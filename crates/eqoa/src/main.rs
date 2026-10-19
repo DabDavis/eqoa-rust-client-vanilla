@@ -25,6 +25,7 @@ mod audio;
 mod chat;
 mod dialog;
 mod client_image;
+mod editbox;
 mod group;
 mod hud;
 mod hudmenu;

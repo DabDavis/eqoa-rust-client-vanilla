@@ -123,8 +123,8 @@ pub struct Play {
     pub channel: u8,
     /// `m_p4F0B8`: who last sent a tell.
     pub reply_name: String,
-    /// `VIWndGame::m_mode`: 0 playing, 7 a dialog's answers, 9 a dialog
-    /// showing, 13 the start menu, 14 a message box.
+    /// `VIWndGame::m_mode`: 0 playing, 2 the edit box, 7 a dialog's
+    /// answers, 9 a dialog showing, 13 the start menu, 14 a message box.
     pub mode: i32,
     /// `m_dialogs`: dialogs waiting while another mode is up (at most 11).
     dialogs: std::collections::VecDeque<Vec<u16>>,
@@ -151,6 +151,11 @@ pub struct Play {
     start_keys: Vec<(i32, bool)>,
     /// An emote's action for the player's own walker.
     emote: Option<i32>,
+    /// `VIWndEdit` (mode 2), and keys for it waiting for the raster.
+    edit: crate::editbox::EditBox,
+    edit_keys: Vec<(i32, bool)>,
+    /// `EQOA_EDIT_TEXT`'s progress.
+    pub edit_typed: usize,
     /// The spell effects (`VIScene::m_spellEffects`), loaded with the first
     /// frame; the casts heard this frame; each slot's entity as the effects
     /// last saw it; the player's own clock for its actions.
@@ -232,6 +237,11 @@ impl Play {
                     Some(crate::dialog::BoxAnswer::No(0, 0x7020000)) => self.decline_invite(),
                     Some(crate::dialog::BoxAnswer::Yes(0, 0x50E0000)) => self.session.send_op_byte(0x0041, 5),
                     Some(crate::dialog::BoxAnswer::Yes(0, 0xA010000)) => self.do_action(0xA010000, 0),
+                    Some(crate::dialog::BoxAnswer::Yes(0, 0xB0B1002)) => {
+                        let to = String::from_utf16_lossy(&self.edit.text);
+                        self.edit.title.clear();
+                        self.send_report(&to);
+                    }
                     _ => {}
                 }
                 if answer.is_some() {
@@ -455,7 +465,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1) };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1) };
         p.take_abilities();
         p
     }
@@ -1344,7 +1354,16 @@ impl Play {
                     self.mbox.prompt(&text, 1, 0, 0xA010000, now);
                     self.mode = 14;
                 }
-                0x0B05_3001 | 0x0B05_3002 | 0x0301_0000 | 0x0B04_0000 | 0x0B05_1000 | 0x0B05_1006 | 0x0B05_1009 | 0x0B05_100B | 0x0B0B_1002 | 0x0801_0000 => {
+                // the edit box: a name (the target's) or a line
+                0x0B05_3001 => self.open_edit(msg, 24, 67, true),
+                0x0B05_3002 => self.open_edit(msg, 24, 613, true),
+                0x0B04_0000 => self.open_edit(msg, 24, 86, true),
+                0x0B0B_1002 => self.open_edit(msg, 24, 1470, true),
+                0x0301_0000 => {
+                    self.open_edit(0xB0F0000, 128, -1, false);
+                    self.edit.title = self.chat_title();
+                }
+                0x0B05_1000 | 0x0B05_1006 | 0x0B05_1009 | 0x0B05_100B | 0x0801_0000 => {
                     eprintln!("play: start menu {msg:#x}: its window is not ported");
                 }
                 0x0B05_1007 | 0x0B05_1008 | 0x0B05_100A | 0x0B05_100C | 0x0B0A_0000 | 0x0B0B_0000 | 0x0B0B_0002 | 0x0B0D_0000 | 0x0B0D_0001 | 0x0B0B_1000 | 0x0B0B_1001 => {
@@ -1353,6 +1372,124 @@ impl Play {
                 _ => self.do_action(msg, id),
             }
         }
+    }
+
+    /// The edit box for `purpose`: `max` long, titled with a word (-1 none),
+    /// holding the target's name when `name` and the target is a creature.
+    fn open_edit(&mut self, purpose: u32, max: usize, title: i32, name: bool) {
+        let target = if name { self.target_name().unwrap_or_default() } else { String::new() };
+        let e = &mut self.edit;
+        e.clear();
+        e.set_max_length(max);
+        e.set_text(&crate::ui::wide(&target));
+        e.title = if title >= 0 { self.words.as_ref().map_or_else(Vec::new, |w| crate::ui::wide(w.get(title, 0))) } else { Vec::new() };
+        e.purpose = purpose;
+        e.focus(self.session.now() as i64);
+        self.mode = 2;
+    }
+
+    /// `SetEditTitle(1)`: the channel's word and "message".
+    fn chat_title(&self) -> Vec<u16> {
+        let Some(w) = self.words.as_ref() else { return Vec::new() };
+        let word = match self.channel {
+            0 => 106,
+            1 => 109,
+            2 => 107,
+            3 => 108,
+            4 => 512,
+            _ => return Vec::new(),
+        };
+        crate::ui::wide(&format!("{} {}", w.get(word, 0), w.get(522, 0)))
+    }
+
+    /// The edit box shows the compact legend (no soft keyboard).
+    pub fn edit_pad_only(&self) -> bool {
+        self.edit.pad_only
+    }
+
+    /// A key for the edit box (the game's codes), handled with the next HUD
+    /// frame.
+    pub fn edit_key(&mut self, key: i32, down: bool) {
+        self.edit_keys.push((key, down));
+    }
+
+    /// The edit box's keys, with the raster; what is done with its text
+    /// (`VIWndGame::OnMessage` 259), or its cancel (260).
+    fn run_edit(&mut self, vui: &vi::ui::Vui, r: &dyn vi::ui::Raster) {
+        let now = self.session.now() as i64;
+        let mut cues = Vec::new();
+        for (key, down) in std::mem::take(&mut self.edit_keys) {
+            if self.mode != 2 {
+                break;
+            }
+            if !down {
+                self.edit.key_up(key);
+                continue;
+            }
+            match self.edit.key(vui, r, key, now, &mut cues) {
+                crate::editbox::EditUp::Done(purpose) => self.edit_done(purpose),
+                crate::editbox::EditUp::Cancel => self.mode = 0,
+                _ => {}
+            }
+        }
+        self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
+    }
+
+    /// 259: the edit box's text to where it was for.
+    fn edit_done(&mut self, purpose: u32) {
+        let text = String::from_utf16_lossy(&self.edit.text);
+        let mut keep = false;
+        if !text.is_empty() {
+            match purpose {
+                0x0B0F_0000 => self.chat_line(&text),
+                // AddBuddy (the list's own checks are not ported)
+                0x0B04_0000 => {
+                    if text.eq_ignore_ascii_case(&self.dump.player.name) {
+                        self.warn(679);
+                    } else {
+                        let mut w = net::stream::Writer::op(870);
+                        w.string(text.as_bytes());
+                        self.session.send(&w.data);
+                    }
+                }
+                // VIClientPart38300::Add; Remove needs the list, not kept
+                0x0B05_3001 => {
+                    let mut w = net::stream::Writer::op(0x1000);
+                    w.string(text.as_bytes());
+                    self.session.send(&w.data);
+                }
+                0x0B05_3002 => eprintln!("play: the ignore list is not kept; {text} not removed"),
+                0x0B0B_1002 => {
+                    // the report asks first (word 1472)
+                    let w = self.words.as_ref().map_or_else(Vec::new, |w| crate::ui::wide(w.get(1472, 0)));
+                    self.mbox.prompt(&w, 1, 0, 0xB0B1002, self.session.now() as i64);
+                    self.mode = 14;
+                    keep = true;
+                }
+                _ => {}
+            }
+        }
+        if !keep {
+            self.edit.title.clear();
+            self.mode = 0;
+        }
+    }
+
+    /// `SendReport(to)` (0x00F0): the player, who, and the chat log as
+    /// "Text=" and the lines '|'-separated; not oneself (word 1471).
+    fn send_report(&mut self, to: &str) {
+        if to.eq_ignore_ascii_case(&self.dump.player.name) {
+            self.warn(1471);
+            return;
+        }
+        let mut text = String::from("Text=");
+        for (line, _) in &self.chat {
+            text.push_str(line);
+            text.push('|');
+        }
+        let mut w = net::stream::Writer::op(240);
+        w.string(self.dump.player.name.as_bytes()).string(to.as_bytes()).string(text.as_bytes());
+        self.session.send(&w.data);
     }
 
     /// `VIClient::DoAction`: what an entry's message does (the menus'
@@ -1824,6 +1961,12 @@ impl Play {
                 self.mbox.draw(vui, &mut r, now as i64);
             }
             actions = self.run_start_menu(vui, &r, &start_loc);
+            self.run_edit(vui, &r);
+            if self.mode == 2 {
+                let mut cues = Vec::new();
+                self.edit.draw(vui, &mut r, now as i64, &mut cues);
+                self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
+            }
             if let Some(s) = self.start.as_mut() {
                 let mut cues = Vec::new();
                 s.menu.draw(vui, &mut r, &s.menus, now as i64, &start_stats, &mut cues);

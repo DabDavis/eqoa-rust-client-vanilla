@@ -431,6 +431,19 @@ pub fn shot_with(
                         p.start_key(k, down);
                     }
                 }
+                // `EQOA_EDIT_TEXT`: typed into the edit box, a character a frame
+                // once it is up, then Enter.
+                if p.mode == 2
+                    && let Ok(text) = std::env::var("EQOA_EDIT_TEXT")
+                {
+                    let k = p.edit_typed;
+                    p.edit_typed += 1;
+                    match text.chars().nth(k) {
+                        Some(c) => p.edit_key(c as i32, true),
+                        None if k == text.chars().count() => p.edit_key(13, true),
+                        None => {}
+                    }
+                }
                 // `EQOA_INVITE`: the target invited just after targeting
                 // (`DoAction(0x07010000)`); `EQOA_ACCEPT`: any message box
                 // answered Yes (left, then X).
@@ -861,6 +874,35 @@ impl ApplicationHandler for App {
                 g.window.request_redraw();
             }
             WindowEvent::KeyboardInput { event, .. } => {
+                // The edit box (mode 2) takes the keyboard: characters type,
+                // Backspace, Escape (cancel), Enter (done), the arrows move the
+                // caret (with the soft keyboard showing, its cursor; Insert
+                // presses its key).
+                if let Some(p) = self.play.as_mut()
+                    && p.mode == 2
+                {
+                    let down = event.state == ElementState::Pressed;
+                    let soft = !p.edit_pad_only();
+                    let named = match &event.logical_key {
+                        Key::Named(NamedKey::Backspace) => Some(8),
+                        Key::Named(NamedKey::Escape) => Some(27),
+                        Key::Named(NamedKey::Enter) => Some(13),
+                        Key::Named(NamedKey::ArrowLeft) => Some(if soft { 136 } else { 17 }),
+                        Key::Named(NamedKey::ArrowRight) => Some(if soft { 137 } else { 18 }),
+                        Key::Named(NamedKey::ArrowUp) => Some(if soft { 138 } else { 19 }),
+                        Key::Named(NamedKey::ArrowDown) => Some(if soft { 139 } else { 20 }),
+                        Key::Named(NamedKey::Insert) => Some(134),
+                        _ => None,
+                    };
+                    if let Some(k) = named {
+                        p.edit_key(k, down);
+                    } else if down && let Some(t) = &event.text {
+                        for c in t.chars().filter(|c| c.is_ascii() && !c.is_ascii_control()) {
+                            p.edit_key(c as i32, true);
+                        }
+                    }
+                    return;
+                }
                 // The start menu (mode 13) takes the arrows, Enter or E (X) and
                 // Escape (back), down and up (its auto-repeat); Escape in play
                 // opens it (`OnKeyDown` 27).
