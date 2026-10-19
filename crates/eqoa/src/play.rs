@@ -36,6 +36,10 @@ struct Puppet {
     attached: Vec<(i32, GpuModel)>,
     /// The name plate's anchor this frame: 0.6 above the name node (3).
     name_at: Option<[f32; 3]>,
+    /// The actor's transform and the centre transform it was drawn with
+    /// this frame (what an effect's node transform is under).
+    actor_m: Matrix44<Ee>,
+    centre: Matrix44<Ee>,
 }
 
 /// `VICSprite::NameColors`.
@@ -114,6 +118,13 @@ pub struct Play {
     /// A teleport into another world, for the viewer to load: the world
     /// file, where, the heading.
     world_change: Option<(String, [f32; 3], f32)>,
+    /// The spell effects (`VIScene::m_spellEffects`), loaded with the first
+    /// frame; the casts heard this frame; each slot's entity as the effects
+    /// last saw it; the player's own clock for its actions.
+    pub spells: Option<crate::spells::Spells>,
+    casts: Vec<crate::spells::Cast>,
+    spell_ids: Vec<Option<u32>>,
+    spell_rand: Rand,
 }
 
 /// `gWorldInfo`'s paths on the Frontiers disc, by world index (CLIENT's
@@ -280,7 +291,7 @@ fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Optio
                         dress(&mut model, &vi::cust::apply_look(cs, look, helm_worn, |id| lib.surface(id as i32).is_some()));
                     }
                     let gpu = g.renderer.upload(g.device, g.queue, &model, &[render::IDENTITY], &textures);
-                    Some(Puppet { model: e.model, look, sprite, anims, rand, gpu, attached, name_at: None })
+                    Some(Puppet { model: e.model, look, sprite, anims, rand, gpu, attached, name_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity() })
                 })
 }
 
@@ -393,7 +404,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None }
+        Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1) }
     }
 
     fn self_id32(&self) -> Option<u32> {
@@ -499,6 +510,15 @@ impl Play {
                 Event::Chat(text, color) => {
                     eprintln!("chat: {text}");
                     self.add_chat(text, color);
+                }
+                // CastingCombat (0x00B1) and Msg0776: an effect to play; one
+                // the player cast itself (0x0776) it has already played.
+                Event::Opcode { op, data } => {
+                    if let Some(c) = crate::spells::cast_of(op, &data)
+                        && !(op == 0x0776 && Some(c.caster) == self.self_id32())
+                    {
+                        self.casts.push(c);
+                    }
                 }
                 Event::WorldEntry { self_id, player, dump } => {
                     eprintln!("play: world entry again as {self_id:#x} at {:?}", player.pos);
@@ -637,12 +657,84 @@ impl Play {
                 }
                 None => (actor.to_cols(), Vec::new()),
             };
+            p.actor_m = actor;
+            p.centre = glam_to_matrix(matrix);
             g.renderer.set_instances(g.queue, &p.gpu, &[matrix]);
             if !palette.is_empty() {
                 g.renderer.set_palette(g.queue, &p.gpu, &palette);
             }
         }
+        self.spells_frame(walker, lib, game_ms, sound);
         new_model
+    }
+
+    /// `VIScene`'s spell effects, a frame: the creatures as their actors (the
+    /// player as `SELF`), an entity gone told to them, this frame's casts
+    /// played with their entities named as `CastingCombat` names them, then
+    /// every playback run (`VISpellEffectSystem::Process`).
+    fn spells_frame(&mut self, walker: &mut Walker, lib: &Library, game_ms: i64, sound: Option<&mut crate::sound::Sound>) {
+        use crate::spells::{Body, SELF, Spells};
+        let spells = self.spells.get_or_insert_with(|| Spells::load(lib, game_ms));
+        let me = self.session.self_id.map(|s| s as u32);
+        let mut bodies: Vec<Body> = Vec::new();
+        for (slot, (e, p)) in self.entities.slots.iter().zip(self.puppets.iter_mut()).enumerate() {
+            let Some(e) = e.as_ref().filter(|e| Some(e.id) != me) else { continue };
+            match p {
+                Some(p) => bodies.push(Body { actor: slot as i32, sprite: p.sprite.as_mut().map(|cs| (cs, &p.anims, &mut p.rand)), transform: p.actor_m, centre: p.centre, attack: [0, 0] }),
+                None => {
+                    let m = Matrix44::transform(&v3(e.hpr), F::ONE, &v3(e.pos));
+                    bodies.push(Body { actor: slot as i32, sprite: None, transform: m, centre: m, attack: [0, 0] });
+                }
+            }
+        }
+        // the player: its walker's body and the attack types in its hands
+        let mut attack = [0, 0];
+        for it in &self.dump.inventory.items {
+            match it.equip_slot {
+                14 => attack[0] = it.item.attack_type as i32,
+                15 => attack[1] = it.item.attack_type as i32,
+                _ => {}
+            }
+        }
+        let actor = Matrix44::transform(&Vect3::new(walker.cam.walk.phys.angles.x, F::ZERO, F::ZERO), F::ONE, &walker.cam.walk.phys.smooth_location());
+        let has_self = me.is_some_and(|me| self.entities.slots.iter().flatten().any(|e| e.id == me));
+        if has_self {
+            let anims = &walker.anims;
+            let (sprite, centre) = match walker.sprite.as_mut() {
+                Some(cs) => {
+                    let c = cs.h.calc_trans_about_center(&actor, anims);
+                    (Some((cs, anims, &mut self.spell_rand)), c)
+                }
+                None => (None, actor),
+            };
+            bodies.push(Body { actor: SELF, sprite, transform: actor, centre, attack });
+        }
+        // NotifyActorWasDestroyed: a slot's entity gone or replaced
+        for slot in 0..SLOTS {
+            let now = self.entities.slots[slot].as_ref().map(|e| e.id).filter(|&id| Some(id) != me);
+            if self.spell_ids[slot].is_some() && self.spell_ids[slot] != now {
+                spells.actor_gone(slot as i32, &mut bodies, game_ms);
+            }
+            self.spell_ids[slot] = now;
+        }
+        let actor_of = |id: u32| -> i32 {
+            if id == u32::MAX {
+                -1
+            } else if Some(id) == me {
+                if has_self { SELF } else { -1 }
+            } else {
+                self.entities.slots.iter().position(|e| e.as_ref().is_some_and(|e| e.id == id)).map_or(-1, |s| s as i32)
+            }
+        };
+        let casts: Vec<_> = std::mem::take(&mut self.casts)
+            .into_iter()
+            .map(|c| {
+                let (a, t) = (actor_of(c.caster), actor_of(c.target));
+                let ts: Vec<i32> = c.targets.iter().map(|&id| actor_of(id)).filter(|&a| a != -1).take(8).collect();
+                (c, a, t, ts)
+            })
+            .collect();
+        spells.frame(&mut bodies, &casts, if has_self { SELF } else { -1 }, Some(&mut walker.cam.effect), game_ms, &walker.eye, lib, sound);
     }
 
     /// `SetName`'s plates for every creature drawn: its name, in
@@ -863,9 +955,9 @@ impl Play {
 
     /// `AutoAttackTick`, each frame while auto-attack is held: when the
     /// swing is due, what is worn picks the swing (`GetSwing`), and with
-    /// the target in reach its spell effect would play (`VISpellEffects`
-    /// are not ported, so only the time is kept); otherwise the swing's
-    /// animation plays and 0x00D8 goes out, and the next is 2 s off.
+    /// the target in reach its spell effect plays, the player on the target
+    /// (and the time is kept); otherwise the swing's animation plays and
+    /// 0x00D8 goes out, and the next is 2 s off.
     fn auto_attack_tick(&mut self, walker: &mut Walker, now: u32) {
         if !self.auto_attack || (now.wrapping_sub(self.attack_due) as i32) < 0 {
             return;
@@ -905,7 +997,13 @@ impl Play {
             delay = vi::swing::swing_delay(swing);
         }
         if self.target_in_range(walker, slot) && !no_effect {
-            self.swung = now;
+            let effect = vi::swing::swing_effect(swing);
+            let me = self.self_id32();
+            let found = |id: Option<u32>| self.entities.slots.iter().flatten().any(|e| Some(e.id) == id);
+            if self.spells.as_ref().is_some_and(|s| s.has(effect)) && found(me) && found(Some(self.target)) {
+                self.casts.push(crate::spells::Cast { effect, time: 0, caster: me.unwrap(), target: self.target, targets: Vec::new() });
+                self.swung = now;
+            }
         } else {
             // With no weapon (slot -1) the game reads the slot before the
             // list's first, whatever that holds; taken here as not ranged.
@@ -1116,6 +1214,7 @@ impl Play {
 
     pub fn describe(&self) -> String {
         let n = self.entities.slots.iter().flatten().count();
-        format!("{n} entities, {} packets sent", self.session.packets_sent)
+        let fx = self.spells.as_ref().map_or_else(String::new, |s| format!(", {}", s.describe()));
+        format!("{n} entities, {} packets sent{fx}", self.session.packets_sent)
     }
 }

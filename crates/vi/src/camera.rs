@@ -72,6 +72,19 @@ impl<M: Model> CameraEffect<M> {
         self.amplitude_rate = F::ZERO;
     }
 
+    /// `ShakeTerp`: the shake's amplitude carried from where it was headed
+    /// to `amp` over `time` seconds (at once, at the same speed, for 0).
+    pub fn shake_terp(&mut self, amp: F<M>, time: F<M>) {
+        if time == F::ZERO {
+            self.shake(self.speed, amp);
+            return;
+        }
+        let from = self.amplitude_end;
+        self.amplitude_end = amp;
+        self.amplitude = from;
+        self.amplitude_rate = (amp - from) / time;
+    }
+
     pub fn update(&mut self, dt: F<M>) {
         if self.manual_terp_rate != F::ZERO {
             self.manual_terp += self.manual_terp_rate * dt;

@@ -45,6 +45,26 @@ pub struct Batch {
     pub quads: Vec<Quad>,
 }
 
+/// Triangle strips in world space, one colour (`VIRaster::BeginTriStrip`
+/// as `VILightning::Render` uses it), drawn through the billboard program
+/// with the corners at zero.
+#[derive(Clone, Debug)]
+pub struct Strips {
+    /// the texture's DictID (0 none: white)
+    pub texture: i32,
+    /// as `Batch::blend`
+    pub blend: usize,
+    pub ztest: bool,
+    pub zwrite: bool,
+    pub color: [f32; 4],
+    /// each strip's vertices: (u, v), (x, y, z)
+    pub strips: Vec<Vec<([f32; 2], [f32; 3])>>,
+}
+
+/// A run of vertices to draw: the pipeline (blend, Z test, Z write), the
+/// texture, the first vertex and the end.
+type Run = ((usize, bool, bool), i32, u32, u32);
+
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Vert {
@@ -156,7 +176,7 @@ impl Billboards {
 
 impl Renderer {
     /// The particles, over what `draw` drew (`view` and `proj` are the frame's
-    /// own, not composed), in the order given.
+    /// own, not composed), in the order given; `strips` first.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_billboards(
         &mut self,
@@ -170,9 +190,9 @@ impl Renderer {
         batches: &[Batch],
         textures: &Textures,
     ) {
-        use wgpu::util::DeviceExt;
-        if batches.iter().all(|b| b.quads.is_empty()) {
-            return;
+        let strips = std::mem::take(&mut self.strips);
+        if !strips.is_empty() {
+            self.draw_strips(device, queue, encoder, target, depth, view, proj, &strips, textures);
         }
         let mut verts: Vec<Vert> = Vec::new();
         let mut draws = Vec::new();
@@ -186,15 +206,74 @@ impl Renderer {
                 let v = |i: usize| Vert { center: q.center, corner: corners[i], uv: UVS[k + i], color: q.color };
                 verts.extend([v(0), v(1), v(2), v(2), v(1), v(3)]);
             }
-            let tex = self.texture(device, queue, b.texture, textures).unwrap_or_else(|| self.white.clone());
-            draws.push((b, start, verts.len() as u32, tex));
+            draws.push(((b.blend.min(4), b.ztest, b.zwrite), b.texture, start, verts.len() as u32));
         }
-        let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("billboards"), contents: bytemuck::cast_slice(&verts), usage: wgpu::BufferUsages::VERTEX });
+        self.draw_verts(device, queue, encoder, target, depth, view, proj, &verts, &draws, textures);
+    }
+
+    /// Triangle strips (lightning), over what `draw` drew, in the order given.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_strips(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        view: Mat4,
+        proj: Mat4,
+        strips: &[Strips],
+        textures: &Textures,
+    ) {
+        let mut verts: Vec<Vert> = Vec::new();
+        let mut draws = Vec::new();
+        for s in strips {
+            let start = verts.len() as u32;
+            for strip in &s.strips {
+                let v = |i: usize| Vert { center: strip[i].1, corner: [0.0, 0.0], uv: strip[i].0, color: s.color };
+                for i in 2..strip.len() {
+                    verts.extend([v(i - 2), v(i - 1), v(i)]);
+                }
+            }
+            if verts.len() as u32 > start {
+                draws.push(((s.blend.min(4), s.ztest, s.zwrite), s.texture, start, verts.len() as u32));
+            }
+        }
+        self.draw_verts(device, queue, encoder, target, depth, view, proj, &verts, &draws, textures);
+    }
+
+    /// The billboard program over `verts`, a run of them per (pipeline key,
+    /// texture).
+    #[allow(clippy::too_many_arguments)]
+    fn draw_verts(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        view: Mat4,
+        proj: Mat4,
+        verts: &[Vert],
+        runs: &[Run],
+        textures: &Textures,
+    ) {
+        use wgpu::util::DeviceExt;
+        if runs.is_empty() {
+            return;
+        }
+        let mut draws = Vec::new();
+        for &(key, texture, start, end) in runs {
+            let tex = self.texture(device, queue, texture, textures).unwrap_or_else(|| self.white.clone());
+            draws.push((key, start, end, tex));
+        }
+        let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("billboards"), contents: bytemuck::cast_slice(verts), usage: wgpu::BufferUsages::VERTEX });
         let format = self.format;
         let bb = self.billboards.get_or_insert_with(|| Billboards::new(device));
         let mut groups = Vec::new();
-        for (b, _, _, tex) in &draws {
-            let u = FrameU { view: view.to_cols_array_2d(), proj: proj.to_cols_array_2d(), flags: [if b.blend == 0 { 1.0 } else { 0.5 }, (b.blend == 0) as i32 as f32, 0.0, 0.0] };
+        for (key, _, _, tex) in &draws {
+            let blend = key.0;
+            let u = FrameU { view: view.to_cols_array_2d(), proj: proj.to_cols_array_2d(), flags: [if blend == 0 { 1.0 } else { 0.5 }, (blend == 0) as i32 as f32, 0.0, 0.0] };
             let ub = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("billboard frame"), contents: bytemuck::bytes_of(&u), usage: wgpu::BufferUsages::UNIFORM });
             let fbg = device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &bb.frame_layout, entries: &[wgpu::BindGroupEntry { binding: 0, resource: ub.as_entire_binding() }] });
             let tbg = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -204,8 +283,8 @@ impl Renderer {
             });
             groups.push((fbg, tbg));
         }
-        for (b, _, _, _) in &draws {
-            bb.pipeline(device, format, (b.blend.min(4), b.ztest, b.zwrite));
+        for (key, _, _, _) in &draws {
+            bb.pipeline(device, format, *key);
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("billboards"),
@@ -225,8 +304,8 @@ impl Renderer {
             multiview_mask: None,
         });
         pass.set_vertex_buffer(0, vb.slice(..));
-        for ((b, start, end, _), (fbg, tbg)) in draws.iter().zip(&groups) {
-            pass.set_pipeline(&bb.pipelines[&(b.blend.min(4), b.ztest, b.zwrite)]);
+        for ((key, start, end, _), (fbg, tbg)) in draws.iter().zip(&groups) {
+            pass.set_pipeline(&bb.pipelines[key]);
             pass.set_bind_group(0, fbg, &[]);
             pass.set_bind_group(1, tbg, &[]);
             pass.draw(*start..*end, 0..1);

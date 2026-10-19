@@ -325,6 +325,47 @@ fn rotate_hpr<M: Model>(v: &Vect3<M>) -> Matrix44<M> {
     }
 }
 
+/// `VICSprite::SetAttackAction` (alt false) / `SetAttackAltAction`: the
+/// action a hand's attack plays, from the attack types of the two hands'
+/// items; a two-handed weapon in the first hand decides for both. `None`
+/// for a slot past the hands or a weapon with no swing.
+pub fn attack_action(attack: [i32; 2], slot: i32, alt: bool) -> Option<i32> {
+    if !(0..2).contains(&slot) {
+        return None;
+    }
+    let first = slot == 0;
+    let id = match (alt, attack[0]) {
+        (false, 2) => 26,
+        (false, 4) => 42,
+        (false, 6) => 29,
+        (true, 2) => 42,
+        (true, 4) => 29,
+        (true, 6) => 26,
+        (true, 9) => 33,
+        (false, _) => match attack[slot as usize] {
+            11 => if first { 23 } else { 22 },
+            1 => if first { 25 } else { 24 },
+            3 => if first { 41 } else { 40 },
+            5 => if first { 28 } else { 27 },
+            7 => 31,
+            9 => 33,
+            8 => if first { 35 } else { 32 },
+            10 => 36,
+            _ => return None,
+        },
+        (true, _) => match attack[slot as usize] {
+            1 => if first { 41 } else { 40 },
+            3 => if first { 28 } else { 27 },
+            5 | 11 => if first { 25 } else { 24 },
+            7 => 31,
+            8 => if first { 35 } else { 32 },
+            10 => 36,
+            _ => return None,
+        },
+    };
+    Some(id)
+}
+
 /// `VIMatrix44::ConvertToEulerZXY`
 pub fn to_euler_zxy<M: Model>(m: &Matrix44<M>) -> Vect3<M> {
     let cy = (m.m[2].z * m.m[2].z + m.m[2].x * m.m[2].x).sqrt();

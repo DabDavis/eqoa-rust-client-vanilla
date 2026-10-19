@@ -30,6 +30,7 @@ mod play;
 mod scene;
 mod sky;
 mod sound;
+mod spells;
 mod stream;
 mod ui;
 mod viewer;
@@ -219,6 +220,9 @@ fn run(args: &[String]) -> Result<()> {
             // The HUD's art and font ("ArialUI").
             lib.add("UI.CSF", esf::Container::open(disc(None)?.read("UI.CSF")?)?);
             lib.add("ARIALUI.CSF", esf::Container::open(disc(None)?.read("ARIALUI.CSF")?)?);
+            // The spell effects, and the lightning's texture.
+            lib.add("SPELLFX.CSF", esf::Container::open(disc(None)?.read("SPELLFX.CSF")?)?);
+            lib.add("FX.CSF", esf::Container::open(disc(None)?.read("FX.CSF")?)?);
             let [x, _, z] = player.pos;
             let index = vi::world::World::<vi::fpu::Ee>::zone_at(lib.file(main_file), x, z).ok_or("no zone at the player's position")?;
             let character = lib.lookup(viewer::HUMAN).ok_or("no human model")?;

@@ -122,28 +122,34 @@ impl Particles {
                 self.sys.update(emitter, &mut self.rand);
             }
         }
-        let mut out = Vec::new();
-        for (id, bbs) in self.sys.render(time) {
-            let def = self.sys.emitter(id).def;
-            let Some(d) = self.sys.defs[def].as_ref() else { continue };
-            out.push(Batch {
-                texture: d.texture as i32,
-                blend: d.blend.clamp(0, 4) as usize,
-                ztest: d.ztest,
-                zwrite: d.zwrite,
-                quads: bbs
-                    .iter()
-                    .map(|b| Quad {
-                        center: [b.location.x.0, b.location.y.0, b.location.z.0],
-                        half: [b.width.0, b.height.0],
-                        frame: b.frame,
-                        color: [b.color.r.0, b.color.g.0, b.color.b.0, b.color.a.0],
-                    })
-                    .collect(),
-            });
-        }
-        out
+        render(&mut self.sys, time)
     }
+}
+
+/// `VIParticleSystem::Render`: each emitter's billboards with its
+/// definition's material.
+pub fn render(sys: &mut System<Ee>, time: i64) -> Vec<Batch> {
+    let mut out = Vec::new();
+    for (id, bbs) in sys.render(time) {
+        let def = sys.emitter(id).def;
+        let Some(d) = sys.defs[def].as_ref() else { continue };
+        out.push(Batch {
+            texture: d.texture as i32,
+            blend: d.blend.clamp(0, 4) as usize,
+            ztest: d.ztest,
+            zwrite: d.zwrite,
+            quads: bbs
+                .iter()
+                .map(|b| Quad {
+                    center: [b.location.x.0, b.location.y.0, b.location.z.0],
+                    half: [b.width.0, b.height.0],
+                    frame: b.frame,
+                    color: [b.color.r.0, b.color.g.0, b.color.b.0, b.color.a.0],
+                })
+                .collect(),
+        });
+    }
+    out
 }
 
 /// The six planes of a view-projection (`dot(plane, (p, 1)) >= 0` inside),

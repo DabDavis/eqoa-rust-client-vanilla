@@ -5,13 +5,24 @@ use std::collections::BTreeMap;
 use vi::fpu::Ieee;
 fn main() {
     let mut iso = iso::Iso::open(std::env::var("EQOA_ISO").unwrap_or("run/eqoa.iso".into())).unwrap();
-    let c = esf::Container::open(iso.read("DATA2/SPELLFX.CSF").unwrap()).unwrap();
+    let c = esf::Container::open(iso.read("SPELLFX.CSF").unwrap()).unwrap();
+    // the lightning's texture (`VILightningFxInit`): which file has it
+    let lt = vi::hash::hash_resource_id("lightning.tga") as i32;
+    for f in ["SPELLFX.CSF", "FX.CSF", "CHAR.ESF", "UI.CSF", "CHARCUST.CSF"] {
+        if let Ok(b) = iso.read(f)
+            && let Ok(x) = esf::Container::open(b)
+            && let Some(n) = x.lookup(lt)
+        {
+            println!("lightning.tga ({lt:#x}) is {:#06x} in {f}", x.node(n).ty);
+        }
+    }
     let mut types: BTreeMap<i32, usize> = BTreeMap::new();
     let mut orbits = 0;
     let mut flights: BTreeMap<(i32, i32), usize> = BTreeMap::new();
     let mut items = 0;
     let mut kinds: BTreeMap<(i32, String), usize> = BTreeMap::new();
     let mut n = 0;
+    let mut first: BTreeMap<i32, usize> = BTreeMap::new();
     for i in 0..c.nodes.len() {
         if c.nodes[i].ty != 0xC200 {
             continue;
@@ -26,8 +37,17 @@ fn main() {
         });
         let Some(e) = e else { continue };
         n += 1;
+        // `SPELL=n`: that effect's events
+        if std::env::var("SPELL").ok().and_then(|v| v.parse::<usize>().ok()) == Some(n - 1) {
+            for (k, l) in e.lists.iter().enumerate() {
+                for ev in l {
+                    println!("list {k}: type {:2} p04 {:#x} id {} p0c {:#x} p10 {} f {:?}", ev.ty, ev.p04, ev.id, ev.p0c, ev.p10, ev.f.map(|f| f.0));
+                }
+            }
+        }
         for ev in e.lists.iter().flatten() {
             *types.entry(ev.ty).or_default() += 1;
+            first.entry(ev.ty).or_insert(n - 1);
             if ev.ty == 3 && (ev.p0c >> 20) & 3 != 0 {
                 orbits += 1;
             }
@@ -40,6 +60,7 @@ fn main() {
         }
     }
     println!("{n} effects; events by type {types:?}");
+    println!("the first effect (in file order) with each event type: {first:?}");
     println!("{orbits} emitters orbit; projectiles by (flight, source) {flights:?}, {items} carry the hand's item");
     for (k, v) in kinds {
         println!("id kind {} -> {}: {v}", k.0, k.1);
