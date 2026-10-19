@@ -199,6 +199,14 @@ pub struct Play {
     who_wnd: crate::wholist::WhoList,
     who_open: bool,
     who_keys: Vec<(i32, bool)>,
+    /// Tradeskills (`VIClientPart3834C`) and their windows: the recipe book
+    /// (mode 6) and the experiment (mode 37); the keys and what the part said
+    /// for the windows, handled with the next HUD frame.
+    craft: crate::craft::Craft,
+    recipe_wnd: crate::craftwnd::RecipeWnd,
+    exp_wnd: crate::craftwnd::ExperimentWnd,
+    craft_keys: Vec<(i32, bool)>,
+    craft_outs: Vec<crate::craft::CraftOut>,
     /// The quests (`m_questTitle`) and the journal (mode 22).
     quests: crate::questlog::Quests,
     quest_log: crate::questlog::QuestLog,
@@ -571,7 +579,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new() };
         p.take_abilities();
         p.npcw_world_entry();
         p
@@ -715,6 +723,13 @@ impl Play {
                 }
                 Event::Opcode { op: 0x0E02, data } => self.who.recv(&data),
                 Event::Opcode { op: 0x007C, data } => self.quests.recv_add(&data),
+                // VIClientPart3834C::Recv1102
+                Event::Opcode { op: 0x1102, data } => {
+                    let modes = crate::craft::Modes { recipe: self.mode == 6, experiment: self.mode == 37 };
+                    let words = self.words.clone().unwrap_or_default();
+                    let out = self.craft.recv(&data, modes, &words, self.session.expansion & net::session::EXPANSION_FLAGS);
+                    self.craft_outs.extend(out);
+                }
                 Event::Opcode { op: 0x1402, data } => self.cm_msgs.push(data),
                 Event::Opcode { op: 0x0468, data } => {
                     if let Some(o) = self.guild.recv_0468(&data) {
@@ -1575,6 +1590,9 @@ impl Play {
     fn take_abilities(&mut self) {
         self.abilities = self.dump.abilities.iter().map(|a| (a.id, a.clone())).collect();
         self.ability_token = self.dump.p2bb60;
+        // the dump's crafting token and slots (SetP78C0, ReadSlots)
+        self.craft.token = self.dump.craft_p78c0;
+        self.craft.slots = self.dump.craft_slots;
         // the dump's quests (m_questCount, m_questTitle) and their stamp
         // ReadState: the MemoryDump's Class Mastery
         self.cm.m = self.dump.mastery.clone();
@@ -1915,6 +1933,13 @@ impl Play {
                     self.trainer_open = true;
                     self.mode = 12;
                 }
+                // VIClientPart3834C::Use: the recipe book of a skill (its
+                // list asked for) or the experiment
+                m if crate::craft::Craft::is_mine(m) => {
+                    let inv = self.dump.inventory.clone();
+                    let out = self.craft.use_id(m, id, &inv);
+                    self.craft_outs.extend(out);
+                }
                 // OpenQuestLog: mode 22
                 0x0B0A_0000 => {
                     self.quest_open = true;
@@ -1940,7 +1965,7 @@ impl Play {
     /// A character window is up (the trainer, mode 12; the quest journal,
     /// mode 22).
     pub fn char_window(&self) -> bool {
-        matches!(self.mode, 12 | 22 | 40 | 41)
+        matches!(self.mode, 6 | 12 | 22 | 37 | 40 | 41)
     }
 
     /// A key for the character window up, handled with the next HUD frame.
@@ -1950,6 +1975,7 @@ impl Play {
             40 => self.cm_keys.push((key, down)),
             41 => self.faction_keys.push((key, down)),
             22 => self.quest_keys.push((key, down)),
+            6 | 37 => self.craft_keys.push((key, down)),
             _ => {}
         }
     }
@@ -2081,6 +2107,82 @@ impl Play {
                         self.session.send(&m);
                     }
                 }
+            }
+        }
+    }
+
+    /// The tradeskill windows: what the part said (requests, lines, windows
+    /// to open, boxes), then the open window's keys, drawing and asks.
+    fn run_craft(&mut self, vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster) {
+        use crate::craft::CraftOut;
+        use crate::craftwnd::CraftUp;
+        let now = self.session.now() as i64;
+        let flags = self.session.expansion & net::session::EXPANSION_FLAGS;
+        let mut cues = Vec::new();
+        let mut ups: Vec<CraftUp> = std::mem::take(&mut self.craft_outs).into_iter().map(CraftUp::Out).collect();
+        let attack_words = self.start.as_ref().map(|s| s.attack_words.clone()).unwrap_or_default();
+        let pl = &self.dump.player;
+        let info = crate::infotext::Info {
+            words: &vui.words,
+            inv: &self.dump.inventory,
+            hp: [self.stats.stat[7], self.stats.stat[8], self.stats.stat[9], self.stats.stat[10]],
+            base: &self.stats.base,
+            class: pl.class,
+            level: pl.level,
+            attack_words: &attack_words,
+        };
+        let items = self.craft.items.clone();
+        let icon = |i: usize| items.items.get(i).map_or(-1, |it| crate::inventory::item_icon(it, flags) as i32);
+        let mut k = 0;
+        // the part's outs, applied in turn (a window opened first)
+        while k < ups.len() {
+            if let CraftUp::Out(o) = ups[k].clone() {
+                match o {
+                    CraftOut::OpenRecipe(skill) => {
+                        // VIWndGame::OpenRecipe: SetSkill, mode 6
+                        self.recipe_wnd.skill = skill;
+                        self.recipe_wnd.open(vui, r);
+                        self.mode = 6;
+                    }
+                    CraftOut::OpenExperiment => {
+                        self.exp_wnd.open(vui, r, &self.craft, &icon, now);
+                        self.mode = 37;
+                    }
+                    CraftOut::RecipeMessage(text, _) => self.recipe_wnd.message(&text, now),
+                    CraftOut::RecipeInspect => self.recipe_wnd.inspect(vui, r, &self.craft),
+                    CraftOut::Notify(text, _) => self.exp_wnd.notify(&text, now),
+                    CraftOut::Ask(text, p1, p2, _) => self.exp_wnd.ask(&text, p1, p2, now),
+                    _ => {}
+                }
+            }
+            k += 1;
+        }
+        for (key, down) in std::mem::take(&mut self.craft_keys) {
+            match self.mode {
+                6 => ups.extend(self.recipe_wnd.key(vui, &mut self.craft, key, down, now, &mut cues)),
+                37 => ups.extend(self.exp_wnd.key(vui, r, &mut self.craft, &info, key, down, now, &mut cues)),
+                _ => break,
+            }
+        }
+        let name = self.dump.player.name.clone();
+        match self.mode {
+            6 => self.recipe_wnd.draw(vui, r, &self.craft, &name, now, &mut cues),
+            37 => self.exp_wnd.draw(vui, r, &self.craft, &info, &icon, now, &mut cues),
+            _ => {}
+        }
+        self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
+        for up in ups {
+            match up {
+                // ClosePanel708 / 70C: CloseRecipe / CloseExperiment, back to
+                // the start menu
+                CraftUp::Close => {
+                    self.mode = 0;
+                    self.open_start_menu(false);
+                }
+                CraftUp::Out(CraftOut::Send(m)) => self.session.send(&m),
+                CraftUp::Out(CraftOut::ShowWord(w)) => self.show_word(w),
+                CraftUp::Out(CraftOut::Chat(t, c)) => self.add_chat(t, c),
+                CraftUp::Out(_) => {}
             }
         }
     }
@@ -3160,6 +3262,7 @@ impl Play {
             }
             self.run_who(vui, &mut r);
             self.run_quests(vui, &mut r);
+            self.run_craft(vui, &mut r);
             self.run_trainer(vui, &mut r);
             self.run_class_mastery(vui, &mut r);
             self.run_factions(vui, &mut r);
