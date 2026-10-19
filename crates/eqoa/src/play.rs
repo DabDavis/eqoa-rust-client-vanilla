@@ -394,6 +394,17 @@ impl Play {
                 Event::ReplyName(n) => self.reply_name = n,
                 Event::Dialog { text, .. } => self.show_dialog(&text),
                 Event::DialogBox { id, text, options } => self.dialog_box(id, &text, &options),
+                Event::Teleport { world, pos, hpr, .. } => {
+                    // Msg00B2: back to play, then Respawn.
+                    self.mode = 0;
+                    if world as i64 != self.player.world {
+                        eprintln!("play: teleport to world {world} at {pos:?}: another world is not loaded yet (only this one, {})", self.player.world);
+                    } else {
+                        eprintln!("play: teleport to {pos:?}");
+                        walker.relocate(pos, hpr[0]);
+                        self.player.pos = pos;
+                    }
+                }
                 Event::LevelExp { level, exp } => {
                     self.dump.player.level = level;
                     self.dump.player.exp = exp;
@@ -664,6 +675,11 @@ impl Play {
         let mut w = net::stream::Writer::op(0x0010);
         w.u32(0).u32(self.target);
         self.session.send(&w.data);
+    }
+
+    /// The creatures' names, slot order.
+    pub fn entity_names(&self) -> Vec<String> {
+        self.entities.slots.iter().flatten().filter_map(|e| e.creature.as_ref().map(|c| c.name.trim().to_string())).collect()
     }
 
     /// Targets the creature called `name` (as a click on it would), 0x0010.

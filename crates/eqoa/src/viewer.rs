@@ -303,7 +303,11 @@ pub fn shot_with(
                 if t == at
                     && let Ok(name) = std::env::var("EQOA_TARGET")
                 {
-                    eprintln!("target {name}: {}", p.target_by_name(&name));
+                    let found = p.target_by_name(&name);
+                    eprintln!("target {name}: {found}");
+                    if !found {
+                        eprintln!("  in view: {}", p.entity_names().join(", "));
+                    }
                 }
                 if t == at && tab {
                     let (proj, v) = walker.view(aspect);

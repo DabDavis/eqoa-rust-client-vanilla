@@ -72,6 +72,19 @@ impl Walker {
         Walker { cam, scene, eye, sprite: None, anims: AnimScene::default(), rand: Rand(1) }
     }
 
+    /// `Respawn`'s placing: the character stood at `pos` (on the ground
+    /// when the zone there is loaded, else at the height given), facing
+    /// `heading`, the camera set behind.
+    pub fn relocate(&mut self, pos: [f32; 3], heading: f32) {
+        let y = ground(&mut self.scene, pos[0], pos[2]).filter(|g| (g - pos[1]).abs() < 20.0).unwrap_or(pos[1]);
+        let p = Vect3::of(pos[0], y, pos[2]);
+        // Respawn: SetLocation (not Init: the camera keeps its mode and
+        // distance), then SetOrbitAngleBehind.
+        self.cam.set_location(p, Vect3::of(heading, 0.0, 0.0), &mut self.scene);
+        self.cam.set_orbit_angle_behind();
+        self.eye = self.cam.process(&mut self.scene);
+    }
+
     /// Loads the character as a VICSprite from `r` (a 0x2700 record).
     pub fn set_character(&mut self, lib: &esf::Library, r: esf::Ref) {
         self.anims.time = self.scene.time;

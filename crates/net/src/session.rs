@@ -86,6 +86,9 @@ pub enum Event {
     Dialog { id: u32, text: Vec<u16> },
     /// 0x0034: a dialog with answers (raw; `Msg0034` expands them).
     DialogBox { id: u32, text: Vec<u16>, options: Vec<Vec<u16>> },
+    /// 0x00B2 (`Msg00B2`, the respawn/teleport): the world, where, the
+    /// heading, pitch and roll, and the token 0x0049 answers with.
+    Teleport { world: u8, pos: [f32; 3], hpr: [f32; 3], token: u32 },
     /// 0x0020: the player's level and experience.
     LevelExp { level: i64, exp: i64 },
     /// 0x0775: an entity plays an action (`VICSprite::SetAction`).
@@ -427,6 +430,17 @@ impl Session {
                 let n = r.u8();
                 let options = (0..n).map(|_| wide(&mut r, 64)).collect();
                 ev.push(Event::DialogBox { id, text, options });
+            }
+            0x00B2 => {
+                let world = r.u8();
+                let pos = [r.f32(), r.f32(), r.f32()];
+                let hpr = [r.f32(), r.f32(), r.f32()];
+                let token = r.u32();
+                // SendOpSigned(73, token): answered whatever happens.
+                let mut w = Writer::op(0x0049);
+                w.signed(token as i32 as i64);
+                self.send(&w.data);
+                ev.push(Event::Teleport { world, pos, hpr, token });
             }
             0x0020 => {
                 let level = r.signed();
