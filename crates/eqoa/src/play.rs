@@ -47,6 +47,57 @@ pub struct Play {
     walks: Vec<Option<(u32, WalkControl<Ee>)>>,
     /// The player's model as the server last named it on its channel.
     pub self_model: Option<u32>,
+    /// The player dressed as its own channel says (look, items, helm),
+    /// placed with the walker's pose.
+    self_puppet: Option<Puppet>,
+}
+
+/// A creature's model as `Apply` dresses it: the look on its text slots, the
+/// items and helm on their nodes.
+fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64) -> Option<Puppet> {
+    let textures = render::library_textures(lib);
+    lib.lookup(e.model as i32).and_then(|r| {
+                    let mut model = lib.build_model(r)?;
+                    let mut anims = AnimScene { time: game_ms, ..Default::default() };
+                    let mut rand = Rand(slot as u64 + 1);
+                    let sprite = load_csprite(lib, r, &mut anims, &mut AnimCache::new(), &mut rand);
+                    // Attach: the items in hand (ApplyItems: the override if
+                    // any) and the helm (SetHelm, at node 8, in the tint).
+                    let mut attached = Vec::new();
+                    let mut helm_worn = false;
+                    if let (Some(cs), Some(c)) = (&sprite, &e.creature) {
+                        for i in 0..3 {
+                            let id = if c.items_over[i] != 0 { c.items_over[i] } else { c.items[i] };
+                            let node = cs.item_nodes[i];
+                            if id == 0 || node < 0 {
+                                continue;
+                            }
+                            if let Some(m) = lib.lookup(id as i32).and_then(|r| lib.build_model(r)) {
+                                attached.push((node, g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
+                            }
+                        }
+                        if cs.node_ids[8] >= 0
+                            && let Some(h) = vi::cust::helm(c.armor[5])
+                            && let Some(mut m) = lib.lookup(h as i32).and_then(|r| lib.build_model(r))
+                        {
+                            let tint = vi::cust::TINTS[(c.armor_tint[5] as usize).min(14)];
+                            for b in &mut m.batches {
+                                for l in &mut b.layers {
+                                    l.color = tint;
+                                }
+                            }
+                            helm_worn = true;
+                            attached.push((cs.node_ids[8], g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
+                        }
+                    }
+                    // ApplyLook: the look's textures and tints on the layers the
+                    // sprite's text slots name.
+                    if let (Some(cs), Some(look)) = (&sprite, &look) {
+                        dress(&mut model, &vi::cust::apply_look(cs, look, helm_worn, |id| lib.surface(id as i32).is_some()));
+                    }
+                    let gpu = g.renderer.upload(g.device, g.queue, &model, &[render::IDENTITY], &textures);
+                    Some(Puppet { model: e.model, look, sprite, anims, rand, gpu, attached })
+                })
 }
 
 /// Puts layer changes onto the batches of the palette entries they name.
@@ -65,6 +116,22 @@ fn dress(model: &mut esf::Model, changes: &[vi::cust::LayerChange]) {
     }
 }
 
+/// A column-major matrix back into the row-vector `Matrix44`.
+fn glam_to_matrix(m: [[f32; 4]; 4]) -> Matrix44<Ee> {
+    let mut out = Matrix44::<Ee>::identity();
+    for (r, row) in out.m.iter_mut().enumerate() {
+        row.x = F::new(m[r][0]);
+        row.y = F::new(m[r][1]);
+        row.z = F::new(m[r][2]);
+        row.w = F::new(m[r][3]);
+    }
+    out
+}
+
+fn look_of(c: &net::entity::Creature) -> vi::cust::Look {
+    vi::cust::Look { armor: c.armor, armor_tint: c.armor_tint, hair: c.hair, face: c.face, robe: c.robe as i8, robe_tint: c.robe_tint }
+}
+
 fn v3(a: [f32; 3]) -> Vect3<Ee> {
     Vect3::of(a[0], a[1], a[2])
 }
@@ -77,7 +144,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player) -> Self {
-        Play { session, player, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None }
+        Play { session, player, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None }
     }
 
     fn self_id32(&self) -> Option<u32> {
@@ -86,7 +153,7 @@ impl Play {
 
     /// One frame. Returns the player's model when the server has just named
     /// a different one (the caller re-dresses the walker).
-    pub fn frame(&mut self, walker: &mut Walker, lib: &Library, g: Gpu, game_ms: i64) -> Option<u32> {
+    pub fn frame(&mut self, walker: &mut Walker, lib: &Library, mut g: Gpu, game_ms: i64) -> Option<u32> {
         let now = self.session.now();
         let mut new_model = None;
         for e in self.session.pump() {
@@ -173,7 +240,6 @@ impl Play {
             self.session.send_state(0x40, &msg);
         }
         let me = self.self_id32();
-        let textures = render::library_textures(lib);
         for (slot, entity) in self.entities.slots.iter().enumerate() {
             let want = entity.as_ref().filter(|e| Some(e.id) != me && e.model != 0);
             if let Some(e) = entity
@@ -184,61 +250,22 @@ impl Play {
                 self.self_model = Some(e.model);
                 new_model = Some(e.model);
             }
+            if let Some(e) = entity
+                && Some(e.id) == me
+                && e.model != 0
+            {
+                let look = e.creature.as_ref().map(look_of);
+                if self.self_puppet.as_ref().map(|p| (p.model, p.look)) != Some((e.model, look)) {
+                    self.self_puppet = build_puppet(lib, &mut g, e, look, slot, game_ms);
+                }
+            }
             let Some(e) = want else {
                 self.puppets[slot] = None;
                 continue;
             };
-            let look = e.creature.as_ref().map(|c| vi::cust::Look {
-                armor: c.armor,
-                armor_tint: c.armor_tint,
-                hair: c.hair,
-                face: c.face,
-                robe: c.robe as i8,
-                robe_tint: c.robe_tint,
-            });
+            let look = e.creature.as_ref().map(look_of);
             if self.puppets[slot].as_ref().map(|p| (p.model, p.look)) != Some((e.model, look)) {
-                self.puppets[slot] = lib.lookup(e.model as i32).and_then(|r| {
-                    let mut model = lib.build_model(r)?;
-                    let mut anims = AnimScene { time: game_ms, ..Default::default() };
-                    let mut rand = Rand(slot as u64 + 1);
-                    let sprite = load_csprite(lib, r, &mut anims, &mut AnimCache::new(), &mut rand);
-                    // Attach: the items in hand (ApplyItems: the override if
-                    // any) and the helm (SetHelm, at node 8, in the tint).
-                    let mut attached = Vec::new();
-                    let mut helm_worn = false;
-                    if let (Some(cs), Some(c)) = (&sprite, &e.creature) {
-                        for i in 0..3 {
-                            let id = if c.items_over[i] != 0 { c.items_over[i] } else { c.items[i] };
-                            let node = cs.item_nodes[i];
-                            if id == 0 || node < 0 {
-                                continue;
-                            }
-                            if let Some(m) = lib.lookup(id as i32).and_then(|r| lib.build_model(r)) {
-                                attached.push((node, g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
-                            }
-                        }
-                        if cs.node_ids[8] >= 0
-                            && let Some(h) = vi::cust::helm(c.armor[5])
-                            && let Some(mut m) = lib.lookup(h as i32).and_then(|r| lib.build_model(r))
-                        {
-                            let tint = vi::cust::TINTS[(c.armor_tint[5] as usize).min(14)];
-                            for b in &mut m.batches {
-                                for l in &mut b.layers {
-                                    l.color = tint;
-                                }
-                            }
-                            helm_worn = true;
-                            attached.push((cs.node_ids[8], g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
-                        }
-                    }
-                    // ApplyLook: the look's textures and tints on the layers the
-                    // sprite's text slots name.
-                    if let (Some(cs), Some(look)) = (&sprite, &look) {
-                        dress(&mut model, &vi::cust::apply_look(cs, look, helm_worn, |id| lib.surface(id as i32).is_some()));
-                    }
-                    let gpu = g.renderer.upload(g.device, g.queue, &model, &[render::IDENTITY], &textures);
-                    Some(Puppet { model: e.model, look, sprite, anims, rand, gpu, attached })
-                });
+                self.puppets[slot] = build_puppet(lib, &mut g, e, look, slot, game_ms);
             }
             let Some(p) = self.puppets[slot].as_mut() else { continue };
             let f = F::<Ee>::new;
@@ -280,8 +307,30 @@ impl Play {
         new_model
     }
 
+    /// Whether the player is drawn dressed (the caller hides its plain body).
+    pub fn has_self(&self) -> bool {
+        self.self_puppet.is_some()
+    }
+
+    /// Places the dressed player with the walker's pose: the body at its
+    /// model matrix and palette, the attachments on the walker's nodes.
+    pub fn place_self(&self, walker: &Walker, matrix: [[f32; 4]; 4], palette: &[[[f32; 4]; 4]], r: &Renderer, queue: &wgpu::Queue) {
+        let Some(p) = &self.self_puppet else { return };
+        r.set_instances(queue, &p.gpu, &[matrix]);
+        if !palette.is_empty() {
+            r.set_palette(queue, &p.gpu, palette);
+        }
+        let Some(cs) = walker.sprite.as_ref() else { return };
+        let centre = glam_to_matrix(matrix);
+        for (node, gpu) in &p.attached {
+            if let Some(n) = cs.h.nodes.get(*node as usize) {
+                r.set_instances(queue, gpu, &[Matrix44::mul(&n.world, &centre).to_cols()]);
+            }
+        }
+    }
+
     pub fn models(&self) -> impl Iterator<Item = &GpuModel> {
-        self.puppets.iter().flatten().flat_map(|p| std::iter::once(&p.gpu).chain(p.attached.iter().map(|a| &a.1)))
+        self.puppets.iter().chain(std::iter::once(&self.self_puppet)).flatten().flat_map(|p| std::iter::once(&p.gpu).chain(p.attached.iter().map(|a| &a.1)))
     }
 
     pub fn describe(&self) -> String {

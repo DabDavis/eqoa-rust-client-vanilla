@@ -268,8 +268,12 @@ pub fn shot_with(
         let (model, palette) = walker.pose();
         eprintln!("after {} ms: {}", script.ms, walker.describe());
         let textures = render::library_textures(lib);
-        let g = renderer.upload(&device, &queue, &body, &[model], &textures);
+        let mut g = renderer.upload(&device, &queue, &body, &[model], &textures);
         renderer.set_palette(&queue, &g, &palette);
+        if let Some(p) = play.as_ref().filter(|p| p.has_self()) {
+            p.place_self(&walker, model, &palette, &renderer, &queue);
+            g.visible = false;
+        }
         gpu.push(g);
         let at = Vec3::from(walker.cam.walk.phys.position.to_array());
         streamer.update(at, &mut walker.scene, lib, stream::Gpu { renderer: &mut renderer, device: &device, queue: &queue }, None);
@@ -603,6 +607,13 @@ impl ApplicationHandler for App {
                     if let Some(body) = g.models.get(body_at) {
                         g.renderer.set_instances(&g.queue, body, &[m]);
                         g.renderer.set_palette(&g.queue, body, &palette);
+                    }
+                    // Dressed as the server says: the plain body gives way.
+                    if let Some(p) = play.as_ref().filter(|p| p.has_self()) {
+                        p.place_self(w, m, &palette, &g.renderer, &g.queue);
+                        if let Some(body) = g.models.get_mut(body_at) {
+                            body.visible = false;
+                        }
                     }
                     if let Some(s) = streamer {
                         // One zone a frame, as the game's loader takes them.

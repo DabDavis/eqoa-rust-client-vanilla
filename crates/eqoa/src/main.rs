@@ -169,7 +169,10 @@ fn login(host: &str, user: &str, pass: &str) -> Result<(net::session::Session, n
                     for c in list {
                         eprintln!("character: {} (id {}, race {}, class {}, level {})", c.name, c.server_id, c.race, c.class, c.level);
                     }
-                    if let Some(c) = list.first() {
+                    // `EQOA_CHAR=<name>` picks one; else the first.
+                    let want = std::env::var("EQOA_CHAR").ok();
+                    let pick = list.iter().find(|c| want.as_deref() == Some(c.name.as_str())).or(list.first());
+                    if let Some(c) = pick {
                         s.select_character(&c.clone());
                     }
                 }
