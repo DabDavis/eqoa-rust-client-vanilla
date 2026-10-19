@@ -14,6 +14,7 @@ use crate::hsprite::{AnimScene, HSprite};
 use crate::collide::{Collide, CollBuffer, cull_ray_sphere, cull_sphere};
 use crate::fpu::{F, Model, clamp, f};
 use crate::geom::{BBox, Matrix44, Plane, Sphere};
+use crate::pick::{self, Color32F, PickBuffer, PickSegment};
 use crate::scene::{Filter, FilterKind, Scene};
 use crate::vect::Vect3;
 use esf::{Container, Library, NodeId, Ref};
@@ -60,7 +61,8 @@ pub enum SpriteKind {
     /// them: `m_loc` is handed to `Transform` as the ANGLES and `m_hpr` as the
     /// translation, and the data agrees (every member's first triple is 0).
     Group(Vec<(usize, [f32; 3], f32, [f32; 3])>),
-    Lod(Vec<usize>),
+    /// The levels: (sprite, switch distance).
+    Lod(Vec<(usize, f32)>),
     /// An animated HSprite: index into `World::hsprites`.
     H(usize),
     /// `VISoundSprite` (0xB100): a positional sound, its wave or XM record,
@@ -86,6 +88,8 @@ pub struct SceneSprite<M: Model> {
     pub bsphere: Sphere<M>,
     /// `VISpriteType` 5 is VICSprite, which the walk filters skip.
     pub sprite_type: i32,
+    /// A simple sprite's prim buffer as the pick reads it (`World::picks`).
+    pub pick: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -101,6 +105,11 @@ pub struct Actor<M: Model> {
     pub flags: u32,
     /// `m_p80`, the scene pass that last visited it.
     pub stamp80: i32,
+    /// `m_p70`: the static light colour (`CreateStaticProxyActor`'s, the
+    /// zone actor record's bytes / 255).
+    pub color: Color32F<M>,
+    /// `m_p6C`: its static lighting (`World::lightings`), if any.
+    pub lighting: Option<usize>,
 }
 
 pub struct World<M: Model> {
@@ -117,6 +126,11 @@ pub struct World<M: Model> {
     /// The record each scene sprite was built from.
     pub sprite_refs: Vec<Ref>,
     pub buffers: Vec<CollBuffer<M>>,
+    /// The simple sprites' prim buffers as the pick reads them.
+    pub picks: Vec<PickBuffer<M>>,
+    /// The static lightings: each a list of colour buffers (0x1220), the
+    /// colours as the pick reads them, flat in vertex order.
+    pub lightings: Vec<Vec<Vec<[u8; 4]>>>,
     pub actors: Vec<Actor<M>>,
     pub collide: Collide<M>,
     /// `VIScene::GetTime`, ms; the caller advances it.
@@ -269,6 +283,8 @@ impl<M: Model> World<M> {
             sprite_of: HashMap::new(),
             sprite_refs: Vec::new(),
             buffers: Vec::new(),
+            picks: Vec::new(),
+            lightings: Vec::new(),
             actors: Vec::new(),
             collide: Collide::default(),
             time: 0,
@@ -392,10 +408,43 @@ impl<M: Model> World<M> {
                         bound: Sphere::default(),
                         flags: 12,
                         stamp80: 0,
+                        color: {
+                            let k = F::new(1.0 / 255.0);
+                            let b = |i: usize| F::from_int(d[32 + i] as i32) * k;
+                            Color32F { r: b(0), g: b(1), b: b(2), a: b(3) }
+                        },
+                        lighting: None,
                     });
                     if let Some(r) = self.zones[zi].rooms.get_mut(room) {
                         r.placements.push(id);
                     }
+                }
+            }
+        }
+        // ParseZoneStaticLightings: per room (0x3290: 0x32A0 the room, 0x6030
+        // the list), each 0x6010 an actor index in the room (0x6020) and its
+        // colour buffers (0x1220).
+        if let Some(sl) = c.child(z, 0x32B0) {
+            for &rl in &c.node(sl).children {
+                let Some(room) = c.child(rl, 0x32A0).map(|r| rd_i(c.body(r), 0) as usize) else { continue };
+                let Some(list) = c.child(rl, 0x6030) else { continue };
+                for &l in &c.node(list).children {
+                    let Some(obj) = c.child(l, 0x6020) else { continue };
+                    let ai = rd_i(c.body(obj), 0);
+                    let bufs: Vec<Vec<[u8; 4]>> = c
+                        .node(l)
+                        .children
+                        .iter()
+                        .filter(|&&b| c.node(b).ty == 0x1220)
+                        .map(|&b| {
+                            let d = c.body(b);
+                            let n = rd_i(d, 4).max(0) as usize;
+                            (0..n).filter_map(|k| d.get(8 + 4 * k..12 + 4 * k)).map(|q| pick::pack_color([q[0] >> 1, q[1] >> 1, q[2] >> 1, q[3] >> 1])).collect()
+                        })
+                        .collect();
+                    let Some(&a) = usize::try_from(ai).ok().and_then(|ai| self.zones[zi].rooms.get(room)?.placements.get(ai)) else { continue };
+                    self.lightings.push(bufs);
+                    self.actors[a].lighting = Some(self.lightings.len() - 1);
                 }
             }
         }
@@ -461,7 +510,7 @@ impl<M: Model> World<M> {
                     for k in 0..rd_i(d, 0).max(0) as usize {
                         let Some(lr) = lib.lookup(rd_i(d, 4 + k * 8)) else { continue };
                         if let Some(ls) = self.sprite(lib, lr, pretrans) {
-                            levels.push(ls);
+                            levels.push((ls, rd_f(d, 8 + k * 8)));
                         }
                     }
                 }
@@ -529,7 +578,15 @@ impl<M: Model> World<M> {
         let id = self.sprites.len();
         // a sound sprite's sphere is its radius, not its box's half diagonal
         let bsphere = if let SpriteKind::Sound { .. } | SpriteKind::Particle { .. } = kind { Sphere { c: Vect3::default(), r: bbox.max.x } } else { Sphere::from_bbox(&bbox) };
-        self.sprites.push(SceneSprite { kind, bbox, bsphere, sprite_type });
+        // the prim buffer a simple sprite picks with
+        let pick = match n.ty {
+            0x2000 | 0x2310 => c.child(r.node, 0x1200).and_then(|b| pick::read_pick_buffer(c.body(b), c.node(b).version as u16, pretrans)).map(|pb| {
+                self.picks.push(pb);
+                self.picks.len() - 1
+            }),
+            _ => None,
+        };
+        self.sprites.push(SceneSprite { kind, bbox, bsphere, sprite_type, pick });
         self.sprite_refs.push(r);
         self.sprite_of.insert(r, id);
         Some(id)
@@ -613,6 +670,132 @@ impl<M: Model> World<M> {
         match self.sprites[*self.sprite_of.get(&r)?].kind {
             SpriteKind::H(i) => Some(i),
             _ => None,
+        }
+    }
+
+    /// `VIScene::Pick(seg, VISceneOutdoorsFilter)`: the segment through the
+    /// world and zone trees to the rooms, each room's own sprite and then its
+    /// static actors (the filter rejects the rest), nearest hit kept; the hit
+    /// colour is the baked colour at the hit plus the static light then set.
+    pub fn pick_outdoors(&mut self, seg: &mut PickSegment<M>) -> bool {
+        let mut v = PickVars { start: seg.start, end: seg.end, stamp: self.state, light: Color32F { a: F::ONE, ..Default::default() } };
+        let hit = if self.nodes.is_empty() { self.pick_world(LEAF, &mut v, seg) } else { self.pick_world(0, &mut v, seg) };
+        self.state += 1;
+        self.stamp += 1;
+        hit
+    }
+
+    fn pick_world(&mut self, node: u32, v: &mut PickVars<M>, seg: &mut PickSegment<M>) -> bool {
+        let mut node = node;
+        if node & 0xF000_0000 != 0 {
+            if node & LEAF != 0 {
+                let z = self.leaves[(node & 0x0FFF_FFFF) as usize] as usize;
+                if self.zones[z].leaves.is_empty() {
+                    return false;
+                }
+                let root = if self.zones[z].nodes.is_empty() { LEAF } else { 0 };
+                return self.pick_zone(z, root, v, seg);
+            }
+            node &= 0x0FFF_FFFF;
+        }
+        let n = self.nodes[node as usize].clone();
+        pick_descend(&n, v, |front, v| self.pick_world(if front { n.front } else { n.back }, v, seg))
+    }
+
+    fn pick_zone(&mut self, z: usize, node: u32, v: &mut PickVars<M>, seg: &mut PickSegment<M>) -> bool {
+        let mut node = node;
+        if node & 0xF000_0000 != 0 {
+            if node & LEAF != 0 {
+                // PickLeaf
+                let room = self.zones[z].leaves[(node & 0x0FFF_FFFF) as usize].0 as usize;
+                if self.zones[z].rooms[room].stamp20 != v.stamp {
+                    self.zones[z].rooms[room].stamp20 = v.stamp;
+                    if self.pick_room(z, room, v, seg) {
+                        v.end = seg.hit_point();
+                        return true;
+                    }
+                }
+                return false;
+            }
+            node &= 0x0FFF_FFFF;
+        }
+        let n = self.zones[z].nodes[node as usize].clone();
+        pick_descend(&n, v, |front, v| self.pick_zone(z, if front { n.front } else { n.back }, v, seg))
+    }
+
+    fn pick_room(&mut self, z: usize, room: usize, v: &mut PickVars<M>, seg: &mut PickSegment<M>) -> bool {
+        let mut hit = false;
+        if self.zones[z].rooms[room].stamp24 != self.stamp {
+            self.zones[z].rooms[room].stamp24 = self.stamp;
+            if let Some(sprite) = self.zones[z].rooms[room].sprite {
+                // no lighting (m_p444 -1); the static light is what was last set
+                hit = self.pick_sprite(sprite, &Matrix44::identity(), None, &mut -1, v, seg);
+            }
+        }
+        for k in 0..self.zones[z].rooms[room].actors.len() {
+            let a = self.zones[z].rooms[room].actors[k];
+            if self.pick_actor(a, v, seg) {
+                hit = true;
+            }
+        }
+        hit
+    }
+
+    /// `VIScene::PickActor` under `VISceneOutdoorsFilter`.
+    fn pick_actor(&mut self, i: usize, v: &mut PickVars<M>, seg: &mut PickSegment<M>) -> bool {
+        let a = &self.actors[i];
+        if a.stamp80 == self.stamp || a.flags & 5 != 0 {
+            return false;
+        }
+        self.actors[i].stamp80 = self.stamp;
+        let a = &self.actors[i];
+        // FilterActor: only static actors
+        if a.flags & 8 == 0 || pick::cull_sphere(seg, &a.bound) {
+            return false;
+        }
+        let Some(sprite) = a.sprite else { return false };
+        let (m, lighting) = (a.object_to_world, a.lighting);
+        v.light = a.color;
+        self.pick_sprite(sprite, &m, lighting, &mut -1, v, seg)
+    }
+
+    /// The sprite's own `Pick` under the model view `mv`; `lighting` and
+    /// `cursor` are `m_p444`/`m_p448`, the colour buffer each simple sprite
+    /// takes in turn (`GetNextColorBuffer`).
+    fn pick_sprite(&mut self, sprite: usize, mv: &Matrix44<M>, lighting: Option<usize>, cursor: &mut i32, v: &mut PickVars<M>, seg: &mut PickSegment<M>) -> bool {
+        match self.sprites[sprite].kind.clone() {
+            SpriteKind::Simple(_) => {
+                let cb = lighting.and_then(|l| {
+                    *cursor += 1;
+                    self.lightings[l].get(*cursor as usize)
+                });
+                let Some(p) = self.sprites[sprite].pick else { return false };
+                let pb = &self.picks[p];
+                let colors = cb.map(|flat| pick::split_colors(flat, pb));
+                pick::pick_prim_buffer(seg, mv, pb, colors.as_deref(), &v.light)
+            }
+            SpriteKind::Group(members) => {
+                for (ms, angles, scale, t) in members {
+                    let mem = Matrix44::transform(&Vect3::of(angles[0], angles[1], angles[2]), F::new(scale), &Vect3::of(t[0], t[1], t[2]));
+                    let out = Matrix44::mul(&mem, mv);
+                    if self.pick_sprite(ms, &out, lighting, cursor, v, seg) {
+                        return true;
+                    }
+                }
+                false
+            }
+            SpriteKind::Lod(levels) => {
+                let p = Vect3::new(mv.m[3].x - seg.start.x, mv.m[3].y - seg.start.y, mv.m[3].z - seg.start.z);
+                let d = p.x * p.x + p.y * p.y + p.z * p.z;
+                let mut i = 0;
+                while i < levels.len() && F::<M>::new(levels[i].1) * F::new(levels[i].1) < d {
+                    i += 1;
+                }
+                levels.get(i).is_some_and(|&(l, _)| self.pick_sprite(l, mv, lighting, cursor, v, seg))
+            }
+            // an animated HSprite's pick (posed, its attachments) is not
+            // ported; the rest have none
+            _ => false,
         }
     }
 
@@ -785,7 +968,7 @@ impl<M: Model> World<M> {
                 }
                 false
             }
-            SpriteKind::Lod(levels) => levels.first().is_some_and(|&l| self.collide_sprite(l, s)),
+            SpriteKind::Lod(levels) => levels.first().is_some_and(|&(l, _)| self.collide_sprite(l, s)),
             // VIHSprite::Collide: the pose for now, the centre transform on the
             // collider's world, and each node attachment under its node.
             SpriteKind::H(i) => {
@@ -967,6 +1150,42 @@ fn env_split<M: Model>(
 
 /// What one world walk carries (`VISceneCollVars`): the sweep's ends (the
 /// end shrinks to each hit), its radius and the walk's stamp.
+/// `VIScenePickVars`: the segment as the trees see it (its end pulled in to
+/// each hit), the walk stamp, and the raster's static light as last set.
+struct PickVars<M: Model> {
+    start: Vect3<M>,
+    end: Vect3<M>,
+    stamp: i32,
+    light: Color32F<M>,
+}
+
+/// `VIWorld::Pick(int, v)` / `VIZone::Pick(int, v)`'s descent: no margin;
+/// a straddling segment takes its own side first and the other when, measured
+/// again, it still reaches it.
+fn pick_descend<M: Model>(n: &Node<M>, v: &mut PickVars<M>, mut go: impl FnMut(bool, &mut PickVars<M>) -> bool) -> bool {
+    let ds = n.plane.distance(&v.start);
+    let de = n.plane.distance(&v.end);
+    if F::ZERO < ds && F::ZERO < de {
+        go(true, v)
+    } else if ds < F::ZERO && de < F::ZERO {
+        go(false, v)
+    } else if F::ZERO < ds {
+        let mut hit = go(true, v);
+        let (ds, de) = (n.plane.distance(&v.start), n.plane.distance(&v.end));
+        if (ds < F::ZERO || de < F::ZERO) && go(false, v) {
+            hit = true;
+        }
+        hit
+    } else {
+        let mut hit = go(false, v);
+        let (ds, de) = (n.plane.distance(&v.start), n.plane.distance(&v.end));
+        if (F::ZERO < ds || F::ZERO < de) && go(true, v) {
+            hit = true;
+        }
+        hit
+    }
+}
+
 struct Vars<M: Model> {
     start: Vect3<M>,
     end: Vect3<M>,
@@ -1092,5 +1311,40 @@ impl<M: Model> Scene<M> for World<M> {
     }
     fn env_flags(&self, at: &Vect3<M>) -> u32 {
         World::env_flags(self, at)
+    }
+}
+
+/// `VIScene::CalcOutdoorsIntensity`'s state (`m_soundTrack.m_p28`, `m_p30`):
+/// a 15-unit segment straight down from the eye, the baked colour's alpha
+/// where it lands (sun visibility: 1 under the sky, low under a roof), eased
+/// toward at 0.2 a second. A miss keeps the last value.
+#[derive(Clone, Copy, Debug)]
+pub struct Outdoors<M: Model> {
+    last: i64,
+    pub intensity: F<M>,
+}
+
+impl<M: Model> Default for Outdoors<M> {
+    fn default() -> Self {
+        Outdoors { last: 0, intensity: F::ONE }
+    }
+}
+
+impl<M: Model> Outdoors<M> {
+    pub fn update(&mut self, w: &mut World<M>, eye: &Vect3<M>, now: i64) -> F<M> {
+        let b = Vect3::new(eye.x, eye.y - F::new(15.0), eye.z);
+        let mut seg = PickSegment::new(*eye, b);
+        if w.pick_outdoors(&mut seg) {
+            if self.last != 0 {
+                let lim = F::from_int((now - self.last) as i32) * F::new(0.001) * F::new(0.2);
+                let d = seg.hit_color.a - self.intensity;
+                let c = crate::fpu::vimin(lim, crate::fpu::vimax(-lim, d));
+                self.intensity = self.intensity + c;
+            } else {
+                self.intensity = seg.hit_color.a;
+            }
+            self.last = now;
+        }
+        self.intensity
     }
 }

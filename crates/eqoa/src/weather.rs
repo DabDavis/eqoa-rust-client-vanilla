@@ -102,6 +102,8 @@ pub struct Weather {
     /// caller's restarts (a world change), as the game's never does
     last: i64,
     offset: i64,
+    /// `CalcOutdoorsIntensity`'s probe
+    pub outdoors: vi::world::Outdoors<Ee>,
 }
 
 impl Weather {
@@ -154,7 +156,7 @@ impl Weather {
         if models.is_none() {
             atm.initialised = false;
         }
-        let mut w = Weather { atm, rand, sys, tex: MATERIALS.map(|m| id(m.0)), first: true, sounds_attached: false, silent_handles: 0, flash: None, last: time, offset: 0 };
+        let mut w = Weather { atm, rand, sys, tex: MATERIALS.map(|m| id(m.0)), first: true, sounds_attached: false, silent_handles: 0, flash: None, last: time, offset: 0, outdoors: Default::default() };
         if let Ok(v) = std::env::var("EQOA_WEATHER") {
             let mut it = v.split(',');
             let t = it.next().and_then(|t| t.trim().parse().ok()).unwrap_or(0);
@@ -206,6 +208,8 @@ impl Weather {
             self.atm.set_sky(&b, self.first);
             self.first = false;
         }
+        // CalcOutdoorsIntensity, ahead of the atmosphere's Update
+        let o = self.outdoors.update(world, &eye.position, time);
         let mut sound = sound;
         if !self.sounds_attached
             && let Some(s) = sound.as_deref()
@@ -216,10 +220,11 @@ impl Weather {
         }
         if let Some(s) = sound.as_deref_mut() {
             s.weather = self.atm.intensity;
+            s.outdoors = o;
         }
         let cam = camera(eye);
         let mut voices = Voices(sound, &mut self.silent_handles);
-        self.atm.update(&mut Rays(world), &mut voices, &mut self.sys, &cam, time, F::new(hour), F::ONE, &mut self.rand);
+        self.atm.update(&mut Rays(world), &mut voices, &mut self.sys, &cam, time, F::new(hour), o, &mut self.rand);
     }
 
     /// The lights' half (`SetupTimeOfDayLights`' `GetLightning`): the flash,

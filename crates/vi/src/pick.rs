@@ -246,6 +246,8 @@ pub struct PickStrip<M: Model> {
 /// A prim buffer as the pick walks it.
 #[derive(Clone, Debug, Default)]
 pub struct PickBuffer<M: Model> {
+    /// `VIPrimBufferType`: 1 VUNC (float), 2 PackVUNC, 3 PackVUNCG.
+    pub kind: i32,
     pub bbox: BBox<M>,
     pub strips: Vec<PickStrip<M>>,
 }
@@ -289,7 +291,9 @@ pub fn pick_prim_buffer<M: Model>(seg: &mut PickSegment<M>, model_view: &Matrix4
     let Some(inv) = Matrix44::invert(model_view) else { return false };
     let mut local = PickSegment::transformed(seg, &inv);
     let mut hit = false;
-    if !cull_bbox(&local, &pb.bbox) && pick_strips(&mut local, pb, colors) {
+    // the colour-buffer form's switch has only PackVUNC's case
+    let walks = colors.is_none() || pb.kind == 2;
+    if !cull_bbox(&local, &pb.bbox) && walks && pick_strips(&mut local, pb, colors) {
         *seg = PickSegment::transformed(&local, model_view);
         hit = true;
     }
@@ -341,6 +345,94 @@ pub fn decode_color_tags(tags: &[u8], counts: &[i32]) -> Vec<Vec<[u8; 4]>> {
             let c = (0..nv).map(|k| tags.get(o + 8 + 4 * k..o + 12 + 4 * k).map_or([0; 4], |b| pack_color([b[0], b[1], b[2], b[3]]))).collect();
             o += (nv + 4).div_ceil(4) * 16;
             c
+        })
+        .collect()
+}
+
+/// A PrimBuffer record (0x1200) as the parser leaves it for the pick: each
+/// face record a strip, its box bounded as `VIPrimBuffer::Unlock` does, and
+/// the buffer's the union. Version 0 is float (VUNC: the colour through
+/// `/255` and back, `(int)(f*255 + 0.5)`); later versions are packed, the
+/// position scaled by 2^-p1, a colour stored `>> 1` and read back `<< 1`, and
+/// type 4 (PackVUNCG) offset by `pretrans[group]`. Type 5 (PackVUNBW) picks
+/// nothing, and neither does an unknown type.
+pub fn read_pick_buffer<M: Model>(d: &[u8], version: u16, pretrans: &[Vect3<M>]) -> Option<PickBuffer<M>> {
+    let rd = |o: usize| d.get(o..o + 4).map(|b| i32::from_le_bytes(b.try_into().unwrap()));
+    let mut p = 0usize;
+    let (kind, nfaces, scale) = if version == 0 {
+        let n = rd(4)?;
+        p += 12;
+        (0, n, F::ONE)
+    } else {
+        if version > 1 {
+            p += 4;
+        }
+        let (kind, nfaces, p1) = (rd(p)?, rd(p + 8)?, rd(p + 16)?);
+        p += 28;
+        (kind, nfaces, F::new((2.0f64.powi(-p1)) as f32))
+    };
+    let stride = match (version, kind) {
+        (0, _) => 36,
+        (_, 2) => 17,
+        (_, 4) => 19,
+        _ => return None,
+    };
+    if !(0..=100_000).contains(&nfaces) {
+        return None;
+    }
+    let mut pb = PickBuffer::<M> { kind: if version == 0 { 1 } else if kind == 4 { 3 } else { 2 }, ..Default::default() };
+    for f in 0..nfaces {
+        let (count, material) = (rd(p)?, rd(p + 4)?);
+        p += 8;
+        if !(0..=200_000).contains(&count) || p + count as usize * stride > d.len() {
+            return None;
+        }
+        let mut s = PickStrip { material, ..Default::default() };
+        for v in 0..count as usize {
+            let r = &d[p + v * stride..p + (v + 1) * stride];
+            let (pos, col) = if version == 0 {
+                let g = |k: usize| F::<M>::new(f32::from_le_bytes(r[k * 4..k * 4 + 4].try_into().unwrap()));
+                let k = F::<M>::new(1.0 / 255.0);
+                let back = |b: u8| ((F::<M>::from_int(b as i32) * k) * F::new(255.0) + F::new(0.5)).0 as i32 as u8;
+                (Vect3::new(g(0), g(1), g(2)), [back(r[32]), back(r[33]), back(r[34]), back(r[35])])
+            } else {
+                let sv = |k: usize| F::<M>::from_int(i16::from_le_bytes([r[k * 2], r[k * 2 + 1]]) as i32) * scale;
+                let mut pos = Vect3::new(sv(0), sv(1), sv(2));
+                if kind == 4 {
+                    let g = i16::from_le_bytes([r[17], r[18]]);
+                    if let Some(t) = usize::try_from(g).ok().and_then(|g| pretrans.get(g)) {
+                        pos += *t;
+                    }
+                }
+                (pos, pack_color([r[13] >> 1, r[14] >> 1, r[15] >> 1, r[16] >> 1]))
+            };
+            s.bbox.bound(v == 0, &pos);
+            s.verts.push((pos, col));
+        }
+        p += count as usize * stride;
+        if f == 0 {
+            pb.bbox = s.bbox;
+        } else {
+            pb.bbox = BBox::union(&pb.bbox, &s.bbox);
+        }
+        pb.strips.push(s);
+    }
+    Some(pb)
+}
+
+/// A colour buffer's colours (flat, in vertex order) split over a buffer's
+/// strips; past its end, zero.
+pub fn split_colors<M: Model>(flat: &[[u8; 4]], pb: &PickBuffer<M>) -> Vec<Vec<[u8; 4]>> {
+    let mut k = 0usize;
+    pb.strips
+        .iter()
+        .map(|s| {
+            (0..s.verts.len())
+                .map(|_| {
+                    k += 1;
+                    flat.get(k - 1).copied().unwrap_or([0; 4])
+                })
+                .collect()
         })
         .collect()
 }

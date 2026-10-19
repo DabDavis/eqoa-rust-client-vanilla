@@ -10,7 +10,7 @@
 //! the IOP then takes the device's frames, a block a frame, as on the console.
 //! The weather's intensity dims the track (`weather` is the atmosphere's);
 //! the rain and thunder are the atmosphere's own (`weather.rs`). Not ported:
-//! the outdoors probe (`CalcOutdoorsIntensity`, so `m_p30` stays 1), and the
+//! the outdoors intensity (`m_p30`, set each frame from the weather's probe), and the
 //! sound sprites' half of
 //! `UpdateSoundEmitters` (no world places one; SPELLFX does).
 
@@ -129,6 +129,8 @@ pub struct Sound {
     /// the weather's intensity (`m_atmosphere.m_intensity`), which dims the
     /// track: set by `weather.rs` each frame
     pub weather: F<Ee>,
+    /// `CalcOutdoorsIntensity`'s value this frame (`m_soundTrack.m_p30`).
+    pub outdoors: F<Ee>,
 }
 
 impl Sound {
@@ -194,6 +196,7 @@ impl Sound {
             battle: (0, -1),
             battle_option: 9,
             weather: F::ZERO,
+            outdoors: F::ONE,
         })
         .map(|mut s| {
             s.load_resident(iso_path);
@@ -461,6 +464,7 @@ impl Sound {
     /// 15 s, a slot faded out is retired, and a loaded one starts. Under water
     /// the music is muted and the underwater ambience plays instead.
     fn set_sound_track(&mut self, world: &World<Ee>, eye: &Eye<Ee>, hour: f32, time: i64) {
+        self.track.p30 = self.outdoors;
         let Some(grid) = &world.grid else { return };
         let b = grid.profile_blend(&eye.position);
         let (mut best, mut k) = (F::<Ee>::ZERO, 0);

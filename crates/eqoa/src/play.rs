@@ -1378,8 +1378,8 @@ impl Play {
         use vi::fpu::F;
         let p = walker.cam.walk.phys.position;
         self.light.at = vi::vect::Vect3::new(p.x, p.y + F::new(3.0), p.z);
-        let (rain, o) = weather.map_or((F::ZERO, F::ZERO), |w| (w.atm.intensity, w.atm.overcast_interp()));
-        let (at, r, c) = self.light.step(now, F::new(hour), rain, F::ONE, o)?;
+        let (rain, o, out) = weather.map_or((F::ZERO, F::ZERO, F::ONE), |w| (w.atm.intensity, w.atm.overcast_interp(), w.outdoors.intensity));
+        let (at, r, c) = self.light.step(now, F::new(hour), rain, out, o)?;
         Some((glam::Vec3::new(at.x.0, at.y.0, at.z.0), r.0, glam::Vec3::new(c[0].0, c[1].0, c[2].0)))
     }
 

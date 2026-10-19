@@ -202,7 +202,7 @@ fn pick_pack_vunc_matches() {
         let mut payload = (mode as i32).to_le_bytes().to_vec();
         payload.extend(f32s(&[seg.start.x.0, seg.start.y.0, seg.start.z.0, seg.end.x.0, seg.end.y.0, seg.end.z.0, scale]));
         payload.extend(body);
-        let pb = PickBuffer { bbox: BBox::default(), strips: decode_pack_vunc(&verts, &prims, F::new(scale), &vec![7; prims.len()]) };
+        let pb = PickBuffer { kind: 2, bbox: BBox::default(), strips: decode_pack_vunc(&verts, &prims, F::new(scale), &vec![7; prims.len()]) };
         let cb = decode_color_tags(&tags, &prims.iter().map(|p| p.0).collect::<Vec<_>>());
         let mut ours = seg;
         let hit = pick_strips(&mut ours, &pb, (mode == 1).then_some(&cb[..]));

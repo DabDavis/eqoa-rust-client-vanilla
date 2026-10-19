@@ -54,8 +54,9 @@ pub fn lit(
     let o = weather.as_deref().map_or(F::ZERO, |w| w.atm.overcast_interp());
     let k = blend.as_ref().map_or(F::ZERO, |(b, _, _)| vi::tod::overcast_weight(o, b));
     let (amb, mut sun, mut dir) = tod.lights(hour, k);
+    let outdoors = weather.as_deref().map_or(F::ONE, |w| w.outdoors.intensity);
     if let Some(flash) = weather.as_deref_mut().and_then(|w| w.lightning()) {
-        (sun, dir) = tod.flash(&sun, flash, F::ONE);
+        (sun, dir) = tod.flash(&sun, flash, outdoors);
     }
     let rgb = |c: [F<Ee>; 3]| Vec3::new(c[0].0, c[1].0, c[2].0);
     let mut v = View {
