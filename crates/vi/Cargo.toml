@@ -1,0 +1,9 @@
+[package]
+name = "vi"
+description = "The VI engine's game logic, ported from the matching decomp: walking, the camera, collision primitives"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ee.workspace = true

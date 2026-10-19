@@ -2,9 +2,13 @@
 //! (fly camera). `shot` renders the same view offscreen to a PNG.
 //!
 //! Models: drag to orbit, scroll to zoom, ←/→ for the previous/next model.
-//! Zones: drag to look, WASD to move, Q/E down/up, Shift ×5. Esc quits.
+//! Zones: drag to look, WASD to move, Q/E down/up, Shift ×5.
+//! Walking: WASD is the left stick, ←/→ orbit and ↑/↓ zoom (the right stick),
+//! drag orbits too. Esc quits.
 
 use crate::scene::{self, Scene};
+use crate::standin::TerrainScene;
+use crate::walker::{Controls, Walker};
 use esf::{Library, Ref};
 use glam::Vec3;
 use render::{GpuModel, Renderer, View, wgpu};
@@ -23,7 +27,12 @@ type Error = Box<dyn std::error::Error>;
 pub enum Source {
     Models { list: Vec<(i32, Ref)>, index: usize },
     Zone { file: usize, zone: esf::NodeId, index: usize },
+    /// A zone with the character in it, walking.
+    Walk { file: usize, zone: esf::NodeId, index: usize, character: Ref },
 }
+
+/// The human (`claude-notes`: model ids by race; the wire value is the DictID).
+pub const HUMAN: i32 = 0x70D898C6;
 
 impl Source {
     pub fn scene(&self, lib: &Library) -> Scene {
@@ -32,15 +41,27 @@ impl Source {
                 let (id, r) = list[*index];
                 scene::model(id, lib.build_model(r).unwrap_or_default())
             }
-            Source::Zone { file, zone, index } => scene::zone(lib, *file, *zone, *index),
+            Source::Zone { file, zone, index } | Source::Walk { file, zone, index, .. } => {
+                scene::zone(lib, *file, *zone, *index)
+            }
         }
+    }
+
+    /// For a walk: the character on the zone's terrain, in the middle of it.
+    pub fn walker(&self, lib: &Library, s: &Scene) -> Option<(Walker, esf::Model)> {
+        let Source::Walk { character, .. } = self else { return None };
+        let terrain = TerrainScene::new(&s.parts.first()?.0);
+        eprintln!("stand-in collision: {} terrain triangles", terrain.triangles());
+        let c = (s.bounds.0 + s.bounds.1) * 0.5;
+        let w = Walker::new(terrain, c.x, c.z, 0.0);
+        Some((w, lib.build_model(*character)?))
     }
 
     pub fn camera(&self, bounds: (Vec3, Vec3)) -> Camera {
         match self {
             Source::Models { .. } => Camera::Orbit { yaw: 0.6, pitch: 0.3, zoom: 1.0 },
             // Above the middle of the zone, looking down across it.
-            Source::Zone { .. } => {
+            Source::Zone { .. } | Source::Walk { .. } => {
                 let c = (bounds.0 + bounds.1) * 0.5;
                 Camera::Fly { pos: Vec3::new(c.x, bounds.1.y + 150.0, bounds.0.z - 100.0), yaw: 0.0, pitch: -0.5 }
             }
@@ -100,17 +121,46 @@ fn report(renderer: &Renderer) {
     }
 }
 
+/// A scripted walk for `shot`: hold `controls` for `ms` of game time.
+#[derive(Clone, Copy, Debug)]
+pub struct Script {
+    pub ms: i64,
+    pub controls: Controls,
+}
+
 /// Renders one view to a PNG, with no window.
-pub fn shot(lib: &Library, source: &Source, cam: Option<Camera>, (w, h): (u32, u32), out: &str) -> Result<(), Error> {
+pub fn shot(
+    lib: &Library,
+    source: &Source,
+    cam: Option<Camera>,
+    script: Option<Script>,
+    (w, h): (u32, u32),
+    out: &str,
+) -> Result<(), Error> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))?;
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default()))?;
     let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
     let s = source.scene(lib);
-    let gpu = upload(&mut renderer, &device, &queue, lib, &s);
+    let mut gpu = upload(&mut renderer, &device, &queue, lib, &s);
     let cam = cam.unwrap_or_else(|| source.camera(s.bounds));
+    let aspect = w as f32 / h as f32;
+    let mut view = cam.view(s.bounds, aspect);
+    if let Some((mut walker, body)) = source.walker(lib, &s) {
+        // 60 frames a second of game time, the controls held throughout.
+        let script = script.unwrap_or(Script { ms: 0, controls: Controls::default() });
+        let mut t = 0;
+        while t < script.ms {
+            t += 16;
+            walker.frame(script.controls, t);
+        }
+        eprintln!("after {} ms: {}", script.ms, walker.describe());
+        let textures = render::library_textures(lib);
+        gpu.push(renderer.upload(&device, &queue, &body, &[walker.body_matrix()], &textures));
+        view = View::daylight(walker.view(aspect));
+    }
     let refs: Vec<&GpuModel> = gpu.iter().collect();
-    let rgba = render::capture(&device, &queue, &renderer, w, h, &cam.view(s.bounds, w as f32 / h as f32), &refs);
+    let rgba = render::capture(&device, &queue, &renderer, w, h, &view, &refs);
     let mut enc = png::Encoder::new(std::io::BufWriter::new(std::fs::File::create(out)?), w, h);
     enc.set_color(png::ColorType::Rgba);
     enc.set_depth(png::BitDepth::Eight);
@@ -141,6 +191,8 @@ struct App {
     cursor: (f64, f64),
     held: HashSet<String>,
     last: Instant,
+    walker: Option<Walker>,
+    clock: Instant,
     gfx: Option<Gfx>,
     display: winit::event_loop::OwnedDisplayHandle,
 }
@@ -158,6 +210,8 @@ pub fn run(lib: Library, source: Source) -> Result<(), Error> {
         cursor: (0.0, 0.0),
         held: HashSet::new(),
         last: Instant::now(),
+        walker: None,
+        clock: Instant::now(),
         gfx: None,
         display,
     };
@@ -175,8 +229,15 @@ impl App {
         if !matches!(self.camera, Camera::Orbit { .. }) || matches!(self.source, Source::Zone { .. }) || self.gfx.is_none() {
             self.camera = self.source.camera(s.bounds);
         }
+        let walker = self.source.walker(&self.lib, &s);
         if let Some(g) = &mut self.gfx {
             g.models = upload(&mut g.renderer, &g.device, &g.queue, &self.lib, &s);
+            self.walker = walker.map(|(w, body)| {
+                let textures = render::library_textures(&self.lib);
+                g.models.push(g.renderer.upload(&g.device, &g.queue, &body, &[w.body_matrix()], &textures));
+                w
+            });
+            self.clock = Instant::now();
             report(&g.renderer);
             g.window.set_title(&format!("eqoa — {}", self.summary));
             g.window.request_redraw();
@@ -190,10 +251,20 @@ impl App {
         }
     }
 
+    /// The walker's controls from the held keys (`UpdateControls`'s keyboard
+    /// half): W/S forward, A/D strafe, ←/→ orbit, ↑/↓ zoom.
+    fn controls(&self) -> Controls {
+        let k = |a: &str, b: &str| self.held.contains(a) as i32 as f32 - self.held.contains(b) as i32 as f32;
+        Controls { fwd: k("w", "s"), strafe: k("d", "a"), orbit: k("right", "left"), pitch: k("down", "up") }
+    }
+
     /// Fly-camera movement from the held keys, scaled by frame time.
     fn fly(&mut self) -> bool {
         let dt = self.last.elapsed().as_secs_f32().min(0.1);
         self.last = Instant::now();
+        if self.walker.is_some() {
+            return false;
+        }
         let Camera::Fly { pos, yaw, pitch } = &mut self.camera else { return false };
         let fwd = direction(*yaw, *pitch);
         let right = fwd.cross(Vec3::Y).normalize_or_zero();
@@ -241,7 +312,7 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, _: &ActiveEventLoop) {
-        if !self.held.is_empty()
+        if (!self.held.is_empty() || self.walker.is_some())
             && let Some(g) = &self.gfx
         {
             g.window.request_redraw();
@@ -262,14 +333,18 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { event, .. } => {
                 let name = match &event.logical_key {
                     Key::Named(NamedKey::Shift) => Some("shift".to_string()),
+                    Key::Named(NamedKey::ArrowLeft) => Some("left".to_string()),
+                    Key::Named(NamedKey::ArrowRight) => Some("right".to_string()),
+                    Key::Named(NamedKey::ArrowUp) => Some("up".to_string()),
+                    Key::Named(NamedKey::ArrowDown) => Some("down".to_string()),
                     Key::Character(c) => Some(c.to_lowercase()),
                     _ => None,
                 };
                 if event.state == ElementState::Pressed {
                     match event.logical_key {
                         Key::Named(NamedKey::Escape) => el.exit(),
-                        Key::Named(NamedKey::ArrowRight) => self.step(1),
-                        Key::Named(NamedKey::ArrowLeft) => self.step(-1),
+                        Key::Named(NamedKey::ArrowRight) if self.walker.is_none() => self.step(1),
+                        Key::Named(NamedKey::ArrowLeft) if self.walker.is_none() => self.step(-1),
                         _ => {}
                     }
                     if let Some(n) = name {
@@ -291,6 +366,11 @@ impl ApplicationHandler for App {
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = (position.x, position.y);
                 if let Some((x, y)) = self.drag {
+                    if let Some(w) = &mut self.walker {
+                        // The right stick, by mouse: a drag is an orbit push.
+                        let k = vi::fpu::F::new(((position.x - x) as f32 * 0.05).clamp(-1.0, 1.0));
+                        w.cam.orbit_right(k);
+                    }
                     self.camera.drag((position.x - x) as f32, (position.y - y) as f32);
                     self.drag = Some(self.cursor);
                     if let Some(g) = &self.gfx {
@@ -312,7 +392,18 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 self.fly();
+                let controls = self.controls();
+                let now = self.clock.elapsed().as_millis() as i64;
                 let Some(g) = &mut self.gfx else { return };
+                let walk_view = self.walker.as_mut().map(|w| {
+                    w.frame(controls, now);
+                    let m = w.body_matrix();
+                    if let Some(body) = g.models.last() {
+                        g.renderer.set_instances(&g.queue, body, &[m]);
+                    }
+                    g.window.set_title(&format!("eqoa — walking {}", w.describe()));
+                    w.view(g.config.width as f32 / g.config.height as f32)
+                });
                 let frame = match g.surface.get_current_texture() {
                     wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
                     _ => {
@@ -320,7 +411,10 @@ impl ApplicationHandler for App {
                         return;
                     }
                 };
-                let view = self.camera.view(self.bounds, g.config.width as f32 / g.config.height as f32);
+                let view = match walk_view {
+                    Some(vp) => View::daylight(vp),
+                    None => self.camera.view(self.bounds, g.config.width as f32 / g.config.height as f32),
+                };
                 let target = frame.texture.create_view(&Default::default());
                 let mut enc = g.device.create_command_encoder(&Default::default());
                 let refs: Vec<&GpuModel> = g.models.iter().collect();

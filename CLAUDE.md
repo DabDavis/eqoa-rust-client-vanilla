@@ -8,3 +8,7 @@ The Rust client. README.md is the plan and the crate table; keep it current.
 - Port from the decomp (`../decomp/src`), not from the Go client: the Go client's
   differences from the original are listed in `../claude-notes/go-client-vs-decomp-audit-20261015.md`.
 - Each crate states what it is checked against; a port without a check is not done.
+- `vi` is the game logic: port from the decomp line by line, generic over `Model`, `#[repr(C)]`
+  in the EE layout, and add the method to eqoa-port's `test/oracle/oracle.cpp` and
+  `crates/vi/tests/oracle.rs` in the same change. A new test needs a negative control.
+- The oracle binary is `../eqoa-port/build/oracle` (`make oracle` there, never `make build/oracle`).

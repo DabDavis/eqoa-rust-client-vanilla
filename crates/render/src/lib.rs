@@ -11,6 +11,9 @@ use wgpu::util::DeviceExt;
 
 pub use wgpu;
 
+/// Which winding is front, in esf's strip-to-list order. Settled by looking.
+pub const FRONT_FACE: wgpu::FrontFace = wgpu::FrontFace::Ccw;
+
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 #[repr(C)]
@@ -139,9 +142,17 @@ impl Renderer {
                     }),
                 ],
             },
-            // Strips are flattened to lists; the game draws both faces of most
-            // geometry (the GS has no culling), so no culling here either.
-            primitive: wgpu::PrimitiveState::default(),
+            // Strips are flattened to lists with the winding made consistent
+            // (esf: even k is (k, k+2, k+1)). The VU1 strip programs cull a
+            // triangle whose screen winding is against the strip's alternating
+            // parity -- they set ADC on it (decomp/vu/README.md) -- so back
+            // faces are culled here too; that is also what hides the
+            // backward-facing triangles that bridge one strip to the next.
+            primitive: wgpu::PrimitiveState {
+                front_face: FRONT_FACE,
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: DEPTH_FORMAT,
                 depth_write_enabled: Some(true),
@@ -268,9 +279,15 @@ impl Renderer {
         let instance_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("instances"),
             contents: bytemuck::cast_slice(instances),
-            usage: wgpu::BufferUsages::VERTEX,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
         GpuModel { vertices, instances: instance_buf, instance_count: instances.len() as u32, batches, bounds: (lo, hi) }
+    }
+
+    /// Moves a model's instances (as many as it was uploaded with).
+    pub fn set_instances(&self, queue: &wgpu::Queue, m: &GpuModel, instances: &[[[f32; 4]; 4]]) {
+        let n = instances.len().min(m.instance_count as usize);
+        queue.write_buffer(&m.instances, 0, bytemuck::cast_slice(&instances[..n]));
     }
 
     pub fn draw(

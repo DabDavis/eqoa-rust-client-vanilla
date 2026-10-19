@@ -7,16 +7,20 @@
 //! eqoa zones <world.esf>        the zones in a world file
 //! eqoa view <file> [model]       a model (wgpu + winit)
 //! eqoa view <world> zone <n>     a zone: terrain and every placed actor
+//! eqoa view <world> walk <n>     the character, walking in a zone
 //! eqoa shot <file> [model | zone <n>] <out.png> [camera]   one view, offscreen
 //! ```
 //!
 //! A model is a list index or a DictID in hex (`0x…`). A `shot` camera is
-//! `yaw pitch zoom` for a model, `x y z yaw pitch` for a zone.
+//! `yaw pitch zoom` for a model, `x y z yaw pitch` for a zone, and for a walk
+//! a script, `ms [fwd strafe orbit pitch]`, held for that much game time.
 //!
 //! `iso` defaults to `$EQOA_ISO`, then `run/eqoa.iso`.
 
 mod scene;
+mod standin;
 mod viewer;
+mod walker;
 
 use std::process::ExitCode;
 
@@ -92,8 +96,11 @@ fn run(args: &[String]) -> Result<()> {
                 let (out, nums) = (&rest[at], &rest[at + 1..]);
                 rest = &rest[..at];
                 let (lib, src) = source(file, rest)?;
-                let cam = camera_args(&src, nums)?;
-                viewer::shot(&lib, &src, cam, (960, 540), out)?;
+                let (cam, script) = match src {
+                    viewer::Source::Walk { .. } => (None, script_args(nums)?),
+                    _ => (camera_args(&src, nums)?, None),
+                };
+                viewer::shot(&lib, &src, cam, script, (960, 540), out)?;
             } else {
                 let (lib, src) = source(file, rest)?;
                 viewer::run(lib, src)?;
@@ -122,6 +129,14 @@ fn source(file: &str, rest: &[String]) -> Result<(esf::Library, viewer::Source)>
     }
     eprintln!("loaded {} files in {:.2?}", lib.files.len(), t.elapsed());
     match rest {
+        [z, n] if z == "walk" => {
+            // The character's art: CHAR.ESF, after everything else.
+            lib.add("CHAR.ESF", esf::Container::open(iso.read("CHAR.ESF")?)?);
+            let index: usize = n.parse()?;
+            let zone = *lib.file(main).zones().get(index).ok_or("no such zone")?;
+            let character = lib.lookup(viewer::HUMAN).ok_or("no human model")?;
+            Ok((lib, viewer::Source::Walk { file: main, zone, index, character }))
+        }
         [z, n] if z == "zone" => {
             let index: usize = n.parse()?;
             let zone = *lib.file(main).zones().get(index).ok_or("no such zone")?;
@@ -143,6 +158,16 @@ fn source(file: &str, rest: &[String]) -> Result<(esf::Library, viewer::Source)>
         }
         _ => Err("expected [model] or zone <n>".into()),
     }
+}
+
+/// `shot` for a walk: `ms [fwd strafe orbit pitch]`, held throughout.
+fn script_args(n: &[String]) -> Result<Option<viewer::Script>> {
+    let v: Vec<f32> = n.iter().map(|s| s.parse()).collect::<std::result::Result<_, _>>()?;
+    let g = |i: usize| v.get(i).copied().unwrap_or(0.0);
+    Ok(Some(viewer::Script {
+        ms: g(0) as i64,
+        controls: walker::Controls { fwd: g(1), strafe: g(2), orbit: g(3), pitch: g(4) },
+    }))
 }
 
 /// `shot` camera numbers: orbit `yaw pitch zoom`, or fly `x y z yaw pitch`.
