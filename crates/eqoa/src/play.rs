@@ -94,6 +94,11 @@ pub struct Play {
     wnd_chat: Option<crate::chat::WndChat>,
     /// When the HUD was last drawn (its frame time).
     hud_last: i64,
+    /// `m_p382E4`: the chat channel plain text goes to (0 say, 2 group,
+    /// 3 shout, 4 guild).
+    pub channel: u8,
+    /// `m_p4F0B8`: who last sent a tell.
+    pub reply_name: String,
 }
 
 /// A creature's model as `Apply` dresses it: the look on its text slots, the
@@ -253,7 +258,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, chat_pending: Vec::new(), wnd_chat: None, hud_last: 0 }
+        Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new() }
     }
 
     fn self_id32(&self) -> Option<u32> {
@@ -268,6 +273,8 @@ impl Play {
         for e in self.session.pump() {
             match e {
                 Event::TargetInfo { disposition, .. } => self.target_info = Some(disposition),
+                Event::ReplyName(n) => self.reply_name = n,
+                Event::PlayerP2C(v) => self.dump.player.p2c = v as i64,
                 Event::State { channel: 0x42, data } => {
                     self.stats = net::dump::read_stats(&mut net::stream::Reader::new(&data));
                 }
@@ -550,6 +557,75 @@ impl Play {
             self.session.send(&w.data);
         }
         self.auto_attack = true;
+    }
+
+    /// `ChatLine`: a typed line. A slash command picks its channel for the
+    /// one line (`/say`, `/g`, `/gu`, `/s`; 0x000E sets it and puts the
+    /// current one back), `/t` goes as typed, `/r` to whoever last sent a
+    /// tell; an unknown command is answered with word 826. Plain text goes
+    /// to the current channel. Not here: `/alarm`, `/time`, `/follow` and
+    /// the crafting commands.
+    pub fn chat_line(&mut self, text: &str) {
+        let wide: Vec<u16> = text.encode_utf16().collect();
+        if self.session.self_id.is_none() || wide.len() >= 128 {
+            return;
+        }
+        let target = self.target;
+        if wide.first() != Some(&(b'/' as u16)) {
+            match self.channel {
+                4 => self.session.send_op_sub_wide(0x0578, 12, text),
+                3 => self.session.send_op_sub_wide(0x0C01, 2, text),
+                _ => self.session.say(text, target),
+            }
+            return;
+        }
+        // The command: up to ten characters, to a space, A-Z lowered.
+        let mut n = 0;
+        let mut cmd = String::new();
+        loop {
+            let c = wide[n] as u8;
+            cmd.push(if c.is_ascii_uppercase() { c + 32 } else { c } as char);
+            n += 1;
+            if n >= wide.len() || wide[n] == b' ' as u16 || n >= 10 {
+                break;
+            }
+        }
+        let rest_at = if wide.get(n) == Some(&(b' ' as u16)) { n + 1 } else { n };
+        let rest = String::from_utf16_lossy(&wide[rest_at.min(wide.len())..]);
+        let back = self.channel;
+        match cmd.as_str() {
+            "/sa" | "/say" => {
+                self.session.send_op_byte(0x000E, 0);
+                self.session.say(&rest, target);
+                self.session.send_op_byte(0x000E, back);
+            }
+            "/g" | "/group" => {
+                self.session.send_op_byte(0x000E, 2);
+                self.session.say(&rest, target);
+                self.session.send_op_byte(0x000E, back);
+            }
+            "/gu" | "/guild" => {
+                self.session.send_op_byte(0x000E, 4);
+                self.session.send_op_sub_wide(0x0578, 12, &rest);
+                self.session.send_op_byte(0x000E, back);
+            }
+            "/s" | "/shout" => {
+                self.session.send_op_byte(0x000E, 3);
+                self.session.send_op_sub_wide(0x0C01, 2, &rest);
+                self.session.send_op_byte(0x000E, back);
+            }
+            "/t" | "/tell" => self.session.say(text, target),
+            "/r" | "/reply" => {
+                if !self.reply_name.is_empty() {
+                    let line = format!("/t {} {}", self.reply_name, rest);
+                    self.session.say(&line, target);
+                }
+            }
+            _ => {
+                let word = self.words.as_ref().map_or_else(|| "(word 826)".to_string(), |w| w.get(826, 0).to_string());
+                self.add_chat(format!("{word} \"{cmd}\"."), [1.0; 4]);
+            }
+        }
     }
 
     /// `VIWndGame::AddText`: a line for the chat box (queued with its time

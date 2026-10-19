@@ -276,7 +276,7 @@ pub fn shot_with(
                 if t == 1008
                     && let Some(line) = &say
                 {
-                    p.session.say(line, u32::MAX);
+                    p.chat_line(line);
                 }
                 // `EQOA_TAB`: Tab two seconds in.
                 // `EQOA_TARGET=<name>`: that creature targeted two seconds in.
@@ -585,22 +585,39 @@ impl ApplicationHandler for App {
                 g.window.request_redraw();
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                // Chat: Enter opens a line, Enter sends it, Escape drops it;
-                // while it is open, keys type rather than move.
+                // The game's keys (`VIWndGame::OnKeyDown`): Enter opens a chat
+                // line, `/` one that starts with it, R one to `/reply`, T one
+                // to `/tell`; while a line is open, keys type into it, Enter
+                // sends it (`ChatLine`) and Escape drops it.
                 if let Some(p) = self.play.as_mut()
                     && event.state == ElementState::Pressed
                 {
+                    let open = |p: &mut crate::play::Play, held: &mut HashSet<String>, s: &str| {
+                        p.typing = Some(s.to_string());
+                        held.clear();
+                    };
                     match (&mut p.typing, &event.logical_key) {
                         (None, Key::Named(NamedKey::Enter)) => {
-                            p.typing = Some(String::new());
-                            self.held.clear();
+                            open(p, &mut self.held, "");
+                            return;
+                        }
+                        (None, Key::Character(c)) if c.as_str() == "/" => {
+                            open(p, &mut self.held, "/");
+                            return;
+                        }
+                        (None, Key::Character(c)) if c.eq_ignore_ascii_case("r") && !p.reply_name.is_empty() => {
+                            open(p, &mut self.held, "/reply ");
+                            return;
+                        }
+                        (None, Key::Character(c)) if c.eq_ignore_ascii_case("t") => {
+                            open(p, &mut self.held, "/tell ");
                             return;
                         }
                         (Some(t), Key::Named(NamedKey::Enter)) => {
                             let line = std::mem::take(t);
                             p.typing = None;
                             if !line.is_empty() {
-                                p.session.say(&line, u32::MAX);
+                                p.chat_line(&line);
                             }
                             return;
                         }
@@ -624,10 +641,8 @@ impl ApplicationHandler for App {
                 if self.play.as_ref().is_some_and(|p| p.typing.is_some()) {
                     return;
                 }
-                // F: attack, held (`ToggleAutoAttack` / `MaybeStopAutoAttack`).
-                if let (Some(p), Key::Character(c)) = (self.play.as_mut(), &event.logical_key)
-                    && c.eq_ignore_ascii_case("f")
-                {
+                // Space: attack, held (`ToggleAutoAttack` / `MaybeStopAutoAttack`).
+                if let (Some(p), Key::Named(NamedKey::Space)) = (self.play.as_mut(), &event.logical_key) {
                     if event.state == ElementState::Pressed && !event.repeat {
                         p.attack_press();
                     } else if event.state == ElementState::Released {

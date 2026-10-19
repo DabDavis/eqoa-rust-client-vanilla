@@ -82,6 +82,10 @@ pub enum Event {
     /// stops before the trailing token, so it is taken as answered whatever
     /// the token, as eqoa-port's `VI_HOST_ONLY` does.
     TargetInfo { disposition: u8, b: u8, c: u8, title: String, guild: String },
+    /// 0x07A3: who last sent a tell (`/reply` answers them).
+    ReplyName(String),
+    /// 0x00D9: the player's +0x2C.
+    PlayerP2C(i32),
     /// A line for the chat log, in its colour (RGBA 0..1): 0x0A7A white,
     /// 0x0A7B its own colour, 0x069E blue, 0x0758 (narrow) white.
     Chat(String, [f32; 4]),
@@ -194,11 +198,26 @@ impl Session {
         }
     }
 
-    /// `ChatLine`'s plain text: 0x000B with the line (wide) and the target
-    /// (-1 for none), on the channel in use.
+    /// `SendOpWStringInt(11, text, target)`: a chat line (wide) and the
+    /// target (-1 for none), on the channel in use.
     pub fn say(&mut self, text: &str, target: u32) {
         let mut w = Writer::op(0x000B);
         w.wide(text).u32(target);
+        self.send(&w.data);
+    }
+
+    /// `SendOpcodeByte(op, v)`.
+    pub fn send_op_byte(&mut self, op: u16, v: u8) {
+        let mut w = Writer::op(op);
+        w.u8(v);
+        self.send(&w.data);
+    }
+
+    /// A sub-op byte and a wide string: `VIClientPart2EF24::Say` (0x0578,
+    /// 12: the guild) and `VIClientPart2EFCC::SendText` (0x0C01, 2: a shout).
+    pub fn send_op_sub_wide(&mut self, op: u16, sub: u8, text: &str) {
+        let mut w = Writer::op(op);
+        w.u8(sub).wide(text);
         self.send(&w.data);
     }
 
@@ -373,6 +392,8 @@ impl Session {
                 self.send(&w.data);
             }
             0x00F8 => ev.push(Event::Speed(r.f32())),
+            0x07A3 => ev.push(Event::ReplyName(String::from_utf8_lossy(&r.string(24)).into_owned())),
+            0x00D9 => ev.push(Event::PlayerP2C(r.u32() as i32)),
             0x0010 => {
                 let (disposition, b, c) = (r.u8(), r.u8(), r.u8());
                 let mut fixed = || {
