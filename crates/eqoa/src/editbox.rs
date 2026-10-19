@@ -117,6 +117,22 @@ impl EditBox {
         self.set_cursor(0);
     }
 
+    /// `SetRows`.
+    pub fn set_rows(&mut self, n: i32) {
+        self.rows = n;
+    }
+
+    /// `SetMultiLine` (the soft keyboard's cell 64 is the newline key while
+    /// it is on; `key_at` reads the flag).
+    pub fn set_multi_line(&mut self, on: bool) {
+        self.multi_line = on;
+    }
+
+    /// `SetCenter`: the box placed round `p` for its rows.
+    pub fn set_center(&mut self, p: [i32; 2]) {
+        self.pos = [p[0] - 226, p[1] - ((self.rows * 17 + 203) >> 1)];
+    }
+
     /// `Clear`.
     pub fn clear(&mut self) {
         self.text.clear();

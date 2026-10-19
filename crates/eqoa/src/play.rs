@@ -10,6 +10,8 @@
 
 #[path = "npcw.rs"]
 mod npcw;
+#[path = "mail.rs"]
+mod mail;
 
 use crate::walker::Walker;
 use esf::Library;
@@ -272,6 +274,8 @@ pub struct Play {
     spell_rand: Rand,
     /// The corpse, merchant and trade windows (modes 1, 10, 15, 16).
     npcw: npcw::NpcWindows,
+    /// the gram client and the mail and tell windows (`mail.rs`)
+    mail: mail::MailWindows,
 }
 
 /// `gWorldInfo`'s paths on the Frontiers disc, by world index (CLIENT's
@@ -579,7 +583,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default() };
         p.take_abilities();
         p.npcw_world_entry();
         p
@@ -730,6 +734,7 @@ impl Play {
                     let out = self.craft.recv(&data, modes, &words, self.session.expansion & net::session::EXPANSION_FLAGS);
                     self.craft_outs.extend(out);
                 }
+                Event::Opcode { op: 0x0D41, data } => self.mail_recv(&data),
                 Event::Opcode { op: 0x1402, data } => self.cm_msgs.push(data),
                 Event::Opcode { op: 0x0468, data } => {
                     if let Some(o) = self.guild.recv_0468(&data) {
@@ -994,6 +999,7 @@ impl Play {
                         crate::camstyle::set_style(&mut walker.cam, self.cam_saved.mode, rc, &mut walker.scene);
                     }
                     self.npcw_world_entry();
+                    self.mail_connect();
                     self.pet_id = u32::MAX;
                     self.pet_name.clear();
                     // Msg000D's PlayCue
@@ -1946,8 +1952,13 @@ impl Play {
                     self.mode = 22;
                 }
                 0x0B05_1000..=0x0B05_100C if msg != 0x0B05_1001 => self.guild_action(msg, id),
-                0x0B0B_0000 | 0x0B0B_0002 | 0x0B0D_0000 | 0x0B0D_0001 | 0x0B0B_1000 | 0x0B0B_1001 => {
-                    eprintln!("play: start menu {msg:#x}: the gram, tell and support windows are not ported");
+                // Mail > Compose and Inbox, Tell and Reply
+                0x0B0B_0000 => self.open_mail(23),
+                0x0B0B_0002 => self.open_mail(24),
+                0x0B0D_0000 => self.open_mail(28),
+                0x0B0D_0001 => self.open_mail(29),
+                0x0B0B_1000 | 0x0B0B_1001 => {
+                    eprintln!("play: start menu {msg:#x}: the support windows are not ported");
                 }
                 _ => self.do_action(msg, id),
             }
@@ -3111,7 +3122,7 @@ impl Play {
                     self.open_edit(0xB0F0000, 128, -1, false);
                     self.edit.set_text(&crate::ui::wide(&format!("/t {name} ")));
                 }
-                BuddyUp::Mail(name) => eprintln!("play: mail to {name}: the gram window is not ported"),
+                BuddyUp::Mail(name) => self.buddy_mail(name),
                 BuddyUp::Remove(n) => {
                     if let Some(req) = self.buddies.remove(n) {
                         self.session.send(&req);
@@ -3269,6 +3280,7 @@ impl Play {
             self.run_npcw(vui, &mut r);
             self.run_panels(vui, &mut r);
             self.run_guild(vui, &mut r);
+            self.run_mail(vui, &mut r);
             self.run_edit(vui, &r);
             if self.mode == 2 {
                 let mut cues = Vec::new();

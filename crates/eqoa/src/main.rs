@@ -32,6 +32,7 @@ mod death;
 mod editbox;
 mod group;
 mod guild;
+mod gram;
 mod hud;
 mod hudmenu;
 mod spellbook;
