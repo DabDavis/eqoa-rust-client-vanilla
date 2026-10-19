@@ -8,3 +8,4 @@
 *.bin
 *.EEmemory
 /run/
+/web/dist/

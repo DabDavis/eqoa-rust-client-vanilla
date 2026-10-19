@@ -14,7 +14,7 @@ use glam::Vec3;
 use render::{GpuModel, Renderer, View, wgpu};
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::Instant;
+use web_time::Instant;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
@@ -731,6 +731,20 @@ pub fn shot_with(
     Ok(())
 }
 
+/// Frames drawn so far (the browser page's rate readout).
+pub static FRAMES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// A surface and device made before the event loop: a browser's, where the
+/// adapter is the canvas's own (WebGL2) and asking for it is asynchronous.
+/// `attrs` puts the window on the same canvas.
+pub struct PendingGfx {
+    pub attrs: winit::window::WindowAttributes,
+    pub surface: wgpu::Surface<'static>,
+    pub config: wgpu::SurfaceConfiguration,
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
+}
+
 struct Gfx {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -774,6 +788,8 @@ struct App {
     sky_at: Option<usize>,
     clock: Instant,
     gfx: Option<Gfx>,
+    /// Made before the loop (a browser's), taken when it resumes.
+    pending: Option<PendingGfx>,
     display: winit::event_loop::OwnedDisplayHandle,
 }
 
@@ -783,8 +799,15 @@ pub fn run(lib: Library, source: Source) -> Result<(), Error> {
 
 /// `run`, with a game session to play on.
 pub fn run_with(lib: Library, source: Source, play: Option<crate::play::Play>) -> Result<(), Error> {
+    run_with_gfx(lib, source, play, None)
+}
+
+/// `run_with` on a surface made beforehand. In a browser the loop is handed
+/// to the page and this returns at once.
+pub fn run_with_gfx(lib: Library, source: Source, play: Option<crate::play::Play>, pending: Option<PendingGfx>) -> Result<(), Error> {
     let event_loop = EventLoop::new()?;
     let display = event_loop.owned_display_handle();
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     let mut app = App {
         lib,
         source,
@@ -808,8 +831,15 @@ pub fn run_with(lib: Library, source: Source, play: Option<crate::play::Play>) -
         sky_at: None,
         clock: Instant::now(),
         gfx: None,
+        pending,
         display,
     };
+    #[cfg(target_arch = "wasm32")]
+    {
+        use winit::platform::web::EventLoopExtWebSys;
+        event_loop.spawn_app(app);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
     event_loop.run_app(&mut app)?;
     Ok(())
 }
@@ -917,11 +947,30 @@ impl App {
         *pos += v * speed * dt;
         v != Vec3::ZERO
     }
+
+    /// The renderer on a configured surface, then the scene.
+    fn attach(&mut self, window: Arc<Window>, surface: wgpu::Surface<'static>, config: wgpu::SurfaceConfiguration, device: wgpu::Device, queue: wgpu::Queue) {
+        let mut renderer = Renderer::new(&device, &queue, config.format);
+        if let Some(f) = arial(&self.lib) {
+            renderer.set_font(&device, &queue, &f);
+        }
+        if let Some(p) = self.play.as_mut() {
+            p.attach_ui(&mut renderer, &device, &queue, config.format, &self.lib);
+        }
+        let depth = render::depth_view(&device, config.width, config.height);
+        self.gfx = Some(Gfx { window, surface, device, queue, config, depth, renderer, models: Vec::new() });
+        self.load();
+    }
 }
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, el: &ActiveEventLoop) {
         if self.gfx.is_some() {
+            return;
+        }
+        if let Some(p) = self.pending.take() {
+            let window = Arc::new(el.create_window(p.attrs).expect("window"));
+            self.attach(window, p.surface, p.config, p.device, p.queue);
             return;
         }
         let window = Arc::new(el.create_window(Window::default_attributes().with_title("eqoa")).expect("window"));
@@ -939,16 +988,7 @@ impl ApplicationHandler for App {
         // The bytes go out as the GS's do: no sRGB encode (render::TARGET_FORMAT).
         config.format = config.format.remove_srgb_suffix();
         surface.configure(&device, &config);
-        let mut renderer = Renderer::new(&device, &queue, config.format);
-        if let Some(f) = arial(&self.lib) {
-            renderer.set_font(&device, &queue, &f);
-        }
-        if let Some(p) = self.play.as_mut() {
-            p.attach_ui(&mut renderer, &device, &queue, config.format, &self.lib);
-        }
-        let depth = render::depth_view(&device, config.width, config.height);
-        self.gfx = Some(Gfx { window, surface, device, queue, config, depth, renderer, models: Vec::new() });
-        self.load();
+        self.attach(window, surface, config, device, queue);
     }
 
     fn about_to_wait(&mut self, _: &ActiveEventLoop) {
@@ -1519,6 +1559,7 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 if let Some((file, pos, heading)) = self.play.as_mut().and_then(|p| p.take_world_change()) {
                     match self.enter_world(&file, pos, heading) {
                         Ok(()) => {}

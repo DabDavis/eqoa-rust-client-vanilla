@@ -145,7 +145,7 @@ pub struct Renderer {
     textures: std::collections::HashMap<i32, Option<wgpu::TextureView>>,
     /// DictIDs a batch asked for that no loaded file holds.
     pub missing_textures: std::collections::BTreeSet<i32>,
-    start: std::time::Instant,
+    start: web_time::Instant,
     format: wgpu::TextureFormat,
     /// Labels (name plates), once a font is set.
     pub text: Option<text::Text>,
@@ -358,7 +358,7 @@ impl Renderer {
             white,
             textures: Default::default(),
             missing_textures: Default::default(),
-            start: std::time::Instant::now(),
+            start: web_time::Instant::now(),
             format,
             text: None,
             ui: None,

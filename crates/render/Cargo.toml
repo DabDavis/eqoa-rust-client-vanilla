@@ -10,3 +10,4 @@ bytemuck = { version = "1.25.2", features = ["derive"] }
 esf.workspace = true
 glam = "0.34.1"
 wgpu = "30.0.1"
+web-time.workspace = true

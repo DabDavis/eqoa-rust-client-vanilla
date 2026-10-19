@@ -21,6 +21,9 @@
 //!
 //! `iso` defaults to `$EQOA_ISO`, then `run/eqoa.iso`.
 
+// The browser build runs none of the commands (the page calls `web`).
+#![cfg_attr(target_arch = "wasm32", allow(dead_code, unused_imports))]
+
 mod audio;
 mod chat;
 mod dialog;
@@ -72,8 +75,18 @@ mod wndlist;
 mod walker;
 mod weather;
 
+#[cfg(target_arch = "wasm32")]
+mod web;
+
 use std::process::ExitCode;
 
+/// In a browser the page drives it (`web::view`, `web::play`).
+#[cfg(target_arch = "wasm32")]
+fn main() {
+    web::start();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match run(&args) {

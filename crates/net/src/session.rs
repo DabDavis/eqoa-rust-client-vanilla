@@ -15,6 +15,32 @@ use crate::stream::{Reader, Writer};
 use drdp::{Addr, ConnId, Drdp, PORT_LEADER, address_to_endpoint};
 use std::net::{SocketAddr, UdpSocket};
 use vi::fpu::Ee;
+use web_time::{Instant, SystemTime, UNIX_EPOCH};
+
+/// What the session sends its datagrams through: a UDP socket natively, a
+/// relay's WebSocket in a browser. Addresses are IPv4 and a port.
+pub trait Datagrams {
+    fn send_to(&mut self, data: &[u8], ip: [u8; 4], port: u16);
+    /// The next datagram waiting, if any, and its sender.
+    fn recv_from(&mut self) -> Option<(Vec<u8>, [u8; 4], u16)>;
+}
+
+/// A non-blocking UDP socket.
+pub struct Udp {
+    socket: UdpSocket,
+    buf: Vec<u8>,
+}
+
+impl Datagrams for Udp {
+    fn send_to(&mut self, data: &[u8], ip: [u8; 4], port: u16) {
+        let _ = self.socket.send_to(data, SocketAddr::from((ip, port)));
+    }
+
+    fn recv_from(&mut self) -> Option<(Vec<u8>, [u8; 4], u16)> {
+        let (n, p) = self.socket.recv_from(&mut self.buf).ok()?;
+        Some((self.buf[..n].to_vec(), ipv4(&p), p.port()))
+    }
+}
 
 /// `VIClient`'s protocol version (0x0000 carries it both ways).
 pub const VERSION: u32 = 18;
@@ -169,7 +195,7 @@ pub enum State {
 
 pub struct Session {
     pub drdp: Drdp<Ee>,
-    socket: UdpSocket,
+    socket: Box<dyn Datagrams>,
     pub conn: Option<ConnId>,
     pub state: State,
     pub self_id: Option<u64>,
@@ -177,7 +203,7 @@ pub struct Session {
     pub expansion: u32,
     user: String,
     token: [u8; 32],
-    start: std::time::Instant,
+    start: Instant,
     base: u32,
     /// Datagrams sent so far: `usocket_sendto_addr` draws newlib's `rand()`
     /// twice for each, so a client keeping animation in step draws as many.
@@ -207,9 +233,17 @@ impl Session {
         probe.connect(server)?;
         let local = SocketAddr::new(probe.local_addr()?.ip(), socket.local_addr()?.port());
         socket.set_nonblocking(true)?;
-        let base = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u32).unwrap_or(1);
-        let mut drdp = Drdp::<Ee>::create_client(Addr { ip: ipv4(&local), port: local.port() }, base);
-        drdp.set_port_udp(local.port());
+        let udp = Udp { socket, buf: vec![0u8; 65536] };
+        Self::connect_with(Box::new(udp), (ipv4(&local), local.port()), (ipv4(&server), server.port()), user, token)
+            .ok_or_else(|| std::io::Error::other("connection_open failed"))
+    }
+
+    /// `connect` over any datagram carrier: `local` is the address the
+    /// server will see the client at (a relay's own, through one).
+    pub fn connect_with(socket: Box<dyn Datagrams>, local: ([u8; 4], u16), server: ([u8; 4], u16), user: &str, token: [u8; 32]) -> Option<Self> {
+        let base = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u32).unwrap_or(1);
+        let mut drdp = Drdp::<Ee>::create_client(Addr { ip: local.0, port: local.1 }, base);
+        drdp.set_port_udp(local.1);
         let mut s = Session {
             drdp,
             socket,
@@ -219,15 +253,15 @@ impl Session {
             expansion: 0,
             user: user.to_string(),
             token,
-            start: std::time::Instant::now(),
+            start: Instant::now(),
             base,
             packets_sent: 0,
             debug: std::env::var_os("EQOA_NET_DEBUG").is_some(),
             held: Vec::new(),
         };
-        let dst = address_to_endpoint(ipv4(&server), server.port(), PORT_LEADER);
+        let dst = address_to_endpoint(server.0, server.1, PORT_LEADER);
         let sys = s.drdp.system_endpoint;
-        let c = s.drdp.connection_open(sys, dst).ok_or_else(|| std::io::Error::other("connection_open failed"))?;
+        let c = s.drdp.connection_open(sys, dst)?;
         s.drdp.connection_set_failure(c, 1000, 30000, 60000);
         s.drdp.connection_set_simulated(c, 0, 0, 0);
         s.conn = Some(c);
@@ -235,7 +269,7 @@ impl Session {
         let mut w = Writer::op(0x0904);
         w.u8(0).u32(EXPANSION_FLAGS);
         s.send_login(w);
-        Ok(s)
+        Some(s)
     }
 
     fn send_hello(&mut self) {
@@ -343,11 +377,11 @@ impl Session {
     pub fn pump(&mut self) -> Vec<Event> {
         let t = self.now();
         self.drdp.set_time(t);
-        let mut buf = vec![0u8; 65536];
-        while let Ok((n, p)) = self.socket.recv_from(&mut buf) {
-            let mut d = ipv4(&p).to_vec();
-            d.extend(p.port().to_le_bytes());
-            d.extend(&buf[..n]);
+        while let Some((buf, ip, port)) = self.socket.recv_from() {
+            let n = buf.len();
+            let mut d = ip.to_vec();
+            d.extend(port.to_le_bytes());
+            d.extend(&buf);
             let r = self.drdp.process_packet(&d);
             if self.debug {
                 let mut b = drdp::buffer::Buffer::reader(&buf[..n.saturating_sub(4)]);
@@ -389,7 +423,7 @@ impl Session {
                 }
                 eprintln!("[net] -> {} bytes, drdp ports {from:#x}->{to:#x}: {segs:?}", p.data.len());
             }
-            let _ = self.socket.send_to(&p.data, SocketAddr::from((p.to.ip, p.to.port)));
+            self.socket.send_to(&p.data, p.to.ip, p.to.port);
             self.packets_sent += 1;
         }
         events

@@ -1,0 +1,212 @@
+#!/usr/bin/env python3
+"""drive -- run the browser client in a headless Chromium and watch it, for tests.
+
+Serves web/dist on a local port, opens the page in a Chromium of its own over
+the DevTools protocol, puts the disc image into the page's file input (the
+same as a player picking it), fills the form, presses View or Play, prints the
+page's console, and screenshots it.
+
+    web/drive.py --iso run/eqoa.iso --view 'CHAR.ESF 0x70D898C6' --shot 8=human.png
+    EQOA_PASSWORD=... web/drive.py --iso run/eqoa.iso --play dab \\
+        --params 'relay=ws://127.0.0.1:8790&server=203.0.113.10' --shot 30=world.png
+
+--shot SECONDS=FILE.png screenshots that long after the button (repeatable);
+--until TEXT exits 0 once a console line has it; --keys SECONDS=KEYS holds
+keys for a while (w, a, s, d, ArrowLeft...: 'w:2000' holds w for 2 s).
+WebGL/WebGPU run on the machine's GPU (--no-gpu: SwiftShader, every core).
+Needs the `websockets` package.
+"""
+import argparse, asyncio, base64, functools, http.server, json, os, shutil, socketserver, subprocess, sys, threading, time, urllib.request
+from pathlib import Path
+
+import websockets
+
+HERE = Path(__file__).resolve().parent
+
+
+def serve(root, port):
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        extensions_map = {**http.server.SimpleHTTPRequestHandler.extensions_map, ".wasm": "application/wasm", ".js": "text/javascript"}
+
+        def log_message(self, *a):
+            pass
+
+    handler = functools.partial(Quiet, directory=str(root))
+    socketserver.ThreadingTCPServer.allow_reuse_address = True
+    httpd = socketserver.ThreadingTCPServer(("127.0.0.1", port), handler)
+    httpd.daemon_threads = True
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd
+
+
+async def main(a):
+    httpd = serve(HERE / "dist", a.http_port) if not a.base else None
+    base = a.base or f"http://127.0.0.1:{httpd.server_address[1]}/"
+    prof = Path(a.profile).expanduser()
+    prof.mkdir(parents=True, exist_ok=True)
+    tmp = prof.parent / "tmp"
+    tmp.mkdir(exist_ok=True)
+    flags = [shutil.which("chromium") or "chromium", "--headless=new", f"--user-data-dir={prof}",
+             f"--remote-debugging-port={a.port}", "--no-first-run", "--no-default-browser-check",
+             f"--window-size={a.size}", "--enable-unsafe-swiftshader"]
+    if a.gpu:
+        flags += ["--use-angle=vulkan", "--enable-features=Vulkan", "--ignore-gpu-blocklist", "--enable-gpu"]
+    if a.webgpu:
+        flags += ["--enable-unsafe-webgpu", "--enable-features=Vulkan,WebGPU"]
+    flags += a.chrome
+    env = dict(os.environ, TMPDIR=str(tmp), DBUS_SESSION_BUS_ADDRESS="disabled:")
+    proc = subprocess.Popen(flags + ["about:blank"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        for _ in range(100):
+            try:
+                urllib.request.urlopen(f"http://127.0.0.1:{a.port}/json/version", timeout=1)
+                break
+            except OSError:
+                await asyncio.sleep(0.1)
+        req = urllib.request.Request(f"http://127.0.0.1:{a.port}/json/new?about:blank", method="PUT")
+        target = json.load(urllib.request.urlopen(req))
+        return await drive(a, base, target["webSocketDebuggerUrl"])
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        if httpd:
+            httpd.shutdown()
+
+
+async def drive(a, base, ws_url):
+    async with websockets.connect(ws_url, max_size=1 << 28) as ws:
+        seq = 0
+        pending = {}
+        lines = []
+        until = asyncio.Event()
+
+        async def call(method, **params):
+            nonlocal seq
+            seq += 1
+            fut = asyncio.get_running_loop().create_future()
+            pending[seq] = fut
+            await ws.send(json.dumps({"id": seq, "method": method, "params": params}))
+            return await fut
+
+        def out(text):
+            line = f"[{time.monotonic() - t0:7.2f}] {text}"
+            print(line, flush=True)
+            lines.append(line)
+            if a.until and a.until in text:
+                until.set()
+
+        async def reader():
+            async for raw in ws:
+                m = json.loads(raw)
+                if "id" in m and m["id"] in pending:
+                    pending.pop(m["id"]).set_result(m.get("result", m.get("error")))
+                elif m.get("method") == "Runtime.consoleAPICalled":
+                    p = m["params"]
+                    out(" ".join(str(x.get("value", x.get("description", ""))) for x in p["args"]))
+                elif m.get("method") == "Runtime.exceptionThrown":
+                    d = m["params"]["exceptionDetails"]
+                    out("EXCEPTION " + d.get("exception", {}).get("description", d.get("text", "")))
+                elif m.get("method") == "Log.entryAdded":
+                    e = m["params"]["entry"]
+                    out(f"log {e.get('level')}: {e.get('text')}")
+
+        t0 = time.monotonic()
+        rt = asyncio.ensure_future(reader())
+        await call("Runtime.enable")
+        await call("Log.enable")
+        await call("Page.enable")
+        await call("Page.navigate", url=base + ("?" + a.params if a.params else ""))
+        await asyncio.sleep(2)
+
+        async def js(expr):
+            r = await call("Runtime.evaluate", expression=expr, awaitPromise=True)
+            return r.get("result", {}).get("value") if r else None
+
+        for _ in range(100):
+            if await js("document.getElementById('status').textContent") == "ready":
+                break
+            await asyncio.sleep(0.1)
+        doc = await call("DOM.getDocument")
+        node = await call("DOM.querySelector", nodeId=doc["root"]["nodeId"], selector="#iso")
+        await call("DOM.setFileInputFiles", nodeId=node["nodeId"], files=[str(Path(a.iso).resolve())])
+
+        def setv(k, v):
+            return js(f"document.getElementById({json.dumps(k)}).value = {json.dumps(v)}")
+
+        if a.view is not None:
+            await setv("viewargs", a.view)
+            await js("document.getElementById('view').click()")
+        else:
+            await setv("user", a.play)
+            await setv("pass", os.environ.get("EQOA_PASSWORD", ""))
+            if a.character:
+                await setv("character", a.character)
+            await js("document.getElementById('play').click()")
+        t_click = time.monotonic()
+
+        async def shoot(path):
+            r = await call("Page.captureScreenshot", format="png")
+            Path(path).write_bytes(base64.b64decode(r["data"]))
+            out(f"screenshot {path}")
+
+        async def key(k, down):
+            code = {"w": "KeyW", "a": "KeyA", "s": "KeyS", "d": "KeyD"}.get(k, k)
+            await call("Input.dispatchKeyEvent", type="keyDown" if down else "keyUp", key=k, code=code,
+                       text=k if (down and len(k) == 1) else "", windowsVirtualKeyCode=ord(k.upper()) if len(k) == 1 else 0)
+
+        events = []
+        for s in a.shot:
+            t, f = s.split("=", 1)
+            events.append((float(t), "shot", f))
+        for s in a.keys:
+            t, spec = s.split("=", 1)
+            events.append((float(t), "keys", spec))
+        events.sort()
+        deadline = t_click + a.timeout
+        for t, kind, arg in events:
+            while time.monotonic() < t_click + t:
+                if until.is_set():
+                    break
+                await asyncio.sleep(0.05)
+            if kind == "shot":
+                await shoot(arg)
+            else:
+                await js("document.getElementById('eqoa').focus()")
+                for part in arg.split(","):
+                    k, ms = part.split(":")
+                    await key(k, True)
+                    await asyncio.sleep(int(ms) / 1000)
+                    await key(k, False)
+        while time.monotonic() < deadline and not until.is_set() and a.until:
+            await asyncio.sleep(0.1)
+        if a.final_shot:
+            await shoot(a.final_shot)
+        rt.cancel()
+        return 0 if (not a.until or until.is_set()) else 2
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--iso", required=True)
+    g = ap.add_mutually_exclusive_group(required=True)
+    g.add_argument("--view", help="the viewer's file and arguments")
+    g.add_argument("--play", metavar="USER", help="log in as USER (password in EQOA_PASSWORD)")
+    ap.add_argument("--character")
+    ap.add_argument("--params", default="", help="the page's query string")
+    ap.add_argument("--base", help="a page already served (default: web/dist on --http-port)")
+    ap.add_argument("--http-port", type=int, default=0, help="0: any free port")
+    ap.add_argument("--shot", action="append", default=[])
+    ap.add_argument("--keys", action="append", default=[])
+    ap.add_argument("--final-shot")
+    ap.add_argument("--until")
+    ap.add_argument("--timeout", type=float, default=60)
+    ap.add_argument("--profile", default="~/.cache/eqoa-rs-web/profile")
+    ap.add_argument("--port", type=int, default=9334)
+    ap.add_argument("--size", default="1280,800")
+    ap.add_argument("--gpu", action=argparse.BooleanOptionalAction, default=True)
+    ap.add_argument("--webgpu", action="store_true", help="ask Chromium for WebGPU too")
+    ap.add_argument("--chrome", action="append", default=[])
+    sys.exit(asyncio.run(main(ap.parse_args())))

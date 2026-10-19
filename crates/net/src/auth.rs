@@ -108,30 +108,92 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+/// The exchange without a socket, so anything that carries the stream can
+/// drive it (a TCP connection here, a browser's relayed WebSocket): hand it
+/// the bytes as they arrive and send what it returns.
+pub struct Exchange {
+    user: String,
+    password: String,
+    buf: Vec<u8>,
+    sent: bool,
+}
+
+/// What the exchange wants next.
+#[derive(Debug)]
+pub enum Step {
+    /// Send these bytes (the Login Request, after the Hello).
+    Send(Vec<u8>),
+    /// Wait for more bytes.
+    Wait,
+    Done(Login),
+}
+
+impl Exchange {
+    pub fn new(user: &str, password: &str) -> Self {
+        Exchange { user: user.into(), password: password.into(), buf: Vec::new(), sent: false }
+    }
+
+    /// How many more bytes the next step needs (a stream read can ask for
+    /// exactly that).
+    pub fn wants(&self) -> usize {
+        match (self.sent, self.buf.len()) {
+            (false, n) => 40usize.saturating_sub(n),
+            (true, n) if n < 8 => 8 - n,
+            (true, n) => 168usize.saturating_sub(n),
+        }
+    }
+
+    /// Bytes arrived: the Hello (type 4) is answered with the request, the
+    /// reply (type 37) ends it.
+    pub fn feed(&mut self, data: &[u8]) -> Result<Step, Error> {
+        self.buf.extend_from_slice(data);
+        let ty = |b: &[u8]| u32::from_be_bytes(b[4..8].try_into().unwrap());
+        if !self.sent {
+            if self.buf.len() < 40 {
+                return Ok(Step::Wait);
+            }
+            let t = ty(&self.buf);
+            if t != 4 {
+                return Err(Error::Unexpected(t));
+            }
+            self.buf.drain(..40);
+            self.sent = true;
+            return Ok(Step::Send(login_request(&self.user, &self.password).to_vec()));
+        }
+        if self.buf.len() < 8 {
+            return Ok(Step::Wait);
+        }
+        let t = ty(&self.buf);
+        if t != 37 {
+            return Err(Error::Unexpected(t));
+        }
+        if self.buf.len() < 168 {
+            return Ok(Step::Wait);
+        }
+        let r = &self.buf[..168];
+        let be = |o: usize| u32::from_be_bytes(r[o..o + 4].try_into().unwrap());
+        if be(12) != 0 {
+            return Err(Error::Refused(be(12)));
+        }
+        Ok(Step::Done(Login { account: be(80), status: be(84), game_features: be(164), token: udp_token(&self.password) }))
+    }
+}
+
 /// The whole exchange against `addr` (the auth server, port 9735).
 pub fn login(addr: impl ToSocketAddrs, user: &str, password: &str) -> Result<Login, Error> {
     let addr = addr.to_socket_addrs()?.next().ok_or_else(|| std::io::Error::other("no address"))?;
     let mut s = TcpStream::connect_timeout(&addr, Duration::from_secs(5))?;
     s.set_read_timeout(Some(Duration::from_secs(10)))?;
-    let mut hello = [0u8; 40];
-    s.read_exact(&mut hello)?;
-    let t = u32::from_be_bytes(hello[4..8].try_into().unwrap());
-    if t != 4 {
-        return Err(Error::Unexpected(t));
+    let mut x = Exchange::new(user, password);
+    loop {
+        let mut buf = vec![0u8; x.wants()];
+        s.read_exact(&mut buf)?;
+        match x.feed(&buf)? {
+            Step::Send(b) => s.write_all(&b)?,
+            Step::Wait => {}
+            Step::Done(l) => return Ok(l),
+        }
     }
-    s.write_all(&login_request(user, password))?;
-    let mut r = [0u8; 168];
-    s.read_exact(&mut r[..8])?;
-    let t = u32::from_be_bytes(r[4..8].try_into().unwrap());
-    if t != 37 {
-        return Err(Error::Unexpected(t));
-    }
-    s.read_exact(&mut r[8..])?;
-    let be = |o: usize| u32::from_be_bytes(r[o..o + 4].try_into().unwrap());
-    if be(12) != 0 {
-        return Err(Error::Refused(be(12)));
-    }
-    Ok(Login { account: be(80), status: be(84), game_features: be(164), token: udp_token(password) })
 }
 
 #[cfg(test)]
@@ -146,5 +208,37 @@ mod tests {
         assert_eq!(&r[84..88], b"EQOA");
         // CBC: an all-zero second block still encrypts to something else.
         assert_ne!(&r[56..64], &[0; 8]);
+    }
+
+    fn frame(ty: u32, len: usize) -> Vec<u8> {
+        let mut b = vec![0u8; len];
+        b[0..4].copy_from_slice(&(len as u32).to_be_bytes());
+        b[4..8].copy_from_slice(&ty.to_be_bytes());
+        b
+    }
+
+    #[test]
+    fn the_exchange_a_byte_at_a_time() {
+        let mut x = Exchange::new("dab", "x");
+        let mut steps = Vec::new();
+        let mut reply = frame(37, 168);
+        reply[80..84].copy_from_slice(&7u32.to_be_bytes());
+        for b in frame(4, 40).into_iter().chain(reply) {
+            match x.feed(&[b]).unwrap() {
+                Step::Wait => {}
+                s => steps.push(s),
+            }
+        }
+        assert!(matches!(&steps[0], Step::Send(b) if b[..] == login_request("dab", "x")[..]));
+        assert!(matches!(&steps[1], Step::Done(l) if l.account == 7 && l.token == udp_token("x")));
+        assert_eq!(steps.len(), 2);
+        // a refusal, and a reply of the wrong type
+        let mut x = Exchange::new("dab", "x");
+        x.feed(&frame(4, 40)).unwrap();
+        let mut refused = frame(37, 168);
+        refused[12..16].copy_from_slice(&5u32.to_be_bytes());
+        assert!(matches!(x.feed(&refused), Err(Error::Refused(5))));
+        let mut x = Exchange::new("dab", "x");
+        assert!(matches!(x.feed(&frame(0x43, 40)), Err(Error::Unexpected(0x43))));
     }
 }

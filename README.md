@@ -178,6 +178,41 @@ order per stage is not yet measured.
 - A lighting band along terrain patch edges (zone 84 at x = 25000): not a gap,
   the edges' vertex colours or normals; to revisit with the real lighting.
 
+## In a browser
+
+The same client builds for `wasm32-unknown-unknown` and runs in a page
+(`web/`): WebGPU where the browser has a working adapter, else WebGL2 (the
+renderer asks for nothing WebGL2 lacks, and the adapter there is the canvas's
+own, so the device is made on the page's canvas before the event loop). The
+player picks their own disc image in the page; it is read there a slice at a
+time (`File.slice`), never uploaded, and nothing from it is served. What the
+game reads synchronously is fetched first; whatever walks the image (its
+directory, a world file's record headers) runs against `iso::Sparse`, a cache
+that answers `WouldBlock` for bytes it lacks and is filled between attempts
+(`tests/sparse.rs`: the listing in 2 fetches, 128 KB, equal to the file's).
+
+A page can open neither a UDP socket nor a TCP connection, so the session's
+datagrams (`net::session::Datagrams`: a UDP socket natively) and the Station
+login (`net::auth::Exchange`, the exchange with no socket in it) go through a
+relay: go-eqoa-server's `cmd/wsrelay`, which speaks eqoa-port's
+`tools/wsrelay.py` protocol, one WebSocket for the DRDP datagrams and one for
+the login. Logged in through it, the page stands in Freeport at the display's
+rate (60 fps idle in Chromium).
+
+```bash
+cargo install wasm-bindgen-cli --version 0.2.129   # once: the version Cargo.lock pins
+web/build.sh                                        # web/dist: the page, eqoa.js, eqoa_bg.wasm
+EQOA_WEB_DEST=user@host:/path/to/play/ web/deploy.sh
+web/drive.py --iso run/eqoa.iso --view 'CHAR.ESF 0x70D898C6' --shot 6=human.png   # headless Chromium
+EQOA_PASSWORD=... web/drive.py --base https://host/eqoa/play/ --iso run/eqoa.iso --play <user> --shot 30=world.png
+```
+
+The page takes `?relay=` and `?server=` (an IPv4 address; by default the
+page's own host, as the relay resolves it). Not in the browser yet: sound
+(SNDDRV runs on cpal's callback thread; a page's is an AudioWorklet), the HUD's
+atlas and the start menu (they read the player's decrypted SUPPORT and CLIENT
+images, which a page has no way to get yet), a world change, touch controls.
+
 ## Licence
 
 MIT (`LICENSE`).
