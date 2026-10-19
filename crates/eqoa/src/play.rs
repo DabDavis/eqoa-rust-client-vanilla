@@ -19,6 +19,7 @@ use vi::fpu::{Ee, F};
 use vi::geom::Matrix44;
 use vi::hsprite::AnimScene;
 use vi::vect::Vect3;
+use vi::walk::{WalkControl, WalkPhysics};
 
 /// `gEntityUpdateRate`.
 pub const UPDATE_RATE: u32 = 100;
@@ -38,6 +39,9 @@ pub struct Play {
     pub entities: Entities,
     last_send: u32,
     puppets: Vec<Option<Puppet>>,
+    /// Each creature's `m_walk`, made with it (`CreateEntity`: `Init` at the
+    /// origin), keyed by the entity's id.
+    walks: Vec<Option<(u32, WalkControl<Ee>)>>,
     /// The player's model as the server last named it on its channel.
     pub self_model: Option<u32>,
 }
@@ -54,7 +58,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player) -> Self {
-        Play { session, player, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), self_model: None }
+        Play { session, player, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None }
     }
 
     fn self_id32(&self) -> Option<u32> {
@@ -72,9 +76,32 @@ impl Play {
                     let self_id = self.session.self_id;
                     let skel = self.puppets[channel as usize].as_ref().and_then(|p| p.sprite.as_ref()).map_or(0, |s| s.skel_type);
                     let scene = &mut walker.scene;
+                    let walk = &mut self.walks[channel as usize];
                     self.entities.channel(channel as usize, &data, self_id, now, UPDATE_RATE, |e| {
-                        // VICreatureEntity::Sync: a creature that does not walk
-                        // is put on the ground at once.
+                        if walk.as_ref().map(|w| w.0) != Some(e.id) {
+                            let mut w = WalkControl::<Ee>::default();
+                            w.init(Vect3::default(), Vect3::default(), scene);
+                            *walk = Some((e.id, w));
+                        }
+                        // VICreatureEntity::Sync: the update becomes the walk
+                        // control's physics; a creature that does not walk is
+                        // put on the ground at once.
+                        if let (Some(c), Some((_, w))) = (&e.creature, walk.as_mut()) {
+                            let p = WalkPhysics::<Ee> {
+                                position: v3(e.pos),
+                                angles: v3(e.hpr),
+                                velocity: v3(c.velocity),
+                                angular_vel: v3(c.angular_vel),
+                                force: v3(c.accel),
+                                torque: v3(c.angular_accel),
+                                floor: F::new(c.floor),
+                                loco_state: c.state as i32,
+                                target_heading: F::new(c.target_heading),
+                                flags: c.walk_flags,
+                                ..Default::default()
+                            };
+                            w.set_update_physics(&p, scene);
+                        }
                         if e.creature.as_ref().is_some_and(|c| c.p255 == 0) {
                             let (mut pos, mut hpr) = (v3(e.pos), v3(e.hpr));
                             vi::creature::extrapolate_ground(scene, -1, skel, None, &mut pos, &mut hpr);
@@ -93,15 +120,22 @@ impl Play {
             }
         }
         let self_id = self.session.self_id;
-        // UpdateCreatures: each creature carried along its velocity since it
-        // was last moved (`VICreatureEntity::Walk`, ExtrapolateMove). Those
-        // that run their own walk physics (players) are carried the same way
-        // for now.
+        // UpdateCreatures / VICreatureEntity::Walk: a creature with its own
+        // walk physics (a player, +0x255) is stepped by it; any other is
+        // carried along its velocity since it was last moved (ExtrapolateMove).
         let me = self.self_id32();
         for (slot, e) in self.entities.slots.iter_mut().enumerate() {
             let Some(e) = e else { continue };
             let Some(c) = &e.creature else { continue };
             if Some(e.id) == me {
+                continue;
+            }
+            if c.p255 != 0
+                && let Some((_, w)) = self.walks[slot].as_mut()
+            {
+                w.process(1, &mut walker.scene);
+                e.pos = w.committed.position.to_array();
+                e.hpr = [w.committed.angles.x.0, 0.0, 0.0];
                 continue;
             }
             let skel = self.puppets[slot].as_ref().and_then(|p| p.sprite.as_ref()).map_or(0, |s| s.skel_type);
@@ -155,9 +189,15 @@ impl Play {
             let (matrix, palette) = match p.sprite.as_mut() {
                 Some(cs) => {
                     p.anims.time = game_ms;
-                    // UpdateCreatures: SetLocomotion with the creature's state.
+                    // UpdateCreatures: a walking creature's sprite follows its
+                    // walk control; any other takes SetLocomotion(state).
                     if let Some(c) = &e.creature {
-                        cs.set_locomotion(c.state as i32, &p.anims, &mut p.rand);
+                        match self.walks[slot].as_ref() {
+                            Some((_, w)) if c.p255 != 0 => {
+                                w.update_sprite(cs, &p.anims, &mut p.rand);
+                            }
+                            _ => cs.set_locomotion(c.state as i32, &p.anims, &mut p.rand),
+                        }
                     }
                     cs.h.process(0, &p.anims);
                     let m = cs.h.calc_trans_about_center(&actor, &p.anims);
