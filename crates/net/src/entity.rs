@@ -54,6 +54,8 @@ pub struct Entity {
     pub world: i8,
     /// +0x18 (byte 26): bit 0 selectable, bit 1 a corpse.
     pub p18: u8,
+    /// +0x19 (byte 27): `TargetInRange` refuses a target where it is 0.
+    pub p19: u8,
     pub model: u32,
     pub model2: u32,
     pub scale: f32,
@@ -110,7 +112,7 @@ impl Entity {
         self.world = r.u8() as i8;
         r.u64();
         self.p18 = r.u8();
-        r.u8();
+        self.p19 = r.u8();
         self.model = r.u32();
         self.model2 = r.u32();
         self.scale = r.f32();

@@ -43,6 +43,13 @@ pub struct Walker {
 }
 
 impl Walker {
+    /// `VICSprite::SetAction` on the character: its handle, or None with
+    /// no character.
+    pub fn set_action(&mut self, id: i32) -> Option<i32> {
+        let sc = &self.anims;
+        self.sprite.as_mut().map(|s| s.set_action(id, sc, &mut self.rand))
+    }
+
     /// Stand the character at (x, z) on the terrain, facing `heading`, with
     /// the camera behind it.
     pub fn new(scene: World<Ee>, x: f32, z: f32, heading: f32) -> Self {

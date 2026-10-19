@@ -3,6 +3,7 @@
 //! from the server list to standing in the world (`session`).
 
 pub mod auth;
+pub mod dump;
 pub mod entity;
 pub mod session;
 pub mod stream;

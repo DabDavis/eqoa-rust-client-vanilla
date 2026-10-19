@@ -135,6 +135,10 @@ fn character_animation_matches() {
             4000..=4999 => 4,
             5000..=5999 => 11,
             6000..=6999 => 2,
+            // Actions (1000 + id): a swing standing, one mid-blend, a cast.
+            7008 => 1023,
+            7040 => 1025,
+            8000 => 1034,
             _ => 0,
         };
         let lod = match k % 7 {
@@ -157,29 +161,37 @@ fn character_animation_matches() {
     // The same on our side: SetDefaultEntries/Priorities/Defaults already ran
     // in load_csprite, as they do in ParseCSpriteObj.
     let nn = cs.h.nodes.len();
-    let step = 16 + nn * 64;
+    let step = 28 + nn * 64;
     let mut changes = 0;
+    let mut actions = 0;
     let mut last = [(0, 0); 2];
     for (k, &(t, loco, lod)) in script.iter().enumerate() {
         sc.time = t as i64;
-        cs.set_locomotion(loco, &sc, &mut rand);
+        let handle = if loco >= 1000 {
+            actions += 1;
+            cs.set_action(loco - 1000, &sc, &mut rand)
+        } else {
+            cs.set_locomotion(loco, &sc, &mut rand);
+            -2
+        };
         cs.h.process(lod, &sc);
         let off = 4 + k * step;
-        let st: Vec<i32> = (0..4).map(|i| i32::from_le_bytes(res[off + i * 4..off + i * 4 + 4].try_into().unwrap())).collect();
-        let ours = [cs.cur[0].anim, cs.cur[0].play, cs.cur[1].anim, cs.cur[1].play];
-        assert_eq!(ours.to_vec(), st, "step {k} (t {t}, loco {loco}): layers (anim, play)");
+        let st: Vec<i32> = (0..7).map(|i| i32::from_le_bytes(res[off + i * 4..off + i * 4 + 4].try_into().unwrap())).collect();
+        let ours = [cs.cur[0].anim, cs.cur[0].play, cs.cur[1].anim, cs.cur[1].play, handle, cs.action, cs.action_seq];
+        assert_eq!(ours.to_vec(), st, "step {k} (t {t}, loco {loco}): layers (anim, play), handle, action, sequence");
         let now = [(ours[0], ours[1]), (ours[2], ours[3])];
         if now != last {
             changes += 1;
             last = now;
         }
         for j in 0..nn {
-            let theirs = from_bytes::<Matrix44<Ieee>>(&res[off + 16 + j * 64..]);
+            let theirs = from_bytes::<Matrix44<Ieee>>(&res[off + 28 + j * 64..]);
             if let Some((o2, a, b2)) = first_diff(&cs.h.nodes[j].world, &theirs) {
                 panic!("step {k} (t {t}, loco {loco}, lod {lod}) node {j}: +0x{o2:02X} ours {a:08X} theirs {b2:08X}");
             }
         }
     }
-    eprintln!("{} steps x {nn} nodes equal; {changes} layer changes", script.len());
+    eprintln!("{} steps x {nn} nodes equal; {changes} layer changes, {actions} actions", script.len());
     assert!(changes >= 6);
+    assert_eq!(actions, 3);
 }

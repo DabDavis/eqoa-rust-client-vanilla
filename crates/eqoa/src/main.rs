@@ -118,7 +118,7 @@ fn run(args: &[String]) -> Result<()> {
             let host = args.get(1).ok_or("usage: eqoa play <host> <user> (password in EQOA_PASSWORD)")?;
             let user = args.get(2).ok_or("usage: eqoa play <host> <user>")?;
             let pass = std::env::var("EQOA_PASSWORD").map_err(|_| "set EQOA_PASSWORD")?;
-            let (session, player) = login(host, user, &pass)?;
+            let (session, player, dump) = login(host, user, &pass)?;
             // The world the dump names: its file, by the path's last part.
             let file = player.world_path.rsplit(['\\', '/']).next().unwrap_or("tunaria.esf").to_uppercase();
             let (lib, src) = source(&file, &[])?;
@@ -134,7 +134,10 @@ fn run(args: &[String]) -> Result<()> {
             let character = lib.lookup(viewer::HUMAN).ok_or("no human model")?;
             drop(src);
             let src = viewer::Source::Walk { file: main_file, index, character, spawn: Some((x, z, player.hpr[0])) };
-            let play = Some(play::Play::new(session, player));
+            let mut play = play::Play::new(session, player, dump);
+            // The game's words, for the lines the client writes itself.
+            play.words = disc(None)?.read("WORDS.TXT").ok().and_then(|b| vi::strtab::StringTable::parse(&b));
+            let play = Some(play);
             if args[0] == "playshot" {
                 let out = args.get(3).ok_or("usage: eqoa playshot <host> <user> <out.png> [ms]")?;
                 let ms: i64 = args.get(4).map(|m| m.parse()).transpose()?.unwrap_or(3000);
@@ -151,7 +154,7 @@ fn run(args: &[String]) -> Result<()> {
 
 /// The Station login and the game session up to world entry, printing
 /// every event: the first shard and the first character are taken.
-fn login(host: &str, user: &str, pass: &str) -> Result<(net::session::Session, net::session::Player)> {
+fn login(host: &str, user: &str, pass: &str) -> Result<(net::session::Session, net::session::Player, Box<net::dump::MemoryDump>)> {
     use net::session::{Event, Session};
     let l = net::auth::login((host, 9735), user, pass)?;
     eprintln!("auth: account {} status {} features {:#x}", l.account, l.status, l.game_features);
@@ -178,10 +181,20 @@ fn login(host: &str, user: &str, pass: &str) -> Result<(net::session::Session, n
                         s.select_character(&c.clone());
                     }
                 }
-                Event::WorldEntry { self_id, player } => {
+                Event::WorldEntry { self_id, player, dump } => {
                     eprintln!("in the world as {self_id:#x}: {player:?} after {:.2?}, {} packets sent", t.elapsed(), s.packets_sent);
+                    eprintln!(
+                        "  dump: {} quick-chat sets, {} quests, {} items carried ({} worn), bank {} items, {} abilities, speed {}",
+                        dump.text_sets.len(),
+                        dump.quests.len(),
+                        dump.inventory.items.len(),
+                        dump.inventory.items.iter().filter(|i| i.equip_slot >= 0).count(),
+                        dump.bank.items.items.len(),
+                        dump.abilities.len(),
+                        dump.speed
+                    );
                     let p = player.clone();
-                    return Ok((s, p));
+                    return Ok((s, p, dump.clone()));
                 }
                 Event::Disconnected(r) => return Err(format!("disconnected (reason {r})").into()),
                 Event::State { channel, data } => eprintln!("state {channel:#04x}: {} bytes", data.len()),

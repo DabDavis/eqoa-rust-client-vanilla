@@ -74,7 +74,7 @@ pub enum Event {
     /// The server opened the game connection (promotion).
     Promoted,
     /// 0x000D parsed: the player's own entity id and where they stand.
-    WorldEntry { self_id: u64, player: Player },
+    WorldEntry { self_id: u64, player: Player, dump: Box<crate::dump::MemoryDump> },
     /// 0x00F8: the run speed (0 stops).
     Speed(f32),
     /// A line for the chat log, in its colour (RGBA 0..1): 0x0A7A white,
@@ -336,11 +336,29 @@ impl Session {
             }
             0x000D => {
                 self.state = State::World;
-                let player = read_player(&mut r);
+                let dump = crate::dump::read(&mut r);
+                // Every retail dump ends in 39 zero bytes past the last
+                // field read (tests/dump_capture.rs).
+                if self.debug || r.error || r.pos + 39 != r.data.len() {
+                    eprintln!("[net] MemoryDump: {} of {} bytes read{}", r.pos, r.data.len(), if r.error { ", SHORT" } else { "" });
+                }
+                // Msg000D goes on only when the whole dump read.
                 if !r.error {
+                    let p = &dump.player;
+                    let player = Player {
+                        world_path: dump.world_path.clone(),
+                        server_id: p.id,
+                        name: p.name.clone(),
+                        class: p.class,
+                        race: p.race,
+                        level: p.level,
+                        world: p.world,
+                        pos: p.pos,
+                        hpr: p.hpr,
+                    };
                     self.self_id = Some(m.src);
                     self.send(&Writer::op(0x0014).data);
-                    ev.push(Event::WorldEntry { self_id: m.src, player });
+                    ev.push(Event::WorldEntry { self_id: m.src, player, dump: Box::new(dump) });
                 }
                 let mut w = Writer::op(0x00C9);
                 w.u8(1).u8(0);
@@ -410,28 +428,3 @@ fn read_characters(r: &mut Reader) -> Vec<Character> {
         .collect()
 }
 
-/// The MemoryDump's head: the world-path gate, the path, `VIPlayer::Read`.
-fn read_player(r: &mut Reader) -> Player {
-    let mut p = Player::default();
-    r.u8();
-    p.world_path = String::from_utf8_lossy(&r.string(256)).into_owned();
-    p.server_id = r.signed();
-    p.name = String::from_utf8_lossy(&r.string(256)).into_owned();
-    p.class = r.signed();
-    p.race = r.signed();
-    p.level = r.signed();
-    r.signed(); // exp
-    r.signed(); // debt
-    r.u8(); // breath
-    for _ in 0..4 {
-        r.signed(); // tunar, bank tunar, unused TP, p44
-    }
-    p.world = r.signed();
-    for v in &mut p.pos {
-        *v = r.f32();
-    }
-    for v in &mut p.hpr {
-        *v = r.f32();
-    }
-    p
-}

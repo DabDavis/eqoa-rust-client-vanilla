@@ -205,6 +205,15 @@ impl<M: Model> CSprite<M> {
         self.action_seq += 1;
     }
 
+    /// `SetAction`: `SetLocomotion`'s body, handing back the action's
+    /// handle (for `IsActionComplete`). `SetAnimation` cannot fail here (no
+    /// play pool runs out), so the decomp's early -1 never arises.
+    pub fn set_action(&mut self, id: i32, sc: &AnimScene<M>, rand: &mut Rand) -> i32 {
+        let handle = self.action_seq;
+        self.set_locomotion(id, sc, rand);
+        handle
+    }
+
     pub fn is_action_complete(&self, i: i32) -> bool {
         if self.action != i {
             return true;

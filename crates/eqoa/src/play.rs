@@ -51,6 +51,8 @@ pub struct Plate {
 pub struct Play {
     pub session: Session,
     pub player: Player,
+    /// The MemoryDump's whole content (inventory, abilities, ...).
+    pub dump: Box<net::dump::MemoryDump>,
     pub entities: Entities,
     last_send: u32,
     puppets: Vec<Option<Puppet>>,
@@ -70,8 +72,14 @@ pub struct Play {
     pub target: u32,
     /// `m_autoAttack`: held while the attack button is (the 0x40 carries it).
     pub auto_attack: bool,
-    /// `m_p071E8`: when the next 0x000F may go out.
+    /// `m_p071E8`: when the next 0x000F may go out, and the next swing.
     attack_due: u32,
+    /// `m_p071F0`: when the last swing landed in reach.
+    pub swung: u32,
+    /// The stat channel (0x42).
+    pub stats: net::dump::Stats,
+    /// The game's words (WORDS.TXT), for the lines the client writes itself.
+    pub words: Option<vi::strtab::StringTable>,
 }
 
 /// A creature's model as `Apply` dresses it: the look on its text slots, the
@@ -226,8 +234,8 @@ pub struct Gpu<'a> {
 }
 
 impl Play {
-    pub fn new(session: Session, player: Player) -> Self {
-        Play { session, player, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0 }
+    pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
+        Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None }
     }
 
     fn self_id32(&self) -> Option<u32> {
@@ -241,6 +249,9 @@ impl Play {
         let mut new_model = None;
         for e in self.session.pump() {
             match e {
+                Event::State { channel: 0x42, data } => {
+                    self.stats = net::dump::read_stats(&mut net::stream::Reader::new(&data));
+                }
                 Event::State { channel, data } if (channel as usize) < SLOTS => {
                     let self_id = self.session.self_id;
                     let skel = self.puppets[channel as usize].as_ref().and_then(|p| p.sprite.as_ref()).map_or(0, |s| s.skel_type);
@@ -288,12 +299,16 @@ impl Play {
                         self.chat.pop_front();
                     }
                 }
-                Event::WorldEntry { self_id, player } => {
+                Event::WorldEntry { self_id, player, dump } => {
                     eprintln!("play: world entry again as {self_id:#x} at {:?}", player.pos);
                     self.player = player;
+                    self.dump = dump;
                 }
                 _ => {}
             }
+        }
+        if self.has_self() {
+            self.auto_attack_tick(walker, now);
         }
         let self_id = self.session.self_id;
         // UpdateCreatures / VICreatureEntity::Walk: a creature with its own
@@ -517,6 +532,157 @@ impl Play {
             self.session.send(&w.data);
         }
         self.auto_attack = true;
+    }
+
+    /// A line the client writes itself: word `id`, in red as the game's
+    /// warnings are.
+    fn warn(&mut self, id: i32) {
+        let text = self.words.as_ref().map_or_else(|| format!("(word {id})"), |w| w.get(id, 0).to_string());
+        self.chat.push_back((text, [1.0, 0.25, 0.25, 1.0]));
+        while self.chat.len() > 8 {
+            self.chat.pop_front();
+        }
+    }
+
+    /// `AutoAttackTick`, each frame while auto-attack is held: when the
+    /// swing is due, what is worn picks the swing (`GetSwing`), and with
+    /// the target in reach its spell effect would play (`VISpellEffects`
+    /// are not ported, so only the time is kept); otherwise the swing's
+    /// animation plays and 0x00D8 goes out, and the next is 2 s off.
+    fn auto_attack_tick(&mut self, walker: &mut Walker, now: u32) {
+        if !self.auto_attack || (now.wrapping_sub(self.attack_due) as i32) < 0 {
+            return;
+        }
+        let (mut b14, mut b15, mut b16, mut b17, mut b18, mut b19, mut b20) = (false, false, false, false, false, false, false);
+        let mut slot: i32 = -1;
+        let mut anim = 23;
+        let mut delay = 3500;
+        let mut no_effect = false;
+        for (i, it) in self.dump.inventory.items.iter().enumerate() {
+            match it.equip_slot {
+                14 | 16 | 18 => {
+                    match it.equip_slot {
+                        14 => b14 = true,
+                        16 => b16 = true,
+                        _ => b18 = true,
+                    }
+                    anim = vi::swing::attack_anim(it.item.attack_type as i32, false);
+                    if slot == -1 {
+                        slot = i as i32;
+                    }
+                }
+                15 => b15 = true,
+                17 => b17 = true,
+                19 => {
+                    no_effect = true;
+                    b19 = true;
+                }
+                20 => b20 = true,
+                _ => {}
+            }
+        }
+        let swing = vi::swing::get_swing(self.player.class as i32, self.player.level as i32, b14, b15, b16, b18, b17, b19, b20);
+        if vi::swing::swing_effect(swing) == 0 {
+            no_effect = true;
+        } else {
+            delay = vi::swing::swing_delay(swing);
+        }
+        if self.target_in_range(walker, slot) && !no_effect {
+            self.swung = now;
+        } else {
+            // With no weapon (slot -1) the game reads the slot before the
+            // list's first, whatever that holds; taken here as not ranged.
+            let ranged = slot >= 0 && self.dump.inventory.items[slot as usize].equip_slot == 18;
+            if !ranged && !no_effect {
+                walker.set_action(anim);
+            }
+            self.session.send(&net::stream::Writer::op(0x00D8).data);
+            delay = 2000;
+        }
+        self.attack_due = self.attack_due.wrapping_add(delay as u32);
+    }
+
+    /// `TargetInRange(slot)`: melee within 4.5 (plus 3 or 5 for a large
+    /// target, npc flags 0x400 / 0x800), a ranged weapon within its range
+    /// with the power and the ammunition for it.
+    fn target_in_range(&mut self, walker: &Walker, slot: i32) -> bool {
+        // `extra` starts from an uninitialised stack float in the game;
+        // taken as 0.
+        let mut extra = 0.0f32;
+        if self.target == u32::MAX {
+            return false;
+        }
+        let me = self.self_id32();
+        let Some(t) = self.entities.slots.iter().flatten().find(|e| e.id == self.target) else { return false };
+        if t.p19 == 0 || Some(t.id) == me {
+            return false;
+        }
+        let Some(m) = self.entities.slots.iter().flatten().find(|e| Some(e.id) == me) else { return false };
+        let (Some(tc), Some(mc)) = (&t.creature, &m.creature) else { return false };
+        if mc.p256 == 2 && (tc.p256 == 2 || tc.p256 == 3) {
+            return false;
+        }
+        if tc.npc_flags & 0x400 != 0 {
+            extra += 3.0;
+        } else if tc.npc_flags & 0x800 != 0 {
+            extra += 5.0;
+        }
+        // The player's entity stands where the walk camera last put it.
+        let a = walker.cam.walk.committed.position.to_array();
+        let b = t.pos;
+        let d = (a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]);
+        let mut max = (extra + 4.5) * (extra + 4.5);
+        let mut ranged_type = None;
+        if slot >= 0 {
+            let (attack_type, range) = {
+                let item = &self.dump.inventory.items[slot as usize].item;
+                (item.attack_type, item.range)
+            };
+            match attack_type {
+                1..=6 => {}
+                7 | 9 | 10 => {
+                    let r = range as f32;
+                    max = (r + extra) * (r + extra);
+                    if !self.check_power() || !self.has_ammo_for(attack_type) {
+                        return false;
+                    }
+                    ranged_type = Some(attack_type);
+                }
+                _ => return false,
+            }
+        }
+        if 0.0 <= d && d <= max {
+            return true;
+        }
+        if ranged_type.is_some() {
+            self.warn(723);
+        }
+        false
+    }
+
+    /// `CheckPower`: a tenth of the power pool at least.
+    fn check_power(&mut self) -> bool {
+        if self.stats.stat[9] >= (self.stats.stat[10] as f32 / 10.0) as i32 {
+            return true;
+        }
+        self.warn(731);
+        false
+    }
+
+    /// `HasAmmoFor`: arrows (type 1) for a bow, bolts (2) for a crossbow,
+    /// carried and not worn.
+    fn has_ammo_for(&mut self, attack_type: i64) -> bool {
+        let want = match attack_type {
+            7 => 1,
+            9 => 2,
+            10 => return true,
+            _ => -1,
+        };
+        if want >= 0 && self.dump.inventory.items.iter().any(|i| i.item.p18 == want && i.item.wear_slot == -1) {
+            return true;
+        }
+        self.warn(if attack_type == 7 { 724 } else { 725 });
+        false
     }
 
     /// `MaybeStopAutoAttack`: the button released.
