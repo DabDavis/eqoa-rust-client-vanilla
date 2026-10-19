@@ -339,6 +339,28 @@ pub fn read_item_list(r: &mut Reader) -> ItemList {
     ItemList { p04, items }
 }
 
+/// `operator>>(VIMemStream &, VIAuctionItem &)`: seven zigzag words, the
+/// seller, the item.
+pub fn read_auction_item(r: &mut Reader) -> AuctionItem {
+    AuctionItem {
+        lot_id: r.signed(),
+        quantity: r.signed(),
+        cur_hp: r.signed(),
+        charges: r.signed(),
+        p2f4: r.signed(),
+        p2f8: r.signed(),
+        p2fc: r.signed(),
+        seller: narrow(r, 24),
+        item: read_item(r),
+    }
+}
+
+/// `operator>>(VIMemStream &, VIDbCharBid &)`: the key's two words, three
+/// more, a byte.
+pub fn read_bid(r: &mut Reader) -> Bid {
+    Bid { character_id: r.signed(), auction_id: r.signed(), x08: r.signed(), x0c: r.signed(), x10: r.signed(), x14: r.u8() }
+}
+
 fn read_bank(r: &mut Reader) -> Bank {
     let items = read_item_list(r);
     let mut lots = Vec::new();
@@ -346,24 +368,14 @@ fn read_bank(r: &mut Reader) -> Bank {
         if r.error {
             break;
         }
-        lots.push(AuctionItem {
-            lot_id: r.signed(),
-            quantity: r.signed(),
-            cur_hp: r.signed(),
-            charges: r.signed(),
-            p2f4: r.signed(),
-            p2f8: r.signed(),
-            p2fc: r.signed(),
-            seller: narrow(r, 24),
-            item: read_item(r),
-        });
+        lots.push(read_auction_item(r));
     }
     let mut bids = Vec::new();
     for _ in 0..count(r) {
         if r.error {
             break;
         }
-        bids.push(Bid { character_id: r.signed(), auction_id: r.signed(), x08: r.signed(), x0c: r.signed(), x10: r.signed(), x14: r.u8() });
+        bids.push(read_bid(r));
     }
     let p78cc = r.u8() != 0;
     Bank { items, lots, bids, p78cc }
