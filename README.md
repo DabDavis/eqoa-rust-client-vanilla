@@ -226,7 +226,8 @@ EQOA_PASSWORD=... web/drive.py --base https://host/eqoa/play/ --iso run/eqoa.iso
 ```
 
 The page takes `?relay=` and `?server=` (an IPv4 address; by default the
-page's own host, as the relay resolves it). Not in the browser yet: sound
+page's own host, as the relay resolves it), and `?webgl` for WebGL2 where
+WebGPU works (the same frame, 60 fps in Chromium through ANGLE). Not in the browser yet: sound
 (SNDDRV runs on cpal's callback thread; a page's is an AudioWorklet), the HUD's
 atlas and the start menu (they read the player's decrypted SUPPORT and CLIENT
 images, which a page has no way to get yet), a world change, touch controls,

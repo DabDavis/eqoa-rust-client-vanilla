@@ -89,7 +89,16 @@ async fn gfx(canvas: web_sys::HtmlCanvasElement) -> Result<viewer::PendingGfx, S
     let (w, h) = (((canvas.client_width() as f64) * dpr).max(1.0) as u32, ((canvas.client_height() as f64) * dpr).max(1.0) as u32);
     canvas.set_width(w);
     canvas.set_height(h);
-    let instance = wgpu::util::new_instance_with_webgpu_detection(wgpu::InstanceDescriptor::new_without_display_handle()).await;
+    // `?webgl` in the page's address: WebGL2 even where WebGPU works (a test,
+    // and a way round a WebGPU that misbehaves).
+    let webgl = web_sys::window().and_then(|w| w.location().search().ok()).is_some_and(|q| q.split(['?', '&']).any(|p| p == "webgl"));
+    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    let instance = if webgl {
+        desc.backends = wgpu::Backends::GL;
+        wgpu::Instance::new(desc)
+    } else {
+        wgpu::util::new_instance_with_webgpu_detection(desc).await
+    };
     let surface = instance.create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone())).map_err(|e| format!("surface: {e}"))?;
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions { compatible_surface: Some(&surface), ..Default::default() })
