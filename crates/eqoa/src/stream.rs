@@ -1,16 +1,185 @@
-//! Zone streaming for the walk: the zones around the player come and go as
-//! `VIWorld::StreamLeaf` decides (`vi::world::World::stream`), each with its
-//! terrain, its placed actors and its animated props. The collision world is
-//! still the whole file's (it loads in two seconds); only drawing streams.
+//! Zone streaming for the walk, at two levels, as the PS2 streams them.
+//!
+//! - **The disc.** A world file opens with its zones left on the disc
+//!   (`esf::Container::open_deferred`: TUNARIA's 997 MB become 20 KB read).
+//!   A zone's bytes are asked of a [`ZoneSource`] once it comes within
+//!   [`PREFETCH`] of the player, and when they arrive (at once natively, a
+//!   frame or more later in a browser) the zone goes into the library and the
+//!   collision world (`Streamer::install`). Before a walk starts, the zones
+//!   within the inner radius of the spawn are read first ([`fill`],
+//!   `VIScene::StreamFillCache`). Zones are only added, never let go.
+//! - **The GPU.** The zones within the inner radius come and go as
+//!   `VIWorld::StreamLeaf` decides (`vi::world::World::stream`), each with its
+//!   terrain, its placed actors and its animated props.
+//!
+//! `EQOA_WHOLE_WORLD=1` reads a world file whole, as before.
 
 use crate::scene;
 use crate::walker::AnimatedProps;
-use esf::Library;
+use esf::{Container, Library};
 use glam::Vec3;
 use render::{GpuModel, Renderer, wgpu};
-use std::collections::{BTreeMap, BTreeSet};
-use vi::fpu::Ee;
-use vi::world::World;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use vi::fpu::{Ee, F};
+use vi::vect::Vect3;
+use vi::world::{STREAM_INNER, World};
+
+/// How far ahead of the player a zone is read: the radius the game's BSP
+/// walk measures zones within, past the inner one (900) a zone is drawn at.
+pub const PREFETCH: f32 = 1050.0;
+
+/// Where a deferred world's zones come from: each zone's bytes (its record,
+/// header and body, at `esf::Library::zone_range`) asked for once and handed
+/// back now or on a later frame.
+pub trait ZoneSource {
+    /// Starts reading `len` bytes at `off` of the world file: zone `zi`.
+    fn request(&mut self, zi: usize, off: u64, len: usize);
+    /// A zone whose read has finished, each once.
+    fn poll(&mut self) -> Option<(usize, std::io::Result<Vec<u8>>)>;
+}
+
+/// The native source: the world file's extent in the disc image, read at once.
+pub struct FileZones {
+    src: esf::Window<std::fs::File>,
+    done: VecDeque<(usize, std::io::Result<Vec<u8>>)>,
+}
+
+impl FileZones {
+    /// The file `name` inside the image at `iso_path`.
+    pub fn open(iso_path: &std::path::Path, name: &str) -> Option<Self> {
+        let e = iso::Iso::open(iso_path).ok()?.find(name)?.clone();
+        let f = std::fs::File::open(iso_path).ok()?;
+        Some(FileZones { src: esf::Window::new(f, e.lba as u64 * iso::SECTOR, e.size as u64), done: VecDeque::new() })
+    }
+}
+
+impl ZoneSource for FileZones {
+    fn request(&mut self, zi: usize, off: u64, len: usize) {
+        let mut b = vec![0u8; len];
+        let r = esf::ReadAt::read_at(&mut self.src, off, &mut b).map(|_| b);
+        self.done.push_back((zi, r));
+    }
+    fn poll(&mut self) -> Option<(usize, std::io::Result<Vec<u8>>)> {
+        self.done.pop_front()
+    }
+}
+
+type Factory = Box<dyn Fn(&Library, usize) -> Option<Box<dyn ZoneSource>>>;
+
+thread_local! {
+    static FACTORY: RefCell<Option<Factory>> = const { RefCell::new(None) };
+}
+
+/// Makes `f` the way a deferred world's zones are read (the browser's
+/// fetches); without one they come off the disc image ([`FileZones`]).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn set_source_factory(f: Factory) {
+    FACTORY.with(|c| *c.borrow_mut() = Some(f));
+}
+
+/// The source for the world in file `file`, if it was opened deferred.
+pub fn source_for(lib: &Library, file: usize) -> Option<Box<dyn ZoneSource>> {
+    if !lib.is_deferred(file) {
+        return None;
+    }
+    if let Some(s) = FACTORY.with(|c| c.borrow().as_ref().map(|f| f(lib, file))) {
+        return s;
+    }
+    let name = lib.files[file].0.clone();
+    FileZones::open(std::path::Path::new(&crate::disc_path(None)), &name).map(|z| Box::new(z) as Box<dyn ZoneSource>)
+}
+
+/// Opens `name` off the disc image: a world (its first record 0x8000) with
+/// its zones left on the disc, anything else whole. `EQOA_WHOLE_WORLD=1`
+/// reads every file whole.
+pub fn open_file(iso_path: &std::path::Path, name: &str) -> Result<Container, Box<dyn std::error::Error>> {
+    let e = iso::Iso::open(iso_path)?.find(name).ok_or_else(|| format!("{name}: not on the disc"))?.clone();
+    let mut src = esf::Window::new(std::fs::File::open(iso_path)?, e.lba as u64 * iso::SECTOR, e.size as u64);
+    let whole = std::env::var_os("EQOA_WHOLE_WORLD").is_some_and(|v| v != "0");
+    if !whole && is_world(&mut src) {
+        return Ok(Container::open_deferred(&mut src)?);
+    }
+    Ok(Container::open(esf::read_all(&mut src)?)?)
+}
+
+/// Whether the file is a world: an OBJF whose first record is 0x8000.
+pub fn is_world(src: &mut dyn esf::ReadAt) -> bool {
+    let mut h = [0u8; 24];
+    if src.len() < 36 || src.read_at(0, &mut h).is_err() || &h[..4] != b"FJBO" {
+        return false;
+    }
+    let start = i64::from_le_bytes(h[16..24].try_into().unwrap());
+    let mut r = [0u8; 2];
+    start >= 0 && src.read_at(start as u64, &mut r).is_ok() && u16::from_le_bytes(r) == 0x8000
+}
+
+/// Puts zone `zi`'s bytes (its record, as `esf::Library::zone_range` names
+/// it) into the library.
+pub fn install(lib: &mut Library, file: usize, zi: usize, bytes: Vec<u8>) -> Result<(), String> {
+    let (_, len) = lib.zone_range(file, zi).ok_or_else(|| format!("zone {zi}: not on the disc"))?;
+    if bytes.len() != len || bytes.len() < 12 || u16::from_le_bytes([bytes[0], bytes[1]]) != esf::zone::ZONE {
+        return Err(format!("zone {zi}: {} bytes that are not its record", bytes.len()));
+    }
+    lib.add_zone(file, zi, Container::parse_records(bytes)).map(|_| ()).ok_or_else(|| format!("zone {zi}: not added"))
+}
+
+/// Each zone's bounds, out of the world base's proxies.
+fn zone_bounds(lib: &Library, file: usize) -> Vec<vi::geom::BBox<Ee>> {
+    let c = lib.file(file);
+    c.roots.first().and_then(|&r| c.child(r, 0x8200)).map_or_else(Vec::new, |base| World::<Ee>::proxies(c, base))
+}
+
+/// What a walk at (x, z) needs read before it starts
+/// (`VIScene::StreamFillCache`): the zone there and every zone within the
+/// inner radius of it (measured flat, the height not known yet), nearest
+/// first, that is not in yet: (zone, offset, length) in the world file.
+pub fn fill_set(lib: &Library, file: usize, x: f32, z: f32) -> Vec<(usize, u64, usize)> {
+    let at = Vect3::<Ee>::of(x, 0.0, z);
+    let flat = |b: &vi::geom::BBox<Ee>| {
+        let mut b = *b;
+        b.min.y = F::new(-1e9);
+        b.max.y = F::new(1e9);
+        b.distance_squared(&at).0
+    };
+    let bounds = zone_bounds(lib, file);
+    let here = World::<Ee>::zone_at(lib.file(file), x, z);
+    let mut want: Vec<(f32, usize)> = (0..bounds.len()).filter(|&k| Some(k) == here || flat(&bounds[k]) < STREAM_INNER * STREAM_INNER).map(|k| (flat(&bounds[k]), k)).collect();
+    want.sort_by(|a, b| a.0.total_cmp(&b.0));
+    want.into_iter().filter(|&(_, k)| lib.zone(file, k).is_none()).filter_map(|(_, k)| lib.zone_range(file, k).map(|(o, n)| (k, o, n))).collect()
+}
+
+/// [`fill_set`] read through `src` and installed; how many are still
+/// missing (natively none: the disc answers at once).
+pub fn fill(lib: &mut Library, file: usize, x: f32, z: f32, src: &mut dyn ZoneSource) -> usize {
+    let want = fill_set(lib, file, x, z);
+    for &(zi, off, len) in &want {
+        src.request(zi, off, len);
+    }
+    while let Some((zi, r)) = src.poll() {
+        match r.map_err(|e| e.to_string()).and_then(|b| install(lib, file, zi, b)) {
+            Ok(()) => {}
+            Err(e) => eprintln!("zone {zi}: {e}"),
+        }
+    }
+    want.iter().filter(|w| lib.zone(file, w.0).is_none()).count()
+}
+
+/// One zone read and installed now, through the world's source (natively:
+/// the disc); a world read whole has it already.
+pub fn load_zone_now(lib: &mut Library, file: usize, zi: usize) -> Result<(), String> {
+    if lib.zone(file, zi).is_some() {
+        return Ok(());
+    }
+    let (off, len) = lib.zone_range(file, zi).ok_or_else(|| format!("no zone {zi}"))?;
+    let mut src = source_for(lib, file).ok_or("no source for the world's zones")?;
+    src.request(zi, off, len);
+    match src.poll() {
+        Some((_, Ok(b))) => install(lib, file, zi, b),
+        Some((_, Err(e))) => Err(format!("zone {zi}: {e}")),
+        None => Err(format!("zone {zi}: not read yet")),
+    }
+}
 
 struct Loaded {
     models: Vec<GpuModel>,
@@ -21,6 +190,10 @@ struct Loaded {
 pub struct Streamer {
     file: usize,
     zones: BTreeMap<usize, Loaded>,
+    /// The deferred world's zones' source (`None`: the world was read whole).
+    source: Option<Box<dyn ZoneSource>>,
+    /// Zones asked for whose bytes have not come yet.
+    requested: BTreeSet<usize>,
 }
 
 pub struct Gpu<'a> {
@@ -30,24 +203,72 @@ pub struct Gpu<'a> {
 }
 
 impl Streamer {
-    pub fn new(file: usize) -> Self {
-        Streamer { file, zones: BTreeMap::new() }
+    pub fn new(file: usize, source: Option<Box<dyn ZoneSource>>) -> Self {
+        Streamer { file, zones: BTreeMap::new(), source, requested: BTreeSet::new() }
     }
 
-    /// Lets go of the zones past the outer radius of `at` and loads up to
-    /// `budget` of those inside the inner one (all, if `None`), nearest
-    /// first. Returns whether anything changed.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub fn set_source(&mut self, s: Box<dyn ZoneSource>) {
+        self.source = Some(s);
+    }
+
+    /// Asks for the zones within [`PREFETCH`] of `at` that are neither in
+    /// nor asked for, nearest first.
+    pub fn fetch(&mut self, at: Vec3, world: &World<Ee>, lib: &Library) {
+        let Some(src) = self.source.as_mut() else { return };
+        let p = Vect3::<Ee>::of(at.x, at.y, at.z);
+        let mut want: Vec<(f32, usize)> = world
+            .zone_bounds
+            .iter()
+            .enumerate()
+            .filter(|&(k, _)| !world.loaded.get(k).copied().unwrap_or(true) && !self.requested.contains(&k))
+            .map(|(k, b)| (b.distance_squared(&p).0, k))
+            .filter(|&(d, _)| d < PREFETCH * PREFETCH)
+            .collect();
+        want.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for (_, k) in want {
+            if let Some((off, len)) = lib.zone_range(self.file, k) {
+                src.request(k, off, len);
+                self.requested.insert(k);
+            }
+        }
+    }
+
+    /// Puts the zones whose bytes have come into the library and the
+    /// collision world. Returns the first actor they added, if any (for what
+    /// keeps state per actor: the particles).
+    pub fn install(&mut self, lib: &mut Library, world: &mut World<Ee>) -> Option<usize> {
+        let src = self.source.as_mut()?;
+        let first = world.actors.len();
+        while let Some((zi, r)) = src.poll() {
+            self.requested.remove(&zi);
+            match r.map_err(|e| e.to_string()).and_then(|b| install(lib, self.file, zi, b)) {
+                Ok(()) => {
+                    world.add_zone(lib, self.file, zi);
+                }
+                Err(e) => eprintln!("zone {zi}: {e}"),
+            }
+        }
+        (world.actors.len() > first).then_some(first)
+    }
+
+    /// Asks for the zones ahead ([`Streamer::fetch`]), lets go of the zones
+    /// past the outer radius of `at` and uploads up to `budget` of those in
+    /// and inside the inner one (all, if `None`), nearest first. Returns
+    /// whether anything changed.
     pub fn update(&mut self, at: Vec3, world: &mut World<Ee>, lib: &Library, g: Gpu, budget: Option<usize>) -> bool {
+        self.fetch(at, world, lib);
         let loaded: BTreeSet<usize> = self.zones.keys().copied().collect();
         let (load, release) = world.stream(&vi::vect::Vect3::of(at.x, at.y, at.z), &loaded);
         for z in &release {
             self.zones.remove(z);
         }
-        let all = lib.file(self.file).zones();
+        let load: Vec<usize> = load.into_iter().filter(|&z| world.loaded.get(z).copied().unwrap_or(false)).collect();
         let textures = render::library_textures(lib);
         let n = budget.unwrap_or(usize::MAX).min(load.len());
         for &z in &load[..n] {
-            let s = scene::zones(lib, self.file, &[all[z]], &format!("zone {z}"), true);
+            let Some((zf, zn)) = lib.zone(self.file, z) else { continue };
+            let s = scene::zones(lib, zf, &[zn], &format!("zone {z}"), true);
             let models = s
                 .parts
                 .iter()

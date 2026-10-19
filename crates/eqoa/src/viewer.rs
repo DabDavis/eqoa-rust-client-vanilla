@@ -110,28 +110,21 @@ impl Source {
                 scene::model(id, lib.build_model(r).unwrap_or_default())
             }
             Source::Zone { file, zone, index } => scene::zone(lib, *file, *zone, *index),
-            // Only for the spawn point: a walk's zones are streamed.
-            Source::Walk { file, index, .. } => {
-                let c = lib.file(*file);
-                scene::zone(lib, *file, c.zones()[*index], *index)
-            }
+            // Only for the spawn point: a walk's zones are streamed. (A world
+            // left on the disc must have this zone in already.)
+            Source::Walk { file, index, .. } => match lib.zone(*file, *index) {
+                Some((zf, z)) => scene::zone(lib, zf, z, *index),
+                None => scene::zones(lib, *file, &[], &format!("zone {index} (not in)"), false),
+            },
         }
     }
 
     /// For a walk: the character in the middle of the zone, on the game's own
-    /// collision world (the whole world file's, not just this zone's), and a
-    /// streamer for the zones to draw.
-    pub fn walker(&self, lib: &Library, s: &Scene) -> Option<(Walker, esf::Model, Streamer)> {
+    /// collision world (a world left on the disc has the zones round the
+    /// spawn read first, `stream::fill`; one read whole has every zone), and
+    /// a streamer for the zones to read and draw.
+    pub fn walker(&self, lib: &mut Library, s: &Scene) -> Option<(Walker, esf::Model, Streamer)> {
         let Source::Walk { file, character, spawn: given, .. } = self else { return None };
-        let t = Instant::now();
-        let world = vi::world::World::load(lib, *file)?;
-        eprintln!(
-            "collision world: {} zones, {} buffers, {} actors, in {:.2?}",
-            world.zones.len(),
-            world.buffers.len(),
-            world.actors.len(),
-            t.elapsed()
-        );
         // `EQOA_SPAWN=x,z[,heading]` picks the spot; else near the middle.
         let c = (s.bounds.0 + s.bounds.1) * 0.5;
         let spawn: Vec<f32> = std::env::var("EQOA_SPAWN")
@@ -144,9 +137,25 @@ impl Source {
             (_, Some(at)) => *at,
             _ => (c.x - 40.0, c.z + 40.0, 0.0),
         };
+        let mut source = stream::source_for(lib, *file);
+        if let Some(src) = source.as_mut() {
+            let t = Instant::now();
+            let missing = stream::fill(lib, *file, x, z, src.as_mut());
+            eprintln!("zones round the spawn read in {:.2?}{}", t.elapsed(), if missing > 0 { format!(", {missing} still missing") } else { String::new() });
+        }
+        let t = Instant::now();
+        let world = vi::world::World::load(lib, *file)?;
+        eprintln!(
+            "collision world: {} zones ({} in), {} buffers, {} actors, in {:.2?}",
+            world.zones.len(),
+            world.loaded.iter().filter(|&&l| l).count(),
+            world.buffers.len(),
+            world.actors.len(),
+            t.elapsed()
+        );
         let mut w = Walker::new(world, x, z, h);
         w.set_character(lib, *character);
-        Some((w, lib.build_model(*character)?, Streamer::new(*file)))
+        Some((w, lib.build_model(*character)?, Streamer::new(*file, source)))
     }
 
     pub fn camera(&self, bounds: (Vec3, Vec3)) -> Camera {
@@ -218,9 +227,10 @@ fn upload(renderer: &mut Renderer, device: &wgpu::Device, queue: &wgpu::Queue, l
 /// A world change in a playshot: the world file replaced, and a walker and
 /// streamer for it at the arrival.
 fn change_world(lib: &mut Library, file: &str, pos: [f32; 3], heading: f32) -> Result<(Walker, Streamer), Error> {
-    let c = esf::Container::open(crate::disc(None)?.read(file)?)?;
+    let c = stream::open_file(std::path::Path::new(&crate::disc_path(None)), file)?;
     lib.replace(0, file, c);
     let index = vi::world::World::<vi::fpu::Ee>::zone_at(lib.file(0), pos[0], pos[2]).ok_or("no zone at the arrival")?;
+    stream::load_zone_now(lib, 0, index)?;
     let character = lib.lookup(HUMAN).ok_or("no human model")?;
     let src = Source::Walk { file: 0, index, character, spawn: Some((pos[0], pos[2], heading)) };
     let s = src.scene(lib);
@@ -344,6 +354,11 @@ pub fn shot_with(
                 None => script.controls,
             };
             walker.frame(controls, t);
+            // the zones it walks toward, read as the game's loader reads them
+            streamer.fetch(Vec3::from(walker.cam.walk.phys.position.to_array()), &walker.scene, lib);
+            if let Some(first) = streamer.install(lib, &mut walker.scene) {
+                parts.add_from(&walker.scene, first);
+            }
             if let Some(p) = &mut play {
                 // `EQOA_SAY=<text>[@ms][;<text>@ms...]`: each line said at its
                 // time (a second in without one).
@@ -578,6 +593,8 @@ pub fn shot_with(
                         Ok((w, s2)) => {
                             walker = w;
                             streamer = s2;
+                            // the particles named the old world's actors
+                            parts = crate::particles::Particles::new(&walker.scene, t);
                         }
                         Err(e) => eprintln!("world change to {file}: {e}"),
                     }
@@ -824,7 +841,7 @@ impl App {
         if !matches!(self.camera, Camera::Orbit { .. }) || matches!(self.source, Source::Zone { .. }) || self.gfx.is_none() {
             self.camera = self.source.camera(s.bounds);
         }
-        let walker = self.source.walker(&self.lib, &s);
+        let walker = self.source.walker(&mut self.lib, &s);
         if let Some(g) = &mut self.gfx {
             g.models = if walker.is_some() { Vec::new() } else { upload(&mut g.renderer, &g.device, &g.queue, &self.lib, &s) };
             self.streamer = None;
@@ -863,9 +880,10 @@ impl App {
     /// A world change in the window: the file replaces the world's, and
     /// `load` begins the walk again at the arrival.
     fn enter_world(&mut self, file: &str, pos: [f32; 3], heading: f32) -> Result<(), Error> {
-        let c = esf::Container::open(crate::disc(None)?.read(file)?)?;
+        let c = stream::open_file(std::path::Path::new(&crate::disc_path(None)), file)?;
         self.lib.replace(0, file, c);
         let index = vi::world::World::<vi::fpu::Ee>::zone_at(self.lib.file(0), pos[0], pos[2]).ok_or("no zone at the arrival")?;
+        stream::load_zone_now(&mut self.lib, 0, index)?;
         let Source::Walk { character, .. } = self.source else { return Err("not walking".into()) };
         self.source = Source::Walk { file: 0, index, character, spawn: Some((pos[0], pos[2], heading)) };
         self.load();
@@ -1526,6 +1544,13 @@ impl ApplicationHandler for App {
                     }
                 }
                 self.fly();
+                // Zones whose bytes have come: into the library and the collision world.
+                if let (Some(s), Some(w)) = (self.streamer.as_mut(), self.walker.as_mut())
+                    && let Some(first) = s.install(&mut self.lib, &mut w.scene)
+                    && let Some(p) = self.particles.as_mut()
+                {
+                    p.add_from(&w.scene, first);
+                }
                 let controls = self.controls();
                 let now = self.clock.elapsed().as_millis() as i64;
                 let Some(g) = &mut self.gfx else { return };
