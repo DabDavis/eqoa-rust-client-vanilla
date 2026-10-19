@@ -262,10 +262,17 @@ pub fn shot_with(
         // 60 frames a second of game time, the controls held throughout.
         let script = script.unwrap_or(Script { ms: 0, controls: Controls::default() });
         let mut t = 0;
+        let say = std::env::var("EQOA_SAY").ok();
         while t < script.ms {
             t += 16;
             walker.frame(script.controls, t);
             if let Some(p) = &mut play {
+                // `EQOA_SAY=<text>`: said a second in.
+                if t == 1008
+                    && let Some(line) = &say
+                {
+                    p.session.say(line, u32::MAX);
+                }
                 let gpu = crate::play::Gpu { renderer: &mut renderer, device: &device, queue: &queue };
                 if let Some(model) = p.frame(&mut walker, lib, gpu, t)
                     && let Some(r) = lib.lookup(model as i32)
@@ -329,6 +336,8 @@ pub fn shot_with(
             let plates = p.plates();
             if let Some(t) = renderer.text.as_mut() {
                 t.labels = crate::play::labels(&plates, shot_eye, view.view_proj, t);
+                let chat = crate::play::chat_labels(p, t, (w, h));
+                t.labels.extend(chat);
             }
         }
         if let Some(p) = &play {
@@ -545,6 +554,45 @@ impl ApplicationHandler for App {
                 g.window.request_redraw();
             }
             WindowEvent::KeyboardInput { event, .. } => {
+                // Chat: Enter opens a line, Enter sends it, Escape drops it;
+                // while it is open, keys type rather than move.
+                if let Some(p) = self.play.as_mut()
+                    && event.state == ElementState::Pressed
+                {
+                    match (&mut p.typing, &event.logical_key) {
+                        (None, Key::Named(NamedKey::Enter)) => {
+                            p.typing = Some(String::new());
+                            self.held.clear();
+                            return;
+                        }
+                        (Some(t), Key::Named(NamedKey::Enter)) => {
+                            let line = std::mem::take(t);
+                            p.typing = None;
+                            if !line.is_empty() {
+                                p.session.say(&line, u32::MAX);
+                            }
+                            return;
+                        }
+                        (Some(_), Key::Named(NamedKey::Escape)) => {
+                            p.typing = None;
+                            return;
+                        }
+                        (Some(t), Key::Named(NamedKey::Backspace)) => {
+                            t.pop();
+                            return;
+                        }
+                        (Some(t), _) => {
+                            if let Some(s) = &event.text {
+                                t.push_str(s);
+                            }
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+                if self.play.as_ref().is_some_and(|p| p.typing.is_some()) {
+                    return;
+                }
                 let name = match &event.logical_key {
                     Key::Named(NamedKey::Shift) => Some("shift".to_string()),
                     Key::Named(NamedKey::ArrowLeft) => Some("left".to_string()),
@@ -677,6 +725,8 @@ impl ApplicationHandler for App {
                     let plates = p.plates();
                     if let Some(t) = g.renderer.text.as_mut() {
                         t.labels = crate::play::labels(&plates, w.eye_position(), view.view_proj, t);
+                        let chat = crate::play::chat_labels(p, t, (g.config.width, g.config.height));
+                        t.labels.extend(chat);
                     }
                 }
                 let target = frame.texture.create_view(&Default::default());

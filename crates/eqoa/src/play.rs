@@ -62,6 +62,10 @@ pub struct Play {
     /// The player dressed as its own channel says (look, items, helm),
     /// placed with the walker's pose.
     self_puppet: Option<Puppet>,
+    /// The chat log, newest last (`VIWndGame::AddText`'s lines).
+    pub chat: std::collections::VecDeque<(String, [f32; 4])>,
+    /// A line being typed, when chat is open.
+    pub typing: Option<String>,
 }
 
 /// A creature's model as `Apply` dresses it: the look on its text slots, the
@@ -140,6 +144,28 @@ fn glam_to_matrix(m: [[f32; 4]; 4]) -> Matrix44<Ee> {
     out
 }
 
+/// The chat log as labels, bottom left, newest lowest, and the line being
+/// typed below it. A stand-in for `VIWndGame`'s chat window, which is not
+/// ported: the lines, their colours and the font are the game's.
+pub fn chat_labels(play: &Play, text: &render::text::Text, size: (u32, u32)) -> Vec<render::text::Label> {
+    let k = size.1 as f32 / render::text::SCREEN_H;
+    let line = (text.height() as f32 + 2.0) * k;
+    let mut out = Vec::new();
+    let mut rows: Vec<(String, [f32; 4])> = play.chat.iter().cloned().collect();
+    if let Some(t) = &play.typing {
+        rows.push((format!("> {t}_"), [1.0, 1.0, 0.6, 1.0]));
+    }
+    let n = rows.len();
+    for (i, (s, c)) in rows.into_iter().enumerate() {
+        let w = text.width(&s) as f32 * k;
+        let x = 12.0 * k + w / 2.0;
+        let y = size.1 as f32 - 12.0 * k - line * (n - i) as f32 + line / 2.0;
+        let ndc = [x / size.0 as f32 * 2.0 - 1.0, 1.0 - y / size.1 as f32 * 2.0, 0.0];
+        out.push(render::text::Label { at: ndc, color: c, text: s });
+    }
+    out
+}
+
 /// `VINameSprite::Raster` and `RasterDeferred` for a frame seen from `eye`
 /// through `view_proj`: plates within 22 of the eye (the squared view-space
 /// length plus w² under 22²), at most 24, nearest first, each dropped if its
@@ -192,7 +218,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player) -> Self {
-        Play { session, player, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None }
+        Play { session, player, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None }
     }
 
     fn self_id32(&self) -> Option<u32> {
@@ -246,6 +272,13 @@ impl Play {
                     });
                 }
                 Event::Disconnected(r) => eprintln!("play: disconnected (reason {r})"),
+                Event::Chat(text, color) => {
+                    eprintln!("chat: {text}");
+                    self.chat.push_back((text, color));
+                    while self.chat.len() > 8 {
+                        self.chat.pop_front();
+                    }
+                }
                 Event::WorldEntry { self_id, player } => {
                     eprintln!("play: world entry again as {self_id:#x} at {:?}", player.pos);
                     self.player = player;

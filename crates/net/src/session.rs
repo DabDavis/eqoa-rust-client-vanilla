@@ -77,6 +77,9 @@ pub enum Event {
     WorldEntry { self_id: u64, player: Player },
     /// 0x00F8: the run speed (0 stops).
     Speed(f32),
+    /// A line for the chat log, in its colour (RGBA 0..1): 0x0A7A white,
+    /// 0x0A7B its own colour, 0x069E blue, 0x0758 (narrow) white.
+    Chat(String, [f32; 4]),
     /// A state channel's full value (0x00-0x17 entities, 0x42 stats...).
     State { channel: u8, data: Vec<u8> },
     /// Any other opcode, not handled here yet.
@@ -184,6 +187,14 @@ impl Session {
         if let Some(c) = self.conn {
             self.drdp.connection_send(c, data, channel);
         }
+    }
+
+    /// `ChatLine`'s plain text: 0x000B with the line (wide) and the target
+    /// (-1 for none), on the channel in use.
+    pub fn say(&mut self, text: &str, target: u32) {
+        let mut w = Writer::op(0x000B);
+        w.wide(text).u32(target);
+        self.send(&w.data);
     }
 
     /// `ConnectShard`: the game endpoint, the hello and 0x0001.
@@ -339,6 +350,17 @@ impl Session {
                 self.send(&w.data);
             }
             0x00F8 => ev.push(Event::Speed(r.f32())),
+            0x0A7A => ev.push(Event::Chat(r.wide(1024), [1.0; 4])),
+            0x0A7B => {
+                let text = r.wide(1024);
+                let (cr, cg, cb) = (r.u8(), r.u8(), r.u8());
+                ev.push(Event::Chat(text, [cr as f32 / 255.0, cg as f32 / 255.0, cb as f32 / 255.0, 1.0]));
+            }
+            0x069E => {
+                r.u32();
+                ev.push(Event::Chat(r.wide(1024), [0.5, 0.5, 1.0, 1.0]));
+            }
+            0x0758 => ev.push(Event::Chat(String::from_utf8_lossy(&r.string(512)).into_owned(), [1.0; 4])),
             _ => ev.push(Event::Opcode { op, data: m.data[2.min(m.data.len())..].to_vec() }),
         }
     }

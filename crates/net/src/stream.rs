@@ -117,6 +117,16 @@ impl Writer {
     pub fn signed(&mut self, v: i64) -> &mut Self {
         self.varint(((v << 1) ^ (v >> 63)) as u64)
     }
+    /// The wide `WriteString`: a u32 character count, then UTF-16LE.
+    pub fn wide(&mut self, s: &str) -> &mut Self {
+        let u: Vec<u16> = s.encode_utf16().collect();
+        self.u32(u.len() as u32);
+        for c in u {
+            self.data.extend(c.to_le_bytes());
+        }
+        self
+    }
+
     /// `WriteString`: a u32 length and the bytes, no terminator.
     pub fn string(&mut self, s: &[u8]) -> &mut Self {
         self.u32(s.len() as u32).bytes(s)
