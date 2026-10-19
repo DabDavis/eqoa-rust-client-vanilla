@@ -229,7 +229,8 @@ pub struct MBox {
     pub p2: i32,
     alpha: f32,
     time: i64,
-    pos: [i32; 2],
+    /// `m_pos` (the game window's at (80, 115), the item menu's at (190, 115))
+    pub pos: [i32; 2],
     window: Window,
 }
 

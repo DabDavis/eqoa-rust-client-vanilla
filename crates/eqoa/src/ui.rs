@@ -142,4 +142,8 @@ impl Raster for UiRaster<'_> {
     fn set_viewport(&mut self, v: [i32; 4]) {
         self.ui.viewport = Some(v);
     }
+
+    fn has(&self, id: u32) -> bool {
+        self.assets.surface(id).is_some()
+    }
 }

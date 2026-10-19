@@ -154,6 +154,10 @@ pub struct Play {
     book_open: bool,
     book_keys: Vec<(i32, bool)>,
     start_keys: Vec<(i32, bool)>,
+    /// The start menu's item menu (`VIWndItemMenu`).
+    items: crate::itemmenu::ItemMenu,
+    /// `m_p13B90`: a destroy (0x003C) is waiting for the server's answer.
+    waiting: bool,
     /// An emote's action for the player's own walker.
     emote: Option<i32>,
     /// `VIWndEdit` (mode 2), and keys for it waiting for the raster.
@@ -470,7 +474,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false };
         p.take_abilities();
         p
     }
@@ -573,6 +577,40 @@ impl Play {
                     }
                 }
                 Event::State { channel: 0x40, data } => self.group.channel40(&data),
+                Event::InvAdd(item) => {
+                    // AddInvItem
+                    let limit = item.item.max_stack;
+                    crate::inventory::add_item(&mut self.dump.inventory, &item, limit, crate::inventory::CAPACITY);
+                }
+                Event::InvTook { slot, n, .. } => {
+                    // Msg003C (no merchant here)
+                    crate::inventory::took(&mut self.dump.inventory, slot as usize, n as i64);
+                    self.waiting = false;
+                }
+                Event::InvMove { from, to } => crate::inventory::op003d(&mut self.dump.inventory, from as usize, to as usize),
+                Event::InvUse { slot, charge } => {
+                    if let Some(c) = crate::inventory::use_charge(&mut self.dump.inventory, slot as usize, charge != 0) {
+                        self.cues.push(crate::sound::Cue::Ui(c));
+                    }
+                }
+                Event::InvEquip { i, slot } => {
+                    if let Some(c) = crate::inventory::equip(&mut self.dump.inventory, i as usize, slot as i64) {
+                        self.cues.push(crate::sound::Cue::Ui(c));
+                    }
+                }
+                Event::InvUnequip(slot) => {
+                    if let Some(c) = crate::inventory::take_off(&mut self.dump.inventory, slot as i64) {
+                        self.cues.push(crate::sound::Cue::Ui(c));
+                    }
+                }
+                Event::QuickSlot { slot, pos } => crate::inventory::quick_slot(&mut self.dump.inventory, slot as usize, pos),
+                Event::ItemHp { id, hp } => {
+                    // Msg0060: the hit points and sound 1
+                    if let Some(k) = crate::inventory::find(&self.dump.inventory, id) {
+                        crate::inventory::set_hp(&mut self.dump.inventory, k, hp as i64);
+                    }
+                    self.cues.push(crate::sound::Cue::Ui(1));
+                }
                 Event::Pet(id) => {
                     self.pet_id = id.unwrap_or(u32::MAX);
                     if id.is_none() {
@@ -1322,6 +1360,48 @@ impl Play {
         self.start_keys.push((key, down));
     }
 
+    /// `UseItem(i, b)`: 0x003E (62) with the item's inventory id, the target
+    /// and `b`.
+    fn use_item(&mut self, i: i32, b: u8) {
+        let Some(it) = self.dump.inventory.items.get(i.max(0) as usize).filter(|_| i >= 0) else { return };
+        let mut w = net::stream::Writer::op(62);
+        w.u32(it.inv_index).u32(self.target).u8(b);
+        self.session.send(&w.data);
+    }
+
+    /// What the item menu asked for: `UseItemOn` (0x003C, one at a time),
+    /// `SwapItems` (61), `RequestQuickSlot` (`SendMsg(10, ...)`).
+    fn item_outs(&mut self, outs: Vec<crate::itemmenu::ItemOut>) {
+        use crate::itemmenu::ItemOut;
+        let id = |p: &Play, i: i32| p.dump.inventory.items.get(i.max(0) as usize).filter(|_| i >= 0).map(|it| it.inv_index);
+        for o in outs {
+            match o {
+                ItemOut::UseItem(i, b) => self.use_item(i, b),
+                ItemOut::UseItemOn(i, n) => {
+                    if let (false, Some(slot)) = (self.waiting, id(self, i)) {
+                        self.waiting = true;
+                        let mut w = net::stream::Writer::op(0x3C);
+                        w.u32(slot).u32(n as u32);
+                        self.session.send(&w.data);
+                    }
+                }
+                ItemOut::Swap(a, b) => {
+                    if let (Some(a), Some(b)) = (id(self, a), id(self, b)) {
+                        let mut w = net::stream::Writer::op(61);
+                        w.u32(a).u32(b);
+                        self.session.send(&w.data);
+                    }
+                }
+                ItemOut::QuickSlot(i, pos) => {
+                    if let Some(slot) = id(self, i) {
+                        self.session.send_msg(10, slot, pos as u8);
+                    }
+                }
+                ItemOut::Back => {}
+            }
+        }
+    }
+
     /// `CloseStartMenu(mode)`.
     fn close_start_menu(&mut self, mode: i32) {
         self.mode = mode;
@@ -1333,11 +1413,32 @@ impl Play {
     /// The start menu's waiting work, with the raster: the open, then each
     /// key to the focused menu; 260 from it closes it, 261 is
     /// `VIWndGame::OnMessage`'s mode-13 path.
-    fn run_start_menu(&mut self, vui: &vi::ui::Vui, r: &dyn vi::ui::Raster, loc: &crate::startmenu::Location) -> Vec<(u32, i32)> {
+    fn run_start_menu(&mut self, vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster, loc: &crate::startmenu::Location) -> Vec<(u32, i32)> {
         let now = self.session.now() as i64;
         let expansion = self.session.expansion;
         let mut actions = Vec::new();
         let Some(s) = self.start.as_mut() else { return actions };
+        let attack_words = s.attack_words.clone();
+        // UpdateQuickBars' item menus, every frame
+        let inv = &self.dump.inventory;
+        let pl = &self.dump.player;
+        let flags = net::session::EXPANSION_FLAGS;
+        self.items.set_built(crate::itemmenu::build(
+            inv,
+            s.item_counts,
+            &|k| crate::inventory::item_icon(&inv.items[k], flags) as i32,
+            &|k| crate::inventory::can_use(&inv.items[k], pl.class, pl.race, pl.level),
+        ));
+        let info = crate::infotext::Info {
+            words: &vui.words,
+            inv,
+            hp: [self.stats.stat[7], self.stats.stat[8], self.stats.stat[9], self.stats.stat[10]],
+            base: &self.stats.base,
+            class: pl.class,
+            level: pl.level,
+            attack_words: &attack_words,
+        };
+        let mut outs = Vec::new();
         if let Some(reset) = self.start_open.take() {
             s.pick(false, expansion);
             s.menu.visible = true;
@@ -1348,7 +1449,23 @@ impl Play {
             if !s.menu.visible {
                 continue;
             }
+            if self.items.visible {
+                let mut o = Vec::new();
+                self.items.key(vui, r, key, down, inv, &info, self.waiting, &mut cues, &mut o);
+                if o.contains(&crate::itemmenu::ItemOut::Back) {
+                    // VIWndStartMenu::OnMessage 260 from the items: ShowMain(0)
+                    self.items.visible = false;
+                    s.menu.show_main(vui, r, false, now, loc);
+                }
+                outs.extend(o);
+                continue;
+            }
             match s.menu.key(vui, r, &s.menus, key, down, now, loc, &mut cues) {
+                crate::startmenu::Up::Items => {
+                    // ShowItems
+                    self.items.open(vui, r, now);
+                    self.waiting = false;
+                }
                 crate::startmenu::Up::Back => {
                     s.menu.visible = false;
                     actions.push((0, 0));
@@ -1361,6 +1478,7 @@ impl Play {
             }
         }
         self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
+        self.item_outs(outs);
         actions
     }
 
@@ -1770,7 +1888,7 @@ impl Play {
         if let Some((msg, id)) = used {
             match msg {
                 0x8060000 => self.send_0032(id),
-                0x2030000 => eprintln!("play: use item {id} (not ported)"),
+                0x2030000 => self.use_item(id as i32, 1),
                 _ => {}
             }
         }
@@ -1935,8 +2053,9 @@ impl Play {
         self.auto_attack = false;
     }
 
-    /// Builds the HUD on the viewer's device: the 2D layer, UI.CSF's
-    /// surfaces and "ArialUI" out of the loaded files.
+    /// Builds the HUD on the viewer's device: the 2D layer, UI.CSF's and
+    /// ITEMICON.ESF's surfaces (the item icons the client's icon cache
+    /// would stream) and "ArialUI" out of the loaded files.
     pub fn attach_ui(&mut self, renderer: &mut render::Renderer, device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat, lib: &Library) {
         let Some((atlas, textures)) = self.ui_data.take() else { return };
         let mut ui = render::ui::Ui::new(device, format, render::DEPTH_FORMAT);
@@ -1945,7 +2064,7 @@ impl Play {
         let mut assets = crate::ui::UiAssets::default();
         assets.add_white(&mut ui, device, queue);
         for (name, c) in &lib.files {
-            if name.eq_ignore_ascii_case("UI.CSF") {
+            if name.eq_ignore_ascii_case("UI.CSF") || name.eq_ignore_ascii_case("ITEMICON.ESF") {
                 assets.add_surfaces(&mut ui, device, queue, c);
             }
         }
@@ -2030,7 +2149,7 @@ impl Play {
             if self.mode == 14 {
                 self.mbox.draw(vui, &mut r, now as i64);
             }
-            actions = self.run_start_menu(vui, &r, &start_loc);
+            actions = self.run_start_menu(vui, &mut r, &start_loc);
             self.run_edit(vui, &r);
             if self.mode == 2 {
                 let mut cues = Vec::new();
@@ -2056,6 +2175,19 @@ impl Play {
             if let Some(s) = self.start.as_mut() {
                 let mut cues = Vec::new();
                 s.menu.draw(vui, &mut r, &s.menus, now as i64, &start_stats, &mut cues);
+                if s.menu.visible && self.items.visible {
+                    let pl = &self.dump.player;
+                    let info = crate::infotext::Info {
+                        words: &vui.words,
+                        inv: &self.dump.inventory,
+                        hp: [self.stats.stat[7], self.stats.stat[8], self.stats.stat[9], self.stats.stat[10]],
+                        base: &self.stats.base,
+                        class: pl.class,
+                        level: pl.level,
+                        attack_words: &s.attack_words,
+                    };
+                    self.items.draw(vui, &mut r, &info, &mut cues);
+                }
                 self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
             }
             // DrawStatus: under water, the breath gauge
@@ -2169,9 +2301,14 @@ impl Play {
     }
 
     pub fn describe(&self) -> String {
+        if std::env::var_os("EQOA_INV").is_some() {
+            for (k, it) in self.dump.inventory.items.iter().enumerate() {
+                eprintln!("inv {k}: {} wear {} equip {} quick {} p4c {} p54 {} qty {} icon {:#x}/{:#x}", it.item.name, it.item.wear_slot, it.equip_slot, it.quick_slot, it.item.p4c, it.item.p54, it.quantity, it.item.icon, it.item.icon2);
+            }
+        }
         let n = self.entities.slots.iter().flatten().count();
         let on_bar = self.abilities.values().filter(|a| a.valid != 0).count();
         let fx = self.spells.as_ref().map_or_else(String::new, |s| format!(", {}", s.describe()));
-        format!("{n} entities, {} abilities ({on_bar} on a bar), {} packets sent{fx}", self.abilities.len(), self.session.packets_sent)
+        format!("{n} entities, {} items, {} abilities ({on_bar} on a bar), {} packets sent{fx}", self.dump.inventory.items.len(), self.abilities.len(), self.session.packets_sent)
     }
 }

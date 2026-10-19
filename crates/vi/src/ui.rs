@@ -102,6 +102,11 @@ pub trait Raster {
     fn point_size(&self) -> i32;
     fn viewport(&self) -> [i32; 4];
     fn set_viewport(&mut self, v: [i32; 4]);
+    /// Whether surface `id` is there to draw (CLIENT's icon cache asks; a
+    /// recorder has everything).
+    fn has(&self, _id: u32) -> bool {
+        true
+    }
 }
 
 pub struct Vui {
@@ -847,6 +852,56 @@ impl Window {
         let at = self.row_center(vui, ui, row);
         let at = [self.center[0] - (self.size[0] >> 1) + x - 16, at[1] - 5];
         vui.blit_ex(ui, 89, at, 3, if pulse { self.tick_pulse(vui.time) } else { 1.0 }, 0);
+    }
+
+    /// `TickU(x, row, pulse)`: the up tick (atlas 90) over a column.
+    pub fn tick_u(&self, vui: &Vui, ui: &mut dyn Raster, x: i32, row: i32, pulse: bool) {
+        let at = self.row_center(vui, ui, row);
+        let at = [self.center[0] - (self.size[0] >> 1) + x - 8, at[1] - 5];
+        vui.blit_ex(ui, 90, at, 3, if pulse { self.tick_pulse(vui.time) } else { 1.0 }, 0);
+    }
+
+    /// `TickD(x, row, pulse)`: the down tick (atlas 87).
+    pub fn tick_d(&self, vui: &Vui, ui: &mut dyn Raster, x: i32, row: i32, pulse: bool) {
+        let at = self.row_center(vui, ui, row);
+        let at = [self.center[0] - (self.size[0] >> 1) + x - 8, at[1] - 5];
+        vui.blit_ex(ui, 87, at, 3, if pulse { self.tick_pulse(vui.time) } else { 1.0 }, 0);
+    }
+
+    /// `DrawFrame(x, row, w, rows, flags)`: a frame round `rows` rows from
+    /// `x`, over a faint black (0.1); 0x40 drops the bottom margin, 0x20
+    /// adds the two pulsing side arrows (atlas 128).
+    pub fn draw_frame(&self, vui: &Vui, ui: &mut dyn Raster, x: i32, row: i32, w: i32, rows: i32, flags: u32) {
+        let h = vui.font_height(ui) - 4;
+        let pos = [self.top_left()[0] + x, self.row_center(vui, ui, row)[1] - 4];
+        let size = [w, rows * h];
+        let at = [pos[0] - 4, pos[1] - 3];
+        let sz = [size[0] + 8, if flags & 0x40 != 0 { size[1] } else { size[1] + 4 }];
+        let fp = FrameParam { tl: (101, 0), top: (102, 0), tr: (103, 0), right: (104, 0), br: (106, 0), bottom: (102, 0), bl: (105, 0), left: (104, 0) };
+        vui.stretch_blit_ex(ui, 61, at, sz, 3, self.open * 0.1);
+        vui.blit_frame(ui, at, sz, &fp, 0, self.open, true);
+        let e = vui.entry(128);
+        if flags & 0x20 != 0 {
+            let aw = e.uv1[0] + 3;
+            let y = at[1] + (sz[1] >> 1) - (e.uv1[1] >> 1);
+            let a = self.tick_pulse(vui.time);
+            vui.blit_ex(ui, 128, [at[0] - aw, y], 3, a, 0);
+            vui.blit_ex(ui, 128, [at[0] + sz[0] + 3, y], 3, a, 1);
+        }
+    }
+
+    /// `DrawFrameVScroll(x, row, w, rows, t)`: the frame with a scroll bar
+    /// down its right edge, the thumb at `t` (none outside 0..1).
+    pub fn draw_frame_vscroll(&self, vui: &Vui, ui: &mut dyn Raster, x: i32, row: i32, w: i32, rows: i32, t: f32) {
+        let h = vui.font_height(ui) - 4;
+        let pos = [self.top_left()[0] + x, self.row_center(vui, ui, row)[1] - 4];
+        let size = [w, rows * h];
+        let at = [pos[0] - 4, pos[1] - 3];
+        let sz = [size[0] + 8, size[1] + 4];
+        self.draw_frame(vui, ui, x, row, w, rows, 0);
+        if (0.0..=1.0).contains(&t) {
+            self.draw_vscroll(vui, ui, [at[0] + sz[0] - 4, at[1]], sz[1], t);
+        }
     }
 
     /// `ResetTickPulse`: the pulse starts over now.

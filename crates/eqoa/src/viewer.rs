@@ -423,10 +423,10 @@ pub fn shot_with(
                         }
                         'u' => Some(K::UP),
                         'd' => Some(K::DOWN),
+                        'l' => Some(K::LEFT),
+                        'r' => Some(K::RIGHT),
                         'e' => Some(K::CROSS),
                         'x' => Some(K::ESCAPE),
-                        'l' => Some(136),
-                        'r' => Some(137),
                         _ => None,
                     };
                     if let Some(k) = k {
@@ -922,6 +922,8 @@ impl ApplicationHandler for App {
                         let k = match &event.logical_key {
                             Key::Named(NamedKey::ArrowUp) => Some(K::UP),
                             Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
+                            Key::Named(NamedKey::ArrowLeft) => Some(K::LEFT),
+                            Key::Named(NamedKey::ArrowRight) => Some(K::RIGHT),
                             Key::Named(NamedKey::Enter) => Some(K::CROSS),
                             Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
                             Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),

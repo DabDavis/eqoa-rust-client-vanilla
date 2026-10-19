@@ -49,9 +49,7 @@ impl ClientImage {
     }
 }
 
-/// `VIMenuEntry`, its sub-menu as an index into `Menus`. (The icons and
-/// number are the item menus', not ported yet.)
-#[allow(dead_code)]
+/// `VIMenuEntry`, its sub-menu as an index into `Menus`.
 #[derive(Clone, Copy, Debug)]
 pub struct MenuEntry {
     pub icon: i32,
@@ -62,6 +60,13 @@ pub struct MenuEntry {
     pub sub: Option<usize>,
     pub msg: u32,
     pub id: i32,
+}
+
+impl Default for MenuEntry {
+    /// An emptied slot, as the Build* functions clear them.
+    fn default() -> Self {
+        MenuEntry { icon: -1, icon2: -1, x08: -1, word: -1, number: -1, sub: None, msg: 0, id: -1 }
+    }
 }
 
 /// `VIMenuDef`.
@@ -93,6 +98,12 @@ impl Menus {
         let entries = img.ptr_at(va + 8).map(|e| self.entries(img, e, count)).unwrap_or_default();
         self.list[k].entries = entries;
         k
+    }
+
+    /// A menu built at run time (the item menus `UpdateQuickBars` fills).
+    pub fn push(&mut self, m: Menu) -> usize {
+        self.list.push(m);
+        self.list.len() - 1
     }
 
     /// A menu made of `count` entries at `va` (the start menu's tables,
