@@ -31,6 +31,7 @@ pub mod hash;
 pub mod hsprite;
 pub mod lightning;
 pub mod particle;
+pub mod pick;
 pub mod quat;
 pub mod scene;
 pub mod tod;
