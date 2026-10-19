@@ -163,8 +163,10 @@ order per stage is not yet measured.
   static colour per instance, but not checked against the console yet. The personal light (the lantern, `vi::tod::PersonalLight`,
   ramped as `SetupTimeOfDayLights` does) is the strip programs' point term but
   evaluated per pixel, where VU1 lights per vertex (and the game also
-  tessellates near it). Blended layers are drawn after every
-  opaque one, not interleaved strip by strip as the game draws them.
+  tessellates near it). The two passes are the scene's: a material whose
+  first layer is opaque draws whole at once, one whose first layer blends is
+  deferred whole (`MaterialHasDepthSort`); the deferred pass runs in model
+  order, not the game's tree-walk order (rooms, flora, actors).
 - Zone streaming is `VIWorld::StreamLeaf`'s radial rule (load within 900 of a
   zone's bounds, let go past 950, a zone a frame) for drawing only: collision
   still loads the whole file (two seconds for Tunaria), and `VIZone::Stream`'s

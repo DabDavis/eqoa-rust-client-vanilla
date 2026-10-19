@@ -6,9 +6,11 @@
 //! (alpha test or blend mode, wrap, the UV transform and its scroll), and GPU
 //! skinning as `VIRStrip4` does it.
 //!
-//! One deliberate difference: every opaque pass is drawn before any blended
-//! one, where the game draws a strip's layers back to back. A translucent
-//! layer then never hides geometry drawn after it.
+//! Two passes, as the scene draws them: a material whose first layer is
+//! opaque draws every layer at once, and one whose first layer blends waits
+//! for the second pass (`MaterialHasDepthSort`, `RenderDeferredList`). The
+//! second pass goes in model order, where the game's goes rooms, flora, then
+//! actors in the order its tree walk met them.
 
 pub mod billboard;
 pub mod text;
@@ -686,8 +688,11 @@ impl Renderer {
             }
         }
         pass.set_bind_group(0, &self.frame_bg, &[]);
-        // Opaque passes first, then the blended ones (see the module docs).
-        for blended in [false, true] {
+        // Two passes, as VIScene::Render's: a material whose layer 0 is
+        // opaque (MaterialHasDepthSort) draws all its layers at once in the
+        // first, one whose layer 0 blends is deferred whole to the second
+        // (DrawPrimBuffer's flags; RenderDeferredList).
+        for deferred in [false, true] {
             let mut current = usize::MAX;
             for m in models {
                 if m.instance_count == 0 || m.sky || !m.visible {
@@ -698,8 +703,11 @@ impl Renderer {
                 pass.set_vertex_buffer(2, m.statics.slice(..));
                 pass.set_bind_group(2, &m.palette_bg, &[]);
                 for (indices, count, passes) in &m.batches {
+                    if passes.first().is_none_or(|p| (p.blend != 0) != deferred) {
+                        continue;
+                    }
                     pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
-                    for p in passes.iter().take(m.passes_used).filter(|p| (p.blend != 0) == blended) {
+                    for p in passes.iter().take(m.passes_used) {
                         if p.blend != current {
                             pass.set_pipeline(&self.pipelines[p.blend]);
                             current = p.blend;
