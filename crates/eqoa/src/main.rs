@@ -117,9 +117,13 @@ pub fn disc(arg: Option<&String>) -> Result<iso::Iso> {
 fn listen(file: &str, x: f32, z: f32, secs: f32, out: &str, hour: f32, walk: bool, cues: bool, fight: bool) -> Result<()> {
     use vi::fpu::Ee;
     let mut lib = esf::Library::new();
-    let f = lib.add(file, esf::Container::open(disc(None)?.read(file)?)?);
+    let f = lib.add(file, stream::open_file(std::path::Path::new(&disc_path(None)), file)?);
     lib.add("CHAR.ESF", esf::Container::open(disc(None)?.read("CHAR.ESF")?)?);
     lib.add(sky::FILE, esf::Container::open(disc(None)?.read(sky::FILE)?)?);
+    // the zones round the spot, off the disc (a world read whole has them)
+    if let Some(mut src) = stream::source_for(&lib, f) {
+        stream::fill(&mut lib, f, x, z, src.as_mut());
+    }
     let world = vi::world::World::<Ee>::load(&lib, f).ok_or("no world in the file")?;
     let mut walker = walker::Walker::new(world, x, z, 0.0);
     let human = lib.lookup(viewer::HUMAN).ok_or("no human in CHAR.ESF")?;
@@ -285,6 +289,8 @@ fn run(args: &[String]) -> Result<()> {
             lib.add("FX.CSF", esf::Container::open(disc(None)?.read("FX.CSF")?)?);
             let [x, _, z] = player.pos;
             let index = vi::world::World::<vi::fpu::Ee>::zone_at(lib.file(main_file), x, z).ok_or("no zone at the player's position")?;
+            // the player's zone off the disc; the walker reads the rest round it
+            stream::load_zone_now(&mut lib, main_file, index)?;
             let character = lib.lookup(viewer::HUMAN).ok_or("no human model")?;
             drop(src);
             let src = viewer::Source::Walk { file: main_file, index, character, spawn: Some((x, z, player.hpr[0])) };
@@ -400,7 +406,8 @@ fn source(file: &str, rest: &[String]) -> Result<(esf::Library, viewer::Source)>
     let mut iso = disc(None)?;
     let mut lib = esf::Library::new();
     let t = std::time::Instant::now();
-    let main = lib.add(file, esf::Container::open(iso.read(file)?)?);
+    // a world with its zones left on the disc (stream::open_file)
+    let main = lib.add(file, stream::open_file(std::path::Path::new(&disc_path(None)), file)?);
     for s in SHARED {
         if !s.eq_ignore_ascii_case(file) {
             lib.add(*s, esf::Container::open(iso.read(s)?)?);
@@ -413,13 +420,16 @@ fn source(file: &str, rest: &[String]) -> Result<(esf::Library, viewer::Source)>
             lib.add("CHAR.ESF", esf::Container::open(iso.read("CHAR.ESF")?)?);
             let index: usize = n.parse()?;
             lib.file(main).zones().get(index).ok_or("no such zone")?;
+            stream::load_zone_now(&mut lib, main, index)?;
             let character = lib.lookup(viewer::HUMAN).ok_or("no human model")?;
             Ok((lib, viewer::Source::Walk { file: main, index, character, spawn: None }))
         }
         [z, n] if z == "zone" => {
             let index: usize = n.parse()?;
-            let zone = *lib.file(main).zones().get(index).ok_or("no such zone")?;
-            Ok((lib, viewer::Source::Zone { file: main, zone, index }))
+            lib.file(main).zones().get(index).ok_or("no such zone")?;
+            stream::load_zone_now(&mut lib, main, index)?;
+            let (file, zone) = lib.zone(main, index).ok_or("no such zone")?;
+            Ok((lib, viewer::Source::Zone { file, zone, index }))
         }
         [] | [_] => {
             let list = scene::list_models(&lib, main);

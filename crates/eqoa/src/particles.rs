@@ -42,8 +42,15 @@ impl Particles {
     /// Every particle sprite placed in `world`, directly or as a group's
     /// member.
     pub fn new(world: &World<Ee>, time: i64) -> Particles {
-        let mut instances = Vec::new();
-        for (a, act) in world.actors.iter().enumerate() {
+        let mut p = Particles { sys: System::new(time, 2000), rand: Rand(1), defs: HashMap::new(), instances: Vec::new() };
+        p.add_from(world, 0);
+        p
+    }
+
+    /// The particle sprites placed by actors `first..`: a zone streamed in.
+    pub fn add_from(&mut self, world: &World<Ee>, first: usize) {
+        let instances = &mut self.instances;
+        for (a, act) in world.actors.iter().enumerate().skip(first) {
             let Some(s) = act.sprite else { continue };
             match &world.sprites[s].kind {
                 SpriteKind::Particle { def: Some(def), flags } => instances.push(Instance { actor: a, member: None, def: *def, flags: *flags, emitter: None }),
@@ -58,7 +65,6 @@ impl Particles {
                 _ => {}
             }
         }
-        Particles { sys: System::new(time, 2000), rand: Rand(1), defs: HashMap::new(), instances }
     }
 
     pub fn describe(&self) -> String {
