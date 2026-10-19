@@ -1,0 +1,6 @@
+[package]
+name = "ee"
+description = "The PS2 Emotion Engine's single-precision float model: chop, flush, saturate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true

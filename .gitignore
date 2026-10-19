@@ -1,0 +1,10 @@
+/target
+# Game data never goes in this repository.
+*.iso
+*.ESF
+*.CSF
+*.esf
+*.csf
+*.bin
+*.EEmemory
+/run/

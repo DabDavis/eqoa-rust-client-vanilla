@@ -1,0 +1,11 @@
+[package]
+name = "eqoa"
+description = "The EQOA Rust client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+iso.workspace = true
+esf.workspace = true
+ee.workspace = true

@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/DabDavis/eqoa-rs"
+
+[workspace.dependencies]
+ee = { path = "crates/ee" }
+iso = { path = "crates/iso" }
+esf = { path = "crates/esf" }
+flate2 = "1"
+crc32fast = "1"
+serde_json = "1"

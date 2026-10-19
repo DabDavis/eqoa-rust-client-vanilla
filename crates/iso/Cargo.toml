@@ -1,0 +1,6 @@
+[package]
+name = "iso"
+description = "ISO 9660 reader for the game disc: walks the directory tree, reads one file at a time"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
