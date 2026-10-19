@@ -184,6 +184,10 @@ pub struct Session {
     pub packets_sent: u64,
     /// `EQOA_NET_DEBUG`: every datagram and message on stderr.
     debug: bool,
+    /// Events handed back to come out of the next `pump` first: what
+    /// arrived with the world entry, after it (0x1005, 0x03D5), for the
+    /// game to read once it is up.
+    pub held: Vec<Event>,
 }
 
 fn ipv4(a: &SocketAddr) -> [u8; 4] {
@@ -219,6 +223,7 @@ impl Session {
             base,
             packets_sent: 0,
             debug: std::env::var_os("EQOA_NET_DEBUG").is_some(),
+            held: Vec::new(),
         };
         let dst = address_to_endpoint(ipv4(&server), server.port(), PORT_LEADER);
         let sys = s.drdp.system_endpoint;
@@ -363,7 +368,7 @@ impl Session {
                 }
             }
         }
-        let mut events = Vec::new();
+        let mut events = std::mem::take(&mut self.held);
         while let Some(m) = self.drdp.receive() {
             if self.debug {
                 eprintln!("[net] message type {} size {} src {:#x}", m.ty, m.data.len(), m.src);

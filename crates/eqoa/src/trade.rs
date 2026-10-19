@@ -962,7 +962,9 @@ impl Trade {
             }
         }
         match self.child {
-            Child::MBox => self.mbox.draw(vui, r, now),
+            Child::MBox => {
+                self.mbox.draw(vui, r, now);
+            }
             Child::Deposit => self.deposit.draw(vui, r, cues),
             Child::Quantity => self.quantity.draw(vui, r, cues),
             Child::Edit => self.edit.draw(vui, r, now, cues),

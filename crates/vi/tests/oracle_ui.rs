@@ -232,6 +232,7 @@ impl Side {
             42 => v.fill_rectangle(r, [[a[0], a[1]], [a[2], a[3]]], col),
             43 => v.frame_fill_rectangle(r, [[a[0], a[1]], [a[2], a[3]]]),
             44 => self.win[k].draw_color_bar(v, r, a[1], a[2], a[3], col),
+            80 => self.win[k].draw_hscroll(v, r, a[1], a[2], a[3], x[0], a[4] as u32),
             19 => v.blit_bar3(r, s, col, [a[0], a[1]], a[2], a[3], a[4], a[5], a[6], x[4], a[7] as u32, a[8] != 0),
             60 => v.blit_ability_icon(r, [a[0], a[1]], a[2], a[3], x[0]),
             61 => v.blit_id(r, a[0] as u32, [a[1], a[2]], a[3], x[0], a[4] as u32),
@@ -333,6 +334,13 @@ fn script() -> Vec<Call> {
         v.push(call(21, &[k, 1], &[], ""));
         v.push(call(23, &[k], &[], ""));
         v.push(call(24, &[k, 25, 1, 400, 1, 0], &[1.0, 1.0, 1.0, 1.0], "a row under the title"));
+    }
+    // Sliders (the options' volumes): ends, middle, and the side arrows.
+    v.push(call(20, &[1, 320, 246, 440, 7, 0], &[], ""));
+    v.push(call(21, &[1, 1], &[], ""));
+    v.push(call(40, &[2500], &[], ""));
+    for (t, f) in [(0.0, 0), (0.5, 32), (1.0, 32), (0.3, 0)] {
+        v.push(call(80, &[1, 260, 2, 140, f], &[t], ""));
     }
     // Solid rectangles: the edit box's caret, a framed one, colour bars.
     v.push(call(42, &[22, 61, 24, 76], &[1.0, 1.0, 1.0, 0.5], ""));

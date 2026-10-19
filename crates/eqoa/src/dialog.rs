@@ -231,6 +231,8 @@ pub struct MBox {
     time: i64,
     /// `m_pos` (the game window's at (80, 115), the item menu's at (190, 115))
     pub pos: [i32; 2],
+    /// `m_timeout`: the time the box cancels itself at, or -1
+    pub timeout: i64,
     window: Window,
 }
 
@@ -243,7 +245,7 @@ pub enum BoxAnswer {
 
 impl Default for MBox {
     fn default() -> Self {
-        MBox { kind: 0, text: Vec::new(), sel: 0, p1: 0, p2: 0, alpha: 0.0, time: 0, pos: [80, 115], window: Window::default() }
+        MBox { kind: 0, text: Vec::new(), sel: 0, p1: 0, p2: 0, alpha: 0.0, time: 0, pos: [80, 115], timeout: -1, window: Window::default() }
     }
 }
 
@@ -252,6 +254,7 @@ impl MBox {
     /// parameters; gaining the focus starts the fade (295).
     pub fn prompt(&mut self, text: &[u16], kind: i32, p1: i32, p2: i32, now: i64) {
         self.kind = kind;
+        self.timeout = -1;
         self.reset_sel();
         self.text = text.to_vec();
         self.p1 = p1;
@@ -301,8 +304,9 @@ impl MBox {
         }
     }
 
-    /// `OnDrawSelf` (no item icon, no countdown).
-    pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, now: i64) {
+    /// `OnDrawSelf` (no item icon). `Update` runs in it: a timeout that has
+    /// passed cancels the box (260), which is returned.
+    pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, now: i64) -> Option<BoxAnswer> {
         let yellow = [1.0, 1.0, 0.0, self.alpha];
         let white = [1.0, 1.0, 1.0, self.alpha];
         let pos = self.pos;
@@ -324,15 +328,24 @@ impl MBox {
         let size = [width + 32, (n + 2) * h + 32];
         self.window.init(vui, r, [pos[0] + size[0] / 2, size[1] / 2 + pos[1] - 16], width, n, 1);
         self.window.open(true);
-        // Update: the fade
+        // Update: the fade, and the timeout
         self.alpha = (self.alpha + (now - self.time) as f32 * 0.001 * 5.0).min(1.0);
         self.time = now;
+        let mut answer = None;
+        if self.timeout != -1 && self.timeout < now {
+            answer = Some(BoxAnswer::No(self.p1, self.p2));
+            self.timeout = -1;
+        }
         r.blit(vi::ui::icon_id("black"), 0, pos, [0, 0], size, 3, self.alpha * 0.75);
         let fp = vi::ui::FrameParam { tl: (101, 0), top: (102, 0), tr: (103, 0), right: (104, 1), br: (106, 0), bottom: (102, 2), bl: (105, 0), left: (104, 0) };
         vui.blit_frame(r, pos, size, &fp, 3, self.alpha, true);
         self.window.text_box(vui, r, &text, 0, 0, width, n, white, 9);
         let mut y = pos[1] + h * (n + 1) + 22;
         let col = [pos[0] + (size[0] >> 2), pos[0] + (size[0] >> 1), pos[0] + (size[0] >> 2) * 3];
+        // the last ten seconds counted down at the left
+        if self.timeout != -1 && self.timeout - now < 11000 {
+            r.draw_string([pos[0] + 16, y], white, &wide(&((self.timeout - now) / 1000).to_string()));
+        }
         let word = |id: i32| wide(vui.words.get(id, vui.language));
         // the buttons, the selected one yellow between two arrows
         let buttons: &[(i32, i32)] = match self.kind {
@@ -351,5 +364,6 @@ impl MBox {
             vui.blit_ex(r, 89, [x - 20 - w, y], 3, self.alpha, 0);
             vui.blit_ex(r, 88, [x + w + 8, y], 3, self.alpha, 0);
         }
+        answer
     }
 }

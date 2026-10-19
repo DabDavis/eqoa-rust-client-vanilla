@@ -396,8 +396,9 @@ pub fn draw_icon(vui: &Vui, r: &mut dyn Raster, icon: i32, pos: [i32; 2], mode: 
     }
 }
 
-/// `VIWndMiniMenu` (kind 0: the frame grows out of its corner; the titled
-/// kind 1 is not used here). Its rows are a CLIENT menu's, or a fixed table
+/// `VIWndMiniMenu`: kind 0 (`DrawPlain`) grows its frame out of its
+/// corner; kind 1 (`DrawTitled`) has a title over its rows and the Select and
+/// Exit legend under them. Its rows are a CLIENT menu's, or a fixed table
 /// (word, message, id) a window builds itself (the spell book's).
 pub struct MiniMenu {
     pub list: WndList,
@@ -405,11 +406,27 @@ pub struct MiniMenu {
     pub visible: bool,
     size: [i32; 2],
     fixed: Option<Vec<(i32, u32, i32)>>,
+    /// `m_kind`
+    pub kind: i32,
+    /// `m_title` (kind 1)
+    pub title: Vec<u16>,
 }
 
 impl MiniMenu {
     fn new(menu: usize) -> Self {
-        MiniMenu { list: WndList::default(), menu, visible: false, size: [0, 0], fixed: None }
+        MiniMenu { list: WndList::default(), menu, visible: false, size: [0, 0], fixed: None, kind: 0, title: Vec::new() }
+    }
+
+    /// A titled popup (kind 1) over a CLIENT menu (the buddy and ignore
+    /// lists' member menus).
+    pub fn titled(menu: usize) -> Self {
+        MiniMenu { kind: 1, ..MiniMenu::new(menu) }
+    }
+
+    /// `ResetScroll`: the selection and the top back to the first row.
+    pub fn reset_scroll(&mut self) {
+        self.list.sel = 0;
+        self.list.top = 0;
     }
 
     /// A popup over a fixed table of (word, message, id).
@@ -455,9 +472,76 @@ impl MiniMenu {
         }
     }
 
+    /// `OnDrawSelf`: the kind's drawing, then the held arrows' repeat.
+    pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, menus: &Menus, now: i64, cues: &mut Vec<i32>) {
+        if self.kind == 1 {
+            self.draw_titled(vui, r, menus, now);
+        } else {
+            self.draw_plain(vui, r, menus, now);
+        }
+        if self.list.flash.pulse(138) {
+            self.list.scroll(-1, now, cues);
+        }
+        if self.list.flash.pulse(139) {
+            self.list.scroll(1, now, cues);
+        }
+    }
+
+    /// `DrawTitled`: the width from the legend, the title and the labels;
+    /// the frame at once (no growing), the title, the rows two lines under
+    /// it, and the Select (70) and Exit (69) legend.
+    fn draw_titled(&mut self, vui: &Vui, r: &mut dyn Raster, menus: &Menus, now: i64) {
+        let rows = self.rows(menus);
+        self.list.items = rows.iter().map(|&(word, _, _)| Row { flags: u32::MAX, icon: -1, icon2: -1, x0c: -1, word, number: -1 }).collect();
+        let h = 19;
+        let dt = (now - self.list.time) as f32 * 0.001;
+        self.list.time = now;
+        let a = self.list.alpha;
+        let white = [1.0, 1.0, 1.0, a];
+        let yellow = [1.0, 1.0, 0.0, a];
+        let word = |id: i32| wide(vui.words.get(id, vui.language));
+        let button = vui.entry(70);
+        let mut size = [vui.string_width(r, &word(161)) + vui.string_width(r, &word(212)) + 105 + button.uv1[0], 0];
+        size[0] = size[0].max(vui.string_width(r, &self.title) + 75);
+        for &(w, _, _) in &rows {
+            size[0] = size[0].max(vui.string_width(r, &word(w)) + 75);
+        }
+        size[1] = (rows.len() as i32 + 5) * h;
+        self.size = size;
+        let (top, corner) = (vui.entry(101), vui.entry(106));
+        let pos = self.list.pos;
+        let fp = FrameParam { tl: (101, 0), top: (102, 0), tr: (103, 0), right: (104, 0), br: (106, 0), bottom: (102, 0), bl: (105, 0), left: (104, 0) };
+        let stretch = [(self.size[0] - corner.uv1[0]).max(0), self.size[1] - top.uv1[1] - corner.uv1[1] + 1];
+        vui.stretch_blit_ex(r, 61, [pos[0], pos[1] + top.uv1[1] - 1], stretch, 3, a.min(0.75));
+        vui.blit_frame(r, pos, self.size, &fp, 3, a, true);
+        let mut p = [pos[0] + 20, pos[1] + 10];
+        vui.draw_string_ex(r, &self.title, p[0], p[1], white, true);
+        p = [p[0] + h * 2, p[1] + h * 2];
+        for (i, &(w, _, _)) in rows.iter().enumerate() {
+            // DrawItem
+            let lit = self.list.x64 && i as i32 == self.list.sel;
+            if lit {
+                let t = vui.entry(89);
+                vui.blit_ex(r, 89, [p[0] - 25, p[1] - t.uv1[1] / 2], 3, a.min(self.list.x7c), 0);
+            }
+            vui.draw_centered_string_ex(r, &word(w), p[0], p[1], if lit { yellow } else { white }, 1, true);
+            p[1] += h;
+        }
+        let mut bp = [pos[0] + 20, pos[1] + self.size[1] - 32];
+        let mut tp = [bp[0] + 22, bp[1] + button.uv1[1] / 2 - 3];
+        vui.blit_ex(r, 70, bp, 3, a, 0);
+        vui.draw_centered_string_ex(r, &word(212), tp[0], tp[1], white, 1, true);
+        let step = vui.string_width(r, &word(212)) + 30 + button.uv1[0];
+        bp[0] += step;
+        tp[0] += step;
+        vui.blit_ex(r, 69, bp, 3, a, 0);
+        vui.draw_centered_string_ex(r, &word(161), tp[0], tp[1], white, 1, true);
+        self.list.update(dt);
+    }
+
     /// `DrawPlain`: the rows' widest label sets the size, the frame grows to
     /// it at three sizes a second, the rows drawn once it is there.
-    pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, menus: &Menus, now: i64, cues: &mut Vec<i32>) {
+    fn draw_plain(&mut self, vui: &Vui, r: &mut dyn Raster, menus: &Menus, now: i64) {
         self.list.items = self.rows(menus).iter().map(|&(word, _, _)| Row { flags: u32::MAX, icon: -1, icon2: -1, x0c: -1, word, number: -1 }).collect();
         let dt = (now - self.list.time) as f32 * 0.001;
         self.list.time = now;
@@ -494,12 +578,6 @@ impl MiniMenu {
             }
         }
         self.list.update(dt);
-        if self.list.flash.pulse(138) {
-            self.list.scroll(-1, now, cues);
-        }
-        if self.list.flash.pulse(139) {
-            self.list.scroll(1, now, cues);
-        }
     }
 }
 

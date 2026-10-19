@@ -932,6 +932,24 @@ impl Window {
         }
     }
 
+    /// `DrawHScroll(x, row, w, t, flags)`: a slider bar `w` wide with its
+    /// knob at `t`; 0x20 adds the two pulsing side arrows (atlas 128).
+    pub fn draw_hscroll(&self, vui: &Vui, ui: &mut dyn Raster, x: i32, row: i32, w: i32, t: f32, flags: u32) {
+        let mut pos = [self.top_left()[0] + x, self.row_center(vui, ui, row)[1] - 4];
+        let size = [w, 16];
+        vui.blit_bar(ui, &[], [0.0; 4], pos, 165, 164, size[0], 3, self.open, 0, true);
+        let e = vui.entry(166);
+        if flags & 0x20 != 0 {
+            let a = vui.entry(128);
+            let aw = a.uv1[0] + 3;
+            let p = self.tick_pulse(vui.time);
+            vui.blit_ex(ui, 128, [pos[0] - aw, pos[1] - 3], 3, p, 0);
+            vui.blit_ex(ui, 128, [pos[0] + size[0] + 3, pos[1] - 3], 3, p, 1);
+        }
+        pos[0] += (t * (size[0] - e.uv1[0]) as f32) as i32;
+        vui.blit_ex(ui, e.x00, pos, 3, self.open, 0);
+    }
+
     /// `DrawFrameVScroll(x, row, w, rows, t)`: the frame with a scroll bar
     /// down its right edge, the thumb at `t` (none outside 0..1).
     pub fn draw_frame_vscroll(&self, vui: &Vui, ui: &mut dyn Raster, x: i32, row: i32, w: i32, rows: i32, t: f32) {

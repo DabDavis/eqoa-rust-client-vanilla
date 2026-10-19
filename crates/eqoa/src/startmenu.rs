@@ -644,6 +644,10 @@ pub struct StartData {
     pub attack_words: Vec<(i32, i64)>,
     /// `gEquipSlotWords` (0x00CDF6F8): (word, equip slot), 23 of them
     pub slot_words: Vec<(i32, i64)>,
+    /// `gBuddyMenu` (0x00CD03B0) and `gIgnoreMemberMenu` (0x00CD0340): the
+    /// buddy and ignore lists' member menus
+    pub buddy_menu: usize,
+    pub ignore_menu: usize,
     pub menu: StartMenu,
 }
 
@@ -662,7 +666,9 @@ impl StartData {
         item_counts[3] = 40;
         let attack_words = (0..11u32).map(|k| (img.i32_at(0x00CDF6A0 + 8 * k), img.i32_at(0x00CDF6A4 + 8 * k) as i64)).collect();
         let slot_words = (0..23u32).map(|k| (img.i32_at(0x00CDF6F8 + 8 * k), img.i32_at(0x00CDF6FC + 8 * k) as i64)).collect();
-        Some(StartData { menus, tables, bounds, item_counts, attack_words, slot_words, menu })
+        let buddy_menu = menus.def(&img, 0x00CD03B0);
+                let ignore_menu = menus.def(&img, 0x00CD0340);
+        Some(StartData { menus, tables, bounds, item_counts, attack_words, slot_words, buddy_menu, ignore_menu, menu })
     }
 
     /// `OpenStartMenu`'s table: the bank's when a banker is in range, the
