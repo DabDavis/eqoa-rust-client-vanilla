@@ -432,6 +432,8 @@ pub fn shot_with(
                     if let Some(k) = k {
                         if p.mode == 5 {
                             p.book_key(k, down);
+                        } else if p.mode == 35 {
+                            p.who_key(k, down);
                         } else {
                             p.start_key(k, down);
                         }
@@ -956,6 +958,24 @@ impl ApplicationHandler for App {
                             && !(down && event.repeat)
                         {
                             p.book_key(k, down);
+                        }
+                        return;
+                    }
+                    // the who list (mode 35): Q asks again
+                    if p.mode == 35 {
+                        let k = match &event.logical_key {
+                            Key::Named(NamedKey::ArrowUp) => Some(K::UP),
+                            Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
+                            Key::Named(NamedKey::Enter) => Some(K::CROSS),
+                            Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
+                            Key::Character(c) if c.eq_ignore_ascii_case("q") => Some(113),
+                            Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
+                            _ => None,
+                        };
+                        if let Some(k) = k
+                            && !(down && event.repeat)
+                        {
+                            p.who_key(k, down);
                         }
                         return;
                     }

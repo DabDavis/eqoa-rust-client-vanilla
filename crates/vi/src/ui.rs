@@ -602,6 +602,10 @@ fn frame_sets() -> [FrameParam; 4] {
     ]
 }
 
+/// `VIUIWindow::SetUiColors`: the palette a `VIUICOLOR` indexes (0 the
+/// text, 1 the selection, 2 dim, 3 light).
+pub const UI_COLORS: [[f32; 4]; 4] = [[0.0, 0.0, 0.0, 1.0], [0.039_215_688, 0.196_078_43, 0.274_509_82, 1.0], [0.4, 0.4, 0.4, 1.0], [0.9, 0.9, 0.9, 1.0]];
+
 /// `VIUIWindow`: a framed panel that opens and closes over a few frames.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Window {

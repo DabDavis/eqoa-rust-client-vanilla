@@ -128,7 +128,8 @@ pub struct Play {
     /// `m_p4F0B8`: who last sent a tell.
     pub reply_name: String,
     /// `VIWndGame::m_mode`: 0 playing, 2 the edit box, 7 a dialog's
-    /// answers, 9 a dialog showing, 13 the start menu, 14 a message box.
+    /// answers, 9 a dialog showing, 13 the start menu, 14 a message box,
+    /// 35 the who list.
     pub mode: i32,
     /// `m_dialogs`: dialogs waiting while another mode is up (at most 11).
     dialogs: std::collections::VecDeque<Vec<u16>>,
@@ -167,6 +168,13 @@ pub struct Play {
     waiting: bool,
     /// An emote's action for the player's own walker.
     emote: Option<i32>,
+    /// The who list (mode 35): its data, its window, keys waiting for the
+    /// raster, and a tell's addressee while the edit box is up for it.
+    who: crate::wholist::Who,
+    who_wnd: crate::wholist::WhoList,
+    who_open: bool,
+    who_keys: Vec<(i32, bool)>,
+    who_tell: Option<String>,
     /// `VIWndEdit` (mode 2), and keys for it waiting for the raster.
     edit: crate::editbox::EditBox,
     edit_keys: Vec<(i32, bool)>,
@@ -484,7 +492,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false };
         p.take_abilities();
         p
     }
@@ -621,6 +629,7 @@ impl Play {
                     }
                     self.cues.push(crate::sound::Cue::Ui(1));
                 }
+                Event::Opcode { op: 0x0E02, data } => self.who.recv(&data),
                 Event::Pet(id) => {
                     self.pet_id = id.unwrap_or(u32::MAX);
                     if id.is_none() {
@@ -1580,6 +1589,77 @@ impl Play {
         }
     }
 
+    /// A key for the who list, handled with the next HUD frame.
+    pub fn who_key(&mut self, key: i32, down: bool) {
+        self.who_keys.push((key, down));
+    }
+
+    /// The who list's open, keys, drawing and what it asks.
+    fn run_who(&mut self, vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster) {
+        let now = self.session.now() as i64;
+        if std::mem::take(&mut self.who_open) {
+            self.who_wnd.open(vui, r);
+        }
+        let mut ups = Vec::new();
+        let mut cues = Vec::new();
+        for (k, down) in std::mem::take(&mut self.who_keys) {
+            if self.mode != 35 {
+                break;
+            }
+            ups.extend(self.who_wnd.key(vui, r, &self.who, k, down, now, &mut cues));
+        }
+        if self.mode == 35 {
+            self.who_wnd.draw(vui, r, &self.who, now, true, &mut cues);
+        }
+        self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
+        for up in ups {
+            match up {
+                crate::wholist::WhoUp::Close => {
+                    // ClosePanel704: CloseWhoList, back to the start menu
+                    self.who.close();
+                    self.mode = 0;
+                    self.open_start_menu(false);
+                }
+                crate::wholist::WhoUp::Refresh => {
+                    let req = self.who.open();
+                    self.session.send(&req);
+                }
+                crate::wholist::WhoUp::Tell(name) => {
+                    // Tell: one row, 128 long, centred on the list
+                    self.open_edit(0xB0F0000, 128, -1, false);
+                    self.who_tell = Some(name);
+                }
+                crate::wholist::WhoUp::Invite(name, id) => self.invite_to_group(id, &name),
+                crate::wholist::WhoUp::Mail(name) => eprintln!("play: mail to {name}: the gram window is not ported"),
+            }
+        }
+    }
+
+    /// `InviteToGroup(rec)`: as `InviteEntity`, by the record's id and name.
+    fn invite_to_group(&mut self, id: u32, name: &str) {
+        if Some(id) == self.self_id32() {
+            self.show_word(679);
+            return;
+        }
+        if self.group.in_group && !self.group.leader {
+            self.show_word(640);
+            return;
+        }
+        if self.group.members.iter().take(self.group.count()).any(|m| m.id == id) {
+            self.show_word_name(1023, name);
+            return;
+        }
+        if !self.group.in_group {
+            self.group.leader = true;
+            self.group.in_group = true;
+        }
+        self.show_word_name(637, name);
+        let mut w = net::stream::Writer::op(0x0625);
+        w.u32(id).string(name.as_bytes());
+        self.session.send(&w.data);
+        self.refuse_invites();
+    }
+
     /// The edit box for `purpose`: `max` long, titled with a word (-1 none),
     /// holding the target's name when `name` and the target is a creature.
     fn open_edit(&mut self, purpose: u32, max: usize, title: i32, name: bool) {
@@ -1634,7 +1714,9 @@ impl Play {
             }
             match self.edit.key(vui, r, key, now, &mut cues) {
                 crate::editbox::EditUp::Done(purpose) => self.edit_done(purpose),
-                crate::editbox::EditUp::Cancel => self.mode = 0,
+                crate::editbox::EditUp::Cancel => {
+                    self.mode = if self.who_tell.take().is_some() { 35 } else { 0 };
+                }
                 _ => {}
             }
         }
@@ -1644,6 +1726,14 @@ impl Play {
     /// 259: the edit box's text to where it was for.
     fn edit_done(&mut self, purpose: u32) {
         let text = String::from_utf16_lossy(&self.edit.text);
+        // VIWndWhoList::SendTell, back to the list
+        if let Some(name) = self.who_tell.take() {
+            if !text.is_empty() {
+                self.chat_line(&format!("/t {name} {text}"));
+            }
+            self.mode = 35;
+            return;
+        }
         let mut keep = false;
         if !text.is_empty() {
             match purpose {
@@ -1714,6 +1804,13 @@ impl Play {
                 }
             }
             0x0B03_0001 => self.group_changed(3),
+            // OpenPanel35: the who list asked for, and shown
+            0x0B03_0004 => {
+                let req = self.who.open();
+                self.session.send(&req);
+                self.who_open = true;
+                self.mode = 35;
+            }
             0x0B03_0002 => self.show_word(570),
             0x0508_0000 => {
                 if target != u32::MAX {
@@ -2168,6 +2265,7 @@ impl Play {
                 self.mbox.draw(vui, &mut r, now as i64);
             }
             actions = self.run_start_menu(vui, &mut r, &start_loc);
+            self.run_who(vui, &mut r);
             self.run_edit(vui, &r);
             if self.mode == 2 {
                 let mut cues = Vec::new();
