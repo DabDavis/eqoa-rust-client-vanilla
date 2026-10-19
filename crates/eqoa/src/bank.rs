@@ -433,7 +433,7 @@ impl Bank {
     fn draw_menu(&mut self, vui: &Vui, r: &mut dyn Raster) {
         let m = &mut self.menu;
         let rows = if m.auction { 8 } else { 7 };
-        m.window.init(vui, r, [0, 0], 250, rows, 1);
+        m.window.init(vui, r, [320, 180], 250, rows, 1);
         m.window.draw(vui, r);
         let (white, yellow) = ([1.0, 1.0, 1.0, m.window.open], [1.0, 1.0, 0.0, m.window.open]);
         let word = |id: i32| wide(vui.words.get(id, vui.language));
