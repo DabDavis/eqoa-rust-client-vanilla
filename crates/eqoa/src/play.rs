@@ -242,6 +242,14 @@ pub struct Play {
     ignore_wnd: crate::social::IgnoreList,
     panel_open: bool,
     panel_keys: Vec<(i32, bool)>,
+    /// The guild (`m_guild`), its commands and invitation (`m_p2EF24`), and
+    /// `VIWndGuild` (modes 20, the invitation, and 21, the roster) with the
+    /// mode it is to open in.
+    pub guild: crate::guild::Guild,
+    guild_cmds: crate::guild::Cmds,
+    guild_wnd: crate::guild::WndGuild,
+    guild_open: Option<i32>,
+    guild_keys: Vec<(i32, bool)>,
     /// `VIWndEdit` (mode 2), and keys for it waiting for the raster.
     edit: crate::editbox::EditBox,
     edit_keys: Vec<(i32, bool)>,
@@ -330,6 +338,8 @@ impl Play {
                     Some(crate::dialog::BoxAnswer::No(0, 0x7020000)) => self.decline_invite(),
                     Some(crate::dialog::BoxAnswer::Yes(0, 0x50E0000)) => self.session.send_op_byte(0x0041, 5),
                     Some(crate::dialog::BoxAnswer::Yes(0, 0xA010000)) => self.do_action(0xA010000, 0),
+                    Some(crate::dialog::BoxAnswer::Yes(0, 0xB051007)) => self.session.send(&crate::guild::Cmds::bare(2)),
+                    Some(crate::dialog::BoxAnswer::Yes(0, 0xB051008)) => self.session.send(&crate::guild::Cmds::bare(3)),
                     Some(crate::dialog::BoxAnswer::Yes(0, 0xB0B1002)) => {
                         let to = String::from_utf16_lossy(&self.edit.text);
                         self.edit.title.clear();
@@ -561,7 +571,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new() };
         p.take_abilities();
         p.npcw_world_entry();
         p
@@ -706,6 +716,34 @@ impl Play {
                 Event::Opcode { op: 0x0E02, data } => self.who.recv(&data),
                 Event::Opcode { op: 0x007C, data } => self.quests.recv_add(&data),
                 Event::Opcode { op: 0x1402, data } => self.cm_msgs.push(data),
+                Event::Opcode { op: 0x0468, data } => {
+                    if let Some(o) = self.guild.recv_0468(&data) {
+                        self.guild_out(o);
+                    }
+                }
+                Event::Opcode { op: 0x0579, data } => {
+                    for o in crate::guild::Cmds::recv_0579(&data) {
+                        self.guild_out(o);
+                    }
+                }
+                Event::Opcode { op: 0x057A, data } => {
+                    let idle = self.mode == 0;
+                    let (inv, o) = self.guild_cmds.recv_057a(&data, &self.guild, idle);
+                    match inv {
+                        Some(crate::guild::Invited::Busy(m)) => {
+                            let name = self.guild_cmds.name.clone();
+                            self.show_word_name(650, &name);
+                            self.session.send(&m);
+                        }
+                        Some(crate::guild::Invited::InGuild(m)) => self.session.send(&m),
+                        // OpenGuild: mode 20, the box
+                        Some(crate::guild::Invited::Show) => self.open_guild(20),
+                        None => {}
+                    }
+                    if let Some(o) = o {
+                        self.guild_out(o);
+                    }
+                }
                 Event::Opcode { op: 0x07E2, data } => self.factions.recv(&data),
                 // Msg001D: the points spent come off, and the trainer refreshes
                 Event::Opcode { op: 0x001D, data } => {
@@ -1882,11 +1920,9 @@ impl Play {
                     self.quest_open = true;
                     self.mode = 22;
                 }
-                0x0B05_1000 | 0x0B05_1006 | 0x0B05_1009 | 0x0B05_100B => {
-                    eprintln!("play: start menu {msg:#x}: its window is not ported");
-                }
-                0x0B05_1007 | 0x0B05_1008 | 0x0B05_100A | 0x0B05_100C | 0x0B0B_0000 | 0x0B0B_0002 | 0x0B0D_0000 | 0x0B0D_0001 | 0x0B0B_1000 | 0x0B0B_1001 => {
-                    eprintln!("play: start menu {msg:#x}: the guild and its windows are not ported");
+                0x0B05_1000..=0x0B05_100C if msg != 0x0B05_1001 => self.guild_action(msg, id),
+                0x0B0B_0000 | 0x0B0B_0002 | 0x0B0D_0000 | 0x0B0D_0001 | 0x0B0B_1000 | 0x0B0B_1001 => {
+                    eprintln!("play: start menu {msg:#x}: the gram, tell and support windows are not ported");
                 }
                 _ => self.do_action(msg, id),
             }
@@ -2240,6 +2276,17 @@ impl Play {
                         self.add_chat(fmt.replacen("%s", &name, 1), [1.0, 0.25, 0.25, 1.0]);
                     }
                 },
+                // the guild's: Create, SetMotd, Say, Invite
+                0x0B05_1009 => self.session.send(&crate::guild::Cmds::create(&text)),
+                0x0B05_100B => self.session.send(&crate::guild::Cmds::text(11, &text)),
+                0x0B05_1006 => self.session.send(&crate::guild::Cmds::text(12, &text)),
+                0x0B05_1000 => match crate::guild::Cmds::invite(&self.dump.player.name, &text, &self.guild) {
+                    Ok(m) => self.session.send(&m),
+                    Err(word) => {
+                        let w = self.words.as_ref().map_or_else(|| format!("(word {word})"), |w| w.get(word, 0).to_string());
+                        self.add_chat(w, [1.0, 0.25, 0.25, 1.0]);
+                    }
+                },
                 // VIClientPart38300::Add and Remove (by name, any case)
                 0x0B05_3001 => self.session.send(&crate::social::Ignore::add(&text)),
                 0x0B05_3002 => {
@@ -2319,6 +2366,14 @@ impl Play {
             }
             0x0A01_0000 => self.quit = true,
             0x0B05_2000 => self.session.send_opcode(69),
+            // the guild roster: ShowInvite (OpenGuildMenu, mode 21), or word 570
+            0x0B05_1001 => {
+                if self.guild.in_guild {
+                    self.open_guild(21);
+                } else {
+                    self.show_word(570);
+                }
+            }
             0x0B09_0000 => self.session.send_op_int(123, target),
             0x0B0E_0000 => self.session.send_opcode(198),
             0x0B0E_0001 => self.session.send_opcode(222),
@@ -2725,6 +2780,150 @@ impl Play {
 
     /// `OpenOptions` (34), `OpenBuddyList` (18), `OpenIgnoreList` (26):
     /// the mode, the window set up with the next HUD frame.
+    /// A guild text: `ShowMsg`/`ShowText` to the chat, a chat line in the
+    /// guild colour.
+    fn guild_out(&mut self, o: crate::guild::Out) {
+        match o {
+            crate::guild::Out::Msg(w) => self.show_word(w),
+            crate::guild::Out::Word(w, args) => {
+                let mut t = self.words.as_ref().map_or_else(|| format!("(word {w})"), |x| x.get(w, 0).to_string());
+                for a in args {
+                    // VIString::snprintf16: %s, %S and %u each take the next
+                    if let Some(i) = ["%s", "%S", "%u", "%d"].iter().filter_map(|f| t.find(f)).min() {
+                        t.replace_range(i..i + 2, &a);
+                    }
+                }
+                self.add_chat(t, [1.0; 4]);
+            }
+            crate::guild::Out::Chat(t) => self.add_chat(t, crate::guild::CHAT_COLOR),
+        }
+    }
+
+    /// `OpenGuild` (20, the invitation) and `OpenGuildMenu` (21, the
+    /// roster): `SetMode(0)`, then the window with the next HUD frame.
+    fn open_guild(&mut self, mode: i32) {
+        self.mode = mode;
+        self.guild_open = Some(mode);
+        self.guild_keys.clear();
+    }
+
+    /// The start menu's guild entries (`VIWndGame::OnMessage` 261): each
+    /// asks its `Can*` first.
+    fn guild_action(&mut self, msg: u32, id: i32) {
+        use crate::guild::Cmds;
+        let me = self.dump.player.id as i32;
+        let g = &self.guild;
+        let now = self.session.now() as i64;
+        let word_box = |p: &mut Self, word: i32, kind: i32, purpose: i32| {
+            let t = p.words.as_ref().map_or_else(Vec::new, |w| crate::ui::wide(w.get(word, 0)));
+            p.mbox.prompt(&t, kind, 0, purpose, now);
+            p.mode = 14;
+        };
+        let err = match msg {
+            0x0B05_1000 => Cmds::can_invite(g, me),
+            0x0B05_1006 | 0x0B05_1008 | 0x0B05_100A => Cmds::can_member(g),
+            0x0B05_1009 => Cmds::can_create(g, self.dump.player.p34, self.group.in_group && self.group.count() == 4, self.group.leader),
+            0x0B05_1007 | 0x0B05_100B => Cmds::can_lead(g, me),
+            0x0B05_100C => {
+                self.session.send(&Cmds::set_chat(id != 0));
+                return;
+            }
+            _ => return,
+        };
+        match (msg, err) {
+            (0x0B05_1000, 0) => self.open_edit(msg, 24, 86, true),
+            (0x0B05_1000, 3 | 11 | 5) => self.show_word([570, 584, 546][[3, 11, 5].iter().position(|&e| e == err).unwrap()]),
+            (0x0B05_1006, 0) => self.open_edit(msg, 128, -1, false),
+            (0x0B05_1009, 0) => self.open_edit(msg, 64, 1027, false),
+            (0x0B05_1009, 4) => self.show_word(569),
+            (0x0B05_1009, 6) => self.guild_out(crate::guild::Out::Word(567, vec![crate::guild::COST.to_string()])),
+            (0x0B05_1009, 7) => self.show_word(568),
+            (0x0B05_1007, 0) => word_box(self, 543, 1, 0xB051007),
+            (0x0B05_1008, 0) => word_box(self, 542, 1, 0xB051008),
+            // List: Prompt(motd), an OK box
+            (0x0B05_100A, 0) => {
+                let t = crate::ui::wide(&self.guild.motd);
+                self.mbox.prompt(&t, 0, 0, 0, now);
+                self.mode = 14;
+            }
+            (0x0B05_100B, 0) => self.open_edit(msg, 64, 1028, false),
+            (_, 3) => self.show_word(570),
+            (_, 5) => self.show_word(546),
+            _ => {}
+        }
+    }
+
+    /// `VIWndGuild` in modes 20 and 21: its opening, keys, drawing and what
+    /// it asks.
+    fn run_guild(&mut self, vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster) {
+        if !matches!(self.mode, 20 | 21) {
+            self.guild_keys.clear();
+            return;
+        }
+        let Some(start) = self.start.as_ref() else { return };
+        let menus = &start.menus;
+        let now = vui.time;
+        let words = |id: i32| vui.words.get(id, vui.language).to_string();
+        let mut cues = Vec::new();
+        let mut ups = Vec::new();
+        match self.guild_open.take() {
+            // UpdateMode 20: the invitation box
+            Some(20) => self.guild_wnd.show_invite(&words, &self.guild_cmds, now),
+            // UpdateMode 21: Close, the roster
+            Some(21) => self.guild_wnd.close(vui, r, now),
+            _ => {}
+        }
+        let me = self.dump.player.id as i32;
+        for (k, down) in std::mem::take(&mut self.guild_keys) {
+            ups.extend(self.guild_wnd.key(menus, &self.guild, me, &words, k, down, now, &mut cues));
+        }
+        ups.extend(self.guild_wnd.draw(vui, r, menus, &self.guild, now, &mut cues));
+        self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
+        use crate::guild::Up;
+        for up in ups {
+            match up {
+                // HideInvite: CloseGuildMenu (back to the start menu), the
+                // invitation forgotten
+                Up::Hide => self.close_guild_menu(),
+                Up::NotInGuild => {
+                    self.show_word(570);
+                    self.close_guild_menu();
+                }
+                // 305: CloseGuildMenu, the edit box holding "/t name "
+                Up::Tell(name) => {
+                    self.close_guild_menu();
+                    self.close_start_menu(2);
+                    self.open_edit(0xB0F0000, 128, -1, false);
+                    self.edit.set_text(&crate::ui::wide(&format!("/t {name} ")));
+                }
+                Up::Member(sub, id) => self.session.send(&crate::guild::Cmds::member_op(sub, id)),
+                Up::Text(w) => self.show_word(w),
+                // Decline/Accept: CloseGuild (mode 0), then the answer
+                Up::Decline => {
+                    self.guild_wnd.mbox_visible = false;
+                    self.mode = 0;
+                    let m = self.guild_cmds.decline();
+                    self.session.send(&m);
+                }
+                Up::Accept => {
+                    self.guild_wnd.mbox_visible = false;
+                    self.mode = 0;
+                    let m = self.guild_cmds.answer(1);
+                    self.session.send(&m);
+                }
+            }
+        }
+    }
+
+    /// `CloseGuildMenu` (with `HideInvite`'s forgetting the inviter): the
+    /// window reset and hidden, the start menu again.
+    fn close_guild_menu(&mut self) {
+        self.guild_wnd.reset();
+        self.guild_cmds.inviter = u32::MAX;
+        self.mode = 0;
+        self.open_start_menu(false);
+    }
+
     fn open_panel(&mut self, mode: i32) {
         self.mode = mode;
         self.panel_open = true;
@@ -2733,12 +2932,16 @@ impl Play {
 
     /// The modes whose window takes the start menu's keys.
     pub fn panel_up(&self) -> bool {
-        matches!(self.mode, 17 | 18 | 26 | 34)
+        matches!(self.mode, 17 | 18 | 20 | 21 | 26 | 34)
     }
 
     /// A key for the window of a panel mode, handled with the next HUD
     /// frame.
     pub fn panel_key(&mut self, key: i32, down: bool) {
+        if matches!(self.mode, 20 | 21) {
+            self.guild_keys.push((key, down));
+            return;
+        }
         self.panel_keys.push((key, down));
     }
 
@@ -2948,6 +3151,7 @@ impl Play {
             self.run_factions(vui, &mut r);
             self.run_npcw(vui, &mut r);
             self.run_panels(vui, &mut r);
+            self.run_guild(vui, &mut r);
             self.run_edit(vui, &r);
             if self.mode == 2 {
                 let mut cues = Vec::new();
