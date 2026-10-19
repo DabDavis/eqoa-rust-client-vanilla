@@ -202,3 +202,42 @@ fn collide_ray_obj_on_real_buffers_matches() {
     eprintln!("CollideObj(ray): {cases} rays over {} real buffers, {hits} hits", bufs.len());
     assert!(hits > cases / 10, "too few hits to mean anything");
 }
+
+/// `CollideObj(VICollSphere &, VICapsule &)` (how a sweep meets a creature):
+/// sweeps outside, inside the grown capsule, inside the tube and inside the
+/// true cylinder, under transformed worlds.
+#[test]
+fn capsule_matches() {
+    use vi::coll::CollSphere;
+    use vi::collide::Capsule;
+    let Some(mut o) = Oracle::open() else { return };
+    let mut r = Rng(0xCA95_0001);
+    let (mut hits, mut n) = (0, 0);
+    for i in 0..20_000 {
+        let m = matrix(&mut r);
+        let mut dir = Vect3::<Ieee>::of(r.range(-0.3, 0.3), 1.0, r.range(-0.3, 0.3));
+        dir.normalize();
+        let c = Capsule { base: Vect3::of(r.range(-1.0, 1.0), r.range(-1.0, 1.0), r.range(-1.0, 1.0)), dir, length: F::new(r.range(0.5, 3.0)), radius: F::new(r.range(0.2, 1.0)) };
+        // a sweep in the capsule's space, near it (some starting inside)
+        let a = Vect3::of(r.range(-2.5, 2.5), r.range(-1.5, 4.0), r.range(-2.5, 2.5));
+        let b = Vect3::of(a.x.0 + r.range(-5.0, 5.0), a.y.0 + r.range(-5.0, 5.0), a.z.0 + r.range(-5.0, 5.0));
+        let mut s = CollSphere::<Ieee>::default();
+        s.init(m.mul_point(&a), m.mul_point(&b), F::new([0.001, 0.5, r.range(0.0, 1.0)][i % 3]));
+        let mut payload = bytes(&s).to_vec();
+        payload.extend_from_slice(bytes(&m));
+        payload.extend(f32s(&[c.base.x.0, c.base.y.0, c.base.z.0, c.dir.x.0, c.dir.y.0, c.dir.z.0, c.length.0, c.radius.0]));
+        let mut col = Collide::<Ieee>::default();
+        col.set_world(&m);
+        let mut ours = s;
+        let hit = col.collide_capsule_obj(&mut ours, &c);
+        let res = o.call(423, &payload);
+        assert_eq!(hit as i32, i32::from_le_bytes(res[0..4].try_into().unwrap()), "case {i}: hit");
+        if let Err(e) = same(&ours, &from_bytes::<CollSphere<Ieee>>(&res[4..])) {
+            panic!("case {i}: {e}");
+        }
+        hits += hit as usize;
+        n += 1;
+    }
+    eprintln!("CollideObj(sphere, capsule): {n} sweeps, {hits} hits");
+    assert!(hits > n / 10);
+}

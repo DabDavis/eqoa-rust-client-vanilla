@@ -752,3 +752,123 @@ pub fn collide_ray_no_caps<M: Model>(r: &mut CollRay<M>, c: &Cylinder<M>) -> boo
     r.hit_time = t;
     true
 }
+
+/// `VICapsule`: a cylinder from `base` along the unit `dir`, `length` long,
+/// with a sphere at each end.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Capsule<M: Model> {
+    pub base: Vect3<M>,
+    pub dir: Vect3<M>,
+    pub length: F<M>,
+    pub radius: F<M>,
+}
+
+fn sub_scaled<M: Model>(a: &mut Vect3<M>, b: &Vect3<M>, k: F<M>) {
+    a.x = a.x - b.x * k;
+    a.y = a.y - b.y * k;
+    a.z = a.z - b.z * k;
+}
+
+impl<M: Model> Cylinder<M> {
+    /// `VICylinder::PointInSolid`: within the radius of the axis, between
+    /// the ends.
+    pub fn point_in_solid(&self, p: &Vect3<M>) -> bool {
+        let mut d = *p;
+        d -= self.base;
+        let t = d.dot(&self.dir);
+        sub_scaled(&mut d, &self.dir, t);
+        if d.dot(&d) <= self.radius * self.radius {
+            let s = self.dir.dot(p) - self.base.dot(&self.dir);
+            return F::ZERO <= s && s <= self.length;
+        }
+        false
+    }
+}
+
+impl<M: Model> Capsule<M> {
+    /// `VICapsule::PointInSolid`: the cylinder, or past an end within its
+    /// sphere.
+    pub fn point_in_solid(&self, p: &Vect3<M>) -> bool {
+        let mut d = *p;
+        d -= self.base;
+        let t = d.dot(&self.dir);
+        sub_scaled(&mut d, &self.dir, t);
+        if d.dot(&d) <= self.radius * self.radius {
+            let s = self.dir.dot(p) - self.base.dot(&self.dir);
+            if F::ZERO <= s && s <= self.length {
+                return true;
+            }
+            let r2 = self.radius * self.radius;
+            let mut d = *p;
+            d -= self.base;
+            if d.dot(&d) <= r2 {
+                return true;
+            }
+            let mut d = self.base;
+            d.x = d.x + self.dir.x * self.length;
+            d.y = d.y + self.dir.y * self.length;
+            d.z = d.z + self.dir.z * self.length;
+            d -= *p;
+            return d.dot(&d) <= r2;
+        }
+        false
+    }
+}
+
+/// `Collide(VICollSphere &, VICapsule &)`: the capsule grown by the
+/// sweep's radius and the sweep run as its bare ray. Starting outside: the
+/// tube and both caps, the nearest winning. Starting inside the grown
+/// capsule: nothing when inside the true cylinder, the tube when inside the
+/// grown one, else the near cap.
+pub fn collide_capsule<M: Model>(s: &mut CollSphere<M>, c: &Capsule<M>) -> bool {
+    let start = s.ray.start;
+    let rad = s.radius;
+    let ex = Capsule { radius: c.radius + rad, ..*c };
+    let cyl = |r: F<M>| Cylinder { base: c.base, dir: c.dir, length: c.length, radius: r };
+    let ray = &mut s.ray;
+    if ex.point_in_solid(&start) {
+        if cyl(c.radius).point_in_solid(&start) {
+            return false;
+        }
+        let grown = cyl(c.radius + rad);
+        if grown.point_in_solid(&start) {
+            return collide_ray_no_caps(ray, &grown);
+        }
+        let ds = start.dot(&c.dir);
+        let db = c.base.dot(&c.dir);
+        let mut end = Sphere { c: c.base, r: c.radius + rad };
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
+        if !(ds - db < F::ZERO) {
+            end.c.x = end.c.x + c.dir.x * c.length;
+            end.c.y = end.c.y + c.dir.y * c.length;
+            end.c.z = end.c.z + c.dir.z * c.length;
+        }
+        return collide_ray_sphere(ray, &end);
+    }
+    let mut hit = collide_ray_no_caps(ray, &cyl(c.radius + rad));
+    let mut end = Sphere { c: c.base, r: c.radius + rad };
+    hit |= collide_ray_sphere(ray, &end);
+    end.c.x = end.c.x + c.dir.x * c.length;
+    end.c.y = end.c.y + c.dir.y * c.length;
+    end.c.z = end.c.z + c.dir.z * c.length;
+    hit |= collide_ray_sphere(ray, &end);
+    hit
+}
+
+impl<M: Model> Collide<M> {
+    /// `CollideObj(VICollSphere &, VICapsule &)`: as the buffer form.
+    pub fn collide_capsule_obj(&mut self, s: &mut CollSphere<M>, c: &Capsule<M>) -> bool {
+        let mut local = transform_sphere(s, &self.inv_world);
+        if collide_capsule(&mut local, c) {
+            s.ray.hit_time = local.ray.hit_time;
+            s.ray.hit_idx = local.ray.hit_idx;
+            let n = local.ray.hit_normal;
+            let mut wn = self.world.apply(&Vect4::new(n.x, n.y, n.z, F::ZERO));
+            wn.normalize();
+            s.ray.hit_normal = wn.xyz();
+            return true;
+        }
+        false
+    }
+}

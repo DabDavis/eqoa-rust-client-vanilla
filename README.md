@@ -123,8 +123,9 @@ order per stage is not yet measured.
   are also on F5-F8. `drdp` leaves out
   endpoint transfer, the master and leader roles and ICMP (see its crate docs).
 
-- Collision: `VICSprite`'s capsule (its sphere `Collide`) collides as nothing
-  (the walk filters skip CSprites anyway; a ray never hits one). The ray half
+- Collision: `VICapsule` (a CSprite's sphere `Collide`) is ported and held to
+  the oracle, but the creatures are not world actors here, so nothing sweeps
+  against them yet (the walk filters skip CSprites anyway; a ray never hits one). The ray half
   (`VICollRay`: the leaves and `CollideObj` against the oracle, the scene walk
   against brute force with the sphere's) is ported. `VIHSprite` props (900 placements of 67
   sprites in Tunaria) collide through each node attachment under its posed node,
