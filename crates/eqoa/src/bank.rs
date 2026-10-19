@@ -31,6 +31,10 @@ pub enum BankOut {
     MoveMoney(u8, i32),
     /// 310: the auction page
     Auction,
+    /// `VIBankControl::Sell(slot, price, buyout, duration)`: 0x1205 sub-op 5
+    Sell(i32, i32, i32, i32),
+    /// `AddText(word 1727)` in red: that cannot be auctioned
+    CannotSell,
 }
 
 /// The page that has the keys.
@@ -94,6 +98,7 @@ pub struct Bank {
     money: MoneyMenu,
     deposit: Deposit,
     item: BankItem,
+    sell: crate::auction::SellWnd,
     pub visible: bool,
 }
 
@@ -256,9 +261,10 @@ impl Bank {
                                 self.items_show(vui, r);
                             }
                             2 if self.menu.auction => {
-                                // 310
+                                // 310: the auction page, the focus
                                 out.push(BankOut::ChatMode(1));
                                 self.page = Page::Auction;
+                                self.sell.focus(vui, r);
                                 out.push(BankOut::Auction);
                             }
                             _ => out.push(BankOut::Close),
@@ -321,8 +327,24 @@ impl Bank {
                 }
                 None => {}
             },
-            Page::Auction => {}
+            Page::Auction => {
+                use crate::auction::SellOut;
+                let mut so = Vec::new();
+                self.sell.key(vui, r, v.bank, key, down, now, cues, &mut so);
+                for o in so {
+                    match o {
+                        SellOut::Back => self.back(vui, r, out),
+                        SellOut::Sell(slot, a, b, c) => out.push(BankOut::Sell(slot, a, b, c)),
+                        SellOut::CannotSell => out.push(BankOut::CannotSell),
+                    }
+                }
+            }
         }
+    }
+
+    /// The auction form's editor is up (it takes the keyboard).
+    pub fn typing(&self) -> bool {
+        self.page == Page::Auction && self.sell.typing()
     }
 
     /// `VIWndBankItem::OnKeyDown` / `OnKeyUp`, and the lists' 256.
@@ -425,7 +447,7 @@ impl Bank {
                     self.item.qty.draw(vui, r, cues);
                 }
             }
-            Page::Auction => {}
+            Page::Auction => self.sell.draw(vui, r, info, v.bank, icon, now, cues),
         }
     }
 

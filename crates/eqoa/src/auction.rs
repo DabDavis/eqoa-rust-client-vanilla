@@ -7,8 +7,15 @@
 //! lots and bids (`m_lots`, `m_bids`) are the MemoryDump's, kept in
 //! `dump.bank`, and 0x1206 adds to and removes from them.
 
-use net::dump::{AuctionItem, Bank, Bid};
+#![allow(clippy::too_many_arguments)]
+
+use crate::dialog::{BoxAnswer, Key as BoxKey, MBox};
+use crate::editbox::{EditBox, EditUp};
+use crate::infotext::Info;
+use crate::wndlist::WndList;
+use net::dump::{AuctionItem, Bank, Bid, ItemList, NetItem};
 use net::stream::{Reader, Writer};
+use vi::ui::{FrameParam, Raster, Vui, Window, wide};
 
 /// `VIAuctionQuery`: what a search asks for.
 #[derive(Clone, Debug, PartialEq)]
@@ -350,6 +357,363 @@ impl Auction {
                 }
             }
         }
+    }
+}
+
+/// `VIWndAuction::CanSell`: tradeable, not lore, rentable, not a stack.
+pub fn can_sell(it: &NetItem) -> bool {
+    it.item.no_trade == 0 && it.item.lore == 0 && it.item.rent != 0 && it.item.max_stack < 2
+}
+
+/// `atoi`: blanks, a sign, the digits.
+fn atoi(s: &str) -> i32 {
+    let t = s.trim_start();
+    let (neg, t) = match t.as_bytes().first() {
+        Some(b'-') => (true, &t[1..]),
+        Some(b'+') => (false, &t[1..]),
+        _ => (false, t),
+    };
+    let v = t.bytes().take_while(u8::is_ascii_digit).fold(0i32, |v, d| v.wrapping_mul(10).wrapping_add((d - b'0') as i32));
+    if neg { v.wrapping_neg() } else { v }
+}
+
+/// What the sell form asks.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SellOut {
+    /// 260 to the bank: back to its menu
+    Back,
+    /// `Sell(slot, price, buyout, duration)` confirmed
+    Sell(i32, i32, i32, i32),
+    /// `AddText(word 1727)` in red: the item cannot be sold
+    CannotSell,
+}
+
+/// Which child of the form has the keys.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+enum SellChild {
+    #[default]
+    Form,
+    Edit,
+    MBox,
+}
+
+/// `VIWndAuction`: the bank's items (80 rows); Enter on one that can be sold
+/// opens the form (the item, minimum bid, buyout, duration, Ok and the fee),
+/// whose numbers are typed into the editor and whose Ok is confirmed in a
+/// Yes/No box before the sale is sent.
+pub struct SellWnd {
+    bank: WndList,
+    edit: EditBox,
+    mbox: MBox,
+    child: SellChild,
+    /// `m_selling`: the form is up
+    pub selling: bool,
+    /// `m_field`: 0 the item .. 4 Ok
+    pub field: i32,
+    pub price: i32,
+    pub buyout: i32,
+    /// minutes
+    pub duration: i32,
+    window: Window,
+    sell: Window,
+}
+
+impl Default for SellWnd {
+    fn default() -> Self {
+        let mut bank = WndList::with_rows([16, 37], 0, 80);
+        bank.set_x64(true);
+        SellWnd { bank, edit: EditBox::default(), mbox: MBox::default(), child: SellChild::Form, selling: false, field: 0, price: 0, buyout: 0, duration: 0, window: Window::default(), sell: Window::default() }
+    }
+}
+
+/// `InMinutes`: the GM channel's flag (`VIClientPart382E8::IsEnabled`),
+/// which a player's client never sets: durations are in hours.
+const IN_MINUTES: bool = false;
+
+impl SellWnd {
+    /// The focus from outside (295): the windows reset, the form down.
+    pub fn focus(&mut self, vui: &Vui, r: &dyn Raster) {
+        self.window.init(vui, r, [320, 180], 330, 14, 0);
+        self.window.open(true);
+        self.sell.init(vui, r, [320, 180], 600, 9, 0);
+        self.sell.close(true);
+        self.selling = false;
+        self.field = 0;
+        self.child = SellChild::Form;
+    }
+
+    /// The editor is up (it takes the keyboard's characters).
+    pub fn typing(&self) -> bool {
+        self.child == SellChild::Edit
+    }
+
+    /// `Select`: the form for the selected bank item, if it can be sold.
+    fn select(&mut self, bank: &ItemList, cues: &mut Vec<i32>, out: &mut Vec<SellOut>) {
+        let Some(it) = bank.items.get(self.bank.sel.max(0) as usize) else { return };
+        if can_sell(it) {
+            cues.push(13);
+            self.price = it.item.value as i32;
+            self.buyout = self.price.wrapping_mul(2);
+            self.duration = if IN_MINUTES { 2 } else { 720 };
+            self.field = 1;
+            self.selling = true;
+            self.sell.close(true);
+            self.sell.open(false);
+        } else {
+            out.push(SellOut::CannotSell);
+            cues.push(9);
+        }
+    }
+
+    /// `Accept`: Ok asks to confirm, another row is edited.
+    fn accept(&mut self, vui: &Vui, bank: &ItemList, now: i64, cues: &mut Vec<i32>) {
+        let mut sound = 13;
+        if self.field == 4 {
+            match bank.items.get(self.bank.sel.max(0) as usize).filter(|it| can_sell(it)) {
+                Some(it) => {
+                    let w = |id: i32| vui.words.get(id, vui.language).to_string();
+                    let text = format!("{}: {}\n{}: {} {}\n{}: {} {}\n{}", w(1723), it.item.name, w(1789), self.price, w(479), w(1726), if IN_MINUTES { self.duration } else { self.duration / 60 }, w(if IN_MINUTES { 1724 } else { 1725 }), w(1790));
+                    self.mbox.prompt(&wide(&text), 1, 0, 0, now);
+                    self.mbox.pos = [175, 115];
+                    self.child = SellChild::MBox;
+                }
+                None => sound = 9,
+            }
+        } else {
+            self.edit_field(vui, now);
+        }
+        cues.push(sound);
+    }
+
+    /// `EditField`: the editor over the minimum bid, buyout or duration.
+    fn edit_field(&mut self, vui: &Vui, now: i64) {
+        let e = &mut self.edit;
+        e.set_rows(1);
+        e.set_multi_line(false);
+        e.set_center([320, 180]);
+        e.set_max_length(128);
+        let w = |id: i32| vui.words.get(id, vui.language).to_string();
+        match self.field {
+            1 => {
+                e.set_max_length(10);
+                e.title = wide(&w(1715));
+            }
+            2 => {
+                e.set_max_length(10);
+                e.title = wide(&w(1716));
+            }
+            3 => {
+                e.set_max_length(5);
+                e.title = wide(&format!("{} {}", w(1726), w(if IN_MINUTES { 1687 } else { 1691 })));
+            }
+            _ => return,
+        }
+        e.clear();
+        e.focus(now);
+        self.child = SellChild::Edit;
+    }
+
+    /// `TakeText`: the editor's number into its row.
+    fn take_text(&mut self) {
+        let v = atoi(&String::from_utf16_lossy(&self.edit.text));
+        match self.field {
+            1 => self.price = v,
+            2 => self.buyout = v,
+            3 => self.duration = if IN_MINUTES { v } else { v.wrapping_mul(60) },
+            _ => {}
+        }
+        self.child = SellChild::Form;
+    }
+
+    /// `OnKeyDown` / `OnKeyUp`, and the children's.
+    pub fn key(&mut self, vui: &Vui, r: &dyn Raster, bank: &ItemList, key: i32, down: bool, now: i64, cues: &mut Vec<i32>, out: &mut Vec<SellOut>) {
+        match self.child {
+            SellChild::Edit => {
+                if !down {
+                    self.edit.key_up(key);
+                    return;
+                }
+                match self.edit.key(vui, r, key, now, cues) {
+                    EditUp::Done(_) => self.take_text(),
+                    EditUp::Cancel => self.child = SellChild::Form,
+                    EditUp::None => {}
+                }
+                return;
+            }
+            SellChild::MBox => {
+                if !down {
+                    return;
+                }
+                let k = match key {
+                    13 | 134 => BoxKey::Enter,
+                    27 | 132 => BoxKey::Escape,
+                    17 | 136 => BoxKey::Left,
+                    18 | 137 => BoxKey::Right,
+                    _ => return,
+                };
+                match self.mbox.key(k, cues) {
+                    // 268: Confirm
+                    Some(BoxAnswer::Yes(..)) => {
+                        let slot = self.bank.sel;
+                        if bank.items.get(slot.max(0) as usize).is_some_and(can_sell) {
+                            out.push(SellOut::Sell(slot, self.price, self.buyout, self.duration));
+                            self.selling = false;
+                        }
+                        self.child = SellChild::Form;
+                    }
+                    Some(BoxAnswer::No(..)) => self.child = SellChild::Form,
+                    None => {}
+                }
+                return;
+            }
+            SellChild::Form => {}
+        }
+        if !down {
+            if !self.selling {
+                self.bank.key_up_down(key, false);
+            }
+            return;
+        }
+        if !self.selling {
+            match key {
+                13 | 134 => self.select(bank, cues, out),
+                19 | 138 | 20 | 139 => self.bank.key_up_down(key, true),
+                27 | 132 => out.push(SellOut::Back),
+                _ => {}
+            }
+        } else {
+            match key {
+                13 | 134 => self.accept(vui, bank, now, cues),
+                19 | 138 => {
+                    // Prev
+                    if self.field < 2 {
+                        self.field = 1;
+                        cues.push(9);
+                    } else {
+                        self.field -= 1;
+                        cues.push(11);
+                    }
+                    self.sell.reset_tick_pulse(now);
+                }
+                20 | 139 => {
+                    // Next
+                    if self.field >= 4 {
+                        self.field = 4;
+                        cues.push(9);
+                    } else {
+                        self.field += 1;
+                        cues.push(11);
+                    }
+                    self.sell.reset_tick_pulse(now);
+                }
+                27 | 132 => {
+                    cues.push(8);
+                    self.selling = false;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// `FillLists`' bank half: a stack shows its count, what cannot be sold
+    /// the red arrows.
+    fn fill(&mut self, bank: &ItemList, icon: &dyn Fn(&NetItem) -> i32) {
+        for i in 0..80 {
+            self.bank.set_item(i, 0, -1, -1, -1, 0);
+        }
+        for (i, it) in bank.items.iter().take(80).enumerate() {
+            let mut flags = if it.quantity >= 2 { 5 } else { 1 };
+            let mut color = -1;
+            if !can_sell(it) {
+                color = 140;
+                flags |= 8;
+            }
+            self.bank.set_item(i, flags, icon(it), color, -1, it.quantity as i32);
+        }
+    }
+
+    /// `DrawRow`: a label, a framed value, a unit; ticked when selected.
+    fn draw_row(w: &Window, vui: &Vui, r: &mut dyn Raster, row: i32, a: Option<&[u16]>, xa: i32, b: Option<&[u16]>, xb: i32, c: Option<&[u16]>, xc: i32, sel: bool, tick: bool) {
+        let color = if sel { [1.0, 1.0, 0.0, w.open] } else { [1.0, 1.0, 1.0, w.open] };
+        if let Some(a) = a {
+            w.text_box(vui, r, a, xa, row, xb - xa, 1, color, 0);
+        }
+        if let Some(b) = b {
+            let width = if c.is_some() { xc - xb - 12 } else { w.size[0] - xb - 30 };
+            w.draw_frame(vui, r, xb, row, width, 1, 64);
+            w.text_box(vui, r, b, xb, row, width, 1, color, 2);
+        }
+        if let Some(c) = c {
+            w.text_box(vui, r, c, xc, row, w.size[0] - xb - 30, 1, color, 0);
+        }
+        if sel && tick {
+            w.tick_r(vui, r, xa, row, true);
+        }
+    }
+
+    /// `OnDrawSelf`: the backdrop, the bar (word 1721), the frame, the
+    /// selected item's text and the bank's list; the form over them.
+    pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, info: &Info, bank: &ItemList, icon: &dyn Fn(&NetItem) -> i32, now: i64, cues: &mut Vec<i32>) {
+        self.fill(bank, icon);
+        let white = [1.0, 1.0, 1.0, 1.0];
+        vui.blit_rect(r, 32, [-1, -1], [642, 332], 0, 1.0);
+        let title = wide(vui.words.get(1721, vui.language));
+        let w = vui.string_width(r, &title) + 64;
+        vui.blit_bar(r, &title, white, [(640 - w) / 2, 8], 33, 34, w, 0, 1.0, 0, true);
+        let fp = FrameParam { tl: (44, 0), top: (45, 0), tr: (46, 0), right: (52, 0), br: (50, 0), bottom: (49, 0), bl: (48, 0), left: (47, 0) };
+        vui.blit_fill_frame(r, [165, 48], [310, 267], &fp, 35, 0, 1.0, true);
+        vui.blit_studded_horz(r, [165, 37], 37, 38, 310, 2, 0, 1.0, 0);
+        vui.blit_studded_horz(r, [165, 313], 40, 41, 310, 2, 0, 1.0, 0);
+        vui.blit_horz(r, [16, 322], 60, 608, 0, 1.0, 0);
+        let text = bank.items.get(self.bank.sel.max(0) as usize).map_or_else(String::new, |it| info.bank_item(it));
+        self.window.init(vui, r, [390, 180], 470, 14, 0);
+        self.window.set_title(Some(&[]));
+        self.window.draw(vui, r);
+        let ww = self.window.size[0];
+        self.window.text_box(vui, r, &wide(&text), 20, 0, ww - 40, 14, [1.0, 1.0, 1.0, self.window.open], 2);
+        self.bank.x84 = !self.selling;
+        self.bank.draw(vui, r, now, cues);
+        if self.selling {
+            self.draw_sell(vui, r, bank);
+        }
+        match self.child {
+            SellChild::Edit => self.edit.draw(vui, r, now, cues),
+            SellChild::MBox => {
+                self.mbox.draw(vui, r, now);
+            }
+            SellChild::Form => {}
+        }
+    }
+
+    /// `DrawSell`: the numbers clamped as they are drawn (the price at least
+    /// the item's value, the buyout at least the price, both under a
+    /// billion; 12 hours to 3 days).
+    fn draw_sell(&mut self, vui: &Vui, r: &mut dyn Raster, bank: &ItemList) {
+        let Some(it) = bank.items.get(self.bank.sel.max(0) as usize) else { return };
+        self.sell.init(vui, r, [320, 180], 475, 9, 0);
+        self.sell.set_title(Some(&wide(vui.words.get(1722, vui.language))));
+        self.sell.draw(vui, r);
+        let cols = [40, 180, 240];
+        self.price = self.price.max(it.item.value as i32).min(999_999_999);
+        self.buyout = self.buyout.max(self.price).min(999_999_999);
+        self.duration = if IN_MINUTES { self.duration.clamp(2, 4320) } else { self.duration.clamp(720, 4320) };
+        let w = |id: i32| wide(vui.words.get(id, vui.language));
+        let s = &self.sell;
+        let f = self.field;
+        Self::draw_row(s, vui, r, 1, Some(&w(1723)), cols[0], Some(&wide(&it.item.name)), cols[1], None, cols[2], f == 0, true);
+        Self::draw_row(s, vui, r, 2, Some(&w(1685)), cols[0], Some(&wide(&self.price.to_string())), cols[1], None, cols[2], f == 1, true);
+        Self::draw_row(s, vui, r, 3, Some(&w(1686)), cols[0], Some(&wide(&self.buyout.to_string())), cols[1], None, cols[2], f == 2, true);
+        let unit = w(if IN_MINUTES { 1724 } else { 1725 });
+        let d = if IN_MINUTES { self.duration } else { self.duration / 60 };
+        Self::draw_row(s, vui, r, 4, Some(&w(1726)), cols[0], Some(&wide(&d.to_string())), cols[1], Some(&unit), cols[2], f == 3, true);
+        let ok = wide(&format!("{}*", vui.words.get(218, vui.language)));
+        Self::draw_row(s, vui, r, 5, Some(&ok), cols[0], None, cols[1], None, cols[2], f == 4, true);
+        let fee = (self.price / 100).max(1);
+        let line = wide(&format!("*{}: {} {}", vui.words.get(1788, vui.language), fee, vui.words.get(479, vui.language)));
+        let width = s.size[0] - 30 - cols[0];
+        Self::draw_row(s, vui, r, 7, Some(&line), cols[0], None, width, None, cols[2], false, false);
+        let legend = wide(&format!("|x{}   |t{}", vui.words.get(212, vui.language), vui.words.get(161, vui.language)));
+        s.text_box(vui, r, &legend, 20, 8, s.size[0] - 40, 1, [1.0, 1.0, 1.0, s.open], 0);
     }
 }
 

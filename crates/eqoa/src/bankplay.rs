@@ -9,20 +9,32 @@ use super::Play;
 use crate::bank::{Bank, BankOut, View};
 
 /// `VIBankControl`'s waiting state and the window.
-#[derive(Default)]
 pub struct BankPlay {
     /// `m_state`: 0 idle, 1 a money move, 2 an item move, 3..6 the
     /// auction's requests
     pub state: i32,
+    /// the auction's half (`VIBankControl`'s search state)
+    pub auction: crate::auction::Auction,
     wnd: Bank,
     open: bool,
     keys: Vec<(i32, bool)>,
+}
+
+impl Default for BankPlay {
+    fn default() -> Self {
+        BankPlay { state: 0, auction: crate::auction::Auction::new(), wnd: Bank::default(), open: false, keys: Vec::new() }
+    }
 }
 
 impl Play {
     /// The bank window has the keys (mode 11).
     pub fn bank_owns(&self) -> bool {
         self.mode == 11
+    }
+
+    /// The auction form's editor has the keyboard.
+    pub fn bank_typing(&self) -> bool {
+        self.mode == 11 && self.bank.wnd.typing()
     }
 
     /// A key for the bank, handled with the next HUD frame.
@@ -68,6 +80,23 @@ impl Play {
                 }
                 self.cues.push(crate::sound::Cue::Ui(5));
                 self.bank.state = 0;
+            }
+            0x1206 => {
+                // Recv1206: the auction's replies (IsAuctionMode: the search, mode 39)
+                let now = self.session.now() as i64;
+                let (state, notes) = self.bank.auction.recv(&mut self.dump.bank, data, self.mode == 39, now);
+                if let Some(st) = state {
+                    self.bank.state = st;
+                }
+                for n in notes {
+                    match n {
+                        crate::auction::AuctionNote::Sound => self.cues.push(crate::sound::Cue::Ui(5)),
+                        crate::auction::AuctionNote::Word(id) => {
+                            let text = self.words.as_ref().map_or_else(String::new, |w| w.get(id, 0).to_string());
+                            self.add_chat(text, crate::auction::CYAN);
+                        }
+                    }
+                }
             }
             0x00D7 => {
                 self.bank.state = 0;
@@ -155,6 +184,18 @@ impl Play {
                     self.bank.state = 1;
                 }
                 BankOut::Auction => {}
+                BankOut::Sell(slot, a, b, c) => {
+                    // VIBankControl::Sell: the bank record's key, state 3
+                    if let Some(it) = self.dump.bank.items.items.get(slot.max(0) as usize).filter(|_| slot >= 0) {
+                        let msg = crate::auction::Auction::sell(self.target, it.inv_index, a, b, c);
+                        self.session.send(&msg);
+                        self.bank.state = 3;
+                    }
+                }
+                BankOut::CannotSell => {
+                    let text = self.words.as_ref().map_or_else(String::new, |w| w.get(1727, 0).to_string());
+                    self.add_chat(text, [1.0, 0.25, 0.25, 1.0]);
+                }
             }
         }
     }
