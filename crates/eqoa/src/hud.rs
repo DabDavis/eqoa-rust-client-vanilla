@@ -36,6 +36,19 @@ pub struct HudState {
     pub self_targeted_flag: bool,
     /// `HasPet()`: the pet, when the player has one.
     pub pet: Option<PetState>,
+    /// `GetP2BE4C()`: the group's size (0 out of one).
+    pub group_count: i32,
+    /// The members `DrawGroup` draws: not the player, active.
+    pub group: Vec<MemberState>,
+}
+
+/// One group member's bar: its name, whether it is the target, and its
+/// health when known (`GetGroupMemberHPKnown`) with `GroupMemberFlag4/8`.
+#[derive(Clone, Debug, Default)]
+pub struct MemberState {
+    pub name: String,
+    pub is_target: bool,
+    pub hp: Option<(u8, bool, bool)>,
 }
 
 /// What `DrawPet` reads: `GetPetName`, whether the pet is the target, and
@@ -127,14 +140,45 @@ impl Hud {
         let part = part.clamp(0.0, 1.0);
         draw_gauge(vui, ui, 152, 151, [p[0], p[1] + 10], true, part);
         draw_gauge(vui, ui, 8, 136, p, true, v);
-        // DrawGroup with no group: its glow goes down.
-        self.glow1_on = -1;
-        self.draw_pet(vui, ui, [20, 93], s);
+        self.draw_group(vui, ui, [20, 93], s);
+        let y = 93 + ((s.group_count - 1) * 48).max(0);
+        self.draw_pet(vui, ui, [20, y], s);
         let p = [-3, 331];
         if s.chat_open {
             vui.blit_rect(ui, 32, [p[0] + 2, p[1]], [203, 125], 0, 1.0);
         }
         self.draw_target(vui, ui, [20, 348], s);
+    }
+
+    /// `DrawGroup`: a bar for each other active member, 48 apart: its name,
+    /// its health when known and two status icons; the target's glows.
+    fn draw_group(&mut self, vui: &Vui, ui: &mut UiRaster, at: [i32; 2], s: &HudState) {
+        let mut p = at;
+        let mut glowing = false;
+        for m in &s.group {
+            let start = p;
+            let glow = if m.is_target { self.glow1 } else { 0.3 };
+            glowing |= m.is_target;
+            vui.blit_bar(ui, &[], [0.0; 4], p, 25, 26, 174, 3, glow, 0, true);
+            let mut w = vi::ui::Window::default();
+            w.init(vui, ui, [p[0] + 87, p[1] + 12], 160, 1, 0);
+            w.open(true);
+            w.text_box(vui, ui, &wide(&m.name), 0, 0, 160, 1, [0.0, 0.0, 0.0, glow], 10);
+            if let Some((hp, f4, f8)) = m.hp {
+                p = [p[0] + 10, p[1] + 25];
+                draw_gauge(vui, ui, 7, 136, p, m.is_target, hp as f32 / 255.0);
+                p = [p[0] + 65, p[1] + 2];
+                if f4 {
+                    vui.blit_ex(ui, 118, [p[0], p[1] - 2], 3, glow, 0);
+                    p[0] += 25;
+                }
+                if f8 {
+                    vui.blit_ex(ui, 119, p, 3, glow, 0);
+                }
+            }
+            p = [start[0], start[1] + 48];
+        }
+        self.glow1_on = if glowing { 1 } else { -1 };
     }
 
     /// `DrawPet`: the bar, glowing while the pet is the target, its name,

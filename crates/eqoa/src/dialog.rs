@@ -167,6 +167,7 @@ impl Response {
                     _ => {}
                 }
             }
+            Key::Left | Key::Right => {}
         }
         Answer::None
     }
@@ -212,4 +213,142 @@ pub enum Key {
     Down,
     Enter,
     Escape,
+    Left,
+    Right,
+}
+
+/// `VIWndMBox`: the message box (`VIWndGame::Prompt`), at (80, 115): the
+/// text, shrunk to its fewest lines, over black in frame style 1, and its
+/// buttons: type 0 OK (word 214), 1 Yes/No (21/22, starting on No), 2 word
+/// 213. It fades in over a fifth of a second.
+pub struct MBox {
+    pub kind: i32,
+    pub text: Vec<u16>,
+    sel: i32,
+    pub p1: i32,
+    pub p2: i32,
+    alpha: f32,
+    time: i64,
+    pos: [i32; 2],
+    window: Window,
+}
+
+/// What a box answered: `OnMessage` 268 (yes / OK) or 260 (no, cancel).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BoxAnswer {
+    Yes(i32, i32),
+    No(i32, i32),
+}
+
+impl Default for MBox {
+    fn default() -> Self {
+        MBox { kind: 0, text: Vec::new(), sel: 0, p1: 0, p2: 0, alpha: 0.0, time: 0, pos: [80, 115], window: Window::default() }
+    }
+}
+
+impl MBox {
+    /// `Prompt(text, type, p1, p2)`: `Init(type, 1)`, the text and the two
+    /// parameters; gaining the focus starts the fade (295).
+    pub fn prompt(&mut self, text: &[u16], kind: i32, p1: i32, p2: i32, now: i64) {
+        self.kind = kind;
+        self.reset_sel();
+        self.text = text.to_vec();
+        self.p1 = p1;
+        self.p2 = p2;
+        self.alpha = 0.0;
+        self.time = now;
+    }
+
+    /// `ResetSel`: a Yes/No box starts on No.
+    fn reset_sel(&mut self) {
+        self.sel = if self.kind == 1 { 1 } else { 0 };
+    }
+
+    /// `OnKeyDown`: Enter / X accepts, Escape / triangle cancels, left and
+    /// right move between the buttons. Sounds go to `cues`.
+    pub fn key(&mut self, key: Key, cues: &mut Vec<i32>) -> Option<BoxAnswer> {
+        match key {
+            Key::Enter => {
+                cues.push(13);
+                let a = match (self.kind, self.sel) {
+                    (0, _) | (1, 0) => BoxAnswer::Yes(self.p1, self.p2),
+                    _ => BoxAnswer::No(self.p1, self.p2),
+                };
+                if self.kind != 2 {
+                    self.reset_sel();
+                }
+                Some(a)
+            }
+            Key::Escape => {
+                cues.push(8);
+                self.reset_sel();
+                Some(BoxAnswer::No(self.p1, self.p2))
+            }
+            Key::Left | Key::Right => {
+                let dir = if matches!(key, Key::Left) { -1 } else { 1 };
+                if self.kind == 1 {
+                    self.sel += dir;
+                    cues.push(if (0..=1).contains(&self.sel) { 11 } else { 9 });
+                    self.sel = self.sel.clamp(0, 1);
+                } else {
+                    cues.push(9);
+                    self.sel = 0;
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// `OnDrawSelf` (no item icon, no countdown).
+    pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, now: i64) {
+        let yellow = [1.0, 1.0, 0.0, self.alpha];
+        let white = [1.0, 1.0, 1.0, self.alpha];
+        let pos = self.pos;
+        let text = self.text.clone();
+        let mut width = 375;
+        let lines = self.window.count_lines(vui, r, &text, width);
+        let mut step;
+        loop {
+            step = width / 6;
+            width -= step;
+            let n = self.window.count_lines(vui, r, &text, width);
+            if !(width > 100 && lines == n) {
+                break;
+            }
+        }
+        width += step;
+        let n = self.window.count_lines(vui, r, &text, width);
+        let h = vui.font_height(r) - 4;
+        let size = [width + 32, (n + 2) * h + 32];
+        self.window.init(vui, r, [pos[0] + size[0] / 2, size[1] / 2 + pos[1] - 16], width, n, 1);
+        self.window.open(true);
+        // Update: the fade
+        self.alpha = (self.alpha + (now - self.time) as f32 * 0.001 * 5.0).min(1.0);
+        self.time = now;
+        r.blit(vi::ui::icon_id("black"), 0, pos, [0, 0], size, 3, self.alpha * 0.75);
+        let fp = vi::ui::FrameParam { tl: (101, 0), top: (102, 0), tr: (103, 0), right: (104, 1), br: (106, 0), bottom: (102, 2), bl: (105, 0), left: (104, 0) };
+        vui.blit_frame(r, pos, size, &fp, 3, self.alpha, true);
+        self.window.text_box(vui, r, &text, 0, 0, width, n, white, 9);
+        let mut y = pos[1] + h * (n + 1) + 22;
+        let col = [pos[0] + (size[0] >> 2), pos[0] + (size[0] >> 1), pos[0] + (size[0] >> 2) * 3];
+        let word = |id: i32| wide(vui.words.get(id, vui.language));
+        // the buttons, the selected one yellow between two arrows
+        let buttons: &[(i32, i32)] = match self.kind {
+            1 => &[(21, col[0]), (22, col[2])],
+            0 => &[(214, col[1])],
+            2 => &[(213, col[1])],
+            _ => &[],
+        };
+        let sel = if self.kind == 1 { self.sel } else { 0 };
+        for (k, &(id, x)) in buttons.iter().enumerate() {
+            vui.draw_centered_string_ex(r, &word(id), x, y, if k as i32 == sel { yellow } else { white }, 3, true);
+        }
+        if let Some(&(id, x)) = buttons.get(sel as usize) {
+            let w = vui.string_width(r, &word(id)) >> 1;
+            y -= 5;
+            vui.blit_ex(r, 89, [x - 20 - w, y], 3, self.alpha, 0);
+            vui.blit_ex(r, 88, [x + w + 8, y], 3, self.alpha, 0);
+        }
+    }
 }

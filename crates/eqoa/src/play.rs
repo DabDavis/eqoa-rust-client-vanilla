@@ -116,7 +116,8 @@ pub struct Play {
     pub channel: u8,
     /// `m_p4F0B8`: who last sent a tell.
     pub reply_name: String,
-    /// `VIWndGame::m_mode`: 0 playing, 9 a dialog showing.
+    /// `VIWndGame::m_mode`: 0 playing, 7 a dialog's answers, 9 a dialog
+    /// showing, 14 a message box.
     pub mode: i32,
     /// `m_dialogs`: dialogs waiting while another mode is up (at most 11).
     dialogs: std::collections::VecDeque<Vec<u16>>,
@@ -129,6 +130,10 @@ pub struct Play {
     /// A teleport into another world, for the viewer to load: the world
     /// file, where, the heading.
     world_change: Option<(String, [f32; 3], f32)>,
+    /// The group and the invitations.
+    pub group: crate::group::Group,
+    /// `VIWndMBox` (mode 14).
+    mbox: crate::dialog::MBox,
 }
 
 /// `gWorldInfo`'s paths on the Frontiers disc, by world index (CLIENT's
@@ -190,6 +195,21 @@ impl Play {
             9 => {
                 if matches!(key, crate::dialog::Key::Enter) {
                     self.close_dialog();
+                }
+                true
+            }
+            14 => {
+                let mut cues = Vec::new();
+                let answer = self.mbox.key(key, &mut cues);
+                self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
+                // VIWndGame::OnMessage 268 / 260: the invitation's answer
+                match answer {
+                    Some(crate::dialog::BoxAnswer::Yes(0, 0x7020000)) => self.accept_invite(),
+                    Some(crate::dialog::BoxAnswer::No(0, 0x7020000)) => self.decline_invite(),
+                    _ => {}
+                }
+                if answer.is_some() {
+                    self.mode = 0;
                 }
                 true
             }
@@ -409,7 +429,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default() };
         p.take_abilities();
         p
     }
@@ -461,6 +481,57 @@ impl Play {
                     self.dump.player.level = level;
                     self.dump.player.exp = exp;
                 }
+                Event::GroupRoster { ids, names } => {
+                    let me = self.self_id32();
+                    self.group.roster(&ids, &names, me);
+                }
+                Event::GroupInvite { id, name, .. } => {
+                    // Msg0773: refused at once while in a group
+                    if self.group.in_group {
+                        self.session.send_msg(0x0624, id, 2);
+                    } else {
+                        self.group.invites.push(crate::group::Invite { id, name: name.clone() });
+                        if self.mode == 0 {
+                            self.show_invite(&name);
+                        }
+                    }
+                }
+                Event::GroupInviteGone(id) => {
+                    // Msg0774
+                    if let Some(k) = self.group.invites.iter().position(|i| i.id == id) {
+                        self.group.invites.remove(k);
+                        self.show_word(635);
+                    }
+                }
+                Event::GroupRemoved(sub) => {
+                    // 0x069A (5 builds a line and shows nothing, as shipped)
+                    if self.group.in_group {
+                        match sub {
+                            1..=4 => self.show_word(629 + sub as i32),
+                            7 => self.show_word(631),
+                            _ => {}
+                        }
+                        self.left_group();
+                    }
+                }
+                Event::GroupDisbanded => {
+                    if self.group.in_group {
+                        self.show_word(634);
+                        self.left_group();
+                    }
+                }
+                Event::GroupNotice { sub, name } => {
+                    // 0x069C
+                    match sub {
+                        3 => self.show_word(627),
+                        1 => self.show_word_name(558, &name),
+                        2 => self.show_word_name(628, &name),
+                        4 => self.show_word_name(642, &name),
+                        5 => self.show_word_name(1022, &name),
+                        _ => {}
+                    }
+                }
+                Event::State { channel: 0x40, data } => self.group.channel40(&data),
                 Event::Pet(id) => {
                     self.pet_id = id.unwrap_or(u32::MAX);
                     if id.is_none() {
@@ -630,6 +701,11 @@ impl Play {
             && let Some(d) = self.pending_box.take()
         {
             self.show_dialog_box(d);
+        } else if self.mode == 0
+            && let Some(i) = self.group.invites.first()
+        {
+            let name = i.name.clone();
+            self.show_invite(&name);
         }
         let self_id = self.session.self_id;
         // UpdateCreatures / VICreatureEntity::Walk: a creature with its own
@@ -966,6 +1042,9 @@ impl Play {
     /// until the box, which measures with the font, takes it), and for the
     /// plain log shown when there is no HUD.
     fn add_chat(&mut self, text: String, color: [f32; 4]) {
+        if std::env::var_os("EQOA_CHAT_LOG").is_some() {
+            eprintln!("chat: {text}");
+        }
         self.chat_pending.push((text.clone(), color, self.session.now()));
         self.chat.push_back((text, color));
         while self.chat.len() > 8 {
@@ -973,12 +1052,159 @@ impl Play {
         }
     }
 
-    /// A line the client writes itself: word `id`, in red as the game's
-    /// warnings are.
     /// The dump's abilities, by id, and its token.
     fn take_abilities(&mut self) {
         self.abilities = self.dump.abilities.iter().map(|a| (a.id, a.clone())).collect();
         self.ability_token = self.dump.p2bb60;
+    }
+
+    /// A word with a name in its `%s` to the chat log.
+    fn show_word_name(&mut self, id: i32, name: &str) {
+        let fmt = self.words.as_ref().map_or_else(|| format!("(word {id}) %s"), |w| w.get(id, 0).to_string());
+        self.add_chat(fmt.replacen("%s", name, 1).replacen("%S", name, 1), [1.0; 4]);
+    }
+
+    /// `VIWndGame::ShowInvite`: word 636 with the name, as a Yes/No prompt
+    /// whose answer is 0x7020000.
+    fn show_invite(&mut self, name: &str) {
+        let fmt = self.words.as_ref().map_or_else(|| "%s".to_string(), |w| w.get(636, 0).to_string());
+        let text = crate::ui::wide(&fmt.replacen("%s", name, 1).replacen("%S", name, 1));
+        let now = self.session.now() as i64;
+        self.mbox.prompt(&text, 1, 0, 0x7020000, now);
+        self.mode = 14;
+    }
+
+    /// `LeaveGroup`/`DisbandGroup`'s and 0x069A's common tail: out of the
+    /// group, and plain text back to say if it went to the group
+    /// (`GroupChanged(0)`).
+    fn left_group(&mut self) {
+        self.group.clear();
+        if self.channel == 2 {
+            self.group_changed(0);
+        }
+    }
+
+    /// `GroupChanged`: the channel plain text goes to (0x000E), and its word.
+    fn group_changed(&mut self, state: u8) {
+        self.channel = state;
+        self.session.send_op_byte(0x000E, state);
+        if state <= 4 {
+            self.show_word(595 + state as i32);
+        }
+    }
+
+    /// `Reset`: every other invitation refused (0x0624, 2).
+    fn refuse_invites(&mut self) {
+        for i in std::mem::take(&mut self.group.invites) {
+            self.session.send_msg(0x0624, i.id, 2);
+        }
+    }
+
+    /// `AcceptInvite`: the first invitation, word 622, 0x0622; in the group,
+    /// not leading it, the others refused.
+    fn accept_invite(&mut self) {
+        let Some(i) = self.group.invites.first().cloned() else {
+            self.show_word(624);
+            return;
+        };
+        self.show_word_name(622, &i.name);
+        self.group.drop_invites(i.id);
+        self.session.send_op_int(0x0622, i.id);
+        self.group.in_group = true;
+        self.group.leader = false;
+        self.refuse_invites();
+    }
+
+    /// `DeclineInvite`: the first invitation, word 623, 0x0624 with 1.
+    fn decline_invite(&mut self) {
+        let Some(i) = self.group.invites.first().cloned() else {
+            self.show_word(624);
+            return;
+        };
+        self.show_word_name(623, &i.name);
+        self.group.drop_invites(i.id);
+        self.session.send_msg(0x0624, i.id, 1);
+    }
+
+    /// The start menu's group actions (`DoAction`): 0x07010000 invite the
+    /// target (`InviteEntity`), 0x07040000 remove it (0x0626), 0x07050000
+    /// disband (0x0627), 0x07060000 leave (0x0623).
+    pub fn group_action(&mut self, action: u32) {
+        match action {
+            0x0701_0000 => self.invite_entity(self.target),
+            0x0704_0000 => {
+                if !self.group.in_group {
+                    self.show_word(629);
+                } else if self.target != u32::MAX {
+                    if self.group.leader {
+                        self.session.send_op_int(0x0626, self.target);
+                    } else {
+                        self.show_word(638);
+                    }
+                }
+            }
+            0x0705_0000 => {
+                if !self.group.in_group {
+                    self.show_word(629);
+                } else if self.group.leader {
+                    self.session.send_opcode(0x0627);
+                    self.left_group();
+                } else {
+                    self.show_word(639);
+                }
+            }
+            0x0706_0000 => {
+                if self.group.in_group {
+                    self.session.send_opcode(0x0623);
+                    self.left_group();
+                } else {
+                    self.show_word(629);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// `InviteEntity`: a player, not yet in the group, invited (0x0625 with
+    /// the id and name); the inviter forms the group and leads it.
+    fn invite_entity(&mut self, id: u32) {
+        let Some(e) = self.entities.slots.iter().flatten().find(|e| e.id == id) else {
+            self.show_word(678);
+            return;
+        };
+        let Some(c) = e.creature.clone() else {
+            self.show_word(588);
+            return;
+        };
+        if c.p256 != 2 {
+            self.show_word(1015);
+            return;
+        }
+        if c.p264 == 0 {
+            self.show_word(1014);
+            return;
+        }
+        if Some(id) == self.self_id32() {
+            self.show_word(679);
+            return;
+        }
+        if self.group.in_group && !self.group.leader {
+            self.show_word(640);
+            return;
+        }
+        if self.group.members.iter().take(self.group.count()).any(|m| m.id == id) {
+            self.show_word_name(1023, &c.name);
+            return;
+        }
+        if !self.group.in_group {
+            self.group.leader = true;
+            self.group.in_group = true;
+        }
+        self.show_word_name(637, &c.name);
+        let mut w = net::stream::Writer::op(0x0625);
+        w.u32(id).string(c.name.as_bytes());
+        self.session.send(&w.data);
+        self.refuse_invites();
     }
 
     /// `ShowText(word)`: a word to the chat log.
@@ -1036,6 +1262,8 @@ impl Play {
         }
     }
 
+    /// A line the client writes itself: word `id`, in red as the game's
+    /// warnings are.
     fn warn(&mut self, id: i32) {
         let text = self.words.as_ref().map_or_else(|| format!("(word {id})"), |w| w.get(id, 0).to_string());
         self.add_chat(text, [1.0, 0.25, 0.25, 1.0]);
@@ -1245,6 +1473,15 @@ impl Play {
             target_info: self.target_info,
             self_targeted_flag: Some(self.target) == me && self.dump.player.p2c > 0,
             pet,
+            group_count: self.group.count() as i32,
+            group: self.group.members[..self.group.count()]
+                .iter()
+                .filter(|m| Some(m.id) != me && m.active)
+                .map(|m| {
+                    let flags = find(Some(m.id)).and_then(|e| e.creature.as_ref()).map_or(0, |c| c.flags262);
+                    crate::hud::MemberState { name: m.name.clone(), is_target: m.id == self.target, hp: (m.hp_known != 0).then_some((m.hp, flags & 4 != 0, flags & 8 != 0)) }
+                })
+                .collect(),
         };
         let now = self.session.now();
         let dt = ((time_ms - self.hud_last).clamp(0, 250)) as f32 / 1000.0;
@@ -1265,6 +1502,9 @@ impl Play {
             }
             if self.mode == 7 {
                 self.response.draw(vui, &mut r);
+            }
+            if self.mode == 14 {
+                self.mbox.draw(vui, &mut r, now as i64);
             }
             // DrawStatus: under water, the breath gauge
             if under_liquid && (self.mode == 0 || self.mode == 36 || self.mode == 38) {

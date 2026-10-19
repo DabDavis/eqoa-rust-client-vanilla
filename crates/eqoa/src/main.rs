@@ -24,6 +24,7 @@
 mod audio;
 mod chat;
 mod dialog;
+mod group;
 mod hud;
 mod hudmenu;
 mod particles;

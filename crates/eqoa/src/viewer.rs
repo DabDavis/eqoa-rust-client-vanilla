@@ -378,6 +378,24 @@ pub fn shot_with(
                         p.hud_key(k);
                     }
                 }
+                // `EQOA_INVITE`: the target invited just after targeting
+                // (`DoAction(0x07010000)`); `EQOA_ACCEPT`: any message box
+                // answered Yes (left, then X).
+                if t == at + 96 && std::env::var_os("EQOA_INVITE").is_some() {
+                    p.group_action(0x0701_0000);
+                }
+                // `EQOA_GROUP_ACTION=<hex>@<ms>`: a start-menu group action then.
+                if let Ok(spec) = std::env::var("EQOA_GROUP_ACTION")
+                    && let Some((a, ms)) = spec.split_once('@')
+                    && let (Ok(a), Ok(ms)) = (u32::from_str_radix(a.trim_start_matches("0x"), 16), ms.parse::<i64>())
+                    && t == ms / 16 * 16
+                {
+                    p.group_action(a);
+                }
+                if p.mode == 14 && std::env::var_os("EQOA_ACCEPT").is_some() {
+                    p.dialog_key(crate::dialog::Key::Left);
+                    p.dialog_key(crate::dialog::Key::Enter);
+                }
                 // `EQOA_INTERACT`: Q just after targeting.
                 if t == at + 96 && std::env::var_os("EQOA_INTERACT").is_some() {
                     p.interact_with_target();
@@ -744,6 +762,8 @@ impl ApplicationHandler for App {
                             Key::Named(NamedKey::ArrowDown) => Some(D::Down),
                             Key::Named(NamedKey::Enter) => Some(D::Enter),
                             Key::Named(NamedKey::Escape) => Some(D::Escape),
+                            Key::Named(NamedKey::ArrowLeft) => Some(D::Left),
+                            Key::Named(NamedKey::ArrowRight) => Some(D::Right),
                             _ => None,
                         };
                         if let Some(k) = k
@@ -839,6 +859,24 @@ impl ApplicationHandler for App {
                         if event.state == ElementState::Pressed {
                             p.hud_key(k);
                         }
+                        return;
+                    }
+                }
+                // F5-F8: the start menu's group page (not ported yet): invite
+                // the target, remove it, disband, leave.
+                if event.state == ElementState::Pressed
+                    && let Some(p) = self.play.as_mut()
+                    && p.mode == 0
+                {
+                    let action = match &event.logical_key {
+                        Key::Named(NamedKey::F5) => Some(0x0701_0000),
+                        Key::Named(NamedKey::F6) => Some(0x0704_0000),
+                        Key::Named(NamedKey::F7) => Some(0x0705_0000),
+                        Key::Named(NamedKey::F8) => Some(0x0706_0000),
+                        _ => None,
+                    };
+                    if let Some(a) = action {
+                        p.group_action(a);
                         return;
                     }
                 }

@@ -47,6 +47,8 @@ pub struct Creature {
     pub p263: u8,
     /// +0x262: `Flag4` (& 4) and `Flag8` (& 8), the bars' two status icons.
     pub flags262: u8,
+    /// +0x264: a player that can be invited (`InviteEntity` refuses 0).
+    pub p264: u8,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -164,7 +166,7 @@ impl Entity {
             r.u8();
             c.flags262 = r.u8();
             c.p263 = r.u8();
-            r.u8();
+            c.p264 = r.u8();
             c.p299 = r.u8();
             self.creature = Some(c);
         }

@@ -73,6 +73,18 @@ pub enum Event {
     Expansion(u32),
     /// 0x007E: the player's pet (`m_petId`); 0x007F: none.
     Pet(Option<u32>),
+    /// 0x0772 (`Msg0772`): the group's roster, ids and names.
+    GroupRoster { ids: Vec<u32>, names: Vec<String> },
+    /// 0x0773 (`Msg0773`): an invitation from `id`.
+    GroupInvite { id: u32, x: i32, name: String },
+    /// 0x0774 (`Msg0774`): the invitation from `id` withdrawn.
+    GroupInviteGone(u32),
+    /// 0x069A: out of the group, why (`sub`).
+    GroupRemoved(u8),
+    /// 0x062F: the group disbanded.
+    GroupDisbanded,
+    /// 0x069C: a group notice: sub 3 alone, 1/2/4/5 about a name.
+    GroupNotice { sub: u8, name: String },
     /// The server opened the game connection (promotion).
     Promoted,
     /// 0x000D parsed: the player's own entity id and where they stand.
@@ -236,6 +248,19 @@ impl Session {
     pub fn send_msg(&mut self, op: u16, v: u32, b: u8) {
         let mut w = Writer::op(op);
         w.u32(v).u8(b);
+        self.send(&w.data);
+    }
+
+    /// `SendOpcode(op)`: the opcode alone.
+    pub fn send_opcode(&mut self, op: u16) {
+        let w = Writer::op(op);
+        self.send(&w.data);
+    }
+
+    /// `SendOpInt(op, v)`.
+    pub fn send_op_int(&mut self, op: u16, v: u32) {
+        let mut w = Writer::op(op);
+        w.u32(v);
         self.send(&w.data);
     }
 
@@ -471,6 +496,28 @@ impl Session {
             0x07A3 => ev.push(Event::ReplyName(String::from_utf8_lossy(&r.string(24)).into_owned())),
             0x00D9 => ev.push(Event::PlayerP2C(r.u32() as i32)),
             0x007E => ev.push(Event::Pet(Some(r.u32()))),
+            0x0772 => {
+                let _x = r.u32();
+                let n = r.u32() as usize;
+                // m_group has four members
+                let n = n.min(4);
+                let ids: Vec<u32> = (0..n).map(|_| r.u32()).collect();
+                let names = (0..n).map(|_| String::from_utf8_lossy(&r.string(24)).into_owned()).collect();
+                ev.push(Event::GroupRoster { ids, names });
+            }
+            0x0773 => {
+                let (id, x) = (r.u32(), r.u32() as i32);
+                let name = String::from_utf8_lossy(&r.string(24)).into_owned();
+                ev.push(Event::GroupInvite { id, x, name });
+            }
+            0x0774 => ev.push(Event::GroupInviteGone(r.u32())),
+            0x069A => ev.push(Event::GroupRemoved(r.u8())),
+            0x062F => ev.push(Event::GroupDisbanded),
+            0x069C => {
+                let sub = r.u8();
+                let name = if sub == 3 { String::new() } else { String::from_utf8_lossy(&r.string(24)).into_owned() };
+                ev.push(Event::GroupNotice { sub, name });
+            }
             0x007F => ev.push(Event::Pet(None)),
             0x0010 => {
                 let (disposition, b, c) = (r.u8(), r.u8(), r.u8());
