@@ -476,6 +476,8 @@ pub fn shot_with(
                 // `EQOA_MAIL_TEXT=a|b|c`: the mail and tell forms' fields, one
                 // into each editor as it opens.
                 p.mail_script_step();
+                // `EQOA_CS_TEXT`: the CS request's text, into its editor.
+                p.support_script_step();
                 // `EQOA_EDIT_TEXT`: typed into the edit box, a character a frame
                 // once it is up, then Enter.
                 if p.mode == 2
@@ -1047,12 +1049,34 @@ impl ApplicationHandler for App {
                 }
                 // The blacksmith and the customer-service windows (modes 19,
                 // 31, 32): the arrows, Enter or E (X), Escape (triangle), Q
-                // (square: the inbox again).
+                // (square: the inbox again); while the text's editor is up
+                // it takes the keyboard (Enter a newline, Tab done).
                 if let Some(p) = self.play.as_mut()
                     && p.typing.is_none()
                     && p.support_owns()
                 {
                     let down = event.state == ElementState::Pressed;
+                    if p.support_typing() {
+                        let named = match &event.logical_key {
+                            Key::Named(NamedKey::Backspace) => Some(8),
+                            Key::Named(NamedKey::Escape) => Some(27),
+                            Key::Named(NamedKey::Enter) => Some(13),
+                            Key::Named(NamedKey::Tab) => Some(143),
+                            Key::Named(NamedKey::ArrowLeft) => Some(17),
+                            Key::Named(NamedKey::ArrowRight) => Some(18),
+                            Key::Named(NamedKey::ArrowUp) => Some(19),
+                            Key::Named(NamedKey::ArrowDown) => Some(20),
+                            _ => None,
+                        };
+                        if let Some(k) = named {
+                            p.support_key(k, down);
+                        } else if down && let Some(t) = &event.text {
+                            for c in t.chars().filter(|c| c.is_ascii() && !c.is_ascii_control()) {
+                                p.support_key(c as i32, true);
+                            }
+                        }
+                        return;
+                    }
                     use crate::startmenu::keys as K;
                     let k = match &event.logical_key {
                         Key::Named(NamedKey::ArrowUp) => Some(K::UP),

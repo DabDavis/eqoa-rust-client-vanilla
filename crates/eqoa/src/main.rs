@@ -41,6 +41,7 @@ mod infotext;
 mod inventory;
 mod itemmenu;
 mod classmastery;
+mod cs;
 mod faction;
 mod loot;
 mod merchant;

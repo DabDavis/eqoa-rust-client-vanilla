@@ -1004,6 +1004,7 @@ impl Play {
                     }
                     self.npcw_world_entry();
                     self.mail_connect();
+                    self.support_connect();
                     self.pet_id = u32::MAX;
                     self.pet_name.clear();
                     // Msg000D's PlayCue
@@ -1961,9 +1962,9 @@ impl Play {
                 0x0B0B_0002 => self.open_mail(24),
                 0x0B0D_0000 => self.open_mail(28),
                 0x0B0D_0001 => self.open_mail(29),
-                0x0B0B_1000 | 0x0B0B_1001 => {
-                    eprintln!("play: start menu {msg:#x}: the support windows are not ported");
-                }
+                // Support: the CS request form (31) and inbox (32)
+                0x0B0B_1000 => self.open_support(31),
+                0x0B0B_1001 => self.open_support(32),
                 _ => self.do_action(msg, id),
             }
         }

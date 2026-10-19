@@ -41,7 +41,7 @@ impl Date {
         format!("{:04}-{:02}-{:02} {:02}:{:02} PST", self.year, self.month, self.day, self.hour, self.minute)
     }
 
-    fn read(r: &mut Reader) -> Self {
+    pub(crate) fn read(r: &mut Reader) -> Self {
         Date { year: r.u16() as i16, month: r.u8(), day: r.u8(), hour: r.u8(), minute: r.u8(), second: r.u8() }
     }
 
@@ -269,20 +269,20 @@ impl Grams {
     }
 }
 
-fn word(vui: &Vui, id: i32) -> String {
+pub(crate) fn word(vui: &Vui, id: i32) -> String {
     vui.words.get(id, vui.language).to_string()
 }
 
 /// The "..." after a status line: one dot more every 15 frames, three at
 /// most (`sDots`, `sTicks`, one pair per window class).
 #[derive(Clone, Copy, Debug, Default)]
-struct Dots {
+pub(crate) struct Dots {
     dots: i8,
     ticks: i8,
 }
 
 impl Dots {
-    fn step(&mut self) {
+    pub(crate) fn step(&mut self) {
         self.ticks = self.ticks.wrapping_sub(1);
         if self.ticks <= 0 {
             self.ticks = 15;
@@ -293,7 +293,7 @@ impl Dots {
         }
     }
 
-    fn line(&self, vui: &Vui, id: i32) -> Vec<u16> {
+    pub(crate) fn line(&self, vui: &Vui, id: i32) -> Vec<u16> {
         wide(&format!("{}{}", word(vui, id), ".".repeat(self.dots as usize + 1)))
     }
 }
@@ -309,7 +309,7 @@ fn draw_status(vui: &Vui, r: &mut dyn Raster, status: &mut Window, line: &[u16])
 
 /// An embedded `VIWndEdit` for one field: rows, multi-line, length, centred
 /// on the window, the field's text, the focus.
-fn edit_field(e: &mut EditBox, rows: i32, multi: bool, max: usize, center: [i32; 2], text: &[u16], now: i64) {
+pub(crate) fn edit_field(e: &mut EditBox, rows: i32, multi: bool, max: usize, center: [i32; 2], text: &[u16], now: i64) {
     e.set_rows(rows);
     e.set_multi_line(multi);
     e.set_center(center);
@@ -318,7 +318,7 @@ fn edit_field(e: &mut EditBox, rows: i32, multi: bool, max: usize, center: [i32;
     e.focus(now);
 }
 
-fn box_key(key: i32) -> Option<BoxKey> {
+pub(crate) fn box_key(key: i32) -> Option<BoxKey> {
     match key {
         13 | 134 => Some(BoxKey::Enter),
         27 | 132 => Some(BoxKey::Escape),
@@ -329,7 +329,7 @@ fn box_key(key: i32) -> Option<BoxKey> {
 }
 
 /// `strcpy16` into a buffer of `n` characters (the terminator counts).
-fn capped(s: &[u16], n: usize) -> Vec<u16> {
+pub(crate) fn capped(s: &[u16], n: usize) -> Vec<u16> {
     s.iter().copied().take_while(|&c| c != 0).take(n - 1).collect()
 }
 
