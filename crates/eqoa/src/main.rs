@@ -26,6 +26,8 @@ mod chat;
 mod dialog;
 mod camstyle;
 mod client_image;
+mod craft;
+mod craftwnd;
 mod death;
 mod editbox;
 mod group;

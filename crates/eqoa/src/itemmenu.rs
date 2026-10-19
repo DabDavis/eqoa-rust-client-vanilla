@@ -122,8 +122,8 @@ pub fn build(inv: &ItemList, counts: [i32; 4], icon: &dyn Fn(usize) -> i32, can_
 /// `VIWndInspect`: the scrolling description, Triangle to close, X to go a
 /// level deeper (the stats) where there is one.
 #[derive(Default)]
-struct Inspect {
-    depth: i32,
+pub struct Inspect {
+    pub depth: i32,
     p28: i32,
     text: Vec<u16>,
     lines: i32,
@@ -131,13 +131,13 @@ struct Inspect {
     top: i32,
     shown: i32,
     window: Window,
-    flash: KeyFlash,
-    visible: bool,
+    pub flash: KeyFlash,
+    pub visible: bool,
 }
 
 impl Inspect {
     /// `Init(depth, p)` and `SetText`.
-    fn set(&mut self, depth: i32, p: i32, text: &str) {
+    pub fn set(&mut self, depth: i32, p: i32, text: &str) {
         self.depth = depth;
         self.p28 = p;
         self.text = wide(text);
@@ -145,7 +145,7 @@ impl Inspect {
     }
 
     /// `OnMessage` 295: the window sized to the text.
-    fn focus(&mut self, vui: &Vui, r: &mut dyn Raster) {
+    pub fn focus(&mut self, vui: &Vui, r: &mut dyn Raster) {
         self.window.init(vui, r, [320, 170], 410, 14, 1);
         let text = self.text.clone();
         self.lines = self.window.count_lines(vui, r, &text, 410);
@@ -161,7 +161,7 @@ impl Inspect {
         self.flash.reset();
     }
 
-    fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, cues: &mut Vec<i32>) {
+    pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, cues: &mut Vec<i32>) {
         let white = [1.0; 4];
         self.window.draw(vui, r);
         let text = self.text.clone();
