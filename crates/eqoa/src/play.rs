@@ -1554,7 +1554,7 @@ impl Play {
         self.ability_token = self.dump.p2bb60;
         // the dump's crafting token and slots (SetP78C0, ReadSlots)
         self.craft.token = self.dump.craft_p78c0;
-        self.craft.slots = self.dump.craft_slots.clone();
+        self.craft.slots = self.dump.craft_slots;
         // the dump's quests (m_questCount, m_questTitle) and their stamp
         // ReadState: the MemoryDump's Class Mastery
         self.cm.m = self.dump.mastery.clone();

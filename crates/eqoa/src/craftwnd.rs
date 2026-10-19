@@ -4,6 +4,7 @@
 //! has a pop-up menu on a recipe and an inspect window, the experiment a menu
 //! of the inventory's components (40 rows, three options each). What they ask
 //! of the client comes back as [`CraftUp`].
+#![allow(clippy::too_many_arguments)]
 
 use crate::client_image::{Menu, MenuEntry, Menus};
 use crate::craft::{Arg, Craft, CraftOut, printf16};

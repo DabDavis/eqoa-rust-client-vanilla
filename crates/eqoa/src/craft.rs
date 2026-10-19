@@ -645,3 +645,138 @@ impl Craft {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn words() -> StringTable {
+        let mut lines = vec![String::new(); 1700];
+        for (id, s) in [(1544, "You have scribed a new recipe."), (1554, "You reach level %d in Jewel Crafting!"), (1560, "You receive %d XP in Jewel Crafting."), (1620, "You gained a rank in Jewel Crafting!"), (1588, "You have created \"%S.\""), (1589, "You broke a recipe reagent."), (1599, "The items you chose do not make anything."), (1601, "This item is already in the combine list."), (1602, "The combine list is full.")] {
+            lines[id - 1] = s.to_string();
+        }
+        StringTable::parse(lines.join("\n").as_bytes()).unwrap()
+    }
+
+    fn rec(order: i32, id: i32) -> Recipe {
+        Recipe { order, id, skill: 3, ..Default::default() }
+    }
+
+    /// The requests: sub-op, token, args; one at a time (a second waits on
+    /// `pending`), except sub-op 5; the combine's ids are zigzag.
+    #[test]
+    fn requests_carry_the_token_and_wait_their_turn() {
+        let mut c = Craft { token: 0x01020304, ..Default::default() };
+        assert_eq!(c.send2(7, 0).unwrap(), vec![0x01, 0x11, 2, 4, 3, 2, 1, 7, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(c.pending, 2);
+        assert!(c.send7(7).is_none(), "a request is out");
+        c.pending = 0;
+        let mut it = NetItem::default();
+        it.item.id = 3;
+        c.combine = vec![it.clone(), it];
+        let m = c.send_combine(&ItemList::default()).unwrap();
+        assert_eq!(&m[2..], &[4, 4, 3, 2, 1, 4, 6, 6], "zigzag count 2, ids 3 and 3");
+        assert!(c.combine.is_empty() && c.pending == 4);
+        c.pending = 0;
+        c.recipes = vec![rec(0, 1)];
+        c.send6(3).unwrap();
+        assert!(c.recipes.is_empty() && c.pending == 5, "Send6 clears the book");
+    }
+
+    /// `Recv08`: the moved one takes the target's place, the rest close up
+    /// — not a swap of the two.
+    #[test]
+    fn a_moved_recipe_takes_the_targets_place() {
+        let mut c = Craft { recipes: vec![rec(0, 10), rec(1, 11), rec(2, 12), rec(3, 13)], ..Default::default() };
+        let mut msg = vec![8u8];
+        for v in [9u32, 10, 12] {
+            msg.extend(v.to_le_bytes());
+        }
+        c.recv(&msg, Modes::default(), &words(), 0);
+        let book: Vec<i32> = c.select(3, 0).iter().map(|r| r.id).collect();
+        assert_eq!(book, vec![11, 12, 10, 13]);
+        assert_ne!(book, vec![12, 11, 10, 13], "a swap would put 12 first");
+        assert_eq!(c.token, 9);
+    }
+
+    /// `Recv09`'s line: created, the XP, a rank, a level reached; the slot
+    /// takes the new values; a broken reagent goes second.
+    #[test]
+    fn the_skill_report_reads_as_the_game_writes_it() {
+        let mut c = Craft::default();
+        c.slots[3] = CraftSlot([0, 1, 0, 0]);
+        let mut msg = vec![9u8];
+        for v in [5u32, 0, 3, 2, 4, 1, 25, 0, 0xFFFF_FFFF] {
+            msg.extend(v.to_le_bytes());
+        }
+        msg.extend(4u32.to_le_bytes());
+        msg.extend("Ring".encode_utf16().flat_map(|c| c.to_le_bytes()));
+        let out = c.recv(&msg, Modes::default(), &words(), 0);
+        let CraftOut::RecipeMessage(text, icon) = &out[0] else { panic!("{out:?}") };
+        assert_eq!(String::from_utf16_lossy(text), "You have created \"Ring.\"  You receive 25 XP in Jewel Crafting.  You gained a rank in Jewel Crafting!  You reach level 2 in Jewel Crafting!");
+        assert_eq!(*icon, -1);
+        assert_eq!(c.slots[3].0, [0, 2, 4, 1]);
+        // again at the same level and rank: only the XP, and a broken reagent
+        let mut msg2 = msg.clone();
+        msg2[29..33].copy_from_slice(&1u32.to_le_bytes());
+        let out = c.recv(&msg2, Modes::default(), &words(), 0);
+        let CraftOut::RecipeMessage(text, _) = &out[0] else { panic!() };
+        assert_eq!(String::from_utf16_lossy(text), "You have created \"Ring.\"  You broke a recipe reagent.  You receive 25 XP in Jewel Crafting.");
+    }
+
+    /// The combine: components only, no more of one than the stack, four at
+    /// most; the replies' notices only while the experiment is up.
+    #[test]
+    fn the_combine_keeps_the_games_limits() {
+        let mut c = Craft::default();
+        let mut it = NetItem { quantity: 2, ..Default::default() };
+        it.item.id = 5;
+        it.item.p54 = 1;
+        let mut plain = it.clone();
+        plain.item.p54 = 0;
+        c.items.items = vec![it, plain];
+        assert!(c.add_to_combine(1, &words()).is_empty() && c.combine.is_empty(), "not a component");
+        c.add_to_combine(0, &words());
+        c.add_to_combine(0, &words());
+        let out = c.add_to_combine(0, &words());
+        assert_eq!(out, vec![CraftOut::Chat("This item is already in the combine list.".into(), RED)]);
+        assert_eq!(c.combine.len(), 2);
+        c.remove_from_combine(0);
+        assert_eq!(c.combine.len(), 1);
+        let msg = [12u8, 2, 1, 0, 0, 0];
+        assert!(c.recv(&msg, Modes::default(), &words(), 0).is_empty(), "no experiment window: no notice");
+        let out = c.recv(&msg, Modes { experiment: true, ..Default::default() }, &words(), 0);
+        assert_eq!(out, vec![CraftOut::Notify(w16("The items you chose do not make anything."), -1)]);
+    }
+
+    /// `VICraftDetail::Read` over a whole record, and a negative count
+    /// stops it.
+    #[test]
+    fn a_detail_reads_its_three_lists() {
+        let mut w = Writer::default();
+        w.signed(7).signed(-1).signed(-1).u8(0).u8(3).u8(0).u8(2);
+        w.data.extend(4u16.to_le_bytes());
+        w.u8(9).wide("Ring").wide("Shiny.").signed(1).signed(0).signed(3).signed(1).wide("Iron");
+        w.data.extend(2u16.to_le_bytes());
+        w.signed(1).wide("Hammer").u8(1);
+        let d = Detail::read(&mut Reader::new(&w.data));
+        assert_eq!((d.x00, d.rarity, d.count, d.level), (7, 2, 4, 9));
+        assert_eq!(d.stats, vec![(0, 3)]);
+        assert_eq!(d.ingredients, vec![(w16("Iron"), 2)]);
+        assert_eq!(d.tools, vec![(w16("Hammer"), 1)]);
+        let mut bad = Writer::default();
+        bad.signed(1).signed(1).signed(1).u8(0).u8(0).u8(0).u8(0);
+        bad.data.extend(1u16.to_le_bytes());
+        bad.u8(1).wide("x").wide("").signed(-1).signed(1);
+        let d = Detail::read(&mut Reader::new(&bad.data));
+        assert!(d.stats.is_empty() && d.ingredients.is_empty(), "a negative count ends the read");
+    }
+
+    /// `snprintf16`: arguments in turn, `%%`, and the buffer's cut.
+    #[test]
+    fn printf16_fills_in_turn_and_cuts() {
+        let f = w16("%S: %d%% of %s");
+        assert_eq!(String::from_utf16_lossy(&printf16(&f, &[Arg::S(&w16("Iron")), Arg::D(-4), Arg::S(&w16("x"))], 256)), "Iron: -4% of x");
+        assert_eq!(printf16(&w16("abcdef"), &[], 8).len(), 3, "8 bytes hold 3 characters and the end");
+    }
+}
