@@ -29,6 +29,7 @@ mod client_image;
 mod death;
 mod editbox;
 mod group;
+mod guild;
 mod hud;
 mod hudmenu;
 mod spellbook;
