@@ -132,6 +132,9 @@ pub struct Renderer {
     pub ui: Option<ui::Ui>,
     /// The particles' pipelines, made at the first particle.
     billboards: Option<billboard::Billboards>,
+    /// Strips (lightning) drawn with the next particles, before them, as
+    /// the spell effects draw theirs before `VIParticleSystem::Render`.
+    pub strips: Vec<billboard::Strips>,
 }
 
 /// What to draw this frame. The lights are the VU1 strip programs' uniforms:
@@ -329,6 +332,7 @@ impl Renderer {
             text: None,
             ui: None,
             billboards: None,
+            strips: Vec::new(),
         }
     }
 

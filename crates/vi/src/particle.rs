@@ -451,7 +451,8 @@ pub struct Emitter<M: Model> {
     pub space: Matrix44<M>,
     pub static_bounds: BBox<M>,
     pub dyn_bounds: BBox<M>,
-    pub blenders: Vec<Blender<M>>,
+    /// in link order; a blender deleted leaves its place empty
+    pub blenders: Vec<Option<Blender<M>>>,
 }
 
 /// `VIBillboard`, as `Render` fills it.
@@ -470,7 +471,9 @@ pub struct System<M: Model> {
     pool: Vec<Particle<M>>,
     free: VecDeque<usize>,
     pub defs: Vec<Option<Definition<M>>>,
-    pub emitters: Vec<Option<Emitter<M>>>,
+    /// by id; an id is never reused (a spell's blender may outlive its
+    /// emitter and must not find another in its place)
+    pub emitters: Vec<Option<Box<Emitter<M>>>>,
     /// emitter ids in list order (`m_emitters`)
     order: Vec<usize>,
     pub time: i64,
@@ -523,14 +526,8 @@ impl<M: Model> System<M> {
             blenders: Vec::new(),
         };
         e.recompute_static_bbox();
-        let id = match self.emitters.iter().position(|e| e.is_none()) {
-            Some(k) => k,
-            None => {
-                self.emitters.push(None);
-                self.emitters.len() - 1
-            }
-        };
-        self.emitters[id] = Some(e);
+        let id = self.emitters.len();
+        self.emitters.push(Some(Box::new(e)));
         self.order.push(id);
         id
     }
@@ -552,6 +549,27 @@ impl<M: Model> System<M> {
 
     pub fn emitter(&mut self, id: usize) -> &mut Emitter<M> {
         self.emitters[id].as_mut().unwrap()
+    }
+
+    /// The emitter, if it has not been destroyed.
+    pub fn get(&self, id: usize) -> Option<&Emitter<M>> {
+        self.emitters.get(id).and_then(|e| e.as_deref())
+    }
+
+    pub fn get_mut(&mut self, id: usize) -> Option<&mut Emitter<M>> {
+        self.emitters.get_mut(id).and_then(|e| e.as_deref_mut())
+    }
+
+    /// `ParticleCount`, 0 for a destroyed emitter.
+    pub fn particle_count(&self, id: usize) -> usize {
+        self.get(id).map_or(0, |e| e.particles.len())
+    }
+
+    /// `LinkMotifBlender(hash, b)` on an emitter, by its definition's motif.
+    pub fn link_blender(&mut self, id: usize, hash: u32) -> Option<usize> {
+        let def = self.get(id)?.def;
+        let d = self.defs.get(def)?.as_ref()?.clone();
+        self.get_mut(id)?.link_blender(&d, hash)
     }
 
     /// `VIParticleEmitter::Update`: one frame of births.
@@ -787,7 +805,7 @@ impl<M: Model> Emitter<M> {
         for m in &mut def.motifs {
             m.attrs.factor = F::ZERO;
         }
-        for b in &mut self.blenders {
+        for b in self.blenders.iter_mut().flatten() {
             if b.changed {
                 b.changed = false;
                 changed = true;
@@ -880,13 +898,24 @@ impl<M: Model> Emitter<M> {
     /// its name's hash, at factor 0.
     pub fn link_blender(&mut self, def: &Definition<M>, hash: u32) -> Option<usize> {
         let motif = def.motifs.iter().position(|m| m.name_hash == hash)?;
-        self.blenders.push(Blender { motif, factor: F::ZERO, changed: true });
+        self.blenders.push(Some(Blender { motif, factor: F::ZERO, changed: true }));
         Some(self.blenders.len() - 1)
+    }
+
+    /// `~VIMotifBlender`: out of the emitter's list.
+    pub fn unlink_blender(&mut self, b: usize) {
+        if let Some(x) = self.blenders.get_mut(b) {
+            *x = None;
+        }
+    }
+
+    pub fn blender_factor(&self, b: usize) -> Option<F<M>> {
+        self.blenders.get(b).and_then(|x| x.as_ref()).map(|x| x.factor)
     }
 
     /// `VIMotifBlender::SetFactor`: a change marks it.
     pub fn set_blender_factor(&mut self, b: usize, f: F<M>) {
-        let b = &mut self.blenders[b];
+        let Some(b) = self.blenders[b].as_mut() else { return };
         if b.factor != f {
             b.factor = f;
             b.changed = true;

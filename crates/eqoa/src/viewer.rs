@@ -283,6 +283,19 @@ pub fn shot_with(
         let say = std::env::var("EQOA_SAY").ok();
         let tab = std::env::var_os("EQOA_TAB").is_some();
         let mut parts = crate::particles::Particles::new(&walker.scene, 0);
+        // `EQOA_SPELL=n`: SPELLFX's n-th effect, cast by the character at a
+        // stand-in 6 ahead of it at EQOA_AT (offline, no server).
+        let mut trial = std::env::var("EQOA_SPELL").ok().and_then(|v| v.parse::<usize>().ok()).filter(|_| play.is_none()).map(|n| {
+            for f in ["SPELLFX.CSF", "FX.CSF"] {
+                if lib.files.iter().all(|(name, _)| name != f)
+                    && let Ok(b) = crate::disc(None).and_then(|mut d| Ok(d.read(f)?))
+                    && let Ok(c) = esf::Container::open(b)
+                {
+                    lib.add(f, c);
+                }
+            }
+            (crate::spells::Spells::load(lib, 0), n, vi::csprite::Rand(1))
+        });
         // `EQOA_AT=ms`: when the target (and then Q, attack) steps happen.
         let at: i64 = std::env::var("EQOA_AT").ok().and_then(|v| v.parse().ok()).map_or(2000, |v: i64| v / 16 * 16);
         let attack = std::env::var_os("EQOA_ATTACK").is_some();
@@ -432,9 +445,44 @@ pub fn shot_with(
             walker.pose();
             let (proj, v) = walker.view(aspect);
             batches = parts.frame(&walker.scene, lib, walker.eye_position(), proj * v, t);
+            if let Some((sp, n, rand)) = trial.as_mut() {
+                use crate::spells::{Body, Cast, SELF};
+                use vi::fpu::{Ee, F};
+                use vi::geom::Matrix44;
+                use vi::vect::Vect3;
+                let phys = &walker.cam.walk.phys;
+                let heading = phys.angles.x;
+                let actor = Matrix44::<Ee>::transform(&Vect3::new(heading, F::ZERO, F::ZERO), F::ONE, &phys.smooth_location());
+                let ahead = actor.mul_point(&Vect3::of(0.0, 0.0, 6.0));
+                let target = Matrix44::<Ee>::transform(&Vect3::new(heading, F::ZERO, F::ZERO), F::ONE, &ahead);
+                let anims = &walker.anims;
+                let (sprite, centre) = match walker.sprite.as_mut() {
+                    Some(cs) => {
+                        let c = cs.h.calc_trans_about_center(&actor, anims);
+                        (Some((cs, anims, &mut *rand)), c)
+                    }
+                    None => (None, actor),
+                };
+                let mut bodies = vec![Body { actor: SELF, sprite, transform: actor, centre, attack: [0, 0] }, Body { actor: 1, sprite: None, transform: target, centre: target, attack: [0, 0] }];
+                let mut casts = Vec::new();
+                if t == at && let Some(effect) = sp.nth(*n) {
+                    eprintln!("spell effect {n} ({effect:#010x}) cast");
+                    casts.push((Cast { effect, time: 1500, caster: 0, target: 1, targets: Vec::new() }, SELF, 1, Vec::new()));
+                }
+                sp.frame(&mut bodies, &casts, SELF, Some(&mut walker.cam.effect), t, &walker.eye, lib, None);
+                batches.append(&mut sp.batches);
+                renderer.strips = std::mem::take(&mut sp.strips);
+            }
+            if let Some(sp) = play.as_mut().and_then(|p| p.spells.as_mut()) {
+                batches.append(&mut sp.batches);
+                renderer.strips = std::mem::take(&mut sp.strips);
+            }
             billboard_view = Some((v, proj));
         }
         eprintln!("{}", parts.describe());
+        if let Some((sp, _, _)) = &trial {
+            eprintln!("{}", sp.describe());
+        }
         let body = match play.as_ref().and_then(|p| p.self_model).and_then(|m| lib.lookup(m as i32)).and_then(|r| lib.build_model(r)) {
             Some(m) => m,
             None => body,
@@ -1035,6 +1083,11 @@ impl ApplicationHandler for App {
                     if let Some(ps) = particles.as_mut() {
                         *batches = ps.frame(&w.scene, lib, w.eye_position(), proj * v, now);
                         bb_view = Some((v, proj));
+                    }
+                    // the spell effects' particles after the world's, their lightning before
+                    if let Some(sp) = play.as_mut().and_then(|p| p.spells.as_mut()) {
+                        batches.append(&mut sp.batches);
+                        g.renderer.strips = std::mem::take(&mut sp.strips);
                     }
                     lit(proj, v, clock, Some((w.eye_position(), &w.scene)))
                 });
