@@ -58,6 +58,9 @@ pub struct Play {
     puppets: Vec<Option<Puppet>>,
     /// The sounds the client asked for this frame (`PlaySound`, `PlayCue`).
     pub cues: Vec<crate::sound::Cue>,
+    /// The weather the server set this frame (0x00C5, 0x00C7): the byte, and
+    /// whether it is instant.
+    pub weather: Vec<(u8, bool)>,
     /// Each creature's `m_walk`, made with it (`CreateEntity`: `Init` at the
     /// origin), keyed by the entity's id.
     walks: Vec<Option<(u32, WalkControl<Ee>)>>,
@@ -393,7 +396,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None }
+        Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None }
     }
 
     fn self_id32(&self) -> Option<u32> {
@@ -499,6 +502,10 @@ impl Play {
                 Event::Chat(text, color) => {
                     eprintln!("chat: {text}");
                     self.add_chat(text, color);
+                }
+                Event::Weather { weather, instant } => {
+                    eprintln!("play: weather {weather}{}", if instant { " (instant)" } else { "" });
+                    self.weather.push((weather, instant));
                 }
                 Event::WorldEntry { self_id, player, dump } => {
                     eprintln!("play: world entry again as {self_id:#x} at {:?}", player.pos);

@@ -32,14 +32,17 @@ fn hour(start: Instant) -> f32 {
     }
 }
 
-/// A frame's lights out of the time of day (clear sky).
-/// A frame's lights, fog and sky out of the time of day (clear sky), for the
-/// camera at `eye` in `world` (its terrain profile and env flags), if any.
+/// A frame's lights, fog and sky out of the time of day, for the camera at
+/// `eye` in `world` (its terrain profiles and env flags), if any, under the
+/// atmosphere's `weather`: its overcast (scaled by the profiles' for the
+/// lights), its lightning flash, and the sky colour and Lavastorm handed back
+/// to it.
 pub fn lit(
     proj: glam::Mat4,
     view: glam::Mat4,
     start: Instant,
     eye: Option<(Vec3, &vi::world::World<vi::fpu::Ee>)>,
+    mut weather: Option<&mut crate::weather::Weather>,
 ) -> (View, Option<crate::sky::SkyFrame>) {
     let view_proj = proj * view;
     let mut rot = view;
@@ -47,7 +50,13 @@ pub fn lit(
     use vi::fpu::{Ee, F};
     let tod = vi::tod::TimeOfDay::<Ee>::new();
     let hour = F::new(hour(start));
-    let (amb, sun, dir) = tod.lights(hour, F::ZERO);
+    let blend = eye.and_then(|(at, w)| w.grid.as_ref().map(|g| (g.profile_blend(&vi::vect::Vect3::of(at.x, at.y, at.z)), at, w)));
+    let o = weather.as_deref().map_or(F::ZERO, |w| w.atm.overcast_interp());
+    let k = blend.as_ref().map_or(F::ZERO, |(b, _, _)| vi::tod::overcast_weight(o, b));
+    let (amb, mut sun, mut dir) = tod.lights(hour, k);
+    if let Some(flash) = weather.as_deref_mut().and_then(|w| w.lightning()) {
+        (sun, dir) = tod.flash(&sun, flash, F::ONE);
+    }
     let rgb = |c: [F<Ee>; 3]| Vec3::new(c[0].0, c[1].0, c[2].0);
     let mut v = View {
         view_proj,
@@ -59,21 +68,23 @@ pub fn lit(
         sky_view_proj: None,
     };
     let mut sky = None;
-    if let Some((at, w)) = eye
-        && let Some(grid) = &w.grid
-    {
+    if let Some((b, at, w)) = &blend {
         let at = vi::vect::Vect3::of(at.x, at.y, at.z);
-        let b = grid.profile_blend(&at);
-        let fog = tod.fog(hour, F::ZERO, &b, w.env_flags(&at), &sun);
+        let fog = tod.fog(hour, o, b, w.env_flags(&at), &sun);
         v.fog = Some((fog.near.0, fog.far.0, Vec3::new(fog.color[0].0, fog.color[1].0, fog.color[2].0)));
-        let c = tod.sky(hour, F::ZERO, &b);
+        let c = tod.sky(hour, o, b);
         v.clear = Vec3::new(c[0] as f32, c[1] as f32, c[2] as f32) / 255.0;
         v.sky_view_proj = Some(proj * rot);
-        sky = Some(crate::sky::SkyFrame {
-            ty: vi::atmosphere::sky_type(&b),
-            rgb: v.clear,
-            rot: vi::atmosphere::sky_rotations(hour, F::new(1.0)),
-        });
+        if let Some(wx) = weather {
+            wx.sky_colour(c, vi::tod::lavastorm_weight(b));
+            let a = &wx.atm;
+            sky = Some(crate::sky::SkyFrame {
+                plane: a.p618,
+                lights: a.p618 == 0 && a.overcast != 0,
+                rot: vi::atmosphere::SkyRotations { sun: a.sky_rot, corona: a.corona_rot, moon: a.moon_rot },
+                pals: (0..5).map(|k| a.pals.get(&k).cloned().unwrap_or_default()).collect(),
+            });
+        }
     }
     (v, sky)
 }
@@ -172,7 +183,7 @@ impl Camera {
             Camera::Fly { pos, yaw, pitch } => (pos, pos + direction(yaw, pitch), 0.5, 6000.0),
         };
         let proj = glam::camera::rh::proj::directx::perspective(fov, aspect, near, far);
-        lit(proj, glam::camera::rh::view::look_at_mat4(eye, target, Vec3::Y), Instant::now(), None).0
+        lit(proj, glam::camera::rh::view::look_at_mat4(eye, target, Vec3::Y), Instant::now(), None, None).0
     }
 
     fn drag(&mut self, dx: f32, dy: f32) {
@@ -273,6 +284,7 @@ pub fn shot_with(
     let mut streamed = None;
     let mut batches: Vec<render::billboard::Batch> = Vec::new();
     let mut billboard_view: Option<(glam::Mat4, glam::Mat4)> = None;
+    let mut sky_billboards: Option<(glam::Mat4, glam::Mat4, Vec<render::billboard::Batch>)> = None;
     let cam = cam.unwrap_or_else(|| source.camera(s.bounds));
     let aspect = w as f32 / h as f32;
     let mut view = cam.view(s.bounds, aspect);
@@ -283,6 +295,7 @@ pub fn shot_with(
         let say = std::env::var("EQOA_SAY").ok();
         let tab = std::env::var_os("EQOA_TAB").is_some();
         let mut parts = crate::particles::Particles::new(&walker.scene, 0);
+        let mut weather = crate::weather::Weather::new(lib, 0);
         // `EQOA_AT=ms`: when the target (and then Q, attack) steps happen.
         let at: i64 = std::env::var("EQOA_AT").ok().and_then(|v| v.parse().ok()).map_or(2000, |v: i64| v / 16 * 16);
         let attack = std::env::var_os("EQOA_ATTACK").is_some();
@@ -368,6 +381,9 @@ pub fn shot_with(
                     eprintln!("the server names the player's model {model:#010x}");
                     walker.set_character(lib, r);
                 }
+                for (w, instant) in p.weather.drain(..) {
+                    weather.set_weather(w, instant);
+                }
                 // The HUD steps each frame (its glows, the name's scroll).
                 if let Some(u) = renderer.ui.as_mut() {
                     p.draw_hud(u, &walker, t);
@@ -389,9 +405,19 @@ pub fn shot_with(
             walker.pose();
             let (proj, v) = walker.view(aspect);
             batches = parts.frame(&walker.scene, lib, walker.eye_position(), proj * v, t);
-            billboard_view = Some((v, proj));
+            // the atmosphere every frame; the last frame's lights and render
+            // are the shot's
+            weather.frame(&mut walker.scene, None, &walker.eye, t, hour(Instant::now()));
+            if t < script.ms {
+                let _ = lit(proj, v, Instant::now(), Some((walker.eye_position(), &walker.scene)), Some(&mut weather));
+                let _ = weather.render(&walker.eye);
+            }
+        }
+        if script.ms == 0 {
+            weather.frame(&mut walker.scene, None, &walker.eye, 0, hour(Instant::now()));
         }
         eprintln!("{}", parts.describe());
+        eprintln!("{}", weather.describe());
         let body = match play.as_ref().and_then(|p| p.self_model).and_then(|m| lib.lookup(m as i32)).and_then(|r| lib.build_model(r)) {
             Some(m) => m,
             None => body,
@@ -410,9 +436,8 @@ pub fn shot_with(
         streamer.update(at, &mut walker.scene, lib, stream::Gpu { renderer: &mut renderer, device: &device, queue: &queue }, None);
         streamer.animate(&mut walker.scene, &renderer, &queue);
         eprintln!("{}", streamer.describe());
-        let (proj, v) = walker.view(aspect);
+        let (mut proj, mut v) = walker.view(aspect);
         let mut shot_eye = walker.eye_position();
-        let mut frame = lit(proj, v, Instant::now(), Some((walker.eye_position(), &walker.scene)));
         // `EQOA_SHOT_EYE=dx,dy,dz`: look at the character from that offset
         // instead of through the game's camera (for checking poses).
         let eye: Vec<f32> = std::env::var("EQOA_SHOT_EYE")
@@ -429,15 +454,21 @@ pub fn shot_with(
                 [x, y, z] => Vec3::new(*x, *y, *z),
                 _ => Vec3::from(walker.cam.walk.phys.position.to_array()) + Vec3::Y,
             };
-            let proj = glam::camera::rh::proj::directx::perspective(40f32.to_radians(), aspect, 0.1, 3000.0);
+            proj = glam::camera::rh::proj::directx::perspective(40f32.to_radians(), aspect, 0.1, 3000.0);
             let at = p + Vec3::new(*dx, *dy, *dz);
             shot_eye = at;
-            let v = glam::camera::rh::view::look_at_mat4(at, p, Vec3::Y);
-            billboard_view = Some((v, proj));
-            frame = lit(proj, v, Instant::now(), Some((at, &walker.scene)));
+            v = glam::camera::rh::view::look_at_mat4(at, p, Vec3::Y);
         }
+        billboard_view = Some((v, proj));
+        let frame = lit(proj, v, Instant::now(), Some((shot_eye, &walker.scene)), Some(&mut weather));
+        let (sky_bb, world_bb) = weather.render(&walker.eye);
+        batches.extend(world_bb);
+        let mut rot = v;
+        rot.w_axis = glam::Vec4::W;
+        sky_billboards = Some((rot, proj, sky_bb));
         if let (Some(f), Some(at)) = (&frame.1, crate::sky::upload(&mut renderer, &device, &queue, lib, &mut gpu)) {
-            crate::sky::update(&renderer, &queue, &mut gpu, at, f);
+            let textures = render::library_textures(lib);
+            crate::sky::update(&mut renderer, &device, &queue, &mut gpu, at, f, &textures);
         }
         view = frame.0;
         streamed = Some(streamer);
@@ -463,7 +494,8 @@ pub fn shot_with(
     let refs: Vec<&GpuModel> = gpu.iter().chain(streamed.iter().flat_map(|s| s.models())).chain(play.iter().flat_map(|p| p.models())).collect();
     let textures = render::library_textures(lib);
     let particles = billboard_view.map(|(v, p)| (v, p, batches.as_slice(), &textures as &render::Textures));
-    let rgba = render::capture(&device, &queue, &mut renderer, w, h, &view, &refs, particles);
+    let sky = sky_billboards.as_ref().map(|(v, p, b)| (*v, *p, b.as_slice(), &textures as &render::Textures));
+    let rgba = render::capture_with_sky(&device, &queue, &mut renderer, w, h, &view, &refs, particles, sky);
     let mut enc = png::Encoder::new(std::io::BufWriter::new(std::fs::File::create(out)?), w, h);
     enc.set_color(png::ColorType::Rgba);
     enc.set_depth(png::BitDepth::Eight);
@@ -506,6 +538,10 @@ struct App {
     /// The world's particles, and this frame's billboards.
     particles: Option<crate::particles::Particles>,
     batches: Vec<render::billboard::Batch>,
+    /// The sky and the weather (made once, kept across worlds as the
+    /// scene's is), and this frame's sky billboards.
+    weather: Option<crate::weather::Weather>,
+    sky_batches: Vec<render::billboard::Batch>,
     /// Index in `Gfx::models` of the character.
     body_at: usize,
     /// Where the sky's models start in `Gfx::models`.
@@ -540,6 +576,8 @@ pub fn run_with(lib: Library, source: Source, play: Option<crate::play::Play>) -
         walker_sounds: Vec::new(),
         particles: None,
         batches: Vec::new(),
+        weather: None,
+        sky_batches: Vec::new(),
         body_at: 0,
         sky_at: None,
         clock: Instant::now(),
@@ -581,6 +619,9 @@ impl App {
             self.sky_at = None;
             if self.walker.is_some() {
                 self.sky_at = crate::sky::upload(&mut g.renderer, &g.device, &g.queue, &self.lib, &mut g.models);
+                if self.weather.is_none() {
+                    self.weather = Some(crate::weather::Weather::new(&mut self.lib, 0));
+                }
                 match &mut self.sound {
                     Some(s) => s.world_changed(),
                     None => self.sound = crate::sound::Sound::new(std::path::Path::new(&crate::disc_path(None))),
@@ -872,6 +913,8 @@ impl ApplicationHandler for App {
                 let walker_sounds = &mut self.walker_sounds;
                 let particles = &mut self.particles;
                 let batches = &mut self.batches;
+                let weather = &mut self.weather;
+                let sky_batches = &mut self.sky_batches;
                 let mut bb_view = None;
                 let play = &mut self.play;
                 let lib = &self.lib;
@@ -889,6 +932,11 @@ impl ApplicationHandler for App {
                             let (mat, _) = w.pose();
                             if body_at < g.models.len() {
                                 g.models[body_at] = g.renderer.upload(&g.device, &g.queue, &m, &[mat], &textures);
+                            }
+                        }
+                        for (x, instant) in p.weather.drain(..) {
+                            if let Some(wx) = weather.as_mut() {
+                                wx.set_weather(x, instant);
                             }
                         }
                     }
@@ -936,12 +984,22 @@ impl ApplicationHandler for App {
                         Some(p) => g.window.set_title(&format!("eqoa — {} — {} — {}", p.player.name, w.describe(), p.describe())),
                         None => g.window.set_title(&format!("eqoa — walking {}", w.describe())),
                     }
+                    if let Some(wx) = weather.as_mut() {
+                        wx.frame(&mut w.scene, sound.as_mut(), &w.eye, now, hour(clock));
+                    }
                     let (proj, v) = w.view(g.config.width as f32 / g.config.height as f32);
                     if let Some(ps) = particles.as_mut() {
                         *batches = ps.frame(&w.scene, lib, w.eye_position(), proj * v, now);
                         bb_view = Some((v, proj));
                     }
-                    lit(proj, v, clock, Some((w.eye_position(), &w.scene)))
+                    let lights = lit(proj, v, clock, Some((w.eye_position(), &w.scene)), weather.as_mut());
+                    if let Some(wx) = weather.as_mut() {
+                        let (sky, world) = wx.render(&w.eye);
+                        *sky_batches = sky;
+                        batches.extend(world);
+                        bb_view = Some((v, proj));
+                    }
+                    lights
                 });
                 let frame = match g.surface.get_current_texture() {
                     wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
@@ -953,7 +1011,8 @@ impl ApplicationHandler for App {
                 let view = match walk_view {
                     Some((v, sky)) => {
                         if let (Some(f), Some(at)) = (sky, self.sky_at) {
-                            crate::sky::update(&g.renderer, &g.queue, &mut g.models, at, &f);
+                            let textures = render::library_textures(&self.lib);
+                            crate::sky::update(&mut g.renderer, &g.device, &g.queue, &mut g.models, at, &f, &textures);
                         }
                         v
                     }
@@ -981,6 +1040,9 @@ impl ApplicationHandler for App {
                 g.renderer.draw(&g.queue, &mut enc, &target, &g.depth, &view, &refs);
                 if let Some((v, p)) = bb_view {
                     let textures = render::library_textures(&self.lib);
+                    let mut rot = v;
+                    rot.w_axis = glam::Vec4::W;
+                    g.renderer.draw_sky_billboards(&g.device, &g.queue, &mut enc, &target, &g.depth, rot, p, &self.sky_batches, &textures);
                     g.renderer.draw_billboards(&g.device, &g.queue, &mut enc, &target, &g.depth, v, p, &self.batches, &textures);
                 }
                 g.renderer.draw_text(&g.device, &mut enc, &target, &g.depth, (g.config.width, g.config.height));

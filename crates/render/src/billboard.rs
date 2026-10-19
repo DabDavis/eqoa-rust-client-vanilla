@@ -170,6 +170,43 @@ impl Renderer {
         batches: &[Batch],
         textures: &Textures,
     ) {
+        self.billboards(device, queue, encoder, target, depth, view, proj, batches, textures, false);
+    }
+
+    /// Billboards that belong to the sky (`VIAtmosphere::RenderStars`: the
+    /// stars and the lightning patches, Z off, drawn before the world): at
+    /// the far plane, so drawn after the world they still land only where
+    /// nothing else did. `view` is the sky's, its translation zeroed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_sky_billboards(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        view: Mat4,
+        proj: Mat4,
+        batches: &[Batch],
+        textures: &Textures,
+    ) {
+        self.billboards(device, queue, encoder, target, depth, view, proj, batches, textures, true);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn billboards(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        view: Mat4,
+        proj: Mat4,
+        batches: &[Batch],
+        textures: &Textures,
+        far: bool,
+    ) {
         use wgpu::util::DeviceExt;
         if batches.iter().all(|b| b.quads.is_empty()) {
             return;
@@ -194,7 +231,7 @@ impl Renderer {
         let bb = self.billboards.get_or_insert_with(|| Billboards::new(device));
         let mut groups = Vec::new();
         for (b, _, _, tex) in &draws {
-            let u = FrameU { view: view.to_cols_array_2d(), proj: proj.to_cols_array_2d(), flags: [if b.blend == 0 { 1.0 } else { 0.5 }, (b.blend == 0) as i32 as f32, 0.0, 0.0] };
+            let u = FrameU { view: view.to_cols_array_2d(), proj: proj.to_cols_array_2d(), flags: [if b.blend == 0 { 1.0 } else { 0.5 }, (b.blend == 0) as i32 as f32, far as i32 as f32, 0.0] };
             let ub = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("billboard frame"), contents: bytemuck::bytes_of(&u), usage: wgpu::BufferUsages::UNIFORM });
             let fbg = device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &bb.frame_layout, entries: &[wgpu::BindGroupEntry { binding: 0, resource: ub.as_entire_binding() }] });
             let tbg = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -204,8 +241,9 @@ impl Renderer {
             });
             groups.push((fbg, tbg));
         }
+        let key = |b: &Batch| if far { (b.blend.min(4), true, false) } else { (b.blend.min(4), b.ztest, b.zwrite) };
         for (b, _, _, _) in &draws {
-            bb.pipeline(device, format, (b.blend.min(4), b.ztest, b.zwrite));
+            bb.pipeline(device, format, key(b));
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("billboards"),
@@ -226,7 +264,7 @@ impl Renderer {
         });
         pass.set_vertex_buffer(0, vb.slice(..));
         for ((b, start, end, _), (fbg, tbg)) in draws.iter().zip(&groups) {
-            pass.set_pipeline(&bb.pipelines[&(b.blend.min(4), b.ztest, b.zwrite)]);
+            pass.set_pipeline(&bb.pipelines[&key(b)]);
             pass.set_bind_group(0, fbg, &[]);
             pass.set_bind_group(1, tbg, &[]);
             pass.draw(*start..*end, 0..1);

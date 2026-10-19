@@ -6,12 +6,13 @@
 //! 128 stars at night. The weather is 200 particles in a 10-unit box that
 //! follows the camera, each dropped to the ground (or a liquid surface) by a
 //! ray, rain (and its splashes) or snow by the effect mix; the Lavastorm drops
-//! fireballs. A change of weather or sky type cross-fades over 30 ticks
+//! fireballs. A change of weather or sky type cross-fades over 30 seconds
 //! (`ProcessTransitions`): the sun, corona and moon fade, the dome blends a
 //! third layer in and out, the intensity follows a seven-step table, and the
-//! rain's two sounds and the thunder are kept going. A thunderstorm flashes
-//! the sky (`GetLightning`, which also whitens the sun in the time of day) and
-//! lights 14 patches of it.
+//! rain's two voices are kept going. Rain also thunders, every 8 seconds or
+//! so, and under a dark sky each clap is a lightning flash (`GetLightning`,
+//! which also whitens the sun in the time of day) that lights 14 patches of
+//! the sky.
 //!
 //! What the atmosphere asks of the scene (the two rays, the sound device, the
 //! particle system for the fireballs) comes in through traits; what it sets
@@ -86,18 +87,24 @@ pub fn sky_profile<M: Model>(b: &ProfileBlend<M>) -> (i32, i32) {
     (sky, (b.index[k] == 20) as i32)
 }
 
-/// `VIAtmosphere::WXTYPE`: the wire's weather byte as `VIClient::SetWeather`
-/// maps it (anything past 6 is clear).
-pub const WXCLEAR: i32 = 0;
-pub const WXRAIN: i32 = 1;
-pub const WXSNOW: i32 = 2;
-pub const WXSLEET: i32 = 3;
-pub const WXSANDSTORM: i32 = 4;
-pub const WXLAVASTORM: i32 = 5;
-pub const WXTHUNDERSTORM: i32 = 6;
+/// `VIAtmosphere::WXTYPE`, the wire's weather byte as `VIClient::SetWeather`
+/// maps it (anything past 6 is clear). The decomp's `vi.h` names 1..6 rain,
+/// snow, sleet, sandstorm, Lavastorm, thunderstorm; what the code does with
+/// them says otherwise: `ProcessTransitions` makes 1-3 rain and 4-6 snow
+/// (`st` 1 and 2: the effect mix, the material, the splashes, the thunder)
+/// at intensities 0.15, 0.5 and 1 each, and the client's own debug command
+/// sets 0, 2 and 5. The Lavastorm is not a weather at all: it is the terrain
+/// profiles' (`SetLavastormIntensity`).
+pub const WX_CLEAR: i32 = 0;
+pub const WX_RAIN_LIGHT: i32 = 1;
+pub const WX_RAIN: i32 = 2;
+pub const WX_RAIN_HEAVY: i32 = 3;
+pub const WX_SNOW_LIGHT: i32 = 4;
+pub const WX_SNOW: i32 = 5;
+pub const WX_SNOW_HEAVY: i32 = 6;
 
 pub fn weather_from_wire(w: u8) -> i32 {
-    if w <= 6 { w as i32 } else { WXCLEAR }
+    if w <= 6 { w as i32 } else { WX_CLEAR }
 }
 
 /// One layer of a sky sprite's material, as the atmosphere reads and writes
@@ -367,6 +374,8 @@ pub struct Atmosphere<M: Model> {
     pub p11a8: F<M>,
     /// the sky sprites' material palettes, by sprite
     pub pals: HashMap<i32, Pal>,
+    /// `s_skyType`, `VIScene::SetSky`'s static: the sky type last seen
+    pub seen_sky: i32,
 }
 
 impl<M: Model> Atmosphere<M> {
@@ -457,6 +466,7 @@ impl<M: Model> Atmosphere<M> {
             p11a4: z,
             p11a8: z,
             pals: HashMap::new(),
+            seen_sky: 0,
         };
         for i in 0..64 {
             let ang = F::<M>::from_int(i) * f(6.2831855) / f(64.0) * f(2.0);
@@ -560,6 +570,20 @@ impl<M: Model> Atmosphere<M> {
             self.clear_all_fireballs(sys);
         }
         self.lavastorm = v;
+    }
+
+    /// `VIScene::SetSky(cam, fade)` for the profile blend at the camera: a
+    /// new sky type (or any, with `fade`, which despite its name makes the
+    /// change instant) goes to `SetDefaultSky`, and profile 20 takes the 360°
+    /// plane of sky. The client calls it every frame with `fade` 0, and with
+    /// 1 on entering a world.
+    pub fn set_sky(&mut self, b: &ProfileBlend<M>, fade: bool) {
+        let (sky, plane) = sky_profile(b);
+        if sky != self.seen_sky || fade {
+            self.set_default_sky(sky, fade);
+        }
+        self.set_plane_of_sky(plane);
+        self.seen_sky = sky;
     }
 
     pub fn set_plane_of_sky(&mut self, i: i32) {

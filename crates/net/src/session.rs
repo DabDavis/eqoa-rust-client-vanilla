@@ -102,6 +102,9 @@ pub enum Event {
     Chat(String, [f32; 4]),
     /// A state channel's full value (0x00-0x17 entities, 0x42 stats...).
     State { channel: u8, data: Vec<u8> },
+    /// 0x00C5 (fades) and 0x00C7 (instant): the weather byte
+    /// (`VIClient::SetWeather`).
+    Weather { weather: u8, instant: bool },
     /// Any other opcode, not handled here yet.
     Opcode { op: u16, data: Vec<u8> },
     /// 0xFD: the connection ended, with the library's reason byte.
@@ -410,6 +413,7 @@ impl Session {
                 self.send(&w.data);
             }
             0x00F8 => ev.push(Event::Speed(r.f32())),
+            0x00C5 | 0x00C7 => ev.push(Event::Weather { weather: r.u8(), instant: op == 0x00C7 }),
             0x0046 => {
                 let id = r.u32();
                 let n = r.u32() as usize;
