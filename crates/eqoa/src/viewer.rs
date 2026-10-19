@@ -391,8 +391,8 @@ pub fn shot_with(
                         p.hud_key(k);
                     }
                 }
-                // `EQOA_START_KEYS` (o open, u d e x): the start menu's keys,
-                // each held for a frame (pressed, then released on the next:
+                // `EQOA_START_KEYS` (o open, u d l r e x): the start menu's
+                // keys, the spell book's while it is up, each held for a frame (pressed, then released on the next:
                 // the menus' auto-repeat pulses while a key is down).
                 let step = ((t - at) / 16 - 1) as usize;
                 if t > at
@@ -412,10 +412,16 @@ pub fn shot_with(
                         'd' => Some(K::DOWN),
                         'e' => Some(K::CROSS),
                         'x' => Some(K::ESCAPE),
+                        'l' => Some(136),
+                        'r' => Some(137),
                         _ => None,
                     };
                     if let Some(k) = k {
-                        p.start_key(k, down);
+                        if p.mode == 5 {
+                            p.book_key(k, down);
+                        } else {
+                            p.start_key(k, down);
+                        }
                     }
                 }
                 // `EQOA_INVITE`: the target invited just after targeting
@@ -842,6 +848,25 @@ impl ApplicationHandler for App {
                             && !(down && event.repeat)
                         {
                             p.start_key(k, down);
+                        }
+                        return;
+                    }
+                    // the spell book (mode 5): its arrows include the tabs
+                    if p.mode == 5 {
+                        let k = match &event.logical_key {
+                            Key::Named(NamedKey::ArrowUp) => Some(K::UP),
+                            Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
+                            Key::Named(NamedKey::ArrowLeft) => Some(136),
+                            Key::Named(NamedKey::ArrowRight) => Some(137),
+                            Key::Named(NamedKey::Enter) => Some(K::CROSS),
+                            Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
+                            Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
+                            _ => None,
+                        };
+                        if let Some(k) = k
+                            && !(down && event.repeat)
+                        {
+                            p.book_key(k, down);
                         }
                         return;
                     }

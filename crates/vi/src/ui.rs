@@ -86,6 +86,8 @@ pub trait Raster {
     /// `StretchBlit(i, flags, at, size, a, b, m, alpha)`: texels `a` ..
     /// `a + b` drawn `size` big at `at`.
     fn stretch_blit(&mut self, id: u32, flags: u32, at: [i32; 2], size: [i32; 2], a: [i32; 2], b: [i32; 2], mode: i32, alpha: f32);
+    /// `Blit(i, flags, at, m, alpha)`: the whole surface at its own size.
+    fn blit_full(&mut self, id: u32, flags: u32, at: [i32; 2], mode: i32, alpha: f32);
     fn draw_string(&mut self, at: [i32; 2], color: [f32; 4], s: &[u16]);
     /// `DrawCenteredString(font, at, c, s, mode)`: 1 centres vertically, 2
     /// horizontally, 0 and 3 both, anything else draws nothing.
@@ -229,6 +231,25 @@ impl Vui {
             self.blit_ex(ui, fp.bl.0, [tl[0], br[1] - e3.uv1[1]], mode, alpha, fp.bl.1);
         }
         self.blit_ex(ui, fp.br.0, [br[0] - e2.uv1[0], br[1] - e2.uv1[1]], mode, alpha, fp.br.1);
+    }
+
+    /// `Blit(int id, at, m, alpha, flags)`: a surface by DictID, whole.
+    pub fn blit_id(&self, ui: &mut dyn Raster, id: u32, at: [i32; 2], mode: i32, alpha: f32, flags: u32) {
+        ui.blit_full(id, flags, at, mode, alpha);
+    }
+
+    /// `BlitAbilityIcon(at, idx, m, alpha)`: the ability row's plate, left
+    /// cap 77, the middle 80 (idx 0) or 79, the right cap 78.
+    pub fn blit_ability_icon(&self, ui: &mut dyn Raster, at: [i32; 2], idx: i32, mode: i32, alpha: f32) {
+        let mut p = at;
+        let l = self.entry(77);
+        self.blit_ex(ui, 77, p, mode, alpha, 0);
+        let id = if idx == 0 { 80 } else { 79 };
+        let e = self.entry(id);
+        p[0] += l.uv1[0];
+        self.blit_ex(ui, id, p, mode, alpha, 0);
+        p[0] += e.uv1[0];
+        self.blit_ex(ui, 78, p, mode, alpha, 0);
     }
 
     /// `StretchBlitEx(id, at, size, m, alpha)`: the entry's texels drawn

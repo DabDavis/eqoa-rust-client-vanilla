@@ -88,6 +88,12 @@ impl Raster for UiRaster<'_> {
         self.ui.push(Quad { tex, blend: mode as u8, pos: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], uv, color: [1.0, 1.0, 1.0, alpha], clip: None });
     }
 
+    fn blit_full(&mut self, id: u32, flags: u32, at: [i32; 2], mode: i32, alpha: f32) {
+        let Some(tex) = self.assets.surface(id) else { return };
+        let (w, h) = self.ui.texture_size(tex);
+        self.blit(id, flags, at, [0, 0], [w as i32, h as i32], mode, alpha);
+    }
+
     fn draw_string(&mut self, at: [i32; 2], color: [f32; 4], s: &[u16]) {
         self.text(at, color, s);
     }

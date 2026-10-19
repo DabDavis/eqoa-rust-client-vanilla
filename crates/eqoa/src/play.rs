@@ -145,6 +145,11 @@ pub struct Play {
     /// Start-menu work waiting for the HUD's raster (the font): an open
     /// (with its reset) and keys (code, down).
     start_open: Option<bool>,
+    /// `VIWndSpellBook` (mode 5): the book, whether it waits to be opened
+    /// (with the HUD's raster), and its keys.
+    pub book: crate::spellbook::SpellBook,
+    book_open: bool,
+    book_keys: Vec<(i32, bool)>,
     start_keys: Vec<(i32, bool)>,
     /// An emote's action for the player's own walker.
     emote: Option<i32>,
@@ -452,7 +457,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1) };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), start: None, quit: false, start_open: None, book: Default::default(), book_open: false, book_keys: Vec::new(), start_keys: Vec::new(), emote: None, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1) };
         p.take_abilities();
         p
     }
@@ -627,6 +632,25 @@ impl Play {
                     self.ability_token = token;
                     if let Some(k) = self.abilities.iter().find(|(_, a)| a.display_index == index as i64).map(|(k, _)| *k) {
                         self.abilities.remove(&k);
+                    }
+                }
+                Event::AbilityClearBar { token } => {
+                    // Msg00FF
+                    self.ability_token = token;
+                    for a in self.abilities.values_mut().filter(|a| a.display_index < 252) {
+                        a.valid = 0;
+                        a.slot = -1;
+                    }
+                }
+                Event::AbilityUsable { token, id, p14 } => {
+                    // Msg00FD
+                    self.ability_token = token;
+                    if let Some(a) = self.abilities.get_mut(&(id as i64)) {
+                        a.p14 = p14 as i64;
+                        if p14 == 0 {
+                            a.valid = 0;
+                            a.slot = -1;
+                        }
                     }
                 }
                 Event::AbilityLockout { index, token, lockout } => {
@@ -1323,6 +1347,47 @@ impl Play {
         actions
     }
 
+    /// A key for the spell book (the game's codes), down or up.
+    pub fn book_key(&mut self, key: i32, down: bool) {
+        self.book_keys.push((key, down));
+    }
+
+    /// What the spell book asked for.
+    fn book_actions(&mut self, out: Vec<crate::spellbook::Out>) {
+        use crate::spellbook::Out;
+        for o in out {
+            match o {
+                Out::Sound(n) => self.cues.push(crate::sound::Cue::Ui(n)),
+                Out::Send0033(index, slot) => {
+                    let mut w = net::stream::Writer::op(0x0033);
+                    w.u32(self.ability_token).u8(index as u8).u8(slot as u8);
+                    self.session.send(&w.data);
+                }
+                Out::Send003A(from, to) => {
+                    // only to a display index the list has
+                    if self.abilities.values().any(|a| a.display_index == to) {
+                        let mut w = net::stream::Writer::op(0x003A);
+                        w.u32(self.ability_token).u8(from as u8).u8(to as u8);
+                        self.session.send(&w.data);
+                    }
+                }
+                Out::Send00FE => {
+                    let mut w = net::stream::Writer::op(0x00FE);
+                    w.u32(self.ability_token);
+                    self.session.send(&w.data);
+                }
+                Out::Word(id) => self.show_word(id),
+                Out::Red(id) => self.warn(id),
+                Out::Close => {
+                    // VIWndGame::OnMessage 260 from the book: the start menu again
+                    self.book.visible = false;
+                    self.mode = 0;
+                    self.open_start_menu(false);
+                }
+            }
+        }
+    }
+
     /// What came out of the start menu: (0, 0) closed it, else an entry's
     /// message.
     fn start_actions(&mut self, actions: Vec<(u32, i32)>) {
@@ -1331,13 +1396,18 @@ impl Play {
             self.close_start_menu(0);
             match msg {
                 0 => {}
+                0x0801_0000 => {
+                    // the spell book (mode 5)
+                    self.mode = 5;
+                    self.book_open = true;
+                }
                 0x0A01_0000 => {
                     // Quit: word 722 as a Yes/No prompt
                     let text = self.words.as_ref().map_or_else(Vec::new, |w| crate::ui::wide(w.get(722, 0)));
                     self.mbox.prompt(&text, 1, 0, 0xA010000, now);
                     self.mode = 14;
                 }
-                0x0B05_3001 | 0x0B05_3002 | 0x0301_0000 | 0x0B04_0000 | 0x0B05_1000 | 0x0B05_1006 | 0x0B05_1009 | 0x0B05_100B | 0x0B0B_1002 | 0x0801_0000 => {
+                0x0B05_3001 | 0x0B05_3002 | 0x0301_0000 | 0x0B04_0000 | 0x0B05_1000 | 0x0B05_1006 | 0x0B05_1009 | 0x0B05_100B | 0x0B0B_1002 => {
                     eprintln!("play: start menu {msg:#x}: its window is not ported");
                 }
                 0x0B05_1007 | 0x0B05_1008 | 0x0B05_100A | 0x0B05_100C | 0x0B0A_0000 | 0x0B0B_0000 | 0x0B0B_0002 | 0x0B0D_0000 | 0x0B0D_0001 | 0x0B0B_1000 | 0x0B0B_1001 => {
@@ -1816,6 +1886,22 @@ impl Play {
                 self.mbox.draw(vui, &mut r, now as i64);
             }
             actions = self.run_start_menu(vui, &r, &start_loc);
+            // the spell book: opened, its keys, drawn; what it asks for
+            let now_ms = now as i64;
+            let expansion = self.session.expansion;
+            if std::mem::take(&mut self.book_open) {
+                self.book.open(vui, &r, expansion, now_ms);
+            }
+            let mut book_out = Vec::new();
+            for (k, down) in std::mem::take(&mut self.book_keys) {
+                if self.mode == 5 {
+                    book_out.extend(self.book.key(&self.abilities, expansion, k, down, now_ms));
+                }
+            }
+            if self.mode == 5 {
+                book_out.extend(self.book.draw(vui, &mut r, &self.abilities, self.dump.player.class as i32, expansion, now_ms));
+            }
+            self.book_actions(book_out);
             if let Some(s) = self.start.as_mut() {
                 let mut cues = Vec::new();
                 s.menu.draw(vui, &mut r, &s.menus, now as i64, &start_stats, &mut cues);
