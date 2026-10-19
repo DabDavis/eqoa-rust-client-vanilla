@@ -404,7 +404,9 @@ pub fn shot_with(
                         p.hud_key(k);
                     }
                 }
-                // `EQOA_START_KEYS` (o open, u d l r e x): the start menu's
+                // `EQOA_START_KEYS` (o open, u d l r e x, s square, t R1, any
+                // other character a pause):
+                // the start menu's
                 // keys, the spell book's while it is up, each held for a frame (pressed, then released on the next:
                 // the menus' auto-repeat pulses while a key is down).
                 let step = ((t - at) / 16 - 1) as usize;
@@ -427,6 +429,8 @@ pub fn shot_with(
                         'r' => Some(K::RIGHT),
                         'e' => Some(K::CROSS),
                         'x' => Some(K::ESCAPE),
+                        's' => Some(133),
+                        't' => Some(142),
                         _ => None,
                     };
                     if let Some(k) = k {
@@ -998,6 +1002,9 @@ impl ApplicationHandler for App {
                             Key::Named(NamedKey::Enter) => Some(K::CROSS),
                             Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
                             Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
+                            // square (Class Mastery's points) and R1 (its other list)
+                            Key::Character(c) if c.eq_ignore_ascii_case("q") => Some(133),
+                            Key::Named(NamedKey::Tab) => Some(142),
                             _ => None,
                         };
                         if let Some(k) = k

@@ -42,9 +42,9 @@ impl Quests {
     pub fn recv_add(&mut self, data: &[u8]) {
         let mut r = net::stream::Reader::new(data);
         self.stamp = r.u32();
-        let n = r.u32() as usize;
-        let t: Vec<u16> = (0..n).map(|_| r.u16()).collect();
-        if !r.error && n < 128 {
+        // ReadString into 128 characters: a longer one reads as empty
+        let t = r.wide(128).encode_utf16().collect();
+        if !r.error {
             self.add(t);
         }
     }
