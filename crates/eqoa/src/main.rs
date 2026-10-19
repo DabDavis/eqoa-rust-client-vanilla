@@ -18,6 +18,7 @@
 //! `iso` defaults to `$EQOA_ISO`, then `run/eqoa.iso`.
 
 mod chat;
+mod dialog;
 mod hud;
 mod play;
 mod scene;

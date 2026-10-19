@@ -104,44 +104,11 @@ pub struct Play {
     /// `m_dialogs`: dialogs waiting while another mode is up (at most 11).
     dialogs: std::collections::VecDeque<Vec<u16>>,
     /// `VIWndPrivChat`: the dialog box.
-    priv_chat: PrivChat,
-}
-
-/// `VIWndPrivChat`: an NPC's words in a box in the middle of the screen,
-/// "|x Close" under them.
-#[derive(Default)]
-struct PrivChat {
-    text: Vec<u16>,
-    rows: i32,
-    window: vi::ui::Window,
-    /// The focus arrived and the window is to be sized (`OnMessage` 295).
-    focus: bool,
-}
-
-impl PrivChat {
-    fn set_text(&mut self, s: &[u16]) {
-        self.text = s.to_vec();
-        self.rows = 0;
-        self.focus = true;
-    }
-
-    fn draw(&mut self, vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster) {
-        if self.focus {
-            self.focus = false;
-            self.window.init(vui, r, [320, 224], 400, 16, 1);
-            self.rows = self.window.count_lines(vui, r, &self.text, 360) + 2;
-            self.window.init(vui, r, [320, 224], 400, self.rows, 1);
-            if self.window.is_open() {
-                self.window.close(true);
-            }
-            self.window.open(false);
-        }
-        self.window.draw(vui, r);
-        let text = self.text.clone();
-        self.window.text_box(vui, r, &text, 20, 0, 360, self.rows - 2, [0.8, 0.8, 0.8, 1.0], 3);
-        let s = vi::ui::wide(&format!("|x{}", vui.words.get(280, vui.language)));
-        self.window.text(vui, r, &s, 20, self.rows - 1, [1.0; 4], 1);
-    }
+    priv_chat: crate::dialog::PrivChat,
+    /// `VIWndResponse`: a dialog's answers.
+    response: crate::dialog::Response,
+    /// `m_dialog` / `m_p2EBFC`: an option box waiting while another mode is up.
+    pending_box: Option<crate::dialog::DialogBox>,
 }
 
 impl Play {
@@ -154,6 +121,63 @@ impl Play {
             self.open_dialog(&buf);
         } else if self.dialogs.len() < 11 {
             self.dialogs.push_back(buf);
+        }
+    }
+
+    /// `Msg0034`: the text (128) and each option (64) expanded; shown at
+    /// once in play, else kept in the one waiting slot (and refused, 0x0035
+    /// 255, when that is taken).
+    fn dialog_box(&mut self, id: u32, text: &[u16], options: &[Vec<u16>]) {
+        let ctx = vi::ui::ExpandContext { player_name: self.dump.player.name.clone(), ..Default::default() };
+        let d = crate::dialog::DialogBox {
+            id,
+            text: vi::ui::expand(text, 128, true, &ctx),
+            options: options.iter().take(6).map(|o| vi::ui::expand(o, 64, true, &ctx)).collect(),
+        };
+        if self.mode == 0 {
+            self.show_dialog_box(d);
+        } else if self.pending_box.is_none() {
+            self.pending_box = Some(d);
+        } else {
+            self.session.send_msg(0x0035, id, 255);
+        }
+    }
+
+    /// A 0x0034 dialog as if the server had sent it (`EQOA_BOX` in a
+    /// playshot: the text, then the options, `|`-separated).
+    pub fn fake_dialog_box(&mut self, spec: &str) {
+        let mut parts = spec.split('|').map(|p| p.encode_utf16().collect::<Vec<u16>>());
+        let text = parts.next().unwrap_or_default();
+        let options: Vec<Vec<u16>> = parts.collect();
+        self.dialog_box(0, &text, &options);
+    }
+
+    /// `VIWndGame::ShowDialogBox`.
+    fn show_dialog_box(&mut self, d: crate::dialog::DialogBox) {
+        let Some((vui, _, _)) = &self.hud else { return };
+        self.response.set_dialog(vui, d);
+        self.mode = 7;
+    }
+
+    /// A key for the dialog windows: true when one took it.
+    pub fn dialog_key(&mut self, key: crate::dialog::Key) -> bool {
+        match self.mode {
+            9 => {
+                if matches!(key, crate::dialog::Key::Enter) {
+                    self.close_dialog();
+                }
+                true
+            }
+            7 => {
+                let Some((vui, _, _)) = &self.hud else { return true };
+                let time = vui.time;
+                if let crate::dialog::Answer::Send(id, choice) = self.response.key(vui, key, time) {
+                    self.session.send_msg(0x0035, id, choice);
+                    self.mode = 0;
+                }
+                true
+            }
+            _ => false,
         }
     }
 
@@ -352,7 +376,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: PrivChat::default() }
+        Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None }
     }
 
     fn self_id32(&self) -> Option<u32> {
@@ -369,6 +393,7 @@ impl Play {
                 Event::TargetInfo { disposition, .. } => self.target_info = Some(disposition),
                 Event::ReplyName(n) => self.reply_name = n,
                 Event::Dialog { text, .. } => self.show_dialog(&text),
+                Event::DialogBox { id, text, options } => self.dialog_box(id, &text, &options),
                 Event::LevelExp { level, exp } => {
                     self.dump.player.level = level;
                     self.dump.player.exp = exp;
@@ -450,6 +475,10 @@ impl Play {
             && let Some(d) = self.dialogs.pop_front()
         {
             self.open_dialog(&d);
+        } else if self.mode == 0
+            && let Some(d) = self.pending_box.take()
+        {
+            self.show_dialog_box(d);
         }
         let self_id = self.session.self_id;
         // UpdateCreatures / VICreatureEntity::Walk: a creature with its own
@@ -972,6 +1001,9 @@ impl Play {
             }
             if self.mode == 9 {
                 self.priv_chat.draw(vui, &mut r);
+            }
+            if self.mode == 7 {
+                self.response.draw(vui, &mut r);
             }
         }
     }

@@ -267,17 +267,27 @@ pub fn shot_with(
         let mut t = 0;
         let say = std::env::var("EQOA_SAY").ok();
         let tab = std::env::var_os("EQOA_TAB").is_some();
+        // `EQOA_AT=ms`: when the target (and then Q, attack) steps happen.
+        let at: i64 = std::env::var("EQOA_AT").ok().and_then(|v| v.parse().ok()).map_or(2000, |v: i64| v / 16 * 16);
         let attack = std::env::var_os("EQOA_ATTACK").is_some();
-        // `EQOA_WALK=fwd,strafe,orbit,ms`: those controls for the first ms.
-        let walk: Option<(Controls, i64)> = std::env::var("EQOA_WALK").ok().and_then(|w| {
-            let v: Vec<f32> = w.split(',').filter_map(|x| x.trim().parse().ok()).collect();
-            (v.len() == 4).then(|| (Controls { fwd: v[0], strafe: v[1], orbit: v[2], pitch: 0.0 }, v[3] as i64))
+        // `EQOA_WALK=fwd,strafe,orbit,ms[;...]`: each set of controls for
+        // its ms, one after another, then none.
+        let walk: Option<Vec<(Controls, i64)>> = std::env::var("EQOA_WALK").ok().map(|w| {
+            let mut end = 0;
+            w.split(';')
+                .filter_map(|seg| {
+                    let v: Vec<f32> = seg.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                    (v.len() == 4).then(|| {
+                        end += v[3] as i64;
+                        (Controls { fwd: v[0], strafe: v[1], orbit: v[2], pitch: 0.0 }, end)
+                    })
+                })
+                .collect()
         });
         while t < script.ms {
             t += 16;
-            let controls = match walk {
-                Some((c, until)) if t <= until => c,
-                Some(_) => Controls::default(),
+            let controls = match &walk {
+                Some(segs) => segs.iter().find(|s| t <= s.1).map_or(Controls::default(), |s| s.0),
                 None => script.controls,
             };
             walker.frame(controls, t);
@@ -290,22 +300,45 @@ pub fn shot_with(
                 }
                 // `EQOA_TAB`: Tab two seconds in.
                 // `EQOA_TARGET=<name>`: that creature targeted two seconds in.
-                if t == 2000
+                if t == at
                     && let Ok(name) = std::env::var("EQOA_TARGET")
                 {
                     eprintln!("target {name}: {}", p.target_by_name(&name));
                 }
-                if t == 2000 && tab {
+                if t == at && tab {
                     let (proj, v) = walker.view(aspect);
                     let dir = Vec3::from(walker.eye.direction.to_array());
                     p.cycle_target(walker.eye_position(), dir, proj * v);
                 }
+                // `EQOA_BOX=text|option|...`: a dialog box then; `EQOA_BOX_KEYS`
+                // (u, d, e, x) pressed one a frame after it.
+                if t == at
+                    && let Ok(spec) = std::env::var("EQOA_BOX")
+                {
+                    p.fake_dialog_box(&spec);
+                }
+                if t > at
+                    && let Ok(keys) = std::env::var("EQOA_BOX_KEYS")
+                    && let Some(k) = keys.chars().nth(((t - at) / 16 - 1) as usize)
+                {
+                    use crate::dialog::Key as D;
+                    let k = match k {
+                        'u' => Some(D::Up),
+                        'd' => Some(D::Down),
+                        'e' => Some(D::Enter),
+                        'x' => Some(D::Escape),
+                        _ => None,
+                    };
+                    if let Some(k) = k {
+                        p.dialog_key(k);
+                    }
+                }
                 // `EQOA_INTERACT`: Q just after targeting.
-                if t == 2096 && std::env::var_os("EQOA_INTERACT").is_some() {
+                if t == at + 96 && std::env::var_os("EQOA_INTERACT").is_some() {
                     p.interact_with_target();
                 }
                 // `EQOA_ATTACK`: attack held from just after that to the end.
-                if t == 2096 && attack {
+                if t == at + 96 && attack {
                     p.attack_press();
                 }
                 let gpu = crate::play::Gpu { renderer: &mut renderer, device: &device, queue: &queue };
@@ -610,12 +643,23 @@ impl ApplicationHandler for App {
                         p.typing = Some(s.to_string());
                         held.clear();
                     };
-                    match (&mut p.typing, &event.logical_key) {
-                        // A dialog up: Enter answers it (279).
-                        (None, Key::Named(NamedKey::Enter)) if p.mode == 9 => {
-                            p.close_dialog();
+                    // A dialog up takes the arrows, Enter and Escape.
+                    if p.typing.is_none() && p.mode != 0 {
+                        use crate::dialog::Key as D;
+                        let k = match &event.logical_key {
+                            Key::Named(NamedKey::ArrowUp) => Some(D::Up),
+                            Key::Named(NamedKey::ArrowDown) => Some(D::Down),
+                            Key::Named(NamedKey::Enter) => Some(D::Enter),
+                            Key::Named(NamedKey::Escape) => Some(D::Escape),
+                            _ => None,
+                        };
+                        if let Some(k) = k
+                            && p.dialog_key(k)
+                        {
                             return;
                         }
+                    }
+                    match (&mut p.typing, &event.logical_key) {
                         (None, Key::Named(NamedKey::Enter)) => {
                             open(p, &mut self.held, "");
                             return;

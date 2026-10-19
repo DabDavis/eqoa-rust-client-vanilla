@@ -184,6 +184,11 @@ impl Side {
             25 => self.win[k].draw_text_internal(v, r, s, a[1], a[2], col, a[3] as u32),
             26 => return self.win[k].text_width(v, r, s),
             27 => return self.win[k].open.to_bits() as i32,
+            34 => self.win[k].tick_r(v, r, a[1], a[2], a[3] != 0),
+            35 => {
+                let t = self.vui.time;
+                self.win[k].reset_tick_pulse(t);
+            }
             28 => self.win[k].text(v, r, s, a[1], a[2], col, a[3] as u32),
             29 => return self.win[k].count_lines(v, r, s, a[1]),
             30 => self.scroll[j].init(v, r, [a[1], a[2]], a[3], a[4], a[5]),
@@ -287,6 +292,14 @@ fn script() -> Vec<Call> {
             v.push(call(25, &[2, 10, 50, 0], &[1.0, 1.0, 1.0, 1.0], icons));
             v.push(call(25, &[2, 10, 50, 1], &[0.5, 0.5, 0.5, 0.7], icons));
         }
+    }
+    // The pointing arrow, pulsing from a reset and steady.
+    v.push(call(40, &[1000], &[], ""));
+    v.push(call(35, &[2], &[], ""));
+    for t in [1000, 1050, 1300, 1700] {
+        v.push(call(40, &[t], &[], ""));
+        v.push(call(34, &[2, 40, 3, 1], &[], ""));
+        v.push(call(34, &[2, 40, 3, 0], &[], ""));
     }
     v.push(call(26, &[2], &[], icons));
     v.push(call(26, &[2], &[], "plain text"));

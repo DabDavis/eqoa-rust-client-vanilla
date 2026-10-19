@@ -84,6 +84,8 @@ pub enum Event {
     TargetInfo { disposition: u8, b: u8, c: u8, title: String, guild: String },
     /// 0x0046: a dialog (an NPC's words), raw (`ShowDialog` expands it).
     Dialog { id: u32, text: Vec<u16> },
+    /// 0x0034: a dialog with answers (raw; `Msg0034` expands them).
+    DialogBox { id: u32, text: Vec<u16>, options: Vec<Vec<u16>> },
     /// 0x0020: the player's level and experience.
     LevelExp { level: i64, exp: i64 },
     /// 0x0775: an entity plays an action (`VICSprite::SetAction`).
@@ -209,6 +211,13 @@ impl Session {
     pub fn say(&mut self, text: &str, target: u32) {
         let mut w = Writer::op(0x000B);
         w.wide(text).u32(target);
+        self.send(&w.data);
+    }
+
+    /// `SendMsg(op, v, b)`: a u32 and a byte (0x0035 answers a dialog).
+    pub fn send_msg(&mut self, op: u16, v: u32, b: u8) {
+        let mut w = Writer::op(op);
+        w.u32(v).u8(b);
         self.send(&w.data);
     }
 
@@ -405,6 +414,19 @@ impl Session {
                 // ReadString(buf, 1024): 511 characters fit.
                 let text = if n < 512 { raw.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect() } else { Vec::new() };
                 ev.push(Event::Dialog { id, text });
+            }
+            0x0034 => {
+                let id = r.u32();
+                let wide = |r: &mut Reader, max: usize| -> Vec<u16> {
+                    let n = r.u32() as usize;
+                    let raw = r.bytes(n * 2);
+                    if n < max { raw.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect() } else { Vec::new() }
+                };
+                // ReadString(raw, 256) and each option's ReadString(opt, 128).
+                let text = wide(&mut r, 128);
+                let n = r.u8();
+                let options = (0..n).map(|_| wide(&mut r, 64)).collect();
+                ev.push(Event::DialogBox { id, text, options });
             }
             0x0020 => {
                 let level = r.signed();

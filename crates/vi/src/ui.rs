@@ -676,6 +676,19 @@ impl Window {
         d * ((t + 1.570_796_4).sin() * 0.5 + 0.5)
     }
 
+    /// `TickR(x, row, pulse)`: the pointing arrow (atlas 89) left of a row,
+    /// pulsing or steady.
+    pub fn tick_r(&self, vui: &Vui, ui: &mut dyn Raster, x: i32, row: i32, pulse: bool) {
+        let at = self.row_center(vui, ui, row);
+        let at = [self.center[0] - (self.size[0] >> 1) + x - 16, at[1] - 5];
+        vui.blit_ex(ui, 89, at, 3, if pulse { self.tick_pulse(vui.time) } else { 1.0 }, 0);
+    }
+
+    /// `ResetTickPulse`: the pulse starts over now.
+    pub fn reset_tick_pulse(&mut self, time: i64) {
+        self.pulse_time = time;
+    }
+
     /// `TextWidth`: the font's width, plus each inline icon's.
     pub fn text_width(&self, vui: &Vui, ui: &dyn Raster, s: &[u16]) -> i32 {
         if s.len() >= 1024 {
