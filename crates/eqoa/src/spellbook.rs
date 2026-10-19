@@ -9,12 +9,13 @@
 //! a slot; the answer is 0x00B4), `Send003A` (Arrange: one display index
 //! moved to another's place; 0x00B6), `Send00FE` (Unmemorize All).
 //!
-//! The popup is a `VIWndMiniMenu` drawn plain (`DrawPlain`, `DrawItem`)
-//! over `VIWndList`'s selection, scroll and blink, kept here (the item
-//! menus' lane ports the list windows on their own).
+//! The popup is `wndlist::MiniMenu` (`VIWndMiniMenu`, drawn plain) over the
+//! book's own four rows.
 #![allow(clippy::too_many_arguments)]
 
+use crate::client_image::Menus;
 use crate::startmenu::KeyFlash;
+use crate::wndlist::{ListUp, MiniMenu};
 use net::dump::Ability;
 use std::collections::BTreeMap;
 use vi::ui::{FrameParam, Raster, Vui, Window, wide};
@@ -62,121 +63,6 @@ pub enum Out {
     Close,
 }
 
-/// The popup (`VIWndMiniMenu`, kind 0, over `VIWndList`).
-#[derive(Default)]
-struct Popup {
-    visible: bool,
-    pos: [i32; 2],
-    sel: i32,
-    top: i32,
-    size: [i32; 2],
-    alpha: f32,
-    time: i64,
-    /// `m_x7C`, `m_x80`: the pointer's blink
-    blink: f32,
-    blink_dir: i32,
-    flash: KeyFlash,
-}
-
-impl Popup {
-    /// `OnMessage` 295 from its parent: the frame grows again.
-    fn opened(&mut self, now: i64) {
-        self.size = [0, 0];
-        self.alpha = 0.3;
-        self.time = now;
-        self.flash.reset();
-    }
-
-    /// `VIWndList::Scroll`.
-    fn scroll(&mut self, d: i32, now: i64, out: &mut Vec<Out>) {
-        let count = POPUP.len() as i32;
-        if self.sel + d >= count && count > 0 {
-            out.push(Out::Sound(11));
-            self.sel = 0;
-            self.top = 0;
-        } else if self.sel + d < 0 {
-            out.push(Out::Sound(11));
-            self.sel = (count - 1).max(0);
-            self.top = (count - 6).max(0);
-        } else {
-            self.sel += d;
-            out.push(Out::Sound(11));
-            if self.sel == 0 || self.sel == count - 1 {
-                self.flash.reset();
-            }
-        }
-        if self.top + 5 < self.sel {
-            self.top = self.sel - 5;
-        }
-        if self.sel < self.top {
-            self.top = self.sel;
-        }
-        self.blink_dir = 1;
-        self.blink = 1.0;
-        self.time = now;
-    }
-
-    /// `DrawPlain`, then the auto-repeat.
-    fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, now: i64, out: &mut Vec<Out>) {
-        let word = |id: i32| wide(vui.words.get(id, vui.language));
-        let dt = (now - self.time) as f32 * 0.001;
-        self.time = now;
-        let mut size = [0, 0];
-        for &(w, _) in &POPUP {
-            size[0] = size[0].max(vui.string_width(r, &word(w)));
-        }
-        size[0] += 75;
-        size[1] = POPUP.len() as i32 * 19 + 25;
-        self.alpha = 1.0;
-        let grow = dt * 3.0;
-        self.size[0] = (self.size[0] + (grow * size[0] as f32) as i32).min(size[0]);
-        self.size[1] = (self.size[1] + (grow * size[1] as f32) as i32).min(size[1]);
-        let (top, corner) = (vui.entry(101), vui.entry(106));
-        let mut pos = self.pos;
-        if pos[1] + size[1] > 320 {
-            pos[1] = 320 - size[1];
-        }
-        let fp = FrameParam { tl: (101, 0), top: (102, 0), tr: (103, 0), right: (104, 0), br: (106, 0), bottom: (102, 0), bl: (105, 0), left: (104, 0) };
-        let sx = (self.size[0] - corner.uv1[0]).max(0);
-        let stretch = [sx, self.size[1] - top.uv1[1] - corner.uv1[1] + 1];
-        vui.stretch_blit_ex(r, 61, [pos[0], pos[1] + top.uv1[1] - 1], stretch, 3, 0.75);
-        vui.blit_frame(r, pos, self.size, &fp, 0, 1.0, false);
-        pos = [pos[0] + 35, pos[1] + 20];
-        if self.size == size {
-            for (i, &(w, _)) in POPUP.iter().enumerate() {
-                // VIWndMiniMenu::DrawItem
-                let lit = i as i32 == self.sel;
-                if lit {
-                    let t = vui.entry(89);
-                    vui.blit_ex(r, 89, [pos[0] - 25, pos[1] - t.uv1[1] / 2], 3, self.alpha.min(self.blink), 0);
-                }
-                let c = if lit { [1.0, 1.0, 0.0, self.alpha] } else { [1.0, 1.0, 1.0, self.alpha] };
-                vui.draw_centered_string_ex(r, &word(w), pos[0], pos[1], c, 1, true);
-                pos[1] += 19;
-            }
-        }
-        // VIWndList::Update
-        self.alpha = (self.alpha + dt * 5.0).min(1.0);
-        if self.blink_dir == -1 {
-            self.blink = (self.blink - (dt + dt)).max(0.0);
-            if self.blink == 0.0 {
-                self.blink_dir = 1;
-            }
-        } else {
-            self.blink = (self.blink + dt * 3.0).min(1.0);
-            if self.blink == 1.0 {
-                self.blink_dir = -1;
-            }
-        }
-        if self.flash.pulse(138) {
-            self.scroll(-1, now, out);
-        }
-        if self.flash.pulse(139) {
-            self.scroll(1, now, out);
-        }
-    }
-}
-
 /// `VIWndSpellBook`.
 pub struct SpellBook {
     pub visible: bool,
@@ -205,7 +91,7 @@ pub struct SpellBook {
     desc: Vec<u16>,
     window: Window,
     flash: KeyFlash,
-    popup: Popup,
+    popup: MiniMenu,
 }
 
 impl Default for SpellBook {
@@ -231,7 +117,7 @@ impl Default for SpellBook {
             desc: Vec::new(),
             window: Window::default(),
             flash: KeyFlash::default(),
-            popup: Popup::default(),
+            popup: MiniMenu::fixed(&POPUP.map(|(w, m)| (w, m, 0))),
         }
     }
 }
@@ -407,26 +293,15 @@ impl SpellBook {
     /// The popup's keys (`VIWndMiniMenu::OnKeyDown`/`OnKeyUp`) and what
     /// they send up (`VIWndSpellBook::OnMessage` 261 and 260).
     fn popup_key(&mut self, abilities: &BTreeMap<i64, Ability>, key: i32, down: bool, now: i64, out: &mut Vec<Out>) {
-        if !down {
-            match key {
-                19 | 138 => self.popup.flash.release(138),
-                20 | 139 => self.popup.flash.release(139),
-                _ => {}
-            }
-            return;
-        }
-        match key {
-            13 | 134 => {
-                let (_, msg) = POPUP[self.popup.sel.clamp(0, 3) as usize];
+        let mut cues = Vec::new();
+        let up = self.popup.key(&Menus::default(), key, down, &mut cues);
+        out.extend(cues.into_iter().map(Out::Sound));
+        match up {
+            ListUp::Action(msg, _) => {
                 let id = self.rows.get(self.sel.max(0) as usize).map_or(-1, |r| r.id);
                 self.popup_message(abilities, msg, id, now, out);
             }
-            27 | 132 => {
-                out.push(Out::Sound(8));
-                self.refocus(now);
-            }
-            19 | 138 => self.popup.flash.press(138),
-            20 | 139 => self.popup.flash.press(139),
+            ListUp::Back => self.refocus(now),
             _ => {}
         }
     }
@@ -476,13 +351,13 @@ impl SpellBook {
     fn pick(&mut self, now: i64) {
         self.reset_fade(now);
         if self.sel >= 0 && (self.sel as usize) < self.rows.len() {
-            self.popup.pos = [150, (self.sel - self.top) * 44 + 45];
-            self.popup.sel = 0;
-            self.popup.top = 0;
+            self.popup.list.pos = [150, (self.sel - self.top) * 44 + 45];
+            self.popup.list.sel = 0;
+            self.popup.list.top = 0;
             self.popup.visible = true;
             self.x44 = false;
             self.flash.reset();
-            self.popup.opened(now);
+            self.popup.focus(now);
         }
     }
 
@@ -707,7 +582,9 @@ impl SpellBook {
             self.down(now, &mut out);
         }
         if self.popup.visible {
-            self.popup.draw(vui, r, now, &mut out);
+            let mut cues = Vec::new();
+            self.popup.draw(vui, r, &Menus::default(), now, &mut cues);
+            out.extend(cues.into_iter().map(Out::Sound));
         }
         out
     }
@@ -875,7 +752,10 @@ mod tests {
         let (mut b, map) = book(&[ability(1, 3, 1, false, -1), ability(2, 4, 1, false, -1), ability(3, 8, 1, false, -1)]);
         b.key(&map, 0, 134, true, 0);
         b.key(&map, 0, 139, true, 0); // the popup down to Arrange
-        b.popup.draw_free_pulse();
+        // the auto-repeat's first pulse, without drawing
+        if b.popup.list.flash.pulse(139) {
+            b.popup.list.scroll(1, 0, &mut Vec::new());
+        }
         b.key(&map, 0, 134, true, 0);
         assert_eq!(b.mode, 1);
         b.sel = 2;
@@ -895,15 +775,5 @@ mod tests {
         assert_eq!(b.key(&map, 0, 27, true, 0), vec![Out::Sound(8)]);
         assert_eq!(b.mode, 0);
         assert_eq!(b.key(&map, 0, 27, true, 0), vec![Out::Sound(8), Out::Close]);
-    }
-
-    impl Popup {
-        /// The auto-repeat's first pulse without drawing (tests).
-        fn draw_free_pulse(&mut self) {
-            if self.flash.pulse(139) {
-                let mut v = Vec::new();
-                self.scroll(1, 0, &mut v);
-            }
-        }
     }
 }

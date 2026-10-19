@@ -296,21 +296,36 @@ pub fn draw_icon(vui: &Vui, r: &mut dyn Raster, icon: i32, pos: [i32; 2], mode: 
 }
 
 /// `VIWndMiniMenu` (kind 0: the frame grows out of its corner; the titled
-/// kind 1 is not used here).
+/// kind 1 is not used here). Its rows are a CLIENT menu's, or a fixed table
+/// (word, message, id) a window builds itself (the spell book's).
 pub struct MiniMenu {
     pub list: WndList,
     pub menu: usize,
     pub visible: bool,
     size: [i32; 2],
+    fixed: Option<Vec<(i32, u32, i32)>>,
 }
 
 impl MiniMenu {
     fn new(menu: usize) -> Self {
-        MiniMenu { list: WndList::default(), menu, visible: false, size: [0, 0] }
+        MiniMenu { list: WndList::default(), menu, visible: false, size: [0, 0], fixed: None }
+    }
+
+    /// A popup over a fixed table of (word, message, id).
+    pub fn fixed(rows: &[(i32, u32, i32)]) -> Self {
+        MiniMenu { fixed: Some(rows.to_vec()), ..MiniMenu::new(0) }
+    }
+
+    /// The rows: (word, message, id).
+    fn rows(&self, menus: &Menus) -> Vec<(i32, u32, i32)> {
+        match &self.fixed {
+            Some(r) => r.clone(),
+            None => menus.list[self.menu].entries.iter().map(|e| (e.word, e.msg, e.id)).collect(),
+        }
     }
 
     /// `OnMessage` 295 from its parent: the frame starts over.
-    fn focus(&mut self, now: i64) {
+    pub fn focus(&mut self, now: i64) {
         self.size = [0, 0];
         self.list.alpha = 0.3;
         self.list.time = now;
@@ -318,14 +333,14 @@ impl MiniMenu {
     }
 
     /// `OnKeyDown`/`OnKeyUp`.
-    fn key(&mut self, menus: &Menus, key: i32, down: bool, cues: &mut Vec<i32>) -> ListUp {
+    pub fn key(&mut self, menus: &Menus, key: i32, down: bool, cues: &mut Vec<i32>) -> ListUp {
         if !down {
             self.list.key_up_down(key, false);
             return ListUp::None;
         }
         match key {
-            13 | 134 => match menus.list[self.menu].entries.get(self.list.sel as usize) {
-                Some(e) if e.msg != 0 => ListUp::Action(e.msg, e.id),
+            13 | 134 => match self.rows(menus).get(self.list.sel as usize) {
+                Some(&(_, msg, id)) if msg != 0 => ListUp::Action(msg, id),
                 _ => ListUp::None,
             },
             27 | 132 => {
@@ -341,9 +356,8 @@ impl MiniMenu {
 
     /// `DrawPlain`: the rows' widest label sets the size, the frame grows to
     /// it at three sizes a second, the rows drawn once it is there.
-    fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, menus: &Menus, now: i64, cues: &mut Vec<i32>) {
-        let menu = &menus.list[self.menu];
-        self.list.items = menu.entries.iter().map(|e| Row { flags: u32::MAX, icon: -1, icon2: -1, x0c: -1, word: e.word, number: -1 }).collect();
+    pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, menus: &Menus, now: i64, cues: &mut Vec<i32>) {
+        self.list.items = self.rows(menus).iter().map(|&(word, _, _)| Row { flags: u32::MAX, icon: -1, icon2: -1, x0c: -1, word, number: -1 }).collect();
         let dt = (now - self.list.time) as f32 * 0.001;
         self.list.time = now;
         let mut size = [0, 0];
