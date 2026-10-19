@@ -8,6 +8,9 @@
 //! (`VICreatureEntity::Walk`/`ExtrapolateMove`/`ExtrapolateGround`), their
 //! animation from it, items, armour and names.
 
+#[path = "npcw.rs"]
+mod npcw;
+
 use crate::walker::Walker;
 use esf::Library;
 use net::entity::{Entities, SLOTS};
@@ -232,6 +235,8 @@ pub struct Play {
     casts: Vec<crate::spells::Cast>,
     spell_ids: Vec<Option<u32>>,
     spell_rand: Rand,
+    /// The corpse, merchant and trade windows (modes 1, 10, 15, 16).
+    npcw: npcw::NpcWindows,
 }
 
 /// `gWorldInfo`'s paths on the Frontiers disc, by world index (CLIENT's
@@ -537,8 +542,9 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default() };
         p.take_abilities();
+        p.npcw_world_entry();
         p
     }
 
@@ -583,6 +589,7 @@ impl Play {
                         walker.relocate(pos, hpr[0]);
                         self.player.pos = pos;
                     }
+                    self.npcw_respawn();
                 }
                 Event::LevelExp { level, exp } => {
                     if self.dump.player.level < level {
@@ -646,11 +653,12 @@ impl Play {
                     // AddInvItem
                     let limit = item.item.max_stack;
                     crate::inventory::add_item(&mut self.dump.inventory, &item, limit, crate::inventory::CAPACITY);
+                    self.npcw_item_added();
                 }
-                Event::InvTook { slot, n, .. } => {
-                    // Msg003C (no merchant here)
+                Event::InvTook { slot, sound, n } => {
+                    // Msg003C
                     crate::inventory::took(&mut self.dump.inventory, slot as usize, n as i64);
-                    self.waiting = false;
+                    self.npcw_item_took(sound);
                 }
                 Event::InvMove { from, to } => crate::inventory::op003d(&mut self.dump.inventory, from as usize, to as usize),
                 Event::InvUse { slot, charge } => {
@@ -856,7 +864,8 @@ impl Play {
                 // CastingCombat (0x00B1) and Msg0776: an effect to play; one
                 // the player cast itself (0x0776) it has already played.
                 Event::Opcode { op, data } => {
-                    if let Some(c) = crate::spells::cast_of(op, &data)
+                    if self.npcw_opcode(op, &data) {
+                    } else if let Some(c) = crate::spells::cast_of(op, &data)
                         && !(op == 0x0776 && Some(c.caster) == self.self_id32())
                     {
                         self.casts.push(c);
@@ -876,6 +885,7 @@ impl Play {
                         let rc = self.race_camera();
                         crate::camstyle::set_style(&mut walker.cam, self.cam_saved.mode, rc, &mut walker.scene);
                     }
+                    self.npcw_world_entry();
                     self.pet_id = u32::MAX;
                     self.pet_name.clear();
                     // Msg000D's PlayCue
@@ -2208,6 +2218,7 @@ impl Play {
                 self.mode = 35;
             }
             0x0B03_0002 => self.show_word(570),
+            0x0B06_0000 => self.request_trade(),
             0x0508_0000 => {
                 if target != u32::MAX {
                     self.session.send_op_int(0x0004, target);
@@ -2675,6 +2686,7 @@ impl Play {
             self.run_trainer(vui, &mut r);
             self.run_class_mastery(vui, &mut r);
             self.run_factions(vui, &mut r);
+            self.run_npcw(vui, &mut r);
             self.run_edit(vui, &r);
             if self.mode == 2 {
                 let mut cues = Vec::new();

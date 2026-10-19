@@ -282,6 +282,107 @@ impl WndList {
             self.scroll(1, now, cues);
         }
     }
+
+    /// A list at `pos` in `style` (`SetPos`, `SetStyle`) with `n` empty
+    /// rows (`Init(n)`).
+    pub fn with_rows(pos: [i32; 2], style: i32, n: usize) -> Self {
+        let mut l = WndList { pos, style, ..Default::default() };
+        l.init(n);
+        l
+    }
+
+    /// `Init(n)`: `n` empty rows.
+    pub fn init(&mut self, n: usize) {
+        self.items = vec![Row::default(); n];
+    }
+
+    /// `SetItem(i, flags, icon, icon2, word, number, x0c)`.
+    pub fn set_item(&mut self, i: usize, flags: u32, icon: i32, icon2: i32, word: i32, number: i32) {
+        if let Some(r) = self.items.get_mut(i) {
+            *r = Row { flags, icon, icon2, x0c: -1, word, number };
+        }
+    }
+
+    /// `Open`: the fade starts over.
+    pub fn open(&mut self, now: i64) {
+        self.alpha = 0.25;
+        self.time = now;
+        self.window.open(false);
+    }
+
+    /// `ResetScroll` / `VIWndTradeList::ResetList`.
+    pub fn reset_scroll(&mut self) {
+        self.sel = 0;
+        self.top = 0;
+    }
+
+    /// `VIWndTradeList::Move(d)`: the selection moved, stopping at the ends
+    /// (sound 9), kept in the `rows` shown.
+    pub fn trade_move(&mut self, d: i32, rows: i32, now: i64, cues: &mut Vec<i32>) {
+        let count = self.count();
+        if self.sel + d >= count && count > 0 {
+            cues.push(9);
+            self.sel = count - 1;
+        } else if self.sel + d < 0 {
+            cues.push(9);
+            self.sel = 0;
+        } else {
+            self.sel += d;
+            cues.push(11);
+        }
+        if self.top + rows - 1 < self.sel {
+            self.top = self.sel - rows + 1;
+        }
+        if self.sel < self.top {
+            self.top = self.sel;
+        }
+        self.x80 = 1;
+        self.x7c = 1.0;
+        self.time = now;
+    }
+
+    /// `VIWndTradeList::OnDrawSelf`: `rows` rows in a plain frame under the
+    /// centred title (`color`, faded with the list), the marker alone on an
+    /// empty list with the selection, the scroll bar; then the repeat.
+    pub fn draw_trade(&mut self, vui: &Vui, r: &mut dyn Raster, rows: i32, title: i32, color: [f32; 4], now: i64, cues: &mut Vec<i32>) {
+        let count = self.count();
+        let dt = (now - self.time) as f32 * 0.001;
+        self.time = now;
+        self.fit(rows);
+        let at = self.pos;
+        let (stud, fill) = (vui.entry(36), vui.entry(82));
+        let fp = FrameParam { tl: (36, 0), top: (37, 0), tr: (36, 1), right: (42, 1), br: (153, 1), bottom: (37, 2), bl: (153, 0), left: (42, 0) };
+        vui.blit_fill_frame(r, at, [stud.uv1[0] * 2 + fill.uv1[0] + 114, stud.uv1[1] * 2 + rows * 44 + 30], &fp, 51, 3, self.alpha, true);
+        let mut pos = [at[0] + stud.uv1[0], at[1] + stud.uv1[1]];
+        if count == 0 && self.x64 {
+            let e = vui.entry(86);
+            vui.blit_ex(r, e.x00, [pos[0] - 2, pos[1] + 44], 3, self.x7c, 1);
+        }
+        let c = [color[0], color[1], color[2], color[3] * self.alpha];
+        vui.draw_centered_string_ex(r, &wide(vui.words.get(title, vui.language)), pos[0] + 57, pos[1] + 14, c, 0, true);
+        pos[1] += 30;
+        for i in 0..rows {
+            let row = i + self.top;
+            if row >= count {
+                break;
+            }
+            let lit = self.x64 && row == self.sel;
+            let item = self.items[row as usize];
+            self.draw_item(vui, r, &item, pos, lit, 1.0);
+            pos[1] += 44;
+        }
+        self.window.init(vui, r, [at[0] + 57, at[1] + rows * 22], 114, 10, 1);
+        self.window.open(true);
+        let t = if rows < count { self.top as f32 / (count - rows) as f32 } else { 0.0 };
+        self.window.draw_vscroll(vui, r, [at[0] + 126, at[1] + 9], rows * 44 + 34, t);
+        self.update(dt);
+        if self.flash.pulse(138) {
+            self.trade_move(-1, rows, now, cues);
+        }
+        if self.flash.pulse(139) {
+            self.trade_move(1, rows, now, cues);
+        }
+    }
 }
 
 /// `VIWndList::DrawIcon`: an inventory icon (the cache's state 0) or, not

@@ -15,6 +15,7 @@ use crate::client_image::{Menu, MenuEntry, Menus};
 use crate::dialog::{BoxAnswer, Key as BoxKey, MBox};
 use crate::infotext::{self, Info};
 use crate::inventory;
+use crate::quantity::{Quantity, QuantityUp};
 use crate::startmenu::KeyFlash;
 use crate::wndlist::{ListUp, WndMenu};
 use net::dump::ItemList;
@@ -188,106 +189,6 @@ impl Inspect {
             } else {
                 cues.push(11);
                 self.top -= 1;
-            }
-        }
-    }
-}
-
-/// `VIWndQuantity`: up to four digits, the one under the cursor changed
-/// with up and down, moved with left and right.
-#[derive(Default)]
-struct Quantity {
-    cursor: i32,
-    max: i32,
-    id: i32,
-    digits: [i32; 4],
-    shown: i32,
-    window: Window,
-    keys: KeyFlash,
-    visible: bool,
-}
-
-impl Quantity {
-    /// `Open(max, id, price)` (no price here), and the focus (295).
-    fn open(&mut self, vui: &Vui, r: &dyn Raster, max: i32, id: i32) {
-        self.max = max;
-        self.id = id;
-        self.cursor = 3;
-        self.digits = [0, 0, 0, 1];
-        self.shown = 1 + (1..4).filter(|&i| max / 10i32.pow(i) > 0).count() as i32;
-        self.visible = true;
-        self.window.init(vui, r, [320, 224], 300, 6, 1);
-        self.window.close(true);
-        self.window.open(false);
-        self.keys.reset();
-    }
-
-    /// `GetValue`.
-    fn value(&self) -> i32 {
-        (0..4).map(|i| self.digits[i] * 10i32.pow(3 - i as u32)).sum()
-    }
-
-    /// `SetMax`.
-    fn set_max(&mut self) {
-        let mut v = self.max;
-        for i in (0..4).rev() {
-            let p = 10i32.pow(i);
-            self.digits[3 - i as usize] = v / p;
-            v -= self.digits[3 - i as usize] * p;
-        }
-    }
-
-    fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, cues: &mut Vec<i32>) {
-        let rows = 5;
-        self.window.init(vui, r, [320, 180], 270, rows, 1);
-        self.window.draw(vui, r);
-        let (white, yellow) = ([1.0, 1.0, 1.0, self.window.open], [1.0, 1.0, 0.0, self.window.open]);
-        let w = vui.string_width(r, &wide("W")) - 6;
-        self.window.text_box(vui, r, &wide(vui.words.get(353, vui.language)), 20, 1, 80, 1, white, 3);
-        let mut x = 100;
-        for i in 4 - self.shown..4 {
-            let lit = i == self.cursor;
-            self.window.text_box(vui, r, &wide(&self.digits[i as usize].to_string()), x, 1, w, 1, if lit { yellow } else { white }, 0);
-            if lit {
-                self.window.tick_d(vui, r, x + w / 2, 0, true);
-                self.window.tick_u(vui, r, x + w / 2, 2, true);
-            }
-            x += w;
-        }
-        let s = format!("|x{}   |t{}", vui.words.get(214, vui.language), vui.words.get(213, vui.language));
-        let width = self.window.size[0];
-        self.window.text_box(vui, r, &wide(&s), 20, rows - 1, width - 40, 1, white, 1);
-        let now = vui.time;
-        let cursor = |q: &mut Quantity, d: i32, cues: &mut Vec<i32>| {
-            q.cursor += d;
-            if q.cursor < 4 - q.shown {
-                cues.push(9);
-                q.cursor = 4 - q.shown;
-            } else if q.cursor >= 4 {
-                cues.push(9);
-                q.cursor = 3;
-            } else {
-                cues.push(11);
-            }
-            q.window.reset_tick_pulse(now);
-        };
-        if self.keys.pulse(136) {
-            cursor(self, -1, cues);
-        }
-        if self.keys.pulse(137) {
-            cursor(self, 1, cues);
-        }
-        for (k, d) in [(138, 1), (139, -1)] {
-            if self.keys.pulse(k) {
-                let c = self.cursor as usize;
-                self.digits[c] = (self.digits[c] + d).rem_euclid(10);
-                if self.max < self.value() {
-                    cues.push(9);
-                    self.set_max();
-                } else {
-                    cues.push(11);
-                }
-                self.window.reset_tick_pulse(now);
             }
         }
     }
@@ -562,40 +463,22 @@ impl ItemMenu {
                     _ => {}
                 }
             }
-            Focus::Quantity => {
-                let k = match key {
-                    17 | 136 => 136,
-                    18 | 137 => 137,
-                    19 | 138 => 138,
-                    20 | 139 => 139,
-                    _ => 0,
-                };
-                if !down {
-                    if k != 0 {
-                        self.quantity.keys.release(k);
-                    }
-                    return;
-                }
-                match key {
-                    13 | 134 => {
-                        // 293: the value, at most the maximum
-                        let v = self.quantity.value().max(0).min(self.quantity.max);
-                        self.quantity.visible = false;
-                        if v > 0 {
-                            self.use_item(self.quantity.id, v, inv, vui, waiting, now, out);
-                        } else {
-                            self.show_menu(false, now);
-                        }
-                    }
-                    27 | 132 => {
-                        cues.push(8);
-                        self.quantity.visible = false;
+            Focus::Quantity => match self.quantity.key(key, down, cues) {
+                // 293: the value, at most the maximum
+                Some(QuantityUp::Value(v, id)) => {
+                    self.quantity.visible = false;
+                    if v > 0 {
+                        self.use_item(id, v, inv, vui, waiting, now, out);
+                    } else {
                         self.show_menu(false, now);
                     }
-                    _ if k != 0 => self.quantity.keys.press(k),
-                    _ => {}
                 }
-            }
+                Some(QuantityUp::Cancel) => {
+                    self.quantity.visible = false;
+                    self.show_menu(false, now);
+                }
+                None => {}
+            },
             Focus::MBox => {
                 if !down {
                     return;
@@ -691,7 +574,7 @@ impl ItemMenu {
                     if !valid {
                         sound = 10;
                     } else if inv.items[id as usize].quantity > 1 {
-                        self.quantity.open(vui, r, inv.items[id as usize].quantity as i32, id);
+                        self.quantity.open(vui, r, inv.items[id as usize].quantity as i32, id, -1);
                         self.focus = Focus::Quantity;
                     } else {
                         self.use_item(id, 1, inv, vui, waiting, now, out);
@@ -851,14 +734,5 @@ mod tests {
         assert_eq!(menus.list[t[1]].entries[0].x08, 1, "no hit points: flagged");
         assert_eq!(menus.list[t[0]].entries[0].icon, 100);
         assert_eq!(menus.list[t[0]].entries[0].number, 3);
-    }
-
-    #[test]
-    fn quantity_digits() {
-        let mut q = Quantity { max: 250, ..Default::default() };
-        q.digits = [0, 3, 1, 0];
-        assert_eq!(q.value(), 310);
-        q.set_max();
-        assert_eq!((q.digits, q.value()), ([0, 2, 5, 0], 250));
     }
 }

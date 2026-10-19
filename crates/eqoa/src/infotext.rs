@@ -364,6 +364,206 @@ impl Info<'_> {
         d += self.w(492);
         d
     }
+
+    /// `DescribeLootItem`: a corpse's item, its name; the masks and level
+    /// for something typed or wearable; the flags.
+    pub fn loot_item(&self, it: &NetItem) -> String {
+        let mut d = it.item.name.clone();
+        if it.item.p4c != 0 || it.item.wear_slot != -1 {
+            d += "\n";
+            self.mask(&mut d, 289, it.item.race_mask, &RACE_SHORT);
+            d += "\n";
+            self.mask(&mut d, 288, it.item.class_mask, &CLASS_SHORT);
+            d += "\n";
+            self.level(&mut d, it.item.level_req);
+        }
+        self.flags(&mut d, it, true);
+        d
+    }
+
+    /// `DescribeInvItem(i, flags)` over a record, and `DescribeMerchantItem`
+    /// (`merchant`: the hit points as the maximum alone, never the stack or
+    /// the charges' flag). `flags & 1`: the blank line after the name, the
+    /// stack instead of the maximum stack, no charges.
+    fn list_item(&self, it: &NetItem, flags: i32, merchant: bool) -> String {
+        let full = flags & 1 != 0;
+        let mut d = format!("{}\n", it.item.name);
+        if full {
+            d += " \n";
+        }
+        if it.item.damage > 0 {
+            d += &format!("{}: {} ", self.w(493), it.item.damage);
+        }
+        if it.item.attack_type != 0 {
+            self.attack_type(&mut d, it.item.attack_type);
+            d += "\n";
+        }
+        if it.item.wear_slot != -1 {
+            self.equip_slot(&mut d, it.item.wear_slot);
+            d += "\n";
+        }
+        if is_ranged(it) && it.item.range > 0 {
+            d += &format!("{}: {}\n", self.w(504), it.item.range);
+        }
+        if merchant {
+            if it.item.max_hp != 0 {
+                d += &format!("{}: {}\n", self.w(233), it.item.max_hp);
+            }
+        } else if it.item.max_hp != 0 {
+            self.hit_points(&mut d, it.cur_hp, it.item.max_hp);
+            d += "\n";
+        }
+        if it.item.durability != 0 {
+            d += &format!("{}: {}\n", self.w(495), it.item.durability);
+        }
+        if full {
+            if it.item.max_stack >= 2 {
+                self.stack(&mut d, it.quantity, it.item.max_stack);
+                d += "\n";
+            }
+        } else if it.item.max_stack >= 2 {
+            d += &format!("{}: {}\n", self.w(502), it.item.max_stack);
+        }
+        if it.charges > 0 && !full {
+            self.charges(&mut d, it.charges);
+            d += "\n";
+        }
+        self.mask(&mut d, 289, it.item.race_mask, &RACE_SHORT);
+        d += "\n";
+        self.mask(&mut d, 288, it.item.class_mask, &CLASS_SHORT);
+        if it.item.level_req > 0 && (it.item.wear_slot != -1 || it.item.p4c != 0) {
+            d += "\n";
+            self.level(&mut d, it.item.level_req);
+        }
+        self.flags(&mut d, it, true);
+        d
+    }
+
+    /// `DescribeInvItem(i, flags)`.
+    pub fn inv_item(&self, i: i32, flags: i32) -> String {
+        self.item(i).map_or_else(String::new, |it| self.list_item(it, flags, false))
+    }
+
+    /// `DescribeMerchantItem`.
+    pub fn merchant_item(&self, it: &NetItem) -> String {
+        self.list_item(it, 0, true)
+    }
+
+    /// `DescribeTradeInvItem` / `DescribeTradeOffer` (the same lines):
+    /// attack, slot, hit points, masks, level, flags.
+    pub fn trade_item(&self, it: &NetItem) -> String {
+        let mut d = format!("{}\n", it.item.name);
+        if it.item.attack_type != 0 {
+            self.attack_type(&mut d, it.item.attack_type);
+            d += "\n";
+        }
+        if it.item.wear_slot != -1 {
+            self.equip_slot(&mut d, it.item.wear_slot);
+            d += "\n";
+        }
+        if it.item.max_hp != 0 {
+            self.hit_points(&mut d, it.cur_hp, it.item.max_hp);
+            d += "\n";
+        }
+        self.mask(&mut d, 289, it.item.race_mask, &RACE_SHORT);
+        d += "\n";
+        self.mask(&mut d, 288, it.item.class_mask, &CLASS_SHORT);
+        if it.item.level_req > 0 && (it.item.wear_slot != -1 || it.item.p4c != 0) {
+            d += "\n";
+            self.level(&mut d, it.item.level_req);
+        }
+        self.flags(&mut d, it, true);
+        d
+    }
+
+    /// `GetStatTotal`: the base stat plus every worn item's.
+    pub fn stat_total(&self, stat: i64) -> i64 {
+        let mut total = self.base.get(stat as usize).copied().unwrap_or(0) as i64;
+        for it in self.inv.items.iter().filter(|it| it.equip_slot != -1) {
+            total += it.item.stats.iter().filter(|s| s.id == stat).map(|s| s.value).sum::<i64>();
+        }
+        total
+    }
+
+    /// `StatWithItem(index, stat, 1)`: the stat with a merchant's item worn,
+    /// over a list of only the worn items (merged, keeping their keys) with
+    /// the item added (`AddItem`, the list's own counter from 0). The key
+    /// found can be a worn item's, as shipped. `None` when the item would
+    /// not go in (the caller says word 823); the total then is
+    /// `GetStatTotal`.
+    pub fn stat_with_merchant_item(&self, src: &NetItem, stat: i64) -> (i64, bool) {
+        let mut list = ItemList::default();
+        for it in self.inv.items.iter().filter(|it| it.equip_slot != -1) {
+            merge(&mut list, it, it.item.max_stack, inventory::CAPACITY);
+        }
+        let (n, mut key) = add_item_key(&mut list, src, src.item.max_stack, inventory::CAPACITY);
+        if n == 0 {
+            // FindFullStack
+            match list.items.iter().find(|it| src.item.id == it.item.id && src.item.max_stack == it.quantity && src.item.max_stack > 1) {
+                Some(it) => key = it.inv_index,
+                None => return (self.stat_total(stat), false),
+            }
+        }
+        let Some(slot) = inventory::find(&list, key) else { return (self.stat_total(stat), true) };
+        let at = equip_slot_for(&list, src, self.class, self.level);
+        inventory::equip(&mut list, slot, at);
+        let mut total = self.base.get(stat as usize).copied().unwrap_or(0) as i64;
+        for it in list.items.iter().filter(|it| it.equip_slot != -1) {
+            total += it.item.stats.iter().filter(|s| s.id == stat).map(|s| s.value).sum::<i64>();
+        }
+        (total, true)
+    }
+}
+
+/// `FindStatWord`.
+pub fn stat_word(stat: i64) -> Option<i32> {
+    find(&STAT_WORDS, stat)
+}
+
+/// `VIItemList::Merge`: as `AddItem`, but a new record keeps its own key.
+pub fn merge(l: &mut ItemList, item: &NetItem, limit: i64, capacity: usize) -> i64 {
+    if limit >= 2 {
+        if let Some(at) = l.items.iter().position(|it| it.item.id == item.item.id) {
+            let have = l.items[at].quantity;
+            return if have + item.quantity > limit {
+                l.items[at].quantity = limit;
+                limit - have
+            } else {
+                l.items[at].quantity = have + item.quantity;
+                item.quantity
+            };
+        }
+        if l.items.len() >= capacity {
+            return 0;
+        }
+        let mut it = item.clone();
+        let n = item.quantity.min(limit);
+        it.quantity = n;
+        l.items.push(it);
+        return n;
+    }
+    if l.items.len() < capacity {
+        let mut it = item.clone();
+        it.quantity = 1;
+        l.items.push(it);
+        return 1;
+    }
+    0
+}
+
+/// `VIItemList::AddItem`: how many went in, and the key it hands back in
+/// `item.m_invIndex` (the stack's when it went onto one; the item's own
+/// when nothing went in).
+pub fn add_item_key(l: &mut ItemList, item: &NetItem, limit: i64, capacity: usize) -> (i64, u32) {
+    let stack = if limit >= 2 { l.items.iter().position(|it| it.item.id == item.item.id) } else { None };
+    let before = l.items.len();
+    let n = inventory::add_item(l, item, limit, capacity);
+    let key = match stack {
+        Some(at) => l.items[at].inv_index,
+        None if l.items.len() > before => l.items[before].inv_index,
+        None => item.inv_index,
+    };
+    (n, key)
 }
 
 /// `IsRangedItem` / `VIInfoText::IsRanged`: attack types 7-10.
