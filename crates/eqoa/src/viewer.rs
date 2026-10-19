@@ -64,6 +64,7 @@ pub fn lit(
         sun: rgb(sun),
         ambient: rgb(amb),
         fog: None,
+        point: None,
         clear: Vec3::new(0.18, 0.2, 0.24),
         sky_view_proj: None,
     };
@@ -292,6 +293,7 @@ pub fn shot_with(
         // 60 frames a second of game time, the controls held throughout.
         let script = script.unwrap_or(Script { ms: 0, controls: Controls::default() });
         let mut t = 0;
+        let mut point = None;
         let say = std::env::var("EQOA_SAY").ok();
         let tab = std::env::var_os("EQOA_TAB").is_some();
         let mut parts = crate::particles::Particles::new(&walker.scene, 0);
@@ -550,6 +552,9 @@ pub fn shot_with(
             weather.frame(&mut walker.scene, None, &walker.eye, t, hour(Instant::now()));
             if t < script.ms {
                 let _ = lit(proj, v, Instant::now(), Some((walker.eye_position(), &walker.scene)), Some(&mut weather));
+                if let Some(p) = play.as_mut() {
+                    point = p.point_light(&walker, t, hour(Instant::now()), Some(&weather));
+                }
                 let _ = weather.render(&walker.eye);
             }
         }
@@ -603,7 +608,8 @@ pub fn shot_with(
             v = glam::camera::rh::view::look_at_mat4(at, p, Vec3::Y);
         }
         billboard_view = Some((v, proj));
-        let frame = lit(proj, v, Instant::now(), Some((shot_eye, &walker.scene)), Some(&mut weather));
+        let mut frame = lit(proj, v, Instant::now(), Some((shot_eye, &walker.scene)), Some(&mut weather));
+        frame.0.point = point;
         let (sky_bb, world_bb) = weather.render(&walker.eye);
         batches.extend(world_bb);
         let mut rot = v;
@@ -1307,7 +1313,10 @@ impl ApplicationHandler for App {
                     if let Some(p) = play.as_mut() {
                         g.renderer.strips.append(&mut p.trail_strips);
                     }
-                    let lights = lit(proj, v, clock, Some((w.eye_position(), &w.scene)), weather.as_mut());
+                    let mut lights = lit(proj, v, clock, Some((w.eye_position(), &w.scene)), weather.as_mut());
+                    if let Some(p) = play.as_mut() {
+                        lights.0.point = p.point_light(w, now, hour(clock), weather.as_ref());
+                    }
                     if let Some(wx) = weather.as_mut() {
                         let (sky, world) = wx.render(&w.eye);
                         *sky_batches = sky;

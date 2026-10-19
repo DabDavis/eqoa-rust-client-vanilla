@@ -159,6 +159,8 @@ pub struct Play {
     /// style's (`m_camSaved`), whether the world was entered (`m_p2BD50`),
     /// and whether the race framing is on.
     pub race_cams: Option<[Vec<crate::camstyle::RaceCamera>; 2]>,
+    /// The personal light (`SetPersonalLight(actor, 20, (1, 0.69, 0.36))`).
+    pub light: vi::tod::PersonalLight<vi::fpu::Ee>,
     cam_preset: crate::camstyle::Preset,
     cam_saved: crate::camstyle::Preset,
     cam_entered: bool,
@@ -509,7 +511,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false };
         p.take_abilities();
         p
     }
@@ -1367,6 +1369,18 @@ impl Play {
     fn race_camera(&self) -> Option<crate::camstyle::RaceCamera> {
         let t = self.race_cams.as_ref()?;
         crate::camstyle::race_camera(t, self.dump.player.race as i32, self.session.expansion & net::session::EXPANSION_FLAGS)
+    }
+
+    /// The frame's point light: the personal light 3 above the player
+    /// (`SetPersonalLight(int actor, ...)`: the actor's up axis × 3), its
+    /// radius stepped (`SetupTimeOfDayLights`) at `hour` under the weather.
+    pub fn point_light(&mut self, walker: &Walker, now: i64, hour: f32, weather: Option<&crate::weather::Weather>) -> Option<(glam::Vec3, f32, glam::Vec3)> {
+        use vi::fpu::F;
+        let p = walker.cam.walk.phys.position;
+        self.light.at = vi::vect::Vect3::new(p.x, p.y + F::new(3.0), p.z);
+        let (rain, o) = weather.map_or((F::ZERO, F::ZERO), |w| (w.atm.intensity, w.atm.overcast_interp()));
+        let (at, r, c) = self.light.step(now, F::new(hour), rain, F::ONE, o)?;
+        Some((glam::Vec3::new(at.x.0, at.y.0, at.z.0), r.0, glam::Vec3::new(c[0].0, c[1].0, c[2].0)))
     }
 
     /// The P key in play (`InitCameraStyle`): first person and back.

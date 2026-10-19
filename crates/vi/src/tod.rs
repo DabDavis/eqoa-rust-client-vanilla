@@ -5,7 +5,8 @@
 //! (−sin 15h°, cos 15h°, 0): straight down at noon. The overcast weight is
 //! the atmosphere's (`GetOvercastInterp`) times the terrain profiles' (see
 //! [`overcast_weight`]); a lightning flash whitens the sun ([`TimeOfDay::flash`]).
-//! Not ported: the personal light and the point lights.
+//! The placed point lights never light anything: `VIRaster::MaxPointLights`
+//! is 1, which the personal light takes.
 
 use crate::fpu::{F, Model, f, vimax, vimin};
 use crate::world::ProfileBlend;
@@ -265,3 +266,51 @@ impl<M: Model> Default for TimeOfDay<M> {
     }
 }
 
+
+/// `VIScene`'s personal light (`m_personalLight*`, `m_p2A38`, `m_p2A40`):
+/// the light the client hangs 3 above the player (`SetPersonalLight(actor,
+/// 20, (1, 0.69, 0.36))`), its radius ramped in `SetupTimeOfDayLights`.
+/// A point light as the raster takes it: position, range, colour.
+pub type PointLight<M> = (Vect3<M>, F<M>, [F<M>; 4]);
+
+#[derive(Clone, Copy, Debug)]
+pub struct PersonalLight<M: Model> {
+    /// `VIPersonalLightMode`: 0 by the hour, 1 on, 2 off
+    pub mode: i32,
+    pub at: Vect3<M>,
+    pub max_radius: F<M>,
+    pub color: [F<M>; 4],
+    last: i64,
+    pub radius: F<M>,
+}
+
+impl<M: Model> Default for PersonalLight<M> {
+    fn default() -> Self {
+        let f = F::new;
+        PersonalLight { mode: 0, at: Vect3::default(), max_radius: f(20.0), color: [f(1.0), f(0.69), f(0.36), f(1.0)], last: 0, radius: F::ZERO }
+    }
+}
+
+impl<M: Model> PersonalLight<M> {
+    /// `SetupTimeOfDayLights`' part: the radius grows 2 a second (on, night
+    /// before 6 or after 16, or rain outdoors under a heavy overcast) or
+    /// shrinks, clamped to the maximum; the light while it is above 0.
+    /// `rain` is the atmosphere's intensity, `outdoors` the probe's, `o`
+    /// `GetOvercastInterp`.
+    pub fn step(&mut self, now: i64, hour: F<M>, rain: F<M>, outdoors: F<M>, o: F<M>) -> Option<PointLight<M>> {
+        if !(0..2).contains(&self.mode) {
+            return None;
+        }
+        let dt = now - self.last;
+        let step = if dt > 0 { F::from_int(dt as i32) * F::new(0.002) } else { F::ZERO };
+        let f = F::new;
+        if self.mode == 1 || hour < f(6.0) || f(16.0) < hour || (F::ZERO < rain && f(0.05) < outdoors && f(0.5) < o) {
+            self.radius = self.radius + step;
+        } else {
+            self.radius = self.radius - step;
+        }
+        self.radius = vimin(self.max_radius, vimax(F::ZERO, self.radius));
+        self.last = now;
+        (F::ZERO < self.radius).then_some((self.at, self.radius, self.color))
+    }
+}

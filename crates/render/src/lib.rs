@@ -60,6 +60,9 @@ struct FrameUniform {
     fog_color: [f32; 4],
     /// near, far.
     fog: [f32; 4],
+    /// The point light: position and range (0: none), and its colour.
+    point: [f32; 4],
+    point_color: [f32; 4],
 }
 
 #[repr(C)]
@@ -161,6 +164,9 @@ pub struct View {
     /// (all fog colour), as the strip programs' per-vertex fog value and the
     /// GS's FOGCOL mix.
     pub fog: Option<(f32, f32, Vec3)>,
+    /// The point light (`VIRaster::SetPointLight` 0, the personal light):
+    /// position, range, colour.
+    pub point: Option<(Vec3, f32, Vec3)>,
     /// What the frame clears to: the sky colour (under the dome, if drawn).
     pub clear: Vec3,
     /// The view with its translation zeroed, for `GpuModel::sky` models.
@@ -176,6 +182,7 @@ impl View {
             sun: Vec3::splat(0.6),
             ambient: Vec3::splat(0.45),
             fog: None,
+            point: None,
             clear: Vec3::new(0.18, 0.2, 0.24),
             sky_view_proj: None,
         }
@@ -599,6 +606,14 @@ impl Renderer {
             fog: match view.fog {
                 Some((n, f, _)) => [n, f.max(n + 1e-3), 0.0, 0.0],
                 None => [0.0, 1.0, 0.0, 0.0],
+            },
+            point: match view.point {
+                Some((p, r, _)) => p.extend(r).to_array(),
+                None => [0.0; 4],
+            },
+            point_color: match view.point {
+                Some((_, _, c)) => c.extend(1.0).to_array(),
+                None => [0.0; 4],
             },
         };
         queue.write_buffer(&self.frame_buf, 0, bytemuck::bytes_of(&uniform));
