@@ -12,6 +12,8 @@ The Rust client. README.md is the plan and the crate table; keep it current.
   in the EE layout, and add the method to eqoa-port's `test/oracle/oracle.cpp` and
   `crates/vi/tests/oracle.rs` in the same change. A new test needs a negative control.
 - The oracle binary is `../eqoa-port/build/oracle` (`make oracle` there, never `make build/oracle`).
+  `make oracle` also builds `build/oracle_drdp`, the decomp's DRDP library with a recording socket
+  (stateful ops 700-710), which `crates/drdp/tests/oracle_drdp.rs` drives step by step.
 - The `vi` structs are `#[repr(C)]` in the EE layout because the oracle compares raw bytes; keep it that way while ports are being proven. Later (not urgent): native runtime types beside them, converted at the edges, the layout types kept for oracle tests.
 - `ee::libm` is held to `tools/vimath-corpus` (Go, needs `../go-eqoa-vi`): regenerate the corpus with
   `go run . > ../../crates/ee/tests/libm_corpus.bin` (Go build: `TMPDIR`/`GOTMPDIR` under `~/.cache`).

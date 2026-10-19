@@ -1,0 +1,9 @@
+[package]
+name = "drdp"
+description = "The DRDP network library, ported from the matching decomp (client role)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vi.workspace = true
