@@ -58,6 +58,12 @@ pub struct Play {
     puppets: Vec<Option<Puppet>>,
     /// The sounds the client asked for this frame (`PlaySound`, `PlayCue`).
     pub cues: Vec<crate::sound::Cue>,
+    /// `m_abilities`, by id (the map's key, `m_p00`), and the list's token
+    /// (`m_p2BB60`) that 0x0032 echoes.
+    pub abilities: std::collections::BTreeMap<i64, net::dump::Ability>,
+    ability_token: u32,
+    /// The HUD's three quick menus.
+    pub hud_menus: crate::hudmenu::HudMenus,
     /// Each creature's `m_walk`, made with it (`CreateEntity`: `Init` at the
     /// origin), keyed by the entity's id.
     walks: Vec<Option<(u32, WalkControl<Ee>)>>,
@@ -393,7 +399,9 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None }
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None };
+        p.take_abilities();
+        p
     }
 
     fn self_id32(&self) -> Option<u32> {
@@ -438,6 +446,81 @@ impl Play {
                     }
                     self.dump.player.level = level;
                     self.dump.player.exp = exp;
+                }
+                Event::AbilityAdd { token, flag, ability } => {
+                    // Msg00B3
+                    self.ability_token = token;
+                    self.abilities.insert(ability.id, *ability);
+                    if flag != 0 {
+                        self.show_word(721);
+                    }
+                }
+                Event::AbilitySlot { token, index, slot } => {
+                    self.ability_token = token;
+                    self.ability_slot(index as i64, slot as i64);
+                }
+                Event::AbilityMoveSlot { token, from, to } => {
+                    // Msg00B5
+                    self.ability_token = token;
+                    let (from, mut to) = (from as i64, to as i64);
+                    let mut found = None;
+                    for (k, a) in self.abilities.iter_mut() {
+                        if a.valid != 0 {
+                            if a.slot == from {
+                                found = Some(*k);
+                            }
+                            if from < a.slot {
+                                a.slot -= 1;
+                            }
+                        }
+                    }
+                    if from < to {
+                        to -= 1;
+                    }
+                    for a in self.abilities.values_mut() {
+                        if a.valid != 0 && a.slot >= to {
+                            a.slot += 1;
+                        }
+                    }
+                    if let Some(a) = found.and_then(|k| self.abilities.get_mut(&k)) {
+                        a.slot = to;
+                    }
+                }
+                Event::AbilityMoveIndex { token, from, to } => {
+                    // Msg00B6
+                    self.ability_token = token;
+                    let (from, to) = (from as i64, to as i64);
+                    let mut found = None;
+                    for (k, a) in self.abilities.iter_mut() {
+                        if a.display_index == from {
+                            found = Some(*k);
+                        }
+                        if from < a.display_index && a.display_index < 252 {
+                            a.display_index -= 1;
+                        }
+                    }
+                    for a in self.abilities.values_mut() {
+                        if a.display_index >= to && a.display_index < 252 {
+                            a.display_index += 1;
+                        }
+                    }
+                    if let Some(a) = found.and_then(|k| self.abilities.get_mut(&k)) {
+                        a.display_index = to;
+                    }
+                }
+                Event::AbilityRemove { token, index } => {
+                    // Msg00B8
+                    self.ability_token = token;
+                    if let Some(k) = self.abilities.iter().find(|(_, a)| a.display_index == index as i64).map(|(k, _)| *k) {
+                        self.abilities.remove(&k);
+                    }
+                }
+                Event::AbilityLockout { index, token, lockout } => {
+                    // Msg00CD
+                    self.ability_token = token;
+                    if let Some(a) = self.abilities.values_mut().find(|a| a.display_index == index as i64) {
+                        a.lockout = lockout as i64;
+                    }
                 }
                 Event::Action { id, action } => {
                     // Msg 0x0775: the player's own only for action 34.
@@ -504,6 +587,7 @@ impl Play {
                     eprintln!("play: world entry again as {self_id:#x} at {:?}", player.pos);
                     self.player = player;
                     self.dump = dump;
+                    self.take_abilities();
                     // Msg000D's PlayCue
                     self.cues.push(crate::sound::Cue::Named("respawn", 0.4));
                 }
@@ -856,6 +940,67 @@ impl Play {
 
     /// A line the client writes itself: word `id`, in red as the game's
     /// warnings are.
+    /// The dump's abilities, by id, and its token.
+    fn take_abilities(&mut self) {
+        self.abilities = self.dump.abilities.iter().map(|a| (a.id, a.clone())).collect();
+        self.ability_token = self.dump.p2bb60;
+    }
+
+    /// `ShowText(word)`: a word to the chat log.
+    fn show_word(&mut self, id: i32) {
+        let text = self.words.as_ref().map_or_else(|| format!("(word {id})"), |w| w.get(id, 0).to_string());
+        self.add_chat(text, [1.0; 4]);
+    }
+
+    /// `Msg00B4`: the ability at display index `index` goes onto `slot` or
+    /// off it (it toggles), and any other on that slot comes off; word 824
+    /// (on) or 825 (off) with its name, and sound 6.
+    fn ability_slot(&mut self, index: i64, slot: i64) {
+        let Some(found) = self.abilities.iter().find(|(_, a)| a.display_index == index).map(|(k, _)| *k) else { return };
+        for a in self.abilities.values_mut() {
+            if a.slot == slot && a.display_index != index {
+                a.valid = 0;
+                a.slot = -1;
+            }
+        }
+        let a = self.abilities.get_mut(&found).unwrap();
+        a.valid = (a.valid == 0) as i64;
+        a.slot = slot;
+        let (valid, name) = (a.valid != 0, a.name.clone());
+        let fmt = self.words.as_ref().map_or_else(|| "%S".to_string(), |w| w.get(if valid { 824 } else { 825 }, 0).to_string());
+        self.add_chat(fmt.replacen("%S", &name, 1).replacen("%s", &name, 1), [1.0; 4]);
+        self.cues.push(crate::sound::Cue::Ui(6));
+    }
+
+    /// `Send0032`: use an ability, by its slot, on the target.
+    fn send_0032(&mut self, id: i64) {
+        let Some(slot) = self.abilities.get(&id).map(|a| a.slot) else { return };
+        let mut w = net::stream::Writer::op(0x0032);
+        w.u32(self.ability_token).u8(slot as u8).u32(self.target);
+        self.session.send(&w.data);
+    }
+
+    /// A pad key for the HUD's quick menus in play (`VIWndHUDMenu::OnKeyDown`
+    /// and `VIWndGame`'s left and right): using an ability sends 0x0032.
+    pub fn hud_key(&mut self, key: crate::hudmenu::Key) {
+        if self.mode != 0 {
+            return;
+        }
+        let now = self.session.now() as i64;
+        // the expansion mask's bit 1: the second ability bar (menu 1)
+        let second = (self.session.expansion >> 1) & 1 != 0;
+        let mut cues = Vec::new();
+        let used = self.hud_menus.key(key, now, second, &mut cues);
+        self.cues.extend(cues);
+        if let Some((msg, id)) = used {
+            match msg {
+                0x8060000 => self.send_0032(id),
+                0x2030000 => eprintln!("play: use item {id} (not ported)"),
+                _ => {}
+            }
+        }
+    }
+
     fn warn(&mut self, id: i32) {
         let text = self.words.as_ref().map_or_else(|| format!("(word {id})"), |w| w.get(id, 0).to_string());
         self.add_chat(text, [1.0, 0.25, 0.25, 1.0]);
@@ -1073,6 +1218,20 @@ impl Play {
             if self.mode == 7 {
                 self.response.draw(vui, &mut r);
             }
+            // UpdateQuickBars, then the menu up (the HUD's, in play)
+            if self.mode == 0 {
+                self.hud_menus.build(&self.abilities, &self.dump.inventory.items);
+                let abilities = &self.abilities;
+                let inventory = &self.dump.inventory.items;
+                let name = |msg: u32, id: i64| -> Vec<u16> {
+                    match msg {
+                        0x08060000 => abilities.get(&id).map(|a| crate::ui::wide(&a.name)).unwrap_or_default(),
+                        0x02030000 => inventory.get(id as usize).map(|it| crate::ui::wide(&it.item.name)).unwrap_or_default(),
+                        _ => Vec::new(),
+                    }
+                };
+                self.hud_menus.draw(vui, &mut r, now as i64, &name);
+            }
         }
     }
 
@@ -1116,6 +1275,7 @@ impl Play {
 
     pub fn describe(&self) -> String {
         let n = self.entities.slots.iter().flatten().count();
-        format!("{n} entities, {} packets sent", self.session.packets_sent)
+        let on_bar = self.abilities.values().filter(|a| a.valid != 0).count();
+        format!("{n} entities, {} abilities ({on_bar} on a bar), {} packets sent", self.abilities.len(), self.session.packets_sent)
     }
 }

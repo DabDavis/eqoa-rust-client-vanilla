@@ -102,6 +102,16 @@ pub enum Event {
     Chat(String, [f32; 4]),
     /// A state channel's full value (0x00-0x17 entities, 0x42 stats...).
     State { channel: u8, data: Vec<u8> },
+    /// The ability list (each carries the list's token, `m_p2BB60`, which
+    /// 0x0032 echoes): 0x00B3 one ability (flag: say "learned"), 0x00B4 an
+    /// ability by display index onto a slot or off it, 0x00B5 a slot moved,
+    /// 0x00B6 a display index moved, 0x00B8 one gone, 0x00CD a lockout.
+    AbilityAdd { token: u32, flag: u32, ability: Box<crate::dump::Ability> },
+    AbilitySlot { token: u32, index: u8, slot: u8 },
+    AbilityMoveSlot { token: u32, from: u8, to: u8 },
+    AbilityMoveIndex { token: u32, from: u8, to: u8 },
+    AbilityRemove { token: u32, index: i32 },
+    AbilityLockout { index: u8, token: u32, lockout: i32 },
     /// Any other opcode, not handled here yet.
     Opcode { op: u16, data: Vec<u8> },
     /// 0xFD: the connection ended, with the library's reason byte.
@@ -124,6 +134,8 @@ pub struct Session {
     pub conn: Option<ConnId>,
     pub state: State,
     pub self_id: Option<u64>,
+    /// 0x07D1's mask (`VIClient+0x50304`), as the server last sent it.
+    pub expansion: u32,
     user: String,
     token: [u8; 32],
     start: std::time::Instant,
@@ -161,6 +173,7 @@ impl Session {
             conn: None,
             state: State::Login,
             self_id: None,
+            expansion: 0,
             user: user.to_string(),
             token,
             start: std::time::Instant::now(),
@@ -367,7 +380,10 @@ impl Session {
         let op = r.u16();
         match op {
             0x0000 => ev.push(Event::Version(r.u32())),
-            0x07D1 => ev.push(Event::Expansion(r.u32())),
+            0x07D1 => {
+                self.expansion = r.u32();
+                ev.push(Event::Expansion(self.expansion));
+            }
             0x0013 => {
                 let (a, b) = (r.u64(), r.u64());
                 ev.push(Event::Time(a, b));
@@ -473,6 +489,29 @@ impl Session {
                 ev.push(Event::Chat(r.wide(1024), [0.5, 0.5, 1.0, 1.0]));
             }
             0x0758 => ev.push(Event::Chat(String::from_utf8_lossy(&r.string(512)).into_owned(), [1.0; 4])),
+            0x00B3 => {
+                let (token, flag) = (r.u32(), r.u32());
+                let ability = Box::new(crate::dump::read_ability(&mut r));
+                ev.push(Event::AbilityAdd { token, flag, ability });
+            }
+            0x00B4..=0x00B6 => {
+                let token = r.u32();
+                let (a, b) = (r.u8(), r.u8());
+                ev.push(match op {
+                    0x00B4 => Event::AbilitySlot { token, index: a, slot: b },
+                    0x00B5 => Event::AbilityMoveSlot { token, from: a, to: b },
+                    _ => Event::AbilityMoveIndex { token, from: a, to: b },
+                });
+            }
+            0x00B8 => {
+                let token = r.u32();
+                ev.push(Event::AbilityRemove { token, index: r.signed() as i32 });
+            }
+            0x00CD => {
+                let index = r.u8();
+                let token = r.u32();
+                ev.push(Event::AbilityLockout { index, token, lockout: r.signed() as i32 });
+            }
             _ => ev.push(Event::Opcode { op, data: m.data[2.min(m.data.len())..].to_vec() }),
         }
     }

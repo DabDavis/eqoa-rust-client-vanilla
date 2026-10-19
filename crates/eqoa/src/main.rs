@@ -25,6 +25,7 @@ mod audio;
 mod chat;
 mod dialog;
 mod hud;
+mod hudmenu;
 mod particles;
 mod play;
 mod scene;
@@ -219,6 +220,8 @@ fn run(args: &[String]) -> Result<()> {
             // The HUD's art and font ("ArialUI").
             lib.add("UI.CSF", esf::Container::open(disc(None)?.read("UI.CSF")?)?);
             lib.add("ARIALUI.CSF", esf::Container::open(disc(None)?.read("ARIALUI.CSF")?)?);
+            // The abilities' and items' icons (the HUD's quick menus).
+            lib.add("ITEMICON.ESF", esf::Container::open(disc(None)?.read("ITEMICON.ESF")?)?);
             let [x, _, z] = player.pos;
             let index = vi::world::World::<vi::fpu::Ee>::zone_at(lib.file(main_file), x, z).ok_or("no zone at the player's position")?;
             let character = lib.lookup(viewer::HUMAN).ok_or("no human model")?;
@@ -256,9 +259,11 @@ fn run(args: &[String]) -> Result<()> {
 /// every event: the first shard and the first character are taken.
 fn login(host: &str, user: &str, pass: &str) -> Result<(net::session::Session, net::session::Player, Box<net::dump::MemoryDump>)> {
     use net::session::{Event, Session};
-    let l = net::auth::login((host, 9735), user, pass)?;
+    // `EQOA_AUTH_PORT` / `EQOA_GAME_PORT`: a server on other ports (a test one)
+    let port = |v: &str, d: u16| std::env::var(v).ok().and_then(|p| p.parse().ok()).unwrap_or(d);
+    let l = net::auth::login((host, port("EQOA_AUTH_PORT", 9735)), user, pass)?;
     eprintln!("auth: account {} status {} features {:#x}", l.account, l.status, l.game_features);
-    let server = std::net::ToSocketAddrs::to_socket_addrs(&(host, 10070))?.next().ok_or("no address")?;
+    let server = std::net::ToSocketAddrs::to_socket_addrs(&(host, port("EQOA_GAME_PORT", 10070)))?.next().ok_or("no address")?;
     let mut s = Session::connect(server, user, l.token)?;
     let t = std::time::Instant::now();
     while t.elapsed() < std::time::Duration::from_secs(30) {

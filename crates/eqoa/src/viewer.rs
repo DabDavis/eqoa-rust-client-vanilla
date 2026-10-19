@@ -353,6 +353,25 @@ pub fn shot_with(
                         p.dialog_key(k);
                     }
                 }
+                // `EQOA_HUD_KEYS` (u, d, l, r, e): the HUD's quick-menu keys, one a
+                // frame from then on.
+                if t > at
+                    && let Ok(keys) = std::env::var("EQOA_HUD_KEYS")
+                    && let Some(k) = keys.chars().nth(((t - at) / 16 - 1) as usize)
+                {
+                    use crate::hudmenu::Key as H;
+                    let k = match k {
+                        'u' => Some(H::Up),
+                        'd' => Some(H::Down),
+                        'l' => Some(H::Left),
+                        'r' => Some(H::Right),
+                        'e' => Some(H::Use),
+                        _ => None,
+                    };
+                    if let Some(k) = k {
+                        p.hud_key(k);
+                    }
+                }
                 // `EQOA_INTERACT`: Q just after targeting.
                 if t == at + 96 && std::env::var_os("EQOA_INTERACT").is_some() {
                     p.interact_with_target();
@@ -613,10 +632,11 @@ impl App {
     }
 
     /// The walker's controls from the held keys (`UpdateControls`'s keyboard
-    /// half): W/S forward, A/D strafe, ←/→ orbit, ↑/↓ zoom.
+    /// half): W/S forward, A/D strafe, ←/→ (or J/L) orbit, ↑/↓ (or I/K) zoom.
     fn controls(&self) -> Controls {
         let k = |a: &str, b: &str| self.held.contains(a) as i32 as f32 - self.held.contains(b) as i32 as f32;
-        Controls { fwd: k("w", "s"), strafe: k("d", "a"), orbit: k("right", "left"), pitch: k("down", "up") }
+        let either = |x: f32, y: f32| if x != 0.0 { x } else { y };
+        Controls { fwd: k("w", "s"), strafe: k("d", "a"), orbit: either(k("right", "left"), k("l", "j")), pitch: either(k("down", "up"), k("k", "i")) }
     }
 
     /// Fly-camera movement from the held keys, scaled by frame time.
@@ -784,6 +804,29 @@ impl ApplicationHandler for App {
                         p.attack_release();
                     }
                     return;
+                }
+                // The d-pad (arrows) and X (E) in play: the HUD's quick menus
+                // (`VIWndHUDMenu`: up/down the selection, left/right the menu,
+                // E uses it). The camera is on I/J/K/L then, a keyboard's
+                // right stick.
+                if let Some(p) = self.play.as_mut()
+                    && p.mode == 0
+                {
+                    use crate::hudmenu::Key as H;
+                    let k = match &event.logical_key {
+                        Key::Named(NamedKey::ArrowUp) => Some(H::Up),
+                        Key::Named(NamedKey::ArrowDown) => Some(H::Down),
+                        Key::Named(NamedKey::ArrowLeft) => Some(H::Left),
+                        Key::Named(NamedKey::ArrowRight) => Some(H::Right),
+                        Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(H::Use),
+                        _ => None,
+                    };
+                    if let Some(k) = k {
+                        if event.state == ElementState::Pressed {
+                            p.hud_key(k);
+                        }
+                        return;
+                    }
                 }
                 // Tab: the next target (`CycleTarget`).
                 if event.state == ElementState::Pressed
