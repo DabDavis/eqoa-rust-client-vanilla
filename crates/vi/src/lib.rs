@@ -17,10 +17,14 @@
 #![allow(clippy::approx_constant, clippy::if_same_then_else)]
 
 pub mod camera;
+pub mod character;
 pub mod coll;
+pub mod csprite;
 pub mod collide;
 pub mod fpu;
 pub mod geom;
+pub mod hsprite;
+pub mod quat;
 pub mod scene;
 pub mod vect;
 pub mod walk;

@@ -38,6 +38,7 @@ pub trait Model: Copy + Default + fmt::Debug + PartialEq + 'static {
     fn powf(a: f32, b: f32) -> f32;
     fn atan2f(a: f32, b: f32) -> f32;
     fn fmodf(a: f32, b: f32) -> f32;
+    fn acosf(a: f32) -> f32;
 }
 
 /// eqoa-port's arithmetic: IEEE single, round to nearest, the host's libm.
@@ -83,6 +84,9 @@ impl Model for Ieee {
     }
     fn fmodf(a: f32, b: f32) -> f32 {
         a % b
+    }
+    fn acosf(a: f32) -> f32 {
+        a.acos()
     }
 }
 
@@ -132,6 +136,9 @@ impl Model for Ee {
     fn fmodf(a: f32, b: f32) -> f32 {
         ee::libm::fmodf(a, b)
     }
+    fn acosf(a: f32) -> f32 {
+        ee::libm::acosf(a).unwrap_or_else(|| ee::operand(a).acos())
+    }
 }
 
 /// A float computed under model `M`. Same size and bits as an `f32`.
@@ -169,6 +176,9 @@ impl<M: Model> F<M> {
     }
     pub fn fmodf(self, d: Self) -> Self {
         F::new(M::fmodf(self.0, d.0))
+    }
+    pub fn acosf(self) -> Self {
+        F::new(M::acosf(self.0))
     }
 }
 
