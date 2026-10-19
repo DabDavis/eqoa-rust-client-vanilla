@@ -6,7 +6,7 @@
 //! times a scale (PackV), and 16-bit vertices with a pre-translation group and
 //! a flora byte (PackVGF), the terrain's.
 
-use crate::coll::CollSphere;
+use crate::coll::{CollRay, CollSphere};
 use crate::fpu::{F, Model, f};
 use crate::geom::{BBox, Matrix44, Plane, Sphere, Vect4};
 use crate::vect::Vect3;
@@ -502,4 +502,253 @@ pub fn collide_edge<M: Model>(s: &mut CollSphere<M>, v0: &Vect3<M>, v1: &Vect3<M
         hit = collide_point(s, v0);
     }
     hit
+}
+
+// ------------------------------------------------------------ the ray half
+//
+// The decomp writes each ray function out beside its sphere twin (the bodies
+// repeated, not shared); so here.
+
+/// `VICylinder`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Cylinder<M: Model> {
+    pub base: Vect3<M>,
+    /// Unit.
+    pub dir: Vect3<M>,
+    pub length: F<M>,
+    pub radius: F<M>,
+}
+
+/// `VICollRay::Init(const VICollRay &src, const VIMatrix44 &mat)`: the ray
+/// carried into another space, its hit state kept.
+pub fn transform_ray<M: Model>(src: &CollRay<M>, m: &Matrix44<M>) -> CollRay<M> {
+    let mut r = CollRay::<M>::default();
+    r.start = m.mul_point(&src.start);
+    r.end = m.mul_point(&src.end);
+    let mut b = m.apply(&Vect4::new(src.dir2.x, src.dir2.y, src.dir2.z, F::ZERO));
+    b.normalize();
+    r.dir2 = b.xyz();
+    r.precalc();
+    r.hit_time = src.hit_time;
+    r.hit_idx = src.hit_idx;
+    r.hit_normal = src.hit_normal;
+    r
+}
+
+impl<M: Model> Collide<M> {
+    /// `CollideObj(VICollRay &, int)`.
+    pub fn collide_ray_obj(&mut self, r: &mut CollRay<M>, buf: &CollBuffer<M>) -> bool {
+        let mut local = transform_ray(r, &self.inv_world);
+        if self.collide_ray_buffer(&mut local, buf) {
+            r.hit_time = local.hit_time;
+            r.hit_idx = local.hit_idx;
+            let n = local.hit_normal;
+            let mut wn = self.world.apply(&Vect4::new(n.x, n.y, n.z, F::ZERO));
+            wn.normalize();
+            r.hit_normal = wn.xyz();
+            return true;
+        }
+        false
+    }
+
+    /// `Collide(VICollRay &, VICollBuffer &)`: the three ray walks, one body.
+    pub fn collide_ray_buffer(&self, r: &mut CollRay<M>, b: &CollBuffer<M>) -> bool {
+        let mut hit = false;
+        if cull_ray_bbox(r, &b.bbox) {
+            return false;
+        }
+        if r.length == F::ZERO {
+            return false;
+        }
+        let pt = &self.pretrans[..];
+        let (mut vert, mut prim) = (0usize, 0usize);
+        for g in &b.groups {
+            if !cull_ray_bbox(r, &g.bbox) {
+                for _ in 0..g.num_prims {
+                    let pr = &b.prims[prim];
+                    if !cull_ray_bbox(r, &pr.bbox) {
+                        let mut n = pr.num_verts - 2;
+                        let mut c = b.vertex(vert, pt);
+                        vert += 1;
+                        let mut d = b.vertex(vert, pt);
+                        vert += 1;
+                        let mut flip = false;
+                        while n != 0 {
+                            let a = c;
+                            c = d;
+                            d = b.vertex(vert, pt);
+                            let h = if !flip { collide_ray_tri(r, pr.mat, &a, &c, &d) } else { collide_ray_tri(r, pr.mat, &c, &a, &d) };
+                            hit |= h;
+                            flip = !flip;
+                            vert += 1;
+                            n -= 1;
+                        }
+                    } else {
+                        vert += pr.num_verts as usize;
+                    }
+                    prim += 1;
+                }
+            } else {
+                prim += g.num_prims as usize;
+                vert += g.num_verts as usize;
+            }
+        }
+        hit
+    }
+}
+
+/// `Cull(VICollRay &, VIBBox &)`: both ends outside one face.
+pub fn cull_ray_bbox<M: Model>(r: &CollRay<M>, b: &BBox<M>) -> bool {
+    let (a, e, mx, mn) = (r.start, r.end, b.max, b.min);
+    (a.x > mx.x && e.x > mx.x)
+        || (a.y > mx.y && e.y > mx.y)
+        || (a.z > mx.z && e.z > mx.z)
+        || (a.x < mn.x && e.x < mn.x)
+        || (a.y < mn.y && e.y < mn.y)
+        || (a.z < mn.z && e.z < mn.z)
+}
+
+/// `Cull(VICollRay &, VISphere &)`: 1 unless the ray starts inside or
+/// reaches the sphere before its current hit.
+pub fn cull_ray_sphere<M: Model>(r: &CollRay<M>, v: &Sphere<M>) -> bool {
+    let mut l = r.start;
+    l -= v.c;
+    let mut cull = true;
+    let c = l.x * l.x + l.y * l.y + l.z * l.z - v.r * v.r;
+    if F::ZERO < c {
+        let d = &r.dir;
+        let b = l.x * d.x + l.y * d.y + l.z * d.z;
+        if b < F::ZERO {
+            let e = b * b - c;
+            if F::ZERO < e {
+                let t = -(b + e.sqrt()) * r.inv_length;
+                if t < r.hit_time {
+                    cull = false;
+                }
+            }
+        }
+    } else {
+        cull = false;
+    }
+    cull
+}
+
+/// `Collide(VICollRay &, int, v0, v1, v2)`: a front face crossed from
+/// above to below, inside the triangle, before the current hit.
+pub fn collide_ray_tri<M: Model>(r: &mut CollRay<M>, idx: i32, v0: &Vect3<M>, v1: &Vect3<M>, v2: &Vect3<M>) -> bool {
+    let mut pl = Plane::default();
+    if pl.from_tri(v0, v1, v2) != 0 {
+        let dir = r.dir;
+        if pl.n.x * dir.x + pl.n.y * dir.y + pl.n.z * dir.z <= F::ZERO {
+            let ds = pl.distance(&r.start);
+            if F::ZERO < ds {
+                let de = pl.distance(&r.end);
+                if de < F::ZERO {
+                    let t = ds / (ds - de);
+                    if t < r.hit_time {
+                        let dl = r.delta;
+                        let hp = Vect3::new(dl.x * t + r.start.x, dl.y * t + r.start.y, dl.z * t + r.start.z);
+                        if point_in_triangle(&hp, &pl, v0, v1, v2) {
+                            r.hit_time = t;
+                            r.hit_normal = pl.n;
+                            r.hit_idx = idx;
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// `Collide(VICollRay &, const VISphere &)`: the point/sphere quadratic
+/// once more; a ray starting inside hits at 0 with the outward normal.
+pub fn collide_ray_sphere<M: Model>(r: &mut CollRay<M>, v: &Sphere<M>) -> bool {
+    let mut l = r.start;
+    l -= v.c;
+    let b = l.dot(&r.dir);
+    if b < F::ZERO {
+        let c = l.x * l.x + l.y * l.y + l.z * l.z - v.r * v.r;
+        let e = b * b - c;
+        if F::ZERO < e {
+            let tn = -(b + e.sqrt());
+            let t = tn * r.inv_length;
+            if t < r.hit_time {
+                if F::ZERO < t {
+                    r.hit_time = t;
+                    let mut n = r.dir;
+                    n *= tn;
+                    n += r.start;
+                    n -= v.c;
+                    n *= F::ONE / v.r;
+                    r.hit_normal = n;
+                } else {
+                    r.hit_time = F::ZERO;
+                    let mut n = r.start;
+                    n -= v.c;
+                    n.normalize();
+                    r.hit_normal = n;
+                }
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// `CollideNoCaps(VICollRay &, const VICylinder &)`: the ray against a
+/// cylinder's side between its ends.
+pub fn collide_ray_no_caps<M: Model>(r: &mut CollRay<M>, c: &Cylinder<M>) -> bool {
+    let cross = |a: &Vect3<M>, b: &Vect3<M>| Vect3::new(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
+    let mut pl = Plane::<M>::default();
+    pl.n = cross(&r.dir, &c.dir);
+    let k = pl.n.dot(&pl.n);
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    if !(F::ZERO < k) {
+        return false;
+    }
+    let k = F::ONE / k.sqrt();
+    pl.n = Vect3::new(pl.n.x * k, pl.n.y * k, pl.n.z * k);
+    pl.d = -pl.n.dot(&c.base);
+    let d = pl.distance(&r.start);
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    if !(-c.radius < d) || !(d < c.radius) {
+        return false;
+    }
+    let v = Vect3::new(r.start.x - c.base.x, r.start.y - c.base.y, r.start.z - c.base.z);
+    let h = cross(&v, &c.dir);
+    let t = -h.dot(&pl.n) * k;
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    if !(F::ZERO < t) {
+        return false;
+    }
+    let v = cross(&pl.n, &c.dir);
+    let half = (c.radius * c.radius - d * d).sqrt();
+    let mut t = t + half / r.dir.dot(&v);
+    if t < F::ZERO {
+        t = F::ZERO;
+    }
+    let t = t * r.inv_length;
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    if !(t < r.hit_time) {
+        return false;
+    }
+    let mut v = r.delta;
+    v *= t;
+    v += r.start;
+    let u = v.dot(&c.dir) - c.base.dot(&c.dir);
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    if !(F::ZERO <= u) || !(u <= c.length) {
+        return false;
+    }
+    let mut n = v;
+    n -= c.base;
+    let along = n.dot(&c.dir);
+    n = Vect3::new(n.x - c.dir.x * along, n.y - c.dir.y * along, n.z - c.dir.z * along);
+    n.normalize();
+    r.hit_normal = n;
+    r.hit_time = t;
+    true
 }

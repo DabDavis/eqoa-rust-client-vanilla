@@ -25,7 +25,7 @@ pub struct CollRay<M: Model> {
 }
 
 impl<M: Model> CollRay<M> {
-    fn precalc(&mut self) {
+    pub(crate) fn precalc(&mut self) {
         self.delta = self.end;
         self.delta -= self.start;
         self.dir = self.delta;
