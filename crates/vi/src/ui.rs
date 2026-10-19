@@ -83,6 +83,9 @@ pub trait Raster {
     /// `Blit(i, flags, at, a, b, m, alpha)`: texels `a` .. `a + b`, `b`
     /// big at `at`, mirrored by `flags & 3`.
     fn blit(&mut self, id: u32, flags: u32, at: [i32; 2], a: [i32; 2], b: [i32; 2], mode: i32, alpha: f32);
+    /// `StretchBlit(i, flags, at, size, a, b, m, alpha)`: texels `a` ..
+    /// `a + b` drawn `size` big at `at`.
+    fn stretch_blit(&mut self, id: u32, flags: u32, at: [i32; 2], size: [i32; 2], a: [i32; 2], b: [i32; 2], mode: i32, alpha: f32);
     fn draw_string(&mut self, at: [i32; 2], color: [f32; 4], s: &[u16]);
     /// `DrawCenteredString(font, at, c, s, mode)`: 1 centres vertically, 2
     /// horizontally, 0 and 3 both, anything else draws nothing.
@@ -226,6 +229,92 @@ impl Vui {
             self.blit_ex(ui, fp.bl.0, [tl[0], br[1] - e3.uv1[1]], mode, alpha, fp.bl.1);
         }
         self.blit_ex(ui, fp.br.0, [br[0] - e2.uv1[0], br[1] - e2.uv1[1]], mode, alpha, fp.br.1);
+    }
+
+    /// `StretchBlitEx(id, at, size, m, alpha)`: the entry's texels drawn
+    /// `size` big.
+    pub fn stretch_blit_ex(&self, ui: &mut dyn Raster, id: i32, at: [i32; 2], size: [i32; 2], mode: i32, alpha: f32) {
+        let e = self.entry(id);
+        ui.stretch_blit(self.entry_id(&e), 0, at, size, e.uv0, e.uv1, mode, alpha);
+    }
+
+    /// `BlitStuddedFrame`: the frame, then `nx` studs evenly along the top
+    /// and bottom and `ny` down the sides (the left only when `left`).
+    pub fn blit_studded_frame(&self, ui: &mut dyn Raster, at: [i32; 2], size: [i32; 2], fp: &FrameParam, studs: &FrameParam, nx: i32, ny: i32, mode: i32, alpha: f32, left: bool) {
+        self.blit_frame(ui, at, size, fp, mode, alpha, left);
+        let mut p = at;
+        let e = self.entry(studs.top.0);
+        let step = size[0] / (nx + 1) - e.uv1[0] / 2;
+        for _ in 0..nx.max(0) {
+            p[0] += step;
+            self.blit_ex(ui, studs.top.0, p, mode, alpha, studs.top.1);
+        }
+        p = at;
+        let e = self.entry(studs.bottom.0);
+        p[1] += size[1] - e.uv1[1];
+        let step = size[0] / (nx + 1) - e.uv1[0] / 2;
+        for _ in 0..nx.max(0) {
+            p[0] += step;
+            self.blit_ex(ui, studs.bottom.0, p, mode, alpha, studs.bottom.1);
+        }
+        if left {
+            p = at;
+            let e = self.entry(studs.left.0);
+            let step = size[1] / (ny + 1) - e.uv1[1] / 2;
+            for _ in 0..ny.max(0) {
+                p[1] += step;
+                self.blit_ex(ui, studs.left.0, p, mode, alpha, studs.left.1);
+            }
+        }
+        p = at;
+        let e = self.entry(studs.right.0);
+        p[0] += size[0] - e.uv1[0];
+        let step = size[1] / (ny + 1) - e.uv1[1] / 2;
+        for _ in 0..ny.max(0) {
+            p[1] += step;
+            self.blit_ex(ui, studs.right.0, p, mode, alpha, studs.right.1);
+        }
+    }
+
+    /// `BlitFillStuddedFrame`: `fill` inside the corners, then the studded
+    /// frame.
+    pub fn blit_fill_studded_frame(&self, ui: &mut dyn Raster, at: [i32; 2], size: [i32; 2], fp: &FrameParam, studs: &FrameParam, fill: i32, nx: i32, ny: i32, mode: i32, alpha: f32, left: bool) {
+        let (e0, e1) = (self.entry(fp.tl.0), self.entry(fp.br.0));
+        let p = [at[0] + e0.uv1[0], at[1] + e0.uv1[1]];
+        let sz = [size[0] - e0.uv1[0] - e1.uv1[0], size[1] - e0.uv1[1] - e1.uv1[1]];
+        self.blit_rect(ui, fill, p, sz, mode, alpha);
+        self.blit_studded_frame(ui, at, size, fp, studs, nx, ny, mode, alpha, left);
+    }
+
+    /// `BlitStuddedHorz`: the bar across `w`, then `n` studs along it.
+    pub fn blit_studded_horz(&self, ui: &mut dyn Raster, at: [i32; 2], bar: i32, stud: i32, w: i32, n: i32, mode: i32, alpha: f32, flags: u32) {
+        if w <= 0 {
+            return;
+        }
+        let mut p = at;
+        self.blit_horz(ui, p, bar, w, mode, alpha, flags);
+        let e = self.entry(stud);
+        let step = w / (n + 1) - e.uv1[0] / 2;
+        for _ in 0..n.max(0) {
+            p[0] += step;
+            self.blit_ex(ui, stud, p, mode, alpha, flags);
+        }
+    }
+
+    /// `BlitVertBar`: the top cap, the middle down `h` (tiled for a row-1
+    /// entry, else stretched), the bottom cap.
+    pub fn blit_vert_bar(&self, ui: &mut dyn Raster, at: [i32; 2], top: i32, bot: i32, mid: i32, h: i32, mode: i32, alpha: f32) {
+        let (e1, e2, e3) = (self.entry(top), self.entry(bot), self.entry(mid));
+        let mut p = at;
+        self.blit_ex(ui, top, p, mode, alpha, 0);
+        p[1] += e1.uv1[1];
+        if e3.row == 1 {
+            self.blit_vert(ui, p, mid, h - e1.uv1[1] - e2.uv1[1], mode, alpha, 0);
+        } else {
+            self.blit_ex_size(ui, e3.x00, p, [e3.uv1[0], h - e1.uv1[1] - e2.uv1[1]], mode, alpha, 0);
+        }
+        p[1] = at[1] + h - e2.uv1[1];
+        self.blit_ex(ui, bot, p, mode, alpha, 0);
     }
 
     /// `BlitFillFrame`: `fill` tiled inside the corners, then the frame.
@@ -546,6 +635,17 @@ impl Window {
     /// caller's colour goes through, as shipped.)
     pub fn text(&self, vui: &Vui, ui: &mut dyn Raster, s: &[u16], x: i32, row: i32, c: [f32; 4], f: u32) {
         self.text_box(vui, ui, s, x, row, 640, 1, c, f);
+    }
+
+    /// `DrawVScroll(at, h, t, flags)`: the bar down `h` and the thumb at
+    /// `t` (0 top, 1 bottom; none outside that).
+    pub fn draw_vscroll(&self, vui: &Vui, ui: &mut dyn Raster, at: [i32; 2], h: i32, t: f32) {
+        let e = vui.entry(84);
+        vui.blit_vert_bar(ui, at, 81, 83, 82, h, 3, self.open);
+        if (0.0..=1.0).contains(&t) {
+            let p = [at[0] - 1, at[1] + (t * (h - e.uv1[1]) as f32) as i32];
+            vui.blit_ex(ui, e.x00, p, 3, self.open, 0);
+        }
     }
 
     /// `CountLines(s, w)`: the rows `s` wraps to at `w` (`TextBox`

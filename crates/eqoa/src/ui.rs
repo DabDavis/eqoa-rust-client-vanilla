@@ -71,6 +71,23 @@ impl Raster for UiRaster<'_> {
         self.ui.push(Quad { tex, blend: mode as u8, pos: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], uv, color: [1.0, 1.0, 1.0, alpha], clip: None });
     }
 
+    fn stretch_blit(&mut self, id: u32, flags: u32, at: [i32; 2], size: [i32; 2], a: [i32; 2], b: [i32; 2], mode: i32, alpha: f32) {
+        let Some(tex) = self.assets.surface(id) else { return };
+        let (w, h) = self.ui.texture_size(tex);
+        let (iw, ih) = (1.0 / w as f32, 1.0 / h as f32);
+        let (x0, y0) = (at[0] as f32, at[1] as f32);
+        let (x1, y1) = (x0 + size[0] as f32, y0 + size[1] as f32);
+        let (u0, v0) = (a[0] as f32 * iw, a[1] as f32 * ih);
+        let (u1, v1) = ((a[0] + b[0]) as f32 * iw, (a[1] + b[1]) as f32 * ih);
+        let uv = match flags & 3 {
+            0 => [[u0, v0], [u1, v0], [u1, v1], [u0, v1]],
+            1 => [[u1, v0], [u0, v0], [u0, v1], [u1, v1]],
+            2 => [[u0, v1], [u1, v1], [u1, v0], [u0, v0]],
+            _ => [[u1, v1], [u0, v1], [u0, v0], [u1, v0]],
+        };
+        self.ui.push(Quad { tex, blend: mode as u8, pos: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], uv, color: [1.0, 1.0, 1.0, alpha], clip: None });
+    }
+
     fn draw_string(&mut self, at: [i32; 2], color: [f32; 4], s: &[u16]) {
         self.text(at, color, s);
     }

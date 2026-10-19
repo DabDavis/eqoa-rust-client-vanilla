@@ -70,6 +70,13 @@ impl Raster for Rec {
         }
         self.f(alpha);
     }
+    fn stretch_blit(&mut self, id: u32, flags: u32, at: [i32; 2], size: [i32; 2], a: [i32; 2], b: [i32; 2], mode: i32, alpha: f32) {
+        self.rec(3);
+        for v in [id as i32, flags as i32, at[0] + self.bug, at[1], size[0], size[1], a[0], a[1], b[0], b[1], mode] {
+            self.i(v);
+        }
+        self.f(alpha);
+    }
     fn draw_string(&mut self, at: [i32; 2], color: [f32; 4], s: &[u16]) {
         self.rec(4);
         self.i(font_id() as i32);
@@ -140,6 +147,9 @@ struct Side {
     vui: Vui,
     win: [Window; 4],
     scroll: [TextScroll; 2],
+    /// fn 41's studs and fill, for fns 15 and 16.
+    studs: FrameParam,
+    fill: i32,
 }
 
 impl Side {
@@ -198,6 +208,16 @@ impl Side {
             }
             32 => self.scroll[j].reset(),
             33 => return self.scroll[j].offset,
+            14 => v.stretch_blit_ex(r, a[0], [a[1], a[2]], [a[3], a[4]], a[5], x[0]),
+            15 => v.blit_studded_frame(r, [a[0], a[1]], [a[2], a[3]], &fp, &self.studs, a[4], a[5], a[6], x[0], a[7] != 0),
+            16 => v.blit_fill_studded_frame(r, [a[0], a[1]], [a[2], a[3]], &fp, &self.studs, self.fill, a[4], a[5], a[6], x[0], a[7] != 0),
+            17 => v.blit_studded_horz(r, [a[0], a[1]], a[2], a[3], a[4], a[5], a[6], x[0], a[7] as u32),
+            18 => v.blit_vert_bar(r, [a[0], a[1]], a[2], a[3], a[4], a[5], a[6], x[0]),
+            36 => self.win[k].draw_vscroll(v, r, [a[1], a[2]], a[3], x[0]),
+            41 => {
+                self.studs = fp;
+                self.fill = a[0];
+            }
             40 => self.vui.time = a[0] as i64,
             _ => return -1,
         }
@@ -242,6 +262,32 @@ fn script() -> Vec<Call> {
         v.push(frame_call(9, &[50, 60, 0, 120, 3, 1], fp, &[0.9]));
         v.push(frame_call(10, &[40, 30, 462, 84, 3, 1, 61], fp, &[0.75]));
         v.push(frame_call(10, &[40, 30, 200, 300, 3, 1, 35], fp, &[1.0]));
+    }
+    // Stretched blits, studded frames and bars (the start menu's and the
+    // lists'), the vertical bar and the scroll bar at its ends and past them.
+    for id in [1, 36, 37, 82, 84, 138, 140, 250] {
+        v.push(call(14, &[id, 12, 34, int(-5, 200), int(-5, 60), 3], &[0.3], ""));
+    }
+    let studs = FrameParam { tl: (0, 0), top: (38, 0), tr: (0, 0), right: (43, 1), br: (0, 0), bottom: (41, 0), bl: (0, 0), left: (43, 0) };
+    let list = FrameParam { tl: (36, 0), top: (37, 0), tr: (36, 1), right: (42, 1), br: (153, 1), bottom: (37, 2), bl: (153, 0), left: (42, 0) };
+    for (fp, st, fill) in [(&sets[0], &studs, 51), (&list, &FrameParam { top: (38, 0), bottom: (38, 2), ..studs }, 51)] {
+        v.push(frame_call(41, &[fill], st, &[]));
+        for (nx, ny, left) in [(2, 3, 0), (1, 3, 1), (0, 0, 1), (5, 1, 1)] {
+            v.push(frame_call(15, &[176, 37, 275, 294, nx, ny, 0, left], fp, &[1.0]));
+            v.push(frame_call(16, &[16, 11, 160, 300, nx, ny, 3, left], fp, &[0.6]));
+        }
+    }
+    for (bar, stud, w, n) in [(37, 38, 177, 1), (40, 41, 200, 1), (37, 38, 0, 2), (37, 38, 90, 0), (45, 38, 300, 4)] {
+        v.push(call(17, &[-1, 37, bar, stud, w, n, 0, 0], &[1.0], ""));
+    }
+    for h in [268, 270, 40, 0] {
+        v.push(call(18, &[126, 9, 81, 83, 82, h, 3], &[0.5], ""));
+        v.push(call(18, &[126, 9, 81, 83, 26, h, 3], &[0.5], ""));
+    }
+    v.push(call(20, &[1, 57, 132, 114, 10, 1], &[], ""));
+    v.push(call(21, &[1, 1], &[], ""));
+    for t in [-0.5, 0.0, 0.25, 0.999, 1.0, 1.5] {
+        v.push(call(36, &[1, 126, 9, 268, 0], &[t], ""));
     }
     // Strings and words.
     v.push(call(11, &[10, 20, 1], &[1.0, 1.0, 1.0, 0.5], "Hello, Norrath"));
@@ -354,6 +400,8 @@ fn the_ui_layer_records_what_the_decomp_records() {
         vui: Vui::new(StringTable::parse(&words).unwrap(), StringTable::parse(&textures).unwrap(), atlas.clone()),
         win: Default::default(),
         scroll: Default::default(),
+        studs: FrameParam::default(),
+        fill: 0,
     };
     let rec = |bug| Rec { out: Vec::new(), n: 0, widths: widths.clone(), point: font.height as i32, vp: [0, 0, 639, 447], bug };
     let mut ours = side();
@@ -401,6 +449,7 @@ fn the_ui_layer_records_what_the_decomp_records() {
             *kinds.entry(kind).or_insert(0) += 1;
             p += 4 + match kind {
                 1 => 40,
+                3 => 48,
                 4 | 5 => {
                     let fixed = if kind == 4 { 28 } else { 32 };
                     let len = u32::from_le_bytes(theirs[p + 4 + fixed..p + 8 + fixed].try_into().unwrap()) as usize;
