@@ -339,6 +339,7 @@ fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Optio
                     let mut helm_worn = false;
                     let mut weapons = [None; 3];
                     if let (Some(cs), Some(c)) = (&sprite, &e.creature) {
+                        #[allow(clippy::needless_range_loop)]
                         for i in 0..3 {
                             let id = if c.items_over[i] != 0 { c.items_over[i] } else { c.items[i] };
                             let node = cs.item_nodes[i];
