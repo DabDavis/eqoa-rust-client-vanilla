@@ -111,7 +111,11 @@ order per stage is not yet measured.
 - `VICameraEffect`'s blend into a scripted camera (a quaternion slerp).
 - The camera preset's own numbers (`ApplyCameraPreset`); the walk camera's
   defaults stand in.
-- Time of day: ambient and sun are fixed placeholders until `VIScene::SetupTimeOfDay`.
+- Time of day is clear-sky only: `InitTimeOfDay`'s table and
+  `SetupTimeOfDayLights`' interpolation are ported (`vi::tod`), the weather and
+  terrain profiles that blend toward overcast, the sky and fog are not. The hour
+  runs from 10:00 at 24 h per hour (`EQOA_HOUR` pins it); a live game gets it
+  from the server.
 - The point light, static lighting and fog. Blended layers are drawn after every
   opaque one, not interleaved strip by strip as the game draws them.
 - Zone streaming: a walk loads the whole world file and draws the zones within

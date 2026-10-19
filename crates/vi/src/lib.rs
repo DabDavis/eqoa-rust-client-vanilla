@@ -26,6 +26,7 @@ pub mod geom;
 pub mod hsprite;
 pub mod quat;
 pub mod scene;
+pub mod tod;
 pub mod vect;
 pub mod walk;
 pub mod world;

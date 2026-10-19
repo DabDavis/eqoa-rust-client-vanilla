@@ -22,6 +22,27 @@ use winit::window::{Window, WindowId};
 
 type Error = Box<dyn std::error::Error>;
 
+/// The hour of day: `EQOA_HOUR` if set, else 10:00 (InitTimeOfDay's) moving
+/// at the game's 24 hours an hour from when the viewer started.
+fn hour(start: Instant) -> f32 {
+    match std::env::var("EQOA_HOUR").ok().and_then(|h| h.parse::<f32>().ok()) {
+        Some(h) => h,
+        None => (10.0 + start.elapsed().as_secs_f32() / 150.0) % 24.0,
+    }
+}
+
+/// A frame's lights out of the time of day (clear sky).
+pub fn lit(view_proj: glam::Mat4, start: Instant) -> View {
+    let tod = vi::tod::TimeOfDay::<vi::fpu::Ieee>::new();
+    let (amb, sun, dir) = tod.lights(vi::fpu::F::new(hour(start)), vi::fpu::F::ZERO);
+    View {
+        view_proj,
+        sun_dir: Vec3::from(dir.to_array()),
+        sun: Vec3::new(sun[0].0, sun[1].0, sun[2].0),
+        ambient: Vec3::new(amb[0].0, amb[1].0, amb[2].0),
+    }
+}
+
 /// What is on screen.
 pub enum Source {
     Models { list: Vec<(i32, Ref)>, index: usize },
@@ -110,7 +131,7 @@ impl Camera {
             Camera::Fly { pos, yaw, pitch } => (pos, pos + direction(yaw, pitch), 0.5, 6000.0),
         };
         let proj = glam::camera::rh::proj::directx::perspective(fov, aspect, near, far);
-        View::daylight(proj * glam::camera::rh::view::look_at_mat4(eye, target, Vec3::Y))
+        lit(proj * glam::camera::rh::view::look_at_mat4(eye, target, Vec3::Y), Instant::now())
     }
 
     fn drag(&mut self, dx: f32, dy: f32) {
@@ -179,7 +200,7 @@ pub fn shot(
         let g = renderer.upload(&device, &queue, &body, &[model], &textures);
         renderer.set_palette(&queue, &g, &palette);
         gpu.push(g);
-        view = View::daylight(walker.view(aspect));
+        view = lit(walker.view(aspect), Instant::now());
         // `EQOA_SHOT_EYE=dx,dy,dz`: look at the character from that offset
         // instead of through the game's camera (for checking poses).
         let eye: Vec<f32> = std::env::var("EQOA_SHOT_EYE")
@@ -189,7 +210,7 @@ pub fn shot(
         if let [dx, dy, dz] = eye.as_slice() {
             let p = Vec3::from(walker.cam.walk.phys.position.to_array()) + Vec3::Y;
             let proj = glam::camera::rh::proj::directx::perspective(40f32.to_radians(), aspect, 0.1, 3000.0);
-            view = View::daylight(proj * glam::camera::rh::view::look_at_mat4(p + Vec3::new(*dx, *dy, *dz), p, Vec3::Y));
+            view = lit(proj * glam::camera::rh::view::look_at_mat4(p + Vec3::new(*dx, *dy, *dz), p, Vec3::Y), Instant::now());
         }
     }
     let refs: Vec<&GpuModel> = gpu.iter().collect();
@@ -448,7 +469,7 @@ impl ApplicationHandler for App {
                     }
                 };
                 let view = match walk_view {
-                    Some(vp) => View::daylight(vp),
+                    Some(vp) => lit(vp, self.clock),
                     None => self.camera.view(self.bounds, g.config.width as f32 / g.config.height as f32),
                 };
                 let target = frame.texture.create_view(&Default::default());
