@@ -7,6 +7,9 @@ use std::collections::BTreeMap;
 
 pub type Mat = [[f32; 4]; 4];
 
+/// An actor's colour buffers, each its colours.
+type ColorBuffers = Vec<Vec<[u8; 4]>>;
+
 pub struct Scene {
     /// Each model with the matrices it is drawn at.
     pub parts: Vec<(Model, Vec<Mat>)>,
@@ -70,7 +73,7 @@ pub fn zones(lib: &Library, file: usize, list: &[esf::NodeId], name: &str, anima
     let terrain_parts = parts.len();
     let mut statics: Vec<Vec<[f32; 4]>> = vec![vec![NO_STATIC]; terrain_parts];
     // the actors with each zone's baked lighting
-    let actors: Vec<(esf::zone::Actor, Option<Vec<Vec<[u8; 4]>>>)> = list
+    let actors: Vec<(esf::zone::Actor, Option<ColorBuffers>)> = list
         .iter()
         .flat_map(|&z| {
             let mut lit = c.static_lightings(z);
