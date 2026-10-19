@@ -905,3 +905,164 @@ impl SearchWnd {
         self.list.text_box(vui, r, &s, 20, 7, lw - 40, 1, [1.0, 1.0, 1.0, self.list.open], 0);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use net::dump::{Bid, Item};
+
+    #[derive(Default)]
+    struct NullRaster;
+
+    impl Raster for NullRaster {
+        fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn stretch_blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+        fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+        fn draw_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16]) {}
+        fn draw_centered_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16], _: u32) {}
+        fn string_width(&self, s: &[u16]) -> i32 {
+            s.len() as i32 * 8
+        }
+        fn point_size(&self) -> i32 {
+            16
+        }
+        fn viewport(&self) -> [i32; 4] {
+            [0, 0, 640, 448]
+        }
+        fn set_viewport(&mut self, _: [i32; 4]) {}
+    }
+
+    fn lot(id: i64, ends: i64) -> AuctionItem {
+        AuctionItem { lot_id: id, quantity: 1, p2f4: 100, p2f8: 300, p2fc: ends, seller: "S".into(), item: Item { name: "Sword".into(), wear_slot: -1, ..Default::default() }, ..Default::default() }
+    }
+
+    struct Rig {
+        w: SearchWnd,
+        a: Auction,
+        bank: Bank,
+        vui: Vui,
+        cues: Vec<i32>,
+        out: Vec<SearchOut>,
+    }
+
+    impl Rig {
+        fn new() -> Self {
+            let vui = Vui::new(Default::default(), Default::default(), Vec::new());
+            let mut w = SearchWnd::default();
+            let mut a = Auction::new();
+            let bank = Bank::default();
+            w.open(&vui, &NullRaster, 0xA801_0000, &mut a, &bank, 0);
+            Rig { w, a, bank, vui, cues: Vec::new(), out: Vec::new() }
+        }
+
+        /// A page as RecvResults leaves it, the menu filled.
+        fn page(&mut self, lots: Vec<AuctionItem>) {
+            let n = lots.len();
+            self.a.results = lots;
+            self.a.cols = [vec![0; n], vec![-1; n], vec![0; n]];
+            self.a.minutes = 0;
+            self.a.arrived = 0;
+            self.a.p7860 = 0;
+            let (icon, can_use) = (|_: &NetItem| 7, |_: &NetItem| true);
+            let v = View { bank: &self.bank, idle: true, searching: false, player: 1, now: 0, icon: &icon, can_use: &can_use };
+            self.w.fill_menu(&self.a, &v);
+        }
+
+        fn key(&mut self, k: i32) {
+            let (icon, can_use) = (|_: &NetItem| 7, |_: &NetItem| true);
+            let v = View { bank: &self.bank, idle: true, searching: false, player: 1, now: 0, icon: &icon, can_use: &can_use };
+            self.w.key(&self.vui, &NullRaster, &mut self.a, &v, k, true, &mut self.cues, &mut self.out);
+            self.w.key(&self.vui, &NullRaster, &mut self.a, &v, k, false, &mut self.cues, &mut self.out);
+        }
+    }
+
+    #[test]
+    fn the_form_searches_with_its_query() {
+        let mut g = Rig::new();
+        // up from the first row wraps to Search (11)
+        g.key(138);
+        assert_eq!(g.w.field, 11);
+        g.key(134);
+        let Some(SearchOut::Send(req, 5)) = g.out.first().cloned() else { panic!("{:?}", g.out) };
+        assert_eq!(&req[..3], &[0x05, 0x12, 7]);
+        // the default form: no price bound (16 not set: 0x7FFFFFFF is past
+        // 999999999 only after the draw clamps it), nothing else
+        let q = &g.a.query;
+        assert_eq!((q.kind, q.p9c, q.pa0, q.pa4, q.pa8, q.pbc), (0, 0xFFFF_FFFF, 0xFFFF_FFFF, 1, 50, true));
+        // negative control: with the max price clamped by a draw, kind 16
+        g.w.max_price = 999_999;
+        g.out.clear();
+        g.key(134);
+        assert_eq!(g.a.query.kind, 16);
+        // left with no page: sound 9, the form stays
+        g.cues.clear();
+        g.key(136);
+        assert_eq!((g.w.state, g.cues.clone()), (0, vec![9]));
+    }
+
+    #[test]
+    fn a_lot_and_its_bid() {
+        let mut g = Rig::new();
+        g.page(vec![lot(5, 100), lot(6, -1)]);
+        g.key(136);
+        assert_eq!(g.w.state, 1, "left onto the page");
+        // Enter: the popup (Inspect, Bid); down, Enter: Bid -> the lot
+        g.key(134);
+        // (the popup's down moves it in the draw; here the selection is set)
+        g.w.menu.sub.as_mut().expect("the popup").list.sel = 1;
+        g.key(134);
+        assert_eq!((g.w.state, g.w.lot), (2, 5));
+        // Enter on a live lot that is not ours: the bid form
+        g.key(134);
+        assert_eq!(g.w.state, 4);
+        // down to Bid, Enter: the box; left to Yes, Enter: Send06(5, bid)
+        g.w.bid = 150;
+        g.key(139);
+        g.key(134);
+        assert_eq!(g.w.child, Child::MBox);
+        g.key(136);
+        g.out.clear();
+        g.key(134);
+        assert_eq!(g.out, vec![SearchOut::Send(Auction::bid(5, 150), 4)]);
+        assert_eq!(g.w.state, 1, "the page again");
+        // an expired lot: word 1776 in red, sound 9
+        g.w.menu.list.sel = 1;
+        g.w.lot = 6;
+        g.w.set_state(2, 0);
+        g.out.clear();
+        g.cues.clear();
+        g.key(134);
+        assert_eq!((g.out.clone(), g.cues.clone(), g.w.state), (vec![SearchOut::Red(1776)], vec![9], 2));
+        // one of our own: sound 9 and no bid form (negative control on HasLot)
+        g.bank.lots.push(lot(5, 100));
+        g.w.menu.list.sel = 0;
+        g.cues.clear();
+        g.key(134);
+        assert_eq!((g.cues.clone(), g.w.state), (vec![9], 2));
+        // the bid row on our own lot: word 1775
+        g.w.set_state(4, 0);
+        g.w.lot = 5;
+        g.w.cursor = 1;
+        g.out.clear();
+        g.key(134);
+        assert_eq!(g.out, vec![SearchOut::Red(1775)]);
+        let _ = Bid::default();
+    }
+
+    #[test]
+    fn my_lots_asks_for_the_banks_ids() {
+        let vui = Vui::new(Default::default(), Default::default(), Vec::new());
+        let mut w = SearchWnd::default();
+        let mut a = Auction::new();
+        let mut bank = Bank::default();
+        bank.lots = vec![lot(11, 9), lot(12, 9)];
+        let req = w.open(&vui, &NullRaster, 0xA802_0000, &mut a, &bank, 0).expect("a request");
+        assert_eq!(req, vec![0x05, 0x12, 8, 2, 4, 22, 24]);
+        assert_eq!((w.mode, w.state), (1, 1));
+        // the search kind asks nothing
+        let mut w2 = SearchWnd::default();
+        assert!(w2.open(&vui, &NullRaster, 0xA801_0000, &mut a, &bank, 0).is_none());
+        assert_eq!((w2.mode, w2.state), (0, 0));
+    }
+}

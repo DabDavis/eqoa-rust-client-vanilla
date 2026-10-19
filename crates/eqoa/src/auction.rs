@@ -277,7 +277,7 @@ impl Auction {
                     })
                     .collect();
                 // qsort by +36, highest first (not stable)
-                self.bidders.sort_by(|a, b| b.x24.cmp(&a.x24));
+                self.bidders.sort_by_key(|b| std::cmp::Reverse(b.x24));
                 self.p7860 = 0;
                 self.p78b8 = 0;
                 Some(0)
