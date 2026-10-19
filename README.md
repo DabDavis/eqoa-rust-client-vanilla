@@ -38,7 +38,7 @@ UI, network (DRDP), sound.
 
 | crate | what | checked against |
 |---|---|---|
-| `ee` | the EE FPU: `mul` `add` `sub` `div` `sqrt` `lt` `le` `eq` | console-measured goldens from `go-eqoa-vi` |
+| `ee` | the EE FPU: `mul` `add` `sub` `div` `sqrt` `lt` `le` `eq`; and `ee::libm`, newlib as SUPPORT has it compiled: `sinf` `cosf` `powf` (with its `_XOPEN_` wrapper) `atanf` `atan2f` (wrapper too) `acosf` `sqrtf` `fmodf` `scalbnf` | console-measured goldens from `go-eqoa-vi`; the libm bit for bit against go-eqoa-vi's console-checked ports over a 24,000-input corpus (`tools/vimath-corpus` writes it), except `atan2f(denormal, ±0)`, where the wrapper's `c.eq.s` flushes the denormal (disassembly at 0x0012711C) and the Go does not |
 | `iso` | ISO 9660 walk, read one file | the disc |
 | `esf` | CSF inflate, the OBJF record tree, DictIDs, surfaces, PrimBuffers, materials, sprites flattened to models; `Library`, the dictionary across files; zones (terrain with pre-translations, actors) | `go-eqoa-esf-tools-v2`: per-surface CRCs (801 surfaces) and per-model geometry (766 models: counts, bbox bits, position CRC); which records register a DictID, and that the first file loaded wins, from the decomp |
 | `vi` | the game logic, ported from the decomp and generic over a float model: `VIWalkControl`, `VIWalkCamera`, `VICameraEffect`; and **`VIScene::Collide`**: the world and zone BSPs, rooms, collision buffers (all three packings), placed actors and their insertion, Simple/Sub/Group/LOD sprites, `GetEnvFlags` and the liquid-surface ray, loaded from the world file as `VIESFParse` loads it (`world.rs`) | **bit for bit against the decomp compiled for the host** (eqoa-port's `make oracle`), under the `Ieee` model: 18 walk-control and 11 camera methods; `VIMatrix44` Transform/InvertAffine/Mul, `VIPlane`, the transformed `VICollSphere::Init`, the triangle/edge/vertex sweeps, and `CollideObj` over 102 real TUNARIA buffers; the BSP walk against brute force over every room and actor (3,000 sweeps). Negative controls fail |
@@ -104,8 +104,8 @@ order per stage is not yet measured.
   collide as nothing; the RAY collide (`Collide(VICollRay &)`) is not ported.
   The world level (BSP walk, rooms, actor insertion) is checked against brute
   force, not yet against the oracle: that needs eqoa-port to load the world.
-- `Ee`'s `sinf`/`cosf`/`powf`/`atan2f` are the host's on conditioned operands;
-  newlib's (ported and console-checked in `go-eqoa-vi/vimath`) are next.
+- newlib's huge-angle `sinf`/`cosf` reduction (|x| > 2^7·π/2) and `acosf`'s
+  |x| > 1 path are not ported (as in the Go); those fall back to the host.
 - The character is drawn in its bind pose: no animation (`vianim` in Go).
 - `VICameraEffect`'s blend into a scripted camera (a quaternion slerp).
 - The camera preset's own numbers (`ApplyCameraPreset`); the walk camera's

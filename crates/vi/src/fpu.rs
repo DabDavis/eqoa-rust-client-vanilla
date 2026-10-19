@@ -14,10 +14,10 @@
 //! `a * b + c` evaluates left to right, one rounding per operator, and `a < b`
 //! is the model's compare. Rust never fuses `a * b + c` on its own.
 //!
-//! Not yet: the EE's own transcendental functions. [`Ee`] takes `sinf`, `cosf`,
-//! `powf`, `atan2f` and `acosf` from the host's libm on conditioned operands;
-//! newlib's are ported and console-checked in `go-eqoa-vi/vimath` (trig, pow,
-//! atan, acos) and are the next thing to bring over.
+//! [`Ee`]'s `sinf`, `cosf`, `powf`, `atan2f` and `fmodf` are newlib's as the
+//! PS2 has them compiled (`ee::libm`, held to go-eqoa-vi's console-checked
+//! ports); outside what is ported there (a huge angle, an exponent-255 `powf`
+//! argument) they fall back to the host's.
 
 use std::fmt;
 use std::marker::PhantomData;
@@ -103,8 +103,10 @@ impl Model for Ee {
     fn div(a: f32, b: f32) -> f32 {
         ee::div(a, b)
     }
+    /// `sqrt.s`, and the guest's retest: a NaN result calls newlib `sqrtf`.
     fn sqrt(a: f32) -> f32 {
-        ee::sqrt(a)
+        let s = ee::sqrt(a);
+        if s.is_nan() { ee::libm::sqrtf(a) } else { s }
     }
     fn lt(a: f32, b: f32) -> bool {
         ee::lt(a, b)
@@ -116,20 +118,19 @@ impl Model for Ee {
         ee::eq(a, b)
     }
     fn sinf(a: f32) -> f32 {
-        ee::operand(a).sin()
+        ee::libm::sinf(a)
     }
     fn cosf(a: f32) -> f32 {
-        ee::operand(a).cos()
+        ee::libm::cosf(a)
     }
     fn powf(a: f32, b: f32) -> f32 {
-        ee::operand(a).powf(ee::operand(b))
+        ee::libm::powf(a, b).unwrap_or_else(|| ee::operand(a).powf(ee::operand(b)))
     }
     fn atan2f(a: f32, b: f32) -> f32 {
-        ee::operand(a).atan2(ee::operand(b))
+        ee::libm::atan2f(a, b)
     }
     fn fmodf(a: f32, b: f32) -> f32 {
-        // fmod is exact, so only the conditioning differs from the host's.
-        ee::operand(a) % ee::operand(b)
+        ee::libm::fmodf(a, b)
     }
 }
 

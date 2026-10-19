@@ -18,6 +18,8 @@
 //! Rust never contracts `a * b + c` into one fused rounding on its own, so the
 //! order of operations written here is the order the guest executes.
 
+pub mod libm;
+
 /// Reduces `x` to `f32` rounding toward zero, then flushes a denormal result.
 /// An overflowing `x` lands on ±`f32::MAX`, which is the EE's saturation.
 fn chop(x: f64) -> f32 {
