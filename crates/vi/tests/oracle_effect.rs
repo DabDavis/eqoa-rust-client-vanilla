@@ -289,7 +289,7 @@ fn scenario(planted: bool, mutated: bool) -> Option<(usize, usize)> {
     }
     if mutated {
         // a code mutation: one corner of one of GlobalInit's fog cards
-        cards.fog[3][1].y = cards.fog[3][1].y + F::new(1e-6);
+        cards.fog[3][1].y += F::new(1e-6);
     }
 
     let mut now = 5000i64;
@@ -338,9 +338,9 @@ fn scenario(planted: bool, mutated: bool) -> Option<(usize, usize)> {
             vs.raster(&cam, &mat(&mv), now, &cards, &mut rand, &mut scene, &mut draw);
             normal = draw.normal;
             if planted && frame == 600 && k == 3 {
-                vs.volume.wind.x = vs.volume.wind.x + F::new(1e-4);
+                vs.volume.wind.x += F::new(1e-4);
                 if let Particles::Dust(p) = &mut vs.volume.particles {
-                    p[0].age = p[0].age + F::new(1e-6);
+                    p[0].age += F::new(1e-6);
                 }
             }
 
