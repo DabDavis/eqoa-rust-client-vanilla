@@ -35,6 +35,8 @@ mod inventory;
 mod itemmenu;
 mod startmenu;
 mod trails;
+mod options;
+mod social;
 mod wholist;
 mod zones;
 mod particles;
@@ -300,8 +302,9 @@ fn login(host: &str, user: &str, pass: &str) -> Result<(net::session::Session, n
     let mut s = Session::connect(server, user, l.token)?;
     let t = std::time::Instant::now();
     while t.elapsed() < std::time::Duration::from_secs(30) {
-        for e in s.pump() {
-            match &e {
+        let events = s.pump();
+        for (k, e) in events.iter().enumerate() {
+            match e {
                 Event::ShardList(list) => {
                     eprintln!("shards: {list:?}");
                     if let Some(sh) = list.first() {
@@ -338,6 +341,9 @@ fn login(host: &str, user: &str, pass: &str) -> Result<(net::session::Session, n
                         dump.speed
                     );
                     let p = player.clone();
+                    // what came with it (the ignore and buddy lists) is the
+                    // game's to read
+                    s.held = events[k + 1..].to_vec();
                     return Ok((s, p, dump.clone()));
                 }
                 Event::Disconnected(r) => return Err(format!("disconnected (reason {r})").into()),
