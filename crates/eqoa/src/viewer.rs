@@ -799,6 +799,10 @@ impl App {
     /// The walker's controls from the held keys (`UpdateControls`'s keyboard
     /// half): W/S forward, A/D strafe, ←/→ (or J/L) orbit, ↑/↓ (or I/K) zoom.
     fn controls(&self) -> Controls {
+        // dead: `UpdateControls` is not run
+        if self.play.as_ref().is_some_and(|p| p.is_dead()) {
+            return Controls::default();
+        }
         let k = |a: &str, b: &str| self.held.contains(a) as i32 as f32 - self.held.contains(b) as i32 as f32;
         let either = |x: f32, y: f32| if x != 0.0 { x } else { y };
         Controls { fwd: k("w", "s"), strafe: k("d", "a"), orbit: either(k("right", "left"), k("l", "j")), pitch: either(k("down", "up"), k("k", "i")) }

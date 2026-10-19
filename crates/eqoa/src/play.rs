@@ -44,6 +44,8 @@ struct Puppet {
     /// sprites) and the weapon trail.
     weapons: [Option<(i32, crate::trails::Points)>; 3],
     trail: crate::trails::State,
+    /// `m_p2A8`: not yet seen a frame (a corpse seen first lies at once).
+    first: bool,
 }
 
 /// `VICSprite::NameColors`.
@@ -146,6 +148,12 @@ pub struct Play {
     pub group: crate::group::Group,
     /// `VIWndMBox` (mode 14).
     mbox: crate::dialog::MBox,
+    /// The player's death camera (`m_pC1B0`) and the screen's fade; the
+    /// actors whose spells a death ends, for the next spell frame.
+    death: Option<crate::death::DeathCam>,
+    fade: crate::death::Fade,
+    dead_casters: Vec<i32>,
+    death_ms: i64,
     /// The weapon trails (`VITrailFx`'s pool) and this frame's strips.
     trails: vi::trail::Trails<Ee>,
     pub trail_strips: Vec<render::billboard::Strips>,
@@ -379,7 +387,7 @@ fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Optio
                         dress(&mut model, &vi::cust::apply_look(cs, look, helm_worn, |id| lib.surface(id as i32).is_some()));
                     }
                     let gpu = g.renderer.upload(g.device, g.queue, &model, &[render::IDENTITY], &textures);
-                    Some(Puppet { model: e.model, look, sprite, anims, rand, gpu, attached, name_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default() })
+                    Some(Puppet { model: e.model, look, sprite, anims, rand, gpu, attached, name_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true })
                 })
 }
 
@@ -492,7 +500,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false };
         p.take_abilities();
         p
     }
@@ -516,9 +524,11 @@ impl Play {
                 Event::ReplyName(n) => self.reply_name = n,
                 Event::Dialog { text, .. } => self.show_dialog(&text),
                 Event::DialogBox { id, text, options } => self.dialog_box(id, &text, &options),
+                Event::Opcode { op: 0x005E, .. } => self.msg_005e(walker),
                 Event::Teleport { world, pos, hpr, .. } => {
                     // Msg00B2: back to play, then Respawn.
                     self.mode = 0;
+                    self.respawned(walker);
                     if world as i64 != self.player.world {
                         match WORLD_FILES.get(world as usize) {
                             Some(f) => {
@@ -811,6 +821,7 @@ impl Play {
                     self.player = player;
                     self.dump = dump;
                     self.take_abilities();
+                    self.respawned(walker);
                     self.pet_id = u32::MAX;
                     self.pet_name.clear();
                     // Msg000D's PlayCue
@@ -930,6 +941,14 @@ impl Play {
                             Some((_, w)) if c.p255 != 0 => {
                                 w.update_sprite(cs, &p.anims, &mut p.rand);
                             }
+                            // UpdateCreatures: state 14 is death (laid down at
+                            // once for a corpse seen first), its spells ended
+                            _ if c.state == 14 => {
+                                if !cs.dead {
+                                    cs.set_death(true, p.first, &p.anims, &mut p.rand, None);
+                                    self.dead_casters.push(slot as i32);
+                                }
+                            }
                             _ => cs.set_locomotion(c.state as i32, &p.anims, &mut p.rand),
                         }
                     }
@@ -939,6 +958,7 @@ impl Play {
                         cs.process_sounds(&walker.eye.position, &walker.eye.direction, &at, Some(&mut s.sink()));
                     }
                     cs.h.process(0, &p.anims);
+                    p.first = false;
                     let m = cs.h.calc_trans_about_center(&actor, &p.anims);
                     crate::trails::process(&mut self.trails, &mut p.trail, cs, &p.weapons, &m, game_ms);
                     cs.h.set_blend_matrices();
@@ -971,6 +991,18 @@ impl Play {
             crate::trails::process(&mut self.trails, &mut p.trail, cs, &p.weapons, &centre, game_ms);
         }
         self.trail_strips = crate::trails::render(&mut self.trails, game_ms);
+        // DeathCamera: the eye swung round the body, the fade at 4 s
+        if let Some(d) = self.death.as_mut() {
+            let dt = ((game_ms - self.death_ms).clamp(0, 1000)) as f32 * 0.001;
+            let body = walker.cam.walk.phys.smooth_location().to_array();
+            let (eye, dir, fade) = d.step(body, dt);
+            walker.eye.position = eye;
+            walker.eye.direction = dir;
+            if fade {
+                self.fade.set(1.0, 4.0);
+            }
+        }
+        self.death_ms = game_ms;
         new_model
     }
 
@@ -1014,6 +1046,10 @@ impl Play {
                 None => (None, actor),
             };
             bodies.push(Body { actor: SELF, sprite, transform: actor, centre, attack });
+        }
+        // a death ends the spells its actor was casting
+        for a in std::mem::take(&mut self.dead_casters) {
+            spells.stop_caster(a, &mut bodies, game_ms);
         }
         // NotifyActorWasDestroyed: a slot's entity gone or replaced
         for slot in 0..SLOTS {
@@ -1264,6 +1300,43 @@ impl Play {
         while self.chat.len() > 8 {
             self.chat.pop_front();
         }
+    }
+
+    /// `Msg005E`: the player died. The death pose, its spells ended, the
+    /// cue, back to play with auto-attack off, every invitation refused (3),
+    /// and `ResetCamera`: the death camera from where the camera is.
+    fn msg_005e(&mut self, walker: &mut Walker) {
+        if let Some(cs) = walker.sprite.as_mut() {
+            cs.set_death(true, false, &walker.anims, &mut self.spell_rand, None);
+            self.dead_casters.push(crate::spells::SELF);
+        }
+        self.mode = 0;
+        self.cues.push(crate::sound::Cue::Named("death", 0.4));
+        self.auto_attack = false;
+        for i in std::mem::take(&mut self.group.invites) {
+            self.session.send_msg(0x0624, i.id, 3);
+        }
+        let body = walker.cam.walk.phys.smooth_location().to_array();
+        self.death = Some(crate::death::DeathCam::new(walker.eye.position.to_array(), walker.eye.direction.to_array(), body));
+    }
+
+    /// A respawn (0x00B2, or the dump again): the death camera off, the body
+    /// up, the cue and the fade back in over a second.
+    fn respawned(&mut self, walker: &mut Walker) {
+        if self.death.take().is_some() {
+            if let Some(cs) = walker.sprite.as_mut() {
+                cs.dead = false;
+                cs.set_locomotion(0, &walker.anims, &mut self.spell_rand);
+            }
+            self.cues.push(crate::sound::Cue::Named("respawn", 0.4));
+            self.fade.set(1.0, 0.0);
+            self.fade.set(0.0, 1.0);
+        }
+    }
+
+    /// Dead: the walk takes no controls (`UpdateControls` is not run).
+    pub fn is_dead(&self) -> bool {
+        self.death.is_some()
     }
 
     /// The dump's abilities, by id, and its token.
@@ -2265,6 +2338,15 @@ impl Play {
                 self.mbox.draw(vui, &mut r, now as i64);
             }
             actions = self.run_start_menu(vui, &mut r, &start_loc);
+            // DrawFade: black over the whole screen at the fade's alpha (the
+            // game's spans the wide edges; here past the 4:3 frame's sides)
+            let a = self.fade.step(dt);
+            if a > 0.0
+                && let Some(tex) = assets.white
+            {
+                let (x0, y0, x1, y1) = (-2000.0, -1.0, 2640.0, 449.0);
+                r.ui.push(render::ui::Quad { tex, blend: 3, pos: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], uv: [[0.5, 0.5]; 4], color: [0.0, 0.0, 0.0, a], clip: None });
+            }
             self.run_who(vui, &mut r);
             self.run_edit(vui, &r);
             if self.mode == 2 {

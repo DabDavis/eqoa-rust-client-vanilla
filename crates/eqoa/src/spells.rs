@@ -230,6 +230,12 @@ impl Spells {
         self.sys.notify_actor_destroyed(actor, &mut sc);
     }
 
+    /// `StopIfThisWasCaster(actor)`: a death ends the spells it was casting.
+    pub fn stop_caster(&mut self, actor: i32, bodies: &mut [Body], time: i64) {
+        let mut sc = Scene { bodies, made: &mut self.made, next: &mut self.next, sprites: &mut self.sprites, time, camera: None };
+        self.sys.stop_if_this_was_caster(actor, &mut sc, &mut self.ps);
+    }
+
     /// `UpdateSoundEmitters`' sound sprites, for the ones the effects made:
     /// each one whose sphere the camera is in plays (started when it was not
     /// heard last frame), at the volume its attenuation gives the distance
