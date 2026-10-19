@@ -140,7 +140,8 @@ pub struct ProfileBlend<M: Model> {
 }
 
 impl<M: Model> Grid<M> {
-    fn read(c: &Container, base: NodeId) -> Option<Self> {
+    /// Out of the world base record (0x8200).
+    pub fn read(c: &Container, base: NodeId) -> Option<Self> {
         let h = c.child(base, 0x8220)?;
         let d = c.body(h);
         let v = c.node(h).version;

@@ -76,7 +76,8 @@ pub const PROFILES: [Profile; 22] = [
     p(0.0, 600.0, b(140, 170, 160), 1, 1.0, 7, 0.0),
 ];
 
-fn profile_color<M: Model>(i: i32) -> [F<M>; 4] {
+/// A profile's tint as `SetProfiles` leaves it.
+pub fn profile_color<M: Model>(i: i32) -> [F<M>; 4] {
     let c = PROFILES.get(i as usize).map_or(U, |p| p.color);
     if c[3] < 0.0 {
         let k = f(1.0 / 255.0);
