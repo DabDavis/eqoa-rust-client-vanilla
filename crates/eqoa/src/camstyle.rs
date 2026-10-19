@@ -79,7 +79,7 @@ pub fn apply(cam: &mut WalkCamera<Ee>, p: &Preset) {
 /// `SetCameraStyle(style)`.
 pub fn set_style<S: Scene<Ee>>(cam: &mut WalkCamera<Ee>, style: i32, rc: Option<RaceCamera>, scene: &mut S) {
     let f = F::<Ee>::new;
-    let half_pi = f(1.570_796_4);
+    let half_pi = f(std::f32::consts::FRAC_PI_2);
     let p34 = rc.map_or(f(1.68), |r| f(r.p34));
     match style {
         2 => {
@@ -88,7 +88,7 @@ pub fn set_style<S: Scene<Ee>>(cam: &mut WalkCamera<Ee>, style: i32, rc: Option<
             cam.max_orbit_distance = f(25.0);
             cam.min_collision_dist = f(3.5);
             cam.set_orbit_distance(f(3.38));
-            cam.walk.set_pitch_range(f(-0.785_398_2), half_pi);
+            cam.walk.set_pitch_range(f(-std::f32::consts::FRAC_PI_4), half_pi);
             cam.walk.turn_rate = half_pi;
             cam.walk.init_intermediate();
             cam.look_at_height_above = f(1.68);
@@ -100,9 +100,9 @@ pub fn set_style<S: Scene<Ee>>(cam: &mut WalkCamera<Ee>, style: i32, rc: Option<
             cam.max_orbit_distance = f(8.0);
             cam.min_collision_dist = f(3.5);
             cam.set_orbit_distance(f(3.38));
-            cam.walk.set_pitch_range(f(-0.785_398_2), half_pi);
+            cam.walk.set_pitch_range(f(-std::f32::consts::FRAC_PI_4), half_pi);
             cam.set_def_orbit_pitch_angle(f(0.261_799_4));
-            cam.walk.turn_rate = f(6.283_185_5);
+            cam.walk.turn_rate = f(std::f32::consts::TAU);
             cam.walk.init_intermediate();
             cam.look_at_height_above = p34;
             cam.set_camera_mode(3);
