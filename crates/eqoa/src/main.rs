@@ -17,6 +17,7 @@
 //!
 //! `iso` defaults to `$EQOA_ISO`, then `run/eqoa.iso`.
 
+mod play;
 mod scene;
 mod sky;
 mod stream;
@@ -113,6 +114,32 @@ fn run(args: &[String]) -> Result<()> {
             let pass = std::env::var("EQOA_PASSWORD").map_err(|_| "set EQOA_PASSWORD")?;
             login(host, user, &pass)?;
         }
+        Some("play") | Some("playshot") => {
+            let host = args.get(1).ok_or("usage: eqoa play <host> <user> (password in EQOA_PASSWORD)")?;
+            let user = args.get(2).ok_or("usage: eqoa play <host> <user>")?;
+            let pass = std::env::var("EQOA_PASSWORD").map_err(|_| "set EQOA_PASSWORD")?;
+            let (session, player) = login(host, user, &pass)?;
+            // The world the dump names: its file, by the path's last part.
+            let file = player.world_path.rsplit(['\\', '/']).next().unwrap_or("tunaria.esf").to_uppercase();
+            let (lib, src) = source(&file, &[])?;
+            let mut lib = lib;
+            let main_file = 0;
+            lib.add("CHAR.ESF", esf::Container::open(disc(None)?.read("CHAR.ESF")?)?);
+            let [x, _, z] = player.pos;
+            let index = vi::world::World::<vi::fpu::Ee>::zone_at(lib.file(main_file), x, z).ok_or("no zone at the player's position")?;
+            let character = lib.lookup(viewer::HUMAN).ok_or("no human model")?;
+            drop(src);
+            let src = viewer::Source::Walk { file: main_file, index, character, spawn: Some((x, z, player.hpr[0])) };
+            let play = Some(play::Play::new(session, player));
+            if args[0] == "playshot" {
+                let out = args.get(3).ok_or("usage: eqoa playshot <host> <user> <out.png> [ms]")?;
+                let ms: i64 = args.get(4).map(|m| m.parse()).transpose()?.unwrap_or(3000);
+                let script = viewer::Script { ms, controls: walker::Controls::default() };
+                viewer::shot_with(&lib, &src, None, Some(script), (960, 540), out, play)?;
+            } else {
+                viewer::run_with(lib, src, play)?;
+            }
+        }
         _ => return Err("usage: eqoa ls|tree|zones|view|shot|login (see main.rs)".into()),
     }
     Ok(())
@@ -120,7 +147,7 @@ fn run(args: &[String]) -> Result<()> {
 
 /// The Station login and the game session up to world entry, printing
 /// every event: the first shard and the first character are taken.
-fn login(host: &str, user: &str, pass: &str) -> Result<net::session::Player> {
+fn login(host: &str, user: &str, pass: &str) -> Result<(net::session::Session, net::session::Player)> {
     use net::session::{Event, Session};
     let l = net::auth::login((host, 9735), user, pass)?;
     eprintln!("auth: account {} status {} features {:#x}", l.account, l.status, l.game_features);
@@ -146,7 +173,8 @@ fn login(host: &str, user: &str, pass: &str) -> Result<net::session::Player> {
                 }
                 Event::WorldEntry { self_id, player } => {
                     eprintln!("in the world as {self_id:#x}: {player:?} after {:.2?}, {} packets sent", t.elapsed(), s.packets_sent);
-                    return Ok(player.clone());
+                    let p = player.clone();
+                    return Ok((s, p));
                 }
                 Event::Disconnected(r) => return Err(format!("disconnected (reason {r})").into()),
                 Event::State { channel, data } => eprintln!("state {channel:#04x}: {} bytes", data.len()),
@@ -182,7 +210,7 @@ fn source(file: &str, rest: &[String]) -> Result<(esf::Library, viewer::Source)>
             let index: usize = n.parse()?;
             lib.file(main).zones().get(index).ok_or("no such zone")?;
             let character = lib.lookup(viewer::HUMAN).ok_or("no human model")?;
-            Ok((lib, viewer::Source::Walk { file: main, index, character }))
+            Ok((lib, viewer::Source::Walk { file: main, index, character, spawn: None }))
         }
         [z, n] if z == "zone" => {
             let index: usize = n.parse()?;

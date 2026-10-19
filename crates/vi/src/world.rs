@@ -279,7 +279,7 @@ impl<M: Model> World<M> {
 
     /// `ParseWorldZoneProxies`: 56 bytes a zone (two 8-byte offsets, a
     /// size, a centre, the bounds), plus a name in version 1.
-    fn proxies(c: &Container, base: NodeId) -> Vec<BBox<M>> {
+    pub fn proxies(c: &Container, base: NodeId) -> Vec<BBox<M>> {
         let Some(p) = c.child(base, 0x8210) else { return Vec::new() };
         let d = c.body(p);
         if c.node(p).version == 1 {
@@ -289,6 +289,23 @@ impl<M: Model> World<M> {
             .filter(|k| 4 + k * 56 + 56 <= d.len())
             .map(|k| BBox { min: v3(d, 4 + k * 56 + 32), max: v3(d, 4 + k * 56 + 44) })
             .collect()
+    }
+
+    /// The zone whose proxy bounds hold (x, z), out of the world base record
+    /// (the nearest by bounds distance when none does).
+    pub fn zone_at(c: &Container, x: f32, z: f32) -> Option<usize> {
+        let base = c.child(*c.roots.first()?, 0x8200)?;
+        let b = Self::proxies(c, base);
+        let at = Vect3::<M>::of(x, 0.0, z);
+        (0..b.len()).min_by(|&i, &j| {
+            let flat = |k: usize| {
+                let mut bb = b[k];
+                bb.min.y = F::new(-1e9);
+                bb.max.y = F::new(1e9);
+                bb.distance_squared(&at).0
+            };
+            flat(i).total_cmp(&flat(j))
+        })
     }
 
     /// `VIWorld::StreamLeaf`'s radial rule for the zones at `at`: which of

@@ -28,6 +28,7 @@ pub mod quat;
 pub mod scene;
 pub mod tod;
 pub mod atmosphere;
+pub mod selfstate;
 pub mod vect;
 pub mod walk;
 pub mod world;

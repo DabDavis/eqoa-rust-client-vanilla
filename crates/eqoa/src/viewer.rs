@@ -83,7 +83,7 @@ pub enum Source {
     Models { list: Vec<(i32, Ref)>, index: usize },
     Zone { file: usize, zone: esf::NodeId, index: usize },
     /// A zone with the character in it, walking.
-    Walk { file: usize, index: usize, character: Ref },
+    Walk { file: usize, index: usize, character: Ref, spawn: Option<(f32, f32, f32)> },
 }
 
 /// The human (`claude-notes`: model ids by race; the wire value is the DictID).
@@ -109,7 +109,7 @@ impl Source {
     /// collision world (the whole world file's, not just this zone's), and a
     /// streamer for the zones to draw.
     pub fn walker(&self, lib: &Library, s: &Scene) -> Option<(Walker, esf::Model, Streamer)> {
-        let Source::Walk { file, character, .. } = self else { return None };
+        let Source::Walk { file, character, spawn: given, .. } = self else { return None };
         let t = Instant::now();
         let world = vi::world::World::load(lib, *file)?;
         eprintln!(
@@ -125,9 +125,10 @@ impl Source {
             .ok()
             .map(|v| v.split(',').filter_map(|t| t.trim().parse().ok()).collect())
             .unwrap_or_default();
-        let (x, z, h) = match spawn.as_slice() {
-            [x, z] => (*x, *z, 0.0),
-            [x, z, h, ..] => (*x, *z, *h),
+        let (x, z, h) = match (spawn.as_slice(), given) {
+            ([x, z], _) => (*x, *z, 0.0),
+            ([x, z, h, ..], _) => (*x, *z, *h),
+            (_, Some(at)) => *at,
             _ => (c.x - 40.0, c.z + 40.0, 0.0),
         };
         let mut w = Walker::new(world, x, z, h);
@@ -215,6 +216,20 @@ pub fn shot(
     (w, h): (u32, u32),
     out: &str,
 ) -> Result<(), Error> {
+    shot_with(lib, source, cam, script, (w, h), out, None)
+}
+
+/// `shot`, playing on a server: the script's time passes in REAL time,
+/// 16 ms a frame, with the session pumped every frame.
+pub fn shot_with(
+    lib: &Library,
+    source: &Source,
+    cam: Option<Camera>,
+    script: Option<Script>,
+    (w, h): (u32, u32),
+    out: &str,
+    mut play: Option<crate::play::Play>,
+) -> Result<(), Error> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))?;
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default()))?;
@@ -233,9 +248,23 @@ pub fn shot(
         while t < script.ms {
             t += 16;
             walker.frame(script.controls, t);
+            if let Some(p) = &mut play {
+                let gpu = crate::play::Gpu { renderer: &mut renderer, device: &device, queue: &queue };
+                if let Some(model) = p.frame(&mut walker, lib, gpu, t)
+                    && let Some(r) = lib.lookup(model as i32)
+                {
+                    eprintln!("the server names the player's model {model:#010x}");
+                    walker.set_character(lib, r);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(16));
+            }
             // UpdateSprite runs every frame in the game.
             walker.pose();
         }
+        let body = match play.as_ref().and_then(|p| p.self_model).and_then(|m| lib.lookup(m as i32)).and_then(|r| lib.build_model(r)) {
+            Some(m) => m,
+            None => body,
+        };
         let (model, palette) = walker.pose();
         eprintln!("after {} ms: {}", script.ms, walker.describe());
         let textures = render::library_textures(lib);
@@ -265,8 +294,15 @@ pub fn shot(
         }
         view = frame.0;
         streamed = Some(streamer);
+        if let Some(p) = &play {
+            eprintln!("play: {}", p.describe());
+            for e in p.entities.slots.iter().flatten() {
+                let name = e.creature.as_ref().map(|c| c.name.as_str()).unwrap_or("");
+                eprintln!("  entity {:#x} {name:24} model {:#010x} at ({:.1}, {:.1}, {:.1})", e.id, e.model, e.pos[0], e.pos[1], e.pos[2]);
+            }
+        }
     }
-    let refs: Vec<&GpuModel> = gpu.iter().chain(streamed.iter().flat_map(|s| s.models())).collect();
+    let refs: Vec<&GpuModel> = gpu.iter().chain(streamed.iter().flat_map(|s| s.models())).chain(play.iter().flat_map(|p| p.models())).collect();
     let rgba = render::capture(&device, &queue, &renderer, w, h, &view, &refs);
     let mut enc = png::Encoder::new(std::io::BufWriter::new(std::fs::File::create(out)?), w, h);
     enc.set_color(png::ColorType::Rgba);
@@ -299,6 +335,8 @@ struct App {
     held: HashSet<String>,
     last: Instant,
     walker: Option<Walker>,
+    /// On a server: the session and the entities it brings.
+    play: Option<crate::play::Play>,
     /// The walk's zones, streamed around the character.
     streamer: Option<Streamer>,
     /// Index in `Gfx::models` of the character.
@@ -311,6 +349,11 @@ struct App {
 }
 
 pub fn run(lib: Library, source: Source) -> Result<(), Error> {
+    run_with(lib, source, None)
+}
+
+/// `run`, with a game session to play on.
+pub fn run_with(lib: Library, source: Source, play: Option<crate::play::Play>) -> Result<(), Error> {
     let event_loop = EventLoop::new()?;
     let display = event_loop.owned_display_handle();
     let mut app = App {
@@ -324,6 +367,7 @@ pub fn run(lib: Library, source: Source) -> Result<(), Error> {
         held: HashSet::new(),
         last: Instant::now(),
         walker: None,
+        play,
         streamer: None,
         body_at: 0,
         sky_at: None,
@@ -528,9 +572,25 @@ impl ApplicationHandler for App {
                 let body_at = self.body_at;
                 let clock = self.clock;
                 let streamer = &mut self.streamer;
+                let play = &mut self.play;
                 let lib = &self.lib;
                 let walk_view = self.walker.as_mut().map(|w| {
                     w.frame(controls, now);
+                    if let Some(p) = play {
+                        let gpu = crate::play::Gpu { renderer: &mut g.renderer, device: &g.device, queue: &g.queue };
+                        // The server named the player's model: dress the walker in it.
+                        if let Some(model) = p.frame(w, lib, gpu, now)
+                            && let Some(r) = lib.lookup(model as i32)
+                            && let Some(m) = lib.build_model(r)
+                        {
+                            w.set_character(lib, r);
+                            let textures = render::library_textures(lib);
+                            let (mat, _) = w.pose();
+                            if body_at < g.models.len() {
+                                g.models[body_at] = g.renderer.upload(&g.device, &g.queue, &m, &[mat], &textures);
+                            }
+                        }
+                    }
                     let (m, palette) = w.pose();
                     if let Some(body) = g.models.get(body_at) {
                         g.renderer.set_instances(&g.queue, body, &[m]);
@@ -543,7 +603,10 @@ impl ApplicationHandler for App {
                         s.update(at, &mut w.scene, lib, gpu, Some(1));
                         s.animate(&mut w.scene, &g.renderer, &g.queue);
                     }
-                    g.window.set_title(&format!("eqoa — walking {}", w.describe()));
+                    match play {
+                        Some(p) => g.window.set_title(&format!("eqoa — {} — {} — {}", p.player.name, w.describe(), p.describe())),
+                        None => g.window.set_title(&format!("eqoa — walking {}", w.describe())),
+                    }
                     let (proj, v) = w.view(g.config.width as f32 / g.config.height as f32);
                     lit(proj, v, clock, Some((w.eye_position(), &w.scene)))
                 });
@@ -565,7 +628,12 @@ impl ApplicationHandler for App {
                 };
                 let target = frame.texture.create_view(&Default::default());
                 let mut enc = g.device.create_command_encoder(&Default::default());
-                let refs: Vec<&GpuModel> = g.models.iter().chain(self.streamer.iter().flat_map(|s| s.models())).collect();
+                let refs: Vec<&GpuModel> = g
+                    .models
+                    .iter()
+                    .chain(self.streamer.iter().flat_map(|s| s.models()))
+                    .chain(self.play.iter().flat_map(|p| p.models()))
+                    .collect();
                 g.renderer.draw(&g.queue, &mut enc, &target, &g.depth, &view, &refs);
                 g.queue.submit([enc.finish()]);
                 g.queue.present(frame);
