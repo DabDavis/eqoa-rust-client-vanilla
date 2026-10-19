@@ -34,6 +34,7 @@ pub mod particle;
 pub mod quat;
 pub mod scene;
 pub mod tod;
+pub mod trail;
 pub mod atmosphere;
 pub mod selfstate;
 pub mod spell;

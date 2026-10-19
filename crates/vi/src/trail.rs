@@ -9,7 +9,7 @@
 //! The lists are kept as index sequences in their order (head first).
 
 use crate::fpu::{F, Model};
-use crate::geom::Color;
+use crate::particle::Color;
 use crate::vect::Vect3;
 use std::collections::VecDeque;
 
@@ -44,10 +44,14 @@ impl<M: Model> Trail<M> {
         self.free = (0..n).collect();
     }
 
-    /// `ClearSegmentsForward(s)`: `s` (at `k` in the used list) and every
-    /// older one back to the free list's tail.
+    /// `ClearSegmentsForward(s)`: meant to free `s` (at `k` in the used
+    /// list) and everything older, it frees `s` and at most the one after:
+    /// the loop takes the next node from `s` each time, and once `s` is on
+    /// the free list its next is that list's tail, which ends the loop. As
+    /// shipped.
     fn clear_forward(&mut self, k: usize) {
-        for s in self.used.drain(k..).collect::<Vec<_>>() {
+        let n = (self.used.len() - k).min(2);
+        for s in self.used.drain(k..k + n).collect::<Vec<_>>() {
             self.free.push_back(s);
         }
     }
@@ -69,8 +73,9 @@ impl<M: Model> Trail<M> {
     }
 
     /// `Update(now)`: every segment ages; at the first one past its life
-    /// whose newer neighbour is past it too (or which is the newest), it and
-    /// everything older go. True while any is left.
+    /// whose newer neighbour is past it too (or which is the newest),
+    /// `ClearSegmentsForward` from it, and the walk stops. True while any is
+    /// left.
     pub fn update(&mut self, now: i64) -> bool {
         let dt = F::<M>::from_int((now - self.last_time) as i32) * F::new(0.001);
         self.last_time = now;
