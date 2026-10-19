@@ -21,6 +21,14 @@ pub const FRONT_FACE: wgpu::FrontFace = wgpu::FrontFace::Ccw;
 
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
+/// Colour is NOT sRGB, anywhere: the GS multiplies, adds and fogs the bytes
+/// as they are (modulate is `Ct·Cf/128`) and the TV shows them as they are,
+/// so the shader does the same arithmetic on the same numbers. An sRGB
+/// target would do it in linear light instead, which lightens every lit or
+/// fogged surface.
+pub const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+pub const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
 /// Palette size: enough for every character skeleton (40 nodes on a human).
 pub const MAX_BONES: usize = 64;
 
@@ -44,6 +52,10 @@ struct FrameUniform {
     /// rgb, and w = the time in seconds (for UV scrolling).
     sun: [f32; 4],
     ambient: [f32; 4],
+    /// rgb, and w = 1 when fog is on.
+    fog_color: [f32; 4],
+    /// near, far.
+    fog: [f32; 4],
 }
 
 #[repr(C)]
@@ -106,12 +118,25 @@ pub struct View {
     pub sun_dir: Vec3,
     pub sun: Vec3,
     pub ambient: Vec3,
+    /// `VIRaster::SetFog`: linear in view depth from `near` (none) to `far`
+    /// (all fog colour), as the strip programs' per-vertex fog value and the
+    /// GS's FOGCOL mix.
+    pub fog: Option<(f32, f32, Vec3)>,
+    /// What the frame clears to: the sky colour until the sky is drawn.
+    pub clear: Vec3,
 }
 
 impl View {
-    /// Placeholder daylight until `VIScene::SetupTimeOfDay` is ported.
+    /// Fixed daylight, no fog: for looking at models on their own.
     pub fn daylight(view_proj: Mat4) -> Self {
-        View { view_proj, sun_dir: Vec3::new(0.35, -0.8, 0.45), sun: Vec3::splat(0.6), ambient: Vec3::splat(0.45) }
+        View {
+            view_proj,
+            sun_dir: Vec3::new(0.35, -0.8, 0.45),
+            sun: Vec3::splat(0.6),
+            ambient: Vec3::splat(0.45),
+            fog: None,
+            clear: Vec3::new(0.18, 0.2, 0.24),
+        }
     }
 }
 
@@ -423,6 +448,14 @@ impl Renderer {
             sun_dir: view.sun_dir.normalize().extend(0.0).to_array(),
             sun: view.sun.extend(self.start.elapsed().as_secs_f32()).to_array(),
             ambient: view.ambient.extend(0.0).to_array(),
+            fog_color: match view.fog {
+                Some((_, _, c)) => c.extend(1.0).to_array(),
+                None => [0.0; 4],
+            },
+            fog: match view.fog {
+                Some((n, f, _)) => [n, f.max(n + 1e-3), 0.0, 0.0],
+                None => [0.0, 1.0, 0.0, 0.0],
+            },
         };
         queue.write_buffer(&self.frame_buf, 0, bytemuck::bytes_of(&uniform));
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -432,7 +465,12 @@ impl Renderer {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.18, g: 0.2, b: 0.24, a: 1.0 }),
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: view.clear.x as f64,
+                        g: view.clear.y as f64,
+                        b: view.clear.z as f64,
+                        a: 1.0,
+                    }),
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -489,7 +527,7 @@ fn upload_rgba(device: &wgpu::Device, queue: &wgpu::Queue, w: u32, h: u32, rgba:
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        format: TEXTURE_FORMAT,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
@@ -528,7 +566,7 @@ pub fn capture(
     view: &View,
     models: &[&GpuModel],
 ) -> Vec<u8> {
-    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let format = TARGET_FORMAT;
     let target = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("capture"),
         size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },

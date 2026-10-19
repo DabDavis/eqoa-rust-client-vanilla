@@ -12,7 +12,7 @@ use crate::character::{AnimCache, load_hsprite};
 use crate::coll::{CollSphere, EnvRay};
 use crate::hsprite::{AnimScene, HSprite};
 use crate::collide::{Collide, CollBuffer, cull_sphere};
-use crate::fpu::{F, Model};
+use crate::fpu::{F, Model, clamp, f};
 use crate::geom::{BBox, Matrix44, Plane, Sphere};
 use crate::scene::{Filter, FilterKind, Scene};
 use crate::vect::Vect3;
@@ -116,6 +116,84 @@ pub struct World<M: Model> {
     pub hsprites: Vec<(HSprite<M>, Vec<SpriteAttachment>)>,
     pub anims: AnimScene<M>,
     anim_cache: AnimCache,
+    /// The terrain-profile grid (`VIWorld::m_regions`), if the file has one.
+    pub grid: Option<Grid<M>>,
+}
+
+/// The world header's grid (record 0x8220) and the region bytes over it
+/// (0x8240, version 2 up): one terrain-profile index per sub-cell.
+#[derive(Clone, Debug)]
+pub struct Grid<M: Model> {
+    pub rows: i32,
+    pub cols: i32,
+    pub subdiv: i32,
+    pub cell_size: F<M>,
+    pub origin: Vect3<M>,
+    pub regions: Vec<u8>,
+}
+
+/// `VITerrainProfileBlend`: four profile indices and their weights.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ProfileBlend<M: Model> {
+    pub index: [i32; 4],
+    pub weight: [F<M>; 4],
+}
+
+impl<M: Model> Grid<M> {
+    fn read(c: &Container, base: NodeId) -> Option<Self> {
+        let h = c.child(base, 0x8220)?;
+        let d = c.body(h);
+        let v = c.node(h).version;
+        let mut p = if v != 0 { 4 } else { 0 };
+        p += 24; // the bbox
+        let (rows, cols) = (rd_i(d, p), rd_i(d, p + 4));
+        p += 8;
+        let subdiv = if v != 0 {
+            p += 4;
+            rd_i(d, p - 4)
+        } else {
+            4
+        };
+        let cell_size = F::new(rd_f(d, p));
+        let origin = v3(d, p + 4);
+        let n = (rows * cols * subdiv * subdiv).max(0) as usize;
+        let mut regions = vec![0u8; n];
+        if c.node(base).version >= 2
+            && let Some(r) = c.child(base, 0x8240)
+        {
+            let b = c.body(r);
+            let k = n.min(b.len());
+            regions[..k].copy_from_slice(&b[..k]);
+        }
+        Some(Grid { rows, cols, subdiv, cell_size, origin, regions })
+    }
+
+    /// `VIWorld::CalcProfileBlend`.
+    pub fn profile_blend(&self, at: &Vect3<M>) -> ProfileBlend<M> {
+        let half = f(0.5);
+        let mut v = *at;
+        v -= self.origin;
+        v.x = v.x + self.cell_size * half;
+        v.z = v.z + self.cell_size * half;
+        let s = F::new(self.subdiv as f32) / self.cell_size;
+        let c = f(1.0) / s;
+        let x = v.x - c * half;
+        let z = v.z - c * half;
+        let (wide, high) = (self.cols * self.subdiv, self.rows * self.subdiv);
+        let col = ((x * s).0 as i32).max(0).min(wide - 1);
+        let row = ((z * s).0 as i32).max(0).min(high - 1);
+        let fx = clamp((x - F::new(col as f32) * c) * s, F::ZERO, f(1.0));
+        let fz = clamp((z - F::new(row as f32) * c) * s, F::ZERO, f(1.0));
+        let i0 = row * wide + col;
+        let i1 = if col != wide - 1 { i0 + 1 } else { i0 };
+        let (i2, i3) = if row != high - 1 { (i0 + wide, i1 + wide) } else { (i0, i1) };
+        let at = |i: i32| self.regions.get(i as usize).copied().unwrap_or(0) as i32;
+        let one = f(1.0);
+        ProfileBlend {
+            index: [at(i0), at(i1), at(i2), at(i3)],
+            weight: [(one - fx) * (one - fz), fx * (one - fz), (one - fx) * fz, fx * fz],
+        }
+    }
 }
 
 fn rd_f(d: &[u8], o: usize) -> f32 {
@@ -178,6 +256,7 @@ impl<M: Model> World<M> {
             hsprites: Vec::new(),
             anims: AnimScene::default(),
             anim_cache: AnimCache::new(),
+            grid: Grid::read(c, base),
         };
         let zones = c.zones();
         for &z in &zones {

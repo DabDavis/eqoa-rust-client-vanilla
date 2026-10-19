@@ -43,7 +43,7 @@ UI, network (DRDP), sound.
 | `esf` | CSF inflate, the OBJF record tree, DictIDs, surfaces, PrimBuffers, materials, sprites flattened to models; `Library`, the dictionary across files; zones (terrain with pre-translations, actors) | `go-eqoa-esf-tools-v2`: per-surface CRCs (801 surfaces) and per-model geometry (766 models: counts, bbox bits, position CRC); which records register a DictID, and that the first file loaded wins, from the decomp |
 | `vi` | the game logic, ported from the decomp and generic over a float model: `VIWalkControl`, `VIWalkCamera`, `VICameraEffect`; and **`VIScene::Collide`**: the world and zone BSPs, rooms, collision buffers (all three packings), placed actors and their insertion, Simple/Sub/Group/LOD sprites, `GetEnvFlags` and the liquid-surface ray, loaded from the world file as `VIESFParse` loads it (`world.rs`) | **bit for bit against the decomp compiled for the host** (eqoa-port's `make oracle`), under the `Ieee` model: 18 walk-control and 11 camera methods; `VIMatrix44` Transform/InvertAffine/Mul, `VIPlane`, the transformed `VICollSphere::Init`, the triangle/edge/vertex sweeps, and `CollideObj` over 102 real TUNARIA buffers; the BSP walk against brute force over every room and actor (3,000 sweeps). Negative controls fail |
 | `vi` (animation) | `VIHSprite` (the pose evaluator: plays, their timing and 250 ms blends, freezes, LOD rest frames, the hierarchy, bind pose and inverse, centre transform, skin palette), `VIHSpriteAnim` (full and packed clips, triggers), `VICSprite` (66-entry play list, priorities, `SetDefaultEntries`, `SetDefaults`, the `SetLocomotion`/`SetAnimation` arbiter and its two-layer sync), `VIWalkControl::UpdateSprite`, and the loader for CSprite records | **bit for bit against the decomp** (oracle op 500 builds the human from CHAR.ESF as a real VICSprite in a bare VIScene): 320 steps of a locomotion script, all 40 node matrices equal at every step; planted bugs fail |
-| `render` | wgpu: instanced models, a texture cache by DictID, the strip programs' lighting (colour + ambient + sun, alpha as sun visibility) and back-face culling, GPU skinning (`VIRStrip4`'s four weighted palette matrices), and one pass per material layer with `VIMaterial::ConstructTextPass`'s GS state: the alpha test or one of four blend modes (add, subtract, alpha, multiply), colour-only writes for blended layers, wrap modes, the UV transform and its scroll, the layer colour as c/255; offscreen capture | by eye, for now |
+| `render` | wgpu: instanced models, a texture cache by DictID, the strip programs' lighting (colour + ambient + sun, alpha as sun visibility) and back-face culling, GPU skinning (`VIRStrip4`'s four weighted palette matrices), and linear fog on view depth as `VIRaster::SetFog` sets it, colour arithmetic on the bytes as the GS does it (no sRGB anywhere), and one pass per material layer with `VIMaterial::ConstructTextPass`'s GS state: the alpha test or one of four blend modes (add, subtract, alpha, multiply), colour-only writes for blended layers, wrap modes, the UV transform and its scroll, the layer colour as c/255; offscreen capture | by eye, for now |
 | `eqoa` | the client binary: `ls`, `tree`, `zones`, `view` (winit window) and `shot` (PNG, no window); walking (`walker.rs`, driven as `VIClient::UpdateControls` drives it in third person) on the game's own collision world, the zone and its neighbours drawn | by eye |
 
 ```bash
@@ -115,12 +115,15 @@ order per stage is not yet measured.
 - `VICameraEffect`'s blend into a scripted camera (a quaternion slerp).
 - The camera preset's own numbers (`ApplyCameraPreset`); the walk camera's
   defaults stand in.
-- Time of day is clear-sky only: `InitTimeOfDay`'s table and
-  `SetupTimeOfDayLights`' interpolation are ported (`vi::tod`), the weather and
-  terrain profiles that blend toward overcast, the sky and fog are not. The hour
-  runs from 10:00 at 24 h per hour (`EQOA_HOUR` pins it); a live game gets it
-  from the server.
-- The point light, static lighting and fog. Blended layers are drawn after every
+- Time of day is clear-sky only: `InitTimeOfDay`'s table,
+  `SetupTimeOfDayLights`, `SetupTimeOfDayFog` (the four env-flag fogs too) and
+  the sky colour of `SetupTimeOfDaySky` are ported (`vi::tod`), over the world's
+  terrain-profile grid (`VIWorld::CalcProfileBlend`, `SetProfiles`). Not ported:
+  the weather that sets the overcast weight, and the sky itself (`VIAtmosphere`'s
+  dome, clouds, sun and moon): the frame clears to the sky colour. The hour runs
+  from 10:00 at 24 h per hour (`EQOA_HOUR` pins it); a live game gets it from the
+  server. None of `vi::tod` is held to the oracle yet.
+- The point light and static lighting. Blended layers are drawn after every
   opaque one, not interleaved strip by strip as the game draws them.
 - Zone streaming: a walk loads the whole world file and draws the zones within
   2.5 km of the chosen one.

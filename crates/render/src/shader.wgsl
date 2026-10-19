@@ -9,13 +9,19 @@
 // the vertex alpha is a sun-visibility factor. An opaque layer is alpha
 // tested at 128 of 255 (TEST 0x3080B); a blended layer's alpha is the
 // texture's times the layer colour's, and the pipeline blends it. Not yet
-// ported: the point light, the static-lighting term, fog.
+// ported: the point light, the static-lighting term.
+//
+// Fog is the strip programs' clamp(w·scale + offset, 0, 255), with scale and
+// offset from VIRaster::SetFog: linear in view depth w, none at the near
+// distance and all fog colour at the far one, mixed after texturing.
 
 struct Frame {
     view_proj: mat4x4<f32>,
     sun_dir: vec4<f32>,
     sun: vec4<f32>,      // w: time in seconds
     ambient: vec4<f32>,
+    fog_color: vec4<f32>,  // w: on
+    fog: vec4<f32>,        // near, far
 };
 @group(0) @binding(0) var<uniform> frame: Frame;
 
@@ -54,6 +60,8 @@ struct VsOut {
     @location(0) uv: vec2<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) color: vec4<f32>,
+    // 1 none, 0 all fog.
+    @location(3) fog: f32,
 };
 
 @vertex
@@ -78,6 +86,7 @@ fn vs_main(v: VsIn) -> VsOut {
         nrm = vec4<f32>(sn.xyz, 0.0);
     }
     o.clip = frame.view_proj * model * pos;
+    o.fog = clamp((frame.fog.y - o.clip.w) / (frame.fog.y - frame.fog.x), 0.0, 1.0);
     // The layer's UV transform, and its scroll (VIMaterial::Process: the
     // offset grows at the rate and drops its whole part past ±1).
     let s = layer.uv1.zw * frame.sun.w;
@@ -105,5 +114,9 @@ fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
     let n = normalize(i.normal);
     let sun = frame.sun.rgb * max(-dot(n, frame.sun_dir.xyz), 0.0) * i.color.a;
     let light = clamp(i.color.rgb + frame.ambient.rgb + sun, vec3<f32>(0.0), vec3<f32>(1.0));
-    return vec4<f32>(texel.rgb * layer.tint.rgb * light, alpha);
+    var rgb = texel.rgb * layer.tint.rgb * light;
+    if (frame.fog_color.w > 0.5) {
+        rgb = mix(frame.fog_color.rgb, rgb, i.fog);
+    }
+    return vec4<f32>(rgb, alpha);
 }

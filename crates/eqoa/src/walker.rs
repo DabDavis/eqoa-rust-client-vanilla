@@ -122,6 +122,11 @@ impl Walker {
         proj * glam::camera::rh::view::look_to_mat4(eye, dir.normalize_or(Vec3::Z), Vec3::Y)
     }
 
+    /// Where the camera is.
+    pub fn eye_position(&self) -> Vec3 {
+        Vec3::from(self.eye.position.to_array())
+    }
+
     pub fn describe(&self) -> String {
         let env = self.scene.env_flags(&self.cam.walk.phys.position);
         let p = &self.cam.walk.phys;
