@@ -434,6 +434,8 @@ pub fn shot_with(
                             p.book_key(k, down);
                         } else if p.mode == 35 {
                             p.who_key(k, down);
+                        } else if p.char_window() {
+                            p.char_key(k, down);
                         } else {
                             p.start_key(k, down);
                         }
@@ -451,6 +453,12 @@ pub fn shot_with(
                         None if k == text.chars().count() => p.edit_key(13, true),
                         None => {}
                     }
+                }
+                // `EQOA_QUESTS=a|b|...`: quests as if 0x007C had brought them.
+                if t == at
+                    && let Ok(q) = std::env::var("EQOA_QUESTS")
+                {
+                    p.fake_quests(&q);
                 }
                 // `EQOA_INVITE`: the target invited just after targeting
                 // (`DoAction(0x07010000)`); `EQOA_ACCEPT`: any message box
@@ -976,6 +984,26 @@ impl ApplicationHandler for App {
                             && !(down && event.repeat)
                         {
                             p.who_key(k, down);
+                        }
+                        return;
+                    }
+                    // the character windows (the quest journal, the trainer,
+                    // class mastery, factions): the arrows, Enter or E, Escape
+                    if p.char_window() {
+                        let k = match &event.logical_key {
+                            Key::Named(NamedKey::ArrowUp) => Some(K::UP),
+                            Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
+                            Key::Named(NamedKey::ArrowLeft) => Some(136),
+                            Key::Named(NamedKey::ArrowRight) => Some(137),
+                            Key::Named(NamedKey::Enter) => Some(K::CROSS),
+                            Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
+                            Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
+                            _ => None,
+                        };
+                        if let Some(k) = k
+                            && !(down && event.repeat)
+                        {
+                            p.char_key(k, down);
                         }
                         return;
                     }

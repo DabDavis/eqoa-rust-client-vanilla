@@ -33,6 +33,7 @@ mod spellbook;
 mod infotext;
 mod inventory;
 mod itemmenu;
+mod questlog;
 mod startmenu;
 mod trails;
 mod wholist;

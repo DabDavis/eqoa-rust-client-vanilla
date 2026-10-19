@@ -129,7 +129,7 @@ pub struct Play {
     pub reply_name: String,
     /// `VIWndGame::m_mode`: 0 playing, 2 the edit box, 7 a dialog's
     /// answers, 9 a dialog showing, 13 the start menu, 14 a message box,
-    /// 35 the who list.
+    /// 22 the quest journal, 35 the who list.
     pub mode: i32,
     /// `m_dialogs`: dialogs waiting while another mode is up (at most 11).
     dialogs: std::collections::VecDeque<Vec<u16>>,
@@ -174,6 +174,11 @@ pub struct Play {
     who_wnd: crate::wholist::WhoList,
     who_open: bool,
     who_keys: Vec<(i32, bool)>,
+    /// The quests (`m_questTitle`) and the journal (mode 22).
+    quests: crate::questlog::Quests,
+    quest_log: crate::questlog::QuestLog,
+    quest_open: bool,
+    quest_keys: Vec<(i32, bool)>,
     who_tell: Option<String>,
     /// `VIWndEdit` (mode 2), and keys for it waiting for the raster.
     edit: crate::editbox::EditBox,
@@ -492,7 +497,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false };
         p.take_abilities();
         p
     }
@@ -630,6 +635,8 @@ impl Play {
                     self.cues.push(crate::sound::Cue::Ui(1));
                 }
                 Event::Opcode { op: 0x0E02, data } => self.who.recv(&data),
+                Event::Opcode { op: 0x007C, data } => self.quests.recv_add(&data),
+                Event::Opcode { op: 0x007D, data } => self.quests.recv_remove(&data),
                 Event::Pet(id) => {
                     self.pet_id = id.unwrap_or(u32::MAX);
                     if id.is_none() {
@@ -1266,10 +1273,12 @@ impl Play {
         }
     }
 
-    /// The dump's abilities, by id, and its token.
+    /// The dump's abilities, by id, and its token; its quests.
     fn take_abilities(&mut self) {
         self.abilities = self.dump.abilities.iter().map(|a| (a.id, a.clone())).collect();
         self.ability_token = self.dump.p2bb60;
+        // the dump's quests (m_questCount, m_questTitle) and their stamp
+        self.quests = crate::questlog::Quests { titles: self.dump.quests.iter().map(|q| crate::ui::wide(q)).collect(), stamp: self.dump.p2bb0c };
     }
 
     /// A word with a name in its `%s` to the chat log.
@@ -1578,13 +1587,71 @@ impl Play {
                     self.open_edit(0xB0F0000, 128, -1, false);
                     self.edit.title = self.chat_title();
                 }
+                // OpenQuestLog: mode 22
+                0x0B0A_0000 => {
+                    self.quest_open = true;
+                    self.mode = 22;
+                }
                 0x0B05_1000 | 0x0B05_1006 | 0x0B05_1009 | 0x0B05_100B => {
                     eprintln!("play: start menu {msg:#x}: its window is not ported");
                 }
-                0x0B05_1007 | 0x0B05_1008 | 0x0B05_100A | 0x0B05_100C | 0x0B0A_0000 | 0x0B0B_0000 | 0x0B0B_0002 | 0x0B0D_0000 | 0x0B0D_0001 | 0x0B0B_1000 | 0x0B0B_1001 => {
+                0x0B05_1007 | 0x0B05_1008 | 0x0B05_100A | 0x0B05_100C | 0x0B0B_0000 | 0x0B0B_0002 | 0x0B0D_0000 | 0x0B0D_0001 | 0x0B0B_1000 | 0x0B0B_1001 => {
                     eprintln!("play: start menu {msg:#x}: the guild and its windows are not ported");
                 }
                 _ => self.do_action(msg, id),
+            }
+        }
+    }
+
+    /// Quests as if 0x007C had brought them (`EQOA_QUESTS=a|b|...` in a
+    /// playshot).
+    pub fn fake_quests(&mut self, spec: &str) {
+        for q in spec.split('|') {
+            self.quests.add(crate::ui::wide(q));
+        }
+    }
+
+    /// A character window is up (the quest journal, mode 22).
+    pub fn char_window(&self) -> bool {
+        self.mode == 22
+    }
+
+    /// A key for the character window up, handled with the next HUD frame.
+    pub fn char_key(&mut self, key: i32, down: bool) {
+        if self.mode == 22 {
+            self.quest_keys.push((key, down));
+        }
+    }
+
+    /// The journal's open, keys, drawing and what it asks.
+    fn run_quests(&mut self, vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster) {
+        let now = self.session.now() as i64;
+        if std::mem::take(&mut self.quest_open) {
+            self.quest_log.open(vui, r);
+        }
+        let mut ups = Vec::new();
+        let mut cues = Vec::new();
+        for (k, down) in std::mem::take(&mut self.quest_keys) {
+            if self.mode != 22 {
+                break;
+            }
+            ups.extend(self.quest_log.key(vui, &self.quests, k, down, now, &mut cues));
+        }
+        if self.mode == 22 {
+            self.quest_log.draw(vui, r, &self.quests, now, &mut cues);
+        }
+        self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
+        for up in ups {
+            match up {
+                // ClosePanel6DC: CloseQuestLog, back to the start menu
+                crate::questlog::QuestUp::Close => {
+                    self.mode = 0;
+                    self.open_start_menu(false);
+                }
+                crate::questlog::QuestUp::Drop(i) => {
+                    let m = self.quests.send_remove(i);
+                    self.session.send(&m);
+                }
             }
         }
     }
@@ -2266,6 +2333,7 @@ impl Play {
             }
             actions = self.run_start_menu(vui, &mut r, &start_loc);
             self.run_who(vui, &mut r);
+            self.run_quests(vui, &mut r);
             self.run_edit(vui, &r);
             if self.mode == 2 {
                 let mut cues = Vec::new();
