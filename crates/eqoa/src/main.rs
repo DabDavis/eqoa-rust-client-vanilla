@@ -10,7 +10,8 @@
 //! eqoa view <world> walk <n>     the character, walking in a zone
 //! eqoa shot <file> [model | zone <n>] <out.png> [camera]   one view, offscreen
 //! eqoa listen <world> <x> <z> <seconds> <out.wav> [hour] [walk]   the world's sound there, offline
-//!                               (walk: the human walks forward, its footsteps with it)
+//!                               (walk: the human walks forward, its footsteps with it;
+//!                                cues: the respawn cue at 1 s and the level-up sound at 2 s)
 //! ```
 //!
 //! A model is a list index or a DictID in hex (`0x…`). A `shot` camera is
@@ -60,7 +61,8 @@ pub fn disc(arg: Option<&String>) -> Result<iso::Iso> {
 /// The world's sound at one spot, offline: the camera stands 3 above the
 /// ground at (x, z), the game runs at 30 frames a second, and the mix is
 /// written to a WAV.
-fn listen(file: &str, x: f32, z: f32, secs: f32, out: &str, hour: f32, walk: bool) -> Result<()> {
+#[allow(clippy::too_many_arguments)]
+fn listen(file: &str, x: f32, z: f32, secs: f32, out: &str, hour: f32, walk: bool, cues: bool) -> Result<()> {
     use vi::fpu::Ee;
     let mut lib = esf::Library::new();
     let f = lib.add(file, esf::Container::open(disc(None)?.read(file)?)?);
@@ -80,6 +82,12 @@ fn listen(file: &str, x: f32, z: f32, secs: f32, out: &str, hour: f32, walk: boo
         let c = walker::Controls { fwd: if walk { 1.0 } else { 0.0 }, strafe: 0.0, orbit: 0.0, pitch: 0.0 };
         walker.frame(c, now);
         walker.pose_sounding(Some(&mut sound.sink()));
+        if cues && k == 30 {
+            sound.cue(&sound::Cue::Named("respawn", 0.4));
+        }
+        if cues && k == 60 {
+            sound.cue(&sound::Cue::Ui(16));
+        }
         let eye = walker.eye;
         sound.frame(&mut walker.scene, &eye, hour, now);
         pcm.extend(sound.audio().render(1600));
@@ -179,8 +187,9 @@ fn run(args: &[String]) -> Result<()> {
             let (x, z, secs) = (num(2)?, num(3)?, num(4)?);
             let out = args.get(5).ok_or(usage)?;
             let hour = args.get(6).map(|h| h.parse::<f32>()).transpose()?.unwrap_or(10.0);
-            let walk = args.get(7).is_some_and(|a| a == "walk");
-            listen(file, x, z, secs, out, hour, walk)?;
+            let walk = args[7.min(args.len())..].iter().any(|a| a == "walk");
+            let cues = args[7.min(args.len())..].iter().any(|a| a == "cues");
+            listen(file, x, z, secs, out, hour, walk, cues)?;
         }
         Some("login") => {
             let host = args.get(1).ok_or("usage: eqoa login <host> <user> (password in EQOA_PASSWORD)")?;

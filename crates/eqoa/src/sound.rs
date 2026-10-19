@@ -19,6 +19,19 @@ use vi::camera::Eye;
 use vi::fpu::{Ee, F};
 use vi::world::{SpriteKind, World};
 
+/// A sound the client asks for: `VIClient::PlaySound(id)` (a row of
+/// UISOUND.TXT at its `GetUISound` volume) or `PlayCue(name, volume)`.
+#[derive(Clone, Debug)]
+pub enum Cue {
+    Ui(i32),
+    Named(&'static str, f32),
+}
+
+/// SUPPORT's `sUISounds`: 17 (id, volume) pairs at this address in the
+/// image, which is indexed by `VA - 0x003E3D00`.
+const UI_SOUNDS_VA: usize = 0x004E_DA48;
+const IMAGE_BASE: usize = 0x003E_3D00;
+
 /// `VISceneSoundTrack::SetTracks`: a (day, night) pair of XM DictIDs for each
 /// terrain profile's music index; index 0 is silence.
 const TRACKS: [[u32; 2]; 11] = [
@@ -103,6 +116,9 @@ pub struct Sound {
     chars: HashMap<u32, (i32, u32)>,
     /// the game's `rand()`
     rand: vi::csprite::Rand,
+    /// `VIUI::m_sounds` (UISOUND.TXT) and `sUISounds`' volumes, when the
+    /// player's SUPPORT image is there to read them from
+    ui: Option<(vi::strtab::StringTable, [f32; 17])>,
 }
 
 impl Sound {
@@ -162,6 +178,11 @@ impl Sound {
             stream_best: -1,
             chars: HashMap::new(),
             rand: vi::csprite::Rand(1),
+            ui: None,
+        })
+        .map(|mut s| {
+            s.load_resident(iso_path);
+            s
         })
     }
 
@@ -200,6 +221,66 @@ impl Sound {
             && let Some(&i) = self.dict.get(&id)
         {
             self.release(i);
+        }
+    }
+
+    /// What is resident from the start: UI.CSF's sounds (the UI's) and
+    /// FX.CSF's (`respawn`, `death`, `amb_underwater`), the UI's sound names,
+    /// and their volumes out of the SUPPORT image (`EQOA_SUPPORT`, else
+    /// `run/support.bin`).
+    fn load_resident(&mut self, iso_path: &std::path::Path) {
+        let Ok(mut disc) = iso::Iso::open(iso_path) else { return };
+        for f in ["DATA2/UI.CSF", "DATA2/FX.CSF"] {
+            let Some(c) = disc.read(f).ok().and_then(|b| esf::Container::open(b).ok()) else { continue };
+            for w in esf::sound::all(&c).0 {
+                let i = self.dev.create_wave(w.channels, w.blocks, w.rate, w.volume, w.pan, w.looped, &w.adpcm);
+                if i >= 0 {
+                    self.dict.insert(w.id, i);
+                }
+            }
+        }
+        // resident before the world is entered, as on the console: the whole
+        // upload queue at once (VISoundDevice::Flush)
+        self.dev.flush(&mut self.link);
+        // VIScene::Init: the underwater ambience by name
+        self.track.p20 = self.dict.get(&vi::hash::hash_resource_id("amb_underwater")).copied().unwrap_or(-1);
+        let names = disc.read("DATA/UISOUND.TXT").ok().and_then(|b| vi::strtab::StringTable::parse(&b));
+        let support = std::env::var("EQOA_SUPPORT").unwrap_or_else(|_| "run/support.bin".into());
+        let volumes = std::fs::read(&support).ok().and_then(|img| {
+            let o = UI_SOUNDS_VA - IMAGE_BASE;
+            let b = img.get(o..o + 17 * 8)?;
+            Some(std::array::from_fn(|k| f32::from_le_bytes(b[k * 8 + 4..k * 8 + 8].try_into().unwrap())))
+        });
+        match (names, volumes) {
+            (Some(n), Some(v)) => self.ui = Some((n, v)),
+            _ => eprintln!("sound: no UI sounds (UISOUND.TXT and the SUPPORT image at {support} are both needed)"),
+        }
+    }
+
+    /// `VIUI::SoundPlay(id)`: the row's name at `GetUISound`'s volume (an
+    /// id past the table takes entry 0's).
+    pub fn play_ui(&mut self, id: i32) {
+        let Some((names, vols)) = &self.ui else { return };
+        let name = names.get(id, 0).to_string();
+        let vol = vols[if (0..17).contains(&id) { id as usize } else { 0 }];
+        self.play_named(&name, vol);
+    }
+
+    /// `VIUI::SoundPlay(name, vol)`: the sound by its name's hash, at
+    /// priority 127, then its volume.
+    pub fn play_named(&mut self, name: &str, vol: f32) {
+        if let Some(&i) = self.dict.get(&vi::hash::hash_resource_id(name)) {
+            let h = self.dev.play(i, 127, 0);
+            if h >= 0 {
+                self.dev.set_volume(h, vol);
+            }
+        }
+    }
+
+    pub fn cue(&mut self, c: &Cue) {
+        match c {
+            Cue::Ui(id) => self.play_ui(*id),
+            Cue::Named(n, v) => self.play_named(n, *v),
         }
     }
 

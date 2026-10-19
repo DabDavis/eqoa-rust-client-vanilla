@@ -902,7 +902,11 @@ impl ApplicationHandler for App {
                         s.update(at, &mut w.scene, lib, gpu, Some(1));
                         s.animate(&mut w.scene, &g.renderer, &g.queue);
                     }
+                    let cues: Vec<crate::sound::Cue> = play.as_mut().map(|p| p.cues.drain(..).collect()).unwrap_or_default();
                     if let Some(s) = sound {
+                        for c in &cues {
+                            s.cue(c);
+                        }
                         s.frame(&mut w.scene, &w.eye, hour(clock), now);
                     }
                     match play {

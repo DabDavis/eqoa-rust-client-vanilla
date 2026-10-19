@@ -56,6 +56,8 @@ pub struct Play {
     pub entities: Entities,
     last_send: u32,
     puppets: Vec<Option<Puppet>>,
+    /// The sounds the client asked for this frame (`PlaySound`, `PlayCue`).
+    pub cues: Vec<crate::sound::Cue>,
     /// Each creature's `m_walk`, made with it (`CreateEntity`: `Init` at the
     /// origin), keyed by the entity's id.
     walks: Vec<Option<(u32, WalkControl<Ee>)>>,
@@ -161,6 +163,7 @@ impl Play {
 
     /// `VIWndGame::ShowDialogBox`.
     fn show_dialog_box(&mut self, d: crate::dialog::DialogBox) {
+        self.cues.push(crate::sound::Cue::Ui(15));
         let Some((vui, _, _)) = &self.hud else { return };
         self.response.set_dialog(vui, d);
         self.mode = 7;
@@ -178,7 +181,11 @@ impl Play {
             7 => {
                 let Some((vui, _, _)) = &self.hud else { return true };
                 let time = vui.time;
-                if let crate::dialog::Answer::Send(id, choice) = self.response.key(vui, key, time) {
+                let answer = self.response.key(vui, key, time);
+                if let Some(c) = self.response.cue.take() {
+                    self.cues.push(crate::sound::Cue::Ui(c));
+                }
+                if let crate::dialog::Answer::Send(id, choice) = answer {
                     self.session.send_msg(0x0035, id, choice);
                     self.mode = 0;
                 }
@@ -190,6 +197,9 @@ impl Play {
 
     /// `VIWndGame::OpenDialog`.
     fn open_dialog(&mut self, text: &[u16]) {
+        // every dialog this client opens is ShowDialog's b = 1 (0x0046, and
+        // the queue): sound 15 with it
+        self.cues.push(crate::sound::Cue::Ui(15));
         self.priv_chat.set_text(text);
         self.mode = 9;
     }
@@ -383,7 +393,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None }
+        Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None }
     }
 
     fn self_id32(&self) -> Option<u32> {
@@ -423,6 +433,9 @@ impl Play {
                     }
                 }
                 Event::LevelExp { level, exp } => {
+                    if self.dump.player.level < level {
+                        self.cues.push(crate::sound::Cue::Ui(16));
+                    }
                     self.dump.player.level = level;
                     self.dump.player.exp = exp;
                 }
@@ -491,6 +504,8 @@ impl Play {
                     eprintln!("play: world entry again as {self_id:#x} at {:?}", player.pos);
                     self.player = player;
                     self.dump = dump;
+                    // Msg000D's PlayCue
+                    self.cues.push(crate::sound::Cue::Named("respawn", 0.4));
                 }
                 _ => {}
             }

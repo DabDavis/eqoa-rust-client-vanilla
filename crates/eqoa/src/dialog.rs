@@ -68,6 +68,8 @@ pub struct Response {
     first: i32,
     window: Window,
     focus: bool,
+    /// The UI sound the last key asked for (`VIClient::PlaySound`).
+    pub cue: Option<i32>,
 }
 
 /// What a key did to the response window.
@@ -116,11 +118,14 @@ impl Response {
         let n = self.options.iter().filter(|o| !o.text.is_empty()).count() as i32;
         let at = self.sel - self.first + d;
         if at < 0 {
+            self.cue = Some(9);
             self.sel = self.first;
         } else if at >= n {
+            self.cue = Some(9);
             self.sel = self.first + n - 1;
         } else {
             self.sel += d;
+            self.cue = Some(11);
         }
         self.window.reset_tick_pulse(time);
     }
@@ -131,6 +136,7 @@ impl Response {
             Key::Up => self.step(-1, time),
             Key::Down => self.step(1, time),
             Key::Escape => {
+                self.cue = Some(8);
                 self.sel = 0;
                 self.first = 0;
                 return Answer::Send(self.dialog.id, 255);
