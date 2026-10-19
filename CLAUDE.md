@@ -25,6 +25,8 @@ The Rust client. README.md is the plan and the crate table; keep it current.
   runs on the wall clock, silent), or `eqoa listen` to a WAV; the user's speakers are real.
 - `run/support.bin` (untracked) is the player's decrypted SUPPORT image; the HUD's atlas table is read
   from it at run time (eqoa-port's gendata does the same). Never commit it or anything read from it.
+  `run/client.bin` is CLIENT's (a link to `claude-eqoa-iso/decrypted_modules/CLIENT_decompressed_SNR1.bin`):
+  the menus and gWorldInfo, its pointers resolved through the SNR1 relocations (`eqoa/src/client_image.rs`).
 - The `vi` structs are `#[repr(C)]` in the EE layout because the oracle compares raw bytes; keep it that way while ports are being proven. Later (not urgent): native runtime types beside them, converted at the edges, the layout types kept for oracle tests.
 - `ee::libm` is held to `tools/vimath-corpus` (Go, needs `../go-eqoa-vi`): regenerate the corpus with
   `go run . > ../../crates/ee/tests/libm_corpus.bin` (Go build: `TMPDIR`/`GOTMPDIR` under `~/.cache`).
