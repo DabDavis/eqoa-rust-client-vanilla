@@ -4,14 +4,18 @@
 //! ```text
 //! eqoa ls   [iso]               every file on the disc
 //! eqoa tree [iso] <file>        a container's record tree
-//! eqoa view <file> [model]       the model viewer (wgpu + winit)
-//! eqoa shot <file> <model> <out.png> [yaw pitch zoom]   one view, offscreen
+//! eqoa zones <world.esf>        the zones in a world file
+//! eqoa view <file> [model]       a model (wgpu + winit)
+//! eqoa view <world> zone <n>     a zone: terrain and every placed actor
+//! eqoa shot <file> [model | zone <n>] <out.png> [camera]   one view, offscreen
 //! ```
 //!
-//! A model is a list index or a DictID in hex (`0x…`).
+//! A model is a list index or a DictID in hex (`0x…`). A `shot` camera is
+//! `yaw pitch zoom` for a model, `x y z yaw pitch` for a zone.
 //!
 //! `iso` defaults to `$EQOA_ISO`, then `run/eqoa.iso`.
 
+mod scene;
 mod viewer;
 
 use std::process::ExitCode;
@@ -56,37 +60,102 @@ fn run(args: &[String]) -> Result<()> {
             }
             eprintln!("{} records, {} DictIDs, {} surfaces", c.nodes.len(), c.dict.len(), c.surfaces.len());
         }
-        Some("view") => {
-            let file = args.get(1).ok_or("usage: eqoa view <file> [model]")?;
-            let models = load(file)?;
-            let index = args.get(2).map_or(Some(0), |m| models.find(m)).ok_or("no such model")?;
-            viewer::run(models, index)?;
-        }
-        Some("shot") => {
-            let [_, file, which, out, rest @ ..] = args else {
-                return Err("usage: eqoa shot <file> <model> <out.png> [yaw pitch zoom]".into());
-            };
-            let models = load(file)?;
-            let index = models.find(which).ok_or("no such model")?;
-            let mut orbit = viewer::Orbit::default();
-            let nums: Vec<f32> = rest.iter().map(|s| s.parse()).collect::<std::result::Result<_, _>>()?;
-            for (slot, v) in [&mut orbit.yaw, &mut orbit.pitch, &mut orbit.zoom].into_iter().zip(nums) {
-                *slot = v;
+        Some("zones") => {
+            let file = args.get(1).ok_or("usage: eqoa zones <world.esf>")?;
+            let t = std::time::Instant::now();
+            let bytes = disc(None)?.read(file)?;
+            let read = t.elapsed();
+            let c = esf::Container::open(bytes)?;
+            eprintln!("{file}: read {read:.2?}, parsed {:.2?}, {} records", t.elapsed() - read, c.nodes.len());
+            for (i, &z) in c.zones().iter().enumerate() {
+                let pre = c.pre_translations(z);
+                let lo = pre.iter().fold([f32::MAX; 3], |a, p| [a[0].min(p[0]), a[1].min(p[1]), a[2].min(p[2])]);
+                println!(
+                    "{i:4}  {:4} patches  {:5} actors  {:3} islands  first island ({:.0}, {:.0}, {:.0})",
+                    c.terrain_patches(z).len(),
+                    c.actors(z).len(),
+                    pre.len(),
+                    lo[0],
+                    lo[1],
+                    lo[2]
+                );
             }
-            viewer::shot(&models, index, orbit, (640, 480), out)?;
         }
-        _ => return Err("usage: eqoa ls|tree|view|shot (see --help in main.rs)".into()),
+        Some("view") | Some("shot") => {
+            let shot = args[0] == "shot";
+            let usage = "usage: eqoa view <file> [model] | eqoa view <world> zone <n> | eqoa shot <same> <out.png> [camera...]";
+            let file = args.get(1).ok_or(usage)?;
+            let mut rest = &args[2..];
+            if shot {
+                // The PNG is the first argument ending in .png.
+                let at = rest.iter().position(|a| a.ends_with(".png")).ok_or(usage)?;
+                let (out, nums) = (&rest[at], &rest[at + 1..]);
+                rest = &rest[..at];
+                let (lib, src) = source(file, rest)?;
+                let cam = camera_args(&src, nums)?;
+                viewer::shot(&lib, &src, cam, (960, 540), out)?;
+            } else {
+                let (lib, src) = source(file, rest)?;
+                viewer::run(lib, src)?;
+            }
+        }
+        _ => return Err("usage: eqoa ls|tree|zones|view|shot (see main.rs)".into()),
     }
     Ok(())
 }
 
-fn load(file: &str) -> Result<viewer::Models> {
-    let models = viewer::Models::new(esf::Container::open(disc(None)?.read(file)?)?);
-    if models.list.is_empty() {
-        return Err(format!("{file}: no drawable models").into());
+/// Files every scene loads before its own, in this order (the dictionary's
+/// first-registration-wins rule makes the order matter). The character art the
+/// game keeps resident through the session.
+const SHARED: &[&str] = &["CHARCUST.CSF", "CHARFACE.CSF"];
+
+/// The library and what to show: `[model]` or `zone <n>`.
+fn source(file: &str, rest: &[String]) -> Result<(esf::Library, viewer::Source)> {
+    let mut iso = disc(None)?;
+    let mut lib = esf::Library::new();
+    let t = std::time::Instant::now();
+    let main = lib.add(file, esf::Container::open(iso.read(file)?)?);
+    for s in SHARED {
+        if !s.eq_ignore_ascii_case(file) {
+            lib.add(*s, esf::Container::open(iso.read(s)?)?);
+        }
     }
-    eprintln!("{file}: {} models", models.list.len());
-    Ok(models)
+    eprintln!("loaded {} files in {:.2?}", lib.files.len(), t.elapsed());
+    match rest {
+        [z, n] if z == "zone" => {
+            let index: usize = n.parse()?;
+            let zone = *lib.file(main).zones().get(index).ok_or("no such zone")?;
+            Ok((lib, viewer::Source::Zone { file: main, zone, index }))
+        }
+        [] | [_] => {
+            let list = scene::list_models(&lib, main);
+            let index = match rest.first() {
+                None => 0,
+                Some(m) => match m.strip_prefix("0x") {
+                    Some(hex) => {
+                        let id = u32::from_str_radix(hex, 16)? as i32;
+                        list.iter().position(|(d, _)| *d == id).ok_or("no model with that DictID")?
+                    }
+                    None => m.parse::<usize>().ok().filter(|&i| i < list.len()).ok_or("no such model")?,
+                },
+            };
+            Ok((lib, viewer::Source::Models { list, index }))
+        }
+        _ => Err("expected [model] or zone <n>".into()),
+    }
+}
+
+/// `shot` camera numbers: orbit `yaw pitch zoom`, or fly `x y z yaw pitch`.
+fn camera_args(src: &viewer::Source, n: &[String]) -> Result<Option<viewer::Camera>> {
+    let n: Vec<f32> = n.iter().map(|s| s.parse()).collect::<std::result::Result<_, _>>()?;
+    Ok(match (src, n.as_slice()) {
+        (_, []) => None,
+        (viewer::Source::Models { .. }, [yaw, pitch, zoom]) => Some(viewer::Camera::Orbit { yaw: *yaw, pitch: *pitch, zoom: *zoom }),
+        (viewer::Source::Zone { .. }, [x, y, z, yaw, pitch]) => {
+            Some(viewer::Camera::Fly { pos: glam::Vec3::new(*x, *y, *z), yaw: *yaw, pitch: *pitch })
+        }
+        _ => return Err("camera: orbit `yaw pitch zoom`, fly `x y z yaw pitch`".into()),
+    })
 }
 
 fn print_tree(c: &esf::Container, id: esf::NodeId, depth: usize) {

@@ -19,14 +19,16 @@ struct Vertex {
     pos: [f32; 3],
     uv: [f32; 2],
     normal: [f32; 3],
-    color: [f32; 3],
+    color: [f32; 4],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct FrameUniform {
     view_proj: [[f32; 4]; 4],
-    light_dir: [f32; 4],
+    sun_dir: [f32; 4],
+    sun: [f32; 4],
+    ambient: [f32; 4],
 }
 
 #[repr(C)]
@@ -36,12 +38,18 @@ struct MaterialUniform {
     flags: [f32; 4],
 }
 
-/// One model on the GPU.
+/// One model on the GPU, drawn once per instance (a model matrix each).
 pub struct GpuModel {
     vertices: wgpu::Buffer,
+    instances: wgpu::Buffer,
+    instance_count: u32,
     batches: Vec<(wgpu::Buffer, u32, wgpu::BindGroup)>,
+    /// Bounds of the model itself, before any instance transform.
     pub bounds: (Vec3, Vec3),
 }
+
+/// A texture source: the decoded image a DictID names, if any.
+pub type Textures<'a> = dyn Fn(i32) -> Option<esf::Image> + 'a;
 
 pub struct Renderer {
     pipeline: wgpu::RenderPipeline,
@@ -50,12 +58,31 @@ pub struct Renderer {
     material_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     white: wgpu::TextureView,
+    /// DictID → uploaded texture (`None`: the id resolved to nothing).
+    textures: std::collections::HashMap<i32, Option<wgpu::TextureView>>,
+    /// DictIDs a batch asked for that no loaded file holds.
+    pub missing_textures: std::collections::BTreeSet<i32>,
 }
 
-/// What to draw this frame.
+/// What to draw this frame. The lights are the VU1 strip programs' uniforms:
+/// the direction the sun's light TRAVELS, its colour, and ambient.
 pub struct View {
     pub view_proj: Mat4,
-    pub light_dir: Vec3,
+    pub sun_dir: Vec3,
+    pub sun: Vec3,
+    pub ambient: Vec3,
+}
+
+impl View {
+    /// Placeholder daylight until `VIScene::SetupTimeOfDay` is ported.
+    pub fn daylight(view_proj: Mat4) -> Self {
+        View {
+            view_proj,
+            sun_dir: Vec3::new(0.35, -0.8, 0.45),
+            sun: Vec3::splat(0.6),
+            ambient: Vec3::splat(0.45),
+        }
+    }
 }
 
 impl Renderer {
@@ -99,11 +126,18 @@ impl Renderer {
                 module: &shader,
                 entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<Vertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x3, 3 => Float32x3],
-                })],
+                buffers: &[
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<Vertex>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x3, 3 => Float32x4],
+                    }),
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: 64,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &wgpu::vertex_attr_array![4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4],
+                    }),
+                ],
             },
             // Strips are flattened to lists; the game draws both faces of most
             // geometry (the GS has no culling), so no culling here either.
@@ -144,11 +178,45 @@ impl Renderer {
             ..Default::default()
         });
         let white = upload_rgba(device, queue, 1, 1, &[255; 4]);
-        Renderer { pipeline, frame_buf, frame_bg, material_layout, sampler, white }
+        Renderer {
+            pipeline,
+            frame_buf,
+            frame_bg,
+            material_layout,
+            sampler,
+            white,
+            textures: Default::default(),
+            missing_textures: Default::default(),
+        }
     }
 
-    /// Uploads a model and the textures it names out of `c`.
-    pub fn upload(&self, device: &wgpu::Device, queue: &wgpu::Queue, c: &esf::Container, m: &esf::Model) -> GpuModel {
+    fn texture(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: i32, src: &Textures) -> Option<wgpu::TextureView> {
+        if id == 0 {
+            return None;
+        }
+        let missing = &mut self.missing_textures;
+        self.textures
+            .entry(id)
+            .or_insert_with(|| {
+                let img = src(id);
+                if img.is_none() {
+                    missing.insert(id);
+                }
+                img.map(|i| upload_rgba(device, queue, i.width, i.height, &i.rgba))
+            })
+            .clone()
+    }
+
+    /// Uploads a model, drawn once per matrix in `instances` (column-major),
+    /// with its textures out of `textures` (cached by DictID).
+    pub fn upload(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        m: &esf::Model,
+        instances: &[[[f32; 4]; 4]],
+        textures: &Textures,
+    ) -> GpuModel {
         let verts: Vec<Vertex> = (0..m.pos.len())
             .map(|i| Vertex { pos: m.pos[i], uv: m.uv[i], normal: m.normal[i], color: m.color[i] })
             .collect();
@@ -162,8 +230,7 @@ impl Renderer {
             if b.indices.is_empty() {
                 continue;
             }
-            let image = c.surface(b.texture()).and_then(|s| s.decode(&c.data));
-            let view = image.as_ref().map(|img| upload_rgba(device, queue, img.width, img.height, &img.rgba));
+            let view = self.texture(device, queue, b.texture(), textures);
             let tint = b
                 .layers
                 .iter()
@@ -198,7 +265,12 @@ impl Renderer {
         }
         let lo = m.pos.iter().fold(Vec3::splat(f32::MAX), |a, p| a.min(Vec3::from(*p)));
         let hi = m.pos.iter().fold(Vec3::splat(f32::MIN), |a, p| a.max(Vec3::from(*p)));
-        GpuModel { vertices, batches, bounds: (lo, hi) }
+        let instance_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("instances"),
+            contents: bytemuck::cast_slice(instances),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        GpuModel { vertices, instances: instance_buf, instance_count: instances.len() as u32, batches, bounds: (lo, hi) }
     }
 
     pub fn draw(
@@ -212,7 +284,9 @@ impl Renderer {
     ) {
         let uniform = FrameUniform {
             view_proj: view.view_proj.to_cols_array_2d(),
-            light_dir: view.light_dir.normalize().extend(0.0).to_array(),
+            sun_dir: view.sun_dir.normalize().extend(0.0).to_array(),
+            sun: view.sun.extend(0.0).to_array(),
+            ambient: view.ambient.extend(0.0).to_array(),
         };
         queue.write_buffer(&self.frame_buf, 0, bytemuck::bytes_of(&uniform));
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -238,11 +312,15 @@ impl Renderer {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.frame_bg, &[]);
         for m in models {
+            if m.instance_count == 0 {
+                continue;
+            }
             pass.set_vertex_buffer(0, m.vertices.slice(..));
+            pass.set_vertex_buffer(1, m.instances.slice(..));
             for (indices, count, bg) in &m.batches {
                 pass.set_bind_group(1, bg, &[]);
                 pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..*count, 0, 0..1);
+                pass.draw_indexed(0..*count, 0, 0..m.instance_count);
             }
         }
     }
@@ -342,4 +420,13 @@ pub fn capture(
         out.extend_from_slice(&data[y * row as usize..y * row as usize + w as usize * 4]);
     }
     out
+}
+
+/// One instance, untransformed.
+pub const IDENTITY: [[f32; 4]; 4] = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+
+/// Textures out of a library: the surface a DictID names, wherever it was
+/// registered, decoded.
+pub fn library_textures(lib: &esf::Library) -> impl Fn(i32) -> Option<esf::Image> + '_ {
+    move |id| lib.surface(id).and_then(|(c, s)| s.decode(&c.data))
 }

@@ -25,8 +25,9 @@ pub struct VertexList {
     pub pos: Vec<[f32; 3]>,
     pub uv: Vec<[f32; 2]>,
     pub normal: Vec<[f32; 3]>,
-    /// RGB in 0..1. A skinned buffer has none (white).
-    pub color: Vec<[f32; 3]>,
+    /// RGBA in 0..1. On packed geometry the alpha is a sun-visibility factor
+    /// (VU1 `VIRStrip2`/`VIRStrip3`). A skinned buffer has no colour: (0,0,0,1).
+    pub color: Vec<[f32; 4]>,
     /// Skinned only: four bone indices (255 = unused) and weights summing to 127.
     pub bones: Vec<[u8; 4]>,
     pub weights: Vec<[u8; 4]>,
@@ -95,7 +96,7 @@ impl PrimBuffer {
                     l.pos.push([f(0), f(1), f(2)]);
                     l.uv.push([f(3), f(4)]);
                     l.normal.push([f(5), f(6), f(7)]);
-                    l.color.push([r[32] as f32 / 255.0, r[33] as f32 / 255.0, r[34] as f32 / 255.0]);
+                    l.color.push([r[32], r[33], r[34], r[35]].map(|c| c as f32 / 255.0));
                     continue;
                 }
                 let s = |k: usize| i16::from_le_bytes([r[k * 2], r[k * 2 + 1]]) as f32;
@@ -103,11 +104,11 @@ impl PrimBuffer {
                 l.uv.push([s(3) * pack2, s(4) * pack2]);
                 l.normal.push([r[10] as i8 as f32 / 127.0, r[11] as i8 as f32 / 127.0, r[12] as i8 as f32 / 127.0]);
                 if out.kind == 5 {
-                    l.color.push([1.0; 3]);
+                    l.color.push([0.0, 0.0, 0.0, 1.0]);
                     l.bones.push([r[13], r[14], r[15], r[16]]);
                     l.weights.push([r[17], r[18], r[19], r[20]]);
                 } else {
-                    l.color.push([r[13] as f32 / 255.0, r[14] as f32 / 255.0, r[15] as f32 / 255.0]);
+                    l.color.push([r[13], r[14], r[15], r[16]].map(|c| c as f32 / 255.0));
                     if out.kind == 4 {
                         l.vgroup.push(i16::from_le_bytes([r[17], r[18]]));
                     }
@@ -195,7 +196,7 @@ pub struct Model {
     pub pos: Vec<[f32; 3]>,
     pub uv: Vec<[f32; 2]>,
     pub normal: Vec<[f32; 3]>,
-    pub color: Vec<[f32; 3]>,
+    pub color: Vec<[f32; 4]>,
     pub bones: Vec<[u8; 4]>,
     pub weights: Vec<[u8; 4]>,
     pub batches: Vec<Batch>,
@@ -237,28 +238,161 @@ impl Placement {
     }
 }
 
-impl Container {
-    /// Material index → layers, for one sprite's palette.
-    pub fn sprite_materials(&self, sprite: NodeId) -> Vec<Vec<Layer>> {
-        let mut mp = self.child(sprite, MATPAL);
-        if mp.is_none() {
-            // SubSprite variants name their palette by DictID instead of nesting it.
-            let hdr = self.child(sprite, SUBSPRITE_HDR).or_else(|| self.child(sprite, SKINSUBSPRITE2));
-            if let Some(h) = hdr.filter(|&h| self.node(h).size >= 8) {
-                mp = self.lookup(i32le(&self.data, self.node(h).body + 4)).filter(|&n| self.node(n).ty == MATPAL);
+/// Resolves a DictID to the record it names and the container holding it.
+pub type Resolve<'a> = dyn Fn(i32) -> Option<(&'a Container, NodeId)> + 'a;
+
+/// Material index → layers, for one sprite's palette.
+fn sprite_materials<'a>(c: &'a Container, sprite: NodeId, resolve: &Resolve<'a>) -> Vec<Vec<Layer>> {
+    let mut mp = c.child(sprite, MATPAL).map(|n| (c, n));
+    if mp.is_none() {
+        // SubSprite variants name their palette by DictID instead of nesting it.
+        let hdr = c.child(sprite, SUBSPRITE_HDR).or_else(|| c.child(sprite, SKINSUBSPRITE2));
+        if let Some(h) = hdr.filter(|&h| c.node(h).size >= 8) {
+            mp = resolve(i32le(&c.data, c.node(h).body + 4)).filter(|(pc, n)| pc.node(*n).ty == MATPAL);
+        }
+    }
+    let Some((pc, arr)) = mp.and_then(|(pc, mp)| pc.child(mp, MATERIAL_ARRAY).map(|a| (pc, a))) else {
+        return Vec::new();
+    };
+    pc.node(arr)
+        .children
+        .iter()
+        .filter(|&&m| pc.node(m).ty == MATERIAL)
+        .map(|&m| read_material(&pc.data, pc.node(m).body, pc.node(m).version))
+        .collect()
+}
+
+/// Appends one sprite's PrimBuffer to `m`, placed.
+fn add_sprite<'a>(
+    m: &mut Model,
+    keys: &mut Vec<(i32, [u8; 4])>,
+    c: &'a Container,
+    sprite: NodeId,
+    place: impl Fn([f32; 3]) -> [f32; 3],
+    pre: &[[f32; 3]],
+    resolve: &Resolve<'a>,
+) {
+    let Some(pb) = c.child(sprite, PRIMBUF).or_else(|| c.child(sprite, SKINPRIMBUF)) else {
+        return;
+    };
+    m.parts += 1;
+    let geom = PrimBuffer::read(c, pb);
+    let mats = sprite_materials(c, sprite, resolve);
+    for l in geom.lists.iter().filter(|l| !l.pos.is_empty()) {
+        let layers = usize::try_from(l.material).ok().and_then(|i| mats.get(i)).cloned().unwrap_or_default();
+        let base_layer = layers.iter().find(|x| x.texture != 0).cloned();
+        let base = m.pos.len() as u32;
+        // Terrain: each vertex is offset by its pre-translation group. pbtype 4
+        // carries the group; pbtype 2 takes entry 0 (the zero value indexes the
+        // table just the same in the Go reference).
+        m.pos.extend(l.pos.iter().enumerate().map(|(i, &p)| {
+            let p = place(p);
+            let g = l.vgroup.get(i).copied().unwrap_or(0);
+            match usize::try_from(g).ok().and_then(|g| pre.get(g)) {
+                Some(t) => [p[0] + t[0], p[1] + t[1], p[2] + t[2]],
+                None => p,
+            }
+        }));
+        m.uv.extend(l.uv.iter().map(|&uv| base_layer.as_ref().map_or(uv, |b| b.apply_uv(uv))));
+        m.normal.extend_from_slice(&l.normal);
+        m.color.extend_from_slice(&l.color);
+        if l.bones.is_empty() {
+            m.bones.extend(std::iter::repeat_n([255u8; 4], l.pos.len()));
+            m.weights.extend(std::iter::repeat_n([0u8; 4], l.pos.len()));
+        } else {
+            m.skinned = true;
+            m.bones.extend_from_slice(&l.bones);
+            m.weights.extend_from_slice(&l.weights);
+        }
+        // Keyed on texture and tint, so per-race skin tones under one texture
+        // stay apart.
+        let key = base_layer.as_ref().map_or((0, [255; 4]), |b| (b.texture, b.color));
+        let bi = keys.iter().position(|k| *k == key).unwrap_or_else(|| {
+            keys.push(key);
+            m.batches.push(Batch { layers: layers.clone(), indices: Vec::new() });
+            keys.len() - 1
+        });
+        let idx = &mut m.batches[bi].indices;
+        // Strip: triangle k is (k, k+2, k+1) when k is even, (k, k+1, k+2) when odd.
+        for k in 0..l.pos.len().saturating_sub(2) as u32 {
+            let (a, b, c) = if k % 2 == 0 { (k, k + 2, k + 1) } else { (k, k + 1, k + 2) };
+            idx.extend([base + a, base + b, base + c]);
+            m.triangles += 1;
+        }
+    }
+}
+
+/// Flattens a sprite into one mesh. GroupSprite members are resolved through
+/// `resolve` and placed. `None` when it carries no geometry.
+pub fn build<'a>(c: &'a Container, id: NodeId, resolve: &Resolve<'a>) -> Option<Model> {
+    let id = c.resolve_lod(id);
+    let mut m = Model::default();
+    let mut keys = Vec::new();
+    let none = |p| Placement::NONE.apply(p);
+    match c.node(id).ty {
+        GROUPSPRITE => {
+            if let Some(mem) = c.child(id, GROUPSPRITE_MEMBERS) {
+                let d = &c.data;
+                let mut p = c.node(mem).body;
+                let n = i32le(d, p).clamp(0, 4096);
+                p += 4;
+                for _ in 0..n {
+                    if p + 32 > d.len() {
+                        break;
+                    }
+                    let place = Placement {
+                        pos: [f32le(d, p + 4), f32le(d, p + 8), f32le(d, p + 12)],
+                        scale: f32le(d, p + 16),
+                        rot: f32le(d, p + 20),
+                    };
+                    match resolve(i32le(d, p)) {
+                        Some((mc, s)) => add_sprite(&mut m, &mut keys, mc, mc.resolve_lod(s), |q| place.apply(q), &[], resolve),
+                        None => m.missing += 1,
+                    }
+                    p += 32;
+                }
+            }
+            add_sprite(&mut m, &mut keys, c, id, none, &[], resolve);
+        }
+        CSPRITE => {
+            for &k in c.child(id, CSPRITE_ARRAY).map_or(&[][..], |a| &c.node(a).children) {
+                if c.node(k).ty == CSPRITE_VARIANT {
+                    for &s in c.child(k, CSPRITE_VARIANT_MESHES).map_or(&[][..], |v| &c.node(v).children) {
+                        add_sprite(&mut m, &mut keys, c, s, none, &[], resolve);
+                    }
+                } else {
+                    add_sprite(&mut m, &mut keys, c, k, none, &[], resolve);
+                }
             }
         }
-        let Some(arr) = mp.and_then(|mp| self.child(mp, MATERIAL_ARRAY)) else {
-            return Vec::new();
-        };
-        self.node(arr)
-            .children
-            .iter()
-            .filter(|&&m| self.node(m).ty == MATERIAL)
-            .map(|&m| read_material(&self.data, self.node(m).body, self.node(m).version))
-            .collect()
+        HSPRITE => {
+            for &k in c.child(id, HSPRITE_ARRAY).map_or(&[][..], |a| &c.node(a).children) {
+                add_sprite(&mut m, &mut keys, c, k, none, &[], resolve);
+            }
+        }
+        _ => add_sprite(&mut m, &mut keys, c, id, none, &[], resolve),
     }
+    finish(m)
+}
 
+/// Builds terrain patches (SubSprites) into one model, each vertex offset by
+/// its pre-translation group.
+pub fn build_terrain<'a>(c: &'a Container, patches: &[NodeId], pre: &[[f32; 3]], resolve: &Resolve<'a>) -> Option<Model> {
+    let mut m = Model::default();
+    let mut keys = Vec::new();
+    for &ss in patches {
+        add_sprite(&mut m, &mut keys, c, ss, |p| p, pre, resolve);
+    }
+    finish(m)
+}
+
+fn finish(m: Model) -> Option<Model> {
+    // Vertex colour is a LIGHT term, added to ambient and sun before the
+    // texture multiplies (VU1 `VIRStrip`), so an all-zero colour is not black.
+    (!m.pos.is_empty()).then_some(m)
+}
+
+impl Container {
     /// A LODSprite reference lands on its empty header; step out to the
     /// highest-detail level (the first of 0x2A20's children).
     pub fn resolve_lod(&self, mut id: NodeId) -> NodeId {
@@ -273,107 +407,9 @@ impl Container {
         id
     }
 
-    /// Flattens a sprite into one mesh. GroupSprite members are resolved through
-    /// the dictionary and placed. `None` when it carries no geometry.
+    /// [`build`] with DictIDs resolved inside this container only.
     pub fn build_model(&self, id: NodeId) -> Option<Model> {
-        let id = self.resolve_lod(id);
-        let mut m = Model::default();
-        // (material layers) → batch index, keyed on texture and tint so per-race
-        // skin tones under one texture stay apart.
-        let mut keys: Vec<(i32, [u8; 4])> = Vec::new();
-        let mut add = |m: &mut Model, sprite: NodeId, place: Placement| {
-            let Some(pb) = self.child(sprite, PRIMBUF).or_else(|| self.child(sprite, SKINPRIMBUF)) else {
-                return;
-            };
-            m.parts += 1;
-            let geom = PrimBuffer::read(self, pb);
-            let mats = self.sprite_materials(sprite);
-            for l in geom.lists.iter().filter(|l| !l.pos.is_empty()) {
-                let layers = usize::try_from(l.material).ok().and_then(|i| mats.get(i)).cloned().unwrap_or_default();
-                let base_layer = layers.iter().find(|x| x.texture != 0).cloned();
-                let base = m.pos.len() as u32;
-                m.pos.extend(l.pos.iter().map(|&p| place.apply(p)));
-                m.uv.extend(l.uv.iter().map(|&uv| base_layer.as_ref().map_or(uv, |b| b.apply_uv(uv))));
-                m.normal.extend_from_slice(&l.normal);
-                m.color.extend_from_slice(&l.color);
-                if l.bones.is_empty() {
-                    m.bones.extend(std::iter::repeat_n([255u8; 4], l.pos.len()));
-                    m.weights.extend(std::iter::repeat_n([0u8; 4], l.pos.len()));
-                } else {
-                    m.skinned = true;
-                    m.bones.extend_from_slice(&l.bones);
-                    m.weights.extend_from_slice(&l.weights);
-                }
-                let key = base_layer.as_ref().map_or((0, [255; 4]), |b| (b.texture, b.color));
-                let bi = keys.iter().position(|k| *k == key).unwrap_or_else(|| {
-                    keys.push(key);
-                    m.batches.push(Batch { layers: layers.clone(), indices: Vec::new() });
-                    keys.len() - 1
-                });
-                let idx = &mut m.batches[bi].indices;
-                // Strip: triangle k is (k, k+2, k+1) when k is even, (k, k+1, k+2) when odd.
-                for k in 0..l.pos.len().saturating_sub(2) as u32 {
-                    let (a, b, c) = if k % 2 == 0 { (k, k + 2, k + 1) } else { (k, k + 1, k + 2) };
-                    idx.extend([base + a, base + b, base + c]);
-                    m.triangles += 1;
-                }
-            }
-        };
-        let ty = self.node(id).ty;
-        match ty {
-            GROUPSPRITE => {
-                if let Some(mem) = self.child(id, GROUPSPRITE_MEMBERS) {
-                    let d = &self.data;
-                    let mut p = self.node(mem).body;
-                    let n = i32le(d, p).clamp(0, 4096);
-                    p += 4;
-                    for _ in 0..n {
-                        if p + 32 > d.len() {
-                            break;
-                        }
-                        let place = Placement {
-                            pos: [f32le(d, p + 4), f32le(d, p + 8), f32le(d, p + 12)],
-                            scale: f32le(d, p + 16),
-                            rot: f32le(d, p + 20),
-                        };
-                        match self.lookup(i32le(d, p)) {
-                            Some(s) => add(&mut m, s, place),
-                            None => m.missing += 1,
-                        }
-                        p += 32;
-                    }
-                }
-                add(&mut m, id, Placement::NONE);
-            }
-            CSPRITE => {
-                let arr = self.child(id, CSPRITE_ARRAY).map(|a| self.node(a).children.clone()).unwrap_or_default();
-                for c in arr {
-                    if self.node(c).ty == CSPRITE_VARIANT {
-                        for &s in self.child(c, CSPRITE_VARIANT_MESHES).map_or(&[][..], |v| &self.node(v).children) {
-                            add(&mut m, s, Placement::NONE);
-                        }
-                    } else {
-                        add(&mut m, c, Placement::NONE);
-                    }
-                }
-            }
-            HSPRITE => {
-                let arr = self.child(id, HSPRITE_ARRAY).map(|a| self.node(a).children.clone()).unwrap_or_default();
-                for c in arr {
-                    add(&mut m, c, Placement::NONE);
-                }
-            }
-            _ => add(&mut m, id, Placement::NONE),
-        }
-        if m.pos.is_empty() {
-            return None;
-        }
-        // Equipment stores vertex colour as all zero (its lighting is baked
-        // elsewhere); drawn as albedo that is pure black, so use flat grey.
-        if m.color.iter().all(|c| *c == [0.0; 3]) {
-            m.color.iter_mut().for_each(|c| *c = [0.62; 3]);
-        }
-        Some(m)
+        build(self, id, &|d| self.lookup(d).map(|n| (self, n)))
     }
 
     /// Every sprite that can be drawn as an object: the resource directory's

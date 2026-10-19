@@ -19,8 +19,11 @@
 use std::collections::HashMap;
 use std::io::Read;
 
-mod mesh;
+mod library;
+pub(crate) mod mesh;
 mod surface;
+pub mod zone;
+pub use library::{Library, Ref};
 pub use mesh::{Batch, Layer, Model, ModelRef, PrimBuffer, VertexList};
 pub use surface::{Image, Surface};
 
@@ -38,6 +41,7 @@ pub mod types {
     pub const HSPRITE_HDR: u16 = 0x2210;
     pub const HSPRITE_ARRAY: u16 = 0x2220;
     pub const HSPRITE_HIERARCHY: u16 = 0x2400;
+    pub const SUBSPRITE: u16 = 0x2310;
     pub const SUBSPRITE_HDR: u16 = 0x2311;
     pub const SKINSUBSPRITE: u16 = 0x2320;
     pub const SKINSUBSPRITE2: u16 = 0x2321;
@@ -56,16 +60,21 @@ pub mod types {
 }
 use types::*;
 
-/// Types whose body starts with a DictID.
-const HAS_DICTID: &[u16] = &[
-    SURFACE, MATPAL_HDR, PRIMBUF, 0x1220, 0x1230, SIMPLESPRITE_HDR, HSPRITE_HDR,
-    SKINSUBSPRITE, 0x5000, CSPRITE_HDR, LODSPRITE_HDR, GROUPSPRITE_HDR, 0x2E00, 0x2F01,
-    0x4200, 0xB101, 0xC010, 0xC101, 0xC210, 0xC310,
-];
-/// Header types whose DictID names their PARENT, not themselves.
-const IS_ID_CONTAINER: &[u16] = &[
-    MATPAL_HDR, SIMPLESPRITE_HDR, HSPRITE_HDR, CSPRITE_HDR, GROUPSPRITE_HDR, 0x2F01,
-    0xB101, 0xC010, 0xC101, 0xC210, 0xC310,
+/// Which records register a DictID, read off the decomp's 27 `m_dict->Add`
+/// sites (`viesfparse.cpp`). Two shapes:
+///
+/// - the id is the first word of the record's OWN body (`Read(id)` straight
+///   after the dispatcher's `ReadBegin`): surfaces, point sprites and lights,
+///   streamed audio, animations, the CSprite ref map, flora PrimBuffers, and
+///   PrimBuffers from version 2 (`if (version >= 2) Read(id)`);
+/// - the id is the first word of the record's FIRST CHILD, a header, and the
+///   PARENT is what gets registered: every other sprite, palette, sound,
+///   particle, font and spell record.
+const ID_IN_BODY: &[u16] = &[SURFACE, 0x2D00, 0x2B00, 0x2E00, 0x2600, 0x5000, 0x1230];
+const ID_IN_BODY_FROM_V2: &[u16] = &[PRIMBUF, SKINPRIMBUF];
+const ID_IN_HEADER: &[u16] = &[
+    SIMPLESPRITE, HSPRITE, CSPRITE, LODSPRITE, CSPRITE_VARIANT, GROUPSPRITE, 0x2F00, SUBSPRITE, SKINSUBSPRITE,
+    0xB100, 0xC100, 0xC300, MATPAL, 0x7000, 0xB000, 0xB030, 0xC200, 0xC000,
 ];
 
 const CSF_HEADER_SIZE: usize = 40;
@@ -164,7 +173,8 @@ pub struct Container {
     pub data: Vec<u8>,
     pub nodes: Vec<Node>,
     pub roots: Vec<NodeId>,
-    /// DictID → the record it names. The first registration wins.
+    /// DictID → the record it names (a sprite, not its header). The first
+    /// registration wins.
     pub dict: HashMap<i32, NodeId>,
     pub surfaces: Vec<Surface>,
 }
@@ -236,13 +246,16 @@ impl Container {
                 }
                 None => self.roots.push(id),
             }
-            if HAS_DICTID.contains(&ty) && size >= 4 {
+            // First registration wins (`ParseSurfaceObj` and its siblings
+            // `Find` the id before they `Add` it).
+            let named = if ID_IN_BODY.contains(&ty) || (ID_IN_BODY_FROM_V2.contains(&ty) && version >= 2) {
+                Some(id)
+            } else {
+                parent.filter(|&p| self.nodes[p].children.len() == 1 && ID_IN_HEADER.contains(&self.nodes[p].ty))
+            };
+            if let Some(target) = named.filter(|_| size >= 4) {
                 let dict_id = i32le(&self.data, body);
                 if dict_id != 0 {
-                    let target = match parent {
-                        Some(p) if IS_ID_CONTAINER.contains(&ty) => p,
-                        _ => id,
-                    };
                     self.dict.entry(dict_id).or_insert(target);
                 }
             }
