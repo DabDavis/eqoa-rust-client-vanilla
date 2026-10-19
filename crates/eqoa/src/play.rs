@@ -392,7 +392,7 @@ impl Play {
 
     /// One frame. Returns the player's model when the server has just named
     /// a different one (the caller re-dresses the walker).
-    pub fn frame(&mut self, walker: &mut Walker, lib: &Library, mut g: Gpu, game_ms: i64) -> Option<u32> {
+    pub fn frame(&mut self, walker: &mut Walker, lib: &Library, mut g: Gpu, game_ms: i64, mut sound: Option<&mut crate::sound::Sound>) -> Option<u32> {
         let now = self.session.now();
         let mut new_model = None;
         for e in self.session.pump() {
@@ -562,13 +562,23 @@ impl Play {
                     self.self_puppet = build_puppet(lib, &mut g, e, look, slot, game_ms);
                 }
             }
+            // a creature's sounds are shared while it is loaded
+            let sounds_of = |p: &Option<Puppet>| p.as_ref().and_then(|p| p.sprite.as_ref()).map(|cs| cs.sounds()).unwrap_or_default();
             let Some(e) = want else {
+                if let Some(s) = sound.as_deref_mut() {
+                    s.release_sounds(&sounds_of(&self.puppets[slot]));
+                }
                 self.puppets[slot] = None;
                 continue;
             };
             let look = e.creature.as_ref().map(look_of);
             if self.puppets[slot].as_ref().map(|p| (p.model, p.look)) != Some((e.model, look)) {
+                let old = sounds_of(&self.puppets[slot]);
                 self.puppets[slot] = build_puppet(lib, &mut g, e, look, slot, game_ms);
+                if let Some(s) = sound.as_deref_mut() {
+                    s.share_sounds(lib, &sounds_of(&self.puppets[slot]));
+                    s.release_sounds(&old);
+                }
             }
             let Some(p) = self.puppets[slot].as_mut() else { continue };
             let f = F::<Ee>::new;
@@ -589,6 +599,11 @@ impl Play {
                             }
                             _ => cs.set_locomotion(c.state as i32, &p.anims, &mut p.rand),
                         }
+                    }
+                    // VICSprite::Process: the sounds its triggers fired
+                    if let Some(s) = sound.as_deref_mut() {
+                        let at = Vect3::new(f(e.actor_pos[0]), f(e.actor_pos[1]), f(e.actor_pos[2]));
+                        cs.process_sounds(&walker.eye.position, &walker.eye.direction, &at, Some(&mut s.sink()));
                     }
                     cs.h.process(0, &p.anims);
                     let m = cs.h.calc_trans_about_center(&actor, &p.anims);

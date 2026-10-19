@@ -9,7 +9,8 @@
 //! eqoa view <world> zone <n>     a zone: terrain and every placed actor
 //! eqoa view <world> walk <n>     the character, walking in a zone
 //! eqoa shot <file> [model | zone <n>] <out.png> [camera]   one view, offscreen
-//! eqoa listen <world> <x> <z> <seconds> <out.wav> [hour]   the world's sound there, offline
+//! eqoa listen <world> <x> <z> <seconds> <out.wav> [hour] [walk]   the world's sound there, offline
+//!                               (walk: the human walks forward, its footsteps with it)
 //! ```
 //!
 //! A model is a list index or a DictID in hex (`0x…`). A `shot` camera is
@@ -59,21 +60,28 @@ pub fn disc(arg: Option<&String>) -> Result<iso::Iso> {
 /// The world's sound at one spot, offline: the camera stands 3 above the
 /// ground at (x, z), the game runs at 30 frames a second, and the mix is
 /// written to a WAV.
-fn listen(file: &str, x: f32, z: f32, secs: f32, out: &str, hour: f32) -> Result<()> {
-    use vi::fpu::{Ee, F};
+fn listen(file: &str, x: f32, z: f32, secs: f32, out: &str, hour: f32, walk: bool) -> Result<()> {
+    use vi::fpu::Ee;
     let mut lib = esf::Library::new();
     let f = lib.add(file, esf::Container::open(disc(None)?.read(file)?)?);
-    let mut world = vi::world::World::<Ee>::load(&lib, f).ok_or("no world in the file")?;
-    let mut s = vi::coll::CollSphere::<Ee>::default();
-    s.init(vi::vect::Vect3::of(x, 2000.0, z), vi::vect::Vect3::of(x, -2000.0, z), F::new(0.001));
-    let mut filt = vi::scene::Filter::new(vi::scene::FilterKind::Scene, -1);
-    let y = if world.collide_sphere(&mut s, &mut filt) { s.hit_point().y.0 } else { 0.0 };
-    let eye = vi::camera::Eye { position: vi::vect::Vect3::of(x, y + 3.0, z), direction: vi::vect::Vect3::of(0.0, -0.2, 1.0) };
+    lib.add("CHAR.ESF", esf::Container::open(disc(None)?.read("CHAR.ESF")?)?);
+    let world = vi::world::World::<Ee>::load(&lib, f).ok_or("no world in the file")?;
+    let mut walker = walker::Walker::new(world, x, z, 0.0);
+    let human = lib.lookup(viewer::HUMAN).ok_or("no human in CHAR.ESF")?;
+    walker.set_character(&lib, human);
     let mut sound = sound::Sound::offline(std::path::Path::new(&disc_path(None))).ok_or("no sound device")?;
+    let ids = walker.sprite.as_ref().map(|cs| cs.sounds()).unwrap_or_default();
+    sound.share_sounds(&lib, &ids);
+    eprintln!("the character's play list names {} sounds", ids.len());
     let frames = (secs * 30.0) as usize;
     let mut pcm: Vec<i16> = Vec::new();
     for k in 0..frames {
-        sound.frame(&mut world, &eye, hour, k as i64 * 1000 / 30);
+        let now = k as i64 * 1000 / 30;
+        let c = walker::Controls { fwd: if walk { 1.0 } else { 0.0 }, strafe: 0.0, orbit: 0.0, pitch: 0.0 };
+        walker.frame(c, now);
+        walker.pose_sounding(Some(&mut sound.sink()));
+        let eye = walker.eye;
+        sound.frame(&mut walker.scene, &eye, hour, now);
         pcm.extend(sound.audio().render(1600));
         if k % 30 == 0 {
             eprintln!("{:5.1} s  {}", k as f32 / 30.0, sound.describe());
@@ -171,7 +179,8 @@ fn run(args: &[String]) -> Result<()> {
             let (x, z, secs) = (num(2)?, num(3)?, num(4)?);
             let out = args.get(5).ok_or(usage)?;
             let hour = args.get(6).map(|h| h.parse::<f32>()).transpose()?.unwrap_or(10.0);
-            listen(file, x, z, secs, out, hour)?;
+            let walk = args.get(7).is_some_and(|a| a == "walk");
+            listen(file, x, z, secs, out, hour, walk)?;
         }
         Some("login") => {
             let host = args.get(1).ok_or("usage: eqoa login <host> <user> (password in EQOA_PASSWORD)")?;

@@ -98,6 +98,11 @@ pub struct Sound {
     track: SoundTrack,
     /// `m_p63C`, the streamed-music region playing
     stream_best: i32,
+    /// The characters' sounds: DictID -> (the device's sound, the creatures
+    /// sharing it), as each creature's loader shares them.
+    chars: HashMap<u32, (i32, u32)>,
+    /// the game's `rand()`
+    rand: vi::csprite::Rand,
 }
 
 impl Sound {
@@ -145,7 +150,19 @@ impl Sound {
             return None;
         }
         let ambtrack = iso::Iso::open(iso_path).ok().and_then(|mut d| d.read("DATA/AMBTRACK.ESF").ok()).and_then(|b| esf::Container::open(b).ok());
-        Some(Sound { dev, link, audio, ambtrack, dict: HashMap::new(), loads: HashMap::new(), next_load: 1, track: SoundTrack::cleared(), stream_best: -1 })
+        Some(Sound {
+            dev,
+            link,
+            audio,
+            ambtrack,
+            dict: HashMap::new(),
+            loads: HashMap::new(),
+            next_load: 1,
+            track: SoundTrack::cleared(),
+            stream_best: -1,
+            chars: HashMap::new(),
+            rand: vi::csprite::Rand(1),
+        })
     }
 
     // ---- the scene's dictionary and the loader --------------------------------------
@@ -184,6 +201,47 @@ impl Sound {
         {
             self.release(i);
         }
+    }
+
+    // ---- the characters' sounds ---------------------------------------------------
+
+    /// A creature was loaded: the waves its play list names are made (from
+    /// whichever loaded file holds them) or shared.
+    pub fn share_sounds(&mut self, lib: &esf::Library, ids: &[u32]) {
+        for &id in ids {
+            if let Some(e) = self.chars.get_mut(&id) {
+                self.dev.share_sound(e.0);
+                e.1 += 1;
+                continue;
+            }
+            let Some(r) = lib.lookup(id as i32) else { continue };
+            let c = lib.file(r.file);
+            if c.node(r.node).ty != esf::sound::WAVE {
+                continue;
+            }
+            let Some(w) = esf::sound::wave(c, r.node) else { continue };
+            let i = self.dev.create_wave(w.channels, w.blocks, w.rate, w.volume, w.pan, w.looped, &w.adpcm);
+            if i >= 0 {
+                self.chars.insert(id, (i, 1));
+            }
+        }
+    }
+
+    /// The creature went: its share of each sound with it.
+    pub fn release_sounds(&mut self, ids: &[u32]) {
+        for id in ids {
+            let Some(e) = self.chars.get_mut(id) else { continue };
+            self.dev.release_sound(e.0);
+            e.1 -= 1;
+            if e.1 == 0 {
+                self.chars.remove(id);
+            }
+        }
+    }
+
+    /// The device as `VICSprite::Process` sees it.
+    pub fn sink(&mut self) -> Sink<'_> {
+        Sink(self)
     }
 
     // ---- a frame ----------------------------------------------------------------
@@ -419,5 +477,34 @@ impl Sound {
             self.dev.stop(self.track.p24);
             self.track.p24 = -1;
         }
+    }
+}
+
+pub struct Sink<'a>(&'a mut Sound);
+
+impl vi::csprite::SoundSink for Sink<'_> {
+    fn play(&mut self, sound: u32) -> i32 {
+        match self.0.chars.get(&sound) {
+            Some(&(i, _)) => self.0.dev.play(i, 0, 0),
+            None => -1,
+        }
+    }
+    fn stop(&mut self, h: i32) {
+        self.0.dev.stop(h);
+    }
+    fn is_playing(&mut self, h: i32) -> bool {
+        self.0.dev.is_playing(h)
+    }
+    fn set_volume(&mut self, h: i32, v: f32) {
+        self.0.dev.set_volume(h, v);
+    }
+    fn set_pan(&mut self, h: i32, p: f32) {
+        self.0.dev.set_pan(h, p);
+    }
+    fn set_pitch(&mut self, h: i32, p: i32) {
+        self.0.dev.set_pitch(h, p);
+    }
+    fn rand(&mut self) -> i32 {
+        self.0.rand.rand()
     }
 }

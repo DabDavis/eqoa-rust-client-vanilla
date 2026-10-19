@@ -108,10 +108,20 @@ impl Walker {
     /// `UpdateSprite`, then `Process` at the LOD for its distance, then the
     /// centre transform and `SetBlendMatrices`.
     pub fn pose(&mut self) -> ([[f32; 4]; 4], Vec<[[f32; 4]; 4]>) {
+        self.pose_sounding(None)
+    }
+
+    /// `pose`, with the sounds its animation's triggers fire played between
+    /// `UpdateSprite` and the pose, as `VIClient` calls `VICSprite::Process`.
+    pub fn pose_sounding(&mut self, sound: Option<&mut dyn vi::csprite::SoundSink>) -> ([[f32; 4]; 4], Vec<[[f32; 4]; 4]>) {
         let actor = self.actor();
         let Some(cs) = self.sprite.as_mut() else { return (actor.to_cols(), Vec::new()) };
         self.anims.time = self.scene.time;
         self.cam.walk.update_sprite(cs, &self.anims, &mut self.rand);
+        if sound.is_some() {
+            let at = self.cam.walk.phys.smooth_location();
+            cs.process_sounds(&self.eye.position, &self.eye.direction, &at, sound);
+        }
         let mut rel = actor;
         rel.m[3].x -= self.eye.position.x;
         rel.m[3].y -= self.eye.position.y;

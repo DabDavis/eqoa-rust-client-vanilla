@@ -359,7 +359,7 @@ pub fn shot_with(
                     p.attack_press();
                 }
                 let gpu = crate::play::Gpu { renderer: &mut renderer, device: &device, queue: &queue };
-                if let Some(model) = p.frame(&mut walker, &*lib, gpu, t)
+                if let Some(model) = p.frame(&mut walker, &*lib, gpu, t, None)
                     && let Some(r) = lib.lookup(model as i32)
                 {
                     eprintln!("the server names the player's model {model:#010x}");
@@ -490,6 +490,8 @@ struct App {
     streamer: Option<Streamer>,
     /// The game's sound, once walking (`EQOA_AUDIO=0`: driven, not heard).
     sound: Option<crate::sound::Sound>,
+    /// The walking character's sounds, shared while it is the character.
+    walker_sounds: Vec<u32>,
     /// Index in `Gfx::models` of the character.
     body_at: usize,
     /// Where the sky's models start in `Gfx::models`.
@@ -521,6 +523,7 @@ pub fn run_with(lib: Library, source: Source, play: Option<crate::play::Play>) -
         play,
         streamer: None,
         sound: None,
+        walker_sounds: Vec::new(),
         body_at: 0,
         sky_at: None,
         clock: Instant::now(),
@@ -849,6 +852,7 @@ impl ApplicationHandler for App {
                 let clock = self.clock;
                 let streamer = &mut self.streamer;
                 let sound = &mut self.sound;
+                let walker_sounds = &mut self.walker_sounds;
                 let play = &mut self.play;
                 let lib = &self.lib;
                 let walk_view = self.walker.as_mut().map(|w| {
@@ -856,7 +860,7 @@ impl ApplicationHandler for App {
                     if let Some(p) = play {
                         let gpu = crate::play::Gpu { renderer: &mut g.renderer, device: &g.device, queue: &g.queue };
                         // The server named the player's model: dress the walker in it.
-                        if let Some(model) = p.frame(w, lib, gpu, now)
+                        if let Some(model) = p.frame(w, lib, gpu, now, sound.as_mut())
                             && let Some(r) = lib.lookup(model as i32)
                             && let Some(m) = lib.build_model(r)
                         {
@@ -868,7 +872,18 @@ impl ApplicationHandler for App {
                             }
                         }
                     }
-                    let (m, palette) = w.pose();
+                    if let Some(s) = sound.as_mut() {
+                        let ids = w.sprite.as_ref().map(|cs| cs.sounds()).unwrap_or_default();
+                        if ids != *walker_sounds {
+                            s.share_sounds(lib, &ids);
+                            s.release_sounds(walker_sounds);
+                            *walker_sounds = ids;
+                        }
+                    }
+                    let (m, palette) = match sound.as_mut() {
+                        Some(s) => w.pose_sounding(Some(&mut s.sink())),
+                        None => w.pose(),
+                    };
                     if let Some(body) = g.models.get(body_at) {
                         g.renderer.set_instances(&g.queue, body, &[m]);
                         g.renderer.set_palette(&g.queue, body, &palette);

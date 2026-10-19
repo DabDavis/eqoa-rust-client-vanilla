@@ -60,6 +60,12 @@ impl<M: Model> Vect3<M> {
     }
 
     /// `sqrtf((x*x + y*y) + z*z)`.
+    /// `VIVect3::Distance`
+    pub fn distance(&self, v: &Self) -> F<M> {
+        let (x, y, z) = (self.x - v.x, self.y - v.y, self.z - v.z);
+        ((x * x + y * y) + z * z).sqrt()
+    }
+
     pub fn magnitude(&self) -> F<M> {
         ((self.x * self.x + self.y * self.y) + self.z * self.z).sqrt()
     }

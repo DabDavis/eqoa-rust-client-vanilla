@@ -236,10 +236,14 @@ pub fn load_csprite<M: Model>(
         let slot = r.i();
         let weight = r.f();
         let sync = r.i();
+        let (mut snd, mut vol, mut var) = ([0u32; 2], [F::<M>::ONE; 2], [F::<M>::ZERO; 2]);
         if pv >= 2 {
-            let n = if pv >= 3 { 3 } else { 2 };
-            for _ in 0..2 * n {
-                r.i();
+            for l in 0..2 {
+                snd[l] = r.i() as u32;
+                vol[l] = r.f();
+                if pv >= 3 {
+                    var[l] = r.f();
+                }
             }
         }
         if !(0..66).contains(&slot) {
@@ -252,9 +256,21 @@ pub fn load_csprite<M: Model>(
         e.animation = [anim(a0, sc, cache), anim(a1, sc, cache)];
         e.weight = weight;
         e.sync = sync;
+        e.sound = snd;
+        e.volume = vol;
+        e.pitch_var = var;
+    }
+    // ParseCSpriteContSound (0x2940): a DictID and its volume
+    if let Some(cs_node) = c.child(id, 0x2940) {
+        let d = c.body(cs_node);
+        if d.len() >= 8 {
+            cs.snd.sound = i32_at(d, 0) as u32;
+            cs.snd.volume = F::new(f32::from_le_bytes(d[4..8].try_into().unwrap()));
+        }
     }
     cs.set_default_entries();
     cs.set_anim_priorities();
+    cs.set_anim_sound_channels();
     if cs.entries[0].animation[0] < 0 {
         return None;
     }

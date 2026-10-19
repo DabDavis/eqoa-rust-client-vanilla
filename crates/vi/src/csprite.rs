@@ -1,11 +1,36 @@
 //! `VICSprite`, the character: a skeleton (`HSprite`) plus a table of 66
 //! animation entries, the arbiter that picks one per body layer
 //! (`SetLocomotion` → `SetAnimation`) and the priorities it ranks them by
-//! (decomp `vicsprite.cpp`). Not ported: items, sounds, particles, weapon
+//! (decomp `vicsprite.cpp`), and the sounds its animations' triggers fire
+//! (`Process`, through `SoundSink`). Not ported: items, particles, weapon
 //! trails, death, faces and armour (the `SetItemAction` call is a no-op).
 
 use crate::fpu::{F, Model};
 use crate::hsprite::{AnimScene, HSprite, hash_ref_id};
+use crate::vect::Vect3;
+
+/// What `VICSprite::Process` asks of the sound device. A sound is named by
+/// its DictID (the parser resolves it to the device's index; the sink does
+/// that here), a playback by its handle.
+pub trait SoundSink {
+    /// `Play(sound, 0, SFX)`: a handle, or below 0
+    fn play(&mut self, sound: u32) -> i32;
+    fn stop(&mut self, handle: i32);
+    fn is_playing(&mut self, handle: i32) -> bool;
+    fn set_volume(&mut self, handle: i32, v: f32);
+    fn set_pan(&mut self, handle: i32, p: f32);
+    fn set_pitch(&mut self, handle: i32, p: i32);
+    /// the game's `rand()`
+    fn rand(&mut self) -> i32;
+}
+
+/// `VICSpriteSoundState`: the continuous sound, its volume and playback.
+#[derive(Clone, Copy, Debug)]
+pub struct ContSound<M: Model> {
+    pub sound: u32,
+    pub volume: F<M>,
+    pub channel: i32,
+}
 
 /// `VICSpriteAnimEntry`.
 #[derive(Clone, Copy, Debug)]
@@ -17,11 +42,18 @@ pub struct Entry<M: Model> {
     /// The playback type: 0 loop, 1 once.
     pub sync: i32,
     pub priority: [i32; 2],
+    /// The sound per layer (a DictID, 0 none), its volume scale and its
+    /// pitch variation.
+    pub sound: [u32; 2],
+    pub volume: [F<M>; 2],
+    pub pitch_var: [F<M>; 2],
+    /// The body layer whose triggers sound it (`SetAnimSoundChannels`).
+    pub channel: i32,
 }
 
 impl<M: Model> Default for Entry<M> {
     fn default() -> Self {
-        Entry { animation: [-1, -1], weight: F::ONE, sync: 0, priority: [0, 0] }
+        Entry { animation: [-1, -1], weight: F::ONE, sync: 0, priority: [0, 0], sound: [0, 0], volume: [F::ONE; 2], pitch_var: [F::ZERO; 2], channel: 0 }
     }
 }
 
@@ -31,11 +63,13 @@ pub struct Layer {
     pub anim: i32,
     pub play: i32,
     pub sync: i32,
+    /// `m_flags`: the playback of the layer's last trigger sound, or -1.
+    pub flags: i32,
 }
 
 impl Default for Layer {
     fn default() -> Self {
-        Layer { anim: 0, play: -1, sync: 0 }
+        Layer { anim: 0, play: -1, sync: 0, flags: -1 }
     }
 }
 
@@ -73,6 +107,8 @@ pub struct CSprite<M: Model> {
     pub entries: [Entry<M>; 66],
     /// The body skin sprite (`m_body[0]`).
     pub body: i32,
+    /// `m_snd`, the continuous sound (0x2940).
+    pub snd: ContSound<M>,
 }
 
 fn in_range(id: i32, lo: i32, n: u32) -> bool {
@@ -100,7 +136,128 @@ impl<M: Model> CSprite<M> {
             idle_time: 0,
             entries: [Entry::default(); 66],
             body: -1,
+            snd: ContSound { sound: 0, volume: F::ONE, channel: -1 },
         }
+    }
+
+    /// `SetAnimSoundChannels`: a two-layer skeleton sounds its first 17
+    /// entries (the locomotion) from the lower body, everything else (and
+    /// every entry of a one-layer skeleton) from layer 0.
+    pub fn set_anim_sound_channels(&mut self) {
+        if self.skel_type != 1 {
+            for e in &mut self.entries[..19] {
+                e.channel = 0;
+            }
+        } else {
+            for e in &mut self.entries[..17] {
+                e.channel = 1;
+            }
+        }
+    }
+
+    /// `CalcVolumeAndPan`: the volume falls off linearly to nothing at 50
+    /// units; the pan is the cosine between the listener-to-source direction
+    /// and the camera's right, in the ground plane.
+    pub fn calc_volume_and_pan(cam_pos: &Vect3<M>, cam_dir: &Vect3<M>, at: &Vect3<M>) -> (F<M>, F<M>) {
+        let mut vol = cam_pos.distance(at) * F::new(0.02);
+        let x = F::ONE - vol;
+        let x = if F::ZERO > x { F::ZERO } else { x };
+        vol = if F::ONE < x { F::ONE } else { x };
+        if vol > F::<M>::ZERO {
+            let mut d = Vect3::new(cam_pos.x - at.x, F::ZERO, cam_pos.z - at.z);
+            let mut r = Vect3::new(cam_dir.z, F::ZERO, -cam_dir.x);
+            d.normalize();
+            r.normalize();
+            (vol, d.x * r.x + d.z * r.z)
+        } else {
+            (vol, F::ZERO)
+        }
+    }
+
+    /// `VICSprite::Process`'s sounds: each tripped sound trigger plays its
+    /// layer's sound on the entry that layer is playing (stopping the last
+    /// one), at the distance's volume and pan and a random pitch within the
+    /// entry's variation; a particle trigger is only reset; then the
+    /// continuous sound is kept playing at the right volume and pan. Without
+    /// a device a sound trigger stays tripped.
+    pub fn process_sounds(&mut self, cam_pos: &Vect3<M>, cam_dir: &Vect3<M>, at: &Vect3<M>, mut sd: Option<&mut dyn SoundSink>) {
+        let id = |n: &str| hash_ref_id(n);
+        let (prim, prim_bpu, prim_bpl) = (id("Primary Sound"), id("Primary Sound_BPU"), id("Primary Sound_BPL"));
+        let (sec, sec_bpu, sec_bpl) = (id("Secondary Sound"), id("Secondary Sound_BPU"), id("Secondary Sound_BPL"));
+        let particles = ["Particle 1", "Particle 1_BPL", "Particle 1_BPU", "Particle 2", "Particle 2_BPL", "Particle 2_BPU"].map(id);
+        for i in 0..self.h.triggers.len() {
+            if self.h.triggers[i].tripped == 0 {
+                continue;
+            }
+            let t = self.h.triggers[i].id;
+            let mut layer = -1;
+            let mut sel = 0usize;
+            if t == prim || t == prim_bpl || t == prim_bpu {
+                layer = 0;
+            } else if t == sec || t == sec_bpl || t == sec_bpu {
+                layer = 1;
+            } else if particles.contains(&t) {
+                sel = 1;
+            }
+            if layer != -1 {
+                let Some(sd) = sd.as_deref_mut() else { continue };
+                let layer = layer as usize;
+                sel = (t == prim_bpl || t == sec_bpl) as usize;
+                let e = self.entries[self.cur[sel].anim.clamp(0, 65) as usize];
+                if sel as i32 == e.channel && e.sound[layer] != 0 {
+                    if self.cur[sel].flags != -1 {
+                        sd.stop(self.cur[sel].flags);
+                        self.cur[sel].flags = -1;
+                    }
+                    let (mut vol, pan) = Self::calc_volume_and_pan(cam_pos, cam_dir, at);
+                    vol = vol * e.volume[layer];
+                    if vol > F::ZERO {
+                        let mut pitch = F::<M>::new((sd.rand() & 0x1FFF) as f32) - F::new(4096.0);
+                        pitch = pitch * e.pitch_var[layer];
+                        let h = sd.play(e.sound[layer]);
+                        pitch = pitch + F::new(4096.0);
+                        if h >= 0 {
+                            sd.set_volume(h, vol.0);
+                            sd.set_pan(h, pan.0);
+                            sd.set_pitch(h, pitch.0 as i32);
+                            self.cur[sel].flags = h;
+                        } else {
+                            self.cur[sel].flags = -1;
+                        }
+                    }
+                }
+                self.h.reset_trigger(i);
+            } else if sel != 0 {
+                // the matching one-shot particle emitters restart: not ported
+                self.h.reset_trigger(i);
+            }
+        }
+        if let Some(sd) = sd
+            && self.snd.sound != 0
+        {
+            let (mut vol, pan) = Self::calc_volume_and_pan(cam_pos, cam_dir, at);
+            vol = vol * self.snd.volume;
+            if vol > F::ZERO && !self.dead {
+                if self.snd.channel == -1 || !sd.is_playing(self.snd.channel) {
+                    self.snd.channel = sd.play(self.snd.sound);
+                }
+                if self.snd.channel >= 0 {
+                    sd.set_volume(self.snd.channel, vol.0);
+                    sd.set_pan(self.snd.channel, pan.0);
+                }
+            } else if self.snd.channel != -1 {
+                sd.stop(self.snd.channel);
+                self.snd.channel = -1;
+            }
+        }
+    }
+
+    /// Every sound the sprite can play: what its loader shares with it.
+    pub fn sounds(&self) -> Vec<u32> {
+        let mut v: Vec<u32> = self.entries.iter().flat_map(|e| e.sound).chain(std::iter::once(self.snd.sound)).filter(|&s| s != 0).collect();
+        v.sort_unstable();
+        v.dedup();
+        v
     }
 
     /// `SetDefaultEntries`: an entry the file leaves empty borrows idle's,
