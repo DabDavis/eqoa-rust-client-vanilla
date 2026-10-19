@@ -23,6 +23,7 @@ mod library;
 pub(crate) mod mesh;
 mod surface;
 pub mod font;
+pub mod sound;
 pub mod zone;
 pub use library::{Library, Ref};
 pub use mesh::{Batch, Layer, Model, ModelRef, PrimBuffer, VertexList};

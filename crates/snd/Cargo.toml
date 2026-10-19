@@ -1,0 +1,12 @@
+[package]
+name = "snd"
+description = "EQOA's sound: the SPU2, SNDDRV (the IOP's sound driver) and VISoundDevice, ported from the decomp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+iso.workspace = true
+esf.workspace = true
