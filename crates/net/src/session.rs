@@ -129,6 +129,12 @@ pub enum Event {
     /// 0x00C5 (fades) and 0x00C7 (instant): the weather byte
     /// (`VIClient::SetWeather`).
     Weather { weather: u8, instant: bool },
+    /// 0x00FF (`Msg00FF`): every ability (display index below 252) off
+    /// the bar; the answer to 0x00FE.
+    AbilityClearBar { token: u32 },
+    /// 0x00FD (`Msg00FD`): an ability's usable flag (`m_p14`); 0 also
+    /// takes it off the bar.
+    AbilityUsable { token: u32, id: i32, p14: i32 },
     /// Any other opcode, not handled here yet.
     Opcode { op: u16, data: Vec<u8> },
     /// 0xFD: the connection ended, with the library's reason byte.
@@ -557,6 +563,12 @@ impl Session {
                     0x00B5 => Event::AbilityMoveSlot { token, from: a, to: b },
                     _ => Event::AbilityMoveIndex { token, from: a, to: b },
                 });
+            }
+            0x00FF => ev.push(Event::AbilityClearBar { token: r.u32() }),
+            0x00FD => {
+                let token = r.u32();
+                let (id, p14) = (r.u32() as i32, r.u32() as i32);
+                ev.push(Event::AbilityUsable { token, id, p14 });
             }
             0x00B8 => {
                 let token = r.u32();

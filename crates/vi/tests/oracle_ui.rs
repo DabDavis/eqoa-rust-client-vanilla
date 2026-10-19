@@ -86,6 +86,13 @@ impl Raster for Rec {
             self.i(c[1]);
         }
     }
+    fn blit_full(&mut self, id: u32, flags: u32, at: [i32; 2], mode: i32, alpha: f32) {
+        self.rec(2);
+        for v in [id as i32, flags as i32, at[0] + self.bug, at[1], mode] {
+            self.i(v);
+        }
+        self.f(alpha);
+    }
     fn draw_string(&mut self, at: [i32; 2], color: [f32; 4], s: &[u16]) {
         self.rec(4);
         self.i(font_id() as i32);
@@ -226,6 +233,8 @@ impl Side {
             43 => v.frame_fill_rectangle(r, [[a[0], a[1]], [a[2], a[3]]]),
             44 => self.win[k].draw_color_bar(v, r, a[1], a[2], a[3], col),
             19 => v.blit_bar3(r, s, col, [a[0], a[1]], a[2], a[3], a[4], a[5], a[6], x[4], a[7] as u32, a[8] != 0),
+            60 => v.blit_ability_icon(r, [a[0], a[1]], a[2], a[3], x[0]),
+            61 => v.blit_id(r, a[0] as u32, [a[1], a[2]], a[3], x[0], a[4] as u32),
             36 => self.win[k].draw_vscroll(v, r, [a[1], a[2]], a[3], x[0]),
             41 => {
                 self.studs = fp;
@@ -296,6 +305,14 @@ fn script() -> Vec<Call> {
     for h in [268, 270, 40, 0] {
         v.push(call(18, &[126, 9, 81, 83, 82, h, 3], &[0.5], ""));
         v.push(call(18, &[126, 9, 81, 83, 26, h, 3], &[0.5], ""));
+    }
+    // The spell book's ability plates and whole-surface blits by DictID.
+    for idx in [0, 1, 2, -1] {
+        v.push(call(60, &[4, 50 + idx * 44, idx, 0], &[1.0], ""));
+        v.push(call(60, &[154, 94, idx, 3], &[0.5], ""));
+    }
+    for (id, m, fl) in [(0x1234_5678u32 as i32, 0, 0), (-1, 3, 1), (77, 3, 2)] {
+        v.push(call(61, &[id, 53, 56, m, fl], &[0.7], ""));
     }
     // The main menu's three-piece bars, with words and a lit colour.
     for (just, sh) in [(0, 0), (1, 1), (3, 0)] {
@@ -474,6 +491,7 @@ fn the_ui_layer_records_what_the_decomp_records() {
             *kinds.entry(kind).or_insert(0) += 1;
             p += 4 + match kind {
                 1 => 40,
+                2 => 24,
                 3 => 48,
                 7 => {
                     let n = u32::from_le_bytes(theirs[p + 20..p + 24].try_into().unwrap()) as usize;

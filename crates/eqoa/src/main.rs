@@ -29,6 +29,7 @@ mod editbox;
 mod group;
 mod hud;
 mod hudmenu;
+mod spellbook;
 mod startmenu;
 mod zones;
 mod particles;
@@ -298,7 +299,13 @@ fn login(host: &str, user: &str, pass: &str) -> Result<(net::session::Session, n
                 Event::ShardList(list) => {
                     eprintln!("shards: {list:?}");
                     if let Some(sh) = list.first() {
-                        s.connect_shard(sh.endpoint);
+                        // EQOA_GAME_PORT also moves the shard's port (a test
+                        // server's list still names the default one)
+                        let mut ep = sh.endpoint;
+                        if std::env::var_os("EQOA_GAME_PORT").is_some() {
+                            ep = (ep & !0xFFFF_0000) | (port("EQOA_GAME_PORT", 10070) as u64) << 16;
+                        }
+                        s.connect_shard(ep);
                     }
                 }
                 Event::Characters(list) => {
