@@ -11,7 +11,8 @@
 //! eqoa shot <file> [model | zone <n>] <out.png> [camera]   one view, offscreen
 //! eqoa listen <world> <x> <z> <seconds> <out.wav> [hour] [walk]   the world's sound there, offline
 //!                               (walk: the human walks forward, its footsteps with it;
-//!                                cues: the respawn cue at 1 s and the level-up sound at 2 s)
+//!                                cues: the respawn cue at 1 s and the level-up sound at 2 s;
+//!                                fight: in combat from 2 s to 8 s, the battle music)
 //! ```
 //!
 //! A model is a list index or a DictID in hex (`0x…`). A `shot` camera is
@@ -62,7 +63,7 @@ pub fn disc(arg: Option<&String>) -> Result<iso::Iso> {
 /// ground at (x, z), the game runs at 30 frames a second, and the mix is
 /// written to a WAV.
 #[allow(clippy::too_many_arguments)]
-fn listen(file: &str, x: f32, z: f32, secs: f32, out: &str, hour: f32, walk: bool, cues: bool) -> Result<()> {
+fn listen(file: &str, x: f32, z: f32, secs: f32, out: &str, hour: f32, walk: bool, cues: bool, fight: bool) -> Result<()> {
     use vi::fpu::Ee;
     let mut lib = esf::Library::new();
     let f = lib.add(file, esf::Container::open(disc(None)?.read(file)?)?);
@@ -88,6 +89,7 @@ fn listen(file: &str, x: f32, z: f32, secs: f32, out: &str, hour: f32, walk: boo
         if cues && k == 60 {
             sound.cue(&sound::Cue::Ui(16));
         }
+        sound.battle_music(Some(fight && (60..240).contains(&k)));
         let eye = walker.eye;
         sound.frame(&mut walker.scene, &eye, hour, now);
         pcm.extend(sound.audio().render(1600));
@@ -189,7 +191,8 @@ fn run(args: &[String]) -> Result<()> {
             let hour = args.get(6).map(|h| h.parse::<f32>()).transpose()?.unwrap_or(10.0);
             let walk = args[7.min(args.len())..].iter().any(|a| a == "walk");
             let cues = args[7.min(args.len())..].iter().any(|a| a == "cues");
-            listen(file, x, z, secs, out, hour, walk, cues)?;
+            let fight = args[7.min(args.len())..].iter().any(|a| a == "fight");
+            listen(file, x, z, secs, out, hour, walk, cues, fight)?;
         }
         Some("login") => {
             let host = args.get(1).ok_or("usage: eqoa login <host> <user> (password in EQOA_PASSWORD)")?;

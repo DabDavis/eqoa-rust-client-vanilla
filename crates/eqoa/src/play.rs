@@ -1082,6 +1082,13 @@ impl Play {
     }
 
     /// Whether the player is drawn dressed (the caller hides its plain body).
+    /// `LeaderByte263` (no group): the player's creature is fighting.
+    /// `None` before the player's creature is known (no battle music then).
+    pub fn self_fighting(&self) -> Option<bool> {
+        let me = self.self_id32()?;
+        self.entities.slots.iter().flatten().find(|e| e.id == me)?.creature.as_ref().map(|c| c.p263 != 0)
+    }
+
     pub fn has_self(&self) -> bool {
         self.self_puppet.is_some()
     }

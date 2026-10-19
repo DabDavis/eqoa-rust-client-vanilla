@@ -119,6 +119,11 @@ pub struct Sound {
     /// `VIUI::m_sounds` (UISOUND.TXT) and `sUISounds`' volumes, when the
     /// player's SUPPORT image is there to read them from
     ui: Option<(vi::strtab::StringTable, [f32; 17])>,
+    /// `VIBattleMusic`'s state and track
+    battle: (i32, i32),
+    /// `VIGameOptions::m_language`, which is the battle-music option: 0 none,
+    /// 1..8 a song, 9 (the default) a random one each fight
+    pub battle_option: i32,
 }
 
 impl Sound {
@@ -145,9 +150,11 @@ impl Sound {
         let st = self.audio.status();
         let t = &self.track;
         format!(
-            "region music {} (bgm {}), ambient track {:08x}/{:08x} (states {}/{}), voices {:06x} {:06x}",
+            "battle {}, region music {} (bgm {} {:?}), ambient track {:08x}/{:08x} (states {}/{}), voices {:06x} {:06x}",
+            self.battle.1,
             self.stream_best,
             if st[6] != 0 { "streaming" } else { "off" },
+            self.dev.bgm_playing(),
             t.state[0].p20,
             t.state[1].p20,
             t.state[0].p00,
@@ -179,6 +186,8 @@ impl Sound {
             chars: HashMap::new(),
             rand: vi::csprite::Rand(1),
             ui: None,
+            battle: (0, -1),
+            battle_option: 9,
         })
         .map(|mut s| {
             s.load_resident(iso_path);
@@ -282,6 +291,43 @@ impl Sound {
             Cue::Ui(id) => self.play_ui(*id),
             Cue::Named(n, v) => self.play_named(n, *v),
         }
+    }
+
+    // ---- the battle music --------------------------------------------------------
+    // gFeatureFlags is 0x300 in every live game, so VIBattleMusic's streamed
+    // half: a battleNN.bgm on BGM slot 0, which out-ranks the region's on 1.
+
+    /// `VIClient::Process`'s battle music: `Play(option)` every frame the
+    /// player (`LeaderByte263`; groups are not ported) is fighting, else
+    /// `Stop`. `None`: no creature of the player's yet (dead or not in the
+    /// world): `Stop` too.
+    pub fn battle_music(&mut self, fighting: Option<bool>) {
+        if fighting == Some(true) {
+            self.battle_play(self.battle_option);
+        } else {
+            // Stop: the state, and the slot's request
+            self.battle.0 = 0;
+            self.dev.stop_bgm(0);
+        }
+    }
+
+    /// `VIBattleMusic::Play`: 9 picks one of eight when a fight starts.
+    fn battle_play(&mut self, track: i32) {
+        if track == 9 {
+            if self.battle.0 == 0 {
+                self.battle.0 = 3;
+                self.battle.1 = self.rand.rand() % 8 + 1;
+            }
+        } else if track != -1 {
+            self.battle.1 = track;
+        }
+        if self.battle.1 == 0 {
+            self.battle.0 = 0;
+            self.dev.stop_bgm(0);
+            return;
+        }
+        let path = format!("bgm\\battle{:02}.bgm", self.battle.1);
+        self.dev.play_bgm(0, &path);
     }
 
     // ---- the characters' sounds ---------------------------------------------------

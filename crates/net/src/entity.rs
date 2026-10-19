@@ -42,6 +42,9 @@ pub struct Creature {
     pub race: u8,
     pub class: u8,
     pub npc_flags: u16,
+    /// +0x263: in combat (`Byte263`): the battle music plays while the
+    /// player's is set.
+    pub p263: u8,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -154,9 +157,12 @@ impl Entity {
             c.class = r.u8();
             c.npc_flags = r.u16();
             r.u32();
-            for _ in 0..5 {
-                r.u8();
-            }
+            // m_p260, m_p261, m_flags262, m_p263, m_p264
+            r.u8();
+            r.u8();
+            r.u8();
+            c.p263 = r.u8();
+            r.u8();
             c.p299 = r.u8();
             self.creature = Some(c);
         }

@@ -621,6 +621,11 @@ impl<M: Model> SoundDevice<M> {
         }
     }
 
+    /// The BGM streaming now (`m_bgmPlaying`), empty for none.
+    pub fn bgm_playing(&self) -> &str {
+        &self.bgm_playing
+    }
+
     pub fn is_bgm_playing(&self, _slot: usize) -> bool {
         !self.bgm_playing.is_empty()
     }

@@ -902,10 +902,13 @@ impl ApplicationHandler for App {
                         s.update(at, &mut w.scene, lib, gpu, Some(1));
                         s.animate(&mut w.scene, &g.renderer, &g.queue);
                     }
-                    let cues: Vec<crate::sound::Cue> = play.as_mut().map(|p| p.cues.drain(..).collect()).unwrap_or_default();
+                    let cues: Vec<crate::sound::Cue> = play.as_mut().map(|p| std::mem::take(&mut p.cues)).unwrap_or_default();
                     if let Some(s) = sound {
                         for c in &cues {
                             s.cue(c);
+                        }
+                        if let Some(p) = play.as_ref() {
+                            s.battle_music(p.self_fighting());
                         }
                         s.frame(&mut w.scene, &w.eye, hour(clock), now);
                     }
