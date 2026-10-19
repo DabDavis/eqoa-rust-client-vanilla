@@ -145,6 +145,14 @@ pub struct World<M: Model> {
     pub grid: Option<Grid<M>>,
     /// Each zone's proxy bounds (record 0x8210), what streaming measures.
     pub zone_bounds: Vec<BBox<M>>,
+    /// Which zones are in (`World::add_zone`); an unloaded zone is a proxy
+    /// with no tree, rooms or actors, which every walk passes over.
+    pub loaded: Vec<bool>,
+    /// Each actor's place in the whole-file load's insertion order (zone,
+    /// room, placement), which every room's actor list is kept sorted by.
+    actor_order: Vec<u64>,
+    /// The rooms an insertion added to, while a zone loads: (zone, room).
+    touched: Vec<(usize, usize)>,
 }
 
 /// `VIScene::Init`'s streaming radii (`m_p2A48[1]`, `[0]`): a zone loads
@@ -265,14 +273,18 @@ fn read_tree<M: Model>(c: &Container, id: NodeId, leaf_words: usize) -> (Vec<Nod
 const LEAF: u32 = 0x4000_0000;
 
 impl<M: Model> World<M> {
-    /// Loads the world in `lib.file(file)`: its tree and every zone's base,
-    /// resources and actors (`ParseWorldObj` with i == 0).
+    /// Loads the world in `lib.file(file)`: its tree and every loaded zone's
+    /// base, resources and actors (`ParseWorldObj` with i == 0 when the whole
+    /// file is loaded). A world opened with its zones on the disc
+    /// (`esf::Container::open_deferred`) has only the zones its library has
+    /// loaded; the rest come later through [`World::add_zone`].
     pub fn load(lib: &Library, file: usize) -> Option<Self> {
         let c = lib.file(file);
         let root = *c.roots.first()?;
         let base = c.child(root, 0x8200)?;
         let tree = c.child(base, 0x8230)?;
         let (nodes, leaves) = read_tree::<M>(c, tree, 1);
+        let n = lib.zone_count(file);
         let mut w = World {
             nodes,
             leaves: leaves.into_iter().map(|l| l.0).collect(),
@@ -293,15 +305,94 @@ impl<M: Model> World<M> {
             anim_cache: AnimCache::new(),
             grid: Grid::read(c, base),
             zone_bounds: Self::proxies(c, base),
+            loaded: vec![false; n],
+            actor_order: Vec::new(),
+            touched: Vec::new(),
         };
-        let zones = c.zones();
-        for &z in &zones {
-            w.zones.push(Self::zone_base(c, z));
+        for zi in 0..n {
+            w.zones.push(lib.zone(file, zi).map_or_else(Zone::default, |(zf, z)| Self::zone_base(lib.file(zf), z)));
         }
-        for (zi, &z) in zones.iter().enumerate() {
-            w.load_zone(lib, file, zi, z);
+        for zi in 0..n {
+            if let Some((zf, z)) = lib.zone(file, zi) {
+                w.load_zone(lib, zf, zi, z);
+                w.loaded[zi] = true;
+            }
         }
+        w.touched.clear();
         Some(w)
+    }
+
+    /// Loads zone `zi` of the world in `lib.file(file)` once its library has
+    /// it (`esf::Library::add_zone`): its base, actors and lightings as
+    /// `load` does, then the actors already in that reach into it, inserted
+    /// into its rooms only. Every room it changed is put back in the order
+    /// the whole-file load inserts in (zone, room, placement), so a walk
+    /// meets actors in the same order however the zones came. Zones are only
+    /// added, never let go (no `ResetToProxy` yet). Every actor names a sprite
+    /// its own zone holds (measured over all six worlds), so no proxy waits
+    /// on another zone. Returns whether the zone was added.
+    pub fn add_zone(&mut self, lib: &Library, file: usize, zi: usize) -> bool {
+        if self.loaded.get(zi) != Some(&false) {
+            return false;
+        }
+        let Some((zf, z)) = lib.zone(file, zi) else { return false };
+        self.zones[zi] = Self::zone_base(lib.file(zf), z);
+        self.touched.clear();
+        let before = self.actors.len();
+        self.load_zone(lib, zf, zi, z);
+        self.loaded[zi] = true;
+        // the actors loaded before it, into its rooms (`UpdateActor` walks
+        // every zone; here only this one's leaves can be new to them)
+        for a in 0..before {
+            if self.actors[a].sprite.is_none() || self.actors[a].flags & 4 != 0 {
+                continue;
+            }
+            let a_ = &self.actors[a];
+            let bound = a_.bound;
+            let corners = self.sprites[a_.sprite.unwrap()].bbox.corners(&a_.object_to_world);
+            let stamp = self.state;
+            let root = if self.nodes.is_empty() { LEAF } else { 0 };
+            self.insert_world_zone(root, zi, a, &bound, &corners, stamp);
+            self.state += 1;
+            self.stamp += 1;
+        }
+        let mut touched = std::mem::take(&mut self.touched);
+        touched.sort_unstable();
+        touched.dedup();
+        for &(tz, room) in &touched {
+            let order = &self.actor_order;
+            self.zones[tz].rooms[room].actors.sort_by_key(|&a| order[a]);
+        }
+        true
+    }
+
+    /// The zone actor `a` was placed by, once its zone has placed it.
+    pub fn actor_zone(&self, a: usize) -> Option<usize> {
+        self.actor_order.get(a).filter(|&&k| k != u64::MAX).map(|&k| (k >> 42) as usize)
+    }
+
+    /// `insert_world`, descending only into the leaves of zone `only`.
+    fn insert_world_zone(&mut self, node: u32, only: usize, actor: usize, b: &Sphere<M>, corners: &[Vect3<M>; 8], stamp: i32) {
+        let mut node = node;
+        if node & 0xF000_0000 != 0 {
+            if node & LEAF != 0 {
+                let z = self.leaves[(node & 0x0FFF_FFFF) as usize] as usize;
+                if z == only {
+                    let root = if self.zones[z].nodes.is_empty() { LEAF } else { 0 };
+                    self.insert_zone(z, root, actor, b, corners, stamp);
+                }
+                return;
+            }
+            node &= 0x0FFF_FFFF;
+        }
+        let n = self.nodes[node as usize].clone();
+        let (front, back) = split(&n.plane, b, corners);
+        if front {
+            self.insert_world_zone(n.front, only, actor, b, corners, stamp);
+        }
+        if back {
+            self.insert_world_zone(n.back, only, actor, b, corners, stamp);
+        }
     }
 
     /// `ParseWorldZoneProxies`: 56 bytes a zone (two 8-byte offsets, a
@@ -398,6 +489,7 @@ impl<M: Model> World<M> {
                         continue;
                     }
                     let id = self.actors.len();
+                    self.actor_order.push(u64::MAX);
                     self.actors.push(Actor {
                         location: v3(d, 4),
                         hpr: v3(d, 16),
@@ -458,6 +550,7 @@ impl<M: Model> World<M> {
         for ri in 0..self.zones[zi].rooms.len() {
             for j in 0..self.zones[zi].rooms[ri].placements.len() {
                 let a = self.zones[zi].rooms[ri].placements[j];
+                self.actor_order[a] = (zi as u64) << 42 | (ri as u64) << 21 | j as u64;
                 if self.actors[a].flags & 4 != 0 {
                     let Some(r) = lib.lookup(self.actors[a].sprite_id as i32) else { continue };
                     let Some(s) = self.sprite(lib, r, &pretrans) else { continue };
@@ -650,6 +743,7 @@ impl<M: Model> World<M> {
                 if r.stamp20 != stamp {
                     r.stamp20 = stamp;
                     r.actors.push(actor);
+                    self.touched.push((z, room as usize));
                 }
                 return;
             }
