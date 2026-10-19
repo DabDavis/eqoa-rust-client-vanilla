@@ -240,6 +240,7 @@ impl Side {
             72 => self.win[k].draw_frame(v, r, a[1], a[2], a[3], a[4], a[5] as u32),
             73 => self.win[k].draw_frame_vscroll(v, r, a[1], a[2], a[3], a[4], x[0]),
             36 => self.win[k].draw_vscroll(v, r, [a[1], a[2]], a[3], x[0]),
+            45 => self.win[k].set_title(if a[1] != 0 { Some(s.as_slice()) } else { None }),
             41 => {
                 self.studs = fp;
                 self.fill = a[0];
@@ -322,6 +323,16 @@ fn script() -> Vec<Call> {
     for (just, sh) in [(0, 0), (1, 1), (3, 0)] {
         v.push(call(19, &[18, 56, 141, 142, 150, 140, 0, just, sh], &[10.0 / 255.0, 50.0 / 255.0, 70.0 / 255.0, 1.0, 1.0], "Inventory"));
         v.push(call(19, &[18, 83, 33, 34, 26, 90, 3, just, sh], &[0.0, 0.0, 0.0, 1.0, 0.5], ""));
+    }
+    // Titled windows (the who list's): the bar over the top edge and the
+    // height grown; an empty title grows it and draws no bar. (A null title
+    // reads through the null pointer in the game: never asked.)
+    for (k, set, title) in [(0, 0, "Who"), (1, 1, "Search Results"), (2, 2, "")] {
+        v.push(call(20, &[k, 320, 180, 600, 13, set], &[], ""));
+        v.push(call(45, &[k, 1], &[], title));
+        v.push(call(21, &[k, 1], &[], ""));
+        v.push(call(23, &[k], &[], ""));
+        v.push(call(24, &[k, 25, 1, 400, 1, 0], &[1.0, 1.0, 1.0, 1.0], "a row under the title"));
     }
     // Solid rectangles: the edit box's caret, a framed one, colour bars.
     v.push(call(42, &[22, 61, 24, 76], &[1.0, 1.0, 1.0, 0.5], ""));

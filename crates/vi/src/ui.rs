@@ -613,6 +613,22 @@ pub struct Window {
     pub dir: f32,
     pub x178: i32,
     pub pulse_time: i64,
+    /// `m_title`, as `SetTitle` keeps it (8-bit, `str16to8`; a character
+    /// past 255 is '?' here, where the game maps code page 1252 first)
+    pub title: Title,
+}
+
+/// A window's title: up to 63 characters.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Title {
+    pub len: u8,
+    pub text: [[u16; 16]; 4],
+}
+
+impl Title {
+    pub fn chars(&self) -> Vec<u16> {
+        self.text.iter().flatten().take(self.len as usize).copied().collect()
+    }
 }
 
 impl Window {
@@ -624,6 +640,23 @@ impl Window {
         self.rows = rows;
         self.x178 = x;
         self.title_h = 18;
+    }
+
+    /// `SetTitle(s)`: a title makes the title bar 24 high instead of 18,
+    /// the window growing by twice the change. (`None` is the null pointer,
+    /// which the game's would read through.)
+    pub fn set_title(&mut self, s: Option<&[u16]>) {
+        let h = if s.is_some() { 24 } else { 18 };
+        let old = self.title_h;
+        self.title_h = h;
+        self.size[1] = self.size[1] - old * 2 + h * 2;
+        let s = s.unwrap_or(&[]);
+        let n = s.iter().position(|&c| c == 0).unwrap_or(s.len()).min(63);
+        let mut t = Title { len: n as u8, ..Default::default() };
+        for (k, &c) in s[..n].iter().enumerate() {
+            t.text[k / 16][k % 16] = if c < 256 { c } else { b'?' as u16 };
+        }
+        self.title = t;
     }
 
     /// `Open(now)`.
@@ -662,9 +695,8 @@ impl Window {
     }
 
     /// `Draw`: steps the open animation (+0.15 opening, -0.2 closing) and
-    /// draws the panel in the window's set, faded by `1 - (1-open)^2`. The
-    /// title bar is not drawn (no window here has a title yet). True when
-    /// fully open or fully closed.
+    /// draws the panel in the window's set, faded by `1 - (1-open)^2`, and
+    /// the title. True when fully open or fully closed.
     pub fn draw(&mut self, vui: &Vui, ui: &mut dyn Raster) -> bool {
         let fp = frame_sets();
         if self.dir > 0.0 {
@@ -689,6 +721,12 @@ impl Window {
                 vui.blit_frame(ui, tl, size, &fp[0], 3, k, true);
             }
             _ => {}
+        }
+        // the title, a captioned bar over the top edge
+        if self.title.len > 0 {
+            let t = self.title.chars();
+            let tw = vui.string_width(ui, &t) + 50;
+            vui.blit_bar(ui, &t, [1.0, 1.0, 1.0, k], [ctr[0] - (tw >> 1), ipos[1] - 21], 33, 34, tw, 3, k, 3, true);
         }
         self.open == 1.0 || self.open == 0.0
     }
