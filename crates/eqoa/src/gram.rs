@@ -45,6 +45,7 @@ impl Date {
         Date { year: r.u16() as i16, month: r.u8(), day: r.u8(), hour: r.u8(), minute: r.u8(), second: r.u8() }
     }
 
+    #[cfg(test)]
     pub fn write(&self, w: &mut Writer) {
         w.bytes(&self.year.to_le_bytes()).u8(self.month).u8(self.day).u8(self.hour).u8(self.minute).u8(self.second);
     }
@@ -79,6 +80,7 @@ impl Header {
     }
 
     /// `operator<<`: the server's half.
+    #[cfg(test)]
     pub fn write(&self, w: &mut Writer) {
         w.u32(self.id).u32(self.x00).u32(self.x08).string(&self.from).wide(&String::from_utf16_lossy(&self.subject));
         self.date.write(w);
@@ -124,12 +126,6 @@ impl Grams {
     /// past its array).
     pub fn header(&self, i: i32) -> Header {
         self.headers.get(i.max(0) as usize).filter(|_| i >= 0).cloned().unwrap_or_default()
-    }
-
-    /// `Reset` (a new session).
-    pub fn reset(&mut self) {
-        self.state = 0;
-        self.count = -1;
     }
 
     /// `OnConnect` (the pump's 0xFF): ask again for what was waited for.
@@ -776,6 +772,8 @@ impl Compose {
 pub enum ReadUp {
     /// 260: back to the list
     Close,
+    /// the reply's `AddText`
+    Warn(i32),
 }
 
 /// `VIWndReadGram`: one gram, From/Subject/Received over its text in one
@@ -857,7 +855,7 @@ impl Read {
             match self.compose.key(vui, r, grams, key, down, now, cues) {
                 // 260 and 309: the reply put away
                 Some(ComposeUp::Close) | Some(ComposeUp::Sent) => self.compose.visible = false,
-                Some(ComposeUp::Warn(_)) => {}
+                Some(ComposeUp::Warn(id)) => return Some(ReadUp::Warn(id)),
                 None => {}
             }
             return None;
@@ -1002,10 +1000,13 @@ impl Read {
 pub enum InboxUp {
     /// `ClosePanel6E4`: back to the start menu
     Close,
+    /// the reader's reply's `AddText`
+    Warn(i32),
 }
 
 /// `VIWndGramInbox` (mode 24): eleven rows of From, Subject and the date
 /// received; X reads the selected one, square asks for the list again.
+#[derive(Default)]
 pub struct Inbox {
     pub sel: i32,
     pub top: i32,
@@ -1016,12 +1017,6 @@ pub struct Inbox {
     flash: KeyFlash,
     pub read: Read,
     dots: Dots,
-}
-
-impl Default for Inbox {
-    fn default() -> Self {
-        Inbox { sel: 0, top: 0, open: false, window: Window::default(), status: Window::default(), flash: KeyFlash::default(), read: Read::default(), dots: Dots::default() }
-    }
 }
 
 impl Inbox {
@@ -1054,8 +1049,10 @@ impl Inbox {
 
     pub fn key(&mut self, vui: &Vui, r: &mut dyn Raster, grams: &mut Grams, key: i32, down: bool, now: i64, cues: &mut Vec<i32>) -> Option<InboxUp> {
         if self.read.visible {
-            if self.read.key(vui, r, grams, key, down, now, cues) == Some(ReadUp::Close) {
-                self.read.visible = false;
+            match self.read.key(vui, r, grams, key, down, now, cues) {
+                Some(ReadUp::Close) => self.read.visible = false,
+                Some(ReadUp::Warn(id)) => return Some(InboxUp::Warn(id)),
+                None => {}
             }
             return None;
         }

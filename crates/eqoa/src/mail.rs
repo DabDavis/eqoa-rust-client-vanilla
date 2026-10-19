@@ -1,0 +1,224 @@
+//! Mail and the tell forms in play: the gram client (`VIClient+0x2EFD0`,
+//! answering 0x0D41) and `VIWndGame`'s modes for its windows: 23 the
+//! compose window (Mail > Compose), 24 the inbox (Mail > Inbox, with its
+//! reader and the reader's reply), 28 the tell form and 29 the reply form;
+//! plus the buddy list's own compose window, which its menu's Mail opens over
+//! the list (mode 18). The windows are `gram`'s; this ties them to the
+//! session. A child of `play`, for `Play`'s fields.
+
+use super::Play;
+use crate::gram::{Compose, ComposeUp, Grams, Inbox, InboxUp, Tell, TellUp};
+
+pub struct MailWindows {
+    pub grams: Grams,
+    tell: Tell,
+    reply: Tell,
+    compose: Compose,
+    inbox: Inbox,
+    /// `VIWndBuddy::m_compose`: a reply-style compose over the buddy list
+    buddy: Compose,
+    /// the mode opened, set up with the next HUD frame
+    opening: Option<i32>,
+    /// the buddy compose's To, set up with the next HUD frame
+    buddy_open: Option<String>,
+    keys: Vec<(i32, bool)>,
+    /// `EQOA_MAIL_TEXT`: the playshot's fields, typed one a field as each
+    /// editor opens: (field, character)
+    script: (usize, usize, bool),
+}
+
+impl Default for MailWindows {
+    fn default() -> Self {
+        MailWindows { grams: Grams::default(), tell: Tell::new(false), reply: Tell::new(true), compose: Compose::new(false), inbox: Inbox::default(), buddy: Compose::new(true), opening: None, buddy_open: None, keys: Vec::new(), script: (0, 0, false) }
+    }
+}
+
+impl Play {
+    /// A key for the mail and tell windows, handled with the next HUD frame.
+    pub fn mail_key(&mut self, key: i32, down: bool) {
+        self.mail.keys.push((key, down));
+    }
+
+    /// The mode is one of these windows', or the buddy list's compose is up.
+    pub fn mail_owns(&self) -> bool {
+        matches!(self.mode, 23 | 24 | 28 | 29) || (self.mode == 18 && (self.mail.buddy.visible || self.mail.buddy_open.is_some()))
+    }
+
+    /// An editor in them is up (it takes the keyboard).
+    pub fn mail_typing(&self) -> bool {
+        let m = &self.mail;
+        match self.mode {
+            23 => m.compose.typing(),
+            24 => m.inbox.typing(),
+            28 => m.tell.typing(),
+            29 => m.reply.typing(),
+            18 => m.buddy.visible && m.buddy.typing(),
+            _ => false,
+        }
+    }
+
+    /// `OpenComposeGram` (23), `OpenGramInbox` (24), `OpenTell` (28),
+    /// `OpenReply` (29): the mode; the window with the next HUD frame.
+    pub(super) fn open_mail(&mut self, mode: i32) {
+        self.mode = mode;
+        self.mail.opening = Some(mode);
+        self.mail.keys.clear();
+        self.mail.script = (0, 0, false);
+    }
+
+    /// The buddy list's Mail: its compose, addressed to the buddy.
+    pub(super) fn buddy_mail(&mut self, name: String) {
+        self.mail.buddy_open = Some(name);
+        self.mail.keys.clear();
+    }
+
+    /// `Recv0D41`.
+    pub(super) fn mail_recv(&mut self, data: &[u8]) {
+        self.mail.grams.recv(data);
+    }
+
+    /// The pump's 0xFF: a new connection (`OnConnect`).
+    pub(super) fn mail_connect(&mut self) {
+        self.mail.grams.on_connect();
+    }
+
+    /// `GetTargetPlayerName`: the target's name when it is a player.
+    fn target_player_name(&self) -> String {
+        self.entities.slots.iter().flatten().find(|e| e.id == self.target).and_then(|e| e.creature.as_ref()).filter(|c| c.p256 == 2).map(|c| c.name.clone()).unwrap_or_default()
+    }
+
+    /// `EQOA_MAIL_TEXT=a|b|c`: each field typed into the next editor that
+    /// opens, a character a frame, then done (143).
+    pub fn mail_script_step(&mut self) {
+        let Ok(spec) = std::env::var("EQOA_MAIL_TEXT") else { return };
+        let fields: Vec<&str> = spec.split('|').collect();
+        let typing = self.mail_typing();
+        let (f, c, was) = self.mail.script;
+        if !typing {
+            if was {
+                self.mail.script = (f + 1, 0, false);
+            }
+            return;
+        }
+        let Some(text) = fields.get(f) else { return };
+        match text.chars().nth(c) {
+            Some(ch) => self.mail_key(ch as i32, true),
+            None if c == text.chars().count() => self.mail_key(143, true),
+            None => {}
+        }
+        self.mail.script = (f, c + 1, true);
+    }
+
+    /// The windows' opening, keys, drawing and what they ask.
+    pub(super) fn run_mail(&mut self, vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster) {
+        let now = vui.time;
+        let pad_only = self.options.compact != 0;
+        if let Some(mode) = self.mail.opening.take() {
+            match mode {
+                23 => {
+                    // UpdateMode: Refresh, then the focus
+                    self.mail.compose.refresh();
+                    self.mail.compose.visible = true;
+                    self.mail.compose.focus(vui, r);
+                }
+                24 => {
+                    let m = &mut self.mail;
+                    m.inbox.open(vui, r, &mut m.grams);
+                }
+                28 => {
+                    let name = crate::ui::wide(&self.target_player_name());
+                    self.mail.tell.open(vui, r, &name);
+                }
+                29 => {
+                    let name = crate::ui::wide(&self.reply_name);
+                    self.mail.reply.open(vui, r, &name);
+                }
+                _ => {}
+            }
+        }
+        if let Some(name) = self.mail.buddy_open.take() {
+            // VIWndBuddy 261, Mail: shown, the focus (295 empties it), Refresh,
+            // then To
+            let b = &mut self.mail.buddy;
+            b.visible = true;
+            b.focus(vui, r);
+            b.refresh();
+            b.set_to(&crate::ui::wide(&name));
+        }
+        for e in [&mut self.mail.tell.edit, &mut self.mail.reply.edit, &mut self.mail.compose.edit, &mut self.mail.buddy.edit, &mut self.mail.inbox.read.compose.edit] {
+            e.pad_only = pad_only;
+        }
+        let mut cues = Vec::new();
+        let mut tell_ups = Vec::new();
+        let mut compose_ups = Vec::new();
+        let mut buddy_ups = Vec::new();
+        let mut inbox_ups = Vec::new();
+        for (k, down) in std::mem::take(&mut self.mail.keys) {
+            let m = &mut self.mail;
+            match self.mode {
+                23 => compose_ups.extend(m.compose.key(vui, r, &mut m.grams, k, down, now, &mut cues)),
+                24 => inbox_ups.extend(m.inbox.key(vui, r, &mut m.grams, k, down, now, &mut cues)),
+                28 => tell_ups.extend(m.tell.key(vui, r, k, down, now, &mut cues)),
+                29 => tell_ups.extend(m.reply.key(vui, r, k, down, now, &mut cues)),
+                18 if m.buddy.visible => buddy_ups.extend(m.buddy.key(vui, r, &mut m.grams, k, down, now, &mut cues)),
+                _ => {}
+            }
+        }
+        {
+            let m = &mut self.mail;
+            match self.mode {
+                23 if m.compose.visible => compose_ups.extend(m.compose.draw(vui, r, &m.grams, now, &mut cues)),
+                24 => m.inbox.draw(vui, r, &m.grams, true, now, &mut cues),
+                28 => m.tell.draw(vui, r, now, &mut cues),
+                29 => m.reply.draw(vui, r, now, &mut cues),
+                18 if m.buddy.visible => buddy_ups.extend(m.buddy.draw(vui, r, &m.grams, now, &mut cues)),
+                _ => {}
+            }
+        }
+        self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
+        for up in tell_ups {
+            match up {
+                // CloseTell / CloseReply: back to play
+                TellUp::Close => self.mode = 0,
+                TellUp::Send(line) => {
+                    self.chat_line(&line);
+                    self.mode = 0;
+                }
+            }
+        }
+        for up in compose_ups {
+            match up {
+                // ClosePanel6E0: CloseComposeGram, back to the start menu
+                ComposeUp::Close | ComposeUp::Sent => {
+                    self.mail.compose.visible = false;
+                    self.mode = 0;
+                    self.open_start_menu(false);
+                }
+                ComposeUp::Warn(id) => self.warn(id),
+            }
+        }
+        for up in buddy_ups {
+            match up {
+                // VIWndBuddy 260 / 309: the compose put away, the list again
+                ComposeUp::Close | ComposeUp::Sent => self.mail.buddy.visible = false,
+                ComposeUp::Warn(id) => self.warn(id),
+            }
+        }
+        for up in inbox_ups {
+            match up {
+                // ClosePanel6E4: CloseGramInbox, back to the start menu
+                InboxUp::Close => {
+                    self.mode = 0;
+                    self.open_start_menu(false);
+                }
+                InboxUp::Warn(id) => self.warn(id),
+            }
+        }
+        for msg in std::mem::take(&mut self.mail.grams.out) {
+            self.session.send(&msg);
+        }
+        for id in std::mem::take(&mut self.mail.grams.shown) {
+            self.show_word(id);
+        }
+    }
+}
