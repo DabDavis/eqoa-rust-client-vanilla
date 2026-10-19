@@ -115,6 +115,9 @@ impl From<std::io::Error> for Error {
 pub trait ReadAt {
     fn len(&self) -> u64;
     fn read_at(&mut self, off: u64, buf: &mut [u8]) -> std::io::Result<()>;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 impl ReadAt for [u8] {
