@@ -107,9 +107,55 @@ fn run(args: &[String]) -> Result<()> {
                 viewer::run(lib, src)?;
             }
         }
-        _ => return Err("usage: eqoa ls|tree|zones|view|shot (see main.rs)".into()),
+        Some("login") => {
+            let host = args.get(1).ok_or("usage: eqoa login <host> <user> (password in EQOA_PASSWORD)")?;
+            let user = args.get(2).ok_or("usage: eqoa login <host> <user>")?;
+            let pass = std::env::var("EQOA_PASSWORD").map_err(|_| "set EQOA_PASSWORD")?;
+            login(host, user, &pass)?;
+        }
+        _ => return Err("usage: eqoa ls|tree|zones|view|shot|login (see main.rs)".into()),
     }
     Ok(())
+}
+
+/// The Station login and the game session up to world entry, printing
+/// every event: the first shard and the first character are taken.
+fn login(host: &str, user: &str, pass: &str) -> Result<net::session::Player> {
+    use net::session::{Event, Session};
+    let l = net::auth::login((host, 9735), user, pass)?;
+    eprintln!("auth: account {} status {} features {:#x}", l.account, l.status, l.game_features);
+    let server = std::net::ToSocketAddrs::to_socket_addrs(&(host, 10070))?.next().ok_or("no address")?;
+    let mut s = Session::connect(server, user, l.token)?;
+    let t = std::time::Instant::now();
+    while t.elapsed() < std::time::Duration::from_secs(30) {
+        for e in s.pump() {
+            match &e {
+                Event::ShardList(list) => {
+                    eprintln!("shards: {list:?}");
+                    if let Some(sh) = list.first() {
+                        s.connect_shard(sh.endpoint);
+                    }
+                }
+                Event::Characters(list) => {
+                    for c in list {
+                        eprintln!("character: {} (id {}, race {}, class {}, level {})", c.name, c.server_id, c.race, c.class, c.level);
+                    }
+                    if let Some(c) = list.first() {
+                        s.select_character(&c.clone());
+                    }
+                }
+                Event::WorldEntry { self_id, player } => {
+                    eprintln!("in the world as {self_id:#x}: {player:?} after {:.2?}, {} packets sent", t.elapsed(), s.packets_sent);
+                    return Ok(player.clone());
+                }
+                Event::Disconnected(r) => return Err(format!("disconnected (reason {r})").into()),
+                Event::State { channel, data } => eprintln!("state {channel:#04x}: {} bytes", data.len()),
+                other => eprintln!("{other:?}"),
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(16));
+    }
+    Err("no world entry within 30 s".into())
 }
 
 /// Files every scene loads before its own, in this order (the dictionary's

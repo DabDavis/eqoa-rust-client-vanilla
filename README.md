@@ -45,6 +45,7 @@ UI, network (DRDP), sound.
 | `vi` (animation) | `VIHSprite` (the pose evaluator: plays, their timing and 250 ms blends, freezes, LOD rest frames, the hierarchy, bind pose and inverse, centre transform, skin palette), `VIHSpriteAnim` (full and packed clips, triggers), `VICSprite` (66-entry play list, priorities, `SetDefaultEntries`, `SetDefaults`, the `SetLocomotion`/`SetAnimation` arbiter and its two-layer sync), `VIWalkControl::UpdateSprite`, and the loader for CSprite records | **bit for bit against the decomp** (oracle op 500 builds the human from CHAR.ESF as a real VICSprite in a bare VIScene): 320 steps of a locomotion script, all 40 node matrices equal at every step; planted bugs fail |
 | `vi` (time of day) | `VIScene::InitTimeOfDay`'s 24 hourly lights, sun directions and sky colours; `SetupTimeOfDayLights`/`Fog`/`Sky`'s interpolation; the world's terrain-profile grid, `VIWorld::SetProfiles` and `CalcProfileBlend` | **bit for bit against the decomp** for the table, the 22 profiles and 4,200 blends over TUNARIA's real grid (oracle ops 600, 601); planted bugs fail. The Setup* combinations write the raster and are not compared |
 | `drdp` | DRDP, the game's network library, for the client role: the wire buffer and varints, the state channels' XOR-and-RLE deltas, guaranteed messages in 1,300-byte fragments, best effort, acks and flush numbers, RTT and timeouts, instances and resets, routes and the leaky bucket, the CRC trailer with the protocol version. Sends go to an outbox; datagrams come in behind their sender's address | **byte for byte against the decomp** (`build/oracle_drdp`: the decomp's library compiled with only the socket replaced): two instances through a lossy, reordering, duplicating network, 132,000 replies over six seeds; and a real PS2-Sandstorm capture replayed into one client (the 26 KB MemoryDump, 24 state channels); a 1 ms clock fault fails |
+| `net` | The client above DRDP: the Station login (TCP 9735: the 148-byte request with the password DES-CBC under `des_string_to_key("LPSS-V1.0$@Z>.ADJ")`, the 168-byte reply, the AES-256 UDP token), `VIMemStream`'s zigzag and strings, and `VIClient`'s session: the version hello and 0x0904, the server list on type 252, `ConnectShard` and 0x0001, the character list, 0x002A, the promotion (a type-255 notice), the MemoryDump head that places the player (its DRDP source is the player's id), and 0x0014/0x00C9/0x00CA. `eqoa login <host> <user>` (password in `EQOA_PASSWORD`) runs it | live against go-eqoa-server: login to standing in Freeport in about a second. Not yet against a capture |
 | `render` | wgpu: instanced models, a texture cache by DictID, the strip programs' lighting (colour + ambient + sun, alpha as sun visibility) and back-face culling, GPU skinning (`VIRStrip4`'s four weighted palette matrices), and linear fog on view depth as `VIRaster::SetFog` sets it, colour arithmetic on the bytes as the GS does it (no sRGB anywhere), and one pass per material layer with `VIMaterial::ConstructTextPass`'s GS state: the alpha test or one of four blend modes (add, subtract, alpha, multiply), colour-only writes for blended layers, wrap modes, the UV transform and its scroll, the layer colour as c/255; offscreen capture | by eye, for now |
 | `eqoa` | the client binary: `ls`, `tree`, `zones`, `view` (winit window) and `shot` (PNG, no window); walking (`walker.rs`, driven as `VIClient::UpdateControls` drives it in third person) on the game's own collision world, the zone and its neighbours drawn | by eye |
 
@@ -103,9 +104,10 @@ order per stage is not yet measured.
 
 ### Not yet
 
-- The client half above DRDP: login (the auth server), `VIClient`'s receive
-  loop and opcodes, the entities they make. `drdp` leaves out endpoint transfer,
-  the master and leader roles and ICMP (see its crate docs).
+- Above the login: the MemoryDump past the player's position, the opcodes after
+  world entry, the 0x40 self-state, the entities on channels 0x00-0x17 (and
+  drawing them), and the view and the network together. `drdp` leaves out
+  endpoint transfer, the master and leader roles and ICMP (see its crate docs).
 
 - Collision: `VICSprite` (a capsule) collides as nothing, and the RAY collide
   (`Collide(VICollRay &)`) is not ported. `VIHSprite` props (900 placements of 67

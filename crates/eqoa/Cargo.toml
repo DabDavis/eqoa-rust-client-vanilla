@@ -11,6 +11,7 @@ esf.workspace = true
 ee.workspace = true
 render.workspace = true
 vi.workspace = true
+net.workspace = true
 winit = "0.30.13"
 pollster = "1.0.1"
 glam = "0.34.1"

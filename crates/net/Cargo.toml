@@ -1,0 +1,12 @@
+[package]
+name = "net"
+description = "The client above DRDP: the Station login, and VIClient's session from the server list to world entry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+drdp.workspace = true
+vi.workspace = true
+des = "0.8"
+aes = "0.8"

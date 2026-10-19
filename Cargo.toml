@@ -15,6 +15,7 @@ esf = { path = "crates/esf" }
 render = { path = "crates/render" }
 vi = { path = "crates/vi" }
 drdp = { path = "crates/drdp" }
+net = { path = "crates/net" }
 flate2 = "1"
 crc32fast = "1"
 serde_json = "1"
