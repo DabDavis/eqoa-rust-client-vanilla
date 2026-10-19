@@ -434,6 +434,8 @@ pub fn shot_with(
                             p.book_key(k, down);
                         } else if p.mode == 35 {
                             p.who_key(k, down);
+                        } else if p.panel_up() {
+                            p.panel_key(k, down);
                         } else {
                             p.start_key(k, down);
                         }
@@ -469,6 +471,14 @@ pub fn shot_with(
                 if p.mode == 14 && std::env::var_os("EQOA_ACCEPT").is_some() {
                     p.dialog_key(crate::dialog::Key::Left);
                     p.dialog_key(crate::dialog::Key::Enter);
+                }
+                // and a buddy request's box (mode 17)
+                if p.mode == 17 && std::env::var_os("EQOA_ACCEPT").is_some() {
+                    use crate::startmenu::keys as K;
+                    for k in [K::LEFT, K::CROSS] {
+                        p.panel_key(k, true);
+                        p.panel_key(k, false);
+                    }
                 }
                 // `EQOA_INTERACT`: Q just after targeting.
                 if t == at + 96 && std::env::var_os("EQOA_INTERACT").is_some() {
@@ -979,6 +989,26 @@ impl ApplicationHandler for App {
                         }
                         return;
                     }
+                    // the options, buddy and ignore lists (modes 34, 17/18,
+                    // 26): arrows, Enter or E, Escape
+                    if p.panel_up() {
+                        let k = match &event.logical_key {
+                            Key::Named(NamedKey::ArrowUp) => Some(K::UP),
+                            Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
+                            Key::Named(NamedKey::ArrowLeft) => Some(K::LEFT),
+                            Key::Named(NamedKey::ArrowRight) => Some(K::RIGHT),
+                            Key::Named(NamedKey::Enter) => Some(K::CROSS),
+                            Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
+                            Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
+                            _ => None,
+                        };
+                        if let Some(k) = k
+                            && !(down && event.repeat)
+                        {
+                            p.panel_key(k, down);
+                        }
+                        return;
+                    }
                     if p.mode == 0 && down && event.logical_key == Key::Named(NamedKey::Escape) {
                         p.open_start_menu(true);
                         return;
@@ -1214,6 +1244,11 @@ impl ApplicationHandler for App {
                 let play = &mut self.play;
                 let lib = &self.lib;
                 let walk_view = self.walker.as_mut().map(|w| {
+                    // the Camera Pitch Axis option, in modes 0 and 2
+                    let mut controls = controls;
+                    if play.as_ref().is_some_and(|p| p.options.inverted != 0) && matches!(w.cam.camera_mode, 0 | 2) {
+                        controls.pitch = -controls.pitch;
+                    }
                     w.frame(controls, now);
                     if let Some(p) = play {
                         let gpu = crate::play::Gpu { renderer: &mut g.renderer, device: &g.device, queue: &g.queue };

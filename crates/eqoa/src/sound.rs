@@ -126,6 +126,9 @@ pub struct Sound {
     /// `VIGameOptions::m_language`, which is the battle-music option: 0 none,
     /// 1..8 a song, 9 (the default) a random one each fight
     pub battle_option: i32,
+    /// the Options window's own VIBattleMusic (`VIWndOptions::m_music`),
+    /// previewing a track on the same slot while its Sound page is up
+    pub preview: Option<i32>,
     /// the weather's intensity (`m_atmosphere.m_intensity`), which dims the
     /// track: set by `weather.rs` each frame
     pub weather: F<Ee>,
@@ -193,6 +196,7 @@ impl Sound {
             ui: None,
             battle: (0, -1),
             battle_option: 9,
+            preview: None,
             weather: F::ZERO,
         })
         .map(|mut s| {
@@ -316,10 +320,21 @@ impl Sound {
     /// `Stop`. `None`: no creature of the player's yet (dead or not in the
     /// world): `Stop` too.
     pub fn battle_music(&mut self, fighting: Option<bool>) {
-        if fighting == Some(true) {
+        if let Some(t) = self.preview {
+            self.battle_play(t);
+        } else if fighting == Some(true) {
             self.battle_play(self.battle_option);
         } else {
             // Stop: the state, and the slot's request
+            self.battle.0 = 0;
+            self.dev.stop_bgm(0);
+        }
+    }
+
+    /// The Options window's `m_music.StopNow()`: its slot stopped and
+    /// handed back to the fight.
+    pub fn end_preview(&mut self) {
+        if self.preview.take().is_some() {
             self.battle.0 = 0;
             self.dev.stop_bgm(0);
         }

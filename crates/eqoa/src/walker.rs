@@ -72,6 +72,41 @@ impl Walker {
         Walker { cam, scene, eye, sprite: None, anims: AnimScene::default(), rand: Rand(1) }
     }
 
+    /// `ApplyOptions`' camera half: `ToggleCameraStyle` when the 3rd
+    /// Person Camera option and the camera disagree (Tether is mode 3,
+    /// Follow mode 2): `SetCameraStyle`, then the orbit turned round from
+    /// the player's heading. The race camera's look-at height is not read,
+    /// so mode 3 keeps the one it has.
+    pub fn apply_camera_option(&mut self, follow: bool) {
+        let mode = self.cam.camera_mode;
+        if !((mode == 2 && !follow) || (mode == 3 && follow)) {
+            return;
+        }
+        let c = &mut self.cam;
+        let pi = F::<Ee>::new(3.1415927);
+        c.target_height = F::new(1.68);
+        c.min_orbit_distance = F::new(1.5);
+        c.max_orbit_distance = F::new(if follow { 25.0 } else { 8.0 });
+        c.min_collision_dist = F::new(3.5);
+        c.set_orbit_distance(F::new(3.38));
+        c.walk.set_pitch_range(F::new(-0.7853982), F::new(1.5707964));
+        if !follow {
+            c.set_def_orbit_pitch_angle(F::new(0.2617994));
+        }
+        c.walk.turn_rate = F::new(if follow { 1.5707964 } else { 6.2831855 });
+        c.walk.init_intermediate();
+        if follow {
+            c.look_at_height_above = F::new(1.68);
+        }
+        c.set_camera_mode(if follow { 2 } else { 3 });
+        let heading = c.walk.committed.angles.x;
+        if !follow {
+            c.choose_orbit_angle(heading + pi, &mut self.scene);
+        }
+        let heading = self.cam.walk.committed.angles.x;
+        self.cam.set_orbit_angle(heading + F::new(3.14159265));
+    }
+
     /// `Respawn`'s placing: the character stood at `pos` (on the ground
     /// when the zone there is loaded, else at the height given), facing
     /// `heading`, the camera set behind.

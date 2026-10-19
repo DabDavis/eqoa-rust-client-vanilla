@@ -175,6 +175,25 @@ pub struct Play {
     who_open: bool,
     who_keys: Vec<(i32, bool)>,
     who_tell: Option<String>,
+    /// `VIGameOptions` and the Options window (mode 34); what it asked of
+    /// the sound device, done in the next frame; a camera style to apply
+    /// (`ApplyOptions`); the faction and loot filters as last sent
+    /// (`m_p502D4`, `m_p502D8`), none since the world entry.
+    pub options: crate::options::GameOptions,
+    options_wnd: crate::options::WndOptions,
+    sound_ops: Vec<crate::options::OptionsUp>,
+    apply_camera: bool,
+    filters_sent: Option<(bool, bool)>,
+    /// The buddy list (VIClient's map, `VIWndBuddy`: mode 18, a request
+    /// mode 17) and the ignore list (`VIClientPart38300`,
+    /// `VIWndIgnoreList`: mode 26); a panel to open with the next HUD
+    /// frame, and keys for whichever is up.
+    buddies: crate::social::Buddies,
+    buddy_wnd: crate::social::BuddyList,
+    ignore: crate::social::Ignore,
+    ignore_wnd: crate::social::IgnoreList,
+    panel_open: bool,
+    panel_keys: Vec<(i32, bool)>,
     /// `VIWndEdit` (mode 2), and keys for it waiting for the raster.
     edit: crate::editbox::EditBox,
     edit_keys: Vec<(i32, bool)>,
@@ -492,7 +511,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false };
         p.take_abilities();
         p
     }
@@ -630,6 +649,41 @@ impl Play {
                     self.cues.push(crate::sound::Cue::Ui(1));
                 }
                 Event::Opcode { op: 0x0E02, data } => self.who.recv(&data),
+                Event::Opcode { op: op @ 0x1003..=0x1006, data } => {
+                    self.ignore.recv(op, &data);
+                }
+                Event::Opcode { op: op @ (0x03D5 | 0x03D6), data } => {
+                    self.buddies.recv(op, &data);
+                }
+                // ShowMsg(590): the other's buddy list is full
+                Event::Opcode { op: 0x03D7, .. } => self.show_word(590),
+                Event::Opcode { op: 0x076F, data } => self.buddy_request(&data),
+                Event::Opcode { op: 0x0770, data } => {
+                    // Msg0770: word 557 with the name
+                    let name = String::from_utf8_lossy(&net::stream::Reader::new(&data).string(24)).trim_end_matches('\0').to_string();
+                    self.show_word_name(557, &name);
+                }
+                Event::Opcode { op: 0x0771, data } => {
+                    // Msg0771: why an invitation went nowhere, by type
+                    let mut r = net::stream::Reader::new(&data);
+                    let kind = r.u8();
+                    let name = String::from_utf8_lossy(&r.string(24)).trim_end_matches('\0').to_string();
+                    let word = match kind {
+                        2 => Some(558),
+                        1 => Some(559),
+                        5 => Some(560),
+                        6 => Some(587),
+                        7 => Some(589),
+                        8 => Some(586),
+                        9 => Some(592),
+                        10 => Some(642),
+                        // the switch leaves the word unset: stack garbage
+                        _ => None,
+                    };
+                    if let Some(w) = word {
+                        self.show_word_name(w, &name);
+                    }
+                }
                 Event::Pet(id) => {
                     self.pet_id = id.unwrap_or(u32::MAX);
                     if id.is_none() {
@@ -808,6 +862,7 @@ impl Play {
                 }
                 Event::WorldEntry { self_id, player, dump } => {
                     eprintln!("play: world entry again as {self_id:#x} at {:?}", player.pos);
+                    self.filters_sent = None;
                     self.player = player;
                     self.dump = dump;
                     self.take_abilities();
@@ -821,6 +876,24 @@ impl Play {
         }
         if self.has_self() {
             self.auto_attack_tick(walker, now);
+            self.options_tick();
+        }
+        // what the Options window asked of the sound device and the camera
+        for op in std::mem::take(&mut self.sound_ops) {
+            let Some(s) = sound.as_deref_mut() else { continue };
+            match op {
+                crate::options::OptionsUp::Volume(cls, v) => s.dev.set_sound_class_volume(cls, v.0),
+                crate::options::OptionsUp::Output(stereo) => s.dev.set_output_mode(stereo as i32),
+                crate::options::OptionsUp::Preview(t) => s.preview = Some(t),
+                crate::options::OptionsUp::PreviewEnd => s.end_preview(),
+                crate::options::OptionsUp::Apply => {}
+            }
+        }
+        if let Some(s) = sound.as_deref_mut() {
+            s.battle_option = self.options.battle as i32;
+        }
+        if std::mem::take(&mut self.apply_camera) {
+            walker.apply_camera_option(self.options.follow != 0);
         }
         // PlayEmote's action on the player's own sprite
         if let Some(a) = self.emote.take() {
@@ -1174,13 +1247,15 @@ impl Play {
         if c.npc_flags & 0x80 != 0 {
             return;
         }
-        if self.attack_due == 0 || (self.attack_due.wrapping_sub(now) as i32) <= 0 {
+        let toggle = self.options.auto_attack != 0;
+        if (!toggle || !self.auto_attack) && (self.attack_due == 0 || (self.attack_due.wrapping_sub(now) as i32) <= 0) {
             self.attack_due = now;
             let mut w = net::stream::Writer::op(0x000F);
             w.u32(self.target);
             self.session.send(&w.data);
         }
-        self.auto_attack = true;
+        // the Auto Attack option makes the button a toggle
+        self.auto_attack = !toggle || !self.auto_attack;
     }
 
     /// `ChatLine`: a typed line. A slash command picks its channel for the
@@ -1570,6 +1645,11 @@ impl Play {
                     self.mode = 14;
                 }
                 // the edit box: a name (the target's) or a line
+                // OpenPanel34 (the battle music's Unload is the sound's own),
+                // OpenPanel18 and m_p38300.OpenPanel: the windows
+                0x0B0D_0002 => self.open_panel(34),
+                0x0B05_0000 => self.open_panel(18),
+                0x0B05_3000 => self.open_panel(26),
                 0x0B05_3001 => self.open_edit(msg, 24, 67, true),
                 0x0B05_3002 => self.open_edit(msg, 24, 613, true),
                 0x0B04_0000 => self.open_edit(msg, 24, 86, true),
@@ -1670,6 +1750,8 @@ impl Play {
         e.set_text(&crate::ui::wide(&target));
         e.title = if title >= 0 { self.words.as_ref().map_or_else(Vec::new, |w| crate::ui::wide(w.get(title, 0))) } else { Vec::new() };
         e.purpose = purpose;
+        // gKeyboardAttached: the host has one, so the option decides
+        e.pad_only = self.options.compact != 0;
         e.focus(self.session.now() as i64);
         self.mode = 2;
     }
@@ -1738,23 +1820,20 @@ impl Play {
         if !text.is_empty() {
             match purpose {
                 0x0B0F_0000 => self.chat_line(&text),
-                // AddBuddy (the list's own checks are not ported)
-                0x0B04_0000 => {
-                    if text.eq_ignore_ascii_case(&self.dump.player.name) {
-                        self.warn(679);
-                    } else {
-                        let mut w = net::stream::Writer::op(870);
-                        w.string(text.as_bytes());
-                        self.session.send(&w.data);
+                0x0B04_0000 => match self.buddies.add(&self.dump.player.name, &text) {
+                    Ok(req) => self.session.send(&req),
+                    Err((word, name)) => {
+                        let fmt = self.words.as_ref().map_or_else(|| format!("(word {word})"), |w| w.get(word, 0).to_string());
+                        self.add_chat(fmt.replacen("%s", &name, 1), [1.0, 0.25, 0.25, 1.0]);
+                    }
+                },
+                // VIClientPart38300::Add and Remove (by name, any case)
+                0x0B05_3001 => self.session.send(&crate::social::Ignore::add(&text)),
+                0x0B05_3002 => {
+                    if let Some(req) = self.ignore.remove(&text) {
+                        self.session.send(&req);
                     }
                 }
-                // VIClientPart38300::Add; Remove needs the list, not kept
-                0x0B05_3001 => {
-                    let mut w = net::stream::Writer::op(0x1000);
-                    w.string(text.as_bytes());
-                    self.session.send(&w.data);
-                }
-                0x0B05_3002 => eprintln!("play: the ignore list is not kept; {text} not removed"),
                 0x0B0B_1002 => {
                     // the report asks first (word 1472)
                     let w = self.words.as_ref().map_or_else(Vec::new, |w| crate::ui::wide(w.get(1472, 0)));
@@ -2163,9 +2242,183 @@ impl Play {
         false
     }
 
-    /// `MaybeStopAutoAttack`: the button released.
+    /// `MaybeStopAutoAttack`: the button released, unless the Auto Attack
+    /// option is on.
     pub fn attack_release(&mut self) {
-        self.auto_attack = false;
+        if self.options.auto_attack == 0 {
+            self.auto_attack = false;
+        }
+    }
+
+    /// `VIClient::Process`'s part of the options: with Auto Attack on, a
+    /// target gone, not to be fought or oneself stops it; the faction and
+    /// loot filters sent when they change (201, 202: off, then 1), and once
+    /// after the world entry (then 0).
+    fn options_tick(&mut self) {
+        if self.options.auto_attack != 0 && self.target != u32::MAX && self.auto_attack {
+            let alive = self.entities.slots.iter().flatten().find(|e| e.id == self.target).is_some_and(|e| e.p19 != 0);
+            if !alive || Some(self.target) == self.self_id32() {
+                self.auto_attack = false;
+            }
+        }
+        let on = (self.options.no_faction == 0, self.options.no_loot == 0);
+        let sent = self.filters_sent;
+        let mut send = |op: u16, on: bool, b: u8| {
+            let mut w = net::stream::Writer::op(op);
+            w.u8(!on as u8).u8(b);
+            self.session.send(&w.data);
+        };
+        match sent {
+            None => {
+                send(201, on.0, 0);
+                send(202, on.1, 0);
+            }
+            Some(s) => {
+                if s.0 != on.0 {
+                    send(201, on.0, 1);
+                }
+                if s.1 != on.1 {
+                    send(202, on.1, 1);
+                }
+            }
+        }
+        self.filters_sent = Some(on);
+    }
+
+    /// `Msg076F`: a buddy request. Busy (any window up) refuses it with
+    /// word 649, a full list (32) with reason 8; else `ShowBuddyRequest`
+    /// (mode 17).
+    fn buddy_request(&mut self, data: &[u8]) {
+        self.buddies.recv_request(data);
+        if self.mode != 0 {
+            let name = self.buddies.request_name.clone();
+            eprintln!("play: a buddy request from {name} while busy (mode {})", self.mode);
+            self.show_word_name(649, &name);
+            let req = self.buddies.refuse(1);
+            self.session.send(&req);
+        } else if self.buddies.count() >= 32 {
+            let req = self.buddies.refuse(8);
+            self.session.send(&req);
+        } else {
+            let now = self.hud_last;
+            let words = self.words.clone();
+            let w = |id: i32| words.as_ref().map_or_else(String::new, |w| w.get(id, 0).to_string());
+            let name = self.buddies.request_name.clone();
+            self.buddy_wnd.show_request(&w, &name, now);
+            self.mode = 17;
+        }
+    }
+
+    /// `OpenOptions` (34), `OpenBuddyList` (18), `OpenIgnoreList` (26):
+    /// the mode, the window set up with the next HUD frame.
+    fn open_panel(&mut self, mode: i32) {
+        self.mode = mode;
+        self.panel_open = true;
+        self.panel_keys.clear();
+    }
+
+    /// The modes whose window takes the start menu's keys.
+    pub fn panel_up(&self) -> bool {
+        matches!(self.mode, 17 | 18 | 26 | 34)
+    }
+
+    /// A key for the window of a panel mode, handled with the next HUD
+    /// frame.
+    pub fn panel_key(&mut self, key: i32, down: bool) {
+        self.panel_keys.push((key, down));
+    }
+
+    /// The panels' opening, keys, drawing and what they ask.
+    fn run_panels(&mut self, vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster) {
+        let Some(start) = self.start.as_ref() else { return };
+        let menus = &start.menus;
+        self.buddy_wnd.menu.menu = start.buddy_menu;
+        self.ignore_wnd.menu.menu = start.ignore_menu;
+        // the HUD's clock, which the windows' tick pulses are drawn on
+        let now = vui.time;
+        let words = |id: i32| vui.words.get(id, vui.language).to_string();
+        let mut cues = Vec::new();
+        let (mut buddy_ups, mut ignore_ups, mut option_ups) = (Vec::new(), Vec::new(), Vec::new());
+        if std::mem::take(&mut self.panel_open) {
+            match self.mode {
+                18 => self.buddy_wnd.open(vui, r),
+                26 => self.ignore_wnd.open(vui, r),
+                34 => self.options_wnd.open(vui, r, &self.options),
+                _ => {}
+            }
+        }
+        for (k, down) in std::mem::take(&mut self.panel_keys) {
+            match self.mode {
+                17 | 18 => buddy_ups.extend(self.buddy_wnd.key(menus, &self.buddies, &words, k, down, now, &mut cues)),
+                26 => ignore_ups.extend(self.ignore_wnd.key(menus, &self.ignore, &words, k, down, now, &mut cues)),
+                34 if down => self.options_wnd.key(vui, r, &mut self.options, k, now, &mut cues, &mut option_ups),
+                _ => {}
+            }
+        }
+        match self.mode {
+            17 | 18 => buddy_ups.extend(self.buddy_wnd.draw(vui, r, menus, &self.buddies, now, &mut cues)),
+            26 => self.ignore_wnd.draw(vui, r, menus, &self.ignore, now, &mut cues),
+            34 => self.options_wnd.draw(vui, r, &self.options, &mut option_ups),
+            _ => {}
+        }
+        self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
+        use crate::social::{BuddyUp, IgnoreUp};
+        for up in buddy_ups {
+            match up {
+                BuddyUp::Close => {
+                    // ClosePanel6D0: CloseBuddyList, back to the start menu
+                    self.buddy_wnd.hide();
+                    self.buddies.request = u32::MAX;
+                    self.mode = 0;
+                    self.open_start_menu(false);
+                }
+                BuddyUp::Tell(name) => {
+                    // 304: CloseBuddyList, the edit box holding "/t name "
+                    self.buddy_wnd.hide();
+                    self.open_edit(0xB0F0000, 128, -1, false);
+                    self.edit.set_text(&crate::ui::wide(&format!("/t {name} ")));
+                }
+                BuddyUp::Mail(name) => eprintln!("play: mail to {name}: the gram window is not ported"),
+                BuddyUp::Remove(n) => {
+                    if let Some(req) = self.buddies.remove(n) {
+                        self.session.send(&req);
+                    }
+                }
+                BuddyUp::Accept => {
+                    let req = self.buddies.accept();
+                    self.session.send(&req);
+                    // HideBuddyRequest
+                    self.buddy_wnd.hide();
+                    self.mode = 0;
+                }
+                BuddyUp::Reject => {
+                    let req = self.buddies.refuse(2);
+                    self.session.send(&req);
+                    self.buddy_wnd.hide();
+                    self.mode = 0;
+                }
+            }
+        }
+        for up in ignore_ups {
+            match up {
+                IgnoreUp::Close => {
+                    // CloseIgnoreList
+                    self.mode = 0;
+                    self.open_start_menu(false);
+                }
+                IgnoreUp::Remove(id) => self.session.send(&crate::social::Ignore::remove_id(id)),
+            }
+        }
+        for up in option_ups {
+            if up == crate::options::OptionsUp::Apply {
+                // ApplyOptions: CloseOptions, the battle music, the camera
+                self.mode = 0;
+                self.apply_camera = true;
+                self.sound_ops.push(crate::options::OptionsUp::PreviewEnd);
+            } else {
+                self.sound_ops.push(up);
+            }
+        }
     }
 
     /// Builds the HUD on the viewer's device: the 2D layer, UI.CSF's and
@@ -2266,6 +2519,7 @@ impl Play {
             }
             actions = self.run_start_menu(vui, &mut r, &start_loc);
             self.run_who(vui, &mut r);
+            self.run_panels(vui, &mut r);
             self.run_edit(vui, &r);
             if self.mode == 2 {
                 let mut cues = Vec::new();
