@@ -41,6 +41,18 @@ impl Library {
         file
     }
 
+    /// Puts `c` in place of file `i` (a world change) and registers every
+    /// DictID again in file order, so the first registration still wins.
+    pub fn replace(&mut self, i: usize, name: impl Into<String>, c: Container) {
+        self.files[i] = (name.into(), c);
+        self.dict.clear();
+        for (file, (_, c)) in self.files.iter().enumerate() {
+            for (&id, &node) in &c.dict {
+                self.dict.entry(id).or_insert(Ref { file, node });
+            }
+        }
+    }
+
     pub fn file(&self, i: usize) -> &Container {
         &self.files[i].1
     }

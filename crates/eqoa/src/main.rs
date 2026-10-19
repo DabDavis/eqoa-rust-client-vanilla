@@ -43,7 +43,7 @@ fn main() -> ExitCode {
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-fn disc(arg: Option<&String>) -> Result<iso::Iso> {
+pub fn disc(arg: Option<&String>) -> Result<iso::Iso> {
     let path = arg
         .cloned()
         .or_else(|| std::env::var("EQOA_ISO").ok())
@@ -101,12 +101,12 @@ fn run(args: &[String]) -> Result<()> {
                 let at = rest.iter().position(|a| a.ends_with(".png")).ok_or(usage)?;
                 let (out, nums) = (&rest[at], &rest[at + 1..]);
                 rest = &rest[..at];
-                let (lib, src) = source(file, rest)?;
+                let (mut lib, src) = source(file, rest)?;
                 let (cam, script) = match src {
                     viewer::Source::Walk { .. } => (None, script_args(nums)?),
                     _ => (camera_args(&src, nums)?, None),
                 };
-                viewer::shot(&lib, &src, cam, script, (960, 540), out)?;
+                viewer::shot(&mut lib, &src, cam, script, (960, 540), out)?;
             } else {
                 let (lib, src) = source(file, rest)?;
                 viewer::run(lib, src)?;
@@ -159,7 +159,7 @@ fn run(args: &[String]) -> Result<()> {
                 let out = args.get(3).ok_or("usage: eqoa playshot <host> <user> <out.png> [ms]")?;
                 let ms: i64 = args.get(4).map(|m| m.parse()).transpose()?.unwrap_or(3000);
                 let script = viewer::Script { ms, controls: walker::Controls::default() };
-                viewer::shot_with(&lib, &src, None, Some(script), (960, 540), out, play)?;
+                viewer::shot_with(&mut lib, &src, None, Some(script), (960, 540), out, play)?;
             } else {
                 viewer::run_with(lib, src, play)?;
             }

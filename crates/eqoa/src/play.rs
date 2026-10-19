@@ -109,7 +109,14 @@ pub struct Play {
     response: crate::dialog::Response,
     /// `m_dialog` / `m_p2EBFC`: an option box waiting while another mode is up.
     pending_box: Option<crate::dialog::DialogBox>,
+    /// A teleport into another world, for the viewer to load: the world
+    /// file, where, the heading.
+    world_change: Option<(String, [f32; 3], f32)>,
 }
+
+/// `gWorldInfo`'s paths on the Frontiers disc, by world index (CLIENT's
+/// table names six; a server's S2 can add more, which are not read here).
+pub const WORLD_FILES: [&str; 6] = ["TUNARIA.ESF", "RATHE.ESF", "ODUS.ESF", "LAVASTM.ESF", "PLANESKY.ESF", "SECRETS.ESF"];
 
 impl Play {
     /// `ShowDialog`: expanded (`%p` and the icon codes), shown now when
@@ -376,7 +383,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None }
+        Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None }
     }
 
     fn self_id32(&self) -> Option<u32> {
@@ -398,7 +405,17 @@ impl Play {
                     // Msg00B2: back to play, then Respawn.
                     self.mode = 0;
                     if world as i64 != self.player.world {
-                        eprintln!("play: teleport to world {world} at {pos:?}: another world is not loaded yet (only this one, {})", self.player.world);
+                        match WORLD_FILES.get(world as usize) {
+                            Some(f) => {
+                                eprintln!("play: teleport to world {world} ({f}) at {pos:?}");
+                                self.world_change = Some((f.to_string(), pos, hpr[0]));
+                                self.player.world = world as i64;
+                                self.player.pos = pos;
+                                // The walker is rebuilt: dress it again.
+                                self.self_model = None;
+                            }
+                            None => eprintln!("play: teleport to world {world}, which the disc's world table does not have"),
+                        }
                     } else {
                         eprintln!("play: teleport to {pos:?}");
                         walker.relocate(pos, hpr[0]);
@@ -675,6 +692,11 @@ impl Play {
         let mut w = net::stream::Writer::op(0x0010);
         w.u32(0).u32(self.target);
         self.session.send(&w.data);
+    }
+
+    /// A world change for the viewer to carry out (`EnterWorld` -> `LoadWorld`).
+    pub fn take_world_change(&mut self) -> Option<(String, [f32; 3], f32)> {
+        self.world_change.take()
     }
 
     /// The creatures' names, slot order.

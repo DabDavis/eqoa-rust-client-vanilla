@@ -194,6 +194,19 @@ fn upload(renderer: &mut Renderer, device: &wgpu::Device, queue: &wgpu::Queue, l
     s.parts.iter().map(|(m, mats)| renderer.upload(device, queue, m, mats, &textures)).collect()
 }
 
+/// A world change in a playshot: the world file replaced, and a walker and
+/// streamer for it at the arrival.
+fn change_world(lib: &mut Library, file: &str, pos: [f32; 3], heading: f32) -> Result<(Walker, Streamer), Error> {
+    let c = esf::Container::open(crate::disc(None)?.read(file)?)?;
+    lib.replace(0, file, c);
+    let index = vi::world::World::<vi::fpu::Ee>::zone_at(lib.file(0), pos[0], pos[2]).ok_or("no zone at the arrival")?;
+    let character = lib.lookup(HUMAN).ok_or("no human model")?;
+    let src = Source::Walk { file: 0, index, character, spawn: Some((pos[0], pos[2], heading)) };
+    let s = src.scene(lib);
+    let (w, _, st) = src.walker(lib, &s).ok_or("no walker")?;
+    Ok((w, st))
+}
+
 /// The font name plates use (`VICSprite::FontResourceID`, "Arial"), if a
 /// loaded file has it.
 fn arial(lib: &Library) -> Option<esf::font::Font> {
@@ -223,7 +236,7 @@ pub struct Script {
 
 /// Renders one view to a PNG, with no window.
 pub fn shot(
-    lib: &Library,
+    lib: &mut Library,
     source: &Source,
     cam: Option<Camera>,
     script: Option<Script>,
@@ -236,7 +249,7 @@ pub fn shot(
 /// `shot`, playing on a server: the script's time passes in REAL time,
 /// 16 ms a frame, with the session pumped every frame.
 pub fn shot_with(
-    lib: &Library,
+    lib: &mut Library,
     source: &Source,
     cam: Option<Camera>,
     script: Option<Script>,
@@ -346,7 +359,7 @@ pub fn shot_with(
                     p.attack_press();
                 }
                 let gpu = crate::play::Gpu { renderer: &mut renderer, device: &device, queue: &queue };
-                if let Some(model) = p.frame(&mut walker, lib, gpu, t)
+                if let Some(model) = p.frame(&mut walker, &*lib, gpu, t)
                     && let Some(r) = lib.lookup(model as i32)
                 {
                     eprintln!("the server names the player's model {model:#010x}");
@@ -355,6 +368,17 @@ pub fn shot_with(
                 // The HUD steps each frame (its glows, the name's scroll).
                 if let Some(u) = renderer.ui.as_mut() {
                     p.draw_hud(u, &walker, t);
+                }
+                // A teleport into another world: that world's file in place
+                // of this one, and the walk begun again there.
+                if let Some((file, pos, heading)) = p.take_world_change() {
+                    match change_world(lib, &file, pos, heading) {
+                        Ok((w, s2)) => {
+                            walker = w;
+                            streamer = s2;
+                        }
+                        Err(e) => eprintln!("world change to {file}: {e}"),
+                    }
                 }
                 std::thread::sleep(std::time::Duration::from_millis(16));
             }
@@ -540,6 +564,18 @@ impl App {
             g.window.set_title(&format!("eqoa — {}", self.summary));
             g.window.request_redraw();
         }
+    }
+
+    /// A world change in the window: the file replaces the world's, and
+    /// `load` begins the walk again at the arrival.
+    fn enter_world(&mut self, file: &str, pos: [f32; 3], heading: f32) -> Result<(), Error> {
+        let c = esf::Container::open(crate::disc(None)?.read(file)?)?;
+        self.lib.replace(0, file, c);
+        let index = vi::world::World::<vi::fpu::Ee>::zone_at(self.lib.file(0), pos[0], pos[2]).ok_or("no zone at the arrival")?;
+        let Source::Walk { character, .. } = self.source else { return Err("not walking".into()) };
+        self.source = Source::Walk { file: 0, index, character, spawn: Some((pos[0], pos[2], heading)) };
+        self.load();
+        Ok(())
     }
 
     fn step(&mut self, by: isize) {
@@ -792,6 +828,12 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                if let Some((file, pos, heading)) = self.play.as_mut().and_then(|p| p.take_world_change()) {
+                    match self.enter_world(&file, pos, heading) {
+                        Ok(()) => {}
+                        Err(e) => eprintln!("world change to {file}: {e}"),
+                    }
+                }
                 self.fly();
                 let controls = self.controls();
                 let now = self.clock.elapsed().as_millis() as i64;
