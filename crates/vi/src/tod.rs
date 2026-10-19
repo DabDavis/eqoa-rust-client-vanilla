@@ -2,9 +2,10 @@
 //! `SetupTimeOfDayLights`' interpolation (decomp `viscene.cpp`). Each hour has
 //! an ambient colour and a sun colour for a CLEAR sky (`[0]`) and an
 //! OVERCAST one (`[1]`), and the direction the sun's light travels,
-//! (−sin 15h°, cos 15h°, 0): straight down at noon. Not ported: the weather
-//! that sets the overcast weight, the terrain profiles that scale it, the
-//! lightning flash, the personal light and the point lights.
+//! (−sin 15h°, cos 15h°, 0): straight down at noon. The overcast weight is
+//! the atmosphere's (`GetOvercastInterp`) times the terrain profiles' (see
+//! [`overcast_weight`]); a lightning flash whitens the sun ([`TimeOfDay::flash`]).
+//! Not ported: the personal light and the point lights.
 
 use crate::fpu::{F, Model, f, vimax, vimin};
 use crate::world::ProfileBlend;
@@ -157,7 +158,32 @@ impl<M: Model> TimeOfDay<M> {
     }
 }
 
+/// `SetupTimeOfDayLights`' `k`: the atmosphere's overcast `o` times the
+/// blend of the profiles' overcast weights.
+pub fn overcast_weight<M: Model>(o: F<M>, b: &ProfileBlend<M>) -> F<M> {
+    let w = |k: usize| F::<M>::new(PROFILES.get(b.index[k] as usize).unwrap_or(&PROFILES[0]).overcast) * b.weight[k];
+    o * (((w(0) + w(1)) + w(2)) + w(3))
+}
+
+/// `SetupTimeOfDaySky`'s Lavastorm intensity: the blend of the profiles'.
+pub fn lavastorm_weight<M: Model>(b: &ProfileBlend<M>) -> F<M> {
+    let w = |k: usize| F::<M>::new(PROFILES.get(b.index[k] as usize).unwrap_or(&PROFILES[0]).lavastorm) * b.weight[k];
+    ((w(0) + w(1)) + w(2)) + w(3)
+}
+
 impl<M: Model> TimeOfDay<M> {
+    /// `SetupTimeOfDayLights` under a lightning flash: the sun whitened by
+    /// `flash` (red and green at 90%) times `outdoors` (`m_soundTrack.m_p30`),
+    /// and its light from hour 10's direction.
+    pub fn flash(&self, sun: &Color<M>, flash: F<M>, outdoors: F<M>) -> (Color<M>, Vect3<M>) {
+        let c = [
+            sun[0] + (F::ONE - sun[0]) * flash * f(0.9) * outdoors,
+            sun[1] + (F::ONE - sun[1]) * flash * f(0.9) * outdoors,
+            sun[2] + (F::ONE - sun[2]) * flash * outdoors,
+        ];
+        (c, self.b[10])
+    }
+
     fn hour_split(hour: F<M>) -> (usize, usize, F<M>) {
         let h = hour.0 as i32 as usize;
         let t = hour - F::new(h as f32);
