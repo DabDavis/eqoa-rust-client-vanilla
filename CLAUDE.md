@@ -18,6 +18,11 @@ The Rust client. README.md is the plan and the crate table; keep it current.
   vifont) compiled over a RECORDING raster (libsupport is `-Bsymbolic`, so interposing on it does not
   work; compile the TUs in instead). `crates/vi/tests/oracle_ui.rs` compares call for call. A CLIENT
   free function is reached by `dlopen("libclient.so")` in the oracle (op 800, the swing tables).
+- `make oracle` also builds `build/oracle_snd`: SNDDRV's four TUs over eqoa-port's SPU2 on a
+  deterministic coroutine IOP (timer every 480 samples, vblank every 800), and SUPPORT's
+  VISoundDevice TUs in the EE layout above it (op 910). `crates/snd/tests/oracle_snd{,dev}.rs`
+  compare sample for sample and packet for packet. Live audio tests: `EQOA_AUDIO=0` (the driver
+  runs on the wall clock, silent), or `eqoa listen` to a WAV; the user's speakers are real.
 - `run/support.bin` (untracked) is the player's decrypted SUPPORT image; the HUD's atlas table is read
   from it at run time (eqoa-port's gendata does the same). Never commit it or anything read from it.
 - The `vi` structs are `#[repr(C)]` in the EE layout because the oracle compares raw bytes; keep it that way while ports are being proven. Later (not urgent): native runtime types beside them, converted at the edges, the layout types kept for oracle tests.
