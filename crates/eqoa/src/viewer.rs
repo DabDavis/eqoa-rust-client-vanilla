@@ -334,11 +334,18 @@ pub fn shot_with(
             };
             walker.frame(controls, t);
             if let Some(p) = &mut play {
-                // `EQOA_SAY=<text>`: said a second in.
-                if t == 1008
-                    && let Some(line) = &say
-                {
-                    p.chat_line(line);
+                // `EQOA_SAY=<text>[@ms][;<text>@ms...]`: each line said at its
+                // time (a second in without one).
+                if let Some(lines) = &say {
+                    for spec in lines.split(';') {
+                        let (line, ms) = match spec.rsplit_once('@') {
+                            Some((l, ms)) if ms.parse::<i64>().is_ok() => (l, ms.parse::<i64>().unwrap() / 16 * 16),
+                            _ => (spec, 1008),
+                        };
+                        if t == ms {
+                            p.chat_line(line);
+                        }
+                    }
                 }
                 // `EQOA_TAB`: Tab two seconds in.
                 // `EQOA_TARGET=<name>`: that creature targeted two seconds in.
@@ -429,8 +436,11 @@ pub fn shot_with(
                         'x' => Some(K::ESCAPE),
                         _ => None,
                     };
+                    let k = if keys.chars().nth(step / 2) == Some('a') { Some(113) } else { k };
                     if let Some(k) = k {
-                        if p.mode == 5 {
+                        if p.npcw_owns() {
+                            p.npcw_key(k, down);
+                        } else if p.mode == 5 {
                             p.book_key(k, down);
                         } else if p.mode == 35 {
                             p.who_key(k, down);
@@ -458,6 +468,15 @@ pub fn shot_with(
                 if t == at + 96 && std::env::var_os("EQOA_INVITE").is_some() {
                     p.group_action(0x0701_0000);
                 }
+                // `EQOA_ACTION=<hex>@<ms>`: a start-menu entry's message then
+                // (`DoAction`; 0B060000 asks the target to trade).
+                if let Ok(spec) = std::env::var("EQOA_ACTION")
+                    && let Some((a, ms)) = spec.split_once('@')
+                    && let (Ok(a), Ok(ms)) = (u32::from_str_radix(a.trim_start_matches("0x"), 16), ms.parse::<i64>())
+                    && t == ms / 16 * 16
+                {
+                    p.do_action(a, 0);
+                }
                 // `EQOA_GROUP_ACTION=<hex>@<ms>`: a start-menu group action then.
                 if let Ok(spec) = std::env::var("EQOA_GROUP_ACTION")
                     && let Some((a, ms)) = spec.split_once('@')
@@ -470,8 +489,10 @@ pub fn shot_with(
                     p.dialog_key(crate::dialog::Key::Left);
                     p.dialog_key(crate::dialog::Key::Enter);
                 }
-                // `EQOA_INTERACT`: Q just after targeting.
-                if t == at + 96 && std::env::var_os("EQOA_INTERACT").is_some() {
+                // `EQOA_INTERACT[=ms]`: Q just after targeting, or at that time.
+                if let Ok(v) = std::env::var("EQOA_INTERACT")
+                    && t == v.parse::<i64>().map_or(at + 96, |ms| ms / 16 * 16)
+                {
                     p.interact_with_target();
                 }
                 // `EQOA_ATTACK`: attack held from just after that to the end.
@@ -912,6 +933,53 @@ impl ApplicationHandler for App {
                         for c in t.chars().filter(|c| c.is_ascii() && !c.is_ascii_control()) {
                             p.edit_key(c as i32, true);
                         }
+                    }
+                    return;
+                }
+                // The corpse, merchant and trade windows (modes 1, 10, 15,
+                // 16): the arrows, Enter or E (X), Escape (triangle), Q
+                // (accept a trade), Space (the trade's chat line, which then
+                // takes the keyboard as the edit box does).
+                if let Some(p) = self.play.as_mut()
+                    && p.typing.is_none()
+                    && p.npcw_owns()
+                {
+                    let down = event.state == ElementState::Pressed;
+                    if p.npcw_typing() {
+                        let named = match &event.logical_key {
+                            Key::Named(NamedKey::Backspace) => Some(8),
+                            Key::Named(NamedKey::Escape) => Some(27),
+                            Key::Named(NamedKey::Enter) => Some(13),
+                            Key::Named(NamedKey::ArrowLeft) => Some(17),
+                            Key::Named(NamedKey::ArrowRight) => Some(18),
+                            _ => None,
+                        };
+                        if let Some(k) = named {
+                            p.npcw_key(k, down);
+                        } else if down && let Some(t) = &event.text {
+                            for c in t.chars().filter(|c| c.is_ascii() && !c.is_ascii_control()) {
+                                p.npcw_key(c as i32, true);
+                            }
+                        }
+                        return;
+                    }
+                    use crate::startmenu::keys as K;
+                    let k = match &event.logical_key {
+                        Key::Named(NamedKey::ArrowUp) => Some(K::UP),
+                        Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
+                        Key::Named(NamedKey::ArrowLeft) => Some(K::LEFT),
+                        Key::Named(NamedKey::ArrowRight) => Some(K::RIGHT),
+                        Key::Named(NamedKey::Enter) => Some(K::CROSS),
+                        Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
+                        Key::Character(c) if c.eq_ignore_ascii_case("q") => Some(113),
+                        Key::Named(NamedKey::Space) => Some(32),
+                        Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
+                        _ => None,
+                    };
+                    if let Some(k) = k
+                        && !(down && event.repeat)
+                    {
+                        p.npcw_key(k, down);
                     }
                     return;
                 }
