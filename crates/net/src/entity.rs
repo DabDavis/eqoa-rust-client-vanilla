@@ -52,6 +52,8 @@ pub struct Entity {
     /// Heading and pitch (roll is 0).
     pub hpr: [f32; 3],
     pub world: i8,
+    /// +0x18 (byte 26): bit 0 selectable, bit 1 a corpse.
+    pub p18: u8,
     pub model: u32,
     pub model2: u32,
     pub scale: f32,
@@ -107,7 +109,7 @@ impl Entity {
         // ReadState
         self.world = r.u8() as i8;
         r.u64();
-        r.u8();
+        self.p18 = r.u8();
         r.u8();
         self.model = r.u32();
         self.model2 = r.u32();

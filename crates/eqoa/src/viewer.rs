@@ -263,6 +263,7 @@ pub fn shot_with(
         let script = script.unwrap_or(Script { ms: 0, controls: Controls::default() });
         let mut t = 0;
         let say = std::env::var("EQOA_SAY").ok();
+        let tab = std::env::var_os("EQOA_TAB").is_some();
         while t < script.ms {
             t += 16;
             walker.frame(script.controls, t);
@@ -272,6 +273,12 @@ pub fn shot_with(
                     && let Some(line) = &say
                 {
                     p.session.say(line, u32::MAX);
+                }
+                // `EQOA_TAB`: Tab two seconds in.
+                if t == 2000 && tab {
+                    let (proj, v) = walker.view(aspect);
+                    let dir = Vec3::from(walker.eye.direction.to_array());
+                    p.cycle_target(walker.eye_position(), dir, proj * v);
                 }
                 let gpu = crate::play::Gpu { renderer: &mut renderer, device: &device, queue: &queue };
                 if let Some(model) = p.frame(&mut walker, lib, gpu, t)
@@ -591,6 +598,16 @@ impl ApplicationHandler for App {
                     }
                 }
                 if self.play.as_ref().is_some_and(|p| p.typing.is_some()) {
+                    return;
+                }
+                // Tab: the next target (`CycleTarget`).
+                if event.state == ElementState::Pressed
+                    && event.logical_key == Key::Named(NamedKey::Tab)
+                    && let (Some(p), Some(w), Some(g)) = (self.play.as_mut(), self.walker.as_ref(), self.gfx.as_ref())
+                {
+                    let (proj, v) = w.view(g.config.width as f32 / g.config.height as f32);
+                    let dir = Vec3::from(w.eye.direction.to_array());
+                    p.cycle_target(w.eye_position(), dir, proj * v);
                     return;
                 }
                 let name = match &event.logical_key {

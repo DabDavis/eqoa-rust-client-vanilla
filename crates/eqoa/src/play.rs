@@ -66,6 +66,8 @@ pub struct Play {
     pub chat: std::collections::VecDeque<(String, [f32; 4])>,
     /// A line being typed, when chat is open.
     pub typing: Option<String>,
+    /// `m_target`: the selected entity's id, or u32::MAX.
+    pub target: u32,
 }
 
 /// A creature's model as `Apply` dresses it: the look on its text slots, the
@@ -155,6 +157,9 @@ pub fn chat_labels(play: &Play, text: &render::text::Text, size: (u32, u32)) -> 
     if let Some(t) = &play.typing {
         rows.push((format!("> {t}_"), [1.0, 1.0, 0.6, 1.0]));
     }
+    if let Some(name) = play.target_name() {
+        out.push(render::text::Label { at: [0.0, 1.0 - (24.0 * k) / size.1 as f32 * 2.0, 0.0], color: [1.0, 1.0, 1.0, 1.0], text: name });
+    }
     let n = rows.len();
     for (i, (s, c)) in rows.into_iter().enumerate() {
         let w = text.width(&s) as f32 * k;
@@ -218,7 +223,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player) -> Self {
-        Play { session, player, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None }
+        Play { session, player, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX }
     }
 
     fn self_id32(&self) -> Option<u32> {
@@ -407,6 +412,72 @@ impl Play {
             out.push(Plate { at, color: NAME_COLORS[color], name: c.name.clone() });
         }
         out
+    }
+
+    /// `CycleTarget(0)`: the next creature in view, by `CompareY` over the
+    /// game's score (mostly how far off the screen's centre line, plus
+    /// distance; a corpse 2 further), from the camera at `eye` looking along
+    /// `dir`; then 0x0010 with the token and the choice. Not here: the group
+    /// and the pet, which are skipped (there are none yet).
+    pub fn cycle_target(&mut self, eye: glam::Vec3, dir: glam::Vec3, view_proj: glam::Mat4) {
+        let me = self.self_id32();
+        let mut cand: Vec<(f32, u32)> = Vec::new();
+        for (slot, e) in self.entities.slots.iter().enumerate() {
+            let Some(e) = e else { continue };
+            if self.puppets.get(slot).is_none_or(|p| p.is_none()) || Some(e.id) == me {
+                continue;
+            }
+            let mut dead = false;
+            if let Some(c) = &e.creature {
+                if c.p256 == 3 {
+                    continue;
+                }
+                dead = c.state == 14;
+            }
+            let pos = glam::Vec3::from(e.actor_pos);
+            let d2 = (pos - eye).length_squared();
+            let mut near = false;
+            if d2 < 15.0 {
+                let a = glam::Vec3::new(pos.x - eye.x, 0.0, pos.z - eye.z).normalize_or_zero();
+                let b = glam::Vec3::new(dir.x, 0.0, dir.z).normalize_or_zero();
+                near = a.dot(b) > 0.65;
+            }
+            let h = view_proj * pos.extend(1.0);
+            let inside = h.w > 0.0 && (h.x / h.w).abs() <= 1.0 && (h.y / h.w).abs() <= 1.0 && h.z / h.w >= 0.0 && h.z / h.w <= 1.0;
+            if !near && !inside {
+                continue;
+            }
+            if e.p18 & 1 == 0 || d2 >= 40000.0 {
+                continue;
+            }
+            let x = h.x / h.w;
+            let score = if near {
+                0.0
+            } else if d2 < 25.0 {
+                d2.sqrt() / 50.0 * 0.35
+            } else {
+                d2.sqrt() / 50.0 * 0.35 + x * x
+            };
+            cand.push((score + if dead { 2.0 } else { 0.0 }, e.id));
+        }
+        cand.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        let n = cand.len();
+        self.target = if n == 0 {
+            u32::MAX
+        } else {
+            match cand.iter().position(|c| c.1 == self.target) {
+                None => cand[0].1,
+                Some(k) => cand[(k + 1) % n].1,
+            }
+        };
+        let mut w = net::stream::Writer::op(0x0010);
+        w.u32(0).u32(self.target);
+        self.session.send(&w.data);
+    }
+
+    /// The target's name, for the screen (the target window is not ported).
+    pub fn target_name(&self) -> Option<String> {
+        self.entities.slots.iter().flatten().find(|e| e.id == self.target).and_then(|e| e.creature.as_ref()).map(|c| c.name.clone())
     }
 
     /// Whether the player is drawn dressed (the caller hides its plain body).
