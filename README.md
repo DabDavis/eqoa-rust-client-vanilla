@@ -161,9 +161,9 @@ order per stage is not yet measured.
 - Baked lighting is drawn for placed actors (a lit actor draws its own copy with
   its colour buffers; LOD sprites draw level 0, which takes the first) and the
   static colour per instance, but not checked against the console yet. The personal light (the lantern, `vi::tod::PersonalLight`,
-  ramped as `SetupTimeOfDayLights` does) is the strip programs' point term but
-  evaluated per pixel, where VU1 lights per vertex (and the game also
-  tessellates near it). The two passes are the scene's: a material whose
+  ramped as `SetupTimeOfDayLights` does) is the strip programs' point term;
+  lighting is per vertex as VU1's (the game also tessellates near the point
+  light, which is not done here). The two passes are the scene's: a material whose
   first layer is opaque draws whole at once, one whose first layer blends is
   deferred whole (`MaterialHasDepthSort`); the deferred pass runs in model
   order, not the game's tree-walk order (rooms, flora, actors).
