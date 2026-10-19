@@ -12,6 +12,7 @@ repository = "https://github.com/DabDavis/eqoa-rs"
 ee = { path = "crates/ee" }
 iso = { path = "crates/iso" }
 esf = { path = "crates/esf" }
+render = { path = "crates/render" }
 flate2 = "1"
 crc32fast = "1"
 serde_json = "1"

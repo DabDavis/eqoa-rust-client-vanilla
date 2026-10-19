@@ -4,9 +4,15 @@
 //! ```text
 //! eqoa ls   [iso]               every file on the disc
 //! eqoa tree [iso] <file>        a container's record tree
+//! eqoa view <file> [model]       the model viewer (wgpu + winit)
+//! eqoa shot <file> <model> <out.png> [yaw pitch zoom]   one view, offscreen
 //! ```
 //!
+//! A model is a list index or a DictID in hex (`0x…`).
+//!
 //! `iso` defaults to `$EQOA_ISO`, then `run/eqoa.iso`.
+
+mod viewer;
 
 use std::process::ExitCode;
 
@@ -50,9 +56,37 @@ fn run(args: &[String]) -> Result<()> {
             }
             eprintln!("{} records, {} DictIDs, {} surfaces", c.nodes.len(), c.dict.len(), c.surfaces.len());
         }
-        _ => return Err("usage: eqoa ls [iso] | eqoa tree [iso] <file>".into()),
+        Some("view") => {
+            let file = args.get(1).ok_or("usage: eqoa view <file> [model]")?;
+            let models = load(file)?;
+            let index = args.get(2).map_or(Some(0), |m| models.find(m)).ok_or("no such model")?;
+            viewer::run(models, index)?;
+        }
+        Some("shot") => {
+            let [_, file, which, out, rest @ ..] = args else {
+                return Err("usage: eqoa shot <file> <model> <out.png> [yaw pitch zoom]".into());
+            };
+            let models = load(file)?;
+            let index = models.find(which).ok_or("no such model")?;
+            let mut orbit = viewer::Orbit::default();
+            let nums: Vec<f32> = rest.iter().map(|s| s.parse()).collect::<std::result::Result<_, _>>()?;
+            for (slot, v) in [&mut orbit.yaw, &mut orbit.pitch, &mut orbit.zoom].into_iter().zip(nums) {
+                *slot = v;
+            }
+            viewer::shot(&models, index, orbit, (640, 480), out)?;
+        }
+        _ => return Err("usage: eqoa ls|tree|view|shot (see --help in main.rs)".into()),
     }
     Ok(())
+}
+
+fn load(file: &str) -> Result<viewer::Models> {
+    let models = viewer::Models::new(esf::Container::open(disc(None)?.read(file)?)?);
+    if models.list.is_empty() {
+        return Err(format!("{file}: no drawable models").into());
+    }
+    eprintln!("{file}: {} models", models.list.len());
+    Ok(models)
 }
 
 fn print_tree(c: &esf::Container, id: esf::NodeId, depth: usize) {

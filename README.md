@@ -40,14 +40,21 @@ UI, network (DRDP), sound.
 |---|---|---|
 | `ee` | the EE FPU: `mul` `add` `sub` `div` `sqrt` `lt` `le` `eq` | console-measured goldens from `go-eqoa-vi` |
 | `iso` | ISO 9660 walk, read one file | the disc |
-| `esf` | CSF inflate, the OBJF record tree, DictIDs, surface decode | `go-eqoa-esf-tools-v2`'s per-surface CRCs (801 surfaces, 4 containers) |
-| `eqoa` | the client binary; for now `eqoa ls` and `eqoa tree <file>` | |
+| `esf` | CSF inflate, the OBJF record tree, DictIDs, surface decode, PrimBuffers, materials, sprites flattened to models | `go-eqoa-esf-tools-v2`: per-surface CRCs (801 surfaces, 4 containers) and per-model geometry (766 models: counts, bbox bits, position CRC) |
+| `render` | wgpu: models with their textures, a stand-in shader (texture × layer tint × vertex colour × half-Lambert, alpha test at 128), offscreen capture | by eye, for now |
+| `eqoa` | the client binary: `ls`, `tree`, `view` (winit window) and `shot` (PNG, no window) | |
 
 ```bash
 cargo test          # the surface test skips, loudly, without run/eqoa.iso and ../esfviewer/expected.js
 cargo run -- ls
 cargo run -- tree CHARCUST.CSF
+cargo run --release -- view CHAR.ESF 0x70D898C6     # the human; drag, scroll, ←/→
+cargo run --release -- shot ITEM.ESF 5 out.png      # [yaw pitch zoom]
 ```
+
+Models are Y-up. A model whose texture lives in another container (the human's
+shorts, from CHARCUST) draws untextured until the dictionary spans files, as the
+game's does (`claude-notes/dictid-cross-file-resolution.md`).
 
 ## Licence
 

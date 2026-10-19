@@ -19,12 +19,16 @@
 use std::collections::HashMap;
 use std::io::Read;
 
+mod mesh;
 mod surface;
+pub use mesh::{Batch, Layer, Model, ModelRef, PrimBuffer, VertexList};
 pub use surface::{Image, Surface};
 
 pub mod types {
     pub const SURFACE: u16 = 0x1000;
     pub const MATERIAL: u16 = 0x1100;
+    pub const MATERIAL_ARRAY: u16 = 0x1101;
+    pub const MATPAL: u16 = 0x1110;
     pub const MATPAL_HDR: u16 = 0x1111;
     pub const PRIMBUF: u16 = 0x1200;
     pub const SKINPRIMBUF: u16 = 0x1210;
@@ -32,13 +36,23 @@ pub mod types {
     pub const SIMPLESPRITE_HDR: u16 = 0x2001;
     pub const HSPRITE: u16 = 0x2200;
     pub const HSPRITE_HDR: u16 = 0x2210;
+    pub const HSPRITE_ARRAY: u16 = 0x2220;
+    pub const HSPRITE_HIERARCHY: u16 = 0x2400;
+    pub const SUBSPRITE_HDR: u16 = 0x2311;
     pub const SKINSUBSPRITE: u16 = 0x2320;
+    pub const SKINSUBSPRITE2: u16 = 0x2321;
     pub const CSPRITE: u16 = 0x2700;
     pub const CSPRITE_HDR: u16 = 0x2710;
+    pub const CSPRITE_ARRAY: u16 = 0x2800;
     pub const LODSPRITE: u16 = 0x2A00;
     pub const LODSPRITE_HDR: u16 = 0x2A10;
+    pub const LODSPRITE_ARRAY: u16 = 0x2A20;
+    pub const CSPRITE_VARIANT: u16 = 0x2A40;
+    pub const CSPRITE_VARIANT_MESHES: u16 = 0x2A60;
     pub const GROUPSPRITE: u16 = 0x2C00;
     pub const GROUPSPRITE_HDR: u16 = 0x2C10;
+    pub const GROUPSPRITE_MEMBERS: u16 = 0x2C30;
+    pub const RESDIR2: u16 = 0xA010;
 }
 use types::*;
 
@@ -72,6 +86,10 @@ impl std::fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+pub(crate) fn f32le(b: &[u8], at: usize) -> f32 {
+    f32::from_le_bytes(b[at..at + 4].try_into().unwrap())
+}
 
 pub(crate) fn i32le(b: &[u8], at: usize) -> i32 {
     i32::from_le_bytes(b[at..at + 4].try_into().unwrap())
@@ -256,5 +274,11 @@ impl Container {
 
     pub fn lookup(&self, dict_id: i32) -> Option<NodeId> {
         self.dict.get(&dict_id).copied()
+    }
+
+    /// The surface a DictID names, if this container holds it.
+    pub fn surface(&self, dict_id: i32) -> Option<Surface> {
+        let id = self.lookup(dict_id)?;
+        (self.node(id).ty == SURFACE).then(|| Surface::read(&self.data, self.node(id).body))
     }
 }
