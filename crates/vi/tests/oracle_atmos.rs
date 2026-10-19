@@ -12,8 +12,8 @@
 //! The run goes through clear night skies (stars, a shooting star), a rain
 //! fade, a thunderstorm queued behind it (lightning, thunder, the rain's two
 //! voices), a default-sky change under weather, snow, an instant sandstorm, a
-//! Lavastorm (two SPELLFX definitions as its head and impact, when the disc
-//! is there), clearing, both planes of sky, and a camera that walks over a
+//! Lavastorm (FX.CSF's own head and impact definitions, when the disc is
+//! there), clearing, both planes of sky, and a camera that walks over a
 //! liquid surface and jumps far enough to re-drop the whole field.
 //!
 //! SKIPs without the oracle (`make oracle` in eqoa-port).
@@ -258,14 +258,20 @@ fn scenario(planted: bool, mutated: bool) -> Option<(usize, usize, usize)> {
     let mut lava_ours = (-1, -1);
     let iso = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
     if let Ok(mut disc) = iso::Iso::open(&iso) {
-        let fx = esf::Container::open(disc.read("DATA2/SPELLFX.CSF").unwrap()).unwrap();
-        let defs: Vec<(i32, Vec<u8>)> = (0..fx.nodes.len())
-            .filter(|&i| fx.nodes[i].ty == 0xC000)
-            .filter_map(|n| fx.child(n, 0xC020).map(|d| (fx.node(d).version as i32, fx.body(d).to_vec())))
-            .take(40)
+        // FX.CSF's own: "head.esf" and "impact.esf", as SetResources finds them
+        let mut lib = esf::Library::new();
+        lib.add("DATA2/FX.CSF", esf::Container::open(disc.read("DATA2/FX.CSF").unwrap()).unwrap());
+        let defs: Vec<(i32, Vec<u8>)> = ["P:\\studio\\eqps2\\team\\brandon\\head.esf", "P:\\studio\\eqps2\\team\\brandon\\impact.esf"]
+            .iter()
+            .map(|n| {
+                let r = lib.lookup(vi::hsprite::hash_ref_id(n)).expect("FX.CSF has the Lavastorm's definitions");
+                let c = lib.file(r.file);
+                let d = c.child(r.node, 0xC020).unwrap();
+                (c.node(d).version as i32, c.body(d).to_vec())
+            })
             .collect();
         let mut ks = Vec::new();
-        for (k, (ver, body)) in [&defs[7], &defs[31]].into_iter().enumerate() {
+        for (k, (ver, body)) in defs.iter().enumerate() {
             let mut p = ver.to_le_bytes().to_vec();
             p.extend(body);
             let pk = i32::from_le_bytes(o.call(1202, &p)[..4].try_into().unwrap());
