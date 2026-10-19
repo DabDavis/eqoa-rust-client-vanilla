@@ -1334,8 +1334,13 @@ impl Inbox {
         let (cat, sub) = names(&cs.categories, cs.message.category, cs.message.subcategory);
         self.read.set_category(&cat);
         self.read.set_subcategory(&sub);
-        self.read.visible = true;
-        self.read.focus(vui, r, now);
+        // SetActiveWindow(m_read): its 295 sets it up only when the focus
+        // comes from elsewhere -- after a reply (the text fetched again) it
+        // comes from the reply form, which then says it was sent and goes
+        if !self.read.visible {
+            self.read.visible = true;
+            self.read.focus(vui, r, now);
+        }
     }
 
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, cs: &mut CsClient, now: i64, cues: &mut Vec<i32>) -> Option<InboxUp> {
