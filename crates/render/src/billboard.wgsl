@@ -8,7 +8,8 @@ struct Frame {
     view: mat4x4<f32>,
     proj: mat4x4<f32>,
     // x: the alpha scale (1 unblended, 0.5 blended: a × 128 or × 64), y: 1
-    // to alpha-test at 128 (an unblended layer's TEST)
+    // to alpha-test at 128 (an unblended layer's TEST), z: 1 for the sky's
+    // (at the far plane)
     flags: vec4<f32>,
 };
 
@@ -34,6 +35,9 @@ fn vs_main(i: VsIn) -> VsOut {
     var o: VsOut;
     let c = frame.view * vec4<f32>(i.center, 1.0);
     o.pos = frame.proj * vec4<f32>(c.xy + i.corner, c.z, 1.0);
+    if (frame.flags.z > 0.5) {
+        o.pos.z = o.pos.w;
+    }
     o.uv = i.uv;
     o.color = i.color;
     return o;

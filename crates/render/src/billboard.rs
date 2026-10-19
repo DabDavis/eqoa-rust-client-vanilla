@@ -190,6 +190,45 @@ impl Renderer {
         batches: &[Batch],
         textures: &Textures,
     ) {
+        self.billboards(device, queue, encoder, target, depth, view, proj, batches, textures, false);
+    }
+
+    /// Billboards that belong to the sky (`VIAtmosphere::RenderStars`: the
+    /// stars and the lightning patches, Z off, drawn before the world): at
+    /// the far plane, so drawn after the world they still land only where
+    /// nothing else did. `view` is the sky's, its translation zeroed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_sky_billboards(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        view: Mat4,
+        proj: Mat4,
+        batches: &[Batch],
+        textures: &Textures,
+    ) {
+        self.billboards(device, queue, encoder, target, depth, view, proj, batches, textures, true);
+    }
+
+    /// The billboards, after any strips; `far` puts them at the far plane
+    /// with Z off.
+    #[allow(clippy::too_many_arguments)]
+    fn billboards(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        view: Mat4,
+        proj: Mat4,
+        batches: &[Batch],
+        textures: &Textures,
+        far: bool,
+    ) {
         let strips = std::mem::take(&mut self.strips);
         if !strips.is_empty() {
             self.draw_strips(device, queue, encoder, target, depth, view, proj, &strips, textures);
@@ -206,9 +245,10 @@ impl Renderer {
                 let v = |i: usize| Vert { center: q.center, corner: corners[i], uv: UVS[k + i], color: q.color };
                 verts.extend([v(0), v(1), v(2), v(2), v(1), v(3)]);
             }
-            draws.push(((b.blend.min(4), b.ztest, b.zwrite), b.texture, start, verts.len() as u32));
+            let key = if far { (b.blend.min(4), true, false) } else { (b.blend.min(4), b.ztest, b.zwrite) };
+            draws.push((key, b.texture, start, verts.len() as u32));
         }
-        self.draw_verts(device, queue, encoder, target, depth, view, proj, &verts, &draws, textures);
+        self.draw_verts(device, queue, encoder, target, depth, view, proj, &verts, &draws, textures, far);
     }
 
     /// Triangle strips (lightning), over what `draw` drew, in the order given.
@@ -239,7 +279,7 @@ impl Renderer {
                 draws.push(((s.blend.min(4), s.ztest, s.zwrite), s.texture, start, verts.len() as u32));
             }
         }
-        self.draw_verts(device, queue, encoder, target, depth, view, proj, &verts, &draws, textures);
+        self.draw_verts(device, queue, encoder, target, depth, view, proj, &verts, &draws, textures, false);
     }
 
     /// The billboard program over `verts`, a run of them per (pipeline key,
@@ -257,6 +297,7 @@ impl Renderer {
         verts: &[Vert],
         runs: &[Run],
         textures: &Textures,
+        far: bool,
     ) {
         use wgpu::util::DeviceExt;
         if runs.is_empty() {
@@ -273,7 +314,7 @@ impl Renderer {
         let mut groups = Vec::new();
         for (key, _, _, tex) in &draws {
             let blend = key.0;
-            let u = FrameU { view: view.to_cols_array_2d(), proj: proj.to_cols_array_2d(), flags: [if blend == 0 { 1.0 } else { 0.5 }, (blend == 0) as i32 as f32, 0.0, 0.0] };
+            let u = FrameU { view: view.to_cols_array_2d(), proj: proj.to_cols_array_2d(), flags: [if blend == 0 { 1.0 } else { 0.5 }, (blend == 0) as i32 as f32, far as i32 as f32, 0.0] };
             let ub = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("billboard frame"), contents: bytemuck::bytes_of(&u), usage: wgpu::BufferUsages::UNIFORM });
             let fbg = device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &bb.frame_layout, entries: &[wgpu::BindGroupEntry { binding: 0, resource: ub.as_entire_binding() }] });
             let tbg = device.create_bind_group(&wgpu::BindGroupDescriptor {

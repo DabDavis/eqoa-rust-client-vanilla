@@ -40,6 +40,7 @@ mod stream;
 mod ui;
 mod viewer;
 mod walker;
+mod weather;
 
 use std::process::ExitCode;
 
@@ -75,11 +76,14 @@ fn listen(file: &str, x: f32, z: f32, secs: f32, out: &str, hour: f32, walk: boo
     let mut lib = esf::Library::new();
     let f = lib.add(file, esf::Container::open(disc(None)?.read(file)?)?);
     lib.add("CHAR.ESF", esf::Container::open(disc(None)?.read("CHAR.ESF")?)?);
+    lib.add(sky::FILE, esf::Container::open(disc(None)?.read(sky::FILE)?)?);
     let world = vi::world::World::<Ee>::load(&lib, f).ok_or("no world in the file")?;
     let mut walker = walker::Walker::new(world, x, z, 0.0);
     let human = lib.lookup(viewer::HUMAN).ok_or("no human in CHAR.ESF")?;
     walker.set_character(&lib, human);
     let mut sound = sound::Sound::offline(std::path::Path::new(&disc_path(None))).ok_or("no sound device")?;
+    // the weather (`EQOA_WEATHER`): its rain and thunder, and its dimming of the track
+    let mut weather = weather::Weather::new(&mut lib, 0);
     let ids = walker.sprite.as_ref().map(|cs| cs.sounds()).unwrap_or_default();
     sound.share_sounds(&lib, &ids);
     eprintln!("the character's play list names {} sounds", ids.len());
@@ -99,9 +103,15 @@ fn listen(file: &str, x: f32, z: f32, secs: f32, out: &str, hour: f32, walk: boo
         sound.battle_music(Some(fight && (60..240).contains(&k)));
         let eye = walker.eye;
         sound.frame(&mut walker.scene, &eye, hour, now);
+        weather.frame(&mut walker.scene, Some(&mut sound), &eye, now, hour);
+        weather.lightning();
+        let _ = weather.render(&eye);
         pcm.extend(sound.audio().render(1600));
         if k % 30 == 0 {
             eprintln!("{:5.1} s  {}", k as f32 / 30.0, sound.describe());
+            if weather.atm.intensity != vi::fpu::F::ZERO {
+                eprintln!("        {}", weather.describe());
+            }
         }
     }
     let mut w = Vec::with_capacity(44 + pcm.len() * 2);

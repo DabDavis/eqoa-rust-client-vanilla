@@ -8,8 +8,10 @@
 //! the device's sound. The loader is synchronous: a track `Load`ed is made
 //! from AMBTRACK.ESF at once and is complete at the next call; its upload to
 //! the IOP then takes the device's frames, a block a frame, as on the console.
-//! Not ported: the outdoors probe (`CalcOutdoorsIntensity`, so `m_p30` stays
-//! 1), the weather's intensity (0), and the sound sprites' half of
+//! The weather's intensity dims the track (`weather` is the atmosphere's);
+//! the rain and thunder are the atmosphere's own (`weather.rs`). Not ported:
+//! the outdoors probe (`CalcOutdoorsIntensity`, so `m_p30` stays 1), and the
+//! sound sprites' half of
 //! `UpdateSoundEmitters` (no world places one; SPELLFX does).
 
 use crate::audio::{Audio, AudioLink};
@@ -124,6 +126,9 @@ pub struct Sound {
     /// `VIGameOptions::m_language`, which is the battle-music option: 0 none,
     /// 1..8 a song, 9 (the default) a random one each fight
     pub battle_option: i32,
+    /// the weather's intensity (`m_atmosphere.m_intensity`), which dims the
+    /// track: set by `weather.rs` each frame
+    pub weather: F<Ee>,
 }
 
 impl Sound {
@@ -188,6 +193,7 @@ impl Sound {
             ui: None,
             battle: (0, -1),
             battle_option: 9,
+            weather: F::ZERO,
         })
         .map(|mut s| {
             s.load_resident(iso_path);
@@ -233,13 +239,15 @@ impl Sound {
         }
     }
 
-    /// What is resident from the start: UI.CSF's sounds (the UI's) and
-    /// FX.CSF's (`respawn`, `death`, `amb_underwater`), the UI's sound names,
+    /// What is resident from the start: UI.CSF's sounds (the UI's),
+    /// FX.CSF's (`respawn`, `death`, `amb_underwater`) and SKY.CSF's (the
+    /// rain and the thunder, loaded with the scene's shared files), the UI's
+    /// sound names,
     /// and their volumes out of the SUPPORT image (`EQOA_SUPPORT`, else
     /// `run/support.bin`).
     fn load_resident(&mut self, iso_path: &std::path::Path) {
         let Ok(mut disc) = iso::Iso::open(iso_path) else { return };
-        for f in ["DATA2/UI.CSF", "DATA2/FX.CSF"] {
+        for f in ["DATA2/UI.CSF", "DATA2/FX.CSF", "DATA2/SKY.CSF"] {
             let Some(c) = disc.read(f).ok().and_then(|b| esf::Container::open(b).ok()) else { continue };
             for w in esf::sound::all(&c).0 {
                 let i = self.dev.create_wave(w.channels, w.blocks, w.rate, w.volume, w.pan, w.looped, &w.adpcm);
@@ -264,6 +272,12 @@ impl Sound {
             (Some(n), Some(v)) => self.ui = Some((n, v)),
             _ => eprintln!("sound: no UI sounds (UISOUND.TXT and the SUPPORT image at {support} are both needed)"),
         }
+    }
+
+    /// The device's sound for a resident wave's name, or -1 (what
+    /// `VIDictionary::Find` hands `SetResources`).
+    pub fn sound_named(&self, name: &str) -> i32 {
+        self.dict.get(&vi::hash::hash_resource_id(name)).copied().unwrap_or(-1)
     }
 
     /// `VIUI::SoundPlay(id)`: the row's name at `GetUISound`'s volume (an
@@ -508,8 +522,7 @@ impl Sound {
             }
         }
 
-        // the weather's intensity is 0: the overcast does not dim it
-        let q = F::<Ee>::ONE - F::ZERO;
+        let q = F::<Ee>::ONE - self.weather;
         for j in 0..2 {
             let t = &mut self.track;
             if t.state[j].p1c == -1 {

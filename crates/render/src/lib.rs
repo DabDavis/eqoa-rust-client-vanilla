@@ -80,6 +80,9 @@ struct Pass {
     bg: wgpu::BindGroup,
     uniform: wgpu::Buffer,
     base: LayerUniform,
+    /// the DictID bound, and the sampler (0 repeat, 1 clamp, 2 mirror)
+    texture: i32,
+    sampler: usize,
 }
 
 /// One model on the GPU, drawn once per instance (a model matrix each).
@@ -101,6 +104,16 @@ pub struct GpuModel {
     pub sky: bool,
     /// Skipped by `draw` when false.
     pub visible: bool,
+    /// How many of each batch's layer passes are drawn (`VIMaterial`'s
+    /// layer count, which the sky's fade changes).
+    pub passes_used: usize,
+}
+
+impl GpuModel {
+    /// How many batches (each with its layer passes) the model has.
+    pub fn batch_count(&self) -> usize {
+        self.batches.len()
+    }
 }
 
 /// A texture source: the decoded image a DictID names, if any.
@@ -425,11 +438,12 @@ impl Renderer {
                     contents: bytemuck::bytes_of(&base),
                     usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 });
-                let sampler = match l.wrap {
-                    1 | 2 => &self.samplers[1],
-                    3 => &self.samplers[2],
-                    _ => &self.samplers[0],
+                let si = match l.wrap {
+                    1 | 2 => 1,
+                    3 => 2,
+                    _ => 0,
                 };
+                let sampler = &self.samplers[si];
                 let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("layer"),
                     layout: &self.material_layout,
@@ -442,7 +456,7 @@ impl Renderer {
                         wgpu::BindGroupEntry { binding: 2, resource: uniform.as_entire_binding() },
                     ],
                 });
-                passes.push(Pass { blend, bg, uniform, base });
+                passes.push(Pass { blend, bg, uniform, base, texture: l.texture, sampler: si });
             }
             let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("indices"),
@@ -469,7 +483,36 @@ impl Renderer {
             bounds: (lo, hi),
             sky: false,
             visible: true,
+            passes_used: usize::MAX,
         }
+    }
+
+    /// Re-points one layer pass of one batch, as `VIAtmosphere` changes the
+    /// sky's materials: its texture (rebound when it changes), blend mode and
+    /// colour (0..1, alpha included).
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_layer(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, m: &mut GpuModel, batch: usize, pass: usize, texture: i32, blend: usize, rgba: [f32; 4], textures: &Textures) {
+        let Some(p) = m.batches.get(batch).and_then(|b| b.2.get(pass)) else { return };
+        let rebind = p.texture != texture;
+        let view = if rebind { self.texture(device, queue, texture, textures) } else { None };
+        let Some(p) = m.batches.get_mut(batch).and_then(|b| b.2.get_mut(pass)) else { return };
+        if rebind {
+            p.bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("layer"),
+                layout: &self.material_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view.as_ref().unwrap_or(&self.white)) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.samplers[p.sampler]) },
+                    wgpu::BindGroupEntry { binding: 2, resource: p.uniform.as_entire_binding() },
+                ],
+            });
+            p.texture = texture;
+            p.base.flags[0] = view.is_some() as i32 as f32;
+        }
+        p.blend = blend.min(4);
+        p.base.flags[1] = (p.blend != 0) as i32 as f32;
+        p.base.tint = rgba;
+        queue.write_buffer(&p.uniform, 0, bytemuck::bytes_of(&p.base));
     }
 
     /// Sets every layer's colour to `rgb` (0..1), keeping each layer's own
@@ -597,7 +640,7 @@ impl Renderer {
                 pass.set_bind_group(2, &m.palette_bg, &[]);
                 for (indices, count, passes) in &m.batches {
                     pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
-                    for p in passes {
+                    for p in passes.iter().take(m.passes_used) {
                         pass.set_pipeline(&self.sky_pipelines[p.blend]);
                         pass.set_bind_group(1, &p.bg, &[]);
                         pass.draw_indexed(0..*count, 0, 0..m.instance_count);
@@ -618,7 +661,7 @@ impl Renderer {
                 pass.set_bind_group(2, &m.palette_bg, &[]);
                 for (indices, count, passes) in &m.batches {
                     pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
-                    for p in passes.iter().filter(|p| (p.blend != 0) == blended) {
+                    for p in passes.iter().take(m.passes_used).filter(|p| (p.blend != 0) == blended) {
                         if p.blend != current {
                             pass.set_pipeline(&self.pipelines[p.blend]);
                             current = p.blend;
@@ -691,6 +734,23 @@ pub fn capture(
     models: &[&GpuModel],
     particles: Option<(Mat4, Mat4, &[billboard::Batch], &Textures)>,
 ) -> Vec<u8> {
+    capture_with_sky(device, queue, renderer, w, h, view, models, particles, None)
+}
+
+/// `capture`, with the sky's billboards (the stars, the lightning patches)
+/// drawn behind the world through the sky's view.
+#[allow(clippy::too_many_arguments)]
+pub fn capture_with_sky(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    renderer: &mut Renderer,
+    w: u32,
+    h: u32,
+    view: &View,
+    models: &[&GpuModel],
+    particles: Option<(Mat4, Mat4, &[billboard::Batch], &Textures)>,
+    sky: Option<(Mat4, Mat4, &[billboard::Batch], &Textures)>,
+) -> Vec<u8> {
     let format = TARGET_FORMAT;
     let target = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("capture"),
@@ -713,6 +773,9 @@ pub fn capture(
     let mut enc = device.create_command_encoder(&Default::default());
     let tv = target.create_view(&Default::default());
     renderer.draw(queue, &mut enc, &tv, &depth, view, models);
+    if let Some((v, p, batches, textures)) = sky {
+        renderer.draw_sky_billboards(device, queue, &mut enc, &tv, &depth, v, p, batches, textures);
+    }
     if let Some((v, p, batches, textures)) = particles {
         renderer.draw_billboards(device, queue, &mut enc, &tv, &depth, v, p, batches, textures);
     }

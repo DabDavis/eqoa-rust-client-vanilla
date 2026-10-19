@@ -42,7 +42,7 @@ impl<M: Model> Matrix33<M> {
 }
 
 /// `VIVect3 operator*(const VIVect3 &, const VIMatrix33 &)`: a row vector.
-fn vm33<M: Model>(v: &Vect3<M>, m: &Matrix33<M>) -> Vect3<M> {
+pub(crate) fn vm33<M: Model>(v: &Vect3<M>, m: &Matrix33<M>) -> Vect3<M> {
     let mut r = Vect3::new(m.m[0].x * v.x, m.m[0].y * v.x, m.m[0].z * v.x);
     r.x = r.x + m.m[1].x * v.y;
     r.y = r.y + m.m[1].y * v.y;
@@ -54,7 +54,7 @@ fn vm33<M: Model>(v: &Vect3<M>, m: &Matrix33<M>) -> Vect3<M> {
 }
 
 /// `VIMatrix44::RotateHPR`
-fn rotate_hpr<M: Model>(v: &Vect3<M>) -> Matrix44<M> {
+pub(crate) fn rotate_hpr<M: Model>(v: &Vect3<M>) -> Matrix44<M> {
     let (si, ci) = (v.x.sinf(), v.x.cosf());
     let (sj, cj) = (v.y.sinf(), v.y.cosf());
     let (sh, ch) = (v.z.sinf(), v.z.cosf());
