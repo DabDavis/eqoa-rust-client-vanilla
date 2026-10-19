@@ -10,6 +10,9 @@ pub type Mat = [[f32; 4]; 4];
 pub struct Scene {
     /// Each model with the matrices it is drawn at.
     pub parts: Vec<(Model, Vec<Mat>)>,
+    /// HSprite placements held out of `parts` to be drawn animated: (sprite
+    /// record, actor transform as the game builds it).
+    pub hsprites: Vec<(Ref, vi::geom::Matrix44<vi::fpu::Ee>)>,
     pub bounds: (Vec3, Vec3),
     pub summary: String,
 }
@@ -40,11 +43,11 @@ pub fn model(dict_id: i32, m: Model) -> Scene {
         if m.skinned { ", skinned" } else { "" }
     );
     let parts = vec![(m, vec![render::IDENTITY])];
-    Scene { bounds: bounds_of(&parts), parts, summary }
+    Scene { bounds: bounds_of(&parts), parts, summary, hsprites: Vec::new() }
 }
 
 pub fn zone(lib: &Library, file: usize, zone: esf::NodeId, index: usize) -> Scene {
-    zones(lib, file, &[zone], &format!("zone {index}"))
+    zones(lib, file, &[zone], &format!("zone {index}"), false)
 }
 
 /// The zones around `index` (every zone with a pre-translation island within
@@ -63,12 +66,13 @@ pub fn zones_near(lib: &Library, file: usize, index: usize, radius: f32) -> Scen
                 .any(|p| home.iter().any(|h| (p[0] - h[0]).abs() < radius && (p[2] - h[2]).abs() < radius))
         })
         .collect();
-    zones(lib, file, &near, &format!("zone {index} and {} around it", near.len() - 1))
+    zones(lib, file, &near, &format!("zone {index} and {} around it", near.len() - 1), true)
 }
 
 /// Terrain per zone plus every placed actor of all of them, one upload per
-/// distinct sprite.
-pub fn zones(lib: &Library, file: usize, list: &[esf::NodeId], name: &str) -> Scene {
+/// distinct sprite. With `animate`, HSprite placements are held out (in
+/// `Scene::hsprites`) to be drawn posed.
+pub fn zones(lib: &Library, file: usize, list: &[esf::NodeId], name: &str, animate: bool) -> Scene {
     let c = lib.file(file);
     let mut parts = Vec::new();
     for &zone in list {
@@ -79,7 +83,21 @@ pub fn zones(lib: &Library, file: usize, list: &[esf::NodeId], name: &str) -> Sc
     let terrain_parts = parts.len();
     let actors: Vec<esf::zone::Actor> = list.iter().flat_map(|&z| c.actors(z)).collect();
     let mut by_sprite: BTreeMap<i32, Vec<Mat>> = BTreeMap::new();
+    let mut hsprites = Vec::new();
     for a in &actors {
+        if animate
+            && let Some(r) = lib.lookup(a.sprite)
+            && lib.file(r.file).node(r.node).ty == esf::types::HSPRITE
+        {
+            let f = vi::fpu::F::new;
+            let m = vi::geom::Matrix44::transform(
+                &vi::vect::Vect3::new(f(a.rot[0]), f(a.rot[1]), f(a.rot[2])),
+                f(a.scale),
+                &vi::vect::Vect3::new(f(a.pos[0]), f(a.pos[1]), f(a.pos[2])),
+            );
+            hsprites.push((r, m));
+            continue;
+        }
         by_sprite.entry(a.sprite).or_default().push(a.matrix());
     }
     let mut unresolved = 0;
@@ -103,7 +121,7 @@ pub fn zones(lib: &Library, file: usize, list: &[esf::NodeId], name: &str) -> Sc
         parts.len() - terrain_parts,
         if empty.is_empty() { "none".into() } else { empty.join(", ") },
     );
-    Scene { bounds: bounds_of(&parts), parts, summary }
+    Scene { bounds: bounds_of(&parts), parts, summary, hsprites }
 }
 
 /// Every drawable model in one file, by list position.

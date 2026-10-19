@@ -237,3 +237,52 @@ pub fn load_csprite<M: Model>(
     cs.set_defaults(sc, rand);
     Some(cs)
 }
+
+/// An attachment: (DictID or sprite index, node; -1 for a skin).
+pub type Attachment = (i32, i32);
+
+/// An HSprite (0x2200) as `ParseHSpriteObj` builds it: the hierarchy, its ref
+/// map, triggers, and its default clip started at once. The attachments come
+/// back as (DictID, node; -1 for a skin) for the caller to resolve.
+pub fn load_hsprite<M: Model>(
+    lib: &Library,
+    sprite: Ref,
+    sc: &mut AnimScene<M>,
+    cache: &mut AnimCache,
+) -> Option<(HSprite<M>, Vec<Attachment>)> {
+    let c: &Container = lib.file(sprite.file);
+    let id = sprite.node;
+    if c.node(id).ty != 0x2200 {
+        return None;
+    }
+    let version = c.node(id).version;
+    let children = &c.node(id).children;
+    let hier = c.child(id, 0x2400)?;
+    let pos = children.iter().position(|&k| k == hier)?;
+    let refmap = children[pos..].iter().copied().find(|&k| c.node(k).ty == 0x5000)?;
+    sc.ref_maps.push(parse_ref_map(c.body(refmap)));
+    let mut h = HSprite::new(sc.ref_maps.len() - 1);
+    parse_hierarchy(&mut h, c.body(hier), c.node(hier).version);
+    if version >= 2
+        && let Some(t) = c.child(id, 0x2450)
+    {
+        let d = c.body(t);
+        h.triggers = (0..i32_at(d, 0).max(0) as usize).map(|k| Trigger { id: i32_at(d, 4 + k * 4), ..Default::default() }).collect();
+    }
+    let mut attach = Vec::new();
+    if let Some(a) = c.child(id, 0x2500) {
+        let d = c.body(a);
+        for k in 0..i32_at(d, 0).max(0) as usize {
+            let (sid, node) = (i32_at(d, 8 + k * 12), i32_at(d, 12 + k * 12));
+            if sid != 0 {
+                attach.push((sid, node));
+            }
+        }
+    }
+    // The default clip is the 0x2600 record nested here; it registered its
+    // own DictID, so it is loaded through the dictionary like any other.
+    let anim = c.child(id, 0x2600)?;
+    let ai = cache.get(lib, i32_at(c.body(anim), 0), sc)?;
+    h.add_play_default(ai, sc);
+    Some((h, attach))
+}

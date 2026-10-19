@@ -7,7 +7,7 @@
 //! drag orbits too. Esc quits.
 
 use crate::scene::{self, Scene};
-use crate::walker::{Controls, Walker};
+use crate::walker::{AnimatedProps, Controls, Walker};
 use esf::{Library, Ref};
 use glam::Vec3;
 use render::{GpuModel, Renderer, View, wgpu};
@@ -67,8 +67,9 @@ impl Source {
     }
 
     /// For a walk: the character in the middle of the zone, on the game's own
-    /// collision world (the whole world file's, not just this zone's).
-    pub fn walker(&self, lib: &Library, s: &Scene) -> Option<(Walker, esf::Model)> {
+    /// collision world (the whole world file's, not just this zone's), and the
+    /// zone's animated props.
+    pub fn walker(&self, lib: &Library, s: &Scene) -> Option<(Walker, esf::Model, AnimatedProps)> {
         let Source::Walk { file, character, .. } = self else { return None };
         let t = Instant::now();
         let world = vi::world::World::load(lib, *file)?;
@@ -92,7 +93,9 @@ impl Source {
         };
         let mut w = Walker::new(world, x, z, h);
         w.set_character(lib, *character);
-        Some((w, lib.build_model(*character)?))
+        let props = AnimatedProps::new(&w.scene, lib, &s.hsprites);
+        eprintln!("animated props: {} placements, {} attachment groups", s.hsprites.len(), props.groups.len());
+        Some((w, lib.build_model(*character)?, props))
     }
 
     pub fn camera(&self, bounds: (Vec3, Vec3)) -> Camera {
@@ -184,7 +187,7 @@ pub fn shot(
     let cam = cam.unwrap_or_else(|| source.camera(s.bounds));
     let aspect = w as f32 / h as f32;
     let mut view = cam.view(s.bounds, aspect);
-    if let Some((mut walker, body)) = source.walker(lib, &s) {
+    if let Some((mut walker, body, props)) = source.walker(lib, &s) {
         // 60 frames a second of game time, the controls held throughout.
         let script = script.unwrap_or(Script { ms: 0, controls: Controls::default() });
         let mut t = 0;
@@ -200,6 +203,9 @@ pub fn shot(
         let g = renderer.upload(&device, &queue, &body, &[model], &textures);
         renderer.set_palette(&queue, &g, &palette);
         gpu.push(g);
+        for (group, mats) in props.groups.iter().zip(props.matrices(&mut walker.scene)) {
+            gpu.push(renderer.upload(&device, &queue, &group.model, &mats, &textures));
+        }
         view = lit(walker.view(aspect), Instant::now());
         // `EQOA_SHOT_EYE=dx,dy,dz`: look at the character from that offset
         // instead of through the game's camera (for checking poses).
@@ -246,6 +252,10 @@ struct App {
     held: HashSet<String>,
     last: Instant,
     walker: Option<Walker>,
+    props: Option<AnimatedProps>,
+    /// Index in `Gfx::models` of the first prop group; the character is
+    /// the model just before it.
+    props_at: usize,
     clock: Instant,
     gfx: Option<Gfx>,
     display: winit::event_loop::OwnedDisplayHandle,
@@ -265,6 +275,8 @@ pub fn run(lib: Library, source: Source) -> Result<(), Error> {
         held: HashSet::new(),
         last: Instant::now(),
         walker: None,
+        props: None,
+        props_at: 0,
         clock: Instant::now(),
         gfx: None,
         display,
@@ -286,11 +298,17 @@ impl App {
         let walker = self.source.walker(&self.lib, &s);
         if let Some(g) = &mut self.gfx {
             g.models = upload(&mut g.renderer, &g.device, &g.queue, &self.lib, &s);
-            self.walker = walker.map(|(w, body)| {
+            self.props = None;
+            self.walker = walker.map(|(w, body, props)| {
                 let textures = render::library_textures(&self.lib);
                 let mut w = w;
                 let (model, _) = w.pose();
                 g.models.push(g.renderer.upload(&g.device, &g.queue, &body, &[model], &textures));
+                self.props_at = g.models.len();
+                for (group, mats) in props.groups.iter().zip(props.matrices(&mut w.scene)) {
+                    g.models.push(g.renderer.upload(&g.device, &g.queue, &group.model, &mats, &textures));
+                }
+                self.props = Some(props);
                 w
             });
             self.clock = Instant::now();
@@ -451,12 +469,21 @@ impl ApplicationHandler for App {
                 let controls = self.controls();
                 let now = self.clock.elapsed().as_millis() as i64;
                 let Some(g) = &mut self.gfx else { return };
+                let props = &self.props;
+                let props_at = self.props_at;
                 let walk_view = self.walker.as_mut().map(|w| {
                     w.frame(controls, now);
                     let (m, palette) = w.pose();
-                    if let Some(body) = g.models.last() {
+                    if let Some(body) = props_at.checked_sub(1).and_then(|i| g.models.get(i)) {
                         g.renderer.set_instances(&g.queue, body, &[m]);
                         g.renderer.set_palette(&g.queue, body, &palette);
+                    }
+                    if let Some(p) = props {
+                        for (k, mats) in p.matrices(&mut w.scene).into_iter().enumerate() {
+                            if let Some(model) = g.models.get(props_at + k) {
+                                g.renderer.set_instances(&g.queue, model, &mats);
+                            }
+                        }
                     }
                     g.window.set_title(&format!("eqoa — walking {}", w.describe()));
                     w.view(g.config.width as f32 / g.config.height as f32)

@@ -24,6 +24,8 @@ fn main() {
         w.buffers.len(),
         w.actors.len()
     );
+    let attach: usize = w.hsprites.iter().map(|h| h.1.len()).sum();
+    println!("{} animated HSprites ({attach} attachments), {} clips", w.hsprites.len(), w.anims.anims.len());
     for (x, z) in [(25000.0, 15000.0), (24900.0, 15000.0), (24600.0, 14400.0), (23900.0, 15300.0)] {
         let from = Vect3::<Ee>::of(x, 400.0, z);
         let to = Vect3::<Ee>::of(x, -100.0, z);

@@ -101,7 +101,11 @@ order per stage is not yet measured.
 
 ### Not yet
 
-- Collision: `VIHSprite` and `VICSprite` (a capsule) collide as nothing; the RAY collide (`Collide(VICollRay &)`) is not ported.
+- Collision: `VICSprite` (a capsule) collides as nothing, and the RAY collide
+  (`Collide(VICollRay &)`) is not ported. `VIHSprite` props (900 placements of 67
+  sprites in Tunaria) collide through each node attachment under its posed node,
+  as `VIHSprite::Collide` does, but that is checked only by the BSP walk test,
+  not against the oracle.
   The world level (BSP walk, rooms, actor insertion) is checked against brute
   force, not yet against the oracle: that needs eqoa-port to load the world.
 - newlib's huge-angle `sinf`/`cosf` reduction (|x| > 2^7·π/2) and `acosf`'s

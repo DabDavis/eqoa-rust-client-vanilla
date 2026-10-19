@@ -147,3 +147,60 @@ pub fn ground(w: &mut World<Ee>, x: f32, z: f32) -> Option<f32> {
     let mut f = Filter::new(FilterKind::WalkFloor, -1);
     w.collide_sphere(&mut s, &mut f).then(|| s.hit_point().y.0)
 }
+
+/// HSprite placements drawn posed: one group per (skeleton, node attachment),
+/// instanced over its placements. The game shares one skeleton between every
+/// placement of a sprite, so each is evaluated once a frame.
+pub struct AnimatedProps {
+    pub groups: Vec<PropGroup>,
+}
+
+pub struct PropGroup {
+    pub hsprite: usize,
+    pub node: usize,
+    pub model: esf::Model,
+    pub actors: Vec<Matrix44<Ee>>,
+}
+
+impl AnimatedProps {
+    pub fn new(world: &World<Ee>, lib: &esf::Library, placements: &[(esf::Ref, Matrix44<Ee>)]) -> Self {
+        let mut groups: Vec<PropGroup> = Vec::new();
+        for (r, m) in placements {
+            let Some(h) = world.hsprite_of(*r) else { continue };
+            for &(sp, node) in &world.hsprites[h].1 {
+                if node < 0 {
+                    continue;
+                }
+                let node = node as usize;
+                if let Some(g) = groups.iter_mut().find(|g| g.hsprite == h && g.node == node) {
+                    g.actors.push(*m);
+                } else if let Some(model) = lib.build_model(world.sprite_refs[sp]) {
+                    groups.push(PropGroup { hsprite: h, node, model, actors: vec![*m] });
+                }
+            }
+        }
+        AnimatedProps { groups }
+    }
+
+    /// This frame's instance matrices per group: `node.world × centre × actor`
+    /// (`VIHSprite::Raster`).
+    pub fn matrices(&self, world: &mut World<Ee>) -> Vec<Vec<[[f32; 4]; 4]>> {
+        world.anims.time = world.time;
+        let mut posed: std::collections::HashMap<usize, Matrix44<Ee>> = std::collections::HashMap::new();
+        for g in &self.groups {
+            if let std::collections::hash_map::Entry::Vacant(e) = posed.entry(g.hsprite) {
+                let h = &mut world.hsprites[g.hsprite].0;
+                h.process(-1, &world.anims);
+                e.insert(h.calc_trans_about_center(&Matrix44::identity(), &world.anims));
+            }
+        }
+        self.groups
+            .iter()
+            .map(|g| {
+                let centre = posed[&g.hsprite];
+                let node = Matrix44::mul(&world.hsprites[g.hsprite].0.nodes[g.node].world, &centre);
+                g.actors.iter().map(|a| Matrix44::mul(&node, a).to_cols()).collect()
+            })
+            .collect()
+    }
+}

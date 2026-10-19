@@ -8,7 +8,9 @@
 //! Not yet: `VIHSprite` and `VICSprite` collide as nothing here (the first
 //! needs the pose evaluator, the second is a capsule); the ray collide.
 
+use crate::character::{AnimCache, load_hsprite};
 use crate::coll::{CollSphere, EnvRay};
+use crate::hsprite::{AnimScene, HSprite};
 use crate::collide::{Collide, CollBuffer, cull_sphere};
 use crate::fpu::{F, Model};
 use crate::geom::{BBox, Matrix44, Plane, Sphere};
@@ -16,6 +18,9 @@ use crate::scene::{Filter, FilterKind, Scene};
 use crate::vect::Vect3;
 use esf::{Container, Library, NodeId, Ref};
 use std::collections::HashMap;
+
+/// A resolved attachment: (scene sprite, node; -1 a skin).
+pub type SpriteAttachment = (usize, i32);
 
 #[derive(Clone, Debug, Default)]
 pub struct Node<M: Model> {
@@ -56,8 +61,10 @@ pub enum SpriteKind {
     /// translation, and the data agrees (every member's first triple is 0).
     Group(Vec<(usize, [f32; 3], f32, [f32; 3])>),
     Lod(Vec<usize>),
+    /// An animated HSprite: index into `World::hsprites`.
+    H(usize),
     /// Collides as nothing (flora, sounds, lights, emitters; and for now
-    /// HSprites and CSprites).
+    /// CSprites, whose collision is a capsule).
     None,
 }
 
@@ -96,11 +103,19 @@ pub struct World<M: Model> {
     pub stamp: i32,
     pub sprites: Vec<SceneSprite<M>>,
     sprite_of: HashMap<Ref, usize>,
+    /// The record each scene sprite was built from.
+    pub sprite_refs: Vec<Ref>,
     pub buffers: Vec<CollBuffer<M>>,
     pub actors: Vec<Actor<M>>,
     pub collide: Collide<M>,
     /// `VIScene::GetTime`, ms; the caller advances it.
     pub time: i64,
+    /// The animated HSprites, one per distinct sprite (`VIHSprite` does not
+    /// override `GetInstType`, so placements share it), with their
+    /// attachments as (world sprite, node; -1 a skin).
+    pub hsprites: Vec<(HSprite<M>, Vec<SpriteAttachment>)>,
+    pub anims: AnimScene<M>,
+    anim_cache: AnimCache,
 }
 
 fn rd_f(d: &[u8], o: usize) -> f32 {
@@ -155,10 +170,14 @@ impl<M: Model> World<M> {
             stamp: 0,
             sprites: Vec::new(),
             sprite_of: HashMap::new(),
+            sprite_refs: Vec::new(),
             buffers: Vec::new(),
             actors: Vec::new(),
             collide: Collide::default(),
             time: 0,
+            hsprites: Vec::new(),
+            anims: AnimScene::default(),
+            anim_cache: AnimCache::new(),
         };
         let zones = c.zones();
         for &z in &zones {
@@ -296,10 +315,26 @@ impl<M: Model> World<M> {
                 (SpriteKind::Lod(levels), header_bbox(0x2A10, 4), 0)
             }
             0x2700 => (SpriteKind::None, header_bbox(0x2710, 4), 5),
+            0x2200 => match load_hsprite(lib, r, &mut self.anims, &mut self.anim_cache) {
+                Some((h, attach)) => {
+                    let mut resolved = Vec::new();
+                    for (sid, node) in attach {
+                        if let Some(ar) = lib.lookup(sid)
+                            && let Some(s) = self.sprite(lib, ar, pretrans)
+                        {
+                            resolved.push((s, node));
+                        }
+                    }
+                    self.hsprites.push((h, resolved));
+                    (SpriteKind::H(self.hsprites.len() - 1), header_bbox(0x2210, 4), 4)
+                }
+                None => (SpriteKind::None, header_bbox(0x2210, 4), 4),
+            },
             _ => (SpriteKind::None, BBox::default(), 0),
         };
         let id = self.sprites.len();
         self.sprites.push(SceneSprite { kind, bbox, bsphere: Sphere::from_bbox(&bbox), sprite_type });
+        self.sprite_refs.push(r);
         self.sprite_of.insert(r, id);
         Some(id)
     }
@@ -374,6 +409,14 @@ impl<M: Model> World<M> {
         }
         if back {
             self.insert_zone(z, n.back, actor, b, corners, stamp);
+        }
+    }
+
+    /// The animated HSprite a dictionary entry is, if the world built one.
+    pub fn hsprite_of(&self, r: Ref) -> Option<usize> {
+        match self.sprites[*self.sprite_of.get(&r)?].kind {
+            SpriteKind::H(i) => Some(i),
+            _ => None,
         }
     }
 
@@ -511,6 +554,28 @@ impl<M: Model> World<M> {
                 false
             }
             SpriteKind::Lod(levels) => levels.first().is_some_and(|&l| self.collide_sprite(l, s)),
+            // VIHSprite::Collide: the pose for now, the centre transform on the
+            // collider's world, and each node attachment under its node.
+            SpriteKind::H(i) => {
+                self.anims.time = self.time;
+                let world = self.collide.world;
+                let (h, attach) = &mut self.hsprites[i];
+                h.process(-1, &self.anims);
+                let m = h.calc_trans_about_center(&world, &self.anims);
+                let parts: Vec<(usize, Matrix44<M>)> = attach
+                    .iter()
+                    .filter(|&&(_, node)| node != -1)
+                    .map(|&(sp, node)| (sp, Matrix44::mul(&h.nodes[node as usize].world, &m)))
+                    .collect();
+                let mut hit = false;
+                for (sp, t) in parts {
+                    self.collide.set_world(&t);
+                    if self.collide_sprite(sp, s) {
+                        hit = true;
+                    }
+                }
+                hit
+            }
             _ => false,
         }
     }
