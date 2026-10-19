@@ -456,6 +456,8 @@ pub fn shot_with(
                     if let Some(k) = k {
                         if p.npcw_owns() {
                             p.npcw_key(k, down);
+                        } else if p.support_owns() {
+                            p.support_key(k, down);
                         } else if p.mode == 5 {
                             p.book_key(k, down);
                         } else if p.mode == 35 {
@@ -1040,6 +1042,33 @@ impl ApplicationHandler for App {
                         && !(down && event.repeat)
                     {
                         p.npcw_key(k, down);
+                    }
+                    return;
+                }
+                // The blacksmith and the customer-service windows (modes 19,
+                // 31, 32): the arrows, Enter or E (X), Escape (triangle), Q
+                // (square: the inbox again).
+                if let Some(p) = self.play.as_mut()
+                    && p.typing.is_none()
+                    && p.support_owns()
+                {
+                    let down = event.state == ElementState::Pressed;
+                    use crate::startmenu::keys as K;
+                    let k = match &event.logical_key {
+                        Key::Named(NamedKey::ArrowUp) => Some(K::UP),
+                        Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
+                        Key::Named(NamedKey::ArrowLeft) => Some(K::LEFT),
+                        Key::Named(NamedKey::ArrowRight) => Some(K::RIGHT),
+                        Key::Named(NamedKey::Enter) => Some(K::CROSS),
+                        Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
+                        Key::Character(c) if c.eq_ignore_ascii_case("q") => Some(133),
+                        Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
+                        _ => None,
+                    };
+                    if let Some(k) = k
+                        && !(down && event.repeat)
+                    {
+                        p.support_key(k, down);
                     }
                     return;
                 }
