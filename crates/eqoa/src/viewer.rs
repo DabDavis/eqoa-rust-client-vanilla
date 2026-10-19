@@ -515,8 +515,21 @@ pub fn shot_with(
                     p.dialog_key(crate::dialog::Key::Left);
                     p.dialog_key(crate::dialog::Key::Enter);
                 }
-                // and a buddy request's box (mode 17)
-                if p.mode == 17 && std::env::var_os("EQOA_ACCEPT").is_some() {
+                // `EQOA_GUILD=create <name>@ms;invite <name>@ms`: the guild's
+                // Create (past the client's group and tunar checks, which a
+                // two-account test cannot meet) and Invite sent then.
+                if let Ok(spec) = std::env::var("EQOA_GUILD") {
+                    for part in spec.split(';') {
+                        if let Some((cmd, ms)) = part.rsplit_once('@')
+                            && let Ok(ms) = ms.parse::<i64>()
+                            && t == ms / 16 * 16
+                        {
+                            p.guild_test(cmd);
+                        }
+                    }
+                }
+                // and a buddy request's box (mode 17), a guild invitation's (20)
+                if matches!(p.mode, 17 | 20) && std::env::var_os("EQOA_ACCEPT").is_some() {
                     use crate::startmenu::keys as K;
                     for k in [K::LEFT, K::CROSS] {
                         p.panel_key(k, true);

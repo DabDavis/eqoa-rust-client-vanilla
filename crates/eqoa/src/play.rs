@@ -2915,6 +2915,20 @@ impl Play {
         }
     }
 
+    /// A test's guild command (`EQOA_GUILD`): `create <name>` or
+    /// `invite <name>`, sent as the client's senders send them.
+    pub fn guild_test(&mut self, cmd: &str) {
+        match cmd.split_once(' ') {
+            Some(("create", name)) => self.session.send(&crate::guild::Cmds::create(name)),
+            Some(("invite", name)) => {
+                if let Ok(m) = crate::guild::Cmds::invite(&self.dump.player.name, name, &self.guild) {
+                    self.session.send(&m);
+                }
+            }
+            _ => eprintln!("play: EQOA_GUILD: {cmd:?} is not create or invite"),
+        }
+    }
+
     /// `CloseGuildMenu` (with `HideInvite`'s forgetting the inviter): the
     /// window reset and hidden, the start menu again.
     fn close_guild_menu(&mut self) {
