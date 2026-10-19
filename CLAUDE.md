@@ -2,7 +2,7 @@
 
 The Rust client. README.md is the plan and the crate table; keep it current.
 
-- Toolchain: rustup in `~/.cargo`. `/tmp` is full: point `TMPDIR` at a directory under `~/.cache`.
+- Toolchain: rustup in `~/.cargo`. `/tmp` is a small partition that old session scratchpads fill: building with `TMPDIR` under `~/.cache` avoids it.
 - `run/` is untracked: `run/eqoa.iso` links the Frontiers disc. Never commit game data.
 - Game-logic floats go through `ee::*`, never host `f32` operators; every compare too.
 - Port from the decomp (`../decomp/src`), not from the Go client: the Go client's
