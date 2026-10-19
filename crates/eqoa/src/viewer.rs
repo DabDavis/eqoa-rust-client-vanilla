@@ -391,6 +391,33 @@ pub fn shot_with(
                         p.hud_key(k);
                     }
                 }
+                // `EQOA_START_KEYS` (o open, u d e x): the start menu's keys,
+                // each held for a frame (pressed, then released on the next:
+                // the menus' auto-repeat pulses while a key is down).
+                let step = ((t - at) / 16 - 1) as usize;
+                if t > at
+                    && let Ok(keys) = std::env::var("EQOA_START_KEYS")
+                    && let Some(k) = keys.chars().nth(step / 2)
+                {
+                    let down = step.is_multiple_of(2);
+                    use crate::startmenu::keys as K;
+                    let k = match k {
+                        'o' => {
+                            if down {
+                                p.open_start_menu(true);
+                            }
+                            None
+                        }
+                        'u' => Some(K::UP),
+                        'd' => Some(K::DOWN),
+                        'e' => Some(K::CROSS),
+                        'x' => Some(K::ESCAPE),
+                        _ => None,
+                    };
+                    if let Some(k) = k {
+                        p.start_key(k, down);
+                    }
+                }
                 // `EQOA_INVITE`: the target invited just after targeting
                 // (`DoAction(0x07010000)`); `EQOA_ACCEPT`: any message box
                 // answered Yes (left, then X).
@@ -782,6 +809,8 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, el: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => el.exit(),
+            // Quit, answered yes in the start menu (`m_p2EC28`).
+            _ if self.play.as_ref().is_some_and(|p| p.quit) => el.exit(),
             WindowEvent::Resized(s) if s.width > 0 && s.height > 0 => {
                 let Some(g) = &mut self.gfx else { return };
                 g.config.width = s.width;
@@ -791,6 +820,36 @@ impl ApplicationHandler for App {
                 g.window.request_redraw();
             }
             WindowEvent::KeyboardInput { event, .. } => {
+                // The start menu (mode 13) takes the arrows, Enter or E (X) and
+                // Escape (back), down and up (its auto-repeat); Escape in play
+                // opens it (`OnKeyDown` 27).
+                if let Some(p) = self.play.as_mut()
+                    && p.typing.is_none()
+                    && p.start.is_some()
+                {
+                    use crate::startmenu::keys as K;
+                    let down = event.state == ElementState::Pressed;
+                    if p.mode == 13 {
+                        let k = match &event.logical_key {
+                            Key::Named(NamedKey::ArrowUp) => Some(K::UP),
+                            Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
+                            Key::Named(NamedKey::Enter) => Some(K::CROSS),
+                            Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
+                            Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
+                            _ => None,
+                        };
+                        if let Some(k) = k
+                            && !(down && event.repeat)
+                        {
+                            p.start_key(k, down);
+                        }
+                        return;
+                    }
+                    if p.mode == 0 && down && event.logical_key == Key::Named(NamedKey::Escape) {
+                        p.open_start_menu(true);
+                        return;
+                    }
+                }
                 // The game's keys (`VIWndGame::OnKeyDown`): Enter opens a chat
                 // line, `/` one that starts with it, R one to `/reply`, T one
                 // to `/tell`; while a line is open, keys type into it, Enter

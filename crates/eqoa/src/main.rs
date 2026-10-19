@@ -24,9 +24,12 @@
 mod audio;
 mod chat;
 mod dialog;
+mod client_image;
 mod group;
 mod hud;
 mod hudmenu;
+mod startmenu;
+mod zones;
 mod particles;
 mod play;
 mod scene;
@@ -244,6 +247,13 @@ fn run(args: &[String]) -> Result<()> {
             match (atlas, textures) {
                 (Some(a), Some(t)) => play.ui_data = Some((a, t)),
                 _ => eprintln!("no HUD: the UI atlas needs a decrypted SUPPORT image at {support} (EQOA_SUPPORT)"),
+            }
+            // The start menu's definitions are CLIENT's data: out of the
+            // decrypted image (EQOA_CLIENT, else run/client.bin).
+            let client = std::env::var("EQOA_CLIENT").unwrap_or_else(|_| "run/client.bin".into());
+            play.start = startmenu::StartData::load(std::path::Path::new(&client));
+            if play.start.is_none() {
+                eprintln!("no start menu: it needs a decrypted CLIENT image at {client} (EQOA_CLIENT)");
             }
             let play = Some(play);
             if args[0] == "playshot" {

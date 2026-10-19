@@ -213,6 +213,7 @@ impl Side {
             16 => v.blit_fill_studded_frame(r, [a[0], a[1]], [a[2], a[3]], &fp, &self.studs, self.fill, a[4], a[5], a[6], x[0], a[7] != 0),
             17 => v.blit_studded_horz(r, [a[0], a[1]], a[2], a[3], a[4], a[5], a[6], x[0], a[7] as u32),
             18 => v.blit_vert_bar(r, [a[0], a[1]], a[2], a[3], a[4], a[5], a[6], x[0]),
+            19 => v.blit_bar3(r, s, col, [a[0], a[1]], a[2], a[3], a[4], a[5], a[6], x[4], a[7] as u32, a[8] != 0),
             36 => self.win[k].draw_vscroll(v, r, [a[1], a[2]], a[3], x[0]),
             41 => {
                 self.studs = fp;
@@ -283,6 +284,11 @@ fn script() -> Vec<Call> {
     for h in [268, 270, 40, 0] {
         v.push(call(18, &[126, 9, 81, 83, 82, h, 3], &[0.5], ""));
         v.push(call(18, &[126, 9, 81, 83, 26, h, 3], &[0.5], ""));
+    }
+    // The main menu's three-piece bars, with words and a lit colour.
+    for (just, sh) in [(0, 0), (1, 1), (3, 0)] {
+        v.push(call(19, &[18, 56, 141, 142, 150, 140, 0, just, sh], &[10.0 / 255.0, 50.0 / 255.0, 70.0 / 255.0, 1.0, 1.0], "Inventory"));
+        v.push(call(19, &[18, 83, 33, 34, 26, 90, 3, just, sh], &[0.0, 0.0, 0.0, 1.0, 0.5], ""));
     }
     v.push(call(20, &[1, 57, 132, 114, 10, 1], &[], ""));
     v.push(call(21, &[1, 1], &[], ""));

@@ -381,6 +381,29 @@ impl Vui {
         self.draw_centered_string_ex(ui, s, tp[0], tp[1], c, just, shadow);
     }
 
+    /// `BlitBar(s, c, at, left, right, mid, w, m, alpha, just, shadow)`: the
+    /// three-piece bar (its own left and right caps), and the text on it.
+    pub fn blit_bar3(&self, ui: &mut dyn Raster, s: &[u16], c: [f32; 4], at: [i32; 2], left: i32, right: i32, mid: i32, w: i32, mode: i32, alpha: f32, just: u32, shadow: bool) {
+        let (e1, e2, e3) = (self.entry(left), self.entry(right), self.entry(mid));
+        let mut p = at;
+        self.blit_ex(ui, left, p, mode, alpha, 0);
+        p[0] += e1.uv1[0];
+        if e3.row == 1 {
+            self.blit_horz(ui, p, mid, w - e1.uv1[0] - e2.uv1[0], mode, alpha, 0);
+        } else {
+            self.blit_ex_size(ui, mid, p, [w - e1.uv1[0] - e2.uv1[0], e3.uv1[1]], mode, alpha, 0);
+        }
+        p[0] = at[0] + w - e2.uv1[0];
+        self.blit_ex(ui, right, p, mode, alpha, 0);
+        let off = [0, 3];
+        let tp = if just == 1 {
+            [at[0] + e1.uv1[0] - off[0], at[1] + e3.uv1[1] / 2 - off[1]]
+        } else {
+            [at[0] + w / 2 - off[0], at[1] + e3.uv1[1] / 2 - off[1]]
+        };
+        self.draw_centered_string_ex(ui, s, tp[0], tp[1], c, just, shadow);
+    }
+
     /// `VIFont::GetHeight`.
     pub fn font_height(&self, ui: &dyn Raster) -> i32 {
         ui.point_size()

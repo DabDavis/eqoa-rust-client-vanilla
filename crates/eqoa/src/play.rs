@@ -121,7 +121,7 @@ pub struct Play {
     /// `m_p4F0B8`: who last sent a tell.
     pub reply_name: String,
     /// `VIWndGame::m_mode`: 0 playing, 7 a dialog's answers, 9 a dialog
-    /// showing, 14 a message box.
+    /// showing, 13 the start menu, 14 a message box.
     pub mode: i32,
     /// `m_dialogs`: dialogs waiting while another mode is up (at most 11).
     dialogs: std::collections::VecDeque<Vec<u16>>,
@@ -138,6 +138,16 @@ pub struct Play {
     pub group: crate::group::Group,
     /// `VIWndMBox` (mode 14).
     mbox: crate::dialog::MBox,
+    /// The start menu (mode 13), when CLIENT's image gave its menus.
+    pub start: Option<crate::startmenu::StartData>,
+    /// `m_p2EC28`: Quit answered yes; the viewer leaves.
+    pub quit: bool,
+    /// Start-menu work waiting for the HUD's raster (the font): an open
+    /// (with its reset) and keys (code, down).
+    start_open: Option<bool>,
+    start_keys: Vec<(i32, bool)>,
+    /// An emote's action for the player's own walker.
+    emote: Option<i32>,
     /// The spell effects (`VIScene::m_spellEffects`), loaded with the first
     /// frame; the casts heard this frame; each slot's entity as the effects
     /// last saw it; the player's own clock for its actions.
@@ -217,6 +227,8 @@ impl Play {
                 match answer {
                     Some(crate::dialog::BoxAnswer::Yes(0, 0x7020000)) => self.accept_invite(),
                     Some(crate::dialog::BoxAnswer::No(0, 0x7020000)) => self.decline_invite(),
+                    Some(crate::dialog::BoxAnswer::Yes(0, 0x50E0000)) => self.session.send_op_byte(0x0041, 5),
+                    Some(crate::dialog::BoxAnswer::Yes(0, 0xA010000)) => self.do_action(0xA010000, 0),
                     _ => {}
                 }
                 if answer.is_some() {
@@ -440,7 +452,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1) };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1) };
         p.take_abilities();
         p
     }
@@ -711,6 +723,10 @@ impl Play {
         }
         if self.has_self() {
             self.auto_attack_tick(walker, now);
+        }
+        // PlayEmote's action on the player's own sprite
+        if let Some(a) = self.emote.take() {
+            walker.set_action(a);
         }
         // UpdateGame: back in play, the next waiting dialog.
         if self.mode == 0
@@ -1218,6 +1234,198 @@ impl Play {
         self.session.send_msg(0x0624, i.id, 1);
     }
 
+    /// What the start menu's stats column and `UpdateLocation` read.
+    fn start_view(&self, walker: &Walker) -> (crate::startmenu::Stats, crate::startmenu::Location) {
+        let st = crate::startmenu::Stats {
+            name: self.dump.player.name.clone(),
+            class: self.dump.player.class as i32,
+            level: self.dump.player.level as i32,
+            hp: self.stats.stat[7],
+            max_hp: self.stats.stat[8],
+            power: self.stats.stat[9],
+            max_power: self.stats.stat[10],
+            ac: self.stats.stat[14],
+            tunar: self.dump.player.p34 as i32,
+            effects: Vec::new(),
+            expansion: net::session::EXPANSION_FLAGS,
+        };
+        let g = walker.scene.grid.as_ref();
+        let p = walker.cam.walk.committed.position;
+        let world = self.dump.player.world as i32;
+        let loc = crate::startmenu::Location {
+            world,
+            pos: [p.x.0, p.y.0, p.z.0],
+            cols: g.map_or(1, |g| g.cols),
+            rows: g.map_or(1, |g| g.rows),
+            cell: g.map_or(1.0, |g| g.cell_size.0),
+            origin: g.map_or([0.0; 3], |g| [g.origin.x.0, g.origin.y.0, g.origin.z.0]),
+            bounds: self.start.as_ref().and_then(|s| s.bounds.get(world as usize).copied().flatten()),
+        };
+        (st, loc)
+    }
+
+    /// `OpenStartMenu(a)` (done with the next HUD frame): the table for the
+    /// bank and expansion, mode 13, auto-attack off, the main menu shown
+    /// (`a` resets it).
+    pub fn open_start_menu(&mut self, reset: bool) {
+        if self.start.is_some() {
+            self.start_open = Some(reset);
+            self.mode = 13;
+            self.auto_attack = false;
+        }
+    }
+
+    /// A key for the start menu (the game's codes, `startmenu::keys`), down
+    /// or up, handled with the next HUD frame.
+    pub fn start_key(&mut self, key: i32, down: bool) {
+        self.start_keys.push((key, down));
+    }
+
+    /// `CloseStartMenu(mode)`.
+    fn close_start_menu(&mut self, mode: i32) {
+        self.mode = mode;
+        if let Some(s) = self.start.as_mut() {
+            s.menu.visible = false;
+        }
+    }
+
+    /// The start menu's waiting work, with the raster: the open, then each
+    /// key to the focused menu; 260 from it closes it, 261 is
+    /// `VIWndGame::OnMessage`'s mode-13 path.
+    fn run_start_menu(&mut self, vui: &vi::ui::Vui, r: &dyn vi::ui::Raster, loc: &crate::startmenu::Location) -> Vec<(u32, i32)> {
+        let now = self.session.now() as i64;
+        let expansion = self.session.expansion;
+        let mut actions = Vec::new();
+        let Some(s) = self.start.as_mut() else { return actions };
+        if let Some(reset) = self.start_open.take() {
+            s.pick(false, expansion);
+            s.menu.visible = true;
+            s.menu.show_main(vui, r, reset, now, loc);
+        }
+        let mut cues = Vec::new();
+        for (key, down) in std::mem::take(&mut self.start_keys) {
+            if !s.menu.visible {
+                continue;
+            }
+            match s.menu.key(vui, r, &s.menus, key, down, now, loc, &mut cues) {
+                crate::startmenu::Up::Back => {
+                    s.menu.visible = false;
+                    actions.push((0, 0));
+                }
+                crate::startmenu::Up::Action(msg, id) => {
+                    s.menu.visible = false;
+                    actions.push((msg, id));
+                }
+                _ => {}
+            }
+        }
+        self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
+        actions
+    }
+
+    /// What came out of the start menu: (0, 0) closed it, else an entry's
+    /// message.
+    fn start_actions(&mut self, actions: Vec<(u32, i32)>) {
+        let now = self.session.now() as i64;
+        for (msg, id) in actions {
+            self.close_start_menu(0);
+            match msg {
+                0 => {}
+                0x0A01_0000 => {
+                    // Quit: word 722 as a Yes/No prompt
+                    let text = self.words.as_ref().map_or_else(Vec::new, |w| crate::ui::wide(w.get(722, 0)));
+                    self.mbox.prompt(&text, 1, 0, 0xA010000, now);
+                    self.mode = 14;
+                }
+                0x0B05_3001 | 0x0B05_3002 | 0x0301_0000 | 0x0B04_0000 | 0x0B05_1000 | 0x0B05_1006 | 0x0B05_1009 | 0x0B05_100B | 0x0B0B_1002 | 0x0801_0000 => {
+                    eprintln!("play: start menu {msg:#x}: its window is not ported");
+                }
+                0x0B05_1007 | 0x0B05_1008 | 0x0B05_100A | 0x0B05_100C | 0x0B0A_0000 | 0x0B0B_0000 | 0x0B0B_0002 | 0x0B0D_0000 | 0x0B0D_0001 | 0x0B0B_1000 | 0x0B0B_1001 => {
+                    eprintln!("play: start menu {msg:#x}: the guild and its windows are not ported");
+                }
+                _ => self.do_action(msg, id),
+            }
+        }
+    }
+
+    /// `VIClient::DoAction`: what an entry's message does (the menus'
+    /// commands; those that open a window not ported say so).
+    pub fn do_action(&mut self, id: u32, arg: i32) {
+        let target = self.target;
+        match id {
+            0x0701_0000 | 0x0704_0000 | 0x0705_0000 | 0x0706_0000 => self.group_action(id),
+            0x0B01_0000 => self.group_changed(0),
+            0x0B02_0000 => self.group_changed(1),
+            0x0B03_0000 => {
+                if self.group.in_group && self.group.count() >= 2 {
+                    self.group_changed(2);
+                } else {
+                    self.show_word(629);
+                }
+            }
+            0x0B03_0001 => self.group_changed(3),
+            0x0B03_0002 => self.show_word(570),
+            0x0508_0000 => {
+                if target != u32::MAX {
+                    self.session.send_op_int(0x0004, target);
+                }
+            }
+            0x0503_0000 | 0x050A_0000 | 0x050B_0000 | 0x050C_0000 | 0x050D_0000 | 0x050E_0000 | 0x050F_0000 | 0x050F_1000 => self.pet_command(id),
+            0x0601_0000 | 0x0602_0000 | 0x0603_0000 | 0x0604_0000 => {
+                // PlayEmote: the opcode; the player's own action follows
+                let k = ((id >> 16) & 0xF) as usize - 1;
+                self.session.send_opcode([30, 66, 67, 68][k]);
+                self.emote = Some([56, 57, 60, 61][k]);
+            }
+            0x0A01_0000 => self.quit = true,
+            0x0B05_2000 => self.session.send_opcode(69),
+            0x0B09_0000 => self.session.send_op_int(123, target),
+            0x0B0E_0000 => self.session.send_opcode(198),
+            0x0B0E_0001 => self.session.send_opcode(222),
+            0x0B0E_0003 => self.session.send_opcode(200),
+            0x0B0E_0006 => self.session.send_op_int(203, target),
+            0x0905_0000 | 0x0509_1004 | 0x0B0E_0002 => {}
+            0x0509_1005 => {
+                let w = self.words.as_ref().map_or_else(String::new, |w| w.get(836, 0).to_string());
+                self.add_chat(format!("{w} 1.108 Protocol=18"), [1.0; 4]);
+            }
+            0x0902_0000 => {
+                let p = self.player.pos;
+                self.add_chat(format!("{:.1} {:.1} {:.1}", p[0], p[1], p[2]), [1.0; 4]);
+            }
+            _ => eprintln!("play: DoAction {id:#x} ({arg}) not ported"),
+        }
+    }
+
+    /// `PetCommand`: op 0x41 with the command, with a pet (else word 1021);
+    /// dismissing asks first (word 830).
+    fn pet_command(&mut self, id: u32) {
+        if self.pet_id == u32::MAX {
+            self.show_word(1021);
+            return;
+        }
+        match id {
+            0x0503_0000 => self.session.send_op_byte(0x41, 0),
+            0x050A_0000 => self.session.send_op_byte(0x41, 1),
+            0x050B_0000 => self.session.send_op_byte(0x41, 2),
+            0x050C_0000 => self.session.send_op_byte(0x41, 3),
+            0x050D_0000 => self.session.send_op_byte(0x41, 4),
+            0x050E_0000 => {
+                let w = self.words.as_ref().map_or_else(String::new, |w| w.get(830, 0).to_string());
+                let now = self.session.now() as i64;
+                self.mbox.prompt(&crate::ui::wide(&format!("{w}?")), 1, 0, 0x050E0000, now);
+                self.mode = 14;
+            }
+            0x050F_0000 => self.session.send_op_byte(0x41, 7),
+            0x050F_1000 => {
+                let mut w = net::stream::Writer::op(0x41);
+                w.u8(8).u32(self.target);
+                self.session.send(&w.data);
+            }
+            _ => {}
+        }
+    }
+
     /// The start menu's group actions (`DoAction`): 0x07010000 invite the
     /// target (`InviteEntity`), 0x07040000 remove it (0x0626), 0x07050000
     /// disband (0x0627), 0x07060000 leave (0x0623).
@@ -1540,6 +1748,7 @@ impl Play {
     pub fn draw_hud(&mut self, ui: &mut render::ui::Ui, walker: &Walker, time_ms: i64) {
         ui.quads.clear();
         let under_liquid = walker.cam.walk.is_under_liquid();
+        let (start_stats, start_loc) = self.start_view(walker);
         let info_text = if self.info_up || self.info_window.open > 0.0 { self.target_info_text() } else { None };
         let me = self.self_id32();
         let find = |id: Option<u32>| self.entities.slots.iter().flatten().find(|e| Some(e.id) == id);
@@ -1584,7 +1793,9 @@ impl Play {
         let now = self.session.now();
         let dt = ((time_ms - self.hud_last).clamp(0, 250)) as f32 / 1000.0;
         self.hud_last = time_ms;
-        if let Some((vui, assets, hud)) = self.hud.as_mut() {
+        let mut actions = Vec::new();
+        if let Some((mut vui_o, assets, mut hud_o)) = self.hud.take() {
+            let (vui, hud) = (&mut vui_o, &mut hud_o);
             vui.time = time_ms;
             let mut r = assets.raster(ui);
             hud.draw(vui, &mut r, &state);
@@ -1603,6 +1814,12 @@ impl Play {
             }
             if self.mode == 14 {
                 self.mbox.draw(vui, &mut r, now as i64);
+            }
+            actions = self.run_start_menu(vui, &r, &start_loc);
+            if let Some(s) = self.start.as_mut() {
+                let mut cues = Vec::new();
+                s.menu.draw(vui, &mut r, &s.menus, now as i64, &start_stats, &mut cues);
+                self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
             }
             // DrawStatus: under water, the breath gauge
             if under_liquid && (self.mode == 0 || self.mode == 36 || self.mode == 38) {
@@ -1647,7 +1864,9 @@ impl Play {
                 };
                 self.hud_menus.draw(vui, &mut r, now as i64, &name);
             }
+            self.hud = Some((vui_o, assets, hud_o));
         }
+        self.start_actions(actions);
     }
 
     /// `DrawTargetInfo`'s text: a player's name, guild, race, title or
