@@ -403,7 +403,7 @@ impl Session {
                 let n = r.u32() as usize;
                 let raw = r.bytes(n * 2);
                 // ReadString(buf, 1024): 511 characters fit.
-                let text = if n < 512 { raw.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect() } else { Vec::new() };
+                let text = if n < 512 { raw.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect() } else { Vec::new() };
                 ev.push(Event::Dialog { id, text });
             }
             0x0020 => {
