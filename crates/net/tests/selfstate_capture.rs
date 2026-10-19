@@ -8,7 +8,7 @@
 //! the value is found by searching floats with the encoder itself, which
 //! shows only that one exists. SKIPs without the capture.
 // The decomp's own literal (WriteQuantized's target-heading range).
-#![allow(clippy::field_reassign_with_default, clippy::needless_range_loop, clippy::excessive_precision)]
+#![allow(clippy::field_reassign_with_default, clippy::needless_range_loop, clippy::excessive_precision, clippy::approx_constant)]
 
 use std::collections::BTreeMap;
 use vi::fpu::{F, Ieee};
