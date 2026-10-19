@@ -331,6 +331,102 @@ impl Vui {
     }
 }
 
+/// What `VIClientText::Expand` reads off the client.
+#[derive(Clone, Debug, Default)]
+pub struct ExpandContext {
+    pub player_name: String,
+    pub level: i32,
+    /// The class's name (WORDS.TXT 165 + class), empty for none.
+    pub class_name: String,
+    pub target_name: String,
+}
+
+/// `VIClientText::ParseToken`: digits make a number, else one letter (or
+/// `& * ( %`) is the token by its code; anything else ends it as 0.
+fn parse_token(s: &[u16], mut p: usize) -> (usize, i32) {
+    let mut n = 0i32;
+    while let Some(&c) = s.get(p) {
+        if c == 0 {
+            break;
+        }
+        if (b'0' as u16..=b'9' as u16).contains(&c) {
+            n = n.wrapping_mul(10).wrapping_add((c - b'0' as u16) as i32);
+            p += 1;
+        } else {
+            let ch = char::from_u32(c as u32).unwrap_or('\0');
+            if ch.is_ascii_alphabetic() || matches!(ch, '&' | '*' | '(' | '%') {
+                n = c as i32;
+                p += 1;
+            }
+            break;
+        }
+    }
+    (p, n)
+}
+
+/// `VIClientText::Expand(dst, size, src, flag)`: a server string's `%`
+/// codes. With `flag`, a letter (or `& * (`, or 7..9) becomes the `|x`
+/// inline-icon code and `%p` the player's name; without, `%1`..`%4` are the
+/// player's name, level, class and the target's name. `%%` is a `%`,
+/// anything else `(?)`. Stops where the next piece no longer fits `size`.
+pub fn expand(src: &[u16], size: usize, flag: bool, ctx: &ExpandContext) -> Vec<u16> {
+    let mut d: Vec<u16> = Vec::new();
+    let mut p = 0;
+    while let Some(&c) = src.get(p) {
+        if c == 0 {
+            break;
+        }
+        p += 1;
+        if c == b'%' as u16 {
+            let (np, tok) = parse_token(src, p);
+            p = np;
+            let piece: String = if flag {
+                match tok {
+                    116 => "|t".into(),
+                    99 => "|c".into(),
+                    120 => "|x".into(),
+                    115 => "|s".into(),
+                    112 => ctx.player_name.clone(),
+                    7 => "|7".into(),
+                    38 => "|&".into(),
+                    8 => "|8".into(),
+                    42 => "|*".into(),
+                    9 => "|9".into(),
+                    40 => "|(".into(),
+                    108 => "|v".into(),
+                    114 => "|V".into(),
+                    117 => "|z".into(),
+                    100 => "|Z".into(),
+                    97 => "|a".into(),
+                    65 => "|A".into(),
+                    37 => "%".into(),
+                    _ => "(?)".into(),
+                }
+            } else {
+                match tok {
+                    1 => ctx.player_name.clone(),
+                    2 => ctx.level.to_string(),
+                    3 => ctx.class_name.clone(),
+                    4 => ctx.target_name.clone(),
+                    37 => "%".into(),
+                    _ => "(?)".into(),
+                }
+            };
+            let piece = wide(&piece);
+            if d.len() + piece.len() < size {
+                d.extend(piece);
+            } else {
+                break;
+            }
+        } else if d.len() + 1 < size {
+            d.push(c);
+        } else {
+            break;
+        }
+    }
+    d
+}
+
 /// `VIUIFrameParam`: (atlas id, flags) for each corner and edge.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FrameParam {
@@ -443,6 +539,19 @@ impl Window {
             _ => {}
         }
         self.open == 1.0 || self.open == 0.0
+    }
+
+    /// `Text(s, x, row, c, f)`: one row of `TextBox`, 640 wide. (It works
+    /// out a faded colour and the row's position and uses neither: the
+    /// caller's colour goes through, as shipped.)
+    pub fn text(&self, vui: &Vui, ui: &mut dyn Raster, s: &[u16], x: i32, row: i32, c: [f32; 4], f: u32) {
+        self.text_box(vui, ui, s, x, row, 640, 1, c, f);
+    }
+
+    /// `CountLines(s, w)`: the rows `s` wraps to at `w` (`TextBox`
+    /// measuring, up to 256).
+    pub fn count_lines(&self, vui: &Vui, ui: &mut dyn Raster, s: &[u16], w: i32) -> i32 {
+        self.text_box(vui, ui, s, 0, 0, w, 256, [0.0, 0.0, 0.0, 1.0], 0xFFFF_FFFF)
     }
 
     /// `AppendEllipsis`: cut `s` until it and "..." fit `w`, then add it.
@@ -785,5 +894,28 @@ impl TextScroll {
             tl[0]
         };
         self.window.draw_text_internal(vui, ui, s, x, y, c, f);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expand_codes() {
+        let ctx = ExpandContext { player_name: "Dab".into(), level: 7, class_name: "Cleric".into(), target_name: "Vaal".into() };
+        let e = |s: &str, f| String::from_utf16_lossy(&expand(&wide(s), 218, f, &ctx));
+        assert_eq!(e("Hail, %p! Press %x to go. 100%%", true), "Hail, Dab! Press |x to go. 100%");
+        assert_eq!(e("%7 %& %8 %* %9 %( %l%r%u%d%a%A", true), "|7 |& |8 |* |9 |( |v|V|z|Z|a|A");
+        // A letter (or % & * () after the digits replaces the number.
+        assert_eq!(e("%7%&", true), "%&");
+        assert_eq!(e("%12x", true), "|x");
+        assert_eq!(e("%1 the level %2 %3 sees %4.", false), "Dab the level 7 Cleric sees Vaal.");
+        // Unknown and empty tokens, and a number token under the flag.
+        assert_eq!(e("%q %! %5", true), "(?) (?)! (?)");
+        assert_eq!(e("%z", false), "(?)");
+        // A piece that does not fit stops the copy (size counts the NUL).
+        assert_eq!(String::from_utf16_lossy(&expand(&wide("abc%pdef"), 6, true, &ctx)), "abc");
+        assert_eq!(String::from_utf16_lossy(&expand(&wide("abcdefgh"), 5, true, &ctx)), "abcd");
     }
 }

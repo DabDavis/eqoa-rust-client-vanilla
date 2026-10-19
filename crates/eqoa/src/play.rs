@@ -99,7 +99,101 @@ pub struct Play {
     pub channel: u8,
     /// `m_p4F0B8`: who last sent a tell.
     pub reply_name: String,
+    /// `VIWndGame::m_mode`: 0 playing, 9 a dialog showing.
+    pub mode: i32,
+    /// `m_dialogs`: dialogs waiting while another mode is up (at most 11).
+    dialogs: std::collections::VecDeque<Vec<u16>>,
+    /// `VIWndPrivChat`: the dialog box.
+    priv_chat: PrivChat,
 }
+
+/// `VIWndPrivChat`: an NPC's words in a box in the middle of the screen,
+/// "|x Close" under them.
+#[derive(Default)]
+struct PrivChat {
+    text: Vec<u16>,
+    rows: i32,
+    window: vi::ui::Window,
+    /// The focus arrived and the window is to be sized (`OnMessage` 295).
+    focus: bool,
+}
+
+impl PrivChat {
+    fn set_text(&mut self, s: &[u16]) {
+        self.text = s.to_vec();
+        self.rows = 0;
+        self.focus = true;
+    }
+
+    fn draw(&mut self, vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster) {
+        if self.focus {
+            self.focus = false;
+            self.window.init(vui, r, [320, 224], 400, 16, 1);
+            self.rows = self.window.count_lines(vui, r, &self.text, 360) + 2;
+            self.window.init(vui, r, [320, 224], 400, self.rows, 1);
+            if self.window.is_open() {
+                self.window.close(true);
+            }
+            self.window.open(false);
+        }
+        self.window.draw(vui, r);
+        let text = self.text.clone();
+        self.window.text_box(vui, r, &text, 20, 0, 360, self.rows - 2, [0.8, 0.8, 0.8, 1.0], 3);
+        let s = vi::ui::wide(&format!("|x{}", vui.words.get(280, vui.language)));
+        self.window.text(vui, r, &s, 20, self.rows - 1, [1.0; 4], 1);
+    }
+}
+
+impl Play {
+    /// `ShowDialog`: expanded (`%p` and the icon codes), shown now when
+    /// nothing else is up, else queued.
+    fn show_dialog(&mut self, text: &[u16]) {
+        let ctx = vi::ui::ExpandContext { player_name: self.dump.player.name.clone(), ..Default::default() };
+        let buf = vi::ui::expand(text, 218, true, &ctx);
+        if self.mode == 0 {
+            self.open_dialog(&buf);
+        } else if self.dialogs.len() < 11 {
+            self.dialogs.push_back(buf);
+        }
+    }
+
+    /// `VIWndGame::OpenDialog`.
+    fn open_dialog(&mut self, text: &[u16]) {
+        self.priv_chat.set_text(text);
+        self.mode = 9;
+    }
+
+    /// The dialog box answered (279): back to play.
+    pub fn close_dialog(&mut self) {
+        if self.mode == 9 {
+            self.mode = 0;
+        }
+    }
+
+    /// `InteractWithTarget`: by the target's npc flags, 0x004C (1), 0x124D
+    /// (2) or 0x0061 (8); a player or a corpse opens the details box (not
+    /// ported); anyone else is talked to (0x0004).
+    pub fn interact_with_target(&mut self) {
+        let Some(e) = self.entities.slots.iter().flatten().find(|e| e.id == self.target) else { return };
+        let Some(c) = &e.creature else { return };
+        let f = c.npc_flags;
+        let op = if f & 1 != 0 {
+            0x004C
+        } else if f & 2 != 0 {
+            0x124D
+        } else if f & 8 != 0 {
+            0x0061
+        } else if c.p256 == 2 || c.p256 == 3 {
+            return;
+        } else {
+            0x0004
+        };
+        let mut w = net::stream::Writer::op(op);
+        w.u32(self.target);
+        self.session.send(&w.data);
+    }
+}
+
 
 /// A creature's model as `Apply` dresses it: the look on its text slots, the
 /// items and helm on their nodes.
@@ -258,7 +352,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new() }
+        Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: PrivChat::default() }
     }
 
     fn self_id32(&self) -> Option<u32> {
@@ -274,6 +368,24 @@ impl Play {
             match e {
                 Event::TargetInfo { disposition, .. } => self.target_info = Some(disposition),
                 Event::ReplyName(n) => self.reply_name = n,
+                Event::Dialog { text, .. } => self.show_dialog(&text),
+                Event::LevelExp { level, exp } => {
+                    self.dump.player.level = level;
+                    self.dump.player.exp = exp;
+                }
+                Event::Action { id, action } => {
+                    // Msg 0x0775: the player's own only for action 34.
+                    if Some(id) == self.self_id32() {
+                        if action == 34 {
+                            walker.set_action(34);
+                        }
+                    } else if let Some(slot) = self.entities.slots.iter().position(|e| e.as_ref().is_some_and(|e| e.id == id))
+                        && let Some(p) = self.puppets[slot].as_mut()
+                        && let Some(cs) = p.sprite.as_mut()
+                    {
+                        cs.set_action(action as i32, &p.anims, &mut p.rand);
+                    }
+                }
                 Event::PlayerP2C(v) => self.dump.player.p2c = v as i64,
                 Event::State { channel: 0x42, data } => {
                     self.stats = net::dump::read_stats(&mut net::stream::Reader::new(&data));
@@ -332,6 +444,12 @@ impl Play {
         }
         if self.has_self() {
             self.auto_attack_tick(walker, now);
+        }
+        // UpdateGame: back in play, the next waiting dialog.
+        if self.mode == 0
+            && let Some(d) = self.dialogs.pop_front()
+        {
+            self.open_dialog(&d);
         }
         let self_id = self.session.self_id;
         // UpdateCreatures / VICreatureEntity::Walk: a creature with its own
@@ -521,7 +639,7 @@ impl Play {
 
     /// Targets the creature called `name` (as a click on it would), 0x0010.
     pub fn target_by_name(&mut self, name: &str) -> bool {
-        let Some(id) = self.entities.slots.iter().flatten().find(|e| e.creature.as_ref().is_some_and(|c| c.name == name)).map(|e| e.id) else {
+        let Some(id) = self.entities.slots.iter().flatten().find(|e| e.creature.as_ref().is_some_and(|c| c.name.trim() == name.trim())).map(|e| e.id) else {
             return false;
         };
         self.target = id;
@@ -851,6 +969,9 @@ impl Play {
                     c.text.add_text(&crate::ui::wide(&text), color, at, |s| vi::ui::Raster::string_width(rr, s));
                 }
                 c.draw(vui, &mut r, now, dt);
+            }
+            if self.mode == 9 {
+                self.priv_chat.draw(vui, &mut r);
             }
         }
     }

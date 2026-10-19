@@ -184,6 +184,8 @@ impl Side {
             25 => self.win[k].draw_text_internal(v, r, s, a[1], a[2], col, a[3] as u32),
             26 => return self.win[k].text_width(v, r, s),
             27 => return self.win[k].open.to_bits() as i32,
+            28 => self.win[k].text(v, r, s, a[1], a[2], col, a[3] as u32),
+            29 => return self.win[k].count_lines(v, r, s, a[1]),
             30 => self.scroll[j].init(v, r, [a[1], a[2]], a[3], a[4], a[5]),
             31 => {
                 self.scroll[j].window.open(true);
@@ -269,6 +271,12 @@ fn script() -> Vec<Call> {
         }
     }
     v.push(call(24, &[3, 25, 0, 417, 1, 0], &[1.0, 1.0, 1.0, 1.0], "short"));
+    // Text and CountLines: the dialog box's two.
+    for w in [360, 200, 90] {
+        v.push(call(29, &[3, w], &[], long));
+    }
+    v.push(call(28, &[3, 20, 4], &[1.0, 1.0, 1.0, 1.0], "|xClose"));
+    v.push(call(28, &[3, 20, 2], &[0.8, 0.8, 0.8, 0.5], long));
     v.push(call(24, &[3, 25, 0, 417, 1, 0], &[1.0, 1.0, 1.0, 1.0], ""));
     // Inline icons, the pulsing ones at two clocks, and widths.
     let icons = "a|tb|sc|cd|xe|>f|<g|}h|{i|aj|Ak|7l|&m|8n|*o|9p|(q|zr|Zs|vt|Vu|-dim|+back||bar|qx|ey|wz|ri|yo|iu|uo|o";

@@ -268,9 +268,19 @@ pub fn shot_with(
         let say = std::env::var("EQOA_SAY").ok();
         let tab = std::env::var_os("EQOA_TAB").is_some();
         let attack = std::env::var_os("EQOA_ATTACK").is_some();
+        // `EQOA_WALK=fwd,strafe,orbit,ms`: those controls for the first ms.
+        let walk: Option<(Controls, i64)> = std::env::var("EQOA_WALK").ok().and_then(|w| {
+            let v: Vec<f32> = w.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+            (v.len() == 4).then(|| (Controls { fwd: v[0], strafe: v[1], orbit: v[2], pitch: 0.0 }, v[3] as i64))
+        });
         while t < script.ms {
             t += 16;
-            walker.frame(script.controls, t);
+            let controls = match walk {
+                Some((c, until)) if t <= until => c,
+                Some(_) => Controls::default(),
+                None => script.controls,
+            };
+            walker.frame(controls, t);
             if let Some(p) = &mut play {
                 // `EQOA_SAY=<text>`: said a second in.
                 if t == 1008
@@ -289,6 +299,10 @@ pub fn shot_with(
                     let (proj, v) = walker.view(aspect);
                     let dir = Vec3::from(walker.eye.direction.to_array());
                     p.cycle_target(walker.eye_position(), dir, proj * v);
+                }
+                // `EQOA_INTERACT`: Q just after targeting.
+                if t == 2096 && std::env::var_os("EQOA_INTERACT").is_some() {
+                    p.interact_with_target();
                 }
                 // `EQOA_ATTACK`: attack held from just after that to the end.
                 if t == 2096 && attack {
@@ -597,8 +611,18 @@ impl ApplicationHandler for App {
                         held.clear();
                     };
                     match (&mut p.typing, &event.logical_key) {
+                        // A dialog up: Enter answers it (279).
+                        (None, Key::Named(NamedKey::Enter)) if p.mode == 9 => {
+                            p.close_dialog();
+                            return;
+                        }
                         (None, Key::Named(NamedKey::Enter)) => {
                             open(p, &mut self.held, "");
+                            return;
+                        }
+                        // Q: InteractWithTarget.
+                        (None, Key::Character(c)) if c.eq_ignore_ascii_case("q") => {
+                            p.interact_with_target();
                             return;
                         }
                         (None, Key::Character(c)) if c.as_str() == "/" => {

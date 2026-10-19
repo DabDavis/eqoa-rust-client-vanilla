@@ -82,6 +82,12 @@ pub enum Event {
     /// stops before the trailing token, so it is taken as answered whatever
     /// the token, as eqoa-port's `VI_HOST_ONLY` does.
     TargetInfo { disposition: u8, b: u8, c: u8, title: String, guild: String },
+    /// 0x0046: a dialog (an NPC's words), raw (`ShowDialog` expands it).
+    Dialog { id: u32, text: Vec<u16> },
+    /// 0x0020: the player's level and experience.
+    LevelExp { level: i64, exp: i64 },
+    /// 0x0775: an entity plays an action (`VICSprite::SetAction`).
+    Action { id: u32, action: u8 },
     /// 0x07A3: who last sent a tell (`/reply` answers them).
     ReplyName(String),
     /// 0x00D9: the player's +0x2C.
@@ -392,6 +398,22 @@ impl Session {
                 self.send(&w.data);
             }
             0x00F8 => ev.push(Event::Speed(r.f32())),
+            0x0046 => {
+                let id = r.u32();
+                let n = r.u32() as usize;
+                let raw = r.bytes(n * 2);
+                // ReadString(buf, 1024): 511 characters fit.
+                let text = if n < 512 { raw.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect() } else { Vec::new() };
+                ev.push(Event::Dialog { id, text });
+            }
+            0x0020 => {
+                let level = r.signed();
+                ev.push(Event::LevelExp { level, exp: r.signed() });
+            }
+            0x0775 => {
+                let id = r.u32();
+                ev.push(Event::Action { id, action: r.u8() });
+            }
             0x07A3 => ev.push(Event::ReplyName(String::from_utf8_lossy(&r.string(24)).into_owned())),
             0x00D9 => ev.push(Event::PlayerP2C(r.u32() as i32)),
             0x0010 => {
