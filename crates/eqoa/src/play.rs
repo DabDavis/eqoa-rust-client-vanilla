@@ -96,6 +96,12 @@ pub struct Play {
     pub hud: Option<(crate::ui::Vui, crate::ui::UiAssets, crate::hud::Hud)>,
     /// `m_targetInfoValid` / `m_targetDisposition`, from 0x0010.
     pub target_info: Option<u8>,
+    /// 0x0010's title and guild (`m_p4FCA8`, `m_p4FC28`).
+    target_title: String,
+    target_guild: String,
+    /// `m_p678`: the target's info window wanted (Q held on a player).
+    pub info_up: bool,
+    info_window: vi::ui::Window,
     /// Chat lines waiting for the chat box, with when they came.
     chat_pending: Vec<(String, [f32; 4], u32)>,
     /// The chat box (`VIWndChat`), with the HUD.
@@ -231,6 +237,7 @@ impl Play {
         } else if f & 8 != 0 {
             0x0061
         } else if c.p256 == 2 || c.p256 == 3 {
+            self.info_up = true;
             return;
         } else {
             0x0004
@@ -399,7 +406,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None };
         p.take_abilities();
         p
     }
@@ -415,7 +422,11 @@ impl Play {
         let mut new_model = None;
         for e in self.session.pump() {
             match e {
-                Event::TargetInfo { disposition, .. } => self.target_info = Some(disposition),
+                Event::TargetInfo { disposition, title, guild, .. } => {
+                    self.target_info = Some(disposition);
+                    self.target_title = title;
+                    self.target_guild = guild;
+                }
                 Event::ReplyName(n) => self.reply_name = n,
                 Event::Dialog { text, .. } => self.show_dialog(&text),
                 Event::DialogBox { id, text, options } => self.dialog_box(id, &text, &options),
@@ -538,6 +549,8 @@ impl Play {
                 Event::PlayerP2C(v) => self.dump.player.p2c = v as i64,
                 Event::State { channel: 0x42, data } => {
                     self.stats = net::dump::read_stats(&mut net::stream::Reader::new(&data));
+                    // the same m_player.m_p30 the dump set (the breath gauge's)
+                    self.dump.player.p30 = self.stats.p30;
                 }
                 Event::State { channel, data } if (channel as usize) < SLOTS => {
                     let self_id = self.session.self_id;
@@ -1178,6 +1191,8 @@ impl Play {
     /// The HUD's quads for this frame (`VIWndGame::OnDrawSelf`).
     pub fn draw_hud(&mut self, ui: &mut render::ui::Ui, walker: &Walker, time_ms: i64) {
         ui.quads.clear();
+        let under_liquid = walker.cam.walk.is_under_liquid();
+        let info_text = if self.info_up || self.info_window.open > 0.0 { self.target_info_text() } else { None };
         let me = self.self_id32();
         let find = |id: Option<u32>| self.entities.slots.iter().flatten().find(|e| Some(e.id) == id);
         let me_e = find(me);
@@ -1218,6 +1233,35 @@ impl Play {
             if self.mode == 7 {
                 self.response.draw(vui, &mut r);
             }
+            // DrawStatus: under water, the breath gauge
+            if under_liquid && (self.mode == 0 || self.mode == 36 || self.mode == 38) {
+                let at = [430, 50];
+                vui.draw_word_ex(&mut r, 911, at[0], at[1], [1.0; 4], true);
+                crate::hud::draw_gauge(vui, &mut r, 9, 136, [at[0], at[1] + 19], true, self.dump.player.p30 as f32 / 255.0);
+            }
+            // the target's info window
+            if self.info_up {
+                self.info_window.open(false);
+            } else {
+                self.info_window.close(false);
+            }
+            if self.info_window.is_open() || self.info_window.is_opening() || self.info_window.is_closing() {
+                let w = &mut self.info_window;
+                match info_text {
+                    None => w.close(true),
+                    Some(text) => {
+                        let text = crate::ui::wide(&text);
+                        let lines = w.count_lines(vui, &mut r, &text, 155);
+                        w.init(vui, &r, [500, 235], 195, lines, 1);
+                        if text.is_empty() {
+                            w.close(true);
+                        }
+                        w.draw(vui, &mut r);
+                        let c = [1.0, 1.0, 1.0, w.open];
+                        w.text_box(vui, &mut r, &text, 20, 0, w.size[0] - 40, lines, c, 3);
+                    }
+                }
+            }
             // UpdateQuickBars, then the menu up (the HUD's, in play)
             if self.mode == 0 {
                 self.hud_menus.build(&self.abilities, &self.dump.inventory.items);
@@ -1235,7 +1279,31 @@ impl Play {
         }
     }
 
-    /// The target's name, for the screen (the target window is not ported).
+    /// `DrawTargetInfo`'s text: a player's name, guild, race, title or
+    /// class and level (the guild and title with 0x0010's answer), a
+    /// creature's name and level; `None` closes the window.
+    fn target_info_text(&self) -> Option<String> {
+        let e = self.entities.slots.iter().flatten().find(|e| e.id == self.target)?;
+        let c = e.creature.as_ref()?;
+        let word = |id: i32| self.words.as_ref().map_or(String::new(), |w| w.get(id, 0).to_string());
+        // GetRace / GetClass: out of range is entry 0; races 10-20 are empty
+        const RACE_WORDS: [i32; 10] = [183, 185, 186, 187, 188, 189, 191, 192, 193, 190];
+        let race = if (c.race as usize) < 21 { RACE_WORDS.get(c.race as usize).copied().unwrap_or(-1) } else { 183 };
+        let race = word(race);
+        let class = word(if c.class < 15 { 165 + c.class as i32 } else { 165 });
+        let level = format!("{} {}", word(503), c.level);
+        match c.p256 {
+            2 => {
+                let (guild, title) = if self.target_info.is_some() { (self.target_guild.as_str(), self.target_title.as_str()) } else { ("", "") };
+                let rank = if title.is_empty() { class.as_str() } else { title };
+                Some(if guild.is_empty() { format!("{}\n{race}\n{rank}\n{level}", c.name) } else { format!("{}\n{guild}\n{race}\n{rank}\n{level}", c.name) })
+            }
+            3 => Some(format!("{}\n{level}", c.name)),
+            _ => None,
+        }
+    }
+
+    /// The target's name, for the screen.
     pub fn target_name(&self) -> Option<String> {
         self.entities.slots.iter().flatten().find(|e| e.id == self.target).and_then(|e| e.creature.as_ref()).map(|c| c.name.clone())
     }

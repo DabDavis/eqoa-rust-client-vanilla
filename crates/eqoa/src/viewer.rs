@@ -796,6 +796,14 @@ impl ApplicationHandler for App {
                 if self.play.as_ref().is_some_and(|p| p.typing.is_some()) {
                     return;
                 }
+                // Q released: the target's info window closes (`OnKeyUp` 81).
+                if let (Some(p), Key::Character(c)) = (self.play.as_mut(), &event.logical_key)
+                    && c.eq_ignore_ascii_case("q")
+                    && event.state == ElementState::Released
+                {
+                    p.info_up = false;
+                    return;
+                }
                 // Space: attack, held (`ToggleAutoAttack` / `MaybeStopAutoAttack`).
                 if let (Some(p), Key::Named(NamedKey::Space)) = (self.play.as_mut(), &event.logical_key) {
                     if event.state == ElementState::Pressed && !event.repeat {
