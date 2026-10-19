@@ -5,9 +5,11 @@
 //! results in 0x0579) and `VIWndGuild` (the roster window, modes 20 and 21:
 //! six columns, eleven rows, the member menu and its confirmation box).
 //!
-//! As shipped: the invitation box's yes (268) DECLINES and its no, cancel or
-//! 45-second timeout (260) ACCEPTS (`VIWndGuild::OnMessage`, byte-exact in the
-//! decomp).
+//! The invitation box's yes (268) sends sub 9 and its no, cancel or 45-second
+//! timeout (260) sub 10 with 1; the busy and already-in-a-guild refusals are
+//! sub 10 with 2 and 4. So 9 is the JOIN and 10 the refusal, and the decomp's
+//! provisional names for the two senders (`Decline` for 9, `Accept` for 10)
+//! are the wrong way round; the behaviour is the game's.
 
 use crate::client_image::Menus;
 use crate::dialog::{BoxAnswer, Key, MBox};
@@ -297,16 +299,18 @@ impl Cmds {
         w.data
     }
 
-    /// 9 `Decline`: the inviter's id; the invitation is gone.
-    pub fn decline(&mut self) -> Vec<u8> {
+    /// 9 (the decomp's `Decline`): join, with the inviter's id; the
+    /// invitation is gone.
+    pub fn join(&mut self) -> Vec<u8> {
         let mut w = cmd(9);
         w.u32(self.inviter);
         self.inviter = u32::MAX;
         w.data
     }
 
-    /// 10 `Accept`: the inviter's id and 1 (2 busy, 4 in a guild).
-    pub fn answer(&mut self, how: u8) -> Vec<u8> {
+    /// 10 (the decomp's `Accept`): refuse, with the inviter's id and why (1
+    /// declined, 2 busy, 4 in a guild).
+    pub fn refuse(&mut self, how: u8) -> Vec<u8> {
         let mut w = cmd(10);
         w.u32(self.inviter).u8(how);
         self.inviter = u32::MAX;
@@ -321,9 +325,9 @@ impl Cmds {
         self.name = cstr(&r.string(24));
         self.guild = r.wide(64);
         if !idle {
-            Invited::Busy(self.answer(2))
+            Invited::Busy(self.refuse(2))
         } else if guild.in_guild {
-            Invited::InGuild(self.answer(4))
+            Invited::InGuild(self.refuse(4))
         } else {
             Invited::Show
         }
@@ -423,9 +427,9 @@ pub enum Up {
     /// a member operation confirmed (4 promote, 5 demote, 6 kick) with the
     /// member's id
     Member(u8, i32),
-    /// the invitation box: 9 decline (its yes) or 10 accept (its no)
-    Decline,
-    Accept,
+    /// the invitation box: its yes joins (9), its no refuses (10, 1)
+    Join,
+    Refuse,
     /// a text to the chat (`ShowText(word)`) with the window kept
     Text(i32),
     /// "not in a guild": sound 8, word 570, `HideInvite`
@@ -515,8 +519,8 @@ impl WndGuild {
     fn answered(&mut self, a: BoxAnswer, g: &Guild) -> Option<Up> {
         self.mbox_visible = false;
         match a {
-            BoxAnswer::Yes(1, _) => Some(Up::Decline),
-            BoxAnswer::No(1, _) => Some(Up::Accept),
+            BoxAnswer::Yes(1, _) => Some(Up::Join),
+            BoxAnswer::No(1, _) => Some(Up::Refuse),
             BoxAnswer::Yes(p1, _) => {
                 let id = g.member(self.sel).map_or(-1, |m| m.id);
                 let sub = match p1 as u32 {
@@ -850,7 +854,7 @@ mod tests {
         let mut c = Cmds::default();
         assert_eq!(c.recv_057a(&inv.data, &g, true).0, Some(Invited::Show));
         assert_eq!((c.inviter, c.name.as_str(), c.guild.as_str()), (0x1234, "Kim", "Knights"));
-        assert_eq!(c.decline(), vec![0x78, 0x05, 9, 0x34, 0x12, 0, 0]);
+        assert_eq!(c.join(), vec![0x78, 0x05, 9, 0x34, 0x12, 0, 0]);
         assert_eq!(c.inviter, u32::MAX);
         assert_eq!(c.recv_057a(&inv.data, &g, false).0, Some(Invited::Busy(vec![0x78, 0x05, 10, 0x34, 0x12, 0, 0, 2])));
         let member = Guild { in_guild: true, ..Default::default() };
@@ -865,17 +869,17 @@ mod tests {
         assert_eq!(Cmds::recv_0579(&[9, 5]), vec![], "an op with no case says nothing");
     }
 
-    /// The invitation box as shipped: yes declines, no (and the timeout)
-    /// accepts; a member box's yes sends the operation, its no nothing.
+    /// The invitation box: yes joins (9), no and the timeout refuse (10);
+    /// a member box's yes sends the operation, its no nothing.
     #[test]
-    fn the_invitation_box_is_inverted() {
+    fn the_invitation_box_answers() {
         let mut w = WndGuild::default();
         let g = Guild::default();
         let c = Cmds { name: "Kim".into(), guild: "K".into(), ..Default::default() };
         w.show_invite(&|_| String::new(), &c, 0);
         assert_eq!(w.mbox.timeout, 45000);
-        assert_eq!(w.answered(BoxAnswer::Yes(1, 0), &g), Some(Up::Decline));
-        assert_eq!(w.answered(BoxAnswer::No(1, 0), &g), Some(Up::Accept));
+        assert_eq!(w.answered(BoxAnswer::Yes(1, 0), &g), Some(Up::Join));
+        assert_eq!(w.answered(BoxAnswer::No(1, 0), &g), Some(Up::Refuse));
         assert_eq!(w.answered(BoxAnswer::Yes(0x0B05_1005, 7), &g), Some(Up::Member(6, -1)));
         assert_eq!(w.answered(BoxAnswer::No(0x0B05_1005, 7), &g), None);
     }

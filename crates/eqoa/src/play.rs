@@ -2898,17 +2898,17 @@ impl Play {
                 }
                 Up::Member(sub, id) => self.session.send(&crate::guild::Cmds::member_op(sub, id)),
                 Up::Text(w) => self.show_word(w),
-                // Decline/Accept: CloseGuild (mode 0), then the answer
-                Up::Decline => {
+                // the answer: CloseGuild (mode 0), then 9 (join) or 10 (refuse)
+                Up::Join => {
                     self.guild_wnd.mbox_visible = false;
                     self.mode = 0;
-                    let m = self.guild_cmds.decline();
+                    let m = self.guild_cmds.join();
                     self.session.send(&m);
                 }
-                Up::Accept => {
+                Up::Refuse => {
                     self.guild_wnd.mbox_visible = false;
                     self.mode = 0;
-                    let m = self.guild_cmds.answer(1);
+                    let m = self.guild_cmds.refuse(1);
                     self.session.send(&m);
                 }
             }
