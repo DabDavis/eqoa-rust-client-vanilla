@@ -1784,6 +1784,9 @@ impl Play {
     fn run_start_menu(&mut self, vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster, loc: &crate::startmenu::Location) -> Vec<(u32, i32)> {
         let now = self.session.now() as i64;
         let expansion = self.session.expansion;
+        // OpenStartMenu: the bank's tables when the bank has the auction
+        // (GetBank()->GetP78CC())
+        let bank_tables = self.dump.bank.p78cc;
         let mut actions = Vec::new();
         let Some(s) = self.start.as_mut() else { return actions };
         let attack_words = s.attack_words.clone();
@@ -1808,7 +1811,7 @@ impl Play {
         };
         let mut outs = Vec::new();
         if let Some(reset) = self.start_open.take() {
-            s.pick(false, expansion);
+            s.pick(bank_tables, expansion);
             s.menu.visible = true;
             s.menu.show_main(vui, r, reset, now, loc);
         }
@@ -2451,6 +2454,8 @@ impl Play {
     pub fn do_action(&mut self, id: u32, arg: i32) {
         let target = self.target;
         match id {
+            // VIBankControl::IsCommand / Do: the auction search
+            0xA801_0000 | 0xA802_0000 | 0xA803_0000 => self.open_auction_search(id),
             0x0701_0000 | 0x0704_0000 | 0x0705_0000 | 0x0706_0000 => self.group_action(id),
             0x0B01_0000 => self.group_changed(0),
             0x0B02_0000 => self.group_changed(1),

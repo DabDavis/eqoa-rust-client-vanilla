@@ -366,7 +366,7 @@ pub fn can_sell(it: &NetItem) -> bool {
 }
 
 /// `atoi`: blanks, a sign, the digits.
-fn atoi(s: &str) -> i32 {
+pub fn atoi(s: &str) -> i32 {
     let t = s.trim_start();
     let (neg, t) = match t.as_bytes().first() {
         Some(b'-') => (true, &t[1..]),

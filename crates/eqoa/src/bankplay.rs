@@ -16,25 +16,46 @@ pub struct BankPlay {
     /// the auction's half (`VIBankControl`'s search state)
     pub auction: crate::auction::Auction,
     wnd: Bank,
+    /// `VIWndAuctionSearch` (mode 39) and the kind it was opened for
+    search: crate::auctionwnd::SearchWnd,
+    search_open: Option<u32>,
     open: bool,
     keys: Vec<(i32, bool)>,
 }
 
 impl Default for BankPlay {
     fn default() -> Self {
-        BankPlay { state: 0, auction: crate::auction::Auction::new(), wnd: Bank::default(), open: false, keys: Vec::new() }
+        BankPlay { state: 0, auction: crate::auction::Auction::new(), wnd: Bank::default(), search: Default::default(), search_open: None, open: false, keys: Vec::new() }
     }
 }
 
 impl Play {
-    /// The bank window has the keys (mode 11).
+    /// The bank window or the auction search has the keys (modes 11, 39).
     pub fn bank_owns(&self) -> bool {
-        self.mode == 11
+        self.mode == 11 || self.mode == 39
+    }
+
+    /// `VIBankControl::Do` (0xA8010000..0xA8030000 from the start menu):
+    /// `VIWndGame::OpenAuctionSearch`, mode 39.
+    pub(super) fn open_auction_search(&mut self, kind: u32) {
+        self.mode = 39;
+        self.bank.search_open = Some(kind);
+    }
+
+    /// `CloseAuctionSearch`: the page and the one before cleared, the start
+    /// menu again.
+    fn close_auction_search(&mut self) {
+        self.bank.auction.clear_results();
+        self.bank.auction.clear_saved();
+        if self.mode == 39 {
+            self.mode = 0;
+        }
+        self.open_start_menu(false);
     }
 
     /// The auction form's editor has the keyboard.
     pub fn bank_typing(&self) -> bool {
-        self.mode == 11 && self.bank.wnd.typing()
+        (self.mode == 11 && self.bank.wnd.typing()) || (self.mode == 39 && self.bank.search.typing())
     }
 
     /// A key for the bank, handled with the next HUD frame.
@@ -126,6 +147,17 @@ impl Play {
             let auction = self.dump.bank.p78cc;
             self.bank.wnd.open(vui, r, auction);
         }
+        if let Some(kind) = self.bank.search_open.take() {
+            let now = vui.time;
+            if let Some(req) = self.bank.search.open(vui, r, kind, &mut self.bank.auction, &self.dump.bank, now) {
+                self.session.send(&req);
+                self.bank.state = 5;
+            }
+        }
+        if self.mode == 39 {
+            self.run_auction_search(vui, r);
+            return;
+        }
         if self.mode != 11 {
             self.bank.keys.clear();
             return;
@@ -194,6 +226,41 @@ impl Play {
                 }
                 BankOut::CannotSell => {
                     let text = self.words.as_ref().map_or_else(String::new, |w| w.get(1727, 0).to_string());
+                    self.add_chat(text, [1.0, 0.25, 0.25, 1.0]);
+                }
+            }
+        }
+    }
+
+    /// The auction search's keys, drawing and requests.
+    fn run_auction_search(&mut self, vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster) {
+        let flags = net::session::EXPANSION_FLAGS;
+        let pl = &self.dump.player;
+        let (class, race, level, id) = (pl.class, pl.race, pl.level, pl.id);
+        let icon = |it: &net::dump::NetItem| crate::inventory::item_icon(it, flags) as i32;
+        let can_use = |it: &net::dump::NetItem| crate::inventory::can_use(it, class, race, level);
+        let mut cues = Vec::new();
+        let mut out = Vec::new();
+        let b = &mut self.bank;
+        let now = self.session.now() as i64;
+        for (k, down) in std::mem::take(&mut b.keys) {
+            let v = crate::auctionwnd::View { bank: &self.dump.bank, idle: b.state == 0, searching: b.state == 5, player: id, now, icon: &icon, can_use: &can_use };
+            b.search.key(vui, r, &mut b.auction, &v, k, down, &mut cues, &mut out);
+            for o in &out {
+                if let crate::auctionwnd::SearchOut::Send(_, st) = o {
+                    b.state = *st;
+                }
+            }
+        }
+        let v = crate::auctionwnd::View { bank: &self.dump.bank, idle: b.state == 0, searching: b.state == 5, player: id, now, icon: &icon, can_use: &can_use };
+        b.search.draw(vui, r, &b.auction, &v, &mut cues);
+        self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
+        for o in out {
+            match o {
+                crate::auctionwnd::SearchOut::Send(msg, _) => self.session.send(&msg),
+                crate::auctionwnd::SearchOut::Close => self.close_auction_search(),
+                crate::auctionwnd::SearchOut::Red(id) => {
+                    let text = self.words.as_ref().map_or_else(String::new, |w| w.get(id, 0).to_string());
                     self.add_chat(text, [1.0, 0.25, 0.25, 1.0]);
                 }
             }
