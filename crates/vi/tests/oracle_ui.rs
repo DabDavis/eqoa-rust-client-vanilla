@@ -214,6 +214,10 @@ impl Side {
             17 => v.blit_studded_horz(r, [a[0], a[1]], a[2], a[3], a[4], a[5], a[6], x[0], a[7] as u32),
             18 => v.blit_vert_bar(r, [a[0], a[1]], a[2], a[3], a[4], a[5], a[6], x[0]),
             19 => v.blit_bar3(r, s, col, [a[0], a[1]], a[2], a[3], a[4], a[5], a[6], x[4], a[7] as u32, a[8] != 0),
+            70 => self.win[k].tick_u(v, r, a[1], a[2], a[3] != 0),
+            71 => self.win[k].tick_d(v, r, a[1], a[2], a[3] != 0),
+            72 => self.win[k].draw_frame(v, r, a[1], a[2], a[3], a[4], a[5] as u32),
+            73 => self.win[k].draw_frame_vscroll(v, r, a[1], a[2], a[3], a[4], x[0]),
             36 => self.win[k].draw_vscroll(v, r, [a[1], a[2]], a[3], x[0]),
             41 => {
                 self.studs = fp;
@@ -294,6 +298,26 @@ fn script() -> Vec<Call> {
     v.push(call(21, &[1, 1], &[], ""));
     for t in [-0.5, 0.0, 0.25, 0.999, 1.0, 1.5] {
         v.push(call(36, &[1, 126, 9, 268, 0], &[t], ""));
+    }
+    // The inspect and quantity windows' frames and ticks, opening and open,
+    // at two clocks.
+    v.push(call(20, &[2, 320, 170, 470, 17, 1], &[], ""));
+    for (open, t) in [(0, 0), (1, 0), (1, 377)] {
+        v.push(call(21, &[2, open], &[], ""));
+        v.push(call(23, &[2], &[], ""));
+        v.push(call(40, &[t], &[], ""));
+        for (row, rows) in [(0, 15), (2, 3)] {
+            for f in [0, 0x20, 0x40, 0x60] {
+                v.push(call(72, &[2, 20, row, 420, rows, f], &[], ""));
+            }
+            for tt in [-0.1, 0.0, 0.5, 1.0, 2.0] {
+                v.push(call(73, &[2, 20, row, 420, rows], &[tt], ""));
+            }
+        }
+        for x in [100, 117, 134] {
+            v.push(call(70, &[2, x, 2, 1], &[], ""));
+            v.push(call(71, &[2, x, 0, 0], &[], ""));
+        }
     }
     // Strings and words.
     v.push(call(11, &[10, 20, 1], &[1.0, 1.0, 1.0, 0.5], "Hello, Norrath"));
