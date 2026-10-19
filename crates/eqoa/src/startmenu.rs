@@ -642,6 +642,8 @@ pub struct StartData {
     pub item_counts: [i32; 4],
     /// `gAttackWords` (0x00CDF6A0): (word, attack type), 11 of them
     pub attack_words: Vec<(i32, i64)>,
+    /// `gEquipSlotWords` (0x00CDF6F8): (word, equip slot), 23 of them
+    pub slot_words: Vec<(i32, i64)>,
     pub menu: StartMenu,
 }
 
@@ -659,7 +661,8 @@ impl StartData {
         let mut item_counts = [0x00CD0310u32, 0x00CD0300, 0x00CD02E0, 0x00CD02F0].map(|va| img.i32_at(va + 12).clamp(0, 256));
         item_counts[3] = 40;
         let attack_words = (0..11u32).map(|k| (img.i32_at(0x00CDF6A0 + 8 * k), img.i32_at(0x00CDF6A4 + 8 * k) as i64)).collect();
-        Some(StartData { menus, tables, bounds, item_counts, attack_words, menu })
+        let slot_words = (0..23u32).map(|k| (img.i32_at(0x00CDF6F8 + 8 * k), img.i32_at(0x00CDF6FC + 8 * k) as i64)).collect();
+        Some(StartData { menus, tables, bounds, item_counts, attack_words, slot_words, menu })
     }
 
     /// `OpenStartMenu`'s table: the bank's when a banker is in range, the

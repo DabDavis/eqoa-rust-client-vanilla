@@ -407,7 +407,9 @@ pub fn shot_with(
                         p.hud_key(k);
                     }
                 }
-                // `EQOA_START_KEYS` (o open, u d l r e x): the start menu's
+                // `EQOA_START_KEYS` (o open, u d l r e x, s square, c circle, t R1, any
+                // other character a pause):
+                // the start menu's
                 // keys, the spell book's while it is up, each held for a frame (pressed, then released on the next:
                 // the menus' auto-repeat pulses while a key is down).
                 let step = ((t - at) / 16 - 1) as usize;
@@ -430,6 +432,9 @@ pub fn shot_with(
                         'r' => Some(K::RIGHT),
                         'e' => Some(K::CROSS),
                         'x' => Some(K::ESCAPE),
+                        's' => Some(133),
+                        'c' => Some(135),
+                        't' => Some(142),
                         _ => None,
                     };
                     if let Some(k) = k {
@@ -437,6 +442,8 @@ pub fn shot_with(
                             p.book_key(k, down);
                         } else if p.mode == 35 {
                             p.who_key(k, down);
+                        } else if p.char_window() {
+                            p.char_key(k, down);
                         } else {
                             p.start_key(k, down);
                         }
@@ -454,6 +461,12 @@ pub fn shot_with(
                         None if k == text.chars().count() => p.edit_key(13, true),
                         None => {}
                     }
+                }
+                // `EQOA_QUESTS=a|b|...`: quests as if 0x007C had brought them.
+                if t == at
+                    && let Ok(q) = std::env::var("EQOA_QUESTS")
+                {
+                    p.fake_quests(&q);
                 }
                 // `EQOA_INVITE`: the target invited just after targeting
                 // (`DoAction(0x07010000)`); `EQOA_ACCEPT`: any message box
@@ -987,6 +1000,31 @@ impl ApplicationHandler for App {
                             && !(down && event.repeat)
                         {
                             p.who_key(k, down);
+                        }
+                        return;
+                    }
+                    // the character windows (the quest journal, the trainer,
+                    // class mastery, factions): the arrows, Enter or E, Escape
+                    if p.char_window() {
+                        let k = match &event.logical_key {
+                            Key::Named(NamedKey::ArrowUp) => Some(K::UP),
+                            Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
+                            Key::Named(NamedKey::ArrowLeft) => Some(136),
+                            Key::Named(NamedKey::ArrowRight) => Some(137),
+                            Key::Named(NamedKey::Enter) => Some(K::CROSS),
+                            Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
+                            Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
+                            // square (Class Mastery's points) and R1 (its other list)
+                            Key::Character(c) if c.eq_ignore_ascii_case("q") => Some(133),
+                            // circle (the factions' next page)
+                            Key::Character(c) if c.eq_ignore_ascii_case("c") => Some(135),
+                            Key::Named(NamedKey::Tab) => Some(142),
+                            _ => None,
+                        };
+                        if let Some(k) = k
+                            && !(down && event.repeat)
+                        {
+                            p.char_key(k, down);
                         }
                         return;
                     }
