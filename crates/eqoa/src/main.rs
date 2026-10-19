@@ -9,6 +9,7 @@
 //! eqoa view <world> zone <n>     a zone: terrain and every placed actor
 //! eqoa view <world> walk <n>     the character, walking in a zone
 //! eqoa shot <file> [model | zone <n>] <out.png> [camera]   one view, offscreen
+//! eqoa listen <world> <x> <z> <seconds> <out.wav> [hour]   the world's sound there, offline
 //! ```
 //!
 //! A model is a list index or a DictID in hex (`0x…`). A `shot` camera is
@@ -17,12 +18,14 @@
 //!
 //! `iso` defaults to `$EQOA_ISO`, then `run/eqoa.iso`.
 
+mod audio;
 mod chat;
 mod dialog;
 mod hud;
 mod play;
 mod scene;
 mod sky;
+mod sound;
 mod stream;
 mod ui;
 mod viewer;
@@ -43,12 +46,61 @@ fn main() -> ExitCode {
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+/// The disc image's path: the argument, `$EQOA_ISO`, or `run/eqoa.iso`.
+pub fn disc_path(arg: Option<&String>) -> String {
+    arg.cloned().or_else(|| std::env::var("EQOA_ISO").ok()).unwrap_or_else(|| "run/eqoa.iso".into())
+}
+
 pub fn disc(arg: Option<&String>) -> Result<iso::Iso> {
-    let path = arg
-        .cloned()
-        .or_else(|| std::env::var("EQOA_ISO").ok())
-        .unwrap_or_else(|| "run/eqoa.iso".into());
+    let path = disc_path(arg);
     Ok(iso::Iso::open(&path).map_err(|e| format!("{path}: {e}"))?)
+}
+
+/// The world's sound at one spot, offline: the camera stands 3 above the
+/// ground at (x, z), the game runs at 30 frames a second, and the mix is
+/// written to a WAV.
+fn listen(file: &str, x: f32, z: f32, secs: f32, out: &str, hour: f32) -> Result<()> {
+    use vi::fpu::{Ee, F};
+    let mut lib = esf::Library::new();
+    let f = lib.add(file, esf::Container::open(disc(None)?.read(file)?)?);
+    let mut world = vi::world::World::<Ee>::load(&lib, f).ok_or("no world in the file")?;
+    let mut s = vi::coll::CollSphere::<Ee>::default();
+    s.init(vi::vect::Vect3::of(x, 2000.0, z), vi::vect::Vect3::of(x, -2000.0, z), F::new(0.001));
+    let mut filt = vi::scene::Filter::new(vi::scene::FilterKind::Scene, -1);
+    let y = if world.collide_sphere(&mut s, &mut filt) { s.hit_point().y.0 } else { 0.0 };
+    let eye = vi::camera::Eye { position: vi::vect::Vect3::of(x, y + 3.0, z), direction: vi::vect::Vect3::of(0.0, -0.2, 1.0) };
+    let mut sound = sound::Sound::offline(std::path::Path::new(&disc_path(None))).ok_or("no sound device")?;
+    let frames = (secs * 30.0) as usize;
+    let mut pcm: Vec<i16> = Vec::new();
+    for k in 0..frames {
+        sound.frame(&mut world, &eye, hour, k as i64 * 1000 / 30);
+        pcm.extend(sound.audio().render(1600));
+        if k % 30 == 0 {
+            eprintln!("{:5.1} s  {}", k as f32 / 30.0, sound.describe());
+        }
+    }
+    let mut w = Vec::with_capacity(44 + pcm.len() * 2);
+    let n = (pcm.len() * 2) as u32;
+    w.extend(b"RIFF");
+    w.extend((36 + n).to_le_bytes());
+    w.extend(b"WAVEfmt ");
+    w.extend(16u32.to_le_bytes());
+    w.extend(1u16.to_le_bytes());
+    w.extend(2u16.to_le_bytes());
+    w.extend(48000u32.to_le_bytes());
+    w.extend((48000u32 * 4).to_le_bytes());
+    w.extend(4u16.to_le_bytes());
+    w.extend(16u16.to_le_bytes());
+    w.extend(b"data");
+    w.extend(n.to_le_bytes());
+    for v in &pcm {
+        w.extend(v.to_le_bytes());
+    }
+    std::fs::write(out, w)?;
+    let loud = pcm.iter().filter(|&&v| v != 0).count();
+    let peak = pcm.iter().map(|v| v.unsigned_abs()).max().unwrap_or(0);
+    eprintln!("{out}: {:.1} s at 48 kHz, {:.0}% of samples not silent, peak {peak}", pcm.len() as f32 / 96000.0, 100.0 * loud as f32 / pcm.len().max(1) as f32);
+    Ok(())
 }
 
 fn run(args: &[String]) -> Result<()> {
@@ -111,6 +163,15 @@ fn run(args: &[String]) -> Result<()> {
                 let (lib, src) = source(file, rest)?;
                 viewer::run(lib, src)?;
             }
+        }
+        Some("listen") => {
+            let usage = "usage: eqoa listen <world> <x> <z> <seconds> <out.wav> [hour]";
+            let file = args.get(1).ok_or(usage)?;
+            let num = |i: usize| -> Result<f32> { Ok(args.get(i).ok_or(usage)?.parse::<f32>()?) };
+            let (x, z, secs) = (num(2)?, num(3)?, num(4)?);
+            let out = args.get(5).ok_or(usage)?;
+            let hour = args.get(6).map(|h| h.parse::<f32>()).transpose()?.unwrap_or(10.0);
+            listen(file, x, z, secs, out, hour)?;
         }
         Some("login") => {
             let host = args.get(1).ok_or("usage: eqoa login <host> <user> (password in EQOA_PASSWORD)")?;

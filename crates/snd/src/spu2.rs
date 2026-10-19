@@ -89,12 +89,7 @@ impl Env {
         if self.counter >= 0x8000 {
             self.counter = 0;
             self.level = self.level.wrapping_add(step);
-            if self.level < 0 {
-                self.level = 0;
-            }
-            if self.level > 0x7fff {
-                self.level = 0x7fff;
-            }
+            self.level = self.level.clamp(0, 0x7fff);
         }
     }
 }
@@ -508,7 +503,7 @@ impl Spu2 {
 
     /// mix `out.len() / 2` stereo frames, interleaved L R, at 48 kHz
     pub fn mix(&mut self, out: &mut [i16]) {
-        for f in out.chunks_exact_mut(2) {
+        for f in out.as_chunks_mut::<2>().0 {
             let (l, r) = self.frame();
             f[0] = l;
             f[1] = r;

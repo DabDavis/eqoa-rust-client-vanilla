@@ -490,6 +490,7 @@ static XM_PERIOD: [u16; 104] = [
 
 /// One player's whole state.
 #[derive(Clone)]
+#[derive(Default)]
 pub struct XmPlayer {
     /// 1 once the song has ended (no repeat)
     done: i32,
@@ -527,33 +528,6 @@ pub struct XmPlayer {
     ch: [XmChannel; 32],
 }
 
-impl Default for XmPlayer {
-    fn default() -> XmPlayer {
-        XmPlayer {
-            done: 0,
-            module: 0,
-            voices: None,
-            tick: 0,
-            row: 0,
-            pattern: 0,
-            order: 0,
-            row_data: 0,
-            row_pos: 0,
-            rows: 0,
-            global_vol: 0,
-            break_row: 0,
-            jump_order: 0,
-            seek: 0,
-            speed: 0,
-            tempo: 0,
-            repeat: 0,
-            volume: 0,
-            pan: 0,
-            pitch: 0,
-            ch: [XmChannel::default(); 32],
-        }
-    }
-}
 
 impl XmPlayer {
     pub fn set_repeat(&mut self, r: i32) {
@@ -1034,8 +1008,8 @@ impl XmPlayer {
             13 => self.break_row = (arg >> 4) as i32 * 10 + (arg & 0xf) as i32,
             14 => self.ext_fx(chan, arg),
             // speed below 32, else BPM
-            15 => {
-                if tick == 0 {
+            15
+                if tick == 0 => {
                     if arg < 32 {
                         self.speed = arg as i16;
                     } else {
@@ -1043,7 +1017,6 @@ impl XmPlayer {
                     }
                     self.tick = 0;
                 }
-            }
             _ => {}
         }
     }
@@ -1098,11 +1071,10 @@ impl XmPlayer {
                 }
             }
             // note cut
-            12 => {
-                if tick >= lo as i32 {
+            12
+                if tick >= lo as i32 => {
                     c.volume = 0;
                 }
-            }
             _ => {}
         }
     }
@@ -1177,7 +1149,7 @@ impl XmPlayer {
             let tab = |k: i32| if k < 0 { (XM_LINEAR[767] as u32 >> 16) as u16 } else { XM_PERIOD.get(k as usize).copied().unwrap_or(0) };
             let lo = tab(idx) as i32;
             let hi = tab(idx + 1) as i32;
-            let period = (interp((finetune / 16) as i16, 0, 15, lo as i16, hi as i16) as i32) >> oct;
+            let period = (interp(finetune / 16, 0, 15, lo as i16, hi as i16) as i32) >> oct;
             if period < 0 && finetune != 0 {
                 finetune = 0;
                 continue;
@@ -1206,7 +1178,7 @@ impl XmPlayer {
             let v = if (0..768).contains(&k) { XM_LINEAR[k as usize] } else { 0 };
             v.wrapping_shr((period / 768) as u32)
         } else {
-            let rate = if period == 0 { 0 } else { 0xa3ba68 / period >> 3 };
+            let rate = if period == 0 { 0 } else { (0xa3ba68 / period) >> 3 };
             rate.wrapping_mul(48000) / 4096
         }
     }

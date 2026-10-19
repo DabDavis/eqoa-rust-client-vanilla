@@ -63,6 +63,13 @@ pub enum SpriteKind {
     Lod(Vec<usize>),
     /// An animated HSprite: index into `World::hsprites`.
     H(usize),
+    /// `VISoundSprite` (0xB100): a positional sound, its wave or XM record,
+    /// the record's volume, and its attenuation and pan settings (the parser
+    /// leaves them at the constructor's 0 and true).
+    Sound { sound: Option<Ref>, volume: f32, attenuation: i32, pan: bool },
+    /// `VIStreamAudioSprite` (0x2E00): a box the listener stands in, the BGM
+    /// it names (relative to `Music\`), whether it loops and its priority.
+    Stream { path: String, looping: bool, priority: i32 },
     /// Collides as nothing (flora, sounds, lights, emitters; and for now
     /// CSprites, whose collision is a capsule).
     None,
@@ -457,6 +464,38 @@ impl<M: Model> World<M> {
                 (SpriteKind::Lod(levels), header_bbox(0x2A10, 4), 0)
             }
             0x2700 => (SpriteKind::None, header_bbox(0x2710, 4), 5),
+            // ParseSoundSpriteObj: radius and volume (1 and 1 before version
+            // 1); the box and sphere are the radius about the origin
+            0xB100 => {
+                let (mut radius, mut volume) = (1.0, 1.0);
+                if let Some(h) = c.child(r.node, 0xB110).or_else(|| c.node(r.node).children.first().copied()) {
+                    let d = c.body(h);
+                    if c.node(h).version != 0 && d.len() >= 12 {
+                        radius = rd_f(d, 4);
+                        volume = rd_f(d, 8);
+                    }
+                }
+                let sound = c.node(r.node).children.iter().copied().find(|&k| matches!(c.node(k).ty, 0xB000 | 0xB030)).map(|node| Ref { file: r.file, node });
+                let rr = F::new(radius);
+                let bbox = BBox { min: Vect3::new(-rr, -rr, -rr), max: Vect3::new(rr, rr, rr) };
+                (SpriteKind::Sound { sound, volume, attenuation: 0, pan: true }, bbox, 9)
+            }
+            // ParseStreamAudioSpriteObj: id, the box, the pathname (u16
+            // length), looping, priority
+            0x2E00 => {
+                let d = c.body(r.node);
+                if d.len() < 30 {
+                    (SpriteKind::None, BBox::default(), 0)
+                } else {
+                    let bbox = BBox { min: v3(d, 4), max: v3(d, 16) };
+                    let n = u16::from_le_bytes([d[28], d[29]]) as usize;
+                    let end = (30 + n).min(d.len());
+                    let path = String::from_utf8_lossy(&d[30..end].iter().take(127).copied().collect::<Vec<u8>>()).into_owned();
+                    let looping = d.get(end..end + 4).is_some_and(|b| i32::from_le_bytes(b.try_into().unwrap()) != 0);
+                    let priority = d.get(end + 4..end + 8).map_or(0, |b| i32::from_le_bytes(b.try_into().unwrap()));
+                    (SpriteKind::Stream { path, looping, priority }, bbox, 12)
+                }
+            }
             0x2200 => match load_hsprite(lib, r, &mut self.anims, &mut self.anim_cache) {
                 Some((h, attach)) => {
                     let mut resolved = Vec::new();
@@ -475,7 +514,9 @@ impl<M: Model> World<M> {
             _ => (SpriteKind::None, BBox::default(), 0),
         };
         let id = self.sprites.len();
-        self.sprites.push(SceneSprite { kind, bbox, bsphere: Sphere::from_bbox(&bbox), sprite_type });
+        // a sound sprite's sphere is its radius, not its box's half diagonal
+        let bsphere = if let SpriteKind::Sound { .. } = kind { Sphere { c: Vect3::default(), r: bbox.max.x } } else { Sphere::from_bbox(&bbox) };
+        self.sprites.push(SceneSprite { kind, bbox, bsphere, sprite_type });
         self.sprite_refs.push(r);
         self.sprite_of.insert(r, id);
         Some(id)
@@ -752,8 +793,8 @@ impl<M: Model> World<M> {
         hit
     }
 
-    /// `VIWorld::FindLeaf` then the zone leaf's flags (`GetEnvFlags`).
-    pub fn env_flags(&self, at: &Vect3<M>) -> u32 {
+    /// `VIWorld::FindLeaf`: the zone and the zone leaf a point is in.
+    pub fn find_leaf(&self, at: &Vect3<M>) -> Option<(usize, usize)> {
         let mut node = 0u32;
         if !self.nodes.is_empty() {
             loop {
@@ -765,7 +806,7 @@ impl<M: Model> World<M> {
             }
             node &= 0x0FFF_FFFF;
         }
-        let Some(&z) = self.leaves.get(node as usize) else { return !0 };
+        let &z = self.leaves.get(node as usize)?;
         let zone = &self.zones[z as usize];
         let mut leaf = 0u32;
         if !zone.nodes.is_empty() {
@@ -778,7 +819,12 @@ impl<M: Model> World<M> {
             }
             leaf &= 0x0FFF_FFFF;
         }
-        zone.leaves.get(leaf as usize).map_or(!0, |l| l.1)
+        ((leaf as usize) < zone.leaves.len()).then_some((z as usize, leaf as usize))
+    }
+
+    /// `VIWorld::FindLeaf` then the zone leaf's flags (`GetEnvFlags`).
+    pub fn env_flags(&self, at: &Vect3<M>) -> u32 {
+        self.find_leaf(at).map_or(!0, |(z, leaf)| self.zones[z].leaves[leaf].1)
     }
 
     /// `VIScene::Collide(VIEnvRay &)` with `VITransEnvRay`'s rule: a hit is

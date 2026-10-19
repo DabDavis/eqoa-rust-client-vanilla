@@ -488,6 +488,8 @@ struct App {
     play: Option<crate::play::Play>,
     /// The walk's zones, streamed around the character.
     streamer: Option<Streamer>,
+    /// The game's sound, once walking (`EQOA_AUDIO=0`: driven, not heard).
+    sound: Option<crate::sound::Sound>,
     /// Index in `Gfx::models` of the character.
     body_at: usize,
     /// Where the sky's models start in `Gfx::models`.
@@ -518,6 +520,7 @@ pub fn run_with(lib: Library, source: Source, play: Option<crate::play::Play>) -
         walker: None,
         play,
         streamer: None,
+        sound: None,
         body_at: 0,
         sky_at: None,
         clock: Instant::now(),
@@ -558,6 +561,10 @@ impl App {
             self.sky_at = None;
             if self.walker.is_some() {
                 self.sky_at = crate::sky::upload(&mut g.renderer, &g.device, &g.queue, &self.lib, &mut g.models);
+                match &mut self.sound {
+                    Some(s) => s.world_changed(),
+                    None => self.sound = crate::sound::Sound::new(std::path::Path::new(&crate::disc_path(None))),
+                }
             }
             self.clock = Instant::now();
             report(&g.renderer);
@@ -841,6 +848,7 @@ impl ApplicationHandler for App {
                 let body_at = self.body_at;
                 let clock = self.clock;
                 let streamer = &mut self.streamer;
+                let sound = &mut self.sound;
                 let play = &mut self.play;
                 let lib = &self.lib;
                 let walk_view = self.walker.as_mut().map(|w| {
@@ -878,6 +886,9 @@ impl ApplicationHandler for App {
                         let gpu = stream::Gpu { renderer: &mut g.renderer, device: &g.device, queue: &g.queue };
                         s.update(at, &mut w.scene, lib, gpu, Some(1));
                         s.animate(&mut w.scene, &g.renderer, &g.queue);
+                    }
+                    if let Some(s) = sound {
+                        s.frame(&mut w.scene, &w.eye, hour(clock), now);
                     }
                     match play {
                         Some(p) => g.window.set_title(&format!("eqoa — {} — {} — {}", p.player.name, w.describe(), p.describe())),

@@ -22,6 +22,11 @@ pub trait Link {
     fn call(&mut self, fno: u32, packet: &[u32; 128]) -> [u32; 128];
     /// A SIF DMA of `data` to IOP address `addr`, complete on return.
     fn dma(&mut self, addr: u32, data: &[u8]);
+    /// `sceSifCheckStatRpc`: the last call is still running, so a packet
+    /// cannot go yet (it stays, and grows, until one can).
+    fn busy(&mut self) -> bool {
+        false
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -298,9 +303,7 @@ impl<M: Model> SoundDevice<M> {
     fn reset_state(&mut self) {
         self.active.clear();
         self.free = (0..46).collect();
-        for s in &mut self.sounds {
-            *s = None;
-        }
+        self.sounds.fill(None);
         self.slots = [None; 46];
         self.channels = 0;
         self.frame = 0;
@@ -1151,6 +1154,9 @@ impl<M: Model> SoundDevice<M> {
 
     /// Ship the packet if there is anything in it.
     fn sound_flush(&mut self, link: &mut dyn Link) -> i32 {
+        if link.busy() {
+            return -1;
+        }
         if self.packet[0] == 0 {
             return -2;
         }

@@ -110,6 +110,20 @@ impl Iso {
         self.read_entry(&e)
     }
 
+    /// Whole sectors from `lba`, as a drive reads them (CDSTREAM's reads):
+    /// past the end of the image the buffer is left as zeros.
+    pub fn read_sectors(&mut self, lba: u32, buf: &mut [u8]) -> Result<(), Error> {
+        buf.fill(0);
+        let off = lba as u64 * SECTOR;
+        let len = self.file.metadata()?.len();
+        if off >= len {
+            return Ok(());
+        }
+        let n = ((len - off) as usize).min(buf.len());
+        read_at(&mut self.file, off, &mut buf[..n])?;
+        Ok(())
+    }
+
     pub fn read_entry(&mut self, e: &Entry) -> Result<Vec<u8>, Error> {
         let mut buf = vec![0u8; e.size as usize];
         read_at(&mut self.file, e.lba as u64 * SECTOR, &mut buf)?;
