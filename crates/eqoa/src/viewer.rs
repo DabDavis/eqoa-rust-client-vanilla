@@ -283,8 +283,16 @@ pub fn shot_with(
             .ok()
             .map(|v| v.split(',').filter_map(|t| t.trim().parse().ok()).collect())
             .unwrap_or_default();
+        // `EQOA_SHOT_AT=x,y,z`: look at that point (from the EYE offset) instead.
+        let at: Vec<f32> = std::env::var("EQOA_SHOT_AT")
+            .ok()
+            .map(|v| v.split(',').filter_map(|t| t.trim().parse().ok()).collect())
+            .unwrap_or_default();
         if let [dx, dy, dz] = eye.as_slice() {
-            let p = Vec3::from(walker.cam.walk.phys.position.to_array()) + Vec3::Y;
+            let p = match at.as_slice() {
+                [x, y, z] => Vec3::new(*x, *y, *z),
+                _ => Vec3::from(walker.cam.walk.phys.position.to_array()) + Vec3::Y,
+            };
             let proj = glam::camera::rh::proj::directx::perspective(40f32.to_radians(), aspect, 0.1, 3000.0);
             let at = p + Vec3::new(*dx, *dy, *dz);
             frame = lit(proj, glam::camera::rh::view::look_at_mat4(at, p, Vec3::Y), Instant::now(), Some((at, &walker.scene)));

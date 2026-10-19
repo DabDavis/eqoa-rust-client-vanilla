@@ -40,6 +40,16 @@ const RACE: [[[u32; 2]; 4]; 11] = [
     [[0; 2]; 4],
     [[0xFD04B372, 0xDAFD61C1], [0x0E9269C3, 0xEC8B1812], [0x20202014, 0xFE18CE63], [0x31ADD665, 0x0FA684B4]],
 ];
+/// `Helm[set]`: the helm sprites.
+const HELM: [u32; 9] = [0, 0x0C6F2FDA, 0x330D43A7, 0x079EAC92, 0x03B8E453, 0x5A51ACC1, 0x7184EC3D, 0x91E411BB, 0x1E25A25F];
+
+/// `GetHelm`: the helm sprite for an armour set (`SetArmorSlot` slot 5 hands
+/// it to `SetHelm`, which attaches a copy at node 8 coloured with the tint).
+pub fn helm(set: u8) -> Option<u32> {
+    let set = if set >= 9 { 0 } else { set as usize };
+    if set == 0 { None } else { Some(HELM[set]) }
+}
+
 /// `Tints`, RGBA.
 pub const TINTS: [[u8; 4]; 15] = [
     [255, 255, 255, 255],
@@ -86,7 +96,7 @@ pub struct LayerChange {
 /// slots, `SetHair`, `SetFace`, in that order; later changes to a layer win.
 /// `has` tells whether a texture DictID resolves (`FindTyped`).
 #[allow(clippy::needless_range_loop)]
-pub fn apply_look<M: Model>(cs: &CSprite<M>, look: &Look, has: impl Fn(u32) -> bool) -> Vec<LayerChange> {
+pub fn apply_look<M: Model>(cs: &CSprite<M>, look: &Look, helm_worn: bool, has: impl Fn(u32) -> bool) -> Vec<LayerChange> {
     let mut out = Vec::new();
     let slot = |i: usize| cs.text_slots[i];
     let found = |id: u32| if id != 0 && has(id) { Some(id) } else { None };
@@ -142,12 +152,12 @@ pub fn apply_look<M: Model>(cs: &CSprite<M>, look: &Look, has: impl Fn(u32) -> b
                 set(i, pick(((i - 8) as i32) < b));
             }
             for i in 16..19 {
-                set(i, pick(((i - 16) as i32) < b));
+                set(i, pick(((i - 16) as i32) < b && !helm_worn));
             }
             for i in 11..14 {
-                set(i, pick(((i - 11) as i32) < a));
+                set(i, pick(((i - 11) as i32) < a && !helm_worn));
             }
-            set(14, pick(a >= 2 && b >= 2));
+            set(14, pick(a >= 2 && b >= 2 && !helm_worn));
             set(15, Some(tex));
         }
     }

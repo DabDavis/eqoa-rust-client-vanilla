@@ -59,6 +59,10 @@ pub struct CSprite<M: Model> {
     /// `m_slots`: for each of the 19 texture slots (0-4 armour, 7 face, 8-18
     /// hair), the material-palette entry and layer it drives; -1 for none.
     pub text_slots: [(i32, i32); 19],
+    /// `m_items[i].m_node` (0x2920): the node each item slot hangs on.
+    pub item_nodes: [i32; 6],
+    /// `m_node` (0x2915): named nodes; 8 is the helm's.
+    pub node_ids: [i32; 10],
     pub dead: bool,
     pub action_seq: i32,
     pub action: i32,
@@ -85,6 +89,8 @@ impl<M: Model> CSprite<M> {
             race,
             sex,
             text_slots: [(-1, -1); 19],
+            item_nodes: [-1; 6],
+            node_ids: [-1; 10],
             dead: false,
             action_seq: 0,
             action: -1,

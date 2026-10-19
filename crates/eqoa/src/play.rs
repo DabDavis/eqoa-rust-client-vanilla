@@ -32,6 +32,8 @@ struct Puppet {
     anims: AnimScene<Ee>,
     rand: Rand,
     gpu: GpuModel,
+    /// Items and the helm, each on its node (`Attach`).
+    attached: Vec<(i32, GpuModel)>,
 }
 
 pub struct Play {
@@ -200,13 +202,42 @@ impl Play {
                     let mut anims = AnimScene { time: game_ms, ..Default::default() };
                     let mut rand = Rand(slot as u64 + 1);
                     let sprite = load_csprite(lib, r, &mut anims, &mut AnimCache::new(), &mut rand);
+                    // Attach: the items in hand (ApplyItems: the override if
+                    // any) and the helm (SetHelm, at node 8, in the tint).
+                    let mut attached = Vec::new();
+                    let mut helm_worn = false;
+                    if let (Some(cs), Some(c)) = (&sprite, &e.creature) {
+                        for i in 0..3 {
+                            let id = if c.items_over[i] != 0 { c.items_over[i] } else { c.items[i] };
+                            let node = cs.item_nodes[i];
+                            if id == 0 || node < 0 {
+                                continue;
+                            }
+                            if let Some(m) = lib.lookup(id as i32).and_then(|r| lib.build_model(r)) {
+                                attached.push((node, g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
+                            }
+                        }
+                        if cs.node_ids[8] >= 0
+                            && let Some(h) = vi::cust::helm(c.armor[5])
+                            && let Some(mut m) = lib.lookup(h as i32).and_then(|r| lib.build_model(r))
+                        {
+                            let tint = vi::cust::TINTS[(c.armor_tint[5] as usize).min(14)];
+                            for b in &mut m.batches {
+                                for l in &mut b.layers {
+                                    l.color = tint;
+                                }
+                            }
+                            helm_worn = true;
+                            attached.push((cs.node_ids[8], g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
+                        }
+                    }
                     // ApplyLook: the look's textures and tints on the layers the
                     // sprite's text slots name.
                     if let (Some(cs), Some(look)) = (&sprite, &look) {
-                        dress(&mut model, &vi::cust::apply_look(cs, look, |id| lib.surface(id as i32).is_some()));
+                        dress(&mut model, &vi::cust::apply_look(cs, look, helm_worn, |id| lib.surface(id as i32).is_some()));
                     }
                     let gpu = g.renderer.upload(g.device, g.queue, &model, &[render::IDENTITY], &textures);
-                    Some(Puppet { model: e.model, look, sprite, anims, rand, gpu })
+                    Some(Puppet { model: e.model, look, sprite, anims, rand, gpu, attached })
                 });
             }
             let Some(p) = self.puppets[slot].as_mut() else { continue };
@@ -232,6 +263,11 @@ impl Play {
                     cs.h.process(0, &p.anims);
                     let m = cs.h.calc_trans_about_center(&actor, &p.anims);
                     cs.h.set_blend_matrices();
+                    for (node, gpu) in &p.attached {
+                        if let Some(n) = cs.h.nodes.get(*node as usize) {
+                            g.renderer.set_instances(g.queue, gpu, &[Matrix44::mul(&n.world, &m).to_cols()]);
+                        }
+                    }
                     (m.to_cols(), cs.h.blend.iter().map(|m| m.to_cols()).collect::<Vec<_>>())
                 }
                 None => (actor.to_cols(), Vec::new()),
@@ -245,7 +281,7 @@ impl Play {
     }
 
     pub fn models(&self) -> impl Iterator<Item = &GpuModel> {
-        self.puppets.iter().flatten().map(|p| &p.gpu)
+        self.puppets.iter().flatten().flat_map(|p| std::iter::once(&p.gpu).chain(p.attached.iter().map(|a| &a.1)))
     }
 
     pub fn describe(&self) -> String {

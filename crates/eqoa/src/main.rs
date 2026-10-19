@@ -125,6 +125,8 @@ fn run(args: &[String]) -> Result<()> {
             let mut lib = lib;
             let main_file = 0;
             lib.add("CHAR.ESF", esf::Container::open(disc(None)?.read("CHAR.ESF")?)?);
+            // What creatures hold: weapons and shields.
+            lib.add("ITEM.ESF", esf::Container::open(disc(None)?.read("ITEM.ESF")?)?);
             let [x, _, z] = player.pos;
             let index = vi::world::World::<vi::fpu::Ee>::zone_at(lib.file(main_file), x, z).ok_or("no zone at the player's position")?;
             let character = lib.lookup(viewer::HUMAN).ok_or("no human model")?;
