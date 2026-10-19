@@ -1,28 +1,33 @@
 // Shading after the VU1 strip programs (claude-notes/vu1-microcode-
-// disassembly-20261017.md, verified there against PCSX2):
+// disassembly-20261017.md, verified there against PCSX2), one pass per
+// material layer:
 //
 //   light = clamp(colour + ambient + sun · max(−N·S, 0) · colour.a, 0, 1)
-//   pixel = texture × layer colour (0x80 = 1.0, the GS's modulate) × light
+//   pixel = texture × layer colour/255 × light
 //
 // where S is the direction the sun's light travels and, on packed geometry,
-// the vertex alpha is a sun-visibility factor. Not yet ported: the point
-// light, the static-lighting term, fog, and every layer after the first.
+// the vertex alpha is a sun-visibility factor. An opaque layer is alpha
+// tested at 128 of 255 (TEST 0x3080B); a blended layer's alpha is the
+// texture's times the layer colour's, and the pipeline blends it. Not yet
+// ported: the point light, the static-lighting term, fog.
 
 struct Frame {
     view_proj: mat4x4<f32>,
     sun_dir: vec4<f32>,
-    sun: vec4<f32>,
+    sun: vec4<f32>,      // w: time in seconds
     ambient: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> frame: Frame;
 
-struct Material {
+struct Layer {
     tint: vec4<f32>,
-    flags: vec4<f32>, // x: 1 when textured
+    flags: vec4<f32>,    // x: textured, y: blended
+    uv0: vec4<f32>,      // m0, m1, m3, m4
+    uv1: vec4<f32>,      // m6, m7, scroll rate u, v
 };
 @group(1) @binding(0) var tex: texture_2d<f32>;
 @group(1) @binding(1) var samp: sampler;
-@group(1) @binding(2) var<uniform> material: Material;
+@group(1) @binding(2) var<uniform> layer: Layer;
 
 // The skin palette, `VIRStrip4`'s: four node matrices per vertex, weighted.
 // Unskinned models carry identities and bone 255 (unused).
@@ -73,7 +78,14 @@ fn vs_main(v: VsIn) -> VsOut {
         nrm = vec4<f32>(sn.xyz, 0.0);
     }
     o.clip = frame.view_proj * model * pos;
-    o.uv = v.uv;
+    // The layer's UV transform, and its scroll (VIMaterial::Process: the
+    // offset grows at the rate and drops its whole part past ±1).
+    let s = layer.uv1.zw * frame.sun.w;
+    let scroll = s - trunc(s);
+    o.uv = vec2<f32>(
+        v.uv.x * layer.uv0.x + v.uv.y * layer.uv0.z + layer.uv1.x + scroll.x,
+        v.uv.x * layer.uv0.y + v.uv.y * layer.uv0.w + layer.uv1.y + scroll.y,
+    );
     // Placements scale uniformly, so the upper 3×3 is fine for normals.
     o.normal = (model * nrm).xyz;
     o.color = v.color;
@@ -83,15 +95,15 @@ fn vs_main(v: VsIn) -> VsOut {
 @fragment
 fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
     var texel = vec4<f32>(1.0);
-    if (material.flags.x > 0.5) {
+    if (layer.flags.x > 0.5) {
         texel = textureSample(tex, samp, i.uv);
     }
-    // The base layer's alpha test: TEST 0x3080B, A >= 128 of 255.
-    if (texel.a < 0.5) {
+    let alpha = texel.a * layer.tint.a;
+    if (layer.flags.y < 0.5 && alpha < 0.5) {
         discard;
     }
     let n = normalize(i.normal);
     let sun = frame.sun.rgb * max(-dot(n, frame.sun_dir.xyz), 0.0) * i.color.a;
     let light = clamp(i.color.rgb + frame.ambient.rgb + sun, vec3<f32>(0.0), vec3<f32>(1.0));
-    return vec4<f32>(texel.rgb * material.tint.rgb * light, 1.0);
+    return vec4<f32>(texel.rgb * layer.tint.rgb * light, alpha);
 }

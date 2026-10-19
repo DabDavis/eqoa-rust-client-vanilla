@@ -1,9 +1,14 @@
 //! The renderer, on wgpu.
 //!
-//! For now: models out of a container, textured from the same container, drawn
-//! with a stand-in shader. The game's own vertex maths (the VU1 strip programs,
-//! already redone as shaders in eqoa-port's `VI_HLE` path) replaces the shader
-//! when the walk/camera slice needs it to match.
+//! Models out of the containers, textured through the dictionary, drawn as the
+//! game draws them: the VU1 strip programs' lighting, one PASS PER MATERIAL
+//! LAYER with the GS state `VIMaterial::ConstructTextPass` builds for it
+//! (alpha test or blend mode, wrap, the UV transform and its scroll), and GPU
+//! skinning as `VIRStrip4` does it.
+//!
+//! One deliberate difference: every opaque pass is drawn before any blended
+//! one, where the game draws a strip's layers back to back. A translucent
+//! layer then never hides geometry drawn after it.
 
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
@@ -15,6 +20,9 @@ pub use wgpu;
 pub const FRONT_FACE: wgpu::FrontFace = wgpu::FrontFace::Ccw;
 
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
+/// Palette size: enough for every character skeleton (40 nodes on a human).
+pub const MAX_BONES: usize = 64;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -28,36 +36,45 @@ struct Vertex {
     weights: [u8; 4],
 }
 
-/// Palette size: enough for every character skeleton (40 nodes on a human).
-pub const MAX_BONES: usize = 64;
-
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct FrameUniform {
     view_proj: [[f32; 4]; 4],
     sun_dir: [f32; 4],
+    /// rgb, and w = the time in seconds (for UV scrolling).
     sun: [f32; 4],
     ambient: [f32; 4],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
-struct MaterialUniform {
+struct LayerUniform {
     tint: [f32; 4],
+    /// x: 1 textured, y: 1 blended (no alpha test).
     flags: [f32; 4],
+    /// (m0, m1, m3, m4) and (m6, m7, rate u, rate v): u' = u·m0 + v·m3 + m6 +
+    /// scroll, v' = u·m1 + v·m4 + m7 + scroll.
+    uv0: [f32; 4],
+    uv1: [f32; 4],
+}
+
+/// One layer's pass over a batch.
+struct Pass {
+    blend: usize,
+    bg: wgpu::BindGroup,
 }
 
 /// One model on the GPU, drawn once per instance (a model matrix each).
 pub struct GpuModel {
     vertices: wgpu::Buffer,
-    /// The skin palette (row-vector matrices, as the engine's), and its
-    /// bind group; for an unskinned model, all identity and never written.
+    /// The skin palette and its bind group; for an unskinned model, all
+    /// identity and never written.
     palette: wgpu::Buffer,
     palette_bg: wgpu::BindGroup,
     pub skinned: bool,
     instances: wgpu::Buffer,
     instance_count: u32,
-    batches: Vec<(wgpu::Buffer, u32, wgpu::BindGroup)>,
+    batches: Vec<(wgpu::Buffer, u32, Vec<Pass>)>,
     /// Bounds of the model itself, before any instance transform.
     pub bounds: (Vec3, Vec3),
 }
@@ -66,17 +83,20 @@ pub struct GpuModel {
 pub type Textures<'a> = dyn Fn(i32) -> Option<esf::Image> + 'a;
 
 pub struct Renderer {
-    pipeline: wgpu::RenderPipeline,
+    /// Indexed by blend mode: 0 opaque, 1 add, 2 subtract, 3 alpha, 4 multiply.
+    pipelines: Vec<wgpu::RenderPipeline>,
     frame_buf: wgpu::Buffer,
     frame_bg: wgpu::BindGroup,
     material_layout: wgpu::BindGroupLayout,
     palette_layout: wgpu::BindGroupLayout,
-    sampler: wgpu::Sampler,
+    /// repeat, clamp, mirror.
+    samplers: [wgpu::Sampler; 3],
     white: wgpu::TextureView,
-    /// DictID → uploaded texture (`None`: the id resolved to nothing).
+    /// DictID -> uploaded texture (`None`: the id resolved to nothing).
     textures: std::collections::HashMap<i32, Option<wgpu::TextureView>>,
     /// DictIDs a batch asked for that no loaded file holds.
     pub missing_textures: std::collections::BTreeSet<i32>,
+    start: std::time::Instant,
 }
 
 /// What to draw this frame. The lights are the VU1 strip programs' uniforms:
@@ -91,13 +111,22 @@ pub struct View {
 impl View {
     /// Placeholder daylight until `VIScene::SetupTimeOfDay` is ported.
     pub fn daylight(view_proj: Mat4) -> Self {
-        View {
-            view_proj,
-            sun_dir: Vec3::new(0.35, -0.8, 0.45),
-            sun: Vec3::splat(0.6),
-            ambient: Vec3::splat(0.45),
-        }
+        View { view_proj, sun_dir: Vec3::new(0.35, -0.8, 0.45), sun: Vec3::splat(0.6), ambient: Vec3::splat(0.45) }
     }
+}
+
+/// The GS ALPHA register of each blend mode, as a wgpu blend:
+/// 1 `Cs·As + Cd`, 2 `Cd − Cs·As`, 3 `(Cs − Cd)·As + Cd`, 4 `Cd·As`.
+fn blend_state(mode: usize) -> Option<wgpu::BlendState> {
+    use wgpu::{BlendComponent as C, BlendFactor as Fa, BlendOperation as Op};
+    let color = match mode {
+        1 => C { src_factor: Fa::SrcAlpha, dst_factor: Fa::One, operation: Op::Add },
+        2 => C { src_factor: Fa::SrcAlpha, dst_factor: Fa::One, operation: Op::ReverseSubtract },
+        3 => C { src_factor: Fa::SrcAlpha, dst_factor: Fa::OneMinusSrcAlpha, operation: Op::Add },
+        4 => C { src_factor: Fa::Zero, dst_factor: Fa::SrcAlpha, operation: Op::Add },
+        _ => return None,
+    };
+    Some(wgpu::BlendState { color, alpha: C { src_factor: Fa::Zero, dst_factor: Fa::One, operation: Op::Add } })
 }
 
 impl Renderer {
@@ -108,7 +137,7 @@ impl Renderer {
             entries: &[uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT)],
         });
         let material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("material"),
+            label: Some("layer"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
@@ -126,7 +155,7 @@ impl Renderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
-                uniform_entry(2, wgpu::ShaderStages::FRAGMENT),
+                uniform_entry(2, wgpu::ShaderStages::VERTEX_FRAGMENT),
             ],
         });
         let palette_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -138,54 +167,62 @@ impl Renderer {
             bind_group_layouts: &[Some(&frame_layout), Some(&material_layout), Some(&palette_layout)],
             immediate_size: 0,
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("model"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[
-                    Some(wgpu::VertexBufferLayout {
-                        array_stride: std::mem::size_of::<Vertex>() as u64,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x3, 3 => Float32x4, 8 => Uint8x4, 9 => Uint8x4],
+        let pipelines = (0..5)
+            .map(|mode| {
+                let blend = blend_state(mode);
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("layer"),
+                    layout: Some(&layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: Some("vs_main"),
+                        compilation_options: Default::default(),
+                        buffers: &[
+                            Some(wgpu::VertexBufferLayout {
+                                array_stride: std::mem::size_of::<Vertex>() as u64,
+                                step_mode: wgpu::VertexStepMode::Vertex,
+                                attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x3, 3 => Float32x4, 8 => Uint8x4, 9 => Uint8x4],
+                            }),
+                            Some(wgpu::VertexBufferLayout {
+                                array_stride: 64,
+                                step_mode: wgpu::VertexStepMode::Instance,
+                                attributes: &wgpu::vertex_attr_array![4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4],
+                            }),
+                        ],
+                    },
+                    // Strips are lists with the winding made consistent; the
+                    // strip programs cull back faces (ADC), so this does too.
+                    primitive: wgpu::PrimitiveState {
+                        front_face: FRONT_FACE,
+                        cull_mode: Some(wgpu::Face::Back),
+                        ..Default::default()
+                    },
+                    // Opaque: depth tested and written. Blended: TEST's
+                    // AFAIL = RGB_ONLY with a NEVER alpha test, i.e. colour
+                    // only, no depth write.
+                    depth_stencil: Some(wgpu::DepthStencilState {
+                        format: DEPTH_FORMAT,
+                        depth_write_enabled: Some(blend.is_none()),
+                        depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                        stencil: Default::default(),
+                        bias: Default::default(),
                     }),
-                    Some(wgpu::VertexBufferLayout {
-                        array_stride: 64,
-                        step_mode: wgpu::VertexStepMode::Instance,
-                        attributes: &wgpu::vertex_attr_array![4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4],
+                    multisample: Default::default(),
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: Some("fs_main"),
+                        compilation_options: Default::default(),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format,
+                            blend,
+                            write_mask: if blend.is_some() { wgpu::ColorWrites::COLOR } else { wgpu::ColorWrites::ALL },
+                        })],
                     }),
-                ],
-            },
-            // Strips are flattened to lists with the winding made consistent
-            // (esf: even k is (k, k+2, k+1)). The VU1 strip programs cull a
-            // triangle whose screen winding is against the strip's alternating
-            // parity -- they set ADC on it (decomp/vu/README.md) -- so back
-            // faces are culled here too; that is also what hides the
-            // backward-facing triangles that bridge one strip to the next.
-            primitive: wgpu::PrimitiveState {
-                front_face: FRONT_FACE,
-                cull_mode: Some(wgpu::Face::Back),
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(format.into())],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+                    multiview_mask: None,
+                    cache: None,
+                })
+            })
+            .collect();
         let frame_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("frame"),
             size: std::mem::size_of::<FrameUniform>() as u64,
@@ -197,24 +234,32 @@ impl Renderer {
             layout: &frame_layout,
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: frame_buf.as_entire_binding() }],
         });
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::Repeat,
-            address_mode_v: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
+        let sampler = |mode| {
+            device.create_sampler(&wgpu::SamplerDescriptor {
+                address_mode_u: mode,
+                address_mode_v: mode,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            })
+        };
+        let samplers = [
+            sampler(wgpu::AddressMode::Repeat),
+            sampler(wgpu::AddressMode::ClampToEdge),
+            sampler(wgpu::AddressMode::MirrorRepeat),
+        ];
         let white = upload_rgba(device, queue, 1, 1, &[255; 4]);
         Renderer {
-            pipeline,
+            pipelines,
             frame_buf,
             frame_bg,
             material_layout,
             palette_layout,
-            sampler,
+            samplers,
             white,
             textures: Default::default(),
             missing_textures: Default::default(),
+            start: std::time::Instant::now(),
         }
     }
 
@@ -255,6 +300,11 @@ impl Renderer {
                 weights: m.weights.get(i).copied().unwrap_or([0; 4]),
             })
             .collect();
+        let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("vertices"),
+            contents: bytemuck::cast_slice(&verts),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
         let identity = [IDENTITY; MAX_BONES];
         let palette = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("palette"),
@@ -266,48 +316,66 @@ impl Renderer {
             layout: &self.palette_layout,
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: palette.as_entire_binding() }],
         });
-        let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("vertices"),
-            contents: bytemuck::cast_slice(&verts),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
         let mut batches = Vec::new();
         for b in &m.batches {
             if b.indices.is_empty() {
                 continue;
             }
-            let view = self.texture(device, queue, b.texture(), textures);
-            let tint = b
-                .layers
-                .iter()
-                .find(|l| l.texture != 0)
-                .map_or([1.0; 4], |l| l.color.map(|c| c as f32 / 128.0));
-            let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("material"),
-                contents: bytemuck::bytes_of(&MaterialUniform {
-                    tint,
-                    flags: [if view.is_some() { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
-                }),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
-            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("material"),
-                layout: &self.material_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(view.as_ref().unwrap_or(&self.white)),
-                    },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                    wgpu::BindGroupEntry { binding: 2, resource: uniform.as_entire_binding() },
-                ],
-            });
+            // A material with no layer at all draws once, untextured.
+            let untextured = [esf::Layer {
+                flags: 1,
+                texture: 0,
+                wrap: 0,
+                blend: 0,
+                color: [255; 4],
+                uv_transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+                lod_bias: 0.8,
+                uv_rate: [0.0, 0.0],
+            }];
+            let layers: &[esf::Layer] = if b.layers.is_empty() { &untextured } else { &b.layers };
+            let mut passes = Vec::new();
+            for l in layers {
+                let view = self.texture(device, queue, l.texture, textures);
+                let blend = (l.blend.clamp(0, 4)) as usize;
+                let k = l.uv_coeffs();
+                // The layer colour reaches the GS as c/255 × 128 and modulates
+                // by /128: a tint of c/255.
+                let tint = l.color.map(|c| c as f32 / 255.0);
+                let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("layer"),
+                    contents: bytemuck::bytes_of(&LayerUniform {
+                        tint,
+                        flags: [view.is_some() as i32 as f32, (blend != 0) as i32 as f32, 0.0, 0.0],
+                        uv0: [k[0], k[1], k[2], k[3]],
+                        uv1: [k[4], k[5], l.uv_rate[0], l.uv_rate[1]],
+                    }),
+                    usage: wgpu::BufferUsages::UNIFORM,
+                });
+                let sampler = match l.wrap {
+                    1 | 2 => &self.samplers[1],
+                    3 => &self.samplers[2],
+                    _ => &self.samplers[0],
+                };
+                let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("layer"),
+                    layout: &self.material_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(view.as_ref().unwrap_or(&self.white)),
+                        },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+                        wgpu::BindGroupEntry { binding: 2, resource: uniform.as_entire_binding() },
+                    ],
+                });
+                passes.push(Pass { blend, bg });
+            }
             let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("indices"),
                 contents: bytemuck::cast_slice(&b.indices),
                 usage: wgpu::BufferUsages::INDEX,
             });
-            batches.push((indices, b.indices.len() as u32, bg));
+            batches.push((indices, b.indices.len() as u32, passes));
         }
         let lo = m.pos.iter().fold(Vec3::splat(f32::MAX), |a, p| a.min(Vec3::from(*p)));
         let hi = m.pos.iter().fold(Vec3::splat(f32::MIN), |a, p| a.max(Vec3::from(*p)));
@@ -353,7 +421,7 @@ impl Renderer {
         let uniform = FrameUniform {
             view_proj: view.view_proj.to_cols_array_2d(),
             sun_dir: view.sun_dir.normalize().extend(0.0).to_array(),
-            sun: view.sun.extend(0.0).to_array(),
+            sun: view.sun.extend(self.start.elapsed().as_secs_f32()).to_array(),
             ambient: view.ambient.extend(0.0).to_array(),
         };
         queue.write_buffer(&self.frame_buf, 0, bytemuck::bytes_of(&uniform));
@@ -377,19 +445,28 @@ impl Renderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.frame_bg, &[]);
-        for m in models {
-            if m.instance_count == 0 {
-                continue;
-            }
-            pass.set_vertex_buffer(0, m.vertices.slice(..));
-            pass.set_vertex_buffer(1, m.instances.slice(..));
-            pass.set_bind_group(2, &m.palette_bg, &[]);
-            for (indices, count, bg) in &m.batches {
-                pass.set_bind_group(1, bg, &[]);
-                pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..*count, 0, 0..m.instance_count);
+        // Opaque passes first, then the blended ones (see the module docs).
+        for blended in [false, true] {
+            let mut current = usize::MAX;
+            for m in models {
+                if m.instance_count == 0 {
+                    continue;
+                }
+                pass.set_vertex_buffer(0, m.vertices.slice(..));
+                pass.set_vertex_buffer(1, m.instances.slice(..));
+                pass.set_bind_group(2, &m.palette_bg, &[]);
+                for (indices, count, passes) in &m.batches {
+                    pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
+                    for p in passes.iter().filter(|p| (p.blend != 0) == blended) {
+                        if p.blend != current {
+                            pass.set_pipeline(&self.pipelines[p.blend]);
+                            current = p.blend;
+                        }
+                        pass.set_bind_group(1, &p.bg, &[]);
+                        pass.draw_indexed(0..*count, 0, 0..m.instance_count);
+                    }
+                }
             }
         }
     }

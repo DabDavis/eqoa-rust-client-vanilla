@@ -120,18 +120,40 @@ impl PrimBuffer {
     }
 }
 
-/// One textured layer of a material. The colour is where per-race skin tone
-/// lives; the 3×3 UV transform is where a layer's tiling rate lives.
-#[derive(Clone, Debug)]
+/// One layer of a material (`ParseMaterial`). The colour is where per-race
+/// skin tone lives; the 3×3 UV transform is where a layer's tiling rate lives.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Layer {
+    /// 1 textured fill, 2 the second UV set.
+    pub flags: i32,
     pub texture: i32,
+    /// 0 repeat, 1 clamp, 2 region, 3 mirror.
+    pub wrap: i32,
+    /// `VIAlphaBlendMode`: 0 opaque (alpha test), 1 add, 2 subtract, 3 alpha,
+    /// 4 multiply the destination by the source alpha.
+    pub blend: i32,
     pub color: [u8; 4],
     pub uv_transform: [f32; 9],
-    pub blend: i32,
+    pub lod_bias: f32,
+    /// UV scroll, per second (`VIMaterial::Process`).
+    pub uv_rate: [f32; 2],
 }
 
 impl Layer {
     /// u' = u·m0 + v·m3 + m6, v' = u·m1 + v·m4 + m7; a zero diagonal is identity.
+    /// The transform as the renderer applies it per layer: (m0, m1, m3, m4,
+    /// m6, m7), a zero diagonal reading as identity (as the reference
+    /// parsers do).
+    pub fn uv_coeffs(&self) -> [f32; 6] {
+        let m = &self.uv_transform;
+        let (mut m0, mut m4) = (m[0], m[4]);
+        if m0 == 0.0 && m4 == 0.0 {
+            m0 = 1.0;
+            m4 = 1.0;
+        }
+        [m0, m[1], m[3], m4, m[6], m[7]]
+    }
+
     pub fn apply_uv(&self, uv: [f32; 2]) -> [f32; 2] {
         let m = &self.uv_transform;
         let (mut m0, mut m4) = (m[0], m[4]);
@@ -161,16 +183,21 @@ pub fn read_material(d: &[u8], body: usize, version: i16) -> Vec<Layer> {
         if p + 68 > d.len() {
             break;
         }
+        let flags = i32le(d, p);
         let texture = i32le(d, p + 4);
+        let wrap = i32le(d, p + 8);
         let blend = i32le(d, p + 12);
         let color = [d[p + 16], d[p + 17], d[p + 18], d[p + 19]];
         let mut uv_transform = [0.0; 9];
         for (k, m) in uv_transform.iter_mut().enumerate() {
             *m = f32le(d, p + 20 + k * 4);
         }
+        // Version 0 reads the LOD bias and throws it away for 0.8.
+        let lod_bias = if version == 0 { 0.8 } else { f32le(d, p + 56) };
+        let uv_rate = [f32le(d, p + 60), f32le(d, p + 64)];
         // flags, tex, wrap, blend, colour, uv[9], lod, uRate, vRate
         p += 20 + 36 + 12;
-        out.push(Layer { texture, color, uv_transform, blend });
+        out.push(Layer { flags, texture, wrap, blend, color, uv_transform, lod_bias, uv_rate });
     }
     out
 }
@@ -189,7 +216,8 @@ impl Batch {
     }
 }
 
-/// A sprite flattened into one vertex array plus per-material batches.
+/// A sprite flattened into one vertex array plus per-material batches. UVs are
+/// the RAW vertex UVs: each layer's transform is applied when it is drawn.
 #[derive(Clone, Debug, Default)]
 pub struct Model {
     pub pos: Vec<[f32; 3]>,
@@ -277,7 +305,7 @@ fn sprite_materials<'a>(c: &'a Container, sprite: NodeId, resolve: &Resolve<'a>)
 /// Appends one sprite's PrimBuffer to `m`, placed.
 fn add_sprite<'a>(
     m: &mut Model,
-    keys: &mut Vec<(i32, [u8; 4])>,
+    keys: &mut Vec<Vec<Layer>>,
     c: &'a Container,
     sprite: NodeId,
     place: impl Fn([f32; 3]) -> [f32; 3],
@@ -292,7 +320,6 @@ fn add_sprite<'a>(
     let mats = sprite_materials(c, sprite, resolve);
     for l in geom.lists.iter().filter(|l| !l.pos.is_empty()) {
         let layers = usize::try_from(l.material).ok().and_then(|i| mats.get(i)).cloned().unwrap_or_default();
-        let base_layer = layers.iter().find(|x| x.texture != 0).cloned();
         let base = m.pos.len() as u32;
         // Terrain: each vertex is offset by its pre-translation group. pbtype 4
         // carries the group; pbtype 2 takes entry 0 (the zero value indexes the
@@ -305,7 +332,7 @@ fn add_sprite<'a>(
                 None => p,
             }
         }));
-        m.uv.extend(l.uv.iter().map(|&uv| base_layer.as_ref().map_or(uv, |b| b.apply_uv(uv))));
+        m.uv.extend_from_slice(&l.uv);
         m.normal.extend_from_slice(&l.normal);
         m.color.extend_from_slice(&l.color);
         if l.bones.is_empty() {
@@ -316,11 +343,10 @@ fn add_sprite<'a>(
             m.bones.extend_from_slice(&l.bones);
             m.weights.extend_from_slice(&l.weights);
         }
-        // Keyed on texture and tint, so per-race skin tones under one texture
-        // stay apart.
-        let key = base_layer.as_ref().map_or((0, [255; 4]), |b| (b.texture, b.color));
-        let bi = keys.iter().position(|k| *k == key).unwrap_or_else(|| {
-            keys.push(key);
+        // One batch per distinct material (every layer), so per-race skin
+        // tones under one texture stay apart and layers are kept whole.
+        let bi = keys.iter().position(|k| *k == layers).unwrap_or_else(|| {
+            keys.push(layers.clone());
             m.batches.push(Batch { layers: layers.clone(), indices: Vec::new() });
             keys.len() - 1
         });
