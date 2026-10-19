@@ -7,7 +7,6 @@
 //! drag orbits too. Esc quits.
 
 use crate::scene::{self, Scene};
-use crate::standin::TerrainScene;
 use crate::walker::{Controls, Walker};
 use esf::{Library, Ref};
 use glam::Vec3;
@@ -28,7 +27,7 @@ pub enum Source {
     Models { list: Vec<(i32, Ref)>, index: usize },
     Zone { file: usize, zone: esf::NodeId, index: usize },
     /// A zone with the character in it, walking.
-    Walk { file: usize, zone: esf::NodeId, index: usize, character: Ref },
+    Walk { file: usize, index: usize, character: Ref },
 }
 
 /// The human (`claude-notes`: model ids by race; the wire value is the DictID).
@@ -41,19 +40,36 @@ impl Source {
                 let (id, r) = list[*index];
                 scene::model(id, lib.build_model(r).unwrap_or_default())
             }
-            Source::Zone { file, zone, index } | Source::Walk { file, zone, index, .. } => {
-                scene::zone(lib, *file, *zone, *index)
-            }
+            Source::Zone { file, zone, index } => scene::zone(lib, *file, *zone, *index),
+            Source::Walk { file, index, .. } => scene::zones_near(lib, *file, *index, 2500.0),
         }
     }
 
-    /// For a walk: the character on the zone's terrain, in the middle of it.
+    /// For a walk: the character in the middle of the zone, on the game's own
+    /// collision world (the whole world file's, not just this zone's).
     pub fn walker(&self, lib: &Library, s: &Scene) -> Option<(Walker, esf::Model)> {
-        let Source::Walk { character, .. } = self else { return None };
-        let terrain = TerrainScene::new(&s.parts.first()?.0);
-        eprintln!("stand-in collision: {} terrain triangles", terrain.triangles());
+        let Source::Walk { file, character, .. } = self else { return None };
+        let t = Instant::now();
+        let world = vi::world::World::load(lib, *file)?;
+        eprintln!(
+            "collision world: {} zones, {} buffers, {} actors, in {:.2?}",
+            world.zones.len(),
+            world.buffers.len(),
+            world.actors.len(),
+            t.elapsed()
+        );
+        // `EQOA_SPAWN=x,z[,heading]` picks the spot; else near the middle.
         let c = (s.bounds.0 + s.bounds.1) * 0.5;
-        let w = Walker::new(terrain, c.x, c.z, 0.0);
+        let spawn: Vec<f32> = std::env::var("EQOA_SPAWN")
+            .ok()
+            .map(|v| v.split(',').filter_map(|t| t.trim().parse().ok()).collect())
+            .unwrap_or_default();
+        let (x, z, h) = match spawn.as_slice() {
+            [x, z] => (*x, *z, 0.0),
+            [x, z, h, ..] => (*x, *z, *h),
+            _ => (c.x - 40.0, c.z + 40.0, 0.0),
+        };
+        let w = Walker::new(world, x, z, h);
         Some((w, lib.build_model(*character)?))
     }
 

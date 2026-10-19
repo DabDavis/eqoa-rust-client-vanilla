@@ -1,0 +1,742 @@
+//! `VIScene`'s collision world: `VIWorld` and its zones (`viworld.cpp`,
+//! `vizone.cpp`), the rooms, sprites and actors in them (`viscene.cpp`), loaded
+//! from the world file the way `VIESFParse` loads it (`ParseWorldBase`,
+//! `ParseZoneBaseObj`, `ParseZoneRoom`, `ParseZoneRoomActorsObj`, the
+//! `Replace*Proxy*` pair and `UpdateActor`), and the three walks over them:
+//! the swept-sphere collide, the environment ray, and actor insertion.
+//!
+//! Not yet: `VIHSprite` and `VICSprite` collide as nothing here (the first
+//! needs the pose evaluator, the second is a capsule); the ray collide.
+
+use crate::coll::{CollSphere, EnvRay};
+use crate::collide::{Collide, CollBuffer, cull_sphere};
+use crate::fpu::{F, Model};
+use crate::geom::{BBox, Matrix44, Plane, Sphere};
+use crate::scene::{Filter, FilterKind, Scene};
+use crate::vect::Vect3;
+use esf::{Container, Library, NodeId, Ref};
+use std::collections::HashMap;
+
+#[derive(Clone, Debug, Default)]
+pub struct Node<M: Model> {
+    pub plane: Plane<M>,
+    pub front: u32,
+    pub back: u32,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Room {
+    /// The DictID of the room's own sprite (`m_p28`), and what it resolved to.
+    pub sprite_id: u32,
+    pub sprite: Option<usize>,
+    /// Pass stamps: `m_p20` (per world walk), `m_p24` (per scene pass).
+    pub stamp20: i32,
+    pub stamp24: i32,
+    /// The actors that occupy it, in insertion order (`m_p68` list).
+    pub actors: Vec<usize>,
+    /// The zone's own actor placements, as parsed (`m_a3C`).
+    pub placements: Vec<usize>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Zone<M: Model> {
+    pub nodes: Vec<Node<M>>,
+    /// (room, environment flags) per leaf.
+    pub leaves: Vec<(i32, u32)>,
+    pub pretrans: Vec<Vect3<M>>,
+    pub rooms: Vec<Room>,
+}
+
+#[derive(Clone, Debug)]
+pub enum SpriteKind {
+    /// SimpleSprite / SubSprite: a collision buffer, if it has one.
+    Simple(Option<usize>),
+    /// (member sprite, angles, scale, translation), as `VIGroupMember` holds
+    /// them: `m_loc` is handed to `Transform` as the ANGLES and `m_hpr` as the
+    /// translation, and the data agrees (every member's first triple is 0).
+    Group(Vec<(usize, [f32; 3], f32, [f32; 3])>),
+    Lod(Vec<usize>),
+    /// Collides as nothing (flora, sounds, lights, emitters; and for now
+    /// HSprites and CSprites).
+    None,
+}
+
+#[derive(Clone, Debug)]
+pub struct SceneSprite<M: Model> {
+    pub kind: SpriteKind,
+    pub bbox: BBox<M>,
+    pub bsphere: Sphere<M>,
+    /// `VISpriteType` 5 is VICSprite, which the walk filters skip.
+    pub sprite_type: i32,
+}
+
+#[derive(Clone, Debug)]
+pub struct Actor<M: Model> {
+    pub location: Vect3<M>,
+    pub hpr: Vect3<M>,
+    pub scale: F<M>,
+    pub sprite_id: u32,
+    pub sprite: Option<usize>,
+    pub object_to_world: Matrix44<M>,
+    pub bound: Sphere<M>,
+    /// `m_p40`: 4 proxy (unresolved), 8 static, 0x10 hidden.
+    pub flags: u32,
+    /// `m_p80`, the scene pass that last visited it.
+    pub stamp80: i32,
+}
+
+pub struct World<M: Model> {
+    pub nodes: Vec<Node<M>>,
+    /// The zone each world leaf is.
+    pub leaves: Vec<i32>,
+    pub zones: Vec<Zone<M>>,
+    /// `VIWorldTree::m_state`, the walk stamp.
+    pub state: i32,
+    /// `VIScene::m_stamp`, the pass stamp.
+    pub stamp: i32,
+    pub sprites: Vec<SceneSprite<M>>,
+    sprite_of: HashMap<Ref, usize>,
+    pub buffers: Vec<CollBuffer<M>>,
+    pub actors: Vec<Actor<M>>,
+    pub collide: Collide<M>,
+    /// `VIScene::GetTime`, ms; the caller advances it.
+    pub time: i64,
+}
+
+fn rd_f(d: &[u8], o: usize) -> f32 {
+    f32::from_le_bytes(d[o..o + 4].try_into().unwrap())
+}
+fn rd_i(d: &[u8], o: usize) -> i32 {
+    i32::from_le_bytes(d[o..o + 4].try_into().unwrap())
+}
+fn v3<M: Model>(d: &[u8], o: usize) -> Vect3<M> {
+    Vect3::of(rd_f(d, o), rd_f(d, o + 4), rd_f(d, o + 8))
+}
+
+fn read_tree<M: Model>(c: &Container, id: NodeId, leaf_words: usize) -> (Vec<Node<M>>, Vec<(i32, u32)>) {
+    let d = c.body(id);
+    let (nn, nl) = (rd_i(d, 0) as usize, rd_i(d, 4) as usize);
+    let mut p = 8;
+    let mut nodes = Vec::with_capacity(nn);
+    for _ in 0..nn {
+        nodes.push(Node {
+            plane: Plane { n: v3(d, p), d: F::new(rd_f(d, p + 12)) },
+            front: rd_i(d, p + 16) as u32,
+            back: rd_i(d, p + 20) as u32,
+        });
+        p += 24;
+    }
+    let mut leaves = Vec::with_capacity(nl);
+    for _ in 0..nl {
+        let a = rd_i(d, p);
+        let b = if leaf_words == 2 { rd_i(d, p + 4) as u32 } else { 0 };
+        leaves.push((a, b));
+        p += 4 * leaf_words;
+    }
+    (nodes, leaves)
+}
+
+const LEAF: u32 = 0x4000_0000;
+
+impl<M: Model> World<M> {
+    /// Loads the world in `lib.file(file)`: its tree and every zone's base,
+    /// resources and actors (`ParseWorldObj` with i == 0).
+    pub fn load(lib: &Library, file: usize) -> Option<Self> {
+        let c = lib.file(file);
+        let root = *c.roots.first()?;
+        let base = c.child(root, 0x8200)?;
+        let tree = c.child(base, 0x8230)?;
+        let (nodes, leaves) = read_tree::<M>(c, tree, 1);
+        let mut w = World {
+            nodes,
+            leaves: leaves.into_iter().map(|l| l.0).collect(),
+            zones: Vec::new(),
+            state: 0,
+            stamp: 0,
+            sprites: Vec::new(),
+            sprite_of: HashMap::new(),
+            buffers: Vec::new(),
+            actors: Vec::new(),
+            collide: Collide::default(),
+            time: 0,
+        };
+        let zones = c.zones();
+        for &z in &zones {
+            w.zones.push(Self::zone_base(c, z));
+        }
+        for (zi, &z) in zones.iter().enumerate() {
+            w.load_zone(lib, file, zi, z);
+        }
+        Some(w)
+    }
+
+    fn zone_base(c: &Container, z: NodeId) -> Zone<M> {
+        let mut zone = Zone::default();
+        let Some(base) = c.child(z, 0x3200) else { return zone };
+        if let Some(t) = c.child(base, 0x3220) {
+            let (n, l) = read_tree(c, t, 2);
+            zone.nodes = n;
+            zone.leaves = l;
+        }
+        if let Some(pt) = c.child(base, 0x3250) {
+            let d = c.body(pt);
+            zone.pretrans = (0..rd_i(d, 0).max(0) as usize).map(|i| v3(d, 4 + i * 12)).collect();
+        }
+        if let Some(rooms) = c.child(base, 0x3230) {
+            for &r in &c.node(rooms).children {
+                if c.node(r).ty == 0x3240 {
+                    let d = c.body(r);
+                    zone.rooms.push(Room { sprite_id: rd_i(d, 0) as u32, stamp20: -1, stamp24: -1, ..Default::default() });
+                }
+            }
+        }
+        zone
+    }
+
+    /// The zone's actors (`ParseZoneActors`), then `ReplaceProxyRooms` and
+    /// `ReplaceStaticProxyActors`, which resolve the DictIDs and insert.
+    fn load_zone(&mut self, lib: &Library, file: usize, zi: usize, z: NodeId) {
+        let c = lib.file(file);
+        if let Some(acts) = c.child(z, 0x3290) {
+            for &ra in &c.node(acts).children {
+                if c.node(ra).ty != 0x3270 {
+                    continue;
+                }
+                let Some(room) = c.child(ra, 0x3280).map(|r| rd_i(c.body(r), 0) as usize) else { continue };
+                let Some(list) = c.child(ra, 0x6040) else { continue };
+                for &a in &c.node(list).children {
+                    let d = c.body(a);
+                    if c.node(a).ty != 0x6000 || d.len() < 36 {
+                        continue;
+                    }
+                    let id = self.actors.len();
+                    self.actors.push(Actor {
+                        location: v3(d, 4),
+                        hpr: v3(d, 16),
+                        scale: F::new(rd_f(d, 28)),
+                        sprite_id: rd_i(d, 0) as u32,
+                        sprite: None,
+                        object_to_world: Matrix44::identity(),
+                        bound: Sphere::default(),
+                        flags: 12,
+                        stamp80: 0,
+                    });
+                    if let Some(r) = self.zones[zi].rooms.get_mut(room) {
+                        r.placements.push(id);
+                    }
+                }
+            }
+        }
+        let pretrans = self.zones[zi].pretrans.clone();
+        for ri in 0..self.zones[zi].rooms.len() {
+            let sid = self.zones[zi].rooms[ri].sprite_id;
+            if let Some(r) = lib.lookup(sid as i32) {
+                self.zones[zi].rooms[ri].sprite = self.sprite(lib, r, &pretrans);
+            }
+        }
+        for ri in 0..self.zones[zi].rooms.len() {
+            for j in 0..self.zones[zi].rooms[ri].placements.len() {
+                let a = self.zones[zi].rooms[ri].placements[j];
+                if self.actors[a].flags & 4 != 0 {
+                    let Some(r) = lib.lookup(self.actors[a].sprite_id as i32) else { continue };
+                    let Some(s) = self.sprite(lib, r, &pretrans) else { continue };
+                    self.actors[a].sprite = Some(s);
+                    self.update_actor(a);
+                    self.actors[a].flags &= !4;
+                }
+            }
+        }
+    }
+
+    /// The scene sprite a dictionary entry is, built once.
+    fn sprite(&mut self, lib: &Library, r: Ref, pretrans: &[Vect3<M>]) -> Option<usize> {
+        if let Some(&s) = self.sprite_of.get(&r) {
+            return Some(s);
+        }
+        let c = lib.file(r.file);
+        let n = c.node(r.node);
+        let header_bbox = |hdr: u16, off: usize| -> BBox<M> {
+            c.child(r.node, hdr).map_or(BBox::default(), |h| {
+                let d = c.body(h);
+                BBox { min: v3(d, off), max: v3(d, off + 12) }
+            })
+        };
+        let (kind, bbox, sprite_type) = match n.ty {
+            // SimpleSprite: the buffer only when the record's version says so.
+            0x2000 => {
+                let coll = if n.version != 0 { self.buffer(c, r.node, pretrans) } else { None };
+                (SpriteKind::Simple(coll), header_bbox(0x2001, 4), 1)
+            }
+            0x2310 => (SpriteKind::Simple(self.buffer(c, r.node, pretrans)), header_bbox(0x2311, 8), 1),
+            0x2C00 => {
+                let mut members = Vec::new();
+                if let Some(m) = c.child(r.node, 0x2C30) {
+                    let d = c.body(m);
+                    for k in 0..rd_i(d, 0).max(0) as usize {
+                        let o = 4 + k * 32;
+                        let Some(mr) = lib.lookup(rd_i(d, o)) else { continue };
+                        let Some(ms) = self.sprite(lib, mr, pretrans) else { continue };
+                        let t = |i: usize| rd_f(d, o + 4 + i * 4);
+                        members.push((ms, [t(0), t(1), t(2)], t(3), [t(4), t(5), t(6)]));
+                    }
+                }
+                (SpriteKind::Group(members), header_bbox(0x2C10, 4), 11)
+            }
+            0x2A00 => {
+                let mut levels = Vec::new();
+                if let Some(l) = c.child(r.node, 0x2A30) {
+                    let d = c.body(l);
+                    for k in 0..rd_i(d, 0).max(0) as usize {
+                        let Some(lr) = lib.lookup(rd_i(d, 4 + k * 8)) else { continue };
+                        if let Some(ls) = self.sprite(lib, lr, pretrans) {
+                            levels.push(ls);
+                        }
+                    }
+                }
+                (SpriteKind::Lod(levels), header_bbox(0x2A10, 4), 0)
+            }
+            0x2700 => (SpriteKind::None, header_bbox(0x2710, 4), 5),
+            _ => (SpriteKind::None, BBox::default(), 0),
+        };
+        let id = self.sprites.len();
+        self.sprites.push(SceneSprite { kind, bbox, bsphere: Sphere::from_bbox(&bbox), sprite_type });
+        self.sprite_of.insert(r, id);
+        Some(id)
+    }
+
+    fn buffer(&mut self, c: &Container, sprite: NodeId, pretrans: &[Vect3<M>]) -> Option<usize> {
+        let b = c.child(sprite, 0x4200)?;
+        let buf = CollBuffer::parse(c.body(b), c.node(b).version, pretrans)?;
+        self.buffers.push(buf);
+        Some(self.buffers.len() - 1)
+    }
+
+    /// `VIScene::UpdateActor`: the transform, the bound, and insertion into
+    /// every room the world and zone trees put it in.
+    fn update_actor(&mut self, i: usize) {
+        let Some(s) = self.actors[i].sprite else { return };
+        let a = &mut self.actors[i];
+        a.object_to_world = Matrix44::transform(&a.hpr, a.scale, &a.location);
+        let sp = &self.sprites[s];
+        a.bound.c = a.object_to_world.mul_point(&sp.bsphere.c);
+        a.bound.r = sp.bsphere.r * a.scale;
+        let corners = sp.bbox.corners(&a.object_to_world);
+        let bound = a.bound;
+        let stamp = self.state;
+        if self.nodes.is_empty() {
+            self.insert_world(LEAF, i, &bound, &corners, stamp);
+        } else {
+            self.insert_world(0, i, &bound, &corners, stamp);
+        }
+        self.state += 1;
+        self.stamp += 1;
+    }
+
+    fn insert_world(&mut self, node: u32, actor: usize, b: &Sphere<M>, corners: &[Vect3<M>; 8], stamp: i32) {
+        let mut node = node;
+        if node & 0xF000_0000 != 0 {
+            if node & LEAF != 0 {
+                let z = self.leaves[(node & 0x0FFF_FFFF) as usize] as usize;
+                let root = if self.zones[z].nodes.is_empty() { LEAF } else { 0 };
+                self.insert_zone(z, root, actor, b, corners, stamp);
+                return;
+            }
+            node &= 0x0FFF_FFFF;
+        }
+        let n = self.nodes[node as usize].clone();
+        let (front, back) = split(&n.plane, b, corners);
+        if front {
+            self.insert_world(n.front, actor, b, corners, stamp);
+        }
+        if back {
+            self.insert_world(n.back, actor, b, corners, stamp);
+        }
+    }
+
+    fn insert_zone(&mut self, z: usize, node: u32, actor: usize, b: &Sphere<M>, corners: &[Vect3<M>; 8], stamp: i32) {
+        let mut node = node;
+        if node & 0xF000_0000 != 0 {
+            if node & LEAF != 0 {
+                let Some(&(room, _)) = self.zones[z].leaves.get((node & 0x0FFF_FFFF) as usize) else { return };
+                let Some(r) = self.zones[z].rooms.get_mut(room as usize) else { return };
+                if r.stamp20 != stamp {
+                    r.stamp20 = stamp;
+                    r.actors.push(actor);
+                }
+                return;
+            }
+            node &= 0x0FFF_FFFF;
+        }
+        let n = self.zones[z].nodes[node as usize].clone();
+        let (front, back) = split(&n.plane, b, corners);
+        if front {
+            self.insert_zone(z, n.front, actor, b, corners, stamp);
+        }
+        if back {
+            self.insert_zone(z, n.back, actor, b, corners, stamp);
+        }
+    }
+
+    /// `VIScene::Collide(VICollSphere &, VISceneFilter &)`.
+    pub fn collide_sphere(&mut self, s: &mut CollSphere<M>, f: &mut Filter) -> bool {
+        let mut v = Vars { start: s.ray.start, end: s.ray.end, radius: s.radius, stamp: self.state };
+        let hit = if self.nodes.is_empty() { self.world_node(LEAF, &mut v, s, f) } else { self.world_node(0, &mut v, s, f) };
+        self.state += 1;
+        self.stamp += 1;
+        hit
+    }
+
+    fn world_node(&mut self, node: u32, v: &mut Vars<M>, s: &mut CollSphere<M>, f: &mut Filter) -> bool {
+        let mut node = node;
+        if node & 0xF000_0000 != 0 {
+            if node & LEAF != 0 {
+                let z = self.leaves[(node & 0x0FFF_FFFF) as usize] as usize;
+                return self.zone_collide(z, v, s, f);
+            }
+            node &= 0x0FFF_FFFF;
+        }
+        let n = self.nodes[node as usize].clone();
+        descend(&n, v, |front, v| self.world_node(if front { n.front } else { n.back }, v, s, f))
+    }
+
+    fn zone_collide(&mut self, z: usize, v: &mut Vars<M>, s: &mut CollSphere<M>, f: &mut Filter) -> bool {
+        if !self.zones[z].pretrans.is_empty() {
+            let pt = self.zones[z].pretrans.clone();
+            self.collide.set_pretranslations(&pt);
+        }
+        if self.zones[z].leaves.is_empty() {
+            return false;
+        }
+        let root = if self.zones[z].nodes.is_empty() { LEAF } else { 0 };
+        self.zone_node(z, root, v, s, f)
+    }
+
+    fn zone_node(&mut self, z: usize, node: u32, v: &mut Vars<M>, s: &mut CollSphere<M>, f: &mut Filter) -> bool {
+        let mut node = node;
+        if node & 0xF000_0000 != 0 {
+            if node & LEAF != 0 {
+                return self.collide_leaf(z, (node & 0x0FFF_FFFF) as usize, v, s, f);
+            }
+            node &= 0x0FFF_FFFF;
+        }
+        let n = self.zones[z].nodes[node as usize].clone();
+        descend(&n, v, |front, v| self.zone_node(z, if front { n.front } else { n.back }, v, s, f))
+    }
+
+    fn collide_leaf(&mut self, z: usize, leaf: usize, v: &mut Vars<M>, s: &mut CollSphere<M>, f: &mut Filter) -> bool {
+        let room = self.zones[z].leaves[leaf].0 as usize;
+        let mut hit = false;
+        if self.zones[z].rooms[room].stamp20 != v.stamp {
+            self.zones[z].rooms[room].stamp20 = v.stamp;
+            if self.collide_room(z, room, s, f) {
+                hit = true;
+                v.end = s.hit_point();
+            }
+        }
+        hit
+    }
+
+    fn collide_room(&mut self, z: usize, room: usize, s: &mut CollSphere<M>, f: &mut Filter) -> bool {
+        let mut hit = false;
+        if self.zones[z].rooms[room].stamp24 != self.stamp {
+            self.zones[z].rooms[room].stamp24 = self.stamp;
+            if let Some(sprite) = self.zones[z].rooms[room].sprite {
+                self.collide.set_world(&Matrix44::identity());
+                if self.collide_sprite(sprite, s) {
+                    f.hit_sprite = sprite as i32;
+                    f.hit_actor = -1;
+                    hit = true;
+                }
+            }
+        }
+        for k in 0..self.zones[z].rooms[room].actors.len() {
+            let a = self.zones[z].rooms[room].actors[k];
+            if self.collide_actor(a, s, f) {
+                hit = true;
+            }
+        }
+        hit
+    }
+
+    /// `VIScene::CollideActor`.
+    fn collide_actor(&mut self, i: usize, s: &mut CollSphere<M>, f: &mut Filter) -> bool {
+        let mut hit = false;
+        if !cull_sphere(s, &self.actors[i].bound) {
+            let a = &self.actors[i];
+            if a.stamp80 == self.stamp || a.flags & 0x14 != 0 {
+                return false;
+            }
+            self.actors[i].stamp80 = self.stamp;
+            let Some(sprite) = self.actors[i].sprite else { return false };
+            let filtered = match f.kind {
+                FilterKind::Scene => i as i32 == f.actor,
+                FilterKind::WalkFloor => self.sprites[sprite].sprite_type == 5,
+                FilterKind::WalkCamera => self.sprites[sprite].sprite_type == 5 || i as i32 == f.actor,
+            };
+            if filtered {
+                return false;
+            }
+            let m = self.actors[i].object_to_world;
+            self.collide.set_world(&m);
+            hit = self.collide_sprite(sprite, s);
+            if hit {
+                f.hit_actor = i as i32;
+                f.hit_sprite = sprite as i32;
+            }
+        } else {
+            self.actors[i].stamp80 = self.stamp;
+        }
+        hit
+    }
+
+    /// The sprite's own `Collide` virtual, under the collider's current world.
+    fn collide_sprite(&mut self, sprite: usize, s: &mut CollSphere<M>) -> bool {
+        match self.sprites[sprite].kind.clone() {
+            SpriteKind::Simple(Some(b)) => {
+                let buf = std::mem::take(&mut self.buffers[b]);
+                let hit = self.collide.collide_obj(s, &buf);
+                self.buffers[b] = buf;
+                hit
+            }
+            SpriteKind::Group(members) => {
+                let base = self.collide.world;
+                for (ms, angles, scale, t) in members {
+                    let mem = Matrix44::transform(&Vect3::of(angles[0], angles[1], angles[2]), F::new(scale), &Vect3::of(t[0], t[1], t[2]));
+                    let out = Matrix44::mul(&mem, &base);
+                    self.collide.set_world(&out);
+                    if self.collide_sprite(ms, s) {
+                        return true;
+                    }
+                }
+                false
+            }
+            SpriteKind::Lod(levels) => levels.first().is_some_and(|&l| self.collide_sprite(l, s)),
+            _ => false,
+        }
+    }
+
+    /// The same answer as [`World::collide_sphere`] by brute force: every
+    /// room sprite and every placed actor in `zones`, no BSP, no culling. For
+    /// testing the walk: anything it fails to visit shows up as a difference.
+    pub fn collide_sphere_brute(&mut self, s: &mut CollSphere<M>, zones: &[usize]) -> bool {
+        let mut hit = false;
+        let mut seen = std::collections::HashSet::new();
+        for &z in zones {
+            let pt = self.zones[z].pretrans.clone();
+            for room in 0..self.zones[z].rooms.len() {
+                if let Some(sprite) = self.zones[z].rooms[room].sprite {
+                    if !pt.is_empty() {
+                        self.collide.set_pretranslations(&pt);
+                    }
+                    self.collide.set_world(&Matrix44::identity());
+                    hit |= self.collide_sprite(sprite, s);
+                }
+                for k in 0..self.zones[z].rooms[room].actors.len() {
+                    let a = self.zones[z].rooms[room].actors[k];
+                    if !seen.insert(a) {
+                        continue;
+                    }
+                    let (Some(sprite), m) = (self.actors[a].sprite, self.actors[a].object_to_world) else { continue };
+                    self.collide.set_world(&m);
+                    hit |= self.collide_sprite(sprite, s);
+                }
+            }
+        }
+        hit
+    }
+
+    /// `VIWorld::FindLeaf` then the zone leaf's flags (`GetEnvFlags`).
+    pub fn env_flags(&self, at: &Vect3<M>) -> u32 {
+        let mut node = 0u32;
+        if !self.nodes.is_empty() {
+            loop {
+                let n = &self.nodes[(node & 0x0FFF_FFFF) as usize];
+                node = if F::ZERO <= n.plane.distance(at) { n.front } else { n.back };
+                if node & LEAF != 0 {
+                    break;
+                }
+            }
+            node &= 0x0FFF_FFFF;
+        }
+        let Some(&z) = self.leaves.get(node as usize) else { return !0 };
+        let zone = &self.zones[z as usize];
+        let mut leaf = 0u32;
+        if !zone.nodes.is_empty() {
+            loop {
+                let n = &zone.nodes[(leaf & 0x0FFF_FFFF) as usize];
+                leaf = if F::ZERO <= n.plane.distance(at) { n.front } else { n.back };
+                if leaf & LEAF != 0 {
+                    break;
+                }
+            }
+            leaf &= 0x0FFF_FFFF;
+        }
+        zone.leaves.get(leaf as usize).map_or(!0, |l| l.1)
+    }
+
+    /// `VIScene::Collide(VIEnvRay &)` with `VITransEnvRay`'s rule: a hit is
+    /// the first leaf whose liquid mask differs from the one before it.
+    pub fn collide_env(&mut self, r: &mut EnvRay<M>) -> bool {
+        r.first_collide = true;
+        let (a, b) = (r.start, r.end);
+        let hit = if self.nodes.is_empty() { self.env_world(LEAF, r, a, b) } else { self.env_world(0, r, a, b) };
+        self.stamp += 1;
+        hit
+    }
+
+    fn env_world(&self, node: u32, r: &mut EnvRay<M>, a: Vect3<M>, b: Vect3<M>) -> bool {
+        let mut node = node;
+        if node & 0xF000_0000 != 0 {
+            if node & LEAF != 0 {
+                let z = self.leaves[(node & 0x0FFF_FFFF) as usize] as usize;
+                let zone = &self.zones[z];
+                if zone.leaves.is_empty() {
+                    return false;
+                }
+                let root = if zone.nodes.is_empty() { LEAF } else { 0 };
+                return env_zone(zone, root, r, a, b);
+            }
+            node &= 0x0FFF_FFFF;
+        }
+        let n = &self.nodes[node as usize];
+        env_split(&n.plane, n.front, n.back, r, a, b, &mut |child, r, a, b| self.env_world(child, r, a, b))
+    }
+}
+
+fn env_zone<M: Model>(zone: &Zone<M>, node: u32, r: &mut EnvRay<M>, a: Vect3<M>, b: Vect3<M>) -> bool {
+    let mut node = node;
+    if node & 0xF000_0000 != 0 {
+        if node & LEAF != 0 {
+            // CollideLeaf: report the mask; the ray's Collide decides.
+            let mask = zone.leaves[(node & 0x0FFF_FFFF) as usize].1 & r.mask;
+            let mut hit = false;
+            if r.first_collide || r.hits != mask {
+                let d = r.delta;
+                let mut t = (a.x * d.x + a.y * d.y + a.z * d.z) - (r.start.x * d.x + r.start.y * d.y + r.start.z * d.z);
+                t *= r.inv_length;
+                hit = !r.first_collide;
+                if hit {
+                    r.hit_time = t;
+                }
+                r.hits = mask;
+                r.first_collide = false;
+            }
+            return hit;
+        }
+        node &= 0x0FFF_FFFF;
+    }
+    let n = &zone.nodes[node as usize];
+    env_split(&n.plane, n.front, n.back, r, a, b, &mut |child, r, a, b| env_zone(zone, child, r, a, b))
+}
+
+/// Visits one child of an env-ray split: (node, ray, from, to) -> hit.
+type EnvVisit<'a, M> = dyn FnMut(u32, &mut EnvRay<M>, Vect3<M>, Vect3<M>) -> bool + 'a;
+
+/// The env-ray descent shared by both trees: split the segment at the plane
+/// and visit the near side first, stopping at its first hit.
+fn env_split<M: Model>(
+    pl: &Plane<M>,
+    front: u32,
+    back: u32,
+    r: &mut EnvRay<M>,
+    a: Vect3<M>,
+    b: Vect3<M>,
+    go: &mut EnvVisit<'_, M>,
+) -> bool {
+    let da = pl.distance(&a);
+    let db = pl.distance(&b);
+    if F::ZERO <= da && F::ZERO <= db {
+        return go(front, r, a, b);
+    }
+    if da <= F::ZERO && db <= F::ZERO {
+        return go(back, r, a, b);
+    }
+    let t = da / (da - db);
+    let mut mid = b;
+    mid -= a;
+    mid *= t;
+    mid += a;
+    let (first, second) = if F::ZERO < da { (front, back) } else { (back, front) };
+    if go(first, r, a, mid) {
+        return true;
+    }
+    go(second, r, mid, b)
+}
+
+/// What one world walk carries (`VISceneCollVars`): the sweep's ends (the
+/// end shrinks to each hit), its radius and the walk's stamp.
+struct Vars<M: Model> {
+    start: Vect3<M>,
+    end: Vect3<M>,
+    radius: F<M>,
+    stamp: i32,
+}
+
+const EPS: f32 = 0.03125;
+
+/// The BSP descent both `Collide(int node, ...)` bodies share: a side that
+/// both ends clear by the radius plus 1/32 is the only one visited; otherwise
+/// the near side first, then the far one if the (possibly shortened) sweep
+/// still reaches it.
+fn descend<M: Model>(n: &Node<M>, v: &mut Vars<M>, mut go: impl FnMut(bool, &mut Vars<M>) -> bool) -> bool {
+    let e = F::new(EPS);
+    let ds = n.plane.distance(&v.start);
+    let de = n.plane.distance(&v.end);
+    if v.radius + e < ds && v.radius + e < de {
+        go(true, v)
+    } else if ds < -v.radius - e && de < -v.radius - e {
+        go(false, v)
+    } else if F::ZERO < ds {
+        let mut hit = go(true, v);
+        let ds = n.plane.distance(&v.start);
+        let de = n.plane.distance(&v.end);
+        if (ds < v.radius + e || de < v.radius + e) && go(false, v) {
+            hit = true;
+        }
+        hit
+    } else {
+        let mut hit = go(false, v);
+        let ds = n.plane.distance(&v.start);
+        let de = n.plane.distance(&v.end);
+        if (-v.radius - e < ds || -v.radius - e < de) && go(true, v) {
+            hit = true;
+        }
+        hit
+    }
+}
+
+/// `InsertActor`'s choice at a node: the bound sphere alone when it is clear
+/// of the plane, else the eight corners.
+fn split<M: Model>(pl: &Plane<M>, b: &Sphere<M>, corners: &[Vect3<M>; 8]) -> (bool, bool) {
+    let d = pl.distance(&b.c);
+    if b.r < d {
+        (true, false)
+    } else if d < -b.r {
+        (false, true)
+    } else {
+        let (mut front, mut back) = (false, false);
+        for c in corners {
+            if F::ZERO < pl.distance(c) {
+                front = true;
+            } else {
+                back = true;
+            }
+        }
+        (front, back)
+    }
+}
+
+impl<M: Model> Scene<M> for World<M> {
+    fn time(&self) -> i64 {
+        self.time
+    }
+    fn collide_sphere(&mut self, s: &mut CollSphere<M>, filter: &mut Filter) -> bool {
+        World::collide_sphere(self, s, filter)
+    }
+    fn collide_env(&mut self, ray: &mut EnvRay<M>) -> bool {
+        World::collide_env(self, ray)
+    }
+    fn env_flags(&self, at: &Vect3<M>) -> u32 {
+        World::env_flags(self, at)
+    }
+}

@@ -41,9 +41,9 @@ UI, network (DRDP), sound.
 | `ee` | the EE FPU: `mul` `add` `sub` `div` `sqrt` `lt` `le` `eq` | console-measured goldens from `go-eqoa-vi` |
 | `iso` | ISO 9660 walk, read one file | the disc |
 | `esf` | CSF inflate, the OBJF record tree, DictIDs, surfaces, PrimBuffers, materials, sprites flattened to models; `Library`, the dictionary across files; zones (terrain with pre-translations, actors) | `go-eqoa-esf-tools-v2`: per-surface CRCs (801 surfaces) and per-model geometry (766 models: counts, bbox bits, position CRC); which records register a DictID, and that the first file loaded wins, from the decomp |
-| `vi` | the game logic, ported from the decomp and generic over a float model: `VIWalkControl` (the character body), `VIWalkCamera` (the third-person camera), `VICameraEffect`, `VICollRay`/`VICollSphere`/`VIEnvRay`, and the `Scene` trait they collide through | **bit for bit against the decomp compiled for the host** (eqoa-port's `make oracle`): 18 walk-control methods, 11 camera methods, sphere init and skitter, over thousands of random states each, under the `Ieee` model; negative controls fail |
+| `vi` | the game logic, ported from the decomp and generic over a float model: `VIWalkControl`, `VIWalkCamera`, `VICameraEffect`; and **`VIScene::Collide`**: the world and zone BSPs, rooms, collision buffers (all three packings), placed actors and their insertion, Simple/Sub/Group/LOD sprites, `GetEnvFlags` and the liquid-surface ray, loaded from the world file as `VIESFParse` loads it (`world.rs`) | **bit for bit against the decomp compiled for the host** (eqoa-port's `make oracle`), under the `Ieee` model: 18 walk-control and 11 camera methods; `VIMatrix44` Transform/InvertAffine/Mul, `VIPlane`, the transformed `VICollSphere::Init`, the triangle/edge/vertex sweeps, and `CollideObj` over 102 real TUNARIA buffers; the BSP walk against brute force over every room and actor (3,000 sweeps). Negative controls fail |
 | `render` | wgpu: instanced models, a texture cache by DictID, the strip programs' lighting (colour + ambient + sun, alpha as sun visibility) and back-face culling, the base layer's alpha test, offscreen capture | by eye, for now |
-| `eqoa` | the client binary: `ls`, `tree`, `zones`, `view` (winit window) and `shot` (PNG, no window); walking (`walker.rs`, driven as `VIClient::UpdateControls` drives it in third person) on a stand-in collision scene (`standin.rs`) | by eye |
+| `eqoa` | the client binary: `ls`, `tree`, `zones`, `view` (winit window) and `shot` (PNG, no window); walking (`walker.rs`, driven as `VIClient::UpdateControls` drives it in third person) on the game's own collision world, the zone and its neighbours drawn | by eye |
 
 ```bash
 cargo test          # the disc tests skip, loudly, without run/eqoa.iso and ../esfviewer/
@@ -53,7 +53,14 @@ cargo run --release -- view CHAR.ESF 0x70D898C6          # the human; drag, scro
 cargo run --release -- shot TUNARIA.ESF zone 84 out.png [x y z yaw pitch]
 cargo run --release -- view TUNARIA.ESF walk 84          # walk: WASD, ←/→ orbit, ↑/↓ zoom, drag
 cargo run --release -- shot TUNARIA.ESF walk 84 out.png 3000 1   # hold forward 3 s of game time
+EQOA_SPAWN=24900,13660,3.14 cargo run --release -- shot TUNARIA.ESF walk 84 out.png 7000 1   # into the river
 ```
+
+Walking in TUNARIA uses the whole world's collision (175 zones, 55,289
+buffers, 229,777 placed actors; built in about 2 s): the character stands on
+terrain and on placed objects, slides round a tree stump, and in the river
+gets the water flags, the swimming locomotion state and the surface height from
+the environment ray, then climbs out on the far bank.
 
 ### The oracle, and the two float models
 
@@ -83,6 +90,8 @@ it; a record whose DictID is already present is skipped, so **the first file
 loaded wins** (`ParseSurfaceObj` finds before it adds; `VIMap::Insert` keeps an
 existing key). It matters: CHAR.ESF and CHARCUST.CSF share 16 DictIDs and 8 of
 them carry different bytes (`cargo run --release -p eqoa --example dict_overlap`).
+GroupSprite members are read as the decomp reads them, (angles, scale,
+translation), not as the Go tools do (`claude-notes/groupsprite-member-order-20261019.md`).
 Which records register is read off the decomp's 27 `m_dict->Add` sites, not off
 the Go tools, whose table missed point sprites (all 362 of ITEM.ESF's
 unresolved GroupSprite members) and registered version-0/1 PrimBuffers. A scene
@@ -91,23 +100,22 @@ order per stage is not yet measured.
 
 ### Not yet
 
-- **The scene's collision is a stand-in** (`crates/eqoa/src/standin.rs`): a ray
-  against the zone's terrain triangles with the radius approximated, no props,
-  no water. The game's `VIScene::Collide` (world BSP → zone BSP → rooms →
-  collision buffers and actors) is the next port; `go-eqoa-vi/vicoll` has it in
-  Go, console-checked, to follow.
+- Collision: `VIHSprite` (needs the pose evaluator) and `VICSprite` (a capsule)
+  collide as nothing; the RAY collide (`Collide(VICollRay &)`) is not ported.
+  The world level (BSP walk, rooms, actor insertion) is checked against brute
+  force, not yet against the oracle: that needs eqoa-port to load the world.
 - `Ee`'s `sinf`/`cosf`/`powf`/`atan2f` are the host's on conditioned operands;
   newlib's (ported and console-checked in `go-eqoa-vi/vimath`) are next.
 - The character is drawn in its bind pose: no animation (`vianim` in Go).
 - `VICameraEffect`'s blend into a scripted camera (a quaternion slerp).
 - The camera preset's own numbers (`ApplyCameraPreset`); the walk camera's
   defaults stand in.
+- Time of day: ambient and sun are fixed placeholders until `VIScene::SetupTimeOfDay`.
+- The point light, static lighting, fog, and every material layer after the first.
+- Zone streaming: a walk loads the whole world file and draws the zones within
+  2.5 km of the chosen one.
 - A lighting band along terrain patch edges (zone 84 at x = 25000): not a gap,
   the edges' vertex colours or normals; to revisit with the real lighting.
-- Time of day: ambient and sun are fixed placeholders until `VIScene::SetupTimeOfDay`.
-- The point light, static lighting, fog, and every material layer after the first
-  (terrain blends and water are drawn from layer 0 alone).
-- Neighbouring zones and streaming; the whole world file is read (1 GB, 0.4 s cached).
 
 ## Licence
 

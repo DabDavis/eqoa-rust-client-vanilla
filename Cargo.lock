@@ -1934,6 +1934,8 @@ name = "vi"
 version = "0.1.0"
 dependencies = [
  "ee",
+ "esf",
+ "iso",
 ]
 
 [[package]]

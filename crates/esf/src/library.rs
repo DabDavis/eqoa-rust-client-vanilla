@@ -13,7 +13,7 @@ use crate::{Container, NodeId, Surface};
 use std::collections::HashMap;
 
 /// Which container, and which record in it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Ref {
     pub file: usize,
     pub node: NodeId,

@@ -7,13 +7,17 @@
 //!   right.x                         ->  OrbitRight(orbit)
 //!   then VIWalkCamera::Process, which steps everything in 32 ms ticks.
 //!
-//! The scene it collides with is [`crate::standin::TerrainScene`], a stand-in.
+//! The scene it collides with is the game's own: `vi::world::World`, the
+//! world and zone BSPs, rooms, collision buffers and placed actors, loaded
+//! from the world file (`VIScene::Collide` and `GetEnvFlags`, ported).
 
-use crate::standin::TerrainScene;
 use glam::{Mat4, Vec3};
 use vi::camera::{Eye, WalkCamera};
+use vi::coll::CollSphere;
 use vi::fpu::{Ee, F};
+use vi::scene::{Filter, FilterKind};
 use vi::vect::Vect3;
+use vi::world::World;
 
 /// One frame's controls, as `UpdateControls` reads them: each in -1..1.
 #[derive(Clone, Copy, Debug, Default)]
@@ -26,16 +30,16 @@ pub struct Controls {
 
 pub struct Walker {
     pub cam: WalkCamera<Ee>,
-    pub scene: TerrainScene,
+    pub scene: World<Ee>,
     pub eye: Eye<Ee>,
 }
 
 impl Walker {
     /// Stand the character at (x, z) on the terrain, facing `heading`, with
     /// the camera behind it.
-    pub fn new(scene: TerrainScene, x: f32, z: f32, heading: f32) -> Self {
+    pub fn new(scene: World<Ee>, x: f32, z: f32, heading: f32) -> Self {
         let mut scene = scene;
-        let y = scene.ground(x, z).unwrap_or(0.0);
+        let y = ground(&mut scene, x, z).unwrap_or(0.0);
         let mut cam = WalkCamera::<Ee>::default();
         let pos = Vect3::of(x, y, z);
         let angles = Vect3::of(heading, 0.0, 0.0);
@@ -80,9 +84,10 @@ impl Walker {
     }
 
     pub fn describe(&self) -> String {
+        let env = self.scene.env_flags(&self.cam.walk.phys.position);
         let p = &self.cam.walk.phys;
         format!(
-            "at ({:.1}, {:.1}, {:.1}) heading {:.2} loco {} flags {:#06x} cam dist {:.2}",
+            "at ({:.1}, {:.1}, {:.1}) heading {:.2} loco {} flags {:#06x} env {env:#x} cam dist {:.2}",
             p.position.x.0,
             p.position.y.0,
             p.position.z.0,
@@ -92,4 +97,13 @@ impl Walker {
             self.cam.cur.dist.0
         )
     }
+}
+
+/// The ground under (x, z): a floor probe from high above, as CalcFloor drops
+/// one.
+pub fn ground(w: &mut World<Ee>, x: f32, z: f32) -> Option<f32> {
+    let mut s = CollSphere::<Ee>::default();
+    s.init(Vect3::of(x, 2000.0, z), Vect3::of(x, -2000.0, z), F::new(0.001));
+    let mut f = Filter::new(FilterKind::WalkFloor, -1);
+    w.collide_sphere(&mut s, &mut f).then(|| s.hit_point().y.0)
 }

@@ -44,12 +44,40 @@ pub fn model(dict_id: i32, m: Model) -> Scene {
 }
 
 pub fn zone(lib: &Library, file: usize, zone: esf::NodeId, index: usize) -> Scene {
+    zones(lib, file, &[zone], &format!("zone {index}"))
+}
+
+/// The zones around `index` (every zone with a pre-translation island within
+/// `radius` of one of its own): what the walk view draws, so the character
+/// can leave the zone it started in.
+pub fn zones_near(lib: &Library, file: usize, index: usize, radius: f32) -> Scene {
+    let c = lib.file(file);
+    let all = c.zones();
+    let home = c.pre_translations(all[index]);
+    let near: Vec<esf::NodeId> = all
+        .iter()
+        .copied()
+        .filter(|&z| {
+            c.pre_translations(z)
+                .iter()
+                .any(|p| home.iter().any(|h| (p[0] - h[0]).abs() < radius && (p[2] - h[2]).abs() < radius))
+        })
+        .collect();
+    zones(lib, file, &near, &format!("zone {index} and {} around it", near.len() - 1))
+}
+
+/// Terrain per zone plus every placed actor of all of them, one upload per
+/// distinct sprite.
+pub fn zones(lib: &Library, file: usize, list: &[esf::NodeId], name: &str) -> Scene {
     let c = lib.file(file);
     let mut parts = Vec::new();
-    if let Some(t) = lib.build_terrain(file, zone) {
-        parts.push((t, vec![render::IDENTITY]));
+    for &zone in list {
+        if let Some(t) = lib.build_terrain(file, zone) {
+            parts.push((t, vec![render::IDENTITY]));
+        }
     }
-    let actors = c.actors(zone);
+    let terrain_parts = parts.len();
+    let actors: Vec<esf::zone::Actor> = list.iter().flat_map(|&z| c.actors(z)).collect();
     let mut by_sprite: BTreeMap<i32, Vec<Mat>> = BTreeMap::new();
     for a in &actors {
         by_sprite.entry(a.sprite).or_default().push(a.matrix());
@@ -68,11 +96,11 @@ pub fn zone(lib: &Library, file: usize, zone: esf::NodeId, index: usize) -> Scen
         }
     }
     let empty: Vec<String> = empty.iter().map(|(t, n)| format!("{n}× {t:04X}")).collect();
+    let patches: usize = list.iter().map(|&z| c.terrain_patches(z).len()).sum();
     let summary = format!(
-        "zone {index}: {} terrain patches, {} actors ({} sprites drawn, {unresolved} unresolved; no geometry: {})",
-        c.terrain_patches(zone).len(),
+        "{name}: {patches} terrain patches, {} actors ({} sprites drawn, {unresolved} unresolved; no geometry: {})",
         actors.len(),
-        parts.len().saturating_sub(1),
+        parts.len() - terrain_parts,
         if empty.is_empty() { "none".into() } else { empty.join(", ") },
     );
     Scene { bounds: bounds_of(&parts), parts, summary }

@@ -148,6 +148,10 @@ pub struct EnvRay<M: Model> {
     pub inv_length: F<M>,
     pub mask: u32,
     pub hit_time: F<M>,
+    /// `m_hits`: the mask of the last leaf reported.
+    pub hits: u32,
+    /// `m_firstCollide`: no leaf reported yet.
+    pub first_collide: bool,
 }
 
 impl<M: Model> EnvRay<M> {
@@ -167,6 +171,8 @@ impl<M: Model> EnvRay<M> {
         self.inv_length = if self.length != F::ZERO { F::ONE / self.length } else { F::ZERO };
         self.mask = mask;
         self.hit_time = F::ONE;
+        self.hits = 0;
+        self.first_collide = true;
         0
     }
 

@@ -18,7 +18,6 @@
 //! `iso` defaults to `$EQOA_ISO`, then `run/eqoa.iso`.
 
 mod scene;
-mod standin;
 mod viewer;
 mod walker;
 
@@ -133,9 +132,9 @@ fn source(file: &str, rest: &[String]) -> Result<(esf::Library, viewer::Source)>
             // The character's art: CHAR.ESF, after everything else.
             lib.add("CHAR.ESF", esf::Container::open(iso.read("CHAR.ESF")?)?);
             let index: usize = n.parse()?;
-            let zone = *lib.file(main).zones().get(index).ok_or("no such zone")?;
+            lib.file(main).zones().get(index).ok_or("no such zone")?;
             let character = lib.lookup(viewer::HUMAN).ok_or("no human model")?;
-            Ok((lib, viewer::Source::Walk { file: main, zone, index, character }))
+            Ok((lib, viewer::Source::Walk { file: main, index, character }))
         }
         [z, n] if z == "zone" => {
             let index: usize = n.parse()?;

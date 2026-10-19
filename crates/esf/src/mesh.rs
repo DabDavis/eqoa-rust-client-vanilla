@@ -11,9 +11,8 @@
 //! ```
 //!
 //! Packed positions are scaled by 2^-p1 and UVs by 2^-p2. Ported from the
-//! Blender importer's `esf.py`; GroupSprite placement follows
-//! `go-eqoa-esf-tools-v2` (`SpritePlacement.Transform`) exactly, because that is
-//! what `tests/meshes.rs`'s fixtures were made by.
+//! Blender importer's `esf.py`, except GroupSprite placement, which follows the
+//! decomp (see `Placement`).
 
 use crate::types::*;
 use crate::{Container, NodeId, f32le, i32le};
@@ -215,26 +214,39 @@ pub struct ModelRef {
     pub dict_id: i32,
 }
 
-/// A GroupSprite member's placement: `SpritePlacement.Transform` in the Go
-/// reference — scale if positive, rotate about Y by `rot` (sin/cos rounded to
-/// f32 first), translate.
+/// A GroupSprite member's placement, as `VIGroupSprite` applies it:
+/// `VIMatrix44::Transform(m_loc, m_scale, m_hpr)`, whose arguments are
+/// (ANGLES, scale, TRANSLATION). So the record is id, angles, scale,
+/// translation -- every member in ITEM.ESF and TUNARIA.ESF has an all-zero
+/// first triple -- and the scale is applied as it is, never skipped.
+/// `go-eqoa-esf-tools-v2` reads it as translation, scale, yaw, which puts every
+/// member at its group's origin (`claude-notes/groupsprite-member-order-20261019.md`).
 #[derive(Clone, Copy)]
 struct Placement {
-    pos: [f32; 3],
+    angles: [f32; 3],
     scale: f32,
-    rot: f32,
+    translation: [f32; 3],
 }
 
 impl Placement {
-    const NONE: Placement = Placement { pos: [0.0; 3], scale: 0.0, rot: 0.0 };
 
-    fn apply(&self, mut p: [f32; 3]) -> [f32; 3] {
-        if self.scale > 0.0 {
-            p = p.map(|c| c * self.scale);
-        }
-        let (sin, cos) = ((self.rot as f64).sin() as f32, (self.rot as f64).cos() as f32);
-        let (x, z) = (p[2] * sin + p[0] * cos, p[2] * cos - p[0] * sin);
-        [x + self.pos[0], p[1] + self.pos[1], z + self.pos[2]]
+    /// `p * Transform(angles, scale, t)`, row vectors, in host floats.
+    fn apply(&self, p: [f32; 3]) -> [f32; 3] {
+        let (si, ci) = self.angles[0].sin_cos();
+        let (sj, cj) = self.angles[1].sin_cos();
+        let (sh, ch) = self.angles[2].sin_cos();
+        let s = self.scale;
+        let r = [
+            [(ch * ci + sh * sj * si) * s, (sh * cj) * s, (-ch * si + sh * sj * ci) * s],
+            [(-sh * ci + ch * sj * si) * s, (ch * cj) * s, (sh * si + ch * sj * ci) * s],
+            [(cj * si) * s, (-sj) * s, (cj * ci) * s],
+        ];
+        let t = self.translation;
+        [
+            p[0] * r[0][0] + p[1] * r[1][0] + p[2] * r[2][0] + t[0],
+            p[0] * r[0][1] + p[1] * r[1][1] + p[2] * r[2][1] + t[1],
+            p[0] * r[0][2] + p[1] * r[1][2] + p[2] * r[2][2] + t[2],
+        ]
     }
 }
 
@@ -328,7 +340,7 @@ pub fn build<'a>(c: &'a Container, id: NodeId, resolve: &Resolve<'a>) -> Option<
     let id = c.resolve_lod(id);
     let mut m = Model::default();
     let mut keys = Vec::new();
-    let none = |p| Placement::NONE.apply(p);
+    let none = |p| p;
     match c.node(id).ty {
         GROUPSPRITE => {
             if let Some(mem) = c.child(id, GROUPSPRITE_MEMBERS) {
@@ -341,9 +353,9 @@ pub fn build<'a>(c: &'a Container, id: NodeId, resolve: &Resolve<'a>) -> Option<
                         break;
                     }
                     let place = Placement {
-                        pos: [f32le(d, p + 4), f32le(d, p + 8), f32le(d, p + 12)],
+                        angles: [f32le(d, p + 4), f32le(d, p + 8), f32le(d, p + 12)],
                         scale: f32le(d, p + 16),
-                        rot: f32le(d, p + 20),
+                        translation: [f32le(d, p + 20), f32le(d, p + 24), f32le(d, p + 28)],
                     };
                     match resolve(i32le(d, p)) {
                         Some((mc, s)) => add_sprite(&mut m, &mut keys, mc, mc.resolve_lod(s), |q| place.apply(q), &[], resolve),

@@ -7,3 +7,7 @@ license.workspace = true
 
 [dependencies]
 ee.workspace = true
+esf.workspace = true
+
+[dev-dependencies]
+iso.workspace = true

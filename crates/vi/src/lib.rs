@@ -18,9 +18,12 @@
 
 pub mod camera;
 pub mod coll;
+pub mod collide;
 pub mod fpu;
+pub mod geom;
 pub mod scene;
 pub mod vect;
 pub mod walk;
+pub mod world;
 
 pub use fpu::{Ee, F, Ieee, Model};
