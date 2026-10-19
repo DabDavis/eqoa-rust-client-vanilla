@@ -25,6 +25,7 @@ mod audio;
 mod chat;
 mod dialog;
 mod hud;
+mod particles;
 mod play;
 mod scene;
 mod sky;

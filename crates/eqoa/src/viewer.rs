@@ -271,6 +271,8 @@ pub fn shot_with(
     let walking = matches!(source, Source::Walk { .. });
     let mut gpu = if walking { Vec::new() } else { upload(&mut renderer, &device, &queue, lib, &s) };
     let mut streamed = None;
+    let mut batches: Vec<render::billboard::Batch> = Vec::new();
+    let mut billboard_view: Option<(glam::Mat4, glam::Mat4)> = None;
     let cam = cam.unwrap_or_else(|| source.camera(s.bounds));
     let aspect = w as f32 / h as f32;
     let mut view = cam.view(s.bounds, aspect);
@@ -280,6 +282,7 @@ pub fn shot_with(
         let mut t = 0;
         let say = std::env::var("EQOA_SAY").ok();
         let tab = std::env::var_os("EQOA_TAB").is_some();
+        let mut parts = crate::particles::Particles::new(&walker.scene, 0);
         // `EQOA_AT=ms`: when the target (and then Q, attack) steps happen.
         let at: i64 = std::env::var("EQOA_AT").ok().and_then(|v| v.parse().ok()).map_or(2000, |v: i64| v / 16 * 16);
         let attack = std::env::var_os("EQOA_ATTACK").is_some();
@@ -384,7 +387,11 @@ pub fn shot_with(
             }
             // UpdateSprite runs every frame in the game.
             walker.pose();
+            let (proj, v) = walker.view(aspect);
+            batches = parts.frame(&walker.scene, lib, walker.eye_position(), proj * v, t);
+            billboard_view = Some((v, proj));
         }
+        eprintln!("{}", parts.describe());
         let body = match play.as_ref().and_then(|p| p.self_model).and_then(|m| lib.lookup(m as i32)).and_then(|r| lib.build_model(r)) {
             Some(m) => m,
             None => body,
@@ -425,7 +432,9 @@ pub fn shot_with(
             let proj = glam::camera::rh::proj::directx::perspective(40f32.to_radians(), aspect, 0.1, 3000.0);
             let at = p + Vec3::new(*dx, *dy, *dz);
             shot_eye = at;
-            frame = lit(proj, glam::camera::rh::view::look_at_mat4(at, p, Vec3::Y), Instant::now(), Some((at, &walker.scene)));
+            let v = glam::camera::rh::view::look_at_mat4(at, p, Vec3::Y);
+            billboard_view = Some((v, proj));
+            frame = lit(proj, v, Instant::now(), Some((at, &walker.scene)));
         }
         if let (Some(f), Some(at)) = (&frame.1, crate::sky::upload(&mut renderer, &device, &queue, lib, &mut gpu)) {
             crate::sky::update(&renderer, &queue, &mut gpu, at, f);
@@ -452,7 +461,9 @@ pub fn shot_with(
         }
     }
     let refs: Vec<&GpuModel> = gpu.iter().chain(streamed.iter().flat_map(|s| s.models())).chain(play.iter().flat_map(|p| p.models())).collect();
-    let rgba = render::capture(&device, &queue, &renderer, w, h, &view, &refs);
+    let textures = render::library_textures(lib);
+    let particles = billboard_view.map(|(v, p)| (v, p, batches.as_slice(), &textures as &render::Textures));
+    let rgba = render::capture(&device, &queue, &mut renderer, w, h, &view, &refs, particles);
     let mut enc = png::Encoder::new(std::io::BufWriter::new(std::fs::File::create(out)?), w, h);
     enc.set_color(png::ColorType::Rgba);
     enc.set_depth(png::BitDepth::Eight);
@@ -492,6 +503,9 @@ struct App {
     sound: Option<crate::sound::Sound>,
     /// The walking character's sounds, shared while it is the character.
     walker_sounds: Vec<u32>,
+    /// The world's particles, and this frame's billboards.
+    particles: Option<crate::particles::Particles>,
+    batches: Vec<render::billboard::Batch>,
     /// Index in `Gfx::models` of the character.
     body_at: usize,
     /// Where the sky's models start in `Gfx::models`.
@@ -524,6 +538,8 @@ pub fn run_with(lib: Library, source: Source, play: Option<crate::play::Play>) -
         streamer: None,
         sound: None,
         walker_sounds: Vec::new(),
+        particles: None,
+        batches: Vec::new(),
         body_at: 0,
         sky_at: None,
         clock: Instant::now(),
@@ -559,6 +575,7 @@ impl App {
                 streamer.update(at, &mut w.scene, &self.lib, gpu, None);
                 eprintln!("{}", streamer.describe());
                 self.streamer = Some(streamer);
+                self.particles = Some(crate::particles::Particles::new(&w.scene, 0));
                 w
             });
             self.sky_at = None;
@@ -853,6 +870,9 @@ impl ApplicationHandler for App {
                 let streamer = &mut self.streamer;
                 let sound = &mut self.sound;
                 let walker_sounds = &mut self.walker_sounds;
+                let particles = &mut self.particles;
+                let batches = &mut self.batches;
+                let mut bb_view = None;
                 let play = &mut self.play;
                 let lib = &self.lib;
                 let walk_view = self.walker.as_mut().map(|w| {
@@ -917,6 +937,10 @@ impl ApplicationHandler for App {
                         None => g.window.set_title(&format!("eqoa — walking {}", w.describe())),
                     }
                     let (proj, v) = w.view(g.config.width as f32 / g.config.height as f32);
+                    if let Some(ps) = particles.as_mut() {
+                        *batches = ps.frame(&w.scene, lib, w.eye_position(), proj * v, now);
+                        bb_view = Some((v, proj));
+                    }
                     lit(proj, v, clock, Some((w.eye_position(), &w.scene)))
                 });
                 let frame = match g.surface.get_current_texture() {
@@ -955,6 +979,10 @@ impl ApplicationHandler for App {
                     .chain(self.play.iter().flat_map(|p| p.models()))
                     .collect();
                 g.renderer.draw(&g.queue, &mut enc, &target, &g.depth, &view, &refs);
+                if let Some((v, p)) = bb_view {
+                    let textures = render::library_textures(&self.lib);
+                    g.renderer.draw_billboards(&g.device, &g.queue, &mut enc, &target, &g.depth, v, p, &self.batches, &textures);
+                }
                 g.renderer.draw_text(&g.device, &mut enc, &target, &g.depth, (g.config.width, g.config.height));
                 g.queue.submit([enc.finish()]);
                 g.queue.present(frame);

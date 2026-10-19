@@ -70,6 +70,10 @@ pub enum SpriteKind {
     /// `VIStreamAudioSprite` (0x2E00): a box the listener stands in, the BGM
     /// it names (relative to `Music\`), whether it loops and its priority.
     Stream { path: String, looping: bool, priority: i32 },
+    /// `VIParticleSprite` (0xC100): its definition record (0xC000) and the
+    /// header's flags (`m_unk430`: 0 the emitter is placed and aimed in the
+    /// world, else it sits at the origin of the sprite's own space).
+    Particle { def: Option<Ref>, flags: i32 },
     /// Collides as nothing (flora, sounds, lights, emitters; and for now
     /// CSprites, whose collision is a capsule).
     None,
@@ -480,6 +484,15 @@ impl<M: Model> World<M> {
                 let bbox = BBox { min: Vect3::new(-rr, -rr, -rr), max: Vect3::new(rr, rr, rr) };
                 (SpriteKind::Sound { sound, volume, attenuation: 0, pan: true }, bbox, 9)
             }
+            // ParseParticleSpriteObj: the id and (from version 1) the flags;
+            // the box and sphere are a unit radius, the emitter's own bounds
+            // coming at its first update
+            0xC100 => {
+                let flags = c.child(r.node, 0xC101).filter(|&h| c.node(h).version != 0).map_or(0, |h| rd_i(c.body(h), 4));
+                let def = c.child(r.node, 0xC000).map(|node| Ref { file: r.file, node });
+                let o = F::ONE;
+                (SpriteKind::Particle { def, flags }, BBox { min: Vect3::new(-o, -o, -o), max: Vect3::new(o, o, o) }, 10)
+            }
             // ParseStreamAudioSpriteObj: id, the box, the pathname (u16
             // length), looping, priority
             0x2E00 => {
@@ -515,7 +528,7 @@ impl<M: Model> World<M> {
         };
         let id = self.sprites.len();
         // a sound sprite's sphere is its radius, not its box's half diagonal
-        let bsphere = if let SpriteKind::Sound { .. } = kind { Sphere { c: Vect3::default(), r: bbox.max.x } } else { Sphere::from_bbox(&bbox) };
+        let bsphere = if let SpriteKind::Sound { .. } | SpriteKind::Particle { .. } = kind { Sphere { c: Vect3::default(), r: bbox.max.x } } else { Sphere::from_bbox(&bbox) };
         self.sprites.push(SceneSprite { kind, bbox, bsphere, sprite_type });
         self.sprite_refs.push(r);
         self.sprite_of.insert(r, id);

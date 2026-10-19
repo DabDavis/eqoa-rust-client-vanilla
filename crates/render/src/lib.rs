@@ -10,6 +10,7 @@
 //! one, where the game draws a strip's layers back to back. A translucent
 //! layer then never hides geometry drawn after it.
 
+pub mod billboard;
 pub mod text;
 pub mod ui;
 
@@ -129,6 +130,8 @@ pub struct Renderer {
     pub text: Option<text::Text>,
     /// The 2D layer (the HUD), drawn over everything.
     pub ui: Option<ui::Ui>,
+    /// The particles' pipelines, made at the first particle.
+    billboards: Option<billboard::Billboards>,
 }
 
 /// What to draw this frame. The lights are the VU1 strip programs' uniforms:
@@ -325,6 +328,7 @@ impl Renderer {
             format,
             text: None,
             ui: None,
+            billboards: None,
         }
     }
 
@@ -670,15 +674,18 @@ pub fn depth_view(device: &wgpu::Device, w: u32, h: u32) -> wgpu::TextureView {
         .create_view(&Default::default())
 }
 
-/// Renders one frame offscreen and returns it as RGBA8 rows (for `--shot`).
+/// Renders one frame offscreen and returns it as RGBA8 rows (for `--shot`),
+/// with the particles' billboards (view, projection, batches) if any.
+#[allow(clippy::too_many_arguments)]
 pub fn capture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    renderer: &Renderer,
+    renderer: &mut Renderer,
     w: u32,
     h: u32,
     view: &View,
     models: &[&GpuModel],
+    particles: Option<(Mat4, Mat4, &[billboard::Batch], &Textures)>,
 ) -> Vec<u8> {
     let format = TARGET_FORMAT;
     let target = device.create_texture(&wgpu::TextureDescriptor {
@@ -702,6 +709,9 @@ pub fn capture(
     let mut enc = device.create_command_encoder(&Default::default());
     let tv = target.create_view(&Default::default());
     renderer.draw(queue, &mut enc, &tv, &depth, view, models);
+    if let Some((v, p, batches, textures)) = particles {
+        renderer.draw_billboards(device, queue, &mut enc, &tv, &depth, v, p, batches, textures);
+    }
     renderer.draw_text(device, &mut enc, &tv, &depth, (w, h));
     enc.copy_texture_to_buffer(
         target.as_image_copy(),
