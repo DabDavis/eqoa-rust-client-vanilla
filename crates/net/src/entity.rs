@@ -45,6 +45,8 @@ pub struct Creature {
     /// +0x263: in combat (`Byte263`): the battle music plays while the
     /// player's is set.
     pub p263: u8,
+    /// +0x262: `Flag4` (& 4) and `Flag8` (& 8), the bars' two status icons.
+    pub flags262: u8,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -160,7 +162,7 @@ impl Entity {
             // m_p260, m_p261, m_flags262, m_p263, m_p264
             r.u8();
             r.u8();
-            r.u8();
+            c.flags262 = r.u8();
             c.p263 = r.u8();
             r.u8();
             c.p299 = r.u8();

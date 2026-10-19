@@ -101,6 +101,9 @@ pub struct Play {
     target_guild: String,
     /// `m_p678`: the target's info window wanted (Q held on a player).
     pub info_up: bool,
+    /// `m_petId` and `m_petName` (filled from the entity once it is seen).
+    pet_id: u32,
+    pet_name: String,
     info_window: vi::ui::Window,
     /// Chat lines waiting for the chat box, with when they came.
     chat_pending: Vec<(String, [f32; 4], u32)>,
@@ -406,7 +409,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None };
         p.take_abilities();
         p
     }
@@ -457,6 +460,12 @@ impl Play {
                     }
                     self.dump.player.level = level;
                     self.dump.player.exp = exp;
+                }
+                Event::Pet(id) => {
+                    self.pet_id = id.unwrap_or(u32::MAX);
+                    if id.is_none() {
+                        self.pet_name.clear();
+                    }
                 }
                 Event::AbilityAdd { token, flag, ability } => {
                     // Msg00B3
@@ -601,6 +610,8 @@ impl Play {
                     self.player = player;
                     self.dump = dump;
                     self.take_abilities();
+                    self.pet_id = u32::MAX;
+                    self.pet_name.clear();
                     // Msg000D's PlayCue
                     self.cues.push(crate::sound::Cue::Named("respawn", 0.4));
                 }
@@ -832,6 +843,17 @@ impl Play {
     }
 
     /// Targets the creature called `name` (as a click on it would), 0x0010.
+    /// As 0x007E would: the creature named `name` becomes the player's pet
+    /// (a test hook; no server here sends 0x007E).
+    pub fn pet_by_name(&mut self, name: &str) -> bool {
+        let Some(id) = self.entities.slots.iter().flatten().find(|e| e.creature.as_ref().is_some_and(|c| c.name.trim() == name.trim())).map(|e| e.id) else {
+            return false;
+        };
+        self.pet_id = id;
+        self.pet_name.clear();
+        true
+    }
+
     pub fn target_by_name(&mut self, name: &str) -> bool {
         let Some(id) = self.entities.slots.iter().flatten().find(|e| e.creature.as_ref().is_some_and(|c| c.name.trim() == name.trim())).map(|e| e.id) else {
             return false;
@@ -1197,6 +1219,16 @@ impl Play {
         let find = |id: Option<u32>| self.entities.slots.iter().flatten().find(|e| Some(e.id) == id);
         let me_e = find(me);
         let target = find(Some(self.target));
+        // VIClient's frame: a pet with no name takes its creature's
+        let pet_e = find(Some(self.pet_id)).filter(|_| self.pet_id != u32::MAX);
+        if self.pet_id != u32::MAX && self.pet_name.is_empty() {
+            self.pet_name = pet_e.and_then(|e| e.creature.as_ref()).map(|c| c.name.chars().take(23).collect()).unwrap_or_default();
+        }
+        let pet = (self.pet_id != u32::MAX).then(|| crate::hud::PetState {
+            name: self.pet_name.clone(),
+            is_target: self.target == self.pet_id,
+            creature: pet_e.and_then(|e| e.creature.as_ref().map(|c| (e.p19 as i32, c.flags262 & 4 != 0, c.flags262 & 8 != 0))),
+        });
         let dir = walker.eye.direction;
         let (heading, _, _) = dir.get_hpr();
         let state = crate::hud::HudState {
@@ -1212,6 +1244,7 @@ impl Play {
             target_hp: target.map_or(0, |e| e.p19 as i32),
             target_info: self.target_info,
             self_targeted_flag: Some(self.target) == me && self.dump.player.p2c > 0,
+            pet,
         };
         let now = self.session.now();
         let dt = ((time_ms - self.hud_last).clamp(0, 250)) as f32 / 1000.0;

@@ -71,6 +71,8 @@ pub enum Event {
     Time(u64, u64),
     /// 0x07D1: the expansion-flag mask.
     Expansion(u32),
+    /// 0x007E: the player's pet (`m_petId`); 0x007F: none.
+    Pet(Option<u32>),
     /// The server opened the game connection (promotion).
     Promoted,
     /// 0x000D parsed: the player's own entity id and where they stand.
@@ -468,6 +470,8 @@ impl Session {
             }
             0x07A3 => ev.push(Event::ReplyName(String::from_utf8_lossy(&r.string(24)).into_owned())),
             0x00D9 => ev.push(Event::PlayerP2C(r.u32() as i32)),
+            0x007E => ev.push(Event::Pet(Some(r.u32()))),
+            0x007F => ev.push(Event::Pet(None)),
             0x0010 => {
                 let (disposition, b, c) = (r.u8(), r.u8(), r.u8());
                 let mut fixed = || {

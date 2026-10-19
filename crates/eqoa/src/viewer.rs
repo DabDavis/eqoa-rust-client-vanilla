@@ -325,6 +325,12 @@ pub fn shot_with(
                         eprintln!("  in view: {}", p.entity_names().join(", "));
                     }
                 }
+                // `EQOA_PET=<name>`: that creature made the pet then (as 0x007E).
+                if t == at
+                    && let Ok(name) = std::env::var("EQOA_PET")
+                {
+                    eprintln!("pet {name}: {}", p.pet_by_name(&name));
+                }
                 if t == at && tab {
                     let (proj, v) = walker.view(aspect);
                     let dir = Vec3::from(walker.eye.direction.to_array());

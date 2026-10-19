@@ -3,10 +3,9 @@
 //! the chat window's backdrop and the target's bar, at the game's own
 //! positions in its 640x448 frame.
 //!
-//! Not here yet: the group's and the pet's bars (there is no group or pet
-//! to show), their patches on the compass, the breath gauge (it needs
-//! `IsLootable`) and the target's details box (`DrawTargetInfo`, opened by
-//! a key).
+//! The pet's bar is here; the breath gauge, the target's details box and
+//! the quick menus are drawn by `play`. Not here yet: the group's bars and
+//! the patches on the compass.
 
 use crate::ui::{Raster, UiRaster, Vui, icon_id, wide};
 use render::ui::Quad;
@@ -35,6 +34,17 @@ pub struct HudState {
     pub target_info: Option<u8>,
     /// The player has targeted themselves and has +0x2C (`m_p2C > 0`).
     pub self_targeted_flag: bool,
+    /// `HasPet()`: the pet, when the player has one.
+    pub pet: Option<PetState>,
+}
+
+/// What `DrawPet` reads: `GetPetName`, whether the pet is the target, and
+/// for a creature pet (`PetIsCreature`) its +0x19 and `Flag4`/`Flag8`.
+#[derive(Clone, Debug, Default)]
+pub struct PetState {
+    pub name: String,
+    pub is_target: bool,
+    pub creature: Option<(i32, bool, bool)>,
 }
 
 /// `ExpForLevel`.
@@ -117,15 +127,43 @@ impl Hud {
         let part = part.clamp(0.0, 1.0);
         draw_gauge(vui, ui, 152, 151, [p[0], p[1] + 10], true, part);
         draw_gauge(vui, ui, 8, 136, p, true, v);
-        // DrawGroup and DrawPet with neither: their glows go down.
+        // DrawGroup with no group: its glow goes down.
         self.glow1_on = -1;
-        self.glow2_on = -1;
-        self.glow2 = 0.3;
+        self.draw_pet(vui, ui, [20, 93], s);
         let p = [-3, 331];
         if s.chat_open {
             vui.blit_rect(ui, 32, [p[0] + 2, p[1]], [203, 125], 0, 1.0);
         }
         self.draw_target(vui, ui, [20, 348], s);
+    }
+
+    /// `DrawPet`: the bar, glowing while the pet is the target, its name,
+    /// and for a creature its health and two status icons.
+    fn draw_pet(&mut self, vui: &Vui, ui: &mut UiRaster, at: [i32; 2], s: &HudState) {
+        let Some(pet) = &s.pet else {
+            self.glow2_on = -1;
+            self.glow2 = 0.3;
+            return;
+        };
+        let mut p = at;
+        self.glow2_on = if pet.is_target { 1 } else { -1 };
+        let g = self.glow2;
+        vui.blit_bar(ui, &[], [0.0; 4], p, 25, 26, 174, 3, g, 0, true);
+        let mut w = vi::ui::Window::default();
+        w.init(vui, ui, [p[0] + 87, p[1] + 12], 160, 1, 0);
+        w.open(true);
+        w.text_box(vui, ui, &wide(&pet.name), 0, 0, 160, 1, [0.0, 0.0, 0.0, g], 10);
+        let Some((hp, f4, f8)) = pet.creature else { return };
+        p = [p[0] + 10, p[1] + 25];
+        draw_gauge(vui, ui, 7, 136, p, pet.is_target, hp as f32 / 255.0);
+        p = [p[0] + 65, p[1] + 2];
+        if f4 {
+            vui.blit_ex(ui, 118, [p[0], p[1] - 2], 3, g, 0);
+            p[0] += 25;
+        }
+        if f8 {
+            vui.blit_ex(ui, 119, p, 3, g, 0);
+        }
     }
 
     /// `DrawTarget`: "Target", the bar with the name scrolling in it, the
