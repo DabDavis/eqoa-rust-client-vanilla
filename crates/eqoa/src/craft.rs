@@ -645,8 +645,3 @@ impl Craft {
         }
     }
 }
-
-/// The MemoryDump's token and slots (`Msg000D`: `SetP78C0`, `ReadSlots`).
-pub fn from_dump(token: u32, slots: &[CraftSlot; 6]) -> Craft {
-    Craft { token, slots: slots.clone(), ..Default::default() }
-}
