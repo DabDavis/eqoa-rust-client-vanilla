@@ -404,7 +404,7 @@ pub fn shot_with(
                         p.hud_key(k);
                     }
                 }
-                // `EQOA_START_KEYS` (o open, u d l r e x, s square, t R1, any
+                // `EQOA_START_KEYS` (o open, u d l r e x, s square, c circle, t R1, any
                 // other character a pause):
                 // the start menu's
                 // keys, the spell book's while it is up, each held for a frame (pressed, then released on the next:
@@ -430,6 +430,7 @@ pub fn shot_with(
                         'e' => Some(K::CROSS),
                         'x' => Some(K::ESCAPE),
                         's' => Some(133),
+                        'c' => Some(135),
                         't' => Some(142),
                         _ => None,
                     };
@@ -1004,6 +1005,8 @@ impl ApplicationHandler for App {
                             Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
                             // square (Class Mastery's points) and R1 (its other list)
                             Key::Character(c) if c.eq_ignore_ascii_case("q") => Some(133),
+                            // circle (the factions' next page)
+                            Key::Character(c) if c.eq_ignore_ascii_case("c") => Some(135),
                             Key::Named(NamedKey::Tab) => Some(142),
                             _ => None,
                         };

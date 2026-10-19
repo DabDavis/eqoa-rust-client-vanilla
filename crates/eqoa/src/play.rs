@@ -129,7 +129,7 @@ pub struct Play {
     pub reply_name: String,
     /// `VIWndGame::m_mode`: 0 playing, 2 the edit box, 7 a dialog's
     /// answers, 9 a dialog showing, 13 the start menu, 14 a message box,
-    /// 12 the trainer, 22 the quest journal, 40 Class Mastery, 35 the who list.
+    /// 12 the trainer, 22 the quest journal, 40 Class Mastery, 41 factions, 35 the who list.
     pub mode: i32,
     /// `m_dialogs`: dialogs waiting while another mode is up (at most 11).
     dialogs: std::collections::VecDeque<Vec<u16>>,
@@ -191,6 +191,12 @@ pub struct Play {
     cm_open: bool,
     cm_msgs: Vec<Vec<u8>>,
     cm_keys: Vec<(i32, bool)>,
+    /// The faction standings (`VIClientPart4F078`) and their window
+    /// (mode 41).
+    factions: crate::faction::Factions,
+    faction_wnd: crate::faction::FactionWnd,
+    faction_open: bool,
+    faction_keys: Vec<(i32, bool)>,
     who_tell: Option<String>,
     /// `VIWndEdit` (mode 2), and keys for it waiting for the raster.
     edit: crate::editbox::EditBox,
@@ -509,7 +515,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false };
         p.take_abilities();
         p
     }
@@ -649,6 +655,7 @@ impl Play {
                 Event::Opcode { op: 0x0E02, data } => self.who.recv(&data),
                 Event::Opcode { op: 0x007C, data } => self.quests.recv_add(&data),
                 Event::Opcode { op: 0x1402, data } => self.cm_msgs.push(data),
+                Event::Opcode { op: 0x07E2, data } => self.factions.recv(&data),
                 // Msg001D: the points spent come off, and the trainer refreshes
                 Event::Opcode { op: 0x001D, data } => {
                     let mut r = net::stream::Reader::new(&data);
@@ -1619,6 +1626,14 @@ impl Play {
                     self.cm_open = true;
                     self.mode = 40;
                 }
+                // VIClientPart4F078::Command -> OpenFaction: page 0, mode 41
+                0xAA00_0001 => {
+                    self.factions.reset();
+                    let m = self.factions.request(0);
+                    self.session.send(&m);
+                    self.faction_open = true;
+                    self.mode = 41;
+                }
                 // OpenTrainer: mode 12
                 0x0302_0000 => {
                     self.trainer_open = true;
@@ -1651,7 +1666,7 @@ impl Play {
     /// A character window is up (the trainer, mode 12; the quest journal,
     /// mode 22).
     pub fn char_window(&self) -> bool {
-        matches!(self.mode, 12 | 22 | 40)
+        matches!(self.mode, 12 | 22 | 40 | 41)
     }
 
     /// A key for the character window up, handled with the next HUD frame.
@@ -1659,6 +1674,7 @@ impl Play {
         match self.mode {
             12 => self.trainer_keys.push((key, down)),
             40 => self.cm_keys.push((key, down)),
+            41 => self.faction_keys.push((key, down)),
             22 => self.quest_keys.push((key, down)),
             _ => {}
         }
@@ -1705,6 +1721,37 @@ impl Play {
                     self.open_start_menu(false);
                 }
                 crate::classmastery::CmUp::Send(m) => self.session.send(&m),
+            }
+        }
+    }
+
+    /// The faction window's open, keys, drawing and what it asks.
+    fn run_factions(&mut self, vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster) {
+        let now = self.session.now() as i64;
+        if std::mem::take(&mut self.faction_open) {
+            self.faction_wnd.open(vui, r);
+        }
+        let mut ups = Vec::new();
+        let mut cues = Vec::new();
+        for (k, down) in std::mem::take(&mut self.faction_keys) {
+            if self.mode != 41 {
+                break;
+            }
+            ups.extend(self.faction_wnd.key(&mut self.factions, k, down, &mut cues));
+        }
+        if self.mode == 41 {
+            self.faction_wnd.draw(vui, r, &self.factions, now, &mut cues);
+        }
+        self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
+        for up in ups {
+            match up {
+                // CloseFaction: reset, back to the start menu
+                crate::faction::FactionUp::Close => {
+                    self.factions.reset();
+                    self.mode = 0;
+                    self.open_start_menu(false);
+                }
+                crate::faction::FactionUp::Send(m) => self.session.send(&m),
             }
         }
     }
@@ -2477,6 +2524,7 @@ impl Play {
             self.run_quests(vui, &mut r);
             self.run_trainer(vui, &mut r);
             self.run_class_mastery(vui, &mut r);
+            self.run_factions(vui, &mut r);
             self.run_edit(vui, &r);
             if self.mode == 2 {
                 let mut cues = Vec::new();

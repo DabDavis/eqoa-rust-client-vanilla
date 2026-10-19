@@ -34,6 +34,7 @@ mod infotext;
 mod inventory;
 mod itemmenu;
 mod classmastery;
+mod faction;
 mod questlog;
 mod textlist;
 mod startmenu;
