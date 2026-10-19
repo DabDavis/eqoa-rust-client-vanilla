@@ -34,6 +34,7 @@ pub mod atmosphere;
 pub mod selfstate;
 pub mod strtab;
 pub mod swing;
+pub mod ui;
 pub mod vect;
 pub mod walk;
 pub mod world;

@@ -147,7 +147,7 @@ fn run(args: &[String]) -> Result<()> {
             // decrypted image (EQOA_SUPPORT, else run/support.bin). Without
             // it there is no HUD.
             let support = std::env::var("EQOA_SUPPORT").unwrap_or_else(|_| "run/support.bin".into());
-            let atlas = std::fs::read(&support).ok().and_then(|b| ui::read_atlas(&b));
+            let atlas = std::fs::read(&support).ok().and_then(|b| vi::ui::read_atlas(&b));
             let textures = disc(None)?.read("TEXTURES.TXT").ok().and_then(|b| vi::strtab::StringTable::parse(&b));
             match (atlas, textures) {
                 (Some(a), Some(t)) => play.ui_data = Some((a, t)),

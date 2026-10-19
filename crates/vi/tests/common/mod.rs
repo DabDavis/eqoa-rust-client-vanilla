@@ -19,6 +19,15 @@ impl Oracle {
         let path = std::env::var_os("EQOA_ORACLE").map(std::path::PathBuf::from).unwrap_or_else(|| {
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../eqoa-port/build/oracle")
         });
+        Self::spawn(path)
+    }
+
+    /// Another of eqoa-port's oracle programs (`build/<name>`).
+    pub fn open_at(name: &str) -> Option<Oracle> {
+        Self::spawn(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../eqoa-port/build").join(name))
+    }
+
+    fn spawn(path: std::path::PathBuf) -> Option<Oracle> {
         if !path.exists() {
             eprintln!("SKIP: no oracle at {} (set EQOA_ORACLE, or `make oracle` in eqoa-port)", path.display());
             return None;

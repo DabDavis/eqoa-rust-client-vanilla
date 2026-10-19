@@ -4,8 +4,7 @@
 //! five), or the last five lines in a fixed 85-pixel box while its mode is
 //! set or it is being scrolled.
 
-use crate::ui::{Vui, Window};
-use render::ui::Ui;
+use vi::ui::{Raster, Vui, Window};
 
 const LINES: usize = 32;
 
@@ -162,7 +161,7 @@ impl WndChat {
 
     /// `OnDrawSelf`, scrolling aside: the box eases to its height at 200
     /// pixels a second (`dt` seconds since the last frame).
-    pub fn draw(&mut self, vui: &Vui, ui: &mut Ui, now: u32, dt: f32) {
+    pub fn draw(&mut self, vui: &Vui, ui: &mut dyn Raster, now: u32, dt: f32) {
         self.text.age(now);
         self.window.init(vui, ui, [422, 390], 462, 6, 1);
         if self.mode != 0 {

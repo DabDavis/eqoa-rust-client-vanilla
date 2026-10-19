@@ -82,9 +82,10 @@ pub struct Play {
     pub words: Option<vi::strtab::StringTable>,
     /// What the HUD is built from, before there is a device: the atlas
     /// (out of SUPPORT) and TEXTURES.TXT.
-    pub ui_data: Option<(Vec<crate::ui::UiTexEntry>, vi::strtab::StringTable)>,
-    /// The HUD, once the viewer has a device (`attach_ui`).
-    pub hud: Option<(crate::ui::Vui, crate::hud::Hud)>,
+    pub ui_data: Option<(Vec<vi::ui::UiTexEntry>, vi::strtab::StringTable)>,
+    /// The HUD, once the viewer has a device (`attach_ui`): `VIUI`, the
+    /// layer's assets, `VIWndGame`.
+    pub hud: Option<(crate::ui::Vui, crate::ui::UiAssets, crate::hud::Hud)>,
     /// `m_targetInfoValid` / `m_targetDisposition`, from 0x0010.
     pub target_info: Option<u8>,
     /// Chat lines waiting for the chat box, with when they came.
@@ -721,20 +722,20 @@ impl Play {
         let Some((atlas, textures)) = self.ui_data.take() else { return };
         let mut ui = render::ui::Ui::new(device, format, render::DEPTH_FORMAT);
         let words = self.words.clone().unwrap_or_default();
-        let mut vui = crate::ui::Vui::new(words, textures, atlas);
+        let vui = crate::ui::Vui::new(words, textures, atlas);
+        let mut assets = crate::ui::UiAssets::default();
         for (name, c) in &lib.files {
             if name.eq_ignore_ascii_case("UI.CSF") {
-                vui.add_surfaces(&mut ui, device, queue, c);
+                assets.add_surfaces(&mut ui, device, queue, c);
             }
         }
-        let id = vi::hash::hash_resource_id("ArialUI") as i32;
+        let id = vi::ui::font_id() as i32;
         let font = lib.files.iter().find_map(|(_, c)| (0..c.nodes.len()).filter(|&i| c.nodes[i].ty == 0x7000).find_map(|i| esf::font::read(c, i).filter(|f| f.id == id)));
         if let Some(f) = font {
-            vui.font = Some(ui.add_font(device, queue, &f));
+            assets.font = Some(ui.add_font(device, queue, &f));
         }
-        let hud = crate::hud::Hud::new(&vui);
         renderer.ui = Some(ui);
-        self.hud = Some((vui, hud));
+        self.hud = Some((vui, assets, crate::hud::Hud::new()));
         self.wnd_chat = Some(crate::chat::WndChat::new());
     }
 
@@ -764,16 +765,16 @@ impl Play {
         let now = self.session.now();
         let dt = ((time_ms - self.hud_last).clamp(0, 250)) as f32 / 1000.0;
         self.hud_last = time_ms;
-        if let Some((vui, hud)) = self.hud.as_mut() {
+        if let Some((vui, assets, hud)) = self.hud.as_mut() {
             vui.time = time_ms;
-            hud.draw(vui, ui, &state);
+            let mut r = assets.raster(ui);
+            hud.draw(vui, &mut r, &state);
             if let Some(c) = self.wnd_chat.as_mut() {
                 for (text, color, at) in self.chat_pending.drain(..) {
-                    let font = vui.font;
-                    let fonts = &ui.fonts;
-                    c.text.add_text(&crate::ui::wide(&text), color, at, |s| font.map_or(0, |f| fonts[f].string_width(s)));
+                    let rr = &r;
+                    c.text.add_text(&crate::ui::wide(&text), color, at, |s| vi::ui::Raster::string_width(rr, s));
                 }
-                c.draw(vui, ui, now, dt);
+                c.draw(vui, &mut r, now, dt);
             }
         }
     }

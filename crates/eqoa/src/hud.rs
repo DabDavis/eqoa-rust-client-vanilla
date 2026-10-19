@@ -8,8 +8,9 @@
 //! `IsLootable`) and the target's details box (`DrawTargetInfo`, opened by
 //! a key).
 
-use crate::ui::{TextScroll, Vui, wide};
-use render::ui::{Quad, Ui};
+use crate::ui::{Raster, UiRaster, Vui, icon_id, wide};
+use render::ui::Quad;
+use vi::ui::TextScroll;
 
 /// What the HUD reads off the client this frame.
 #[derive(Clone, Debug, Default)]
@@ -54,14 +55,12 @@ pub struct Hud {
     glow2: f32,
     glow2_on: i32,
     scroll: TextScroll,
-    /// The texture "sheet1" (the compass rose's art).
-    sheet1: Option<usize>,
     /// `VIGetGameOptions()->m_region`.
     pub region: i8,
 }
 
 impl Hud {
-    pub fn new(vui: &Vui) -> Self {
+    pub fn new() -> Self {
         Hud {
             glow0: 0.3,
             glow0_on: -1,
@@ -70,7 +69,6 @@ impl Hud {
             glow2: 0.3,
             glow2_on: -1,
             scroll: TextScroll::default(),
-            sheet1: vui.surface(crate::ui::icon_id("sheet1")),
             region: 0,
         }
     }
@@ -84,7 +82,7 @@ impl Hud {
     }
 
     /// `OnDrawSelf`, the drawing half.
-    pub fn draw(&mut self, vui: &mut Vui, ui: &mut Ui, s: &HudState) {
+    pub fn draw(&mut self, vui: &Vui, ui: &mut UiRaster, s: &HudState) {
         self.update_glow();
         let mut p = [10, 15];
         vui.blit(ui, 6, p);
@@ -132,7 +130,7 @@ impl Hud {
 
     /// `DrawTarget`: "Target", the bar with the name scrolling in it, the
     /// health gauge, the disposition icon.
-    fn draw_target(&mut self, vui: &mut Vui, ui: &mut Ui, at: [i32; 2], s: &HudState) {
+    fn draw_target(&mut self, vui: &Vui, ui: &mut UiRaster, at: [i32; 2], s: &HudState) {
         let mut p = at;
         let has = s.target_name.is_some();
         self.glow0_on = if has { 1 } else { -1 };
@@ -165,8 +163,8 @@ impl Hud {
 
     /// `DrawCompass`: a 44-pixel quad of "sheet1" turned by the heading
     /// about (39, 54); the rose's window in the sheet is the region's.
-    fn draw_compass(&self, ui: &mut Ui, yaw: f32) {
-        let Some(tex) = self.sheet1 else { return };
+    fn draw_compass(&self, ui: &mut UiRaster, yaw: f32) {
+        let Some(tex) = ui.assets.surface(icon_id("sheet1")) else { return };
         let a = yaw + std::f32::consts::PI;
         let (sn, cs) = (a.sin(), a.cos());
         let at = |x: f32, y: f32| [x * cs - y * sn + 39.0, x * sn + y * cs + 54.0];
@@ -177,7 +175,7 @@ impl Hud {
             _ => (0.046_875, 0.474_609_4, 0.130_859_4, 0.558_593_75),
         };
         // The strip's four vertices (0 1 2 3) as a fan: 0 1 3 2.
-        ui.push(Quad {
+        ui.ui.push(Quad {
             tex,
             blend: 0,
             pos: [out[0], out[1], out[3], out[2]],
@@ -191,7 +189,7 @@ impl Hud {
 /// `DrawGauge`: the frame (`frame`'s art), then `bar`'s art cut to `v` of
 /// its width, inset 3,1 for the experience bar (152) and 2,2 otherwise;
 /// dimmed to 0.3 unless lit.
-pub fn draw_gauge(vui: &Vui, ui: &mut Ui, bar: i32, frame: i32, at: [i32; 2], lit: bool, v: f32) {
+pub fn draw_gauge(vui: &Vui, ui: &mut dyn Raster, bar: i32, frame: i32, at: [i32; 2], lit: bool, v: f32) {
     let fill = vui.entry(bar);
     let bx = vui.entry(frame);
     let alpha = if lit { 1.0 } else { 0.3 };
