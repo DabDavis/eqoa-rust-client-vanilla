@@ -177,20 +177,17 @@ pub fn invert33<M: Model>(a: &Matrix33<M>) -> Option<Matrix33<M>> {
         w.swap(i, row);
         o.swap(i, row);
         let q = F::ONE / p;
-        for c in 0..3 {
-            w[i][c] = w[i][c] * q;
-        }
-        for c in 0..3 {
-            o[i][c] = o[i][c] * q;
-        }
+        w[i] = w[i].map(|x| x * q);
+        o[i] = o[i].map(|x| x * q);
         for k in 0..3 {
             if k != i {
                 let q = -w[k][i];
-                for c in 0..3 {
-                    w[k][c] = w[k][c] + w[i][c] * q;
+                let (wi, oi) = (w[i], o[i]);
+                for (d, s) in w[k].iter_mut().zip(wi) {
+                    *d = *d + s * q;
                 }
-                for c in 0..3 {
-                    o[k][c] = o[k][c] + o[i][c] * q;
+                for (d, s) in o[k].iter_mut().zip(oi) {
+                    *d = *d + s * q;
                 }
             }
         }
