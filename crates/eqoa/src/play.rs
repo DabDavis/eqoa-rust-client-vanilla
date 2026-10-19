@@ -68,6 +68,10 @@ pub struct Play {
     pub typing: Option<String>,
     /// `m_target`: the selected entity's id, or u32::MAX.
     pub target: u32,
+    /// `m_autoAttack`: held while the attack button is (the 0x40 carries it).
+    pub auto_attack: bool,
+    /// `m_p071E8`: when the next 0x000F may go out.
+    attack_due: u32,
 }
 
 /// A creature's model as `Apply` dresses it: the look on its text slots, the
@@ -223,7 +227,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player) -> Self {
-        Play { session, player, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX }
+        Play { session, player, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0 }
     }
 
     fn self_id32(&self) -> Option<u32> {
@@ -322,7 +326,7 @@ impl Play {
         // SendPosition, at the update rate.
         if self_id.is_some() && now.wrapping_sub(self.last_send) >= UPDATE_RATE {
             self.last_send = now;
-            let msg = vi::selfstate::encode(self.player.world as u8, &walker.cam.walk.committed, 0, u32::MAX);
+            let msg = vi::selfstate::encode(self.player.world as u8, &walker.cam.walk.committed, self.auto_attack as u8, self.target);
             self.session.send_state(0x40, &msg);
         }
         let me = self.self_id32();
@@ -461,6 +465,7 @@ impl Play {
             cand.push((score + if dead { 2.0 } else { 0.0 }, e.id));
         }
         cand.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        self.auto_attack = false;
         let n = cand.len();
         self.target = if n == 0 {
             u32::MAX
@@ -473,6 +478,50 @@ impl Play {
         let mut w = net::stream::Writer::op(0x0010);
         w.u32(0).u32(self.target);
         self.session.send(&w.data);
+    }
+
+    /// Targets the creature called `name` (as a click on it would), 0x0010.
+    pub fn target_by_name(&mut self, name: &str) -> bool {
+        let Some(id) = self.entities.slots.iter().flatten().find(|e| e.creature.as_ref().is_some_and(|c| c.name == name)).map(|e| e.id) else {
+            return false;
+        };
+        self.target = id;
+        self.auto_attack = false;
+        let mut w = net::stream::Writer::op(0x0010);
+        w.u32(0).u32(id);
+        self.session.send(&w.data);
+        true
+    }
+
+    /// `ToggleAutoAttack`, the button pressed (the game option that makes it
+    /// a toggle is off, as by default): a corpse is asked for its loot
+    /// (0x0015); a creature not flagged 0x80 is attacked: 0x000F with the
+    /// target when the swing timer allows, and auto-attack on while held.
+    pub fn attack_press(&mut self) {
+        let now = self.session.now();
+        let Some(e) = self.entities.slots.iter().flatten().find(|e| e.id == self.target) else { return };
+        if e.p18 & 2 != 0 {
+            let mut w = net::stream::Writer::op(0x0015);
+            w.u32(self.target);
+            self.session.send(&w.data);
+            return;
+        }
+        let Some(c) = &e.creature else { return };
+        if c.npc_flags & 0x80 != 0 {
+            return;
+        }
+        if self.attack_due == 0 || (self.attack_due.wrapping_sub(now) as i32) <= 0 {
+            self.attack_due = now;
+            let mut w = net::stream::Writer::op(0x000F);
+            w.u32(self.target);
+            self.session.send(&w.data);
+        }
+        self.auto_attack = true;
+    }
+
+    /// `MaybeStopAutoAttack`: the button released.
+    pub fn attack_release(&mut self) {
+        self.auto_attack = false;
     }
 
     /// The target's name, for the screen (the target window is not ported).

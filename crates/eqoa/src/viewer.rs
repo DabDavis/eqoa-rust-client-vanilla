@@ -264,6 +264,7 @@ pub fn shot_with(
         let mut t = 0;
         let say = std::env::var("EQOA_SAY").ok();
         let tab = std::env::var_os("EQOA_TAB").is_some();
+        let attack = std::env::var_os("EQOA_ATTACK").is_some();
         while t < script.ms {
             t += 16;
             walker.frame(script.controls, t);
@@ -275,10 +276,20 @@ pub fn shot_with(
                     p.session.say(line, u32::MAX);
                 }
                 // `EQOA_TAB`: Tab two seconds in.
+                // `EQOA_TARGET=<name>`: that creature targeted two seconds in.
+                if t == 2000
+                    && let Ok(name) = std::env::var("EQOA_TARGET")
+                {
+                    eprintln!("target {name}: {}", p.target_by_name(&name));
+                }
                 if t == 2000 && tab {
                     let (proj, v) = walker.view(aspect);
                     let dir = Vec3::from(walker.eye.direction.to_array());
                     p.cycle_target(walker.eye_position(), dir, proj * v);
+                }
+                // `EQOA_ATTACK`: attack held from just after that to the end.
+                if t == 2096 && attack {
+                    p.attack_press();
                 }
                 let gpu = crate::play::Gpu { renderer: &mut renderer, device: &device, queue: &queue };
                 if let Some(model) = p.frame(&mut walker, lib, gpu, t)
@@ -598,6 +609,17 @@ impl ApplicationHandler for App {
                     }
                 }
                 if self.play.as_ref().is_some_and(|p| p.typing.is_some()) {
+                    return;
+                }
+                // F: attack, held (`ToggleAutoAttack` / `MaybeStopAutoAttack`).
+                if let (Some(p), Key::Character(c)) = (self.play.as_mut(), &event.logical_key)
+                    && c.eq_ignore_ascii_case("f")
+                {
+                    if event.state == ElementState::Pressed && !event.repeat {
+                        p.attack_press();
+                    } else if event.state == ElementState::Released {
+                        p.attack_release();
+                    }
                     return;
                 }
                 // Tab: the next target (`CycleTarget`).
