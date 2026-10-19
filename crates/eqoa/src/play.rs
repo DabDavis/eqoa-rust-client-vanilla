@@ -154,6 +154,15 @@ pub struct Play {
     fade: crate::death::Fade,
     dead_casters: Vec<i32>,
     death_ms: i64,
+    /// The camera: the race cameras (CLIENT's, when its image was read), the
+    /// preset the start menu's framing put aside (`m_camPreset`) and the
+    /// style's (`m_camSaved`), whether the world was entered (`m_p2BD50`),
+    /// and whether the race framing is on.
+    pub race_cams: Option<[Vec<crate::camstyle::RaceCamera>; 2]>,
+    cam_preset: crate::camstyle::Preset,
+    cam_saved: crate::camstyle::Preset,
+    cam_entered: bool,
+    race_framed: bool,
     /// The weapon trails (`VITrailFx`'s pool) and this frame's strips.
     trails: vi::trail::Trails<Ee>,
     pub trail_strips: Vec<render::billboard::Strips>,
@@ -500,7 +509,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false };
         p.take_abilities();
         p
     }
@@ -822,6 +831,10 @@ impl Play {
                     self.dump = dump;
                     self.take_abilities();
                     self.respawned(walker);
+                    if self.cam_entered {
+                        let rc = self.race_camera();
+                        crate::camstyle::set_style(&mut walker.cam, self.cam_saved.mode, rc, &mut walker.scene);
+                    }
                     self.pet_id = u32::MAX;
                     self.pet_name.clear();
                     // Msg000D's PlayCue
@@ -991,6 +1004,22 @@ impl Play {
             crate::trails::process(&mut self.trails, &mut p.trail, cs, &p.weapons, &centre, game_ms);
         }
         self.trail_strips = crate::trails::render(&mut self.trails, game_ms);
+        // The camera style: the first entry's ToggleCameraStyle; the start
+        // menu's ApplyRaceCamera while it is up, ApplyDefaultCamera after
+        let rc = self.race_camera();
+        if !self.cam_entered && self.has_self() {
+            self.cam_entered = true;
+            self.cam_saved = crate::camstyle::toggle(&mut walker.cam, false, rc, &mut walker.scene);
+        }
+        if self.mode == 13 && !self.race_framed {
+            if let Some(p) = crate::camstyle::apply_race(&mut walker.cam, rc, &mut walker.scene) {
+                self.cam_preset = p;
+                self.race_framed = true;
+            }
+        } else if self.mode != 13 && self.race_framed {
+            crate::camstyle::apply(&mut walker.cam, &self.cam_preset);
+            self.race_framed = false;
+        }
         // DeathCamera: the eye swung round the body, the fade at 4 s
         if let Some(d) = self.death.as_mut() {
             let dt = ((game_ms - self.death_ms).clamp(0, 1000)) as f32 * 0.001;
@@ -1331,6 +1360,20 @@ impl Play {
             self.cues.push(crate::sound::Cue::Named("respawn", 0.4));
             self.fade.set(1.0, 0.0);
             self.fade.set(0.0, 1.0);
+        }
+    }
+
+    /// `GetRaceCamera(GetRace(), ExpansionFlags())`.
+    fn race_camera(&self) -> Option<crate::camstyle::RaceCamera> {
+        let t = self.race_cams.as_ref()?;
+        crate::camstyle::race_camera(t, self.dump.player.race as i32, self.session.expansion & net::session::EXPANSION_FLAGS)
+    }
+
+    /// The P key in play (`InitCameraStyle`): first person and back.
+    pub fn camera_style_key(&mut self, walker: &mut Walker) {
+        if self.mode == 0 {
+            let rc = self.race_camera();
+            self.cam_saved = crate::camstyle::cycle(&mut walker.cam, false, rc, &mut walker.scene);
         }
     }
 

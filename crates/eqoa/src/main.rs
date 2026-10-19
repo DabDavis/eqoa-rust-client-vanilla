@@ -24,6 +24,7 @@
 mod audio;
 mod chat;
 mod dialog;
+mod camstyle;
 mod client_image;
 mod death;
 mod editbox;
@@ -271,6 +272,7 @@ fn run(args: &[String]) -> Result<()> {
             // decrypted image (EQOA_CLIENT, else run/client.bin).
             let client = std::env::var("EQOA_CLIENT").unwrap_or_else(|_| "run/client.bin".into());
             play.start = startmenu::StartData::load(std::path::Path::new(&client));
+            play.race_cams = client_image::ClientImage::open(std::path::Path::new(&client)).map(|img| camstyle::race_cameras(&img));
             if play.start.is_none() {
                 eprintln!("no start menu: it needs a decrypted CLIENT image at {client} (EQOA_CLIENT)");
             }

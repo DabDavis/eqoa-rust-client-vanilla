@@ -1027,6 +1027,13 @@ impl ApplicationHandler for App {
                             p.interact_with_target();
                             return;
                         }
+                        // P: InitCameraStyle (first person and back).
+                        (None, Key::Character(c)) if c.eq_ignore_ascii_case("p") => {
+                            if let Some(w) = self.walker.as_mut() {
+                                p.camera_style_key(w);
+                            }
+                            return;
+                        }
                         (None, Key::Character(c)) if c.as_str() == "/" => {
                             open(p, &mut self.held, "/");
                             return;
