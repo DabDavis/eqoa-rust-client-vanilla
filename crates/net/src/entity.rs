@@ -36,6 +36,9 @@ pub struct Creature {
     /// +0x255: runs its own walk physics (players) rather than being carried
     /// along its velocity.
     pub p255: u8,
+    /// +0x256 and +0x299: pick the name plate's colour (`ApplyLook`).
+    pub p256: u8,
+    pub p299: u8,
     pub race: u8,
     pub class: u8,
     pub npc_flags: u16,
@@ -141,11 +144,16 @@ impl Entity {
             c.name = String::from_utf8_lossy(&name[..name.iter().position(|&b| b == 0).unwrap_or(name.len())]).into_owned();
             c.level = r.u8();
             c.p255 = r.u8();
-            r.u8();
+            c.p256 = r.u8();
             r.u8();
             c.race = r.u8();
             c.class = r.u8();
             c.npc_flags = r.u16();
+            r.u32();
+            for _ in 0..5 {
+                r.u8();
+            }
+            c.p299 = r.u8();
             self.creature = Some(c);
         }
     }

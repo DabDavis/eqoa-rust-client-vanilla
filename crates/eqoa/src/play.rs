@@ -34,6 +34,18 @@ struct Puppet {
     gpu: GpuModel,
     /// Items and the helm, each on its node (`Attach`).
     attached: Vec<(i32, GpuModel)>,
+    /// The name plate's anchor this frame: 0.6 above the name node (3).
+    name_at: Option<[f32; 3]>,
+}
+
+/// `VICSprite::NameColors`.
+const NAME_COLORS: [[f32; 4]; 3] = [[212.0 / 255.0, 192.0 / 255.0, 111.0 / 255.0, 1.0], [100.0 / 255.0, 175.0 / 255.0, 220.0 / 255.0, 1.0], [90.0 / 255.0, 1.0, 80.0 / 255.0, 1.0]];
+
+/// A name plate to draw: where, in what colour, what.
+pub struct Plate {
+    pub at: [f32; 3],
+    pub color: [f32; 4],
+    pub name: String,
 }
 
 pub struct Play {
@@ -96,7 +108,7 @@ fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Optio
                         dress(&mut model, &vi::cust::apply_look(cs, look, helm_worn, |id| lib.surface(id as i32).is_some()));
                     }
                     let gpu = g.renderer.upload(g.device, g.queue, &model, &[render::IDENTITY], &textures);
-                    Some(Puppet { model: e.model, look, sprite, anims, rand, gpu, attached })
+                    Some(Puppet { model: e.model, look, sprite, anims, rand, gpu, attached, name_at: None })
                 })
 }
 
@@ -126,6 +138,40 @@ fn glam_to_matrix(m: [[f32; 4]; 4]) -> Matrix44<Ee> {
         row.w = F::new(m[r][3]);
     }
     out
+}
+
+/// `VINameSprite::Raster` and `RasterDeferred` for a frame seen from `eye`
+/// through `view_proj`: plates within 22 of the eye (the squared view-space
+/// length plus w² under 22²), at most 24, nearest first, each dropped if its
+/// rect on the PS2's 640x448 screen meets one already kept (`VIRect::
+/// Intersects`, inclusive).
+pub fn labels(plates: &[Plate], eye: glam::Vec3, view_proj: glam::Mat4, text: &render::text::Text) -> Vec<render::text::Label> {
+    let mut queued = Vec::new();
+    for p in plates {
+        let at = glam::Vec3::from(p.at);
+        if 22.0 * 22.0 <= (at - eye).length_squared() + 1.0 || queued.len() >= 24 {
+            continue;
+        }
+        let clip = view_proj * at.extend(1.0);
+        if clip.w <= 0.0 {
+            continue;
+        }
+        let ndc = clip.truncate() / clip.w;
+        let (qx, qy) = ((ndc.x * 320.0 + 320.0) as i32, (-ndc.y * 224.0 + 224.0) as i32);
+        let w = text.width(&p.name) as i32;
+        let h = text.height() as i32;
+        let min = (qx - (w >> 1), qy - (h >> 1));
+        queued.push((clip.w, min, (min.0 + w, min.1 + h), ndc, p));
+    }
+    queued.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut kept: Vec<((i32, i32), (i32, i32), glam::Vec3, &Plate)> = Vec::new();
+    for (_, min, max, ndc, p) in queued {
+        let meets = kept.iter().any(|k| !(min.0 > k.1.0 || max.0 < k.0.0 || min.1 > k.1.1 || max.1 < k.0.1));
+        if !meets {
+            kept.push((min, max, ndc, p));
+        }
+    }
+    kept.into_iter().map(|(_, _, ndc, p)| render::text::Label { at: ndc.to_array(), color: p.color, text: p.name.clone() }).collect()
 }
 
 fn look_of(c: &net::entity::Creature) -> vi::cust::Look {
@@ -295,6 +341,11 @@ impl Play {
                             g.renderer.set_instances(g.queue, gpu, &[Matrix44::mul(&n.world, &m).to_cols()]);
                         }
                     }
+                    p.name_at = cs.h.nodes.get(cs.node_ids[3].max(0) as usize).filter(|_| cs.node_ids[3] >= 0).map(|n| {
+                        let w = Matrix44::mul(&n.world, &m);
+                        let a = w.mul_point(&Vect3::of(0.0, 0.6, 0.0));
+                        a.to_array()
+                    });
                     (m.to_cols(), cs.h.blend.iter().map(|m| m.to_cols()).collect::<Vec<_>>())
                 }
                 None => (actor.to_cols(), Vec::new()),
@@ -305,6 +356,22 @@ impl Play {
             }
         }
         new_model
+    }
+
+    /// `SetName`'s plates for every creature drawn: its name, in
+    /// `NameColors[ApplyLook's pick]`, at its name node.
+    pub fn plates(&self) -> Vec<Plate> {
+        let mut out = Vec::new();
+        for (slot, e) in self.entities.slots.iter().enumerate() {
+            let (Some(e), Some(Some(p))) = (e, self.puppets.get(slot)) else { continue };
+            let (Some(c), Some(at)) = (&e.creature, p.name_at) else { continue };
+            if c.name.is_empty() {
+                continue;
+            }
+            let color = if c.p256 < 2 { 0 } else if c.p299 & 1 != 0 { 2 } else { 1 };
+            out.push(Plate { at, color: NAME_COLORS[color], name: c.name.clone() });
+        }
+        out
     }
 
     /// Whether the player is drawn dressed (the caller hides its plain body).

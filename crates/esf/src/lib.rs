@@ -22,6 +22,7 @@ use std::io::Read;
 mod library;
 pub(crate) mod mesh;
 mod surface;
+pub mod font;
 pub mod zone;
 pub use library::{Library, Ref};
 pub use mesh::{Batch, Layer, Model, ModelRef, PrimBuffer, VertexList};

@@ -194,6 +194,20 @@ fn upload(renderer: &mut Renderer, device: &wgpu::Device, queue: &wgpu::Queue, l
     s.parts.iter().map(|(m, mats)| renderer.upload(device, queue, m, mats, &textures)).collect()
 }
 
+/// The font name plates use (`VICSprite::FontResourceID`, "Arial"), if a
+/// loaded file has it.
+fn arial(lib: &Library) -> Option<esf::font::Font> {
+    let id = vi::hsprite::hash_ref_id("Arial");
+    if let Some(r) = lib.lookup(id)
+        && lib.file(r.file).node(r.node).ty == 0x7000
+    {
+        return esf::font::read(lib.file(r.file), r.node);
+    }
+    lib.files.iter().find_map(|(_, c)| {
+        (0..c.nodes.len()).filter(|&i| c.nodes[i].ty == 0x7000).find_map(|i| esf::font::read(c, i).filter(|f| f.id == id))
+    })
+}
+
 fn report(renderer: &Renderer) {
     if !renderer.missing_textures.is_empty() {
         eprintln!("{} texture DictIDs resolve to nothing in the loaded files", renderer.missing_textures.len());
@@ -234,6 +248,9 @@ pub fn shot_with(
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))?;
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default()))?;
     let mut renderer = Renderer::new(&device, &queue, render::TARGET_FORMAT);
+    if let Some(f) = arial(lib) {
+        renderer.set_font(&device, &queue, &f);
+    }
     let s = source.scene(lib);
     let walking = matches!(source, Source::Walk { .. });
     let mut gpu = if walking { Vec::new() } else { upload(&mut renderer, &device, &queue, lib, &s) };
@@ -280,6 +297,7 @@ pub fn shot_with(
         streamer.animate(&mut walker.scene, &renderer, &queue);
         eprintln!("{}", streamer.describe());
         let (proj, v) = walker.view(aspect);
+        let mut shot_eye = walker.eye_position();
         let mut frame = lit(proj, v, Instant::now(), Some((walker.eye_position(), &walker.scene)));
         // `EQOA_SHOT_EYE=dx,dy,dz`: look at the character from that offset
         // instead of through the game's camera (for checking poses).
@@ -299,6 +317,7 @@ pub fn shot_with(
             };
             let proj = glam::camera::rh::proj::directx::perspective(40f32.to_radians(), aspect, 0.1, 3000.0);
             let at = p + Vec3::new(*dx, *dy, *dz);
+            shot_eye = at;
             frame = lit(proj, glam::camera::rh::view::look_at_mat4(at, p, Vec3::Y), Instant::now(), Some((at, &walker.scene)));
         }
         if let (Some(f), Some(at)) = (&frame.1, crate::sky::upload(&mut renderer, &device, &queue, lib, &mut gpu)) {
@@ -306,6 +325,12 @@ pub fn shot_with(
         }
         view = frame.0;
         streamed = Some(streamer);
+        if let Some(p) = &play {
+            let plates = p.plates();
+            if let Some(t) = renderer.text.as_mut() {
+                t.labels = crate::play::labels(&plates, shot_eye, view.view_proj, t);
+            }
+        }
         if let Some(p) = &play {
             eprintln!("play: {}", p.describe());
             for e in p.entities.slots.iter().flatten() {
@@ -491,7 +516,10 @@ impl ApplicationHandler for App {
         // The bytes go out as the GS's do: no sRGB encode (render::TARGET_FORMAT).
         config.format = config.format.remove_srgb_suffix();
         surface.configure(&device, &config);
-        let renderer = Renderer::new(&device, &queue, config.format);
+        let mut renderer = Renderer::new(&device, &queue, config.format);
+        if let Some(f) = arial(&self.lib) {
+            renderer.set_font(&device, &queue, &f);
+        }
         let depth = render::depth_view(&device, config.width, config.height);
         self.gfx = Some(Gfx { window, surface, device, queue, config, depth, renderer, models: Vec::new() });
         self.load();
@@ -645,6 +673,12 @@ impl ApplicationHandler for App {
                     }
                     None => self.camera.view(self.bounds, g.config.width as f32 / g.config.height as f32),
                 };
+                if let (Some(p), Some(w)) = (&self.play, &self.walker) {
+                    let plates = p.plates();
+                    if let Some(t) = g.renderer.text.as_mut() {
+                        t.labels = crate::play::labels(&plates, w.eye_position(), view.view_proj, t);
+                    }
+                }
                 let target = frame.texture.create_view(&Default::default());
                 let mut enc = g.device.create_command_encoder(&Default::default());
                 let refs: Vec<&GpuModel> = g
@@ -654,6 +688,7 @@ impl ApplicationHandler for App {
                     .chain(self.play.iter().flat_map(|p| p.models()))
                     .collect();
                 g.renderer.draw(&g.queue, &mut enc, &target, &g.depth, &view, &refs);
+                g.renderer.draw_text(&g.device, &mut enc, &target, &g.depth, (g.config.width, g.config.height));
                 g.queue.submit([enc.finish()]);
                 g.queue.present(frame);
             }

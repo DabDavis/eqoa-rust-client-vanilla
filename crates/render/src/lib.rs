@@ -10,6 +10,8 @@
 //! one, where the game draws a strip's layers back to back. A translucent
 //! layer then never hides geometry drawn after it.
 
+pub mod text;
+
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
 use wgpu::util::DeviceExt;
@@ -121,6 +123,9 @@ pub struct Renderer {
     /// DictIDs a batch asked for that no loaded file holds.
     pub missing_textures: std::collections::BTreeSet<i32>,
     start: std::time::Instant,
+    format: wgpu::TextureFormat,
+    /// Labels (name plates), once a font is set.
+    pub text: Option<text::Text>,
 }
 
 /// What to draw this frame. The lights are the VU1 strip programs' uniforms:
@@ -314,6 +319,8 @@ impl Renderer {
             textures: Default::default(),
             missing_textures: Default::default(),
             start: std::time::Instant::now(),
+            format,
+            text: None,
         }
     }
 
@@ -465,6 +472,38 @@ impl Renderer {
         }
     }
 
+    /// The font labels are drawn in.
+    pub fn set_font(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, font: &esf::font::Font) {
+        self.text = Some(text::Text::new(device, queue, self.format, DEPTH_FORMAT, font));
+    }
+
+    /// The labels, over what `draw` drew (depth-tested against it, not
+    /// writing it). `size` is the target's, in pixels.
+    pub fn draw_text(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, depth: &wgpu::TextureView, size: (u32, u32)) {
+        let Some(t) = &self.text else { return };
+        if t.labels.is_empty() {
+            return;
+        }
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("text"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth,
+                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Discard }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        t.draw(device, &mut pass, size);
+    }
+
     /// The skin palette for a skinned model: one matrix per skeleton node
     /// (`VIHSprite::SetBlendMatrices`), as column-major arrays.
     pub fn set_palette(&self, queue: &wgpu::Queue, m: &GpuModel, palette: &[[[f32; 4]; 4]]) {
@@ -524,7 +563,7 @@ impl Renderer {
             })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: depth,
-                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
+                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
                 stencil_ops: None,
             }),
             timestamp_writes: None,
@@ -651,7 +690,9 @@ pub fn capture(
     });
     let depth = depth_view(device, w, h);
     let mut enc = device.create_command_encoder(&Default::default());
-    renderer.draw(queue, &mut enc, &target.create_view(&Default::default()), &depth, view, models);
+    let tv = target.create_view(&Default::default());
+    renderer.draw(queue, &mut enc, &tv, &depth, view, models);
+    renderer.draw_text(device, &mut enc, &tv, &depth, (w, h));
     enc.copy_texture_to_buffer(
         target.as_image_copy(),
         wgpu::TexelCopyBufferInfo {
