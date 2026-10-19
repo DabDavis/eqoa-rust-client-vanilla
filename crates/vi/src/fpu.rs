@@ -39,6 +39,12 @@ pub trait Model: Copy + Default + fmt::Debug + PartialEq + 'static {
     fn atan2f(a: f32, b: f32) -> f32;
     fn fmodf(a: f32, b: f32) -> f32;
     fn acosf(a: f32) -> f32;
+    /// `cvt.s.w`: an int to a float. Exact up to 2^24; past it `Ieee` rounds
+    /// to nearest and `Ee` toward zero, as the EE's FPU rounds every result
+    /// (unmeasured for this instruction on a console: an assumption).
+    fn cvt_s_w(i: i32) -> f32 {
+        i as f32
+    }
 }
 
 /// eqoa-port's arithmetic: IEEE single, round to nearest, the host's libm.
@@ -139,6 +145,11 @@ impl Model for Ee {
     fn acosf(a: f32) -> f32 {
         ee::libm::acosf(a).unwrap_or_else(|| ee::operand(a).acos())
     }
+    fn cvt_s_w(i: i32) -> f32 {
+        let f = i as f32;
+        // rounded away from zero by the host's nearest: one ulp back
+        if (f as f64).abs() > (i as f64).abs() { f32::from_bits(f.to_bits() - 1) } else { f }
+    }
 }
 
 /// A float computed under model `M`. Same size and bits as an `f32`.
@@ -179,6 +190,10 @@ impl<M: Model> F<M> {
     }
     pub fn acosf(self) -> Self {
         F::new(M::acosf(self.0))
+    }
+    /// `(float)i`
+    pub fn from_int(i: i32) -> Self {
+        F::new(M::cvt_s_w(i))
     }
 }
 

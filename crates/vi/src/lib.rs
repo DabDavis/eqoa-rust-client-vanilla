@@ -28,6 +28,7 @@ pub mod fpu;
 pub mod geom;
 pub mod hash;
 pub mod hsprite;
+pub mod particle;
 pub mod quat;
 pub mod scene;
 pub mod tod;
