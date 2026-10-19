@@ -69,7 +69,8 @@ impl Source {
             [x, z, h, ..] => (*x, *z, *h),
             _ => (c.x - 40.0, c.z + 40.0, 0.0),
         };
-        let w = Walker::new(world, x, z, h);
+        let mut w = Walker::new(world, x, z, h);
+        w.set_character(lib, *character);
         Some((w, lib.build_model(*character)?))
     }
 
@@ -169,11 +170,27 @@ pub fn shot(
         while t < script.ms {
             t += 16;
             walker.frame(script.controls, t);
+            // UpdateSprite runs every frame in the game.
+            walker.pose();
         }
+        let (model, palette) = walker.pose();
         eprintln!("after {} ms: {}", script.ms, walker.describe());
         let textures = render::library_textures(lib);
-        gpu.push(renderer.upload(&device, &queue, &body, &[walker.body_matrix()], &textures));
+        let g = renderer.upload(&device, &queue, &body, &[model], &textures);
+        renderer.set_palette(&queue, &g, &palette);
+        gpu.push(g);
         view = View::daylight(walker.view(aspect));
+        // `EQOA_SHOT_EYE=dx,dy,dz`: look at the character from that offset
+        // instead of through the game's camera (for checking poses).
+        let eye: Vec<f32> = std::env::var("EQOA_SHOT_EYE")
+            .ok()
+            .map(|v| v.split(',').filter_map(|t| t.trim().parse().ok()).collect())
+            .unwrap_or_default();
+        if let [dx, dy, dz] = eye.as_slice() {
+            let p = Vec3::from(walker.cam.walk.phys.position.to_array()) + Vec3::Y;
+            let proj = glam::camera::rh::proj::directx::perspective(40f32.to_radians(), aspect, 0.1, 3000.0);
+            view = View::daylight(proj * glam::camera::rh::view::look_at_mat4(p + Vec3::new(*dx, *dy, *dz), p, Vec3::Y));
+        }
     }
     let refs: Vec<&GpuModel> = gpu.iter().collect();
     let rgba = render::capture(&device, &queue, &renderer, w, h, &view, &refs);
@@ -250,7 +267,9 @@ impl App {
             g.models = upload(&mut g.renderer, &g.device, &g.queue, &self.lib, &s);
             self.walker = walker.map(|(w, body)| {
                 let textures = render::library_textures(&self.lib);
-                g.models.push(g.renderer.upload(&g.device, &g.queue, &body, &[w.body_matrix()], &textures));
+                let mut w = w;
+                let (model, _) = w.pose();
+                g.models.push(g.renderer.upload(&g.device, &g.queue, &body, &[model], &textures));
                 w
             });
             self.clock = Instant::now();
@@ -413,9 +432,10 @@ impl ApplicationHandler for App {
                 let Some(g) = &mut self.gfx else { return };
                 let walk_view = self.walker.as_mut().map(|w| {
                     w.frame(controls, now);
-                    let m = w.body_matrix();
+                    let (m, palette) = w.pose();
                     if let Some(body) = g.models.last() {
                         g.renderer.set_instances(&g.queue, body, &[m]);
+                        g.renderer.set_palette(&g.queue, body, &palette);
                     }
                     g.window.set_title(&format!("eqoa — walking {}", w.describe()));
                     w.view(g.config.width as f32 / g.config.height as f32)

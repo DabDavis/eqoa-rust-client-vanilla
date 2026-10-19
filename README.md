@@ -42,7 +42,8 @@ UI, network (DRDP), sound.
 | `iso` | ISO 9660 walk, read one file | the disc |
 | `esf` | CSF inflate, the OBJF record tree, DictIDs, surfaces, PrimBuffers, materials, sprites flattened to models; `Library`, the dictionary across files; zones (terrain with pre-translations, actors) | `go-eqoa-esf-tools-v2`: per-surface CRCs (801 surfaces) and per-model geometry (766 models: counts, bbox bits, position CRC); which records register a DictID, and that the first file loaded wins, from the decomp |
 | `vi` | the game logic, ported from the decomp and generic over a float model: `VIWalkControl`, `VIWalkCamera`, `VICameraEffect`; and **`VIScene::Collide`**: the world and zone BSPs, rooms, collision buffers (all three packings), placed actors and their insertion, Simple/Sub/Group/LOD sprites, `GetEnvFlags` and the liquid-surface ray, loaded from the world file as `VIESFParse` loads it (`world.rs`) | **bit for bit against the decomp compiled for the host** (eqoa-port's `make oracle`), under the `Ieee` model: 18 walk-control and 11 camera methods; `VIMatrix44` Transform/InvertAffine/Mul, `VIPlane`, the transformed `VICollSphere::Init`, the triangle/edge/vertex sweeps, and `CollideObj` over 102 real TUNARIA buffers; the BSP walk against brute force over every room and actor (3,000 sweeps). Negative controls fail |
-| `render` | wgpu: instanced models, a texture cache by DictID, the strip programs' lighting (colour + ambient + sun, alpha as sun visibility) and back-face culling, the base layer's alpha test, offscreen capture | by eye, for now |
+| `vi` (animation) | `VIHSprite` (the pose evaluator: plays, their timing and 250 ms blends, freezes, LOD rest frames, the hierarchy, bind pose and inverse, centre transform, skin palette), `VIHSpriteAnim` (full and packed clips, triggers), `VICSprite` (66-entry play list, priorities, `SetDefaultEntries`, `SetDefaults`, the `SetLocomotion`/`SetAnimation` arbiter and its two-layer sync), `VIWalkControl::UpdateSprite`, and the loader for CSprite records | **bit for bit against the decomp** (oracle op 500 builds the human from CHAR.ESF as a real VICSprite in a bare VIScene): 320 steps of a locomotion script, all 40 node matrices equal at every step; planted bugs fail |
+| `render` | wgpu: instanced models, a texture cache by DictID, the strip programs' lighting (colour + ambient + sun, alpha as sun visibility) and back-face culling, the base layer's alpha test, GPU skinning (`VIRStrip4`'s four weighted palette matrices), offscreen capture | by eye, for now |
 | `eqoa` | the client binary: `ls`, `tree`, `zones`, `view` (winit window) and `shot` (PNG, no window); walking (`walker.rs`, driven as `VIClient::UpdateControls` drives it in third person) on the game's own collision world, the zone and its neighbours drawn | by eye |
 
 ```bash
@@ -100,13 +101,13 @@ order per stage is not yet measured.
 
 ### Not yet
 
-- Collision: `VIHSprite` (needs the pose evaluator) and `VICSprite` (a capsule)
-  collide as nothing; the RAY collide (`Collide(VICollRay &)`) is not ported.
+- Collision: `VIHSprite` and `VICSprite` (a capsule) collide as nothing; the RAY collide (`Collide(VICollRay &)`) is not ported.
   The world level (BSP walk, rooms, actor insertion) is checked against brute
   force, not yet against the oracle: that needs eqoa-port to load the world.
 - newlib's huge-angle `sinf`/`cosf` reduction (|x| > 2^7·π/2) and `acosf`'s
   |x| > 1 path are not ported (as in the Go); those fall back to the host.
-- The character is drawn in its bind pose: no animation (`vianim` in Go).
+- Character animation stops at the pose: items, sounds, particles, weapon
+  trails, faces, armour and death are not ported (`SetItemAction` is a no-op).
 - `VICameraEffect`'s blend into a scripted camera (a quaternion slerp).
 - The camera preset's own numbers (`ApplyCameraPreset`); the walk camera's
   defaults stand in.

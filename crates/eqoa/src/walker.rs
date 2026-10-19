@@ -17,6 +17,10 @@ use vi::coll::CollSphere;
 use vi::fpu::{Ee, F};
 use vi::scene::{Filter, FilterKind};
 use vi::vect::Vect3;
+use vi::character::{AnimCache, load_csprite};
+use vi::csprite::{CSprite, Rand};
+use vi::geom::Matrix44;
+use vi::hsprite::AnimScene;
 use vi::world::World;
 
 /// One frame's controls, as `UpdateControls` reads them: each in -1..1.
@@ -32,6 +36,10 @@ pub struct Walker {
     pub cam: WalkCamera<Ee>,
     pub scene: World<Ee>,
     pub eye: Eye<Ee>,
+    /// The character, animated: the game's VICSprite over the clips it names.
+    pub sprite: Option<CSprite<Ee>>,
+    pub anims: AnimScene<Ee>,
+    rand: Rand,
 }
 
 impl Walker {
@@ -54,7 +62,45 @@ impl Walker {
         cam.set_orbit_distance(dist);
         cam.set_orbit_angle_behind();
         let eye = cam.process(&mut scene);
-        Walker { cam, scene, eye }
+        Walker { cam, scene, eye, sprite: None, anims: AnimScene::default(), rand: Rand(1) }
+    }
+
+    /// Loads the character as a VICSprite from `r` (a 0x2700 record).
+    pub fn set_character(&mut self, lib: &esf::Library, r: esf::Ref) {
+        self.anims.time = self.scene.time;
+        let mut cache = AnimCache::new();
+        self.sprite = load_csprite(lib, r, &mut self.anims, &mut cache, &mut self.rand);
+        match &self.sprite {
+            Some(s) => eprintln!("character: {} nodes, {} clips, skeleton type {}", s.h.nodes.len(), self.anims.anims.len(), s.skel_type),
+            None => eprintln!("character: not a CSprite with a play list; drawn in its bind pose"),
+        }
+    }
+
+    /// The actor's transform: the body's render position, turned to its
+    /// heading (`VIMatrix44::Transform(hpr, 1, pos)`).
+    fn actor(&self) -> Matrix44<Ee> {
+        let p = self.cam.walk.phys.smooth_location();
+        let hpr = Vect3::new(self.cam.walk.phys.angles.x, F::ZERO, F::ZERO);
+        Matrix44::transform(&hpr, F::ONE, &p)
+    }
+
+    /// The character's model matrix and skin palette for this frame:
+    /// `UpdateSprite`, then `Process` at the LOD for its distance, then the
+    /// centre transform and `SetBlendMatrices`.
+    pub fn pose(&mut self) -> ([[f32; 4]; 4], Vec<[[f32; 4]; 4]>) {
+        let actor = self.actor();
+        let Some(cs) = self.sprite.as_mut() else { return (actor.to_cols(), Vec::new()) };
+        self.anims.time = self.scene.time;
+        self.cam.walk.update_sprite(cs, &self.anims, &mut self.rand);
+        let mut rel = actor;
+        rel.m[3].x -= self.eye.position.x;
+        rel.m[3].y -= self.eye.position.y;
+        rel.m[3].z -= self.eye.position.z;
+        let lod = cs.h.calc_lod_level_index(&rel);
+        cs.h.process(lod, &self.anims);
+        let model = cs.h.calc_trans_about_center(&actor, &self.anims);
+        cs.h.set_blend_matrices();
+        (model.to_cols(), cs.h.blend.iter().map(|m| m.to_cols()).collect())
     }
 
     /// One frame: the controls, then the clock moved to `now_ms` and stepped.
@@ -68,13 +114,6 @@ impl Walker {
         self.eye = self.cam.process(&mut self.scene);
     }
 
-    /// The character's model matrix: the body's render position, turned to
-    /// its heading (HPR's heading turns +Z toward +X).
-    pub fn body_matrix(&self) -> [[f32; 4]; 4] {
-        let p = self.cam.walk.phys.smooth_location().to_array();
-        let h = self.cam.walk.phys.angles.x.0;
-        (Mat4::from_translation(Vec3::from(p)) * Mat4::from_rotation_y(h)).to_cols_array_2d()
-    }
 
     pub fn view(&self, aspect: f32) -> Mat4 {
         let eye = Vec3::from(self.eye.position.to_array());
@@ -87,14 +126,15 @@ impl Walker {
         let env = self.scene.env_flags(&self.cam.walk.phys.position);
         let p = &self.cam.walk.phys;
         format!(
-            "at ({:.1}, {:.1}, {:.1}) heading {:.2} loco {} flags {:#06x} env {env:#x} cam dist {:.2}",
+            "at ({:.1}, {:.1}, {:.1}) heading {:.2} loco {} flags {:#06x} env {env:#x} cam dist {:.2} anim {:?}",
             p.position.x.0,
             p.position.y.0,
             p.position.z.0,
             p.angles.x.0,
             p.loco_state,
             p.flags,
-            self.cam.cur.dist.0
+            self.cam.cur.dist.0,
+            self.sprite.as_ref().map(|s| [s.cur[0].anim, s.cur[1].anim])
         )
     }
 }

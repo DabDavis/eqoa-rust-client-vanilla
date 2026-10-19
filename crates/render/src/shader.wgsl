@@ -24,6 +24,13 @@ struct Material {
 @group(1) @binding(1) var samp: sampler;
 @group(1) @binding(2) var<uniform> material: Material;
 
+// The skin palette, `VIRStrip4`'s: four node matrices per vertex, weighted.
+// Unskinned models carry identities and bone 255 (unused).
+struct Palette {
+    m: array<mat4x4<f32>, 64>,
+};
+@group(2) @binding(0) var<uniform> palette: Palette;
+
 struct VsIn {
     @location(0) pos: vec3<f32>,
     @location(1) uv: vec2<f32>,
@@ -33,6 +40,8 @@ struct VsIn {
     @location(5) m1: vec4<f32>,
     @location(6) m2: vec4<f32>,
     @location(7) m3: vec4<f32>,
+    @location(8) bones: vec4<u32>,
+    @location(9) weights: vec4<u32>,
 };
 
 struct VsOut {
@@ -46,10 +55,27 @@ struct VsOut {
 fn vs_main(v: VsIn) -> VsOut {
     var o: VsOut;
     let model = mat4x4<f32>(v.m0, v.m1, v.m2, v.m3);
-    o.clip = frame.view_proj * model * vec4<f32>(v.pos, 1.0);
+    var pos = vec4<f32>(v.pos, 1.0);
+    var nrm = vec4<f32>(v.normal, 0.0);
+    let wsum = f32(v.weights.x + v.weights.y + v.weights.z + v.weights.w);
+    if (wsum > 0.0) {
+        var sp = vec4<f32>(0.0);
+        var sn = vec4<f32>(0.0);
+        for (var k = 0u; k < 4u; k++) {
+            let b = v.bones[k];
+            if (b < 64u && v.weights[k] > 0u) {
+                let w = f32(v.weights[k]) / wsum;
+                sp += palette.m[b] * pos * w;
+                sn += palette.m[b] * nrm * w;
+            }
+        }
+        pos = vec4<f32>(sp.xyz, 1.0);
+        nrm = vec4<f32>(sn.xyz, 0.0);
+    }
+    o.clip = frame.view_proj * model * pos;
     o.uv = v.uv;
     // Placements scale uniformly, so the upper 3×3 is fine for normals.
-    o.normal = (model * vec4<f32>(v.normal, 0.0)).xyz;
+    o.normal = (model * nrm).xyz;
     o.color = v.color;
     return o;
 }

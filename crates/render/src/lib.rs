@@ -23,7 +23,13 @@ struct Vertex {
     uv: [f32; 2],
     normal: [f32; 3],
     color: [f32; 4],
+    /// Skinning: four palette indices (255 unused) and their weights.
+    bones: [u8; 4],
+    weights: [u8; 4],
 }
+
+/// Palette size: enough for every character skeleton (40 nodes on a human).
+pub const MAX_BONES: usize = 64;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -44,6 +50,11 @@ struct MaterialUniform {
 /// One model on the GPU, drawn once per instance (a model matrix each).
 pub struct GpuModel {
     vertices: wgpu::Buffer,
+    /// The skin palette (row-vector matrices, as the engine's), and its
+    /// bind group; for an unskinned model, all identity and never written.
+    palette: wgpu::Buffer,
+    palette_bg: wgpu::BindGroup,
+    pub skinned: bool,
     instances: wgpu::Buffer,
     instance_count: u32,
     batches: Vec<(wgpu::Buffer, u32, wgpu::BindGroup)>,
@@ -59,6 +70,7 @@ pub struct Renderer {
     frame_buf: wgpu::Buffer,
     frame_bg: wgpu::BindGroup,
     material_layout: wgpu::BindGroupLayout,
+    palette_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     white: wgpu::TextureView,
     /// DictID → uploaded texture (`None`: the id resolved to nothing).
@@ -117,9 +129,13 @@ impl Renderer {
                 uniform_entry(2, wgpu::ShaderStages::FRAGMENT),
             ],
         });
+        let palette_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("palette"),
+            entries: &[uniform_entry(0, wgpu::ShaderStages::VERTEX)],
+        });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("model"),
-            bind_group_layouts: &[Some(&frame_layout), Some(&material_layout)],
+            bind_group_layouts: &[Some(&frame_layout), Some(&material_layout), Some(&palette_layout)],
             immediate_size: 0,
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -133,7 +149,7 @@ impl Renderer {
                     Some(wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<Vertex>() as u64,
                         step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x3, 3 => Float32x4],
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x3, 3 => Float32x4, 8 => Uint8x4, 9 => Uint8x4],
                     }),
                     Some(wgpu::VertexBufferLayout {
                         array_stride: 64,
@@ -194,6 +210,7 @@ impl Renderer {
             frame_buf,
             frame_bg,
             material_layout,
+            palette_layout,
             sampler,
             white,
             textures: Default::default(),
@@ -229,8 +246,26 @@ impl Renderer {
         textures: &Textures,
     ) -> GpuModel {
         let verts: Vec<Vertex> = (0..m.pos.len())
-            .map(|i| Vertex { pos: m.pos[i], uv: m.uv[i], normal: m.normal[i], color: m.color[i] })
+            .map(|i| Vertex {
+                pos: m.pos[i],
+                uv: m.uv[i],
+                normal: m.normal[i],
+                color: m.color[i],
+                bones: m.bones.get(i).copied().unwrap_or([255; 4]),
+                weights: m.weights.get(i).copied().unwrap_or([0; 4]),
+            })
             .collect();
+        let identity = [IDENTITY; MAX_BONES];
+        let palette = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("palette"),
+            contents: bytemuck::cast_slice(&identity),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let palette_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("palette"),
+            layout: &self.palette_layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: palette.as_entire_binding() }],
+        });
         let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("vertices"),
             contents: bytemuck::cast_slice(&verts),
@@ -281,7 +316,23 @@ impl Renderer {
             contents: bytemuck::cast_slice(instances),
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
-        GpuModel { vertices, instances: instance_buf, instance_count: instances.len() as u32, batches, bounds: (lo, hi) }
+        GpuModel {
+            vertices,
+            palette,
+            palette_bg,
+            skinned: m.skinned,
+            instances: instance_buf,
+            instance_count: instances.len() as u32,
+            batches,
+            bounds: (lo, hi),
+        }
+    }
+
+    /// The skin palette for a skinned model: one matrix per skeleton node
+    /// (`VIHSprite::SetBlendMatrices`), as column-major arrays.
+    pub fn set_palette(&self, queue: &wgpu::Queue, m: &GpuModel, palette: &[[[f32; 4]; 4]]) {
+        let n = palette.len().min(MAX_BONES);
+        queue.write_buffer(&m.palette, 0, bytemuck::cast_slice(&palette[..n]));
     }
 
     /// Moves a model's instances (as many as it was uploaded with).
@@ -334,6 +385,7 @@ impl Renderer {
             }
             pass.set_vertex_buffer(0, m.vertices.slice(..));
             pass.set_vertex_buffer(1, m.instances.slice(..));
+            pass.set_bind_group(2, &m.palette_bg, &[]);
             for (indices, count, bg) in &m.batches {
                 pass.set_bind_group(1, bg, &[]);
                 pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);

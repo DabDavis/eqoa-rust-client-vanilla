@@ -5,6 +5,8 @@
 //! comments say why each is there. Laid out as the EE lays it out (0x1A0).
 
 use crate::coll::{CollSphere, EnvRay};
+use crate::csprite::{CSprite, Rand};
+use crate::hsprite::AnimScene;
 use crate::fpu::{F, Model, clamp, f};
 use crate::scene::{Filter, FilterKind, Scene};
 use crate::vect::{Vect2, Vect3};
@@ -229,6 +231,34 @@ impl<M: Model> WalkControl<M> {
         if old & 1 == 0 && self.phys.flags & 1 != 0 && self.phys.flags & SUBMERGED == 0 && old & SUBMERGED == 0 {
             self.parm118 = 16;
         }
+        0
+    }
+
+    /// `UpdateSprite`: hand the body's state to the character -- its
+    /// locomotion animation (7 for a moment after landing), and a 400 ms
+    /// blend of the centre transform: pitched with the body when submerged,
+    /// sunk by the height the sprite's scale leaves out at a surface.
+    pub fn update_sprite(&self, sprite: &mut CSprite<M>, sc: &AnimScene<M>, rand: &mut Rand) -> i32 {
+        let s = sprite.h.default_scale;
+        let center = Vect3::new(F::ZERO, self.parm38 * s, F::ZERO);
+        if self.parm118 & 0x10 == 0 {
+            sprite.set_locomotion(self.committed.loco_state, sc, rand);
+        } else {
+            sprite.set_locomotion(7, sc, rand);
+        }
+        let (hpr, trans);
+        if self.phys.flags & SUBMERGED != 0 && self.phys.flags & AT_SURFACE == 0 {
+            hpr = Vect3::new(F::ZERO, self.phys.angles.y, F::ZERO);
+            trans = Vect3::default();
+        } else {
+            trans = if self.phys.flags & AT_SURFACE != 0 {
+                Vect3::new(F::ZERO, self.parm38 - self.parm38 * sprite.h.default_scale, F::ZERO)
+            } else {
+                Vect3::default()
+            };
+            hpr = Vect3::default();
+        }
+        sprite.h.blend_to_center_transform(center, &hpr, F::ONE, trans, 400, sc);
         0
     }
 
