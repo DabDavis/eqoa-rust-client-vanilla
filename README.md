@@ -7,7 +7,11 @@ phones included (wgpu: Vulkan, Metal, DX12, WebGPU), 64-bit, with the feel of th
 original matched exactly.
 
 **No game data is in this repository**, and none is downloaded: you need your own
-Frontiers disc image (`run/eqoa.iso`, or `$EQOA_ISO`).
+Frontiers disc image (`run/eqoa.iso`, or `$EQOA_ISO`). The in-game HUD also needs
+the player's own decrypted SUPPORT module image (`run/support.bin`, or `$EQOA_SUPPORT`):
+its UI atlas table is the module's data, not on the disc in the clear, and is read at
+run time the way eqoa-port's gendata reads it. Without it `play` runs with plain text
+for the chat and the target.
 
 ## Method
 
@@ -50,6 +54,7 @@ UI, network (DRDP), sound.
 | `eqoa play` | On a server: the world streamed around the player, NPCs dressed, armed and animated between updates, name plates (`VINameSprite`'s two phases in the game's Arial), chat (0x0A7A/0x0A7B in, 0x000B out; Enter to type), targeting (`CycleTarget` on Tab, 0x0010), attacking (`ToggleAutoAttack` held on F, 0x000F and the 0x40's byte). The chat log and the target's name are drawn plainly: `VIWndGame`'s windows are not ported | live against go-eqoa-server; `eqoa playshot` with `EQOA_CHAR`, `EQOA_SAY`, `EQOA_TAB`, `EQOA_TARGET`, `EQOA_ATTACK` drives it headless |
 | `vi` (characters) | `VICSpriteCust`'s tables and `ApplyLook` (`SetRobe`, `SetArmorSlot`, `SetHair`, `SetFace`) over a CSprite's 19 text slots; items and the helm attached at their nodes (`AttachItem`, `SetHelm`); creatures between updates (`ExtrapolateMove`/`ExtrapolateGround`, and a player's own `VIWalkControl` via `SetUpdatePhysics`) | by eye on a live server: Freeport's NPCs in their armour, helms, faces, hair and weapons. The tables are the decomp's constants; the oracle has no raster to apply them through yet |
 | `vi` (combat, words) | `GetSwing`, `SwingEffect`, `SwingDelay`, `AttackAnim` (`vi::swing`), `VIHashResourceID`, `VICSprite::SetAction`, `VIStringTable` (WORDS.TXT); in `eqoa play`, `AutoAttackTick` with `TargetInRange`, `CheckPower`, `HasAmmoFor` | **the swing tables equal the decomp over their whole domains** (175,180 entries; oracle op 800 loads CLIENT); `SetAction` in the animation oracle's script; the string table's rules by unit test. The swing's spell effect is not drawn (`VISpellEffects` not ported) |
+| the HUD | `VIUI` over a 2D layer (`render::ui`: quads in the 640x448 frame, the GS's blend modes, the frame kept 4:3): the atlas (`GetUITexture`), `Blit`/`BlitEx`/`BlitHorz`/`BlitVert`/`BlitRect`/`BlitBar`/`BlitFrame`/`BlitFillFrame`, "ArialUI" (`DrawString`, `DrawCenteredString`, '?' for a missing glyph), `VIUIWindow` (`Draw`, `TextBox`, `DrawTextInternal` with its inline icons), `VIUITextScroll`; `VIWndGame::OnDrawSelf` (frame, compass, health/power/experience gauges, the target's bar with its scrolling name, health and disposition from 0x0010), `VIWndChat` + `VIChatText` (the box that slides up, 20-second lines, the game's wrap) | by eye on a live server: the HUD where the decomp puts it. Not drawn yet: the group's and pet's bars, compass patches, breath, the target's details box |
 | `render` | wgpu: instanced models, a texture cache by DictID, the strip programs' lighting (colour + ambient + sun, alpha as sun visibility) and back-face culling, GPU skinning (`VIRStrip4`'s four weighted palette matrices), and linear fog on view depth as `VIRaster::SetFog` sets it, colour arithmetic on the bytes as the GS does it (no sRGB anywhere), and one pass per material layer with `VIMaterial::ConstructTextPass`'s GS state: the alpha test or one of four blend modes (add, subtract, alpha, multiply), colour-only writes for blended layers, wrap modes, the UV transform and its scroll, the layer colour as c/255; offscreen capture | by eye, for now |
 | `eqoa` | the client binary: `ls`, `tree`, `zones`, `view` (winit window) and `shot` (PNG, no window); walking (`walker.rs`, driven as `VIClient::UpdateControls` drives it in third person) on the game's own collision world, the zone and its neighbours drawn | by eye |
 

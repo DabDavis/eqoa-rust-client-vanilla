@@ -1,0 +1,836 @@
+//! `VIUI`, the device every menu and HUD element is drawn through (SUPPORT,
+//! phase 42), over `render::ui`: the 252-entry atlas (`GetUITexture`), the
+//! word and texture-name tables, the "ArialUI" font, and the blitters; and
+//! the parts of `VIUIWindow` / `VIUITextScroll` the HUD uses.
+//!
+//! An atlas entry names a ROW of TEXTURES.TXT; the row's name, as
+//! `P:\studio\eqps2\Game_Assets\UI\<name>.tga`, hashes to the DictID of a
+//! surface in UI.CSF, and the entry's rectangle is cut out of it. The table
+//! itself is SUPPORT's data (only `extern` in the decomp): it is read from
+//! the player's own decrypted SUPPORT image (`run/support.bin`), as
+//! eqoa-port's gendata reads it; nothing of it is in this repository.
+// The methods keep the decomp's parameter lists.
+#![allow(clippy::too_many_arguments)]
+
+use render::ui::{Quad, Ui};
+use render::wgpu;
+use std::collections::HashMap;
+use vi::strtab::StringTable;
+
+/// SUPPORT's image is indexed by `VA - 0x003E3D00`; the table is at
+/// `0x004EDAF8`, 252 entries of 36 bytes.
+const ATLAS_VA: usize = 0x004E_DAF8;
+const IMAGE_BASE: usize = 0x003E_3D00;
+const ATLAS_LEN: usize = 252;
+
+/// `VIUITexEntry`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiTexEntry {
+    /// A second atlas id (the art a gauge or a filler actually blits).
+    pub x00: i32,
+    /// The row of TEXTURES.TXT naming the surface.
+    pub row: i32,
+    pub uv0: [i32; 2],
+    pub uv1: [i32; 2],
+    pub mode: i32,
+    pub alpha: f32,
+    pub flags: u32,
+}
+
+/// The atlas out of a decrypted SUPPORT image.
+pub fn read_atlas(image: &[u8]) -> Option<Vec<UiTexEntry>> {
+    let base = ATLAS_VA - IMAGE_BASE;
+    let bytes = image.get(base..base + ATLAS_LEN * 36)?;
+    let w = |o: usize| i32::from_le_bytes(bytes[o..o + 4].try_into().unwrap());
+    Some(
+        (0..ATLAS_LEN)
+            .map(|i| {
+                let o = i * 36;
+                UiTexEntry {
+                    x00: w(o),
+                    row: w(o + 4),
+                    uv0: [w(o + 8), w(o + 12)],
+                    uv1: [w(o + 16), w(o + 20)],
+                    mode: w(o + 24),
+                    alpha: f32::from_bits(w(o + 28) as u32),
+                    flags: w(o + 32) as u32,
+                }
+            })
+            .collect(),
+    )
+}
+
+/// `VIHashResourceID_Icon`.
+pub fn icon_id(name: &str) -> u32 {
+    vi::hash::hash_resource_id(&format!("P:\\studio\\eqps2\\Game_Assets\\UI\\{name}.tga"))
+}
+
+pub fn wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().collect()
+}
+
+pub struct Vui {
+    pub words: StringTable,
+    pub textures: StringTable,
+    pub language: i32,
+    atlas: Vec<UiTexEntry>,
+    /// Surface DictID to the layer's texture.
+    surfaces: HashMap<u32, usize>,
+    /// "ArialUI" in the layer.
+    pub font: Option<usize>,
+    /// `VIFont::m_color`.
+    pub font_color: [f32; 4],
+    /// `VITimer::GetTime`, for the pulses.
+    pub time: i64,
+}
+
+impl Vui {
+    pub fn new(words: StringTable, textures: StringTable, atlas: Vec<UiTexEntry>) -> Self {
+        Vui { words, textures, language: 0, atlas, surfaces: HashMap::new(), font: None, font_color: [1.0; 4], time: 0 }
+    }
+
+    /// Every surface of a UI file into the layer, by DictID.
+    pub fn add_surfaces(&mut self, ui: &mut Ui, device: &wgpu::Device, queue: &wgpu::Queue, c: &esf::Container) {
+        for s in &c.surfaces {
+            if self.surfaces.contains_key(&(s.dict_id as u32)) {
+                continue;
+            }
+            if let Some(img) = s.decode(&c.data) {
+                let t = ui.add_texture(device, queue, img.width, img.height, &img.rgba);
+                self.surfaces.insert(s.dict_id as u32, t);
+            }
+        }
+    }
+
+    /// The layer texture of a surface DictID (`m_dict->Find`).
+    pub fn surface(&self, id: u32) -> Option<usize> {
+        self.surfaces.get(&id).copied()
+    }
+
+    /// `GetUITexture`: entry 0 out of range.
+    pub fn entry(&self, id: i32) -> UiTexEntry {
+        let i = if (0..ATLAS_LEN as i32).contains(&id) { id as usize } else { 0 };
+        self.atlas.get(i).copied().unwrap_or_default()
+    }
+
+    fn entry_surface(&self, e: &UiTexEntry) -> Option<usize> {
+        let name = self.textures.get(e.row, self.language);
+        self.surface(icon_id(name))
+    }
+
+    /// `VIRaster::Blit(id, flags, at, a, b, m, alpha)`: texels `a` .. `a+b`
+    /// of the surface at `at`, `b` big, mirrored by `flags & 3`.
+    pub fn raster_blit(&self, ui: &mut Ui, tex: usize, flags: u32, at: [i32; 2], a: [i32; 2], b: [i32; 2], mode: i32, alpha: f32) {
+        let (w, h) = ui.texture_size(tex);
+        let (iw, ih) = (1.0 / w as f32, 1.0 / h as f32);
+        let (x0, y0) = (at[0] as f32, at[1] as f32);
+        let (x1, y1) = (x0 + b[0] as f32, y0 + b[1] as f32);
+        let (u0, v0) = (a[0] as f32 * iw, a[1] as f32 * ih);
+        let (u1, v1) = ((a[0] + b[0]) as f32 * iw, (a[1] + b[1]) as f32 * ih);
+        let uv = match flags & 3 {
+            0 => [[u0, v0], [u1, v0], [u1, v1], [u0, v1]],
+            1 => [[u1, v0], [u0, v0], [u0, v1], [u1, v1]],
+            2 => [[u0, v1], [u1, v1], [u1, v0], [u0, v0]],
+            _ => [[u1, v1], [u0, v1], [u0, v0], [u1, v0]],
+        };
+        ui.push(Quad { tex, blend: mode as u8, pos: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], uv, color: [1.0, 1.0, 1.0, alpha], clip: None });
+    }
+
+    /// `BlitEx(id, at, size, m, alpha, flags)`; a size of -1 takes the
+    /// entry's own.
+    pub fn blit_ex_size(&self, ui: &mut Ui, id: i32, at: [i32; 2], size: [i32; 2], mode: i32, alpha: f32, flags: u32) {
+        let e = self.entry(id);
+        let b = [if size[0] == -1 { e.uv1[0] } else { size[0] }, if size[1] == -1 { e.uv1[1] } else { size[1] }];
+        if let Some(t) = self.entry_surface(&e) {
+            self.raster_blit(ui, t, flags, at, e.uv0, b, mode, alpha);
+        }
+    }
+
+    /// `BlitEx(id, at, m, alpha, flags)`.
+    pub fn blit_ex(&self, ui: &mut Ui, id: i32, at: [i32; 2], mode: i32, alpha: f32, flags: u32) {
+        self.blit_ex_size(ui, id, at, [-1, -1], mode, alpha, flags);
+    }
+
+    /// `Blit(id, at)`: the entry's own mode, alpha and flags.
+    pub fn blit(&self, ui: &mut Ui, id: i32, at: [i32; 2]) {
+        let e = self.entry(id);
+        self.blit_ex_size(ui, id, at, [-1, -1], e.mode, e.alpha, e.flags);
+    }
+
+    /// `BlitHorz`: a row-1 entry tiled across `w`, else stretched.
+    pub fn blit_horz(&self, ui: &mut Ui, at: [i32; 2], id: i32, w: i32, mode: i32, alpha: f32, flags: u32) {
+        if w <= 0 {
+            return;
+        }
+        let e = self.entry(id);
+        let mut p = at;
+        if e.row == 1 {
+            while p[0] + e.uv1[0] < at[0] + w {
+                self.blit_ex(ui, id, p, mode, alpha, flags);
+                p[0] += e.uv1[0];
+            }
+            self.blit_ex_size(ui, id, p, [at[0] + w - p[0], e.uv1[1]], mode, alpha, flags);
+        } else {
+            self.blit_ex_size(ui, id, p, [w, e.uv1[1]], mode, alpha, flags);
+        }
+    }
+
+    /// `BlitVert`: `BlitHorz` down the screen.
+    pub fn blit_vert(&self, ui: &mut Ui, at: [i32; 2], id: i32, h: i32, mode: i32, alpha: f32, flags: u32) {
+        if h <= 0 {
+            return;
+        }
+        let e = self.entry(id);
+        let mut p = at;
+        if e.row == 1 {
+            while p[1] + e.uv1[1] < at[1] + h {
+                self.blit_ex(ui, id, p, mode, alpha, flags);
+                p[1] += e.uv1[1];
+            }
+            self.blit_ex_size(ui, id, p, [e.uv1[0], at[1] + h - p[1]], mode, alpha, flags);
+        } else {
+            self.blit_ex_size(ui, id, p, [e.uv1[0], h], mode, alpha, flags);
+        }
+    }
+
+    /// `BlitFrame`: four edges tiled between four corners (the left edge
+    /// and the left corners only when `left`).
+    pub fn blit_frame(&self, ui: &mut Ui, at: [i32; 2], size: [i32; 2], fp: &FrameParam, mode: i32, alpha: f32, left: bool) {
+        let w = size[0];
+        if w <= 0 || size[1] <= 0 {
+            return;
+        }
+        let tl = at;
+        let br = [size[0] + at[0], size[1] + at[1]];
+        let (e0, e1, e2, e3) = (self.entry(fp.tl.0), self.entry(fp.tr.0), self.entry(fp.br.0), self.entry(fp.bl.0));
+        self.blit_horz(
+            ui,
+            [tl[0] + if left { e0.uv1[0] } else { 0 }, tl[1]],
+            fp.top.0,
+            if left { w - e0.uv1[0] - e1.uv1[0] } else { w - e1.uv1[0] },
+            mode,
+            alpha,
+            fp.top.1,
+        );
+        self.blit_horz(
+            ui,
+            [tl[0] + if left { e3.uv1[0] } else { 0 }, br[1] - e3.uv1[1]],
+            fp.bottom.0,
+            if left { size[0] - e3.uv1[0] - e2.uv1[0] } else { size[0] - e2.uv1[0] },
+            mode,
+            alpha,
+            fp.bottom.1,
+        );
+        if left {
+            self.blit_vert(ui, [tl[0], tl[1] + e0.uv1[1]], fp.left.0, size[1] - e0.uv1[1] - e3.uv1[1], mode, alpha, fp.left.1);
+        }
+        self.blit_vert(ui, [br[0] - e1.uv1[0], tl[1] + e1.uv1[1]], fp.right.0, size[1] - e1.uv1[1] - e2.uv1[1], mode, alpha, fp.right.1);
+        if left {
+            self.blit_ex(ui, fp.tl.0, tl, mode, alpha, fp.tl.1);
+        }
+        self.blit_ex(ui, fp.tr.0, [br[0] - e1.uv1[0], tl[1]], mode, alpha, fp.tr.1);
+        if left {
+            self.blit_ex(ui, fp.bl.0, [tl[0], br[1] - e3.uv1[1]], mode, alpha, fp.bl.1);
+        }
+        self.blit_ex(ui, fp.br.0, [br[0] - e2.uv1[0], br[1] - e2.uv1[1]], mode, alpha, fp.br.1);
+    }
+
+    /// `BlitFillFrame`: `fill` tiled inside the corners, then the frame.
+    pub fn blit_fill_frame(&self, ui: &mut Ui, at: [i32; 2], size: [i32; 2], fp: &FrameParam, fill: i32, mode: i32, alpha: f32, left: bool) {
+        let (e0, e1) = (self.entry(fp.tl.0), self.entry(fp.br.0));
+        let p = [at[0] + e0.uv1[0], at[1] + e0.uv1[1]];
+        let sz = [size[0] - e0.uv1[0] - e1.uv1[0], size[1] - e0.uv1[1] - e1.uv1[1]];
+        self.blit_rect(ui, fill, p, sz, mode, alpha);
+        self.blit_frame(ui, at, size, fp, mode, alpha, left);
+    }
+
+    /// `BlitRect`: a row-1 entry tiled over the rectangle (the last column
+    /// and row cut to fit), else entry `x00` stretched over it.
+    pub fn blit_rect(&self, ui: &mut Ui, id: i32, at: [i32; 2], size: [i32; 2], mode: i32, alpha: f32) {
+        let e = self.entry(id);
+        let mut p = at;
+        let mut d = [0, 0];
+        if e.row == 1 {
+            while p[0] + e.uv1[0] < at[0] + size[0] {
+                while p[1] + e.uv1[1] < at[1] + size[1] {
+                    self.blit_ex(ui, id, p, mode, alpha, 0);
+                    p[1] += e.uv1[1];
+                }
+                p[0] += e.uv1[0];
+                d[1] = at[1] + size[1] - p[1];
+                p[1] = at[1];
+            }
+            d[0] = at[0] + size[0] - p[0];
+            while p[1] + e.uv1[1] < at[1] + size[1] {
+                self.blit_ex_size(ui, id, p, [d[0], e.uv1[1]], mode, alpha, 0);
+                p[1] += e.uv1[1];
+            }
+            p[0] = at[0];
+            while p[0] + e.uv1[0] < at[0] + size[0] {
+                self.blit_ex_size(ui, id, p, [e.uv1[0], d[1]], mode, alpha, 0);
+                p[0] += e.uv1[0];
+            }
+            self.blit_ex_size(ui, id, p, d, mode, alpha, 0);
+        } else {
+            self.blit_ex_size(ui, e.x00, at, size, mode, alpha, 0);
+        }
+    }
+
+    /// `BlitBar(s, c, at, end, mid, w, m, alpha, just, shadow)`: the end cap,
+    /// the middle across, the end cap mirrored, and the text on it.
+    pub fn blit_bar(&self, ui: &mut Ui, s: &[u16], c: [f32; 4], at: [i32; 2], end: i32, mid: i32, w: i32, mode: i32, alpha: f32, just: u32, shadow: bool) {
+        let (e1, e2) = (self.entry(end), self.entry(mid));
+        let mut p = at;
+        self.blit_ex(ui, end, p, mode, alpha, 0);
+        p[0] += e1.uv1[0];
+        if e2.row == 1 {
+            self.blit_horz(ui, p, mid, w - e1.uv1[0] * 2, mode, alpha, 0);
+        } else {
+            self.blit_ex_size(ui, mid, p, [w - e1.uv1[0] * 2, e2.uv1[1]], mode, alpha, 0);
+        }
+        p[0] = at[0] + w - e1.uv1[0];
+        self.blit_ex(ui, end, p, mode, alpha, 1);
+        let off = [0, 3];
+        let tp = if just == 1 {
+            [at[0] + e1.uv1[0] - off[0], at[1] + e2.uv1[1] / 2 - off[1]]
+        } else {
+            [at[0] + w / 2 - off[0], at[1] + e2.uv1[1] / 2 - off[1]]
+        };
+        self.draw_centered_string_ex(ui, s, tp[0], tp[1], c, just, shadow);
+    }
+
+    pub fn font_height(&self, ui: &Ui) -> i32 {
+        self.font.map_or(0, |f| ui.fonts[f].height as i32)
+    }
+
+    pub fn string_width(&self, ui: &Ui, s: &[u16]) -> i32 {
+        self.font.map_or(0, |f| ui.fonts[f].string_width(s))
+    }
+
+    /// `VIFont::DrawString` in the font's colour.
+    pub fn draw_string(&self, ui: &mut Ui, s: &[u16], x: i32, y: i32) {
+        if let Some(f) = self.font {
+            ui.text(f, x, y, self.font_color, s);
+        }
+    }
+
+    /// `VIRaster::DrawCenteredString`'s placement: mode 1 centres
+    /// vertically, 2 horizontally, 0 and 3 both; anything else draws
+    /// nothing.
+    pub fn draw_centered_string(&self, ui: &mut Ui, s: &[u16], x: i32, y: i32, mode: u32) {
+        let Some(f) = self.font else { return };
+        let w = ui.fonts[f].string_width(s);
+        if w < 0 {
+            return;
+        }
+        let h = ui.fonts[f].height as i32;
+        let (x, y) = match mode {
+            1 => (x, y - (h >> 1)),
+            2 => (x - (w >> 1), y),
+            0 | 3 => (x - (w >> 1), y - (h >> 1)),
+            _ => return,
+        };
+        ui.text(f, x, y, self.font_color, s);
+    }
+
+    /// `DrawStringEx`: a black shadow 2 down and right, then the text.
+    pub fn draw_string_ex(&mut self, ui: &mut Ui, s: &[u16], x: i32, y: i32, c: [f32; 4], shadow: bool) {
+        let save = self.font_color;
+        if shadow {
+            self.font_color = [0.0, 0.0, 0.0, c[3]];
+            self.draw_string(ui, s, x + 2, y + 2);
+        }
+        self.font_color = c;
+        self.draw_string(ui, s, x, y);
+        self.font_color = save;
+    }
+
+    /// `DrawStringEx(word, ...)`.
+    pub fn draw_word_ex(&mut self, ui: &mut Ui, word: i32, x: i32, y: i32, c: [f32; 4], shadow: bool) {
+        let s = wide(self.words.get(word, self.language));
+        self.draw_string_ex(ui, &s, x, y, c, shadow);
+    }
+
+    /// `DrawCenteredStringEx`.
+    pub fn draw_centered_string_ex(&self, ui: &mut Ui, s: &[u16], x: i32, y: i32, c: [f32; 4], mode: u32, shadow: bool) {
+        let mut me = Vui { font_color: c, ..self.shallow() };
+        if shadow {
+            me.font_color = [0.0, 0.0, 0.0, c[3]];
+            me.draw_centered_string(ui, s, x + 2, y + 2, mode);
+            me.font_color = c;
+        }
+        me.draw_centered_string(ui, s, x, y, mode);
+    }
+
+    /// The parts drawing reads, without the tables (for a colour change
+    /// that must not touch `self`).
+    fn shallow(&self) -> Vui {
+        Vui {
+            words: StringTable::default(),
+            textures: StringTable::default(),
+            language: self.language,
+            atlas: Vec::new(),
+            surfaces: HashMap::new(),
+            font: self.font,
+            font_color: self.font_color,
+            time: self.time,
+        }
+    }
+}
+
+/// `VIUIFrameParam`: (atlas id, flags) for each corner and edge.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FrameParam {
+    pub tl: (i32, u32),
+    pub top: (i32, u32),
+    pub tr: (i32, u32),
+    pub right: (i32, u32),
+    pub br: (i32, u32),
+    pub bottom: (i32, u32),
+    pub bl: (i32, u32),
+    pub left: (i32, u32),
+}
+
+/// `VIUIWindow::Draw`'s four frame sets.
+fn frame_sets() -> [FrameParam; 4] {
+    [
+        FrameParam { tl: (36, 0), top: (37, 0), tr: (36, 1), right: (42, 1), br: (36, 1), bottom: (37, 0), bl: (36, 0), left: (42, 0) },
+        FrameParam { tl: (44, 0), top: (45, 0), tr: (46, 0), right: (52, 0), br: (50, 0), bottom: (49, 0), bl: (48, 0), left: (47, 0) },
+        FrameParam { tl: (0, 0), top: (38, 0), tr: (0, 0), right: (43, 1), br: (0, 0), bottom: (41, 0), bl: (0, 0), left: (43, 0) },
+        FrameParam { tl: (101, 0), top: (102, 0), tr: (103, 0), right: (104, 1), br: (106, 0), bottom: (102, 2), bl: (105, 0), left: (104, 0) },
+    ]
+}
+
+/// `VIUIWindow`: a framed panel that opens and closes over a few frames.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Window {
+    pub center: [i32; 2],
+    pub size: [i32; 2],
+    pub title_h: i32,
+    pub rows: i32,
+    pub open: f32,
+    pub dir: f32,
+    pub x178: i32,
+    pub pulse_time: i64,
+}
+
+impl Window {
+    /// `Init(ui, pos, center, w, rows, x)`.
+    pub fn init(&mut self, vui: &Vui, ui: &Ui, center: [i32; 2], w: i32, rows: i32, x: i32) {
+        let h = vui.font_height(ui);
+        self.center = center;
+        self.size = [w, rows * (h - 4) + 36];
+        self.rows = rows;
+        self.x178 = x;
+        self.title_h = 18;
+    }
+
+    /// `Open(now)`.
+    pub fn open(&mut self, now: bool) {
+        if now {
+            self.open = 1.0;
+        }
+        self.dir = 1.0;
+    }
+
+    /// `Close(now)`.
+    pub fn close(&mut self, now: bool) {
+        if now {
+            self.open = 0.0;
+        }
+        self.dir = -1.0;
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.open == 1.0
+    }
+
+    pub fn is_opening(&self) -> bool {
+        self.open < 1.0 && self.dir == 1.0
+    }
+
+    pub fn is_closing(&self) -> bool {
+        self.open > 0.0 && self.dir == -1.0
+    }
+
+    /// `RowCenter(row)`.
+    pub fn row_center(&self, vui: &Vui, ui: &Ui, row: i32) -> [i32; 2] {
+        let h = vui.font_height(ui);
+        let t = (h - 4) * row + 5;
+        [self.center[0] - 8, self.center[1] - (self.size[1] >> 1) + self.title_h + t]
+    }
+
+    /// `Draw`: steps the open animation (+0.15 opening, -0.2 closing) and
+    /// draws the panel in the window's set, faded by `1 - (1-open)^2`. The
+    /// title bar is not drawn (no window here has a title yet). True when
+    /// fully open or fully closed.
+    pub fn draw(&mut self, vui: &Vui, ui: &mut Ui) -> bool {
+        let fp = frame_sets();
+        if self.dir > 0.0 {
+            self.open = (self.open + 0.15).min(1.0);
+        } else {
+            self.open = if self.open - 0.2 < 0.0 { 0.0 } else { self.open - 0.2 };
+        }
+        let k = 1.0 - self.open;
+        let k = 1.0 - k * k;
+        let (ctr, size) = (self.center, self.size);
+        let tl = [ctr[0] - (size[0] >> 1), ctr[1] - (size[1] >> 1)];
+        let ipos = [tl[0] + 10, tl[1] + 10];
+        let isize = [size[0] - 20, size[1] - 20];
+        match self.x178 {
+            0 => {
+                vui.blit_fill_frame(ui, ipos, [isize[0] + 1, isize[1]], &fp[1], 35, 3, k, true);
+                vui.blit_frame(ui, tl, size, &fp[0], 3, k, true);
+            }
+            1 => vui.blit_fill_frame(ui, ipos, isize, &fp[3], 61, 3, k * 0.75, true),
+            2 => {
+                vui.blit_rect(ui, 51, ipos, [isize[0] + 1, isize[1]], 3, k);
+                vui.blit_frame(ui, tl, size, &fp[0], 3, k, true);
+            }
+            _ => {}
+        }
+        self.open == 1.0 || self.open == 0.0
+    }
+
+    /// `AppendEllipsis`: cut `s` until it and "..." fit `w`, then add it.
+    fn append_ellipsis(&self, vui: &Vui, ui: &Ui, s: &mut Vec<u16>, w: i32) {
+        let ew = vui.string_width(ui, &wide("..."));
+        if ew < w {
+            while self.text_width(vui, ui, s) + ew >= w && !s.is_empty() {
+                s.pop();
+            }
+            s.extend(wide("..."));
+        }
+    }
+
+    /// `TextBox(s, x, row, w, rows, c, f)`: `s` wrapped to `w` pixels (at
+    /// the last space, else the last character that fit) over at most
+    /// `rows` rows from `row`; `f` places each row (8 centred, 0x10 right),
+    /// 2 ends a cut-off last row in "...", 0x80 shows asterisks, and the
+    /// top byte skips that many rows. The frame of `f & 4` is not ported.
+    /// The rows drawn.
+    pub fn text_box(&self, vui: &Vui, ui: &mut Ui, s: &[u16], x: i32, row: i32, w: i32, rows: i32, c: [f32; 4], f: u32) -> i32 {
+        let all = f == 0xFFFF_FFFF;
+        let pos = [self.top_left()[0] + x, self.row_center(vui, ui, row)[1] - 4];
+        let size_x = w;
+        let copy = |from: usize, n: usize| -> Vec<u16> {
+            if !all && f & 0x80 != 0 { vec![b'*' as u16; n.min(512)] } else { s[from..from + n.min(511)].to_vec() }
+        };
+        let skip = if all { 0 } else { (f >> 24) as i32 };
+        let mut drawn = 0;
+        let mut count = 0;
+        let draw = |me: &Self, ui: &mut Ui, buf: &[u16], drawn: &mut i32, count: i32| {
+            if count >= skip {
+                if !all {
+                    let y = me.row_center(vui, ui, row + *drawn)[1];
+                    let bx = if f & 8 != 0 {
+                        pos[0] + (size_x >> 1) - (me.text_width(vui, ui, buf) >> 1)
+                    } else if f & 0x10 != 0 {
+                        pos[0] + size_x - me.text_width(vui, ui, buf)
+                    } else {
+                        pos[0]
+                    };
+                    me.draw_text_internal(vui, ui, buf, bx, y, c, f);
+                }
+                *drawn += 1;
+            }
+        };
+        let (mut line, mut lastw, mut i, mut space, mut fit) = (0usize, 0, 0usize, 0usize, 0usize);
+        while i < s.len() && s[i] != 0 {
+            if s[i] == b'\n' as u16 {
+                let mut buf = copy(line, i - line);
+                if !all && f & 2 != 0 && drawn + 1 == rows && s.get(i + 1).is_some_and(|&c| c != 0) {
+                    self.append_ellipsis(vui, ui, &mut buf, size_x);
+                }
+                draw(self, ui, &buf, &mut drawn, count);
+                count += 1;
+                i += 1;
+                line = i;
+                space = 0;
+                fit = 0;
+                if drawn >= rows {
+                    break;
+                }
+            } else {
+                let buf = copy(line, i - line);
+                let pw = lastw;
+                lastw = self.text_width(vui, ui, &buf);
+                if lastw >= size_x - 8 {
+                    let mut buf;
+                    if space != 0 {
+                        buf = copy(line, space + 1 - line);
+                        i = space + 1;
+                        line = space + 1;
+                    } else {
+                        buf = copy(line, fit - line);
+                        line = fit;
+                        i = fit;
+                    }
+                    if !all && f & 2 != 0 && drawn + 1 == rows && s.get(line).is_some_and(|&c| c != 0) {
+                        self.append_ellipsis(vui, ui, &mut buf, size_x);
+                    }
+                    draw(self, ui, &buf, &mut drawn, count);
+                    count += 1;
+                    if drawn >= rows {
+                        break;
+                    }
+                    space = 0;
+                    fit = 0;
+                } else {
+                    if pw != lastw {
+                        fit = i;
+                    }
+                    if s[i] == b' ' as u16 {
+                        space = i;
+                    }
+                    i += 1;
+                }
+            }
+        }
+        let m = i - line;
+        if m != 0 {
+            let buf = copy(line, m);
+            draw(self, ui, &buf, &mut drawn, count);
+        }
+        drawn
+    }
+
+    pub fn top_left(&self) -> [i32; 2] {
+        [self.center[0] - (self.size[0] >> 1), self.center[1] - (self.size[1] >> 1)]
+    }
+
+    pub fn bottom_right(&self) -> [i32; 2] {
+        [self.center[0] + (self.size[0] >> 1), self.center[1] + (self.size[1] >> 1)]
+    }
+
+    /// `TickPulse`: a 0..1 throb, scaled by how far the window is open.
+    pub fn tick_pulse(&self, time: i64) -> f32 {
+        let d = 1.0 - self.open;
+        let d = 1.0 - d * d;
+        let mut t = (time - self.pulse_time) as f32 * 0.01; // 0.00999999978f, 0.01's float
+        if t > 6.283_185_5 {
+            t -= 6.283_185_5;
+        }
+        d * ((t + 1.570_796_4).sin() * 0.5 + 0.5)
+    }
+
+    /// `TextWidth`: the font's width, plus each inline icon's.
+    pub fn text_width(&self, vui: &Vui, ui: &Ui, s: &[u16]) -> i32 {
+        if s.len() >= 1024 {
+            return 0;
+        }
+        let mut buf = Vec::new();
+        let mut extra = 0;
+        let mut i = 0;
+        while i < s.len() {
+            if s[i] == b'|' as u16 {
+                let Some(&n) = s.get(i + 1) else { break };
+                if let Some(c) = char::from_u32(n as u32) {
+                    match c {
+                        'c' | 's' | 't' | 'x' => extra += 18,
+                        '<' | '>' | 'e' | 'q' | 'r' | 'w' => extra += 16,
+                        'i' | 'o' | 'u' | 'y' | '{' | '}' => extra += 12,
+                        '|' => buf.push(b'|' as u16),
+                        'A' | 'a' => extra += 27,
+                        '&' | '(' | '*' | '7' | '8' | '9' => extra += 32,
+                        'V' | 'Z' | 'v' | 'z' => extra += 17,
+                        _ => {}
+                    }
+                }
+                i += 1;
+            } else {
+                buf.push(s[i]);
+            }
+            i += 1;
+        }
+        vui.string_width(ui, &buf) + extra
+    }
+
+    /// `DrawTextInternal`: runs of text, centred vertically on `y`, with
+    /// the inline icons (`|t`, `|s`, ...) blitted between them; `|-` dims
+    /// what follows to 0.3, `|+` restores it.
+    pub fn draw_text_internal(&self, vui: &Vui, ui: &mut Ui, s: &[u16], mut x: i32, y: i32, c: [f32; 4], f: u32) {
+        let pulse = self.tick_pulse(vui.time);
+        let mut alpha = 1.0f32;
+        let mut buf: Vec<u16> = Vec::new();
+        let shadow = f & 1 != 0;
+        let mut i = 0;
+        while i < s.len() {
+            if s[i] == b'|' as u16 {
+                let Some(&n) = s.get(i + 1) else { break };
+                if !buf.is_empty() {
+                    vui.draw_centered_string_ex(ui, &buf, x, y, [c[0], c[1], c[2], c[3] * alpha], 1, shadow);
+                    x += vui.string_width(ui, &buf);
+                }
+                buf.clear();
+                let open = self.open * alpha;
+                // (the set's two ids, their y offsets, the advance, alpha, flags)
+                let icon = |a: i32, b: i32, dy: (i32, i32), adv: i32, al: f32, fl: u32| (a, b, dy, adv, al, fl);
+                let pick = match char::from_u32(n as u32).unwrap_or('\0') {
+                    't' => Some(icon(65, 69, (5, 5), 18, open, 0)),
+                    's' => Some(icon(67, 71, (5, 5), 18, open, 0)),
+                    'c' => Some(icon(68, 72, (5, 5), 18, open, 0)),
+                    'x' => Some(icon(66, 70, (5, 5), 18, open, 0)),
+                    '>' => Some(icon(89, 89, (6, 6), 16, open, 0)),
+                    'q' => Some(icon(89, 89, (6, 6), 16, pulse * alpha, 0)),
+                    'e' => Some(icon(89, 89, (6, 6), 16, (1.0 - pulse) * alpha, 0)),
+                    '<' => Some(icon(88, 88, (6, 6), 16, open, 0)),
+                    'w' => Some(icon(88, 88, (6, 6), 16, pulse * alpha, 0)),
+                    'r' => Some(icon(88, 88, (6, 6), 16, (1.0 - pulse) * alpha, 0)),
+                    '}' => Some(icon(128, 128, (6, 6), 12, open, 1)),
+                    'y' => Some(icon(128, 128, (6, 6), 12, pulse * alpha, 1)),
+                    'i' => Some(icon(128, 128, (6, 6), 12, (1.0 - pulse) * alpha, 1)),
+                    '{' => Some(icon(128, 128, (6, 6), 12, open, 0)),
+                    'u' => Some(icon(128, 128, (6, 6), 12, pulse * alpha, 0)),
+                    'o' => Some(icon(128, 128, (6, 6), 12, (1.0 - pulse) * alpha, 0)),
+                    'a' => Some(icon(190, 196, (4, 4), 27, open, 0)),
+                    'A' => Some(icon(189, 195, (4, 4), 27, open, 0)),
+                    '7' => Some(icon(185, 191, (6, 7), 32, open, 0)),
+                    '&' => Some(icon(186, 192, (6, 7), 32, open, 0)),
+                    '8' => Some(icon(187, 193, (6, 7), 32, open, 0)),
+                    '*' => Some(icon(188, 194, (6, 7), 32, open, 0)),
+                    '9' => Some(icon(214, 218, (6, 7), 32, open, 0)),
+                    '(' => Some(icon(215, 219, (6, 7), 32, open, 0)),
+                    'z' => Some(icon(212, 216, (5, 5), 17, open, 0)),
+                    'Z' => Some(icon(212, 216, (5, 5), 17, open, 2)),
+                    'v' => Some(icon(213, 217, (5, 5), 17, open, 0)),
+                    'V' => Some(icon(213, 217, (5, 5), 17, open, 1)),
+                    '-' => {
+                        alpha = 0.3;
+                        None
+                    }
+                    '+' => {
+                        alpha = c[3];
+                        None
+                    }
+                    '|' => {
+                        buf.push(b'|' as u16);
+                        None
+                    }
+                    _ => None,
+                };
+                if let Some((a, b, (dy0, dy1), adv, al, fl)) = pick {
+                    // The pulsing arrows and the item marks draw whatever
+                    // the window's set; the rest only for sets 0, 1, 2.
+                    let same = a == b;
+                    if same || self.x178 == 0 {
+                        vui.blit_ex(ui, a, [x, y - dy0], 3, al, fl);
+                    } else if self.x178 == 1 || self.x178 == 2 {
+                        vui.blit_ex(ui, b, [x, y - dy1], 3, al, fl);
+                    }
+                    x += adv;
+                }
+                i += 1;
+            } else {
+                buf.push(if s[i] == b'\r' as u16 { b' ' as u16 } else { s[i] });
+            }
+            i += 1;
+        }
+        if !buf.is_empty() {
+            vui.draw_centered_string_ex(ui, &buf, x, y, [c[0], c[1], c[2], c[3] * alpha], 1, shadow);
+        }
+    }
+}
+
+/// `VIUITextScroll`: one row of text that, wider than its window, scrolls
+/// (style 0 right to left and round, style 1 to and fro with a 30-frame
+/// pause at each end), cut to the window.
+#[derive(Clone, Copy, Debug)]
+pub struct TextScroll {
+    pub window: Window,
+    pub style: i32,
+    pub offset: i32,
+    pub dir: i32,
+    pub pause: i32,
+    pub width: i32,
+    pub on: i32,
+}
+
+impl Default for TextScroll {
+    fn default() -> Self {
+        TextScroll { window: Window::default(), style: 1, offset: 0, dir: 1, pause: 30, width: 0, on: 1 }
+    }
+}
+
+impl TextScroll {
+    /// `Init(ui, at, w, x, style)`.
+    pub fn init(&mut self, vui: &Vui, ui: &Ui, at: [i32; 2], w: i32, x: i32, style: i32) {
+        self.style = style;
+        self.width = w;
+        self.window.init(vui, ui, at, w, 1, x);
+    }
+
+    /// `Reset`.
+    pub fn reset(&mut self) {
+        self.dir = 1;
+        self.pause = 30;
+        self.offset = 0;
+    }
+
+    /// `TextScroll(s, c, f)`: one frame of it.
+    pub fn text_scroll(&mut self, vui: &Vui, ui: &mut Ui, s: &[u16], c: [f32; 4], f: u32) {
+        let y = self.window.center[1] - 2;
+        let tw = self.window.text_width(vui, ui, s);
+        let saved = ui.viewport;
+        if self.width < tw {
+            match self.style {
+                0 => {
+                    if self.on != 0 || self.offset != self.width {
+                        self.offset -= 2;
+                    }
+                    if self.offset + tw < 0 || self.width < self.offset {
+                        self.offset = self.width;
+                    }
+                }
+                1 => {
+                    if self.width >= self.offset + tw {
+                        self.pause -= 1;
+                        if self.pause > 0 {
+                            self.dir = 0;
+                        } else {
+                            self.dir = 1;
+                            self.pause = 30;
+                        }
+                    } else if self.offset >= 0 {
+                        self.pause -= 1;
+                        if self.on == 0 {
+                            self.dir = 0;
+                            self.pause = 30;
+                        } else if self.pause <= 0 {
+                            self.dir = -1;
+                            self.pause = 30;
+                        } else {
+                            self.dir = 0;
+                        }
+                    }
+                    if self.dir > 0 {
+                        self.offset += 2;
+                    } else if self.dir < 0 {
+                        self.offset -= 2;
+                    }
+                    self.offset = (self.width - tw).max(self.offset).min(0);
+                }
+                _ => {}
+            }
+            let (tl, br) = (self.window.top_left(), self.window.bottom_right());
+            ui.viewport = Some([tl[0], tl[1], br[0], br[1]]);
+            let mut x = 0;
+            for piece in s.chunks(64) {
+                self.window.draw_text_internal(vui, ui, piece, self.offset + x, 23, c, f);
+                x += self.window.text_width(vui, ui, piece);
+            }
+            ui.viewport = saved;
+            return;
+        }
+        self.reset();
+        let tl = self.window.top_left();
+        let x = if f & 8 != 0 {
+            self.window.center[0] - (tw >> 1)
+        } else if f & 0x10 != 0 {
+            tl[0] + self.width - tw
+        } else {
+            tl[0]
+        };
+        self.window.draw_text_internal(vui, ui, s, x, y, c, f);
+    }
+}

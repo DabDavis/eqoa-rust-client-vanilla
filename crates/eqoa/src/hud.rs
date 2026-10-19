@@ -1,0 +1,203 @@
+//! `VIWndGame::OnDrawSelf`: the HUD in play, through `ui::Vui`. The
+//! portrait frame, the compass, the health, power and experience gauges,
+//! the chat window's backdrop and the target's bar, at the game's own
+//! positions in its 640x448 frame.
+//!
+//! Not here yet: the group's and the pet's bars (there is no group or pet
+//! to show), their patches on the compass, the breath gauge (it needs
+//! `IsLootable`) and the target's details box (`DrawTargetInfo`, opened by
+//! a key).
+
+use crate::ui::{TextScroll, Vui, wide};
+use render::ui::{Quad, Ui};
+
+/// What the HUD reads off the client this frame.
+#[derive(Clone, Debug, Default)]
+pub struct HudState {
+    /// Whether the player's entity exists (`FindEntity(m_selfId)`).
+    pub has_self: bool,
+    /// The player's entity's +0x19, its health of 255.
+    pub self_hp: i32,
+    pub power: i32,
+    pub max_power: i32,
+    pub level: i32,
+    pub exp: i32,
+    /// The camera's heading (`m_camera.m_dir.HPR`).
+    pub heading: f32,
+    /// The chat window is showing (`m_chat->m_mode`).
+    pub chat_open: bool,
+    /// The target's name when it is a creature (`GetTargetName` answering 0).
+    pub target_name: Option<String>,
+    /// The target's +0x19.
+    pub target_hp: i32,
+    /// `m_targetInfoValid` and `m_targetDisposition`.
+    pub target_info: Option<u8>,
+    /// The player has targeted themselves and has +0x2C (`m_p2C > 0`).
+    pub self_targeted_flag: bool,
+}
+
+/// `ExpForLevel`.
+pub fn exp_for_level(level: i32) -> u32 {
+    let l = level as u32;
+    if level >= 51 {
+        l.wrapping_mul(l).wrapping_mul(l).wrapping_mul((l.wrapping_sub(1)).wrapping_mul(27).wrapping_add(20))
+    } else {
+        l.wrapping_mul(l).wrapping_mul(l).wrapping_mul((l.wrapping_sub(1)).wrapping_mul(28).wrapping_add(25))
+    }
+}
+
+pub struct Hud {
+    glow0: f32,
+    glow0_on: i32,
+    glow1: f32,
+    glow1_on: i32,
+    glow2: f32,
+    glow2_on: i32,
+    scroll: TextScroll,
+    /// The texture "sheet1" (the compass rose's art).
+    sheet1: Option<usize>,
+    /// `VIGetGameOptions()->m_region`.
+    pub region: i8,
+}
+
+impl Hud {
+    pub fn new(vui: &Vui) -> Self {
+        Hud {
+            glow0: 0.3,
+            glow0_on: -1,
+            glow1: 0.3,
+            glow1_on: -1,
+            glow2: 0.3,
+            glow2_on: -1,
+            scroll: TextScroll::default(),
+            sheet1: vui.surface(crate::ui::icon_id("sheet1")),
+            region: 0,
+        }
+    }
+
+    /// `UpdateGlow`: each glow brightens while its flag is up and fades to
+    /// 0.3.
+    fn update_glow(&mut self) {
+        for (g, on) in [(&mut self.glow0, self.glow0_on), (&mut self.glow1, self.glow1_on), (&mut self.glow2, self.glow2_on)] {
+            *g = if on > 0 { (*g + 0.32).min(1.0) } else { (*g - 0.105).max(0.3) };
+        }
+    }
+
+    /// `OnDrawSelf`, the drawing half.
+    pub fn draw(&mut self, vui: &mut Vui, ui: &mut Ui, s: &HudState) {
+        self.update_glow();
+        let mut p = [10, 15];
+        vui.blit(ui, 6, p);
+        if s.has_self {
+            self.draw_compass(ui, s.heading);
+        }
+        p = [p[0] + 59, p[1] + 21];
+        draw_gauge(vui, ui, 7, 136, p, true, s.self_hp as f32 / 255.0);
+        p[1] += 10;
+        let v = if s.max_power == 0 { 0.0 } else { s.power as f32 / s.max_power as f32 };
+        draw_gauge(vui, ui, 9, 136, p, true, v);
+        p[1] += 10;
+        let need = exp_for_level(s.level + 1);
+        let v = s.exp as f32 / need as f32;
+        let fifth = (need / 5) as i32;
+        // How far through the current fifth of the level.
+        let mut part = 0.0f32;
+        if s.exp > 0 {
+            if s.exp < fifth {
+                part = s.exp as f32 / fifth as f32;
+            } else {
+                let mut i = 2;
+                while i < 6 {
+                    if s.exp < i * fifth {
+                        part = (s.exp - (i - 1) * fifth) as f32 / fifth as f32;
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+        }
+        let part = part.clamp(0.0, 1.0);
+        draw_gauge(vui, ui, 152, 151, [p[0], p[1] + 10], true, part);
+        draw_gauge(vui, ui, 8, 136, p, true, v);
+        // DrawGroup and DrawPet with neither: their glows go down.
+        self.glow1_on = -1;
+        self.glow2_on = -1;
+        self.glow2 = 0.3;
+        let p = [-3, 331];
+        if s.chat_open {
+            vui.blit_rect(ui, 32, [p[0] + 2, p[1]], [203, 125], 0, 1.0);
+        }
+        self.draw_target(vui, ui, [20, 348], s);
+    }
+
+    /// `DrawTarget`: "Target", the bar with the name scrolling in it, the
+    /// health gauge, the disposition icon.
+    fn draw_target(&mut self, vui: &mut Vui, ui: &mut Ui, at: [i32; 2], s: &HudState) {
+        let mut p = at;
+        let has = s.target_name.is_some();
+        self.glow0_on = if has { 1 } else { -1 };
+        let name = wide(s.target_name.as_deref().unwrap_or(""));
+        vui.draw_word_ex(ui, 408, p[0], p[1], [1.0, 1.0, 1.0, self.glow0], true);
+        p[1] += 25;
+        vui.blit_bar(ui, &[], [0.0; 4], p, 25, 26, 174, 3, self.glow0, 0, true);
+        self.scroll.init(vui, ui, [p[0] + 87, p[1] + 12], 160, 0, 1);
+        self.scroll.window.open(true);
+        if name.is_empty() {
+            self.scroll.reset();
+        }
+        self.scroll.text_scroll(vui, ui, &name, [0.0, 0.0, 0.0, self.glow0], 8);
+        p = [p[0] + 10, p[1] + 25];
+        draw_gauge(vui, ui, 7, 136, p, has, s.target_hp as f32 / 255.0);
+        p = [p[0] + 65, p[1] + 2];
+        if let (Some(d), true) = (s.target_info, has) {
+            let icon = match d {
+                0 | 1 => 115,
+                4..=6 => 117,
+                _ => 116,
+            };
+            vui.blit_ex(ui, icon, p, 3, self.glow0, 0);
+            p[0] += 25;
+        }
+        if s.self_targeted_flag {
+            vui.blit_ex(ui, 211, p, 3, self.glow0, 0);
+        }
+    }
+
+    /// `DrawCompass`: a 44-pixel quad of "sheet1" turned by the heading
+    /// about (39, 54); the rose's window in the sheet is the region's.
+    fn draw_compass(&self, ui: &mut Ui, yaw: f32) {
+        let Some(tex) = self.sheet1 else { return };
+        let a = yaw + std::f32::consts::PI;
+        let (sn, cs) = (a.sin(), a.cos());
+        let at = |x: f32, y: f32| [x * cs - y * sn + 39.0, x * sn + y * cs + 54.0];
+        let out = [at(-22.0, 22.0), at(-22.0, -22.0), at(22.0, 22.0), at(22.0, -22.0)];
+        let (u0, v0, u1, v1) = match self.region {
+            2 => (0.775_390_6, 0.861_328_1, 0.859_375, 0.945_312_5),
+            3 => (0.863_281_25, 0.861_328_1, 0.947_265_6, 0.945_312_5),
+            _ => (0.046_875, 0.474_609_4, 0.130_859_4, 0.558_593_75),
+        };
+        // The strip's four vertices (0 1 2 3) as a fan: 0 1 3 2.
+        ui.push(Quad {
+            tex,
+            blend: 0,
+            pos: [out[0], out[1], out[3], out[2]],
+            uv: [[u0, v1], [u0, v0], [u1, v0], [u1, v1]],
+            color: [1.0; 4],
+            clip: None,
+        });
+    }
+}
+
+/// `DrawGauge`: the frame (`frame`'s art), then `bar`'s art cut to `v` of
+/// its width, inset 3,1 for the experience bar (152) and 2,2 otherwise;
+/// dimmed to 0.3 unless lit.
+pub fn draw_gauge(vui: &Vui, ui: &mut Ui, bar: i32, frame: i32, at: [i32; 2], lit: bool, v: f32) {
+    let fill = vui.entry(bar);
+    let bx = vui.entry(frame);
+    let alpha = if lit { 1.0 } else { 0.3 };
+    vui.blit_ex(ui, bx.x00, at, 3, alpha, 0);
+    let inset = if bar == 152 { [3, 1] } else { [2, 2] };
+    let at = [at[0] + inset[0], at[1] + inset[1]];
+    let size = [(fill.uv1[0] as f32 * v) as i32, -1];
+    vui.blit_ex_size(ui, fill.x00, at, size, 3, alpha, 0);
+}

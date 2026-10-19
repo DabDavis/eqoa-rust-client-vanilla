@@ -77,6 +77,11 @@ pub enum Event {
     WorldEntry { self_id: u64, player: Player, dump: Box<crate::dump::MemoryDump> },
     /// 0x00F8: the run speed (0 stops).
     Speed(f32),
+    /// 0x0010, the target-info reply (`Msg0010`): the disposition (the con
+    /// colour), two more bytes, the title and the guild. Sandstorm's reply
+    /// stops before the trailing token, so it is taken as answered whatever
+    /// the token, as eqoa-port's `VI_HOST_ONLY` does.
+    TargetInfo { disposition: u8, b: u8, c: u8, title: String, guild: String },
     /// A line for the chat log, in its colour (RGBA 0..1): 0x0A7A white,
     /// 0x0A7B its own colour, 0x069E blue, 0x0758 (narrow) white.
     Chat(String, [f32; 4]),
@@ -368,6 +373,16 @@ impl Session {
                 self.send(&w.data);
             }
             0x00F8 => ev.push(Event::Speed(r.f32())),
+            0x0010 => {
+                let (disposition, b, c) = (r.u8(), r.u8(), r.u8());
+                let mut fixed = || {
+                    let u: Vec<u16> = (0..64).map(|_| r.u16()).collect();
+                    let n = u.iter().position(|&c| c == 0).unwrap_or(64);
+                    String::from_utf16_lossy(&u[..n])
+                };
+                let (title, guild) = (fixed(), fixed());
+                ev.push(Event::TargetInfo { disposition, b, c, title, guild });
+            }
             0x0A7A => ev.push(Event::Chat(r.wide(1024), [1.0; 4])),
             0x0A7B => {
                 let text = r.wide(1024);

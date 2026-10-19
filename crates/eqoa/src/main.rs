@@ -17,10 +17,13 @@
 //!
 //! `iso` defaults to `$EQOA_ISO`, then `run/eqoa.iso`.
 
+mod chat;
+mod hud;
 mod play;
 mod scene;
 mod sky;
 mod stream;
+mod ui;
 mod viewer;
 mod walker;
 
@@ -129,6 +132,9 @@ fn run(args: &[String]) -> Result<()> {
             lib.add("ITEM.ESF", esf::Container::open(disc(None)?.read("ITEM.ESF")?)?);
             // The name plates' font ("Arial").
             lib.add("ARIAL.CSF", esf::Container::open(disc(None)?.read("ARIAL.CSF")?)?);
+            // The HUD's art and font ("ArialUI").
+            lib.add("UI.CSF", esf::Container::open(disc(None)?.read("UI.CSF")?)?);
+            lib.add("ARIALUI.CSF", esf::Container::open(disc(None)?.read("ARIALUI.CSF")?)?);
             let [x, _, z] = player.pos;
             let index = vi::world::World::<vi::fpu::Ee>::zone_at(lib.file(main_file), x, z).ok_or("no zone at the player's position")?;
             let character = lib.lookup(viewer::HUMAN).ok_or("no human model")?;
@@ -137,6 +143,16 @@ fn run(args: &[String]) -> Result<()> {
             let mut play = play::Play::new(session, player, dump);
             // The game's words, for the lines the client writes itself.
             play.words = disc(None)?.read("WORDS.TXT").ok().and_then(|b| vi::strtab::StringTable::parse(&b));
+            // The HUD's atlas is SUPPORT's data: out of the player's own
+            // decrypted image (EQOA_SUPPORT, else run/support.bin). Without
+            // it there is no HUD.
+            let support = std::env::var("EQOA_SUPPORT").unwrap_or_else(|_| "run/support.bin".into());
+            let atlas = std::fs::read(&support).ok().and_then(|b| ui::read_atlas(&b));
+            let textures = disc(None)?.read("TEXTURES.TXT").ok().and_then(|b| vi::strtab::StringTable::parse(&b));
+            match (atlas, textures) {
+                (Some(a), Some(t)) => play.ui_data = Some((a, t)),
+                _ => eprintln!("no HUD: the UI atlas needs a decrypted SUPPORT image at {support} (EQOA_SUPPORT)"),
+            }
             let play = Some(play);
             if args[0] == "playshot" {
                 let out = args.get(3).ok_or("usage: eqoa playshot <host> <user> <out.png> [ms]")?;

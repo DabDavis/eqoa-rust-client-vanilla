@@ -251,6 +251,9 @@ pub fn shot_with(
     if let Some(f) = arial(lib) {
         renderer.set_font(&device, &queue, &f);
     }
+    if let Some(p) = play.as_mut() {
+        p.attach_ui(&mut renderer, &device, &queue, render::TARGET_FORMAT, lib);
+    }
     let s = source.scene(lib);
     let walking = matches!(source, Source::Walk { .. });
     let mut gpu = if walking { Vec::new() } else { upload(&mut renderer, &device, &queue, lib, &s) };
@@ -297,6 +300,10 @@ pub fn shot_with(
                 {
                     eprintln!("the server names the player's model {model:#010x}");
                     walker.set_character(lib, r);
+                }
+                // The HUD steps each frame (its glows, the name's scroll).
+                if let Some(u) = renderer.ui.as_mut() {
+                    p.draw_hud(u, &walker, t);
                 }
                 std::thread::sleep(std::time::Duration::from_millis(16));
             }
@@ -350,7 +357,10 @@ pub fn shot_with(
         }
         view = frame.0;
         streamed = Some(streamer);
-        if let Some(p) = &play {
+        if let Some(p) = &mut play {
+            if let Some(u) = renderer.ui.as_mut() {
+                p.draw_hud(u, &walker, t);
+            }
             let plates = p.plates();
             if let Some(t) = renderer.text.as_mut() {
                 t.labels = crate::play::labels(&plates, shot_eye, view.view_proj, t);
@@ -546,6 +556,9 @@ impl ApplicationHandler for App {
         let mut renderer = Renderer::new(&device, &queue, config.format);
         if let Some(f) = arial(&self.lib) {
             renderer.set_font(&device, &queue, &f);
+        }
+        if let Some(p) = self.play.as_mut() {
+            p.attach_ui(&mut renderer, &device, &queue, config.format, &self.lib);
         }
         let depth = render::depth_view(&device, config.width, config.height);
         self.gfx = Some(Gfx { window, surface, device, queue, config, depth, renderer, models: Vec::new() });
@@ -760,7 +773,10 @@ impl ApplicationHandler for App {
                     }
                     None => self.camera.view(self.bounds, g.config.width as f32 / g.config.height as f32),
                 };
-                if let (Some(p), Some(w)) = (&self.play, &self.walker) {
+                if let (Some(p), Some(w)) = (&mut self.play, &self.walker) {
+                    if let Some(u) = g.renderer.ui.as_mut() {
+                        p.draw_hud(u, w, self.clock.elapsed().as_millis() as i64);
+                    }
                     let plates = p.plates();
                     if let Some(t) = g.renderer.text.as_mut() {
                         t.labels = crate::play::labels(&plates, w.eye_position(), view.view_proj, t);

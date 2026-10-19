@@ -80,6 +80,19 @@ pub struct Play {
     pub stats: net::dump::Stats,
     /// The game's words (WORDS.TXT), for the lines the client writes itself.
     pub words: Option<vi::strtab::StringTable>,
+    /// What the HUD is built from, before there is a device: the atlas
+    /// (out of SUPPORT) and TEXTURES.TXT.
+    pub ui_data: Option<(Vec<crate::ui::UiTexEntry>, vi::strtab::StringTable)>,
+    /// The HUD, once the viewer has a device (`attach_ui`).
+    pub hud: Option<(crate::ui::Vui, crate::hud::Hud)>,
+    /// `m_targetInfoValid` / `m_targetDisposition`, from 0x0010.
+    pub target_info: Option<u8>,
+    /// Chat lines waiting for the chat box, with when they came.
+    chat_pending: Vec<(String, [f32; 4], u32)>,
+    /// The chat box (`VIWndChat`), with the HUD.
+    wnd_chat: Option<crate::chat::WndChat>,
+    /// When the HUD was last drawn (its frame time).
+    hud_last: i64,
 }
 
 /// A creature's model as `Apply` dresses it: the look on its text slots, the
@@ -165,11 +178,15 @@ pub fn chat_labels(play: &Play, text: &render::text::Text, size: (u32, u32)) -> 
     let k = size.1 as f32 / render::text::SCREEN_H;
     let line = (text.height() as f32 + 2.0) * k;
     let mut out = Vec::new();
-    let mut rows: Vec<(String, [f32; 4])> = play.chat.iter().cloned().collect();
+    // With the HUD the chat box shows the lines; only the line being typed
+    // is drawn here.
+    let mut rows: Vec<(String, [f32; 4])> = if play.hud.is_some() { Vec::new() } else { play.chat.iter().cloned().collect() };
     if let Some(t) = &play.typing {
         rows.push((format!("> {t}_"), [1.0, 1.0, 0.6, 1.0]));
     }
-    if let Some(name) = play.target_name() {
+    if play.hud.is_none()
+        && let Some(name) = play.target_name()
+    {
         out.push(render::text::Label { at: [0.0, 1.0 - (24.0 * k) / size.1 as f32 * 2.0, 0.0], color: [1.0, 1.0, 1.0, 1.0], text: name });
     }
     let n = rows.len();
@@ -235,7 +252,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None }
+        Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, chat_pending: Vec::new(), wnd_chat: None, hud_last: 0 }
     }
 
     fn self_id32(&self) -> Option<u32> {
@@ -249,6 +266,7 @@ impl Play {
         let mut new_model = None;
         for e in self.session.pump() {
             match e {
+                Event::TargetInfo { disposition, .. } => self.target_info = Some(disposition),
                 Event::State { channel: 0x42, data } => {
                     self.stats = net::dump::read_stats(&mut net::stream::Reader::new(&data));
                 }
@@ -294,10 +312,7 @@ impl Play {
                 Event::Disconnected(r) => eprintln!("play: disconnected (reason {r})"),
                 Event::Chat(text, color) => {
                     eprintln!("chat: {text}");
-                    self.chat.push_back((text, color));
-                    while self.chat.len() > 8 {
-                        self.chat.pop_front();
-                    }
+                    self.add_chat(text, color);
                 }
                 Event::WorldEntry { self_id, player, dump } => {
                     eprintln!("play: world entry again as {self_id:#x} at {:?}", player.pos);
@@ -481,6 +496,7 @@ impl Play {
         }
         cand.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         self.auto_attack = false;
+        self.target_info = None;
         let n = cand.len();
         self.target = if n == 0 {
             u32::MAX
@@ -502,6 +518,7 @@ impl Play {
         };
         self.target = id;
         self.auto_attack = false;
+        self.target_info = None;
         let mut w = net::stream::Writer::op(0x0010);
         w.u32(0).u32(id);
         self.session.send(&w.data);
@@ -534,14 +551,22 @@ impl Play {
         self.auto_attack = true;
     }
 
+    /// `VIWndGame::AddText`: a line for the chat box (queued with its time
+    /// until the box, which measures with the font, takes it), and for the
+    /// plain log shown when there is no HUD.
+    fn add_chat(&mut self, text: String, color: [f32; 4]) {
+        self.chat_pending.push((text.clone(), color, self.session.now()));
+        self.chat.push_back((text, color));
+        while self.chat.len() > 8 {
+            self.chat.pop_front();
+        }
+    }
+
     /// A line the client writes itself: word `id`, in red as the game's
     /// warnings are.
     fn warn(&mut self, id: i32) {
         let text = self.words.as_ref().map_or_else(|| format!("(word {id})"), |w| w.get(id, 0).to_string());
-        self.chat.push_back((text, [1.0, 0.25, 0.25, 1.0]));
-        while self.chat.len() > 8 {
-            self.chat.pop_front();
-        }
+        self.add_chat(text, [1.0, 0.25, 0.25, 1.0]);
     }
 
     /// `AutoAttackTick`, each frame while auto-attack is held: when the
@@ -688,6 +713,69 @@ impl Play {
     /// `MaybeStopAutoAttack`: the button released.
     pub fn attack_release(&mut self) {
         self.auto_attack = false;
+    }
+
+    /// Builds the HUD on the viewer's device: the 2D layer, UI.CSF's
+    /// surfaces and "ArialUI" out of the loaded files.
+    pub fn attach_ui(&mut self, renderer: &mut render::Renderer, device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat, lib: &Library) {
+        let Some((atlas, textures)) = self.ui_data.take() else { return };
+        let mut ui = render::ui::Ui::new(device, format, render::DEPTH_FORMAT);
+        let words = self.words.clone().unwrap_or_default();
+        let mut vui = crate::ui::Vui::new(words, textures, atlas);
+        for (name, c) in &lib.files {
+            if name.eq_ignore_ascii_case("UI.CSF") {
+                vui.add_surfaces(&mut ui, device, queue, c);
+            }
+        }
+        let id = vi::hash::hash_resource_id("ArialUI") as i32;
+        let font = lib.files.iter().find_map(|(_, c)| (0..c.nodes.len()).filter(|&i| c.nodes[i].ty == 0x7000).find_map(|i| esf::font::read(c, i).filter(|f| f.id == id)));
+        if let Some(f) = font {
+            vui.font = Some(ui.add_font(device, queue, &f));
+        }
+        let hud = crate::hud::Hud::new(&vui);
+        renderer.ui = Some(ui);
+        self.hud = Some((vui, hud));
+        self.wnd_chat = Some(crate::chat::WndChat::new());
+    }
+
+    /// The HUD's quads for this frame (`VIWndGame::OnDrawSelf`).
+    pub fn draw_hud(&mut self, ui: &mut render::ui::Ui, walker: &Walker, time_ms: i64) {
+        ui.quads.clear();
+        let me = self.self_id32();
+        let find = |id: Option<u32>| self.entities.slots.iter().flatten().find(|e| Some(e.id) == id);
+        let me_e = find(me);
+        let target = find(Some(self.target));
+        let dir = walker.eye.direction;
+        let (heading, _, _) = dir.get_hpr();
+        let state = crate::hud::HudState {
+            has_self: me_e.is_some(),
+            self_hp: me_e.map_or(0, |e| e.p19 as i32),
+            power: self.stats.stat[9],
+            max_power: self.stats.stat[10],
+            level: self.dump.player.level as i32,
+            exp: self.dump.player.exp as i32,
+            heading: heading.0,
+            chat_open: self.wnd_chat.as_ref().is_some_and(|c| c.mode != 0),
+            target_name: target.and_then(|e| e.creature.as_ref()).map(|c| c.name.clone()),
+            target_hp: target.map_or(0, |e| e.p19 as i32),
+            target_info: self.target_info,
+            self_targeted_flag: Some(self.target) == me && self.dump.player.p2c > 0,
+        };
+        let now = self.session.now();
+        let dt = ((time_ms - self.hud_last).clamp(0, 250)) as f32 / 1000.0;
+        self.hud_last = time_ms;
+        if let Some((vui, hud)) = self.hud.as_mut() {
+            vui.time = time_ms;
+            hud.draw(vui, ui, &state);
+            if let Some(c) = self.wnd_chat.as_mut() {
+                for (text, color, at) in self.chat_pending.drain(..) {
+                    let font = vui.font;
+                    let fonts = &ui.fonts;
+                    c.text.add_text(&crate::ui::wide(&text), color, at, |s| font.map_or(0, |f| fonts[f].string_width(s)));
+                }
+                c.draw(vui, ui, now, dt);
+            }
+        }
     }
 
     /// The target's name, for the screen (the target window is not ported).

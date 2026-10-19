@@ -11,6 +11,7 @@
 //! layer then never hides geometry drawn after it.
 
 pub mod text;
+pub mod ui;
 
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
@@ -126,6 +127,8 @@ pub struct Renderer {
     format: wgpu::TextureFormat,
     /// Labels (name plates), once a font is set.
     pub text: Option<text::Text>,
+    /// The 2D layer (the HUD), drawn over everything.
+    pub ui: Option<ui::Ui>,
 }
 
 /// What to draw this frame. The lights are the VU1 strip programs' uniforms:
@@ -162,7 +165,7 @@ impl View {
 
 /// The GS ALPHA register of each blend mode, as a wgpu blend:
 /// 1 `Cs·As + Cd`, 2 `Cd − Cs·As`, 3 `(Cs − Cd)·As + Cd`, 4 `Cd·As`.
-fn blend_state(mode: usize) -> Option<wgpu::BlendState> {
+pub(crate) fn blend_state(mode: usize) -> Option<wgpu::BlendState> {
     use wgpu::{BlendComponent as C, BlendFactor as Fa, BlendOperation as Op};
     let color = match mode {
         1 => C { src_factor: Fa::SrcAlpha, dst_factor: Fa::One, operation: Op::Add },
@@ -321,6 +324,7 @@ impl Renderer {
             start: std::time::Instant::now(),
             format,
             text: None,
+            ui: None,
         }
     }
 
@@ -480,8 +484,9 @@ impl Renderer {
     /// The labels, over what `draw` drew (depth-tested against it, not
     /// writing it). `size` is the target's, in pixels.
     pub fn draw_text(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, depth: &wgpu::TextureView, size: (u32, u32)) {
-        let Some(t) = &self.text else { return };
-        if t.labels.is_empty() {
+        let labels = self.text.as_ref().filter(|t| !t.labels.is_empty());
+        let quads = self.ui.as_ref().filter(|u| !u.quads.is_empty());
+        if labels.is_none() && quads.is_none() {
             return;
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -501,7 +506,12 @@ impl Renderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        t.draw(device, &mut pass, size);
+        if let Some(t) = labels {
+            t.draw(device, &mut pass, size);
+        }
+        if let Some(u) = quads {
+            u.draw(device, &mut pass, size);
+        }
     }
 
     /// The skin palette for a skinned model: one matrix per skeleton node

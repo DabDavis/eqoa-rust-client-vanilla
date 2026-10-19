@@ -782,5 +782,5 @@ impl<M: Model> HSprite<M> {
 
 /// `VIHashRefID`: h = h*131 + c.
 pub fn hash_ref_id(s: &str) -> i32 {
-    s.bytes().fold(0u32, |h, c| h.wrapping_mul(131).wrapping_add(c as u32)) as i32
+    crate::hash::hash_resource_id(s) as i32
 }
