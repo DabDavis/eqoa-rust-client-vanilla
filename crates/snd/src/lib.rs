@@ -9,6 +9,7 @@
 //! decomp's own SNDDRV over the same SPU2 on the same clock
 //! (`tests/oracle_snd.rs`).
 
+pub mod device;
 pub mod driver;
 mod gauss;
 pub mod iop;
