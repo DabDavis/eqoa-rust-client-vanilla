@@ -33,6 +33,9 @@ pub struct Creature {
     pub robe_tint: u8,
     pub name: String,
     pub level: u8,
+    /// +0x255: runs its own walk physics (players) rather than being carried
+    /// along its velocity.
+    pub p255: u8,
     pub race: u8,
     pub class: u8,
     pub npc_flags: u16,
@@ -58,6 +61,8 @@ pub struct Entity {
     /// Drawn this frame.
     pub actor_pos: [f32; 3],
     pub actor_hpr: [f32; 3],
+    /// `m_extrapolated`: the scene time the position was last carried to.
+    pub extrapolated: i64,
 }
 
 /// `VIEntity::Dequantize`: a signed 24-bit big-endian value over 128.
@@ -135,7 +140,7 @@ impl Entity {
             let name = r.bytes(24);
             c.name = String::from_utf8_lossy(&name[..name.iter().position(|&b| b == 0).unwrap_or(name.len())]).into_owned();
             c.level = r.u8();
-            r.u8();
+            c.p255 = r.u8();
             r.u8();
             r.u8();
             c.race = r.u8();
@@ -176,7 +181,9 @@ impl Entities {
     /// the slot; a different id or type, or flag 0, replaces it (flag 0 then
     /// leaves it empty). Types other than 129/130 crash the PS2; they are
     /// dropped here.
-    pub fn channel(&mut self, ch: usize, data: &[u8], self_id: Option<u64>, now: u32, rate: u32) {
+    /// `sync` runs after the read, as `VICreatureEntity::Sync` does inside
+    /// `ReadUpdate` (the ground snap), before the blend is measured.
+    pub fn channel(&mut self, ch: usize, data: &[u8], self_id: Option<u64>, now: u32, rate: u32, mut sync: impl FnMut(&mut Entity)) {
         let Some(self_id) = self_id else { return };
         if ch >= SLOTS {
             return;
@@ -203,6 +210,7 @@ impl Entities {
         e.id = id;
         let old_vel = e.creature.as_ref().map(|c| c.velocity);
         e.read_update(&mut r);
+        sync(e);
         if created {
             e.vel = [0.0; 3];
             e.rot = [0.0; 3];

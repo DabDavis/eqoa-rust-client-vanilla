@@ -42,6 +42,10 @@ pub struct Play {
     pub self_model: Option<u32>,
 }
 
+fn v3(a: [f32; 3]) -> Vect3<Ee> {
+    Vect3::of(a[0], a[1], a[2])
+}
+
 pub struct Gpu<'a> {
     pub renderer: &'a mut Renderer,
     pub device: &'a wgpu::Device,
@@ -66,7 +70,19 @@ impl Play {
             match e {
                 Event::State { channel, data } if (channel as usize) < SLOTS => {
                     let self_id = self.session.self_id;
-                    self.entities.channel(channel as usize, &data, self_id, now, UPDATE_RATE);
+                    let skel = self.puppets[channel as usize].as_ref().and_then(|p| p.sprite.as_ref()).map_or(0, |s| s.skel_type);
+                    let scene = &mut walker.scene;
+                    self.entities.channel(channel as usize, &data, self_id, now, UPDATE_RATE, |e| {
+                        // VICreatureEntity::Sync: a creature that does not walk
+                        // is put on the ground at once.
+                        if e.creature.as_ref().is_some_and(|c| c.p255 == 0) {
+                            let (mut pos, mut hpr) = (v3(e.pos), v3(e.hpr));
+                            vi::creature::extrapolate_ground(scene, -1, skel, None, &mut pos, &mut hpr);
+                            e.pos = pos.to_array();
+                            e.hpr = hpr.to_array();
+                        }
+                        e.extrapolated = game_ms;
+                    });
                 }
                 Event::Disconnected(r) => eprintln!("play: disconnected (reason {r})"),
                 Event::WorldEntry { self_id, player } => {
@@ -77,6 +93,25 @@ impl Play {
             }
         }
         let self_id = self.session.self_id;
+        // UpdateCreatures: each creature carried along its velocity since it
+        // was last moved (`VICreatureEntity::Walk`, ExtrapolateMove). Those
+        // that run their own walk physics (players) are carried the same way
+        // for now.
+        let me = self.self_id32();
+        for (slot, e) in self.entities.slots.iter_mut().enumerate() {
+            let Some(e) = e else { continue };
+            let Some(c) = &e.creature else { continue };
+            if Some(e.id) == me {
+                continue;
+            }
+            let skel = self.puppets[slot].as_ref().and_then(|p| p.sprite.as_ref()).map_or(0, |s| s.skel_type);
+            let dt = F::<Ee>::new((game_ms - e.extrapolated) as i32 as f32) * F::new(0.001);
+            let (mut pos, mut hpr) = (v3(e.pos), v3(e.hpr));
+            vi::creature::extrapolate_move(&mut walker.scene, -1, skel, None, &v3(c.velocity), dt, &mut pos, &mut hpr);
+            e.pos = pos.to_array();
+            e.hpr = hpr.to_array();
+            e.extrapolated = game_ms;
+        }
         self.entities.extrapolate(self_id, now, UPDATE_RATE);
         // SendPosition, at the update rate.
         if self_id.is_some() && now.wrapping_sub(self.last_send) >= UPDATE_RATE {
@@ -120,7 +155,10 @@ impl Play {
             let (matrix, palette) = match p.sprite.as_mut() {
                 Some(cs) => {
                     p.anims.time = game_ms;
-                    let _ = &mut p.rand;
+                    // UpdateCreatures: SetLocomotion with the creature's state.
+                    if let Some(c) = &e.creature {
+                        cs.set_locomotion(c.state as i32, &p.anims, &mut p.rand);
+                    }
                     cs.h.process(0, &p.anims);
                     let m = cs.h.calc_trans_about_center(&actor, &p.anims);
                     cs.h.set_blend_matrices();

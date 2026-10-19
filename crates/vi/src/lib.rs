@@ -19,6 +19,7 @@
 pub mod camera;
 pub mod character;
 pub mod coll;
+pub mod creature;
 pub mod csprite;
 pub mod collide;
 pub mod fpu;
