@@ -97,6 +97,9 @@ pub struct GpuModel {
     palette_bg: wgpu::BindGroup,
     pub skinned: bool,
     instances: wgpu::Buffer,
+    /// Each instance's static light, rgb added and alpha scaling the sun
+    /// term; (0, 0, 0, 1), none, unless set.
+    statics: wgpu::Buffer,
     instance_count: u32,
     batches: Vec<(wgpu::Buffer, u32, Vec<Pass>)>,
     /// Bounds of the model itself, before any instance transform.
@@ -260,6 +263,12 @@ impl Renderer {
                                 array_stride: 64,
                                 step_mode: wgpu::VertexStepMode::Instance,
                                 attributes: &wgpu::vertex_attr_array![4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4],
+                            }),
+                            // the instance's static light (VIRaster::SetStaticLighting)
+                            Some(wgpu::VertexBufferLayout {
+                                array_stride: 16,
+                                step_mode: wgpu::VertexStepMode::Instance,
+                                attributes: &wgpu::vertex_attr_array![10 => Float32x4],
                             }),
                         ],
                     },
@@ -479,12 +488,18 @@ impl Renderer {
             contents: bytemuck::cast_slice(instances),
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
+        let statics = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("static lights"),
+            contents: bytemuck::cast_slice(&vec![[0.0f32, 0.0, 0.0, 1.0]; instances.len().max(1)]),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        });
         GpuModel {
             vertices,
             palette,
             palette_bg,
             skinned: m.skinned,
             instances: instance_buf,
+            statics,
             instance_count: instances.len() as u32,
             batches,
             bounds: (lo, hi),
@@ -579,6 +594,12 @@ impl Renderer {
         queue.write_buffer(&m.palette, 0, bytemuck::cast_slice(&palette[..n]));
     }
 
+    /// Sets a model's instances' static lights (as many as it has).
+    pub fn set_static_lights(&self, queue: &wgpu::Queue, m: &GpuModel, lights: &[[f32; 4]]) {
+        let n = lights.len().min(m.instance_count as usize);
+        queue.write_buffer(&m.statics, 0, bytemuck::cast_slice(&lights[..n]));
+    }
+
     /// Moves a model's instances (as many as it was uploaded with).
     pub fn set_instances(&self, queue: &wgpu::Queue, m: &GpuModel, instances: &[[[f32; 4]; 4]]) {
         let n = instances.len().min(m.instance_count as usize);
@@ -652,6 +673,7 @@ impl Renderer {
             for m in models.iter().filter(|m| m.sky && m.visible && m.instance_count > 0) {
                 pass.set_vertex_buffer(0, m.vertices.slice(..));
                 pass.set_vertex_buffer(1, m.instances.slice(..));
+                pass.set_vertex_buffer(2, m.statics.slice(..));
                 pass.set_bind_group(2, &m.palette_bg, &[]);
                 for (indices, count, passes) in &m.batches {
                     pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -673,6 +695,7 @@ impl Renderer {
                 }
                 pass.set_vertex_buffer(0, m.vertices.slice(..));
                 pass.set_vertex_buffer(1, m.instances.slice(..));
+                pass.set_vertex_buffer(2, m.statics.slice(..));
                 pass.set_bind_group(2, &m.palette_bg, &[]);
                 for (indices, count, passes) in &m.batches {
                     pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);

@@ -158,7 +158,9 @@ order per stage is not yet measured.
   before it with Z off), which differs only behind a blended surface.
   `EQOA_WEATHER=t[,fade]` sets the weather in `shot`, `view` and `listen`;
   the server sets it with 0x00C5 (fade) and 0x00C7 (instant).
-- Static lighting. The personal light (the lantern, `vi::tod::PersonalLight`,
+- Baked lighting is drawn for placed actors (a lit actor draws its own copy with
+  its colour buffers; LOD sprites draw level 0, which takes the first) and the
+  static colour per instance, but not checked against the console yet. The personal light (the lantern, `vi::tod::PersonalLight`,
   ramped as `SetupTimeOfDayLights` does) is the strip programs' point term but
   evaluated per pixel, where VU1 lights per vertex (and the game also
   tessellates near it). Blended layers are drawn after every

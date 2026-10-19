@@ -32,6 +32,8 @@ pub const ZONE_ROOM_ACTORS3: u16 = 0x6040;
 pub struct Actor {
     /// The room's real id (ZoneRoomActors2), not a positional counter.
     pub room: i32,
+    /// Its slot in the room's actor list, which a static lighting names.
+    pub slot: usize,
     pub sprite: i32,
     pub pos: [f32; 3],
     pub rot: [f32; 3],
@@ -94,6 +96,36 @@ impl Container {
         })
     }
 
+    /// The zone's baked lighting (0x32B0, `ParseZoneStaticLightings`): per
+    /// (room id, actor slot), the colour buffers (0x1220), each its colours,
+    /// in the order the actor's simple sprites take them.
+    pub fn static_lightings(&self, zone: NodeId) -> std::collections::HashMap<(i32, usize), Vec<Vec<[u8; 4]>>> {
+        let d = &self.data;
+        let mut out = std::collections::HashMap::new();
+        let Some(sl) = self.child(zone, 0x32B0) else { return out };
+        for &rl in &self.node(sl).children {
+            let (Some(room), Some(list)) = (self.child(rl, 0x32A0), self.child(rl, 0x6030)) else { continue };
+            let room = i32le(d, self.node(room).body);
+            for &l in &self.node(list).children {
+                let Some(obj) = self.child(l, 0x6020) else { continue };
+                let slot = i32le(d, self.node(obj).body);
+                let mut colours = Vec::new();
+                for &b in self.node(l).children.iter().filter(|&&b| self.node(b).ty == 0x1220) {
+                    let n = self.node(b);
+                    let k = i32le(d, n.body + 4).max(0) as usize;
+                    colours.push((0..k).filter(|i| 12 + 4 * i <= n.size).map(|i| {
+                        let o = n.body + 8 + 4 * i;
+                        [d[o], d[o + 1], d[o + 2], d[o + 3]]
+                    }).collect());
+                }
+                if let Ok(slot) = usize::try_from(slot) {
+                    out.insert((room, slot), colours);
+                }
+            }
+        }
+        out
+    }
+
     pub fn actors(&self, zone: NodeId) -> Vec<Actor> {
         let d = &self.data;
         let mut out = Vec::new();
@@ -104,7 +136,7 @@ impl Container {
             }
             let room = self.child(ra, ZONE_ROOM_ACTORS2).map_or(-1, |r| i32le(d, self.node(r).body));
             let Some(ra3) = self.child(ra, ZONE_ROOM_ACTORS3) else { continue };
-            for &a in &self.node(ra3).children {
+            for (slot, &a) in self.node(ra3).children.iter().enumerate() {
                 let n = self.node(a);
                 if n.ty != ZONE_ACTOR || n.size < 36 {
                     continue;
@@ -113,6 +145,7 @@ impl Container {
                 let f = |k: usize| f32le(d, o + k);
                 out.push(Actor {
                     room,
+                    slot,
                     sprite: i32le(d, o),
                     pos: [f(4), f(8), f(12)],
                     rot: [f(16), f(20), f(24)],

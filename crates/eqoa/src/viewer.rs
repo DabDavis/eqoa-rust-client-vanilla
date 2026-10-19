@@ -204,7 +204,15 @@ impl Camera {
 
 fn upload(renderer: &mut Renderer, device: &wgpu::Device, queue: &wgpu::Queue, lib: &Library, s: &Scene) -> Vec<GpuModel> {
     let textures = render::library_textures(lib);
-    s.parts.iter().map(|(m, mats)| renderer.upload(device, queue, m, mats, &textures)).collect()
+    s.parts
+        .iter()
+        .zip(&s.statics)
+        .map(|((m, mats), st)| {
+            let gm = renderer.upload(device, queue, m, mats, &textures);
+            renderer.set_static_lights(queue, &gm, st);
+            gm
+        })
+        .collect()
 }
 
 /// A world change in a playshot: the world file replaced, and a walker and

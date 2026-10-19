@@ -2,8 +2,8 @@
 // disassembly-20261017.md, verified there against PCSX2), one pass per
 // material layer:
 //
-//   light = clamp(colour + ambient + sun · max(−N·S, 0) · colour.a
-//                 + point · (1 − min(|L|/range, 1)) · max(L·N/|L|, 0), 0, 1)
+//   light = clamp(colour + ambient + sun · max(−N·S, 0) · colour.a · static.a
+//                 + static.rgb + point · (1 − min(|L|/range, 1)) · max(L·N/|L|, 0), 0, 1)
 //   pixel = texture × layer colour/255 × light
 //
 // where S is the direction the sun's light travels and, on packed geometry,
@@ -11,7 +11,8 @@
 // tested at 128 of 255 (TEST 0x3080B); a blended layer's alpha is the
 // texture's times the layer colour's, and the pipeline blends it. L runs from
 // the vertex to the point light (the personal light; the raster has one).
-// Not yet ported: the static-lighting term.
+// The static light is the instance's (VIActor::m_p70, set per actor by
+// RasterActor; (0, 0, 0, 1) for terrain).
 //
 // Fog is the strip programs' clamp(w·scale + offset, 0, 255), with scale and
 // offset from VIRaster::SetFog: linear in view depth w, none at the near
@@ -57,6 +58,7 @@ struct VsIn {
     @location(7) m3: vec4<f32>,
     @location(8) bones: vec4<u32>,
     @location(9) weights: vec4<u32>,
+    @location(10) static_light: vec4<f32>,
 };
 
 struct VsOut {
@@ -67,6 +69,7 @@ struct VsOut {
     // 1 none, 0 all fog.
     @location(3) fog: f32,
     @location(4) world: vec3<f32>,
+    @location(5) static_light: vec4<f32>,
 };
 
 @vertex
@@ -91,6 +94,7 @@ fn vs_main(v: VsIn) -> VsOut {
         nrm = vec4<f32>(sn.xyz, 0.0);
     }
     o.world = (model * pos).xyz;
+    o.static_light = v.static_light;
     o.clip = frame.view_proj * model * pos;
     o.fog = clamp((frame.fog.y - o.clip.w) / (frame.fog.y - frame.fog.x), 0.0, 1.0);
     // The layer's UV transform, and its scroll (VIMaterial::Process: the
@@ -118,7 +122,7 @@ fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
         discard;
     }
     let n = normalize(i.normal);
-    let sun = frame.sun.rgb * max(-dot(n, frame.sun_dir.xyz), 0.0) * i.color.a;
+    let sun = frame.sun.rgb * max(-dot(n, frame.sun_dir.xyz), 0.0) * i.color.a * i.static_light.a;
     var point = vec3<f32>(0.0);
     if (frame.point.w > 0.0) {
         let l = frame.point.xyz - i.world;
@@ -127,7 +131,7 @@ fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
             point = frame.point_color.rgb * (1.0 - min(d / frame.point.w, 1.0)) * max(dot(l, n) / d, 0.0);
         }
     }
-    let light = clamp(i.color.rgb + frame.ambient.rgb + sun + point, vec3<f32>(0.0), vec3<f32>(1.0));
+    let light = clamp(i.color.rgb + frame.ambient.rgb + sun + i.static_light.rgb + point, vec3<f32>(0.0), vec3<f32>(1.0));
     var rgb = texel.rgb * layer.tint.rgb * light;
     if (frame.fog_color.w > 0.5) {
         rgb = mix(frame.fog_color.rgb, rgb, i.fog);

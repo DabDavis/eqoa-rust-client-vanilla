@@ -10,6 +10,9 @@ pub type Mat = [[f32; 4]; 4];
 pub struct Scene {
     /// Each model with the matrices it is drawn at.
     pub parts: Vec<(Model, Vec<Mat>)>,
+    /// Each part's instances' static lights (`VIActor::m_p70`: the zone
+    /// actor record's colour / 255; (0, 0, 0, 1) for terrain and models).
+    pub statics: Vec<Vec<[f32; 4]>>,
     /// HSprite placements held out of `parts` to be drawn animated: (sprite
     /// record, actor transform as the game builds it).
     pub hsprites: Vec<(Ref, vi::geom::Matrix44<vi::fpu::Ee>)>,
@@ -43,8 +46,11 @@ pub fn model(dict_id: i32, m: Model) -> Scene {
         if m.skinned { ", skinned" } else { "" }
     );
     let parts = vec![(m, vec![render::IDENTITY])];
-    Scene { bounds: bounds_of(&parts), parts, summary, hsprites: Vec::new() }
+    Scene { bounds: bounds_of(&parts), parts, statics: vec![vec![NO_STATIC]], summary, hsprites: Vec::new() }
 }
+
+/// No static light: nothing added, the sun term whole.
+pub const NO_STATIC: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 
 pub fn zone(lib: &Library, file: usize, zone: esf::NodeId, index: usize) -> Scene {
     zones(lib, file, &[zone], &format!("zone {index}"), false)
@@ -62,10 +68,24 @@ pub fn zones(lib: &Library, file: usize, list: &[esf::NodeId], name: &str, anima
         }
     }
     let terrain_parts = parts.len();
-    let actors: Vec<esf::zone::Actor> = list.iter().flat_map(|&z| c.actors(z)).collect();
-    let mut by_sprite: BTreeMap<i32, Vec<Mat>> = BTreeMap::new();
+    let mut statics: Vec<Vec<[f32; 4]>> = vec![vec![NO_STATIC]; terrain_parts];
+    // the actors with each zone's baked lighting
+    let actors: Vec<(esf::zone::Actor, Option<Vec<Vec<[u8; 4]>>>)> = list
+        .iter()
+        .flat_map(|&z| {
+            let mut lit = c.static_lightings(z);
+            c.actors(z).into_iter().map(move |a| {
+                let l = lit.remove(&(a.room, a.slot));
+                (a, l)
+            })
+        })
+        .collect();
+    let mut by_sprite: BTreeMap<i32, Vec<(Mat, [f32; 4])>> = BTreeMap::new();
+    let mut built: BTreeMap<i32, Option<Model>> = BTreeMap::new();
+    let (mut lit_drawn, mut lit_misfit) = (0, 0);
     let mut hsprites = Vec::new();
-    for a in &actors {
+    for (a, light) in &actors {
+        let st = a.color.map(|c| c as f32 / 255.0);
         if animate
             && let Some(r) = lib.lookup(a.sprite)
             && lib.file(r.file).node(r.node).ty == esf::types::HSPRITE
@@ -79,30 +99,54 @@ pub fn zones(lib: &Library, file: usize, list: &[esf::NodeId], name: &str, anima
             hsprites.push((r, m));
             continue;
         }
-        by_sprite.entry(a.sprite).or_default().push(a.matrix());
+        // A lit actor draws its own copy, its colour buffers in place of the
+        // vertex colours (one per simple sprite, GetNextColorBuffer's order,
+        // which is the flattened model's), when they fit it. An LOD sprite
+        // draws its level 0 here, which takes the first buffer (Raster skips
+        // one per simple level it passes over).
+        if let Some(bufs) = light {
+            let lod = lib.lookup(a.sprite).is_some_and(|r| lib.file(r.file).node(r.node).ty == 0x2A00);
+            let cols: Vec<[u8; 4]> = if lod { bufs.first().cloned().unwrap_or_default() } else { bufs.concat() };
+            let m = built.entry(a.sprite).or_insert_with(|| lib.lookup(a.sprite).and_then(|r| lib.build_model(r)));
+            if let Some(m) = m.as_ref() {
+                if m.pos.len() == cols.len() {
+                    let mut m = m.clone();
+                    m.color = cols.iter().map(|c| c.map(|b| b as f32 / 255.0)).collect();
+                    parts.push((m, vec![a.matrix()]));
+                    statics.push(vec![st]);
+                    lit_drawn += 1;
+                    continue;
+                }
+                lit_misfit += 1;
+            }
+        }
+        by_sprite.entry(a.sprite).or_default().push((a.matrix(), st));
     }
     let mut unresolved = 0;
     // Record type → placements that name a sprite with no geometry (lights,
     // emitters, sounds, effect volumes).
     let mut empty: BTreeMap<u16, usize> = BTreeMap::new();
-    for (sprite, mats) in by_sprite {
+    for (sprite, inst) in by_sprite {
         match lib.lookup(sprite) {
-            None => unresolved += mats.len(),
-            Some(r) => match lib.build_model(r) {
-                Some(m) => parts.push((m, mats)),
-                None => *empty.entry(lib.file(r.file).node(r.node).ty).or_default() += mats.len(),
+            None => unresolved += inst.len(),
+            Some(r) => match built.remove(&sprite).unwrap_or_else(|| lib.build_model(r)) {
+                Some(m) => {
+                    parts.push((m, inst.iter().map(|i| i.0).collect()));
+                    statics.push(inst.iter().map(|i| i.1).collect());
+                }
+                None => *empty.entry(lib.file(r.file).node(r.node).ty).or_default() += inst.len(),
             },
         }
     }
     let empty: Vec<String> = empty.iter().map(|(t, n)| format!("{n}× {t:04X}")).collect();
     let patches: usize = list.iter().map(|&z| c.terrain_patches(z).len()).sum();
     let summary = format!(
-        "{name}: {patches} terrain patches, {} actors ({} sprites drawn, {unresolved} unresolved; no geometry: {})",
+        "{name}: {patches} terrain patches, {} actors ({} parts drawn, {lit_drawn} with baked lighting, {lit_misfit} whose lighting does not fit; {unresolved} unresolved; no geometry: {})",
         actors.len(),
         parts.len() - terrain_parts,
         if empty.is_empty() { "none".into() } else { empty.join(", ") },
     );
-    Scene { bounds: bounds_of(&parts), parts, summary, hsprites }
+    Scene { bounds: bounds_of(&parts), parts, statics, summary, hsprites }
 }
 
 /// Every drawable model in one file, by list position.

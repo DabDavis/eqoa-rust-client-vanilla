@@ -48,7 +48,16 @@ impl Streamer {
         let n = budget.unwrap_or(usize::MAX).min(load.len());
         for &z in &load[..n] {
             let s = scene::zones(lib, self.file, &[all[z]], &format!("zone {z}"), true);
-            let models = s.parts.iter().map(|(m, mats)| g.renderer.upload(g.device, g.queue, m, mats, &textures)).collect();
+            let models = s
+                .parts
+                .iter()
+                .zip(&s.statics)
+                .map(|((m, mats), st)| {
+                    let gm = g.renderer.upload(g.device, g.queue, m, mats, &textures);
+                    g.renderer.set_static_lights(g.queue, &gm, st);
+                    gm
+                })
+                .collect();
             let props = AnimatedProps::new(world, lib, &s.hsprites);
             let prop_models = props
                 .groups
