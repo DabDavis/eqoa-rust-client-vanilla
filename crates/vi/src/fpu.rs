@@ -37,6 +37,7 @@ pub trait Model: Copy + Default + fmt::Debug + PartialEq + 'static {
     fn cosf(a: f32) -> f32;
     fn powf(a: f32, b: f32) -> f32;
     fn atan2f(a: f32, b: f32) -> f32;
+    fn atanf(a: f32) -> f32;
     fn fmodf(a: f32, b: f32) -> f32;
     fn acosf(a: f32) -> f32;
     /// `cvt.s.w`: an int to a float. Exact up to 2^24; past it `Ieee` rounds
@@ -87,6 +88,9 @@ impl Model for Ieee {
     }
     fn atan2f(a: f32, b: f32) -> f32 {
         a.atan2(b)
+    }
+    fn atanf(a: f32) -> f32 {
+        a.atan()
     }
     fn fmodf(a: f32, b: f32) -> f32 {
         a % b
@@ -139,6 +143,9 @@ impl Model for Ee {
     fn atan2f(a: f32, b: f32) -> f32 {
         ee::libm::atan2f(a, b)
     }
+    fn atanf(a: f32) -> f32 {
+        ee::libm::atanf(a)
+    }
     fn fmodf(a: f32, b: f32) -> f32 {
         ee::libm::fmodf(a, b)
     }
@@ -184,6 +191,9 @@ impl<M: Model> F<M> {
     }
     pub fn atan2f(self, x: Self) -> Self {
         F::new(M::atan2f(self.0, x.0))
+    }
+    pub fn atanf(self) -> Self {
+        F::new(M::atanf(self.0))
     }
     pub fn fmodf(self, d: Self) -> Self {
         F::new(M::fmodf(self.0, d.0))
