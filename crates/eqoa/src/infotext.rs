@@ -1,0 +1,487 @@
+//! `VIInfoText` (CLIENT `viinfotext.cpp`), the inventory half: the
+//! descriptions the item menu shows of an item (its stats, charges, stack,
+//! masks, level, flags and text), built out of WORDS.TXT as the game's
+//! `snprintf16`/`strcat16` chains build them, and the four predicates that
+//! sort the inventory into the item menu's tabs. `StatWithItem` (what a
+//! stat would be with the item worn) is here too, over a copy of the list.
+
+use crate::inventory;
+use net::dump::{ItemList, NetItem};
+use vi::strtab::StringTable;
+
+/// `sStatWords` (`vikeyflash.cpp`): (word, stat).
+const STAT_WORDS: [(i32, i64); 19] = [(226, 0), (227, 1), (228, 2), (229, 3), (230, 4), (231, 5), (232, 6), (234, 8), (496, 10), (240, 12), (241, 13), (242, 14), (447, 24), (451, 25), (450, 26), (452, 27), (449, 23), (448, 22), (1203, 28)];
+
+/// `sWearSlotWords` (`viwearslot.cpp`): (word, wear slot).
+const WEAR_WORDS: [(i32, i64); 28] = [
+    (302, -1), (327, 1), (329, 3), (330, 4), (331, 5), (332, 6), (333, 7), (405, 8), (335, 9), (336, 10), (337, 11), (338, 12), (339, 13), (340, 14),
+    (341, 15), (404, 19), (403, 2), (398, 16), (399, 17), (402, 18), (1204, 20), (1206, 21), (1550, 22), (1549, 23), (1552, 24), (1548, 25), (1553, 26), (1551, 27),
+];
+
+/// `GetRace(r)->m_shortStrID` for races 0-9, `GetClass(c)->m_shortStrID`.
+const RACE_SHORT: [i32; 10] = [317, 318, 319, 320, 321, 322, 323, 324, 325, 1191];
+const CLASS_SHORT: [i32; 15] = [303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 1190];
+
+/// The LAST entry for the id (`FindStatWord`, `FindWearSlotWord`,
+/// `FindAttackWord`: no break).
+fn find(table: &[(i32, i64)], id: i64) -> Option<i32> {
+    table.iter().rev().find(|e| e.1 == id).map(|e| e.0)
+}
+
+/// What the describers read off the client.
+pub struct Info<'a> {
+    pub words: &'a StringTable,
+    pub inv: &'a ItemList,
+    /// `GetHP`, `GetMaxHP`, `GetPower`, `GetMaxPower`
+    pub hp: [i32; 4],
+    /// `m_player.m_baseStat`
+    pub base: &'a [i32; 29],
+    pub class: i64,
+    pub level: i64,
+    /// `gAttackWords` (CLIENT's data): (word, attack type)
+    pub attack_words: &'a [(i32, i64)],
+}
+
+impl Info<'_> {
+    fn w(&self, id: i32) -> &str {
+        self.words.get(id, 0)
+    }
+
+    fn item(&self, i: i32) -> Option<&NetItem> {
+        if i < 0 { None } else { self.inv.items.get(i as usize) }
+    }
+
+    fn name_line(&self, it: &NetItem) -> String {
+        format!("{}\n \n", it.item.name)
+    }
+
+    fn charges(&self, d: &mut String, v: i64) {
+        *d += &format!("{}: {v}", self.w(297));
+    }
+
+    fn stack(&self, d: &mut String, v: i64, max: i64) {
+        *d += &format!("{}: {v}/{max}", self.w(491));
+    }
+
+    fn hit_points(&self, d: &mut String, v: i64, max: i64) {
+        *d += &format!("{}: {v}/{max}", self.w(233));
+    }
+
+    fn level(&self, d: &mut String, v: i64) {
+        *d += &format!("{}: {v}", self.w(503));
+    }
+
+    /// `AddEquipSlot`.
+    fn equip_slot(&self, d: &mut String, v: i64) {
+        match find(&WEAR_WORDS, v) {
+            Some(w) => *d += &format!("{}: {}", self.w(490), self.w(w)),
+            None => *d += &format!("{}: {v}", self.w(490)),
+        }
+    }
+
+    /// `AddAttackType`.
+    fn attack_type(&self, d: &mut String, v: i64) {
+        match find(self.attack_words, v) {
+            Some(w) => *d += &format!("{}: {}", self.w(497), self.w(w)),
+            None => *d += &format!("{}: {v}", self.w(497)),
+        }
+    }
+
+    /// `AddRaceMask` / `AddClassMask`: ALL, NONE, or each short name and a
+    /// space.
+    fn mask(&self, d: &mut String, title: i32, mask: i64, short: &[i32]) {
+        let bits = short.len();
+        let all = (0..bits).all(|b| mask & (1 << b) != 0);
+        let none = (0..bits).all(|b| mask & (1 << b) == 0);
+        *d += self.w(title);
+        *d += ": ";
+        if all {
+            *d += self.w(301);
+        } else if none {
+            *d += self.w(302);
+        } else {
+            for (b, &w) in short.iter().enumerate() {
+                if (mask >> b) & 1 != 0 {
+                    *d += self.w(w);
+                    *d += " ";
+                }
+            }
+        }
+    }
+
+    /// The no-trade / no-rent / lore words and their line.
+    fn flags(&self, d: &mut String, it: &NetItem, newline_first: bool) {
+        let any = it.item.no_trade != 0 || it.item.rent == 0 || it.item.lore != 0;
+        if newline_first && any {
+            *d += "\n";
+        }
+        if it.item.no_trade > 0 {
+            *d += &format!("{} ", self.w(553));
+        }
+        if it.item.rent == 0 {
+            *d += &format!("{} ", self.w(554));
+        }
+        if it.item.lore > 0 {
+            *d += self.w(555);
+        }
+        if !newline_first && any {
+            *d += "\n";
+        }
+    }
+
+    /// `AddStats(index, source -1 or 0, all)`: a line a stat, "Str: 5", or
+    /// for source 0 against the stat with it worn, "Str: 5 -> 7"; six at
+    /// most unless `all`.
+    fn stats(&self, d: &mut String, i: i32, source: i32, all: bool) {
+        let Some(it) = self.item(i) else { return };
+        for (n, s) in it.item.stats.iter().enumerate() {
+            if !all && n >= 6 {
+                break;
+            }
+            match find(&STAT_WORDS, s.id) {
+                Some(w) if source == -1 => *d += &format!("{}: {}\n", self.w(w), s.value),
+                Some(w) => *d += &format!("{}: {} -> {}\n", self.w(w), s.value, self.stat_with_item(i as usize, s.id)),
+                None => *d += &format!("{}: {}\n", s.id, s.value),
+            }
+        }
+    }
+
+    /// `VIClient::StatWithItem(index, stat, 0)`: the base stat plus every
+    /// worn item's, with item `index` worn where `EquipSlotFor` puts it.
+    pub fn stat_with_item(&self, index: usize, stat: i64) -> i64 {
+        let mut list = self.inv.clone();
+        if index < list.items.len() {
+            let slot = equip_slot_for(&list, &list.items[index], self.class, self.level);
+            inventory::equip(&mut list, index, slot);
+        }
+        let mut total = self.base.get(stat as usize).copied().unwrap_or(0) as i64;
+        for it in &list.items {
+            for s in &it.item.stats {
+                if s.id == stat && it.equip_slot != -1 {
+                    total += s.value;
+                }
+            }
+        }
+        total
+    }
+
+    /// `DescribeInvUsable`: an item with charges.
+    pub fn inv_usable(&self, i: i32) -> String {
+        let Some(it) = self.item(i) else { return String::new() };
+        let mut d = self.name_line(it);
+        if it.charges > 0 {
+            self.charges(&mut d, it.charges);
+            d += "\n";
+        }
+        if it.item.max_stack >= 2 {
+            self.stack(&mut d, it.quantity, it.item.max_stack);
+            d += "\n";
+        }
+        self.mask(&mut d, 289, it.item.race_mask, &RACE_SHORT);
+        d += "\n";
+        self.mask(&mut d, 288, it.item.class_mask, &CLASS_SHORT);
+        d += "\n";
+        self.level(&mut d, it.item.level_req);
+        d += "\n";
+        self.flags(&mut d, it, false);
+        d += &it.item.desc;
+        d
+    }
+
+    /// `DescribeInvEquipment`: `DescribeInvItem(i, 1)`, in full.
+    pub fn inv_equipment(&self, i: i32) -> String {
+        let Some(it) = self.item(i) else { return String::new() };
+        let mut d = self.name_line(it);
+        if it.item.damage > 0 {
+            d += &format!("{}: {} ", self.w(493), it.item.damage);
+        }
+        if it.item.attack_type != 0 {
+            self.attack_type(&mut d, it.item.attack_type);
+            d += "\n";
+        }
+        if it.item.wear_slot != -1 {
+            self.equip_slot(&mut d, it.item.wear_slot);
+            d += "\n";
+        }
+        if is_ranged(it) && it.item.range > 0 {
+            d += &format!("{}: {}\n", self.w(504), it.item.range);
+        }
+        if it.item.max_hp != 0 {
+            self.hit_points(&mut d, it.cur_hp, it.item.max_hp);
+            d += "\n";
+        }
+        if it.item.durability != 0 {
+            d += &format!("{}: {}\n", self.w(495), it.item.durability);
+        }
+        if it.item.max_stack >= 2 {
+            self.stack(&mut d, it.quantity, it.item.max_stack);
+            d += "\n";
+        }
+        self.mask(&mut d, 289, it.item.race_mask, &RACE_SHORT);
+        d += "\n";
+        self.mask(&mut d, 288, it.item.class_mask, &CLASS_SHORT);
+        if it.item.level_req > 0 && (it.item.wear_slot != -1 || it.item.p4c != 0) {
+            d += "\n";
+            self.level(&mut d, it.item.level_req);
+        }
+        self.flags(&mut d, it, true);
+        d
+    }
+
+    /// `DescribeInvStats`: the name, every stat bonus, the text.
+    pub fn inv_stats(&self, i: i32) -> String {
+        let Some(it) = self.item(i) else { return String::new() };
+        let mut d = self.name_line(it);
+        self.stats(&mut d, i, -1, true);
+        if !it.item.stats.is_empty() {
+            d += " \n";
+        }
+        d += &it.item.desc;
+        d
+    }
+
+    /// `DescribeInvMisc`: charges, masks and level only with a type.
+    pub fn inv_misc(&self, i: i32) -> String {
+        let Some(it) = self.item(i) else { return String::new() };
+        let typed = it.item.p4c != 0;
+        let mut d = self.name_line(it);
+        if it.charges > 0 && typed {
+            self.charges(&mut d, it.charges);
+            d += "\n";
+        }
+        if it.item.max_stack >= 2 {
+            self.stack(&mut d, it.quantity, it.item.max_stack);
+            d += "\n";
+        }
+        if typed {
+            self.mask(&mut d, 289, it.item.race_mask, &RACE_SHORT);
+            d += "\n";
+            self.mask(&mut d, 288, it.item.class_mask, &CLASS_SHORT);
+            if it.item.level_req > 0 {
+                d += "\n";
+                self.level(&mut d, it.item.level_req);
+            }
+            d += "\n";
+        }
+        self.flags(&mut d, it, false);
+        d += &it.item.desc;
+        d
+    }
+
+    /// `DescribeInvCharged`: the stack and the hit points.
+    pub fn inv_charged(&self, i: i32) -> String {
+        let Some(it) = self.item(i) else { return String::new() };
+        let mut d = self.name_line(it);
+        if it.item.max_stack >= 2 {
+            self.stack(&mut d, it.quantity, it.item.max_stack);
+            d += "\n";
+        }
+        if it.item.max_hp > 0 {
+            self.hit_points(&mut d, it.cur_hp, it.item.max_hp);
+            d += "\n";
+        }
+        self.flags(&mut d, it, false);
+        d += &it.item.desc;
+        d
+    }
+
+    /// `DescribeInvChargedShort`: the same, short, ending "Inspect for more
+    /// info" (492).
+    pub fn inv_charged_short(&self, i: i32) -> String {
+        let Some(it) = self.item(i) else { return String::new() };
+        let mut d = self.name_line(it);
+        if it.item.max_stack >= 2 {
+            self.stack(&mut d, it.quantity, it.item.max_stack);
+            d += "\n";
+        }
+        if it.item.max_hp > 0 {
+            self.hit_points(&mut d, it.cur_hp, it.item.max_hp);
+            d += "\n";
+        }
+        d += self.w(492);
+        d
+    }
+
+    /// `DescribeInvConsumable`: the player's HP and power, then the item.
+    pub fn inv_consumable(&self, i: i32) -> String {
+        let Some(it) = self.item(i) else { return String::new() };
+        let mut d = format!("{} {}/{}\n", self.w(233), self.hp[0], self.hp[1]);
+        d += &format!("{} {}/{}\n \n", self.w(235), self.hp[2], self.hp[3]);
+        d += &it.item.name;
+        d += "\n \n";
+        if it.charges > 0 {
+            self.charges(&mut d, it.charges);
+            d += "\n";
+        }
+        if it.item.max_stack >= 2 {
+            self.stack(&mut d, it.quantity, it.item.max_stack);
+            d += "\n";
+        }
+        d += self.w(492);
+        d
+    }
+
+    /// `DescribeInvEquipmentShort`: slot, hit points, durability, damage,
+    /// attack, range, stack, six stat lines against what is worn, 492.
+    pub fn inv_equipment_short(&self, i: i32) -> String {
+        let Some(it) = self.item(i) else { return String::new() };
+        let mut d = self.name_line(it);
+        self.equip_slot(&mut d, it.item.wear_slot);
+        d += "\n";
+        self.hit_points(&mut d, it.cur_hp, it.item.max_hp);
+        d += "\n";
+        d += &format!("{}: {}\n", self.w(495), it.item.durability);
+        if it.item.damage > 0 {
+            d += &format!("{}: {}\n", self.w(493), it.item.damage);
+        }
+        if it.item.attack_type != 0 {
+            self.attack_type(&mut d, it.item.attack_type);
+            d += "\n";
+        }
+        if is_ranged(it) && it.item.range > 0 {
+            d += &format!("{}: {}\n", self.w(504), it.item.range);
+        }
+        if it.item.max_stack >= 2 {
+            self.stack(&mut d, it.quantity, it.item.max_stack);
+            d += "\n";
+        }
+        self.stats(&mut d, i, 0, true);
+        d += self.w(492);
+        d
+    }
+
+    /// `DescribeInvFood`: the food value and the stack.
+    pub fn inv_food(&self, i: i32) -> String {
+        let Some(it) = self.item(i) else { return String::new() };
+        let mut d = self.name_line(it);
+        if it.item.p58 > 0 {
+            d += &format!("{}: {}\n", self.w(11), it.item.p58);
+        }
+        if it.item.max_stack >= 2 {
+            self.stack(&mut d, it.quantity, it.item.max_stack);
+            d += "\n";
+        }
+        d += self.w(492);
+        d
+    }
+}
+
+/// `IsRangedItem` / `VIInfoText::IsRanged`: attack types 7-10.
+pub fn is_ranged(it: &NetItem) -> bool {
+    (7..=10).contains(&it.item.attack_type)
+}
+
+/// `IsCharged`: a stack with a count, not type 8, not worn.
+pub fn is_charged(it: &NetItem) -> bool {
+    it.item.p54 > 0 && it.item.p4c != 8 && it.item.wear_slot == -1
+}
+
+/// `IsWearable`.
+pub fn is_wearable(it: &NetItem) -> bool {
+    it.item.wear_slot != -1
+}
+
+/// `IsMisc`.
+pub fn is_misc(it: &NetItem) -> bool {
+    !matches!(it.item.p4c, 7 | 2 | 5 | 8) && it.item.p54 == 0 && it.item.wear_slot == -1
+}
+
+/// `IsUsable`.
+pub fn is_usable(it: &NetItem) -> bool {
+    matches!(it.item.p4c, 7 | 2 | 5 | 8)
+}
+
+/// `VIClient::EquipSlotFor`: where the item would be worn (the second of a
+/// pair when the first is taken; a second primary only for the classes
+/// that dual-wield, from level 20).
+pub fn equip_slot_for(l: &ItemList, it: &NetItem, class: i64, level: i64) -> i64 {
+    let taken = |s: i64| l.items.iter().any(|x| x.equip_slot == s);
+    let pair = |a: i64, b: i64| {
+        if it.equip_slot == a || it.equip_slot == b {
+            it.equip_slot
+        } else if taken(a) {
+            b
+        } else {
+            a
+        }
+    };
+    match it.item.wear_slot {
+        1 => 0,
+        3 => pair(2, 3),
+        4 => 4,
+        5 => 5,
+        6 => pair(6, 7),
+        7 => 8,
+        19 => 1,
+        8 => pair(9, 10),
+        2 => 21,
+        9 => 11,
+        10 => 12,
+        11 => 13,
+        13 => 17,
+        14 => {
+            if it.equip_slot == 14 || it.equip_slot == 15 {
+                it.equip_slot
+            } else if taken(14) && level >= 20 && matches!(class, 0 | 6 | 4 | 1 | 5) {
+                15
+            } else {
+                14
+            }
+        }
+        15 => 16,
+        16 => 18,
+        18 => pair(19, 20),
+        12 | 20 => 14,
+        21 => 15,
+        22..=27 => 19,
+        _ => -1,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use net::dump::ItemStat;
+
+    fn it(wear: i64, p4c: i64, p54: i64) -> NetItem {
+        let mut n = NetItem { quantity: 1, equip_slot: -1, quick_slot: -1, ..Default::default() };
+        n.item.wear_slot = wear;
+        n.item.p4c = p4c;
+        n.item.p54 = p54;
+        n
+    }
+
+    #[test]
+    fn the_tabs_partition_by_type() {
+        // a worn thing, a potion (2), a charged stack, a plain thing
+        let items = [it(1, 0, 0), it(-1, 2, 0), it(-1, 0, 5), it(-1, 0, 0), it(-1, 8, 5)];
+        let tab = |f: fn(&NetItem) -> bool| items.iter().map(f).collect::<Vec<_>>();
+        assert_eq!(tab(is_wearable), [true, false, false, false, false]);
+        assert_eq!(tab(is_usable), [false, true, false, false, true]);
+        assert_eq!(tab(is_charged), [false, false, true, false, false], "type 8 is not charged");
+        assert_eq!(tab(is_misc), [false, false, false, true, false]);
+    }
+
+    #[test]
+    fn a_stat_with_the_item_worn() {
+        let mut ring = it(8, 0, 0);
+        ring.item.stats = vec![ItemStat { id: 0, value: 5 }];
+        let mut worn = it(8, 0, 0);
+        worn.equip_slot = 9;
+        worn.item.stats = vec![ItemStat { id: 0, value: 2 }];
+        let inv = ItemList { p04: 0, items: vec![worn, ring] };
+        assert_eq!(equip_slot_for(&inv, &inv.items[1], 0, 1), 10, "the second ring slot");
+        let words = StringTable::default();
+        let base = [10; 29];
+        let info = Info { words: &words, inv: &inv, hp: [0; 4], base: &base, class: 0, level: 1, attack_words: &[] };
+        assert_eq!(info.stat_with_item(1, 0), 17);
+        assert_eq!(info.stat_with_item(1, 1), 10);
+        // a second primary needs level 20 and a dual-wielding class
+        let mut a = it(14, 0, 0);
+        a.equip_slot = 14;
+        let inv = ItemList { p04: 0, items: vec![a, it(14, 0, 0)] };
+        assert_eq!(equip_slot_for(&inv, &inv.items[1], 0, 20), 15);
+        assert_eq!(equip_slot_for(&inv, &inv.items[1], 9, 20), 14);
+        assert_eq!(equip_slot_for(&inv, &inv.items[1], 0, 19), 14);
+    }
+}

@@ -73,6 +73,22 @@ pub enum Event {
     Expansion(u32),
     /// 0x007E: the player's pet (`m_petId`); 0x007F: none.
     Pet(Option<u32>),
+    /// 0x003B: an item into the inventory (`AddInvItem`).
+    InvAdd(Box<crate::dump::NetItem>),
+    /// 0x003C (`Msg003C`): `n` taken from slot `slot`; `sound` with a merchant.
+    InvTook { slot: u8, sound: u8, n: i32 },
+    /// 0x003D (`Op003D`): the item at `from` moved to `to`.
+    InvMove { from: u8, to: u8 },
+    /// 0x003E (`Msg003E`): a charge used (`charge`), else the item gone.
+    InvUse { slot: u8, charge: u8 },
+    /// 0x003F (`Msg003F`): item `i` worn in equip slot `slot`.
+    InvEquip { i: u8, slot: u8 },
+    /// 0x0040 (`Msg0040`): equip slot `slot` emptied.
+    InvUnequip(u8),
+    /// 0x000A (`Msg000A`): item `slot` onto quick slot `pos`.
+    QuickSlot { slot: u8, pos: u8 },
+    /// 0x0060 (`Msg0060`): the item with inventory id `id` at `hp`.
+    ItemHp { id: u32, hp: i32 },
     /// 0x0772 (`Msg0772`): the group's roster, ids and names.
     GroupRoster { ids: Vec<u32>, names: Vec<String> },
     /// 0x0773 (`Msg0773`): an invitation from `id`.
@@ -496,6 +512,20 @@ impl Session {
             0x07A3 => ev.push(Event::ReplyName(String::from_utf8_lossy(&r.string(24)).into_owned())),
             0x00D9 => ev.push(Event::PlayerP2C(r.u32() as i32)),
             0x007E => ev.push(Event::Pet(Some(r.u32()))),
+            0x003B => ev.push(Event::InvAdd(Box::new(crate::dump::read_net_item(&mut r)))),
+            0x003C => {
+                let (slot, sound) = (r.u8(), r.u8());
+                ev.push(Event::InvTook { slot, sound, n: r.signed() as i32 });
+            }
+            0x003D => ev.push(Event::InvMove { from: r.u8(), to: r.u8() }),
+            0x003E => ev.push(Event::InvUse { slot: r.u8(), charge: r.u8() }),
+            0x003F => ev.push(Event::InvEquip { i: r.u8(), slot: r.u8() }),
+            0x0040 => ev.push(Event::InvUnequip(r.u8())),
+            0x000A => ev.push(Event::QuickSlot { slot: r.u8(), pos: r.u8() }),
+            0x0060 => {
+                let id = r.u32();
+                ev.push(Event::ItemHp { id, hp: r.signed() as i32 });
+            }
             0x0772 => {
                 let _x = r.u32();
                 let n = r.u32() as usize;

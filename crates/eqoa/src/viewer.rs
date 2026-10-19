@@ -391,7 +391,7 @@ pub fn shot_with(
                         p.hud_key(k);
                     }
                 }
-                // `EQOA_START_KEYS` (o open, u d e x): the start menu's keys,
+                // `EQOA_START_KEYS` (o open, u d l r e x): the start menu's keys,
                 // each held for a frame (pressed, then released on the next:
                 // the menus' auto-repeat pulses while a key is down).
                 let step = ((t - at) / 16 - 1) as usize;
@@ -410,6 +410,8 @@ pub fn shot_with(
                         }
                         'u' => Some(K::UP),
                         'd' => Some(K::DOWN),
+                        'l' => Some(K::LEFT),
+                        'r' => Some(K::RIGHT),
                         'e' => Some(K::CROSS),
                         'x' => Some(K::ESCAPE),
                         _ => None,
@@ -833,6 +835,8 @@ impl ApplicationHandler for App {
                         let k = match &event.logical_key {
                             Key::Named(NamedKey::ArrowUp) => Some(K::UP),
                             Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
+                            Key::Named(NamedKey::ArrowLeft) => Some(K::LEFT),
+                            Key::Named(NamedKey::ArrowRight) => Some(K::RIGHT),
                             Key::Named(NamedKey::Enter) => Some(K::CROSS),
                             Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
                             Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),

@@ -97,6 +97,11 @@ pub trait Raster {
     fn point_size(&self) -> i32;
     fn viewport(&self) -> [i32; 4];
     fn set_viewport(&mut self, v: [i32; 4]);
+    /// Whether surface `id` is there to draw (CLIENT's icon cache asks; a
+    /// recorder has everything).
+    fn has(&self, _id: u32) -> bool {
+        true
+    }
 }
 
 pub struct Vui {

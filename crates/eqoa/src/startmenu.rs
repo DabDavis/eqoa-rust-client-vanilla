@@ -65,6 +65,8 @@ pub mod keys {
     pub const ESCAPE: i32 = 27;
     pub const UP: i32 = 138;
     pub const DOWN: i32 = 139;
+    pub const LEFT: i32 = 136;
+    pub const RIGHT: i32 = 137;
     pub const CROSS: i32 = 134;
 }
 
@@ -78,6 +80,8 @@ pub enum Up {
     Action(u32, i32),
     /// the Start key, handed to the start menu
     Start,
+    /// 261 with 0x2000000: `ShowItems`, the item menu over the frame
+    Items,
 }
 
 /// What the stats column and the character's bar read off the client.
@@ -588,8 +592,12 @@ impl StartMenu {
                 cues.push(8);
                 Up::Back
             }
-            // 261: the items menu is not ported; anything else closes
-            Up::Action(0x0200_0000, _) => Up::None,
+            // 261: the item menu (ShowItems: the main menu hidden), or
+            // anything else, which closes
+            Up::Action(0x0200_0000, _) => {
+                self.main.visible = false;
+                Up::Items
+            }
             Up::Action(m, id) => {
                 self.main.visible = false;
                 Up::Action(m, id)
@@ -629,6 +637,11 @@ pub struct StartData {
     /// `m_p382E8` is not enabled
     tables: [usize; 4],
     pub bounds: [Option<[i32; 4]>; 6],
+    /// the item menus' slot counts: gItemMenu4, gItemMenu3, gInvMenu,
+    /// gEquipMenu (the item menu's tabs A, B, C, D)
+    pub item_counts: [i32; 4],
+    /// `gAttackWords` (0x00CDF6A0): (word, attack type), 11 of them
+    pub attack_words: Vec<(i32, i64)>,
     pub menu: StartMenu,
 }
 
@@ -641,7 +654,12 @@ impl StartData {
         let tables = roots.map(|(e, c)| menus.table(&img, e + 32, img.i32_at(c) - 1));
         let bounds = std::array::from_fn(|w| crate::client_image::world_bounds(&img, w as i32));
         let menu = StartMenu::new(tables[0]);
-        Some(StartData { menus, tables, bounds, menu })
+        // gEquipMenu is set up by vimenudefs.cpp's static initialiser (its
+        // icon is a hashed name), so the image holds no count: 40 there
+        let mut item_counts = [0x00CD0310u32, 0x00CD0300, 0x00CD02E0, 0x00CD02F0].map(|va| img.i32_at(va + 12).clamp(0, 256));
+        item_counts[3] = 40;
+        let attack_words = (0..11u32).map(|k| (img.i32_at(0x00CDF6A0 + 8 * k), img.i32_at(0x00CDF6A4 + 8 * k) as i64)).collect();
+        Some(StartData { menus, tables, bounds, item_counts, attack_words, menu })
     }
 
     /// `OpenStartMenu`'s table: the bank's when a banker is in range, the

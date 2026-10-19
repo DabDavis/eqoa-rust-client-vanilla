@@ -28,6 +28,9 @@ mod client_image;
 mod group;
 mod hud;
 mod hudmenu;
+mod infotext;
+mod inventory;
+mod itemmenu;
 mod startmenu;
 mod zones;
 mod particles;
@@ -39,6 +42,7 @@ mod spells;
 mod stream;
 mod ui;
 mod viewer;
+mod wndlist;
 mod walker;
 
 use std::process::ExitCode;
