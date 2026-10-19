@@ -52,6 +52,15 @@ pub fn model(dict_id: i32, m: Model) -> Scene {
     Scene { bounds: bounds_of(&parts), parts, statics: vec![vec![NO_STATIC]], summary, hsprites: Vec::new() }
 }
 
+/// A placement's transform as the game builds it (`VIScene::UpdateActor`:
+/// `Transform(hpr, scale, location)`, pitch and roll included; about 9% of
+/// Tunaria's placements have them).
+fn placement(a: &esf::zone::Actor) -> Mat {
+    let f = vi::fpu::F::<vi::fpu::Ee>::new;
+    let v = |x: [f32; 3]| vi::vect::Vect3::new(f(x[0]), f(x[1]), f(x[2]));
+    vi::geom::Matrix44::transform(&v(a.rot), f(a.scale), &v(a.pos)).to_cols()
+}
+
 /// No static light: nothing added, the sun term whole.
 pub const NO_STATIC: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 
@@ -115,7 +124,7 @@ pub fn zones(lib: &Library, file: usize, list: &[esf::NodeId], name: &str, anima
                 if m.pos.len() == cols.len() {
                     let mut m = m.clone();
                     m.color = cols.iter().map(|c| c.map(|b| b as f32 / 255.0)).collect();
-                    parts.push((m, vec![a.matrix()]));
+                    parts.push((m, vec![placement(a)]));
                     statics.push(vec![st]);
                     lit_drawn += 1;
                     continue;
@@ -123,7 +132,7 @@ pub fn zones(lib: &Library, file: usize, list: &[esf::NodeId], name: &str, anima
                 lit_misfit += 1;
             }
         }
-        by_sprite.entry(a.sprite).or_default().push((a.matrix(), st));
+        by_sprite.entry(a.sprite).or_default().push((placement(a), st));
     }
     let mut unresolved = 0;
     // Record type → placements that name a sprite with no geometry (lights,
