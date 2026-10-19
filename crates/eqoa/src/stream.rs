@@ -65,7 +65,8 @@ impl ZoneSource for FileZones {
     }
 }
 
-type Factory = Box<dyn Fn(&Library, usize) -> Option<Box<dyn ZoneSource>>>;
+/// Makes the zone source for a deferred world (file index in the library).
+pub type Factory = Box<dyn Fn(&Library, usize) -> Option<Box<dyn ZoneSource>>>;
 
 thread_local! {
     static FACTORY: RefCell<Option<Factory>> = const { RefCell::new(None) };

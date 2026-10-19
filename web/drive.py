@@ -12,7 +12,10 @@ page's console, and screenshots it.
 
 --shot SECONDS=FILE.png screenshots that long after the button (repeatable);
 --until TEXT exits 0 once a console line has it; --keys SECONDS=KEYS holds
-keys for a while (w, a, s, d, ArrowLeft...: 'w:2000' holds w for 2 s).
+keys for a while (w, a, s, d, ArrowLeft...: 'w:2000' holds w for 2 s);
+--js SECONDS=EXPR evaluates EXPR in the page then (the character screens:
+"document.querySelector('#charlist button.primary').click()"), its value
+printed. --new-account makes the account first (the page's New account tab).
 WebGL/WebGPU run on the machine's GPU (--no-gpu: SwiftShader, every core).
 Needs the `websockets` package.
 """
@@ -118,7 +121,8 @@ async def drive(a, base, ws_url):
         await call("Runtime.enable")
         await call("Log.enable")
         await call("Page.enable")
-        await call("Page.navigate", url=base + ("?" + a.params if a.params else ""))
+        q = "&".join(p for p in [a.params, f"character={a.character}" if a.character else ""] if p)
+        await call("Page.navigate", url=base + ("?" + q if q else ""))
         await asyncio.sleep(2)
 
         async def js(expr):
@@ -140,11 +144,12 @@ async def drive(a, base, ws_url):
             await setv("viewargs", a.view)
             await js("document.getElementById('view').click()")
         else:
+            if a.new_account:
+                await js("document.getElementById('tab-new').click()")
+                await setv("pass2", os.environ.get("EQOA_PASSWORD", ""))
             await setv("user", a.play)
             await setv("pass", os.environ.get("EQOA_PASSWORD", ""))
-            if a.character:
-                await setv("character", a.character)
-            await js("document.getElementById('play').click()")
+            await js("document.getElementById('go').click()")
         t_click = time.monotonic()
 
         async def shoot(path):
@@ -164,6 +169,9 @@ async def drive(a, base, ws_url):
         for s in a.keys:
             t, spec = s.split("=", 1)
             events.append((float(t), "keys", spec))
+        for s in a.js:
+            t, expr = s.split("=", 1)
+            events.append((float(t), "js", expr))
         events.sort()
         deadline = t_click + a.timeout
         for t, kind, arg in events:
@@ -173,6 +181,8 @@ async def drive(a, base, ws_url):
                 await asyncio.sleep(0.05)
             if kind == "shot":
                 await shoot(arg)
+            elif kind == "js":
+                out(f"js {arg[:60]} -> {await js(arg)}")
             else:
                 await js("document.getElementById('eqoa').focus()")
                 for part in arg.split(","):
@@ -194,7 +204,9 @@ if __name__ == "__main__":
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--view", help="the viewer's file and arguments")
     g.add_argument("--play", metavar="USER", help="log in as USER (password in EQOA_PASSWORD)")
-    ap.add_argument("--character")
+    ap.add_argument("--character", help="the page's ?character=: played at once, skipping the select screen")
+    ap.add_argument("--new-account", action="store_true")
+    ap.add_argument("--js", action="append", default=[])
     ap.add_argument("--params", default="", help="the page's query string")
     ap.add_argument("--base", help="a page already served (default: web/dist on --http-port)")
     ap.add_argument("--http-port", type=int, default=0, help="0: any free port")

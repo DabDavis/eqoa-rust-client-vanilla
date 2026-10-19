@@ -1,7 +1,16 @@
-// The page around the client (crates/eqoa/src/web): it takes the player's disc
-// image and login and hands them to the wasm. Query parameters override the
-// defaults: ?relay=ws://127.0.0.1:8790&server=203.0.113.10 for a local server.
-import init, { play, view } from './eqoa.js';
+// The page around the client (crates/eqoa/src/web): the login or a new
+// account, the character screen (select, delete, create) the session drives,
+// then the game on the canvas. Query parameters override the defaults:
+// ?relay=ws://127.0.0.1:8790&server=203.0.113.10 for a local server, and
+// ?account= for the account service (default: /eqoa/account on this host).
+import init, { play, view, choose_character, create_character, delete_character, random_name } from './eqoa.js';
+
+const RACES = ['Human', 'Elf', 'Dark Elf', 'Gnome', 'Dwarf', 'Troll', 'Barbarian', 'Halfling', 'Erudite', 'Ogre', 'Froglok'];
+const CITIES = { 1: 'Freeport', 2: 'Qeynos' };
+const CLASSES = ['Warrior', 'Ranger', 'Paladin', 'Shadowknight', 'Monk', 'Bard', 'Rogue', 'Druid', 'Shaman',
+  'Cleric', 'Magician', 'Necromancer', 'Enchanter', 'Wizard', 'Alchemist'];
+const STATS = ['Strength', 'Stamina', 'Agility', 'Dexterity', 'Wisdom', 'Intelligence', 'Charisma'];
+const POINTS = 20;
 
 const $ = (id) => document.getElementById(id);
 const status = (t) => { $('status').textContent = t; };
@@ -12,12 +21,37 @@ const store = {
   get(k) { try { return localStorage.getItem('eqoa.' + k) || ''; } catch { return ''; } },
   set(k, v) { try { localStorage.setItem('eqoa.' + k, v); } catch { /* private window */ } },
 };
-
 const wsBase = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
-for (const k of ['user', 'character', 'relay', 'server', 'viewargs']) {
-  $(k).value = params.get(k) || store.get(k);
-}
+const accountBase = (params.get('account') || '/eqoa/account').replace(/\/+$/, '');
+for (const k of ['user', 'relay', 'server', 'viewargs']) $(k).value = params.get(k) || store.get(k);
 if (!$('relay').value) $('relay').value = wsBase + '/eqoa/relay';
+
+// ---- views
+
+function show(id) {
+  $('panel').hidden = id === null;
+  for (const v of ['login', 'chars', 'create']) $(v).hidden = v !== id;
+}
+
+function error(where, text) {
+  $(where + '-error').textContent = text || '';
+}
+
+// ---- log in, or a new account first
+
+let mode = 'login';
+function setMode(m) {
+  mode = m;
+  $('tab-login').classList.toggle('on', m === 'login');
+  $('tab-new').classList.toggle('on', m === 'new');
+  $('newonly').hidden = m !== 'new';
+  $('pass2').required = m === 'new';
+  $('pass').autocomplete = m === 'new' ? 'new-password' : 'current-password';
+  $('go').textContent = m === 'new' ? 'Create account' : 'Log in';
+  error('login', '');
+}
+$('tab-login').onclick = () => setMode('login');
+$('tab-new').onclick = () => setMode('new');
 
 // The game server's IPv4 address: given, or this page's host as the relay
 // resolves it (the relay reaches only the server's own ports anyway).
@@ -26,60 +60,243 @@ async function serverAddress(relay) {
   if (given) return given;
   const host = location.hostname;
   if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) return host;
-  const http = relay.replace(/^ws/, 'http');
-  const r = await fetch(http + '/resolve?name=' + encodeURIComponent(host));
+  const r = await fetch(relay.replace(/^ws/, 'http') + '/resolve?name=' + encodeURIComponent(host));
   if (!r.ok) throw new Error('the relay could not resolve ' + host);
   return (await r.text()).trim();
 }
 
+async function register(user, pass) {
+  const r = await fetch(accountBase + '/api/register', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: user, password: pass }),
+  });
+  if (!r.ok) throw new Error('the account service answered ' + r.status);
+  const j = await r.json();
+  if (!j.success) throw new Error(j.error || 'the account was not made');
+}
+
 function busy(on) {
-  for (const b of ['play', 'view']) $(b).disabled = on;
+  for (const b of ['go', 'view']) $(b).disabled = on;
 }
 
-function start() {
-  $('panel').style.display = 'none';
-  $('eqoa').focus();
-}
-
-function failed(e) {
-  $('panel').style.display = '';
-  busy(false);
-  status(String(e && e.message ? e.message : e));
-}
-
-function remember() {
-  for (const k of ['user', 'character', 'relay', 'server', 'viewargs']) store.set(k, $(k).value.trim());
-}
-
-$('form').addEventListener('submit', async (ev) => {
+$('login').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const file = $('iso').files[0];
-  if (!file) return status('pick your disc image first');
-  remember();
+  const user = $('user').value.trim();
+  const pass = $('pass').value;
+  if (!file) return error('login', 'Pick your disc image first.');
+  if (mode === 'new' && pass !== $('pass2').value) return error('login', 'The passwords differ.');
+  for (const k of ['user', 'relay', 'server', 'viewargs']) store.set(k, $(k).value.trim());
   busy(true);
+  error('login', '');
   try {
+    if (mode === 'new') {
+      status('making the account');
+      await register(user, pass);
+      status('account made; logging in');
+    }
     const relay = $('relay').value.trim().replace(/\/+$/, '');
     const server = await serverAddress(relay);
-    start();
-    await play(file, $('user').value.trim(), $('pass').value, { relay, server, character: $('character').value.trim() });
+    // Resolves once the game is running; meanwhile the session calls the
+    // character screen's hooks below.
+    await play(file, user, pass, { relay, server, character: params.get('character') || '' });
   } catch (e) {
-    failed(e);
+    show('login');
+    busy(false);
+    error('login', String(e && e.message ? e.message : e));
   }
 });
 
 $('view').addEventListener('click', async () => {
   const file = $('iso').files[0];
-  if (!file) return status('pick your disc image first');
-  remember();
+  if (!file) return error('login', 'Pick your disc image first.');
+  store.set('viewargs', $('viewargs').value.trim());
   busy(true);
   try {
-    start();
+    show(null);
+    $('eqoa').focus();
     await view(file, $('viewargs').value.trim() || 'CHAR.ESF 0x70D898C6');
   } catch (e) {
-    failed(e);
+    show('login');
+    busy(false);
+    error('login', String(e && e.message ? e.message : e));
   }
+});
+
+// ---- the character screen
+
+let characters = [];
+let creating = null;   // the name sent, until the list or a refusal answers
+
+window.eqoaCharacters = (list) => {
+  characters = list;
+  if (creating !== null) {
+    const made = list.some((c) => c.name.toLowerCase() === creating.toLowerCase());
+    creating = null;
+    $('c-make').disabled = false;
+    if (!made) return; // a refusal said why; stay on the form
+  }
+  const ul = $('charlist');
+  ul.replaceChildren();
+  for (const c of list) {
+    const li = document.createElement('li');
+    const who = document.createElement('div');
+    who.className = 'who';
+    const name = document.createElement('div');
+    name.className = 'name';
+    name.textContent = c.name;
+    const what = document.createElement('div');
+    what.className = 'what';
+    what.textContent = `Level ${c.level} ${RACES[c.race] || 'race ' + c.race} ${CLASSES[c.class] || 'class ' + c.class}`;
+    who.append(name, what);
+    const playB = document.createElement('button');
+    playB.className = 'primary';
+    playB.textContent = 'Play';
+    playB.onclick = () => { error('chars', ''); choose_character(c.serverId); };
+    const del = document.createElement('button');
+    del.textContent = 'Delete';
+    del.onclick = () => {
+      if (confirm(`Delete ${c.name}? This cannot be undone.`)) delete_character(c.serverId);
+    };
+    li.append(who, del, playB);
+    ul.append(li);
+  }
+  $('nochars').hidden = list.length > 0;
+  $('new').disabled = list.length >= 8;
+  show('chars');
+};
+
+window.eqoaRefused = (text) => {
+  if (!$('create').hidden) {
+    creating = null;
+    $('c-make').disabled = false;
+    error('create', text);
+  } else {
+    error('chars', text);
+  }
+};
+
+window.eqoaRandomName = (name) => { $('c-name').value = name; };
+window.eqoaEntering = (name) => { show(null); status('entering the world as ' + name); };
+window.eqoaInWorld = () => { show(null); $('eqoa').focus(); };
+
+$('logout').onclick = () => location.reload();
+
+// ---- character creation: what the server's templates allow
+// (GET /api/creation: one entry per race, city and class, with its stats)
+
+let combos = null;
+let spent = new Array(7).fill(0);
+
+async function loadCombos() {
+  if (combos) return combos;
+  const r = await fetch(accountBase + '/api/creation');
+  if (!r.ok) throw new Error('character creation is not offered here (' + r.status + ')');
+  combos = (await r.json()).combos;
+  return combos;
+}
+
+function homeKey(c) { return c.race + ':' + c.city; }
+
+function fillSelect(sel, items) {
+  sel.replaceChildren(...items.map(([v, t]) => Object.assign(document.createElement('option'), { value: v, textContent: t })));
+}
+
+function fillHomes() {
+  const seen = new Map();
+  for (const c of combos) {
+    const k = homeKey(c);
+    if (!seen.has(k)) seen.set(k, (RACES[c.race] || 'Race ' + c.race) + (c.race === 0 && CITIES[c.city] ? ` (${CITIES[c.city]})` : ''));
+  }
+  fillSelect($('c-race'), [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1])));
+}
+
+function current() {
+  const [race, city] = $('c-race').value.split(':').map(Number);
+  const cls = Number($('c-class').value);
+  return { race, city, cls, combo: combos.find((c) => c.race === race && c.city === city && c.class === cls) };
+}
+
+function fillClasses() {
+  const [race, city] = $('c-race').value.split(':').map(Number);
+  const keep = $('c-class').value;
+  const list = combos.filter((c) => c.race === race && c.city === city).map((c) => [c.class, CLASSES[c.class] || 'Class ' + c.class]);
+  fillSelect($('c-class'), list.sort((a, b) => a[1].localeCompare(b[1])));
+  if (list.some(([v]) => String(v) === keep)) $('c-class').value = keep;
+  fillStats();
+}
+
+function fillStats() {
+  const { combo } = current();
+  const base = combo ? combo.stats : new Array(7).fill(60);
+  const left = POINTS - spent.reduce((a, b) => a + b, 0);
+  $('c-points').textContent = left;
+  const t = $('c-stats');
+  t.replaceChildren();
+  STATS.forEach((name, i) => {
+    const tr = document.createElement('tr');
+    const td = (text, cls) => Object.assign(document.createElement('td'), { textContent: text, className: cls || '' });
+    const minus = Object.assign(document.createElement('button'), { type: 'button', textContent: '−', disabled: spent[i] === 0 });
+    const plus = Object.assign(document.createElement('button'), { type: 'button', textContent: '+', disabled: left === 0 });
+    minus.setAttribute('aria-label', 'less ' + name);
+    plus.setAttribute('aria-label', 'more ' + name);
+    minus.onclick = () => { spent[i]--; fillStats(); };
+    plus.onclick = () => { spent[i]++; fillStats(); };
+    const b = document.createElement('td');
+    b.append(minus, ' ', plus);
+    tr.append(td(name), td(String(base[i] + spent[i]), 'n'), td(spent[i] ? '+' + spent[i] : '', 'n'), b);
+    t.append(tr);
+  });
+}
+
+function numbered(n) { return Array.from({ length: n }, (_, i) => [i, String(i + 1)]); }
+fillSelect($('c-face'), numbered(4));
+fillSelect($('c-hstyle'), numbered(4));
+fillSelect($('c-hlength'), numbered(4));
+fillSelect($('c-hcolor'), numbered(8));
+
+$('new').onclick = async () => {
+  error('chars', '');
+  try {
+    await loadCombos();
+  } catch (e) {
+    return error('chars', String(e.message || e));
+  }
+  fillHomes();
+  fillClasses();
+  spent = new Array(7).fill(0);
+  // the look's defaults are the appearance page's (VIWndCharCreateMisc::Init)
+  $('c-face').value = 3; $('c-hstyle').value = 3; $('c-hlength').value = 3; $('c-hcolor').value = 0;
+  $('c-name').value = '';
+  error('create', '');
+  fillStats();
+  show('create');
+};
+$('c-race').onchange = () => { spent = new Array(7).fill(0); fillClasses(); };
+$('c-class').onchange = () => { spent = new Array(7).fill(0); fillStats(); };
+$('c-back').onclick = () => show('chars');
+$('c-random').onclick = () => {
+  const { race } = current();
+  random_name(race, Number($('c-sex').value));
+};
+
+$('create').addEventListener('submit', (ev) => {
+  ev.preventDefault();
+  const name = $('c-name').value.trim();
+  if (!/^[A-Za-z]{3,15}$/.test(name)) return error('create', 'A name is 3 to 15 letters.');
+  const { race, city, cls, combo } = current();
+  if (!combo) return error('create', 'Pick a class.');
+  error('create', '');
+  creating = name;
+  $('c-make').disabled = true;
+  create_character({
+    name, race, city, class: cls, sex: Number($('c-sex').value),
+    face: Number($('c-face').value), hairStyle: Number($('c-hstyle').value),
+    hairLength: Number($('c-hlength').value), hairColor: Number($('c-hcolor').value),
+    stats: spent.slice(),
+  });
 });
 
 $('eqoa').addEventListener('pointerdown', () => $('eqoa').focus());
 
+setMode('login');
 init().then(() => status('ready')).catch((e) => status('could not load the client: ' + e));

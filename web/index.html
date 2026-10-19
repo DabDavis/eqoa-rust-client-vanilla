@@ -5,39 +5,72 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>EQOA</title>
 <style>
-  :root { color-scheme: dark; --bg: #0b0d10; --panel: #151a20; --line: #2a323c; --text: #e6e9ee; --dim: #9aa4b1; --accent: #d9a441; }
+  :root { color-scheme: dark; --bg: #0b0d10; --panel: #151a20; --raised: #1c232b; --line: #2a323c; --text: #e6e9ee; --dim: #9aa4b1; --accent: #d9a441; --bad: #e0745f; --good: #79c08a; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, sans-serif; overflow: hidden; }
   canvas#eqoa { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; outline: none; touch-action: none; }
   #panel { position: fixed; inset: 0; display: grid; place-items: center; padding: 16px; overflow: auto; }
-  form { width: min(420px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 20px; box-sizing: border-box; }
+  .card { width: min(460px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 20px; box-sizing: border-box; }
+  .card.wide { width: min(640px, 100%); }
   h1 { margin: 0 0 4px; font-size: 22px; letter-spacing: .02em; }
-  p.lede { margin: 0 0 16px; color: var(--dim); font-size: 13px; }
+  h2 { margin: 0 0 12px; font-size: 18px; }
+  p.lede { margin: 0 0 14px; color: var(--dim); font-size: 13px; }
   label { display: block; margin: 12px 0 4px; color: var(--dim); font-size: 13px; }
-  input { width: 100%; box-sizing: border-box; padding: 9px 10px; background: #0e1217; color: var(--text); border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+  input, select { width: 100%; box-sizing: border-box; padding: 9px 10px; background: #0e1217; color: var(--text); border: 1px solid var(--line); border-radius: 6px; font: inherit; }
   input[type=file] { padding: 7px; }
   details { margin-top: 14px; color: var(--dim); font-size: 13px; }
   .row { display: flex; gap: 10px; margin-top: 18px; }
-  button { flex: 1; padding: 10px; font: inherit; font-weight: 600; border-radius: 6px; border: 1px solid var(--line); background: #1e252e; color: var(--text); cursor: pointer; }
+  .row.tight { margin-top: 0; align-items: end; }
+  .grow { flex: 1; }
+  button { flex: 1; padding: 10px; font: inherit; font-weight: 600; border-radius: 6px; border: 1px solid var(--line); background: var(--raised); color: var(--text); cursor: pointer; }
   button.primary { background: var(--accent); color: #1a1406; border-color: var(--accent); }
+  button.small { flex: 0 0 auto; padding: 6px 10px; font-weight: 500; }
   button:disabled { opacity: .5; cursor: default; }
-  #status { position: fixed; left: 12px; bottom: 10px; color: var(--dim); font-size: 12px; pointer-events: none; text-shadow: 0 1px 2px #000; }
+  .tabs { display: flex; gap: 6px; margin: 4px 0 6px; }
+  .tabs button { flex: 1; background: transparent; border-color: transparent; color: var(--dim); }
+  .tabs button.on { background: var(--raised); border-color: var(--line); color: var(--text); }
+  .error { color: var(--bad); font-size: 13px; min-height: 1.2em; margin-top: 10px; }
+  .ok { color: var(--good); }
   .note { color: var(--dim); font-size: 12px; margin-top: 12px; }
+  #chars ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  #chars li { display: flex; align-items: center; gap: 10px; background: var(--raised); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+  #chars li .who { flex: 1; min-width: 0; }
+  #chars li .name { font-weight: 600; }
+  #chars li .what { color: var(--dim); font-size: 13px; }
+  #chars li button { flex: 0 0 auto; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+  .looks { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0 10px; }
+  table.stats { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 14px; }
+  table.stats td { padding: 3px 4px; }
+  table.stats td.n { text-align: right; width: 3em; font-variant-numeric: tabular-nums; }
+  table.stats button { padding: 2px 9px; }
+  .points { color: var(--accent); font-weight: 600; }
+  [hidden] { display: none !important; }
+  #status { position: fixed; left: 12px; bottom: 10px; color: var(--dim); font-size: 12px; pointer-events: none; text-shadow: 0 1px 2px #000; }
+  @media (max-width: 520px) { .grid2 { grid-template-columns: 1fr; } .looks { grid-template-columns: 1fr 1fr; } }
 </style>
 </head>
 <body>
 <canvas id="eqoa" tabindex="0"></canvas>
 <div id="panel">
-  <form id="form" autocomplete="on">
+
+  <form id="login" class="card" autocomplete="on">
     <h1>EverQuest Online Adventures</h1>
     <p class="lede">A client in your browser, from your own <i>Frontiers</i> disc image. The image stays on your computer: it is read here, never uploaded.</p>
+    <div class="tabs" role="tablist">
+      <button type="button" id="tab-login" class="on">Log in</button>
+      <button type="button" id="tab-new">New account</button>
+    </div>
     <label for="iso">Disc image (SLUS-20744, .iso)</label>
     <input id="iso" type="file" accept=".iso,.bin,.img" required>
     <label for="user">Account</label>
-    <input id="user" name="username" autocomplete="username" required>
+    <input id="user" name="username" autocomplete="username" required minlength="3" maxlength="16">
     <label for="pass">Password</label>
     <input id="pass" name="password" type="password" autocomplete="current-password" required>
-    <label for="character">Character (blank: the first)</label>
-    <input id="character">
+    <div id="newonly" hidden>
+      <label for="pass2">Password again</label>
+      <input id="pass2" type="password" autocomplete="new-password">
+      <div class="note">3 to 16 letters, digits or underscores; a password of 4 characters or more.</div>
+    </div>
     <details>
       <summary>Server and viewer</summary>
       <label for="relay">Relay</label>
@@ -46,13 +79,61 @@
       <input id="server">
       <label for="viewargs">Offline viewer: file and what to show</label>
       <input id="viewargs" placeholder="CHAR.ESF 0x70D898C6 · LAVASTM.ESF walk 0">
+      <div class="row"><button type="button" id="view">View offline</button></div>
     </details>
-    <div class="row">
-      <button type="button" id="view">View offline</button>
-      <button type="submit" id="play" class="primary">Play</button>
-    </div>
-    <div class="note">WASD walks, arrows turn the camera, Tab targets, Space attacks, Enter chats, Escape opens the menu.</div>
+    <div class="error" id="login-error"></div>
+    <div class="row"><button type="submit" id="go" class="primary">Log in</button></div>
   </form>
+
+  <section id="chars" class="card" hidden>
+    <h2>Characters</h2>
+    <ul id="charlist"></ul>
+    <p class="note" id="nochars" hidden>No characters on this account yet.</p>
+    <div class="error" id="chars-error"></div>
+    <div class="row">
+      <button type="button" id="logout">Log out</button>
+      <button type="button" id="new" class="primary">New character</button>
+    </div>
+  </section>
+
+  <form id="create" class="card wide" hidden>
+    <h2>New character</h2>
+    <div class="grid2">
+      <div>
+        <label for="c-race">Race</label>
+        <select id="c-race"></select>
+      </div>
+      <div>
+        <label for="c-class">Class</label>
+        <select id="c-class"></select>
+      </div>
+      <div>
+        <label for="c-sex">Sex</label>
+        <select id="c-sex"><option value="0">Male</option><option value="1">Female</option></select>
+      </div>
+      <div>
+        <label for="c-name">Name</label>
+        <div class="row tight">
+          <input id="c-name" class="grow" required minlength="3" maxlength="15" pattern="[A-Za-z]+" autocomplete="off">
+          <button type="button" id="c-random" class="small" title="Ask the server for a name">Random</button>
+        </div>
+      </div>
+    </div>
+    <div class="looks">
+      <div><label for="c-face">Face</label><select id="c-face"></select></div>
+      <div><label for="c-hstyle">Hair style</label><select id="c-hstyle"></select></div>
+      <div><label for="c-hlength">Hair length</label><select id="c-hlength"></select></div>
+      <div><label for="c-hcolor">Hair colour</label><select id="c-hcolor"></select></div>
+    </div>
+    <label>Stats: <span class="points" id="c-points">20</span> points to spend</label>
+    <table class="stats" id="c-stats"></table>
+    <div class="error" id="create-error"></div>
+    <div class="row">
+      <button type="button" id="c-back">Back</button>
+      <button type="submit" id="c-make" class="primary">Create</button>
+    </div>
+  </form>
+
 </div>
 <div id="status">loading…</div>
 <script type="module" src="./main.js"></script>

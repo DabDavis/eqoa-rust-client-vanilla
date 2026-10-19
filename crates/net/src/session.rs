@@ -87,12 +87,39 @@ pub struct Player {
     pub hpr: [f32; 3],
 }
 
+/// `VINewChar`, the character-creation form `CreateCharacter` sends as
+/// 0x002B (`SendNewChar`). The decomp's pages fill it: race, sex and city
+/// (`VIWndCharCreateRace`), class and the stats (`VIWndCharCreateClass`), the
+/// look (`VIWndCharCreateMisc`: face, hair style and length 0-3, hair colour
+/// 0-7), the name.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NewChar {
+    pub name: String,
+    pub race: i32,
+    pub class: i32,
+    pub sex: i32,
+    pub hair_color: i32,
+    pub hair_length: i32,
+    pub hair_style: i32,
+    pub face: i32,
+    /// `m_p38`, the city: a human's start (1 and 2), 0 for every other race.
+    pub city: i32,
+    /// The points spent over the race's and the class's bonuses (the page
+    /// sends a stat less both bonuses), 20 at most in all.
+    pub stats: [i32; 7],
+}
+
 #[derive(Clone, Debug)]
 pub enum Event {
     /// 0x0000: the server's version.
     Version(u32),
     ShardList(Vec<Shard>),
     Characters(Vec<Character>),
+    /// 0x0012: the name the server picked (`m_wndCharCreate->SetName`).
+    RandomName(String),
+    /// A creation refused, and the WORDS.TXT line the select page shows:
+    /// 0x002E (269), 0x002F (829), 0x0065 (828).
+    CreateRefused(i32),
     /// 0x0013: the clock pair (`SetTime`).
     Time(u64, u64),
     /// 0x07D1: the expansion-flag mask.
@@ -357,6 +384,26 @@ impl Session {
         self.send_login(w);
     }
 
+    /// `SendNewChar(43, c)`: the creation form as 0x002B. `m_p18` is 1, as
+    /// `VIWndCharCreateBlank::Reset` leaves it; the stats go raw.
+    pub fn create_character(&mut self, c: &NewChar) {
+        self.send(&new_char_message(c));
+    }
+
+    /// `DeleteCharacter`: `SendOpSigned(45, serverId)`.
+    pub fn delete_character(&mut self, server_id: i64) {
+        let mut w = Writer::op(0x002D);
+        w.signed(server_id);
+        self.send(&w.data);
+    }
+
+    /// `Send0012(race, sex)`: the name page asks the server for a name.
+    pub fn random_name(&mut self, race: i32, sex: i32) {
+        let mut w = Writer::op(0x0012);
+        w.signed(race as i64).signed(sex as i64);
+        self.send(&w.data);
+    }
+
     /// `SelectCharacter`: 0x002A with the server id and the face and hair.
     pub fn select_character(&mut self, c: &Character) {
         self.state = State::Selecting;
@@ -483,6 +530,10 @@ impl Session {
                 self.state = State::Characters;
                 ev.push(Event::Characters(read_characters(&mut r)));
             }
+            0x0012 if self.state == State::Characters => ev.push(Event::RandomName(String::from_utf8_lossy(&r.string(24)).into_owned())),
+            0x002E if self.state == State::Characters => ev.push(Event::CreateRefused(269)),
+            0x002F if self.state == State::Characters => ev.push(Event::CreateRefused(829)),
+            0x0065 if self.state == State::Characters => ev.push(Event::CreateRefused(828)),
             0x000D => {
                 self.state = State::World;
                 let dump = crate::dump::read(&mut r);
@@ -670,6 +721,21 @@ fn read_shards(r: &mut Reader) -> Vec<Shard> {
 }
 
 /// `CharacterList`: at most eight.
+/// 0x002B's bytes (`SendNewChar`): the name as `WriteString` (the form's
+/// buffer is 24 bytes), nine zigzags, seven raw ints.
+pub fn new_char_message(c: &NewChar) -> Vec<u8> {
+    let mut w = Writer::op(0x002B);
+    let name: Vec<u8> = c.name.bytes().take(23).collect();
+    w.string(&name).signed(1);
+    for v in [c.race, c.class, c.sex, c.hair_color, c.hair_length, c.hair_style, c.face, c.city] {
+        w.signed(v as i64);
+    }
+    for v in c.stats {
+        w.u32(v as u32);
+    }
+    w.data
+}
+
 fn read_characters(r: &mut Reader) -> Vec<Character> {
     let n = r.signed().clamp(0, 8) as usize;
     (0..n)

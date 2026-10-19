@@ -198,8 +198,24 @@ datagrams (`net::session::Datagrams`: a UDP socket natively) and the Station
 login (`net::auth::Exchange`, the exchange with no socket in it) go through a
 relay: go-eqoa-server's `cmd/wsrelay`, which speaks eqoa-port's
 `tools/wsrelay.py` protocol, one WebSocket for the DRDP datagrams and one for
-the login. Logged in through it, the page stands in Freeport at the display's
-rate (60 fps idle in Chromium).
+the login. A world opens with its zones left on the disc and the ones round
+the player read before the walk starts (`stream::fill_set`, awaited), the rest
+as the walk comes near them (`web::disc::WebZones`, a `stream::ZoneSource`
+whose reads finish on a later frame): in Freeport at the display's rate, 60
+fps in Chromium, with 248 MB of wasm heap (the whole file read was 1.8 GB).
+
+Between the login and the world the page is the character screen, driven by
+the session: the list (0x002C) is drawn in the page, and its Play, Delete and
+Create go out as the game's `SelectCharacter` (0x002A), `DeleteCharacter`
+(0x002D) and `CreateCharacter` (0x002B, `net::session::NewChar` as
+`SendNewChar` writes it, `tests/newchar.rs`), Random as `Send0012`. The form
+offers what the server's character templates hold (go-eqoa-server's
+`GET /api/creation`: race, city and class, with the starting stats), the look
+the appearance page allows (face, hair style and length 1-4, hair colour 1-8)
+and the 20 points the class page spends; a refusal shows the game's word for it
+(828, 829, 269). A new account is made through the account service
+(`POST /api/register`); logging in with a new name also makes one, as it does
+for a PS2.
 
 ```bash
 cargo install wasm-bindgen-cli --version 0.2.129   # once: the version Cargo.lock pins
@@ -213,7 +229,8 @@ The page takes `?relay=` and `?server=` (an IPv4 address; by default the
 page's own host, as the relay resolves it). Not in the browser yet: sound
 (SNDDRV runs on cpal's callback thread; a page's is an AudioWorklet), the HUD's
 atlas and the start menu (they read the player's decrypted SUPPORT and CLIENT
-images, which a page has no way to get yet), a world change, touch controls.
+images, which a page has no way to get yet), a world change, touch controls,
+a 3D preview on the character screens; CHAR.ESF (148 MB) is still read whole.
 
 ## Licence
 
