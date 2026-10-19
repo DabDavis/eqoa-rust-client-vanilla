@@ -24,6 +24,9 @@
 mod audio;
 mod chat;
 mod dialog;
+mod auction;
+mod auctionwnd;
+mod bank;
 mod camstyle;
 mod client_image;
 mod craft;

@@ -454,7 +454,9 @@ pub fn shot_with(
                     };
                     let k = if keys.chars().nth(step / 2) == Some('a') { Some(113) } else { k };
                     if let Some(k) = k {
-                        if p.npcw_owns() {
+                        if p.bank_owns() {
+                            p.bank_key(k, down);
+                        } else if p.npcw_owns() {
                             p.npcw_key(k, down);
                         } else if p.support_owns() {
                             p.support_key(k, down);
@@ -997,6 +999,49 @@ impl ApplicationHandler for App {
                         for c in t.chars().filter(|c| c.is_ascii() && !c.is_ascii_control()) {
                             p.edit_key(c as i32, true);
                         }
+                    }
+                    return;
+                }
+                // The bank (mode 11): the arrows, Enter or E (X), Escape
+                // (triangle); the auction form's editor takes the keyboard.
+                if let Some(p) = self.play.as_mut()
+                    && p.typing.is_none()
+                    && p.bank_owns()
+                {
+                    let down = event.state == ElementState::Pressed;
+                    if p.bank_typing() {
+                        let named = match &event.logical_key {
+                            Key::Named(NamedKey::Backspace) => Some(8),
+                            Key::Named(NamedKey::Escape) => Some(27),
+                            Key::Named(NamedKey::Enter) => Some(13),
+                            Key::Named(NamedKey::ArrowLeft) => Some(17),
+                            Key::Named(NamedKey::ArrowRight) => Some(18),
+                            _ => None,
+                        };
+                        if let Some(k) = named {
+                            p.bank_key(k, down);
+                        } else if down && let Some(t) = &event.text {
+                            for c in t.chars().filter(|c| c.is_ascii() && !c.is_ascii_control()) {
+                                p.bank_key(c as i32, true);
+                            }
+                        }
+                        return;
+                    }
+                    use crate::startmenu::keys as K;
+                    let k = match &event.logical_key {
+                        Key::Named(NamedKey::ArrowUp) => Some(K::UP),
+                        Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
+                        Key::Named(NamedKey::ArrowLeft) => Some(K::LEFT),
+                        Key::Named(NamedKey::ArrowRight) => Some(K::RIGHT),
+                        Key::Named(NamedKey::Enter) => Some(K::CROSS),
+                        Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
+                        Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
+                        _ => None,
+                    };
+                    if let Some(k) = k
+                        && !(down && event.repeat)
+                    {
+                        p.bank_key(k, down);
                     }
                     return;
                 }
