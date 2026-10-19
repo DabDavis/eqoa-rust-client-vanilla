@@ -123,8 +123,10 @@ order per stage is not yet measured.
   are also on F5-F8. `drdp` leaves out
   endpoint transfer, the master and leader roles and ICMP (see its crate docs).
 
-- Collision: `VICSprite` (a capsule) collides as nothing, and the RAY collide
-  (`Collide(VICollRay &)`) is not ported. `VIHSprite` props (900 placements of 67
+- Collision: `VICSprite`'s capsule (its sphere `Collide`) collides as nothing
+  (the walk filters skip CSprites anyway; a ray never hits one). The ray half
+  (`VICollRay`: the leaves and `CollideObj` against the oracle, the scene walk
+  against brute force with the sphere's) is ported. `VIHSprite` props (900 placements of 67
   sprites in Tunaria) collide through each node attachment under its posed node,
   as `VIHSprite::Collide` does, but that is checked only by the BSP walk test,
   not against the oracle.
@@ -146,9 +148,8 @@ order per stage is not yet measured.
   blend are held to the oracle; the Lights/Fog/Sky functions that combine them
   write the raster, so they are not.
 - The sky and the weather (`eqoa/src/weather.rs`, `sky.rs`): the atmosphere
-  is held to the oracle; in the client its two rays are swept as a 0.001
-  sphere (`VIScene::Collide(VICollRay &)`, the ray walk, is not ported), the
-  fireballs ride their own particle system, and the stars and lightning
+  is held to the oracle; in the client its two rays go through the scene's
+  ray walk, the fireballs ride their own particle system, and the stars and lightning
   patches are drawn after the world at the far plane (the game draws them
   before it with Z off), which differs only behind a blended surface.
   `EQOA_WEATHER=t[,fade]` sets the weather in `shot`, `view` and `listen`;

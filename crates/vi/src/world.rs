@@ -9,9 +9,9 @@
 //! needs the pose evaluator, the second is a capsule); the ray collide.
 
 use crate::character::{AnimCache, load_hsprite};
-use crate::coll::{CollSphere, EnvRay};
+use crate::coll::{CollRay, CollSphere, EnvRay};
 use crate::hsprite::{AnimScene, HSprite};
-use crate::collide::{Collide, CollBuffer, cull_sphere};
+use crate::collide::{Collide, CollBuffer, cull_ray_sphere, cull_sphere};
 use crate::fpu::{F, Model, clamp, f};
 use crate::geom::{BBox, Matrix44, Plane, Sphere};
 use crate::scene::{Filter, FilterKind, Scene};
@@ -618,14 +618,25 @@ impl<M: Model> World<M> {
 
     /// `VIScene::Collide(VICollSphere &, VISceneFilter &)`.
     pub fn collide_sphere(&mut self, s: &mut CollSphere<M>, f: &mut Filter) -> bool {
-        let mut v = Vars { start: s.ray.start, end: s.ray.end, radius: s.radius, stamp: self.state };
+        self.collide_swept(s, f)
+    }
+
+    /// `VIScene::Collide(VICollRay &, VISceneFilter &)`: the same walks with
+    /// a radius of 0 (the ray's thresholds are the sphere's at 0 exactly).
+    pub fn collide_ray(&mut self, r: &mut CollRay<M>, f: &mut Filter) -> bool {
+        self.collide_swept(r, f)
+    }
+
+    fn collide_swept<S: Swept<M>>(&mut self, s: &mut S, f: &mut Filter) -> bool {
+        let (start, end) = s.ends();
+        let mut v = Vars { start, end, radius: s.radius(), stamp: self.state };
         let hit = if self.nodes.is_empty() { self.world_node(LEAF, &mut v, s, f) } else { self.world_node(0, &mut v, s, f) };
         self.state += 1;
         self.stamp += 1;
         hit
     }
 
-    fn world_node(&mut self, node: u32, v: &mut Vars<M>, s: &mut CollSphere<M>, f: &mut Filter) -> bool {
+    fn world_node<S: Swept<M>>(&mut self, node: u32, v: &mut Vars<M>, s: &mut S, f: &mut Filter) -> bool {
         let mut node = node;
         if node & 0xF000_0000 != 0 {
             if node & LEAF != 0 {
@@ -638,7 +649,7 @@ impl<M: Model> World<M> {
         descend(&n, v, |front, v| self.world_node(if front { n.front } else { n.back }, v, s, f))
     }
 
-    fn zone_collide(&mut self, z: usize, v: &mut Vars<M>, s: &mut CollSphere<M>, f: &mut Filter) -> bool {
+    fn zone_collide<S: Swept<M>>(&mut self, z: usize, v: &mut Vars<M>, s: &mut S, f: &mut Filter) -> bool {
         if !self.zones[z].pretrans.is_empty() {
             let pt = self.zones[z].pretrans.clone();
             self.collide.set_pretranslations(&pt);
@@ -650,7 +661,7 @@ impl<M: Model> World<M> {
         self.zone_node(z, root, v, s, f)
     }
 
-    fn zone_node(&mut self, z: usize, node: u32, v: &mut Vars<M>, s: &mut CollSphere<M>, f: &mut Filter) -> bool {
+    fn zone_node<S: Swept<M>>(&mut self, z: usize, node: u32, v: &mut Vars<M>, s: &mut S, f: &mut Filter) -> bool {
         let mut node = node;
         if node & 0xF000_0000 != 0 {
             if node & LEAF != 0 {
@@ -662,7 +673,7 @@ impl<M: Model> World<M> {
         descend(&n, v, |front, v| self.zone_node(z, if front { n.front } else { n.back }, v, s, f))
     }
 
-    fn collide_leaf(&mut self, z: usize, leaf: usize, v: &mut Vars<M>, s: &mut CollSphere<M>, f: &mut Filter) -> bool {
+    fn collide_leaf<S: Swept<M>>(&mut self, z: usize, leaf: usize, v: &mut Vars<M>, s: &mut S, f: &mut Filter) -> bool {
         let room = self.zones[z].leaves[leaf].0 as usize;
         let mut hit = false;
         if self.zones[z].rooms[room].stamp20 != v.stamp {
@@ -675,7 +686,7 @@ impl<M: Model> World<M> {
         hit
     }
 
-    fn collide_room(&mut self, z: usize, room: usize, s: &mut CollSphere<M>, f: &mut Filter) -> bool {
+    fn collide_room<S: Swept<M>>(&mut self, z: usize, room: usize, s: &mut S, f: &mut Filter) -> bool {
         let mut hit = false;
         if self.zones[z].rooms[room].stamp24 != self.stamp {
             self.zones[z].rooms[room].stamp24 = self.stamp;
@@ -698,21 +709,37 @@ impl<M: Model> World<M> {
     }
 
     /// `VIScene::CollideActor`.
-    fn collide_actor(&mut self, i: usize, s: &mut CollSphere<M>, f: &mut Filter) -> bool {
+    fn collide_actor<S: Swept<M>>(&mut self, i: usize, s: &mut S, f: &mut Filter) -> bool {
         let mut hit = false;
-        if !cull_sphere(s, &self.actors[i].bound) {
+        // the ray's version tests the stamp, the flags and the filter first,
+        // and culls after
+        if S::RAY {
             let a = &self.actors[i];
             if a.stamp80 == self.stamp || a.flags & 0x14 != 0 {
                 return false;
             }
             self.actors[i].stamp80 = self.stamp;
             let Some(sprite) = self.actors[i].sprite else { return false };
-            let filtered = match f.kind {
-                FilterKind::Scene => i as i32 == f.actor,
-                FilterKind::WalkFloor => self.sprites[sprite].sprite_type == 5,
-                FilterKind::WalkCamera => self.sprites[sprite].sprite_type == 5 || i as i32 == f.actor,
-            };
-            if filtered {
+            if self.filtered(f, i, sprite) || s.cull(&self.actors[i].bound) {
+                return false;
+            }
+            let m = self.actors[i].object_to_world;
+            self.collide.set_world(&m);
+            hit = self.collide_sprite(sprite, s);
+            if hit {
+                f.hit_actor = i as i32;
+                f.hit_sprite = sprite as i32;
+            }
+            return hit;
+        }
+        if !s.cull(&self.actors[i].bound) {
+            let a = &self.actors[i];
+            if a.stamp80 == self.stamp || a.flags & 0x14 != 0 {
+                return false;
+            }
+            self.actors[i].stamp80 = self.stamp;
+            let Some(sprite) = self.actors[i].sprite else { return false };
+            if self.filtered(f, i, sprite) {
                 return false;
             }
             let m = self.actors[i].object_to_world;
@@ -728,12 +755,21 @@ impl<M: Model> World<M> {
         hit
     }
 
+    /// `FilterActor`: the filter's own actor, or (the walk filters) a CSprite.
+    fn filtered(&self, f: &Filter, i: usize, sprite: usize) -> bool {
+        match f.kind {
+            FilterKind::Scene => i as i32 == f.actor,
+            FilterKind::WalkFloor => self.sprites[sprite].sprite_type == 5,
+            FilterKind::WalkCamera => self.sprites[sprite].sprite_type == 5 || i as i32 == f.actor,
+        }
+    }
+
     /// The sprite's own `Collide` virtual, under the collider's current world.
-    fn collide_sprite(&mut self, sprite: usize, s: &mut CollSphere<M>) -> bool {
+    fn collide_sprite<S: Swept<M>>(&mut self, sprite: usize, s: &mut S) -> bool {
         match self.sprites[sprite].kind.clone() {
             SpriteKind::Simple(Some(b)) => {
                 let buf = std::mem::take(&mut self.buffers[b]);
-                let hit = self.collide.collide_obj(s, &buf);
+                let hit = s.collide_obj(&mut self.collide, &buf);
                 self.buffers[b] = buf;
                 hit
             }
@@ -779,7 +815,7 @@ impl<M: Model> World<M> {
     /// The same answer as [`World::collide_sphere`] by brute force: every
     /// room sprite and every placed actor in `zones`, no BSP, no culling. For
     /// testing the walk: anything it fails to visit shows up as a difference.
-    pub fn collide_sphere_brute(&mut self, s: &mut CollSphere<M>, zones: &[usize]) -> bool {
+    pub fn collide_sphere_brute<S: Swept<M>>(&mut self, s: &mut S, zones: &[usize]) -> bool {
         let mut hit = false;
         let mut seen = std::collections::HashSet::new();
         for &z in zones {
@@ -939,6 +975,58 @@ struct Vars<M: Model> {
 }
 
 const EPS: f32 = 0.03125;
+
+/// What `VIScene::Collide` sweeps through the world: `VICollSphere` or
+/// `VICollRay` (whose walks are the sphere's at radius 0, and whose actor
+/// test culls last).
+pub trait Swept<M: Model> {
+    const RAY: bool;
+    fn ends(&self) -> (Vect3<M>, Vect3<M>);
+    fn radius(&self) -> F<M>;
+    fn hit_point(&self) -> Vect3<M>;
+    /// `Cull(.., VISphere &)` against an actor's bound.
+    fn cull(&self, b: &Sphere<M>) -> bool;
+    /// `CollideObj` under the collider's world.
+    fn collide_obj(&mut self, c: &mut Collide<M>, buf: &CollBuffer<M>) -> bool;
+}
+
+impl<M: Model> Swept<M> for CollSphere<M> {
+    const RAY: bool = false;
+    fn ends(&self) -> (Vect3<M>, Vect3<M>) {
+        (self.ray.start, self.ray.end)
+    }
+    fn radius(&self) -> F<M> {
+        self.radius
+    }
+    fn hit_point(&self) -> Vect3<M> {
+        CollSphere::hit_point(self)
+    }
+    fn cull(&self, b: &Sphere<M>) -> bool {
+        cull_sphere(self, b)
+    }
+    fn collide_obj(&mut self, c: &mut Collide<M>, buf: &CollBuffer<M>) -> bool {
+        c.collide_obj(self, buf)
+    }
+}
+
+impl<M: Model> Swept<M> for CollRay<M> {
+    const RAY: bool = true;
+    fn ends(&self) -> (Vect3<M>, Vect3<M>) {
+        (self.start, self.end)
+    }
+    fn radius(&self) -> F<M> {
+        F::ZERO
+    }
+    fn hit_point(&self) -> Vect3<M> {
+        CollRay::hit_point(self)
+    }
+    fn cull(&self, b: &Sphere<M>) -> bool {
+        cull_ray_sphere(self, b)
+    }
+    fn collide_obj(&mut self, c: &mut Collide<M>, buf: &CollBuffer<M>) -> bool {
+        c.collide_ray_obj(self, buf)
+    }
+}
 
 /// The BSP descent both `Collide(int node, ...)` bodies share: a side that
 /// both ends clear by the radius plus 1/32 is the only one visited; otherwise

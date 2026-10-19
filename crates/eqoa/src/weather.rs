@@ -11,16 +11,14 @@
 //! `vi::atmosphere::WX_CLEAR`), instant unless `fade`. The Lavastorm comes
 //! with the terrain (its profiles' weight), not with the weather.
 //!
-//! What differs from the game: the weather's two rays are swept as a sphere
-//! of radius 0.001 (`VIScene::Collide(VICollRay &)`, the ray walk, is not
-//! ported), and the Lavastorm's fireballs ride a particle system of their own
-//! rather than the scene's.
+//! What differs from the game: the Lavastorm's fireballs ride a particle
+//! system of their own rather than the scene's.
 
 use crate::sky::Sprites;
 use esf::Library;
 use render::billboard::{Batch, Quad};
 use vi::atmosphere::{self, Atmosphere, Camera, Material, Raster};
-use vi::coll::{CollRay, CollSphere, EnvRay};
+use vi::coll::{CollRay, EnvRay};
 use vi::csprite::Rand;
 use vi::fpu::{Ee, F};
 use vi::geom::{Matrix44, Plane};
@@ -44,16 +42,8 @@ struct Rays<'a>(&'a mut World<Ee>);
 
 impl atmosphere::Scene<Ee> for Rays<'_> {
     fn collide_ray(&mut self, r: &mut CollRay<Ee>) -> bool {
-        let mut s = CollSphere::default();
-        s.init(r.start, r.end, F::new(0.001));
         let mut f = Filter::new(FilterKind::Scene, -1);
-        if self.0.collide_sphere(&mut s, &mut f) {
-            r.hit_time = s.ray.hit_time;
-            r.hit_idx = s.ray.hit_idx;
-            true
-        } else {
-            false
-        }
+        self.0.collide_ray(r, &mut f)
     }
     fn collide_env(&mut self, r: &mut EnvRay<Ee>) -> bool {
         self.0.collide_env(r)

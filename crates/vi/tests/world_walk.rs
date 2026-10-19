@@ -4,7 +4,7 @@
 //! or actor the walk fails to reach, or a cull that is too tight, shows up as
 //! a different hit time. Run on TUNARIA's zone 84 and its neighbours.
 
-use vi::coll::CollSphere;
+use vi::coll::{CollRay, CollSphere};
 use vi::fpu::{F, Ieee};
 use vi::scene::{Filter, FilterKind};
 use vi::vect::Vect3;
@@ -39,7 +39,7 @@ fn bsp_walk_equals_brute_force() {
         .filter(|&z| w.zones[z].pretrans.iter().any(|p| (p.x.0 - 24500.0).abs() < 2500.0 && (p.z.0 - 14500.0).abs() < 2500.0))
         .collect();
     let mut r = Rng(0x0057_AB1E);
-    let (mut hits, mut n) = (0, 0);
+    let (mut hits, mut n, mut ray_hits) = (0, 0, 0);
     for i in 0..3000 {
         let (x, z) = (r.range(23600.0, 25400.0), r.range(13600.0, 15400.0));
         let ground = {
@@ -63,9 +63,20 @@ fn bsp_walk_equals_brute_force() {
         let h2 = w.collide_sphere_brute(&mut s2, &zones);
         assert_eq!(h1, h2, "case {i}: walk hit {h1}, brute force {h2}, sweep {a:?} -> {b:?} r {rad}");
         assert_eq!(s1.ray.hit_time.bits(), s2.ray.hit_time.bits(), "case {i}: hit time {:?} vs {:?}", s1.ray.hit_time, s2.ray.hit_time);
+        // the same as a ray (VIScene::Collide(VICollRay &))
+        let mut r1 = CollRay::<Ieee>::default();
+        r1.init(a, b);
+        let mut r2 = r1;
+        let mut f = Filter::new(FilterKind::Scene, -1);
+        let g1 = w.collide_ray(&mut r1, &mut f);
+        let g2 = w.collide_sphere_brute(&mut r2, &zones);
+        assert_eq!(g1, g2, "case {i}: ray walk hit {g1}, brute force {g2}");
+        assert_eq!(r1.hit_time.bits(), r2.hit_time.bits(), "case {i}: ray hit time");
+        ray_hits += g1 as usize;
         n += 1;
         hits += h1 as usize;
     }
-    eprintln!("{n} sweeps over {} zones: walk == brute force, {hits} hits", zones.len());
+    eprintln!("{n} sweeps and rays over {} zones: walk == brute force, {hits} sphere hits, {ray_hits} ray hits", zones.len());
     assert!(hits > n / 10);
+    assert!(ray_hits > n / 20);
 }
