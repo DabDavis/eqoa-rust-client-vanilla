@@ -35,6 +35,7 @@ mod inventory;
 mod itemmenu;
 mod questlog;
 mod startmenu;
+mod trainer;
 mod trails;
 mod wholist;
 mod zones;

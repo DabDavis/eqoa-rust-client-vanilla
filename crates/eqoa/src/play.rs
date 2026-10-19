@@ -129,7 +129,7 @@ pub struct Play {
     pub reply_name: String,
     /// `VIWndGame::m_mode`: 0 playing, 2 the edit box, 7 a dialog's
     /// answers, 9 a dialog showing, 13 the start menu, 14 a message box,
-    /// 22 the quest journal, 35 the who list.
+    /// 12 the trainer, 22 the quest journal, 35 the who list.
     pub mode: i32,
     /// `m_dialogs`: dialogs waiting while another mode is up (at most 11).
     dialogs: std::collections::VecDeque<Vec<u16>>,
@@ -179,6 +179,11 @@ pub struct Play {
     quest_log: crate::questlog::QuestLog,
     quest_open: bool,
     quest_keys: Vec<(i32, bool)>,
+    /// The stat trainer (mode 12): opened, 0x001D's refresh, keys.
+    trainer: crate::trainer::Trainer,
+    trainer_open: bool,
+    trainer_refresh: bool,
+    trainer_keys: Vec<(i32, bool)>,
     who_tell: Option<String>,
     /// `VIWndEdit` (mode 2), and keys for it waiting for the raster.
     edit: crate::editbox::EditBox,
@@ -497,7 +502,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false };
         p.take_abilities();
         p
     }
@@ -636,6 +641,15 @@ impl Play {
                 }
                 Event::Opcode { op: 0x0E02, data } => self.who.recv(&data),
                 Event::Opcode { op: 0x007C, data } => self.quests.recv_add(&data),
+                // Msg001D: the points spent come off, and the trainer refreshes
+                Event::Opcode { op: 0x001D, data } => {
+                    let mut r = net::stream::Reader::new(&data);
+                    let z = r.signed();
+                    if !r.error {
+                        self.dump.player.p40 -= z;
+                        self.trainer_refresh = true;
+                    }
+                }
                 Event::Opcode { op: 0x007D, data } => self.quests.recv_remove(&data),
                 Event::Pet(id) => {
                     self.pet_id = id.unwrap_or(u32::MAX);
@@ -1587,6 +1601,11 @@ impl Play {
                     self.open_edit(0xB0F0000, 128, -1, false);
                     self.edit.title = self.chat_title();
                 }
+                // OpenTrainer: mode 12
+                0x0302_0000 => {
+                    self.trainer_open = true;
+                    self.mode = 12;
+                }
                 // OpenQuestLog: mode 22
                 0x0B0A_0000 => {
                     self.quest_open = true;
@@ -1611,15 +1630,73 @@ impl Play {
         }
     }
 
-    /// A character window is up (the quest journal, mode 22).
+    /// A character window is up (the trainer, mode 12; the quest journal,
+    /// mode 22).
     pub fn char_window(&self) -> bool {
-        self.mode == 22
+        matches!(self.mode, 12 | 22)
     }
 
     /// A key for the character window up, handled with the next HUD frame.
     pub fn char_key(&mut self, key: i32, down: bool) {
-        if self.mode == 22 {
-            self.quest_keys.push((key, down));
+        match self.mode {
+            12 => self.trainer_keys.push((key, down)),
+            22 => self.quest_keys.push((key, down)),
+            _ => {}
+        }
+    }
+
+    /// The trainer's open, refresh, keys, drawing and what it asks.
+    fn run_trainer(&mut self, vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster) {
+        let now = self.session.now() as i64;
+        let empty = Vec::new();
+        let slot_words = self.start.as_ref().map_or(&empty, |s| &s.slot_words);
+        let pl = &self.dump.player;
+        let d = crate::trainer::Data {
+            name: &pl.name,
+            class: pl.class as i32,
+            race: pl.race as i32,
+            level: pl.level as i32,
+            base: &self.stats.base,
+            cur: &self.stats.stat,
+            p40: pl.p40 as i32,
+            p44: pl.p44 as i32,
+            mastery: &self.dump.mastery.stats,
+            bonuses: &self.dump.mastery.bonuses,
+            inv: &self.dump.inventory,
+            slot_words,
+        };
+        if std::mem::take(&mut self.trainer_open) {
+            self.trainer.open(vui, r, &d, now);
+        }
+        if std::mem::take(&mut self.trainer_refresh) {
+            self.trainer.refresh(&d);
+        }
+        let mut ups = Vec::new();
+        let mut cues = Vec::new();
+        for (k, down) in std::mem::take(&mut self.trainer_keys) {
+            if self.mode != 12 {
+                break;
+            }
+            ups.extend(self.trainer.key(&d, k, down, now, &mut cues));
+        }
+        if self.mode == 12 {
+            self.trainer.draw(vui, r, &d, now, &mut cues);
+        }
+        let p40 = d.p40;
+        self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
+        for up in ups {
+            match up {
+                // 260: CloseTrainer, back to the start menu
+                crate::trainer::TrainUp::Close => {
+                    self.mode = 0;
+                    self.open_start_menu(false);
+                }
+                crate::trainer::TrainUp::Train(points) => {
+                    if let Some(m) = crate::trainer::train_stats(&points, p40) {
+                        self.session.send(&m);
+                    }
+                }
+            }
         }
     }
 
@@ -2334,6 +2411,7 @@ impl Play {
             actions = self.run_start_menu(vui, &mut r, &start_loc);
             self.run_who(vui, &mut r);
             self.run_quests(vui, &mut r);
+            self.run_trainer(vui, &mut r);
             self.run_edit(vui, &r);
             if self.mode == 2 {
                 let mut cues = Vec::new();
