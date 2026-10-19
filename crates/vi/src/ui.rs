@@ -86,6 +86,9 @@ pub trait Raster {
     /// `StretchBlit(i, flags, at, size, a, b, m, alpha)`: texels `a` ..
     /// `a + b` drawn `size` big at `at`.
     fn stretch_blit(&mut self, id: u32, flags: u32, at: [i32; 2], size: [i32; 2], a: [i32; 2], b: [i32; 2], mode: i32, alpha: f32);
+    /// `FillRectangle`'s fan: `SetSolidFillUIMaterial`, the colour, and the
+    /// corners `a`, (b.x, a.y), `b`, (a.x, b.y).
+    fn fill_fan(&mut self, color: [f32; 4], corners: [[i32; 2]; 4]);
     fn draw_string(&mut self, at: [i32; 2], color: [f32; 4], s: &[u16]);
     /// `DrawCenteredString(font, at, c, s, mode)`: 1 centres vertically, 2
     /// horizontally, 0 and 3 both, anything else draws nothing.
@@ -229,6 +232,17 @@ impl Vui {
             self.blit_ex(ui, fp.bl.0, [tl[0], br[1] - e3.uv1[1]], mode, alpha, fp.bl.1);
         }
         self.blit_ex(ui, fp.br.0, [br[0] - e2.uv1[0], br[1] - e2.uv1[1]], mode, alpha, fp.br.1);
+    }
+
+    /// `FillRectangle(r, c)`: a solid rectangle from `r[0]` to `r[1]`.
+    pub fn fill_rectangle(&self, ui: &mut dyn Raster, r: [[i32; 2]; 2], c: [f32; 4]) {
+        ui.fill_fan(c, [r[0], [r[1][0], r[0][1]], r[1], [r[0][0], r[1][1]]]);
+    }
+
+    /// `FrameFillRectangle(r)`: white, and black two pixels in.
+    pub fn frame_fill_rectangle(&self, ui: &mut dyn Raster, r: [[i32; 2]; 2]) {
+        self.fill_rectangle(ui, r, [1.0; 4]);
+        self.fill_rectangle(ui, [[r[0][0] + 2, r[0][1] + 2], [r[1][0] - 2, r[1][1] - 2]], [0.0, 0.0, 0.0, 1.0]);
     }
 
     /// `StretchBlitEx(id, at, size, m, alpha)`: the entry's texels drawn
@@ -658,6 +672,13 @@ impl Window {
     /// caller's colour goes through, as shipped.)
     pub fn text(&self, vui: &Vui, ui: &mut dyn Raster, s: &[u16], x: i32, row: i32, c: [f32; 4], f: u32) {
         self.text_box(vui, ui, s, x, row, 640, 1, c, f);
+    }
+
+    /// `DrawColorBar(x, row, w, c)`: a solid bar six pixels short of a row.
+    pub fn draw_color_bar(&self, vui: &Vui, ui: &mut dyn Raster, x: i32, row: i32, w: i32, c: [f32; 4]) {
+        let h = vui.font_height(ui);
+        let pos = [self.top_left()[0] + x, self.row_center(vui, ui, row)[1] - 4];
+        vui.fill_rectangle(ui, [pos, [pos[0] + w, pos[1] + h - 6]], c);
     }
 
     /// `DrawVScroll(at, h, t, flags)`: the bar down `h` and the thumb at

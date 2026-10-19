@@ -1729,6 +1729,7 @@ impl Play {
         let words = self.words.clone().unwrap_or_default();
         let vui = crate::ui::Vui::new(words, textures, atlas);
         let mut assets = crate::ui::UiAssets::default();
+        assets.add_white(&mut ui, device, queue);
         for (name, c) in &lib.files {
             if name.eq_ignore_ascii_case("UI.CSF") {
                 assets.add_surfaces(&mut ui, device, queue, c);

@@ -77,6 +77,15 @@ impl Raster for Rec {
         }
         self.f(alpha);
     }
+    fn fill_fan(&mut self, color: [f32; 4], corners: [[i32; 2]; 4]) {
+        self.rec(7);
+        self.color(color);
+        self.i(4);
+        for c in corners {
+            self.i(c[0] + self.bug);
+            self.i(c[1]);
+        }
+    }
     fn draw_string(&mut self, at: [i32; 2], color: [f32; 4], s: &[u16]) {
         self.rec(4);
         self.i(font_id() as i32);
@@ -213,6 +222,9 @@ impl Side {
             16 => v.blit_fill_studded_frame(r, [a[0], a[1]], [a[2], a[3]], &fp, &self.studs, self.fill, a[4], a[5], a[6], x[0], a[7] != 0),
             17 => v.blit_studded_horz(r, [a[0], a[1]], a[2], a[3], a[4], a[5], a[6], x[0], a[7] as u32),
             18 => v.blit_vert_bar(r, [a[0], a[1]], a[2], a[3], a[4], a[5], a[6], x[0]),
+            42 => v.fill_rectangle(r, [[a[0], a[1]], [a[2], a[3]]], col),
+            43 => v.frame_fill_rectangle(r, [[a[0], a[1]], [a[2], a[3]]]),
+            44 => self.win[k].draw_color_bar(v, r, a[1], a[2], a[3], col),
             19 => v.blit_bar3(r, s, col, [a[0], a[1]], a[2], a[3], a[4], a[5], a[6], x[4], a[7] as u32, a[8] != 0),
             36 => self.win[k].draw_vscroll(v, r, [a[1], a[2]], a[3], x[0]),
             41 => {
@@ -290,8 +302,15 @@ fn script() -> Vec<Call> {
         v.push(call(19, &[18, 56, 141, 142, 150, 140, 0, just, sh], &[10.0 / 255.0, 50.0 / 255.0, 70.0 / 255.0, 1.0, 1.0], "Inventory"));
         v.push(call(19, &[18, 83, 33, 34, 26, 90, 3, just, sh], &[0.0, 0.0, 0.0, 1.0, 0.5], ""));
     }
+    // Solid rectangles: the edit box's caret, a framed one, colour bars.
+    v.push(call(42, &[22, 61, 24, 76], &[1.0, 1.0, 1.0, 0.5], ""));
+    v.push(call(42, &[100, 50, 40, 10], &[0.0, 0.0, 0.8, 1.0], ""));
+    v.push(call(43, &[10, 20, 110, 70], &[], ""));
     v.push(call(20, &[1, 57, 132, 114, 10, 1], &[], ""));
     v.push(call(21, &[1, 1], &[], ""));
+    for row in [0, 3, 9] {
+        v.push(call(44, &[1, 12, row, 80], &[0.2, 0.9, 0.2, 0.7], ""));
+    }
     for t in [-0.5, 0.0, 0.25, 0.999, 1.0, 1.5] {
         v.push(call(36, &[1, 126, 9, 268, 0], &[t], ""));
     }
@@ -456,6 +475,10 @@ fn the_ui_layer_records_what_the_decomp_records() {
             p += 4 + match kind {
                 1 => 40,
                 3 => 48,
+                7 => {
+                    let n = u32::from_le_bytes(theirs[p + 20..p + 24].try_into().unwrap()) as usize;
+                    20 + n * 8
+                }
                 4 | 5 => {
                     let fixed = if kind == 4 { 28 } else { 32 };
                     let len = u32::from_le_bytes(theirs[p + 4 + fixed..p + 8 + fixed].try_into().unwrap()) as usize;

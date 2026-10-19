@@ -14,6 +14,8 @@ pub use vi::ui::{Raster, Vui, icon_id, wide};
 pub struct UiAssets {
     surfaces: HashMap<u32, usize>,
     pub font: Option<usize>,
+    /// A white texel, for `FillRectangle`'s solid fill.
+    pub white: Option<usize>,
 }
 
 impl UiAssets {
@@ -28,6 +30,11 @@ impl UiAssets {
                 self.surfaces.insert(s.dict_id as u32, t);
             }
         }
+    }
+
+    /// The white texel solid fills draw with.
+    pub fn add_white(&mut self, ui: &mut Ui, device: &wgpu::Device, queue: &wgpu::Queue) {
+        self.white = Some(ui.add_texture(device, queue, 1, 1, &[255; 4]));
     }
 
     /// The layer texture of a surface DictID (`m_dict->Find`).
@@ -86,6 +93,13 @@ impl Raster for UiRaster<'_> {
             _ => [[u1, v1], [u0, v1], [u0, v0], [u1, v0]],
         };
         self.ui.push(Quad { tex, blend: mode as u8, pos: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], uv, color: [1.0, 1.0, 1.0, alpha], clip: None });
+    }
+
+    fn fill_fan(&mut self, color: [f32; 4], c: [[i32; 2]; 4]) {
+        let Some(tex) = self.assets.white else { return };
+        let pos = c.map(|p| [p[0] as f32, p[1] as f32]);
+        // m_solidFillUIMaterial: InitSolidFill's blend 0 (opaque)
+        self.ui.push(Quad { tex, blend: 0, pos, uv: [[0.5, 0.5]; 4], color, clip: None });
     }
 
     fn draw_string(&mut self, at: [i32; 2], color: [f32; 4], s: &[u16]) {
