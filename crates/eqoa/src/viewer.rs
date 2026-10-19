@@ -138,10 +138,11 @@ impl Source {
             _ => (c.x - 40.0, c.z + 40.0, 0.0),
         };
         let mut source = stream::source_for(lib, *file);
+        let mut pending = Vec::new();
         if let Some(src) = source.as_mut() {
             let t = Instant::now();
-            let missing = stream::fill(lib, *file, x, z, src.as_mut());
-            eprintln!("zones round the spawn read in {:.2?}{}", t.elapsed(), if missing > 0 { format!(", {missing} still missing") } else { String::new() });
+            pending = stream::fill(lib, *file, x, z, src.as_mut());
+            eprintln!("zones round the spawn read in {:.2?}{}", t.elapsed(), if pending.is_empty() { String::new() } else { format!(", {} still coming", pending.len()) });
         }
         let t = Instant::now();
         let world = vi::world::World::load(lib, *file)?;
@@ -155,7 +156,7 @@ impl Source {
         );
         let mut w = Walker::new(world, x, z, h);
         w.set_character(lib, *character);
-        Some((w, lib.build_model(*character)?, Streamer::new(*file, source)))
+        Some((w, lib.build_model(*character)?, Streamer::new(*file, source, pending)))
     }
 
     pub fn camera(&self, bounds: (Vec3, Vec3)) -> Camera {

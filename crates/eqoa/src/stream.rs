@@ -149,9 +149,10 @@ pub fn fill_set(lib: &Library, file: usize, x: f32, z: f32) -> Vec<(usize, u64, 
     want.into_iter().filter(|&(_, k)| lib.zone(file, k).is_none()).filter_map(|(_, k)| lib.zone_range(file, k).map(|(o, n)| (k, o, n))).collect()
 }
 
-/// [`fill_set`] read through `src` and installed; how many are still
-/// missing (natively none: the disc answers at once).
-pub fn fill(lib: &mut Library, file: usize, x: f32, z: f32, src: &mut dyn ZoneSource) -> usize {
+/// [`fill_set`] read through `src` and installed; the zones asked for that
+/// have not come yet (natively none: the disc answers at once), for the
+/// streamer to expect ([`Streamer::new`]).
+pub fn fill(lib: &mut Library, file: usize, x: f32, z: f32, src: &mut dyn ZoneSource) -> Vec<usize> {
     let want = fill_set(lib, file, x, z);
     for &(zi, off, len) in &want {
         src.request(zi, off, len);
@@ -162,7 +163,7 @@ pub fn fill(lib: &mut Library, file: usize, x: f32, z: f32, src: &mut dyn ZoneSo
             Err(e) => eprintln!("zone {zi}: {e}"),
         }
     }
-    want.iter().filter(|w| lib.zone(file, w.0).is_none()).count()
+    want.iter().filter(|w| lib.zone(file, w.0).is_none()).map(|w| w.0).collect()
 }
 
 /// One zone read and installed now, through the world's source (natively:
@@ -203,8 +204,11 @@ pub struct Gpu<'a> {
 }
 
 impl Streamer {
-    pub fn new(file: usize, source: Option<Box<dyn ZoneSource>>) -> Self {
-        Streamer { file, zones: BTreeMap::new(), source, requested: BTreeSet::new() }
+    /// A streamer for the world in file `file`, reading its zones through
+    /// `source` (`None`: read whole); `pending` are zones already asked of
+    /// it (what [`fill`] left in flight).
+    pub fn new(file: usize, source: Option<Box<dyn ZoneSource>>, pending: Vec<usize>) -> Self {
+        Streamer { file, zones: BTreeMap::new(), source, requested: pending.into_iter().collect() }
     }
 
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
