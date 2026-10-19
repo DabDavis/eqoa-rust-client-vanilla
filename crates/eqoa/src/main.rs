@@ -34,6 +34,7 @@ mod infotext;
 mod inventory;
 mod itemmenu;
 mod startmenu;
+mod trails;
 mod zones;
 mod particles;
 mod play;

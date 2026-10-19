@@ -134,8 +134,9 @@ order per stage is not yet measured.
   force, not yet against the oracle: that needs eqoa-port to load the world.
 - newlib's huge-angle `sinf`/`cosf` reduction (|x| > 2^7·π/2) and `acosf`'s
   |x| > 1 path are not ported (as in the Go); those fall back to the host.
-- Character animation stops at the pose: items, sounds, particles, weapon
-  trails, faces, armour and death are not ported (`SetItemAction` is a no-op).
+- Character animation: death and `SetItemAction` (a no-op) are not ported.
+  Weapon trails are (`vi::trail` against `oracle_trail`; `ProcessWeaponTrails`
+  on the weapon group's two point sprites, by reading).
 - `VICameraEffect`'s blend into a scripted camera (a quaternion slerp).
 - The camera preset's own numbers (`ApplyCameraPreset`); the walk camera's
   defaults stand in.

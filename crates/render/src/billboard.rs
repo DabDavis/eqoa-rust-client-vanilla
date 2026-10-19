@@ -45,9 +45,10 @@ pub struct Batch {
     pub quads: Vec<Quad>,
 }
 
-/// Triangle strips in world space, one colour (`VIRaster::BeginTriStrip`
-/// as `VILightning::Render` uses it), drawn through the billboard program
-/// with the corners at zero.
+/// Triangle strips in world space (`VIRaster::BeginTriStrip` as
+/// `VILightning::Render` and `VITrailFx::Render` use it), one colour or a
+/// colour per vertex, drawn through the billboard program with the corners
+/// at zero.
 #[derive(Clone, Debug)]
 pub struct Strips {
     /// the texture's DictID (0 none: white)
@@ -59,6 +60,9 @@ pub struct Strips {
     pub color: [f32; 4],
     /// each strip's vertices: (u, v), (x, y, z)
     pub strips: Vec<Vec<([f32; 2], [f32; 3])>>,
+    /// a colour per vertex, in place of `color` (`VIRaster::Color` before
+    /// each `Vertex`); empty for one colour
+    pub colors: Vec<Vec<[f32; 4]>>,
 }
 
 /// A run of vertices to draw: the pipeline (blend, Z test, Z write), the
@@ -269,8 +273,8 @@ impl Renderer {
         let mut draws = Vec::new();
         for s in strips {
             let start = verts.len() as u32;
-            for strip in &s.strips {
-                let v = |i: usize| Vert { center: strip[i].1, corner: [0.0, 0.0], uv: strip[i].0, color: s.color };
+            for (k, strip) in s.strips.iter().enumerate() {
+                let v = |i: usize| Vert { center: strip[i].1, corner: [0.0, 0.0], uv: strip[i].0, color: s.colors.get(k).and_then(|c| c.get(i)).copied().unwrap_or(s.color) };
                 for i in 2..strip.len() {
                     verts.extend([v(i - 2), v(i - 1), v(i)]);
                 }

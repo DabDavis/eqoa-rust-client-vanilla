@@ -40,6 +40,10 @@ struct Puppet {
     /// this frame (what an effect's node transform is under).
     actor_m: Matrix44<Ee>,
     centre: Matrix44<Ee>,
+    /// The three hands' weapon ends (the item's node and its two point
+    /// sprites) and the weapon trail.
+    weapons: [Option<(i32, crate::trails::Points)>; 3],
+    trail: crate::trails::State,
 }
 
 /// `VICSprite::NameColors`.
@@ -141,6 +145,9 @@ pub struct Play {
     pub group: crate::group::Group,
     /// `VIWndMBox` (mode 14).
     mbox: crate::dialog::MBox,
+    /// The weapon trails (`VITrailFx`'s pool) and this frame's strips.
+    trails: vi::trail::Trails<Ee>,
+    pub trail_strips: Vec<render::billboard::Strips>,
     /// The start menu (mode 13), when CLIENT's image gave its menus.
     pub start: Option<crate::startmenu::StartData>,
     /// `m_p2EC28`: Quit answered yes; the viewer leaves.
@@ -330,6 +337,7 @@ fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Optio
                     // any) and the helm (SetHelm, at node 8, in the tint).
                     let mut attached = Vec::new();
                     let mut helm_worn = false;
+                    let mut weapons = [None; 3];
                     if let (Some(cs), Some(c)) = (&sprite, &e.creature) {
                         for i in 0..3 {
                             let id = if c.items_over[i] != 0 { c.items_over[i] } else { c.items[i] };
@@ -337,6 +345,7 @@ fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Optio
                             if id == 0 || node < 0 {
                                 continue;
                             }
+                            weapons[i] = crate::trails::weapon_points(lib, id).map(|w| (node, w));
                             if let Some(m) = lib.lookup(id as i32).and_then(|r| lib.build_model(r)) {
                                 attached.push((node, g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
                             }
@@ -361,7 +370,7 @@ fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Optio
                         dress(&mut model, &vi::cust::apply_look(cs, look, helm_worn, |id| lib.surface(id as i32).is_some()));
                     }
                     let gpu = g.renderer.upload(g.device, g.queue, &model, &[render::IDENTITY], &textures);
-                    Some(Puppet { model: e.model, look, sprite, anims, rand, gpu, attached, name_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity() })
+                    Some(Puppet { model: e.model, look, sprite, anims, rand, gpu, attached, name_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default() })
                 })
 }
 
@@ -474,7 +483,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false };
         p.take_abilities();
         p
     }
@@ -921,6 +930,7 @@ impl Play {
                     }
                     cs.h.process(0, &p.anims);
                     let m = cs.h.calc_trans_about_center(&actor, &p.anims);
+                    crate::trails::process(&mut self.trails, &mut p.trail, cs, &p.weapons, &m, game_ms);
                     cs.h.set_blend_matrices();
                     for (node, gpu) in &p.attached {
                         if let Some(n) = cs.h.nodes.get(*node as usize) {
@@ -944,6 +954,13 @@ impl Play {
             }
         }
         self.spells_frame(walker, lib, game_ms, sound);
+        // the player's own swing, on its walker's pose
+        if let (Some(p), Some(cs)) = (self.self_puppet.as_mut(), walker.sprite.as_mut()) {
+            let actor = Matrix44::transform(&Vect3::new(walker.cam.walk.phys.angles.x, F::ZERO, F::ZERO), F::ONE, &walker.cam.walk.phys.smooth_location());
+            let centre = cs.h.calc_trans_about_center(&actor, &walker.anims);
+            crate::trails::process(&mut self.trails, &mut p.trail, cs, &p.weapons, &centre, game_ms);
+        }
+        self.trail_strips = crate::trails::render(&mut self.trails, game_ms);
         new_model
     }
 

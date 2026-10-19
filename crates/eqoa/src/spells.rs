@@ -215,6 +215,7 @@ impl Spells {
                 zwrite: false,
                 color: [b.color.r.0, b.color.g.0, b.color.b.0, b.color.a.0],
                 strips: b.strips.iter().map(|s| s.iter().map(|(uv, v)| ([uv[0].0, uv[1].0], v.to_array())).collect()).collect(),
+                colors: Vec::new(),
             })
             .collect();
         self.bolts += self.strips.len();

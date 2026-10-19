@@ -539,6 +539,10 @@ pub fn shot_with(
                 batches.append(&mut sp.batches);
                 renderer.strips = std::mem::take(&mut sp.strips);
             }
+            // the weapon trails (VITrailFxRender) after them
+            if let Some(p) = play.as_mut() {
+                renderer.strips.append(&mut p.trail_strips);
+            }
             // the atmosphere every frame; the last frame's lights and render
             // are the shot's
             weather.frame(&mut walker.scene, None, &walker.eye, t, hour(Instant::now()));
@@ -1267,6 +1271,10 @@ impl ApplicationHandler for App {
                     if let Some(sp) = play.as_mut().and_then(|p| p.spells.as_mut()) {
                         batches.append(&mut sp.batches);
                         g.renderer.strips = std::mem::take(&mut sp.strips);
+                    }
+                    // the weapon trails (VITrailFxRender) after them
+                    if let Some(p) = play.as_mut() {
+                        g.renderer.strips.append(&mut p.trail_strips);
                     }
                     let lights = lit(proj, v, clock, Some((w.eye_position(), &w.scene)), weather.as_mut());
                     if let Some(wx) = weather.as_mut() {
