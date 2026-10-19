@@ -350,6 +350,44 @@ impl<M: Model> CSprite<M> {
     }
 
     /// `SetLocomotion`.
+    /// `SetDeath(on, erase)`: dead, the death locomotion (14); with `erase`
+    /// every play (current and previous, both layers) dropped first, its
+    /// trigger sound stopped, and the death animation put at its last frame.
+    pub fn set_death(&mut self, on: bool, erase: bool, sc: &AnimScene<M>, rand: &mut Rand, mut sound: Option<&mut dyn SoundSink>) {
+        self.dead = on;
+        if !on {
+            return;
+        }
+        if erase {
+            for i in 0..2 {
+                for l in [&mut self.cur[i], &mut self.prev[i]] {
+                    if l.play != -1 {
+                        self.h.erase_play(l.play);
+                        if let Some(sd) = sound.as_deref_mut()
+                            && l.flags != -1
+                        {
+                            sd.stop(l.flags);
+                            l.flags = -1;
+                        }
+                        l.play = -1;
+                        l.anim = 0;
+                    }
+                }
+            }
+        }
+        self.set_locomotion(14, sc, rand);
+        if erase {
+            for i in 0..2 {
+                let p = self.cur[i].play;
+                if p == -1 {
+                    continue;
+                }
+                let nf = sc.anims[self.h.plays.get(p).anim].num_frames;
+                self.h.set_play_frame(p, F::from_int(nf - 1), sc);
+            }
+        }
+    }
+
     pub fn set_locomotion(&mut self, id: i32, sc: &AnimScene<M>, rand: &mut Rand) {
         if self.skel_type == 1 {
             if self.set_animation(id, 0, sc, rand) != 0 {

@@ -446,6 +446,35 @@ impl<M: Model> HSprite<M> {
         self.plays.erase(i);
     }
 
+    /// `SetPlayFrame(i, frame)`: the play put at `frame` (its fraction as
+    /// time into the frame), held at the last frame for a play-once, wrapped
+    /// otherwise.
+    pub fn set_play_frame(&mut self, i: i32, frame: F<M>, sc: &AnimScene<M>) {
+        let nf = sc.anims[self.plays.get(i).anim].num_frames;
+        let p = self.plays.get_mut(i);
+        let fi = frame.0 as i32;
+        p.frame_a = fi;
+        p.time_accum = (frame - F::from_int(fi)) * p.frame_duration;
+        if p.playback_type == ONCE {
+            if nf - 1 < fi {
+                p.frame_a = nf - 1;
+            }
+            p.frame_b = p.frame_a + 1;
+            if nf - 1 < p.frame_b {
+                p.frame_b = p.frame_a;
+                p.time_accum = F::ZERO;
+            }
+        } else {
+            p.frame_a = fi % nf;
+            p.frame_b = p.frame_a + 1;
+            if nf - 1 < p.frame_b {
+                p.frame_b = 0;
+            }
+        }
+        p.frame_t = p.time_accum * p.frame_rate;
+        p.last_time = sc.time;
+    }
+
     pub fn stop_playback(&mut self, i: i32, sc: &AnimScene<M>) {
         self.process_play_timing(i, sc);
         let p = self.plays.get_mut(i);
@@ -471,7 +500,13 @@ impl<M: Model> HSprite<M> {
         p.blend_duration < sc.time - p.blend_start
     }
 
+    /// `IsPlaybackStopped(i)`. For -1 (a play `SetDeath` just erased,
+    /// which `SetAnimation` still asks about) the game reads the slot before
+    /// the pool's first; here it answers stopped.
     pub fn is_playback_stopped(&self, i: i32) -> bool {
+        if i < 0 {
+            return true;
+        }
         self.plays.get(i).playback_type == STOP_END
     }
 

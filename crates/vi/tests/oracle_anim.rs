@@ -139,6 +139,10 @@ fn character_animation_matches() {
             7008 => 1023,
             7040 => 1025,
             8000 => 1034,
+            // Death (2000 + erase): kept playing, then erased to its last
+            // frame; the locomotion after it stays 14.
+            9024 => 2000,
+            9600 => 2001,
             _ => 0,
         };
         let lod = match k % 7 {
@@ -167,7 +171,10 @@ fn character_animation_matches() {
     let mut last = [(0, 0); 2];
     for (k, &(t, loco, lod)) in script.iter().enumerate() {
         sc.time = t as i64;
-        let handle = if loco >= 1000 {
+        let handle = if loco >= 2000 {
+            cs.set_death(true, loco == 2001, &sc, &mut rand, None);
+            -2
+        } else if loco >= 1000 {
             actions += 1;
             cs.set_action(loco - 1000, &sc, &mut rand)
         } else {
