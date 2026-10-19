@@ -71,7 +71,7 @@ fn init_time_of_day() {
     // Negative controls: the table is checked entry by entry, so one wrong
     // channel, and a sun direction off by an hour, each fail it.
     let mut bad = t.clone();
-    bad.d[13][1][0] = bad.d[13][1][0] + F::new(1.0 / 1024.0);
+    bad.d[13][1][0] += F::new(1.0 / 1024.0);
     assert_eq!(tod_mismatches(&out, &bad), 1);
     let mut bad = t.clone();
     bad.b.rotate_left(1);
@@ -171,7 +171,7 @@ fn profiles_and_blend() {
     // Negative controls: a grid one sub-cell off, and one region changed,
     // each move blends.
     let mut off = g.clone();
-    off.origin.x = off.origin.x + F::new(step);
+    off.origin.x += F::new(step);
     assert!(blend_mismatches(&off, &points, &want) > 100);
     let mut one = g.clone();
     let k = one.regions.iter().position(|&x| x != 0).unwrap_or(0);
