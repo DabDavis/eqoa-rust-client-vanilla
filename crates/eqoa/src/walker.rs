@@ -115,11 +115,12 @@ impl Walker {
     }
 
 
-    pub fn view(&self, aspect: f32) -> Mat4 {
+    /// The projection and the view matrix through the game's camera.
+    pub fn view(&self, aspect: f32) -> (Mat4, Mat4) {
         let eye = Vec3::from(self.eye.position.to_array());
         let dir = Vec3::from(self.eye.direction.to_array());
         let proj = glam::camera::rh::proj::directx::perspective(45f32.to_radians(), aspect, 0.3, 6000.0);
-        proj * glam::camera::rh::view::look_to_mat4(eye, dir.normalize_or(Vec3::Z), Vec3::Y)
+        (proj, glam::camera::rh::view::look_to_mat4(eye, dir.normalize_or(Vec3::Z), Vec3::Y))
     }
 
     /// Where the camera is.

@@ -34,7 +34,15 @@ fn hour(start: Instant) -> f32 {
 /// A frame's lights out of the time of day (clear sky).
 /// A frame's lights, fog and sky out of the time of day (clear sky), for the
 /// camera at `eye` in `world` (its terrain profile and env flags), if any.
-pub fn lit(view_proj: glam::Mat4, start: Instant, eye: Option<(Vec3, &vi::world::World<vi::fpu::Ee>)>) -> View {
+pub fn lit(
+    proj: glam::Mat4,
+    view: glam::Mat4,
+    start: Instant,
+    eye: Option<(Vec3, &vi::world::World<vi::fpu::Ee>)>,
+) -> (View, Option<crate::sky::SkyFrame>) {
+    let view_proj = proj * view;
+    let mut rot = view;
+    rot.w_axis = glam::Vec4::W;
     use vi::fpu::{Ee, F};
     let tod = vi::tod::TimeOfDay::<Ee>::new();
     let hour = F::new(hour(start));
@@ -47,7 +55,9 @@ pub fn lit(view_proj: glam::Mat4, start: Instant, eye: Option<(Vec3, &vi::world:
         ambient: rgb(amb),
         fog: None,
         clear: Vec3::new(0.18, 0.2, 0.24),
+        sky_view_proj: None,
     };
+    let mut sky = None;
     if let Some((at, w)) = eye
         && let Some(grid) = &w.grid
     {
@@ -55,10 +65,16 @@ pub fn lit(view_proj: glam::Mat4, start: Instant, eye: Option<(Vec3, &vi::world:
         let b = grid.profile_blend(&at);
         let fog = tod.fog(hour, F::ZERO, &b, w.env_flags(&at), &sun);
         v.fog = Some((fog.near.0, fog.far.0, Vec3::new(fog.color[0].0, fog.color[1].0, fog.color[2].0)));
-        let sky = tod.sky(hour, F::ZERO, &b);
-        v.clear = Vec3::new(sky[0] as f32, sky[1] as f32, sky[2] as f32) / 255.0;
+        let c = tod.sky(hour, F::ZERO, &b);
+        v.clear = Vec3::new(c[0] as f32, c[1] as f32, c[2] as f32) / 255.0;
+        v.sky_view_proj = Some(proj * rot);
+        sky = Some(crate::sky::SkyFrame {
+            ty: vi::atmosphere::sky_type(&b),
+            rgb: v.clear,
+            rot: vi::atmosphere::sky_rotations(hour, F::new(1.0)),
+        });
     }
-    v
+    (v, sky)
 }
 
 /// What is on screen.
@@ -152,7 +168,7 @@ impl Camera {
             Camera::Fly { pos, yaw, pitch } => (pos, pos + direction(yaw, pitch), 0.5, 6000.0),
         };
         let proj = glam::camera::rh::proj::directx::perspective(fov, aspect, near, far);
-        lit(proj * glam::camera::rh::view::look_at_mat4(eye, target, Vec3::Y), Instant::now(), None)
+        lit(proj, glam::camera::rh::view::look_at_mat4(eye, target, Vec3::Y), Instant::now(), None).0
     }
 
     fn drag(&mut self, dx: f32, dy: f32) {
@@ -224,7 +240,8 @@ pub fn shot(
         for (group, mats) in props.groups.iter().zip(props.matrices(&mut walker.scene)) {
             gpu.push(renderer.upload(&device, &queue, &group.model, &mats, &textures));
         }
-        view = lit(walker.view(aspect), Instant::now(), Some((walker.eye_position(), &walker.scene)));
+        let (proj, v) = walker.view(aspect);
+        let mut frame = lit(proj, v, Instant::now(), Some((walker.eye_position(), &walker.scene)));
         // `EQOA_SHOT_EYE=dx,dy,dz`: look at the character from that offset
         // instead of through the game's camera (for checking poses).
         let eye: Vec<f32> = std::env::var("EQOA_SHOT_EYE")
@@ -235,8 +252,12 @@ pub fn shot(
             let p = Vec3::from(walker.cam.walk.phys.position.to_array()) + Vec3::Y;
             let proj = glam::camera::rh::proj::directx::perspective(40f32.to_radians(), aspect, 0.1, 3000.0);
             let at = p + Vec3::new(*dx, *dy, *dz);
-            view = lit(proj * glam::camera::rh::view::look_at_mat4(at, p, Vec3::Y), Instant::now(), Some((at, &walker.scene)));
+            frame = lit(proj, glam::camera::rh::view::look_at_mat4(at, p, Vec3::Y), Instant::now(), Some((at, &walker.scene)));
         }
+        if let (Some(f), Some(at)) = (&frame.1, crate::sky::upload(&mut renderer, &device, &queue, lib, &mut gpu)) {
+            crate::sky::update(&renderer, &queue, &mut gpu, at, f);
+        }
+        view = frame.0;
     }
     let refs: Vec<&GpuModel> = gpu.iter().collect();
     let rgba = render::capture(&device, &queue, &renderer, w, h, &view, &refs);
@@ -275,6 +296,8 @@ struct App {
     /// Index in `Gfx::models` of the first prop group; the character is
     /// the model just before it.
     props_at: usize,
+    /// Where the sky's models start in `Gfx::models`.
+    sky_at: Option<usize>,
     clock: Instant,
     gfx: Option<Gfx>,
     display: winit::event_loop::OwnedDisplayHandle,
@@ -296,6 +319,7 @@ pub fn run(lib: Library, source: Source) -> Result<(), Error> {
         walker: None,
         props: None,
         props_at: 0,
+        sky_at: None,
         clock: Instant::now(),
         gfx: None,
         display,
@@ -330,6 +354,10 @@ impl App {
                 self.props = Some(props);
                 w
             });
+            self.sky_at = None;
+            if self.walker.is_some() {
+                self.sky_at = crate::sky::upload(&mut g.renderer, &g.device, &g.queue, &self.lib, &mut g.models);
+            }
             self.clock = Instant::now();
             report(&g.renderer);
             g.window.set_title(&format!("eqoa — {}", self.summary));
@@ -507,7 +535,8 @@ impl ApplicationHandler for App {
                         }
                     }
                     g.window.set_title(&format!("eqoa — walking {}", w.describe()));
-                    lit(w.view(g.config.width as f32 / g.config.height as f32), clock, Some((w.eye_position(), &w.scene)))
+                    let (proj, v) = w.view(g.config.width as f32 / g.config.height as f32);
+                    lit(proj, v, clock, Some((w.eye_position(), &w.scene)))
                 });
                 let frame = match g.surface.get_current_texture() {
                     wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
@@ -517,7 +546,12 @@ impl ApplicationHandler for App {
                     }
                 };
                 let view = match walk_view {
-                    Some(v) => v,
+                    Some((v, sky)) => {
+                        if let (Some(f), Some(at)) = (sky, self.sky_at) {
+                            crate::sky::update(&g.renderer, &g.queue, &mut g.models, at, &f);
+                        }
+                        v
+                    }
                     None => self.camera.view(self.bounds, g.config.width as f32 / g.config.height as f32),
                 };
                 let target = frame.texture.create_view(&Default::default());

@@ -74,6 +74,8 @@ struct LayerUniform {
 struct Pass {
     blend: usize,
     bg: wgpu::BindGroup,
+    uniform: wgpu::Buffer,
+    base: LayerUniform,
 }
 
 /// One model on the GPU, drawn once per instance (a model matrix each).
@@ -89,6 +91,12 @@ pub struct GpuModel {
     batches: Vec<(wgpu::Buffer, u32, Vec<Pass>)>,
     /// Bounds of the model itself, before any instance transform.
     pub bounds: (Vec3, Vec3),
+    /// Part of the sky: drawn first, through `View::sky_view_proj`, with no
+    /// depth test or write and its layers in order (`VIAtmosphere::RenderSky`;
+    /// `SetResources` turns Z off on the sky's materials).
+    pub sky: bool,
+    /// Skipped by `draw` when false.
+    pub visible: bool,
 }
 
 /// A texture source: the decoded image a DictID names, if any.
@@ -97,8 +105,12 @@ pub type Textures<'a> = dyn Fn(i32) -> Option<esf::Image> + 'a;
 pub struct Renderer {
     /// Indexed by blend mode: 0 opaque, 1 add, 2 subtract, 3 alpha, 4 multiply.
     pipelines: Vec<wgpu::RenderPipeline>,
+    /// The same with Z test and write off, for the sky.
+    sky_pipelines: Vec<wgpu::RenderPipeline>,
     frame_buf: wgpu::Buffer,
     frame_bg: wgpu::BindGroup,
+    sky_frame_buf: wgpu::Buffer,
+    sky_frame_bg: wgpu::BindGroup,
     material_layout: wgpu::BindGroupLayout,
     palette_layout: wgpu::BindGroupLayout,
     /// repeat, clamp, mirror.
@@ -122,8 +134,10 @@ pub struct View {
     /// (all fog colour), as the strip programs' per-vertex fog value and the
     /// GS's FOGCOL mix.
     pub fog: Option<(f32, f32, Vec3)>,
-    /// What the frame clears to: the sky colour until the sky is drawn.
+    /// What the frame clears to: the sky colour (under the dome, if drawn).
     pub clear: Vec3,
+    /// The view with its translation zeroed, for `GpuModel::sky` models.
+    pub sky_view_proj: Option<Mat4>,
 }
 
 impl View {
@@ -136,6 +150,7 @@ impl View {
             ambient: Vec3::splat(0.45),
             fog: None,
             clear: Vec3::new(0.18, 0.2, 0.24),
+            sky_view_proj: None,
         }
     }
 }
@@ -192,8 +207,7 @@ impl Renderer {
             bind_group_layouts: &[Some(&frame_layout), Some(&material_layout), Some(&palette_layout)],
             immediate_size: 0,
         });
-        let pipelines = (0..5)
-            .map(|mode| {
+        let make = |mode: usize, sky: bool| {
                 let blend = blend_state(mode);
                 device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                     label: Some("layer"),
@@ -227,8 +241,8 @@ impl Renderer {
                     // only, no depth write.
                     depth_stencil: Some(wgpu::DepthStencilState {
                         format: DEPTH_FORMAT,
-                        depth_write_enabled: Some(blend.is_none()),
-                        depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                        depth_write_enabled: Some(blend.is_none() && !sky),
+                        depth_compare: Some(if sky { wgpu::CompareFunction::Always } else { wgpu::CompareFunction::LessEqual }),
                         stencil: Default::default(),
                         bias: Default::default(),
                     }),
@@ -246,8 +260,9 @@ impl Renderer {
                     multiview_mask: None,
                     cache: None,
                 })
-            })
-            .collect();
+        };
+        let pipelines = (0..5).map(|m| make(m, false)).collect();
+        let sky_pipelines = (0..5).map(|m| make(m, true)).collect();
         let frame_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("frame"),
             size: std::mem::size_of::<FrameUniform>() as u64,
@@ -258,6 +273,17 @@ impl Renderer {
             label: Some("frame"),
             layout: &frame_layout,
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: frame_buf.as_entire_binding() }],
+        });
+        let sky_frame_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("sky frame"),
+            size: std::mem::size_of::<FrameUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let sky_frame_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("sky frame"),
+            layout: &frame_layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: sky_frame_buf.as_entire_binding() }],
         });
         let sampler = |mode| {
             device.create_sampler(&wgpu::SamplerDescriptor {
@@ -276,8 +302,11 @@ impl Renderer {
         let white = upload_rgba(device, queue, 1, 1, &[255; 4]);
         Renderer {
             pipelines,
+            sky_pipelines,
             frame_buf,
             frame_bg,
+            sky_frame_buf,
+            sky_frame_bg,
             material_layout,
             palette_layout,
             samplers,
@@ -366,15 +395,16 @@ impl Renderer {
                 // The layer colour reaches the GS as c/255 × 128 and modulates
                 // by /128: a tint of c/255.
                 let tint = l.color.map(|c| c as f32 / 255.0);
+                let base = LayerUniform {
+                    tint,
+                    flags: [view.is_some() as i32 as f32, (blend != 0) as i32 as f32, 0.0, 0.0],
+                    uv0: [k[0], k[1], k[2], k[3]],
+                    uv1: [k[4], k[5], l.uv_rate[0], l.uv_rate[1]],
+                };
                 let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("layer"),
-                    contents: bytemuck::bytes_of(&LayerUniform {
-                        tint,
-                        flags: [view.is_some() as i32 as f32, (blend != 0) as i32 as f32, 0.0, 0.0],
-                        uv0: [k[0], k[1], k[2], k[3]],
-                        uv1: [k[4], k[5], l.uv_rate[0], l.uv_rate[1]],
-                    }),
-                    usage: wgpu::BufferUsages::UNIFORM,
+                    contents: bytemuck::bytes_of(&base),
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 });
                 let sampler = match l.wrap {
                     1 | 2 => &self.samplers[1],
@@ -393,7 +423,7 @@ impl Renderer {
                         wgpu::BindGroupEntry { binding: 2, resource: uniform.as_entire_binding() },
                     ],
                 });
-                passes.push(Pass { blend, bg });
+                passes.push(Pass { blend, bg, uniform, base });
             }
             let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("indices"),
@@ -418,6 +448,20 @@ impl Renderer {
             instance_count: instances.len() as u32,
             batches,
             bounds: (lo, hi),
+            sky: false,
+            visible: true,
+        }
+    }
+
+    /// Sets every layer's colour to `rgb` (0..1), keeping each layer's own
+    /// alpha (`VIAtmosphere::SetSkyColor`).
+    pub fn set_layer_rgb(&self, queue: &wgpu::Queue, m: &GpuModel, rgb: Vec3) {
+        for (_, _, passes) in &m.batches {
+            for p in passes {
+                let mut u = p.base;
+                u.tint = [rgb.x, rgb.y, rgb.z, p.base.tint[3]];
+                queue.write_buffer(&p.uniform, 0, bytemuck::bytes_of(&u));
+            }
         }
     }
 
@@ -458,6 +502,10 @@ impl Renderer {
             },
         };
         queue.write_buffer(&self.frame_buf, 0, bytemuck::bytes_of(&uniform));
+        if let Some(vp) = view.sky_view_proj {
+            let sky = FrameUniform { view_proj: vp.to_cols_array_2d(), ..uniform };
+            queue.write_buffer(&self.sky_frame_buf, 0, bytemuck::bytes_of(&sky));
+        }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("models"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -483,12 +531,29 @@ impl Renderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
+        // The sky: its own view, no depth, every layer in order.
+        if view.sky_view_proj.is_some() {
+            pass.set_bind_group(0, &self.sky_frame_bg, &[]);
+            for m in models.iter().filter(|m| m.sky && m.visible && m.instance_count > 0) {
+                pass.set_vertex_buffer(0, m.vertices.slice(..));
+                pass.set_vertex_buffer(1, m.instances.slice(..));
+                pass.set_bind_group(2, &m.palette_bg, &[]);
+                for (indices, count, passes) in &m.batches {
+                    pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
+                    for p in passes {
+                        pass.set_pipeline(&self.sky_pipelines[p.blend]);
+                        pass.set_bind_group(1, &p.bg, &[]);
+                        pass.draw_indexed(0..*count, 0, 0..m.instance_count);
+                    }
+                }
+            }
+        }
         pass.set_bind_group(0, &self.frame_bg, &[]);
         // Opaque passes first, then the blended ones (see the module docs).
         for blended in [false, true] {
             let mut current = usize::MAX;
             for m in models {
-                if m.instance_count == 0 {
+                if m.instance_count == 0 || m.sky || !m.visible {
                     continue;
                 }
                 pass.set_vertex_buffer(0, m.vertices.slice(..));

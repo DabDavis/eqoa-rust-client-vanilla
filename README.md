@@ -120,8 +120,10 @@ order per stage is not yet measured.
   `SetupTimeOfDayLights`, `SetupTimeOfDayFog` (the four env-flag fogs too) and
   the sky colour of `SetupTimeOfDaySky` are ported (`vi::tod`), over the world's
   terrain-profile grid (`VIWorld::CalcProfileBlend`, `SetProfiles`). Not ported:
-  the weather that sets the overcast weight, and the sky itself (`VIAtmosphere`'s
-  dome, clouds, sun and moon): the frame clears to the sky colour. The hour runs
+  the weather that sets the overcast weight, sky-type transitions
+  (`ProcessTransitions`' 30 s fade: the sky is always settled), stars, lightning
+  and the Lavastorm. The dome, sun, corona and moon are drawn (`RenderSky`,
+  `VIAtmosphere::Update`'s placement, `SetSky`'s type, out of DATA2/SKY.CSF). The hour runs
   from 10:00 at 24 h per hour (`EQOA_HOUR` pins it); a live game gets it from the
   server. The table, the profiles and the blend are held to the oracle; the
   Lights/Fog/Sky functions that combine them write the raster, so they are not.

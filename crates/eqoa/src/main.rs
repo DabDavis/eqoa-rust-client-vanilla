@@ -18,6 +18,7 @@
 //! `iso` defaults to `$EQOA_ISO`, then `run/eqoa.iso`.
 
 mod scene;
+mod sky;
 mod viewer;
 mod walker;
 
@@ -113,7 +114,7 @@ fn run(args: &[String]) -> Result<()> {
 /// Files every scene loads before its own, in this order (the dictionary's
 /// first-registration-wins rule makes the order matter). The character art the
 /// game keeps resident through the session.
-const SHARED: &[&str] = &["CHARCUST.CSF", "CHARFACE.CSF"];
+const SHARED: &[&str] = &["CHARCUST.CSF", "CHARFACE.CSF", sky::FILE];
 
 /// The library and what to show: `[model]` or `zone <n>`.
 fn source(file: &str, rest: &[String]) -> Result<(esf::Library, viewer::Source)> {
