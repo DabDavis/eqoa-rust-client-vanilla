@@ -444,6 +444,13 @@ impl Info<'_> {
         self.item(i).map_or_else(String::new, |it| self.list_item(it, flags, false))
     }
 
+    /// `DescribeBankItem`: the bank's record, the lines `DescribeInvItem(i,
+    /// 0)` gives an inventory one (name, damage, attack, slot, range, hit
+    /// points, durability, the maximum stack, charges, masks, level, flags).
+    pub fn bank_item(&self, it: &NetItem) -> String {
+        self.list_item(it, 0, false)
+    }
+
     /// `DescribeMerchantItem`.
     pub fn merchant_item(&self, it: &NetItem) -> String {
         self.list_item(it, 0, true)

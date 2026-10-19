@@ -367,6 +367,16 @@ impl Deposit {
         self.flash.reset();
     }
 
+    /// The focus (295): the window at (320, 224) closed and opening, the
+    /// repeat reset; shown.
+    pub fn focus(&mut self, vui: &Vui, r: &dyn Raster) {
+        self.visible = true;
+        self.window.init(vui, r, [320, 224], 300, 7, 1);
+        self.window.close(true);
+        self.window.open(false);
+        self.flash.reset();
+    }
+
     /// `MoveCursor(d)`.
     fn move_cursor(&mut self, d: i32, now: i64, cues: &mut Vec<i32>) {
         let c = self.cursor + d;
