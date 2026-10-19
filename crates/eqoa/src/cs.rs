@@ -1044,10 +1044,9 @@ impl Read {
 
     pub fn key(&mut self, vui: &Vui, r: &mut dyn Raster, cs: &mut CsClient, key: i32, down: bool, now: i64, cues: &mut Vec<i32>) -> Option<ReadUp> {
         if self.request.visible {
-            match self.request.key(vui, r, cs, key, down, now, cues) {
-                // 260: the reply put away
-                Some(_) => self.request.visible = false,
-                None => {}
+            // 260: the reply put away
+            if self.request.key(vui, r, cs, key, down, now, cues).is_some() {
+                self.request.visible = false;
             }
             return None;
         }
