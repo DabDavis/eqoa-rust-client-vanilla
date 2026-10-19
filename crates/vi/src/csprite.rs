@@ -56,6 +56,9 @@ pub struct CSprite<M: Model> {
     pub skel_type: i32,
     pub race: i32,
     pub sex: i32,
+    /// `m_slots`: for each of the 19 texture slots (0-4 armour, 7 face, 8-18
+    /// hair), the material-palette entry and layer it drives; -1 for none.
+    pub text_slots: [(i32, i32); 19],
     pub dead: bool,
     pub action_seq: i32,
     pub action: i32,
@@ -81,6 +84,7 @@ impl<M: Model> CSprite<M> {
             skel_type,
             race,
             sex,
+            text_slots: [(-1, -1); 19],
             dead: false,
             action_seq: 0,
             action: -1,

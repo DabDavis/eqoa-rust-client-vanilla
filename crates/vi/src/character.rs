@@ -203,6 +203,17 @@ pub fn load_csprite<M: Model>(
             }
         }
     }
+    // ParseCSpriteTSlotList (object version 5 up): (slot, palette entry,
+    // layer) triples.
+    if let Some(t) = c.child(id, 0x2930) {
+        let d = c.body(t);
+        for k in 0..i32_at(d, 0).max(0) as usize {
+            let (slot, pal, layer) = (i32_at(d, 4 + k * 12), i32_at(d, 8 + k * 12), i32_at(d, 12 + k * 12));
+            if let Some(s) = cs.text_slots.get_mut(slot as usize) {
+                *s = (pal, layer);
+            }
+        }
+    }
     let pl = c.child(id, 0x2910)?;
     let (pv, pd) = (c.node(pl).version, c.body(pl));
     let mut r = Rd { d: pd, p: 0 };

@@ -27,6 +27,7 @@ pub const UPDATE_RATE: u32 = 100;
 /// One drawn entity: its model as a CSprite, animated on its own clock.
 struct Puppet {
     model: u32,
+    look: Option<vi::cust::Look>,
     sprite: Option<CSprite<Ee>>,
     anims: AnimScene<Ee>,
     rand: Rand,
@@ -44,6 +45,22 @@ pub struct Play {
     walks: Vec<Option<(u32, WalkControl<Ee>)>>,
     /// The player's model as the server last named it on its channel.
     pub self_model: Option<u32>,
+}
+
+/// Puts layer changes onto the batches of the palette entries they name.
+fn dress(model: &mut esf::Model, changes: &[vi::cust::LayerChange]) {
+    for ch in changes {
+        for b in model.batches.iter_mut().filter(|b| b.material == ch.entry) {
+            if let Some(l) = b.layers.get_mut(ch.layer as usize) {
+                if let Some(t) = ch.texture {
+                    l.texture = t as i32;
+                }
+                if let Some(c) = ch.color {
+                    l.color = c;
+                }
+            }
+        }
+    }
 }
 
 fn v3(a: [f32; 3]) -> Vect3<Ee> {
@@ -169,14 +186,27 @@ impl Play {
                 self.puppets[slot] = None;
                 continue;
             };
-            if self.puppets[slot].as_ref().map(|p| p.model) != Some(e.model) {
+            let look = e.creature.as_ref().map(|c| vi::cust::Look {
+                armor: c.armor,
+                armor_tint: c.armor_tint,
+                hair: c.hair,
+                face: c.face,
+                robe: c.robe as i8,
+                robe_tint: c.robe_tint,
+            });
+            if self.puppets[slot].as_ref().map(|p| (p.model, p.look)) != Some((e.model, look)) {
                 self.puppets[slot] = lib.lookup(e.model as i32).and_then(|r| {
-                    let model = lib.build_model(r)?;
+                    let mut model = lib.build_model(r)?;
                     let mut anims = AnimScene { time: game_ms, ..Default::default() };
                     let mut rand = Rand(slot as u64 + 1);
                     let sprite = load_csprite(lib, r, &mut anims, &mut AnimCache::new(), &mut rand);
+                    // ApplyLook: the look's textures and tints on the layers the
+                    // sprite's text slots name.
+                    if let (Some(cs), Some(look)) = (&sprite, &look) {
+                        dress(&mut model, &vi::cust::apply_look(cs, look, |id| lib.surface(id as i32).is_some()));
+                    }
                     let gpu = g.renderer.upload(g.device, g.queue, &model, &[render::IDENTITY], &textures);
-                    Some(Puppet { model: e.model, sprite, anims, rand, gpu })
+                    Some(Puppet { model: e.model, look, sprite, anims, rand, gpu })
                 });
             }
             let Some(p) = self.puppets[slot].as_mut() else { continue };

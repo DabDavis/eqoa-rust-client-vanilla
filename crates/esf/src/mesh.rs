@@ -205,6 +205,9 @@ pub fn read_material(d: &[u8], body: usize, version: i16) -> Vec<Layer> {
 /// Triangles that share one material entry.
 #[derive(Clone, Debug)]
 pub struct Batch {
+    /// The material's index in its sprite's palette (-1 for none): what a
+    /// CSprite's texture slots name.
+    pub material: i32,
     /// The material's layers; the first with a texture is the base.
     pub layers: Vec<Layer>,
     pub indices: Vec<u32>,
@@ -305,7 +308,7 @@ fn sprite_materials<'a>(c: &'a Container, sprite: NodeId, resolve: &Resolve<'a>)
 /// Appends one sprite's PrimBuffer to `m`, placed.
 fn add_sprite<'a>(
     m: &mut Model,
-    keys: &mut Vec<Vec<Layer>>,
+    keys: &mut Vec<(i32, Vec<Layer>)>,
     c: &'a Container,
     sprite: NodeId,
     place: impl Fn([f32; 3]) -> [f32; 3],
@@ -345,9 +348,10 @@ fn add_sprite<'a>(
         }
         // One batch per distinct material (every layer), so per-race skin
         // tones under one texture stay apart and layers are kept whole.
-        let bi = keys.iter().position(|k| *k == layers).unwrap_or_else(|| {
-            keys.push(layers.clone());
-            m.batches.push(Batch { layers: layers.clone(), indices: Vec::new() });
+        let material = if (l.material as usize) < mats.len() { l.material } else { -1 };
+        let bi = keys.iter().position(|k| k.0 == material && k.1 == layers).unwrap_or_else(|| {
+            keys.push((material, layers.clone()));
+            m.batches.push(Batch { material, layers: layers.clone(), indices: Vec::new() });
             keys.len() - 1
         });
         let idx = &mut m.batches[bi].indices;
