@@ -164,7 +164,9 @@ pub fn labels(plates: &[Plate], eye: glam::Vec3, view_proj: glam::Mat4, text: &r
         queued.push((clip.w, min, (min.0 + w, min.1 + h), ndc, p));
     }
     queued.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let mut kept: Vec<((i32, i32), (i32, i32), glam::Vec3, &Plate)> = Vec::new();
+    /// A kept plate: its rect's corners, where it is drawn, what.
+    type Kept<'a> = ((i32, i32), (i32, i32), glam::Vec3, &'a Plate);
+    let mut kept: Vec<Kept> = Vec::new();
     for (_, min, max, ndc, p) in queued {
         let meets = kept.iter().any(|k| !(min.0 > k.1.0 || max.0 < k.0.0 || min.1 > k.1.1 || max.1 < k.0.1));
         if !meets {
