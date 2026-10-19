@@ -7,7 +7,8 @@
 //! drag orbits too. Esc quits.
 
 use crate::scene::{self, Scene};
-use crate::walker::{AnimatedProps, Controls, Walker};
+use crate::stream::{self, Streamer};
+use crate::walker::{Controls, Walker};
 use esf::{Library, Ref};
 use glam::Vec3;
 use render::{GpuModel, Renderer, View, wgpu};
@@ -96,14 +97,18 @@ impl Source {
                 scene::model(id, lib.build_model(r).unwrap_or_default())
             }
             Source::Zone { file, zone, index } => scene::zone(lib, *file, *zone, *index),
-            Source::Walk { file, index, .. } => scene::zones_near(lib, *file, *index, 2500.0),
+            // Only for the spawn point: a walk's zones are streamed.
+            Source::Walk { file, index, .. } => {
+                let c = lib.file(*file);
+                scene::zone(lib, *file, c.zones()[*index], *index)
+            }
         }
     }
 
     /// For a walk: the character in the middle of the zone, on the game's own
-    /// collision world (the whole world file's, not just this zone's), and the
-    /// zone's animated props.
-    pub fn walker(&self, lib: &Library, s: &Scene) -> Option<(Walker, esf::Model, AnimatedProps)> {
+    /// collision world (the whole world file's, not just this zone's), and a
+    /// streamer for the zones to draw.
+    pub fn walker(&self, lib: &Library, s: &Scene) -> Option<(Walker, esf::Model, Streamer)> {
         let Source::Walk { file, character, .. } = self else { return None };
         let t = Instant::now();
         let world = vi::world::World::load(lib, *file)?;
@@ -127,9 +132,7 @@ impl Source {
         };
         let mut w = Walker::new(world, x, z, h);
         w.set_character(lib, *character);
-        let props = AnimatedProps::new(&w.scene, lib, &s.hsprites);
-        eprintln!("animated props: {} placements, {} attachment groups", s.hsprites.len(), props.groups.len());
-        Some((w, lib.build_model(*character)?, props))
+        Some((w, lib.build_model(*character)?, Streamer::new(*file)))
     }
 
     pub fn camera(&self, bounds: (Vec3, Vec3)) -> Camera {
@@ -217,11 +220,13 @@ pub fn shot(
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default()))?;
     let mut renderer = Renderer::new(&device, &queue, render::TARGET_FORMAT);
     let s = source.scene(lib);
-    let mut gpu = upload(&mut renderer, &device, &queue, lib, &s);
+    let walking = matches!(source, Source::Walk { .. });
+    let mut gpu = if walking { Vec::new() } else { upload(&mut renderer, &device, &queue, lib, &s) };
+    let mut streamed = None;
     let cam = cam.unwrap_or_else(|| source.camera(s.bounds));
     let aspect = w as f32 / h as f32;
     let mut view = cam.view(s.bounds, aspect);
-    if let Some((mut walker, body, props)) = source.walker(lib, &s) {
+    if let Some((mut walker, body, mut streamer)) = source.walker(lib, &s) {
         // 60 frames a second of game time, the controls held throughout.
         let script = script.unwrap_or(Script { ms: 0, controls: Controls::default() });
         let mut t = 0;
@@ -237,9 +242,10 @@ pub fn shot(
         let g = renderer.upload(&device, &queue, &body, &[model], &textures);
         renderer.set_palette(&queue, &g, &palette);
         gpu.push(g);
-        for (group, mats) in props.groups.iter().zip(props.matrices(&mut walker.scene)) {
-            gpu.push(renderer.upload(&device, &queue, &group.model, &mats, &textures));
-        }
+        let at = Vec3::from(walker.cam.walk.phys.position.to_array());
+        streamer.update(at, &mut walker.scene, lib, stream::Gpu { renderer: &mut renderer, device: &device, queue: &queue }, None);
+        streamer.animate(&mut walker.scene, &renderer, &queue);
+        eprintln!("{}", streamer.describe());
         let (proj, v) = walker.view(aspect);
         let mut frame = lit(proj, v, Instant::now(), Some((walker.eye_position(), &walker.scene)));
         // `EQOA_SHOT_EYE=dx,dy,dz`: look at the character from that offset
@@ -258,8 +264,9 @@ pub fn shot(
             crate::sky::update(&renderer, &queue, &mut gpu, at, f);
         }
         view = frame.0;
+        streamed = Some(streamer);
     }
-    let refs: Vec<&GpuModel> = gpu.iter().collect();
+    let refs: Vec<&GpuModel> = gpu.iter().chain(streamed.iter().flat_map(|s| s.models())).collect();
     let rgba = render::capture(&device, &queue, &renderer, w, h, &view, &refs);
     let mut enc = png::Encoder::new(std::io::BufWriter::new(std::fs::File::create(out)?), w, h);
     enc.set_color(png::ColorType::Rgba);
@@ -292,10 +299,10 @@ struct App {
     held: HashSet<String>,
     last: Instant,
     walker: Option<Walker>,
-    props: Option<AnimatedProps>,
-    /// Index in `Gfx::models` of the first prop group; the character is
-    /// the model just before it.
-    props_at: usize,
+    /// The walk's zones, streamed around the character.
+    streamer: Option<Streamer>,
+    /// Index in `Gfx::models` of the character.
+    body_at: usize,
     /// Where the sky's models start in `Gfx::models`.
     sky_at: Option<usize>,
     clock: Instant,
@@ -317,8 +324,8 @@ pub fn run(lib: Library, source: Source) -> Result<(), Error> {
         held: HashSet::new(),
         last: Instant::now(),
         walker: None,
-        props: None,
-        props_at: 0,
+        streamer: None,
+        body_at: 0,
         sky_at: None,
         clock: Instant::now(),
         gfx: None,
@@ -340,18 +347,19 @@ impl App {
         }
         let walker = self.source.walker(&self.lib, &s);
         if let Some(g) = &mut self.gfx {
-            g.models = upload(&mut g.renderer, &g.device, &g.queue, &self.lib, &s);
-            self.props = None;
-            self.walker = walker.map(|(w, body, props)| {
+            g.models = if walker.is_some() { Vec::new() } else { upload(&mut g.renderer, &g.device, &g.queue, &self.lib, &s) };
+            self.streamer = None;
+            self.walker = walker.map(|(w, body, mut streamer)| {
                 let textures = render::library_textures(&self.lib);
                 let mut w = w;
                 let (model, _) = w.pose();
+                self.body_at = g.models.len();
                 g.models.push(g.renderer.upload(&g.device, &g.queue, &body, &[model], &textures));
-                self.props_at = g.models.len();
-                for (group, mats) in props.groups.iter().zip(props.matrices(&mut w.scene)) {
-                    g.models.push(g.renderer.upload(&g.device, &g.queue, &group.model, &mats, &textures));
-                }
-                self.props = Some(props);
+                let at = Vec3::from(w.cam.walk.phys.position.to_array());
+                let gpu = stream::Gpu { renderer: &mut g.renderer, device: &g.device, queue: &g.queue };
+                streamer.update(at, &mut w.scene, &self.lib, gpu, None);
+                eprintln!("{}", streamer.describe());
+                self.streamer = Some(streamer);
                 w
             });
             self.sky_at = None;
@@ -517,22 +525,23 @@ impl ApplicationHandler for App {
                 let controls = self.controls();
                 let now = self.clock.elapsed().as_millis() as i64;
                 let Some(g) = &mut self.gfx else { return };
-                let props = &self.props;
-                let props_at = self.props_at;
+                let body_at = self.body_at;
                 let clock = self.clock;
+                let streamer = &mut self.streamer;
+                let lib = &self.lib;
                 let walk_view = self.walker.as_mut().map(|w| {
                     w.frame(controls, now);
                     let (m, palette) = w.pose();
-                    if let Some(body) = props_at.checked_sub(1).and_then(|i| g.models.get(i)) {
+                    if let Some(body) = g.models.get(body_at) {
                         g.renderer.set_instances(&g.queue, body, &[m]);
                         g.renderer.set_palette(&g.queue, body, &palette);
                     }
-                    if let Some(p) = props {
-                        for (k, mats) in p.matrices(&mut w.scene).into_iter().enumerate() {
-                            if let Some(model) = g.models.get(props_at + k) {
-                                g.renderer.set_instances(&g.queue, model, &mats);
-                            }
-                        }
+                    if let Some(s) = streamer {
+                        // One zone a frame, as the game's loader takes them.
+                        let at = Vec3::from(w.cam.walk.phys.position.to_array());
+                        let gpu = stream::Gpu { renderer: &mut g.renderer, device: &g.device, queue: &g.queue };
+                        s.update(at, &mut w.scene, lib, gpu, Some(1));
+                        s.animate(&mut w.scene, &g.renderer, &g.queue);
                     }
                     g.window.set_title(&format!("eqoa — walking {}", w.describe()));
                     let (proj, v) = w.view(g.config.width as f32 / g.config.height as f32);
@@ -556,7 +565,7 @@ impl ApplicationHandler for App {
                 };
                 let target = frame.texture.create_view(&Default::default());
                 let mut enc = g.device.create_command_encoder(&Default::default());
-                let refs: Vec<&GpuModel> = g.models.iter().collect();
+                let refs: Vec<&GpuModel> = g.models.iter().chain(self.streamer.iter().flat_map(|s| s.models())).collect();
                 g.renderer.draw(&g.queue, &mut enc, &target, &g.depth, &view, &refs);
                 g.queue.submit([enc.finish()]);
                 g.queue.present(frame);

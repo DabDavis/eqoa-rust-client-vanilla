@@ -50,25 +50,6 @@ pub fn zone(lib: &Library, file: usize, zone: esf::NodeId, index: usize) -> Scen
     zones(lib, file, &[zone], &format!("zone {index}"), false)
 }
 
-/// The zones around `index` (every zone with a pre-translation island within
-/// `radius` of one of its own): what the walk view draws, so the character
-/// can leave the zone it started in.
-pub fn zones_near(lib: &Library, file: usize, index: usize, radius: f32) -> Scene {
-    let c = lib.file(file);
-    let all = c.zones();
-    let home = c.pre_translations(all[index]);
-    let near: Vec<esf::NodeId> = all
-        .iter()
-        .copied()
-        .filter(|&z| {
-            c.pre_translations(z)
-                .iter()
-                .any(|p| home.iter().any(|h| (p[0] - h[0]).abs() < radius && (p[2] - h[2]).abs() < radius))
-        })
-        .collect();
-    zones(lib, file, &near, &format!("zone {index} and {} around it", near.len() - 1), true)
-}
-
 /// Terrain per zone plus every placed actor of all of them, one upload per
 /// distinct sprite. With `animate`, HSprite placements are held out (in
 /// `Scene::hsprites`) to be drawn posed.

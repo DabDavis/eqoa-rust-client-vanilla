@@ -129,8 +129,10 @@ order per stage is not yet measured.
   Lights/Fog/Sky functions that combine them write the raster, so they are not.
 - The point light and static lighting. Blended layers are drawn after every
   opaque one, not interleaved strip by strip as the game draws them.
-- Zone streaming: a walk loads the whole world file and draws the zones within
-  2.5 km of the chosen one.
+- Zone streaming is `VIWorld::StreamLeaf`'s radial rule (load within 900 of a
+  zone's bounds, let go past 950, a zone a frame) for drawing only: collision
+  still loads the whole file (two seconds for Tunaria), and `VIZone::Stream`'s
+  finer per-static radii (500/550) are not ported.
 - A lighting band along terrain patch edges (zone 84 at x = 25000): not a gap,
   the edges' vertex colours or normals; to revisit with the real lighting.
 

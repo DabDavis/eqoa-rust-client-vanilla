@@ -19,6 +19,7 @@
 
 mod scene;
 mod sky;
+mod stream;
 mod viewer;
 mod walker;
 

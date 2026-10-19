@@ -173,6 +173,30 @@ fn bb_min<M: Model>(a: F<M>, b: F<M>) -> F<M> {
 }
 
 impl<M: Model> BBox<M> {
+    /// `VIBBox::DistanceSquared`: from `v` to the nearest point of the box.
+    pub fn distance_squared(&self, v: &Vect3<M>) -> F<M> {
+        let mut d = Vect3::<M>::default();
+        if d.x < self.min.x - v.x {
+            d.x = self.min.x - v.x;
+        }
+        if d.y < self.min.y - v.y {
+            d.y = self.min.y - v.y;
+        }
+        if d.z < self.min.z - v.z {
+            d.z = self.min.z - v.z;
+        }
+        if d.x < v.x - self.max.x {
+            d.x = v.x - self.max.x;
+        }
+        if d.y < v.y - self.max.y {
+            d.y = v.y - self.max.y;
+        }
+        if d.z < v.z - self.max.z {
+            d.z = v.z - self.max.z;
+        }
+        d.x * d.x + d.y * d.y + d.z * d.z
+    }
+
     pub fn bound(&mut self, first: bool, v: &Vect3<M>) {
         if !first {
             self.min.x = bb_min(self.min.x, v.x);

@@ -118,7 +118,14 @@ pub struct World<M: Model> {
     anim_cache: AnimCache,
     /// The terrain-profile grid (`VIWorld::m_regions`), if the file has one.
     pub grid: Option<Grid<M>>,
+    /// Each zone's proxy bounds (record 0x8210), what streaming measures.
+    pub zone_bounds: Vec<BBox<M>>,
 }
+
+/// `VIScene::Init`'s streaming radii (`m_p2A48[1]`, `[0]`): a zone loads
+/// when its bounds come within the inner one and is let go past the outer.
+pub const STREAM_INNER: f32 = 900.0;
+pub const STREAM_OUTER: f32 = 950.0;
 
 /// The world header's grid (record 0x8220) and the region bytes over it
 /// (0x8240, version 2 up): one terrain-profile index per sub-cell.
@@ -258,6 +265,7 @@ impl<M: Model> World<M> {
             anims: AnimScene::default(),
             anim_cache: AnimCache::new(),
             grid: Grid::read(c, base),
+            zone_bounds: Self::proxies(c, base),
         };
         let zones = c.zones();
         for &z in &zones {
@@ -267,6 +275,43 @@ impl<M: Model> World<M> {
             w.load_zone(lib, file, zi, z);
         }
         Some(w)
+    }
+
+    /// `ParseWorldZoneProxies`: 56 bytes a zone (two 8-byte offsets, a
+    /// size, a centre, the bounds), plus a name in version 1.
+    fn proxies(c: &Container, base: NodeId) -> Vec<BBox<M>> {
+        let Some(p) = c.child(base, 0x8210) else { return Vec::new() };
+        let d = c.body(p);
+        if c.node(p).version == 1 {
+            return Vec::new();
+        }
+        (0..rd_i(d, 0).max(0) as usize)
+            .filter(|k| 4 + k * 56 + 56 <= d.len())
+            .map(|k| BBox { min: v3(d, 4 + k * 56 + 32), max: v3(d, 4 + k * 56 + 44) })
+            .collect()
+    }
+
+    /// `VIWorld::StreamLeaf`'s radial rule for the zones at `at`: which of
+    /// those not in `loaded` to load (inside the inner radius) and which of
+    /// those in it to let go (past the outer). Every zone is measured, where
+    /// the game measures those its BSP walk reaches within 1,050.
+    pub fn stream(&self, at: &Vect3<M>, loaded: &std::collections::BTreeSet<usize>) -> (Vec<usize>, Vec<usize>) {
+        let (inner, outer) = (F::<M>::new(STREAM_INNER), F::<M>::new(STREAM_OUTER));
+        let mut load = Vec::new();
+        let mut release = Vec::new();
+        for (z, b) in self.zone_bounds.iter().enumerate() {
+            let d = b.distance_squared(at);
+            if loaded.contains(&z) {
+                if outer * outer < d {
+                    release.push(z);
+                }
+            } else if d < inner * inner {
+                load.push(z);
+            }
+        }
+        // Nearest first, so a budgeted caller fills in around the player.
+        load.sort_by(|&a, &b| self.zone_bounds[a].distance_squared(at).0.total_cmp(&self.zone_bounds[b].distance_squared(at).0));
+        (load, release)
     }
 
     fn zone_base(c: &Container, z: NodeId) -> Zone<M> {
