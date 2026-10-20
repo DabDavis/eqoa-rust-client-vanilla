@@ -61,8 +61,10 @@ pub struct Mouse {
     last_click: Option<((f64, f64), Instant)>,
     /// the drag since the last frame, window pixels
     look: (f64, f64),
-    /// the wheel since the last frame, in lines (up positive)
+    /// the wheel since the last frame, in lines (up positive), and in a
+    /// window's steps (a notch one)
     wheel: f32,
+    steps: f32,
 }
 
 impl Mouse {
@@ -113,25 +115,30 @@ impl Mouse {
         Some(Click::Target(x, y))
     }
 
-    pub fn wheel(&mut self, lines: f32) {
+    /// The wheel turned: `lines` for the camera's zoom, `steps` for a window
+    /// up (the d-pad's up or down a step; a notch is one).
+    pub fn wheel(&mut self, lines: f32, steps: f32) {
         self.wheel += lines;
+        self.steps += steps;
     }
 
-    /// The wheel since the last frame, taken.
+    /// The wheel's steps for a window since the last frame, taken.
     pub fn take_wheel(&mut self) -> f32 {
-        std::mem::take(&mut self.wheel)
+        std::mem::take(&mut self.steps)
     }
 
     /// This frame's drag and wheel let go of (a window up, the camera held).
     pub fn discard(&mut self) {
         self.look = (0.0, 0.0);
         self.wheel = 0.0;
+        self.steps = 0.0;
     }
 
     /// This frame's drag and wheel on the walker's camera (`look`).
     pub fn look(&mut self, w: &mut Walker, inverted: bool) -> [f32; 2] {
         let (dx, dy) = std::mem::take(&mut self.look);
         let wheel = std::mem::take(&mut self.wheel);
+        self.steps = 0.0;
         look(w, dx as f32, dy as f32, wheel, inverted)
     }
 }
@@ -194,7 +201,7 @@ impl Mouse {
                 self.button(false, false, now)
             }
             Some("wheel") => {
-                self.wheel(num(1) as f32);
+                self.wheel(num(1) as f32, num(1) as f32);
                 None
             }
             _ => None,

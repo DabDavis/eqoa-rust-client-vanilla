@@ -2014,12 +2014,14 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                let d = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => y,
-                    MouseScrollDelta::PixelDelta(p) => p.y as f32 / 40.0,
+                // a window takes a notch (a line; a page's hundred pixels)
+                // as one step
+                let (d, steps) = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => (y, y.clamp(-1.0, 1.0)),
+                    MouseScrollDelta::PixelDelta(p) => (p.y as f32 / 40.0, p.y as f32 / 100.0),
                 };
                 if self.walker.is_some() {
-                    self.mouse.wheel(d);
+                    self.mouse.wheel(d, steps);
                 } else if let Camera::Orbit { zoom, .. } = &mut self.camera {
                     *zoom = (*zoom * 0.9f32.powf(d)).clamp(0.05, 20.0);
                 }

@@ -22,6 +22,8 @@ SECONDS=WxH sets the page's viewport then, as a resized window would.
 --mobile makes the page a touch-first device (CDP's touch emulation: its
 pointer is coarse); --touch SECONDS=STEPS touches the canvas then, steps
 ';'-separated: 'tap X Y', 'hold X Y MS', 'drag X0 Y0 X1 Y1 MS' (CSS pixels);
+--mouse SECONDS=STEPS moves the mouse over the canvas, steps ';'-separated:
+'click X Y', 'rclick X Y', 'wheel X Y LINES' (up positive), 'move X Y';
 --gamepad SECONDS=STEPS plays a gamepad the page sees through
 navigator.getGamepads (the standard layout's indices: 0 A, 1 B, 2 X, 3 Y,
 4 LB, 5 RB, 6 LT, 7 RT, 8 Back, 9 Start, 10 L3, 11 R3, 12-15 the d-pad):
@@ -209,6 +211,23 @@ async def drive(a, base, ws_url):
                     await touch("touchEnd", [])
                 out(f"touch {step}")
 
+        async def mice(spec):
+            for step in spec.split(";"):
+                w = step.split()
+                if not w:
+                    continue
+                x, y = float(w[1]), float(w[2])
+                await call("Input.dispatchMouseEvent", type="mouseMoved", x=x, y=y)
+                if w[0] in ("click", "rclick"):
+                    b = "left" if w[0] == "click" else "right"
+                    for kind in ("mousePressed", "mouseReleased"):
+                        await call("Input.dispatchMouseEvent", type=kind, x=x, y=y, button=b, clickCount=1)
+                        await asyncio.sleep(0.03)
+                elif w[0] == "wheel":
+                    # a line is a hundred pixels to Chromium; down is positive there
+                    await call("Input.dispatchMouseEvent", type="mouseWheel", x=x, y=y, deltaX=0, deltaY=-100 * float(w[3]))
+                out(f"mouse {step}")
+
         async def gamepad(spec):
             for step in spec.split(";"):
                 w = step.split()
@@ -233,6 +252,9 @@ async def drive(a, base, ws_url):
         for s in a.gamepad:
             t, spec = s.split("=", 1)
             events.append((float(t), "gamepad", spec))
+        for s in a.mouse:
+            t, spec = s.split("=", 1)
+            events.append((float(t), "mouse", spec))
         for s in a.shot:
             t, f = s.split("=", 1)
             events.append((float(t), "shot", f))
@@ -260,6 +282,8 @@ async def drive(a, base, ws_url):
                 await touches(arg)
             elif kind == "gamepad":
                 await gamepad(arg)
+            elif kind == "mouse":
+                await mice(arg)
             elif kind == "resize":
                 w, h = (int(v) for v in arg.split("x"))
                 await call("Emulation.setDeviceMetricsOverride", width=w, height=h, deviceScaleFactor=1, mobile=False)
@@ -297,6 +321,7 @@ if __name__ == "__main__":
     ap.add_argument("--mobile", action="store_true", help="a touch-first device (touch emulation: the pointer is coarse)")
     ap.add_argument("--touch", action="append", default=[], help="SECONDS=STEPS: touches on the canvas")
     ap.add_argument("--gamepad", action="append", default=[], help="SECONDS=STEPS: a gamepad, through navigator.getGamepads")
+    ap.add_argument("--mouse", action="append", default=[], help="SECONDS=STEPS: the mouse over the canvas")
     ap.add_argument("--final-shot")
     ap.add_argument("--until")
     ap.add_argument("--timeout", type=float, default=60)
