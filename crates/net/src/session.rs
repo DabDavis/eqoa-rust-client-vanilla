@@ -481,6 +481,13 @@ impl Session {
             }
             self.route(m, &mut events);
         }
+        self.flush();
+        events
+    }
+
+    /// The flush `pump` ends with, and the sends: what was sent goes out now
+    /// (Quit's logout, before the client leaves).
+    pub fn flush(&mut self) {
         self.drdp.flush();
         for p in std::mem::take(&mut self.drdp.outbox) {
             if self.debug {
@@ -498,7 +505,6 @@ impl Session {
             self.socket.send_to(&p.data, p.to.ip, p.to.port);
             self.packets_sent += 1;
         }
-        events
     }
 
     /// `PumpMessages`' routing by DRDP message type.

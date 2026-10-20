@@ -440,6 +440,10 @@ pub fn shot_with(
                         }
                     }
                 }
+                // both mouse buttons: run forward (`Mouse::running`)
+                if mouse.running() {
+                    sticks[3] = -1.0;
+                }
             } else {
                 // a window up: the wheel and a finger's drag are its up and down
                 let lines = mouse.take_wheel() + crate::touch::drag_lines(ty, (w, h));
@@ -1319,6 +1323,10 @@ impl App {
         if dead {
             return a;
         }
+        // both mouse buttons: run forward (`Mouse::running`)
+        if free && self.mouse.running() {
+            a[3] = -1.0;
+        }
         let pad = self.console.sticks();
         for (i, a) in a.iter_mut().enumerate() {
             let (m, t) = if i < 2 { (look[i], feel[i]) } else { (0.0, 0.0) };
@@ -1853,16 +1861,21 @@ impl ApplicationHandler for App {
                         return;
                     }
                 }
-                // The game's keys (`VIWndGame::OnKeyDown`): Enter opens a chat
-                // line, `/` one that starts with it, R one to `/reply`, T one
-                // to `/tell`; while a line is open, keys type into it, Enter
-                // sends it (`ChatLine`) and Escape drops it.
+                // The game's keys (`VIWndGame::OnKeyDown`): Enter opens the
+                // edit box R3 opens, `/` one begun with it, R one to `/reply`,
+                // T one to `/tell` (`Play::chat_key`). Before the HUD is up
+                // (no SUPPORT yet) a plain line stands in: keys type into it,
+                // Enter sends it (`ChatLine`) and Escape drops it.
                 if let Some(p) = self.play.as_mut()
                     && event.state == ElementState::Pressed
                 {
                     let open = |p: &mut crate::play::Play, held: &mut HashSet<String>, s: &str| {
-                        p.typing = Some(s.to_string());
                         held.clear();
+                        if p.hud_ready() {
+                            p.chat_key(s, s.is_empty() || s == "/");
+                        } else {
+                            p.typing = Some(s.to_string());
+                        }
                     };
                     // A dialog up takes the arrows, Enter and Escape.
                     if p.typing.is_none() && p.mode != 0 {
@@ -2038,6 +2051,8 @@ impl ApplicationHandler for App {
             }
             // Walking, the mouse is `mouse.rs`'s: a drag looks round, the
             // wheel zooms, a click targets and a double or right click talks.
+            // a release that may never come: let go of what is held
+            WindowEvent::Focused(false) | WindowEvent::CursorLeft { .. } => self.mouse.release_all(),
             WindowEvent::MouseInput { state, button, .. } if matches!(button, MouseButton::Left | MouseButton::Right) => {
                 let down = state == ElementState::Pressed;
                 if self.walker.is_some() {

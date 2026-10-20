@@ -9,6 +9,9 @@
 //!   camera zooms on it, first person pitches. The options' Camera Pitch
 //!   Axis turns them round as it does the stick.
 //! - the wheel zooms the orbiting cameras (`SetOrbitDistance`).
+//! - both buttons held run forward (the left stick all the way up), the
+//!   way the view faces in the orbiting camera, as many PC games do; a drag
+//!   meanwhile steers. Letting go after it is no click.
 //! - a click (a press let go within a few pixels) targets the creature under
 //!   it; a double click or a right click also talks to it, or opens its
 //!   corpse (`InteractWithTarget`, or `ToggleAutoAttack`'s loot request).
@@ -58,6 +61,8 @@ struct Press {
 pub struct Mouse {
     pub cursor: (f64, f64),
     press: Option<Press>,
+    /// the left and the right button held
+    held: [bool; 2],
     last_click: Option<((f64, f64), Instant)>,
     /// the drag since the last frame, window pixels
     look: (f64, f64),
@@ -91,9 +96,12 @@ impl Mouse {
 
     /// A button pressed or let go; a click when it is let go undragged.
     pub fn button(&mut self, right: bool, down: bool, now: Instant) -> Option<Click> {
+        self.held[right as usize] = down;
         if down {
-            if self.press.is_none() {
-                self.press = Some(Press { right, at: self.cursor, dragged: false });
+            match self.press.as_mut() {
+                None => self.press = Some(Press { right, at: self.cursor, dragged: false }),
+                // the other one too: a run (`running`), no click after it
+                Some(p) => p.dragged = true,
             }
             return None;
         }
@@ -113,6 +121,18 @@ impl Mouse {
         }
         self.last_click = Some(((x, y), now));
         Some(Click::Target(x, y))
+    }
+
+    /// Both buttons held: the client's run forward.
+    pub fn running(&self) -> bool {
+        self.held[0] && self.held[1]
+    }
+
+    /// The window lost the pointer or the focus: what was held is let go
+    /// (its release may never come), clicking nothing.
+    pub fn release_all(&mut self) {
+        self.held = [false; 2];
+        self.press = None;
     }
 
     /// The wheel turned: `lines` for the camera's zoom, `steps` for a window
@@ -169,8 +189,9 @@ pub fn look(w: &mut Walker, dx: f32, dy: f32, wheel: f32, inverted: bool) -> [f3
 
 /// `EQOA_MOUSE`, for headless runs: `;`-separated steps at a time in ms,
 /// `click <x> <y>@<ms>`, `rclick <x> <y>@<ms>`, `drag <dx> <dy>@<ms>` (from
-/// the window's middle) and `wheel <lines>@<ms>`, played through a `Mouse`
-/// as the window's events would be.
+/// the window's middle), `wheel <lines>@<ms>` and `press l|r@<ms>` /
+/// `release l|r@<ms>`, played through a `Mouse` as the window's events
+/// would be.
 pub fn script() -> Vec<(i64, String)> {
     let Ok(s) = std::env::var("EQOA_MOUSE") else { return Vec::new() };
     s.split(';')
@@ -204,6 +225,8 @@ impl Mouse {
                 self.wheel(num(1) as f32, num(1) as f32);
                 None
             }
+            // `press l|r` and `release l|r`: a button held across steps
+            Some(s @ ("press" | "release")) => self.button(w.get(1) == Some(&"r"), s == "press", now),
             _ => None,
         }
     }
@@ -246,6 +269,34 @@ mod tests {
         m.button(false, false, t0 + Duration::from_millis(4010));
         m.button(false, true, t0 + Duration::from_millis(4600));
         assert_eq!(m.button(false, false, t0 + Duration::from_millis(4610)), Some(Click::Target(140.0, 90.0)));
+    }
+
+    /// Both buttons run while both are held, either order, and letting go
+    /// clicks nothing; one button alone neither runs nor stops clicking (the
+    /// control), and a lost focus lets go of a run.
+    #[test]
+    fn both_buttons_run_and_click_nothing() {
+        let t0 = Instant::now();
+        let mut m = Mouse::default();
+        m.moved(100.0, 100.0);
+        m.button(false, true, t0);
+        assert!(!m.running(), "one button");
+        m.button(true, true, t0);
+        assert!(m.running());
+        m.moved(130.0, 100.0);
+        assert_eq!(m.look, (30.0, 0.0), "a drag while running steers");
+        assert_eq!(m.button(false, false, t0), None, "no click");
+        assert!(!m.running());
+        assert_eq!(m.button(true, false, t0), None, "no right click");
+        m.button(true, true, t0 + Duration::from_millis(1000));
+        m.button(false, true, t0 + Duration::from_millis(1000));
+        assert!(m.running(), "right first");
+        m.release_all();
+        assert!(!m.running(), "a lost focus lets go");
+        assert_eq!(m.button(true, false, t0 + Duration::from_millis(1100)), None);
+        // the control: one button is a click as before
+        m.button(false, true, t0 + Duration::from_millis(3000));
+        assert_eq!(m.button(false, false, t0 + Duration::from_millis(3010)), Some(Click::Target(130.0, 100.0)));
     }
 
     #[test]

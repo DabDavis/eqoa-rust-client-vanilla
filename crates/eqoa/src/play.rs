@@ -2179,6 +2179,23 @@ impl Play {
         }
     }
 
+    /// Quit answered yes (`m_p2EC28`, `Process`'s LOGOUT): 0x09B0 to the
+    /// server, sent now, then `Disconnect(9, 1)`: in a page its login screen
+    /// again, saying word 820 ("Logged out."), as the console goes back to
+    /// the server selection word 722 promised; natively the client leaves.
+    fn logout(&mut self) {
+        self.session.send(&net::stream::Writer::op(0x09B0).data);
+        self.session.flush();
+        let text = net::session::disconnect_word(9)
+            .and_then(|w| self.words.as_ref().map(|t| t.get(w, 0).to_string()))
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| "Logged out.".to_string());
+        eprintln!("play: logged out: {text}");
+        #[cfg(target_arch = "wasm32")]
+        crate::web::disconnected(&text);
+        self.quit = true;
+    }
+
     /// Dead: the walk takes no controls (`UpdateControls` is not run).
     pub fn is_dead(&self) -> bool {
         self.death.is_some()
@@ -3202,6 +3219,23 @@ impl Play {
         self.mode = 2;
     }
 
+    /// `VIWndGame::OnKeyDown`'s keyboard chat keys, the edit box R3 opens
+    /// (`0xB0F0000`, 128 long, a line for `ChatLine`): Enter (13, as R3) and
+    /// `/` (47, the line begun with it) titled with the channel
+    /// (`SetEditTitle(1)`), R (82, "/reply ") and T (84, "/tell ") untitled.
+    pub fn chat_key(&mut self, text: &str, titled: bool) {
+        self.open_edit(0xB0F0000, 128, -1, false);
+        if titled {
+            self.edit.title = self.chat_title();
+        }
+        self.edit.set_text(&crate::ui::wide(text));
+    }
+
+    /// The HUD is up (SUPPORT's atlas has come): its windows can be drawn.
+    pub fn hud_ready(&self) -> bool {
+        self.hud.is_some()
+    }
+
     /// `SetEditTitle(1)`: the channel's word and "message".
     fn chat_title(&self) -> Vec<u16> {
         let Some(w) = self.words.as_ref() else { return Vec::new() };
@@ -3363,7 +3397,7 @@ impl Play {
                 self.session.send_opcode([30, 66, 67, 68][k]);
                 self.emote = Some([56, 57, 60, 61][k]);
             }
-            0x0A01_0000 => self.quit = true,
+            0x0A01_0000 => self.logout(),
             0x0B05_2000 => self.session.send_opcode(69),
             // the guild roster: ShowInvite (OpenGuildMenu, mode 21), or word 570
             0x0B05_1001 => {
