@@ -6,12 +6,15 @@
 //! list is VIClient's `m_buddies` map (0x03D5 adds or replaces a record,
 //! 0x03D6 erases one), in id order; `VIWndBuddy` shows ten rows of it, with
 //! `gBuddyMenu` (Message, Mail, Remove) and the box that also carries an
-//! incoming buddy request (`ShowRequest`, 45 s to answer).
+//! incoming buddy request (`ShowRequest`, 45 s to answer). A pointer
+//! (`pointer`) goes to the child with the focus as the keys do: the box's
+//! buttons, the menu's rows (off the menu, it closes), the list's rows.
 
 #![allow(clippy::too_many_arguments)]
 
 use crate::client_image::Menus;
 use crate::dialog::{BoxAnswer, Key, MBox};
+use crate::pointer::{Hits, MOVED, key, rows_rect};
 use crate::startmenu::KeyFlash;
 use crate::wndlist::{ListUp, MiniMenu};
 use net::stream::{Reader, Writer};
@@ -26,6 +29,37 @@ fn box_key(key: i32) -> Option<Key> {
         17 | 136 => Some(Key::Left),
         18 | 137 => Some(Key::Right),
         _ => None,
+    }
+}
+
+/// A pointer on a list with a box and a titled menu over it (the buddy and
+/// ignore lists), to the child with the focus: the box's buttons (✕), the
+/// menu's rows at once, or off the menu the menu closed (△) and the row
+/// under the pointer selected (`select`); else a row selected, or the
+/// selection's menu opened (✕). The keys to press.
+fn list_point(p: [f32; 2], mbox: Option<&mut MBox>, menu: Option<&mut MiniMenu>, hits: &Hits, sel: i32, select: &mut dyn FnMut(i32)) -> Vec<i32> {
+    if let Some(b) = mbox {
+        return b.point(p).then_some(key::CROSS).into_iter().collect();
+    }
+    if let Some(m) = menu {
+        if let Some(k) = m.point(p) {
+            return k.into_iter().collect();
+        }
+        let mut keys = Vec::new();
+        if let Some(row) = hits.at(p).filter(|&row| row != sel) {
+            select(row);
+            keys.push(MOVED);
+        }
+        keys.push(key::TRIANGLE);
+        return keys;
+    }
+    match hits.at(p) {
+        Some(row) if row == sel => vec![key::CROSS],
+        Some(row) => {
+            select(row);
+            vec![MOVED]
+        }
+        None => Vec::new(),
     }
 }
 
@@ -134,20 +168,30 @@ pub struct IgnoreList {
     pub mbox_visible: bool,
     pub menu: MiniMenu,
     flash: KeyFlash,
+    /// the names drawn, by index into the list, and when (for a pointer)
+    hits: Hits,
+    now: i64,
 }
 
 impl IgnoreList {
-
-    /// A pointer at frame point `p` (`pointer`): what is under it selected,
-    /// and the keys to press.
+    /// A pointer at frame point `p` (`pointer`): the box's buttons, the
+    /// menu's rows (off the menu it closes), or a name selected and the
+    /// selection's menu opened (✕). The keys to press.
     pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
-        let _ = p;
-        Vec::new()
+        let (sel, now) = (self.sel, self.now);
+        let (sel_out, window) = (&mut self.sel, &mut self.window);
+        let mut select = |row: i32| {
+            // the list's keys start the tick's pulse over
+            *sel_out = row;
+            window.reset_tick_pulse(now);
+        };
+        list_point(p, self.mbox_visible.then_some(&mut self.mbox), self.menu.visible.then_some(&mut self.menu), &self.hits, sel, &mut select)
     }
+
     /// `Init`: the box (Yes/No, at (80, 115)) and the titled member menu,
     /// hidden.
     pub fn new(menu: usize) -> Self {
-        IgnoreList { sel: 0, top: 0, count: 0, window: Window::default(), mbox: MBox::default(), mbox_visible: false, menu: MiniMenu::titled(menu), flash: KeyFlash::default() }
+        IgnoreList { sel: 0, top: 0, count: 0, window: Window::default(), mbox: MBox::default(), mbox_visible: false, menu: MiniMenu::titled(menu), flash: KeyFlash::default(), hits: Hits::default(), now: 0 }
     }
 
     /// `OnMessage` 295 with the focus coming to it from outside, then
@@ -282,6 +326,8 @@ impl IgnoreList {
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, menus: &Menus, ignore: &Ignore, now: i64, cues: &mut Vec<i32>) {
         let count = ignore.list.len() as i32;
         self.clamp(count);
+        self.now = now;
+        self.hits.clear();
         let w = |id: i32| vui.words.get(id, vui.language).to_string();
         let black = [0.0, 0.0, 0.0, 1.0];
         vui.blit_rect(r, 32, [-1, -1], [642, 332], 0, 1.0);
@@ -300,6 +346,7 @@ impl IgnoreList {
             }
             let name = wide(&ignore.list[n as usize].name);
             self.window.text_box(vui, r, &name, 50, row, width - 95, 1, UI_COLORS[(n == self.sel) as usize], 2);
+            self.hits.push(rows_rect(&self.window, vui, r, 50, row, width - 95, 1), n);
             row += 1;
             n += 1;
             if row >= 12 {
@@ -460,18 +507,28 @@ pub struct BuddyList {
     pub mbox_visible: bool,
     pub menu: MiniMenu,
     flash: KeyFlash,
+    /// the buddies drawn, by index, and when (for a pointer)
+    hits: Hits,
+    now: i64,
 }
 
 impl BuddyList {
-
-    /// A pointer at frame point `p` (`pointer`): what is under it selected,
-    /// and the keys to press.
+    /// A pointer at frame point `p` (`pointer`): the box's buttons (the
+    /// request's too), the menu's rows (off the menu it closes), or a buddy
+    /// selected and the selection's menu opened (✕). The keys to press.
     pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
-        let _ = p;
-        Vec::new()
+        let (sel, now) = (self.sel, self.now);
+        let (sel_out, window) = (&mut self.sel, &mut self.window);
+        let mut select = |row: i32| {
+            // `Move` starts the tick's pulse over
+            *sel_out = row;
+            window.reset_tick_pulse(now);
+        };
+        list_point(p, self.mbox_visible.then_some(&mut self.mbox), self.menu.visible.then_some(&mut self.menu), &self.hits, sel, &mut select)
     }
+
     pub fn new(menu: usize) -> Self {
-        BuddyList { shown: false, sel: 0, top: 0, count: 0, window: Window::default(), mbox: MBox::default(), mbox_visible: false, menu: MiniMenu::titled(menu), flash: KeyFlash::default() }
+        BuddyList { shown: false, sel: 0, top: 0, count: 0, window: Window::default(), mbox: MBox::default(), mbox_visible: false, menu: MiniMenu::titled(menu), flash: KeyFlash::default(), hits: Hits::default(), now: 0 }
     }
 
     /// `OnMessage` 295 then `Close` (`UpdateMode` 18): the window, titled
@@ -618,6 +675,8 @@ impl BuddyList {
     /// the held arrows repeat. Then the box (its timeout answered here) and
     /// the menu.
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, menus: &Menus, buddies: &Buddies, now: i64, cues: &mut Vec<i32>) -> Option<BuddyUp> {
+        self.now = now;
+        self.hits.clear();
         if self.shown {
             self.draw_list(vui, r, buddies, now, cues);
         }
@@ -665,6 +724,7 @@ impl BuddyList {
                 black
             };
             let Some(b) = buddies.get(k) else { break };
+            self.hits.push(rows_rect(&self.window, vui, r, 40, i + 2, width - 80, 1), k);
             r.draw_string([left + 40, y], c, &wide(&b.name));
             r.draw_string([left + 170, y], c, &word(if b.online { 21 } else { 22 }));
             let Some(race) = race_short(b.race) else { continue };
@@ -773,4 +833,115 @@ mod tests {
         assert_eq!(l.answered(BoxAnswer::No(1, 0)), None, "a removal box's no only closes it");
         assert_eq!(l.answered(BoxAnswer::Yes(1, 0)), Some(BuddyUp::Remove(0)));
     }
+
+    /// The first point of the frame (on a 4-pixel grid) a pointer finds a
+    /// box's button at, by asking `point`.
+    fn find_button(point: &mut dyn FnMut([f32; 2]) -> Vec<i32>) -> Option<[f32; 2]> {
+        (0..112).flat_map(|y| (0..160).map(move |x| [x as f32 * 4.0, y as f32 * 4.0])).find(|&p| point(p) == vec![crate::pointer::key::CROSS])
+    }
+
+    fn one_menu() -> (Menus, usize) {
+        use crate::client_image::{Menu, MenuEntry};
+        let mut menus = Menus::default();
+        let m = menus.push(Menu { x00: -1, x04: -1, entries: (0..3).map(|k| MenuEntry { word: 10 + k, msg: 0x0B05_0001 + k as u32, id: k, ..Default::default() }).collect() });
+        (menus, m)
+    }
+
+    /// A pointer on the buddy list: a row selected, then its menu opened
+    /// (✕); the menu's rows used at once; off the menu it closes (△) with
+    /// the row under the pointer selected; under a request only the box's
+    /// buttons are there.
+    #[test]
+    fn a_pointer_on_the_buddy_list() {
+        use crate::pointer::testing::{NullRaster, mid, vui};
+        let vui = vui();
+        let mut r = NullRaster;
+        let (menus, m) = one_menu();
+        let mut b = Buddies::default();
+        for k in 0..3 {
+            b.recv(0x03D5, &buddy(k + 1, &format!("B{k}"), true, "W"));
+        }
+        let mut l = BuddyList::new(m);
+        l.open(&vui, &r);
+        let mut cues = Vec::new();
+        l.draw(&vui, &mut r, &menus, &b, 0, &mut cues);
+        // ten rows from the window's row 2
+        let row = |l: &BuddyList, i: i32| rows_rect(&l.window, &vui, &NullRaster, 40, i + 2, 400, 1);
+        assert_eq!(l.point(mid(row(&l, 2))), vec![MOVED]);
+        assert_eq!(l.sel, 2);
+        assert_eq!(l.point(mid(row(&l, 2))), vec![key::CROSS]);
+        assert!(l.point(mid(row(&l, 3))).is_empty(), "past the list");
+        assert!(l.point(mid(row(&l, -2))).is_empty(), "the column headers");
+        // ✕: the member menu; drawn, its rows are used at once
+        l.key(&menus, &b, &|_| String::new(), 134, true, 0, &mut cues);
+        assert!(l.menu.visible);
+        l.draw(&vui, &mut r, &menus, &b, 16, &mut cues);
+        // DrawTitled: the rows 19 apart from 48 under the menu's corner
+        let at = l.menu.list.pos;
+        assert_eq!(l.point([(at[0] + 60) as f32, (at[1] + 48 + 19) as f32]), vec![key::CROSS]);
+        assert_eq!(l.menu.list.sel, 1);
+        assert!(l.point([(at[0] + 60) as f32, (at[1] + 4) as f32]).is_empty(), "the menu's frame");
+        // off the menu, on row 0 left of it: closed, row 0 selected
+        let r0 = row(&l, 0);
+        assert!(r0[0] + 10 < at[0]);
+        assert_eq!(l.point([r0[0] as f32 + 10.0, mid(r0)[1]]), vec![MOVED, key::TRIANGLE]);
+        assert_eq!(l.sel, 0);
+        // a request: the list is not drawn, the box takes its buttons
+        l.menu.visible = false;
+        l.show_request(&|_| String::new(), "Kim", 0);
+        l.draw(&vui, &mut r, &menus, &b, 32, &mut cues);
+        assert!(l.point(mid(row(&l, 1))).is_empty(), "no list under a request");
+        assert!(l.point([630.0, 440.0]).is_empty(), "off the box: nothing");
+        assert!(find_button(&mut |p| l.point(p)).is_some(), "the box's buttons");
+        // negative control: no box, no list: nothing anywhere
+        l.hide();
+        l.draw(&vui, &mut r, &menus, &b, 48, &mut cues);
+        assert!(find_button(&mut |p| l.point(p)).is_none());
+    }
+
+    /// The ignore list: twelve names a page; a name selected, then its menu
+    /// (✕); the menu and the box as the buddy list's.
+    #[test]
+    fn a_pointer_on_the_ignore_list() {
+        use crate::pointer::testing::{NullRaster, mid, vui};
+        let vui = vui();
+        let mut r = NullRaster;
+        let (menus, m) = one_menu();
+        let mut ig = Ignore::default();
+        for k in 0..14 {
+            ig.list.push(IgnoreRow { name: format!("N{k}"), id: k });
+        }
+        let mut l = IgnoreList::new(m);
+        l.open(&vui, &r);
+        let mut cues = Vec::new();
+        l.draw(&vui, &mut r, &menus, &ig, 0, &mut cues);
+        let row = |l: &IgnoreList, i: i32| rows_rect(&l.window, &vui, &NullRaster, 50, i, 200, 1);
+        assert_eq!(l.point(mid(row(&l, 11))), vec![MOVED]);
+        assert_eq!(l.sel, 11);
+        assert_eq!(l.point(mid(row(&l, 11))), vec![key::CROSS]);
+        assert!(l.point(mid(row(&l, 12))).is_empty(), "the thirteenth name is on the next page");
+        // scrolled: the rows are the names from the top
+        l.top = 2;
+        l.draw(&vui, &mut r, &menus, &ig, 16, &mut cues);
+        assert_eq!(l.point(mid(row(&l, 0))), vec![MOVED]);
+        assert_eq!(l.sel, 2);
+        // the menu: its rows at once; off it (right of it, on a row) closed
+        l.key(&menus, &ig, &|_| String::new(), 134, true, 0, &mut cues);
+        assert!(l.menu.visible);
+        l.draw(&vui, &mut r, &menus, &ig, 32, &mut cues);
+        let at = l.menu.list.pos;
+        assert_eq!(l.point([(at[0] + 60) as f32, (at[1] + 48) as f32]), vec![key::CROSS]);
+        assert_eq!(l.menu.list.sel, 0);
+        let r1 = row(&l, 1);
+        assert_eq!(l.point([r1[2] as f32 - 4.0, mid(r1)[1]]), vec![MOVED, key::TRIANGLE]);
+        assert_eq!(l.sel, 3);
+        // the box: its buttons only
+        l.menu.visible = false;
+        l.mbox.prompt(&wide("Sure?"), 1, 0x0B05_3004, 5, 0);
+        l.mbox_visible = true;
+        l.draw(&vui, &mut r, &menus, &ig, 48, &mut cues);
+        assert!(l.point([630.0, 440.0]).is_empty());
+        assert!(find_button(&mut |p| l.point(p)).is_some());
+    }
+
 }
