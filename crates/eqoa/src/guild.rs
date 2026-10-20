@@ -3,7 +3,9 @@
 //! `VIClientPart2EF24` (VIClient+0x2EF24: the commands, all 0x0578 with a
 //! sub-opcode, their `Can*` checks, the invitation from 0x057A and the
 //! results in 0x0579) and `VIWndGuild` (the roster window, modes 20 and 21:
-//! six columns, eleven rows, the member menu and its confirmation box).
+//! six columns, eleven rows, the member menu and its confirmation box). A
+//! pointer (`pointer`) goes where the keys go: the box's buttons, the menu's
+//! rows (off the menu, it closes), a member's row.
 //!
 //! The invitation box's yes (268) sends sub 9 and its no, cancel or 45-second
 //! timeout (260) sub 10 with 1; the busy and already-in-a-guild refusals are
@@ -13,6 +15,7 @@
 
 use crate::client_image::Menus;
 use crate::dialog::{BoxAnswer, Key, MBox};
+use crate::pointer::{Hits, MOVED, key};
 use crate::startmenu::KeyFlash;
 use crate::wndlist::{ListUp, MiniMenu};
 use net::stream::{Reader, Writer};
@@ -452,6 +455,8 @@ pub struct WndGuild {
     pub mbox_visible: bool,
     pub menu: MiniMenu,
     flash: KeyFlash,
+    /// the members' rows drawn, by index (for a pointer)
+    hits: Hits,
 }
 
 impl Default for WndGuild {
@@ -460,7 +465,7 @@ impl Default for WndGuild {
         menu.kind = 1;
         let mut mbox = MBox::default();
         mbox.pos = [80, 115];
-        WndGuild { mode: 1, sel: 0, top: 0, count: 0, focus: true, time: 0, fade_in: 1, alpha: 1.0, window: Window::default(), mbox, mbox_visible: false, menu, flash: KeyFlash::default() }
+        WndGuild { mode: 1, sel: 0, top: 0, count: 0, focus: true, time: 0, fade_in: 1, alpha: 1.0, window: Window::default(), mbox, mbox_visible: false, menu, flash: KeyFlash::default(), hits: Hits::default() }
     }
 }
 
@@ -475,12 +480,46 @@ fn box_key(key: i32) -> Option<Key> {
 }
 
 impl WndGuild {
-
-    /// A pointer at frame point `p` (`pointer`): what is under it selected,
-    /// and the keys to press.
+    /// A pointer at frame point `p` (`pointer`), to the child with the
+    /// focus: the box's buttons (the invitation's too), the member menu's
+    /// rows, or off the menu the menu closed (△) and the row under the
+    /// pointer selected; in the roster a member selected, or the
+    /// selection's menu opened (✕). The keys to press.
     pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
-        let _ = p;
-        Vec::new()
+        if self.mbox_visible {
+            return self.mbox.point(p).then_some(key::CROSS).into_iter().collect();
+        }
+        if self.menu.visible {
+            if let Some(k) = self.menu.point(p) {
+                return k.into_iter().collect();
+            }
+            let mut keys = Vec::new();
+            if let Some(row) = self.hits.at(p).filter(|&row| row != self.sel) {
+                self.select(row);
+                keys.push(MOVED);
+            }
+            keys.push(key::TRIANGLE);
+            return keys;
+        }
+        if self.mode != 2 {
+            return Vec::new();
+        }
+        match self.hits.at(p) {
+            Some(row) if row == self.sel => vec![key::CROSS],
+            Some(row) => {
+                self.select(row);
+                vec![MOVED]
+            }
+            None => Vec::new(),
+        }
+    }
+
+    /// The selection on `row` as `Move` leaves it: the marker's blink
+    /// started over.
+    fn select(&mut self, row: i32) {
+        self.sel = row;
+        self.fade_in = 1;
+        self.alpha = 1.0;
     }
     /// 295 on gaining the focus: the window at (320, 180), 600 wide.
     fn gain_focus(&mut self, vui: &Vui, r: &dyn Raster, now: i64) {
@@ -668,6 +707,7 @@ impl WndGuild {
     /// answered here, and the menu).
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, menus: &Menus, g: &Guild, now: i64, cues: &mut Vec<i32>) -> Option<Up> {
         let mut up = None;
+        self.hits.clear();
         if self.mode == 2 {
             up = self.draw_roster(vui, r, g, now, cues);
         }
@@ -729,6 +769,8 @@ impl WndGuild {
                 black
             };
             let Some(m) = g.member(n) else { break };
+            // the row, from the marker to the last column's end
+            self.hits.push([x[0] - 27, y - line_h / 2, x[5] + 60, y + line_h - line_h / 2], n);
             // a name past eleven letters ends "..."
             let mut name: Vec<u8> = m.name.bytes().take(63).collect();
             if name.len() > 11 {
@@ -890,4 +932,51 @@ mod tests {
         assert_eq!(w.answered(BoxAnswer::Yes(0x0B05_1005, 7), &g), Some(Up::Member(6, -1)));
         assert_eq!(w.answered(BoxAnswer::No(0x0B05_1005, 7), &g), None);
     }
+
+    /// A pointer on the roster: a member selected, then the member menu
+    /// (✕); its rows used at once; off it closed (△) with the row under the
+    /// pointer selected; the invitation's box takes its buttons and the
+    /// roster is not there.
+    #[test]
+    fn a_pointer_on_the_roster() {
+        use crate::pointer::testing::{NullRaster, vui};
+        use crate::pointer::{MOVED, key};
+        let vui = vui();
+        let mut r = NullRaster;
+        let menus = Menus::default();
+        let mut g = Guild { in_guild: true, name: "K".into(), ..Default::default() };
+        for id in 1..=4 {
+            g.members.insert(id, Member { id, name: format!("M{id}"), class: 0, race: 0, level: 1, rank: 0, online: true });
+        }
+        let mut w = WndGuild::default();
+        w.close(&vui, &r, 0);
+        let mut cues = Vec::new();
+        w.draw(&vui, &mut r, &menus, &g, 0, &mut cues);
+        // member i is drawn on the window's row i + 1, columns from x 65
+        let at = |w: &WndGuild, i: i32, x: f32| [x, w.window.row_center(&vui, &NullRaster, i + 1)[1] as f32];
+        assert_eq!(w.point(at(&w, 3, 300.0)), vec![MOVED]);
+        assert_eq!(w.sel, 3);
+        assert_eq!(w.point(at(&w, 3, 500.0)), vec![key::CROSS], "any column of the selection");
+        assert!(w.point(at(&w, 4, 300.0)).is_empty(), "past the roster");
+        assert!(w.point(at(&w, -1, 300.0)).is_empty(), "the headers");
+        // the member menu
+        w.key(&menus, &g, 1, &|_| String::new(), 134, true, 0, &mut cues);
+        assert!(w.menu.visible);
+        w.draw(&vui, &mut r, &menus, &g, 16, &mut cues);
+        let m = w.menu.list.pos;
+        assert_eq!(w.point([(m[0] + 60) as f32, (m[1] + 48 + 2 * 19) as f32]), vec![key::CROSS]);
+        assert_eq!(w.menu.list.sel, 2, "Demote");
+        assert_eq!(w.point(at(&w, 0, 60.0)), vec![MOVED, key::TRIANGLE]);
+        assert_eq!(w.sel, 0);
+        // the invitation (mode 1): the box's buttons, no roster
+        let c = Cmds { name: "Kim".into(), guild: "K".into(), ..Default::default() };
+        w.show_invite(&|_| String::new(), &c, 0);
+        w.draw(&vui, &mut r, &menus, &g, 32, &mut cues);
+        assert!(w.point([630.0, 440.0]).is_empty());
+        let found = (0..112).flat_map(|y| (0..160).map(move |x| [x as f32 * 4.0, y as f32 * 4.0])).any(|p| w.point(p) == vec![key::CROSS]);
+        assert!(found, "the box's buttons");
+        w.mbox_visible = false;
+        assert!(w.point(at(&w, 1, 300.0)).is_empty(), "mode 1 has no roster to pick from");
+    }
+
 }
