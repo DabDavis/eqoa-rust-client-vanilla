@@ -2100,6 +2100,10 @@ impl ApplicationHandler for App {
                 // longer frames rather than fewer ticks.
                 #[cfg(target_arch = "wasm32")]
                 if !crate::web::frame_due() {
+                    // the sound is still fed (`Sound::feed`)
+                    if let Some(s) = self.sound.as_mut() {
+                        s.feed();
+                    }
                     if let Some(g) = &self.gfx {
                         g.window.request_redraw();
                     }
