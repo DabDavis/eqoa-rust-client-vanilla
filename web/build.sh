@@ -1,23 +1,40 @@
 #!/bin/sh
-# The browser client: web/dist/ gets the page (with its worker, unpack.js, and
-# its AudioWorklet, sound.js), eqoa.js and eqoa_bg.wasm
-# (wasm-bindgen 0.2.129, the version Cargo.lock pins: `cargo install
-# wasm-bindgen-cli --version 0.2.129`). wasm-opt is used when it is on the
-# PATH or in ~/emsdk. No game data is in dist/: the player picks their own disc
-# image in the page.
+# The browser client: web/dist/ gets the page (index.html) and its build,
+# v/<build>/: main.js and report.js, the worker (unpack.js), the AudioWorklet
+# (sound.js), eqoa.js and eqoa_bg.wasm (wasm-bindgen 0.2.129, the version
+# Cargo.lock pins: `cargo install wasm-bindgen-cli --version 0.2.129`), and
+# build.json. A build is named by the digest of its files, the page and the
+# commit, so its files never change under that name: the host keeps them
+# for good, and only the page and version.json (the newest build's name, for
+# the pages already open) are asked for again (web/deploy.sh). wasm-opt is
+# used when it is on the PATH or in ~/emsdk. No game data is in dist/: the
+# player picks their own disc image in the page.
 set -e
 cd "$(dirname "$0")/.."
 export TMPDIR="${TMPDIR:-$HOME/.cache/rust-tmp}"
 mkdir -p "$TMPDIR"
 cargo build --release --target wasm32-unknown-unknown -p eqoa
 rm -rf web/dist
-mkdir -p web/dist
-wasm-bindgen --target web --no-typescript --out-dir web/dist --out-name eqoa target/wasm32-unknown-unknown/release/eqoa.wasm
+STAGE=web/dist/stage
+mkdir -p "$STAGE"
+wasm-bindgen --target web --no-typescript --out-dir "$STAGE" --out-name eqoa target/wasm32-unknown-unknown/release/eqoa.wasm
 OPT="$(command -v wasm-opt || true)"
 [ -z "$OPT" ] && [ -x "$HOME/emsdk/upstream/bin/wasm-opt" ] && OPT="$HOME/emsdk/upstream/bin/wasm-opt"
 if [ -n "$OPT" ]; then
     "$OPT" -O2 --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext --enable-mutable-globals \
-        --enable-reference-types --enable-multivalue web/dist/eqoa_bg.wasm -o web/dist/eqoa_bg.wasm
+        --enable-reference-types --enable-multivalue "$STAGE/eqoa_bg.wasm" -o "$STAGE/eqoa_bg.wasm"
 fi
-cp web/index.html web/main.js web/unpack.js web/sound.js web/dist/
-ls -la web/dist
+cp web/main.js web/report.js web/unpack.js web/sound.js "$STAGE/"
+# the commit, with a + when tracked files differ from it
+COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo none)"
+git diff --quiet HEAD 2>/dev/null || COMMIT="$COMMIT+"
+BUILD="$( { (cd "$STAGE" && sha256sum -- *); sha256sum < web/index.html; echo "$COMMIT"; } | sha256sum | cut -c1-12)"
+printf '{"build":"%s","commit":"%s"}\n' "$BUILD" "$COMMIT" > "$STAGE/build.json"
+mkdir -p web/dist/v
+mv "$STAGE" "web/dist/v/$BUILD"
+sed -e "s|src=\"\./main\.js\"|src=\"./v/$BUILD/main.js\"|" -e "s|src=\"\./report\.js\"|src=\"./v/$BUILD/report.js\"|" web/index.html > web/dist/index.html
+# a page that names no build would load files that are not there
+grep -q "src=\"./v/$BUILD/main.js\"" web/dist/index.html && grep -q "src=\"./v/$BUILD/report.js\"" web/dist/index.html \
+    || { echo "web/index.html: its scripts are not ./main.js and ./report.js" >&2; exit 1; }
+cp "web/dist/v/$BUILD/build.json" web/dist/version.json
+ls -la "web/dist" "web/dist/v/$BUILD"

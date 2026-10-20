@@ -228,6 +228,15 @@ impl WebDisc {
         self.read_at(e.lba as u64 * iso::SECTOR, e.size as usize).await
     }
 
+    /// The program the disc starts, as its SYSTEM.CNF names it (`BOOT2 =
+    /// cdrom0:\\SLUS_207.44;1` is `SLUS_207.44`): which disc this is.
+    pub async fn boot(&self) -> Option<String> {
+        let cnf = self.read("SYSTEM.CNF").await.ok()?;
+        let line = String::from_utf8_lossy(&cnf).lines().find(|l| l.trim_start().to_ascii_uppercase().starts_with("BOOT2"))?.to_string();
+        let file = line.rsplit(['\\', '/', ':']).next()?.trim();
+        Some(file.split(';').next()?.trim().to_string()).filter(|f| !f.is_empty())
+    }
+
     /// Runs a synchronous walk against the cache, fetching what it lacks,
     /// until it stops asking.
     pub async fn drive<T>(&mut self, mut f: impl FnMut(&mut Sparse) -> Result<T, iso::Error>) -> Result<T, iso::Error> {
@@ -242,5 +251,36 @@ impl WebDisc {
                 r => return r,
             }
         }
+    }
+}
+
+/// The disc this client is made for, by the program it starts.
+pub const FRONTIERS: &str = "SLUS_207.44";
+
+/// The other EverQuest Online Adventures discs, by the program each starts,
+/// and what is missing with it: measured, each disc through the page
+/// (2026-10-20). The first and the 2002-09-18 beta start the same program.
+const OTHER_DISCS: &[(&str, &str, &str)] = &[
+    ("SLUS_204.70", "EverQuest Online Adventures (USA)", "the client cannot enter the world"),
+    ("SLUS_280.21", "an EverQuest Online Adventures beta (USA)", "the client cannot enter the world"),
+    ("SCES_516.48", "EverQuest Online Adventures (Europe)", "there is no HUD and no start menu"),
+    ("SCES_517.25", "EverQuest Online Adventures (Europe, En/Fr/De)", "there is no HUD and no start menu"),
+    ("SCED_517.28", "the EverQuest Online Adventures demo (Europe)", "there is no HUD and no start menu"),
+    ("SLUS_290.63", "the Frontiers beta (USA)", "there is no HUD and no start menu"),
+];
+
+/// Whether a disc that starts `boot` is the one this client is made for,
+/// and a line for the player saying which disc it is.
+pub fn describe(boot: Option<&str>) -> (bool, String) {
+    const WANT: &str = "The client is made for EverQuest Online Adventures: Frontiers (USA), SLUS-20744";
+    // SLUS_207.44 as the disc's label prints it, SLUS-20744
+    let label = |b: &str| b.replace('_', "-").replace('.', "");
+    match boot {
+        Some(FRONTIERS) => (true, "EverQuest Online Adventures: Frontiers (USA), SLUS-20744.".into()),
+        Some(b) => match OTHER_DISCS.iter().find(|d| d.0.eq_ignore_ascii_case(b)) {
+            Some((_, name, missing)) => (false, format!("This is {name}, {}. {WANT}: with this disc {missing}.", label(b))),
+            None => (false, format!("This disc starts {}, which is not Frontiers. {WANT}.", label(b))),
+        },
+        None => (false, format!("This image has no SYSTEM.CNF, so it is not a PlayStation 2 disc. {WANT}.")),
     }
 }

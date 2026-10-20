@@ -3,7 +3,8 @@
 // then the game on the canvas. Query parameters override the defaults:
 // ?relay=ws://127.0.0.1:8790&server=203.0.113.10 for a local server, and
 // ?account= for the account service (default: /eqoa/account on this host).
-import init, { play, view, choose_character, create_character, delete_character, random_name } from './eqoa.js';
+// Reports, notices and what goes wrong are report.js's (window.eqoaReport).
+import init, { play, view, choose_character, create_character, delete_character, random_name, client_state, want_shot, crash_test, disc_id } from './eqoa.js';
 
 const RACES = ['Human', 'Elf', 'Dark Elf', 'Gnome', 'Dwarf', 'Troll', 'Barbarian', 'Halfling', 'Erudite', 'Ogre', 'Froglok'];
 const CITIES = { 1: 'Freeport', 2: 'Qeynos' };
@@ -13,8 +14,16 @@ const STATS = ['Strength', 'Stamina', 'Agility', 'Dexterity', 'Wisdom', 'Intelli
 const POINTS = 20;
 
 const $ = (id) => document.getElementById(id);
-const status = (t) => { $('status').textContent = t; };
+// the client's own graphics line ("graphics: <adapter> (<backend>)"), for reports
+let clientGraphics = '';
+const status = (t) => {
+  $('status').textContent = t;
+  if (t.startsWith('graphics: ')) clientGraphics = t.slice(10);
+};
 window.eqoaStatus = status;
+// report.js's, when it loaded (it is a module of its own, before this one)
+const report = window.eqoaReport || null;
+const problem = (key, text) => (report ? report.problem(key, text) : console.warn(text));
 
 // ---- sound: an AudioContext at 48 kHz, made on the click that starts a
 // session (a page may only start sound from its user's gesture), playing
@@ -44,7 +53,7 @@ function startAudio() {
     node.port.onmessage = ({ data }) => { audio.stats = data; };
     node.connect(ctx.destination);
     audio.node = node;
-  }).catch((e) => console.log('no sound: ' + e));
+  }).catch((e) => problem('sound-worklet', `No sound: the page's sound worklet (sound.js) did not load (${e}).`));
 }
 
 window.eqoaAudio = {
@@ -101,11 +110,25 @@ const params = new URLSearchParams(location.search);
 const store = {
   get(k) { try { return localStorage.getItem('eqoa.' + k) || ''; } catch { return ''; } },
   set(k, v) { try { localStorage.setItem('eqoa.' + k, v); } catch { /* private window */ } },
+  drop(k) { try { localStorage.removeItem('eqoa.' + k); } catch { /* as above */ } },
+};
+const session = {
+  get(k) { try { return sessionStorage.getItem('eqoa.' + k) || ''; } catch { return ''; } },
+  set(k, v) { try { sessionStorage.setItem('eqoa.' + k, v); } catch { /* as above */ } },
 };
 const wsBase = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
 const accountBase = (params.get('account') || '/eqoa/account').replace(/\/+$/, '');
-for (const k of ['user', 'relay', 'server', 'viewargs']) $(k).value = params.get(k) || store.get(k);
-if (!$('relay').value) $('relay').value = wsBase + '/eqoa/relay';
+// What the page offers when nothing is given: kept only when the player
+// changed it, so that a new default reaches everyone who did not.
+const defaults = { user: '', relay: wsBase + '/eqoa/relay', server: '', viewargs: '' };
+for (const k of Object.keys(defaults)) $(k).value = params.get(k) || store.get(k) || defaults[k];
+function keepFields() {
+  for (const k of Object.keys(defaults)) {
+    const v = $(k).value.trim();
+    if (v && v !== defaults[k]) store.set(k, v);
+    else store.drop(k);
+  }
+}
 
 // ---- views
 
@@ -121,6 +144,7 @@ function error(where, text) {
 // ---- log in, or a new account first
 
 let mode = 'login';
+let started = false; // a session or the viewer began: a reload would end it
 function setMode(m) {
   mode = m;
   $('tab-login').classList.toggle('on', m === 'login');
@@ -167,7 +191,8 @@ $('login').addEventListener('submit', async (ev) => {
   const pass = $('pass').value;
   if (!file) return error('login', 'Pick your disc image first.');
   if (mode === 'new' && pass !== $('pass2').value) return error('login', 'The passwords differ.');
-  for (const k of ['user', 'relay', 'server', 'viewargs']) store.set(k, $(k).value.trim());
+  keepFields();
+  started = true;
   busy(true);
   error('login', '');
   try {
@@ -191,12 +216,14 @@ $('login').addEventListener('submit', async (ev) => {
 $('view').addEventListener('click', async () => {
   const file = $('iso').files[0];
   if (!file) return error('login', 'Pick your disc image first.');
-  store.set('viewargs', $('viewargs').value.trim());
+  keepFields();
+  started = true;
   busy(true);
   try {
     show(null);
     $('eqoa').focus();
     await view(file, $('viewargs').value.trim() || 'CHAR.ESF 0x70D898C6');
+    if (report) report.running(true);
   } catch (e) {
     show('login');
     busy(false);
@@ -259,7 +286,13 @@ window.eqoaRefused = (text) => {
 
 window.eqoaRandomName = (name) => { $('c-name').value = name; };
 window.eqoaEntering = (name) => { show(null); status('entering the world as ' + name); };
-window.eqoaInWorld = () => { show(null); $('eqoa').focus(); };
+window.eqoaInWorld = () => {
+  show(null);
+  $('eqoa').focus();
+  // the status line goes right: the HUD's report button is at the bottom left
+  document.body.classList.add('playing');
+  if (report) report.running(true);
+};
 
 $('logout').onclick = () => location.reload();
 
@@ -427,10 +460,12 @@ function unpackInWorker(util, aut) {
   });
 }
 
-// (name, UTIL.REL, the .AUT) -> the module; the client calls it (web::unpack_client).
-window.eqoaUnpack = async (name, util, aut) => {
+// (name, UTIL.REL, the .AUT, fresh) -> the module; the client calls it
+// (web::unpack_modules), with `fresh` when the copy kept from before failed
+// its check: unpacked again, and that copy replaced.
+window.eqoaUnpack = async (name, util, aut, fresh) => {
   const file = await cacheName(name, util, aut).catch(() => null);
-  if (file) {
+  if (file && !fresh) {
     const hit = await cached(file).catch(() => null);
     if (hit) return hit;
   }
@@ -543,6 +578,118 @@ async function checkGraphics() {
   gfxHelp(b, 'WebGPU is not available here.');
 }
 
+// ---- the disc image: which disc it is, by the program it starts
+// (web::disc_id), as soon as it is picked, so a disc other than Frontiers
+// is named before a session finds out without its HUD.
+
+let discLine = '';
+$('iso').addEventListener('change', async () => {
+  const file = $('iso').files[0];
+  const line = $('iso-what');
+  line.textContent = '';
+  line.className = 'note';
+  discLine = '';
+  if (!file) return;
+  try {
+    await ready;
+    const [ok, text] = await disc_id(file);
+    line.className = 'note ' + (ok ? 'ok' : 'warn');
+    line.textContent = text;
+    discLine = `${text} (${file.size} bytes)`;
+  } catch (e) {
+    line.className = 'note warn';
+    line.textContent = String(e && e.message ? e.message : e);
+    discLine = `${line.textContent} (${file.size} bytes)`;
+  }
+});
+
+// ---- updates: this page is one build (web/build.sh puts each in
+// v/<build>/, kept as it is for good), and version.json beside the page names
+// the newest. A tab left open asks now and then: on an untouched login card
+// it reloads at once, nothing being lost; anywhere else it says so, and the
+// player reloads when it suits them.
+
+const BUILD = (import.meta.url.match(/\/v\/([0-9a-f]+)\/main\.js(?:$|[?#])/) || [])[1] || null;
+window.eqoaBuild = BUILD;
+let latest = null;     // the newest build version.json named, when last asked
+let asked = 0;
+let laterFor = null;   // the build the player said "later" to
+
+async function checkUpdate(force) {
+  if (!BUILD) return null; // not a built page (no v/<build>/): nothing to compare
+  if (!force && Date.now() - asked < 10000) return latest;
+  asked = Date.now();
+  try {
+    const r = await fetch(new URL('../../version.json', import.meta.url), { cache: 'no-store' });
+    if (!r.ok) return latest;
+    latest = (await r.json()).build || null;
+  } catch {
+    return latest; // offline, or the host is down: nothing to say
+  }
+  if (!report) return latest;
+  if (!latest || latest === BUILD) {
+    report.notice('update');
+    return latest;
+  }
+  const untouched = !started && !$('iso').files.length && !$('pass').value && !$('pass2').value;
+  if (session.get('reloadedFor') === latest) {
+    // reloaded for it once already and still this build: something between
+    // here and the server keeps the old page
+    problem('stale-page', `This page is build ${BUILD}, and the server's is ${latest}; a reload did not bring it. Something between the browser and the server may be keeping the old page: try a hard reload (Ctrl+F5, or Ctrl+Shift+R).`);
+    return latest;
+  }
+  if (untouched) {
+    session.set('reloadedFor', latest);
+    location.reload();
+    return latest;
+  }
+  if (laterFor !== latest) {
+    report.notice('update', '', started
+      ? 'A new version of the client is out. Reloading leaves the game, and you log in again.'
+      : 'A new version of the client is out.', [
+      ['Reload', () => { session.set('reloadedFor', latest); location.reload(); }, true],
+      ['Later', () => { laterFor = latest; report.notice('update'); }],
+    ]);
+  }
+  return latest;
+}
+window.eqoaCheckUpdate = () => checkUpdate(true);
+setInterval(checkUpdate, 60000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkUpdate(); });
+addEventListener('pageshow', (e) => { if (e.persisted) checkUpdate(); });
+
+// ---- reports (report.js): what this page adds to each, and the cards' buttons
+
+if (report) {
+  report.graphics = () => {
+    if (/\(Gl\)$/.test(clientGraphics)) return 'WebGL2';
+    if (/WebGpu/.test(clientGraphics)) return 'WebGPU';
+    const g = $('gfx-state').textContent;
+    return /WebGPU/.test(g) ? 'WebGPU' : /WebGL2/.test(g) ? 'WebGL2' : '';
+  };
+  report.facts = () => [
+    `update: ${!BUILD ? 'not a built page' : !latest ? 'not asked yet' : latest === BUILD ? 'this is the newest' : `the server has ${latest}`}`,
+    `graphics: ${$('gfx-state').textContent}${clientGraphics ? `; the client's: ${clientGraphics}` : ''}`,
+    `disc: ${discLine || ($('iso').files.length ? 'picked, not identified' : 'none picked')}`,
+    `panel: ${['login', 'chars', 'create'].find((v) => !$(v).hidden) || 'none (the game)'}, status: ${$('status').textContent}`,
+    `relay ${$('relay').value || '-'}, server ${$('server').value || '(this host)'}`,
+    `sound: ${JSON.stringify(window.eqoaAudio.stats())}`,
+  ];
+}
+for (const [button, where] of [['report-login', 'login'], ['report-chars', 'chars']]) {
+  $(button).onclick = () => {
+    const e = $(where + '-error').textContent.trim();
+    if (report) report.open(e ? `The page said: ${e}` : '');
+  };
+}
+
 checkGraphics();
 setMode('login');
-init({ module_or_path: wasmModule }).then(() => status('ready')).catch((e) => status('could not load the client: ' + e));
+const ready = init({ module_or_path: wasmModule });
+ready.then(() => {
+  window.eqoaClient = { state: client_state, wantShot: want_shot, crashTest: crash_test };
+  status('ready');
+}).catch((e) => {
+  status('could not load the client: ' + e);
+  problem('load', `The client did not load (${e}). Reload the page; if it keeps happening, send a report.`);
+});

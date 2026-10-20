@@ -111,12 +111,14 @@ pub struct Hud {
 
 /// What a pointer finds on the HUD's left side (`Hud::pick`): the player's
 /// own frame, a group member's bar (its id), the pet's bar. Each is what L1's
-/// cycle targets in turn.
+/// cycle targets in turn. In a page, also the bug report's button.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Pick {
     Me,
     Member(u32),
     Pet,
+    #[cfg(target_arch = "wasm32")]
+    Report,
 }
 
 impl Hud {
@@ -209,6 +211,18 @@ impl Hud {
             ui.ui.anchor = Anchor::Left;
         }
         self.draw_target(vui, ui, [20, 348], s);
+        #[cfg(target_arch = "wasm32")]
+        self.draw_report(vui, ui, [20, 421]);
+    }
+
+    /// The page's bug report (F3, web/report.js) as a button under the
+    /// target's bar: the bar's art, dim, with its key and what it does on it.
+    #[cfg(target_arch = "wasm32")]
+    fn draw_report(&mut self, vui: &Vui, ui: &mut UiRaster, at: [i32; 2]) {
+        let label = wide("F3  Report a bug");
+        let w = vui.string_width(ui, &label) + 28;
+        self.note([at[0], at[1], at[0] + w, at[1] + vui.entry(26).uv1[1]], Pick::Report);
+        vui.blit_bar(ui, &label, [1.0, 1.0, 1.0, 0.85], at, 25, 26, w, 3, 0.5, 0, true);
     }
 
     /// `DrawGroup`: a bar for each other active member, 48 apart: its name,

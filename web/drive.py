@@ -18,7 +18,9 @@ keys for a while (w, a, s, d, ArrowLeft...: 'w:2000' holds w for 2 s);
 printed. --new-account makes the account first (the page's New account tab).
 WebGL/WebGPU run on the machine's GPU (--no-gpu: SwiftShader, every core).
 --headed opens a real window on $DISPLAY instead (F11 needs one); --resize
-SECONDS=WxH sets the page's viewport then, as a resized window would.
+SECONDS=WxH sets the page's viewport then, as a resized window would; --scale
+is the device's pixel ratio throughout (Windows' display scaling, 1.25 or 1.5;
+a phone's, 2 to 3).
 --mobile makes the page a touch-first device (CDP's touch emulation: its
 pointer is coarse); --touch SECONDS=STEPS touches the canvas then, steps
 ';'-separated: 'tap X Y', 'hold X Y MS', 'drag X0 Y0 X1 Y1 MS' (CSS pixels);
@@ -68,6 +70,10 @@ async def main(a):
         flags += ["--use-angle=vulkan", "--enable-features=Vulkan", "--ignore-gpu-blocklist", "--enable-gpu"]
     if a.webgpu:
         flags += ["--enable-unsafe-webgpu", "--enable-features=Vulkan,WebGPU"]
+    if a.scale != 1:
+        # the display's own scale, as Windows' is: the canvas's device pixels
+        # follow it (CDP's emulated ratio leaves them at the CSS size)
+        flags.append(f"--force-device-scale-factor={a.scale}")
     flags += a.chrome
     env = dict(os.environ, TMPDIR=str(tmp), DBUS_SESSION_BUS_ADDRESS="disabled:")
     proc = subprocess.Popen(flags + ["about:blank"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -286,7 +292,7 @@ async def drive(a, base, ws_url):
                 await mice(arg)
             elif kind == "resize":
                 w, h = (int(v) for v in arg.split("x"))
-                await call("Emulation.setDeviceMetricsOverride", width=w, height=h, deviceScaleFactor=1, mobile=False)
+                await call("Emulation.setDeviceMetricsOverride", width=w, height=h, deviceScaleFactor=a.scale, mobile=False)
                 out(f"resized to {w}x{h}")
             else:
                 await js("document.getElementById('eqoa').focus()")
@@ -328,6 +334,7 @@ if __name__ == "__main__":
     ap.add_argument("--profile", default="~/.cache/eqoa-rs-web/profile")
     ap.add_argument("--port", type=int, default=9334)
     ap.add_argument("--size", default="1280,800")
+    ap.add_argument("--scale", type=float, default=1, help="the device's pixel ratio (Windows' display scaling: 1.25, 1.5)")
     ap.add_argument("--gpu", action=argparse.BooleanOptionalAction, default=True)
     ap.add_argument("--webgpu", action="store_true", help="ask Chromium for WebGPU too")
     ap.add_argument("--chrome", action="append", default=[])

@@ -267,11 +267,46 @@ the world if it was entered quickly.
 
 ```bash
 cargo install wasm-bindgen-cli --version 0.2.129   # once: the version Cargo.lock pins
-web/build.sh                                        # web/dist: the page, its worker and worklet, eqoa.js, eqoa_bg.wasm
+web/build.sh                                        # web/dist: the page, version.json and the build, v/<build>/
 EQOA_WEB_DEST=user@host:/path/to/play/ web/deploy.sh
+web/pagetest.py --iso run/eqoa.iso                  # the page's updates, reports and crashes (21 checks)
 web/drive.py --iso run/eqoa.iso --view 'CHAR.ESF 0x70D898C6' --shot 6=human.png   # headless Chromium
 EQOA_PASSWORD=... web/drive.py --base https://host/eqoa/play/ --iso run/eqoa.iso --play <user> --shot 30=world.png
 ```
+
+Each build is a directory of its own, `v/<build>/`, named by the digest of its files,
+the page and the commit (`web/build.sh`), so nothing under that name ever changes: the
+host serves `v/` as immutable and revalidates only the page and `version.json`.
+`web/deploy.sh` publishes the build's directory first, then the page that names it, then
+`version.json`. Builds stay two days, and the newest three always, for the pages still
+running them: a page fetches its worker and its worklet a while after it opened. A page
+already open asks for `version.json` every minute and whenever it is shown again. On a
+login card with nothing entered it reloads at once; anywhere else it says a new version
+is out and the player reloads when it suits them; a reload that brings the old page back
+is a problem notice, not another reload. Until 2026-10-20 a deploy rewrote the files in
+place one at a time: a page loaded during one could mix two builds (a tester's did, to
+the second), and a tab left open never heard of a new build.
+
+Problems are reported from the page (`web/report.js`) as the Go client reports them.
+F3, the HUD's **Report a bug** under the target's bar, or a card's **Report a problem**
+opens a dialog that sends a note, a picture of the frame (the client says when its
+frame is drawn, `web::frame_drawn`), the client's state (`web::note_state`: the
+character, the world, the entities round it, what has come of CLIENT and SUPPORT) and
+the console's last 200 lines to go-eqoa-client-v1's `cmd/reportd`; its board is
+`/eqoa/reports/board`, linked from both cards. The account name and the password are
+taken out of everything sent. A panic, a wasm trap or a lost graphics device opens the
+crash report (`/crash`), and a tab that died while it was shown is offered on the next
+visit. What only takes a part away is a notice with a Send report button: a disc other
+than Frontiers, named by the program it starts as soon as it is picked (`web/disc.rs`;
+with the European discs and the Frontiers beta there is no HUD and no start menu, with
+the first USA disc and the 2002 betas no world: each measured through the page), a
+module that would not unpack on the Frontiers disc (unpacked once more past the page's
+copy first), a file of the page that did not load, no sound, a failed world change.
+`web/pagetest.py` checks the page's half against a stand-in for reportd: the update
+paths, a report and its scrubbing, a crash, a tab whose renderer really crashed, a page
+whose build is gone, the disc line. Each check has its control. `drive.py --scale`
+is the display's own scale: at Windows' 125% and 150%, on WebGPU and on WebGL2, the HUD
+draws as at 100% and the canvas holds the device's pixels.
 
 F11 is the browser's own full screen. The canvas cancels every key it is given
 (winit's listener calls `preventDefault`), which kept F11 from the browser, so the

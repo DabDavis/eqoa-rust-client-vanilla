@@ -1347,6 +1347,26 @@ impl App {
         v != Vec3::ZERO
     }
 
+    /// What a report from the page says of the client (web/report.js): the
+    /// frames, the surface, the files in the library and play's own.
+    #[cfg(target_arch = "wasm32")]
+    fn report_state(&self) -> String {
+        use std::fmt::Write;
+        let mut o = String::new();
+        let _ = writeln!(o, "frames {}, clock {:.1} s", FRAMES.load(std::sync::atomic::Ordering::Relaxed), self.clock.elapsed().as_secs_f64());
+        if let Some(g) = &self.gfx {
+            let _ = writeln!(o, "surface {}x{} {:?}", g.config.width, g.config.height, g.config.format);
+        }
+        let _ = writeln!(o, "files: {}", self.lib.files.iter().map(|f| f.0.as_str()).collect::<Vec<_>>().join(", "));
+        if let Some(e) = &self.entering {
+            let _ = writeln!(o, "entering {} at {:?}", e.0, e.1);
+        }
+        if let (Some(p), Some(w)) = (&self.play, &self.walker) {
+            o.push_str(&p.report(w.cam.walk.phys.position.to_array()));
+        }
+        o
+    }
+
     /// The renderer on a configured surface (or none: an offscreen target of
     /// the configuration's size), then the scene.
     fn attach(&mut self, window: Arc<Window>, surface: Option<wgpu::Surface<'static>>, config: wgpu::SurfaceConfiguration, device: wgpu::Device, queue: wgpu::Queue) {
@@ -2050,7 +2070,11 @@ impl ApplicationHandler for App {
                     let (file, pos, heading, _) = self.entering.take().unwrap();
                     match r.map_err(Error::from).and_then(|(c, zones)| self.enter_world(&file, c, zones, pos, heading)) {
                         Ok(()) => crate::say(&format!("entered {file} at {pos:?}")),
-                        Err(e) => crate::say(&format!("world change to {file}: {e}")),
+                        Err(e) => {
+                            crate::say(&format!("world change to {file}: {e}"));
+                            #[cfg(target_arch = "wasm32")]
+                            crate::web::problem("world", &format!("The world change to {file} failed: {e}"));
+                        }
                     }
                     if let Some(p) = self.play.as_mut() {
                         p.world_entered();
@@ -2281,6 +2305,13 @@ impl ApplicationHandler for App {
                 if let Some(p) = &mut self.perf {
                     p.drawn = g.renderer.drawn.get();
                     p.end(frame_start);
+                }
+                // The page's picture of this frame, if it asked, and its
+                // report's state of the client (web/report.js).
+                #[cfg(target_arch = "wasm32")]
+                {
+                    crate::web::frame_drawn();
+                    crate::web::note_state(|| self.report_state());
                 }
             }
             _ => {}

@@ -22,6 +22,13 @@
 //! mixed on this thread a little ahead of the page's audio clock and played
 //! by an AudioWorklet (`window.eqoaAudio`, main.js; web/sound.js), the music
 //! read off the disc whole before it starts (`bgm`).
+//!
+//! What goes wrong is the page's to show and to report (web/report.js): a
+//! panic or a lost graphics device stops the client and opens its crash
+//! report (`crash`); what only takes a part away (a module that would not
+//! unpack, a disc other than Frontiers, no sound) is a notice (`problem`).
+//! A report carries the state play last noted (`note_state`) and a picture
+//! of the frame drawn after the page asked for one (`want_shot`).
 
 mod bgm;
 mod disc;
@@ -110,9 +117,95 @@ pub fn can_rumble() -> bool {
         .is_some_and(|v| v.is_truthy())
 }
 
-/// `main`, in a browser: the page calls the exports below.
+/// `main`, in a browser: the page calls the exports below. A panic goes to
+/// the console and to the page's crash report: the client stops there, and
+/// a player without the console open would see only a frame that no longer
+/// moves.
 pub fn start() {
-    console_error_panic_hook::set_once();
+    std::panic::set_hook(Box::new(|info| {
+        console_error_panic_hook::hook(info);
+        crash("The client stopped", &info.to_string());
+    }));
+}
+
+thread_local! {
+    /// The client's state as the frame last noted it, and when (`note_state`).
+    static STATE: RefCell<(String, f64)> = const { RefCell::new((String::new(), f64::NEG_INFINITY)) };
+}
+
+/// Notes the client's state for a report, once a second at most: `state`
+/// runs only when a second has gone by.
+pub fn note_state(state: impl FnOnce() -> String) {
+    let now = js_sys::Date::now();
+    STATE.with(|c| {
+        if let Ok(mut c) = c.try_borrow_mut()
+            && now - c.1 >= 1000.0
+        {
+            *c = (state(), now);
+        }
+    });
+}
+
+/// The client's state as last noted, for the page's reports.
+#[wasm_bindgen]
+pub fn client_state() -> String {
+    STATE.with(|c| c.try_borrow().map(|c| c.0.clone()).unwrap_or_default())
+}
+
+/// The client has stopped (`title`; `detail` says why): the page's crash
+/// report (`window.eqoaCrash`, web/report.js), with the state last noted.
+fn crash(title: &str, detail: &str) {
+    let text = format!("{detail}\n\n{}", client_state());
+    let a = js_sys::Array::of2(&title.into(), &text.into());
+    call_page("eqoaCrash", &a);
+}
+
+/// Something the player should know went wrong, short of a crash: a notice
+/// on the page with a way to report it (`window.eqoaProblem`). `key` names
+/// it, so the same problem again replaces its notice.
+pub fn problem(key: &str, text: &str) {
+    log(text);
+    call_page("eqoaProblem", &js_sys::Array::of2(&key.into(), &text.into()));
+}
+
+static SHOT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The page wants a picture of the next frame (a report's): it is told once
+/// that frame is drawn, while its image is still the canvas's (`frame_drawn`).
+#[wasm_bindgen]
+pub fn want_shot() {
+    SHOT.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// A frame is drawn: the page takes its picture now, if it asked
+/// (`window.eqoaFrameDrawn`).
+pub fn frame_drawn() {
+    if SHOT.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        call_page("eqoaFrameDrawn", &JsValue::NULL);
+    }
+}
+
+/// The page's bug report, opened from the HUD's button (`hud::Pick::Report`;
+/// F3 is the page's own, `window.eqoaReportOpen`).
+pub fn open_report() {
+    call_page("eqoaReportOpen", &JsValue::NULL);
+}
+
+/// Stops the client with a panic, as a bug would: how the crash report is
+/// checked (`eqoaClient.crashTest()` in the page).
+#[wasm_bindgen]
+pub fn crash_test() {
+    panic!("crash_test: the client stopped on purpose");
+}
+
+/// What the disc image `file` is (`disc::describe`): `[ok, line]`, ok when
+/// it is the Frontiers disc the client is made for. The page's login card
+/// shows the line when the image is picked.
+#[wasm_bindgen]
+pub async fn disc_id(file: web_sys::File) -> Result<JsValue, JsValue> {
+    let disc = WebDisc::open(file).await.map_err(|e| JsValue::from_str(&e))?;
+    let (ok, line) = disc::describe(disc.boot().await.as_deref());
+    Ok(js_sys::Array::of2(&ok.into(), &line.into()).into())
 }
 
 /// Once a second, the frame rate and the wasm heap on the status line,
@@ -127,7 +220,10 @@ fn rate(what: &'static str) {
             let [lead, dry] = &crate::audio::PAGE_SOUND;
             let lead = lead.load(std::sync::atomic::Ordering::Relaxed);
             let sound = if lead > 0 { format!(" · sound +{lead} ms, dry {}", dry.load(std::sync::atomic::Ordering::Relaxed)) } else { String::new() };
-            status(&format!("{what} · {} fps · {:.0} MB{sound}", n.wrapping_sub(last), mem / 1048576.0));
+            // the status line only: once a second in the console would push
+            // everything else out of the last lines a report carries
+            let line = format!("{what} · {} fps · {:.0} MB{sound}", n.wrapping_sub(last), mem / 1048576.0);
+            call_page("eqoaStatus", &JsValue::from_str(&line));
             last = n;
         }
     });
@@ -183,6 +279,13 @@ async fn gfx(canvas: web_sys::HtmlCanvasElement) -> Result<viewer::PendingGfx, S
         .request_device(&wgpu::DeviceDescriptor { required_limits: limits, ..Default::default() })
         .await
         .map_err(|e| format!("device: {e}"))?;
+    // A device lost (a driver reset, the GPU process gone) draws nothing more:
+    // the client has stopped. `Destroyed` is the page closing.
+    device.set_device_lost_callback(|reason, message| {
+        if !matches!(reason, wgpu::DeviceLostReason::Destroyed) {
+            crash("The graphics stopped", &format!("the graphics device was lost ({reason:?}): {message}"));
+        }
+    });
     let mut config = surface.get_default_config(&adapter, w, h).ok_or("the surface cannot be configured")?;
     // The bytes go out as the GS's do: no sRGB encode (render::TARGET_FORMAT).
     config.format = config.format.remove_srgb_suffix();
@@ -286,12 +389,26 @@ pub fn unpack_module(util: &[u8], aut: &[u8]) -> Result<Vec<u8>, JsValue> {
 /// `.AUT`s read off the disc here, each unpacked by the page
 /// (`window.eqoaUnpack`: a worker of its own, or the page's copy from a
 /// visit before) while the session goes on, and kept (`modules::put`) for
-/// play to take up when it comes.
-async fn unpack_modules(disc: &WebDisc) {
+/// play to take up when it comes. An image that fails `modules::check` is
+/// unpacked once more past the page's copy, in case that copy is what is
+/// wrong. On the Frontiers disc a module that still does not come is a
+/// problem for the page to show; on another disc it is expected, and the
+/// disc's own notice says so.
+async fn unpack_modules(disc: &WebDisc, frontiers: bool) {
     use crate::modules::{self, Module};
+    let missing = move |m: Module, why: &str| {
+        let gives = m.gives();
+        let text = format!("{}{} is missing ({}: {why}).", gives[..1].to_uppercase(), &gives[1..], m.name());
+        if frontiers { problem(&format!("module-{}", m.name()), &text) } else { log(&text) }
+    };
     let util = match disc.read("UTIL.REL").await {
         Ok(u) => u,
-        Err(e) => return log(&format!("no start menu and no HUD: {e}")),
+        Err(e) => {
+            for m in Module::ALL {
+                missing(m, &format!("UTIL.REL: {e}"));
+            }
+            return;
+        }
     };
     for m in Module::ALL {
         if modules::get(m).is_some() {
@@ -300,29 +417,39 @@ async fn unpack_modules(disc: &WebDisc) {
         let aut = match disc.read(&format!("{}.AUT", m.name())).await {
             Ok(a) => a,
             Err(e) => {
-                log(&format!("no {}: {e}", m.gives()));
+                missing(m, &e);
                 continue;
             }
         };
         let util = util.clone();
         wasm_bindgen_futures::spawn_local(async move {
             let t = web_time::Instant::now();
-            let r = async {
-                let w = web_sys::window().ok_or("no window")?;
-                let f = js_sys::Reflect::get(&w, &"eqoaUnpack".into()).ok().and_then(|f| f.dyn_into::<js_sys::Function>().ok()).ok_or("the page has no eqoaUnpack")?;
-                let p = f.call3(&JsValue::NULL, &m.name().into(), &js_sys::Uint8Array::from(&util[..]), &js_sys::Uint8Array::from(&aut[..])).map_err(err)?;
-                let v = wasm_bindgen_futures::JsFuture::from(js_sys::Promise::resolve(&p)).await.map_err(err)?;
-                let image = js_sys::Uint8Array::new(&v).to_vec();
-                modules::check(m, &image).map_err(String::from)?;
-                Ok::<_, String>(image)
-            }
-            .await;
+            let unpack = |fresh: bool| {
+                let (util, aut) = (util.clone(), aut.clone());
+                async move {
+                    let w = web_sys::window().ok_or("no window")?;
+                    let f = js_sys::Reflect::get(&w, &"eqoaUnpack".into()).ok().and_then(|f| f.dyn_into::<js_sys::Function>().ok()).ok_or("the page has no eqoaUnpack")?;
+                    let args = js_sys::Array::of4(&m.name().into(), &js_sys::Uint8Array::from(&util[..]), &js_sys::Uint8Array::from(&aut[..]), &fresh.into());
+                    let p = f.apply(&JsValue::NULL, &args).map_err(err)?;
+                    let v = wasm_bindgen_futures::JsFuture::from(js_sys::Promise::resolve(&p)).await.map_err(err)?;
+                    let image = js_sys::Uint8Array::new(&v).to_vec();
+                    modules::check(m, &image).map_err(String::from)?;
+                    Ok::<_, String>(image)
+                }
+            };
+            let r = match unpack(false).await {
+                Err(e) if frontiers => {
+                    log(&format!("{}: {e}; unpacking it again, past the page's copy", m.name()));
+                    unpack(true).await
+                }
+                r => r,
+            };
             match r {
                 Ok(image) => {
                     log(&format!("{} in {:.1} s (unpacked off the disc, or the page's copy from before): {} is in", m.name(), t.elapsed().as_secs_f64(), m.gives()));
                     modules::put(m, image);
                 }
-                Err(e) => log(&format!("no {}: {} {e}", m.gives(), m.name())),
+                Err(e) => missing(m, &e),
             }
         });
     }
@@ -523,7 +650,11 @@ pub async fn play(file: web_sys::File, user: String, password: String, opts: JsV
         let mut disc = WebDisc::open(file).await?;
         crate::stream::set_source_factory(disc.zone_sources());
         crate::stream::set_world_opener(disc.world_opener());
-        unpack_modules(&disc).await;
+        let (frontiers, which) = disc::describe(disc.boot().await.as_deref());
+        if !frontiers {
+            problem("disc", &which);
+        }
+        unpack_modules(&disc, frontiers).await;
         // What every world needs, before the session starts its clock.
         let mut common = Vec::new();
         for name in ["CHAR.ESF", "ITEM.ESF", "ARIAL.CSF", "UI.CSF", "ARIALUI.CSF", "ITEMICON.ESF", "SPELLFX.CSF", "FX.CSF", "ADDART.CSF"] {
@@ -546,6 +677,9 @@ pub async fn play(file: web_sys::File, user: String, password: String, opts: JsV
         let words = disc.read("WORDS.TXT").await.ok().and_then(|b| vi::strtab::StringTable::parse(&b));
         // The HUD's texture names (its atlas is SUPPORT's, `unpack_modules`).
         let textures = disc.read("TEXTURES.TXT").await.ok().and_then(|b| vi::strtab::StringTable::parse(&b));
+        if textures.is_none() && frontiers {
+            problem("hud-textures", "No HUD: TEXTURES.TXT (the HUD's texture names) could not be read off the disc.");
+        }
         status(&format!("logging in as {user}"));
         let l = relay::login(&relay, server, auth_port, &user, &password).await?;
         let (sock, local) = relay::RelayUdp::open(&relay).await?;
@@ -592,7 +726,7 @@ pub async fn play(file: web_sys::File, user: String, password: String, opts: JsV
         };
         match crate::sound::Sound::with(&mut |p| sound_files.remove(p), crate::audio::Audio::web(Box::new(bgm), fetch)) {
             Some(s) => crate::sound::give(s),
-            None => log("no sound: VISoundDevice::Init failed"),
+            None => problem("sound", "No sound: the sound device did not start (VISoundDevice::Init failed)."),
         }
         let pending = gfx(canvas()?).await?;
         status("in the world");
