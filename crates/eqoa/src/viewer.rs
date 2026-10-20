@@ -353,6 +353,7 @@ pub fn shot_with(
                 None => script.controls,
             };
             let mut sticks = controls.axes();
+            touch.window = play.as_ref().is_some_and(|p| p.mode != 0);
             for (_, id, phase, at) in touch_script.iter().filter(|e| e.0 == t) {
                 touch.touch(*id, *phase, *at, Instant::now(), (w, h));
             }
@@ -2065,6 +2066,7 @@ impl ApplicationHandler for App {
                 for c in self.touch.take_clicks() {
                     self.click(c, true);
                 }
+                self.touch.window = self.play.as_ref().is_some_and(|p| p.mode != 0);
                 mark(&mut self.perf, 0);
                 let sticks = self.sticks();
                 let now = self.clock.elapsed().as_millis() as i64;

@@ -14,6 +14,11 @@
 //! - a tap there targets the creature under it, a double tap talks to it
 //!   (`mouse::Click`).
 //!
+//! While a window is up the pad keeps only its face buttons (△ backs out of
+//! every window); the d-pad, the top row and the stick step aside, so a
+//! finger reaches the window, whose rows, tabs and legends take a tap
+//! (`Play::point`), and a drag scrolls it.
+//!
 //! Shown from the first touch (in a page on a touch-first device from the
 //! start); a key or a controller hides it.
 
@@ -175,7 +180,13 @@ pub struct TouchPad {
     size: (u32, u32),
     /// the disc and the ring, once on the layer
     tex: Option<(usize, usize)>,
+    /// a window is up (the viewer sets it each frame): only the face
+    /// buttons are the pad's
+    pub window: bool,
 }
+
+/// The face buttons, the only ones a window up leaves on the screen.
+const FACE: u16 = bit::CROSS | bit::CIRCLE | bit::SQUARE | bit::TRIANGLE;
 
 impl TouchPad {
     /// A pad, shown from the start or from the first touch.
@@ -191,9 +202,9 @@ impl TouchPad {
         let l = layout(size);
         match phase {
             Phase::Started => {
-                let role = if let Some(b) = l.button_at(at) {
+                let role = if let Some(b) = l.button_at(at).filter(|b| !self.window || b.bit & FACE != 0) {
                     Role::Button(b.bit)
-                } else if l.in_stick_zone(at) && !self.fingers.iter().any(|f| matches!(f.role, Role::Stick { .. })) {
+                } else if !self.window && l.in_stick_zone(at) && !self.fingers.iter().any(|f| matches!(f.role, Role::Stick { .. })) {
                     Role::Stick { centre: at }
                 } else {
                     Role::Look { start: at, moved: false }
@@ -308,14 +319,12 @@ impl TouchPad {
 
     /// The overlay's quads over a `size` window. `glyph` answers an atlas
     /// entry on the layer, once SUPPORT's atlas is there.
-    /// With `dim`, a window is up: the pad steps back from it (the face
-    /// buttons and the d-pad, which drive every window, a little; the rest
-    /// more).
+    /// With `dim`, a window is up: only the face buttons, a little faded
+    /// (a button still held is drawn while it is).
     pub fn draw(&self, ui: &mut Ui, size: (u32, u32), dim: bool, glyph: &dyn Fn(i32) -> Option<Glyph>) {
         let (Some((disc, ring)), true) = (self.tex, self.shown) else { return };
         let l = layout(size);
         let held = self.report().buttons;
-        let menu_keys = bit::CROSS | bit::CIRCLE | bit::SQUARE | bit::TRIANGLE | bit::UP | bit::DOWN | bit::LEFT | bit::RIGHT;
         let quad = |tex: usize, c: [f32; 2], half: [f32; 2], uv: [f32; 4], color: [f32; 4]| {
             let p = |x: f32, y: f32| render::ui::frame_from_window(size, [x, y]);
             Quad {
@@ -330,11 +339,10 @@ impl TouchPad {
         let full = [0.0, 0.0, 1.0, 1.0];
         for b in &l.buttons {
             let on = held & b.bit != 0;
-            let fade = match (dim, b.bit & menu_keys != 0) {
-                (false, _) => 1.0,
-                (true, true) => 0.7,
-                (true, false) => 0.3,
-            };
+            if dim && b.bit & FACE == 0 && !on {
+                continue;
+            }
+            let fade = if dim { 0.7 } else { 1.0 };
             ui.push_whole(quad(disc, b.at, [b.r, b.r], full, [0.05, 0.05, 0.08, if on { 0.55 } else { 0.3 * fade }]));
             if let Some((tex, uv, px)) = glyph(b.glyph) {
                 // the glyph inside the disc, its shape kept
@@ -354,8 +362,9 @@ impl TouchPad {
                 ui.push_whole(quad(ring, c, [l.stick_r, l.stick_r], full, [1.0, 1.0, 1.0, 0.6]));
                 ui.push_whole(quad(disc, [c[0] + dx / m, c[1] + dy / m], [0.42 * l.u, 0.42 * l.u], full, [0.85, 0.85, 0.9, 0.6]));
             }
-            // where it floats from: a faint ring only
-            None => ui.push_whole(quad(ring, l.stick_home, [l.stick_r, l.stick_r], full, [1.0, 1.0, 1.0, 0.18])),
+            // where it floats from: a faint ring only (none over a window)
+            None if !dim => ui.push_whole(quad(ring, l.stick_home, [l.stick_r, l.stick_r], full, [1.0, 1.0, 1.0, 0.18])),
+            None => {}
         }
     }
 }
@@ -385,6 +394,29 @@ pub fn script() -> Vec<(i64, u64, Phase, [f32; 2])> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// With a window up only the face buttons are the pad's: a finger on
+    /// the d-pad, the top row or the stick's corner is a tap for the window.
+    #[test]
+    fn a_window_takes_what_the_pad_steps_away_from() {
+        let t = Instant::now();
+        let l = layout(SIZE);
+        let at = |bit: u16| l.buttons.iter().find(|b| b.bit == bit).unwrap().at;
+        let mut p = TouchPad::new(true);
+        p.window = true;
+        for (k, a) in [at(bit::UP), at(bit::START), [l.stick_zone[0] + 50.0, l.stick_zone[3] - 50.0]].into_iter().enumerate() {
+            p.touch(k as u64, Phase::Started, a, t, SIZE);
+            assert_eq!(p.report(), Report::default(), "finger {k} holds nothing");
+            p.touch(k as u64, Phase::Ended, a, t + Duration::from_secs(k as u64 + 1), SIZE);
+        }
+        assert_eq!(p.take_clicks().len(), 3, "three taps for the window");
+        p.touch(9, Phase::Started, at(bit::TRIANGLE), t, SIZE);
+        assert_eq!(p.report().buttons, bit::TRIANGLE, "△ is still the pad's");
+        // negative control: no window, the d-pad is the pad's
+        p.window = false;
+        p.touch(10, Phase::Started, at(bit::UP), t, SIZE);
+        assert_eq!(p.report().buttons, bit::TRIANGLE | bit::UP);
+    }
 
     const SIZE: (u32, u32) = (2400, 1080);
 
