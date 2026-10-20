@@ -55,6 +55,13 @@ The Rust client. README.md is the plan and the crate table; keep it current.
 - `ee::libm` is held to `tools/vimath-corpus` (Go, needs `../go-eqoa-vi`): regenerate the corpus with
   `go run . > ../../crates/ee/tests/libm_corpus.txt` (Go build: `TMPDIR`/`GOTMPDIR` under `~/.cache`).
   It is text and committed: the pre-commit hook refuses binaries, and `*.bin` is ignored.
+- Input (README "the pad", "the mouse and the touch screen"): the pad is the game's own path
+  (`vi::pad` held to oracle ops 50-52; `input.rs` libpad on the host, `PadKeys`, `Play::set_key`,
+  `controls.rs` UpdateControls). Headless: `EQOA_PAD` (`start@2500;stick l 0 -1@1500+2000`),
+  `EQOA_MOUSE` (`click @<name>@ms`), `EQOA_TOUCH=1`, `EQOA_TOUCHES`, `EQOA_TAP=<name|*>@ms` in a
+  playshot; `drive.py --gamepad/--mobile/--touch` in a page; `EQOA_PAD_TRACE=1` / `?padtrace`. A
+  DualSense is plugged in here and gilrs drives its motors: rumble is as real as the speakers.
+  The local server spawns a character at a random heading each login, so click by name, not pixel.
 - The browser build (`web/`, README "In a browser"): `web/build.sh`, then `web/drive.py` (headless
   Chromium over the DevTools protocol, the disc image handed to the page's file input). Platform
   code goes behind `net::session::Datagrams`, `net::auth::Exchange`, `iso::Source`/`iso::Sparse`

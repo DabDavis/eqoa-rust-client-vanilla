@@ -73,6 +73,10 @@ for (const ev of ['keydown', 'keyup']) {
 // one, each 0..1, for `ms`; both 0 stops them.
 const rumblers = () => [...(navigator.getGamepads ? navigator.getGamepads() : [])].filter((g) => g && g.connected && g.vibrationActuator);
 window.eqoaCanRumble = () => rumblers().length > 0;
+
+// A touch-first device (its main pointer is coarse: a phone or a tablet): the
+// client shows its on-screen pad from the start.
+window.eqoaTouchFirst = () => matchMedia('(pointer: coarse)').matches;
 window.eqoaRumble = (strong, weak, ms) => {
   for (const g of rumblers()) {
     const a = g.vibrationActuator;

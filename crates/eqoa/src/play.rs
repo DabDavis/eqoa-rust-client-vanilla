@@ -1584,13 +1584,92 @@ impl Play {
         let Some(id) = self.entities.slots.iter().flatten().find(|e| e.creature.as_ref().is_some_and(|c| c.name.trim() == name.trim())).map(|e| e.id) else {
             return false;
         };
+        self.target_id(id);
+        true
+    }
+
+    /// `id` targeted, as `CycleTarget` leaves a choice: the attack off, the
+    /// target's details asked again, 0x0010 with the token.
+    pub fn target_id(&mut self, id: u32) {
         self.target = id;
         self.auto_attack = false;
         self.target_info = None;
         let mut w = net::stream::Writer::op(0x0010);
         w.u32(0).u32(id);
         self.session.send(&w.data);
-        true
+    }
+
+    /// The creature drawn under window point `at` of a `size` window seen
+    /// through `view_proj` (the player left out): of those whose upright,
+    /// from the feet to the name plate's anchor, passes within a quarter of
+    /// its height on screen (12 pixels at least), the nearest the camera.
+    pub fn creature_at(&self, at: (f64, f64), size: (u32, u32), view_proj: glam::Mat4) -> Option<u32> {
+        let (w, h) = (size.0 as f32, size.1 as f32);
+        let px = |p: glam::Vec3| {
+            let c = view_proj * p.extend(1.0);
+            (c.w > 0.0).then(|| (glam::Vec2::new((c.x / c.w + 1.0) * 0.5 * w, (1.0 - c.y / c.w) * 0.5 * h), c.w))
+        };
+        let cursor = glam::Vec2::new(at.0 as f32, at.1 as f32);
+        let me = self.self_id32();
+        let mut best: Option<(u32, f32)> = None;
+        for (slot, e) in self.entities.slots.iter().enumerate() {
+            let (Some(e), Some(Some(p))) = (e, self.puppets.get(slot)) else { continue };
+            if Some(e.id) == me {
+                continue;
+            }
+            let foot = glam::Vec3::from(e.actor_pos);
+            let head = p.name_at.map_or(foot + glam::Vec3::Y * 2.0, glam::Vec3::from);
+            let (Some((a, depth)), Some((b, _))) = (px(foot), px(head)) else { continue };
+            let reach = ((b - a).length() * 0.25).max(12.0);
+            if crate::mouse::to_segment(cursor, a, b) <= reach && best.is_none_or(|(_, d)| depth < d) {
+                best = Some((e.id, depth));
+            }
+        }
+        best.map(|b| b.0)
+    }
+
+    /// Where creature `name` is drawn in a `size` window seen through
+    /// `view_proj`, the middle of its upright, when it is on screen (for
+    /// scripted clicks); `*` is the first creature that is (not the player).
+    pub fn screen_of(&self, name: &str, size: (u32, u32), view_proj: glam::Mat4) -> Option<(f64, f64)> {
+        let me = self.self_id32();
+        let (w, h) = (size.0 as f32, size.1 as f32);
+        self.entities.slots.iter().enumerate().find_map(|(slot, e)| {
+            let e = e.as_ref()?;
+            let c = e.creature.as_ref()?;
+            if (name.trim() != "*" && c.name.trim() != name.trim()) || Some(e.id) == me {
+                return None;
+            }
+            let p = self.puppets.get(slot)?.as_ref()?;
+            let foot = glam::Vec3::from(e.actor_pos);
+            let head = p.name_at.map_or(foot + glam::Vec3::Y * 2.0, glam::Vec3::from);
+            let c = view_proj * ((foot + head) * 0.5).extend(1.0);
+            let (x, y) = ((c.x / c.w + 1.0) * 0.5 * w, (1.0 - c.y / c.w) * 0.5 * h);
+            (c.w > 0.0 && (0.0..w).contains(&x) && (0.0..h).contains(&y)).then_some((x as f64, y as f64))
+        })
+    }
+
+    /// A click on a creature (or on nothing, which keeps the target): it is
+    /// targeted, and with `interact` talked to, or its corpse opened (the
+    /// attack button's loot request on a corpse).
+    pub fn click(&mut self, id: Option<u32>, interact: bool) {
+        self.keyboard = true;
+        let Some(id) = id else { return };
+        if self.mode != 0 {
+            return;
+        }
+        if id != self.target {
+            self.target_id(id);
+        }
+        if interact {
+            let corpse = self.entities.slots.iter().flatten().find(|e| e.id == id).is_some_and(|e| e.p18 & 2 != 0);
+            if corpse {
+                self.attack_press();
+                self.attack_release();
+            } else {
+                self.interact_with_target();
+            }
+        }
     }
 
     /// `ToggleAutoAttack`, the button pressed (the game option that makes it
@@ -1816,7 +1895,11 @@ impl Play {
             move_ok: self.locks.0,
             look_ok: self.locks.1,
             rooted: self.rooted,
-            timed_out: self.session.timed_out(),
+            // IsTimedOut (8 s with nothing arriving) is not applied:
+            // go-eqoa-server sends nothing while nothing changes, so it would
+            // stop a player standing still (the Sandstorm capture's longest
+            // silence is 2.6 s)
+            timed_out: false,
         }
     }
 
@@ -3594,6 +3677,23 @@ impl Play {
             self.hud = Some((crate::ui::Vui::new(words, textures, atlas), assets, crate::hud::Hud::new()));
             self.wnd_chat = Some(crate::chat::WndChat::new());
         }
+    }
+
+    /// The touch screen's pad over the HUD (`touch.rs`): its discs, and the
+    /// atlas's glyphs once SUPPORT's atlas is here.
+    pub fn draw_touch(&self, ui: &mut render::ui::Ui, touch: &crate::touch::TouchPad, size: (u32, u32)) {
+        let mut glyphs: Vec<(i32, crate::touch::Glyph)> = Vec::new();
+        if let Some((vui, assets, _)) = self.hud.as_ref() {
+            for b in crate::touch::layout(size).buttons {
+                let e = vui.entry(b.glyph);
+                let Some(tex) = assets.surface(vui.entry_id(&e)) else { continue };
+                let (w, h) = ui.texture_size(tex);
+                let (w, h) = (w as f32, h as f32);
+                let uv = [e.uv0[0] as f32 / w, e.uv0[1] as f32 / h, (e.uv0[0] + e.uv1[0]) as f32 / w, (e.uv0[1] + e.uv1[1]) as f32 / h];
+                glyphs.push((b.glyph, (tex, uv, [e.uv1[0] as f32, e.uv1[1] as f32])));
+            }
+        }
+        touch.draw(ui, size, self.mode != 0, &|id| glyphs.iter().find(|g| g.0 == id).map(|g| g.1));
     }
 
     /// The HUD's quads for this frame (`VIWndGame::OnDrawSelf`).

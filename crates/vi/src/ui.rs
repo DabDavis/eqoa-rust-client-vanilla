@@ -135,7 +135,7 @@ impl Vui {
 
     /// The DictID of an entry's surface: its TEXTURES.TXT row's name as an
     /// icon path.
-    fn entry_id(&self, e: &UiTexEntry) -> u32 {
+    pub fn entry_id(&self, e: &UiTexEntry) -> u32 {
         icon_id(self.textures.get(e.row, self.language))
     }
 

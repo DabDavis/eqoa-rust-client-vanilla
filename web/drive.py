@@ -19,6 +19,13 @@ printed. --new-account makes the account first (the page's New account tab).
 WebGL/WebGPU run on the machine's GPU (--no-gpu: SwiftShader, every core).
 --headed opens a real window on $DISPLAY instead (F11 needs one); --resize
 SECONDS=WxH sets the page's viewport then, as a resized window would.
+--mobile makes the page a touch-first device (CDP's touch emulation: its
+pointer is coarse); --touch SECONDS=STEPS touches the canvas then, steps
+';'-separated: 'tap X Y', 'hold X Y MS', 'drag X0 Y0 X1 Y1 MS' (CSS pixels);
+--gamepad SECONDS=STEPS plays a gamepad the page sees through
+navigator.getGamepads (the standard layout's indices: 0 A, 1 B, 2 X, 3 Y,
+4 LB, 5 RB, 6 LT, 7 RT, 8 Back, 9 Start, 10 L3, 11 R3, 12-15 the d-pad):
+'tap N [MS]', 'press N', 'release N', 'axes LX LY RX RY'.
 Needs the `websockets` package.
 """
 import argparse, asyncio, base64, functools, http.server, json, os, shutil, socketserver, subprocess, sys, threading, time, urllib.request
@@ -125,6 +132,15 @@ async def drive(a, base, ws_url):
         await call("Log.enable")
         await call("Page.enable")
         q = "&".join(p for p in [a.params, f"character={a.character}" if a.character else ""] if p)
+        if a.mobile:
+            await call("Emulation.setTouchEmulationEnabled", enabled=True, maxTouchPoints=5)
+        if a.gamepad:
+            # one standard-layout pad, played by --gamepad
+            await call("Page.addScriptToEvaluateOnNewDocument", source="""
+                window.drivePad = { id: 'drive.py pad', index: 0, connected: true, mapping: 'standard', timestamp: 0,
+                    buttons: Array.from({ length: 17 }, () => ({ pressed: false, touched: false, value: 0 })),
+                    axes: [0, 0, 0, 0], vibrationActuator: null };
+                Object.defineProperty(navigator, 'getGamepads', { configurable: true, value: () => [window.drivePad] });""")
         await call("Page.navigate", url=base + ("?" + q if q else ""))
         await asyncio.sleep(2)
 
@@ -165,7 +181,58 @@ async def drive(a, base, ws_url):
             await call("Input.dispatchKeyEvent", type="keyDown" if down else "keyUp", key=k, code=code,
                        text=k if (down and len(k) == 1) else "", windowsVirtualKeyCode=ord(k.upper()) if len(k) == 1 else 0)
 
+        async def touch(kind, pts):
+            await call("Input.dispatchTouchEvent", type=kind, touchPoints=[{"x": x, "y": y, "id": 1} for x, y in pts])
+
+        async def touches(spec):
+            for step in spec.split(";"):
+                w = step.split()
+                if not w:
+                    continue
+                if w[0] == "tap":
+                    x, y = float(w[1]), float(w[2])
+                    await touch("touchStart", [(x, y)])
+                    await asyncio.sleep(0.08)
+                    await touch("touchEnd", [])
+                elif w[0] == "hold":
+                    x, y, ms = float(w[1]), float(w[2]), int(w[3])
+                    await touch("touchStart", [(x, y)])
+                    await asyncio.sleep(ms / 1000)
+                    await touch("touchEnd", [])
+                elif w[0] == "drag":
+                    x0, y0, x1, y1, ms = float(w[1]), float(w[2]), float(w[3]), float(w[4]), int(w[5])
+                    await touch("touchStart", [(x0, y0)])
+                    n = max(2, ms // 16)
+                    for k in range(1, n + 1):
+                        await asyncio.sleep(ms / 1000 / n)
+                        await touch("touchMove", [(x0 + (x1 - x0) * k / n, y0 + (y1 - y0) * k / n)])
+                    await touch("touchEnd", [])
+                out(f"touch {step}")
+
+        async def gamepad(spec):
+            for step in spec.split(";"):
+                w = step.split()
+                if not w:
+                    continue
+                b = "window.drivePad.buttons"
+                if w[0] in ("tap", "press"):
+                    await js(f"{b}[{int(w[1])}].pressed = true, {b}[{int(w[1])}].value = 1")
+                if w[0] == "tap":
+                    await asyncio.sleep(int(w[2] if len(w) > 2 else 150) / 1000)
+                if w[0] in ("tap", "release"):
+                    await js(f"{b}[{int(w[1])}].pressed = false, {b}[{int(w[1])}].value = 0")
+                if w[0] == "axes":
+                    await js(f"window.drivePad.axes = [{','.join(str(float(v)) for v in w[1:5])}]")
+                await js("window.drivePad.timestamp = performance.now()")
+                out(f"gamepad {step}")
+
         events = []
+        for s in a.touch:
+            t, spec = s.split("=", 1)
+            events.append((float(t), "touch", spec))
+        for s in a.gamepad:
+            t, spec = s.split("=", 1)
+            events.append((float(t), "gamepad", spec))
         for s in a.shot:
             t, f = s.split("=", 1)
             events.append((float(t), "shot", f))
@@ -189,6 +256,10 @@ async def drive(a, base, ws_url):
                 await shoot(arg)
             elif kind == "js":
                 out(f"js {arg[:60]} -> {await js(arg)}")
+            elif kind == "touch":
+                await touches(arg)
+            elif kind == "gamepad":
+                await gamepad(arg)
             elif kind == "resize":
                 w, h = (int(v) for v in arg.split("x"))
                 await call("Emulation.setDeviceMetricsOverride", width=w, height=h, deviceScaleFactor=1, mobile=False)
@@ -223,6 +294,9 @@ if __name__ == "__main__":
     ap.add_argument("--shot", action="append", default=[])
     ap.add_argument("--keys", action="append", default=[])
     ap.add_argument("--resize", action="append", default=[], help="SECONDS=WxH: the page's viewport then, as a window resized (or put full screen)")
+    ap.add_argument("--mobile", action="store_true", help="a touch-first device (touch emulation: the pointer is coarse)")
+    ap.add_argument("--touch", action="append", default=[], help="SECONDS=STEPS: touches on the canvas")
+    ap.add_argument("--gamepad", action="append", default=[], help="SECONDS=STEPS: a gamepad, through navigator.getGamepads")
     ap.add_argument("--final-shot")
     ap.add_argument("--until")
     ap.add_argument("--timeout", type=float, default=60)

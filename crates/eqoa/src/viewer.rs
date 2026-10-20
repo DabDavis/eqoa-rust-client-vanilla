@@ -336,9 +336,16 @@ pub fn shot_with(
         let at: i64 = std::env::var("EQOA_AT").ok().and_then(|v| v.parse().ok()).map_or(2000, |v: i64| v / 16 * 16);
         let attack = std::env::var_os("EQOA_ATTACK").is_some();
         let walk = walk_script();
-        // `EQOA_PAD`: a pad by script, through the game's pad path
+        // `EQOA_PAD`: a pad by script, through the game's pad path;
+        // `EQOA_MOUSE`: the mouse's, through the window's
         let pad_script = crate::input::Script::from_env();
         let mut console = crate::input::Console::new();
+        let mouse_script = crate::mouse::script();
+        let mut mouse = crate::mouse::Mouse::default();
+        let mut last_view: Option<glam::Mat4> = None;
+        // `EQOA_TOUCH=1` and `EQOA_TOUCHES`: the touch screen's pad
+        let touch_script = crate::touch::script();
+        let mut touch = crate::touch::TouchPad::new(touch_first());
         while t < script.ms {
             t += 16;
             let controls = match &walk {
@@ -346,9 +353,27 @@ pub fn shot_with(
                 None => script.controls,
             };
             let mut sticks = controls.axes();
-            if let Some(s) = &pad_script {
+            for (_, id, phase, at) in touch_script.iter().filter(|e| e.0 == t) {
+                touch.touch(*id, *phase, *at, Instant::now(), (w, h));
+            }
+            // `EQOA_TAP=<name>@<ms>`: a tap where that creature is drawn
+            if let Ok(spec) = std::env::var("EQOA_TAP")
+                && let Some((name, ms)) = spec.rsplit_once('@')
+                && ms.parse::<i64>().is_ok_and(|ms| ms / 16 * 16 == t)
+                && let (Some(p), Some(vp)) = (play.as_ref(), last_view)
+                && let Some((x, y)) = p.screen_of(name, (w, h), vp)
+            {
+                eprintln!("tap {name} at ({x:.0}, {y:.0})");
+                touch.touch(99, crate::touch::Phase::Started, [x as f32, y as f32], Instant::now(), (w, h));
+                touch.touch(99, crate::touch::Phase::Ended, [x as f32, y as f32], Instant::now(), (w, h));
+            }
+            if pad_script.is_some() || touch.shown {
                 let dead = play.as_ref().is_some_and(|p| p.is_dead());
-                let keys = console.poll(s.at(t), true, false, dead);
+                let mut report = pad_script.as_ref().map_or_else(Default::default, |s| s.at(t));
+                if touch.shown {
+                    report.merge(&touch.report());
+                }
+                let keys = console.poll(report, true, false, dead);
                 if let Some(p) = play.as_mut() {
                     p.pad_mode(console.mode());
                     for (k, down) in keys {
@@ -364,12 +389,54 @@ pub fn shot_with(
                     }
                 }
             }
+            for c in touch.take_clicks() {
+                if let (Some(p), Some(vp)) = (play.as_mut(), last_view) {
+                    let (crate::mouse::Click::Target(x, y) | crate::mouse::Click::Interact(x, y)) = c;
+                    let id = p.creature_at((x, y), (w, h), vp);
+                    eprintln!("touch tap: {c:?} on {id:?}");
+                    p.click(id, matches!(c, crate::mouse::Click::Interact(..)));
+                }
+            }
+            for (_, step) in mouse_script.iter().filter(|s| s.0 == t) {
+                // `click @<name>`: at the creature called that, where it is drawn
+                let mut step = step.clone();
+                if let Some((verb, name)) = step.split_once(" @")
+                    && let (Some(p), Some(vp)) = (play.as_ref(), last_view)
+                {
+                    match p.screen_of(name, (w, h), vp) {
+                        Some((x, y)) => step = format!("{verb} {x:.0} {y:.0}"),
+                        None => eprintln!("mouse {step}: not on screen"),
+                    }
+                }
+                let click = mouse.play(&step, (w, h), Instant::now());
+                if let (Some(c), Some(p), Some(vp)) = (click, play.as_mut(), last_view) {
+                    let (crate::mouse::Click::Target(x, y) | crate::mouse::Click::Interact(x, y)) = c;
+                    let id = p.creature_at((x, y), (w, h), vp);
+                    eprintln!("mouse {step}: {:?} on {id:?}", c);
+                    p.click(id, matches!(c, crate::mouse::Click::Interact(..)));
+                }
+            }
+            if !play.as_ref().is_some_and(|p| p.is_dead()) {
+                let inverted = play.as_ref().is_some_and(|p| p.options.inverted != 0);
+                let look = mouse.look(&mut walker, inverted);
+                let (tx, ty, pinch) = touch.take_look();
+                let feel = crate::mouse::look(&mut walker, tx, ty, pinch, inverted);
+                for i in 0..2 {
+                    for m in [look[i], feel[i]] {
+                        if m * m > sticks[i] * sticks[i] {
+                            sticks[i] = m;
+                        }
+                    }
+                }
+            }
             let client = play.as_ref().filter(|p| !p.is_dead()).map(|p| p.control_client()).unwrap_or_default();
             if walker.frame_with(sticks, t, &client)
                 && let Some(p) = play.as_mut()
             {
                 p.toggle_autorun();
             }
+            let (proj, v) = walker.view(aspect);
+            last_view = Some(proj * v);
             // the zones it walks toward, read as the game's loader reads them
             streamer.fetch(Vec3::from(walker.cam.walk.phys.position.to_array()), &walker.scene, lib);
             if let Some(first) = streamer.install(lib, &mut walker.scene) {
@@ -759,6 +826,8 @@ pub fn shot_with(
         if let Some(p) = &mut play {
             if let Some(u) = renderer.ui.as_mut() {
                 p.draw_hud(u, &walker, t, view.view_proj, (w, h));
+                touch.textures(u, &device, &queue);
+                p.draw_touch(u, &touch, (w, h));
             }
             let plates = p.plates();
             if let Some(t) = renderer.text.as_mut() {
@@ -806,6 +875,16 @@ fn offscreen_target(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) 
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     })
+}
+
+/// Whether the touch screen's pad shows from the start: in a page on a
+/// touch-first device (`window.eqoaTouchFirst`), or with `EQOA_TOUCH=1`.
+fn touch_first() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    if crate::web::touch_first() {
+        return true;
+    }
+    std::env::var("EQOA_TOUCH").is_ok_and(|v| v == "1")
 }
 
 /// `EQOA_WALK=fwd,strafe,orbit,ms[;...]`: each set of controls held for its
@@ -980,6 +1059,12 @@ struct App {
     console: crate::input::Console,
     pads: crate::input::Gamepads,
     pad_script: Option<crate::input::Script>,
+    /// The mouse in play (`mouse.rs`), and the last frame's view (what a
+    /// click picks through).
+    mouse: crate::mouse::Mouse,
+    last_view: Option<glam::Mat4>,
+    /// The touch screen's pad (`touch.rs`).
+    touch: crate::touch::TouchPad,
 }
 
 pub fn run(lib: Library, source: Source) -> Result<(), Error> {
@@ -1029,6 +1114,9 @@ pub fn run_with_gfx(lib: Library, source: Source, play: Option<crate::play::Play
         console: crate::input::Console::new(),
         pads: crate::input::Gamepads::new(),
         pad_script: crate::input::Script::from_env(),
+        mouse: crate::mouse::Mouse::default(),
+        last_view: None,
+        touch: crate::touch::TouchPad::new(touch_first()),
     };
     #[cfg(target_arch = "wasm32")]
     {
@@ -1136,14 +1224,22 @@ impl App {
     /// and `PadKeys`' keys to the window that has them (`SetKey`).
     fn poll_pad(&mut self) {
         let (mut report, mut connected, motors) = self.pads.poll();
+        // a controller in use: the touch screen's pad goes
+        if report.buttons != 0 || report.sticks.iter().any(|v| v.abs() > 0.5) {
+            self.touch.hide();
+        }
         if let Some(s) = &self.pad_script {
             report.merge(&s.at(self.clock.elapsed().as_millis() as i64));
+            connected = true;
+        }
+        if self.touch.shown {
+            report.merge(&self.touch.report());
             connected = true;
         }
         let dead = self.play.as_ref().is_some_and(|p| p.is_dead());
         let keys = self.console.poll(report, connected, motors, dead);
         // `EQOA_PAD_TRACE=1`: every pad key, as the game gets it
-        if std::env::var_os("EQOA_PAD_TRACE").is_some() {
+        if crate::input::trace() {
             for &(k, down) in &keys {
                 crate::say(&format!("[pad] {} {}", crate::input::key_name(k), if down { "down" } else { "up" }));
             }
@@ -1157,18 +1253,41 @@ impl App {
         }
     }
 
-    /// The sticks `UpdateControls` reads: the keyboard's (`controls`) and
-    /// the pad's, axis by axis the one further from rest.
-    fn sticks(&self) -> [f32; 4] {
+    /// The sticks `UpdateControls` reads: the keyboard's (`controls`), the
+    /// pad's and the mouse's drag (`Mouse::look`, which moves an orbiting
+    /// camera itself), axis by axis the one further from rest.
+    fn sticks(&mut self) -> [f32; 4] {
         let mut a = self.controls().axes();
-        if !self.play.as_ref().is_some_and(|p| p.is_dead()) {
-            for (a, p) in a.iter_mut().zip(self.console.sticks()) {
-                if p * p > *a * *a {
-                    *a = p;
+        if self.play.as_ref().is_some_and(|p| p.is_dead()) {
+            return a;
+        }
+        let inverted = self.play.as_ref().is_some_and(|p| p.options.inverted != 0);
+        let (tx, ty, pinch) = self.touch.take_look();
+        let (look, feel) = match self.walker.as_mut() {
+            Some(w) => (self.mouse.look(w, inverted), crate::mouse::look(w, tx, ty, pinch, inverted)),
+            None => ([0.0; 2], [0.0; 2]),
+        };
+        let pad = self.console.sticks();
+        for (i, a) in a.iter_mut().enumerate() {
+            let (m, t) = if i < 2 { (look[i], feel[i]) } else { (0.0, 0.0) };
+            for v in [pad[i], m, t] {
+                if v * v > *a * *a {
+                    *a = v;
                 }
             }
         }
         a
+    }
+
+    /// A click in play: the creature under it targeted (through the last
+    /// frame's view), and with `Interact` talked to.
+    fn click(&mut self, c: crate::mouse::Click) {
+        let (Some(p), Some(g), Some(vp)) = (self.play.as_mut(), self.gfx.as_ref(), self.last_view) else { return };
+        let size = (g.config.width, g.config.height);
+        match c {
+            crate::mouse::Click::Target(x, y) => p.click(p.creature_at((x, y), size, vp), false),
+            crate::mouse::Click::Interact(x, y) => p.click(p.creature_at((x, y), size, vp), true),
+        }
     }
 
     /// Fly-camera movement from the held keys, scaled by frame time.
@@ -1298,13 +1417,31 @@ impl ApplicationHandler for App {
                     g.window.set_fullscreen((!full).then_some(Fullscreen::Borderless(None)));
                 }
             }
+            WindowEvent::Touch(t) => {
+                use winit::event::TouchPhase as T;
+                let phase = match t.phase {
+                    T::Started => crate::touch::Phase::Started,
+                    T::Moved => crate::touch::Phase::Moved,
+                    T::Ended => crate::touch::Phase::Ended,
+                    T::Cancelled => crate::touch::Phase::Cancelled,
+                };
+                let size = self.gfx.as_ref().map_or((1, 1), |g| (g.config.width, g.config.height));
+                if self.walker.is_some() {
+                    self.touch.touch(t.id, phase, [t.location.x as f32, t.location.y as f32], Instant::now(), size);
+                    if let Some(p) = self.play.as_mut() {
+                        p.keyboard = false;
+                    }
+                }
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 // a keyboard in use (`gKeyboardAttached`): the edit boxes'
-                // compact face, with the options' Soft Keyboard on
-                if let Some(p) = self.play.as_mut()
-                    && event.state == ElementState::Pressed
-                {
-                    p.keyboard = true;
+                // compact face, with the options' Soft Keyboard on; the
+                // touch screen's pad goes
+                if event.state == ElementState::Pressed {
+                    self.touch.hide();
+                    if let Some(p) = self.play.as_mut() {
+                        p.keyboard = true;
+                    }
                 }
                 // The edit box (mode 2) takes the keyboard: characters type,
                 // Backspace, Escape (cancel), Enter (done), the arrows move the
@@ -1821,17 +1958,24 @@ impl ApplicationHandler for App {
                     g.window.request_redraw();
                 }
             }
-            WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
-                self.drag = (state == ElementState::Pressed).then_some(self.cursor);
+            // Walking, the mouse is `mouse.rs`'s: a drag looks round, the
+            // wheel zooms, a click targets and a double or right click talks.
+            WindowEvent::MouseInput { state, button, .. } if matches!(button, MouseButton::Left | MouseButton::Right) => {
+                let down = state == ElementState::Pressed;
+                if self.walker.is_some() {
+                    if let Some(c) = self.mouse.button(button == MouseButton::Right, down, Instant::now()) {
+                        self.click(c);
+                    }
+                } else if button == MouseButton::Left {
+                    self.drag = down.then_some(self.cursor);
+                }
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = (position.x, position.y);
-                if let Some((x, y)) = self.drag {
-                    if let Some(w) = &mut self.walker {
-                        // The right stick, by mouse: a drag is an orbit push.
-                        let k = vi::fpu::F::new(((position.x - x) as f32 * 0.05).clamp(-1.0, 1.0));
-                        w.cam.orbit_right(k);
-                    }
+                self.mouse.moved(position.x, position.y);
+                if self.walker.is_none()
+                    && let Some((x, y)) = self.drag
+                {
                     self.camera.drag((position.x - x) as f32, (position.y - y) as f32);
                     self.drag = Some(self.cursor);
                     if let Some(g) = &self.gfx {
@@ -1844,7 +1988,9 @@ impl ApplicationHandler for App {
                     MouseScrollDelta::LineDelta(_, y) => y,
                     MouseScrollDelta::PixelDelta(p) => p.y as f32 / 40.0,
                 };
-                if let Camera::Orbit { zoom, .. } = &mut self.camera {
+                if self.walker.is_some() {
+                    self.mouse.wheel(d);
+                } else if let Camera::Orbit { zoom, .. } = &mut self.camera {
                     *zoom = (*zoom * 0.9f32.powf(d)).clamp(0.05, 20.0);
                 }
                 if let Some(g) = &self.gfx {
@@ -1887,6 +2033,9 @@ impl ApplicationHandler for App {
                     p.add_from(&w.scene, first);
                 }
                 self.poll_pad();
+                for c in self.touch.take_clicks() {
+                    self.click(c);
+                }
                 mark(&mut self.perf, 0);
                 let sticks = self.sticks();
                 let now = self.clock.elapsed().as_millis() as i64;
@@ -2047,9 +2196,12 @@ impl ApplicationHandler for App {
                     }
                     None => self.camera.view(self.bounds, g.config.width as f32 / g.config.height as f32),
                 };
+                self.last_view = Some(view.view_proj);
                 if let (Some(p), Some(w)) = (&mut self.play, &self.walker) {
                     if let Some(u) = g.renderer.ui.as_mut() {
                         p.draw_hud(u, w, self.clock.elapsed().as_millis() as i64, view.view_proj, (g.config.width, g.config.height));
+                        self.touch.textures(u, &g.device, &g.queue);
+                        p.draw_touch(u, &self.touch, (g.config.width, g.config.height));
                     }
                     let plates = p.plates();
                     if let Some(t) = g.renderer.text.as_mut() {

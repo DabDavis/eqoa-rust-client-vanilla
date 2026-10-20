@@ -330,6 +330,15 @@ impl Script {
     }
 }
 
+/// `EQOA_PAD_TRACE=1` (in a page `?padtrace`): each pad key as the game
+/// gets it, and gilrs's events and the controllers' report as they change.
+pub fn trace() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    return crate::web::page_flag("padtrace");
+    #[cfg(not(target_arch = "wasm32"))]
+    return std::env::var_os("EQOA_PAD_TRACE").is_some();
+}
+
 /// The controllers, through gilrs: every connected gamepad as one report.
 pub struct Gamepads {
     gilrs: Option<gilrs::Gilrs>,
@@ -337,6 +346,8 @@ pub struct Gamepads {
     effect: Option<gilrs::ff::Effect>,
     /// the names of the pads seen, to say so once
     seen: Vec<String>,
+    trace: bool,
+    last: Report,
 }
 
 impl Default for Gamepads {
@@ -365,6 +376,8 @@ impl Gamepads {
             #[cfg(not(target_arch = "wasm32"))]
             effect: None,
             seen: Vec::new(),
+            trace: trace(),
+            last: Report::default(),
         }
     }
 
@@ -372,7 +385,11 @@ impl Gamepads {
     /// one can rumble.
     pub fn poll(&mut self) -> (Report, bool, bool) {
         let Some(g) = self.gilrs.as_mut() else { return (Report::default(), false, false) };
-        while g.next_event().is_some() {}
+        while let Some(ev) = g.next_event() {
+            if self.trace {
+                crate::say(&format!("[gilrs] {:?}", ev.event));
+            }
+        }
         let mut out = Report::default();
         let (mut any, mut motors) = (false, false);
         for (_, pad) in g.gamepads() {
@@ -390,6 +407,10 @@ impl Gamepads {
         }
         if any && !motors {
             motors = web_can_rumble();
+        }
+        if self.trace && out != self.last {
+            crate::say(&format!("[pad] report {out:?}"));
+            self.last = out;
         }
         (out, any, motors)
     }

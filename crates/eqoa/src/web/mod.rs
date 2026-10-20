@@ -89,6 +89,17 @@ pub fn rumble(strong: f64, weak: f64, ms: u32) {
     }
 }
 
+/// Whether the page is on a touch-first device (`window.eqoaTouchFirst`:
+/// its main pointer is coarse), so the touch screen's pad shows at once.
+pub fn touch_first() -> bool {
+    let Some(w) = web_sys::window() else { return false };
+    js_sys::Reflect::get(&w, &"eqoaTouchFirst".into())
+        .ok()
+        .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+        .and_then(|f| f.call0(&JsValue::NULL).ok())
+        .is_some_and(|v| v.is_truthy())
+}
+
 /// Whether a connected gamepad can rumble (`window.eqoaCanRumble`).
 pub fn can_rumble() -> bool {
     let Some(w) = web_sys::window() else { return false };

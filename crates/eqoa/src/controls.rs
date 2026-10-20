@@ -11,7 +11,8 @@
 //! player turns to face the target (mode 3 heads straight for it). Autorun
 //! runs forward until the stick is pushed past 0.7; the player's own cast
 //! walks; the locks stop movement or the camera; a connection silent for 8 s
-//! stops both.
+//! stops both (`Client::timed_out`, which the client leaves off: see
+//! `Play::control_client`).
 //!
 //! The keyboard here is a pad's sticks too (`walker::Controls`: WASD the left,
 //! I/J/K/L or the arrows the right), merged in axis by axis; the PS2's own

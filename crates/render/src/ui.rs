@@ -43,6 +43,13 @@ pub fn frame_from_ndc(size: (u32, u32), ndc: [f32; 2]) -> [f32; 2] {
     [((ndc[0] + 1.0) * 0.5 * tw - ox) / sx, ((1.0 - ndc[1]) * 0.5 * th - oy) / sy]
 }
 
+/// A point of a `size` target in its own pixels (y down), as a point of the
+/// frame: what is laid out against the window's edges (`Ui::push_whole`).
+pub fn frame_from_window(size: (u32, u32), px: [f32; 2]) -> [f32; 2] {
+    let (ox, oy, sx, sy) = frame(size);
+    [(px[0] - ox) / sx, (px[1] - oy) / sy]
+}
+
 /// The whole frame pixels a `size` target shows beyond each side of the
 /// frame: none when it is 4:3 or narrower.
 pub fn side(size: (u32, u32)) -> f32 {
