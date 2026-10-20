@@ -3,9 +3,12 @@
 //! keys it already takes: nothing a pad could not do.
 //!
 //! - every button glyph on the screen is that button: the legends' "✕
-//!   Select  △ Exit", the shoulder buttons' and Start's, a slider's side
-//!   arrows. The HUD's raster notes where each was drawn, with the words
-//!   drawn after it (`Glyphs`), and a click there presses it;
+//!   Select  △ Exit", the shoulder buttons' and Start's. The HUD's raster
+//!   notes where each was drawn, with the words drawn after it (`Glyphs`),
+//!   and a click there presses it. (The side arrow, atlas 128, is not one:
+//!   it points out from a slider, in at the trainer's value, between two
+//!   stat values and round a sort key, so the windows whose values change
+//!   with left and right take a click's side of the value themselves);
 //! - a window notes where its rows, tabs and fields were drawn (`Hits`); a
 //!   click on one moves the window's selection there, as the d-pad would,
 //!   and a click on the selection already there presses ✕. A menu of
@@ -85,24 +88,11 @@ pub fn rows_rect(w: &Window, vui: &Vui, r: &dyn Raster, x: i32, row: i32, width:
     [left - 20, c0 - h / 2, left + width, c1 + h - h / 2]
 }
 
-/// A click on row `row` of a list whose selection is `sel`: the selection
-/// moved there (`MOVED`), or ✕ on the selection already there.
-pub fn row_click(sel: &mut i32, row: i32) -> i32 {
-    if *sel == row {
-        key::CROSS
-    } else {
-        *sel = row;
-        MOVED
-    }
-}
-
 /// Which pad key a glyph is: some by their flags (a mirrored arrow points
 /// the other way).
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum GlyphKey {
     Key(i32),
-    /// the slider's arrow (atlas 128): left, mirrored right
-    Side,
     /// the d-pad's down arm (212, 216): flipped, up
     Vertical,
     /// the d-pad's right arm (213, 217): mirrored, left
@@ -112,9 +102,9 @@ enum GlyphKey {
 /// The atlas's button glyphs: the face buttons in their three sets (65-68
 /// and 69-72 inline in text, 73-76 large), the shoulder buttons in three
 /// (185-188, 191-194, 197-200 and 205), Select and Start (189 and 195
-/// inline, 190 and 196, 201 and 202), L3 and R3 (214 and 218, 215 and 219),
-/// the slider's arrow and the d-pad's arms. The arrows that mark a
-/// selection (85-90) are not buttons.
+/// inline, 190 and 196, 201 and 202), L3 and R3 (214 and 218, 215 and 219)
+/// and the d-pad's arms. The arrows that mark a selection (85-90) and the
+/// side arrow (128) are not buttons.
 const GLYPHS: &[(i32, GlyphKey)] = {
     use GlyphKey::*;
     use key::*;
@@ -131,7 +121,6 @@ const GLYPHS: &[(i32, GlyphKey)] = {
         (74, Key(CROSS)),
         (75, Key(SQUARE)),
         (76, Key(CIRCLE)),
-        (128, Side),
         (185, Key(L1)),
         (186, Key(L2)),
         (187, Key(R1)),
@@ -182,13 +171,6 @@ impl GlyphTable {
     pub fn key(&self, id: u32, a: [i32; 2], b: [i32; 2], flags: u32) -> Option<i32> {
         Some(match *self.0.get(&(id, a, b))? {
             GlyphKey::Key(k) => k,
-            GlyphKey::Side => {
-                if flags & 1 != 0 {
-                    key::RIGHT
-                } else {
-                    key::LEFT
-                }
-            }
             GlyphKey::Vertical => {
                 if flags & 2 != 0 {
                     key::UP
@@ -338,12 +320,7 @@ mod tests {
     }
 
     #[test]
-    fn a_click_selects_then_uses() {
-        let mut sel = 2;
-        assert_eq!(row_click(&mut sel, 4), MOVED);
-        assert_eq!(sel, 4);
-        assert_eq!(row_click(&mut sel, 4), key::CROSS);
-        assert_eq!(sel, 4);
+    fn steps_go_the_way_of_the_target() {
         assert_eq!(steps(1, 3, key::LEFT, key::RIGHT), vec![key::RIGHT, key::RIGHT]);
         assert_eq!(steps(3, 2, key::LEFT, key::RIGHT), vec![key::LEFT]);
         assert!(steps(2, 2, key::LEFT, key::RIGHT).is_empty());

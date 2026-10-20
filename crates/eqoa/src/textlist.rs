@@ -264,8 +264,14 @@ impl Message {
                 let (a, b) = if p == PROMPT_OKCANCEL { (786, 213) } else { (21, 22) };
                 self.window.text_box(vui, r, &choice(self.sel == 0, a), col[0] - 100, self.rows - 1, 200, 1, c, 8);
                 self.window.text_box(vui, r, &choice(self.sel == 1, b), col[1] - 100, self.rows - 1, 200, 1, c, 8);
-                self.hits.push(rows_rect(&self.window, vui, r, col[0] - 80, self.rows - 1, 160, 1), 0);
-                self.hits.push(rows_rect(&self.window, vui, r, col[1] - 80, self.rows - 1, 160, 1), 1);
+                // each its half of the row, split between their centres
+                let left = self.window.top_left()[0];
+                let split = left + (col[0] + col[1]) / 2;
+                for (k, (x0, x1)) in [(left, split), (split, left + w)].into_iter().enumerate() {
+                    let mut rr = rows_rect(&self.window, vui, r, 0, self.rows - 1, 0, 1);
+                    (rr[0], rr[2]) = (x0, x1);
+                    self.hits.push(rr, k as i32);
+                }
             }
         }
     }
@@ -274,6 +280,27 @@ impl Message {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Yes/No message's choices each take their half of the row, split
+    /// between their centres (in a narrow one they used to overlap, and the
+    /// second took the first's right side).
+    #[test]
+    fn a_message_choice_takes_its_half() {
+        let (vui, mut r) = (crate::pointer::testing::vui(), crate::pointer::testing::NullRaster);
+        let mut m = Message::default();
+        m.setup(&vui, &mut r, &wide("T"), &wide("Sure?"), PROMPT_YESNO, [320, 200], 300);
+        m.draw(&vui, &mut r);
+        let left = m.window.top_left()[0] as f32;
+        let y = m.window.row_center(&vui, &r, m.rows - 1)[1] as f32;
+        assert_eq!(m.point([left + 140.0, y]), Some(key::CROSS));
+        assert_eq!(m.sel, 0, "left of the split (150)");
+        assert_eq!(m.point([left + 160.0, y]), Some(key::CROSS));
+        assert_eq!(m.sel, 1);
+        assert_eq!(m.point([left + 20.0, y]), Some(key::CROSS));
+        assert_eq!(m.sel, 0, "the first's half reaches the window's edge");
+        assert_eq!(m.point([left - 10.0, y]), None, "off the window");
+        assert_eq!(m.point([left + 140.0, y - 60.0]), None, "above the choices");
+    }
 
     /// `SetSel` clamps to the lines; `Scroll` reports the end it is at and
     /// moves only inside `0..=count-rows`.
