@@ -933,6 +933,24 @@ fn touch_first() -> bool {
     std::env::var("EQOA_TOUCH").is_ok_and(|v| v == "1")
 }
 
+/// A key's name in the held set (`App::held`): the cursor block's and
+/// Shift by name, a character as itself in lower case.
+fn held_name(k: &Key) -> Option<String> {
+    Some(match k {
+        Key::Named(NamedKey::Shift) => "shift".to_string(),
+        Key::Named(NamedKey::ArrowLeft) => "left".to_string(),
+        Key::Named(NamedKey::ArrowRight) => "right".to_string(),
+        Key::Named(NamedKey::ArrowUp) => "up".to_string(),
+        Key::Named(NamedKey::ArrowDown) => "down".to_string(),
+        Key::Named(NamedKey::PageUp) => "pageup".to_string(),
+        Key::Named(NamedKey::PageDown) => "pagedown".to_string(),
+        Key::Named(NamedKey::End) => "end".to_string(),
+        Key::Named(NamedKey::Home) => "home".to_string(),
+        Key::Character(c) => c.to_lowercase(),
+        _ => return None,
+    })
+}
+
 /// `EQOA_WALK=fwd,strafe,orbit,ms[;...]`: each set of controls held for its
 /// ms, one after another, then none (`shot`'s script, in the window too).
 fn walk_script() -> Option<Vec<(Controls, i64)>> {
@@ -1553,6 +1571,14 @@ impl ApplicationHandler for App {
                         p.keyboard = true;
                     }
                 }
+                // a key let go is let go of, whichever window takes the
+                // event: an arrow held to walk and let go over the start
+                // menu would walk on after it
+                if event.state == ElementState::Released
+                    && let Some(n) = held_name(&event.logical_key)
+                {
+                    self.held.remove(&n);
+                }
                 // The edit box (mode 2) takes the keyboard: characters type,
                 // Backspace, Escape (cancel), Enter (done), the arrows move the
                 // caret (with the soft keyboard showing, its cursor; Insert
@@ -2088,19 +2114,7 @@ impl ApplicationHandler for App {
                     p.cycle_target(false, w.eye_position(), dir, proj * v);
                     return;
                 }
-                let name = match &event.logical_key {
-                    Key::Named(NamedKey::Shift) => Some("shift".to_string()),
-                    Key::Named(NamedKey::ArrowLeft) => Some("left".to_string()),
-                    Key::Named(NamedKey::ArrowRight) => Some("right".to_string()),
-                    Key::Named(NamedKey::ArrowUp) => Some("up".to_string()),
-                    Key::Named(NamedKey::ArrowDown) => Some("down".to_string()),
-                    Key::Named(NamedKey::PageUp) => Some("pageup".to_string()),
-                    Key::Named(NamedKey::PageDown) => Some("pagedown".to_string()),
-                    Key::Named(NamedKey::End) => Some("end".to_string()),
-                    Key::Named(NamedKey::Home) => Some("home".to_string()),
-                    Key::Character(c) => Some(c.to_lowercase()),
-                    _ => None,
-                };
+                let name = held_name(&event.logical_key);
                 if event.state == ElementState::Pressed {
                     match event.logical_key {
                         Key::Named(NamedKey::Escape) => el.exit(),
@@ -2124,7 +2138,11 @@ impl ApplicationHandler for App {
             // Walking, the mouse is `mouse.rs`'s: a drag looks round, the
             // wheel zooms, a click targets and a double or right click talks.
             // a release that may never come: let go of what is held
-            WindowEvent::Focused(false) | WindowEvent::CursorLeft { .. } => self.mouse.release_all(),
+            WindowEvent::Focused(false) => {
+                self.mouse.release_all();
+                self.held.clear();
+            }
+            WindowEvent::CursorLeft { .. } => self.mouse.release_all(),
             WindowEvent::MouseInput { state, button, .. } if matches!(button, MouseButton::Left | MouseButton::Right) => {
                 let down = state == ElementState::Pressed;
                 if self.walker.is_some() {
