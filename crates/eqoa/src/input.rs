@@ -101,7 +101,13 @@ pub fn stick_byte(v: f32) -> u8 {
 /// rests in its middle, and PCSX2 leaves its "Analog Deadzone" to the player
 /// (none by default). In a page `?deadzone=<0..0.9>`, natively
 /// `EQOA_DEADZONE`; the page's problem reports carry the sticks as they came.
+/// A page's default is 0.37, the edge it had through gilrs (0.1 + 0.3 x
+/// 0.9) when those reports were settled: a stick resting at 0.34 there stayed
+/// still and would walk at 0.3.
+#[cfg(not(target_arch = "wasm32"))]
 pub const STICK_DEAD_ZONE: f32 = 0.3;
+#[cfg(target_arch = "wasm32")]
+pub const STICK_DEAD_ZONE: f32 = 0.37;
 
 /// [`STICK_DEAD_ZONE`], or the player's.
 pub fn dead_zone() -> f32 {
