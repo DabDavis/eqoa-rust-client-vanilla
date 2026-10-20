@@ -9,6 +9,13 @@
 //!
 //! Not ported: the four pickers (their rows keep the "any" the form starts
 //! with) and Inspect (`DescribeAuctionItem`'s four describers).
+//!
+//! A pointer (`pointer`) goes to the child with the keys (the editor, the
+//! box, the page's menu and its popup); a click on the form from the page
+//! goes right to it, and one on the page's rows from the form left to them,
+//! the field or the row under the pointer selected; the form's fields, the
+//! bidders and the bid form's rows are selected by a click and used by a
+//! second.
 
 #![allow(clippy::too_many_arguments)]
 
@@ -16,6 +23,7 @@ use crate::auction::{Auction, Query, atoi};
 use crate::client_image::{Menu, MenuEntry, Menus};
 use crate::dialog::{BoxAnswer, Key as BoxKey, MBox};
 use crate::editbox::{EditBox, EditUp};
+use crate::pointer::{Hits, MOVED, key, rows_rect};
 use crate::wndlist::{ListUp, WndMenu};
 use net::dump::{AuctionItem, Bank, NetItem};
 use vi::ui::{Raster, Vui, Window, wide};
@@ -85,6 +93,10 @@ pub struct SearchWnd {
     window: Window,
     list: Window,
     status: Window,
+    /// the search form's fields where they were drawn, by field; the
+    /// bidders (by index) or the bid form's rows (by cursor): for a pointer
+    form_hits: Hits,
+    list_hits: Hits,
 }
 
 impl Default for SearchWnd {
@@ -126,6 +138,8 @@ impl Default for SearchWnd {
             window: Window::default(),
             list: Window::default(),
             status: Window::default(),
+            form_hits: Hits::default(),
+            list_hits: Hits::default(),
         }
     }
 }
@@ -179,6 +193,66 @@ impl SearchWnd {
     /// The editor is up (it takes the keyboard).
     pub fn typing(&self) -> bool {
         self.child == Child::Edit
+    }
+
+    /// A pointer at frame point `p`, to the child with the keys: the editor,
+    /// the box, the page's menu (its popup first). From the page a click on
+    /// the search form goes right to it with the field under it selected;
+    /// from the form one on the page's rows goes left to them with the row
+    /// selected (the keys say whether there is a page). The form's fields,
+    /// the bid form's rows: a click selects, a second uses (Enter); the
+    /// bidders are selected. The keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        match self.child {
+            Child::Edit => return self.edit.point(p).flatten().into_iter().collect(),
+            Child::MBox => return self.mbox.point(p).then_some(key::CROSS).into_iter().collect(),
+            Child::Menu => {
+                let popup = self.menu.sub.as_ref().is_some_and(|s| s.visible);
+                if !popup
+                    && self.mode == 0
+                    && let Some(f) = self.form_hits.at(p)
+                {
+                    self.field = f;
+                    return vec![key::RIGHT];
+                }
+                return self.menu.point(p);
+            }
+            Child::Own => {}
+        }
+        match self.state {
+            0 => {
+                if let Some(f) = self.form_hits.at(p) {
+                    if f == self.field {
+                        return vec![key::CROSS];
+                    }
+                    self.field = f;
+                    return vec![MOVED];
+                }
+                match self.menu.list.row_at(p) {
+                    Some(row) => {
+                        self.menu.list.pick(row);
+                        vec![key::LEFT]
+                    }
+                    None => Vec::new(),
+                }
+            }
+            3 => match self.list_hits.at(p) {
+                Some(i) if i != self.cursor => {
+                    self.cursor = i;
+                    vec![MOVED]
+                }
+                _ => Vec::new(),
+            },
+            4 => match self.list_hits.at(p) {
+                Some(c) if c == self.cursor => vec![key::CROSS],
+                Some(c) => {
+                    self.cursor = c;
+                    vec![MOVED]
+                }
+                None => Vec::new(),
+            },
+            _ => Vec::new(),
+        }
     }
 
     /// `SetState`.
@@ -699,6 +773,8 @@ impl SearchWnd {
         self.window.set_title(Some(&[]));
         self.window.draw(vui, r);
         let cols = [30, 140];
+        self.form_hits.clear();
+        self.list_hits.clear();
         if self.mode == 0 {
             let w = &self.window;
             let f = self.field;
@@ -726,6 +802,10 @@ impl SearchWnd {
             Self::draw_row(w, vui, r, 11, Some(&wd(1690)), Some(&wide(&self.seller)), cols[0], cols[1], f == 10, own, true);
             Self::draw_row(w, vui, r, 12, Some(&wd(509)), None, cols[0], cols[1], f == 10, false, true);
             Self::draw_row(w, vui, r, 13, Some(&wd(1673)), None, cols[0], cols[1], f == 11, own, true);
+            // the fields' rows: field k on row k + 1, the seller's two, Search on 13
+            for (field, row, rows) in (0..10).map(|k| (k, k + 1, 1)).chain([(10, 11, 2), (11, 13, 1)]) {
+                self.form_hits.push(rows_rect(w, vui, r, cols[0], row, ww - 25 - cols[0], rows), field);
+            }
         }
         self.menu.visible = true;
         self.menu.draw(vui, r, &self.menus, now, cues);
@@ -873,6 +953,7 @@ impl SearchWnd {
             let b = &auction.bidders[i as usize];
             let sel = i == self.cursor;
             Self::draw_row(&self.list, vui, r, row, Some(&wide(&b.name)), Some(&wide(&b.x24.to_string())), cols[0], cols[1], sel, sel, false);
+            self.list_hits.push(rows_rect(&self.list, vui, r, 22, row, lw - 55, 1), i);
             i += 1;
             row += 1;
         }
@@ -901,6 +982,9 @@ impl SearchWnd {
         Self::draw_row(&self.list, vui, r, 4, Some(&wd(1700)), None, cols[0], cols[1], false, false, true);
         let buy = wide(&vui.words.get(1701, vui.language).replacen("%d", &l.p2f8.to_string(), 1));
         Self::draw_row(&self.list, vui, r, 5, Some(&buy), None, cols[0], lw - 40, c == 2, true, true);
+        for (cursor, row) in [(0, 1), (1, 3), (2, 5)] {
+            self.list_hits.push(rows_rect(&self.list, vui, r, cols[0], row, lw - 40 - cols[0], 1), cursor);
+        }
         let s = wide(&format!("|x{}   |t{}", vui.words.get(212, vui.language), vui.words.get(161, vui.language)));
         self.list.text_box(vui, r, &s, 20, 7, lw - 40, 1, [1.0, 1.0, 1.0, self.list.open], 0);
     }
@@ -975,6 +1059,68 @@ mod tests {
             self.w.key(&self.vui, &NullRaster, &mut self.a, &v, k, true, &mut self.cues, &mut self.out);
             self.w.key(&self.vui, &NullRaster, &mut self.a, &v, k, false, &mut self.cues, &mut self.out);
         }
+
+        fn draw(&mut self) {
+            let (icon, can_use) = (|_: &NetItem| 7, |_: &NetItem| true);
+            let v = View { bank: &self.bank, idle: true, searching: false, player: 1, now: 0, icon: &icon, can_use: &can_use };
+            self.w.draw(&self.vui, &mut NullRaster, &self.a, &v, &mut self.cues);
+        }
+    }
+
+    /// The form's fields take a click and a second edits; from the form a
+    /// click on the page's rows goes left to them with the row selected, and
+    /// from the page one on the form goes right back with the field selected;
+    /// the menu then takes its own; the bid form's rows are the cursor's.
+    #[test]
+    fn a_pointer_across_the_search() {
+        use crate::pointer::testing::{mid, vui};
+        let mut g = Rig::new();
+        // the geometry measured with a Vui of its own (the rig's is borrowed
+        // by its draws); the font is the raster's either way
+        let gv = vui();
+        g.page(vec![lot(5, 100), lot(6, 100), lot(7, 100)]);
+        g.draw();
+        // the form's window as the draw sets it up (it is the summary's after)
+        let mut form = Window::default();
+        form.init(&gv, &NullRaster, [300, 180], 290, 14, 0);
+        form.set_title(Some(&[]));
+        let field = |f: i32, rows: i32| mid(rows_rect(&form, &gv, &NullRaster, 30, f + 1, 290 - 25 - 30, rows));
+        // the page's rows at (16, 37), 44 high (no atlas here)
+        let row = |i: i32| [16.0 + 57.0, 37.0 + 44.0 * i as f32 + 22.0];
+        assert_eq!(g.w.point(field(3, 1)), vec![MOVED]);
+        assert_eq!(g.w.field, 3, "the minimum level");
+        assert_eq!(g.w.point(field(3, 1)), vec![key::CROSS]);
+        assert_eq!(g.w.point(field(10, 2)), vec![MOVED], "the seller's two rows");
+        assert_eq!(g.w.field, 10);
+        assert_eq!(g.w.point(row(1)), vec![key::LEFT], "onto the page");
+        assert_eq!(g.w.menu.list.sel, 1);
+        assert!(g.w.point(row(3)).is_empty(), "three lots");
+        g.key(key::LEFT);
+        assert_eq!((g.w.state, g.w.child), (1, Child::Menu));
+        g.draw();
+        // the page has the keys: its rows are the menu's
+        assert_eq!(g.w.point(row(2)), vec![MOVED]);
+        assert_eq!(g.w.point(row(2)), vec![key::CROSS]);
+        assert_eq!(g.w.point(field(5, 1)), vec![key::RIGHT], "back to the form");
+        assert_eq!(g.w.field, 5);
+        g.key(key::RIGHT);
+        assert_eq!((g.w.state, g.w.child), (0, Child::Own));
+        // the bid form (a lot of the page): its three rows by the cursor
+        g.w.menu.list.sel = 0;
+        g.w.lot = 5;
+        g.w.set_state(1, 0);
+        g.w.set_state(2, 0);
+        g.w.set_state(4, 0);
+        g.draw();
+        let mut bid = Window::default();
+        bid.init(&gv, &NullRaster, [320, 180], 430, 8, 0);
+        bid.set_title(Some(&wide("x")));
+        let at = |row: i32| mid(rows_rect(&bid, &gv, &NullRaster, 30, row, 430 - 40 - 30, 1));
+        assert_eq!(g.w.point(at(5)), vec![MOVED]);
+        assert_eq!(g.w.cursor, 2, "the buyout");
+        assert_eq!(g.w.point(at(5)), vec![key::CROSS]);
+        assert!(g.w.point(at(4)).is_empty(), "the line between is no row");
+        assert_eq!(g.w.cursor, 2);
     }
 
     #[test]
