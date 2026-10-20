@@ -7,7 +7,8 @@
 //! points) carries the list's "X" mark.
 //!
 //! The server opens it with 0x0061 (the smith's id, kept for the repairs) and
-//! only in play; triangle closes it (0x0063 out), and so does 0x0063 in.
+//! only in play; triangle closes it (0x0063 out), and so does 0x0063 in. A
+//! pointer (`pointer`) selects a row, and repairs the selected one.
 
 use crate::infotext::{self, Info};
 use crate::wndlist::WndList;
@@ -84,6 +85,13 @@ impl Blacksmith {
         self.list.reset_scroll();
         self.window.init(vui, r, [403, 180], 490, 15, 0);
         self.window.open(true);
+    }
+
+    /// A pointer at frame point `p` (`pointer`): a row of the list selected
+    /// as the arrows select it, and the selected one repaired (X, the
+    /// list's 256). The keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        self.list.row_at(p).map(|row| self.list.pick(row)).into_iter().collect()
     }
 
     /// `OnKeyDown` / `OnKeyUp`: triangle closes; X and the arrows go to the
@@ -259,5 +267,36 @@ mod tests {
         assert!(!usable(&it));
         it.item.p54 = 1;
         assert!(usable(&it));
+    }
+
+    /// A pointer on the list (at (16, 37), framed: rows 44 high under the
+    /// frame's corner): a row selected, the selected one repaired with X
+    /// (which the window's key turns into the repair); the rows past the
+    /// inventory, and beside the list, take nothing.
+    #[test]
+    fn a_pointer_selects_and_repairs() {
+        use crate::pointer::testing::{NullRaster, vui};
+        use crate::pointer::{MOVED, key};
+        let (vui, mut r) = (vui(), NullRaster);
+        let inv = net::dump::ItemList { p04: 0, items: vec![item(100, 10, 50, 1), item(100, 20, 50, 2), item(5, 1, 1, -1)] };
+        let words = Default::default();
+        let info = Info { words: &words, inv: &inv, hp: [0; 4], base: &Default::default(), class: 0, level: 1, attack_words: &[] };
+        let icon = |_: &NetItem| -1;
+        let view = View { info: &info, coin: 7, inv_icon: &icon };
+        let mut b = Blacksmith::default();
+        b.open(&vui, &r);
+        let mut cues = Vec::new();
+        b.draw(&vui, &mut r, &view, 1000, &mut cues);
+        // the frame's corner (atlas 36) is no size with no atlas: the rows
+        // start at the list's own place
+        let row = |i: i32| [16.0 + 50.0, 37.0 + 44.0 * i as f32 + 22.0];
+        assert_eq!(b.point(row(1)), vec![MOVED]);
+        assert_eq!(b.list.sel, 1);
+        assert_eq!(b.point(row(1)), vec![key::CROSS]);
+        let mut out = Vec::new();
+        b.key(&view, key::CROSS, true, &mut cues, &mut out);
+        assert_eq!(out, vec![SmithOut::Repair(1)], "the key repairs the selection");
+        assert!(b.point(row(3)).is_empty(), "three items: no fourth row");
+        assert!(b.point([200.0, 60.0]).is_empty(), "the panel beside the list");
     }
 }

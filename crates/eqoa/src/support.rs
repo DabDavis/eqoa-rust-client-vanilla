@@ -44,11 +44,18 @@ impl Play {
         self.support.keys.push((key, down));
     }
 
-    /// A pointer at frame point `f` on the blacksmith or the CS windows (`pointer`): what is
-    /// under it selected, and the keys to press.
+    /// A pointer at frame point `f` on the blacksmith or the CS windows
+    /// (`pointer`), to the window the keys go to: the smith's list, the
+    /// request form, the inbox (and its reader, its options, the reply).
+    /// What is under it selected, and the keys to press.
     pub fn support_point(&mut self, f: [f32; 2]) -> Vec<i32> {
-        let _ = f;
-        Vec::new()
+        let s = &mut self.support;
+        match self.mode {
+            19 => s.smith.point(f),
+            31 if s.request.visible => s.request.point(f),
+            32 => s.inbox.point(f),
+            _ => Vec::new(),
+        }
     }
 
     /// The mode is one of these windows'.
