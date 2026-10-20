@@ -53,7 +53,11 @@ struct Vertex {
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct FrameUniform {
+    /// `View::view_proj` with the camera moved to the origin: the shader
+    /// projects positions relative to `eye`.
     view_proj: [[f32; 4]; 4],
+    /// The camera (w unused).
+    eye: [f32; 4],
     sun_dir: [f32; 4],
     /// rgb, and w = the time in seconds (for UV scrolling).
     sun: [f32; 4],
@@ -289,6 +293,9 @@ pub struct Renderer {
 /// the direction the sun's light TRAVELS, its colour, and ambient.
 pub struct View {
     pub view_proj: Mat4,
+    /// Where the camera is, in the world: what the models are drawn relative
+    /// to (`draw`). The origin is right for a view near it.
+    pub eye: Vec3,
     pub sun_dir: Vec3,
     pub sun: Vec3,
     pub ambient: Vec3,
@@ -310,6 +317,7 @@ impl View {
     pub fn daylight(view_proj: Mat4) -> Self {
         View {
             view_proj,
+            eye: Vec3::ZERO,
             sun_dir: Vec3::new(0.35, -0.8, 0.45),
             sun: Vec3::splat(0.6),
             ambient: Vec3::splat(0.45),
@@ -722,8 +730,13 @@ impl Renderer {
         view: &View,
         items: &[Draw],
     ) {
+        // The view-projection relative to the eye, in doubles: `view_proj`'s
+        // translation is the projection of the eye's world position, which
+        // the eye's own translation here cancels (shader.wgsl, vs_main).
+        let rel = (view.view_proj.as_dmat4() * glam::DMat4::from_translation(view.eye.as_dvec3())).as_mat4();
         let uniform = FrameUniform {
-            view_proj: view.view_proj.to_cols_array_2d(),
+            view_proj: rel.to_cols_array_2d(),
+            eye: view.eye.extend(0.0).to_array(),
             sun_dir: view.sun_dir.normalize().extend(0.0).to_array(),
             sun: view.sun.extend(self.scroll_time.unwrap_or_else(|| self.start.elapsed().as_secs_f32())).to_array(),
             ambient: view.ambient.extend(0.0).to_array(),
@@ -746,7 +759,8 @@ impl Renderer {
         };
         queue.write_buffer(&self.frame_buf, 0, bytemuck::bytes_of(&uniform));
         if let Some(vp) = view.sky_view_proj {
-            let sky = FrameUniform { view_proj: vp.to_cols_array_2d(), ..uniform };
+            // the sky's view has no translation: its eye is the origin
+            let sky = FrameUniform { view_proj: vp.to_cols_array_2d(), eye: [0.0; 4], ..uniform };
             queue.write_buffer(&self.sky_frame_buf, 0, bytemuck::bytes_of(&sky));
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

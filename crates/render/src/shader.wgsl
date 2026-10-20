@@ -18,9 +18,13 @@
 // Fog is the strip programs' clamp(w·scale + offset, 0, 255), with scale and
 // offset from VIRaster::SetFog: linear in view depth w, none at the near
 // distance and all fog colour at the far one, mixed after texturing.
+//
+// Positions are taken relative to the eye before they are projected (see
+// vs_main): `view_proj` is the frame's with the camera at the origin.
 
 struct Frame {
     view_proj: mat4x4<f32>,
+    eye: vec4<f32>,      // the camera, in the world
     sun_dir: vec4<f32>,
     sun: vec4<f32>,      // w: time in seconds
     ambient: vec4<f32>,
@@ -93,7 +97,16 @@ fn vs_main(v: VsIn) -> VsOut {
         pos = vec4<f32>(sp.xyz, 1.0);
         nrm = vec4<f32>(sn.xyz, 0.0);
     }
-    o.clip = frame.view_proj * model * pos;
+    // Relative to the eye first: the instance's translation less the eye,
+    // then the rest of the transform added. A world position would be tens of
+    // thousands (Freeport is at x 25,300, where a float steps 2 mm) and
+    // projecting it would cancel nearly all of that, so two surfaces a few
+    // centimetres apart could trade depths. `view_proj * model * pos` kept
+    // the world out of it only while the compiler multiplied the matrices
+    // first: Mesa's GLSL (GL, and WebGL2 in Firefox on Linux) multiplies
+    // `model * pos` first, and the obelisks' glow came through their stone.
+    let rel = v.m0.xyz * pos.x + v.m1.xyz * pos.y + v.m2.xyz * pos.z + (v.m3.xyz - frame.eye.xyz);
+    o.clip = frame.view_proj * vec4<f32>(rel, 1.0);
     o.fog = clamp((frame.fog.y - o.clip.w) / (frame.fog.y - frame.fog.x), 0.0, 1.0);
     // The layer's UV transform, and its scroll (VIMaterial::Process: the
     // offset grows at the rate and drops its whole part past ±1).
@@ -105,11 +118,10 @@ fn vs_main(v: VsIn) -> VsOut {
     );
     // Placements scale uniformly, so the upper 3×3 is fine for normals.
     let n = normalize((model * nrm).xyz);
-    let world = (model * pos).xyz;
     let sun = frame.sun.rgb * max(-dot(n, frame.sun_dir.xyz), 0.0) * v.color.a * v.static_light.a;
     var point = vec3<f32>(0.0);
     if (frame.point.w > 0.0) {
-        let l = frame.point.xyz - world;
+        let l = (frame.point.xyz - frame.eye.xyz) - rel;
         let d = length(l);
         if (d > 0.0) {
             point = frame.point_color.rgb * (1.0 - min(d / frame.point.w, 1.0)) * max(dot(l, n) / d, 0.0);

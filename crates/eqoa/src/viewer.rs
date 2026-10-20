@@ -61,6 +61,8 @@ pub fn lit(
     let rgb = |c: [F<Ee>; 3]| Vec3::new(c[0].0, c[1].0, c[2].0);
     let mut v = View {
         view_proj,
+        // the camera, which the models are drawn relative to
+        eye: view.inverse().w_axis.truncate(),
         sun_dir: Vec3::from(dir.to_array()),
         sun: rgb(sun),
         ambient: rgb(amb),
