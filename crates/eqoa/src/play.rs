@@ -21,6 +21,7 @@ use crate::walker::Walker;
 use esf::Library;
 use net::entity::{Entities, SLOTS};
 use net::session::{Event, Player, Session};
+use render::ui::Anchor;
 use render::{GpuModel, Renderer, wgpu};
 use vi::character::{AnimCache, load_csprite};
 use vi::csprite::{CSprite, Rand};
@@ -3350,7 +3351,7 @@ impl Play {
 
     /// The HUD's quads for this frame (`VIWndGame::OnDrawSelf`).
     pub fn draw_hud(&mut self, ui: &mut render::ui::Ui, walker: &Walker, time_ms: i64, view_proj: glam::Mat4, size: (u32, u32)) {
-        ui.quads.clear();
+        ui.begin(size);
         let under_liquid = walker.cam.walk.is_under_liquid();
         let (start_stats, start_loc) = self.start_view(walker);
         let info_text = if self.info_up || self.info_window.open > 0.0 { self.target_info_text() } else { None };
@@ -3427,10 +3428,18 @@ impl Play {
                 Some(crate::damage::Target { pos: slots[k].as_ref()?.actor_pos, slot4: p.slot4_at })
             });
             let mut r = assets.raster(ui);
+            // A window wider than 4:3 has the HUD at its sides (`Anchor`):
+            // the frame, the gauges, the group, the effects and the target's
+            // bar at the left (`Hud::draw`); the chat box, the quick menus,
+            // the breath gauge and the target's details at the right; the
+            // boxes and the menus in the middle, with the frame, and a menu
+            // takes back under it what it covers on a 4:3 screen (`end`).
             hud.draw(vui, &mut r, &state);
+            r.ui.anchor = Anchor::Left;
             if crate::influence::shown(self.mode) {
                 crate::influence::draw(vui, &mut r, &self.effects);
             }
+            r.ui.anchor = Anchor::Right;
             if let Some(c) = self.wnd_chat.as_mut() {
                 for (text, color, at) in self.chat_pending.drain(..) {
                     let rr = &r;
@@ -3438,6 +3447,7 @@ impl Play {
                 }
                 c.draw(vui, &mut r, now, dt);
             }
+            r.ui.anchor = Anchor::Middle;
             if self.mode == 9 {
                 self.priv_chat.draw(vui, &mut r);
             }
@@ -3509,6 +3519,7 @@ impl Play {
                 }
                 self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
             }
+            r.ui.anchor = Anchor::Right;
             // DrawStatus: under water, the breath gauge
             if under_liquid && (self.mode == 0 || self.mode == 36 || self.mode == 38) {
                 let at = [430, 50];
@@ -3552,6 +3563,7 @@ impl Play {
                 };
                 self.hud_menus.draw(vui, &mut r, now as i64, &name);
             }
+            r.ui.end();
             self.hud = Some((vui_o, assets, hud_o));
         }
         self.start_actions(actions);

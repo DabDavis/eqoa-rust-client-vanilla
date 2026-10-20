@@ -330,7 +330,12 @@ fn run(args: &[String]) -> Result<()> {
                 let out = args.get(3).ok_or("usage: eqoa playshot <host> <user> <out.png> [ms]")?;
                 let ms: i64 = args.get(4).map(|m| m.parse()).transpose()?.unwrap_or(3000);
                 let script = viewer::Script { ms, controls: walker::Controls::default() };
-                viewer::shot_with(&mut lib, &src, None, Some(script), (960, 540), out, play)?;
+                // `EQOA_SHOT_SIZE=WxH`: the picture's size (960x540 without)
+                let size = std::env::var("EQOA_SHOT_SIZE").ok().and_then(|v| {
+                    let (w, h) = v.split_once('x')?;
+                    Some((w.parse().ok()?, h.parse().ok()?))
+                });
+                viewer::shot_with(&mut lib, &src, None, Some(script), size.unwrap_or((960, 540)), out, play)?;
             } else {
                 viewer::run_with(lib, src, play)?;
             }

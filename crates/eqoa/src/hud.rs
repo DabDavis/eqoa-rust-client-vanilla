@@ -8,7 +8,7 @@
 //! drawn by `play`.
 
 use crate::ui::{Raster, UiRaster, Vui, icon_id, wide};
-use render::ui::Quad;
+use render::ui::{Anchor, Quad};
 use vi::ui::TextScroll;
 
 /// What the HUD reads off the client this frame.
@@ -127,9 +127,12 @@ impl Hud {
         }
     }
 
-    /// `OnDrawSelf`, the drawing half.
+    /// `OnDrawSelf`, the drawing half. In a window wider than 4:3 its pieces
+    /// keep to the left side (`Anchor`; a menu over them takes them back
+    /// under it, `Ui::end`).
     pub fn draw(&mut self, vui: &Vui, ui: &mut UiRaster, s: &HudState) {
         self.update_glow();
+        ui.ui.anchor = Anchor::Left;
         let mut p = [10, 15];
         vui.blit(ui, 6, p);
         if s.has_self {
@@ -169,7 +172,11 @@ impl Hud {
         self.draw_pet(vui, ui, [20, y], s);
         let p = [-3, 331];
         if s.chat_open {
+            // the strip's left piece, stretched to the chat box's piece,
+            // which keeps to the right
+            ui.ui.anchor = Anchor::Span(p[0] + 2, p[0] + 2 + 203);
             vui.blit_rect(ui, 32, [p[0] + 2, p[1]], [203, 125], 0, 1.0);
+            ui.ui.anchor = Anchor::Left;
         }
         self.draw_target(vui, ui, [20, 348], s);
     }
