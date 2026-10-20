@@ -3,10 +3,10 @@
 //!
 //! Each frame [`Console::poll`] runs SUPPORT's `VIPad::Read` (`vi::pad`, held
 //! to the decomp) on a libpad whose port 0 is every source at once, OR'd as
-//! eqoa-port's `platform/pad.c` ORs them: the gamepads (gilrs: SDL's layout
-//! natively, the Gamepad API's standard one in a page; both positional, A ✕,
-//! B ○, X □, Y △, Back Select), the touch screen's pad (`touch`) and a script
-//! (`EQOA_PAD`). A pad that is not ready is read as all zeros, as
+//! eqoa-port's `platform/pad.c` ORs them: the gamepads (natively gilrs, SDL's
+//! layout; in a page the Gamepad API read straight, `padmap`, which knows
+//! each browser's layouts; both positional, A ✕, B ○, X □, Y △, Back Select),
+//! the touch screen's pad (`touch`) and a script (`EQOA_PAD`). A pad that is not ready is read as all zeros, as
 //! `VIConsole::GetInput` clears it; then `PadKeys`: each of the 20 fields whose
 //! zero-ness changed becomes key `128 + i`, down or up, for `SetKey`. The
 //! sticks stay for `UpdateControls` (`m_p07190`).
@@ -85,14 +85,14 @@ pub fn stick_byte(v: f32) -> u8 {
     ((v * 1.33).clamp(-1.0, 1.0) * 127.5 + 127.5).round() as u8
 }
 
-/// The host's dead zone on a gamepad's stick, radial, on the stick as gilrs
-/// gives it: inside it the stick is at rest, outside it passes as it is, so
+/// The host's dead zone on a gamepad's stick, radial, on the stick's own
+/// travel: inside it the stick is at rest, outside it passes as it is, so
 /// the game's own dead zone and response are what they were. `ScaleStick`
-/// ignores bytes 88..167, which after the 1.33 is 0.236 of the stick as
-/// gilrs gives it either way of its middle. Natively that is the stick's own
-/// travel (gilrs's dead zone is the device's, an xpad's 0.004); in a page
-/// gilrs scales the stick past a radial 0.1 of its own (the Gamepad API names
-/// none), so the game's edge is at 0.312 of the travel and this one at 0.37.
+/// ignores bytes 88..167, which after the 1.33 is 0.236 of the travel
+/// either way of its middle (natively gilrs's dead zone is the device's, an
+/// xpad's 0.004; a page reads the Gamepad API's axes as they come, with none;
+/// until 2026-10-20 a page read them through gilrs, which scaled them past a
+/// radial 0.1 of its own, so this edge was at 0.37 of the travel there).
 /// A modern stick does not come back to its middle that well (Microsoft asks
 /// a game to ignore up to 0.24 of the left stick's travel and 0.265 of the
 /// right's; a worn pad drifts further), and one resting past the game's edge
@@ -380,11 +380,22 @@ pub fn trace() -> bool {
     return std::env::var_os("EQOA_PAD_TRACE").is_some();
 }
 
-/// The controllers, through gilrs: every connected gamepad as one report.
+/// The controllers: natively through gilrs (SDL's layout), in a page
+/// straight from the Gamepad API (`padmap`: every button and axis, and the
+/// layout each browser gives). Every connected pad as one report.
 pub struct Gamepads {
+    #[cfg(not(target_arch = "wasm32"))]
     gilrs: Option<gilrs::Gilrs>,
     #[cfg(not(target_arch = "wasm32"))]
     effect: Option<gilrs::ff::Effect>,
+    /// each pad's reading, by its index and id (in a page)
+    #[cfg(target_arch = "wasm32")]
+    web: Vec<(u32, String, crate::padmap::PadMap)>,
+    #[cfg(target_arch = "wasm32")]
+    browser: crate::padmap::Browser,
+    /// what `?padtrace` last said of each pad (in a page)
+    #[cfg(target_arch = "wasm32")]
+    traced: Vec<String>,
     /// the names of the pads seen, to say so once
     seen: Vec<String>,
     trace: bool,
@@ -393,6 +404,10 @@ pub struct Gamepads {
     pub dead_zone: f32,
     /// the pads' sticks as they came, before the dead zone (for a report)
     pub raw: [f32; 4],
+    /// each pad as a report gives it: its id, mapping, layout, every axis
+    /// and every button pressed (in a page)
+    #[cfg(target_arch = "wasm32")]
+    pub described: Vec<String>,
 }
 
 impl Default for Gamepads {
@@ -404,11 +419,11 @@ impl Default for Gamepads {
 impl Gamepads {
     pub fn new() -> Self {
         // `EQOA_GAMEPAD=0`: none (a script or the touch pad only)
-        let off = std::env::var("EQOA_GAMEPAD").is_ok_and(|v| v == "0");
-        let gilrs = if off {
+        #[cfg(not(target_arch = "wasm32"))]
+        let gilrs = if std::env::var("EQOA_GAMEPAD").is_ok_and(|v| v == "0") {
             None
         } else {
-            match gilrs::GilrsBuilder::new().with_force_feedback(!cfg!(target_arch = "wasm32")).build() {
+            match gilrs::GilrsBuilder::new().with_force_feedback(true).build() {
                 Ok(g) => Some(g),
                 Err(e) => {
                     crate::say(&format!("no gamepads: {e}"));
@@ -417,19 +432,29 @@ impl Gamepads {
             }
         };
         Gamepads {
+            #[cfg(not(target_arch = "wasm32"))]
             gilrs,
             #[cfg(not(target_arch = "wasm32"))]
             effect: None,
+            #[cfg(target_arch = "wasm32")]
+            web: Vec::new(),
+            #[cfg(target_arch = "wasm32")]
+            browser: crate::web::pad::browser(),
+            #[cfg(target_arch = "wasm32")]
+            traced: Vec::new(),
             seen: Vec::new(),
             trace: trace(),
             last: Report::default(),
             dead_zone: dead_zone(),
             raw: [0.0; 4],
+            #[cfg(target_arch = "wasm32")]
+            described: Vec::new(),
         }
     }
 
     /// Every connected pad as one report; whether there is one, and whether
     /// one can rumble.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn poll(&mut self) -> (Report, bool, bool) {
         let Some(g) = self.gilrs.as_mut() else { return (Report::default(), false, false) };
         while let Some(ev) = g.next_event() {
@@ -457,14 +482,63 @@ impl Gamepads {
             out.merge(&r);
         }
         self.raw = raw.sticks;
-        if any && !motors {
-            motors = web_can_rumble();
-        }
         if self.trace && out != self.last {
             crate::say(&format!("[pad] report {out:?}"));
             self.last = out;
         }
         (out, any, motors)
+    }
+
+    /// Every connected pad as one report, read off the Gamepad API (each
+    /// pad laid out by `padmap`); whether there is one, and whether one can
+    /// rumble (the page's motors, `window.eqoaRumble`).
+    #[cfg(target_arch = "wasm32")]
+    pub fn poll(&mut self) -> (Report, bool, bool) {
+        let pads = crate::web::pad::gamepads();
+        let mut out = Report::default();
+        let mut raw = Report::default();
+        let mut described = Vec::new();
+        let mut traced = Vec::new();
+        for p in &pads {
+            // a pad's reading is kept by its slot, anew when another pad
+            // takes the slot
+            let k = match self.web.iter().position(|(i, id, _)| *i == p.index && *id == p.id) {
+                Some(k) => k,
+                None => {
+                    self.web.retain(|(i, _, _)| *i != p.index);
+                    self.web.push((p.index, p.id.clone(), crate::padmap::PadMap::default()));
+                    self.web.len() - 1
+                }
+            };
+            let map = &mut self.web[k].2;
+            let mut r = map.read(p, self.browser);
+            if !self.seen.contains(&p.id) {
+                crate::say(&format!("gamepad: {} (mapping {:?}, {})", p.id, p.mapping, map.how(p, self.browser)));
+                self.seen.push(p.id.clone());
+            }
+            let d = map.describe(p, self.browser);
+            if self.trace {
+                // `?padtrace`: a pad as it changes, its axes to 0.05
+                let coarse = format!("{} {:?} {:?}", p.index, p.buttons.iter().map(|b| b.0).collect::<Vec<_>>(), p.axes.iter().map(|v| (v * 20.0).round() as i32).collect::<Vec<_>>());
+                if !self.traced.contains(&coarse) {
+                    crate::say(&format!("[pad] {d}"));
+                }
+                traced.push(coarse);
+            }
+            described.push(d);
+            raw.merge(&r);
+            r.rest(self.dead_zone);
+            out.merge(&r);
+        }
+        self.traced = traced;
+        self.described = described;
+        self.raw = raw.sticks;
+        if self.trace && out != self.last {
+            crate::say(&format!("[pad] report {out:?}"));
+            self.last = out;
+        }
+        let any = !pads.is_empty();
+        (out, any, any && web_can_rumble())
     }
 
     /// The motors as `VIPad` set them: the small one on or off, the large
@@ -473,10 +547,7 @@ impl Gamepads {
     pub fn rumble(&mut self, act: [u8; 2], ms: i64) {
         let ms = ms.clamp(0, 5000) as u32;
         #[cfg(target_arch = "wasm32")]
-        {
-            let _ = &self.gilrs;
-            crate::web::rumble(act[1] as f64 / 255.0, if act[0] != 0 { 1.0 } else { 0.0 }, ms);
-        }
+        crate::web::rumble(act[1] as f64 / 255.0, if act[0] != 0 { 1.0 } else { 0.0 }, ms);
         #[cfg(not(target_arch = "wasm32"))]
         {
             use gilrs::ff::{BaseEffect, BaseEffectType, EffectBuilder, Repeat, Replay, Ticks};
@@ -508,7 +579,9 @@ impl Gamepads {
 
 /// One gamepad as libpad's report: positional face buttons, the shoulders,
 /// the triggers past a third of their travel (the game reads L2 and R2 as
-/// buttons), the d-pad, and the sticks with +y down.
+/// buttons), the d-pad, and the sticks with +y down. Natively: SDL's layout
+/// through gilrs.
+#[cfg(not(target_arch = "wasm32"))]
 fn report_of(p: &gilrs::Gamepad<'_>) -> Report {
     use gilrs::{Axis, Button};
     let pressed = |b: Button| p.is_pressed(b) || p.button_data(b).is_some_and(|d| d.value() > 0.33 && matches!(b, Button::LeftTrigger2 | Button::RightTrigger2));
@@ -540,15 +613,11 @@ fn report_of(p: &gilrs::Gamepad<'_>) -> Report {
     r
 }
 
-/// In a page: whether a connected gamepad has a vibration actuator (gilrs
-/// does not drive one there; the page does, `window.eqoaRumble`).
+/// In a page: whether a connected gamepad has a vibration actuator (the
+/// page drives it, `window.eqoaRumble`).
 #[cfg(target_arch = "wasm32")]
-pub fn web_can_rumble() -> bool {
+fn web_can_rumble() -> bool {
     crate::web::can_rumble()
-}
-#[cfg(not(target_arch = "wasm32"))]
-pub fn web_can_rumble() -> bool {
-    false
 }
 
 #[cfg(test)]

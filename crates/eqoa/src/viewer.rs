@@ -1102,6 +1102,9 @@ struct App {
     console: crate::input::Console,
     pads: crate::input::Gamepads,
     pad_script: Option<crate::input::Script>,
+    /// the sticks `UpdateControls` got last frame: the pad's, the keys', the
+    /// mouse's and the touch screen's (for a report)
+    sticks_used: [f32; 4],
     /// The mouse in play (`mouse.rs`), and the last frame's view (what a
     /// click picks through).
     mouse: crate::mouse::Mouse,
@@ -1157,6 +1160,7 @@ pub fn run_with_gfx(lib: Library, source: Source, play: Option<crate::play::Play
         console: crate::input::Console::new(),
         pads: crate::input::Gamepads::new(),
         pad_script: crate::input::Script::from_env(),
+        sticks_used: [0.0; 4],
         mouse: crate::mouse::Mouse::default(),
         last_view: None,
         touch: crate::touch::TouchPad::new(touch_first()),
@@ -1390,9 +1394,24 @@ impl App {
         }
         let _ = writeln!(o, "files: {}", self.lib.files.iter().map(|f| f.0.as_str()).collect::<Vec<_>>().join(", "));
         // the controls: a pad's sticks as they came (before the host's dead
-        // zone) and as the game reads them, and the camera's mode
+        // zone), as the game reads them and with the keys, the mouse and the
+        // touch screen's merged in (what `UpdateControls` got), the camera's
+        // mode; each pad as the browser gives it; what else is held
         let mode = self.walker.as_ref().map_or(-1, |w| w.cam.camera_mode);
-        let _ = writeln!(o, "sticks rx ry lx ly: pad {:.3?} (dead zone {}), the game's {:.4?}; camera mode {mode}", self.pads.raw, self.pads.dead_zone, self.console.sticks());
+        let _ = writeln!(
+            o,
+            "sticks rx ry lx ly: pad {:.3?} (dead zone {}), the game's {:.4?}, with the keys, mouse and touch {:.4?}; camera mode {mode}",
+            self.pads.raw,
+            self.pads.dead_zone,
+            self.console.sticks(),
+            self.sticks_used
+        );
+        for d in &self.pads.described {
+            let _ = writeln!(o, "  {d}");
+        }
+        let mut keys: Vec<&str> = self.held.iter().map(String::as_str).collect();
+        keys.sort_unstable();
+        let _ = writeln!(o, "keys held [{}]; mouse {}; touch pad {}", keys.join(", "), self.mouse.describe(), if self.touch.used { "in use" } else { "unused" });
         if let Some(e) = &self.entering {
             let _ = writeln!(o, "entering {} at {:?}", e.0, e.1);
         }
@@ -2051,8 +2070,14 @@ impl ApplicationHandler for App {
             }
             // Walking, the mouse is `mouse.rs`'s: a drag looks round, the
             // wheel zooms, a click targets and a double or right click talks.
-            // a release that may never come: let go of what is held
-            WindowEvent::Focused(false) | WindowEvent::CursorLeft { .. } => self.mouse.release_all(),
+            // a release that may never come: let go of what is held (a key
+            // let go while the report's dialog or another window has the
+            // keys would walk or turn the player on for good)
+            WindowEvent::Focused(false) => {
+                self.mouse.release_all();
+                self.held.clear();
+            }
+            WindowEvent::CursorLeft { .. } => self.mouse.release_all(),
             WindowEvent::MouseInput { state, button, .. } if matches!(button, MouseButton::Left | MouseButton::Right) => {
                 let down = state == ElementState::Pressed;
                 if self.walker.is_some() {
@@ -2149,6 +2174,7 @@ impl ApplicationHandler for App {
                 self.touch.window = self.play.as_ref().is_some_and(|p| p.mode != 0);
                 mark(&mut self.perf, 0);
                 let sticks = self.sticks();
+                self.sticks_used = sticks;
                 let now = self.clock.elapsed().as_millis() as i64;
                 let Some(g) = &mut self.gfx else { return };
                 let body_at = self.body_at;

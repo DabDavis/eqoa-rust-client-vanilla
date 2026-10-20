@@ -32,6 +32,7 @@
 
 mod bgm;
 mod disc;
+pub mod pad;
 mod relay;
 
 use crate::{play, sky, viewer};
