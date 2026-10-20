@@ -1413,6 +1413,10 @@ impl App {
         // zone) and as the game reads them, and the camera's mode
         let mode = self.walker.as_ref().map_or(-1, |w| w.cam.camera_mode);
         let _ = writeln!(o, "sticks rx ry lx ly: pad {:.3?} (dead zone {}), the game's {:.4?}; camera mode {mode}", self.pads.raw, self.pads.dead_zone, self.console.sticks());
+        if let Some(w) = &self.walker {
+            let c = &w.cam;
+            let _ = writeln!(o, "camera: distance {:.2} of {:.2}, pitch {:.3} (default {:.3})", c.cur.dist.0, c.max_orbit_distance.0, c.cur.orbit.y.0, c.def_orbit_pitch.0);
+        }
         if let Some(e) = &self.entering {
             let _ = writeln!(o, "entering {} at {:?}", e.0, e.1);
         }

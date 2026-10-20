@@ -25,7 +25,8 @@ a phone's, 2 to 3).
 pointer is coarse); --touch SECONDS=STEPS touches the canvas then, steps
 ';'-separated: 'tap X Y', 'hold X Y MS', 'drag X0 Y0 X1 Y1 MS' (CSS pixels);
 --mouse SECONDS=STEPS moves the mouse over the canvas, steps ';'-separated:
-'click X Y', 'rclick X Y', 'wheel X Y LINES' (up positive), 'move X Y';
+'click X Y', 'rclick X Y', 'wheel X Y LINES' (up positive), 'move X Y',
+'drag X0 Y0 X1 Y1 [MS]' (the left button held);
 --gamepad SECONDS=STEPS plays a gamepad the page sees through
 navigator.getGamepads (the standard layout's indices: 0 A, 1 B, 2 X, 3 Y,
 4 LB, 5 RB, 6 LT, 7 RT, 8 Back, 9 Start, 10 L3, 11 R3, 12-15 the d-pad):
@@ -234,6 +235,16 @@ async def drive(a, base, ws_url):
                 elif w[0] == "wheel":
                     # a line is a hundred pixels to Chromium; down is positive there
                     await call("Input.dispatchMouseEvent", type="mouseWheel", x=x, y=y, deltaX=0, deltaY=-100 * float(w[3]))
+                elif w[0] == "drag":
+                    # the left button held from (x, y) to (x1, y1) over MS (default 300)
+                    x1, y1 = float(w[3]), float(w[4])
+                    ms = int(w[5]) if len(w) > 5 else 300
+                    await call("Input.dispatchMouseEvent", type="mousePressed", x=x, y=y, button="left", buttons=1, clickCount=1)
+                    n = max(2, ms // 16)
+                    for i in range(1, n + 1):
+                        await asyncio.sleep(ms / 1000 / n)
+                        await call("Input.dispatchMouseEvent", type="mouseMoved", x=x + (x1 - x) * i / n, y=y + (y1 - y) * i / n, button="left", buttons=1)
+                    await call("Input.dispatchMouseEvent", type="mouseReleased", x=x1, y=y1, button="left", buttons=0, clickCount=1)
                 out(f"mouse {step}")
 
         async def gamepad(spec):
