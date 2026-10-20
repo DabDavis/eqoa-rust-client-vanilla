@@ -15,6 +15,11 @@
 //! and (295, 37)), both sums, the text of the item under the cursor, the
 //! accept glow, the button legend; with the money entry (`VIWndDeposit`),
 //! the quantity picker, the message box and a chat line.
+//!
+//! A pointer (`pointer`) goes to the child with the keys; on the window
+//! itself a click on another list (or the money) moves the focus there as
+//! the d-pad does and selects the row under it, and a click on the list
+//! with the focus selects a row or uses the selection.
 
 #![allow(clippy::too_many_arguments)]
 
@@ -569,6 +574,10 @@ pub struct Trade {
     window: Window,
     offer: Window,
     pub visible: bool,
+    /// the three lists' frames and the money where they were drawn, by the
+    /// focus each is (0 the inventory, 1 the offer, 2 the money, 3 the
+    /// partner's offer), for a pointer
+    hits: Hits,
 }
 
 impl Default for Trade {
@@ -596,6 +605,7 @@ impl Default for Trade {
             window: Window::default(),
             offer: Window::default(),
             visible: false,
+            hits: Hits::default(),
         }
     }
 }
@@ -688,6 +698,73 @@ impl Trade {
     pub fn clear_accepted(&mut self) {
         self.i_accepted = false;
         self.they_accepted = false;
+    }
+
+    /// A pointer at frame point `p`, to the child with the keys (the box,
+    /// the money entry, the picker, the chat line). On the window: on the
+    /// list (or the money) with the focus, a row selected or the selection
+    /// used (Enter: offered, taken back, the money entered); on another, the
+    /// focus moved there as the d-pad moves it and the row under the
+    /// pointer selected. The keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        match self.child {
+            Child::MBox => return self.mbox.point(p).then_some(key::CROSS).into_iter().collect(),
+            Child::Deposit => return self.deposit.point(p),
+            Child::Quantity => return self.quantity.point(p),
+            Child::Edit => return self.edit.point(p).flatten().into_iter().collect(),
+            Child::Trade => {}
+        }
+        let Some(target) = self.hits.at(p) else { return Vec::new() };
+        let row = match target {
+            0 => self.list.row_at(p),
+            1 => self.mine.row_at(p),
+            3 => self.theirs.row_at(p),
+            _ => None,
+        };
+        if target == self.focus {
+            return match (target, row) {
+                (2, _) => vec![key::CROSS],
+                (0, Some(r)) => vec![self.list.pick(r)],
+                (1, Some(r)) => vec![self.mine.pick(r)],
+                (3, Some(r)) => vec![self.theirs.pick(r)],
+                _ => Vec::new(),
+            };
+        }
+        self.focus_to(target);
+        if let Some(r) = row {
+            let (l, rows) = match target {
+                0 => (&mut self.list, 6),
+                1 => (&mut self.mine, 3),
+                _ => (&mut self.theirs, 3),
+            };
+            l.pick(r);
+            if l.top + rows - 1 < r {
+                l.top = r - rows + 1;
+            }
+            l.top = l.top.min(r);
+        }
+        vec![MOVED]
+    }
+
+    /// The focus moved to `target` (0 the inventory, 1 the offer, 2 the
+    /// money, 3 the partner's offer) as the d-pad moves it: `Left`, `Right`,
+    /// `Up` from the money, and `Down`'s step off the bottom of the offer
+    /// onto the money (the rows above skipped).
+    fn focus_to(&mut self, target: i32) {
+        let mut cues = Vec::new();
+        for _ in 0..4 {
+            match (self.focus, target) {
+                (f, t) if f == t => break,
+                (0, _) | (1 | 2, 3) => self.right(&mut cues),
+                (2, 1) => self.up(138, &mut cues),
+                (1, 2) => {
+                    self.focus = 2;
+                    self.mine.set_x64(false);
+                }
+                (1..=3, _) => self.left(&mut cues),
+                _ => break,
+            }
+        }
     }
 
     /// The keys of whichever child has them.
@@ -932,6 +1009,7 @@ impl Trade {
     /// (an accepted offer glowing green); then the children up.
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, st: &TradeState, info: &Info, icon: &dyn Fn(&NetItem) -> i32, can_use: &dyn Fn(&NetItem) -> bool, cues: &mut Vec<i32>) {
         let now = vui.time;
+        self.hits.clear();
         if self.focus != -1 {
             // RefreshLists
             let inv: Vec<&NetItem> = st.inv.items.iter().collect();
@@ -956,6 +1034,7 @@ impl Trade {
             self.offer.draw(vui, r);
             self.window.text_box(vui, r, &word(479), 30, 10, 105, 1, white, 1);
             self.window.text_box(vui, r, &wide(&st.my_money.to_string()), 30, 11, 105, 1, white, 5);
+            self.hits.push(crate::pointer::rows_rect(&self.window, vui, r, 30, 10, 105, 2), 2);
             if self.focus == 2 {
                 self.window.tick_r(vui, r, 20, 11, self.child == Child::Trade);
             }
@@ -981,6 +1060,13 @@ impl Trade {
             self.list.x84 = focused;
             self.mine.x84 = focused;
             self.theirs.x84 = focused;
+            // the lists' frames, as `VIWndList::OnDrawSelf` and
+            // `VIWndTradeList::OnDrawSelf` size them
+            let (stud, fill) = (vui.entry(36), vui.entry(82));
+            let w = stud.uv1[0] * 2 + fill.uv1[0] + 114;
+            for (l, h, k) in [(&self.list, 264, 0), (&self.mine, 3 * 44 + 30, 1), (&self.theirs, 3 * 44 + 30, 3)] {
+                self.hits.push([l.pos[0], l.pos[1], l.pos[0] + w, l.pos[1] + stud.uv1[1] * 2 + h], k);
+            }
             self.list.draw(vui, r, now, cues);
             let (mc, tc) = (glow(self.i_accepted, self.fade), glow(self.they_accepted, self.fade));
             self.mine.draw_trade(vui, r, 3, 474, mc, now, cues);
@@ -1110,5 +1196,63 @@ mod tests {
         d.digits = [0; 9];
         assert_eq!(d.key(134, true, 0, &mut cues), Some(DepositUp::Cancel), "nothing: cancelled, sound 3");
         assert_eq!(cues, vec![13, 3]);
+    }
+
+    /// On the list with the focus a click selects a row and a second uses
+    /// it; on another list or the money the focus goes there as the d-pad
+    /// takes it (the lists lit as `Left`/`Right` light them) with the row
+    /// under the pointer selected; with the money entry up only it takes
+    /// clicks.
+    #[test]
+    fn a_pointer_across_the_lists() {
+        use crate::pointer::testing::{NullRaster, mid, vui};
+        use crate::pointer::rows_rect;
+        let (vui, mut r) = (vui(), NullRaster);
+        // the inventory left with two rows, the offer with two
+        let mut st = state(true);
+        st.inv.items.push(it(300, 5, 1, 1));
+        st.inv.items.push(it(400, 6, 1, 1));
+        st.add_slot(4, 1);
+        st.add_slot(6, 1);
+        assert_eq!((st.inv.items.len(), st.mine.len()), (2, 2));
+        let base = [0; 29];
+        let info = Info { words: &vui.words, inv: &st.inv, hp: [0; 4], base: &base, class: 0, level: 1, attack_words: &[] };
+        let (icon, can_use) = (|_: &NetItem| 1, |_: &NetItem| true);
+        let mut cues = Vec::new();
+        let mut t = Trade::default();
+        t.start(&vui, &r, 0);
+        t.draw(&vui, &mut r, &st, &info, &icon, &can_use, &mut cues);
+        // no atlas here: the lists' rows start at their corners, 44 high;
+        // a trade list's rows under its 30-pixel title
+        let inv_row = |i: i32| [6.0 + 57.0, 37.0 + 44.0 * i as f32 + 22.0];
+        let mine_row = |i: i32| [155.0 + 57.0, 37.0 + 30.0 + 44.0 * i as f32 + 22.0];
+        let theirs_frame = [295.0 + 57.0, 100.0];
+        let money = mid(rows_rect(&t.window, &vui, &r, 30, 10, 105, 2));
+        assert_eq!(t.point(inv_row(1)), vec![MOVED]);
+        assert_eq!(t.list.sel, 1);
+        assert_eq!(t.point(inv_row(1)), vec![key::CROSS], "offered (Enter)");
+        assert!(t.point(inv_row(2)).is_empty(), "two rows");
+        // the offer's second row: Right, then the row
+        assert_eq!(t.point(mine_row(1)), vec![MOVED]);
+        assert_eq!((t.focus, t.mine.sel, t.list.x64, t.mine.x64), (1, 1, false, true));
+        assert_eq!(t.point(mine_row(1)), vec![key::CROSS], "taken back (Enter)");
+        // the money: Down's step off the offer; Enter on it opens the entry
+        assert_eq!(t.point(money), vec![MOVED]);
+        assert_eq!((t.focus, t.mine.x64), (2, false));
+        assert_eq!(t.point(money), vec![key::CROSS]);
+        // the partner's empty offer: its frame takes the focus
+        assert_eq!(t.point(theirs_frame), vec![MOVED]);
+        assert_eq!((t.focus, t.theirs.x64), (3, true));
+        // back across to the inventory: Left twice, its first row
+        assert_eq!(t.point(inv_row(0)), vec![MOVED]);
+        assert_eq!((t.focus, t.list.sel, t.list.x64, t.mine.x64, t.theirs.x64), (0, 0, true, false, false));
+        assert!(t.point([600.0, 20.0]).is_empty(), "off the window");
+        // the money entry up: the lists behind it take no clicks
+        t.focus_to(2);
+        t.key(&vui, &mut r, &st, 134, true, &mut cues, &mut Vec::new());
+        assert_eq!(t.child, Child::Deposit);
+        t.draw(&vui, &mut r, &st, &info, &icon, &can_use, &mut cues);
+        assert!(t.point(inv_row(0)).is_empty());
+        assert_eq!(t.focus, 2);
     }
 }
