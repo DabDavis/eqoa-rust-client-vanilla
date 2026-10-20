@@ -1,8 +1,9 @@
 //! The newlib port against go-eqoa-vi/vimath, whose functions were checked
 //! against the running console: 24,000 inputs from the regimes each function
-//! branches on (`tools/vimath-corpus`, `go run . > crates/ee/tests/libm_corpus.bin`),
-//! every answer compared bit for bit. Plus the console values the Go code
-//! records as literals.
+//! branches on (`tools/vimath-corpus`, `go run . > ../../crates/ee/tests/libm_corpus.txt`:
+//! a line a record, the op, the bit patterns of a, b and Go's answer in hex,
+//! and whether Go answers), every answer compared bit for bit. Plus the
+//! console values the Go code records as literals.
 //!
 //! ONE deliberate difference: `atan2f`'s wrapper tests its arguments with
 //! `c.eq.s` (SUPPORT 0x0012711C, 0x0012712C), which on the EE flushes a
@@ -15,15 +16,18 @@ use ee::libm;
 
 #[test]
 fn matches_console_checked_go() {
-    let data = include_bytes!("libm_corpus.bin");
+    let corpus = include_str!("libm_corpus.txt");
     let names = ["sinf", "cosf", "powf", "atanf", "atan2f", "acosf", "sqrtf", "fmodf"];
     let mut counts = [0usize; 8];
     let mut skipped = 0;
     let mut atan2_denormal_zero = 0;
-    for (i, r) in data.chunks(14).enumerate() {
-        let op = r[0] as usize;
-        let u = |o: usize| u32::from_le_bytes(r[o..o + 4].try_into().unwrap());
-        let (a, b, want, ok) = (f32::from_bits(u(1)), f32::from_bits(u(5)), u(9), r[13] == 1);
+    assert_eq!(corpus.lines().count(), 24_000, "the corpus is whole");
+    for (i, line) in corpus.lines().enumerate() {
+        let f: Vec<&str> = line.split(' ').collect();
+        assert!(f.len() == 5 && (f[4] == "0" || f[4] == "1"), "record {i}: {line:?}");
+        let op: usize = f[0].parse().unwrap();
+        let u = |k: usize| u32::from_str_radix(f[k], 16).unwrap();
+        let (a, b, want, ok) = (f32::from_bits(u(1)), f32::from_bits(u(2)), u(3), f[4] == "1");
         let got: Option<f32> = match op {
             0 => (!libm::huge_angle(a)).then(|| libm::sinf(a)),
             1 => (!libm::huge_angle(a)).then(|| libm::cosf(a)),

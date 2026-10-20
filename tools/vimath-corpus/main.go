@@ -1,15 +1,15 @@
 // Writes the corpus crates/ee/tests/libm.rs checks the Rust port of newlib's
 // maths against: inputs from the regimes each function branches on, and the
 // answer of go-eqoa-vi/vimath, whose functions were checked against the
-// running console. Records are little-endian: u8 op, u32 a, u32 b, u32 result,
-// u8 ok.
+// running console. A record is a line: the op, the bit patterns of a, b and
+// the result in hex, and ok (1 or 0). Text, so the corpus can be committed.
 //
-//	go run . > ../../crates/ee/tests/libm_corpus.bin
+//	go run . > ../../crates/ee/tests/libm_corpus.txt
 package main
 
 import (
 	"bufio"
-	"encoding/binary"
+	"fmt"
 	"math"
 	"os"
 
@@ -53,15 +53,11 @@ func main() {
 	w := bufio.NewWriter(os.Stdout)
 	defer w.Flush()
 	rec := func(op byte, a, b, r float32, ok bool) {
-		var buf [14]byte
-		buf[0] = op
-		binary.LittleEndian.PutUint32(buf[1:], math.Float32bits(a))
-		binary.LittleEndian.PutUint32(buf[5:], math.Float32bits(b))
-		binary.LittleEndian.PutUint32(buf[9:], math.Float32bits(r))
+		k := 0
 		if ok {
-			buf[13] = 1
+			k = 1
 		}
-		w.Write(buf[:])
+		fmt.Fprintf(w, "%d %08x %08x %08x %d\n", op, math.Float32bits(a), math.Float32bits(b), math.Float32bits(r), k)
 	}
 	pick := func() float32 {
 		switch next() % 6 {
