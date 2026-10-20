@@ -16,11 +16,19 @@ use crate::client_image::Menus;
 use vi::ui::{FrameParam, Raster, TextScroll, Vui, Window, wide};
 
 /// `VIKeyFlash`: a held key's auto-repeat. It fires at once, then after 15
-/// frames, then 8, 7, ... down to every frame.
+/// frames, then 8, 7, ... down to every other frame. `pulse` is called once
+/// a frame of the game's (`frames.rs`), when the window draws.
+///
+/// One addition: a key let go before its first pulse has fired is kept until
+/// that pulse, which fires once and lets it go. On the console a key is read
+/// off the pad once a frame, so its press and release always have a frame
+/// between them; here a keyboard's can both come between two of the game's
+/// frames (33 ms), and the tap would be lost.
 #[derive(Clone, Copy, Default)]
 pub struct KeyFlash {
     count: usize,
-    slots: [(u8, i32, i32); 16],
+    /// key, `m_time`, `m_wait`, and let go before the first pulse
+    slots: [(u8, i32, i32, bool); 16],
 }
 
 impl KeyFlash {
@@ -38,13 +46,18 @@ impl KeyFlash {
             self.count += 1;
         }
         if let Some(k) = k {
-            self.slots[k] = (key, 16, 0);
+            self.slots[k] = (key, 16, 0, false);
         }
     }
 
     pub fn release(&mut self, key: u8) {
         if let Some(s) = self.slots.iter_mut().find(|s| s.0 == key) {
-            s.0 = 0;
+            // `m_time` is 16 only until the first pulse
+            if s.1 == 16 {
+                s.3 = true;
+            } else {
+                s.0 = 0;
+            }
         }
     }
 
@@ -53,6 +66,9 @@ impl KeyFlash {
         if s.2 == 0 {
             s.1 = if s.1 == 15 { 8 } else { (s.1 - 1).max(1) };
             s.2 = s.1;
+            if s.3 {
+                s.0 = 0;
+            }
             return true;
         }
         s.2 -= 1;

@@ -37,6 +37,7 @@ mod craft;
 mod craftwnd;
 mod death;
 mod editbox;
+mod frames;
 mod group;
 mod guild;
 // the music off a disc read asynchronously: a page's (natively, its tests)

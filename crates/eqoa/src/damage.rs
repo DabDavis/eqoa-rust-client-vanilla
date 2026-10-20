@@ -17,7 +17,7 @@
 #![allow(clippy::approx_constant)]
 
 use glam::{Mat4, Vec3};
-use render::ui::{Quad, Ui};
+use render::ui::Quad;
 use vi::csprite::Rand;
 
 /// `VIDamageNumber`, 44 bytes on the console.
@@ -65,12 +65,15 @@ pub struct Damage {
     /// `VIClient` hands `Process`.
     last: Option<i64>,
     history: [f32; 8],
+    /// The numbers `frame` laid out: where each floats, and its digits'
+    /// quads about that point (shaken, faded and grown as `Draw` drew them).
+    laid: Vec<(Vec3, Vec<Quad>)>,
 }
 
 impl Default for Damage {
     /// `Init`: all 32 numbers on the free list, in order.
     fn default() -> Self {
-        Damage { slot: [0; 2], numbers: [Number::default(); 32], active: Vec::new(), free: (0..32).collect(), rand: Rand(1), last: None, history: [0.0; 8] }
+        Damage { slot: [0; 2], numbers: [Number::default(); 32], active: Vec::new(), free: (0..32).collect(), rand: Rand(1), last: None, history: [0.0; 8], laid: Vec::new() }
     }
 }
 
@@ -142,11 +145,12 @@ impl Damage {
 
     /// `Process`'s drawing: each number inside the camera's frustum (its
     /// near 0.1 and far 900) projected into the HUD's frame and drawn.
+    #[cfg(test)]
     pub fn quads(&mut self, shown: &[Shown], view_proj: Mat4, size: (u32, u32), tex: usize) -> Vec<Quad> {
         let mut out = Vec::new();
         for s in shown {
             let h = view_proj * s.at.extend(1.0);
-            if !(h.w > 0.1 && h.w <= 900.0 && h.x.abs() <= h.w && h.y.abs() <= h.w) {
+            if !in_frustum(h) {
                 continue;
             }
             let at = render::ui::frame_from_ndc(size, [h.x / h.w, h.y / h.w]);
@@ -155,14 +159,46 @@ impl Damage {
         out
     }
 
-    /// `Process`: a frame of the numbers, onto the HUD's layer (none drawn
-    /// without the font).
-    pub fn process(&mut self, ui: &mut Ui, tex: Option<usize>, now_ms: i64, view_proj: Mat4, size: (u32, u32), find: impl Fn(u32) -> Option<Target>) {
+    /// `Process` on a frame of the game's (`frames.rs`): the numbers moved
+    /// on, and those in the frustum laid out as `Draw` draws them (its
+    /// `rand()`s are the game's, a frame each). Where they go on the screen
+    /// is `place`'s, every frame drawn, so a number keeps to its creature
+    /// while the view moves between the game's frames.
+    pub fn frame(&mut self, tex: Option<usize>, now_ms: i64, view_proj: Mat4, find: impl Fn(u32) -> Option<Target>) {
         let shown = self.step(now_ms, find);
+        self.laid.clear();
         let Some(tex) = tex else { return };
-        for q in self.quads(&shown, view_proj, size, tex) {
-            ui.push_whole(q);
+        for s in shown {
+            if !in_frustum(view_proj * s.at.extend(1.0)) {
+                continue;
+            }
+            let mut quads = Vec::new();
+            self.draw(&mut quads, tex, [0.0, 0.0], s.amount, s.color, s.time);
+            self.laid.push((s.at, quads));
         }
+    }
+
+    /// The laid-out numbers through this frame's view, into the HUD's frame:
+    /// the quads to draw under the HUD.
+    pub fn place(&self, view_proj: Mat4, size: (u32, u32)) -> Vec<Quad> {
+        let mut out = Vec::new();
+        for (at, quads) in &self.laid {
+            let h = view_proj * at.extend(1.0);
+            if !in_frustum(h) {
+                continue;
+            }
+            let p = render::ui::frame_from_ndc(size, [h.x / h.w, h.y / h.w]);
+            for q in quads {
+                let mut q = *q;
+                for v in &mut q.pos {
+                    v[0] += p[0];
+                    v[1] += p[1];
+                }
+                q.clip = Some(render::ui::WHOLE);
+                out.push(q);
+            }
+        }
+        out
     }
 
     /// `Draw`: the digits of |amount| from `pos` less half their width and
@@ -197,6 +233,12 @@ impl Damage {
             p[0] += scale * 10.0;
         }
     }
+}
+
+/// Inside the camera's frustum as `Process` tests it (its near 0.1 and far
+/// 900), for a point in clip space.
+fn in_frustum(h: glam::Vec4) -> bool {
+    h.w > 0.1 && h.w <= 900.0 && h.x.abs() <= h.w && h.y.abs() <= h.w
 }
 
 /// `GlyphUV`: a digit's four corners in the 4 x 4 grid.
@@ -333,5 +375,45 @@ mod tests {
         // straight ahead is the frame's centre, less the number's offset
         let s = 0.7f32 * 1.2 + 0.9;
         assert!((q[0].pos[0][0] - (320.0 - (10.0 * 0.5 * s + s))).abs() < 1e-3);
+    }
+
+    /// Laid out on a frame of the game's and placed through the same view,
+    /// the quads are `Draw`'s through that view, its `rand()`s and all; placed
+    /// through a view turned since, they follow the number on the screen
+    /// (where the game's frame left them they would lag the creature).
+    #[test]
+    fn numbers_laid_out_once_a_frame_follow_the_view_between() {
+        let proj = glam::camera::rh::proj::directx::perspective(45f32.to_radians(), 4.0 / 3.0, 0.3, 6000.0);
+        let vp = proj * glam::camera::rh::view::look_to_mat4(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y);
+        let find = |id: u32| (id == 3).then_some(Target { pos: [1.0, 0.0, -12.0], slot4: Some([1.0, 2.0, -12.0]) });
+        let (mut a, mut b) = (Damage::default(), Damage::default());
+        a.add(3, -42, 0);
+        b.add(3, -42, 0);
+        // the same frames through `step` + `quads` and through `frame` + `place`
+        let mut drawn = Vec::new();
+        let mut placed = Vec::new();
+        for t in [1000, 1033, 1067, 1100] {
+            let shown = a.step(t, find);
+            drawn = a.quads(&shown, vp, (640, 448), 7);
+            b.frame(Some(7), t, vp, find);
+            placed = b.place(vp, (640, 448));
+        }
+        assert_eq!(drawn.len(), 2, "two digits");
+        for (d, p) in drawn.iter().zip(&placed) {
+            for k in 0..4 {
+                assert!((d.pos[k][0] - p.pos[k][0]).abs() < 1e-3 && (d.pos[k][1] - p.pos[k][1]).abs() < 1e-3, "{:?} {:?}", d.pos, p.pos);
+            }
+            assert_eq!(d.color, p.color);
+        }
+        assert_eq!(a.rand.0, b.rand.0, "the same rand()s");
+        // the view turned a little before the next of the game's frames: the
+        // digits move with the point they float over
+        let turned = proj * glam::camera::rh::view::look_to_mat4(Vec3::ZERO, Vec3::new(0.05, 0.0, -1.0), Vec3::Y);
+        let moved = b.place(turned, (640, 448));
+        let dx = moved[0].pos[0][0] - placed[0].pos[0][0];
+        assert!(dx < -5.0, "the view turned right, the number moves left ({dx})");
+        for (m, p) in moved.iter().zip(&placed) {
+            assert!((m.pos[2][0] - m.pos[0][0] - (p.pos[2][0] - p.pos[0][0])).abs() < 1e-3, "the same digit, moved whole");
+        }
     }
 }

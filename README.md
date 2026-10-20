@@ -138,6 +138,30 @@ and 9.4 ms on WebGL2 (25 ms and 39 fps before, wgpu's GL path being the
 costlier one). The sound driver's SPU2 is under 0.4 ms of that, and natively
 on a thread of its own.
 
+### The game's frame at any display rate
+
+The console's loop runs 30 frames a second (CLIENT's 20 ms floor, then the
+raster's wait for a field); the client draws at the display's rate, 165 a
+second on one tester's monitor. What the game moves by its clock (the walk
+and camera in 32 ms ticks, animation, particles, the weather) runs every
+frame drawn. What it counts in frames runs on a clock of the game's frames,
+30 a second (`frames.rs`): the HUD and every window (`VIKeyFlash`'s repeat
+after 16 frames, `VIUIWindow` opening by 0.15 a frame, `VIUITextScroll`'s two
+pixels a frame and 30-frame pause, the quick menus' light, the glows, the
+"..." dots) is made once a frame of the game's and its quads drawn again in
+between (`render::ui::Ui::keep`/`again`); the damage numbers are laid out
+then (their `rand()`s are the game's) and placed through every view drawn;
+`TrackTarget`'s colour easing, `DeathCamera`'s swing and `VICameraEffect`'s
+shake samples step on it too. Run every frame at 165 Hz they went 5.5 times
+as fast: the target's name rocked at 330 pixels a second with 0.18 s pauses
+(the console's 60 and 1 s), the menus' first repeat came after 97 ms (533).
+`frames.rs`'s tests drive the repeat, the name's scroll and the rings at 30,
+60, 144 and 165 Hz against the console's times, each with its control. A key
+let go before its first pulse still fires once (a keyboard's tap can fall
+between two of the game's frames; a pad read once a frame cannot), and a
+mouse's drag pushes the stick for a sixtieth of a second a pixel, whatever
+the rate. `EQOA_FRAME_MS=n` gives a `shot` or `playshot` frames n ms long.
+
 ### The dictionary
 
 The game keeps one dictionary per stage, and every file it loads registers into

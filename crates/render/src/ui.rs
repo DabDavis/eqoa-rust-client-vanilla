@@ -22,7 +22,7 @@ pub const SCREEN_W: f32 = 640.0;
 pub const SCREEN_H: f32 = 448.0;
 
 /// A quad's clip that is the whole target (`Ui::push_whole`).
-const WHOLE: [i32; 4] = [i32::MIN / 4, i32::MIN / 4, i32::MAX / 4, i32::MAX / 4];
+pub const WHOLE: [i32; 4] = [i32::MIN / 4, i32::MIN / 4, i32::MAX / 4, i32::MAX / 4];
 
 /// Where the frame sits in a `size` target: its offset and its scale. The
 /// frame keeps its 4:3 shape (a PS2 shows it on a 4:3 picture): the full
@@ -227,6 +227,8 @@ pub struct Ui {
     /// with the frame, and what they cover (`end`).
     sided: Vec<(usize, f32)>,
     opaque: Vec<(usize, [f32; 4])>,
+    /// The quads `keep` kept, which `again` makes the frame's.
+    kept: Vec<Quad>,
 }
 
 impl Ui {
@@ -300,7 +302,7 @@ impl Ui {
                 })
             })
             .collect();
-        Ui { layout, sampler, pipelines, textures: Vec::new(), fonts: Vec::new(), quads: Vec::new(), viewport: None, anchor: Anchor::Middle, side: 0.0, sided: Vec::new(), opaque: Vec::new() }
+        Ui { layout, sampler, pipelines, textures: Vec::new(), fonts: Vec::new(), quads: Vec::new(), viewport: None, anchor: Anchor::Middle, side: 0.0, sided: Vec::new(), opaque: Vec::new(), kept: Vec::new() }
     }
 
     /// A new frame's quads, for a `size` target: none yet, and those made
@@ -327,6 +329,18 @@ impl Ui {
         settle(&mut self.quads, &self.sided, &self.opaque);
         self.sided.clear();
         self.opaque.clear();
+    }
+
+    /// The quads made so far kept for the frames that follow (`again`): the
+    /// game makes its 2D layer once a frame of its own, 30 a second, and a
+    /// faster display draws the same quads in between.
+    pub fn keep(&mut self) {
+        self.kept.clone_from(&self.quads);
+    }
+
+    /// The kept quads made this frame's, in place of making them again.
+    pub fn again(&mut self) {
+        self.quads.clone_from(&self.kept);
     }
 
     /// A texture for the layer: RGBA8, top row first. Its index.

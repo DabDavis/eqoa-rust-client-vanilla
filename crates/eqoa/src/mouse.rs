@@ -29,7 +29,10 @@ const SLOP: f64 = 5.0;
 const DOUBLE: Duration = Duration::from_millis(400);
 /// The orbit's turn for a pixel of drag (radians): half a turn over 390.
 const ORBIT_PER_PIXEL: f32 = 0.008;
-/// A pixel of drag as the stick's push for a frame.
+/// A pixel of drag as the stick's push for a sixtieth of a second (a frame
+/// at 60 Hz, where it was set). The push acts for the frame it is given in
+/// (`UpdateControls`' thrusts are integrated over the frame), so it is
+/// scaled by the frame's length: a drag turns or zooms the same at any rate.
 const STICK_PER_PIXEL: f32 = 0.05;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -154,20 +157,23 @@ impl Mouse {
         self.steps = 0.0;
     }
 
-    /// This frame's drag and wheel on the walker's camera (`look`).
-    pub fn look(&mut self, w: &mut Walker, inverted: bool) -> [f32; 2] {
+    /// This frame's drag and wheel on the walker's camera (`look`), for a
+    /// frame `frame_s` seconds long.
+    pub fn look(&mut self, w: &mut Walker, inverted: bool, frame_s: f32) -> [f32; 2] {
         let (dx, dy) = std::mem::take(&mut self.look);
         let wheel = std::mem::take(&mut self.wheel);
         self.steps = 0.0;
-        look(w, dx as f32, dy as f32, wheel, inverted)
+        look(w, dx as f32, dy as f32, wheel, inverted, frame_s)
     }
 }
 
 /// A drag of (dx, dy) window pixels and `wheel` lines on the walker's
-/// camera: the orbit and the distance moved at once in the orbiting modes,
-/// and the rest as the right stick's push (rx, ry) for `UpdateControls`.
-pub fn look(w: &mut Walker, dx: f32, dy: f32, wheel: f32, inverted: bool) -> [f32; 2] {
+/// camera in a frame `frame_s` seconds long: the orbit and the distance
+/// moved at once in the orbiting modes, and the rest as the right stick's
+/// push (rx, ry) for `UpdateControls`.
+pub fn look(w: &mut Walker, dx: f32, dy: f32, wheel: f32, inverted: bool, frame_s: f32) -> [f32; 2] {
     let mut stick = [0.0f32; 2];
+    let per_pixel = stick_per_pixel(frame_s);
     let mode = w.cam.camera_mode;
     if mode == 1 || mode == 3 {
         if dx != 0.0 {
@@ -181,10 +187,16 @@ pub fn look(w: &mut Walker, dx: f32, dy: f32, wheel: f32, inverted: bool) -> [f3
             w.cam.set_orbit_distance(F::new(d));
         }
     } else {
-        stick[0] = (dx * STICK_PER_PIXEL).clamp(-1.0, 1.0);
+        stick[0] = (dx * per_pixel).clamp(-1.0, 1.0);
     }
-    stick[1] = (dy * STICK_PER_PIXEL).clamp(-1.0, 1.0);
+    stick[1] = (dy * per_pixel).clamp(-1.0, 1.0);
     stick
+}
+
+/// The stick's push for a pixel of drag in a frame `frame_s` seconds long
+/// (`STICK_PER_PIXEL`); a frame under a millisecond counts as one.
+fn stick_per_pixel(frame_s: f32) -> f32 {
+    STICK_PER_PIXEL * (1.0 / 60.0) / frame_s.max(0.001)
 }
 
 /// `EQOA_MOUSE`, for headless runs: `;`-separated steps at a time in ms,
@@ -297,6 +309,23 @@ mod tests {
         // the control: one button is a click as before
         m.button(false, true, t0 + Duration::from_millis(3000));
         assert_eq!(m.button(false, false, t0 + Duration::from_millis(3010)), Some(Click::Target(130.0, 100.0)));
+    }
+
+    #[test]
+    fn a_drag_pushes_the_stick_for_the_same_time_at_any_rate() {
+        // 120 pixels a second of drag for a second: the push times the
+        // frame's length, summed, is what UpdateControls integrates
+        let total = |hz: f32| -> f32 {
+            let frame = 1.0 / hz;
+            (0..hz as usize).map(|_| (120.0 * frame * stick_per_pixel(frame)).clamp(-1.0, 1.0) * frame).sum()
+        };
+        let (a, b, c) = (total(30.0), total(60.0), total(165.0));
+        assert!((a - b).abs() < 1e-3 && (b - c).abs() < 1e-3, "{a} {b} {c}");
+        // at 60 Hz the push is what it was (0.05 a pixel)
+        assert!((stick_per_pixel(1.0 / 60.0) - STICK_PER_PIXEL).abs() < 1e-6);
+        // control: a push a frame not scaled shrinks with the frame rate
+        let plain = |hz: f32| -> f32 { (0..hz as usize).map(|_| (120.0 / hz * STICK_PER_PIXEL).clamp(-1.0, 1.0) / hz).sum() };
+        assert!(plain(165.0) < plain(60.0) * 0.5);
     }
 
     #[test]
