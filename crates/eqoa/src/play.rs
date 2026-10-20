@@ -98,6 +98,11 @@ pub struct Play {
     /// The player dressed as its own channel says (look, items, helm),
     /// placed with the walker's pose.
     self_puppet: Option<Puppet>,
+    /// `UpdateGame`'s `SetActorVisibility` for the player's own actor, false
+    /// in first person (`self_visibility`).
+    self_shown: bool,
+    /// `m_p00088`: the follow camera is inside the player's head.
+    pub cam_inside: bool,
     /// The chat log, newest last (`VIWndGame::AddText`'s lines).
     pub chat: std::collections::VecDeque<(String, [f32; 4])>,
     /// A line being typed, when chat is open.
@@ -643,6 +648,52 @@ fn v3(a: [f32; 3]) -> Vect3<Ee> {
     Vect3::of(a[0], a[1], a[2])
 }
 
+/// `UpdateGame`'s `SetActorVisibility` for the player's own actor, from
+/// whether it was shown, the camera mode, whether the player is dead, the
+/// distance from the camera to the head and the creature's npc flags:
+/// whether it is shown now, and `m_p00088` (the follow camera is inside the
+/// head).
+fn own_actor_shown(was: bool, mode: i32, dead: bool, head_to_camera: F<Ee>, npc_flags: u16) -> (bool, bool) {
+    let (shown, inside) = match mode {
+        0 => (was && dead, false),
+        2 if head_to_camera < F::new(0.8) => (false, true),
+        _ => (true, false),
+    };
+    (shown && npc_flags & 0x200 == 0, inside)
+}
+
+#[cfg(test)]
+mod own_actor {
+    use super::*;
+
+    /// Each of `UpdateGame`'s arms: first person hides it (a dead player's
+    /// keeps what it had), the follow camera hides it inside the head only,
+    /// the others show it, and npc flag 0x200 hides it whatever the camera.
+    /// The control: a rule that always shows it (as before) fails.
+    #[test]
+    fn first_person_and_a_camera_in_the_head_hide_the_player() {
+        let near = F::new(0.5);
+        let far = F::new(3.0);
+        let cases = [
+            ((true, 0, false, far, 0), (false, false)),
+            ((true, 0, true, far, 0), (true, false)),
+            ((false, 0, true, far, 0), (false, false)),
+            ((true, 2, false, near, 0), (false, true)),
+            ((false, 2, false, far, 0), (true, false)),
+            ((true, 2, false, F::new(0.8), 0), (true, false)),
+            ((false, 1, false, near, 0), (true, false)),
+            ((false, 3, false, near, 0), (true, false)),
+            ((true, 3, false, far, 0x200), (false, false)),
+            ((true, 3, false, far, 0x1FF), (true, false)),
+        ];
+        for ((was, mode, dead, d, flags), want) in cases {
+            assert_eq!(own_actor_shown(was, mode, dead, d, flags), want, "{:?}", (was, mode, dead, d, flags));
+        }
+        let always = |_: bool, _: i32, _: bool, _: F<Ee>, _: u16| (true, false);
+        assert!(cases.iter().any(|&((w, m, de, d, f), want)| always(w, m, de, d, f) != want), "the control must fail");
+    }
+}
+
 pub struct Gpu<'a> {
     pub renderer: &'a mut Renderer,
     pub device: &'a wgpu::Device,
@@ -651,7 +702,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, start: None, quit: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, cast_window: (0, 0), rooted: false, locks: (true, true), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, self_shown: true, cam_inside: false, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, start: None, quit: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, cast_window: (0, 0), rooted: false, locks: (true, true), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None };
         p.take_abilities();
         p.npcw_world_entry();
         p
@@ -1176,6 +1227,7 @@ impl Play {
         }
         if self.has_self() {
             self.auto_attack_tick(walker, now);
+            self.self_visibility(walker);
             self.options_tick();
         }
         // what the Options window asked of the sound device and the camera
@@ -1997,6 +2049,13 @@ impl Play {
         for i in std::mem::take(&mut self.group.invites) {
             self.session.send_msg(0x0624, i.id, 3);
         }
+        // ResetCamera: first person becomes the follow camera (style 2),
+        // processed once, so the death camera starts behind the body
+        if walker.cam.camera_mode == 0 {
+            let rc = self.race_camera();
+            crate::camstyle::set_style(&mut walker.cam, 2, rc, &mut walker.scene);
+            walker.eye = walker.cam.process(&mut walker.scene);
+        }
         let body = walker.cam.walk.phys.smooth_location().to_array();
         self.death = Some(crate::death::DeathCam::new(walker.eye.position.to_array(), walker.eye.direction.to_array(), body));
     }
@@ -2044,6 +2103,22 @@ impl Play {
     /// Dead: the walk takes no controls (`UpdateControls` is not run).
     pub fn is_dead(&self) -> bool {
         self.death.is_some()
+    }
+
+    /// `UpdateGame`'s own actor, after `AutoAttackTick`: hidden in first
+    /// person (`m_cameraMode` 0) while alive (a death leaves it as it was,
+    /// `ResetCamera` having left first person); in the follow camera (2)
+    /// hidden while the camera is within 0.8 of the head, `m_targetHeight`
+    /// above where the actor last stood (`m_p00088`); shown otherwise; and
+    /// hidden whatever the camera while its creature carries npc flag 0x200.
+    /// The manual camera (mode 38) that also hides it is not ported.
+    fn self_visibility(&mut self, walker: &Walker) {
+        let mut d = self.self_at.map_or_else(|| walker.cam.walk.phys.smooth_location(), |(at, _)| v3(at));
+        d.y += walker.cam.target_height;
+        d -= walker.eye.position;
+        let me = self.self_id32();
+        let flags = self.entities.slots.iter().flatten().find(|e| Some(e.id) == me).and_then(|e| e.creature.as_ref()).map_or(0, |c| c.npc_flags);
+        (self.self_shown, self.cam_inside) = own_actor_shown(self.self_shown, walker.cam.camera_mode, self.death.is_some(), d.magnitude(), flags);
     }
 
     /// `ToggleP74`: autorun on or off, and the line saying so ("%S: %S",
@@ -4246,7 +4321,8 @@ impl Play {
     }
 
     pub fn models(&self) -> impl Iterator<Item = &GpuModel> {
-        self.puppets.iter().chain(std::iter::once(&self.self_puppet)).flatten().flat_map(|p| std::iter::once(&p.gpu).chain(p.attached.iter().map(|a| &a.1)))
+        let me = self.self_puppet.as_ref().filter(|_| self.self_shown);
+        self.puppets.iter().flatten().chain(me).flat_map(|p| std::iter::once(&p.gpu).chain(p.attached.iter().map(|a| &a.1)))
     }
 
     pub fn describe(&self) -> String {
