@@ -13,11 +13,18 @@
 //! `VIWndReadGram` (`Read`, the inbox's reader) and `VIWndTell` /
 //! `VIWndReply` (`Tell`, modes 28 and 29: a name and a line, then "/t name
 //! line" to the chat line).
+//!
+//! A pointer (`pointer`) goes where the keys go: an editor's soft keyboard,
+//! a box's buttons, a message's choice, the reader's option list (off it,
+//! △ closes it); else a form's field is selected and the selected one used
+//! (✕: its editor, or Send), and an inbox's row is selected and the
+//! selected one read. Nothing a pad cannot do: not while the client waits.
 
 #![allow(clippy::too_many_arguments)]
 
 use crate::dialog::{BoxAnswer, Key as BoxKey, MBox};
 use crate::editbox::{EditBox, EditUp};
+use crate::pointer::{Hits, MOVED, key, rows_rect};
 use crate::startmenu::KeyFlash;
 use crate::textlist::{Message, PROMPT_OK};
 use crate::wholist::OptionList;
@@ -333,6 +340,22 @@ pub(crate) fn capped(s: &[u16], n: usize) -> Vec<u16> {
     s.iter().copied().take_while(|&c| c != 0).take(n - 1).collect()
 }
 
+/// A pointer on a form's field or a list's row (`hit`, from the window's
+/// hits) whose selection is `sel`: the selection moved there as up and down
+/// move it (the tick's pulse started over at `now`; `MOVED`), or ✕ on the
+/// selection already there. Nothing off them.
+pub(crate) fn field_click(sel: &mut i32, window: &mut Window, now: i64, hit: Option<i32>) -> Vec<i32> {
+    match hit {
+        Some(f) if f == *sel => vec![key::CROSS],
+        Some(f) => {
+            *sel = f;
+            window.reset_tick_pulse(now);
+            vec![MOVED]
+        }
+        None => Vec::new(),
+    }
+}
+
 /// What a tell or reply form asks of the game.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TellUp {
@@ -355,11 +378,29 @@ pub struct Tell {
     pub edit: EditBox,
     pub editing: bool,
     msg: Message,
+    /// the fields drawn (name, text, Send), for a pointer, and the frame's
+    /// time, the tick's to restart
+    hits: Hits,
+    time: i64,
 }
 
 impl Tell {
     pub fn new(reply: bool) -> Self {
-        Tell { reply, sel: 0, name: Vec::new(), text: Vec::new(), window: Window::default(), edit: EditBox::default(), editing: false, msg: Message::default() }
+        Tell { reply, sel: 0, name: Vec::new(), text: Vec::new(), window: Window::default(), edit: EditBox::default(), editing: false, msg: Message::default(), hits: Hits::default(), time: 0 }
+    }
+
+    /// A pointer at frame point `p`, where the keys go: the editor's soft
+    /// keyboard, the message's choice; else a field (the name, the text,
+    /// Send) selected as up and down select it, and the selected one used
+    /// (✕). The keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        if self.editing {
+            return self.edit.point(p).flatten().into_iter().collect();
+        }
+        if self.msg.visible {
+            return self.msg.point(p).into_iter().collect();
+        }
+        field_click(&mut self.sel, &mut self.window, self.time, self.hits.at(p))
     }
 
     /// `Open(name)` / `Start(to)`, then the focus (295): a name starts on the
@@ -491,6 +532,11 @@ impl Tell {
         let legend = wide(&format!("|x{}   |t{}", word(vui, 212), word(vui, 161)));
         self.window.text(vui, r, &legend, 40, 7, c(false), 0);
         self.window.tick_r(vui, r, 36, self.sel * 2 + 1, true);
+        self.time = now;
+        self.hits.clear();
+        for (field, row) in [(0, 1), (1, 3), (2, 5)] {
+            self.hits.push(rows_rect(&self.window, vui, r, 40, row, w - 80, 1), field);
+        }
         if self.editing {
             self.edit.draw(vui, r, now, cues);
         }
@@ -531,6 +577,11 @@ pub struct Compose {
     mbox: MBox,
     mbox_up: bool,
     dots: Dots,
+    /// the fields drawn (To, Subject, the body, Send), for a pointer; the
+    /// frame's time; the client busy (the fields take no keys then)
+    hits: Hits,
+    time: i64,
+    busy: bool,
 }
 
 impl Compose {
@@ -538,7 +589,27 @@ impl Compose {
         let mut mbox = MBox::default();
         mbox.kind = 1;
         mbox.pos = [100, 100];
-        Compose { reply, visible: false, sel: 0, to: Vec::new(), subject: Vec::new(), body: Vec::new(), x7b4: 0, window: Window::default(), status: Window::default(), edit: EditBox::default(), editing: false, message: Message::default(), mbox, mbox_up: false, dots: Dots::default() }
+        Compose { reply, visible: false, sel: 0, to: Vec::new(), subject: Vec::new(), body: Vec::new(), x7b4: 0, window: Window::default(), status: Window::default(), edit: EditBox::default(), editing: false, message: Message::default(), mbox, mbox_up: false, dots: Dots::default(), hits: Hits::default(), time: 0, busy: false }
+    }
+
+    /// A pointer at frame point `p`, where the keys go: the editor's soft
+    /// keyboard, the box's buttons, the message's choice; else, the client
+    /// free, a field (To, Subject, the body, Send) selected as up and down
+    /// select it, and the selected one used (✕). The keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        if self.editing {
+            return self.edit.point(p).flatten().into_iter().collect();
+        }
+        if self.mbox_up {
+            return self.mbox.point(p).then_some(key::CROSS).into_iter().collect();
+        }
+        if self.message.visible {
+            return self.message.point(p).into_iter().collect();
+        }
+        if self.busy {
+            return Vec::new();
+        }
+        field_click(&mut self.sel, &mut self.window, self.time, self.hits.at(p))
     }
 
     /// 295, the focus from elsewhere: the windows, the cursor (a reply's on
@@ -724,6 +795,12 @@ impl Compose {
         self.window.text(vui, r, &legend, 40, 13, c(false), 0);
         let row = [1, 3, 5, 11][self.sel.clamp(0, 3) as usize];
         self.window.tick_r(vui, r, 36, row, true);
+        self.time = now;
+        self.busy = grams.state > 0;
+        self.hits.clear();
+        for (field, row, rows) in [(0, 1, 1), (1, 3, 1), (2, 5, 5), (3, 11, 1)] {
+            self.hits.push(rows_rect(&self.window, vui, r, 40, row, w - 80, rows), field);
+        }
         let mut up = None;
         let fail = |me: &mut Self, vui: &Vui, r: &mut dyn Raster, id: i32, x: i32| {
             if me.x7b4 == 1 {
@@ -848,6 +925,26 @@ impl Read {
 
     pub fn typing(&self) -> bool {
         self.compose.visible && self.compose.typing()
+    }
+
+    /// A pointer at frame point `p`, where the keys go: the reply's compose,
+    /// the message's choice, the option list (a line taken at once; off it,
+    /// △ closes it). The text itself takes nothing (the wheel scrolls it,
+    /// its legend's ✕ offers the options). The keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        if self.compose.visible {
+            return self.compose.point(p);
+        }
+        if self.message.visible {
+            return self.message.point(p).into_iter().collect();
+        }
+        if self.options.visible {
+            return match self.options.point(p) {
+                Some(k) => k.into_iter().collect(),
+                None => vec![key::TRIANGLE],
+            };
+        }
+        Vec::new()
     }
 
     pub fn key(&mut self, vui: &Vui, r: &mut dyn Raster, grams: &mut Grams, key: i32, down: bool, now: i64, cues: &mut Vec<i32>) -> Option<ReadUp> {
@@ -1017,9 +1114,27 @@ pub struct Inbox {
     flash: KeyFlash,
     pub read: Read,
     dots: Dots,
+    /// the rows drawn, by index, for a pointer; the frame's time; the client
+    /// busy (the rows take no keys then)
+    hits: Hits,
+    time: i64,
+    busy: bool,
 }
 
 impl Inbox {
+    /// A pointer at frame point `p`: to the reader while it is up; else,
+    /// the client free, a row selected as up and down select it, and the
+    /// selected one read (✕). The keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        if self.read.visible {
+            return self.read.point(p);
+        }
+        if self.busy {
+            return Vec::new();
+        }
+        field_click(&mut self.sel, &mut self.window, self.time, self.hits.at(p))
+    }
+
     /// `OpenGramInbox` (mode 24): `Refresh`, then the focus (295).
     pub fn open(&mut self, vui: &Vui, r: &dyn Raster, grams: &mut Grams) {
         self.refresh(grams);
@@ -1122,10 +1237,14 @@ impl Inbox {
         let t = if n == 11 { 0.0 } else { self.top as f32 / (n - 11) as f32 };
         self.window.draw_frame_vscroll(vui, r, 40, 1, w - 80, 11, t);
         let end = if self.top + 11 > n { n } else { self.top + 11 };
+        self.time = now;
+        self.busy = grams.state > 0;
+        self.hits.clear();
         for i in self.top..end {
             let h = grams.header(i);
             let c = UI_COLORS[(self.sel == i) as usize];
             let row = i - self.top + 1;
+            self.hits.push(rows_rect(&self.window, vui, r, x[0], row, w - 44 - x[0], 1), i);
             let from: Vec<u16> = h.from.iter().map(|&b| b as u16).collect();
             self.window.text_box(vui, r, &from, x[0], row, x[1] - x[0] - 10, 1, c, 2);
             self.window.text_box(vui, r, &h.subject, x[1], row, x[2] - x[1] - 10, 1, c, 2);
@@ -1278,5 +1397,117 @@ mod tests {
     #[test]
     fn date_formats_as_the_game() {
         assert_eq!(header(0, "", "").date.format(), "2026-10-19 21:05 PST");
+    }
+
+    use crate::pointer::testing::{NullRaster, mid, vui};
+
+    /// The tell form: a field is selected by a click (the tick restarted)
+    /// and used by a second; nothing off the fields; while the message box
+    /// is up the fields take nothing and its choice takes the click; while
+    /// the editor is up (the compact face here) neither do they.
+    #[test]
+    fn a_pointer_on_the_tell_form() {
+        let (vui, mut r) = (vui(), NullRaster);
+        let mut cues = Vec::new();
+        let mut t = Tell::new(false);
+        t.open(&vui, &r, &wide("Bob"));
+        assert_eq!(t.sel, 1, "a name given: on the text");
+        t.draw(&vui, &mut r, 1000, &mut cues);
+        let w = t.window.size[0];
+        let field = |t: &Tell, row: i32| mid(rows_rect(&t.window, &vui, &NullRaster, 40, row, w - 80, 1));
+        assert_eq!(t.point(field(&t, 1)), vec![MOVED]);
+        assert_eq!((t.sel, t.window.pulse_time), (0, 1000), "the name, the tick started over");
+        assert_eq!(t.point(field(&t, 1)), vec![key::CROSS], "the selection: its editor");
+        assert_eq!(t.point(field(&t, 5)), vec![MOVED]);
+        assert_eq!(t.sel, 2, "Send");
+        assert!(t.point([5.0, 5.0]).is_empty(), "off the form");
+        assert!(t.point(field(&t, 7)).is_empty(), "the legend's row is no field");
+        // the message box: its choice, not the fields. Its window is 300
+        // wide round the form's centre (320, 224), four rows and titled
+        // (96 high), so its OK row (3) is centred on y 241
+        t.msg.setup(&vui, &mut r, &wide("Tell Failed"), &wide("x"), PROMPT_OK, t.window.center, 300);
+        t.draw(&vui, &mut r, 1016, &mut cues);
+        assert!(t.point(field(&t, 1)).is_empty());
+        assert_eq!(t.sel, 2, "the fields took nothing");
+        assert_eq!(t.point([310.0, 241.0]), vec![key::CROSS]);
+        // the editor
+        t.msg.visible = false;
+        t.editing = true;
+        assert!(t.point(field(&t, 1)).is_empty());
+        assert_eq!(t.sel, 2);
+    }
+
+    /// The compose window: four fields (the body five rows), each selected
+    /// and then used; while the client waits nothing; the box's Yes.
+    #[test]
+    fn a_pointer_on_the_compose_window() {
+        let (vui, mut r) = (vui(), NullRaster);
+        let mut cues = Vec::new();
+        let mut g = Grams::default();
+        let mut c = Compose::new(false);
+        c.visible = true;
+        c.focus(&vui, &r);
+        c.draw(&vui, &mut r, &g, 2000, &mut cues);
+        let w = c.window.size[0];
+        let at = |c: &Compose, row: i32, rows: i32| mid(rows_rect(&c.window, &vui, &NullRaster, 40, row, w - 80, rows));
+        assert_eq!(c.point(at(&c, 5, 5)), vec![MOVED], "the body's middle row");
+        assert_eq!(c.sel, 2);
+        assert_eq!(c.point(at(&c, 9, 1)), vec![key::CROSS], "its last row is the body too");
+        assert_eq!(c.point(at(&c, 11, 1)), vec![MOVED]);
+        assert_eq!(c.sel, 3, "Send");
+        assert!(c.point(at(&c, 13, 1)).is_empty(), "the legend's row");
+        // sending: the fields take nothing
+        g.state = 3;
+        c.draw(&vui, &mut r, &g, 2016, &mut cues);
+        assert!(c.point(at(&c, 1, 1)).is_empty());
+        assert_eq!(c.sel, 3);
+        // the box at (100, 100): its Yes at the first quarter of its width,
+        // the fields not
+        g.state = 0;
+        c.mbox.prompt(&wide("x"), 1, 0, 0, 2032);
+        c.mbox_up = true;
+        c.draw(&vui, &mut r, &g, 2032, &mut cues);
+        assert!(c.point(at(&c, 1, 1)).is_empty());
+        assert_eq!(c.point([134.0, 146.0]), vec![key::CROSS]);
+    }
+
+    /// The inbox: rows selected and read; the rows not listed and a busy
+    /// client take nothing; the reader's option list takes a line at once
+    /// and off it is closed (△).
+    #[test]
+    fn a_pointer_on_the_inbox_and_the_reader() {
+        let (vui, mut r) = (vui(), NullRaster);
+        let mut cues = Vec::new();
+        let mut g = Grams::default();
+        let mut ib = Inbox::default();
+        ib.open(&vui, &r, &mut g);
+        g.state = 0;
+        g.count = 3;
+        g.headers = vec![header(1, "Ann", "a"), header(2, "Bob", "b"), header(3, "Cy", "c")];
+        ib.draw(&vui, &mut r, &g, true, 3000, &mut cues);
+        let w = ib.window.size[0];
+        let row = |ib: &Inbox, row: i32| mid(rows_rect(&ib.window, &vui, &NullRaster, 58, row, w - 44 - 58, 1));
+        assert_eq!(ib.point(row(&ib, 2)), vec![MOVED]);
+        assert_eq!(ib.sel, 1);
+        assert_eq!(ib.point(row(&ib, 2)), vec![key::CROSS], "read");
+        assert!(ib.point(row(&ib, 4)).is_empty(), "three listed: no fourth");
+        g.state = 2;
+        ib.draw(&vui, &mut r, &g, true, 3016, &mut cues);
+        assert!(ib.point(row(&ib, 1)).is_empty(), "waiting: nothing");
+        assert_eq!(ib.sel, 1);
+        // the reader up: the rows behind it take nothing; its options do
+        g.state = 0;
+        ib.read.visible = true;
+        ib.read.focus(&vui, &r);
+        ib.draw(&vui, &mut r, &g, true, 3032, &mut cues);
+        assert!(ib.point(row(&ib, 1)).is_empty());
+        assert_eq!(ib.sel, 1);
+        ib.read.options.visible = true;
+        ib.draw(&vui, &mut r, &g, true, 3048, &mut cues);
+        // the option list: 300 wide round (320, 180), titled, a line a row
+        // from row 1 (centred on y 167): Delete is row 2
+        assert_eq!(ib.point([310.0, 179.0]), vec![key::CROSS]);
+        assert_eq!(ib.read.options.sel, 1);
+        assert_eq!(ib.point([10.0, 10.0]), vec![key::TRIANGLE], "off it: closed");
     }
 }

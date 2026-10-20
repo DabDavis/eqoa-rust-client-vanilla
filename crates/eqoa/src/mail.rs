@@ -39,11 +39,21 @@ impl Play {
         self.mail.keys.push((key, down));
     }
 
-    /// A pointer at frame point `f` on the mail and tell windows (`pointer`): what is
-    /// under it selected, and the keys to press.
+    /// A pointer at frame point `f` on the mail and tell windows
+    /// (`pointer`), to the window the keys go to: the compose window, the
+    /// inbox (and its reader, its options, the reply), the tell and reply
+    /// forms, the buddy list's compose. What is under it selected, and the
+    /// keys to press.
     pub fn mail_point(&mut self, f: [f32; 2]) -> Vec<i32> {
-        let _ = f;
-        Vec::new()
+        let m = &mut self.mail;
+        match self.mode {
+            23 if m.compose.visible => m.compose.point(f),
+            24 => m.inbox.point(f),
+            28 => m.tell.point(f),
+            29 => m.reply.point(f),
+            18 if m.buddy.visible => m.buddy.point(f),
+            _ => Vec::new(),
+        }
     }
 
     /// The mode is one of these windows', or the buddy list's compose is up.
