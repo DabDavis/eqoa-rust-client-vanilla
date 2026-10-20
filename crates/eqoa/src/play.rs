@@ -1635,15 +1635,18 @@ impl Play {
         best.map(|b| b.0)
     }
 
-    /// A click or a tap at window point `at` of a `size` window, on the
-    /// game's windows (`pointer`; `finger` for a touch screen's, which may
-    /// miss a little): in play the HUD's quick menus take it (a row used,
+    /// A click or a tap `c` on a `size` window, on the game's windows
+    /// (`pointer`; `finger` for a touch screen's, which may miss a
+    /// little): in play the HUD's quick menus take it (a row used,
     /// the title bar the next menu); with a window up a right click is △, a
     /// button glyph drawn there that button, else what the window has there
     /// (its rows, tabs and fields) as the keys it takes. True when a window
     /// took it (one up takes every one), so it targets nothing.
     pub fn point(&mut self, c: crate::mouse::Click, size: (u32, u32), finger: bool) -> bool {
         use crate::mouse::Click;
+        // a mouse means a keyboard beside it (the edit boxes' compact face,
+        // with the options' Soft Keyboard on); a finger, none
+        self.keyboard = !finger;
         let (Click::Target(x, y) | Click::Interact(x, y) | Click::Right(x, y)) = c;
         let f = render::ui::frame_from_window(size, [x as f32, y as f32]);
         if self.mode == 0 {
@@ -1782,7 +1785,6 @@ impl Play {
     /// targeted, and with `interact` talked to, or its corpse opened (the
     /// attack button's loot request on a corpse).
     pub fn click(&mut self, id: Option<u32>, interact: bool) {
-        self.keyboard = true;
         let Some(id) = id else { return };
         if self.mode != 0 {
             return;
