@@ -7,11 +7,14 @@
 use crate::padmap::{Browser, WebPad};
 use wasm_bindgen::JsCast;
 
-/// The connected pads, as they are now.
+/// The connected pads, as they are now. Read by their properties, not their
+/// classes (as gilrs read them): a stand-in with the same fields, as
+/// `drive.py --gamepad` plays, is a pad too.
 pub fn gamepads() -> Vec<WebPad> {
     let Some(list) = web_sys::window().and_then(|w| w.navigator().get_gamepads().ok()) else { return Vec::new() };
     list.iter()
-        .filter_map(|g| g.dyn_into::<web_sys::Gamepad>().ok())
+        .filter(|g| g.is_object())
+        .map(|g| g.unchecked_into::<web_sys::Gamepad>())
         .filter(|g| g.connected())
         .map(|g| {
             // the mapping as the browser spells it ("standard", "", "xr-standard")
@@ -19,9 +22,12 @@ pub fn gamepads() -> Vec<WebPad> {
             let buttons = g
                 .buttons()
                 .iter()
-                .map(|b| match b.dyn_into::<web_sys::GamepadButton>() {
-                    Ok(b) => (b.pressed(), b.value() as f32),
-                    Err(_) => (false, 0.0),
+                .map(|b| match b.is_object() {
+                    true => {
+                        let b = b.unchecked_into::<web_sys::GamepadButton>();
+                        (b.pressed(), b.value() as f32)
+                    }
+                    false => (false, 0.0),
                 })
                 .collect();
             let axes = g.axes().iter().map(|a| a.as_f64().map_or(f32::NAN, |v| v as f32)).collect();

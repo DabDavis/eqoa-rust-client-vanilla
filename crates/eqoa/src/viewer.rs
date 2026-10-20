@@ -1416,11 +1416,16 @@ impl App {
         if let Some(w) = &self.walker {
             let (p, c) = (&w.cam.walk.phys, &w.cam.cur);
             let anim = w.sprite.as_ref().map(|s| [s.cur[0].anim, s.cur[1].anim]);
+            let v = p.velocity;
             let _ = writeln!(
                 o,
-                "body: heading {:.4} (target {:.4}), loco {}, anim {anim:?}; camera: orbit {:.4}, pitch {:.4}, dist {:.2}, flags {:#x}",
+                "body: heading {:.4} (target {:.4}), velocity [{:.3}, {:.3}, {:.3}], flags {:#x}, loco {}, anim {anim:?}; camera: orbit {:.4}, pitch {:.4}, dist {:.2}, flags {:#x}",
                 p.angles.x.0,
                 p.target_heading.0,
+                v.x.0,
+                v.y.0,
+                v.z.0,
+                p.flags,
                 p.loco_state,
                 c.orbit.x.0,
                 c.orbit.y.0,
