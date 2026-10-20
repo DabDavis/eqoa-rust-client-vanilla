@@ -907,38 +907,57 @@ impl Renderer {
     /// Uploads `parts` as one [`GpuGroup`], drawn as `draw` would draw them
     /// one by one as models, in this order.
     pub fn upload_group(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, parts: &[GroupPart], textures: &Textures) -> GpuGroup {
-        let (mut verts, mut indices, mut instances, mut statics) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
-        let mut members = Vec::new();
+        // The buffers are sized first and each part written as it is built: a
+        // whole zone's vertices at once (and the copies made of them on the
+        // way to the GPU) would stay in a page's wasm heap, which never shrinks.
+        let (mut nverts, mut nindices, mut ninstances) = (0, 0, 0);
         for p in parts {
-            let base = verts.len() as u32;
-            verts.extend(vertices_of(p.model));
-            let mut batches = Vec::new();
-            for b in p.model.batches.iter().filter(|b| !b.indices.is_empty()) {
-                let first = indices.len() as u32;
-                // rebased here: WebGL2 has no base vertex
-                indices.extend(b.indices.iter().map(|&i| i + base));
-                let passes = layers_of(b).iter().map(|l| self.material(device, queue, l, textures)).collect();
-                batches.push((first..indices.len() as u32, passes));
-            }
-            let instance0 = instances.len() as u32;
-            instances.extend_from_slice(p.instances);
-            statics.extend((0..p.instances.len()).map(|k| p.statics.get(k).copied().unwrap_or([0.0, 0.0, 0.0, 1.0])));
-            members.push(Member { instance0, instances: p.instances.len() as u32, batches });
+            nverts += p.model.pos.len();
+            nindices += p.model.batches.iter().map(|b| b.indices.len()).sum::<usize>();
+            ninstances += p.instances.len();
         }
         // a buffer of no bytes cannot be made; an empty group draws nothing
-        let buffer = |label: &str, bytes: &[u8], usage: wgpu::BufferUsages| {
-            let mut bytes = bytes.to_vec();
-            bytes.resize(bytes.len().max(16), 0);
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents: &bytes, usage })
+        let buffer = |label: &str, bytes: usize, usage: wgpu::BufferUsages| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: bytes.max(16) as u64,
+                usage: usage | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
         };
-        let mut g = GpuGroup {
-            vertices: buffer("group vertices", bytemuck::cast_slice(&verts), wgpu::BufferUsages::VERTEX),
-            indices: buffer("group indices", bytemuck::cast_slice(&indices), wgpu::BufferUsages::INDEX),
-            instances: buffer("group instances", bytemuck::cast_slice(&instances), wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST),
-            statics: buffer("group static lights", bytemuck::cast_slice(&statics), wgpu::BufferUsages::VERTEX),
-            members,
-            runs: Vec::new(),
-        };
+        let vertices = buffer("group vertices", nverts * size_of::<Vertex>(), wgpu::BufferUsages::VERTEX);
+        let indices = buffer("group indices", nindices * 4, wgpu::BufferUsages::INDEX);
+        let instances = buffer("group instances", ninstances * 64, wgpu::BufferUsages::VERTEX);
+        let statics = buffer("group static lights", ninstances * 16, wgpu::BufferUsages::VERTEX);
+        let mut members = Vec::new();
+        let (mut base, mut first_index, mut instance0) = (0u32, 0u32, 0u32);
+        for p in parts {
+            let verts = vertices_of(p.model);
+            let mut part_indices: Vec<u32> = Vec::new();
+            let mut batches = Vec::new();
+            for b in p.model.batches.iter().filter(|b| !b.indices.is_empty()) {
+                let first = first_index + part_indices.len() as u32;
+                // rebased here: WebGL2 has no base vertex
+                part_indices.extend(b.indices.iter().map(|&i| i + base));
+                let passes = layers_of(b).iter().map(|l| self.material(device, queue, l, textures)).collect();
+                batches.push((first..first_index + part_indices.len() as u32, passes));
+            }
+            let lights: Vec<[f32; 4]> = (0..p.instances.len()).map(|k| p.statics.get(k).copied().unwrap_or([0.0, 0.0, 0.0, 1.0])).collect();
+            let write = |to: &wgpu::Buffer, at: u32, stride: usize, bytes: &[u8]| {
+                if !bytes.is_empty() {
+                    queue.write_buffer(to, at as u64 * stride as u64, bytes);
+                }
+            };
+            write(&vertices, base, size_of::<Vertex>(), bytemuck::cast_slice(&verts));
+            write(&indices, first_index, 4, bytemuck::cast_slice(&part_indices));
+            write(&instances, instance0, 64, bytemuck::cast_slice(p.instances));
+            write(&statics, instance0, 16, bytemuck::cast_slice(&lights));
+            members.push(Member { instance0, instances: p.instances.len() as u32, batches });
+            base += verts.len() as u32;
+            first_index += part_indices.len() as u32;
+            instance0 += p.instances.len() as u32;
+        }
+        let mut g = GpuGroup { vertices, indices, instances, statics, members, runs: Vec::new() };
         for at in (0..parts.len()).step_by(RUN) {
             let span = at..(at + RUN).min(parts.len());
             let bounds = parts[span.clone()].iter().filter_map(part_bounds).reduce(|(a, b), (c, d)| (a.min(c), b.max(d)));
