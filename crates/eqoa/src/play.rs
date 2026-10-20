@@ -796,9 +796,10 @@ impl Play {
                 Event::DialogBox { id, text, options } => self.dialog_box(id, &text, &options),
                 Event::Opcode { op: 0x005E, .. } => self.msg_005e(walker),
                 Event::Teleport { world, pos, hpr, .. } => {
-                    // Msg00B2: back to play, then Respawn.
+                    // Msg00B2: back to play, then Respawn. A dead player
+                    // stays dead (EnterWorld leaves m_pC1B0): only the
+                    // dump (Msg000D) ends a death.
                     self.mode = 0;
-                    self.respawned(walker);
                     if world as i64 != self.player.world {
                         match WORLD_FILES.get(world as usize) {
                             Some(f) => {
@@ -1204,11 +1205,32 @@ impl Play {
                 }
                 Event::WorldEntry { self_id, player, dump } => {
                     eprintln!("play: world entry again as {self_id:#x} at {:?}", player.pos);
+                    // Msg000D in play: EnterWorld, then SetLocation and
+                    // SetOrbitAngleBehind at the dump's place (a respawn is
+                    // a dump at the bind point), another world's file read
+                    // first, black until it is in (`world_entered`)
+                    let mut elsewhere = false;
+                    if player.world != self.player.world {
+                        match WORLD_FILES.get(player.world as usize) {
+                            Some(f) => {
+                                eprintln!("play: the dump's world {} ({f}) at {:?}", player.world, player.pos);
+                                self.world_change = Some((f.to_string(), player.pos, player.hpr[0]));
+                                self.self_model = None;
+                                elsewhere = true;
+                            }
+                            None => eprintln!("play: the dump's world {}, which the disc's world table does not have", player.world),
+                        }
+                    } else {
+                        walker.relocate(player.pos, player.hpr[0]);
+                    }
                     self.filters_sent = None;
                     self.player = player;
                     self.dump = dump;
                     self.take_abilities();
                     self.respawned(walker);
+                    if elsewhere {
+                        self.fade.set(1.0, 0.0);
+                    }
                     if self.cam_entered {
                         let rc = self.race_camera();
                         crate::camstyle::set_style(&mut walker.cam, self.cam_saved.mode, rc, &mut walker.scene);
@@ -2060,18 +2082,18 @@ impl Play {
         self.death = Some(crate::death::DeathCam::new(walker.eye.position.to_array(), walker.eye.direction.to_array(), body));
     }
 
-    /// A respawn (0x00B2, or the dump again): the death camera off, the body
-    /// up, the cue and the fade back in over a second.
+    /// The dump again, Msg000D's end: `ClearPC1B0` (the death camera off,
+    /// the body up), then `SetFade(1, 0)` and `SetFade(0, 1)`, the screen
+    /// black and back over a second. A warp (0x00B2) does not end a death.
     fn respawned(&mut self, walker: &mut Walker) {
-        if self.death.take().is_some() {
-            if let Some(cs) = walker.sprite.as_mut() {
-                cs.dead = false;
-                cs.set_locomotion(0, &walker.anims, &mut self.spell_rand);
-            }
-            self.cues.push(crate::sound::Cue::Named("respawn", 0.4));
-            self.fade.set(1.0, 0.0);
-            self.fade.set(0.0, 1.0);
+        if self.death.take().is_some()
+            && let Some(cs) = walker.sprite.as_mut()
+        {
+            cs.dead = false;
+            cs.set_locomotion(0, &walker.anims, &mut self.spell_rand);
         }
+        self.fade.set(1.0, 0.0);
+        self.fade.set(0.0, 1.0);
     }
 
     /// `GetRaceCamera(GetRace(), ExpansionFlags())`.

@@ -2,8 +2,9 @@
 //! keeps where the camera is looking from, then `DeathCamera` each frame
 //! swings it round the body and up, its look easing from the old direction
 //! to the body over the first 4 seconds, when the screen starts its 4-second
-//! fade to black (`SetFade(1, 4)`, drawn by `DrawFade`). A respawn (0x00B2,
-//! or a new dump) ends it and the fade comes back in over a second.
+//! fade to black (`SetFade(1, 4)`, drawn by `DrawFade`). The server's next
+//! dump (Msg000D: a respawn is one, at the bind point) ends it and the fade
+//! comes back in over a second; a warp (0x00B2) does not.
 
 use vi::fpu::{Ee, F};
 use vi::vect::Vect3;
