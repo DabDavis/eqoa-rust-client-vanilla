@@ -4,9 +4,13 @@
 //! pad's soft keyboard (6 rows of 11) or, with a USB keyboard and the
 //! compact option, a one-line legend. A keyboard types into either.
 //!
-//! The compact face is the default here (the PC has a keyboard);
-//! `EQOA_SOFT_KEYBOARD=1` shows the soft one, driven by the arrows (the
-//! d-pad), E (X), Backspace (square) and Space (circle).
+//! Which face is the game's one static, `sPadOnly`, set each frame from
+//! `gKeyboardAttached` and the options' Soft Keyboard ([`set_pad_only`]): a
+//! keyboard in use with the option on shows the compact face (the default
+//! here, `EQOA_SOFT_KEYBOARD=1` turns the option off); a pad or the touch
+//! screen in use shows the soft keyboard, driven by the d-pad, X, square
+//! (back) and circle (space) (on a keyboard: the arrows, E, Backspace and
+//! Space).
 
 use vi::ui::{FrameParam, Raster, Vui, wide};
 
@@ -21,6 +25,20 @@ const KEYS: [u8; 66] = [
     b'U', b'V', b'W', b'X', b'Y', 1, 3, 7, b'=', b':', 5, //
     b'Z', 14, 16, 13, b'(', b')', 9, 8, 10, 0, 0,
 ];
+
+/// `sPadOnly`: the compact face, no soft keyboard (1 in the game's image).
+static PAD_ONLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// `sPadOnly`, as `OnDrawSelf` sets it every frame: `gKeyboardAttached`
+/// and the options' Soft Keyboard (`m_x91`).
+pub fn set_pad_only(compact: bool) {
+    PAD_ONLY.store(compact, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The compact face is showing.
+pub fn pad_only() -> bool {
+    PAD_ONLY.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 /// What the editor tells its parent.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -68,8 +86,6 @@ pub struct EditBox {
     glide: f32,
     repeat_key: i32,
     repeat_delay: f32,
-    /// `sPadOnly`: the compact face (no soft keyboard)
-    pub pad_only: bool,
 }
 
 impl Default for EditBox {
@@ -101,7 +117,6 @@ impl Default for EditBox {
             glide: 0.0,
             repeat_key: 0,
             repeat_delay: 0.0,
-            pad_only: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none(),
         };
         e.set_max_length(64);
         e
@@ -254,7 +269,7 @@ impl EditBox {
                 let ok = self.line_down(vui, r, now);
                 Self::sound(ok, cues);
             }
-            _ if self.pad_only => {}
+            _ if pad_only() => {}
             142 => {
                 cues.push(11);
                 self.shift = true;
@@ -299,7 +314,7 @@ impl EditBox {
         if key == self.repeat_key {
             self.repeat_key = 0;
         }
-        if self.pad_only {
+        if pad_only() {
             return;
         }
         match key {
@@ -533,11 +548,11 @@ impl EditBox {
             }
         }
         let rows = self.rows;
-        let mut size = [452, if self.pad_only { rows * 17 + 42 } else { rows * 17 + 203 }];
-        if self.pad_only {
+        let mut size = [452, if pad_only() { rows * 17 + 42 } else { rows * 17 + 203 }];
+        if pad_only() {
             size[1] += 26;
         }
-        if !self.pad_only {
+        if !pad_only() {
             if self.key != self.last_key {
                 self.glide += dt * 15.0;
                 if self.glide >= 1.0 {
@@ -572,7 +587,7 @@ impl EditBox {
         vui.blit_frame(r, pos, size, &fp0, 3, a, true);
         vui.blit_fill_frame(r, [pos[0] + 16, pos[1] + 16], [420, rows * 17 + 8], &fp3, 96, 3, a, true);
         let word = |id: i32| vui.words.get(id, vui.language).to_string();
-        if !self.pad_only {
+        if !pad_only() {
             // the legend under the box: Done, Cancel, Space, Newline, Back
             pos[1] += rows * 17 + 28;
             pos[0] += 325;

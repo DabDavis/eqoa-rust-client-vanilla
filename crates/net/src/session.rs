@@ -419,6 +419,13 @@ impl Session {
         self.base.wrapping_add(self.start.elapsed().as_millis() as u32)
     }
 
+    /// `VIClient::IsTimedOut`: no connection, or nothing has arrived on it
+    /// for 8 s.
+    pub fn timed_out(&self) -> bool {
+        let Some(c) = self.conn.and_then(|c| self.drdp.conns.get(c)) else { return true };
+        self.now().wrapping_sub(c.time_last_arrival) >= 8000
+    }
+
     /// One frame: the clock, every datagram waiting, the arrived messages
     /// (as events), a flush, and the sends.
     pub fn pump(&mut self) -> Vec<Event> {

@@ -67,6 +67,23 @@ for (const ev of ['keydown', 'keyup']) {
   addEventListener(ev, (e) => { if (e.key === 'F11') e.stopImmediatePropagation(); }, true);
 }
 
+// The gamepads' motors (the client reads the pads through gilrs, which drives
+// no motors in a page): the Gamepad API's dual-rumble, where the browser has
+// it. `strong` is the DualShock 2's large motor's level, `weak` its small
+// one, each 0..1, for `ms`; both 0 stops them.
+const rumblers = () => [...(navigator.getGamepads ? navigator.getGamepads() : [])].filter((g) => g && g.connected && g.vibrationActuator);
+window.eqoaCanRumble = () => rumblers().length > 0;
+window.eqoaRumble = (strong, weak, ms) => {
+  for (const g of rumblers()) {
+    const a = g.vibrationActuator;
+    if (strong === 0 && weak === 0) {
+      if (a.reset) a.reset().catch(() => {});
+    } else {
+      a.playEffect('dual-rumble', { startDelay: 0, duration: ms, strongMagnitude: strong, weakMagnitude: weak }).catch(() => {});
+    }
+  }
+};
+
 // The client's wasm, compiled once: the page runs it, and so does the worker
 // that unpacks CLIENT off the disc (unpack.js), from the same compiled module.
 const wasmModule = fetch(new URL('eqoa_bg.wasm', import.meta.url)).then((r) => {

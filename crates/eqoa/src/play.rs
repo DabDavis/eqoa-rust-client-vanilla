@@ -110,6 +110,28 @@ pub struct Play {
     attack_due: u32,
     /// `m_p071F0`: when the last swing landed in reach.
     pub swung: u32,
+    /// `m_p00074`: autorun (`ToggleP74`: L3, or X on the PS2's keyboard).
+    pub autorun: bool,
+    /// `m_p2BB40` .. `m_p2BB48`: the player's own cast (`CastingCombat`),
+    /// on the session's clock; the walk walks through it.
+    cast_window: (u32, u32),
+    /// `m_p06DC8`: 0x00FC's byte, the player held in place.
+    rooted: bool,
+    /// `m_p06DC0` and `m_p06DC4`: movement and the camera allowed
+    /// (`ApplyRaceCamera` takes both away while the start menu frames the
+    /// character, `ApplyDefaultCamera` gives them back).
+    locks: (bool, bool),
+    /// `m_p50318`: the pad's mode last frame (1 a DualShock read).
+    pad_mode: i32,
+    /// `CycleTarget`'s static `lastGroup`.
+    last_group: bool,
+    /// `gKeyboardAttached`, as the host can know it: the last key came from a
+    /// keyboard, not a pad or the touch screen. With the options' Soft
+    /// Keyboard on (`compact`) it gives the edit boxes their compact face.
+    pub keyboard: bool,
+    /// The pad's motors as `Rumble` asked (motor, level, ms), for the
+    /// viewer's pad to take.
+    pub rumbles: Vec<(u8, u8, i32)>,
     /// The stat channel (0x42).
     pub stats: net::dump::Stats,
     /// The active effects (state channel 0x43), `VIWndInfluence`'s icons.
@@ -618,7 +640,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, cast_window: (0, 0), rooted: false, locks: (true, true), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new() };
         p.take_abilities();
         p.npcw_world_entry();
         p
@@ -1054,10 +1076,23 @@ impl Play {
                     if self.bank_opcode(op, &data) || self.npcw_opcode(op, &data) || self.support_opcode(op, &data) {
                     } else if op == 0x00DB {
                         self.damage_indication(&data, walker.cam.camera_mode);
-                    } else if let Some(c) = crate::spells::cast_of(op, &data)
-                        && !(op == 0x0776 && Some(c.caster) == self.self_id32())
-                    {
-                        self.casts.push(c);
+                    } else if op == 0x00FC {
+                        // m_p06DC8: held in place
+                        self.rooted = data.first().is_some_and(|&b| b != 0);
+                    } else if let Some(c) = crate::spells::cast_of(op, &data) {
+                        // CastingCombat: a cast of the player's own stamps the
+                        // cast window, through which the walk walks
+                        if op == 0x00B1 && Some(c.caster) == self.self_id32() {
+                            let now = self.session.now();
+                            let mut end = now.wrapping_add(c.time as u32);
+                            if (end.wrapping_sub(self.cast_window.1) as i32) < 0 {
+                                end = self.cast_window.1;
+                            }
+                            self.cast_window = (now, end);
+                        }
+                        if !(op == 0x0776 && Some(c.caster) == self.self_id32()) {
+                            self.casts.push(c);
+                        }
                     }
                     }
                 Event::Weather { weather, instant } => {
@@ -1294,9 +1329,13 @@ impl Play {
                 if let Some(p) = crate::camstyle::apply_race(&mut walker.cam, rc, &mut walker.scene) {
                     self.cam_preset = p;
                     self.race_framed = true;
+                    self.locks = (false, false);
                 }
             }
-            Some(false) if self.race_framed => crate::camstyle::apply(&mut walker.cam, &self.cam_preset),
+            Some(false) if self.race_framed => {
+                crate::camstyle::apply(&mut walker.cam, &self.cam_preset);
+                self.locks = (true, true);
+            }
             _ => {}
         }
         // DeathCamera: the eye swung round the body, the fade at 4 s
@@ -1385,6 +1424,7 @@ impl Play {
             })
             .collect();
         spells.frame(&mut bodies, &casts, if has_self { SELF } else { -1 }, Some(&mut walker.cam.effect), game_ms, &walker.eye, lib, sound);
+        self.rumbles.append(&mut spells.rumbles);
     }
 
     /// `SetName`'s plates for every creature drawn: its name, in
@@ -1403,17 +1443,55 @@ impl Play {
         out
     }
 
-    /// `CycleTarget(0)`: the next creature in view, by `CompareY` over the
-    /// game's score (mostly how far off the screen's centre line, plus
-    /// distance; a corpse 2 further), from the camera at `eye` looking along
-    /// `dir`; then 0x0010 with the token and the choice. Not here: the group
-    /// and the pet, which are skipped (there are none yet).
-    pub fn cycle_target(&mut self, eye: glam::Vec3, dir: glam::Vec3, view_proj: glam::Mat4) {
+    /// Mode 33 (R2 held): the chat box has the keys (`VIWndChat::OnKeyDown`
+    /// and `OnKeyUp`), and what it passes up goes to `VIWndGame`: R2 let go
+    /// ends the scroll, L3 toggles autorun (33 is a chat mode), and the
+    /// attack and the target's details are let go as in play.
+    fn chat_scroll_key(&mut self, key: i32, down: bool) {
+        let took = self.wnd_chat.as_mut().is_some_and(|c| if down { c.key_down(key) } else { c.key_up(key) });
+        if took {
+            return;
+        }
+        if down {
+            if key == 146 {
+                self.toggle_autorun();
+            }
+            return;
+        }
+        match key {
+            143 => {
+                if let Some(c) = self.wnd_chat.as_mut() {
+                    c.set_scroll(0);
+                }
+                self.mode = 0;
+            }
+            134 => self.attack_release(),
+            133 => self.info_up = false,
+            _ => {}
+        }
+    }
+
+    /// `CycleTarget(group)`. Not `group` (R1, Tab): the next creature in
+    /// view, by `CompareY` over the game's score (mostly how far off the
+    /// screen's centre line, plus distance; a corpse 2 further), from the
+    /// camera at `eye` looking along `dir`, the group, the pet and the player
+    /// left out. `group` (L1): the player, the group's other members, the
+    /// pet, in turn. Changing between the two starts each from its first;
+    /// then 0x0010 with the token and the choice.
+    pub fn cycle_target(&mut self, group: bool, eye: glam::Vec3, dir: glam::Vec3, view_proj: glam::Mat4) {
         let me = self.self_id32();
+        let members: Vec<u32> = self.group.members[..self.group.count()].iter().map(|m| m.id).collect();
         let mut cand: Vec<(f32, u32)> = Vec::new();
+        if group {
+            cand.extend(me.map(|id| (0.0, id)));
+            cand.extend(members.iter().filter(|&&id| Some(id) != me).map(|&id| (0.0, id)));
+            if self.pet_id != u32::MAX {
+                cand.push((0.0, self.pet_id));
+            }
+        }
         for (slot, e) in self.entities.slots.iter().enumerate() {
             let Some(e) = e else { continue };
-            if self.puppets.get(slot).is_none_or(|p| p.is_none()) || Some(e.id) == me {
+            if group || self.puppets.get(slot).is_none_or(|p| p.is_none()) || Some(e.id) == me || members.contains(&e.id) || e.id == self.pet_id {
                 continue;
             }
             let mut dead = false;
@@ -1449,21 +1527,29 @@ impl Play {
             };
             cand.push((score + if dead { 2.0 } else { 0.0 }, e.id));
         }
-        cand.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        self.auto_attack = false;
-        self.target_info = None;
+        if !group {
+            cand.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        }
         let n = cand.len();
-        self.target = if n == 0 {
-            u32::MAX
+        // the one after k; k None is "not found": the first. Into the group's
+        // cycle from the other, the one after the last (the player); out of
+        // it, the first.
+        let k = if self.last_group != group {
+            if group { n.checked_sub(1) } else { None }
         } else {
-            match cand.iter().position(|c| c.1 == self.target) {
-                None => cand[0].1,
-                Some(k) => cand[(k + 1) % n].1,
-            }
+            cand.iter().position(|c| c.1 == self.target)
         };
+        self.auto_attack = false;
+        self.target = match (n, k) {
+            (0, _) => u32::MAX,
+            (_, None) => cand[0].1,
+            (_, Some(k)) => cand[(k + 1) % n].1,
+        };
+        self.target_info = None;
         let mut w = net::stream::Writer::op(0x0010);
         w.u32(0).u32(self.target);
         self.session.send(&w.data);
+        self.last_group = group;
     }
 
     /// A world change for the viewer to carry out (`EnterWorld` -> `LoadWorld`).
@@ -1679,6 +1765,169 @@ impl Play {
     /// Dead: the walk takes no controls (`UpdateControls` is not run).
     pub fn is_dead(&self) -> bool {
         self.death.is_some()
+    }
+
+    /// `ToggleP74`: autorun on or off, and the line saying so ("%S: %S",
+    /// words 720 and 551 or 552).
+    pub fn toggle_autorun(&mut self) {
+        self.autorun = !self.autorun;
+        let w = |id: i32| self.words.as_ref().map_or_else(|| format!("(word {id})"), |w| w.get(id, 0).to_string());
+        let text = format!("{}: {}", w(720), w(if self.autorun { 551 } else { 552 }));
+        self.add_chat(text, [1.0; 4]);
+    }
+
+    /// `ClearTarget` (triangle in play): the target let go; nothing is sent.
+    pub fn clear_target(&mut self) {
+        self.target_info = None;
+        self.target = u32::MAX;
+    }
+
+    /// `UpdateControls`' opening: the pad lost (its mode from 1 to 0) says
+    /// so in red (word 1805) and stops the auto-attack and the autorun.
+    pub fn pad_mode(&mut self, mode: i32) {
+        if mode == 0 && self.pad_mode == 1 {
+            self.warn(1805);
+            self.auto_attack = false;
+            if self.autorun {
+                self.toggle_autorun();
+            }
+        }
+        self.pad_mode = mode;
+    }
+
+    /// What `UpdateControls` reads of the client this frame.
+    pub fn control_client(&self) -> crate::controls::Client {
+        let now = self.session.now();
+        let me = self.self_id32();
+        let target = if self.target != u32::MAX && Some(self.target) != me {
+            self.actor_pos(self.target).zip(self.self_at.map(|s| s.0))
+        } else {
+            None
+        };
+        let (a, b) = self.cast_window;
+        crate::controls::Client {
+            has_chat: matches!(self.mode, 2 | 28 | 29 | 30 | 33),
+            inverted: self.options.inverted != 0,
+            auto_attack: self.auto_attack,
+            swung: now.wrapping_sub(self.swung) < 1000,
+            target,
+            autorun: self.autorun,
+            casting: now.wrapping_sub(a) as i32 >= 0 && (now.wrapping_sub(b) as i32) < 0,
+            move_ok: self.locks.0,
+            look_ok: self.locks.1,
+            rooted: self.rooted,
+            timed_out: self.session.timed_out(),
+        }
+    }
+
+    /// `VIClient::SetKey` for the pad's keys (128 + a `VIConsolePad` field,
+    /// `PadKeys`'): to the window that has the keys (the editor, the NPC,
+    /// bank, support and mail windows, the start menu and what it opened,
+    /// a dialog), else, in play, `VIWndGame::OnKeyDown`/`OnKeyUp` and the
+    /// HUD's quick menus. The camera's style and the target's cycle need the
+    /// walker and the window's shape.
+    pub fn set_key(&mut self, key: i32, down: bool, walker: &mut Walker, aspect: f32) {
+        use crate::dialog::Key as D;
+        use crate::hudmenu::Key as H;
+        self.keyboard = false;
+        if self.typing.is_some() {
+            return;
+        }
+        if self.mode == 2 {
+            self.edit_key(key, down);
+            return;
+        }
+        if self.bank_owns() {
+            self.bank_key(key, down);
+            return;
+        }
+        if self.npcw_owns() {
+            self.npcw_key(key, down);
+            return;
+        }
+        if self.support_owns() {
+            self.support_key(key, down);
+            return;
+        }
+        if self.mail_owns() {
+            self.mail_key(key, down);
+            return;
+        }
+        if self.start.is_some() {
+            match self.mode {
+                13 => return self.start_key(key, down),
+                5 => return self.book_key(key, down),
+                35 => return self.who_key(key, down),
+                _ if self.char_window() => return self.char_key(key, down),
+                _ if self.panel_up() => return self.panel_key(key, down),
+                _ => {}
+            }
+        }
+        if self.mode == 33 {
+            self.chat_scroll_key(key, down);
+            return;
+        }
+        if self.mode != 0 {
+            let k = match key {
+                138 => Some(D::Up),
+                139 => Some(D::Down),
+                136 => Some(D::Left),
+                137 => Some(D::Right),
+                134 => Some(D::Enter),
+                132 => Some(D::Escape),
+                _ => None,
+            };
+            if down && let Some(k) = k {
+                self.dialog_key(k);
+            }
+            // a key's release still stops the attack (`OnKeyUp` 134)
+            if !down && key == 134 {
+                self.attack_release();
+            }
+            return;
+        }
+        if !down {
+            match key {
+                134 => self.attack_release(),
+                133 => self.info_up = false,
+                _ => {}
+            }
+            return;
+        }
+        match key {
+            144 => self.open_start_menu(true),
+            145 => self.camera_style_key(walker),
+            134 => self.attack_press(),
+            133 => self.interact_with_target(),
+            132 => self.clear_target(),
+            140 | 142 => {
+                let (proj, v) = walker.view(aspect);
+                let dir = glam::Vec3::from(walker.eye.direction.to_array());
+                self.cycle_target(key == 140, walker.eye_position(), dir, proj * v);
+            }
+            136 => self.hud_key(H::Left),
+            137 => self.hud_key(H::Right),
+            138 => self.hud_key(H::Up),
+            139 => self.hud_key(H::Down),
+            135 => self.hud_key(H::Use),
+            // R3: the chat line, the edit box with the channel's title
+            147 => {
+                self.open_edit(0xB0F0000, 128, -1, false);
+                self.edit.title = self.chat_title();
+            }
+            146 => self.toggle_autorun(),
+            // R2 held: the chat box's history (mode 33), movement and the
+            // camera allowed (`SetP06DC0(1, 1)`)
+            143 => {
+                self.mode = 33;
+                self.locks = (true, true);
+                if let Some(c) = self.wnd_chat.as_mut() {
+                    c.set_scroll(1);
+                }
+            }
+            // L2: the quick-chat menu (mode 30, `VIWndMenu4`) is not ported
+            _ => {}
+        }
     }
 
     /// The dump's abilities, by id, and its token; its quests.
@@ -2456,8 +2705,6 @@ impl Play {
         e.set_text(&crate::ui::wide(&target));
         e.title = if title >= 0 { self.words.as_ref().map_or_else(Vec::new, |w| crate::ui::wide(w.get(title, 0))) } else { Vec::new() };
         e.purpose = purpose;
-        // gKeyboardAttached: the host has one, so the option decides
-        e.pad_only = self.options.compact != 0;
         e.focus(self.session.now() as i64);
         self.mode = 2;
     }
@@ -2478,7 +2725,7 @@ impl Play {
 
     /// The edit box shows the compact legend (no soft keyboard).
     pub fn edit_pad_only(&self) -> bool {
-        self.edit.pad_only
+        crate::editbox::pad_only()
     }
 
     /// A key for the edit box (the game's codes), handled with the next HUD
@@ -3352,6 +3599,9 @@ impl Play {
     /// The HUD's quads for this frame (`VIWndGame::OnDrawSelf`).
     pub fn draw_hud(&mut self, ui: &mut render::ui::Ui, walker: &Walker, time_ms: i64, view_proj: glam::Mat4, size: (u32, u32)) {
         ui.begin(size);
+        // VIWndEdit::OnDrawSelf's `sPadOnly`: a keyboard in use and the
+        // options' Soft Keyboard on show the compact face
+        crate::editbox::set_pad_only(self.keyboard && self.options.compact != 0);
         let under_liquid = walker.cam.walk.is_under_liquid();
         let (start_stats, start_loc) = self.start_view(walker);
         let info_text = if self.info_up || self.info_window.open > 0.0 { self.target_info_text() } else { None };
@@ -3446,6 +3696,7 @@ impl Play {
                     c.text.add_text(&crate::ui::wide(&text), color, at, |s| vi::ui::Raster::string_width(rr, s));
                 }
                 c.draw(vui, &mut r, now, dt);
+                self.cues.extend(c.cues.drain(..).map(crate::sound::Cue::Ui));
             }
             r.ui.anchor = Anchor::Middle;
             if self.mode == 9 {

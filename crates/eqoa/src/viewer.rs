@@ -336,13 +336,40 @@ pub fn shot_with(
         let at: i64 = std::env::var("EQOA_AT").ok().and_then(|v| v.parse().ok()).map_or(2000, |v: i64| v / 16 * 16);
         let attack = std::env::var_os("EQOA_ATTACK").is_some();
         let walk = walk_script();
+        // `EQOA_PAD`: a pad by script, through the game's pad path
+        let pad_script = crate::input::Script::from_env();
+        let mut console = crate::input::Console::new();
         while t < script.ms {
             t += 16;
             let controls = match &walk {
                 Some(segs) => segs.iter().find(|s| t <= s.1).map_or(Controls::default(), |s| s.0),
                 None => script.controls,
             };
-            walker.frame(controls, t);
+            let mut sticks = controls.axes();
+            if let Some(s) = &pad_script {
+                let dead = play.as_ref().is_some_and(|p| p.is_dead());
+                let keys = console.poll(s.at(t), true, false, dead);
+                if let Some(p) = play.as_mut() {
+                    p.pad_mode(console.mode());
+                    for (k, down) in keys {
+                        eprintln!("pad key {k} {}", if down { "down" } else { "up" });
+                        p.set_key(k, down, &mut walker, aspect);
+                    }
+                }
+                if !dead {
+                    for (a, p) in sticks.iter_mut().zip(console.sticks()) {
+                        if p * p > *a * *a {
+                            *a = p;
+                        }
+                    }
+                }
+            }
+            let client = play.as_ref().filter(|p| !p.is_dead()).map(|p| p.control_client()).unwrap_or_default();
+            if walker.frame_with(sticks, t, &client)
+                && let Some(p) = play.as_mut()
+            {
+                p.toggle_autorun();
+            }
             // the zones it walks toward, read as the game's loader reads them
             streamer.fetch(Vec3::from(walker.cam.walk.phys.position.to_array()), &walker.scene, lib);
             if let Some(first) = streamer.install(lib, &mut walker.scene) {
@@ -382,7 +409,7 @@ pub fn shot_with(
                 if t == at && tab {
                     let (proj, v) = walker.view(aspect);
                     let dir = Vec3::from(walker.eye.direction.to_array());
-                    p.cycle_target(walker.eye_position(), dir, proj * v);
+                    p.cycle_target(false, walker.eye_position(), dir, proj * v);
                 }
                 // `EQOA_BOX=text|option|...`: a dialog box then; `EQOA_BOX_KEYS`
                 // (u, d, e, x) pressed one a frame after it.
@@ -948,6 +975,11 @@ struct App {
     /// `EQOA_QUIT`: when the run ends (s on `clock`)
     quit_at: Option<f64>,
     walk: Option<Vec<(Controls, i64)>>,
+    /// The pad the game reads (`VIConsole`'s), the controllers behind it,
+    /// and `EQOA_PAD`'s script.
+    console: crate::input::Console,
+    pads: crate::input::Gamepads,
+    pad_script: Option<crate::input::Script>,
 }
 
 pub fn run(lib: Library, source: Source) -> Result<(), Error> {
@@ -994,6 +1026,9 @@ pub fn run_with_gfx(lib: Library, source: Source, play: Option<crate::play::Play
         perf: Perf::from_env(),
         quit_at: std::env::var("EQOA_QUIT").ok().and_then(|s| s.parse().ok()),
         walk: walk_script(),
+        console: crate::input::Console::new(),
+        pads: crate::input::Gamepads::new(),
+        pad_script: crate::input::Script::from_env(),
     };
     #[cfg(target_arch = "wasm32")]
     {
@@ -1094,6 +1129,46 @@ impl App {
         let k = |a: &str, b: &str| self.held.contains(a) as i32 as f32 - self.held.contains(b) as i32 as f32;
         let either = |x: f32, y: f32| if x != 0.0 { x } else { y };
         Controls { fwd: k("w", "s"), strafe: k("d", "a"), orbit: either(k("right", "left"), k("l", "j")), pitch: either(k("down", "up"), k("k", "i")) }
+    }
+
+    /// The pad, once a frame: every source as libpad's one port
+    /// (`VIPad::Read`), its mode to the client (`UpdateControls`' opening),
+    /// and `PadKeys`' keys to the window that has them (`SetKey`).
+    fn poll_pad(&mut self) {
+        let (mut report, mut connected, motors) = self.pads.poll();
+        if let Some(s) = &self.pad_script {
+            report.merge(&s.at(self.clock.elapsed().as_millis() as i64));
+            connected = true;
+        }
+        let dead = self.play.as_ref().is_some_and(|p| p.is_dead());
+        let keys = self.console.poll(report, connected, motors, dead);
+        // `EQOA_PAD_TRACE=1`: every pad key, as the game gets it
+        if std::env::var_os("EQOA_PAD_TRACE").is_some() {
+            for &(k, down) in &keys {
+                crate::say(&format!("[pad] {} {}", crate::input::key_name(k), if down { "down" } else { "up" }));
+            }
+        }
+        let aspect = self.gfx.as_ref().map_or(4.0 / 3.0, |g| g.config.width as f32 / g.config.height as f32);
+        if let (Some(p), Some(w)) = (self.play.as_mut(), self.walker.as_mut()) {
+            p.pad_mode(self.console.mode());
+            for (k, down) in keys {
+                p.set_key(k, down, w, aspect);
+            }
+        }
+    }
+
+    /// The sticks `UpdateControls` reads: the keyboard's (`controls`) and
+    /// the pad's, axis by axis the one further from rest.
+    fn sticks(&self) -> [f32; 4] {
+        let mut a = self.controls().axes();
+        if !self.play.as_ref().is_some_and(|p| p.is_dead()) {
+            for (a, p) in a.iter_mut().zip(self.console.sticks()) {
+                if p * p > *a * *a {
+                    *a = p;
+                }
+            }
+        }
+        a
     }
 
     /// Fly-camera movement from the held keys, scaled by frame time.
@@ -1224,6 +1299,13 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
+                // a keyboard in use (`gKeyboardAttached`): the edit boxes'
+                // compact face, with the options' Soft Keyboard on
+                if let Some(p) = self.play.as_mut()
+                    && event.state == ElementState::Pressed
+                {
+                    p.keyboard = true;
+                }
                 // The edit box (mode 2) takes the keyboard: characters type,
                 // Backspace, Escape (cancel), Enter (done), the arrows move the
                 // caret (with the soft keyboard showing, its cursor; Insert
@@ -1707,7 +1789,7 @@ impl ApplicationHandler for App {
                 {
                     let (proj, v) = w.view(g.config.width as f32 / g.config.height as f32);
                     let dir = Vec3::from(w.eye.direction.to_array());
-                    p.cycle_target(w.eye_position(), dir, proj * v);
+                    p.cycle_target(false, w.eye_position(), dir, proj * v);
                     return;
                 }
                 let name = match &event.logical_key {
@@ -1804,8 +1886,9 @@ impl ApplicationHandler for App {
                 {
                     p.add_from(&w.scene, first);
                 }
+                self.poll_pad();
                 mark(&mut self.perf, 0);
-                let controls = self.controls();
+                let sticks = self.sticks();
                 let now = self.clock.elapsed().as_millis() as i64;
                 let Some(g) = &mut self.gfx else { return };
                 let body_at = self.body_at;
@@ -1821,13 +1904,16 @@ impl ApplicationHandler for App {
                 let play = &mut self.play;
                 let lib = &self.lib;
                 let perf = &mut self.perf;
+                let console = &mut self.console;
+                let pads = &mut self.pads;
                 let walk_view = self.walker.as_mut().map(|w| {
-                    // the Camera Pitch Axis option, in modes 0 and 2
-                    let mut controls = controls;
-                    if play.as_ref().is_some_and(|p| p.options.inverted != 0) && matches!(w.cam.camera_mode, 0 | 2) {
-                        controls.pitch = -controls.pitch;
+                    // UpdateControls, on the sticks, as the client stands
+                    let client = play.as_ref().filter(|p| !p.is_dead()).map(|p| p.control_client()).unwrap_or_default();
+                    if w.frame_with(sticks, now, &client)
+                        && let Some(p) = play.as_mut()
+                    {
+                        p.toggle_autorun();
                     }
-                    w.frame(controls, now);
                     mark(perf, 1);
                     if let Some(p) = play {
                         let gpu = crate::play::Gpu { renderer: &mut g.renderer, device: &g.device, queue: &g.queue };
@@ -1850,6 +1936,15 @@ impl ApplicationHandler for App {
                         }
                         // the HUD, once SUPPORT's atlas has come
                         p.attach_ui(&mut g.renderer, &g.device, &g.queue, g.config.format, lib);
+                        // the spell effects' vibrate events (`Rumble`)
+                        let vibration = p.options.vibration != 0;
+                        for (motor, level, ms) in p.rumbles.drain(..) {
+                            console.rumble(motor, level, ms, vibration);
+                        }
+                    }
+                    // VIConsole::Process: the motors as they are now
+                    if let Some((act, ms)) = console.process(now) {
+                        pads.rumble(act, ms);
                     }
                     mark(perf, 2);
                     if let Some(s) = sound.as_mut() {

@@ -11,8 +11,10 @@
 //! trail (`SetWeaponTrail` is taken and dropped), a hand's projectile sprite
 //! (no item carries one yet, so no arrow flies), the animated sprites an
 //! effect can create (three events on the disc; tracked, not drawn), the fade
-//! (no event on the disc uses it) and the pad's rumble. The effects run on a
-//! particle system of their own, not the world's.
+//! (no event on the disc uses it). The vibrate events of the player's own
+//! effects go to the pad (`rumbles`: `VIClient`'s `Rumble`, which the client
+//! always hands the effect system). The effects run on a particle system of
+//! their own, not the world's.
 
 use esf::{Library, Ref};
 use render::billboard::{Batch, Strips};
@@ -113,6 +115,9 @@ pub struct Spells {
     pub played: usize,
     /// bolts drawn, all frames
     pub bolts: usize,
+    /// the vibrate events, as the callback gets them (power, time, mode:
+    /// `Rumble`'s motor, level and ms)
+    pub rumbles: Vec<(u8, u8, i32)>,
 }
 
 impl Spells {
@@ -134,6 +139,7 @@ impl Spells {
             strips: Vec::new(),
             played: 0,
             bolts: 0,
+            rumbles: Vec::new(),
         };
         let mut defs: HashMap<Ref, usize> = HashMap::new();
         let mut sprites: HashMap<Ref, usize> = HashMap::new();
@@ -195,7 +201,9 @@ impl Spells {
     pub fn frame(&mut self, bodies: &mut [Body], casts: &[(Cast, i32, i32, Vec<i32>)], player: i32, camera: Option<&mut CameraEffect<Ee>>, time: i64, eye: &Eye<Ee>, lib: &Library, sound: Option<&mut crate::sound::Sound>) {
         self.sys.player_actor = player;
         self.sys.camera = camera.is_some();
-        let mut sc = Scene { bodies, made: &mut self.made, next: &mut self.next, sprites: &mut self.sprites, time, camera };
+        // `SetVibrateCallback(Rumble, &m_console)`: the client always sets one
+        self.sys.vibrate = true;
+        let mut sc = Scene { bodies, made: &mut self.made, next: &mut self.next, sprites: &mut self.sprites, time, camera, rumbles: &mut self.rumbles };
         for (c, caster, target, targets) in casts {
             let Some(&i) = self.by_dict.get(&c.effect) else { continue };
             if self.sys.play(i, c.time, *caster, *target, targets, &mut sc) != -1 {
@@ -226,13 +234,13 @@ impl Spells {
 
     /// An entity went: `NotifyActorWasDestroyed`.
     pub fn actor_gone(&mut self, actor: i32, bodies: &mut [Body], time: i64) {
-        let mut sc = Scene { bodies, made: &mut self.made, next: &mut self.next, sprites: &mut self.sprites, time, camera: None };
+        let mut sc = Scene { bodies, made: &mut self.made, next: &mut self.next, sprites: &mut self.sprites, time, camera: None, rumbles: &mut self.rumbles };
         self.sys.notify_actor_destroyed(actor, &mut sc);
     }
 
     /// `StopIfThisWasCaster(actor)`: a death ends the spells it was casting.
     pub fn stop_caster(&mut self, actor: i32, bodies: &mut [Body], time: i64) {
-        let mut sc = Scene { bodies, made: &mut self.made, next: &mut self.next, sprites: &mut self.sprites, time, camera: None };
+        let mut sc = Scene { bodies, made: &mut self.made, next: &mut self.next, sprites: &mut self.sprites, time, camera: None, rumbles: &mut self.rumbles };
         self.sys.stop_if_this_was_caster(actor, &mut sc, &mut self.ps);
     }
 
@@ -333,6 +341,7 @@ struct Scene<'a, 'b, 'c> {
     sprites: &'a mut Vec<Sprite>,
     time: i64,
     camera: Option<&'c mut CameraEffect<Ee>>,
+    rumbles: &'a mut Vec<(u8, u8, i32)>,
 }
 
 impl<'b> Scene<'_, 'b, '_> {
@@ -502,5 +511,7 @@ impl SpellScene<Ee> for Scene<'_, '_, '_> {
         }
     }
 
-    fn vibrate(&mut self, _power: u8, _time: u8, _mode: i32) {}
+    fn vibrate(&mut self, power: u8, time: u8, mode: i32) {
+        self.rumbles.push((power, time, mode));
+    }
 }

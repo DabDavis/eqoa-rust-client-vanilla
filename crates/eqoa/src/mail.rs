@@ -112,7 +112,6 @@ impl Play {
     /// The windows' opening, keys, drawing and what they ask.
     pub(super) fn run_mail(&mut self, vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster) {
         let now = vui.time;
-        let pad_only = self.options.compact != 0;
         if let Some(mode) = self.mail.opening.take() {
             match mode {
                 23 => {
@@ -144,9 +143,6 @@ impl Play {
             b.focus(vui, r);
             b.refresh();
             b.set_to(&crate::ui::wide(&name));
-        }
-        for e in [&mut self.mail.tell.edit, &mut self.mail.reply.edit, &mut self.mail.compose.edit, &mut self.mail.buddy.edit, &mut self.mail.inbox.read.compose.edit] {
-            e.pad_only = pad_only;
         }
         let mut cues = Vec::new();
         let mut tell_ups = Vec::new();

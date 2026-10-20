@@ -1,11 +1,7 @@
 //! The character on the ground: the ported `VIWalkCamera` (crate `vi`, on the
-//! console's float model), set up and driven the way CLIENT's
-//! `VIClient::UpdateControls` drives it in third person (camera mode 3):
-//!
-//!   fwd = -left.y, strafe = left.x  ->  ViewRelativeMove(camera dir, fwd, strafe)
-//!   right.y                         ->  OrbitIn(-pitch)
-//!   right.x                         ->  OrbitRight(orbit)
-//!   then VIWalkCamera::Process, which steps everything in 32 ms ticks.
+//! console's float model), driven as CLIENT's `VIClient::UpdateControls`
+//! drives it in each camera mode (`controls`), then `VIWalkCamera::Process`,
+//! which steps everything in 32 ms ticks.
 //!
 //! The scene it collides with is the game's own: `vi::world::World`, the
 //! world and zone BSPs, rooms, collision buffers and placed actors, loaded
@@ -23,13 +19,21 @@ use vi::geom::Matrix44;
 use vi::hsprite::AnimScene;
 use vi::world::World;
 
-/// One frame's controls, as `UpdateControls` reads them: each in -1..1.
+/// One frame's controls from the keyboard or a script, each in -1..1: a
+/// pad's two sticks, as `UpdateControls` reads them (`axes`).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Controls {
     pub fwd: f32,
     pub strafe: f32,
     pub orbit: f32,
     pub pitch: f32,
+}
+
+impl Controls {
+    /// The sticks (rx, ry, lx, ly, +y down): forward is the left stick up.
+    pub fn axes(&self) -> [f32; 4] {
+        [self.orbit, self.pitch, self.strafe, -self.fwd]
+    }
 }
 
 pub struct Walker {
@@ -135,13 +139,17 @@ impl Walker {
 
     /// One frame: the controls, then the clock moved to `now_ms` and stepped.
     pub fn frame(&mut self, c: Controls, now_ms: i64) {
-        let f = F::<Ee>::new;
-        let dir = self.eye.direction;
-        self.cam.walk.view_relative_move(&dir, f(c.fwd), f(c.strafe));
-        self.cam.orbit_in(f(-c.pitch));
-        self.cam.orbit_right(f(c.orbit));
+        self.frame_with(c.axes(), now_ms, &crate::controls::Client::default());
+    }
+
+    /// One frame on the sticks `keys` (rx, ry, lx, ly) for the client
+    /// `c`: `UpdateControls`, then the clock moved to `now_ms` and
+    /// `Process`. True when the stick cancelled autorun.
+    pub fn frame_with(&mut self, keys: [f32; 4], now_ms: i64, c: &crate::controls::Client) -> bool {
+        let toggled = crate::controls::update_controls(self, keys, c);
         self.scene.time = now_ms;
         self.eye = self.cam.process(&mut self.scene);
+        toggled
     }
 
 
@@ -172,6 +180,54 @@ impl Walker {
             self.cam.cur.dist.0,
             self.sprite.as_ref().map(|s| [s.cur[0].anim, s.cur[1].anim])
         )
+    }
+}
+
+impl crate::controls::Walk for Walker {
+    fn camera_mode(&self) -> i32 {
+        self.cam.camera_mode
+    }
+    fn heading(&self) -> F<Ee> {
+        self.cam.walk.committed.angles.x
+    }
+    fn camera_dir(&self) -> Vect3<Ee> {
+        self.eye.direction
+    }
+    fn under_liquid(&self) -> bool {
+        self.cam.walk.is_under_liquid()
+    }
+    fn at_liquid_surface(&self) -> bool {
+        self.cam.walk.is_at_liquid_surface()
+    }
+    fn move_stick(&mut self, x: F<Ee>, y: F<Ee>) {
+        self.cam.walk.move_stick(x, y);
+    }
+    fn walk(&mut self, x: F<Ee>, y: F<Ee>) {
+        self.cam.walk.walk(x, y);
+    }
+    fn turn_left(&mut self, t: F<Ee>) {
+        self.cam.walk.turn_left(t);
+    }
+    fn pitch_down(&mut self, t: F<Ee>) {
+        self.cam.walk.pitch_down(t);
+    }
+    fn swim_up(&mut self, t: F<Ee>) {
+        self.cam.walk.swim_up(t);
+    }
+    fn view_relative_move(&mut self, r: &Vect3<Ee>, x: F<Ee>, y: F<Ee>) {
+        self.cam.walk.view_relative_move(r, x, y);
+    }
+    fn view_relative_walk(&mut self, r: &Vect3<Ee>, x: F<Ee>, y: F<Ee>) {
+        self.cam.walk.view_relative_walk(r, x, y);
+    }
+    fn set_target_heading(&mut self, h: F<Ee>) {
+        self.cam.walk.set_target_heading(h);
+    }
+    fn orbit_in(&mut self, t: F<Ee>) {
+        self.cam.orbit_in(t);
+    }
+    fn orbit_right(&mut self, t: F<Ee>) {
+        self.cam.orbit_right(t);
     }
 }
 

@@ -20,6 +20,7 @@ pollster = "1.0.1"
 glam = "0.34.1"
 png = "0.18.1"
 cpal = "0.16"
+gilrs = "0.11.2"
 
 # The browser build (`web/build.sh`): the page hands over the player's disc
 # image and the login; sockets go through a WebSocket relay; wgpu falls back

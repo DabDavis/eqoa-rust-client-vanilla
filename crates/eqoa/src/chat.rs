@@ -2,7 +2,8 @@
 //! `VIWndChat::OnDrawSelf`, the window that slides up from the bottom of
 //! the screen to show the lines added in the last 20 seconds (at most
 //! five), or the last five lines in a fixed 85-pixel box while its mode is
-//! set or it is being scrolled.
+//! set or it is being scrolled: R2 held (`VIWndGame` mode 33) scrolls the
+//! last 32 lines with up and down, which repeat while held.
 
 use vi::ui::{Raster, Vui, Window};
 
@@ -60,6 +61,14 @@ impl ChatText {
     }
     pub fn prev(i: usize) -> usize {
         if i == 0 { LINES - 1 } else { i - 1 }
+    }
+    /// `Count`: the lines held (31 once the ring has gone round).
+    pub fn count(&self) -> usize {
+        if self.tail < self.head { LINES - 1 } else { self.tail - self.head }
+    }
+    /// `Index`: line `i`'s place counting from the oldest.
+    pub fn index(&self, i: usize) -> usize {
+        if i < self.head { LINES - self.head + i } else { i - self.head }
     }
     pub fn line(&self, i: usize) -> Option<&ChatLine> {
         self.lines.get(i)
@@ -135,15 +144,26 @@ pub struct WndChat {
     lines: i32,
     pub text: ChatText,
     window: Window,
+    /// `m_scroll`: 1 while scrolling (`SetScroll`)
+    scroll: i32,
+    /// the first line shown while scrolling, and the line after the last
+    top: usize,
+    bottom: usize,
+    /// the scroll key held (19, 20, 138, 139), and when it repeats
+    held: i32,
+    repeat: f32,
+    /// `PlaySound`s to make (11 a step, 9 at an end)
+    pub cues: Vec<i32>,
 }
 
 impl WndChat {
     /// `Init`: the window is 462 wide and lines wrap at its width less 45.
     pub fn new() -> Self {
-        WndChat { mode: 0, height: 0, target: 0, lines: 0, text: ChatText::new(462 - 45), window: Window::default() }
+        WndChat { mode: 0, height: 0, target: 0, lines: 0, text: ChatText::new(462 - 45), window: Window::default(), scroll: 0, top: 0, bottom: 0, held: 0, repeat: 0.0, cues: Vec::new() }
     }
 
-    /// `CountLines`: the fresh lines (or five in a fixed mode), at most five.
+    /// `CountLines`: the fresh lines (every line while scrolling; five in a
+    /// fixed mode), at most five.
     fn count_lines(&self) -> i32 {
         if self.mode != 0 {
             return 5;
@@ -151,7 +171,7 @@ impl WndChat {
         let mut n = 0;
         let mut i = self.text.first();
         while i != self.text.end() {
-            if self.text.line(i).is_some_and(|l| l.kind == 1) {
+            if self.text.line(i).is_some_and(|l| l.kind == 1 || self.scroll == 1) {
                 n += 1;
             }
             i = ChatText::next(i);
@@ -159,16 +179,103 @@ impl WndChat {
         n.min(5)
     }
 
+    /// `SetScroll`: 1 opens the view on the last five lines, 0 ends it.
+    pub fn set_scroll(&mut self, on: i32) {
+        self.scroll = on;
+        if on == 1 {
+            self.target = 85;
+            self.height = 85;
+            self.top = self.text.end();
+            self.bottom = self.top;
+            for _ in 0..5 {
+                if self.top == self.text.first() {
+                    break;
+                }
+                self.top = ChatText::prev(self.top);
+            }
+        } else {
+            self.bottom = 0;
+        }
+    }
+
+    /// `ScrollDown`: a line later, unless at the end.
+    fn scroll_down(&mut self) {
+        if self.bottom != self.text.end() {
+            self.cues.push(11);
+            self.bottom = ChatText::next(self.bottom);
+            self.top = ChatText::next(self.top);
+        } else {
+            self.cues.push(9);
+        }
+    }
+
+    /// `ScrollUp`: a line earlier, unless at the first.
+    fn scroll_up(&mut self) {
+        if self.top != self.text.first() {
+            self.cues.push(11);
+            self.top = ChatText::prev(self.top);
+            self.bottom = ChatText::prev(self.bottom);
+        } else {
+            self.cues.push(9);
+        }
+    }
+
+    /// `OnKeyDown`: up and down scroll, and repeat while held. False for a
+    /// key it passes up to the game window (only L3, 146).
+    pub fn key_down(&mut self, key: i32) -> bool {
+        self.held = 0;
+        match key {
+            19 | 138 => {
+                self.held = key;
+                self.repeat = 0.45;
+                self.scroll_up();
+            }
+            20 | 139 => {
+                self.held = key;
+                self.repeat = 0.45;
+                self.scroll_down();
+            }
+            146 => return false,
+            _ => {}
+        }
+        true
+    }
+
+    /// `OnKeyUp`: the held key let go. False for a key it passes up to the
+    /// game window (all but the scroll keys).
+    pub fn key_up(&mut self, key: i32) -> bool {
+        if key == self.held {
+            self.held = 0;
+        }
+        if matches!(key, 19 | 20 | 138 | 139) {
+            return true;
+        }
+        self.held = 0;
+        false
+    }
+
     /// `OnDrawSelf`, scrolling aside: the box eases to its height at 200
     /// pixels a second (`dt` seconds since the last frame).
     pub fn draw(&mut self, vui: &Vui, ui: &mut dyn Raster, now: u32, dt: f32) {
         self.text.age(now);
+        // a held scroll key repeats every 1/20 s after the first 0.45 s
+        if matches!(self.held, 19 | 20 | 138 | 139) {
+            self.repeat -= dt;
+            if self.repeat <= 0.0 {
+                self.repeat = 0.05;
+                if matches!(self.held, 138 | 19) {
+                    self.scroll_up();
+                } else {
+                    self.scroll_down();
+                }
+            }
+        }
         self.window.init(vui, ui, [422, 390], 462, 6, 1);
         if self.mode != 0 {
             vui.blit_ex_size(ui, 32, [200, 331], [442, 118], 0, 1.0, 0);
         }
-        let it = self.text.end();
-        self.lines = self.count_lines();
+        let it = if self.scroll == 1 { self.bottom } else { self.text.end() };
+        self.lines = if self.scroll == 1 { 5 } else { self.count_lines() };
         let h = vui.font_height(ui);
         if self.mode != 0 {
             self.target = 85;
@@ -192,13 +299,20 @@ impl WndChat {
             if let Some(l) = self.text.line(i)
                 && !l.text.is_empty()
                 && l.text[0] != 0
-                && (l.kind == 1 || self.mode != 0)
+                && (self.scroll == 1 || (self.scroll == 0 && l.kind == 1) || self.mode != 0)
             {
                 let (text, color) = (l.text.clone(), l.color);
                 self.window.text_box(vui, ui, &text, 25, row, self.window.size[0] - 45, 1, color, 0);
                 row -= 1;
             }
             i = ChatText::prev(i);
+        }
+        if self.scroll == 1 {
+            let n = self.text.count();
+            let t = if n > 5 { self.text.index(self.top) as f32 / (n - 5) as f32 } else { 0.0 };
+            let tl = self.window.top_left();
+            let at = [tl[0] + 10, tl[1] + 10];
+            self.window.draw_vscroll(vui, ui, at, self.window.bottom_right()[1] - tl[1] - 40, t);
         }
         let step = (dt * 200.0) as i32;
         if self.height < self.target {

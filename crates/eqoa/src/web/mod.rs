@@ -78,6 +78,27 @@ pub fn status(s: &str) {
     call_page("eqoaStatus", &JsValue::from_str(s));
 }
 
+/// The gamepads' motors (`window.eqoaRumble(strong, weak, ms)`, main.js:
+/// the Gamepad API's dual-rumble, which gilrs does not drive in a page).
+pub fn rumble(strong: f64, weak: f64, ms: u32) {
+    let Some(w) = web_sys::window() else { return };
+    if let Ok(f) = js_sys::Reflect::get(&w, &"eqoaRumble".into())
+        && let Some(f) = f.dyn_ref::<js_sys::Function>()
+    {
+        let _ = f.call3(&JsValue::NULL, &strong.into(), &weak.into(), &(ms as f64).into());
+    }
+}
+
+/// Whether a connected gamepad can rumble (`window.eqoaCanRumble`).
+pub fn can_rumble() -> bool {
+    let Some(w) = web_sys::window() else { return false };
+    js_sys::Reflect::get(&w, &"eqoaCanRumble".into())
+        .ok()
+        .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+        .and_then(|f| f.call0(&JsValue::NULL).ok())
+        .is_some_and(|v| v.is_truthy())
+}
+
 /// `main`, in a browser: the page calls the exports below.
 pub fn start() {
     console_error_panic_hook::set_once();

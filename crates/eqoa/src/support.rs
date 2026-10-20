@@ -157,9 +157,6 @@ impl Play {
                 _ => {}
             }
         }
-        let pad_only = self.options.compact != 0;
-        self.support.request.edit.pad_only = pad_only;
-        self.support.inbox.read.request.edit.pad_only = pad_only;
         let mut req_ups = Vec::new();
         let mut inbox_ups = Vec::new();
         let flags = net::session::EXPANSION_FLAGS;
