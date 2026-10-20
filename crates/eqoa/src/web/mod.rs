@@ -274,6 +274,12 @@ pub fn page_flag(name: &str) -> bool {
     web_sys::window().and_then(|w| w.location().search().ok()).is_some_and(|q| q.split(['?', '&']).any(|p| p == name))
 }
 
+/// The page's `?name=value`, if it has one.
+pub fn page_value(name: &str) -> Option<String> {
+    let q = web_sys::window()?.location().search().ok()?;
+    q.split(['?', '&']).find_map(|p| p.strip_prefix(name)?.strip_prefix('=').map(str::to_string))
+}
+
 pub async fn sleep(ms: i32) {
     let p = js_sys::Promise::new(&mut |resolve, _| {
         if let Some(w) = web_sys::window() {

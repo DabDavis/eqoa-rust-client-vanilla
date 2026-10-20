@@ -337,6 +337,7 @@ pub fn shot_with(
         // `EQOA_AT=ms`: when the target (and then Q, attack) steps happen.
         let at: i64 = std::env::var("EQOA_AT").ok().and_then(|v| v.parse().ok()).map_or(2000, |v: i64| v / 16 * 16);
         let attack = std::env::var_os("EQOA_ATTACK").is_some();
+        let trace_walk: Option<i64> = std::env::var("EQOA_TRACE_WALK").ok().and_then(|v| v.parse::<i64>().ok()).map(|v| (v / 16 * 16).max(16));
         let walk = walk_script();
         // `EQOA_PAD`: a pad by script, through the game's pad path;
         // `EQOA_MOUSE`: the mouse's, through the window's
@@ -453,6 +454,12 @@ pub fn shot_with(
             {
                 p.toggle_autorun();
             }
+            // `EQOA_TRACE_WALK=ms`: the body and the camera every that often
+            if let Some(every) = trace_walk
+                && t % every == 0
+            {
+                eprintln!("walk {t} ms: {} orbit {:.4} sticks {sticks:?} anim {:?}", walker.describe(), walker.cam.cur.orbit.x.0, walker.sprite.as_ref().map(|s| s.action));
+            }
             let (proj, v) = walker.view(aspect);
             last_view = Some(proj * v);
             // the zones it walks toward, read as the game's loader reads them
@@ -490,6 +497,10 @@ pub fn shot_with(
                     && let Ok(name) = std::env::var("EQOA_PET")
                 {
                     eprintln!("pet {name}: {}", p.pet_by_name(&name));
+                }
+                // `EQOA_P=<ms>`: the P key then (first person and back)
+                if std::env::var("EQOA_P").ok().and_then(|v| v.parse::<i64>().ok()).is_some_and(|ms| ms / 16 * 16 == t) {
+                    p.camera_style_key(&mut walker);
                 }
                 if t == at && tab {
                     let (proj, v) = walker.view(aspect);
@@ -1370,6 +1381,10 @@ impl App {
             let _ = writeln!(o, "surface {}x{} {:?}", g.config.width, g.config.height, g.config.format);
         }
         let _ = writeln!(o, "files: {}", self.lib.files.iter().map(|f| f.0.as_str()).collect::<Vec<_>>().join(", "));
+        // the controls: a pad's sticks as they came (before the host's dead
+        // zone) and as the game reads them, and the camera's mode
+        let mode = self.walker.as_ref().map_or(-1, |w| w.cam.camera_mode);
+        let _ = writeln!(o, "sticks rx ry lx ly: pad {:.3?} (dead zone {}), the game's {:.4?}; camera mode {mode}", self.pads.raw, self.pads.dead_zone, self.console.sticks());
         if let Some(e) = &self.entering {
             let _ = writeln!(o, "entering {} at {:?}", e.0, e.1);
         }
