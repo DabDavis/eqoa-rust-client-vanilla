@@ -13,10 +13,10 @@
 //! `delete_character` and `random_name` (the game's `SelectCharacter`,
 //! `CreateCharacter`, `DeleteCharacter` and `Send0012`).
 //!
-//! The start menu reads CLIENT's data, which the disc holds only encrypted:
-//! the page's worker (`web/unpack.js`) runs this same module's
-//! `unpack_module` on it, the disc's own DNAS library in crate `dnas`, while
-//! the session goes on (`unpack_client`).
+//! The start menu reads CLIENT's data and the HUD SUPPORT's, which the disc
+//! holds only encrypted: the page's workers (`web/unpack.js`) run this same
+//! module's `unpack_module` on them, the disc's own DNAS library in crate
+//! `dnas`, while the session goes on (`unpack_modules`).
 
 mod disc;
 mod relay;
@@ -215,36 +215,50 @@ pub fn unpack_module(util: &[u8], aut: &[u8]) -> Result<Vec<u8>, JsValue> {
     dnas::unpack(util, aut).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
-/// CLIENT's image for the start menu: `UTIL.REL` and `CLIENT.AUT` read off
-/// the disc here, unpacked by the page (`window.eqoaUnpack`: a worker, and
-/// the page's own cache of what it unpacked before) while the session goes
-/// on, and handed to play when it comes (`client_image::arrive`).
-async fn unpack_client(disc: &WebDisc) {
-    let files = async { Ok::<_, String>((disc.read("UTIL.REL").await?, disc.read("CLIENT.AUT").await?)) }.await;
-    let (util, aut) = match files {
-        Ok(f) => f,
-        Err(e) => return log(&format!("no start menu: {e}")),
+/// CLIENT and SUPPORT (the start menu, the HUD): `UTIL.REL` and the two
+/// `.AUT`s read off the disc here, each unpacked by the page
+/// (`window.eqoaUnpack`: a worker of its own, or the page's copy from a
+/// visit before) while the session goes on, and kept (`modules::put`) for
+/// play to take up when it comes.
+async fn unpack_modules(disc: &WebDisc) {
+    use crate::modules::{self, Module};
+    let util = match disc.read("UTIL.REL").await {
+        Ok(u) => u,
+        Err(e) => return log(&format!("no start menu and no HUD: {e}")),
     };
-    wasm_bindgen_futures::spawn_local(async move {
-        let t = web_time::Instant::now();
-        let r = async {
-            let w = web_sys::window().ok_or("no window")?;
-            let f = js_sys::Reflect::get(&w, &"eqoaUnpack".into()).ok().and_then(|f| f.dyn_into::<js_sys::Function>().ok()).ok_or("the page has no eqoaUnpack")?;
-            let p = f.call3(&JsValue::NULL, &"CLIENT".into(), &js_sys::Uint8Array::from(&util[..]), &js_sys::Uint8Array::from(&aut[..])).map_err(err)?;
-            let v = wasm_bindgen_futures::JsFuture::from(js_sys::Promise::resolve(&p)).await.map_err(err)?;
-            Ok::<_, String>(js_sys::Uint8Array::new(&v).to_vec())
+    for m in Module::ALL {
+        if modules::get(m).is_some() {
+            continue;
         }
-        .await;
-        match r.map(crate::client_image::ClientImage::from_bytes) {
-            Ok(Some(img)) if img.is_frontiers() => {
-                log(&format!("CLIENT's image in {:.1} s (unpacked off the disc, or the page's copy from before): the start menu is in", t.elapsed().as_secs_f64()));
-                crate::client_image::arrive(img);
+        let aut = match disc.read(&format!("{}.AUT", m.name())).await {
+            Ok(a) => a,
+            Err(e) => {
+                log(&format!("no {}: {e}", m.gives()));
+                continue;
             }
-            Ok(Some(_)) => log("no start menu: this disc's CLIENT is not the Frontiers one"),
-            Ok(None) => log("no start menu: what came back is not an SNR1 module"),
-            Err(e) => log(&format!("no start menu: {e}")),
-        }
-    });
+        };
+        let util = util.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let t = web_time::Instant::now();
+            let r = async {
+                let w = web_sys::window().ok_or("no window")?;
+                let f = js_sys::Reflect::get(&w, &"eqoaUnpack".into()).ok().and_then(|f| f.dyn_into::<js_sys::Function>().ok()).ok_or("the page has no eqoaUnpack")?;
+                let p = f.call3(&JsValue::NULL, &m.name().into(), &js_sys::Uint8Array::from(&util[..]), &js_sys::Uint8Array::from(&aut[..])).map_err(err)?;
+                let v = wasm_bindgen_futures::JsFuture::from(js_sys::Promise::resolve(&p)).await.map_err(err)?;
+                let image = js_sys::Uint8Array::new(&v).to_vec();
+                modules::check(m, &image).map_err(String::from)?;
+                Ok::<_, String>(image)
+            }
+            .await;
+            match r {
+                Ok(image) => {
+                    log(&format!("{} in {:.1} s (unpacked off the disc, or the page's copy from before): {} is in", m.name(), t.elapsed().as_secs_f64(), m.gives()));
+                    modules::put(m, image);
+                }
+                Err(e) => log(&format!("no {}: {} {e}", m.gives(), m.name())),
+            }
+        });
+    }
 }
 
 /// A thrown value as text.
@@ -441,7 +455,7 @@ pub async fn play(file: web_sys::File, user: String, password: String, opts: JsV
         status("reading the disc");
         let mut disc = WebDisc::open(file).await?;
         crate::stream::set_source_factory(disc.zone_sources());
-        unpack_client(&disc).await;
+        unpack_modules(&disc).await;
         // What every world needs, before the session starts its clock.
         let mut common = Vec::new();
         for name in ["CHAR.ESF", "ITEM.ESF", "ARIAL.CSF", "UI.CSF", "ARIALUI.CSF", "ITEMICON.ESF", "SPELLFX.CSF", "FX.CSF", "ADDART.CSF"] {
@@ -454,7 +468,7 @@ pub async fn play(file: web_sys::File, user: String, password: String, opts: JsV
             shared.push((*name, disc.container(name).await?));
         }
         let words = disc.read("WORDS.TXT").await.ok().and_then(|b| vi::strtab::StringTable::parse(&b));
-        // The HUD's texture names (the atlas is built in).
+        // The HUD's texture names (its atlas is SUPPORT's, `unpack_modules`).
         let textures = disc.read("TEXTURES.TXT").await.ok().and_then(|b| vi::strtab::StringTable::parse(&b));
         status(&format!("logging in as {user}"));
         let l = relay::login(&relay, server, auth_port, &user, &password).await?;
@@ -492,7 +506,7 @@ pub async fn play(file: web_sys::File, user: String, password: String, opts: JsV
         let src = viewer::Source::Walk { file: main, index, character, spawn: Some((x, z, player.hpr[0])) };
         let mut play = play::Play::new(s, player, dump);
         play.words = words;
-        play.ui_data = textures.map(|t| (vi::ui::atlas(), t));
+        play.ui_textures = textures;
         let pending = gfx(canvas()?).await?;
         status("in the world");
         call_page("eqoaInWorld", &JsValue::NULL);

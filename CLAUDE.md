@@ -23,17 +23,18 @@ The Rust client. README.md is the plan and the crate table; keep it current.
   VISoundDevice TUs in the EE layout above it (op 910). `crates/snd/tests/oracle_snd{,dev}.rs`
   compare sample for sample and packet for packet. Live audio tests: `EQOA_AUDIO=0` (the driver
   runs on the wall clock, silent), or `eqoa listen` to a WAV; the user's speakers are real.
-- `run/support.bin` (untracked) is the player's decrypted SUPPORT image; the UI sounds' volumes are read
-  from it at run time (eqoa-port's gendata does the same). Never commit it or anything read from it, with
-  ONE exception the user chose (2026-10-20, "do what the go client does for now"): the HUD's atlas table
-  is built in (`vi/src/ui_atlas.in`, the Go client's public `internal/ui/table.go` in the decomp's nine
-  fields), so the HUD needs only the disc, in a page too; `vi/tests/atlas.rs` holds it to the image.
-  `run/client.bin` is CLIENT's (a link to `claude-eqoa-iso/decrypted_modules/CLIENT_decompressed_SNR1.bin`):
-  the menus and gWorldInfo, its pointers resolved through the SNR1 relocations (`eqoa/src/client_image.rs`).
-  In a page CLIENT comes off the disc: `dnas` (the disc's own DNAS library, interpreted) in a worker
-  (`web/unpack.js`), kept in the origin's OPFS. `dnas` is held to the modules the game itself unpacked
-  (`tests/discs.rs`: `run/`, and `$EQOA_BUILDS`, default `../decomp-builds`) and builds at `opt-level = 3`
-  in dev too (~300M interpreted instructions a module).
+- CLIENT and SUPPORT (the start menu, gWorldInfo, the race cameras; the HUD's atlas, the UI sounds'
+  volumes) are read at run time out of images of those modules (`eqoa/src/modules.rs`): the player's
+  decrypted ones when given (`run/client.bin`, `run/support.bin`, untracked; here links into
+  `claude-eqoa-iso/decrypted_modules/`), else unpacked off the disc by `dnas` (natively on threads,
+  kept in `~/.cache/eqoa-rs/dnas` or `$EQOA_CACHE`; in a page in workers, `web/unpack.js`, kept in
+  OPFS). An image counts only when it is the Frontiers build's (`modules::check`). Never commit them
+  or anything read from them: the HUD's atlas was built in for a day (2026-10-20, the user's "for
+  now") and is SUPPORT's again (`vi::ui::read_atlas`). CLIENT's pointers resolve through the SNR1
+  relocations (`eqoa/src/client_image.rs`). `dnas` is held to the modules the game itself unpacked
+  (`tests/discs.rs`: `run/`, and `$EQOA_BUILDS`, default `../decomp-builds`) and builds at
+  `opt-level = 3` in dev too (~300M interpreted instructions a module); tests that need SUPPORT take
+  `run/support.bin`, else unpack it off the disc (`vi/tests/common`).
 - The `vi` structs are `#[repr(C)]` in the EE layout because the oracle compares raw bytes; keep it that way while ports are being proven. Later (not urgent): native runtime types beside them, converted at the edges, the layout types kept for oracle tests.
 - `ee::libm` is held to `tools/vimath-corpus` (Go, needs `../go-eqoa-vi`): regenerate the corpus with
   `go run . > ../../crates/ee/tests/libm_corpus.bin` (Go build: `TMPDIR`/`GOTMPDIR` under `~/.cache`).

@@ -15,8 +15,8 @@
 //! planted bug must disagree.
 //!
 //! The atlas is SUPPORT's data: the decomp's side has it from libsupport
-//! (gendata, out of the decrypted image), this side is the built-in table
-//! (`vi::ui::atlas`), so the two are compared through every blitter too.
+//! (gendata, out of the decrypted image), this side reads it with
+//! `read_atlas` (`run/support.bin`, else the disc's own unpacked by `dnas`).
 //! Needs the disc (TEXTURES.TXT, WORDS.TXT, ARIALUI.CSF) and the oracle;
 //! SKIPs without them.
 #![allow(clippy::too_many_arguments)]
@@ -481,7 +481,10 @@ fn the_ui_layer_records_what_the_decomp_records() {
     let r = o.call(720, &b);
     assert_eq!(i32::from_le_bytes(r[0..4].try_into().unwrap()), 0, "oracle init");
 
-    let atlas = vi::ui::atlas();
+    let Some(atlas) = support_image().and_then(|i| vi::ui::read_atlas(&i)) else {
+        eprintln!("SKIP: needs SUPPORT's atlas (run/support.bin, or the disc)");
+        return;
+    };
     let side = || Side {
         vui: Vui::new(StringTable::parse(&words).unwrap(), StringTable::parse(&textures).unwrap(), atlas.clone()),
         win: Default::default(),

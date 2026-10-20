@@ -2,8 +2,8 @@
 # The browser client: web/dist/ gets the page, eqoa.js and eqoa_bg.wasm
 # (wasm-bindgen 0.2.129, the version Cargo.lock pins: `cargo install
 # wasm-bindgen-cli --version 0.2.129`). wasm-opt is used when it is on the
-# PATH or in ~/emsdk. No game data is in dist/ but the HUD's atlas table
-# (built in, see the README): the player picks their own disc image in the page.
+# PATH or in ~/emsdk. No game data is in dist/: the player picks their own disc
+# image in the page.
 set -e
 cd "$(dirname "$0")/.."
 export TMPDIR="${TMPDIR:-$HOME/.cache/rust-tmp}"

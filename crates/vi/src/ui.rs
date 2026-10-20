@@ -10,13 +10,9 @@
 //! An atlas entry names a ROW of TEXTURES.TXT; the row's name, as
 //! `P:\studio\eqps2\Game_Assets\UI\<name>.tga`, hashes to the DictID of a
 //! surface in UI.CSF, and the entry's rectangle is cut out of it. The table
-//! itself is SUPPORT's data (only `extern` in the decomp). It is built in
-//! (`atlas`), as the Go client builds it in, so the HUD needs nothing but
-//! the disc (a page has no decrypted SUPPORT to read it from): the Go
-//! client's table (`go-eqoa-client-v1/internal/ui/table.go`) in the decomp's
-//! nine fields, `x00` the entry's own index, mode 0 and alpha 1 for every
-//! entry. `tests/atlas.rs` holds it to a decrypted SUPPORT image
-//! (`read_atlas`) field for field.
+//! itself is SUPPORT's data (only `extern` in the decomp), read out of the
+//! player's SUPPORT image (`read_atlas`): their decrypted image, or the
+//! disc's own unpacked by crate `dnas` (the client's `modules`).
 // The methods keep the decomp's parameter lists.
 #![allow(clippy::too_many_arguments)]
 
@@ -42,38 +38,29 @@ pub struct UiTexEntry {
     pub flags: u32,
 }
 
-const fn e(x00: i32, row: i32, uv0: [i32; 2], uv1: [i32; 2], mode: i32, alpha: f32, flags: u32) -> UiTexEntry {
-    UiTexEntry { x00, row, uv0, uv1, mode, alpha, flags }
-}
-
-static ATLAS: [UiTexEntry; ATLAS_LEN] = include!("ui_atlas.in");
-
-/// The atlas, built in.
-pub fn atlas() -> Vec<UiTexEntry> {
-    ATLAS.to_vec()
-}
-
-/// The atlas out of a decrypted SUPPORT image.
+/// The atlas out of a decrypted SUPPORT image (un-relocated, as
+/// `VILauncher::UnpackAndVerify` leaves it). `None` for an image that is not
+/// the Frontiers build's: there every entry's first field is its own index,
+/// which nothing else at that address is.
 pub fn read_atlas(image: &[u8]) -> Option<Vec<UiTexEntry>> {
     let base = ATLAS_VA - IMAGE_BASE;
     let bytes = image.get(base..base + ATLAS_LEN * 36)?;
     let w = |o: usize| i32::from_le_bytes(bytes[o..o + 4].try_into().unwrap());
-    Some(
-        (0..ATLAS_LEN)
-            .map(|i| {
-                let o = i * 36;
-                UiTexEntry {
-                    x00: w(o),
-                    row: w(o + 4),
-                    uv0: [w(o + 8), w(o + 12)],
-                    uv1: [w(o + 16), w(o + 20)],
-                    mode: w(o + 24),
-                    alpha: f32::from_bits(w(o + 28) as u32),
-                    flags: w(o + 32) as u32,
-                }
-            })
-            .collect(),
-    )
+    let atlas: Vec<UiTexEntry> = (0..ATLAS_LEN)
+        .map(|i| {
+            let o = i * 36;
+            UiTexEntry {
+                x00: w(o),
+                row: w(o + 4),
+                uv0: [w(o + 8), w(o + 12)],
+                uv1: [w(o + 16), w(o + 20)],
+                mode: w(o + 24),
+                alpha: f32::from_bits(w(o + 28) as u32),
+                flags: w(o + 32) as u32,
+            }
+        })
+        .collect();
+    atlas.iter().enumerate().all(|(i, e)| e.x00 == i as i32).then_some(atlas)
 }
 
 /// `VIHashResourceID_Icon`.

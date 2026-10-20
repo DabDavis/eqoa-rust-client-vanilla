@@ -53,6 +53,7 @@ mod cs;
 mod faction;
 mod loot;
 mod merchant;
+mod modules;
 mod quantity;
 mod questlog;
 mod startmenu;
@@ -130,6 +131,8 @@ fn listen(file: &str, x: f32, z: f32, secs: f32, out: &str, hour: f32, walk: boo
     let mut walker = walker::Walker::new(world, x, z, 0.0);
     let human = lib.lookup(viewer::HUMAN).ok_or("no human in CHAR.ESF")?;
     walker.set_character(&lib, human);
+    // the UI sounds' volumes are SUPPORT's: waited for here
+    modules::load_now(modules::Module::Support, std::path::Path::new(&disc_path(None)));
     let mut sound = sound::Sound::offline(std::path::Path::new(&disc_path(None))).ok_or("no sound device")?;
     // the weather (`EQOA_WEATHER`): its rain and thunder, and its dimming of the track
     let mut weather = weather::Weather::new(&mut lib, 0);
@@ -270,6 +273,9 @@ fn run(args: &[String]) -> Result<()> {
             let host = args.get(1).ok_or("usage: eqoa play <host> <user> (password in EQOA_PASSWORD)")?;
             let user = args.get(2).ok_or("usage: eqoa play <host> <user>")?;
             let pass = std::env::var("EQOA_PASSWORD").map_err(|_| "set EQOA_PASSWORD")?;
+            // CLIENT and SUPPORT (the start menu, the HUD): the player's
+            // images, else off the disc, on threads of their own meanwhile.
+            modules::load(std::path::Path::new(&disc_path(None)));
             let (session, player, dump) = login(host, user, &pass)?;
             // The world the dump names: its file, by the path's last part.
             let file = player.world_path.rsplit(['\\', '/']).next().unwrap_or("tunaria.esf").to_uppercase();
@@ -302,18 +308,11 @@ fn run(args: &[String]) -> Result<()> {
             let mut play = play::Play::new(session, player, dump);
             // The game's words, for the lines the client writes itself.
             play.words = disc(None)?.read("WORDS.TXT").ok().and_then(|b| vi::strtab::StringTable::parse(&b));
-            // The HUD: the built-in atlas, and the texture names off the disc.
-            match disc(None)?.read("TEXTURES.TXT").ok().and_then(|b| vi::strtab::StringTable::parse(&b)) {
-                Some(t) => play.ui_data = Some((vi::ui::atlas(), t)),
-                None => eprintln!("no HUD: TEXTURES.TXT is not on the disc"),
-            }
-            // The start menu's definitions are CLIENT's data: out of the
-            // decrypted image (EQOA_CLIENT, else run/client.bin).
-            let client = std::env::var("EQOA_CLIENT").unwrap_or_else(|_| "run/client.bin".into());
-            match client_image::ClientImage::open(std::path::Path::new(&client)) {
-                Some(img) if img.is_frontiers() => play.client_data(&img),
-                Some(_) => eprintln!("no start menu: {client} is not the Frontiers CLIENT"),
-                None => eprintln!("no start menu: it needs a decrypted CLIENT image at {client} (EQOA_CLIENT)"),
+            // The HUD's texture names off the disc; its atlas is SUPPORT's,
+            // and the start menu CLIENT's, taken up as they come (`modules`).
+            play.ui_textures = disc(None)?.read("TEXTURES.TXT").ok().and_then(|b| vi::strtab::StringTable::parse(&b));
+            if play.ui_textures.is_none() {
+                eprintln!("no HUD: TEXTURES.TXT is not on the disc");
             }
             let play = Some(play);
             if args[0] == "playshot" {

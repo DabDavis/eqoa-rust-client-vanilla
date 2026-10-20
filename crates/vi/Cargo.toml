@@ -11,3 +11,4 @@ esf.workspace = true
 
 [dev-dependencies]
 iso.workspace = true
+dnas.workspace = true

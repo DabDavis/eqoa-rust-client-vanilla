@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 iso.workspace = true
+dnas.workspace = true
 esf.workspace = true
 ee.workspace = true
 render.workspace = true
@@ -22,10 +23,9 @@ cpal = "0.16"
 
 # The browser build (`web/build.sh`): the page hands over the player's disc
 # image and the login; sockets go through a WebSocket relay; wgpu falls back
-# to WebGL2 where there is no WebGPU; CLIENT's image (the start menu) is
-# unpacked off the disc by `dnas`, in a worker.
+# to WebGL2 where there is no WebGPU; CLIENT and SUPPORT are unpacked off the
+# disc by `dnas` in the page's workers.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-dnas.workspace = true
 wasm-bindgen = "0.2.129"
 wasm-bindgen-futures = "0.4.79"
 js-sys = "0.3.106"

@@ -601,6 +601,8 @@ pub fn shot_with(
                     eprintln!("the server names the player's model {model:#010x}");
                     walker.set_character(lib, r);
                 }
+                // the HUD, once SUPPORT's atlas has come
+                p.attach_ui(&mut renderer, &device, &queue, render::TARGET_FORMAT, lib);
                 for (w, instant) in p.weather.drain(..) {
                     weather.set_weather(w, instant);
                 }
@@ -1656,6 +1658,8 @@ impl ApplicationHandler for App {
                                 wx.set_weather(x, instant);
                             }
                         }
+                        // the HUD, once SUPPORT's atlas has come
+                        p.attach_ui(&mut g.renderer, &g.device, &g.queue, g.config.format, lib);
                     }
                     if let Some(s) = sound.as_mut() {
                         let ids = w.sprite.as_ref().map(|cs| cs.sounds()).unwrap_or_default();

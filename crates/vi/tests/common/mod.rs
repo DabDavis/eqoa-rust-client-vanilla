@@ -1,5 +1,6 @@
 //! The oracle harness, shared by the oracle tests: eqoa-port's `build/oracle`
-//! over a pipe, byte views of the repr(C) structs, and a seeded RNG.
+//! over a pipe, byte views of the repr(C) structs, a seeded RNG, and the
+//! player's SUPPORT image.
 #![allow(dead_code)]
 
 use std::io::{Read, Write};
@@ -131,3 +132,15 @@ impl Rng {
     }
 }
 
+/// SUPPORT's decrypted image: `run/support.bin`, else unpacked off the disc
+/// (`run/eqoa.iso`, or `$EQOA_ISO`) by its own DNAS library (`dnas`, ~6 s),
+/// else `None`.
+pub fn support_image() -> Option<Vec<u8>> {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    if let Ok(b) = std::fs::read(root.join("run/support.bin")) {
+        return Some(b);
+    }
+    let iso = std::env::var_os("EQOA_ISO").map(std::path::PathBuf::from).unwrap_or_else(|| root.join("run/eqoa.iso"));
+    let mut disc = iso::Iso::open(iso).ok()?;
+    dnas::unpack(&disc.read("UTIL.REL").ok()?, &disc.read("SUPPORT.AUT").ok()?).ok()
+}

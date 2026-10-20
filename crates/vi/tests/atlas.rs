@@ -1,39 +1,34 @@
-//! The built-in atlas (`vi::ui::atlas`, the Go client's table in the
-//! decomp's nine fields) against SUPPORT's own, read out of a decrypted
-//! image at run/support.bin: every entry, every field, the alpha by its
-//! bits. SKIPs without the image. A table with one field moved, an alpha a
-//! bit off or two entries swapped must disagree.
+//! `read_atlas` on the player's SUPPORT image (`run/support.bin`, else the
+//! disc's own, unpacked by `dnas`): `GetUITexture`'s 252 entries, each
+//! numbering itself, mode 0 and alpha 1, every row a row of TEXTURES.TXT and
+//! every rectangle (an origin and a size) on the 512-texel art. SKIPs
+//! without an image. The check that keeps another build's data out must
+//! refuse an image whose table is off by one entry, one whose entry 200 is
+//! not its own, and a short one.
 
-use vi::ui::UiTexEntry;
-
-/// The entries that differ, by index.
-fn differing(a: &[UiTexEntry], b: &[UiTexEntry]) -> Vec<usize> {
-    let key = |e: &UiTexEntry| (e.x00, e.row, e.uv0, e.uv1, e.mode, e.alpha.to_bits(), e.flags);
-    let mut d: Vec<usize> = (0..a.len().min(b.len())).filter(|&i| key(&a[i]) != key(&b[i])).collect();
-    d.extend(a.len().min(b.len())..a.len().max(b.len()));
-    d
-}
+mod common;
 
 #[test]
-fn the_built_in_atlas_is_supports() {
-    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let Ok(image) = std::fs::read(root.join("run/support.bin")) else {
-        eprintln!("SKIP: needs a decrypted SUPPORT image at run/support.bin");
+fn supports_atlas_reads_whole() {
+    let Some(image) = common::support_image() else {
+        eprintln!("SKIP: needs a SUPPORT image (run/support.bin, or the disc at run/eqoa.iso)");
         return;
     };
-    let theirs = vi::ui::read_atlas(&image).expect("the atlas in the image");
-    let ours = vi::ui::atlas();
-    assert_eq!(ours.len(), 252);
-    assert_eq!(differing(&ours, &theirs), Vec::<usize>::new());
+    let atlas = vi::ui::read_atlas(&image).expect("the Frontiers atlas");
+    assert_eq!(atlas.len(), 252);
+    for (i, e) in atlas.iter().enumerate() {
+        assert_eq!((e.x00, e.mode, e.alpha), (i as i32, 0, 1.0), "entry {i}");
+        assert!((0..400).contains(&e.row), "entry {i}'s row {}", e.row);
+        assert!(e.uv0.iter().all(|c| (0..512).contains(c)) && e.uv1.iter().all(|&s| s >= 0), "entry {i}'s rectangle {:?} {:?}", e.uv0, e.uv1);
+    }
 
-    let mut moved = ours.clone();
-    moved[136].uv1[0] += 1;
-    assert_eq!(differing(&moved, &theirs), vec![136]);
-    let mut dim = ours.clone();
-    dim[7].alpha = f32::from_bits(dim[7].alpha.to_bits() - 1);
-    assert_eq!(differing(&dim, &theirs), vec![7]);
-    let mut swapped = ours.clone();
-    swapped.swap(115, 117);
-    assert_eq!(differing(&swapped, &theirs), vec![115, 117]);
-    assert_eq!(differing(&ours[..251], &theirs), vec![251]);
+    // the table moved by one entry (36 bytes), as another build would have it
+    let base = 0x004E_DAF8 - 0x003E_3D00;
+    let mut moved = image.clone();
+    moved.copy_within(base + 36..base + 252 * 36, base);
+    assert!(vi::ui::read_atlas(&moved).is_none(), "a table off by one entry");
+    let mut one = image.clone();
+    one[base + 200 * 36] ^= 1;
+    assert!(vi::ui::read_atlas(&one).is_none(), "entry 200 not numbered 200");
+    assert!(vi::ui::read_atlas(&image[..base + 251 * 36]).is_none(), "an image that ends inside the table");
 }

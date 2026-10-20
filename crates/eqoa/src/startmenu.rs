@@ -717,7 +717,7 @@ mod tests {
     #[test]
     fn the_start_tables_read_out_of_client() {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/client.bin");
-        let Some(img) = crate::client_image::ClientImage::open(&path) else {
+        let Some(img) = std::fs::read(&path).ok().and_then(crate::client_image::ClientImage::from_bytes) else {
             eprintln!("SKIP: no run/client.bin");
             return;
         };

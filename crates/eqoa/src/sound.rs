@@ -118,9 +118,11 @@ pub struct Sound {
     chars: HashMap<u32, (i32, u32)>,
     /// the game's `rand()`
     rand: vi::csprite::Rand,
-    /// `VIUI::m_sounds` (UISOUND.TXT) and `sUISounds`' volumes, when the
-    /// player's SUPPORT image is there to read them from
+    /// `VIUI::m_sounds` (UISOUND.TXT) and `sUISounds`' volumes, once
+    /// SUPPORT's image is there to read them from (`take_support`)
     ui: Option<(vi::strtab::StringTable, [f32; 17])>,
+    /// UISOUND.TXT until then
+    ui_names: Option<vi::strtab::StringTable>,
     /// `VIBattleMusic`'s state and track
     battle: (i32, i32),
     /// `VIGameOptions::m_language`, which is the battle-music option: 0 none,
@@ -196,6 +198,7 @@ impl Sound {
             chars: HashMap::new(),
             rand: vi::csprite::Rand(1),
             ui: None,
+            ui_names: None,
             battle: (0, -1),
             battle_option: 9,
             preview: None,
@@ -249,9 +252,8 @@ impl Sound {
     /// What is resident from the start: UI.CSF's sounds (the UI's),
     /// FX.CSF's (`respawn`, `death`, `amb_underwater`) and SKY.CSF's (the
     /// rain and the thunder, loaded with the scene's shared files), the UI's
-    /// sound names,
-    /// and their volumes out of the SUPPORT image (`EQOA_SUPPORT`, else
-    /// `run/support.bin`).
+    /// sound names, and their volumes once SUPPORT's image is there
+    /// (`modules`).
     fn load_resident(&mut self, iso_path: &std::path::Path) {
         let Ok(mut disc) = iso::Iso::open(iso_path) else { return };
         for f in ["DATA2/UI.CSF", "DATA2/FX.CSF", "DATA2/SKY.CSF"] {
@@ -268,17 +270,24 @@ impl Sound {
         self.dev.flush(&mut self.link);
         // VIScene::Init: the underwater ambience by name
         self.track.p20 = self.dict.get(&vi::hash::hash_resource_id("amb_underwater")).copied().unwrap_or(-1);
-        let names = disc.read("DATA/UISOUND.TXT").ok().and_then(|b| vi::strtab::StringTable::parse(&b));
-        let support = std::env::var("EQOA_SUPPORT").unwrap_or_else(|_| "run/support.bin".into());
-        let volumes = std::fs::read(&support).ok().and_then(|img| {
-            let o = UI_SOUNDS_VA - IMAGE_BASE;
-            let b = img.get(o..o + 17 * 8)?;
-            Some(std::array::from_fn(|k| f32::from_le_bytes(b[k * 8 + 4..k * 8 + 8].try_into().unwrap())))
-        });
-        match (names, volumes) {
-            (Some(n), Some(v)) => self.ui = Some((n, v)),
-            _ => eprintln!("sound: no UI sounds (UISOUND.TXT and the SUPPORT image at {support} are both needed)"),
+        self.ui_names = disc.read("DATA/UISOUND.TXT").ok().and_then(|b| vi::strtab::StringTable::parse(&b));
+        if self.ui_names.is_none() {
+            eprintln!("sound: no UI sounds (UISOUND.TXT is not on the disc)");
         }
+        self.take_support();
+    }
+
+    /// `sUISounds`' volumes, out of SUPPORT's image once it has come
+    /// (`modules`): the UI sounds play from then on.
+    pub fn take_support(&mut self) {
+        if self.ui.is_some() || self.ui_names.is_none() {
+            return;
+        }
+        let Some(img) = crate::modules::get(crate::modules::Module::Support) else { return };
+        let o = UI_SOUNDS_VA - IMAGE_BASE;
+        let Some(b) = img.get(o..o + 17 * 8) else { return };
+        let volumes = std::array::from_fn(|k| f32::from_le_bytes(b[k * 8 + 4..k * 8 + 8].try_into().unwrap()));
+        self.ui = self.ui_names.take().map(|n| (n, volumes));
     }
 
     /// The device's sound for a resident wave's name, or -1 (what
