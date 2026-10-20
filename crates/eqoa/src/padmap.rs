@@ -36,10 +36,15 @@
 //! page's `?padxy=swap` or `?padxy=keep` says otherwise for a pad the rule gets
 //! wrong.
 //!
-//! A pair of axes counts as the triggers only once both have read -1
-//! together, as triggers at rest do: a stick's axis there (a device that puts
-//! its right stick at axes 4 and 5) rests at 0, and read as a trigger it would
-//! hold L2 down for good. An axis a browser gives as no number reads as 0.
+//! Firefox reads no axis's value until the axis sends an event, so every
+//! axis reads 0 until it first moves, a trigger at rest included (seen on
+//! Firefox 140 with a clone of the tester's pad on uinput). On a pad xpad
+//! drives axes 4 and 5 are its triggers, and each counts once it has moved
+//! from what was first seen. On any other pair counts only once both have
+//! read -1 together, as triggers at rest do: a stick's axis there (a generic
+//! HID pad puts its right stick on ABS_Z and ABS_RZ, so at axes 4 and 5) rests
+//! at 0, and read as a trigger it would hold L2 down for good. An axis a
+//! browser gives as no number reads as 0.
 
 use crate::input::{Report, bit};
 
@@ -149,6 +154,9 @@ fn trigger_axis(v: f32) -> bool {
 pub struct PadMap {
     /// its trigger pair has read -1 together (the module's notes)
     pub triggers: bool,
+    /// the axes as first seen, and which have moved from it since
+    first: Option<Vec<f32>>,
+    moved: Vec<bool>,
 }
 
 impl PadMap {
@@ -167,6 +175,14 @@ impl PadMap {
         let ax = |i: usize| pad.axes.get(i).copied().filter(|v| v.is_finite()).unwrap_or(0.0);
         let pressed = |i: usize| pad.buttons.get(i).is_some_and(|b| b.0);
         let value = |i: usize| pad.buttons.get(i).map_or(0.0, |b| b.1);
+        let now: Vec<f32> = (0..pad.axes.len()).map(ax).collect();
+        let first = self.first.get_or_insert_with(|| now.clone());
+        self.moved.resize(now.len(), false);
+        for (i, v) in now.iter().enumerate() {
+            if first.get(i) != Some(v) {
+                self.moved[i] = true;
+            }
+        }
         let pair = Self::trigger_pair(pad, layout);
         if let Some((l, r)) = pair
             && ax(l) <= -0.9
@@ -174,6 +190,10 @@ impl PadMap {
         {
             self.triggers = true;
         }
+        // a trigger's axis that counts: xpad's once it has moved, any
+        // other once the pair has rested at -1 together
+        let xpad = layout == Layout::Evdev && is_xpad(&pad.id);
+        let live = |axis: usize| self.triggers || (xpad && self.moved.get(axis).copied().unwrap_or(false));
         let (square, triangle) = if swaps_xy(pad, b) { (bit::TRIANGLE, bit::SQUARE) } else { (bit::SQUARE, bit::TRIANGLE) };
         let mut r = Report::default();
         let mut set = |on: bool, k: u16| {
@@ -202,7 +222,7 @@ impl PadMap {
             r.sticks = [ax(3), ax(4), ax(0), ax(1)];
             return r;
         }
-        let trig = |i: usize, axis: usize| value(i) > 1.0 / 3.0 || (layout == Layout::Evdev && self.triggers && trigger_axis(ax(axis)));
+        let trig = |i: usize, axis: usize| value(i) > 1.0 / 3.0 || (layout == Layout::Evdev && pair.is_some() && live(axis) && trigger_axis(ax(axis)));
         set(trig(6, 4), bit::L2);
         set(trig(7, 5), bit::R2);
         set(pressed(8), bit::SELECT);
@@ -230,7 +250,8 @@ impl PadMap {
             how.push_str(", X and Y swapped");
         }
         if let Some((l, r)) = Self::trigger_pair(pad, layout) {
-            how.push_str(&format!(", triggers at axes {l} and {r}{}", if self.triggers { "" } else { " (not yet at rest)" }));
+            let known = self.triggers || (layout == Layout::Evdev && is_xpad(&pad.id));
+            how.push_str(&format!(", triggers at axes {l} and {r}{}", if known { "" } else { " (not yet at rest)" }));
         }
         how
     }
@@ -330,12 +351,13 @@ mod tests {
         assert_eq!(m.read(&powera(), ff).sticks, [-0.031, -0.123, 0.023, -0.063]);
     }
 
-    /// Axes 4 and 5 that never read -1 together are not triggers: a pad whose
-    /// right stick is there rests at 0, which as a trigger would be L2 held.
+    /// On a pad xpad does not drive, axes 4 and 5 that never read -1 together
+    /// are not triggers: a generic HID pad's right stick is there (ABS_Z and
+    /// ABS_RZ), resting at 0, which as a trigger would be L2 held.
     #[test]
     fn axes_that_never_rested_at_minus_one_are_no_triggers() {
         let ff = Browser::new(FIREFOX_LINUX, None);
-        let mut p = pad("20d6-2005-Generic X-Box pad", "standard", 17, &[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+        let mut p = pad("0810-0001-USB Gamepad", "standard", 17, &[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
         let mut m = PadMap::default();
         assert_eq!(m.read(&p, ff).buttons, 0);
         // one of them at -1 is not enough (a stick pushed one way)
@@ -349,6 +371,35 @@ mod tests {
         m.read(&p, ff);
         p.axes[4] = 0.5;
         assert_eq!(m.read(&p, ff).buttons, bit::L2);
+    }
+
+    /// Firefox gives every axis as 0 until it sends an event (it reads no
+    /// initial values), a trigger at rest included: on Firefox 140 the clone
+    /// of the tester's pad read [0, 0, 0, 0, 0, 0] until each axis moved. On
+    /// xpad's pad a trigger counts as soon as it moves from that, its first
+    /// press included; at 0 it is no press (the control: the naive rule would
+    /// hold L2 and R2 from the start). The same steps on a pad xpad does not
+    /// drive (the other control) wait for the pair to rest at -1 together.
+    #[test]
+    fn firefox_gives_axes_as_zero_until_they_move_and_xpads_triggers_count_at_once() {
+        let ff = Browser::new(FIREFOX_LINUX, None);
+        let steps: [([f32; 2], u16); 5] = [([0.0, 0.0], 0), ([0.369, 0.0], bit::L2), ([-1.0, 0.0], 0), ([-1.0, 0.369], bit::R2), ([-1.0, -1.0], 0)];
+        let mut p = pad("20d6-2005-Generic X-Box pad", "standard", 17, &[0.0; 6]);
+        let mut m = PadMap::default();
+        for (axes, want) in steps {
+            p.axes[4] = axes[0];
+            p.axes[5] = axes[1];
+            assert_eq!(m.read(&p, ff).buttons, want, "xpad, LT {} RT {}", axes[0], axes[1]);
+        }
+        let mut q = pad("0810-0001-USB Gamepad", "standard", 17, &[0.0; 6]);
+        let mut n = PadMap::default();
+        for (axes, _) in steps {
+            q.axes[4] = axes[0];
+            q.axes[5] = axes[1];
+            assert_eq!(n.read(&q, ff).buttons, 0, "a generic pad, LT {} RT {}", axes[0], axes[1]);
+        }
+        q.axes[4] = 0.5;
+        assert_eq!(n.read(&q, ff).buttons, bit::L2, "once the pair has rested at -1");
     }
 
     /// Firefox on Linux, a DualSense: hid-playstation sends △ as BTN_NORTH and
