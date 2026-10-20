@@ -12,6 +12,7 @@
 use crate::dialog::{BoxAnswer, Key as BoxKey, MBox};
 use crate::editbox::{EditBox, EditUp};
 use crate::infotext::Info;
+use crate::pointer::{Hits, MOVED, key, rows_rect};
 use crate::wndlist::WndList;
 use net::dump::{AuctionItem, Bank, Bid, ItemList, NetItem};
 use net::stream::{Reader, Writer};
@@ -400,7 +401,9 @@ enum SellChild {
 /// `VIWndAuction`: the bank's items (80 rows); Enter on one that can be sold
 /// opens the form (the item, minimum bid, buyout, duration, Ok and the fee),
 /// whose numbers are typed into the editor and whose Ok is confirmed in a
-/// Yes/No box before the sale is sent.
+/// Yes/No box before the sale is sent. A pointer (`pointer`) takes the
+/// list's rows, then the form's (a click on another row selects it, on the
+/// selected one edits it or asks), then the editor's and the box's.
 pub struct SellWnd {
     bank: WndList,
     edit: EditBox,
@@ -416,13 +419,15 @@ pub struct SellWnd {
     pub duration: i32,
     window: Window,
     sell: Window,
+    /// the form's rows where they were drawn, by field, for a pointer
+    hits: Hits,
 }
 
 impl Default for SellWnd {
     fn default() -> Self {
         let mut bank = WndList::with_rows([16, 37], 0, 80);
         bank.set_x64(true);
-        SellWnd { bank, edit: EditBox::default(), mbox: MBox::default(), child: SellChild::Form, selling: false, field: 0, price: 0, buyout: 0, duration: 0, window: Window::default(), sell: Window::default() }
+        SellWnd { bank, edit: EditBox::default(), mbox: MBox::default(), child: SellChild::Form, selling: false, field: 0, price: 0, buyout: 0, duration: 0, window: Window::default(), sell: Window::default(), hits: Hits::default() }
     }
 }
 
@@ -445,6 +450,30 @@ impl SellWnd {
     /// The editor is up (it takes the keyboard's characters).
     pub fn typing(&self) -> bool {
         self.child == SellChild::Edit
+    }
+
+    /// A pointer at frame point `p`, to the child with the keys (the
+    /// editor, the box); else, the form down, a row of the bank's list
+    /// selected or its selection taken (Enter: the form); the form up, one
+    /// of its rows selected (not the item's, which the keys skip) or the
+    /// selected one edited or confirmed (Enter). The keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        match self.child {
+            SellChild::Edit => return self.edit.point(p).flatten().into_iter().collect(),
+            SellChild::MBox => return self.mbox.point(p).then_some(key::CROSS).into_iter().collect(),
+            SellChild::Form => {}
+        }
+        if !self.selling {
+            return self.bank.row_at(p).map(|row| self.bank.pick(row)).into_iter().collect();
+        }
+        match self.hits.at(p) {
+            Some(f) if f == self.field => vec![key::CROSS],
+            Some(f) if f >= 1 => {
+                self.field = f;
+                vec![MOVED]
+            }
+            _ => Vec::new(),
+        }
     }
 
     /// `Select`: the form for the selected bank item, if it can be sold.
@@ -655,6 +684,7 @@ impl SellWnd {
     /// selected item's text and the bank's list; the form over them.
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, info: &Info, bank: &ItemList, icon: &dyn Fn(&NetItem) -> i32, now: i64, cues: &mut Vec<i32>) {
         self.fill(bank, icon);
+        self.hits.clear();
         let white = [1.0, 1.0, 1.0, 1.0];
         vui.blit_rect(r, 32, [-1, -1], [642, 332], 0, 1.0);
         let title = wide(vui.words.get(1721, vui.language));
@@ -708,6 +738,10 @@ impl SellWnd {
         Self::draw_row(s, vui, r, 4, Some(&w(1726)), cols[0], Some(&wide(&d.to_string())), cols[1], Some(&unit), cols[2], f == 3, true);
         let ok = wide(&format!("{}*", vui.words.get(218, vui.language)));
         Self::draw_row(s, vui, r, 5, Some(&ok), cols[0], None, cols[1], None, cols[2], f == 4, true);
+        // the rows 1..5 are the fields 0..4
+        for field in 0..5 {
+            self.hits.push(rows_rect(s, vui, r, cols[0], field + 1, s.size[0] - 30 - cols[0], 1), field);
+        }
         let fee = (self.price / 100).max(1);
         let line = wide(&format!("*{}: {} {}", vui.words.get(1788, vui.language), fee, vui.words.get(479, vui.language)));
         let width = s.size[0] - 30 - cols[0];
@@ -852,5 +886,51 @@ mod tests {
         q.data.clear();
         Query::default().write(&mut q);
         assert_eq!(q.data.len(), 1 + 4 + 4 + 4 + 4 + 1 + 1 + 1 + 5 + 1 + 1 + 1);
+    }
+
+    /// The bank's rows take a click, a second asks for the form; with the
+    /// form up its rows take them (not the item's, which the keys skip, nor
+    /// the list behind it), a second click editing the row.
+    #[test]
+    fn a_pointer_on_the_sell_form() {
+        use crate::pointer::testing::{NullRaster, mid, vui};
+        let (vui, mut r) = (vui(), NullRaster);
+        let mut bank = ItemList::default();
+        for v in [10, 20] {
+            let mut it = NetItem { quantity: 1, equip_slot: -1, quick_slot: -1, ..Default::default() };
+            it.item.rent = 1;
+            it.item.value = v;
+            bank.items.push(it);
+        }
+        let base = [0; 29];
+        let info = Info { words: &vui.words, inv: &bank, hp: [0; 4], base: &base, class: 0, level: 1, attack_words: &[] };
+        let (mut cues, mut out) = (Vec::new(), Vec::new());
+        let mut s = SellWnd::default();
+        s.focus(&vui, &r);
+        s.draw(&vui, &mut r, &info, &bank, &|_| 1, 0, &mut cues);
+        // the bank's list at (16, 37), rows 44 high (no atlas here)
+        let row = |i: i32| [16.0 + 57.0, 37.0 + 44.0 * i as f32 + 22.0];
+        assert_eq!(s.point(row(1)), vec![MOVED]);
+        assert_eq!(s.point(row(1)), vec![key::CROSS]);
+        assert!(s.point(row(2)).is_empty(), "two items");
+        s.key(&vui, &r, &bank, 134, true, 0, &mut cues, &mut out);
+        assert!(s.selling && s.field == 1);
+        s.draw(&vui, &mut r, &info, &bank, &|_| 1, 0, &mut cues);
+        let field = |s: &SellWnd, f: i32| mid(rows_rect(&s.sell, &vui, &r, 40, f + 1, s.sell.size[0] - 70, 1));
+        let p = field(&s, 3);
+        assert_eq!(s.point(p), vec![MOVED]);
+        assert_eq!(s.field, 3, "the duration");
+        assert_eq!(s.point(p), vec![key::CROSS]);
+        let p = field(&s, 0);
+        assert!(s.point(p).is_empty(), "the item's row");
+        assert!(s.point(row(0)).is_empty(), "the list behind the form");
+        assert_eq!(s.field, 3);
+        // Enter on the duration: the editor, which then takes the clicks
+        s.key(&vui, &r, &bank, 134, true, 0, &mut cues, &mut out);
+        assert!(s.typing());
+        let p = field(&s, 4);
+        let want: Vec<i32> = s.edit.point(p).flatten().into_iter().collect();
+        assert_eq!(s.point(p), want, "the editor's answer");
+        assert_eq!(s.field, 3, "Ok is behind the editor");
     }
 }

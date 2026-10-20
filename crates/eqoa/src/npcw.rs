@@ -41,11 +41,16 @@ impl Play {
         self.npcw.keys.push((key, down));
     }
 
-    /// A pointer at frame point `f` on the corpse, merchant or trade window (`pointer`): what is
-    /// under it selected, and the keys to press.
+    /// A pointer at frame point `f` on the corpse, merchant or trade window
+    /// (`pointer`), as its keys go: what is under it selected, and the keys
+    /// to press.
     pub fn npcw_point(&mut self, f: [f32; 2]) -> Vec<i32> {
-        let _ = f;
-        Vec::new()
+        match self.mode {
+            1 => self.npcw.loot.point(f),
+            10 => self.npcw.merchant.point(f),
+            15 | 16 => self.npcw.trade.point(f),
+            _ => Vec::new(),
+        }
     }
 
     /// The mode is one of these windows'.

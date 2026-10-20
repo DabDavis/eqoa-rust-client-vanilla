@@ -63,11 +63,15 @@ impl Play {
         self.bank.keys.push((key, down));
     }
 
-    /// A pointer at frame point `f` on the bank or the auction search (`pointer`): what is
-    /// under it selected, and the keys to press.
+    /// A pointer at frame point `f` on the bank (its pages and the auction's
+    /// sell form) or the auction search (`pointer`), as their keys go: what
+    /// is under it selected, and the keys to press.
     pub fn bank_point(&mut self, f: [f32; 2]) -> Vec<i32> {
-        let _ = f;
-        Vec::new()
+        match self.mode {
+            11 => self.bank.wnd.point(f),
+            39 => self.bank.search.point(f),
+            _ => Vec::new(),
+        }
     }
 
     /// The bank's opcodes; true when handled. 0x00D7 (`Msg00D7`) clears the

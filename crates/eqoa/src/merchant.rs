@@ -11,11 +11,16 @@
 //! the merchant's id, the sell and buy rates, the wares, the greeting. A
 //! request out (`m_p1B304`) holds Enter until 0x003B or 0x003C (with its
 //! sound) or 0x00D7 answers.
+//!
+//! A pointer (`pointer`) goes to the window with the focus: the menu's
+//! Buy, Sell and Leave at once, the list's rows (a second click buys or
+//! sells), the picker and the box.
 
 #![allow(clippy::too_many_arguments)]
 
 use crate::dialog::{BoxAnswer, Key as BoxKey, MBox};
 use crate::infotext::{self, Info};
+use crate::pointer::{Hits, key, rows_rect};
 use crate::quantity::{Quantity, QuantityUp};
 use crate::wndlist::WndList;
 use net::dump::{ItemList, NetItem};
@@ -100,6 +105,8 @@ struct MercMenu {
     rows: i32,
     window: Window,
     visible: bool,
+    /// Buy, Sell and Leave where they were drawn, for a pointer
+    hits: Hits,
 }
 
 impl MercMenu {
@@ -134,9 +141,11 @@ impl MercMenu {
         let w = self.window.size[0];
         let word = |id: i32| wide(vui.words.get(id, vui.language));
         self.window.text_box(vui, r, &self.text, 20, 0, w - 40, self.rows, white, 0);
+        self.hits.clear();
         for (k, id) in [63, 62, 161].into_iter().enumerate() {
             let k = k as i32;
             self.window.text_box(vui, r, &word(id), 40, self.rows + 1 + k, w - 60, 1, if self.sel == k { yellow } else { white }, 0);
+            self.hits.push(rows_rect(&self.window, vui, r, 40, self.rows + 1 + k, w - 60, 1), k);
         }
         let s = wide(&format!("|t{}", vui.words.get(161, vui.language)));
         self.window.text_box(vui, r, &s, 20, self.rows + 5, w - 40, 1, white, 0);
@@ -252,6 +261,25 @@ impl Merchant {
         self.list.x84 = true;
         self.window.init(vui, r, [403, 180], 490, 15, 1);
         self.window.open(true);
+    }
+
+    /// A pointer at frame point `p`, to the window with the focus: the
+    /// menu's Buy, Sell or Leave chosen at once; a row of the list selected,
+    /// or the selection bought or sold (Enter); the picker's and the box's.
+    /// The keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        match self.focus {
+            Focus::Menu => match self.menu.hits.at(p) {
+                Some(k) => {
+                    self.menu.sel = k;
+                    vec![key::CROSS]
+                }
+                None => Vec::new(),
+            },
+            Focus::List => self.list.row_at(p).map(|row| self.list.pick(row)).into_iter().collect(),
+            Focus::Quantity => self.quantity.point(p),
+            Focus::MBox => self.mbox.point(p).then_some(key::CROSS).into_iter().collect(),
+        }
     }
 
     /// The keys of whichever window has them.
@@ -587,5 +615,52 @@ mod tests {
         let s = read_shop(&w.data);
         assert_eq!((s.id, s.sell_rate, s.buy_rate, s.wares.items.len()), (Some(0x1234), 90, 110, 0));
         assert_eq!(String::from_utf16_lossy(&s.greeting), "Hello");
+    }
+
+    /// The menu's Sell is chosen at once by a click; then the list takes
+    /// clicks (a row selected, the selection sold), and while the picker is
+    /// up the list behind it takes none.
+    #[test]
+    fn a_pointer_through_the_merchant() {
+        use crate::pointer::testing::{NullRaster, mid, vui};
+        use crate::pointer::{MOVED, rows_rect};
+        let (vui, mut r) = (vui(), NullRaster);
+        let mut inv = ItemList::default();
+        for q in [1, 1, 5] {
+            let mut it = item(10, 0, 0);
+            it.quantity = q;
+            inv.items.push(it);
+        }
+        let shop = Shop { id: Some(7), sell_rate: 100, buy_rate: 100, wares: inv.clone(), greeting: wide("Hello"), pending: false };
+        let base = [0; 29];
+        let info = Info { words: &vui.words, inv: &inv, hp: [0; 4], base: &base, class: 0, level: 1, attack_words: &[] };
+        let (can_use, icon) = (|_: &NetItem| true, |_: &NetItem| 1);
+        let view = View { info: &info, shop: &shop, coin: 0, can_use: &can_use, inv_icon: &icon };
+        let (mut cues, mut out) = (Vec::new(), Vec::new());
+        let mut m = Merchant::default();
+        m.open(&vui, &mut r, &wide("Hello"));
+        m.draw(&vui, &mut r, &view, &mut cues, &mut out);
+        let w = m.menu.window.size[0];
+        let sell = mid(rows_rect(&m.menu.window, &vui, &r, 40, m.menu.rows + 2, w - 60, 1));
+        assert_eq!(m.point(sell), vec![key::CROSS]);
+        assert_eq!(m.menu.sel, 1, "Sell");
+        assert!(m.point([20.0, 20.0]).is_empty(), "off the menu");
+        m.key(&vui, &mut r, &view, 134, true, &mut cues, &mut out);
+        assert_eq!((m.mode, m.focus), (1, Focus::List));
+        m.draw(&vui, &mut r, &view, &mut cues, &mut out);
+        // the list at (12, 48), bare: rows 44 high
+        let row = |i: i32| [12.0 + 57.0, 48.0 + 44.0 * i as f32 + 22.0];
+        assert!(m.point(sell).is_empty(), "the menu is gone");
+        assert_eq!(m.point(row(2)), vec![MOVED]);
+        assert_eq!(m.list.sel, 2);
+        assert_eq!(m.point(row(2)), vec![key::CROSS]);
+        assert!(m.point(row(3)).is_empty(), "three items, three rows");
+        // Enter on the stack: the picker, which has the focus; the list's
+        // rows behind it take no pointer
+        m.key(&vui, &mut r, &view, 134, true, &mut cues, &mut out);
+        assert_eq!(m.focus, Focus::Quantity);
+        m.draw(&vui, &mut r, &view, &mut cues, &mut out);
+        assert!(m.point(row(0)).is_empty());
+        assert_eq!(m.list.sel, 2);
     }
 }

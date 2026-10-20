@@ -8,10 +8,17 @@
 //!
 //! As in the other windows, the window tree's messages come back up as
 //! values: `BankOut` is what `VIBankControl` and `VIWndGame` are asked.
+//!
+//! A pointer (`pointer`) goes to the page with the keys: the menus' rows at
+//! once; on the item page a row of the list in use selected or its
+//! selection moved, a row of the other list selected and that list taken
+//! up (left or right, as the d-pad does); the pickers and the auction's
+//! form as theirs.
 
 #![allow(clippy::too_many_arguments)]
 
 use crate::infotext::Info;
+use crate::pointer::{Hits, key, rows_rect};
 use crate::quantity::{Quantity, QuantityUp};
 use crate::trade::{Deposit, DepositUp};
 use crate::wndlist::WndList;
@@ -59,6 +66,8 @@ struct BankMenu {
     /// the bank offers the auction (`GetP78CC`)
     auction: bool,
     window: Window,
+    /// the rows where they were drawn, by cursor, for a pointer
+    hits: Hits,
 }
 
 /// `VIWndMoneyMenu`.
@@ -66,6 +75,8 @@ struct BankMenu {
 struct MoneyMenu {
     sel: i32,
     window: Window,
+    /// the rows where they were drawn, for a pointer
+    hits: Hits,
 }
 
 /// `VIWndBankItem`.
@@ -77,6 +88,8 @@ struct BankItem {
     from: i32,
     text: String,
     window: Window,
+    /// the two lists' frames (0 the inventory, 1 the bank), for a pointer
+    hits: Hits,
 }
 
 impl Default for BankItem {
@@ -86,7 +99,7 @@ impl Default for BankItem {
         let mut bank = WndList::with_rows([475, 37], 0, 40);
         inv.x84 = true;
         bank.x84 = true;
-        BankItem { inv, bank, qty: Quantity::default(), from: -1, text: String::new(), window: Window::default() }
+        BankItem { inv, bank, qty: Quantity::default(), from: -1, text: String::new(), window: Window::default(), hits: Hits::default() }
     }
 }
 
@@ -342,6 +355,47 @@ impl Bank {
         }
     }
 
+    /// A pointer at frame point `p`, to the page with the keys: a row of
+    /// the bank's menu or the money menu chosen at once; on the item page a
+    /// row of the active list selected, or its selection moved (Enter), and
+    /// on the other list its row selected and the list taken up (left or
+    /// right); the deposit form, the quantity picker and the auction's own.
+    /// The keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        match self.page {
+            Page::Menu => match self.menu.hits.at(p) {
+                Some(k) => {
+                    self.menu.cursor = k;
+                    vec![key::CROSS]
+                }
+                None => Vec::new(),
+            },
+            Page::MoneyMenu => match self.money.hits.at(p) {
+                Some(k) => {
+                    self.money.sel = k;
+                    vec![key::CROSS]
+                }
+                None => Vec::new(),
+            },
+            Page::Deposit => self.deposit.point(p),
+            Page::Items => {
+                let it = &mut self.item;
+                let Some(side) = it.hits.at(p) else { return Vec::new() };
+                let (list, other) = if side == 0 { (&mut it.inv, key::LEFT) } else { (&mut it.bank, key::RIGHT) };
+                let row = list.row_at(p);
+                if list.x64 {
+                    return row.map(|r| list.pick(r)).into_iter().collect();
+                }
+                if let Some(r) = row {
+                    list.pick(r);
+                }
+                vec![other]
+            }
+            Page::Quantity => self.item.qty.point(p),
+            Page::Auction => self.sell.point(p),
+        }
+    }
+
     /// The auction form's editor is up (it takes the keyboard).
     pub fn typing(&self) -> bool {
         self.page == Page::Auction && self.sell.typing()
@@ -470,6 +524,10 @@ impl Bank {
             m.window.text_box(vui, r, &word(1617), 40, 4, w - 60, 1, lit(2), 0);
             m.window.text_box(vui, r, &word(161), 40, 5, w - 60, 1, lit(3), 0);
         }
+        m.hits.clear();
+        for k in 0..if m.auction { 4 } else { 3 } {
+            m.hits.push(rows_rect(&m.window, vui, r, 40, k + 2, w - 60, 1), k);
+        }
         m.window.tick_r(vui, r, 31, m.cursor + 2, true);
         let s = wide(&format!("|x{}   |t{}", vui.words.get(212, vui.language), vui.words.get(161, vui.language)));
         m.window.text_box(vui, r, &s, 20, rows - 1, w - 40, 1, white, 0);
@@ -488,6 +546,10 @@ impl Bank {
         m.window.text_box(vui, r, &word(351), 40, 2, w - 60, 1, lit(0), 0);
         m.window.text_box(vui, r, &word(352), 40, 3, w - 60, 1, lit(1), 0);
         m.window.text_box(vui, r, &word(217), 40, 4, w - 60, 1, lit(2), 0);
+        m.hits.clear();
+        for k in 0..3 {
+            m.hits.push(rows_rect(&m.window, vui, r, 40, k + 2, w - 60, 1), k);
+        }
         m.window.tick_r(vui, r, 31, m.sel + 2, true);
         let s = wide(&format!("|x{}   |t{}", vui.words.get(212, vui.language), vui.words.get(217, vui.language)));
         m.window.text_box(vui, r, &s, 20, 6, w - 40, 1, white, 0);
@@ -513,6 +575,13 @@ impl Bank {
         it.window.text_box(vui, r, &text, 0, 0, 280, 14, [0.0, 0.0, 0.0, 1.0], 2);
         fill(&mut it.inv, v.inv, true, icon, can_use);
         fill(&mut it.bank, v.bank, false, icon, can_use);
+        // the lists' frames, as `VIWndList::OnDrawSelf` sizes them
+        let (stud, fill_e) = (vui.entry(36), vui.entry(82));
+        let size = [stud.uv1[0] * 2 + fill_e.uv1[0] + 114, stud.uv1[1] * 2 + 264];
+        it.hits.clear();
+        for (l, k) in [(&it.inv, 0), (&it.bank, 1)] {
+            it.hits.push([l.pos[0], l.pos[1], l.pos[0] + size[0], l.pos[1] + size[1]], k);
+        }
         it.inv.draw(vui, r, now, cues);
         it.bank.draw(vui, r, now, cues);
     }
@@ -661,5 +730,49 @@ mod tests {
         g.b.key(&vui, &r, &busy, 134, true, 0, &mut g.cues, &mut g.out);
         assert_eq!((g.cues.clone(), g.b.page), (vec![9], Page::Deposit));
         assert!(g.out.is_empty());
+    }
+
+    /// The menus take a click at once; on the item page a click on the list
+    /// in use selects a row and a second moves it, one on the other list
+    /// selects its row and asks for that list (right, as the d-pad does);
+    /// the panel between the lists takes nothing.
+    #[test]
+    fn a_pointer_on_the_pages() {
+        use crate::pointer::testing::mid;
+        use crate::pointer::{MOVED, key, rows_rect};
+        let (vui, mut r) = (vui(), NullRaster);
+        let (inv, bank) = (list(&[1, 1, 3]), list(&[2, 1]));
+        let base = [0; 29];
+        let info = Info { words: &vui.words, inv: &inv, hp: [0; 4], base: &base, class: 0, level: 1, attack_words: &[] };
+        let v = View { carried: 50, banked: 900, inv: &inv, bank: &bank, idle: true };
+        let (icon, can_use) = (|_: &NetItem| 1, |_: &NetItem| true);
+        let (mut cues, mut out) = (Vec::new(), Vec::new());
+        let mut b = Bank::default();
+        b.open(&vui, &r, true);
+        b.draw(&vui, &mut r, &info, &v, &icon, &can_use, 0, &mut cues);
+        let w = b.menu.window.size[0];
+        let done = mid(rows_rect(&b.menu.window, &vui, &r, 40, 5, w - 60, 1));
+        assert_eq!(b.point(done), vec![key::CROSS]);
+        assert_eq!(b.menu.cursor, 3, "Done, with the auction's row above it");
+        let items = mid(rows_rect(&b.menu.window, &vui, &r, 40, 3, w - 60, 1));
+        assert_eq!(b.point(items), vec![key::CROSS]);
+        b.key(&vui, &r, &v, 134, true, 0, &mut cues, &mut out);
+        assert_eq!(b.page, Page::Items);
+        b.draw(&vui, &mut r, &info, &v, &icon, &can_use, 0, &mut cues);
+        // the lists at (16, 37) and (475, 37): rows 44 high (no atlas here)
+        let row = |x: f32, i: i32| [x + 57.0, 37.0 + 44.0 * i as f32 + 22.0];
+        assert!(b.point(items).is_empty(), "the menu is put away");
+        assert_eq!(b.point(row(16.0, 2)), vec![MOVED]);
+        assert_eq!(b.item.inv.sel, 2);
+        assert_eq!(b.point(row(16.0, 2)), vec![key::CROSS], "moved to the bank (Enter)");
+        assert_eq!(b.point(row(475.0, 1)), vec![key::RIGHT], "the bank's row, and the bank list asked for");
+        assert_eq!(b.item.bank.sel, 1);
+        b.key(&vui, &r, &v, key::RIGHT, true, 0, &mut cues, &mut out);
+        assert!(b.item.bank.x64 && !b.item.inv.x64);
+        assert_eq!(b.point(row(475.0, 1)), vec![key::CROSS]);
+        assert!(b.point(row(475.0, 2)).is_empty(), "two items, two rows");
+        assert!(b.point([320.0, 150.0]).is_empty(), "the text between the lists");
+        assert_eq!(b.point(row(16.0, 0)), vec![key::LEFT]);
+        assert_eq!(b.item.inv.sel, 0);
     }
 }
