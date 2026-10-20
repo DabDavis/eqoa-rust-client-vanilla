@@ -2738,6 +2738,12 @@ impl Play {
     /// A 0x00DB as if the server had sent it (`EQOA_DAMAGE` in a playshot):
     /// `self` and `target` name the player and its target, anything else is
     /// an id in hex.
+    /// `EQOA_DIE`: the player's death as 0x005E brings it (a test without
+    /// a fight).
+    pub fn fake_death(&mut self, walker: &mut Walker) {
+        self.msg_005e(walker);
+    }
+
     pub fn fake_damage(&mut self, attacker: &str, amount: i64, defender: &str, camera_mode: i32) {
         let id = |s: &str| match s {
             "self" => self.self_id32().unwrap_or(u32::MAX),
@@ -4112,6 +4118,15 @@ impl Play {
             // the breath gauge and the target's details at the right; the
             // boxes and the menus in the middle, with the frame, and a menu
             // takes back under it what it covers on a 4:3 screen (`end`).
+            // UpdateGame, before the HUD: while dead, "You have died." on a
+            // bar in the middle, coming up over its first two seconds
+            if let Some(d) = self.death.as_ref() {
+                r.ui.anchor = Anchor::Middle;
+                let a = (d.time() * 0.5).min(1.0);
+                let text = crate::ui::wide(vui.words.get(501, vui.language));
+                let w = vui.string_width(&r, &text);
+                vui.blit_bar(&mut r, &text, [0.8, 0.8, 0.8, a], [320 - ((w + 50) >> 1), 229], 33, 34, w + 50, 3, a, 0, true);
+            }
             hud.draw(vui, &mut r, &state);
             r.ui.anchor = Anchor::Left;
             if crate::influence::shown(self.mode) {
@@ -4137,15 +4152,6 @@ impl Play {
                 self.mbox.draw(vui, &mut r, now as i64);
             }
             actions = self.run_start_menu(vui, &mut r, &start_loc);
-            // DrawFade: black over the whole screen at the fade's alpha (the
-            // game's spans the wide edges; here past the 4:3 frame's sides)
-            let a = self.fade.step(dt);
-            if a > 0.0
-                && let Some(tex) = assets.white
-            {
-                let (x0, y0, x1, y1) = (-2000.0, -1.0, 2640.0, 449.0);
-                r.ui.push_whole(render::ui::Quad { tex, blend: 3, pos: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], uv: [[0.5, 0.5]; 4], color: [0.0, 0.0, 0.0, a], clip: None });
-            }
             self.run_who(vui, &mut r);
             self.run_quests(vui, &mut r);
             self.run_craft(vui, &mut r);
@@ -4248,6 +4254,16 @@ impl Play {
                 eprintln!("glyphs (mode {}): {}", self.mode, list.join(", "));
             }
             self.glyphs = std::mem::take(&mut r.glyphs);
+            // DrawFade, last, as `Process` draws it after every window: black
+            // over the whole screen at the fade's alpha (the game's spans the
+            // wide edges; here past the 4:3 frame's sides)
+            let a = self.fade.step(dt);
+            if a > 0.0
+                && let Some(tex) = assets.white
+            {
+                let (x0, y0, x1, y1) = (-2000.0, -1.0, 2640.0, 449.0);
+                r.ui.push_whole(render::ui::Quad { tex, blend: 3, pos: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], uv: [[0.5, 0.5]; 4], color: [0.0, 0.0, 0.0, a], clip: None });
+            }
             r.ui.end();
             self.hud = Some((vui_o, assets, hud_o));
         }

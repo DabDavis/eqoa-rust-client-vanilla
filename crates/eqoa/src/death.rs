@@ -25,6 +25,11 @@ impl DeathCam {
         DeathCam { pos: cam_pos, dir: cam_dir, dist: (d[0] * d[0] + d[2] * d[2]).sqrt(), yaw: -cam_dir[2].atan2(cam_dir[0]), t: 0.0 }
     }
 
+    /// `m_pC1D0`: the seconds the camera has run.
+    pub fn time(&self) -> f32 {
+        self.t
+    }
+
     /// `DeathCamera`, a frame of `dt` seconds (over a tenth counts as a
     /// thirtieth): the eye and direction, and whether the fade starts now.
     pub fn step(&mut self, body: [f32; 3], dt: f32) -> (Vect3<Ee>, Vect3<Ee>, bool) {

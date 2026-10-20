@@ -615,6 +615,13 @@ pub fn shot_with(
                 }
                 // `EQOA_DAMAGE=<attacker>,<amount>,<defender>@ms;...`: 0x00DBs
                 // then (self, target or a hex id).
+                // `EQOA_DIE=ms`: the player dies then, as 0x005E says.
+                if let Ok(v) = std::env::var("EQOA_DIE")
+                    && let Ok(ms) = v.parse::<i64>()
+                    && t == ms / 16 * 16
+                {
+                    p.fake_death(&mut walker);
+                }
                 if let Ok(spec) = std::env::var("EQOA_DAMAGE") {
                     for part in spec.split(';') {
                         if let Some((hit, ms)) = part.rsplit_once('@')
