@@ -1448,8 +1448,9 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, el: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => el.exit(),
-            // Quit, answered yes in the start menu (`m_p2EC28`).
-            _ if self.play.as_ref().is_some_and(|p| p.quit) => el.exit(),
+            // Quit, answered yes in the start menu (`m_p2EC28`), or the
+            // server ended the connection.
+            _ if self.play.as_ref().is_some_and(|p| p.quit || p.disconnected.is_some()) => el.exit(),
             WindowEvent::Resized(s) if s.width > 0 && s.height > 0 => {
                 let Some(g) = &mut self.gfx else { return };
                 let Some(surface) = &g.surface else { return };

@@ -185,6 +185,14 @@ pub fn frame_drawn() {
     }
 }
 
+/// The server ended the connection in the world (`Play::disconnected`): the
+/// page goes back to its login screen with CLIENT's text for the reason
+/// (`window.eqoaDisconnected`), as the console's VIWndDisconnect shows it.
+pub fn disconnected(text: &str) {
+    log(text);
+    call_page("eqoaDisconnected", &JsValue::from_str(text));
+}
+
 /// The page's bug report, opened from the HUD's button (`hud::Pick::Report`;
 /// F3 is the page's own, `window.eqoaReportOpen`).
 pub fn open_report() {

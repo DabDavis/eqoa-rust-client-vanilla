@@ -206,8 +206,12 @@ pub enum Event {
     AbilityUsable { token: u32, id: i32, p14: i32 },
     /// Any other opcode, not handled here yet.
     Opcode { op: u16, data: Vec<u8> },
-    /// 0xFD: the connection ended, with the library's reason byte.
-    Disconnected(u8),
+    /// The connection ended (`VIClient::Disconnect`), with CLIENT's reason
+    /// (`m_p4F0E8`, read by `ConnectStatusString`; see `disconnect_word`):
+    /// a DRDP 0xFD with its byte mapped as `PumpMessages` maps it, or one of
+    /// the dispatcher's disconnect opcodes (0x07A4, "You have logged in
+    /// from another location.", is reason 8).
+    Disconnected(i32),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -506,7 +510,14 @@ impl Session {
                 if m.connection == self.conn {
                     self.conn = None;
                 }
-                ev.push(Event::Disconnected(m.data.first().copied().unwrap_or(0)));
+                // m_4F0EC = data[0]; reason 14 -> 16, 1 -> 1, 15 -> 15, else 10
+                let reason = match m.data.first().copied().unwrap_or(0) {
+                    14 => 16,
+                    1 => 1,
+                    15 => 15,
+                    _ => 10,
+                };
+                ev.push(Event::Disconnected(reason));
             }
             ty if ty < drdp::TYPE_STATE_CHANNELS => ev.push(Event::State { channel: ty, data: m.data }),
             _ => {}
@@ -700,12 +711,64 @@ impl Session {
                 let token = r.u32();
                 ev.push(Event::AbilityLockout { index, token, lockout: r.signed() as i32 });
             }
+            // The dispatcher's `Disconnect(reason, 0)` cases: the connection
+            // goes, with the reason the notice shows.
+            0x0729 | 0x072B | 0x0728 | 0x072A | 0x00EC | 0x07A4 | 0x07A1 | 0x07A2 | 0x07C0 | 0x07C1 | 0x07D2 => {
+                let reason = match op {
+                    0x0729 => 3,
+                    0x072B => 4,
+                    0x0728 => 6,
+                    0x072A => 7,
+                    0x00EC | 0x07A4 => 8,
+                    0x07A1 => 13,
+                    0x07A2 => 14,
+                    0x07C0 => 17,
+                    0x07C1 => 18,
+                    _ => 19,
+                };
+                if let Some(c) = self.conn.take()
+                    && self.drdp.conns.contains(c)
+                {
+                    self.drdp.connection_close(c);
+                }
+                ev.push(Event::Disconnected(reason));
+            }
             _ => ev.push(Event::Opcode { op, data: m.data[2.min(m.data.len())..].to_vec() }),
         }
     }
 }
 
 /// `VIShardInfo::Read`: entries for the client's language (0) only.
+/// `VIClient::ConnectStatusString`: the WORDS.TXT row the disconnect notice
+/// shows for a reason (`Event::Disconnected`). Reasons 0 and 10 add a code
+/// when there is one, which is left off here.
+pub fn disconnect_word(reason: i32) -> Option<i32> {
+    Some(match reason {
+        0 => 272,
+        1 => 666,
+        2 => 431,
+        3 => 270,
+        4 => 593,
+        5 => 594,
+        6 => 620,
+        7 => 621,
+        8 => 619,
+        9 => 820,
+        10 => 667,
+        11 => 1017,
+        12 => 821,
+        13 => 677,
+        14 => 716,
+        15 => 719,
+        16 => 718,
+        17 | 18 => 1024,
+        19 => 1420,
+        20 => 758,
+        21 => 822,
+        _ => return None,
+    })
+}
+
 fn read_shards(r: &mut Reader) -> Vec<Shard> {
     let n = r.signed().max(0) as usize;
     let mut v = Vec::new();
@@ -764,3 +827,52 @@ fn read_characters(r: &mut Reader) -> Vec<Character> {
         .collect()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Null;
+    impl Datagrams for Null {
+        fn send_to(&mut self, _: &[u8], _: [u8; 4], _: u16) {}
+        fn recv_from(&mut self) -> Option<(Vec<u8>, [u8; 4], u16)> {
+            None
+        }
+    }
+
+    fn session() -> Session {
+        Session::connect_with(Box::new(Null), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap()
+    }
+
+    fn deliver(s: &mut Session, ty: u8, data: Vec<u8>) -> Vec<Event> {
+        let mut ev = Vec::new();
+        s.route(drdp::Message { ty, data, connection: s.conn, ..Default::default() }, &mut ev);
+        ev
+    }
+
+    // 0x07A4, what go-eqoa-server sends a session whose character logged in
+    // from another window: CLIENT's Disconnect(8), word 619, and the
+    // connection goes. Control: an opcode that is not a disconnect keeps it.
+    #[test]
+    fn logged_in_elsewhere_disconnects() {
+        let mut s = session();
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xA4, 0x07]);
+        assert!(matches!(ev[..], [Event::Disconnected(8)]), "{ev:?}");
+        assert!(s.conn.is_none());
+        assert_eq!(disconnect_word(8), Some(619));
+
+        let mut s = session();
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xA5, 0x07]);
+        assert!(!ev.iter().any(|e| matches!(e, Event::Disconnected(_))), "{ev:?}");
+        assert!(s.conn.is_some());
+    }
+
+    // A DRDP 0xFD carries the library's byte, mapped as PumpMessages maps it.
+    #[test]
+    fn drdp_disconnect_maps_its_byte() {
+        for (byte, reason) in [(14, 16), (1, 1), (15, 15), (0, 10), (7, 10)] {
+            let mut s = session();
+            let ev = deliver(&mut s, drdp::TYPE_DISCONNECT, vec![byte]);
+            assert!(matches!(ev[..], [Event::Disconnected(r)] if r == reason), "{byte}: {ev:?}");
+        }
+    }
+}

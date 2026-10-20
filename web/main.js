@@ -296,6 +296,21 @@ window.eqoaInWorld = () => {
 
 $('logout').onclick = () => location.reload();
 
+// The server ended the game's connection (0x07A4: the character logged in
+// from another window): the page starts over, so the sockets, the sound and
+// the GPU go with it, and the login screen says why.
+window.eqoaDisconnected = (text) => {
+  session.set('notice', text);
+  location.reload();
+};
+{
+  const notice = session.get('notice');
+  if (notice) {
+    session.set('notice', '');
+    error('login', notice);
+  }
+}
+
 // ---- character creation: what the server's templates allow
 // (GET /api/creation: one entry per race, city and class, with its stats)
 
