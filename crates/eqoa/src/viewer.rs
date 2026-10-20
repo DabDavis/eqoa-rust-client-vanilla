@@ -1249,8 +1249,22 @@ impl App {
         }
     }
 
-    /// The walker's controls from the held keys (`UpdateControls`'s keyboard
-    /// half): W/S forward, A/D strafe, ←/→ (or J/L) orbit, ↑/↓ (or I/K) zoom.
+    /// The keyboard's axes `UpdateControls` reads (`m_keys[17..=24]`, the
+    /// codes `VIKeyboard::Read` gives the cursor block: 17 left, 18 right,
+    /// 19 up, 20 down, 21 page up, 22 page down, 23 end, 24 home), held or
+    /// not: the arrows walk and turn (strafe in the follow orbit), Home and
+    /// End orbit it, Page Up and Page Down pitch or zoom.
+    fn game_keys(&self) -> [f32; 8] {
+        if self.play.as_ref().is_some_and(|p| p.is_dead()) {
+            return [0.0; 8];
+        }
+        ["left", "right", "up", "down", "pageup", "pagedown", "end", "home"].map(|k| self.held.contains(k) as i32 as f32)
+    }
+
+    /// The walker's controls from the held keys: the client's own right
+    /// stick on I/J/K/L (orbit and zoom), which the game's keyboard leaves
+    /// free (its own camera keys are Home, End, Page Up and Page Down,
+    /// `game_keys`).
     fn controls(&self) -> Controls {
         // dead: `UpdateControls` is not run
         if self.play.as_ref().is_some_and(|p| p.is_dead()) {
@@ -1261,8 +1275,7 @@ impl App {
             return segs.iter().find(|s| t <= s.1).map_or(Controls::default(), |s| s.0);
         }
         let k = |a: &str, b: &str| self.held.contains(a) as i32 as f32 - self.held.contains(b) as i32 as f32;
-        let either = |x: f32, y: f32| if x != 0.0 { x } else { y };
-        Controls { fwd: k("w", "s"), strafe: k("d", "a"), orbit: either(k("right", "left"), k("l", "j")), pitch: either(k("down", "up"), k("k", "i")) }
+        Controls { fwd: 0.0, strafe: 0.0, orbit: k("l", "j"), pitch: k("k", "i") }
     }
 
     /// The pad, once a frame: every source as libpad's one port
@@ -1908,8 +1921,29 @@ impl ApplicationHandler for App {
                             return;
                         }
                         // Q: InteractWithTarget.
-                        (None, Key::Character(c)) if c.eq_ignore_ascii_case("q") => {
+                        (None, Key::Character(c)) if p.mode == 0 && c.eq_ignore_ascii_case("q") => {
                             p.interact_with_target();
+                            return;
+                        }
+                        // ` and ~ (96, 126): L1's cycle, the player, the
+                        // group, the pet (`CycleTarget(1)`).
+                        (None, Key::Character(c)) if p.mode == 0 && (c.as_str() == "`" || c.as_str() == "~") => {
+                            if let (Some(w), Some(g)) = (self.walker.as_ref(), self.gfx.as_ref()) {
+                                let (proj, v) = w.view(g.config.width as f32 / g.config.height as f32);
+                                let dir = Vec3::from(w.eye.direction.to_array());
+                                p.cycle_target(true, w.eye_position(), dir, proj * v);
+                            }
+                            return;
+                        }
+                        // X (88, 120): autorun (`ToggleP74`), as L3.
+                        (None, Key::Character(c)) if p.mode == 0 && c.eq_ignore_ascii_case("x") => {
+                            p.toggle_autorun();
+                            return;
+                        }
+                        // 1 to 6: `SelectTarget`, the player, the group's
+                        // others, the pet.
+                        (None, Key::Character(c)) if p.mode == 0 && matches!(c.as_str(), "1" | "2" | "3" | "4" | "5" | "6") => {
+                            p.select_target(c.as_bytes()[0] as i32 - 48);
                             return;
                         }
                         // P: InitCameraStyle (first person and back).
@@ -1959,6 +1993,26 @@ impl ApplicationHandler for App {
                 if self.play.as_ref().is_some_and(|p| p.typing.is_some()) {
                     return;
                 }
+                // C (67, 99) held: the chat box's history, as R2 holds it
+                // (mode 33), its up and down the arrows (19, 20); let go,
+                // play again (`OnKeyDown`/`OnKeyUp` 67, `VIWndChat`).
+                if let Some(p) = self.play.as_mut()
+                    && (p.mode == 0 || p.mode == 33)
+                {
+                    let down = event.state == ElementState::Pressed;
+                    let k = match &event.logical_key {
+                        Key::Character(c) if c.eq_ignore_ascii_case("c") => Some(99),
+                        Key::Named(NamedKey::ArrowUp) if p.mode == 33 => Some(19),
+                        Key::Named(NamedKey::ArrowDown) if p.mode == 33 => Some(20),
+                        _ => None,
+                    };
+                    if let Some(k) = k
+                        && !(down && event.repeat)
+                    {
+                        p.chat_history_key(k, down);
+                        return;
+                    }
+                }
                 // Q released: the target's info window closes (`OnKeyUp` 81).
                 if let (Some(p), Key::Character(c)) = (self.play.as_mut(), &event.logical_key)
                     && c.eq_ignore_ascii_case("q")
@@ -1969,26 +2023,28 @@ impl ApplicationHandler for App {
                 }
                 // Space: attack, held (`ToggleAutoAttack` / `MaybeStopAutoAttack`).
                 if let (Some(p), Key::Named(NamedKey::Space)) = (self.play.as_mut(), &event.logical_key) {
-                    if event.state == ElementState::Pressed && !event.repeat {
+                    if event.state == ElementState::Pressed && !event.repeat && p.mode == 0 {
                         p.attack_press();
                     } else if event.state == ElementState::Released {
                         p.attack_release();
                     }
                     return;
                 }
-                // The d-pad (arrows) and X (E) in play: the HUD's quick menus
-                // (`VIWndHUDMenu`: up/down the selection, left/right the menu,
-                // E uses it). The camera is on I/J/K/L then, a keyboard's
-                // right stick.
+                // The HUD's quick menus in play, as the game's keyboard has
+                // them: W and S the selection (`VIWndHUDMenu::OnKeyDown`, as
+                // the d-pad's up and down), A and D the menu (`VIWndGame`'s
+                // `Attack` and `Interact`, as left and right), E uses it (as
+                // circle). The arrows walk and turn (`UpdateControls`'
+                // `m_keys[17..20]`, `game_keys`).
                 if let Some(p) = self.play.as_mut()
                     && p.mode == 0
                 {
                     use crate::hudmenu::Key as H;
                     let k = match &event.logical_key {
-                        Key::Named(NamedKey::ArrowUp) => Some(H::Up),
-                        Key::Named(NamedKey::ArrowDown) => Some(H::Down),
-                        Key::Named(NamedKey::ArrowLeft) => Some(H::Left),
-                        Key::Named(NamedKey::ArrowRight) => Some(H::Right),
+                        Key::Character(c) if c.eq_ignore_ascii_case("w") => Some(H::Up),
+                        Key::Character(c) if c.eq_ignore_ascii_case("s") => Some(H::Down),
+                        Key::Character(c) if c.eq_ignore_ascii_case("a") => Some(H::Left),
+                        Key::Character(c) if c.eq_ignore_ascii_case("d") => Some(H::Right),
                         Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(H::Use),
                         _ => None,
                     };
@@ -2021,6 +2077,7 @@ impl ApplicationHandler for App {
                 if event.state == ElementState::Pressed
                     && event.logical_key == Key::Named(NamedKey::Tab)
                     && let (Some(p), Some(w), Some(g)) = (self.play.as_mut(), self.walker.as_ref(), self.gfx.as_ref())
+                    && p.mode == 0
                 {
                     let (proj, v) = w.view(g.config.width as f32 / g.config.height as f32);
                     let dir = Vec3::from(w.eye.direction.to_array());
@@ -2033,6 +2090,10 @@ impl ApplicationHandler for App {
                     Key::Named(NamedKey::ArrowRight) => Some("right".to_string()),
                     Key::Named(NamedKey::ArrowUp) => Some("up".to_string()),
                     Key::Named(NamedKey::ArrowDown) => Some("down".to_string()),
+                    Key::Named(NamedKey::PageUp) => Some("pageup".to_string()),
+                    Key::Named(NamedKey::PageDown) => Some("pagedown".to_string()),
+                    Key::Named(NamedKey::End) => Some("end".to_string()),
+                    Key::Named(NamedKey::Home) => Some("home".to_string()),
                     Key::Character(c) => Some(c.to_lowercase()),
                     _ => None,
                 };
@@ -2156,6 +2217,7 @@ impl ApplicationHandler for App {
                 self.touch.window = self.play.as_ref().is_some_and(|p| p.mode != 0);
                 mark(&mut self.perf, 0);
                 let sticks = self.sticks();
+                let game_keys = self.game_keys();
                 let now = self.clock.elapsed().as_millis() as i64;
                 let Some(g) = &mut self.gfx else { return };
                 let body_at = self.body_at;
@@ -2174,8 +2236,10 @@ impl ApplicationHandler for App {
                 let console = &mut self.console;
                 let pads = &mut self.pads;
                 let walk_view = self.walker.as_mut().map(|w| {
-                    // UpdateControls, on the sticks, as the client stands
-                    let client = play.as_ref().filter(|p| !p.is_dead()).map(|p| p.control_client()).unwrap_or_default();
+                    // UpdateControls, on the sticks and the keyboard's axes,
+                    // as the client stands
+                    let mut client = play.as_ref().filter(|p| !p.is_dead()).map(|p| p.control_client()).unwrap_or_default();
+                    client.keys = game_keys;
                     if w.frame_with(sticks, now, &client)
                         && let Some(p) = play.as_mut()
                     {

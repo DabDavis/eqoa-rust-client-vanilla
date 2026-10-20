@@ -1628,7 +1628,8 @@ impl Play {
             return;
         }
         match key {
-            143 => {
+            // R2, or the keyboard's C (`OnKeyUp` 67, 99, 143)
+            143 | 67 | 99 => {
                 if let Some(c) = self.wnd_chat.as_mut() {
                     c.set_scroll(0);
                 }
@@ -2299,6 +2300,8 @@ impl Play {
             // stop a player standing still (the Sandstorm capture's longest
             // silence is 2.6 s)
             timed_out: false,
+            // the keyboard's held axes: the viewer's (`game_keys`)
+            keys: [0.0; 8],
         }
     }
 
@@ -3588,6 +3591,48 @@ impl Play {
         let Some(slot) = self.abilities.get(&id).map(|a| a.slot) else { return };
         let mut w = net::stream::Writer::op(0x0032);
         w.u32(self.ability_token).u8(slot as u8).u32(self.target);
+        self.session.send(&w.data);
+    }
+
+    /// The keyboard's C (99) held in play: the chat box's history, as R2
+    /// (mode 33, movement and the camera allowed, `SetP06DC0(1, 1)`); in it,
+    /// the keys to the chat box (its up and down 19 and 20), C let go back
+    /// to play (`chat_scroll_key`).
+    pub fn chat_history_key(&mut self, key: i32, down: bool) {
+        match self.mode {
+            0 if down && key == 99 => {
+                self.mode = 33;
+                self.locks = (true, true);
+                if let Some(c) = self.wnd_chat.as_mut() {
+                    c.set_scroll(1);
+                }
+            }
+            33 => self.chat_scroll_key(key, down),
+            _ => {}
+        }
+    }
+
+    /// `SelectTarget(which)`, the keyboard's 1 to 6 in play: 1 the player,
+    /// 2 to 5 the group's others in roster order (a place holding the player
+    /// gives the next), 6 the pet; past the group, or anything else, none.
+    /// The auto-attack stops; 0x0010 with the token and the choice.
+    pub fn select_target(&mut self, which: i32) {
+        let me = self.self_id32();
+        let ids: Vec<u32> = self.group.members[..self.group.count()].iter().map(|m| m.id).collect();
+        let n = ids.len() as i32;
+        self.target = match which {
+            1 => me.unwrap_or(u32::MAX),
+            2..=5 if which <= n => {
+                let k = (which - 2) as usize;
+                if Some(ids[k]) == me { ids.get(k + 1).copied().unwrap_or(u32::MAX) } else { ids[k] }
+            }
+            6 => self.pet_id,
+            _ => u32::MAX,
+        };
+        self.auto_attack = false;
+        self.target_info = None;
+        let mut w = net::stream::Writer::op(0x0010);
+        w.u32(0).u32(self.target);
         self.session.send(&w.data);
     }
 
