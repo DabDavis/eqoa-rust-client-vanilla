@@ -313,6 +313,12 @@ impl Ui {
         self.anchor = Anchor::Middle;
     }
 
+    /// The whole frame pixels the target shows beyond each side of the
+    /// frame this frame (`side`): none on a 4:3 target.
+    pub fn side(&self) -> f32 {
+        self.side
+    }
+
     /// The frame's quads are made: a piece moved to a side that a window
     /// made after it covers on a 4:3 screen goes back under that window, so
     /// a menu hides what it hides there (and the piece is not cut by its

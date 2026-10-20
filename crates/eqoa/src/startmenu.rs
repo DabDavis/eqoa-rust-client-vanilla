@@ -602,11 +602,14 @@ fn zone_name(loc: &Location, row: i32, col: i32) -> u16 {
 pub struct StartMenu {
     pub main: MainMenu,
     pub visible: bool,
+    /// The window is wider than 4:3, so the frame's cut sides show: they
+    /// are closed (`draw`).
+    pub edges: bool,
 }
 
 impl StartMenu {
     pub fn new(menu: usize) -> Self {
-        StartMenu { main: MainMenu::new(menu, false), visible: false }
+        StartMenu { main: MainMenu::new(menu, false), visible: false, edges: false }
     }
 
     /// A pointer on the focused menu's bars (`MainMenu::point`).
@@ -659,7 +662,31 @@ impl StartMenu {
         vui.blit_studded_horz(r, [451, 37], 37, 38, 200, 1, 0, 1.0, 0);
         vui.blit_studded_horz(r, [451, 313], 40, 41, 200, 1, 0, 1.0, 0);
         vui.blit_studded_frame(r, [176, 37], [275, 294], &fp, &studs, 2, 3, 0, 1.0, false);
+        if self.edges {
+            close_sides(vui, r);
+        }
         self.main.draw(vui, r, menus, now, st, cues);
+    }
+}
+
+/// The client's own, for a window wider than 4:3: the band, the rails and
+/// both panels run off a TV's sides (the band from x -1, the right panel to
+/// 650), so there the frame shows cut. The middle frame's studded sides
+/// close it at the 4:3 picture's edges, from the top of the screen (where
+/// the band runs off as on a TV) down to its bottom corners on the bottom
+/// rail (331), studded as the middle frame's sides are.
+fn close_sides(vui: &Vui, r: &mut dyn Raster) {
+    let (corner, side, stud) = (vui.entry(39), vui.entry(42), vui.entry(43));
+    let (top, bottom) = (-1, 37 + 294);
+    for (x, flip) in [(0, 0), (640 - side.uv1[0], 1)] {
+        vui.blit_vert(r, [x, top], 42, bottom - corner.uv1[1] - top, 0, 1.0, flip);
+        let cx = if flip == 0 { 0 } else { 640 - corner.uv1[0] };
+        vui.blit_ex(r, 39, [cx, bottom - corner.uv1[1]], 0, 1.0, flip);
+        let sx = if flip == 0 { 0 } else { 640 - stud.uv1[0] };
+        let step = 294 / 4 - stud.uv1[1] / 2;
+        for k in 1..=3 {
+            vui.blit_ex(r, 43, [sx, 37 + step * k], 0, 1.0, flip);
+        }
     }
 }
 
