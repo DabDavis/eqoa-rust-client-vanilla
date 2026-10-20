@@ -7,7 +7,13 @@
 //!
 //! Its modes (`m_mode`): 0 the stats, 1 the Train bar, 2 the Details bar,
 //! 3 the details, 4 points sent and waiting for 0x001D.
+//!
+//! A pointer (`pointer`) moves as the keys move: a stat or a bar clicked is
+//! the up and down steps to it (each step finds the stat's items, which only
+//! the client's data can), the selected stat's value a point off on its left
+//! half and on on its right, the selected bar ✕.
 
+use crate::pointer::{Hits, key};
 use crate::startmenu::KeyFlash;
 use net::dump::ItemList;
 use vi::ui::{Raster, UI_COLORS, Vui, Window, wide};
@@ -25,6 +31,18 @@ const MASTERY_IDS: [i32; 29] = [0, 1, 2, 3, 4, 5, 6, -1, -1, -1, -1, -1, -1, -1,
 
 /// `gRaces[r].m_nameStrID` (`GetRace`), the ten playable races.
 const RACE_WORDS: [i32; 10] = [183, 185, 186, 187, 188, 189, 191, 192, 193, 190];
+
+/// What the trainer notes where it is drawn, for a pointer: a stat's
+/// caption (`STAT` + stat), its value's left and right halves (`LESS`,
+/// `MORE` + stat), the bars, a detail's row (`DETAIL` + row).
+const STAT: i32 = 0;
+const LESS: i32 = 10;
+const MORE: i32 = 20;
+const TRAIN_BAR: i32 = 30;
+const DETAILS_BAR: i32 = 31;
+const DETAIL: i32 = 40;
+/// A row of bars, 25 apart.
+const ROW_H: i32 = 25;
 
 const HI: [f32; 4] = [10.0 / 255.0, 50.0 / 255.0, 70.0 / 255.0, 1.0];
 const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
@@ -113,21 +131,47 @@ pub struct Trainer {
     last: i32,
     item: i32,
     flash: KeyFlash,
+    hits: Hits,
 }
 
 impl Default for Trainer {
     fn default() -> Self {
-        Trainer { sel: 0, points: 0, mode: 0, add: [0; 7], time: 0, fade_dir: 1, fade: 1.0, color_dir: 1, color: BLACK, window: Window::default(), list: Window::default(), last: 0, item: 0, flash: KeyFlash::default() }
+        Trainer { sel: 0, points: 0, mode: 0, add: [0; 7], time: 0, fade_dir: 1, fade: 1.0, color_dir: 1, color: BLACK, window: Window::default(), list: Window::default(), last: 0, item: 0, flash: KeyFlash::default(), hits: Hits::default() }
     }
 }
 
 impl Trainer {
 
-    /// A pointer at frame point `p` (`pointer`): what is under it selected,
-    /// and the keys to press.
+    /// A pointer at frame point `p` (`pointer`), as the keys: a stat, a
+    /// detail or a bar not selected is the up and down steps to it (from a
+    /// bar, up to the stats first); the selected stat's value a point off
+    /// (left, its left half) or on (right); the selected bar ✕. Nothing while
+    /// the points are out. The keys to press.
     pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
-        let _ = p;
-        Vec::new()
+        let Some(h) = self.hits.at(p) else { return Vec::new() };
+        let steps = |from: i32, to: i32| crate::pointer::steps(from, to, key::UP, key::DOWN);
+        match (self.mode, h) {
+            (4, _) => Vec::new(),
+            (3, h) if h >= DETAIL => steps(self.sel, h - DETAIL),
+            (0, h) if (LESS..LESS + 7).contains(&h) && h - LESS == self.sel => vec![key::LEFT],
+            (0, h) if (MORE..MORE + 7).contains(&h) && h - MORE == self.sel => vec![key::RIGHT],
+            (0..=2, h) if h < TRAIN_BAR => {
+                let stat = h % 10;
+                if self.mode == 0 && stat == self.sel {
+                    return Vec::new();
+                }
+                // up from a bar to the stats, where the selection is as it was
+                let mut keys = vec![key::UP; self.mode as usize];
+                keys.extend(steps(self.sel, stat));
+                keys
+            }
+            (1, TRAIN_BAR) | (2, DETAILS_BAR) => vec![key::CROSS],
+            (0, TRAIN_BAR) => vec![key::DOWN; (7 - self.sel).max(0) as usize],
+            (0, DETAILS_BAR) => vec![key::DOWN; (8 - self.sel).max(0) as usize],
+            (1, DETAILS_BAR) => vec![key::DOWN],
+            (2, TRAIN_BAR) => vec![key::UP],
+            _ => Vec::new(),
+        }
     }
     /// `Open` (the player's points, mode 0), and `OnMessage` 295's windows.
     pub fn open(&mut self, vui: &Vui, r: &dyn Raster, d: &Data, now: i64) {
@@ -357,6 +401,7 @@ impl Trainer {
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, d: &Data, now: i64, cues: &mut Vec<i32>) {
         let dt = (now - self.time) as f32 * 0.001;
         self.time = now;
+        self.hits.clear();
         let word = |id: i32| vui.words.get(id, vui.language).to_string();
         vui.blit_rect(r, 32, [-1, -1], [642, 332], 0, 1.0);
         self.window.init(vui, r, [320, 162], 640, 17, 0);
@@ -377,6 +422,7 @@ impl Trainer {
         let mut pos = [0, 0];
         if self.mode != 3 {
             Self::bar(vui, r, &wide(&word(482)), if self.mode == 1 { HI } else { BLACK }, bar, 200, true);
+            self.hits.push([bar[0], bar[1], bar[0] + 200, bar[1] + ROW_H], TRAIN_BAR);
         }
         if self.mode == 1 {
             pos = [bar[0], Self::arrow_y(vui, bar[1])];
@@ -384,6 +430,7 @@ impl Trainer {
         if self.mode != 3 {
             bar[1] += 25;
             Self::bar(vui, r, &wide(&word(77)), if self.mode == 2 { HI } else { BLACK }, bar, 200, true);
+            self.hits.push([bar[0], bar[1], bar[0] + 200, bar[1] + ROW_H], DETAILS_BAR);
         }
         if self.mode == 2 {
             pos = [bar[0], Self::arrow_y(vui, bar[1])];
@@ -467,6 +514,10 @@ impl Trainer {
             Self::bar(vui, r, &w(caption), c, p1, 200, true);
             let v = d.cur[stat as usize] + self.add[stat as usize];
             Self::bar(vui, r, &wide(&v.to_string()), c, p3, 75, false);
+            let i = i as i32;
+            self.hits.push([p1[0], p1[1], p3[0], p1[1] + ROW_H], STAT + i);
+            self.hits.push([p3[0], p3[1], p3[0] + 37, p3[1] + ROW_H], LESS + i);
+            self.hits.push([p3[0] + 37, p3[1], p3[0] + 75, p3[1] + ROW_H], MORE + i);
             if lit {
                 let y = Self::arrow_y(vui, p1[1]);
                 vui.blit_ex(r, vui.entry(85).x00, [p1[0], y], 3, self.fade, 0);
@@ -508,6 +559,7 @@ impl Trainer {
                 vui.blit_ex(r, vui.entry(85).x00, [p1[0], Self::arrow_y(vui, p1[1])], 3, self.fade, 0);
             }
             Self::bar(vui, r, &wide(&Data::derived(d.cur, stat).to_string()), c, p3, 75, false);
+            self.hits.push([p1[0], p1[1], p3[0] + 75, p1[1] + ROW_H], DETAIL + i as i32);
             p1[1] += 25;
             p3[1] += 25;
         }
@@ -624,5 +676,68 @@ mod tests {
         assert_eq!(train_stats(&[1, 1, 0, 0, 0, 0, 0], 2), Some(vec![0x1D, 0, 2, 2, 0, 0, 0, 0, 0]));
         assert!(d.highlighted(0) && d.highlighted(1) && !d.highlighted(2), "WAR's mask 3");
         assert_eq!(Data::derived(&base, 20), (10 / 7 + 10 + 40).min(315));
+    }
+
+    /// A pointer as the keys: another stat is the steps to it, the selected
+    /// stat's value left and right, the bars the steps down past the last
+    /// stat and ✕ on the selected one; from a bar up to the stats first; the
+    /// details' rows; nothing while the points are out. The steps land where
+    /// they were meant to.
+    #[test]
+    fn a_pointer_steps_as_the_keys() {
+        use crate::pointer::testing::{NullRaster, vui};
+        let (vui, mut r) = (vui(), NullRaster);
+        let base = [10; 29];
+        let inv = ItemList::default();
+        let d = Data { name: "X", class: 0, race: 0, level: 1, base: &base, cur: &base, p40: 2, p44: 11, mastery: &[0; 29], bonuses: &[0; 7], inv: &inv, slot_words: &[] };
+        let mut t = Trainer::default();
+        t.open(&vui, &r, &d, 0);
+        let mut cues = Vec::new();
+        let mut press = |t: &mut Trainer, keys: Vec<i32>| {
+            for k in keys {
+                t.key(&d, k, true, 0, &mut cues);
+                t.key(&d, k, false, 0, &mut cues);
+            }
+        };
+        t.draw(&vui, &mut r, &d, 0, &mut Vec::new());
+        // the stats' rows from y 65, 25 apart
+        let stat = |i: i32, x: f32| [x, (65 + 25 * i + 12) as f32];
+        assert_eq!(t.point(stat(3, 100.0)), vec![key::DOWN; 3]);
+        assert_eq!(t.point(stat(0, 240.0)), vec![key::LEFT], "the selected stat's value, left half");
+        assert_eq!(t.point(stat(0, 290.0)), vec![key::RIGHT], "right half");
+        assert!(t.point(stat(0, 100.0)).is_empty(), "its caption");
+        assert_eq!(t.point(stat(3, 240.0)), vec![key::DOWN; 3], "another stat's value is that stat");
+        assert!(t.point([100.0, 20.0]).is_empty(), "the header");
+        // Train past the seven stats, Details one more
+        let (train, details) = ([100.0, 262.0], [100.0, 287.0]);
+        assert_eq!(t.point(details), vec![key::DOWN; 8]);
+        let keys = t.point(train);
+        assert_eq!(keys, vec![key::DOWN; 7]);
+        press(&mut t, keys);
+        assert_eq!((t.mode, t.sel), (1, 6), "the steps landed on Train");
+        t.draw(&vui, &mut r, &d, 0, &mut Vec::new());
+        assert_eq!(t.point(train), vec![key::CROSS]);
+        assert_eq!(t.point(details), vec![key::DOWN]);
+        let keys = t.point(stat(4, 100.0));
+        assert_eq!(keys, vec![key::UP, key::UP, key::UP]);
+        press(&mut t, keys);
+        assert_eq!((t.mode, t.sel), (0, 4), "up to the stats, then to the fifth");
+        // Details, then its rows
+        let keys = t.point(details);
+        press(&mut t, keys);
+        assert_eq!(t.mode, 2);
+        t.draw(&vui, &mut r, &d, 0, &mut Vec::new());
+        assert_eq!(t.point(train), vec![key::UP], "Train from Details");
+        t.key(&d, key::CROSS, true, 0, &mut cues);
+        assert_eq!(t.mode, 3);
+        t.draw(&vui, &mut r, &d, 0, &mut Vec::new());
+        assert_eq!(t.point([100.0, (40 + 25 * 5 + 12) as f32]), vec![key::DOWN; 5]);
+        assert!(t.point(details).is_empty(), "no bars on the details");
+        assert!(t.point([100.0, (40 + 12) as f32]).is_empty(), "the selected detail");
+        // waiting for the points: nothing
+        t.mode = 4;
+        t.draw(&vui, &mut r, &d, 0, &mut Vec::new());
+        assert!(t.point(stat(3, 100.0)).is_empty());
+        assert!(t.point(train).is_empty());
     }
 }

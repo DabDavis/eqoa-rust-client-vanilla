@@ -3,9 +3,11 @@
 //! then `Msg007C` adding one and `Msg007D` dropping one). Each quest's title
 //! is a text box as many rows as it wraps to, the page scrolled so the
 //! selection is whole; X asks (word 574) and a yes sends 0x007D with the
-//! quest's index (`Send007D`).
+//! quest's index (`Send007D`). A pointer (`pointer`) selects a quest and asks
+//! about the selected one; with the box up, its buttons.
 
 use crate::dialog::{BoxAnswer, Key, MBox};
+use crate::pointer::{Hits, MOVED, key, rows_rect};
 use crate::startmenu::KeyFlash;
 use vi::ui::{Raster, UI_COLORS, Vui, Window, wide};
 
@@ -87,23 +89,38 @@ pub struct QuestLog {
     keys: KeyFlash,
     mbox: MBox,
     boxed: bool,
+    /// each quest drawn, all its rows, by index; and the draw's time (a
+    /// selection's tick pulse starts over then, as the keys' does)
+    hits: Hits,
+    drawn: i64,
 }
 
 impl Default for QuestLog {
     fn default() -> Self {
         let mut mbox = MBox::default();
         mbox.pos = [100, 115];
-        QuestLog { sel: 0, top: 0, active: true, page_end: 0, last: 0, window: Window::default(), keys: KeyFlash::default(), mbox, boxed: false }
+        QuestLog { sel: 0, top: 0, active: true, page_end: 0, last: 0, window: Window::default(), keys: KeyFlash::default(), mbox, boxed: false, hits: Hits::default(), drawn: 0 }
     }
 }
 
 impl QuestLog {
 
-    /// A pointer at frame point `p` (`pointer`): what is under it selected,
-    /// and the keys to press.
+    /// A pointer at frame point `p` (`pointer`): with the box up, its
+    /// buttons; else a quest selected (`MOVED`), and the selected one asked
+    /// about (✕, `Select`). The keys to press.
     pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
-        let _ = p;
-        Vec::new()
+        if self.boxed {
+            return self.mbox.point(p).then_some(key::CROSS).into_iter().collect();
+        }
+        match self.hits.at(p) {
+            Some(i) if i == self.sel => vec![key::CROSS],
+            Some(i) => {
+                self.sel = i;
+                self.window.reset_tick_pulse(self.drawn);
+                vec![MOVED]
+            }
+            None => Vec::new(),
+        }
     }
     /// `Open`, with `OnMessage` 295's window: 550 wide, 14 rows, titled
     /// "Quest Journal" (573).
@@ -216,6 +233,8 @@ impl QuestLog {
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, quests: &Quests, now: i64, cues: &mut Vec<i32>) {
         let count = quests.titles.len() as i32;
         self.clamp_sel(count);
+        self.drawn = now;
+        self.hits.clear();
         vui.blit_rect(r, 32, [-1, -1], [641, 332], 0, 1.0);
         self.window.draw(vui, r);
         let w = |id: i32| vui.words.get(id, vui.language).to_string();
@@ -239,6 +258,7 @@ impl QuestLog {
                     self.window.tick_r(vui, r, 45, y, self.active);
                 }
                 self.window.text_box(vui, r, title, 45, y, width - 80, rows, UI_COLORS[(i == self.sel) as usize], 0);
+                self.hits.push(rows_rect(&self.window, vui, r, 45, y, width - 80, rows), i);
                 y = end;
                 self.last = i;
                 if self.top == 0 {
@@ -291,5 +311,37 @@ mod tests {
         q.recv_add(&add);
         assert_eq!((q.stamp, q.titles.last().unwrap().clone()), (0x1234, w("hi")));
         assert_eq!(q.send_remove(3), vec![0x7D, 0, 0x34, 0x12, 0, 0, 6]);
+    }
+
+    /// A click selects a quest (a title wrapped to two rows is two rows
+    /// tall), a second asks about it; then the box takes the clicks, the
+    /// list under it none; nothing below the last quest.
+    #[test]
+    fn a_pointer_selects_and_asks() {
+        use crate::pointer::testing::{NullRaster, mid, vui};
+        let (vui, mut r) = (vui(), NullRaster);
+        let mut q = Quests::default();
+        q.add(w("short"));
+        // eight pixels a character: wider than the 470-pixel box, two rows
+        q.add(w(&"long words ".repeat(7)));
+        q.add(w("third"));
+        let mut l = QuestLog::default();
+        l.open(&vui, &r);
+        let mut cues = Vec::new();
+        l.draw(&vui, &mut r, &q, 0, &mut cues);
+        let row = |l: &QuestLog, row: i32| rows_rect(&l.window, &vui, &NullRaster, 45, row, 470, 1);
+        assert_eq!(l.point(mid(row(&l, 3))), vec![MOVED], "the third quest, under the two-row title");
+        assert_eq!(l.sel, 2);
+        assert_eq!(l.point(mid(row(&l, 2))), vec![MOVED], "the long title's second row");
+        assert_eq!(l.sel, 1);
+        assert_eq!(l.point(mid(row(&l, 1))), vec![key::CROSS], "the selection: asked about");
+        assert!(l.point(mid(row(&l, 4))).is_empty(), "below the last quest");
+        assert!(l.point([30.0, mid(row(&l, 0))[1]]).is_empty(), "left of the rows");
+        // Select opens the box; then a quest row is not the box's
+        l.key(&vui, &q, key::CROSS, true, 0, &mut cues);
+        assert!(l.boxed);
+        l.draw(&vui, &mut r, &q, 0, &mut cues);
+        assert!(l.point(mid(row(&l, 0))).is_empty(), "the list under the box");
+        assert_eq!(l.sel, 1);
     }
 }

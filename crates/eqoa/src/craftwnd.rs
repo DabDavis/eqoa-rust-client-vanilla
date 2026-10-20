@@ -4,6 +4,11 @@
 //! has a pop-up menu on a recipe and an inspect window, the experiment a menu
 //! of the inventory's components (40 rows, three options each). What they ask
 //! of the client comes back as [`CraftUp`].
+//!
+//! A pointer (`pointer`) takes them as their keys reach them: in the book a
+//! component or a recipe selected and the selected one used, the popup's
+//! rows at once (a click off it closes it), the box's buttons; in the
+//! experiment the component menu (`WndMenu::point`) and the box.
 #![allow(clippy::too_many_arguments)]
 
 use crate::client_image::{Menu, MenuEntry, Menus};
@@ -11,6 +16,7 @@ use crate::craft::{Arg, Craft, CraftOut, printf16};
 use crate::dialog::{BoxAnswer, Key, MBox};
 use crate::infotext::Info;
 use crate::itemmenu::Inspect;
+use crate::pointer::{Hits, MOVED, key, rows_rect};
 use crate::startmenu::KeyFlash;
 use crate::wndlist::{ListUp, MiniMenu, WndMenu};
 use vi::ui::{Raster, UI_COLORS, Vui, Window, wide};
@@ -39,6 +45,10 @@ const COMPONENTS5: [i32; 13] = [1526, 1527, 1528, 1529, 1530, 1531, 1532, 1533, 
 /// The recipe pop-up's entries: (word, message); every one's id is the
 /// recipe's.
 const RECIPE_MENU: [(i32, u32); 4] = [(1525, 0xA704_0000), (122, 0xA704_0002), (200, 0xA704_0003), (516, 0xA704_0001)];
+
+/// What the book notes where it is drawn, for a pointer: a recipe by its
+/// index, a component by `COMP` + its index.
+const COMP: i32 = 1000;
 
 /// Who has the focus in a crafting window (`SetActiveWindow`).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -103,23 +113,71 @@ pub struct RecipeWnd {
     focus: Focus,
     dots: i8,
     ticks: i8,
+    hits: Hits,
 }
 
 impl Default for RecipeWnd {
     fn default() -> Self {
         let mut menu = MiniMenu::fixed(&RECIPE_MENU.map(|(w, m)| (w, m, -1)));
         menu.kind = 1;
-        RecipeWnd { skill: 0, comp: 0, comp_top: 0, sel: 0, sort: 0, top: 0, pick: -1, mode: 0, list: Vec::new(), window: Window::default(), status: Window::default(), keys: KeyFlash::default(), menu, inspect: Inspect::default(), mbox: MBox::default(), focus: Focus::Main, dots: 0, ticks: 15 }
+        RecipeWnd { skill: 0, comp: 0, comp_top: 0, sel: 0, sort: 0, top: 0, pick: -1, mode: 0, list: Vec::new(), window: Window::default(), status: Window::default(), keys: KeyFlash::default(), menu, inspect: Inspect::default(), mbox: MBox::default(), focus: Focus::Main, dots: 0, ticks: 15, hits: Hits::default() }
     }
 }
 
 impl RecipeWnd {
-
-    /// A pointer at frame point `p` (`pointer`): what is under it selected,
-    /// and the keys to press.
+    /// A pointer at frame point `p` (`pointer`), to the window with the
+    /// focus: the box's buttons; the popup's rows at once, a click off it
+    /// closing it (△); the inspect window none (its legend is glyphs, the
+    /// wheel scrolls it). In the book: a component selected (`MOVED`, the
+    /// recipe back to the first, as the keys' move does), the selected one's
+    /// recipes entered (✕); from the recipes a component is back to the
+    /// components (△) on it. A recipe selected (from the components, the
+    /// recipes entered on it: ✕), the selected one's popup or, picking a
+    /// place, the place taken (✕); while a place is picked the components
+    /// wait. The keys to press.
     pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
-        let _ = p;
-        Vec::new()
+        match self.focus {
+            Focus::MBox => return self.mbox.point(p).then_some(key::CROSS).into_iter().collect(),
+            Focus::Inspect => return Vec::new(),
+            Focus::Menu => {
+                return match self.menu.point(p) {
+                    Some(k) => k.into_iter().collect(),
+                    None => vec![key::TRIANGLE],
+                };
+            }
+            Focus::Main => {}
+        }
+        let Some(h) = self.hits.at(p) else { return Vec::new() };
+        if h >= COMP {
+            let c = h - COMP;
+            let mut keys = Vec::new();
+            if self.mode == 2 {
+                return keys;
+            }
+            if c == self.comp && self.mode == 0 {
+                return vec![key::CROSS];
+            }
+            if c != self.comp {
+                self.comp = c;
+                self.sel = 0;
+                keys.push(MOVED);
+            }
+            if self.mode == 1 {
+                keys.push(key::TRIANGLE);
+            }
+            return keys;
+        }
+        match self.mode {
+            0 => {
+                self.sel = h;
+                vec![key::CROSS]
+            }
+            _ if h == self.sel => vec![key::CROSS],
+            _ => {
+                self.sel = h;
+                vec![MOVED]
+            }
+        }
     }
     /// `OnMessage` 295 from outside its own windows: the windows, the
     /// children down, everything back to the first component.
@@ -407,6 +465,7 @@ impl RecipeWnd {
         }
         self.mbox.pos = [160, 115];
         let white = [1.0; 4];
+        self.hits.clear();
         vui.blit_rect(r, 32, [-1, -1], [642, 332], 0, 1.0);
         let head = printf16(
             &wide("%s: %S %d, %S %d %S"),
@@ -463,6 +522,7 @@ impl RecipeWnd {
                 vui.stretch_blit_ex(r, 61, p, [width - 80, 18], 3, 0.25);
             }
             let c = UI_COLORS[hl as usize];
+            self.hits.push(rows_rect(&self.window, vui, r, cols[0], row, width - 55 - cols[0] + 22, 1), i);
             self.window.text_box(vui, r, &rec.name, cols[0], row, cols[1] - cols[0], 1, c, 2);
             self.window.text_box(vui, r, &wide(&rec.level.to_string()), cols[1], row, cols[2] - cols[1], 1, c, 0);
             self.window.text_box(vui, r, &Self::difficulty(vui, rec.difficulty), cols[2], row, 110, 1, c, 2);
@@ -485,6 +545,7 @@ impl RecipeWnd {
             if i == self.comp {
                 self.window.tick_r(vui, r, 30, row, self.mode == 0);
             }
+            self.hits.push(rows_rect(&self.window, vui, r, 30, row, width - 55, 1), COMP + i);
             self.window.text_box(vui, r, &self.component_name(vui, i), 30, row, width - 55, 1, UI_COLORS[(i == self.comp) as usize], 2);
             i += 1;
             row += 1;
@@ -603,12 +664,16 @@ impl Default for ExperimentWnd {
 }
 
 impl ExperimentWnd {
-
-    /// A pointer at frame point `p` (`pointer`): what is under it selected,
-    /// and the keys to press.
+    /// A pointer at frame point `p` (`pointer`), to the window with the
+    /// focus: the box's buttons; the inspect window none; else the component
+    /// menu's rows and popups (`WndMenu::point`). The combine is the
+    /// legend's □. The keys to press.
     pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
-        let _ = p;
-        Vec::new()
+        match self.focus {
+            Focus::MBox => self.mbox.point(p).then_some(key::CROSS).into_iter().collect(),
+            Focus::Inspect => Vec::new(),
+            _ => self.menu.point(p),
+        }
     }
     /// `Refresh()`: 40 rows emptied, then one per component in the copy (an
     /// item with `m_p54`, not of type 8), each with its three options.
@@ -781,4 +846,117 @@ fn info_inventory(info: &Info) -> net::dump::ItemList {
 
 fn vui_words(vui: &Vui) -> &vi::strtab::StringTable {
     &vui.words
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::craft::Recipe;
+    use crate::pointer::testing::{NullRaster, mid, vui};
+
+    fn recipe(order: i32, id: i32, comp: u8) -> Recipe {
+        Recipe { order, id, comp, level: 1, name: wide(&format!("Recipe {id}")), ..Default::default() }
+    }
+
+    /// The book: a component selected, the selected one's recipes entered;
+    /// a recipe selected, the selected one's popup, whose rows a click uses
+    /// and off which a click closes it; from the recipes a component goes
+    /// back to the components; picking a place, the components wait; the
+    /// box's buttons only while it is up.
+    #[test]
+    fn a_pointer_takes_the_recipe_book() {
+        let (vui, mut r) = (vui(), NullRaster);
+        let mut part = Craft { recipes: vec![recipe(0, 10, 0), recipe(1, 11, 0), recipe(2, 12, 0), recipe(0, 20, 3), recipe(1, 21, 3)], ..Default::default() };
+        let mut w = RecipeWnd::default();
+        w.open(&vui, &r);
+        let mut cues = Vec::new();
+        w.draw(&vui, &mut r, &part, "X", 0, &mut cues);
+        // the components' window ([110, 180], 190 wide) and the recipes'
+        // ([410, 180], 430 wide), as the draw sets them up
+        let mut comps = Window::default();
+        comps.init(&vui, &NullRaster, [110, 180], 190, 14, 0);
+        comps.set_title(Some(&[]));
+        let mut recs = Window::default();
+        recs.init(&vui, &NullRaster, [410, 180], 430, 14, 0);
+        recs.set_title(Some(&[]));
+        let comp = |i: i32| mid(rows_rect(&comps, &vui, &NullRaster, 30, i, 135, 1));
+        let rec = |i: i32| mid(rows_rect(&recs, &vui, &NullRaster, 35, 2 + i, 340, 1));
+        assert_eq!(w.point(comp(3)), vec![MOVED]);
+        assert_eq!((w.comp, w.sel), (3, 0));
+        w.draw(&vui, &mut r, &part, "X", 0, &mut cues);
+        assert!(w.point(rec(1)) == vec![key::CROSS] && w.sel == 1, "a recipe from the components: entered on it");
+        w.sel = 0;
+        assert_eq!(w.point(comp(0)), vec![MOVED]);
+        w.draw(&vui, &mut r, &part, "X", 0, &mut cues);
+        assert_eq!(w.point(comp(0)), vec![key::CROSS], "the selected component: its recipes");
+        w.key(&vui, &mut part, key::CROSS, true, 0, &mut cues);
+        assert_eq!(w.mode, 1);
+        w.draw(&vui, &mut r, &part, "X", 0, &mut cues);
+        assert_eq!(w.point(rec(2)), vec![MOVED]);
+        assert_eq!(w.sel, 2);
+        assert!(w.point(rec(3)).is_empty(), "past the three recipes");
+        assert_eq!(w.point(rec(2)), vec![key::CROSS], "the selection: its popup");
+        assert_eq!(w.point(comp(1)), vec![MOVED, key::TRIANGLE], "a component from the recipes: back on it");
+        assert_eq!((w.comp, w.sel), (1, 0));
+        // the popup (titled, so its rows are there at once)
+        w.comp = 0;
+        w.draw(&vui, &mut r, &part, "X", 0, &mut cues);
+        w.mode = 1;
+        w.sel = 2;
+        w.key(&vui, &mut part, key::CROSS, true, 0, &mut cues);
+        assert_eq!(w.focus, Focus::Menu);
+        w.draw(&vui, &mut r, &part, "X", 100, &mut cues);
+        let at = w.menu.list.pos;
+        // DrawTitled: the rows from (+58, +48), 19 apart
+        assert_eq!(w.point([(at[0] + 60) as f32, (at[1] + 48 + 19 * 2) as f32]), vec![key::CROSS]);
+        assert_eq!(w.menu.list.sel, 2);
+        assert_eq!(w.point([600.0, 400.0]), vec![key::TRIANGLE], "off the popup: closed");
+        // picking a place: the recipes take a click, the components none
+        w.focus = Focus::Main;
+        w.menu.visible = false;
+        w.mode = 2;
+        w.draw(&vui, &mut r, &part, "X", 200, &mut cues);
+        assert!(w.point(comp(2)).is_empty());
+        assert_eq!(w.point(rec(0)), vec![MOVED]);
+        assert_eq!(w.point(rec(0)), vec![key::CROSS], "the place taken");
+        // the box: its buttons only
+        w.message(&wide("Done"), 300);
+        w.draw(&vui, &mut r, &part, "X", 300, &mut cues);
+        assert!(w.point(rec(1)).is_empty());
+        assert_eq!(w.sel, 0);
+    }
+
+    /// The experiment: the component menu's rows (a click selects, a second
+    /// opens the options), the box's buttons only while it is up.
+    #[test]
+    fn a_pointer_takes_the_experiment() {
+        let (vui, mut r) = (vui(), NullRaster);
+        let mut part = Craft::default();
+        part.items.items = (0..3)
+            .map(|k| {
+                let mut it = net::dump::NetItem { quantity: 1, equip_slot: -1, quick_slot: -1, ..Default::default() };
+                it.item.p54 = 1;
+                it.item.name = format!("Thing {k}");
+                it
+            })
+            .collect();
+        let mut w = ExperimentWnd::default();
+        w.open(&vui, &r, &part, &|_| 5, 0);
+        let words = vi::strtab::StringTable::default();
+        let base = [0; 29];
+        let attack = Vec::new();
+        let info = Info { words: &words, inv: &part.items, hp: [0; 4], base: &base, class: 0, level: 1, attack_words: &attack };
+        let mut cues = Vec::new();
+        w.draw(&vui, &mut r, &part, &info, &|_| 5, 0, &mut cues);
+        // style 0: the rows from the studs' corner (no atlas here: (16, 37))
+        let row = |i: i32| [40.0, (37 + 44 * i + 20) as f32];
+        assert_eq!(w.point(row(1)), vec![MOVED]);
+        assert_eq!(w.menu.list.sel, 1);
+        assert_eq!(w.point(row(1)), vec![key::CROSS]);
+        assert!(w.point(row(3)).is_empty(), "past the three components");
+        w.notify(&wide("Nothing"), 0);
+        w.draw(&vui, &mut r, &part, &info, &|_| 5, 0, &mut cues);
+        assert!(w.point(row(0)).is_empty(), "the box is up");
+        assert_eq!(w.menu.list.sel, 1);
+    }
 }

@@ -4,8 +4,10 @@
 //! page) and answered by 0x07E2 (byte 119, the sequence, the page, the page
 //! count, the list); a reply for an older request is dropped. Each standing
 //! is a bar from the middle of its cell, red to the left and blue to the
-//! right.
+//! right. A pointer (`pointer`) selects a faction and shows the selected
+//! one's standing; a click off that box closes it.
 
+use crate::pointer::{Hits, MOVED, key, rows_rect};
 use crate::startmenu::KeyFlash;
 use net::stream::{Reader, Writer};
 use vi::ui::{Raster, UI_COLORS, Vui, Window, wide};
@@ -76,16 +78,32 @@ pub struct FactionWnd {
     wait: Window,
     detail: Window,
     flash: KeyFlash,
+    /// the factions drawn, by index, and the standing's box (-1); the
+    /// draw's time (a selection's tick pulse starts over then)
+    hits: Hits,
+    drawn: i64,
 }
 
 impl FactionWnd {
-
-    /// A pointer at frame point `p` (`pointer`): what is under it selected,
-    /// and the keys to press.
+    /// A pointer at frame point `p` (`pointer`): with the standing's box up,
+    /// a click off it closes it (△); else a faction selected (`MOVED`), and
+    /// the selected one's standing shown (✕). The keys to press.
     pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
-        let _ = p;
-        Vec::new()
+        let hit = self.hits.at(p);
+        if self.mode == 1 {
+            return if hit == Some(-1) { Vec::new() } else { vec![key::TRIANGLE] };
+        }
+        match hit {
+            Some(i) if i == self.sel => vec![key::CROSS],
+            Some(i) if i >= 0 => {
+                self.sel = i;
+                self.window.reset_tick_pulse(self.drawn);
+                vec![MOVED]
+            }
+            _ => Vec::new(),
+        }
     }
+
     /// `OnMessage` 295: the windows, the selection at the top.
     pub fn open(&mut self, vui: &Vui, r: &dyn Raster) {
         self.window.init(vui, r, [320, 180], 600, 15, 0);
@@ -174,6 +192,8 @@ impl FactionWnd {
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, part: &Factions, now: i64, cues: &mut Vec<i32>) {
         let word = |id: i32| vui.words.get(id, vui.language).to_string();
         let c0 = UI_COLORS[0];
+        self.drawn = now;
+        self.hits.clear();
         vui.blit_rect(r, 32, [-1, -1], [642, 332], 0, 1.0);
         let title = wide("Factions");
         let tw = vui.string_width(r, &title) + 64;
@@ -194,6 +214,7 @@ impl FactionWnd {
                     self.window.tick_r(vui, r, x, row, self.mode == 0);
                 }
                 self.draw_standing(vui, r, *value, y, row, width - y - 25);
+                self.hits.push(rows_rect(&self.window, vui, r, x, row, width - x - 25, 1), i as i32);
             }
             if self.mode == 1 {
                 if let Some((name, value)) = part.list.get(self.sel as usize) {
@@ -203,6 +224,8 @@ impl FactionWnd {
                     self.detail.init(vui, r, [320, 180], 350, lines + 2, 1);
                     self.detail.open(false);
                     self.detail.draw(vui, r);
+                    let (tl, br) = (self.detail.top_left(), self.detail.bottom_right());
+                    self.hits.push([tl[0], tl[1], br[0], br[1]], -1);
                     let c = [1.0, 1.0, 1.0, self.detail.open];
                     self.detail.text_box(vui, r, &s, 20, 0, 310, lines, c, 1);
                     self.detail.text_box(vui, r, &wide(&format!("|t{}", word(161))), 20, lines + 1, 350, 1, c, 1);
@@ -285,5 +308,38 @@ mod tests {
         assert!(f.ready);
         assert_eq!((f.page, f.pages, f.list[0].1), (1, 34, -400));
         assert_eq!(String::from_utf16_lossy(&f.list[0].0), "Freeport Militia");
+    }
+
+    /// A click selects a faction, a second shows its standing in the box;
+    /// a click on the box does nothing, off it closes it (△); no rows
+    /// before the page has come.
+    #[test]
+    fn a_pointer_selects_and_shows_the_standing() {
+        use crate::pointer::testing::{NullRaster, mid, vui};
+        let (vui, mut r) = (vui(), NullRaster);
+        let mut f = Factions::default();
+        let mut w = FactionWnd::default();
+        w.open(&vui, &r);
+        let mut cues = Vec::new();
+        w.draw(&vui, &mut r, &f, 0, &mut cues);
+        let row = |w: &FactionWnd, row: i32| rows_rect(&w.window, &vui, &NullRaster, 40, row, 535, 1);
+        assert!(w.point(mid(row(&w, 3))).is_empty(), "no page yet: no rows");
+        f.page = 0;
+        f.pages = 1;
+        f.list = (0..4).map(|k| (wide(&format!("Faction {k}")), k * 100)).collect();
+        f.ready = true;
+        w.draw(&vui, &mut r, &f, 0, &mut cues);
+        // the list's rows start at row 2
+        assert_eq!(w.point(mid(row(&w, 4))), vec![MOVED]);
+        assert_eq!(w.sel, 2);
+        assert!(w.point(mid(row(&w, 7))).is_empty(), "past the four factions");
+        assert_eq!(w.point(mid(row(&w, 4))), vec![key::CROSS]);
+        w.key(&mut f, key::CROSS, true, &mut cues);
+        assert_eq!(w.mode, 1);
+        w.draw(&vui, &mut r, &f, 0, &mut cues);
+        let (tl, br) = (w.detail.top_left(), w.detail.bottom_right());
+        assert!(w.point(mid([tl[0], tl[1], br[0], br[1]])).is_empty(), "on the box");
+        assert_eq!(w.point([20.0, 20.0]), vec![key::TRIANGLE], "off the box: closed");
+        assert_eq!(w.sel, 2, "no other faction selected under the box");
     }
 }
