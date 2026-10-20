@@ -126,6 +126,8 @@ pub struct Play {
     /// What the HUD is built from once the viewer has a device
     /// (`attach_ui`): SUPPORT's atlas and TEXTURES.TXT.
     ui_data: Option<(Vec<vi::ui::UiTexEntry>, vi::strtab::StringTable)>,
+    /// The HUD's surfaces and fonts, uploaded while the atlas is awaited.
+    ui_assets: Option<crate::ui::UiAssets>,
     /// CLIENT's and SUPPORT's images taken up (`take_modules`).
     modules_taken: [bool; 2],
     /// The HUD, once the viewer has a device (`attach_ui`): `VIUI`, the
@@ -615,7 +617,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default() };
         p.take_abilities();
         p.npcw_world_entry();
         p
@@ -3302,31 +3304,39 @@ impl Play {
     /// Builds the HUD on the viewer's device: the 2D layer, UI.CSF's and
     /// ITEMICON.ESF's surfaces (the item icons the client's icon cache
     /// would stream), ADDART.CSF's (the compass's patch), FX.CSF's damage
-    /// font and "ArialUI" out of the loaded files. The viewer calls it every
-    /// frame; it does its work once, when SUPPORT's atlas is here.
+    /// font and "ArialUI" out of the loaded files, uploaded the first time
+    /// (as the viewer gets its device); then `VIUI` over them, once
+    /// SUPPORT's atlas is here. The viewer calls it every frame.
     pub fn attach_ui(&mut self, renderer: &mut render::Renderer, device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat, lib: &Library) {
-        let Some((atlas, textures)) = self.ui_data.take() else { return };
-        let mut ui = render::ui::Ui::new(device, format, render::DEPTH_FORMAT);
-        let words = self.words.clone().unwrap_or_default();
-        let vui = crate::ui::Vui::new(words, textures, atlas);
-        let mut assets = crate::ui::UiAssets::default();
-        assets.add_white(&mut ui, device, queue);
-        for (name, c) in &lib.files {
-            if name.eq_ignore_ascii_case("UI.CSF") || name.eq_ignore_ascii_case("ITEMICON.ESF") || name.eq_ignore_ascii_case("ADDART.CSF") {
-                assets.add_surfaces(&mut ui, device, queue, c);
+        if self.hud.is_none() && self.ui_assets.is_none() && (self.ui_textures.is_some() || self.ui_data.is_some()) {
+            let mut ui = render::ui::Ui::new(device, format, render::DEPTH_FORMAT);
+            let mut assets = crate::ui::UiAssets::default();
+            assets.add_white(&mut ui, device, queue);
+            for (name, c) in &lib.files {
+                if name.eq_ignore_ascii_case("UI.CSF") || name.eq_ignore_ascii_case("ITEMICON.ESF") || name.eq_ignore_ascii_case("ADDART.CSF") {
+                    assets.add_surfaces(&mut ui, device, queue, c);
+                }
+                if name.eq_ignore_ascii_case("FX.CSF") {
+                    assets.add_surface(&mut ui, device, queue, c, vi::hash::hash_resource_id("damage_font.tga"));
+                }
             }
-            if name.eq_ignore_ascii_case("FX.CSF") {
-                assets.add_surface(&mut ui, device, queue, c, vi::hash::hash_resource_id("damage_font.tga"));
+            let id = vi::ui::font_id() as i32;
+            let font = lib.files.iter().find_map(|(_, c)| (0..c.nodes.len()).filter(|&i| c.nodes[i].ty == 0x7000).find_map(|i| esf::font::read(c, i).filter(|f| f.id == id)));
+            if let Some(f) = font {
+                assets.font = Some(ui.add_font(device, queue, &f));
             }
+            renderer.ui = Some(ui);
+            self.ui_assets = Some(assets);
         }
-        let id = vi::ui::font_id() as i32;
-        let font = lib.files.iter().find_map(|(_, c)| (0..c.nodes.len()).filter(|&i| c.nodes[i].ty == 0x7000).find_map(|i| esf::font::read(c, i).filter(|f| f.id == id)));
-        if let Some(f) = font {
-            assets.font = Some(ui.add_font(device, queue, &f));
+        if self.hud.is_none()
+            && self.ui_data.is_some()
+            && let Some(assets) = self.ui_assets.take()
+        {
+            let (atlas, textures) = self.ui_data.take().unwrap();
+            let words = self.words.clone().unwrap_or_default();
+            self.hud = Some((crate::ui::Vui::new(words, textures, atlas), assets, crate::hud::Hud::new()));
+            self.wnd_chat = Some(crate::chat::WndChat::new());
         }
-        renderer.ui = Some(ui);
-        self.hud = Some((vui, assets, crate::hud::Hud::new()));
-        self.wnd_chat = Some(crate::chat::WndChat::new());
     }
 
     /// The HUD's quads for this frame (`VIWndGame::OnDrawSelf`).
