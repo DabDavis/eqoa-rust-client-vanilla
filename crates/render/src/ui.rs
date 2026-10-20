@@ -17,6 +17,28 @@ use wgpu::util::DeviceExt;
 pub const SCREEN_W: f32 = 640.0;
 pub const SCREEN_H: f32 = 448.0;
 
+/// A quad's clip that is the whole target (`Ui::push_whole`).
+const WHOLE: [i32; 4] = [i32::MIN / 4, i32::MIN / 4, i32::MAX / 4, i32::MAX / 4];
+
+/// Where the frame sits in a `size` target: its offset and its scale. The
+/// frame keeps its 4:3 shape (a PS2 shows it on a 4:3 picture): the full
+/// height, in the middle of a wider target (eqoa-port's widescreen does the
+/// same with the HUD).
+fn frame(size: (u32, u32)) -> (f32, f32, f32, f32) {
+    let (tw, th) = (size.0 as f32, size.1 as f32);
+    let fw = (th * 4.0 / 3.0).min(tw);
+    let fh = if fw < th * 4.0 / 3.0 { fw * 3.0 / 4.0 } else { th };
+    ((tw - fw) / 2.0, (th - fh) / 2.0, fw / SCREEN_W, fh / SCREEN_H)
+}
+
+/// A point of a `size` target, in normalised device coordinates (y up), as
+/// a point of the frame: off its sides in a wider target.
+pub fn frame_from_ndc(size: (u32, u32), ndc: [f32; 2]) -> [f32; 2] {
+    let (tw, th) = (size.0 as f32, size.1 as f32);
+    let (ox, oy, sx, sy) = frame(size);
+    [((ndc[0] + 1.0) * 0.5 * tw - ox) / sx, ((1.0 - ndc[1]) * 0.5 * th - oy) / sy]
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Vertex {
@@ -246,6 +268,14 @@ impl Ui {
         }
     }
 
+    /// A quad cut only to the target, not to the frame or a viewport: for
+    /// what floats over the world, which reaches past the frame's sides in a
+    /// wider window.
+    pub fn push_whole(&mut self, mut q: Quad) {
+        q.clip = Some(WHOLE);
+        self.quads.push(q);
+    }
+
     /// A quad, placed in and cut to the current viewport.
     pub fn push(&mut self, mut q: Quad) {
         if let Some([x1, y1, x2, y2]) = self.viewport {
@@ -266,14 +296,8 @@ impl Ui {
         if self.quads.is_empty() {
             return;
         }
-        // The frame keeps its 4:3 shape (a PS2 shows it on a 4:3 picture):
-        // the full height, in the middle of a wider target (eqoa-port's
-        // widescreen does the same with the HUD).
         let (tw, th) = (size.0 as f32, size.1 as f32);
-        let fw = (th * 4.0 / 3.0).min(tw);
-        let fh = if fw < th * 4.0 / 3.0 { fw * 3.0 / 4.0 } else { th };
-        let (ox, oy) = ((tw - fw) / 2.0, (th - fh) / 2.0);
-        let (sx, sy) = (fw / SCREEN_W, fh / SCREEN_H);
+        let (ox, oy, sx, sy) = frame(size);
         let mut v = Vec::with_capacity(self.quads.len() * 6);
         for q in &self.quads {
             let p = |i: usize| Vertex {
@@ -294,7 +318,7 @@ impl Ui {
                 j += 1;
             }
             let [x0, y0, x1, y1] = clip.unwrap_or([0, 0, SCREEN_W as i32, SCREEN_H as i32]);
-            let px = |v: i32, o: f32, k: f32, max: u32| ((o + v.max(0) as f32 * k) as u32).min(max);
+            let px = |v: i32, o: f32, k: f32, max: u32| (o + v as f32 * k).clamp(0.0, max as f32) as u32;
             let (a, b) = (px(x0, ox, sx, size.0), px(y0, oy, sy, size.1));
             let (c, d) = (px(x1, ox, sx, size.0), px(y1, oy, sy, size.1));
             if c <= a || d <= b {
