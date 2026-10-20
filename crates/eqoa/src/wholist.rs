@@ -2,11 +2,13 @@
 //! reply 0x0E02, a stale serial dropped), `VIWndWhoList` (ten rows of name,
 //! race, class and level in a titled window, "searching..." while the reply
 //! is out) and `VIWndOptionList`, the popup a row opens: Tell (the edit box,
-//! then `/t name text`), Invite (`InviteToGroup`), Mail (not ported).
+//! then `/t name text`), Invite (`InviteToGroup`), Mail (not ported). A
+//! pointer (`pointer`) selects a row and opens its popup from the selection;
+//! off the popup it closes it.
 
 #![allow(clippy::too_many_arguments)]
 
-use crate::pointer::{Hits, key, rows_rect};
+use crate::pointer::{Hits, MOVED, key, rows_rect};
 use crate::startmenu::KeyFlash;
 use net::stream::{Reader, Writer};
 use vi::ui::{Raster, UI_COLORS, Vui, Window, wide};
@@ -204,15 +206,44 @@ pub struct WhoList {
     flash: KeyFlash,
     ticks: i32,
     dots: i32,
+    /// the rows drawn, by index into the list, and when (for a pointer)
+    hits: Hits,
+    now: i64,
 }
 
 impl WhoList {
-
-    /// A pointer at frame point `p` (`pointer`): what is under it selected,
-    /// and the keys to press.
+    /// A pointer at frame point `p` (`pointer`): with the popup up, its
+    /// choice taken, or off it the popup closed (△) and the row under the
+    /// pointer selected; else a row selected, or the selection's popup
+    /// opened (✕). The keys to press.
     pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
-        let _ = p;
-        Vec::new()
+        if self.options.visible {
+            if let Some(k) = self.options.point(p) {
+                return k.into_iter().collect();
+            }
+            let mut keys = Vec::new();
+            if let Some(row) = self.hits.at(p).filter(|&row| row != self.sel) {
+                self.select(row);
+                keys.push(MOVED);
+            }
+            keys.push(key::TRIANGLE);
+            return keys;
+        }
+        match self.hits.at(p) {
+            Some(row) if row == self.sel => vec![key::CROSS],
+            Some(row) => {
+                self.select(row);
+                vec![MOVED]
+            }
+            None => Vec::new(),
+        }
+    }
+
+    /// The selection on `row` as the d-pad's move leaves it: the tick's
+    /// pulse started over.
+    fn select(&mut self, row: i32) {
+        self.sel = row;
+        self.window.reset_tick_pulse(self.now);
     }
     /// `OnMessage` 295 from outside: the window and the status box set up
     /// and titled (730, 271), the popup's three choices (425, 942, 515)
@@ -288,6 +319,8 @@ impl WhoList {
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, who: &Who, now: i64, focused: bool, cues: &mut Vec<i32>) {
         let w = |id: i32| wide(vui.words.get(id, vui.language));
         let n = who.list.len() as i32;
+        self.now = now;
+        self.hits.clear();
         vui.blit_rect(r, 32, [-1, -1], [642, 332], 0, 1.0);
         self.window.draw(vui, r);
         if self.sel > n - 1 {
@@ -320,6 +353,7 @@ impl WhoList {
             self.window.text_box(vui, r, &w(race), x[1], row, x[2] - x[1], 1, c, 2);
             self.window.text_box(vui, r, &w(class), x[2], row, x[3] - x[2], 1, c, 2);
             self.window.text_box(vui, r, &wide(&e.level.to_string()), x[3], row, width - x[3] - 40, 1, c, 2);
+            self.hits.push(rows_rect(&self.window, vui, r, x[0], row, width - x[0] - 40, 1), i);
             if i == self.sel {
                 self.window.tick_r(vui, r, 46, row, focused && !self.options.visible);
             }
@@ -401,4 +435,49 @@ mod tests {
         assert!(!who.pending);
         assert_eq!(who.list.iter().map(|e| (e.name.as_str(), e.level, e.x1c)).collect::<Vec<_>>(), vec![("Rsgroup", 1, 100), ("TestBear", 2, 101)]);
     }
+
+    /// A pointer on the who list: a row selected, then its popup opened
+    /// (✕); on the popup a choice taken at once; off it the popup closed
+    /// (△) and the row under the pointer selected. The header, the rows
+    /// past the list and what is off the window are nothing.
+    #[test]
+    fn a_pointer_selects_a_row_and_opens_its_popup() {
+        use crate::pointer::testing::{NullRaster, mid, vui};
+        use crate::pointer::{MOVED, key};
+        let vui = vui();
+        let mut r = NullRaster;
+        let mut who = Who::default();
+        for k in 0..3 {
+            who.list.push(WhoRow { name: format!("P{k}"), ..Default::default() });
+        }
+        let mut l = WhoList::default();
+        l.open(&vui, &r);
+        let mut cues = Vec::new();
+        l.draw(&vui, &mut r, &who, 0, true, &mut cues);
+        // the list's rows are the window's rows 1.., from x 50
+        let row = |l: &WhoList, i: i32| rows_rect(&l.window, &vui, &NullRaster, 50, i + 1, 400, 1);
+        assert_eq!(l.point(mid(row(&l, 1))), vec![MOVED]);
+        assert_eq!(l.sel, 1);
+        assert_eq!(l.point(mid(row(&l, 1))), vec![key::CROSS], "the selection: its popup");
+        assert!(l.point(mid(row(&l, -1))).is_empty(), "the header");
+        assert!(l.point(mid(row(&l, 3))).is_empty(), "past the list");
+        assert!(l.point([5.0, 5.0]).is_empty(), "off the window");
+        assert_eq!(l.sel, 1);
+        // ✕ opens the popup; drawn, its choices are there
+        l.key(&vui, &r, &who, 134, true, 0, &mut cues);
+        assert!(l.options.visible);
+        l.draw(&vui, &mut r, &who, 16, true, &mut cues);
+        let choice = mid(rows_rect(&l.options.window, &vui, &NullRaster, 40, 2, 100, 1));
+        assert_eq!(l.point(choice), vec![key::CROSS]);
+        assert_eq!(l.options.sel, 1, "Invite");
+        // the popup's own frame: nothing
+        let tl = l.options.window.top_left();
+        assert!(l.point([tl[0] as f32 + 4.0, tl[1] as f32 + 4.0]).is_empty());
+        // off the popup on row 0, at its left end: closed, row 0 selected
+        let r0 = row(&l, 0);
+        assert_eq!(l.point([r0[0] as f32 + 10.0, mid(r0)[1]]), vec![MOVED, key::TRIANGLE]);
+        assert_eq!(l.sel, 0);
+        assert_eq!(l.point([5.0, 5.0]), vec![key::TRIANGLE], "off everything: closed only");
+    }
+
 }
