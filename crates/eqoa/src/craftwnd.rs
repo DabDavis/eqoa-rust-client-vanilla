@@ -866,8 +866,7 @@ mod tests {
     #[test]
     fn a_pointer_takes_the_recipe_book() {
         let (vui, mut r) = (vui(), NullRaster);
-        let mut part = Craft::default();
-        part.recipes = vec![recipe(0, 10, 0), recipe(1, 11, 0), recipe(2, 12, 0), recipe(0, 20, 3), recipe(1, 21, 3)];
+        let mut part = Craft { recipes: vec![recipe(0, 10, 0), recipe(1, 11, 0), recipe(2, 12, 0), recipe(0, 20, 3), recipe(1, 21, 3)], ..Default::default() };
         let mut w = RecipeWnd::default();
         w.open(&vui, &r);
         let mut cues = Vec::new();
