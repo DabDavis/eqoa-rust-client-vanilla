@@ -30,6 +30,7 @@ pub mod geom;
 pub mod hash;
 pub mod hsprite;
 pub mod lightning;
+pub mod pad;
 pub mod particle;
 pub mod pick;
 pub mod quat;
