@@ -691,7 +691,12 @@ pub async fn play(file: web_sys::File, user: String, password: String, opts: JsV
         status(&format!("logging in as {user}"));
         let l = relay::login(&relay, server, auth_port, &user, &password).await?;
         let (sock, local) = relay::RelayUdp::open(&relay).await?;
-        let s = Session::connect_with(Box::new(sock), local, (server, game_port), &user, l.token).ok_or("could not open the game connection")?;
+        let mut s = Session::connect_with(Box::new(sock), local, (server, game_port), &user, l.token).ok_or("could not open the game connection")?;
+        // `?netdebug`: the session's datagram trace on the console
+        if web_sys::window().and_then(|w| w.location().search().ok()).is_some_and(|q| q.contains("netdebug")) {
+            net::session::set_debug_sink(log);
+            s.set_debug(true);
+        }
         let (s, player, dump) = enter_world(s, opt(&opts, "character"), words.as_ref()).await?;
         // The world the dump names, by the path's last part, opened with its
         // zones on the disc and the ones round the player read, while the

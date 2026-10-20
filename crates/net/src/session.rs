@@ -224,6 +224,21 @@ pub enum State {
     World = 5,
 }
 
+static DEBUG_SINK: std::sync::OnceLock<fn(&str)> = std::sync::OnceLock::new();
+
+/// Where `EQOA_NET_DEBUG`'s lines go when not to stderr: a page has no
+/// stderr, so it sets its console (`?netdebug`).
+pub fn set_debug_sink(f: fn(&str)) {
+    let _ = DEBUG_SINK.set(f);
+}
+
+fn debug_line(s: &str) {
+    match DEBUG_SINK.get() {
+        Some(f) => f(s),
+        None => eprintln!("{s}"),
+    }
+}
+
 pub struct Session {
     pub drdp: Drdp<Ee>,
     socket: Box<dyn Datagrams>,
@@ -419,6 +434,11 @@ impl Session {
     }
 
     /// The DRDP clock: milliseconds, from the wall clock at connect.
+    /// The datagram and message trace `EQOA_NET_DEBUG` turns on.
+    pub fn set_debug(&mut self, on: bool) {
+        self.debug = on;
+    }
+
     pub fn now(&self) -> u32 {
         self.base.wrapping_add(self.start.elapsed().as_millis() as u32)
     }
@@ -442,22 +462,22 @@ impl Session {
                 while b.remaining() > 0 && !b.overflow {
                     let h = drdp::read_segment_header(&mut b, 0, 0);
                     let body = b.rest()[..(h.size as usize).min(b.rest().len()).min(16)].to_vec();
-                    eprintln!("[net]    body head {body:02x?}");
+                    debug_line(&format!("[net]    body head {body:02x?}"));
                     b.skip(h.size as usize);
                     segs.push(format!("flags {:#x} size {} crc {:#x} src {:#x} dst {:#x}", h.flags, h.size, h.crc, h.src, h.dst));
                 }
-                eprintln!("[net] <- {n} bytes, drdp ports {from:#x}->{to:#x}: {r}; {segs:?}");
+                debug_line(&format!("[net] <- {n} bytes, drdp ports {from:#x}->{to:#x}: {r}; {segs:?}"));
                 let sys = self.drdp.system_endpoint;
                 for (&dst, &c) in &self.drdp.eps[sys].connections {
                     let k = &self.drdp.conns[c];
-                    eprintln!("[net]    conn {dst:#x}: flags {:#x} flush {} arrival {} rx_seq {} tx_seq {} tx_ack {} inst {:#x}/{:#x} cstat {:?}", k.flags, k.flush, k.arrival_number, k.rx_seqnum, k.tx_seqnum, k.tx_ack, k.instance_local, k.instance_remote, k.cstat);
+                    debug_line(&format!("[net]    conn {dst:#x}: flags {:#x} flush {} arrival {} rx_seq {} tx_seq {} tx_ack {} inst {:#x}/{:#x} cstat {:?}", k.flags, k.flush, k.arrival_number, k.rx_seqnum, k.tx_seqnum, k.tx_ack, k.instance_local, k.instance_remote, k.cstat));
                 }
             }
         }
         let mut events = std::mem::take(&mut self.held);
         while let Some(m) = self.drdp.receive() {
             if self.debug {
-                eprintln!("[net] message type {} size {} src {:#x}", m.ty, m.data.len(), m.src);
+                debug_line(&format!("[net] message type {} size {} src {:#x}", m.ty, m.data.len(), m.src));
             }
             self.route(m, &mut events);
         }
@@ -473,7 +493,7 @@ impl Session {
                     b.skip(h.size as usize);
                     segs.push(format!("flags {:#x} dst {:#x} body {body:02x?}", h.flags, h.dst));
                 }
-                eprintln!("[net] -> {} bytes, drdp ports {from:#x}->{to:#x}: {segs:?}", p.data.len());
+                debug_line(&format!("[net] -> {} bytes, drdp ports {from:#x}->{to:#x}: {segs:?}", p.data.len()));
             }
             self.socket.send_to(&p.data, p.to.ip, p.to.port);
             self.packets_sent += 1;
@@ -552,7 +572,7 @@ impl Session {
                 // Every retail dump ends in 39 zero bytes past the last
                 // field read (tests/dump_capture.rs).
                 if self.debug || r.error || r.pos + 39 != r.data.len() {
-                    eprintln!("[net] MemoryDump: {} of {} bytes read{}", r.pos, r.data.len(), if r.error { ", SHORT" } else { "" });
+                    debug_line(&format!("[net] MemoryDump: {} of {} bytes read{}", r.pos, r.data.len(), if r.error { ", SHORT" } else { "" }));
                 }
                 // Msg000D goes on only when the whole dump read.
                 if !r.error {

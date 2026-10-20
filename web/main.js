@@ -195,6 +195,7 @@ $('login').addEventListener('submit', async (ev) => {
   started = true;
   busy(true);
   error('login', '');
+  $('takeover').hidden = true;
   try {
     if (mode === 'new') {
       status('making the account');
@@ -209,7 +210,36 @@ $('login').addEventListener('submit', async (ev) => {
   } catch (e) {
     show('login');
     busy(false);
+    const msg = String(e && e.message ? e.message : e);
+    error('login', msg);
+    // one login at a time: the server refuses a second window on an account
+    // already in the game, and its owner may end the other one from here
+    $('takeover').hidden = !/already logged in/i.test(msg);
+  }
+});
+
+// "Log out the other window": the account's sessions in the game are ended
+// (each is told "You have logged in from another location."), then this
+// window logs in.
+$('takeover-go').addEventListener('click', async () => {
+  const user = $('user').value.trim();
+  const pass = $('pass').value;
+  if (!user || !pass) return error('login', 'Enter the account name and password first.');
+  $('takeover-go').disabled = true;
+  try {
+    const r = await fetch(accountBase + '/api/logout', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: user, password: pass }),
+    });
+    if (!r.ok) throw new Error('the account service answered ' + r.status);
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error || 'the other window was not logged out');
+    $('takeover').hidden = true;
+    error('login', '');
+    $('login').requestSubmit();
+  } catch (e) {
     error('login', String(e && e.message ? e.message : e));
+  } finally {
+    $('takeover-go').disabled = false;
   }
 });
 

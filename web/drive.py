@@ -149,6 +149,8 @@ async def drive(a, base, ws_url):
                     buttons: Array.from({ length: 17 }, () => ({ pressed: false, touched: false, value: 0 })),
                     axes: [0, 0, 0, 0], vibrationActuator: null };
                 Object.defineProperty(navigator, 'getGamepads', { configurable: true, value: () => [window.drivePad] });""")
+        for src in a.init:
+            await call("Page.addScriptToEvaluateOnNewDocument", source=src)
         await call("Page.navigate", url=base + ("?" + q if q else ""))
         await asyncio.sleep(2)
 
@@ -318,6 +320,7 @@ if __name__ == "__main__":
     ap.add_argument("--character", help="the page's ?character=: played at once, skipping the select screen")
     ap.add_argument("--new-account", action="store_true")
     ap.add_argument("--js", action="append", default=[])
+    ap.add_argument("--init", action="append", default=[], help="a script run before the page's own (wrap a constructor, say)")
     ap.add_argument("--params", default="", help="the page's query string")
     ap.add_argument("--base", help="a page already served (default: web/dist on --http-port)")
     ap.add_argument("--http-port", type=int, default=0, help="0: any free port")

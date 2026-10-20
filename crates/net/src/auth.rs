@@ -5,8 +5,10 @@
 //! DES-decrypts into a billing key it never uses for login). The client sends
 //! the 148-byte Login Request (type 36) with its password DES-CBC encrypted
 //! under `des_string_to_key("LPSS-V1.0$@Z>.ADJ")`, the key doubling as the
-//! IV; the server answers with the 168-byte type 37: `result` at 12 must be
-//! 0, the account id is at 80, its status at 84, the game features at 164.
+//! IV; the server answers with the 168-byte type 37 (`VIStationReply37`):
+//! `result` at 8 must be 0, a text at 12 (64 bytes; STATION never shows it,
+//! its refusal is word 1394), the account id at 80, its status at 84, the game
+//! features at 164.
 //!
 //! What the game connection carries forward is not from the reply: STATION
 //! hands CLIENT the password AES-256-ECB encrypted under a fixed key, and the
@@ -86,8 +88,9 @@ pub enum Error {
     Io(std::io::Error),
     /// The server answered with a type other than the one expected.
     Unexpected(u32),
-    /// `result` was not 0 (the game shows word 1394).
-    Refused(u32),
+    /// `result` was not 0 (the game shows word 1394), with the reply's text
+    /// (empty when the server gave none).
+    Refused(u32, String),
 }
 
 impl From<std::io::Error> for Error {
@@ -101,7 +104,8 @@ impl std::fmt::Display for Error {
         match self {
             Error::Io(e) => write!(f, "auth: {e}"),
             Error::Unexpected(t) => write!(f, "auth: unexpected message type {t:#x}"),
-            Error::Refused(r) => write!(f, "auth: login refused (result {r})"),
+            Error::Refused(_, t) if !t.is_empty() => write!(f, "{t}"),
+            Error::Refused(r, _) => write!(f, "auth: login refused (result {r})"),
         }
     }
 }
@@ -172,8 +176,10 @@ impl Exchange {
         }
         let r = &self.buf[..168];
         let be = |o: usize| u32::from_be_bytes(r[o..o + 4].try_into().unwrap());
-        if be(12) != 0 {
-            return Err(Error::Refused(be(12)));
+        if be(8) != 0 {
+            let t = &r[12..76];
+            let t = &t[..t.iter().position(|&b| b == 0).unwrap_or(t.len())];
+            return Err(Error::Refused(be(8), String::from_utf8_lossy(t).into_owned()));
         }
         Ok(Step::Done(Login { account: be(80), status: be(84), game_features: be(164), token: udp_token(&self.password) }))
     }
@@ -236,8 +242,19 @@ mod tests {
         let mut x = Exchange::new("dab", "x");
         x.feed(&frame(4, 40)).unwrap();
         let mut refused = frame(37, 168);
-        refused[12..16].copy_from_slice(&5u32.to_be_bytes());
-        assert!(matches!(x.feed(&refused), Err(Error::Refused(5))));
+        refused[8..12].copy_from_slice(&1u32.to_be_bytes());
+        refused[12..38].copy_from_slice(b"You are already logged in.");
+        match x.feed(&refused) {
+            Err(e @ Error::Refused(1, _)) => assert_eq!(e.to_string(), "You are already logged in."),
+            r => panic!("{r:?}"),
+        }
+        // control: text with result 0 is no refusal (OnValidateLogin tests
+        // the result alone)
+        let mut x = Exchange::new("dab", "x");
+        x.feed(&frame(4, 40)).unwrap();
+        let mut ok = frame(37, 168);
+        ok[12..16].copy_from_slice(b"note");
+        assert!(matches!(x.feed(&ok), Ok(Step::Done(_))));
         let mut x = Exchange::new("dab", "x");
         assert!(matches!(x.feed(&frame(0x43, 40)), Err(Error::Unexpected(0x43))));
     }
