@@ -20,6 +20,10 @@ pollster = "1.0.1"
 glam = "0.34.1"
 png = "0.18.1"
 cpal = "0.16"
+
+# The gamepads natively (SDL's layout, force feedback); a page reads the
+# Gamepad API itself (`padmap`, `web::pad`).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 gilrs = "0.11.2"
 
 # The browser build (`web/build.sh`): the page hands over the player's disc
@@ -41,10 +45,13 @@ web-sys = { version = "0.3.106", features = [
     "Element",
     "Event",
     "File",
+    "Gamepad",
+    "GamepadButton",
     "HtmlCanvasElement",
     "HtmlElement",
     "Location",
     "MessageEvent",
+    "Navigator",
     "Performance",
     "WebSocket",
     "Window",

@@ -49,6 +49,9 @@ mod damage;
 mod hudmenu;
 mod influence;
 mod input;
+// the page's gamepads (the browser build), checked natively by its tests
+#[cfg(any(test, target_arch = "wasm32"))]
+mod padmap;
 mod spellbook;
 mod infotext;
 mod inventory;

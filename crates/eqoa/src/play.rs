@@ -764,7 +764,7 @@ impl Play {
         let _ = writeln!(o, "character: {} (server id {}), level {}, race {}, class {}", p.name, p.server_id, self.dump.player.level, p.race, p.class);
         let _ = writeln!(o, "world {} ({}), at {at:?}", p.world, p.world_path);
         let target = if self.target == u32::MAX { "none".to_string() } else { format!("{:#x}", self.target) };
-        let _ = writeln!(o, "mode {}, target {target}, dead {}, autorun {}", self.mode, self.is_dead(), self.autorun);
+        let _ = writeln!(o, "mode {}, target {target}, dead {}, autorun {}, auto-attack {}", self.mode, self.is_dead(), self.autorun, self.auto_attack);
         let start = match (&self.start, self.modules_taken[0]) {
             (Some(_), _) => "in",
             (None, true) => "CLIENT came but was not read",
