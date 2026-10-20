@@ -8,6 +8,9 @@
 //!
 //! The corpse itself is `VIClient::m_corpse`, read off 0x0018 (and the
 //! MemoryDump); 0x0016 closes the window and forgets it.
+//!
+//! A pointer (`pointer`) takes the corpse list's rows, as its keys do; the
+//! inventory list beside it takes no keys, so no pointer either.
 
 #![allow(clippy::too_many_arguments)]
 
@@ -98,6 +101,12 @@ impl Loot {
         }
         self.window.open(false);
         self.visible = true;
+    }
+
+    /// A pointer at frame point `p`: a row of the corpse list selected, the
+    /// selection taken (Enter: take it, all, or close). The keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        self.loot.row_at(p).map(|row| self.loot.pick(row)).into_iter().collect()
     }
 
     /// The corpse list's keys (`VIWndList::OnKeyDown`, Enter as 256 to
@@ -199,5 +208,32 @@ mod tests {
         assert_eq!(at(4), None);
         assert_eq!(w.key(27, true, &c, &mut cues), Some(LootOut::Close));
         assert_eq!(cues, vec![13, 13, 13, 13, 13, 8]);
+    }
+
+    /// A click selects a row of the corpse list where it was drawn, a second
+    /// takes it (Enter); the inventory list beside it takes no keys and no
+    /// pointer, and a row past the corpse's is not there.
+    #[test]
+    fn a_pointer_on_the_corpse() {
+        use crate::pointer::testing::{NullRaster, vui};
+        use crate::pointer::{MOVED, key};
+        let (vui, mut r) = (vui(), NullRaster);
+        let (inv, c) = (corpse(3), corpse(2));
+        let base = [0; 29];
+        let info = Info { words: &vui.words, inv: &inv, hp: [0; 4], base: &base, class: 0, level: 1, attack_words: &[] };
+        let mut w = Loot::default();
+        w.open(&vui, &r, 0);
+        let mut cues = Vec::new();
+        w.draw(&vui, &mut r, &info, &c, &|_| 1, &|_| 1, 0, &mut cues);
+        // the corpse list at (144, 10), the inventory's at (5, 10): rows 44
+        // high (no atlas here, so no studs before them)
+        let row = |x: f32, i: i32| [x + 57.0, 10.0 + 44.0 * i as f32 + 22.0];
+        assert_eq!(w.point(row(144.0, 2)), vec![MOVED]);
+        assert_eq!(w.loot.sel, 2);
+        assert_eq!(w.point(row(144.0, 2)), vec![key::CROSS], "the selection: Enter");
+        assert_eq!(w.key(134, true, &c, &mut cues), Some(LootOut::One(11, 2)), "the row the pointer chose");
+        assert!(w.point(row(144.0, 4)).is_empty(), "past \"done\": no row");
+        assert!(w.point(row(5.0, 0)).is_empty(), "the inventory list takes no pointer");
+        assert_eq!(w.loot.sel, 2);
     }
 }
