@@ -444,11 +444,15 @@ impl Renderer {
                         module: &shader,
                         entry_point: Some("fs_main"),
                         compilation_options: Default::default(),
-                        targets: &[Some(wgpu::ColorTargetState {
-                            format,
-                            blend,
-                            write_mask: if blend.is_some() { wgpu::ColorWrites::COLOR } else { wgpu::ColorWrites::ALL },
-                        })],
+                        // Colour only, opaque or not: nothing reads the
+                        // target's alpha (no GS ALPHA setting the game uses
+                        // takes the destination's), and it must stay the
+                        // clear's 1. A page's WebGL2 canvas is composited
+                        // with it (wgpu makes the context with alpha), and
+                        // its picture (a report's) came out with the colour
+                        // of every alpha-tested edge wrapped round: a cyan
+                        // fringe where red exceeded alpha.
+                        targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: wgpu::ColorWrites::COLOR })],
                     }),
                     multiview_mask: None,
                     cache: None,
