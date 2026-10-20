@@ -1412,6 +1412,22 @@ impl App {
         let mut keys: Vec<&str> = self.held.iter().map(String::as_str).collect();
         keys.sort_unstable();
         let _ = writeln!(o, "keys held [{}]; mouse {}; touch pad {}", keys.join(", "), self.mouse.describe(), if self.touch.used { "in use" } else { "unused" });
+        // the body and the camera, for a report of either moving on its own
+        if let Some(w) = &self.walker {
+            let (p, c) = (&w.cam.walk.phys, &w.cam.cur);
+            let anim = w.sprite.as_ref().map(|s| [s.cur[0].anim, s.cur[1].anim]);
+            let _ = writeln!(
+                o,
+                "body: heading {:.4} (target {:.4}), loco {}, anim {anim:?}; camera: orbit {:.4}, pitch {:.4}, dist {:.2}, flags {:#x}",
+                p.angles.x.0,
+                p.target_heading.0,
+                p.loco_state,
+                c.orbit.x.0,
+                c.orbit.y.0,
+                c.dist.0,
+                c.flags
+            );
+        }
         if let Some(e) = &self.entering {
             let _ = writeln!(o, "entering {} at {:?}", e.0, e.1);
         }
