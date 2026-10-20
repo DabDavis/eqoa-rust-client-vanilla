@@ -108,7 +108,9 @@ pub struct GpuModel {
     /// term; (0, 0, 0, 1), none, unless set.
     statics: wgpu::Buffer,
     instance_count: u32,
-    batches: Vec<(wgpu::Buffer, u32, Vec<Pass>)>,
+    /// Each batch's indices and their count, its layer passes and its LOD
+    /// level (`esf::Batch::lod`).
+    batches: Vec<(wgpu::Buffer, u32, Vec<Pass>, Option<u8>)>,
     /// Bounds of the model itself, before any instance transform.
     pub bounds: (Vec3, Vec3),
     /// Part of the sky: drawn first, through `View::sky_view_proj`, with no
@@ -120,6 +122,13 @@ pub struct GpuModel {
     /// How many of each batch's layer passes are drawn (`VIMaterial`'s
     /// layer count, which the sky's fade changes).
     pub passes_used: usize,
+    /// The LOD level drawn of a skinned LOD body (`VILODSprite::Raster` draws
+    /// one): batches of any other level are skipped, and with `None` every
+    /// level is. Level 0, the near mesh, unless set.
+    pub level: Option<u8>,
+    /// The levels' distances (`esf::Model::lod_dists`), for whoever sets
+    /// `level`; empty for a model with no levels.
+    pub lod_dists: Vec<f32>,
 }
 
 impl GpuModel {
@@ -435,11 +444,15 @@ impl Renderer {
                         module: &shader,
                         entry_point: Some("fs_main"),
                         compilation_options: Default::default(),
-                        targets: &[Some(wgpu::ColorTargetState {
-                            format,
-                            blend,
-                            write_mask: if blend.is_some() { wgpu::ColorWrites::COLOR } else { wgpu::ColorWrites::ALL },
-                        })],
+                        // Colour only, opaque or not: nothing reads the
+                        // target's alpha (no GS ALPHA setting the game uses
+                        // takes the destination's), and it must stay the
+                        // clear's 1. A page's WebGL2 canvas is composited
+                        // with it (wgpu makes the context with alpha), and
+                        // its picture (a report's) came out with the colour
+                        // of every alpha-tested edge wrapped round: a cyan
+                        // fringe where red exceeded alpha.
+                        targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: wgpu::ColorWrites::COLOR })],
                     }),
                     multiview_mask: None,
                     cache: None,
@@ -599,7 +612,7 @@ impl Renderer {
                 contents: bytemuck::cast_slice(&b.indices),
                 usage: wgpu::BufferUsages::INDEX,
             });
-            batches.push((indices, b.indices.len() as u32, passes));
+            batches.push((indices, b.indices.len() as u32, passes, b.lod));
         }
         let lo = m.pos.iter().fold(Vec3::splat(f32::MAX), |a, p| a.min(Vec3::from(*p)));
         let hi = m.pos.iter().fold(Vec3::splat(f32::MIN), |a, p| a.max(Vec3::from(*p)));
@@ -626,6 +639,8 @@ impl Renderer {
             sky: false,
             visible: true,
             passes_used: usize::MAX,
+            level: Some(0),
+            lod_dists: m.lod_dists.clone(),
         }
     }
 
@@ -660,7 +675,7 @@ impl Renderer {
     /// Sets every layer's colour to `rgb` (0..1), keeping each layer's own
     /// alpha (`VIAtmosphere::SetSkyColor`).
     pub fn set_layer_rgb(&self, queue: &wgpu::Queue, m: &GpuModel, rgb: Vec3) {
-        for (_, _, passes) in &m.batches {
+        for (_, _, passes, _) in &m.batches {
             for p in passes {
                 let mut u = p.base;
                 u.tint = [rgb.x, rgb.y, rgb.z, p.base.tint[3]];
@@ -810,7 +825,7 @@ impl Renderer {
                 pass.set_vertex_buffer(1, m.instances.slice(..));
                 pass.set_vertex_buffer(2, m.statics.slice(..));
                 pass.set_bind_group(2, &m.palette_bg, &[]);
-                for (indices, count, passes) in &m.batches {
+                for (indices, count, passes, _) in &m.batches {
                     pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
                     for p in passes.iter().take(m.passes_used) {
                         pass.set_pipeline(&self.sky_pipelines[p.blend]);
@@ -874,8 +889,8 @@ impl Renderer {
     /// bundle; `current` is the blend mode whose pipeline is set. Returns the
     /// draw calls.
     fn encode_model<'a, E: wgpu::util::RenderEncoder<'a>>(&'a self, e: &mut E, m: &'a GpuModel, deferred: bool, current: &mut usize) -> u32 {
-        let in_pass = |passes: &[Pass]| passes.first().is_some_and(|p| (p.blend != 0) == deferred);
-        if !m.batches.iter().any(|(_, _, passes)| in_pass(passes)) {
+        let in_pass = |passes: &[Pass], lod: Option<u8>| passes.first().is_some_and(|p| (p.blend != 0) == deferred) && level_drawn(lod, m.level);
+        if !m.batches.iter().any(|(_, _, passes, lod)| in_pass(passes, *lod)) {
             return 0;
         }
         e.set_vertex_buffer(0, Some(m.vertices.slice(..)));
@@ -883,8 +898,8 @@ impl Renderer {
         e.set_vertex_buffer(2, Some(m.statics.slice(..)));
         e.set_bind_group(2, Some(&m.palette_bg), &[]);
         let mut draws = 0;
-        for (indices, count, passes) in &m.batches {
-            if !in_pass(passes) {
+        for (indices, count, passes, lod) in &m.batches {
+            if !in_pass(passes, *lod) {
                 continue;
             }
             e.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -937,7 +952,7 @@ impl Renderer {
         let (mut nverts, mut nindices, mut ninstances) = (0, 0, 0);
         for p in parts {
             nverts += p.model.pos.len();
-            nindices += p.model.batches.iter().map(|b| b.indices.len()).sum::<usize>();
+            nindices += p.model.batches.iter().filter(|b| group_drawn(b)).map(|b| b.indices.len()).sum::<usize>();
             ninstances += p.instances.len();
         }
         // a buffer of no bytes cannot be made; an empty group draws nothing
@@ -959,7 +974,7 @@ impl Renderer {
             let verts = vertices_of(p.model);
             let mut part_indices: Vec<u32> = Vec::new();
             let mut batches = Vec::new();
-            for b in p.model.batches.iter().filter(|b| !b.indices.is_empty()) {
+            for b in p.model.batches.iter().filter(|b| !b.indices.is_empty() && group_drawn(b)) {
                 let first = first_index + part_indices.len() as u32;
                 // rebased here: WebGL2 has no base vertex
                 part_indices.extend(b.indices.iter().map(|&i| i + base));
@@ -1048,6 +1063,19 @@ impl Renderer {
         let n = instances.len().min(m.instances as usize);
         queue.write_buffer(&g.instances, m.instance0 as u64 * 64, bytemuck::cast_slice(&instances[..n]));
     }
+}
+
+/// Whether a batch of LOD level `lod` (`esf::Batch::lod`) is drawn while its
+/// model's level is `level` (`GpuModel::level`): a batch in no level always,
+/// one in a level only while that level is the model's.
+fn level_drawn(lod: Option<u8>, level: Option<u8>) -> bool {
+    lod.is_none() || lod == level
+}
+
+/// Whether a group draws a batch: a group's members are never moved closer or
+/// further, so of a skinned LOD body only the near level, 0.
+fn group_drawn(b: &esf::Batch) -> bool {
+    b.lod.is_none_or(|l| l == 0)
 }
 
 /// The vertices of a model as the shader takes them.
@@ -1233,4 +1261,24 @@ pub const IDENTITY: [[f32; 4]; 4] = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0],
 /// registered, decoded.
 pub fn library_textures(lib: &esf::Library) -> impl Fn(i32) -> Option<esf::Image> + '_ {
     move |id| lib.surface(id).and_then(|(c, s)| s.decode(&c.data))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::level_drawn;
+
+    /// One level of an LOD body at a time, none past the last; a batch in no
+    /// level whatever the model's level. The control: drawing every batch
+    /// (the old rule) draws the far level with the near one.
+    #[test]
+    fn one_level_at_a_time() {
+        for level in [None, Some(0), Some(1)] {
+            assert!(level_drawn(None, level));
+        }
+        assert!(level_drawn(Some(0), Some(0)) && !level_drawn(Some(1), Some(0)));
+        assert!(level_drawn(Some(1), Some(1)) && !level_drawn(Some(0), Some(1)));
+        assert!(!level_drawn(Some(0), None) && !level_drawn(Some(1), None));
+        let every = |_: Option<u8>, _: Option<u8>| true;
+        assert_ne!(every(Some(1), Some(0)), level_drawn(Some(1), Some(0)));
+    }
 }

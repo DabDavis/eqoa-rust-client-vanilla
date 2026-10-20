@@ -444,6 +444,15 @@ impl Sound {
         self.dev.stop_bgm(1);
     }
 
+    /// The output fed between frames: a page capped below its display's rate
+    /// skips animation frames whole (`web::frame_due`), and feeding at those
+    /// too halves the time between feeds, which the lead is sized by
+    /// (`audio::lead_for`). Only mixing: the game's sound waits for its frame.
+    #[cfg(target_arch = "wasm32")]
+    pub fn feed(&mut self) {
+        self.audio.feed();
+    }
+
     /// One frame of the game's sound, for the camera `eye` at `hour` and the
     /// scene time `time` (ms).
     pub fn frame(&mut self, world: &mut World<Ee>, eye: &Eye<Ee>, hour: f32, time: i64) {

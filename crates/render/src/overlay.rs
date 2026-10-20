@@ -104,7 +104,8 @@ impl Overlay {
                         module: &shader,
                         entry_point: Some(if mode == 0 { "fs_tested" } else { "fs_main" }),
                         compilation_options: Default::default(),
-                        targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: if blend.is_some() { wgpu::ColorWrites::COLOR } else { wgpu::ColorWrites::ALL } })],
+                        // colour only: the target's alpha stays 1 (render's model pipelines)
+                        targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: wgpu::ColorWrites::COLOR })],
                     }),
                     multiview_mask: None,
                     cache: None,

@@ -840,7 +840,8 @@ pub fn shot_with(
         let textures = render::library_textures(lib);
         let mut g = renderer.upload(&device, &queue, &body, &[model], &textures);
         renderer.set_palette(&queue, &g, &palette);
-        if let Some(p) = play.as_ref().filter(|p| p.has_self()) {
+        crate::play::place_body(&mut g, &walker, model);
+        if let Some(p) = play.as_mut().filter(|p| p.has_self()) {
             p.place_self(&walker, model, &palette, &renderer, &queue);
             g.visible = false;
         }
@@ -2259,6 +2260,10 @@ impl ApplicationHandler for App {
                 // longer frames rather than fewer ticks.
                 #[cfg(target_arch = "wasm32")]
                 if !crate::web::frame_due() {
+                    // the sound is still fed (`Sound::feed`)
+                    if let Some(s) = self.sound.as_mut() {
+                        s.feed();
+                    }
                     if let Some(g) = &self.gfx {
                         g.window.request_redraw();
                     }
@@ -2391,12 +2396,13 @@ impl ApplicationHandler for App {
                         Some(s) => w.pose_sounding(Some(&mut s.sink())),
                         None => w.pose(),
                     };
-                    if let Some(body) = g.models.get(body_at) {
+                    if let Some(body) = g.models.get_mut(body_at) {
                         g.renderer.set_instances(&g.queue, body, &[m]);
                         g.renderer.set_palette(&g.queue, body, &palette);
+                        crate::play::place_body(body, w, m);
                     }
                     // Dressed as the server says: the plain body gives way.
-                    if let Some(p) = play.as_ref().filter(|p| p.has_self()) {
+                    if let Some(p) = play.as_mut().filter(|p| p.has_self()) {
                         p.place_self(w, m, &palette, &g.renderer, &g.queue);
                         if let Some(body) = g.models.get_mut(body_at) {
                             body.visible = false;

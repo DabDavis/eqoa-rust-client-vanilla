@@ -69,11 +69,50 @@ pub struct Audio {
     page: Option<Page>,
 }
 
-/// 48 kHz frames the page's output is kept ahead of its clock: 100 ms, and
-/// 50 ms more each time a frame came later than that, up to 300 ms; 25 ms
-/// back after each ten seconds without one.
-#[cfg(target_arch = "wasm32")]
-const LEAD: (u64, u64, u64) = (4800, 2400, 14400);
+/// How far the page's output is mixed ahead of its clock (48 kHz frames): the
+/// time a sound the game starts waits before it is heard. Each feed mixes up
+/// to the clock plus the lead, and the next feed must come before that is
+/// played out; so the lead is sized by how far the clock moved between two
+/// feeds over the last `LEAD_WINDOW` seconds (`lead_for`). The clock moves in
+/// steps, the blocks the browser's output takes from the AudioWorklet at
+/// once (512 frames in Chromium, 1,408-1,536 in Firefox on Linux, measured),
+/// so a move counts them whole, and half a move more is kept for the block
+/// taken while a feed's frames are still on their way to the worklet. The
+/// two largest moves in the window are left out (a stall runs dry once
+/// rather than holding every sound late for the window), and so is a move
+/// past `LEAD_MAX` (a world loading, a hidden page). It was 100 ms, 50 ms more
+/// at each dry and 25 ms less each ten seconds without one: a few slow frames
+/// held every sound 150-200 ms late (F3 20261020-203549).
+#[cfg(any(target_arch = "wasm32", test))]
+pub const LEAD_START: u64 = 4800;
+#[cfg(any(target_arch = "wasm32", test))]
+pub const LEAD_MIN: u64 = 1440;
+#[cfg(any(target_arch = "wasm32", test))]
+pub const LEAD_MAX: u64 = 14400;
+#[cfg(any(target_arch = "wasm32", test))]
+pub const LEAD_MARGIN: u64 = 240;
+#[cfg(any(target_arch = "wasm32", test))]
+pub const LEAD_WINDOW: f64 = 10.0;
+
+/// The lead for the clock's moves between feeds `moves` (48 kHz frames): the
+/// third largest, half of it again and `LEAD_MARGIN`, within `LEAD_MIN` and
+/// `LEAD_MAX`; with none yet, `LEAD_START`.
+#[cfg(any(target_arch = "wasm32", test))]
+pub fn lead_for(moves: impl Iterator<Item = u64>) -> u64 {
+    let mut top = [None::<u64>; 3];
+    for m in moves {
+        let mut v = Some(m);
+        for t in top.iter_mut() {
+            if v > *t {
+                std::mem::swap(t, &mut v);
+            }
+        }
+    }
+    match top[2].or(top[1]).or(top[0]) {
+        Some(m) => (m + m / 2 + LEAD_MARGIN).clamp(LEAD_MIN, LEAD_MAX),
+        None => LEAD_START,
+    }
+}
 
 /// The driver in a page (`Audio::web`).
 #[cfg(target_arch = "wasm32")]
@@ -84,8 +123,10 @@ struct Page {
     /// lined up, and whether the page's was its audio output's
     base: Option<(u64, f64, bool)>,
     lead: u64,
-    /// when the output last ran dry, on the wall clock (s)
-    dry_at: f64,
+    /// the output's clock at the last feed, and its moves between feeds over
+    /// the last `LEAD_WINDOW` seconds (wall clock s, 48 kHz frames)
+    last: Option<f64>,
+    moves: std::collections::VecDeque<(f64, u64)>,
     dry: u32,
     wall: web_time::Instant,
 }
@@ -206,18 +247,19 @@ impl Audio {
     pub fn web(disc: Box<dyn Disc>, fetch: Box<dyn FnMut()>) -> Audio {
         let shared = Arc::new(Mutex::new(Shared { drv: Driver::new(disc), status: [0; 128], pcm: Vec::new() }));
         let mut a = Self::with_shared(shared, None, "the page's AudioWorklet".into());
-        a.page = Some(Page { fetch, base: None, lead: LEAD.0, dry_at: 0.0, dry: 0, wall: web_time::Instant::now() });
+        a.page = Some(Page { fetch, base: None, lead: LEAD_START, last: None, moves: Default::default(), dry: 0, wall: web_time::Instant::now() });
         a
     }
 
-    /// Once a frame (`Sound::frame`). Natively nothing: the device's callback
+    /// Once a frame (`Sound::frame`), and at each animation frame a capped
+    /// page skips (`Sound::feed`). Natively nothing: the device's callback
     /// pulls. In a page: the music's disc reads started, then the driver
     /// mixed up to the page's audio clock (`web::audio_clock`, 48 kHz frames
-    /// played) plus the lead, and the frames handed to the AudioWorklet
-    /// (`web::audio_push`). With no output running it keeps to the wall
-    /// clock and its frames are dropped, as natively. A frame later than the
-    /// lead (a stall, a hidden page) leaves the output dry for a moment: the
-    /// driver is paused for it, so nothing is skipped, and the lead grows.
+    /// played) plus the lead (`lead_for`), and the frames handed to the
+    /// AudioWorklet (`web::audio_push`). With no output running it keeps to
+    /// the wall clock and its frames are dropped, as natively. A feed later
+    /// than the lead (a stall, a hidden page) leaves the output dry for a
+    /// moment: the driver is paused for it, so nothing is skipped.
     pub fn feed(&mut self) {
         #[cfg(target_arch = "wasm32")]
         if let Some(p) = self.page.as_mut() {
@@ -227,6 +269,16 @@ impl Audio {
                 Some(c) => (c, true),
                 None => (wall * 48000.0, false),
             };
+            // the clock's move since the last feed, into the lead's window
+            match p.last.filter(|_| live) {
+                Some(last) if now - last <= LEAD_MAX as f64 => p.moves.push_back((wall, (now - last).max(0.0) as u64)),
+                _ => {}
+            }
+            p.last = live.then_some(now);
+            while p.moves.front().is_some_and(|m| m.0 < wall - LEAD_WINDOW) {
+                p.moves.pop_front();
+            }
+            p.lead = lead_for(p.moves.iter().map(|m| m.1));
             let mut g = self.shared.lock().unwrap();
             let drv = g.drv.now;
             let mut played = match p.base {
@@ -241,12 +293,7 @@ impl Audio {
                 played = drv;
                 if live {
                     p.dry += 1;
-                    p.dry_at = wall;
-                    p.lead = (p.lead + LEAD.1).min(LEAD.2);
                 }
-            } else if wall - p.dry_at > 10.0 && p.lead > LEAD.0 {
-                p.dry_at = wall;
-                p.lead -= LEAD.1 / 2;
             }
             let target = played + if live { p.lead } else { 0 };
             let ahead = g.drv.now;
@@ -340,5 +387,31 @@ impl Link for AudioLink {
 
     fn bgm_ready(&mut self, path: &str) -> bool {
         self.0.lock().unwrap().drv.disc_ready(path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The lead is the third largest move between feeds, half of it again and
+    /// a margin, within its bounds; with no move yet, the start's. The
+    /// controls: two stalls do not raise it, a third does; the old rule's
+    /// floor would hold a steady 60 fps page at 100 ms.
+    #[test]
+    fn the_lead_follows_the_clocks_moves() {
+        assert_eq!(lead_for(std::iter::empty()), LEAD_START);
+        // Chromium at 60 fps: steps of 512, two now and then
+        assert_eq!(lead_for([512, 0, 1024, 512, 1024, 512, 1024].into_iter()), 1024 + 512 + LEAD_MARGIN);
+        // Firefox: 1,440-frame steps, two in a slow frame
+        assert_eq!(lead_for([1440, 0, 2880, 1440, 2880, 2880].into_iter()), 2880 + 1440 + LEAD_MARGIN);
+        // two stalls of 200 ms run dry; a third raises the lead
+        let steady = [512, 1024, 512, 1024, 1024];
+        assert_eq!(lead_for(steady.into_iter().chain([9600, 9600])), lead_for(steady.into_iter()));
+        assert_eq!(lead_for(steady.into_iter().chain([9600, 9600, 9600])), LEAD_MAX);
+        // one or two moves: the smaller
+        assert_eq!(lead_for([2000, 1000].into_iter()), 1500 + LEAD_MARGIN);
+        assert_eq!(lead_for([0, 0, 0].into_iter()), LEAD_MIN);
+        assert!(lead_for(steady.into_iter()) < 4800, "below the old 100 ms floor");
     }
 }

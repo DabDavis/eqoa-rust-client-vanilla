@@ -165,11 +165,8 @@ impl Billboards {
                     module: &self.shader,
                     entry_point: Some("fs_main"),
                     compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        blend: state,
-                        write_mask: if state.is_some() { wgpu::ColorWrites::COLOR } else { wgpu::ColorWrites::ALL },
-                    })],
+                    // colour only: the target's alpha stays 1 (render's model pipelines)
+                    targets: &[Some(wgpu::ColorTargetState { format, blend: state, write_mask: wgpu::ColorWrites::COLOR })],
                 }),
                 multiview_mask: None,
                 cache: None,
