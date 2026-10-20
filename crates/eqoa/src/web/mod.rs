@@ -237,6 +237,38 @@ fn rate(what: &'static str) {
     });
 }
 
+/// The time between two frames a page drawing through WebGL2 keeps, in
+/// milliseconds (0: every animation frame). WebGL2 costs about twice the
+/// CPU of WebGPU, so it is held to 30 frames a second (2026-10-20, a
+/// tester's ask); `?uncapped` in the page's address lifts it.
+static FRAME_GAP: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+thread_local! {
+    /// When the next capped frame is due (`performance.now()`, ms).
+    static FRAME_DUE: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
+}
+
+/// Whether this animation frame is drawn: always, but at the cap
+/// (`FRAME_GAP`) only once the next frame is due. Due times step by the gap
+/// from the last, so a 60 Hz display draws every other frame and a 144 Hz
+/// one about every fifth; an animation frame up to 4 ms early counts as on
+/// time (they jitter), and after a stall the next is a gap from now.
+pub fn frame_due() -> bool {
+    let gap = FRAME_GAP.load(std::sync::atomic::Ordering::Relaxed) as f64;
+    if gap == 0.0 {
+        return true;
+    }
+    let Some(now) = web_sys::window().and_then(|w| w.performance()).map(|p| p.now()) else { return true };
+    FRAME_DUE.with(|due| {
+        let at = due.get();
+        if now + 4.0 < at {
+            return false;
+        }
+        due.set(if now - at > gap { now + gap } else { at + gap });
+        true
+    })
+}
+
 /// Whether the page's address has `?name` (or `&name`) in its query.
 pub fn page_flag(name: &str) -> bool {
     web_sys::window().and_then(|w| w.location().search().ok()).is_some_and(|q| q.split(['?', '&']).any(|p| p == name))
@@ -282,6 +314,10 @@ async fn gfx(canvas: web_sys::HtmlCanvasElement) -> Result<viewer::PendingGfx, S
         .map_err(|e| format!("no graphics adapter: {e}"))?;
     let info = adapter.get_info();
     status(&format!("graphics: {} ({:?})", info.name, info.backend));
+    if info.backend == wgpu::Backend::Gl && !page_flag("uncapped") {
+        FRAME_GAP.store(1000 / 30, std::sync::atomic::Ordering::Relaxed);
+        status("WebGL2: drawn at 30 frames a second (?uncapped lifts it)");
+    }
     let limits = wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits());
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor { required_limits: limits, ..Default::default() })

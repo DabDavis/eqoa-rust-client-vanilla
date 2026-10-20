@@ -2053,6 +2053,17 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                // A page on WebGL2 draws at most 30 frames a second
+                // (`web::frame_due`): an animation frame before the next is
+                // due is skipped whole, the game included, so its clocks see
+                // longer frames rather than fewer ticks.
+                #[cfg(target_arch = "wasm32")]
+                if !crate::web::frame_due() {
+                    if let Some(g) = &self.gfx {
+                        g.window.request_redraw();
+                    }
+                    return;
+                }
                 FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let frame_start = Instant::now();
                 if let Some(p) = &mut self.perf {
