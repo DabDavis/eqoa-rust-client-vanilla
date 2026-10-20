@@ -59,6 +59,14 @@ for (const ev of ['pointerdown', 'keydown']) {
   addEventListener(ev, () => { if (audio && audio.ctx.state === 'suspended') audio.ctx.resume().catch(() => {}); });
 }
 
+// F11 is the browser's own full screen. The canvas cancels every key it is
+// given (winit's listener), so F11 is kept from it, caught on its way down
+// before the canvas sees it, and left to the browser; the canvas follows the
+// window's new size.
+for (const ev of ['keydown', 'keyup']) {
+  addEventListener(ev, (e) => { if (e.key === 'F11') e.stopImmediatePropagation(); }, true);
+}
+
 // The client's wasm, compiled once: the page runs it, and so does the worker
 // that unpacks CLIENT off the disc (unpack.js), from the same compiled module.
 const wasmModule = fetch(new URL('eqoa_bg.wasm', import.meta.url)).then((r) => {

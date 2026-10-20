@@ -17,6 +17,8 @@ keys for a while (w, a, s, d, ArrowLeft...: 'w:2000' holds w for 2 s);
 "document.querySelector('#charlist button.primary').click()"), its value
 printed. --new-account makes the account first (the page's New account tab).
 WebGL/WebGPU run on the machine's GPU (--no-gpu: SwiftShader, every core).
+--headed opens a real window on $DISPLAY instead (F11 needs one); --resize
+SECONDS=WxH sets the page's viewport then, as a resized window would.
 Needs the `websockets` package.
 """
 import argparse, asyncio, base64, functools, http.server, json, os, shutil, socketserver, subprocess, sys, threading, time, urllib.request
@@ -50,7 +52,7 @@ async def main(a):
     tmp = prof.parent / "tmp"
     tmp.mkdir(exist_ok=True)
     # sound starts without a gesture: the page's clicks here are not the user's
-    flags = [shutil.which("chromium") or "chromium", "--headless=new", f"--user-data-dir={prof}",
+    flags = [shutil.which("chromium") or "chromium", *([] if a.headed else ["--headless=new"]), f"--user-data-dir={prof}",
              f"--remote-debugging-port={a.port}", "--no-first-run", "--no-default-browser-check",
              f"--window-size={a.size}", "--enable-unsafe-swiftshader", "--autoplay-policy=no-user-gesture-required"]
     if a.gpu:
@@ -173,6 +175,9 @@ async def drive(a, base, ws_url):
         for s in a.js:
             t, expr = s.split("=", 1)
             events.append((float(t), "js", expr))
+        for s in a.resize:
+            t, size = s.split("=", 1)
+            events.append((float(t), "resize", size))
         events.sort()
         deadline = t_click + a.timeout
         for t, kind, arg in events:
@@ -184,6 +189,10 @@ async def drive(a, base, ws_url):
                 await shoot(arg)
             elif kind == "js":
                 out(f"js {arg[:60]} -> {await js(arg)}")
+            elif kind == "resize":
+                w, h = (int(v) for v in arg.split("x"))
+                await call("Emulation.setDeviceMetricsOverride", width=w, height=h, deviceScaleFactor=1, mobile=False)
+                out(f"resized to {w}x{h}")
             else:
                 await js("document.getElementById('eqoa').focus()")
                 for part in arg.split(","):
@@ -213,6 +222,7 @@ if __name__ == "__main__":
     ap.add_argument("--http-port", type=int, default=0, help="0: any free port")
     ap.add_argument("--shot", action="append", default=[])
     ap.add_argument("--keys", action="append", default=[])
+    ap.add_argument("--resize", action="append", default=[], help="SECONDS=WxH: the page's viewport then, as a window resized (or put full screen)")
     ap.add_argument("--final-shot")
     ap.add_argument("--until")
     ap.add_argument("--timeout", type=float, default=60)
@@ -222,4 +232,5 @@ if __name__ == "__main__":
     ap.add_argument("--gpu", action=argparse.BooleanOptionalAction, default=True)
     ap.add_argument("--webgpu", action="store_true", help="ask Chromium for WebGPU too")
     ap.add_argument("--chrome", action="append", default=[])
+    ap.add_argument("--headed", action="store_true", help="a window on $DISPLAY (an Xvfb with a window manager) for what needs one: F11")
     sys.exit(asyncio.run(main(ap.parse_args())))

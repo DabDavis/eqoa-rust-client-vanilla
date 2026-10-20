@@ -16,10 +16,10 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use web_time::Instant;
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key, NamedKey};
-use winit::window::{Window, WindowId};
+use winit::window::{Fullscreen, Window, WindowId};
 
 type Error = Box<dyn std::error::Error>;
 
@@ -1214,6 +1214,14 @@ impl ApplicationHandler for App {
                 surface.configure(&g.device, &g.config);
                 g.depth = render::depth_view(&g.device, s.width, s.height);
                 g.window.request_redraw();
+            }
+            // F11: full screen (borderless, on the window's monitor) and back.
+            // A page leaves F11 to the browser (web/main.js).
+            WindowEvent::KeyboardInput { event: KeyEvent { logical_key: Key::Named(NamedKey::F11), state: ElementState::Pressed, repeat: false, .. }, .. } => {
+                if let Some(g) = &self.gfx {
+                    let full = g.window.fullscreen().is_some();
+                    g.window.set_fullscreen((!full).then_some(Fullscreen::Borderless(None)));
+                }
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 // The edit box (mode 2) takes the keyboard: characters type,
