@@ -41,7 +41,9 @@ mod guild;
 mod blacksmith;
 mod gram;
 mod hud;
+mod damage;
 mod hudmenu;
+mod influence;
 mod spellbook;
 mod infotext;
 mod inventory;
@@ -287,6 +289,9 @@ fn run(args: &[String]) -> Result<()> {
             // The spell effects, and the lightning's texture.
             lib.add("SPELLFX.CSF", esf::Container::open(disc(None)?.read("SPELLFX.CSF")?)?);
             lib.add("FX.CSF", esf::Container::open(disc(None)?.read("FX.CSF")?)?);
+            // EnterGameLoad's last file (the card's copy when there is one):
+            // the compass's patch art.
+            lib.add("ADDART.CSF", esf::Container::open(disc(None)?.read("ADDART.CSF")?)?);
             let [x, _, z] = player.pos;
             let index = vi::world::World::<vi::fpu::Ee>::zone_at(lib.file(main_file), x, z).ok_or("no zone at the player's position")?;
             // the player's zone off the disc; the walker reads the rest round it
@@ -297,15 +302,10 @@ fn run(args: &[String]) -> Result<()> {
             let mut play = play::Play::new(session, player, dump);
             // The game's words, for the lines the client writes itself.
             play.words = disc(None)?.read("WORDS.TXT").ok().and_then(|b| vi::strtab::StringTable::parse(&b));
-            // The HUD's atlas is SUPPORT's data: out of the player's own
-            // decrypted image (EQOA_SUPPORT, else run/support.bin). Without
-            // it there is no HUD.
-            let support = std::env::var("EQOA_SUPPORT").unwrap_or_else(|_| "run/support.bin".into());
-            let atlas = std::fs::read(&support).ok().and_then(|b| vi::ui::read_atlas(&b));
-            let textures = disc(None)?.read("TEXTURES.TXT").ok().and_then(|b| vi::strtab::StringTable::parse(&b));
-            match (atlas, textures) {
-                (Some(a), Some(t)) => play.ui_data = Some((a, t)),
-                _ => eprintln!("no HUD: the UI atlas needs a decrypted SUPPORT image at {support} (EQOA_SUPPORT)"),
+            // The HUD: the built-in atlas, and the texture names off the disc.
+            match disc(None)?.read("TEXTURES.TXT").ok().and_then(|b| vi::strtab::StringTable::parse(&b)) {
+                Some(t) => play.ui_data = Some((vi::ui::atlas(), t)),
+                None => eprintln!("no HUD: TEXTURES.TXT is not on the disc"),
             }
             // The start menu's definitions are CLIENT's data: out of the
             // decrypted image (EQOA_CLIENT, else run/client.bin).

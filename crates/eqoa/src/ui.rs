@@ -32,6 +32,18 @@ impl UiAssets {
         }
     }
 
+    /// One surface of a file into the layer, by its DictID (what the HUD
+    /// draws from a file that is not the UI's: FX.CSF's damage font).
+    pub fn add_surface(&mut self, ui: &mut Ui, device: &wgpu::Device, queue: &wgpu::Queue, c: &esf::Container, id: u32) {
+        if self.surfaces.contains_key(&id) {
+            return;
+        }
+        if let Some(img) = c.surfaces.iter().find(|s| s.dict_id as u32 == id).and_then(|s| s.decode(&c.data)) {
+            let t = ui.add_texture(device, queue, img.width, img.height, &img.rgba);
+            self.surfaces.insert(id, t);
+        }
+    }
+
     /// The white texel solid fills draw with.
     pub fn add_white(&mut self, ui: &mut Ui, device: &wgpu::Device, queue: &wgpu::Queue) {
         self.white = Some(ui.add_texture(device, queue, 1, 1, &[255; 4]));

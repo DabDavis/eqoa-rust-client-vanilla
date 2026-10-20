@@ -99,7 +99,7 @@ pub struct Stats {
     /// `m_player.m_p34`, tunar
     pub tunar: i32,
     /// `m_effectName[0 .. m_effectCount]`
-    pub effects: Vec<String>,
+    pub effects: Vec<Vec<u16>>,
     /// `VIGetExpansionFlags()`
     pub expansion: u32,
 }
@@ -442,13 +442,23 @@ impl MainMenu {
         line(r, &word(479), yellow);
         line(r, &wide(&st.tunar.to_string()), white);
         line(r, &word(15), yellow);
-        let effects = st.effects.join("    ");
+        // strcat16 into a 256-character buffer: 255 at most
+        let mut effects: Vec<u16> = Vec::new();
+        let n = st.effects.len();
+        for (i, name) in st.effects.iter().enumerate() {
+            let sep = if n >= 2 && i < n - 1 { wide("    ") } else { Vec::new() };
+            for &c in name.iter().chain(&sep) {
+                if effects.len() + 1 < 256 {
+                    effects.push(c);
+                }
+            }
+        }
         self.scroll.init(vui, r, [at[0], at[1] + 2], 160, 0, 0);
         self.scroll.window.open(true);
         if effects.is_empty() {
             self.scroll.reset();
         }
-        self.scroll.text_scroll(vui, r, &wide(&effects), white, 9);
+        self.scroll.text_scroll(vui, r, &effects, white, 9);
     }
 
     /// `UpdateLocation`: the grid cell's zone name and which ninth of it.

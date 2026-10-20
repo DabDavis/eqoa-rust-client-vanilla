@@ -45,6 +45,9 @@ struct Puppet {
     attached: Vec<(i32, GpuModel)>,
     /// The name plate's anchor this frame: 0.6 above the name node (3).
     name_at: Option<[f32; 3]>,
+    /// Slot 4's place this frame (`CalcSlotWorldTransform(4)`), which a
+    /// damage number floats from.
+    slot4_at: Option<[f32; 3]>,
     /// The actor's transform and the centre transform it was drawn with
     /// this frame (what an effect's node transform is under).
     actor_m: Matrix44<Ee>,
@@ -108,10 +111,17 @@ pub struct Play {
     pub swung: u32,
     /// The stat channel (0x42).
     pub stats: net::dump::Stats,
+    /// The active effects (state channel 0x43), `VIWndInfluence`'s icons.
+    pub effects: net::dump::Effects,
+    /// The floating damage numbers (`m_p4FD28`).
+    damage: crate::damage::Damage,
+    /// The player's actor position and its slot 4 this frame, while it is
+    /// drawn.
+    self_at: Option<([f32; 3], Option<[f32; 3]>)>,
     /// The game's words (WORDS.TXT), for the lines the client writes itself.
     pub words: Option<vi::strtab::StringTable>,
     /// What the HUD is built from, before there is a device: the atlas
-    /// (out of SUPPORT) and TEXTURES.TXT.
+    /// (built in) and TEXTURES.TXT.
     pub ui_data: Option<(Vec<vi::ui::UiTexEntry>, vi::strtab::StringTable)>,
     /// The HUD, once the viewer has a device (`attach_ui`): `VIUI`, the
     /// layer's assets, `VIWndGame`.
@@ -478,7 +488,7 @@ fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Optio
                         dress(&mut model, &vi::cust::apply_look(cs, look, helm_worn, |id| lib.surface(id as i32).is_some()));
                     }
                     let gpu = g.renderer.upload(g.device, g.queue, &model, &[render::IDENTITY], &textures);
-                    Some(Puppet { model: e.model, look, sprite, anims, rand, gpu, attached, name_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true })
+                    Some(Puppet { model: e.model, look, sprite, anims, rand, gpu, attached, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true })
                 })
 }
 
@@ -575,6 +585,15 @@ pub fn labels(plates: &[Plate], eye: glam::Vec3, view_proj: glam::Mat4, text: &r
     kept.into_iter().map(|(_, _, ndc, p)| render::text::Label { at: ndc.to_array(), color: p.color, text: p.name.clone() }).collect()
 }
 
+/// `CalcSlotWorldTransform(slot)`'s translation: the slot's node under the
+/// centre transform `m`; None when the sprite lacks the slot (the game then
+/// takes the actor's own transform, no offset).
+fn slot_point(cs: &CSprite<Ee>, slot: usize, m: &Matrix44<Ee>) -> Option<[f32; 3]> {
+    let node = *cs.node_ids.get(slot)?;
+    let n = cs.h.nodes.get(usize::try_from(node).ok()?)?;
+    Some(Matrix44::mul(&n.world, m).mul_point(&Vect3::of(0.0, 0.0, 0.0)).to_array())
+}
+
 fn look_of(c: &net::entity::Creature) -> vi::cust::Look {
     vi::cust::Look { armor: c.armor, armor_tint: c.armor_tint, hair: c.hair, face: c.face, robe: c.robe as i8, robe_tint: c.robe_tint }
 }
@@ -591,7 +610,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), self_at: None, words: None, ui_data: None, hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default() };
         p.take_abilities();
         p.npcw_world_entry();
         p
@@ -938,6 +957,7 @@ impl Play {
                     // the same m_player.m_p30 the dump set (the breath gauge's)
                     self.dump.player.p30 = self.stats.p30;
                 }
+                Event::State { channel: 0x43, data } => net::dump::read_effects(&mut self.effects, &data),
                 Event::State { channel, data } if (channel as usize) < SLOTS => {
                     let self_id = self.session.self_id;
                     let skel = self.puppets[channel as usize].as_ref().and_then(|p| p.sprite.as_ref()).map_or(0, |s| s.skel_type);
@@ -986,6 +1006,8 @@ impl Play {
                 // the player cast itself (0x0776) it has already played.
                 Event::Opcode { op, data } => {
                     if self.bank_opcode(op, &data) || self.npcw_opcode(op, &data) || self.support_opcode(op, &data) {
+                    } else if op == 0x00DB {
+                        self.damage_indication(&data, walker.cam.camera_mode);
                     } else if let Some(c) = crate::spells::cast_of(op, &data)
                         && !(op == 0x0776 && Some(c.caster) == self.self_id32())
                     {
@@ -1186,6 +1208,7 @@ impl Play {
                         let a = w.mul_point(&Vect3::of(0.0, 0.6, 0.0));
                         a.to_array()
                     });
+                    p.slot4_at = slot_point(cs, 4, &m);
                     (m.to_cols(), cs.h.blend.iter().map(|m| m.to_cols()).collect::<Vec<_>>())
                 }
                 None => (actor.to_cols(), Vec::new()),
@@ -1203,6 +1226,9 @@ impl Play {
             let actor = Matrix44::transform(&Vect3::new(walker.cam.walk.phys.angles.x, F::ZERO, F::ZERO), F::ONE, &walker.cam.walk.phys.smooth_location());
             let centre = cs.h.calc_trans_about_center(&actor, &walker.anims);
             crate::trails::process(&mut self.trails, &mut p.trail, cs, &p.weapons, &centre, game_ms);
+            self.self_at = Some((walker.cam.walk.phys.smooth_location().to_array(), slot_point(cs, 4, &centre)));
+        } else {
+            self.self_at = None;
         }
         self.trail_strips = crate::trails::render(&mut self.trails, game_ms);
         // The camera style: the first entry's ToggleCameraStyle; the start
@@ -1696,7 +1722,7 @@ impl Play {
             max_power: self.stats.stat[10],
             ac: self.stats.stat[14],
             tunar: self.dump.player.p34 as i32,
-            effects: Vec::new(),
+            effects: (0..self.effects.count.max(0) as usize).map(|i| self.effects.name[i].clone()).collect(),
             expansion: net::session::EXPANSION_FLAGS,
         };
         let g = walker.scene.grid.as_ref();
@@ -1977,6 +2003,58 @@ impl Play {
                 _ => self.do_action(msg, id),
             }
         }
+    }
+
+    /// 0x00DB: the attacker, the amount (zigzag) and the defender.
+    /// `DamageFromSelf` when the player hit: over the defender; else
+    /// `DamageFromOther`: over the player, only from a walk camera not in
+    /// first person (`m_cameraMode` 0) and no manual camera (mode 38,
+    /// `IsModal`). Both off under the options' `m_x92`.
+    fn damage_indication(&mut self, data: &[u8], camera_mode: i32) {
+        let mut r = net::stream::Reader::new(data);
+        let (attacker, amount, defender) = (r.u32(), r.signed() as i32, r.u32());
+        if r.error || self.options.no_damage != 0 {
+            return;
+        }
+        let me = self.self_id32();
+        if Some(attacker) == me {
+            self.damage.add(defender, amount, 0);
+        } else if camera_mode != 0 && self.mode != 38
+            && let Some(me) = me
+        {
+            self.damage.add(me, amount, 1);
+        }
+    }
+
+    /// A 0x00DB as if the server had sent it (`EQOA_DAMAGE` in a playshot):
+    /// `self` and `target` name the player and its target, anything else is
+    /// an id in hex.
+    pub fn fake_damage(&mut self, attacker: &str, amount: i64, defender: &str, camera_mode: i32) {
+        let id = |s: &str| match s {
+            "self" => self.self_id32().unwrap_or(u32::MAX),
+            "target" => self.target,
+            _ => u32::from_str_radix(s.trim_start_matches("0x"), 16).unwrap_or(u32::MAX),
+        };
+        let mut w = net::stream::Writer::default();
+        w.u32(id(attacker)).signed(amount).u32(id(defender));
+        self.damage_indication(&w.data, camera_mode);
+    }
+
+    /// Effects as if state channel 0x43 had brought them
+    /// (`EQOA_EFFECTS=<icon>:<name>|...` in a playshot, the icon a DictID in
+    /// hex): the channel's value built and read.
+    pub fn fake_effects(&mut self, spec: &str) {
+        let parts: Vec<(u32, &str)> = spec.split('|').filter_map(|p| p.split_once(':')).filter_map(|(i, n)| Some((u32::from_str_radix(i.trim_start_matches("0x"), 16).ok()?, n))).collect();
+        let mut v = (parts.len() as u32).to_le_bytes().to_vec();
+        for (icon, name) in parts {
+            let mut r = icon.to_le_bytes().to_vec();
+            let w: Vec<u16> = name.encode_utf16().collect();
+            r.extend((w.len() as u32).to_le_bytes());
+            r.extend(w.iter().flat_map(|c| c.to_le_bytes()));
+            r.resize(132, 0);
+            v.extend(r);
+        }
+        net::dump::read_effects(&mut self.effects, &v);
     }
 
     /// Quests as if 0x007C had brought them (`EQOA_QUESTS=a|b|...` in a
@@ -3183,7 +3261,8 @@ impl Play {
 
     /// Builds the HUD on the viewer's device: the 2D layer, UI.CSF's and
     /// ITEMICON.ESF's surfaces (the item icons the client's icon cache
-    /// would stream) and "ArialUI" out of the loaded files.
+    /// would stream), ADDART.CSF's (the compass's patch), FX.CSF's damage
+    /// font and "ArialUI" out of the loaded files.
     pub fn attach_ui(&mut self, renderer: &mut render::Renderer, device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat, lib: &Library) {
         let Some((atlas, textures)) = self.ui_data.take() else { return };
         let mut ui = render::ui::Ui::new(device, format, render::DEPTH_FORMAT);
@@ -3192,8 +3271,11 @@ impl Play {
         let mut assets = crate::ui::UiAssets::default();
         assets.add_white(&mut ui, device, queue);
         for (name, c) in &lib.files {
-            if name.eq_ignore_ascii_case("UI.CSF") || name.eq_ignore_ascii_case("ITEMICON.ESF") {
+            if name.eq_ignore_ascii_case("UI.CSF") || name.eq_ignore_ascii_case("ITEMICON.ESF") || name.eq_ignore_ascii_case("ADDART.CSF") {
                 assets.add_surfaces(&mut ui, device, queue, c);
+            }
+            if name.eq_ignore_ascii_case("FX.CSF") {
+                assets.add_surface(&mut ui, device, queue, c, vi::hash::hash_resource_id("damage_font.tga"));
             }
         }
         let id = vi::ui::font_id() as i32;
@@ -3207,7 +3289,7 @@ impl Play {
     }
 
     /// The HUD's quads for this frame (`VIWndGame::OnDrawSelf`).
-    pub fn draw_hud(&mut self, ui: &mut render::ui::Ui, walker: &Walker, time_ms: i64) {
+    pub fn draw_hud(&mut self, ui: &mut render::ui::Ui, walker: &Walker, time_ms: i64, view_proj: glam::Mat4, size: (u32, u32)) {
         ui.quads.clear();
         let under_liquid = walker.cam.walk.is_under_liquid();
         let (start_stats, start_loc) = self.start_view(walker);
@@ -3251,6 +3333,20 @@ impl Play {
                     crate::hud::MemberState { name: m.name.clone(), is_target: m.id == self.target, hp: (m.hp_known != 0).then_some((m.hp, flags & 4 != 0, flags & 8 != 0)) }
                 })
                 .collect(),
+            patches: self.group.members[..self.group.count()]
+                .iter()
+                .enumerate()
+                .map(|(index, m)| {
+                    // the entity's actor while it has one, else channel 0x40's place in this world
+                    let actor = if Some(m.id) == me { self.self_at.map(|a| a.0) } else { self.actor_pos(m.id) };
+                    let pos = actor.or_else(|| (m.x == self.dump.player.world as i32).then_some(m.pos));
+                    crate::hud::PatchMember { index, id: m.id, pos }
+                })
+                .collect(),
+            self_id: me,
+            target: self.target,
+            camera: walker.eye.position.to_array(),
+            time_ms,
         };
         let now = self.session.now();
         let dt = ((time_ms - self.hud_last).clamp(0, 250)) as f32 / 1000.0;
@@ -3259,8 +3355,22 @@ impl Play {
         if let Some((mut vui_o, assets, mut hud_o)) = self.hud.take() {
             let (vui, hud) = (&mut vui_o, &mut hud_o);
             vui.time = time_ms;
+            // VIClient's m_p4FD28.Process: after the scene, before the windows
+            let font = assets.surface(vi::hash::hash_resource_id("damage_font.tga"));
+            let (slots, puppets, self_at, me) = (&self.entities.slots, &self.puppets, self.self_at, self.self_id32());
+            self.damage.process(ui, font, time_ms, view_proj, size, |id| {
+                let k = slots.iter().position(|e| e.as_ref().is_some_and(|e| e.id == id))?;
+                if Some(id) == me {
+                    return self_at.map(|(pos, slot4)| crate::damage::Target { pos, slot4 });
+                }
+                let p = puppets.get(k)?.as_ref()?;
+                Some(crate::damage::Target { pos: slots[k].as_ref()?.actor_pos, slot4: p.slot4_at })
+            });
             let mut r = assets.raster(ui);
             hud.draw(vui, &mut r, &state);
+            if crate::influence::shown(self.mode) {
+                crate::influence::draw(vui, &mut r, &self.effects);
+            }
             if let Some(c) = self.wnd_chat.as_mut() {
                 for (text, color, at) in self.chat_pending.drain(..) {
                     let rr = &r;
@@ -3285,7 +3395,7 @@ impl Play {
                 && let Some(tex) = assets.white
             {
                 let (x0, y0, x1, y1) = (-2000.0, -1.0, 2640.0, 449.0);
-                r.ui.push(render::ui::Quad { tex, blend: 3, pos: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], uv: [[0.5, 0.5]; 4], color: [0.0, 0.0, 0.0, a], clip: None });
+                r.ui.push_whole(render::ui::Quad { tex, blend: 3, pos: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], uv: [[0.5, 0.5]; 4], color: [0.0, 0.0, 0.0, a], clip: None });
             }
             self.run_who(vui, &mut r);
             self.run_quests(vui, &mut r);
@@ -3385,6 +3495,13 @@ impl Play {
             self.hud = Some((vui_o, assets, hud_o));
         }
         self.start_actions(actions);
+    }
+
+    /// An entity's actor position, while it is drawn.
+    fn actor_pos(&self, id: u32) -> Option<[f32; 3]> {
+        let k = self.entities.slots.iter().position(|e| e.as_ref().is_some_and(|e| e.id == id))?;
+        self.puppets.get(k)?.as_ref()?;
+        Some(self.entities.slots[k].as_ref()?.actor_pos)
     }
 
     /// `DrawTargetInfo`'s text: a player's name, guild, race, title or

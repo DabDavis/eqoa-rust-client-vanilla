@@ -515,6 +515,27 @@ pub fn shot_with(
                 {
                     p.fake_quests(&q);
                 }
+                // `EQOA_DAMAGE=<attacker>,<amount>,<defender>@ms;...`: 0x00DBs
+                // then (self, target or a hex id).
+                if let Ok(spec) = std::env::var("EQOA_DAMAGE") {
+                    for part in spec.split(';') {
+                        if let Some((hit, ms)) = part.rsplit_once('@')
+                            && let Ok(ms) = ms.parse::<i64>()
+                            && t == ms / 16 * 16
+                            && let [a, n, d] = hit.split(',').collect::<Vec<_>>()[..]
+                            && let Ok(n) = n.parse::<i64>()
+                        {
+                            p.fake_damage(a, n, d, walker.cam.camera_mode);
+                        }
+                    }
+                }
+                // `EQOA_EFFECTS=<icon>:<name>|...`: effects as if channel 0x43
+                // had brought them.
+                if t == at
+                    && let Ok(fx) = std::env::var("EQOA_EFFECTS")
+                {
+                    p.fake_effects(&fx);
+                }
                 // `EQOA_INVITE`: the target invited just after targeting
                 // (`DoAction(0x07010000)`); `EQOA_ACCEPT`: any message box
                 // answered Yes (left, then X).
@@ -585,7 +606,8 @@ pub fn shot_with(
                 }
                 // The HUD steps each frame (its glows, the name's scroll).
                 if let Some(u) = renderer.ui.as_mut() {
-                    p.draw_hud(u, &walker, t);
+                    let (proj, v) = walker.view(w as f32 / h as f32);
+                    p.draw_hud(u, &walker, t, proj * v, (w, h));
                 }
                 // A teleport into another world: that world's file in place
                 // of this one, and the walk begun again there.
@@ -718,7 +740,7 @@ pub fn shot_with(
         streamed = Some(streamer);
         if let Some(p) = &mut play {
             if let Some(u) = renderer.ui.as_mut() {
-                p.draw_hud(u, &walker, t);
+                p.draw_hud(u, &walker, t, view.view_proj, (w, h));
             }
             let plates = p.plates();
             if let Some(t) = renderer.text.as_mut() {
@@ -1727,7 +1749,7 @@ impl ApplicationHandler for App {
                 };
                 if let (Some(p), Some(w)) = (&mut self.play, &self.walker) {
                     if let Some(u) = g.renderer.ui.as_mut() {
-                        p.draw_hud(u, w, self.clock.elapsed().as_millis() as i64);
+                        p.draw_hud(u, w, self.clock.elapsed().as_millis() as i64, view.view_proj, (g.config.width, g.config.height));
                     }
                     let plates = p.plates();
                     if let Some(t) = g.renderer.text.as_mut() {

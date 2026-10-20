@@ -392,7 +392,7 @@ pub async fn play(file: web_sys::File, user: String, password: String, opts: JsV
         crate::stream::set_source_factory(disc.zone_sources());
         // What every world needs, before the session starts its clock.
         let mut common = Vec::new();
-        for name in ["CHAR.ESF", "ITEM.ESF", "ARIAL.CSF", "UI.CSF", "ARIALUI.CSF", "ITEMICON.ESF", "SPELLFX.CSF", "FX.CSF"] {
+        for name in ["CHAR.ESF", "ITEM.ESF", "ARIAL.CSF", "UI.CSF", "ARIALUI.CSF", "ITEMICON.ESF", "SPELLFX.CSF", "FX.CSF", "ADDART.CSF"] {
             status(&format!("reading {name}"));
             common.push((name, disc.container(name).await?));
         }
@@ -402,6 +402,8 @@ pub async fn play(file: web_sys::File, user: String, password: String, opts: JsV
             shared.push((*name, disc.container(name).await?));
         }
         let words = disc.read("WORDS.TXT").await.ok().and_then(|b| vi::strtab::StringTable::parse(&b));
+        // The HUD's texture names (the atlas is built in).
+        let textures = disc.read("TEXTURES.TXT").await.ok().and_then(|b| vi::strtab::StringTable::parse(&b));
         status(&format!("logging in as {user}"));
         let l = relay::login(&relay, server, auth_port, &user, &password).await?;
         let (sock, local) = relay::RelayUdp::open(&relay).await?;
@@ -438,6 +440,7 @@ pub async fn play(file: web_sys::File, user: String, password: String, opts: JsV
         let src = viewer::Source::Walk { file: main, index, character, spawn: Some((x, z, player.hpr[0])) };
         let mut play = play::Play::new(s, player, dump);
         play.words = words;
+        play.ui_data = textures.map(|t| (vi::ui::atlas(), t));
         let pending = gfx(canvas()?).await?;
         status("in the world");
         call_page("eqoaInWorld", &JsValue::NULL);

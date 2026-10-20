@@ -3,9 +3,9 @@
 //! the chat window's backdrop and the target's bar, at the game's own
 //! positions in its 640x448 frame.
 //!
-//! The pet's bar is here; the breath gauge, the target's details box and
-//! the quick menus are drawn by `play`. Not here yet: the group's bars and
-//! the patches on the compass.
+//! The group's and the pet's bars and the group's patches on the compass are
+//! here; the breath gauge, the target's details box and the quick menus are
+//! drawn by `play`.
 
 use crate::ui::{Raster, UiRaster, Vui, icon_id, wide};
 use render::ui::Quad;
@@ -40,6 +40,26 @@ pub struct HudState {
     pub group_count: i32,
     /// The members `DrawGroup` draws: not the player, active.
     pub group: Vec<MemberState>,
+    /// Every member, for `DrawPatch`.
+    pub patches: Vec<PatchMember>,
+    /// `m_selfId` and `m_target`.
+    pub self_id: Option<u32>,
+    pub target: u32,
+    /// The camera's position (`m_camera.m_position`).
+    pub camera: [f32; 3],
+    /// The scene's clock, in ms.
+    pub time_ms: i64,
+}
+
+/// What `DrawPatch` reads of a group member: its index in the group (which
+/// colours its patch), its id, and where it is: its actor's position while
+/// it has one, else its last place from channel 0x40 when that is in the
+/// player's world (none otherwise).
+#[derive(Clone, Debug, Default)]
+pub struct PatchMember {
+    pub index: usize,
+    pub id: u32,
+    pub pos: Option<[f32; 3]>,
 }
 
 /// One group member's bar: its name, whether it is the target, and its
@@ -80,6 +100,8 @@ pub struct Hud {
     scroll: TextScroll,
     /// `VIGetGameOptions()->m_region`.
     pub region: i8,
+    /// `DrawPatch`'s static `start`: the clock when its material was made.
+    patch_start: Option<i64>,
 }
 
 impl Hud {
@@ -93,6 +115,7 @@ impl Hud {
             glow2_on: -1,
             scroll: TextScroll::default(),
             region: 0,
+            patch_start: None,
         }
     }
 
@@ -111,6 +134,7 @@ impl Hud {
         vui.blit(ui, 6, p);
         if s.has_self {
             self.draw_compass(ui, s.heading);
+            self.draw_patch(ui, s);
         }
         p = [p[0] + 59, p[1] + 21];
         draw_gauge(vui, ui, 7, 136, p, true, s.self_hp as f32 / 255.0);
@@ -268,6 +292,69 @@ impl Hud {
     }
 }
 
+impl Hud {
+    /// `DrawPatch`: each other member within 2000 of the camera as a 10x10
+    /// patch of "Patch_Art" (ADDART.CSF, 16x16, texels 3 to 13) 27 pixels
+    /// out from (39, 55) at its bearing from the camera's heading, in its
+    /// index's colour (1 green, 2 blue, 3 cyan, the rest yellow); the
+    /// target's is off for the last 150 ms of every 1.5 s, counted from the
+    /// first call with the art.
+    fn draw_patch(&mut self, ui: &mut UiRaster, s: &HudState) {
+        let Some(tex) = ui.assets.surface(icon_id("Patch_Art")) else { return };
+        let start = *self.patch_start.get_or_insert(s.time_ms);
+        let phase = (s.time_ms - start) % 1500;
+        let (uv, size, tex_size) = ([3.0f32, 3.0], [10, 10], 16.0f32);
+        for m in &s.patches {
+            if Some(m.id) == s.self_id || (phase > 1350 && s.target == m.id) {
+                continue;
+            }
+            let Some(at) = m.pos else { continue };
+            let d = [at[0] - s.camera[0], at[1] - s.camera[1], at[2] - s.camera[2]];
+            let Some(p) = patch_point(s.heading, d) else { continue };
+            let (hx, hy) = ((size[0] >> 1) as f32, (size[1] >> 1) as f32);
+            let color = match m.index {
+                1 => [0.0, 1.0, 0.0, 1.0],
+                2 => [0.0, 0.0, 1.0, 1.0],
+                3 => [0.0, 1.0, 1.0, 1.0],
+                _ => [1.0, 1.0, 0.0, 1.0],
+            };
+            let (u0, v0) = (uv[0] / tex_size, uv[1] / tex_size);
+            let (u1, v1) = ((uv[0] + size[0] as f32) / tex_size, (uv[1] + size[1] as f32) / tex_size);
+            ui.ui.push(Quad {
+                tex,
+                blend: 0,
+                pos: [[p[0] - hx, p[1] - hy], [p[0] + hx, p[1] - hy], [p[0] + hx, p[1] + hy], [p[0] - hx, p[1] + hy]],
+                uv: [[u0, v0], [u1, v0], [u1, v1], [u0, v1]],
+                color,
+                clip: None,
+            });
+        }
+    }
+}
+
+/// Where `DrawPatch` puts a member `d` from the camera, whose heading is
+/// `yaw`: 27 pixels out from (39, 55) at its bearing (ahead is up); none
+/// past 2000. (The game's two wraps, the first testing the heading as read,
+/// move the angle by whole turns.)
+fn patch_point(yaw: f32, d: [f32; 3]) -> Option<[f32; 2]> {
+    use std::f32::consts::PI;
+    let (center, radius) = ([39.0f32, 55.0], 27.0f32);
+    if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() > 2000.0 {
+        return None;
+    }
+    // HPR with y zeroed
+    let h = d[0].atan2(d[2]);
+    let mut x = h;
+    if h - yaw > PI {
+        x -= 2.0 * PI;
+    }
+    if x - yaw < -PI {
+        x += 2.0 * PI;
+    }
+    x -= yaw;
+    Some([center[0] - x.sin() * radius, center[1] - x.cos() * radius])
+}
+
 /// `DrawGauge`: the frame (`frame`'s art), then `bar`'s art cut to `v` of
 /// its width, inset 3,1 for the experience bar (152) and 2,2 otherwise;
 /// dimmed to 0.3 unless lit.
@@ -280,4 +367,33 @@ pub fn draw_gauge(vui: &Vui, ui: &mut dyn Raster, bar: i32, frame: i32, at: [i32
     let at = [at[0] + inset[0], at[1] + inset[1]];
     let size = [(fill.uv1[0] as f32 * v) as i32, -1];
     vui.blit_ex_size(ui, fill.x00, at, size, 3, alpha, 0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::patch_point;
+
+    fn near(a: [f32; 2], b: [f32; 2]) -> bool {
+        (a[0] - b[0]).abs() < 1e-3 && (a[1] - b[1]).abs() < 1e-3
+    }
+
+    #[test]
+    fn a_patch_sits_at_its_bearing_from_the_camera() {
+        // facing +z: ahead is the top of the rose, +x (to the left, the
+        // world is right-handed) its left, behind its foot
+        assert!(near(patch_point(0.0, [0.0, 5.0, 100.0]).unwrap(), [39.0, 28.0]));
+        assert!(near(patch_point(0.0, [100.0, 0.0, 0.0]).unwrap(), [12.0, 55.0]));
+        assert!(near(patch_point(0.0, [0.0, 0.0, -100.0]).unwrap(), [39.0, 82.0]));
+        // turned to face +x, a member there is ahead
+        assert!(near(patch_point(std::f32::consts::FRAC_PI_2, [100.0, 0.0, 0.0]).unwrap(), [39.0, 28.0]));
+        // across the seam, a member 0.083 rad off the heading either way
+        let off = 2.0 * std::f32::consts::PI - 6.2;
+        let a = patch_point(3.1, [(-3.1f32).sin(), 0.0, (-3.1f32).cos()]).unwrap();
+        let b = patch_point(-3.1, [(3.1f32).sin(), 0.0, (3.1f32).cos()]).unwrap();
+        assert!(near(a, [39.0 - off.sin() * 27.0, 55.0 - off.cos() * 27.0]), "{a:?}");
+        assert!(near(b, [39.0 + off.sin() * 27.0, 55.0 - off.cos() * 27.0]), "{b:?}");
+        // 2000 is the edge, measured before y is dropped
+        assert!(patch_point(0.0, [0.0, 0.0, 2000.0]).is_some());
+        assert!(patch_point(0.0, [0.0, 100.0, 1998.0]).is_none());
+    }
 }

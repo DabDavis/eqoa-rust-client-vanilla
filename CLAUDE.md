@@ -23,8 +23,11 @@ The Rust client. README.md is the plan and the crate table; keep it current.
   VISoundDevice TUs in the EE layout above it (op 910). `crates/snd/tests/oracle_snd{,dev}.rs`
   compare sample for sample and packet for packet. Live audio tests: `EQOA_AUDIO=0` (the driver
   runs on the wall clock, silent), or `eqoa listen` to a WAV; the user's speakers are real.
-- `run/support.bin` (untracked) is the player's decrypted SUPPORT image; the HUD's atlas table is read
-  from it at run time (eqoa-port's gendata does the same). Never commit it or anything read from it.
+- `run/support.bin` (untracked) is the player's decrypted SUPPORT image; the UI sounds' volumes are read
+  from it at run time (eqoa-port's gendata does the same). Never commit it or anything read from it, with
+  ONE exception the user chose (2026-10-20, "do what the go client does for now"): the HUD's atlas table
+  is built in (`vi/src/ui_atlas.in`, the Go client's public `internal/ui/table.go` in the decomp's nine
+  fields), so the HUD needs only the disc, in a page too; `vi/tests/atlas.rs` holds it to the image.
   `run/client.bin` is CLIENT's (a link to `claude-eqoa-iso/decrypted_modules/CLIENT_decompressed_SNR1.bin`):
   the menus and gWorldInfo, its pointers resolved through the SNR1 relocations (`eqoa/src/client_image.rs`).
 - The `vi` structs are `#[repr(C)]` in the EE layout because the oracle compares raw bytes; keep it that way while ports are being proven. Later (not urgent): native runtime types beside them, converted at the edges, the layout types kept for oracle tests.
