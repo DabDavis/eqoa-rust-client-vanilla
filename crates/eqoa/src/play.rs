@@ -4368,7 +4368,6 @@ impl Play {
             self.book_actions(book_out);
             if let Some(s) = self.start.as_mut() {
                 let mut cues = Vec::new();
-                s.menu.edges = r.ui.side() > 0.0;
                 s.menu.draw(vui, &mut r, &s.menus, now as i64, &start_stats, &mut cues);
                 if s.menu.visible && self.items.visible {
                     let pl = &self.dump.player;

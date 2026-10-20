@@ -20,8 +20,10 @@ use crate::inventory;
 use crate::pointer::{Hits, key};
 use crate::quantity::{Quantity, QuantityUp};
 use crate::startmenu::KeyFlash;
+use crate::ui::Layout;
 use crate::wndlist::{ListUp, WndMenu};
 use net::dump::ItemList;
+use render::ui::Anchor;
 use vi::ui::{Raster, Vui, Window, wide};
 
 /// `sSlotIcons`: the icon on each quick slot.
@@ -234,6 +236,9 @@ pub struct ItemMenu {
     /// the tabs and the quick slots, where they were drawn
     tab_hits: Hits,
     slot_hits: Hits,
+    /// how far the panels went out to the sides (`Layout::side`): the lists
+    /// left, the slots right
+    side: i32,
 }
 
 impl Default for ItemMenu {
@@ -260,6 +265,7 @@ impl Default for ItemMenu {
             built: (Menus::default(), [0; 4]),
             tab_hits: Hits::default(),
             slot_hits: Hits::default(),
+            side: 0,
         }
     }
 }
@@ -272,12 +278,15 @@ impl ItemMenu {
     /// `ChangeSlot`'s rules), the quantity picker and the box take it as
     /// theirs. The keys to press.
     pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        // the panels' own places, wherever they went (`Layout`)
+        let s = self.side as f32;
+        let (left, right) = ([p[0] + s, p[1]], [p[0] - s, p[1]]);
         match self.focus {
             // the description scrolls on the wheel; its legend is glyphs
             Focus::Inspect => Vec::new(),
             Focus::Quantity => self.quantity.point(p),
             Focus::MBox => self.mbox.point(p).then_some(key::CROSS).into_iter().collect(),
-            Focus::Slots => match self.slot_hits.at(p) {
+            Focus::Slots => match self.slot_hits.at(right) {
                 Some(i) if i == self.slot => vec![key::CROSS],
                 Some(i) => crate::pointer::steps(self.slot, i, key::UP, key::DOWN),
                 None => Vec::new(),
@@ -293,7 +302,7 @@ impl ItemMenu {
                         keys.extend(crate::pointer::steps(self.menu, t, key::LEFT, key::RIGHT));
                         keys
                     }
-                    None => m.point(p),
+                    None => m.point(left),
                 }
             }
             Focus::Menu => Vec::new(),
@@ -646,11 +655,15 @@ impl ItemMenu {
         cues.push(sound);
     }
 
-    /// `OnDrawSelf` (with `UpdateDesc`), then the open windows over it.
-    pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, info: &Info, cues: &mut Vec<i32>) {
+    /// `OnDrawSelf` (with `UpdateDesc`), then the open windows over it. In a
+    /// window wider than 4:3 its lists go with the start menu's left panel
+    /// to the left side, the description and the quick slots with the right
+    /// panel to the right (`Layout`); the tabs stay in the middle.
+    pub fn draw(&mut self, vui: &Vui, r: &mut dyn Layout, info: &Info, cues: &mut Vec<i32>) {
         if !self.visible {
             return;
         }
+        self.side = r.side();
         let now = vui.time;
         let dt = (now - self.time) as f32 * 0.001;
         self.time = now;
@@ -683,17 +696,21 @@ impl ItemMenu {
             }
             pos[0] += step;
         }
+        r.anchor(Anchor::Left);
         vui.blit_rect(r, 51, [-1, 48], [175, 265], 0, 1.0);
+        r.anchor(Anchor::Middle);
         let e = vui.entry(89);
         lift[1] = pos[1] - e.uv1[1] / 2;
         vui.blit_ex(r, e.x00, lift, 0, 1.0, 0);
         let width = self.window.size[0];
+        r.anchor(Anchor::Right);
         if self.menu != -1 {
             let desc = wide(&self.desc);
             self.window.text_box(vui, r, &desc, 20, 0, width - 40, 15, white, 3);
         } else {
             self.draw_slots(vui, r);
         }
+        r.anchor(Anchor::Middle);
         if self.menu == -1 {
             if self.fade_in == -1 {
                 self.alpha = (self.alpha - dt * 2.0).max(0.0);
@@ -709,9 +726,11 @@ impl ItemMenu {
         } else {
             self.alpha = 1.0;
         }
+        r.anchor(Anchor::Left);
         for m in &mut self.menus {
             m.draw(vui, r, &self.built.0, now, cues);
         }
+        r.anchor(Anchor::Middle);
         if self.inspect.visible {
             self.inspect.draw(vui, r, cues);
         }
@@ -770,6 +789,8 @@ mod tests {
     #[derive(Default)]
     struct Slots(Vec<f32>);
 
+    impl Layout for Slots {}
+
     impl Raster for Slots {
         fn blit(&mut self, _: u32, _: u32, at: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, alpha: f32) {
             if at[0] == 32 && (48..48 + 6 * 44).contains(&at[1]) && (at[1] - 48) % 44 == 0 {
@@ -821,6 +842,65 @@ mod tests {
             assert_eq!(r.0.len(), 6, "six empty slots");
             assert!(r.0.iter().all(|&a| a == 1.0), "frame {frame}: the slots drawn whole, {:?}", r.0);
         }
+    }
+
+    /// A raster `.0` frame pixels wider than the frame each side.
+    struct Sided(i32);
+
+    impl Raster for Sided {
+        fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn stretch_blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+        fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+        fn draw_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16]) {}
+        fn draw_centered_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16], _: u32) {}
+        fn string_width(&self, s: &[u16]) -> i32 {
+            s.len() as i32 * 8
+        }
+        fn point_size(&self) -> i32 {
+            16
+        }
+        fn viewport(&self) -> [i32; 4] {
+            [0, 0, 639, 447]
+        }
+        fn set_viewport(&mut self, _: [i32; 4]) {}
+    }
+
+    impl Layout for Sided {
+        fn side(&self) -> i32 {
+            self.0
+        }
+    }
+
+    /// A pointer meets the inventory's rows where they were drawn: with the
+    /// start menu's left panel at the left side of a wide window (the
+    /// control: on a 4:3 picture the same point is off the list, the row's
+    /// own place on it); the tabs stay in the middle.
+    #[test]
+    fn a_pointer_follows_the_list_to_the_side() {
+        let inv = ItemList { p04: 0, items: vec![it(-1, 2, 0, 1), it(-1, 2, 0, 1)] };
+        let words = crate::pointer::testing::vui().words.clone();
+        let base = [0; 29];
+        let info = Info { words: &words, inv: &inv, hp: [0; 4], base: &base, class: 0, level: 1, attack_words: &[] };
+        let menu = |side: i32| {
+            let mut vui = crate::pointer::testing::vui();
+            vui.time = 1_000;
+            let mut m = ItemMenu::default();
+            m.set_built(build(&inv, [30, 30, 30, 40], &|k| 100 + k as i32, &|_| true));
+            m.open(&vui, &Sided(side));
+            vui.time = 1_033;
+            m.draw(&vui, &mut Sided(side), &info, &mut Vec::new());
+            m
+        };
+        let row1 = [32.0 + 50.0, 48.0 + 44.0 + 20.0];
+        let mut m = menu(106);
+        assert_eq!(m.point([row1[0] - 106.0, row1[1]]), vec![crate::pointer::MOVED], "row 1, moved to the left side");
+        let mut tv = menu(0);
+        assert!(tv.point([row1[0] - 106.0, row1[1]]).is_empty(), "off the list on a 4:3 picture");
+        assert_eq!(tv.point(row1), vec![crate::pointer::MOVED]);
+        // the tabs: the middle's either way (the third, two steps right)
+        let tab = [110.0 + 240.0, 20.0];
+        assert_eq!(m.point(tab), vec![key::RIGHT, key::RIGHT]);
     }
 
     #[test]

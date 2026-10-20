@@ -4,10 +4,25 @@
 //! mirrored by its flags; a string's glyphs one pixel apart; the viewport
 //! as the GS's offset and scissor).
 
-use render::ui::{Quad, Ui};
+use render::ui::{Anchor, Quad, Ui};
 use render::wgpu;
 use std::collections::HashMap;
 pub use vi::ui::{Raster, Vui, icon_id, wide};
+
+/// A raster a window lays itself out on across a window wider than 4:3
+/// (the client's own: the game drew for a 4:3 picture): how far the target
+/// reaches past the frame's sides, and where the quads made next go
+/// (`render::ui::Anchor`). A 4:3 target, or none, reaches 0 past them, and
+/// the window is drawn as the game draws it.
+pub trait Layout: Raster {
+    /// The whole frame pixels the target shows beyond each side of the
+    /// frame (0 on a 4:3 target).
+    fn side(&self) -> i32 {
+        0
+    }
+    /// Where the quads made from now go.
+    fn anchor(&mut self, _a: Anchor) {}
+}
 
 /// What the layer holds for the UI: surfaces by DictID, and the font.
 #[derive(Default)]
@@ -92,6 +107,15 @@ impl UiRaster<'_> {
             }
             None => self.glyphs.other(),
         }
+    }
+}
+
+impl Layout for UiRaster<'_> {
+    fn side(&self) -> i32 {
+        self.ui.side() as i32
+    }
+    fn anchor(&mut self, a: Anchor) {
+        self.ui.anchor = a;
     }
 }
 

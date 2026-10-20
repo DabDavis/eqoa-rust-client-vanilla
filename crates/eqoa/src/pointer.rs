@@ -247,6 +247,9 @@ pub mod testing {
     #[derive(Default)]
     pub struct NullRaster;
 
+    /// A 4:3 picture: windows lay out as the game does.
+    impl crate::ui::Layout for NullRaster {}
+
     impl Raster for NullRaster {
         fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
         fn stretch_blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
