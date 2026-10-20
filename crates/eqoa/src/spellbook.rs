@@ -11,9 +11,14 @@
 //!
 //! The popup is `wndlist::MiniMenu` (`VIWndMiniMenu`, drawn plain) over the
 //! book's own four rows.
+//!
+//! A pointer (`pointer`) selects an ability and opens the selected one's
+//! popup (or places the one held), steps the level tabs round to the one
+//! clicked, and chooses a slot when the book asks for one.
 #![allow(clippy::too_many_arguments)]
 
 use crate::client_image::Menus;
+use crate::pointer::{Hits, MOVED, key};
 use crate::startmenu::KeyFlash;
 use crate::wndlist::{ListUp, MiniMenu};
 use net::dump::Ability;
@@ -31,6 +36,12 @@ const WEAPON_WORDS: [(i32, i32); 8] = [(342, 0), (343, 1), (344, 2), (345, 3), (
 
 /// The popup's four entries (`Init`): word and message.
 const POPUP: [(i32, u32); 4] = [(1016, 0x0804_0000), (200, 0x0808_0000), (1800, 0x0809_0000), (161, 0x0802_0000)];
+
+/// What the book notes where it is drawn, for a pointer: the rows by
+/// index, a tab by its place from the left (`TAB` + place), a slot (`SLOT`
+/// + slot).
+const TAB: i32 = 1000;
+const SLOT: i32 = 2000;
 
 /// `VIRec32_C97888`: a row.
 #[derive(Clone, Copy, Debug, Default)]
@@ -92,6 +103,9 @@ pub struct SpellBook {
     window: Window,
     flash: KeyFlash,
     popup: MiniMenu,
+    hits: Hits,
+    /// the draw's time (a slot's tick pulse starts over then)
+    drawn: i64,
 }
 
 impl Default for SpellBook {
@@ -118,17 +132,64 @@ impl Default for SpellBook {
             window: Window::default(),
             flash: KeyFlash::default(),
             popup: MiniMenu::fixed(&POPUP.map(|(w, m)| (w, m, 0))),
+            hits: Hits::default(),
+            drawn: 0,
         }
     }
 }
 
 impl SpellBook {
 
-    /// A pointer at frame point `p` (`pointer`): what is under it selected,
-    /// and the keys to press.
+    /// A pointer at frame point `p` (`pointer`), as the keys reach the
+    /// book: the popup's row used at once, a click off the popup closing it
+    /// (△); in the list (and while arranging) an ability selected
+    /// (`MOVED`), the selected one's popup opened or the held one placed
+    /// (✕); a level tab, the right steps round to it (the list only); while
+    /// choosing a slot, one chosen, the chosen one taken (✕). The keys to
+    /// press.
     pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
-        let _ = p;
-        Vec::new()
+        if self.popup.visible {
+            return match self.popup.point(p) {
+                Some(k) => k.into_iter().collect(),
+                None => vec![key::TRIANGLE],
+            };
+        }
+        match self.hits.at(p) {
+            Some(h) if h >= SLOT => {
+                let j = h - SLOT;
+                if self.mode != 2 {
+                    Vec::new()
+                } else if j == self.slot {
+                    vec![key::CROSS]
+                } else {
+                    // Slot: the fade and the tick's pulse start over
+                    self.slot = j;
+                    self.fade_dir = 1;
+                    self.fade = 1.0;
+                    self.window.reset_tick_pulse(self.drawn);
+                    vec![MOVED]
+                }
+            }
+            Some(h) if h >= TAB => {
+                if self.mode == 0 {
+                    vec![key::RIGHT; (h - TAB) as usize]
+                } else {
+                    Vec::new()
+                }
+            }
+            Some(i) if self.mode == 0 || self.mode == 1 => {
+                if i == self.sel {
+                    vec![key::CROSS]
+                } else {
+                    // Up / Down: the fade starts over
+                    self.sel = i;
+                    self.fade_dir = 1;
+                    self.fade = 1.0;
+                    vec![MOVED]
+                }
+            }
+            _ => Vec::new(),
+        }
     }
     /// `Open`, and the focus arriving from another window (295): the tab
     /// count for the expansion, the popup down, the fade, the window.
@@ -488,6 +549,8 @@ impl SpellBook {
         let right = [449, 0];
         let dt = (now - self.time) as f32 * 0.001;
         self.time = now;
+        self.drawn = now;
+        self.hits.clear();
         vui.blit_rect(r, 32, [-1, -1], [642, 332], 0, 1.0);
         let fp = FrameParam { tl: (44, 0), top: (45, 0), tr: (46, 0), right: (52, 0), br: (50, 0), bottom: (49, 0), bl: (48, 0), left: (47, 0) };
         vui.blit_fill_frame(r, [150, 50], [300, 177], &fp, 35, 0, 1.0, true);
@@ -515,6 +578,10 @@ impl SpellBook {
             self.draw_slots(vui, r, abilities);
         }
         self.draw_tabs(vui, r);
+        // the tabs' places: the left end's piece, then 73 a tab
+        for k in 0..self.tab_count {
+            self.hits.push([if k == 0 { 0 } else { 37 + 73 * k }, 5, 110 + 73 * k, 39], TAB + k);
+        }
         self.window.init(vui, r, [300, 135], 280, 9, 0);
         let text = self.text.clone();
         self.window.text_box(vui, r, &text, 0, 0, 280, 9, black, 2);
@@ -532,6 +599,7 @@ impl SpellBook {
         while i < n && k < 6 {
             let lit = self.x3c && i == self.sel && self.mode == 0;
             let row = self.rows[i as usize];
+            self.hits.push([p[0], p[1], p[0] + 132, p[1] + 44], i);
             self.draw_icon(vui, r, &row, p, lit, 1.0);
             if i == self.sel && self.mode == 1 {
                 let held = self.held;
@@ -650,6 +718,7 @@ impl SpellBook {
         let mut p = [464, 60];
         for i in 0..5 {
             let lit = self.mode == 2 && i == self.slot;
+            self.hits.push([p[0], p[1] - 6, p[0] + 175, p[1] + 33], SLOT + i);
             let c = if lit { [1.0, 1.0, 0.0, 1.0] } else { [1.0; 4] };
             if lit {
                 vui.blit_bar3(r, &[], c, p, 56, 58, 57, 175, 0, 1.0, 0, true);
@@ -683,6 +752,7 @@ impl SpellBook {
         let w = self.window.size[0] - 40;
         for i in 0..10 {
             self.window.text_box(vui, r, &[], 20, i, w, 1, [0.0, 0.0, 0.0, 1.0], 4);
+            self.hits.push(crate::pointer::rows_rect(&self.window, vui, r, 20, i, w, 1), SLOT + i);
         }
         for &(id, slot, _) in &self.slots.clone() {
             let name = abilities.get(&id).map_or_else(Vec::new, |a| wide(&a.name));
@@ -772,6 +842,60 @@ mod tests {
         b.held_at = 2;
         let out = b.key(&map, 0, 134, true, 0);
         assert_eq!(out, vec![Out::Sound(13)], "placed on itself: nothing sent");
+    }
+
+    /// A click selects an ability, a second opens its popup, whose row a
+    /// click uses and off which a click closes it; a level tab is the right
+    /// steps round to it (the list only); while a slot is chosen the slots
+    /// take the clicks (five, or ten with the expansion), not the rows.
+    #[test]
+    fn a_pointer_takes_the_book() {
+        use crate::pointer::testing::{NullRaster, mid, vui};
+        let (vui, mut r) = (vui(), NullRaster);
+        let (mut b, map) = book(&[ability(1, 3, 1, false, -1), ability(2, 4, 1, false, -1), ability(3, 8, 1, false, -1)]);
+        b.open(&vui, &r, 0, 0);
+        b.draw(&vui, &mut r, &map, 0, 0, 0);
+        let row = |k: i32| [40.0, (50 + 44 * k + 20) as f32];
+        assert_eq!(b.point(row(2)), vec![MOVED]);
+        assert_eq!(b.sel, 2);
+        assert!(b.point(row(3)).is_empty(), "past the three abilities");
+        assert!(b.point([300.0, 200.0]).is_empty(), "the description");
+        assert_eq!(b.point(row(2)), vec![key::CROSS], "the selection: its popup");
+        // the tabs: the third place from the left is two steps right
+        assert_eq!(b.point([37.0 + 73.0 * 2.0 + 30.0, 20.0]), vec![key::RIGHT, key::RIGHT]);
+        assert!(b.point([20.0, 20.0]).is_empty(), "the tab shown");
+        // ✕: the popup, grown, then its rows
+        b.key(&map, 0, 134, true, 0);
+        assert!(b.popup.visible);
+        for t in [100, 200, 300, 400, 500] {
+            b.draw(&vui, &mut r, &map, 0, 0, t);
+        }
+        let at = b.popup.list.pos;
+        assert_eq!(b.point([(at[0] + 40) as f32, (at[1] + 20 + 19) as f32]), vec![key::CROSS]);
+        assert_eq!(b.popup.list.sel, 1, "Arrange");
+        assert_eq!(b.point(row(0)), vec![key::TRIANGLE], "off the popup: closed");
+        assert_eq!(b.sel, 2, "nothing selected under it");
+        // choosing a slot: the slots take the clicks, the rows and the tabs none
+        b.popup.visible = false;
+        b.mode = 2;
+        b.draw(&vui, &mut r, &map, 0, 0, 600);
+        assert!(b.point(row(1)).is_empty());
+        assert!(b.point([37.0 + 73.0 + 30.0, 20.0]).is_empty());
+        let slot = |j: i32| [500.0, (60 + 39 * j + 10) as f32];
+        assert_eq!(b.point(slot(3)), vec![MOVED]);
+        assert_eq!(b.slot, 3);
+        assert_eq!(b.point(slot(3)), vec![key::CROSS]);
+        assert!(b.point(slot(5)).is_empty(), "five slots without the expansion");
+        // ten with it, rows of a window
+        b.draw(&vui, &mut r, &map, 0, 2, 700);
+        let mut slots = Window::default();
+        slots.init(&vui, &NullRaster, [545, 155], 190, 10, 1);
+        let w10 = crate::pointer::rows_rect(&slots, &vui, &NullRaster, 20, 7, 150, 1);
+        assert_eq!(b.point(mid(w10)), vec![MOVED]);
+        assert_eq!(b.slot, 7);
+        // in the list, a slot is not chosen
+        b.mode = 0;
+        assert!(b.point(mid(w10)).is_empty());
     }
 
     /// Escape: back from slot choice, then out of the book.
