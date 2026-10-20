@@ -1369,6 +1369,10 @@ impl App {
             let _ = writeln!(o, "surface {}x{} {:?}", g.config.width, g.config.height, g.config.format);
         }
         let _ = writeln!(o, "files: {}", self.lib.files.iter().map(|f| f.0.as_str()).collect::<Vec<_>>().join(", "));
+        // the controls: a pad's sticks as they came (before the host's dead
+        // zone) and as the game reads them, and the camera's mode
+        let mode = self.walker.as_ref().map_or(-1, |w| w.cam.camera_mode);
+        let _ = writeln!(o, "sticks rx ry lx ly: pad {:.3?} (dead zone {}), the game's {:.4?}; camera mode {mode}", self.pads.raw, self.pads.dead_zone, self.console.sticks());
         if let Some(e) = &self.entering {
             let _ = writeln!(o, "entering {} at {:?}", e.0, e.1);
         }

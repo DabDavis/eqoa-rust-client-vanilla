@@ -15,6 +15,9 @@
 //! square, so each axis is scaled by 1.33 and clamped, as PCSX2's DualShock 2
 //! is by default ("130% to 140% for recent controllers"): a full diagonal
 //! runs instead of walking (`run_threshold` 0.7 on the stick's magnitude).
+//! Before that a gamepad's sticks go through the host's own dead zone
+//! ([`STICK_DEAD_ZONE`]): a modern stick does not come back to its middle,
+//! and scaled by 1.33 its rest would leave `ScaleStick`'s.
 //!
 //! The motors are `VIPad`'s (`VibrateLf`/`VibrateHf` from `Rumble`, the spell
 //! effects' vibrate events; `Process` sends them). The pad is found a read
@@ -82,7 +85,40 @@ pub fn stick_byte(v: f32) -> u8 {
     ((v * 1.33).clamp(-1.0, 1.0) * 127.5 + 127.5).round() as u8
 }
 
+/// The host's dead zone on a gamepad's stick, radial, in the stick's own
+/// travel: inside it the stick is at rest, outside it passes as it is, so
+/// the game's own dead zone and response are what they were. `ScaleStick`
+/// ignores bytes 88..167, which after the 1.33 is 0.236 of a stick's travel
+/// either way of its middle; a modern stick does not come back to its middle
+/// so well (Microsoft asks a game to ignore up to 0.24 of the left stick's
+/// travel and 0.265 of the right's), and one resting past 0.236 walks the
+/// player sideways with nothing held, or turns it slowly (F3 reports
+/// 20261020-103355 and -104019, a PowerA pad). A DualShock 2 rests in its
+/// middle, and PCSX2 leaves its "Analog Deadzone" to the player (none by
+/// default). In a page `?deadzone=<0..0.9>`, natively `EQOA_DEADZONE`.
+pub const STICK_DEAD_ZONE: f32 = 0.3;
+
+/// [`STICK_DEAD_ZONE`], or the player's.
+pub fn dead_zone() -> f32 {
+    #[cfg(target_arch = "wasm32")]
+    let v = crate::web::page_value("deadzone");
+    #[cfg(not(target_arch = "wasm32"))]
+    let v = std::env::var("EQOA_DEADZONE").ok();
+    v.and_then(|v| v.parse::<f32>().ok()).filter(|v| (0.0..=0.9).contains(v)).unwrap_or(STICK_DEAD_ZONE)
+}
+
 impl Report {
+    /// Each stick inside the radial dead zone `dz` put at rest.
+    pub fn rest(&mut self, dz: f32) {
+        for k in [0, 2] {
+            let (x, y) = (self.sticks[k], self.sticks[k + 1]);
+            if x * x + y * y < dz * dz {
+                self.sticks[k] = 0.0;
+                self.sticks[k + 1] = 0.0;
+            }
+        }
+    }
+
     /// Another source on the same port: the buttons OR'd, each stick axis
     /// the one further from rest.
     pub fn merge(&mut self, o: &Report) {
@@ -348,6 +384,10 @@ pub struct Gamepads {
     seen: Vec<String>,
     trace: bool,
     last: Report,
+    /// [`dead_zone`]
+    pub dead_zone: f32,
+    /// the pads' sticks as they came, before the dead zone (for a report)
+    pub raw: [f32; 4],
 }
 
 impl Default for Gamepads {
@@ -378,6 +418,8 @@ impl Gamepads {
             seen: Vec::new(),
             trace: trace(),
             last: Report::default(),
+            dead_zone: dead_zone(),
+            raw: [0.0; 4],
         }
     }
 
@@ -391,6 +433,7 @@ impl Gamepads {
             }
         }
         let mut out = Report::default();
+        let mut raw = Report::default();
         let (mut any, mut motors) = (false, false);
         for (_, pad) in g.gamepads() {
             if !pad.is_connected() {
@@ -403,8 +446,12 @@ impl Gamepads {
                 crate::say(&format!("gamepad: {name}{}", if pad.is_ff_supported() { " (rumble)" } else { "" }));
                 self.seen.push(name);
             }
-            out.merge(&report_of(&pad));
+            let mut r = report_of(&pad);
+            raw.merge(&r);
+            r.rest(self.dead_zone);
+            out.merge(&r);
         }
+        self.raw = raw.sticks;
         if any && !motors {
             motors = web_can_rumble();
         }
@@ -512,6 +559,33 @@ mod tests {
         // a full diagonal runs: each axis past the 0.7 the walk runs above
         let d = vi::pad::scale_stick::<Ee>(stick_byte(std::f32::consts::FRAC_1_SQRT_2)).0;
         assert!((2.0 * d * d).sqrt() > 0.7, "{d}");
+    }
+
+    /// A stick resting as far off its middle as Microsoft allows (0.265 of
+    /// the right stick's travel) reads as rest through the host's dead zone;
+    /// without it the game reads it as pushed (`ScaleStick` past 167), which
+    /// walks the player. A push past the dead zone passes as it was.
+    #[test]
+    fn a_stick_resting_off_its_middle_is_at_rest() {
+        let game = |r: &Report| -> [f32; 4] {
+            let d = r.data();
+            std::array::from_fn(|i| vi::pad::scale_stick::<Ee>(d[4 + i]).0)
+        };
+        for v in [0.24, 0.265, -0.29] {
+            let mut r = Report { buttons: 0, sticks: [v, 0.0, 0.0, v] };
+            // the negative control: as it came, the game reads both pushed
+            assert!(game(&r)[0] != 0.0 && game(&r)[3] != 0.0, "{v} with no dead zone is a push: {:?}", game(&r));
+            r.rest(STICK_DEAD_ZONE);
+            assert_eq!(game(&r), [0.0; 4], "{v}");
+        }
+        // past it, as it was: the walk's push and the run's
+        for v in [0.35, 0.8] {
+            let mut r = Report { buttons: 0, sticks: [0.0, v, -v, 0.0] };
+            let before = game(&r);
+            r.rest(STICK_DEAD_ZONE);
+            assert_eq!(game(&r), before, "{v}");
+            assert!(before[1] > 0.0 && before[2] < 0.0, "{v}: {before:?}");
+        }
     }
 
     #[test]
