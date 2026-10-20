@@ -2179,6 +2179,28 @@ impl Play {
         }
     }
 
+    /// The mouse wheel past the closest zoom, or out of first person (the
+    /// client's own: `mouse::Zoom`), in play: into first person as P's
+    /// `InitCameraStyle` goes there, saved as it saves, the camera it left
+    /// kept in `back`; out to that camera's style, distance and tilt (or,
+    /// first person having come by P, P's way out).
+    pub fn wheel_style(&mut self, walker: &mut Walker, zoom: crate::mouse::Zoom, back: &mut Option<crate::camstyle::ZoomBack>) {
+        use crate::mouse::Zoom;
+        if self.mode != 0 || zoom == Zoom::None {
+            return;
+        }
+        let rc = self.race_camera();
+        match (zoom, back.take()) {
+            (Zoom::In, _) => *back = Some(crate::camstyle::zoom_in(&mut walker.cam, rc, &mut walker.scene)),
+            (_, Some(b)) => crate::camstyle::zoom_out(&mut walker.cam, &b, rc, &mut walker.scene),
+            (_, None) => {
+                self.camera_style_key(walker);
+                return;
+            }
+        }
+        self.cam_saved = crate::camstyle::save(&walker.cam);
+    }
+
     /// Quit answered yes (`m_p2EC28`, `Process`'s LOGOUT): 0x09B0 to the
     /// server, sent now, then `Disconnect(9, 1)`: in a page its login screen
     /// again, saying word 820 ("Logged out."), as the console goes back to

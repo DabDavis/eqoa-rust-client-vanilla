@@ -431,7 +431,10 @@ pub fn shot_with(
             let (tx, ty, pinch) = touch.take_look();
             if !play.as_ref().is_some_and(|p| p.is_dead()) && play.as_ref().is_none_or(|p| p.look_free()) {
                 let inverted = play.as_ref().is_some_and(|p| p.options.inverted != 0);
-                let look = mouse.look(&mut walker, inverted);
+                let (look, zoom) = mouse.look(&mut walker, inverted);
+                if let Some(p) = play.as_mut() {
+                    p.wheel_style(&mut walker, zoom, &mut mouse.back);
+                }
                 let feel = crate::mouse::look(&mut walker, tx, ty, pinch, inverted);
                 for i in 0..2 {
                     for m in [look[i], feel[i]] {
@@ -1307,7 +1310,7 @@ impl App {
         let dead = self.play.as_ref().is_some_and(|p| p.is_dead());
         let free = !dead && self.play.as_ref().is_none_or(|p| p.look_free());
         let inverted = self.play.as_ref().is_some_and(|p| p.options.inverted != 0);
-        let (look, feel) = match self.walker.as_mut() {
+        let ((look, zoom), feel) = match self.walker.as_mut() {
             Some(w) if free => (self.mouse.look(w, inverted), crate::mouse::look(w, tx, ty, pinch, inverted)),
             _ => {
                 // a window up: the wheel and a finger's drag are its up and down
@@ -1317,9 +1320,13 @@ impl App {
                 if let Some(p) = self.play.as_mut() {
                     p.window_wheel(lines);
                 }
-                ([0.0; 2], [0.0; 2])
+                (([0.0; 2], crate::mouse::Zoom::None), [0.0; 2])
             }
         };
+        // the wheel past the closest zoom: first person, and back
+        if let (Some(p), Some(w)) = (self.play.as_mut(), self.walker.as_mut()) {
+            p.wheel_style(w, zoom, &mut self.mouse.back);
+        }
         if dead {
             return a;
         }
