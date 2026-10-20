@@ -13,6 +13,7 @@
 //! actors in the order its tree walk met them.
 
 pub mod billboard;
+pub mod overlay;
 pub mod text;
 pub mod ui;
 
@@ -274,6 +275,9 @@ pub struct Renderer {
     pub ui: Option<ui::Ui>,
     /// The particles' pipelines, made at the first particle.
     billboards: Option<billboard::Billboards>,
+    /// What is drawn over the scene with Z off (`set_overlay`), made at the
+    /// first.
+    overlay: Option<overlay::Overlay>,
     /// Strips (lightning) drawn with the next particles, before them, as
     /// the spell effects draw theirs before `VIParticleSystem::Render`.
     pub strips: Vec<billboard::Strips>,
@@ -501,6 +505,7 @@ impl Renderer {
             text: None,
             ui: None,
             billboards: None,
+            overlay: None,
             strips: Vec::new(),
             drawn: Default::default(),
             materials: Default::default(),
@@ -662,11 +667,13 @@ impl Renderer {
     }
 
     /// The labels, over what `draw` drew (depth-tested against it, not
-    /// writing it). `size` is the target's, in pixels.
+    /// writing it), then the overlay (`set_overlay`), then the 2D layer.
+    /// `size` is the target's, in pixels.
     pub fn draw_text(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, depth: &wgpu::TextureView, size: (u32, u32)) {
         let labels = self.text.as_ref().filter(|t| !t.labels.is_empty());
+        let overlay = self.overlay.as_ref().filter(|o| !o.is_empty());
         let quads = self.ui.as_ref().filter(|u| !u.quads.is_empty());
-        if labels.is_none() && quads.is_none() {
+        if labels.is_none() && overlay.is_none() && quads.is_none() {
             return;
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -688,6 +695,9 @@ impl Renderer {
         });
         if let Some(t) = labels {
             t.draw(device, &mut pass, size);
+        }
+        if let Some(o) = overlay {
+            o.draw(&mut pass);
         }
         if let Some(u) = quads {
             u.draw(device, &mut pass, size);
