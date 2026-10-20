@@ -1,14 +1,29 @@
 //! The Emotion Engine's FPU, as the game sees it.
 //!
 //! Ported from `go-eqoa-vi/vimath/ee.go`, where every rule below was measured
-//! on a running console through the tracer, not read out of a manual. The EE
+//! on a running game through the tracer, not read out of a manual. The EE
 //! FPU is not IEEE-754:
 //!
 //! - it rounds toward zero, always (no rounding-mode control);
 //! - it flushes denormals to a signed zero, on the way IN as well as out;
 //! - it saturates to ±`f32::MAX` instead of producing an infinity, and an
 //!   exponent-255 operand is clamped to ±`f32::MAX` before it is used;
-//! - a comparison conditions its operands too, so `0 < 1.4e-45` is false.
+//! - a comparison conditions its operands too, so `0 < 1.4e-45` is false;
+//! - its adder aligns the smaller operand with one guard bit and no sticky
+//!   bit: bits shifted past the guard are dropped before the add, and an
+//!   operand 25 or more exponents below the other adds nothing but its sign
+//!   (`add`).
+//!
+//! The last is PCSX2's recompiler's (`FPU_ADD_SUB`, `iFPU.cpp`), which the
+//! game plays on; the tracer's `call` runs guest code in PCSX2's interpreter,
+//! whose `ADD_S` is the host's addition (the exact sum toward zero), so
+//! go-eqoa-vi measured that one. The two differ where the dropped bits would
+//! have borrowed: `x + -tiny` is `x` on the console and one step toward zero
+//! in the interpreter, which made a body with a little velocity left after a
+//! stop creep a float step toward the world's origin every walk tick for the
+//! twenty seconds the velocity took to underflow (2 mm a tick at Freeport's
+//! x of 25,000; F3 20261020-194625, 0.3 m/s at 165 frames a second). The
+//! interpreter's adder is kept as `interp`, for the ports checked against it.
 //!
 //! Host `f32` arithmetic rounds to nearest-even and disagrees by one step on
 //! most inexact results. Game logic whose feel has to match the console
@@ -18,7 +33,13 @@
 //! Rust never contracts `a * b + c` into one fused rounding on its own, so the
 //! order of operations written here is the order the guest executes.
 
+pub mod interp;
 pub mod libm;
+
+/// What `libm` computes with (`interp::libm` has the interpreter's adder).
+mod arith {
+    pub use crate::{add, div, mul, operand, sub};
+}
 
 /// The f64 bit pattern of 2^-126, the least normal f32.
 const MIN_NORMAL: u64 = 0x3810_0000_0000_0000;
@@ -69,50 +90,40 @@ pub fn mul(a: f32, b: f32) -> f32 {
     chop(operand(a) as f64 * operand(b) as f64)
 }
 
-/// EE `add.s`: the exact sum, rounded toward zero.
+/// EE `add.s`: the smaller operand aligned as the adder aligns it (`align`),
+/// then the sum rounded toward zero.
 ///
-/// The f64 sum `s` misses the exact one by less than half an f64 step, and
-/// every f32 is an f64, so unless `s` lands on an f32 the exact sum lies
-/// between the same two f32s and chops as `s` does. An inexact `s` lands on
-/// one only when the smaller operand is at most half an f64 step of the
-/// larger, 53 or more exponents below it (`1.0 + -5e-17` rounds to 1.0 in
-/// f64, and the console's answer is one step below 1.0): `add_far` settles
-/// those by the error of the sum. Nearer than that, or with a zero, `s` will do.
+/// After the alignment the smaller operand's lowest bit is half a step of the
+/// larger's at least (or it is a zero), so the f64 sum is exact (27 bits at
+/// most) and its chop is the answer.
 #[inline(always)]
 pub fn add(a: f32, b: f32) -> f32 {
-    let (a, b) = (operand(a), operand(b));
-    let (ea, eb) = ((a.to_bits() >> 23) & 0xFF, (b.to_bits() >> 23) & 0xFF);
-    if ea.abs_diff(eb) > 52 && ea != 0 && eb != 0 {
-        return add_far(a, b);
-    }
-    chop(a as f64 + b as f64)
+    let (a, b) = align(operand(a).to_bits(), operand(b).to_bits());
+    chop(f32::from_bits(a) as f64 + f32::from_bits(b) as f64)
 }
 
-/// `add` of conditioned operands 53 or more exponents apart: when the f64 sum
-/// lands on an f32, the error of the sum (`two_sum`) tells which side of it the
-/// exact sum was.
-#[inline(never)]
-fn add_far(a: f32, b: f32) -> f32 {
-    let (x, y) = (a as f64, b as f64);
-    let s = x + y;
-    let bb = s - x;
-    let e = (x - (s - bb)) + (y - bb);
-    let r = chop(s);
-    if e == 0.0 || r == 0.0 {
-        return r;
-    }
-    let rem = (s - r as f64) + e;
-    if (r > 0.0 && rem < 0.0) || (r < 0.0 && rem > 0.0) {
-        // one step toward zero, which in the bit pattern is down for both
-        // signs; flushed if that left the normal range
-        let b = r.to_bits() - 1;
-        return f32::from_bits(if b & 0x7F80_0000 == 0 { b & 0x8000_0000 } else { b });
-    }
-    r
+/// The adder's alignment, as PCSX2's recompiler models the EE's
+/// (`FPU_ADD_SUB`, "the PS2 uses a single guard bit"): of the operand `d`
+/// exponents below the other, the bits that shifting it `d` places would
+/// take past the one guard bit are cleared, and 25 or more below, all but
+/// its sign. The operands are conditioned already.
+#[inline(always)]
+fn align(a: u32, b: u32) -> (u32, u32) {
+    let d = ((a >> 23) & 0xFF) as i32 - ((b >> 23) & 0xFF) as i32;
+    (a & keep(-d), b & keep(d))
+}
+
+/// The mask `align` keeps of an operand `d` exponents below the other: all of
+/// it within one exponent, the bits above the lowest `d - 1` up to 24 below,
+/// the sign alone past that.
+#[inline(always)]
+fn keep(d: i32) -> u32 {
+    let s = if d > 24 { 31 } else if d > 1 { d - 1 } else { 0 };
+    u32::MAX << s
 }
 
 /// EE `sub.s`: `add` with the second operand's sign flipped (conditioning
-/// keeps the sign, so the two orders agree).
+/// and the alignment keep the sign, so the two orders agree).
 #[inline(always)]
 pub fn sub(a: f32, b: f32) -> f32 {
     add(a, neg(b))
@@ -157,15 +168,13 @@ pub fn mul4(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
     [mul(a[0], b[0]), mul(a[1], b[1]), mul(a[2], b[2]), mul(a[3], b[3])]
 }
 
-/// Four [`add`]s at once, as [`mul4`]; a lane whose operands are 53 or more
-/// exponents apart sends all four through `add`.
+/// Four [`add`]s at once, as [`mul4`].
 #[inline(always)]
 pub fn add4(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
     #[cfg(target_arch = "x86_64")]
     // SAFETY: SSE2 is part of the x86_64 baseline.
-    if let Some(r) = unsafe { simd::add4(a, b) } {
-        return r;
-    }
+    return unsafe { simd::add4(a, b) };
+    #[cfg(not(target_arch = "x86_64"))]
     [add(a[0], b[0]), add(a[1], b[1]), add(a[2], b[2]), add(a[3], b[3])]
 }
 
@@ -234,24 +243,31 @@ mod simd {
         }
     }
 
-    /// `None` when a lane's operands are 53 or more exponents apart, both
-    /// nonzero (`add_far`'s).
+    /// `keep` on four lanes: `u32::MAX << s` as `-(2^s)`, 2^s converted
+    /// from the float whose exponent is s (2^31 is past i32's range and
+    /// converts to 0x80000000, which negates to itself: the sign alone).
     #[inline(always)]
-    pub unsafe fn add4(a: [f32; 4], b: [f32; 4]) -> Option<[f32; 4]> {
+    unsafe fn keep4(d: __m128i) -> __m128i {
+        unsafe {
+            let one = _mm_set1_epi32(1);
+            let s = _mm_and_si128(_mm_sub_epi32(d, one), _mm_cmpgt_epi32(d, one));
+            let s = select(_mm_cmpgt_epi32(d, _mm_set1_epi32(24)), _mm_set1_epi32(31), s);
+            let p = _mm_cvttps_epi32(_mm_castsi128_ps(_mm_slli_epi32(_mm_add_epi32(s, _mm_set1_epi32(127)), 23)));
+            _mm_sub_epi32(_mm_setzero_si128(), p)
+        }
+    }
+
+    /// `add` on four lanes: `align`, then the exact sum chopped.
+    #[inline(always)]
+    pub unsafe fn add4(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
         unsafe {
             let (a, b) = (operand4(a), operand4(b));
             let exp = |v| _mm_srli_epi32(_mm_and_si128(v, _mm_set1_epi32(0x7F80_0000)), 23);
-            let (ea, eb) = (exp(a), exp(b));
-            let far = _mm_or_si128(
-                _mm_cmpgt_epi32(_mm_sub_epi32(ea, eb), _mm_set1_epi32(52)),
-                _mm_cmpgt_epi32(_mm_sub_epi32(eb, ea), _mm_set1_epi32(52)),
-            );
-            let zero = _mm_or_si128(_mm_cmpeq_epi32(ea, _mm_setzero_si128()), _mm_cmpeq_epi32(eb, _mm_setzero_si128()));
-            if _mm_movemask_epi8(_mm_andnot_si128(zero, far)) != 0 {
-                return None;
-            }
+            let d = _mm_sub_epi32(exp(a), exp(b));
+            let a = _mm_and_si128(a, keep4(_mm_sub_epi32(_mm_setzero_si128(), d)));
+            let b = _mm_and_si128(b, keep4(d));
             let ((a0, a1), (b0, b1)) = (widen(a), widen(b));
-            Some(store(chop2(_mm_add_pd(a0, b0)), chop2(_mm_add_pd(a1, b1))))
+            store(chop2(_mm_add_pd(a0, b0)), chop2(_mm_add_pd(a1, b1)))
         }
     }
 }
@@ -349,9 +365,34 @@ mod tests {
         assert_eq!(operand(f32::from_bits(0xFF80_0000)), -f32::MAX);
     }
 
+    /// The adder's guard bit, against PCSX2's interpreter (`interp`, where
+    /// the tracer measured): an operand 25 or more exponents below adds only
+    /// its sign; nearer, its bits past the guard are dropped before the add.
     #[test]
-    fn sum_needs_the_error_term() {
-        // 1.0 + -5e-17 is one step below 1.0 on the console.
-        assert_eq!(add(1.0, -5e-17).to_bits(), 0x3F7F_FFFF);
+    fn the_adder_has_one_guard_bit() {
+        // 1.0 + -5e-17: the interpreter one step below 1.0, the console 1.0
+        assert_eq!(interp::add(1.0, -5e-17).to_bits(), 0x3F7F_FFFF);
+        assert_eq!(add(1.0, -5e-17).to_bits(), 0x3F80_0000);
+        // the slide (F3 20261020-194625): Freeport's x less a walk tick's
+        // trace of velocity stays put; the interpreter's crept 2 mm a tick
+        let x = 25280.5f32;
+        assert_eq!(add(x, -1.0e-5), x);
+        assert_eq!(sub(x, 1.0e-5), x);
+        assert_eq!(interp::add(x, -1.0e-5).to_bits(), x.to_bits() - 1);
+        // half a step of x or more still takes it a step (the guard bit)
+        let half = f32::from_bits((x.to_bits() & 0x7F80_0000) - (24 << 23));
+        assert_eq!(add(x, -half).to_bits(), x.to_bits() - 1);
+        assert_eq!(add(x, -half * 0.75), x, "under half a step: 25 exponents below");
+        // nearer: 1 - (1/8 + 2^-26) drops 2^-26 (3 below: two bits past the
+        // guard cleared) and is 0.875; the interpreter's is a step under
+        let b = -(0.125f32 + f32::from_bits(0x3280_0000));
+        assert_eq!(b.to_bits() & 3, 1, "the bit to drop is there");
+        assert_eq!(add(1.0, b).to_bits(), 0x3F60_0000);
+        assert_eq!(interp::add(1.0, b).to_bits(), 0x3F5F_FFFF);
+        // a sum that only grows never borrows: the two agree
+        assert_eq!(add(1.0, -b).to_bits(), interp::add(1.0, -b).to_bits());
+        // and the four-lane form is the same adder
+        let s = add4([x, 1.0, 1.0, 3.0], [-1.0e-5, -5e-17, b, 0.25]);
+        assert_eq!(s.map(f32::to_bits), [x.to_bits(), 0x3F80_0000, 0x3F60_0000, 3.25f32.to_bits()]);
     }
 }
