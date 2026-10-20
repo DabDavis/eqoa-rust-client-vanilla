@@ -307,8 +307,13 @@ impl ItemMenu {
         self.built = built;
     }
 
-    /// `Open`: tab 0 at its top, the description window.
-    pub fn open(&mut self, vui: &Vui, r: &dyn Raster, now: i64) {
+    /// `Open`: tab 0 at its top, the description window. On the clock the
+    /// menu draws with (`vui.time`): the game has one (`m_p07568`), and the
+    /// tab's list fades by the time since its focus came, so a focus stamped
+    /// on another clock left its rows and empty slots at a negative alpha
+    /// until a tab change stamped it again (F3 20261020-204418).
+    pub fn open(&mut self, vui: &Vui, r: &dyn Raster) {
+        let now = vui.time;
         self.quantity.visible = false;
         self.inspect.visible = false;
         for m in &mut self.menus {
@@ -758,6 +763,64 @@ mod tests {
         n.item.p4c = p4c;
         n.item.p54 = p54;
         n
+    }
+
+    /// The blits at the item list's six row places (32, 48 + 44 k): the
+    /// empty slots of the grid, with their alpha.
+    #[derive(Default)]
+    struct Slots(Vec<f32>);
+
+    impl Raster for Slots {
+        fn blit(&mut self, _: u32, _: u32, at: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, alpha: f32) {
+            if at[0] == 32 && (48..48 + 6 * 44).contains(&at[1]) && (at[1] - 48) % 44 == 0 {
+                self.0.push(alpha);
+            }
+        }
+        fn stretch_blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+        fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+        fn draw_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16]) {}
+        fn draw_centered_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16], _: u32) {}
+        fn string_width(&self, s: &[u16]) -> i32 {
+            s.len() as i32 * 8
+        }
+        fn point_size(&self) -> i32 {
+            16
+        }
+        fn viewport(&self) -> [i32; 4] {
+            [0, 0, 640, 448]
+        }
+        fn set_viewport(&mut self, _: [i32; 4]) {}
+    }
+
+    /// The inventory opened shows its grid from the first frame on: the
+    /// tab's list is focused on the clock it is drawn with (`vui.time`, the
+    /// HUD's), whatever clock the session keeps, so its six empty slots are
+    /// drawn whole frame after frame. With the focus stamped on another
+    /// clock (the DRDP clock, milliseconds from the wall clock at connect)
+    /// the list's fade ran from a huge negative time and the slots were
+    /// drawn at an alpha far below zero until a tab change (F3
+    /// 20261020-204418).
+    #[test]
+    fn the_grid_is_drawn_from_the_first_frame() {
+        let inv = ItemList { p04: 0, items: Vec::new() };
+        let mut vui = crate::pointer::testing::vui();
+        let words = vui.words.clone();
+        let base = [0; 29];
+        let info = Info { words: &words, inv: &inv, hp: [0; 4], base: &base, class: 0, level: 1, attack_words: &[] };
+        let mut m = ItemMenu::default();
+        m.set_built(build(&inv, [30, 30, 30, 40], &|_| -1, &|_| true));
+        vui.time = 1_000;
+        m.open(&vui, &Slots::default());
+        assert_eq!(m.menus[0].list.time, vui.time, "focused on the HUD's clock");
+        for frame in 1..=3 {
+            vui.time = 1_000 + 33 * frame;
+            let mut r = Slots::default();
+            let mut cues = Vec::new();
+            m.draw(&vui, &mut r, &info, &mut cues);
+            assert_eq!(r.0.len(), 6, "six empty slots");
+            assert!(r.0.iter().all(|&a| a == 1.0), "frame {frame}: the slots drawn whole, {:?}", r.0);
+        }
     }
 
     #[test]

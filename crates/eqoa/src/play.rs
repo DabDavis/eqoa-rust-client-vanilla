@@ -2670,7 +2670,7 @@ impl Play {
             match s.menu.key(vui, r, &s.menus, key, down, now, loc, &mut cues) {
                 crate::startmenu::Up::Items => {
                     // ShowItems
-                    self.items.open(vui, r, now);
+                    self.items.open(vui, r);
                     self.waiting = false;
                 }
                 crate::startmenu::Up::Back => {
