@@ -146,6 +146,13 @@ impl Layout {
     }
 }
 
+/// A looking finger's drag down `dy` window pixels in a `size` window, as
+/// the wheel's lines (up positive) a window up takes it as: a fifteenth of
+/// the window's height a line, so a list follows the finger.
+pub fn drag_lines(dy: f32, size: (u32, u32)) -> f32 {
+    dy / (size.1.max(1) as f32 / 15.0)
+}
+
 fn dist(a: [f32; 2], b: [f32; 2]) -> f32 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
 }

@@ -114,6 +114,13 @@ impl Default for RecipeWnd {
 }
 
 impl RecipeWnd {
+
+    /// A pointer at frame point `p` (`pointer`): what is under it selected,
+    /// and the keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        let _ = p;
+        Vec::new()
+    }
     /// `OnMessage` 295 from outside its own windows: the windows, the
     /// children down, everything back to the first component.
     pub fn open(&mut self, vui: &Vui, r: &dyn Raster) {
@@ -596,6 +603,13 @@ impl Default for ExperimentWnd {
 }
 
 impl ExperimentWnd {
+
+    /// A pointer at frame point `p` (`pointer`): what is under it selected,
+    /// and the keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        let _ = p;
+        Vec::new()
+    }
     /// `Refresh()`: 40 rows emptied, then one per component in the copy (an
     /// item with `m_p54`, not of type 8), each with its three options.
     fn refresh(&mut self, part: &Craft, icon: &dyn Fn(usize) -> i32) {

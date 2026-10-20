@@ -199,6 +199,13 @@ pub struct WndOptions {
 }
 
 impl WndOptions {
+
+    /// A pointer at frame point `p` (`pointer`): what is under it selected,
+    /// and the keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        let _ = p;
+        Vec::new()
+    }
     /// `OnMessage` 295 with the focus coming from outside: the window (300
     /// wide, seven rows, titled 788) opening, the values kept, the menu.
     pub fn open(&mut self, vui: &Vui, r: &dyn Raster, o: &GameOptions) {

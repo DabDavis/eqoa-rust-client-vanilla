@@ -73,6 +73,7 @@ mod wholist;
 mod zones;
 mod particles;
 mod play;
+mod pointer;
 mod scene;
 mod sky;
 mod touch;

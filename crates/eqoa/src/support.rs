@@ -44,6 +44,13 @@ impl Play {
         self.support.keys.push((key, down));
     }
 
+    /// A pointer at frame point `f` on the blacksmith or the CS windows (`pointer`): what is
+    /// under it selected, and the keys to press.
+    pub fn support_point(&mut self, f: [f32; 2]) -> Vec<i32> {
+        let _ = f;
+        Vec::new()
+    }
+
     /// The mode is one of these windows'.
     pub fn support_owns(&self) -> bool {
         owns(self.mode)

@@ -21,6 +21,7 @@
 use crate::dialog::{BoxAnswer, Key as BoxKey, MBox};
 use crate::editbox::{EditBox, EditUp};
 use crate::infotext::Info;
+use crate::pointer::{Hits, MOVED, key};
 use crate::quantity::{Quantity, QuantityUp};
 use crate::startmenu::KeyFlash;
 use crate::wndlist::WndList;
@@ -311,6 +312,9 @@ pub struct Deposit {
     window: Window,
     flash: KeyFlash,
     pub visible: bool,
+    /// each digit drawn (its index), the room above it (10 + index) and
+    /// below it (20 + index), for a pointer
+    hits: Hits,
 }
 
 /// What the money entry tells its parent.
@@ -328,6 +332,23 @@ impl Deposit {
     /// `GetValue`.
     pub fn value(&self) -> i32 {
         (0..9).map(|i| self.digits[i] * 10i32.pow(8 - i as u32)).sum()
+    }
+
+    /// A pointer at frame point `p`: the cursor to the digit under it, and
+    /// above or below it the digit changed (up, down). The keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        let Some(h) = self.hits.at(p) else { return Vec::new() };
+        let mut keys = Vec::new();
+        if h % 10 != self.cursor {
+            self.cursor = h % 10;
+            keys.push(MOVED);
+        }
+        match h / 10 {
+            1 => keys.push(key::UP),
+            2 => keys.push(key::DOWN),
+            _ => {}
+        }
+        keys
     }
 
     fn limit(&self) -> i32 {
@@ -477,8 +498,13 @@ impl Deposit {
         let half = self.window.size[0] / 2 - 10;
         let mut x = half;
         let w = vui.string_width(r, &wide("W")) - 6;
+        self.hits.clear();
         for i in 9 - self.width..9 {
             let lit = i == self.cursor;
+            for (row, what) in [(1, 0), (0, 10), (2, 20)] {
+                let rr = crate::pointer::rows_rect(&self.window, vui, r, x, row, w, 1);
+                self.hits.push([rr[0] + 20, rr[1], rr[2], rr[3]], what + i);
+            }
             self.window.text_box(vui, r, &wide(&self.digits[i as usize].to_string()), x, 1, w, 1, if lit { yellow } else { white }, 0);
             if lit {
                 self.window.tick_d(vui, r, x + w / 2, 0, true);

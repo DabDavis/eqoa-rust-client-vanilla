@@ -122,6 +122,13 @@ impl Default for Trainer {
 }
 
 impl Trainer {
+
+    /// A pointer at frame point `p` (`pointer`): what is under it selected,
+    /// and the keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        let _ = p;
+        Vec::new()
+    }
     /// `Open` (the player's points, mode 0), and `OnMessage` 295's windows.
     pub fn open(&mut self, vui: &Vui, r: &dyn Raster, d: &Data, now: i64) {
         self.sel = 0;

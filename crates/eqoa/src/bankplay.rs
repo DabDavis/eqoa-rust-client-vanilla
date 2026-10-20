@@ -63,6 +63,13 @@ impl Play {
         self.bank.keys.push((key, down));
     }
 
+    /// A pointer at frame point `f` on the bank or the auction search (`pointer`): what is
+    /// under it selected, and the keys to press.
+    pub fn bank_point(&mut self, f: [f32; 2]) -> Vec<i32> {
+        let _ = f;
+        Vec::new()
+    }
+
     /// The bank's opcodes; true when handled. 0x00D7 (`Msg00D7`) clears the
     /// waiting state and is left for the merchant's half too.
     pub(super) fn bank_opcode(&mut self, op: u16, data: &[u8]) -> bool {

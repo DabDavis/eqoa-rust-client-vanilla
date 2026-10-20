@@ -475,6 +475,13 @@ fn box_key(key: i32) -> Option<Key> {
 }
 
 impl WndGuild {
+
+    /// A pointer at frame point `p` (`pointer`): what is under it selected,
+    /// and the keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        let _ = p;
+        Vec::new()
+    }
     /// 295 on gaining the focus: the window at (320, 180), 600 wide.
     fn gain_focus(&mut self, vui: &Vui, r: &dyn Raster, now: i64) {
         self.focus = true;

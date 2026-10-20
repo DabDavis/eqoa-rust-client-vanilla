@@ -16,6 +16,9 @@ pub struct UiAssets {
     pub font: Option<usize>,
     /// A white texel, for `FillRectangle`'s solid fill.
     pub white: Option<usize>,
+    /// The atlas's button glyphs, once SUPPORT's atlas is here: the raster
+    /// notes where each is drawn (`pointer::Glyphs`).
+    pub glyphs: Option<crate::pointer::GlyphTable>,
 }
 
 impl UiAssets {
@@ -55,19 +58,38 @@ impl UiAssets {
     }
 
     pub fn raster<'a>(&'a self, ui: &'a mut Ui) -> UiRaster<'a> {
-        UiRaster { assets: self, ui }
+        UiRaster { assets: self, ui, glyphs: Default::default() }
     }
 }
 
 pub struct UiRaster<'a> {
     pub assets: &'a UiAssets,
     pub ui: &'a mut Ui,
+    /// The button glyphs drawn, where (for a pointer).
+    pub glyphs: crate::pointer::Glyphs,
 }
 
 impl UiRaster<'_> {
     fn text(&mut self, at: [i32; 2], color: [f32; 4], s: &[u16]) {
         if let Some(f) = self.assets.font {
             self.ui.text(f, at[0], at[1], color, s);
+            if color[3] > 0.0 {
+                let (w, h) = (self.string_width(s).max(0), self.point_size());
+                let (a, b) = (self.ui.placed([at[0] as f32, at[1] as f32]), self.ui.placed([(at[0] + w) as f32, (at[1] + h) as f32]));
+                self.glyphs.string([a[0], a[1], b[0], b[1]]);
+            }
+        }
+    }
+
+    /// A blit's glyph noted (a visible button glyph at its own size), or
+    /// that something else was blitted.
+    fn note(&mut self, id: u32, flags: u32, at: [i32; 2], a: [i32; 2], b: [i32; 2], alpha: f32) {
+        match self.assets.glyphs.as_ref().and_then(|t| t.key(id, a, b, flags)).filter(|_| alpha > 0.05) {
+            Some(key) => {
+                let (p, q) = (self.ui.placed([at[0] as f32, at[1] as f32]), self.ui.placed([(at[0] + b[0]) as f32, (at[1] + b[1]) as f32]));
+                self.glyphs.glyph([p[0], p[1], q[0], q[1]], key);
+            }
+            None => self.glyphs.other(),
         }
     }
 }
@@ -88,6 +110,7 @@ impl Raster for UiRaster<'_> {
             _ => [[u1, v1], [u0, v1], [u0, v0], [u1, v0]],
         };
         self.ui.push(Quad { tex, blend: mode as u8, pos: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], uv, color: [1.0, 1.0, 1.0, alpha], clip: None });
+        self.note(id, flags, at, a, b, alpha);
     }
 
     fn stretch_blit(&mut self, id: u32, flags: u32, at: [i32; 2], size: [i32; 2], a: [i32; 2], b: [i32; 2], mode: i32, alpha: f32) {
@@ -105,6 +128,7 @@ impl Raster for UiRaster<'_> {
             _ => [[u1, v1], [u0, v1], [u0, v0], [u1, v0]],
         };
         self.ui.push(Quad { tex, blend: mode as u8, pos: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], uv, color: [1.0, 1.0, 1.0, alpha], clip: None });
+        self.glyphs.other();
     }
 
     fn fill_fan(&mut self, color: [f32; 4], c: [[i32; 2]; 4]) {
@@ -112,6 +136,7 @@ impl Raster for UiRaster<'_> {
         let pos = c.map(|p| [p[0] as f32, p[1] as f32]);
         // m_solidFillUIMaterial: InitSolidFill's blend 0 (opaque)
         self.ui.push(Quad { tex, blend: 0, pos, uv: [[0.5, 0.5]; 4], color, clip: None });
+        self.glyphs.other();
     }
 
     fn blit_full(&mut self, id: u32, flags: u32, at: [i32; 2], mode: i32, alpha: f32) {

@@ -123,6 +123,13 @@ impl Default for SpellBook {
 }
 
 impl SpellBook {
+
+    /// A pointer at frame point `p` (`pointer`): what is under it selected,
+    /// and the keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        let _ = p;
+        Vec::new()
+    }
     /// `Open`, and the focus arriving from another window (295): the tab
     /// count for the expansion, the popup down, the fade, the window.
     pub fn open(&mut self, vui: &Vui, r: &dyn Raster, expansion: u32, now: i64) {

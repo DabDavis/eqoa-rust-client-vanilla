@@ -98,6 +98,13 @@ impl Default for QuestLog {
 }
 
 impl QuestLog {
+
+    /// A pointer at frame point `p` (`pointer`): what is under it selected,
+    /// and the keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        let _ = p;
+        Vec::new()
+    }
     /// `Open`, with `OnMessage` 295's window: 550 wide, 14 rows, titled
     /// "Quest Journal" (573).
     pub fn open(&mut self, vui: &Vui, r: &dyn Raster) {

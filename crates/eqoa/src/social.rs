@@ -137,6 +137,13 @@ pub struct IgnoreList {
 }
 
 impl IgnoreList {
+
+    /// A pointer at frame point `p` (`pointer`): what is under it selected,
+    /// and the keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        let _ = p;
+        Vec::new()
+    }
     /// `Init`: the box (Yes/No, at (80, 115)) and the titled member menu,
     /// hidden.
     pub fn new(menu: usize) -> Self {
@@ -456,6 +463,13 @@ pub struct BuddyList {
 }
 
 impl BuddyList {
+
+    /// A pointer at frame point `p` (`pointer`): what is under it selected,
+    /// and the keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        let _ = p;
+        Vec::new()
+    }
     pub fn new(menu: usize) -> Self {
         BuddyList { shown: false, sel: 0, top: 0, count: 0, window: Window::default(), mbox: MBox::default(), mbox_visible: false, menu: MiniMenu::titled(menu), flash: KeyFlash::default() }
     }

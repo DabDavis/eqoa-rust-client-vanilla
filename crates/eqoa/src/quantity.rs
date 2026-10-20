@@ -3,8 +3,10 @@
 //! one under the cursor changed with up and down and moved with left and
 //! right (held keys repeating), the total when a unit price is given (word
 //! 286), and the legend. Enter hands the value up (293), at most the
-//! maximum; Triangle cancels (260).
+//! maximum; Triangle cancels (260). A pointer (`pointer`) puts the cursor on
+//! the digit it is on, and above or below one changes it as up or down do.
 
+use crate::pointer::{Hits, MOVED, key};
 use crate::startmenu::KeyFlash;
 use vi::ui::{Raster, Vui, Window, wide};
 
@@ -29,6 +31,9 @@ pub struct Quantity {
     window: Window,
     pub keys: KeyFlash,
     pub visible: bool,
+    /// each digit drawn (its index), the room above it (10 + index) and
+    /// below it (20 + index)
+    hits: Hits,
 }
 
 impl Quantity {
@@ -46,6 +51,23 @@ impl Quantity {
         self.window.close(true);
         self.window.open(false);
         self.keys.reset();
+    }
+
+    /// A pointer at frame point `p`: the cursor to the digit under it, and
+    /// above or below it the digit changed (up, down). The keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        let Some(h) = self.hits.at(p) else { return Vec::new() };
+        let mut keys = Vec::new();
+        if h % 10 != self.cursor {
+            self.cursor = h % 10;
+            keys.push(MOVED);
+        }
+        match h / 10 {
+            1 => keys.push(key::UP),
+            2 => keys.push(key::DOWN),
+            _ => {}
+        }
+        keys
     }
 
     /// `GetValue`.
@@ -133,8 +155,13 @@ impl Quantity {
         let word = |id: i32| vui.words.get(id, vui.language).to_string();
         self.window.text_box(vui, r, &wide(&word(353)), 20, 1, 80, 1, white, 3);
         let mut x = 100;
+        self.hits.clear();
         for i in 4 - self.shown..4 {
             let lit = i == self.cursor;
+            for (row, what) in [(1, 0), (0, 10), (2, 20)] {
+                let rr = crate::pointer::rows_rect(&self.window, vui, r, x, row, w, 1);
+                self.hits.push([rr[0] + 20, rr[1], rr[2], rr[3]], what + i);
+            }
             self.window.text_box(vui, r, &wide(&self.digits[i as usize].to_string()), x, 1, w, 1, if lit { yellow } else { white }, 0);
             if lit {
                 self.window.tick_d(vui, r, x + w / 2, 0, true);

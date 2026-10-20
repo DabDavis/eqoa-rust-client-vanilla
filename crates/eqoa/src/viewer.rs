@@ -389,15 +389,14 @@ pub fn shot_with(
             }
             for c in touch.take_clicks() {
                 if let (Some(p), Some(vp)) = (play.as_mut(), last_view) {
-                    let (crate::mouse::Click::Target(x, y) | crate::mouse::Click::Interact(x, y)) = c;
                     let mode = p.mode;
-                    if p.point((x, y), (w, h)) {
+                    if p.point(c, (w, h), true) {
                         eprintln!("touch tap: {c:?} on a window (mode {mode})");
                         continue;
                     }
-                    let id = p.creature_at((x, y), (w, h), vp);
+                    let id = p.creature_at(c.at(), (w, h), vp);
                     eprintln!("touch tap: {c:?} on {id:?}");
-                    p.click(id, matches!(c, crate::mouse::Click::Interact(..)));
+                    p.click(id, !matches!(c, crate::mouse::Click::Target(..)));
                 }
             }
             for (_, step) in mouse_script.iter().filter(|s| s.0 == t) {
@@ -413,15 +412,14 @@ pub fn shot_with(
                 }
                 let click = mouse.play(&step, (w, h), Instant::now());
                 if let (Some(c), Some(p), Some(vp)) = (click, play.as_mut(), last_view) {
-                    let (crate::mouse::Click::Target(x, y) | crate::mouse::Click::Interact(x, y)) = c;
                     let mode = p.mode;
-                    if p.point((x, y), (w, h)) {
+                    if p.point(c, (w, h), false) {
                         eprintln!("mouse {step}: {c:?} on a window (mode {mode})");
                         continue;
                     }
-                    let id = p.creature_at((x, y), (w, h), vp);
+                    let id = p.creature_at(c.at(), (w, h), vp);
                     eprintln!("mouse {step}: {:?} on {id:?}", c);
-                    p.click(id, matches!(c, crate::mouse::Click::Interact(..)));
+                    p.click(id, !matches!(c, crate::mouse::Click::Target(..)));
                 }
             }
             // the pointers' looks, taken every frame, applied only in play
@@ -439,7 +437,12 @@ pub fn shot_with(
                     }
                 }
             } else {
+                // a window up: the wheel and a finger's drag are its up and down
+                let lines = mouse.take_wheel() + crate::touch::drag_lines(ty, (w, h));
                 mouse.discard();
+                if let Some(p) = play.as_mut() {
+                    p.window_wheel(lines);
+                }
             }
             let client = play.as_ref().filter(|p| !p.is_dead()).map(|p| p.control_client()).unwrap_or_default();
             if walker.frame_with(sticks, t, &client)
@@ -1279,7 +1282,13 @@ impl App {
         let (look, feel) = match self.walker.as_mut() {
             Some(w) if free => (self.mouse.look(w, inverted), crate::mouse::look(w, tx, ty, pinch, inverted)),
             _ => {
+                // a window up: the wheel and a finger's drag are its up and down
+                let size = self.gfx.as_ref().map_or((640, 448), |g| (g.config.width, g.config.height));
+                let lines = self.mouse.take_wheel() + crate::touch::drag_lines(ty, size);
                 self.mouse.discard();
+                if let Some(p) = self.play.as_mut() {
+                    p.window_wheel(lines);
+                }
                 ([0.0; 2], [0.0; 2])
             }
         };
@@ -1298,20 +1307,16 @@ impl App {
         a
     }
 
-    /// A click in play: the creature under it targeted (through the last
-    /// frame's view), and with `Interact` talked to.
-    fn click(&mut self, c: crate::mouse::Click) {
+    /// A click in play (a finger's tap with `finger`): a window takes it
+    /// first (`Play::point`); else the creature under it targeted (through
+    /// the last frame's view), and with a double or right click talked to.
+    fn click(&mut self, c: crate::mouse::Click, finger: bool) {
         let (Some(p), Some(g), Some(vp)) = (self.play.as_mut(), self.gfx.as_ref(), self.last_view) else { return };
         let size = (g.config.width, g.config.height);
-        // a window under it takes it first
-        let (crate::mouse::Click::Target(x, y) | crate::mouse::Click::Interact(x, y)) = c;
-        if p.point((x, y), size) {
+        if p.point(c, size, finger) {
             return;
         }
-        match c {
-            crate::mouse::Click::Target(x, y) => p.click(p.creature_at((x, y), size, vp), false),
-            crate::mouse::Click::Interact(x, y) => p.click(p.creature_at((x, y), size, vp), true),
-        }
+        p.click(p.creature_at(c.at(), size, vp), !matches!(c, crate::mouse::Click::Target(..)));
     }
 
     /// Fly-camera movement from the held keys, scaled by frame time.
@@ -1988,7 +1993,7 @@ impl ApplicationHandler for App {
                 let down = state == ElementState::Pressed;
                 if self.walker.is_some() {
                     if let Some(c) = self.mouse.button(button == MouseButton::Right, down, Instant::now()) {
-                        self.click(c);
+                        self.click(c, false);
                     }
                 } else if button == MouseButton::Left {
                     self.drag = down.then_some(self.cursor);
@@ -2058,7 +2063,7 @@ impl ApplicationHandler for App {
                 }
                 self.poll_pad();
                 for c in self.touch.take_clicks() {
-                    self.click(c);
+                    self.click(c, true);
                 }
                 mark(&mut self.perf, 0);
                 let sticks = self.sticks();

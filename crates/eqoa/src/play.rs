@@ -324,6 +324,13 @@ pub struct Play {
     mail: mail::MailWindows,
     /// the blacksmith and the customer-service windows (`support`)
     support: support::SupportWindows,
+    /// The button glyphs the last HUD frame drew, where (`pointer`).
+    glyphs: crate::pointer::Glyphs,
+    /// The wheel's lines not yet turned into a window's up or down.
+    wheel: f32,
+    /// A pointer's keys for the window up, and the one held (`press`).
+    key_queue: std::collections::VecDeque<i32>,
+    held: Option<i32>,
 }
 
 /// `gWorldInfo`'s paths on the Frontiers disc, by world index (CLIENT's
@@ -640,7 +647,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, cast_window: (0, 0), rooted: false, locks: (true, true), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, start: None, quit: false, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, cast_window: (0, 0), rooted: false, locks: (true, true), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None };
         p.take_abilities();
         p.npcw_world_entry();
         p
@@ -1628,62 +1635,125 @@ impl Play {
         best.map(|b| b.0)
     }
 
-    /// A click or a tap on the game's windows at window point `at` of a
-    /// `size` window (the client's own: the game takes the pad and the
-    /// keyboard): what it is on, as the keys that window takes. The soft
-    /// keyboard's keys and its legend, the start menu's bars, a dialog's
-    /// options and a box's buttons, the HUD's quick menus. True when a window
-    /// took it (another window up takes every one), so it targets nothing.
-    pub fn point(&mut self, at: (f64, f64), size: (u32, u32)) -> bool {
-        use crate::dialog::Key as D;
-        let f = render::ui::frame_from_window(size, [at.0 as f32, at.1 as f32]);
-        let press = |p: &mut Play, k: i32, f: fn(&mut Play, i32, bool)| {
-            f(p, k, true);
-            f(p, k, false);
+    /// A click or a tap at window point `at` of a `size` window, on the
+    /// game's windows (`pointer`; `finger` for a touch screen's, which may
+    /// miss a little): in play the HUD's quick menus take it (a row used,
+    /// the title bar the next menu); with a window up a right click is △, a
+    /// button glyph drawn there that button, else what the window has there
+    /// (its rows, tabs and fields) as the keys it takes. True when a window
+    /// took it (one up takes every one), so it targets nothing.
+    pub fn point(&mut self, c: crate::mouse::Click, size: (u32, u32), finger: bool) -> bool {
+        use crate::mouse::Click;
+        let (Click::Target(x, y) | Click::Interact(x, y) | Click::Right(x, y)) = c;
+        let f = render::ui::frame_from_window(size, [x as f32, y as f32]);
+        if self.mode == 0 {
+            if matches!(c, Click::Right(..)) {
+                return false;
+            }
+            // the quick menus are drawn out at a wide window's right
+            let side = render::ui::side(size);
+            return match self.hud_menus.point([f[0] - side, f[1]]) {
+                Some(k) => {
+                    self.hud_key(k);
+                    true
+                }
+                None => false,
+            };
+        }
+        let keys = if matches!(c, Click::Right(..)) {
+            vec![crate::pointer::key::TRIANGLE]
+        } else {
+            match self.glyphs.at(f, if finger { crate::pointer::FINGER } else { 0.0 }) {
+                Some(k) => vec![k],
+                None => self.window_point(f),
+            }
         };
+        self.press(&keys);
+        true
+    }
+
+    /// The wheel's `lines` (up positive; a finger's drag down) on the window
+    /// up: the d-pad's up or down for each whole line (a few at most
+    /// waiting). False in play.
+    pub fn window_wheel(&mut self, lines: f32) -> bool {
+        use crate::pointer::key;
+        if self.mode == 0 {
+            self.wheel = 0.0;
+            return false;
+        }
+        self.wheel += lines;
+        while self.wheel.abs() >= 1.0 {
+            let k = if self.wheel > 0.0 { key::UP } else { key::DOWN };
+            self.wheel -= self.wheel.signum();
+            if self.key_queue.len() < 3 {
+                self.press(&[k]);
+            }
+        }
+        true
+    }
+
+    /// What the window up has at frame point `f`, found as `window_key`
+    /// finds the window: the window's selection moved there, and the keys
+    /// to press (`pointer`).
+    fn window_point(&mut self, f: [f32; 2]) -> Vec<i32> {
+        use crate::pointer::key;
+        let one = |k: Option<i32>| k.into_iter().collect::<Vec<i32>>();
+        if self.mode == 2 {
+            return one(self.edit.point(f).flatten());
+        }
+        if self.bank_owns() {
+            return self.bank_point(f);
+        }
+        if self.npcw_owns() {
+            return self.npcw_point(f);
+        }
+        if self.support_owns() {
+            return self.support_point(f);
+        }
+        if self.mail_owns() {
+            return self.mail_point(f);
+        }
+        if let Some(s) = self.start.as_mut() {
+            match self.mode {
+                13 if self.items.visible => return self.items.point(f),
+                13 => return one(s.menu.point(f, &s.menus).then_some(key::CROSS)),
+                5 => return self.book.point(f),
+                35 => return self.who_wnd.point(f),
+                _ if self.char_window() => return self.char_point(f),
+                _ if self.panel_up() => return self.panel_point(f),
+                _ => {}
+            }
+        }
+        one(match self.mode {
+            7 => self.response.point(f).then_some(key::CROSS),
+            // the NPC's words: a click goes on, as Enter does
+            9 => Some(key::CROSS),
+            14 => self.mbox.point(f).then_some(key::CROSS),
+            _ => None,
+        })
+    }
+
+    /// `window_point` for the character windows.
+    fn char_point(&mut self, f: [f32; 2]) -> Vec<i32> {
         match self.mode {
-            0 => {
-                // the quick menus are drawn out at a wide window's right
-                let side = render::ui::side(size);
-                match self.hud_menus.point([f[0] - side, f[1]]) {
-                    Some(k) => {
-                        self.hud_key(k);
-                        true
-                    }
-                    None => false,
-                }
-            }
-            2 => {
-                if let Some(Some(k)) = self.edit.point(f) {
-                    press(self, k, Play::edit_key);
-                }
-                true
-            }
-            13 => {
-                if let Some(s) = self.start.as_mut()
-                    && s.menu.point(f, &s.menus)
-                {
-                    press(self, crate::startmenu::keys::CROSS, Play::start_key);
-                }
-                true
-            }
-            7 => {
-                if self.response.point(f) {
-                    self.dialog_key(D::Enter);
-                }
-                true
-            }
-            9 => {
-                self.dialog_key(D::Enter);
-                true
-            }
-            14 => {
-                if self.mbox.point(f) {
-                    self.dialog_key(D::Enter);
-                }
-                true
-            }
-            _ => true,
+            12 => self.trainer.point(f),
+            40 => self.cm_wnd.point(f),
+            41 => self.faction_wnd.point(f),
+            22 => self.quest_log.point(f),
+            6 => self.recipe_wnd.point(f),
+            37 => self.exp_wnd.point(f),
+            _ => Vec::new(),
+        }
+    }
+
+    /// `window_point` for the panels.
+    fn panel_point(&mut self, f: [f32; 2]) -> Vec<i32> {
+        match self.mode {
+            17 | 18 => self.buddy_wnd.point(f),
+            26 => self.ignore_wnd.point(f),
+            34 => self.options_wnd.point(f),
+            20 | 21 => self.guild_wnd.point(f),
+            _ => Vec::new(),
         }
     }
 
@@ -1968,6 +2038,104 @@ impl Play {
         }
     }
 
+    /// `SetKey`'s part for a window that has the keys: the editor, the NPC,
+    /// bank, support and mail windows, the start menu and what it opened,
+    /// the chat box's history, a dialog. False in play (mode 0), where
+    /// `VIWndGame` takes them.
+    fn window_key(&mut self, key: i32, down: bool) -> bool {
+        if self.mode == 2 {
+            self.edit_key(key, down);
+            return true;
+        }
+        if self.bank_owns() {
+            self.bank_key(key, down);
+            return true;
+        }
+        if self.npcw_owns() {
+            self.npcw_key(key, down);
+            return true;
+        }
+        if self.support_owns() {
+            self.support_key(key, down);
+            return true;
+        }
+        if self.mail_owns() {
+            self.mail_key(key, down);
+            return true;
+        }
+        if self.start.is_some() {
+            match self.mode {
+                13 => self.start_key(key, down),
+                5 => self.book_key(key, down),
+                35 => self.who_key(key, down),
+                _ if self.char_window() => self.char_key(key, down),
+                _ if self.panel_up() => self.panel_key(key, down),
+                _ => return self.other_window_key(key, down),
+            }
+            return true;
+        }
+        self.other_window_key(key, down)
+    }
+
+    /// The chat box's history (mode 33) and the dialogs: any mode but play.
+    fn other_window_key(&mut self, key: i32, down: bool) -> bool {
+        use crate::dialog::Key as D;
+        if self.mode == 33 {
+            self.chat_scroll_key(key, down);
+            return true;
+        }
+        if self.mode == 0 {
+            return false;
+        }
+        let k = match key {
+            138 => Some(D::Up),
+            139 => Some(D::Down),
+            136 => Some(D::Left),
+            137 => Some(D::Right),
+            134 => Some(D::Enter),
+            132 => Some(D::Escape),
+            _ => None,
+        };
+        if down && let Some(k) = k {
+            self.dialog_key(k);
+        }
+        // a key's release still stops the attack (`OnKeyUp` 134)
+        if !down && key == 134 {
+            self.attack_release();
+        }
+        true
+    }
+
+    /// Keys for the window up from a pointer (`point`, `window_wheel`), one
+    /// a frame: each held until the HUD's next frame has taken it, as a
+    /// pad's press is (the windows' `KeyFlash` acts on a key still down
+    /// when it draws), then let go (`pump_keys`). `pointer::MOVED` is the
+    /// move's sound, at once.
+    fn press(&mut self, keys: &[i32]) {
+        for &k in keys {
+            if k == crate::pointer::MOVED {
+                self.cues.push(crate::sound::Cue::Ui(11));
+            } else {
+                self.key_queue.push_back(k);
+            }
+        }
+        if self.held.is_none() {
+            self.pump_keys();
+        }
+    }
+
+    /// After a HUD frame: the pointer's key held through it let go, and the
+    /// next one pressed.
+    fn pump_keys(&mut self) {
+        if let Some(k) = self.held.take() {
+            self.window_key(k, false);
+        }
+        if let Some(k) = self.key_queue.pop_front() {
+            self.window_key(k, true);
+            self.held = Some(k);
+        }
+    }
+
     /// `VIClient::SetKey` for the pad's keys (128 + a `VIConsolePad` field,
     /// `PadKeys`'): to the window that has the keys (the editor, the NPC,
     /// bank, support and mail windows, the start menu and what it opened,
@@ -1975,63 +2143,9 @@ impl Play {
     /// HUD's quick menus. The camera's style and the target's cycle need the
     /// walker and the window's shape.
     pub fn set_key(&mut self, key: i32, down: bool, walker: &mut Walker, aspect: f32) {
-        use crate::dialog::Key as D;
         use crate::hudmenu::Key as H;
         self.keyboard = false;
-        if self.typing.is_some() {
-            return;
-        }
-        if self.mode == 2 {
-            self.edit_key(key, down);
-            return;
-        }
-        if self.bank_owns() {
-            self.bank_key(key, down);
-            return;
-        }
-        if self.npcw_owns() {
-            self.npcw_key(key, down);
-            return;
-        }
-        if self.support_owns() {
-            self.support_key(key, down);
-            return;
-        }
-        if self.mail_owns() {
-            self.mail_key(key, down);
-            return;
-        }
-        if self.start.is_some() {
-            match self.mode {
-                13 => return self.start_key(key, down),
-                5 => return self.book_key(key, down),
-                35 => return self.who_key(key, down),
-                _ if self.char_window() => return self.char_key(key, down),
-                _ if self.panel_up() => return self.panel_key(key, down),
-                _ => {}
-            }
-        }
-        if self.mode == 33 {
-            self.chat_scroll_key(key, down);
-            return;
-        }
-        if self.mode != 0 {
-            let k = match key {
-                138 => Some(D::Up),
-                139 => Some(D::Down),
-                136 => Some(D::Left),
-                137 => Some(D::Right),
-                134 => Some(D::Enter),
-                132 => Some(D::Escape),
-                _ => None,
-            };
-            if down && let Some(k) = k {
-                self.dialog_key(k);
-            }
-            // a key's release still stops the attack (`OnKeyUp` 134)
-            if !down && key == 134 {
-                self.attack_release();
-            }
+        if self.typing.is_some() || self.window_key(key, down) {
             return;
         }
         if !down {
@@ -3739,7 +3853,10 @@ impl Play {
         {
             let (atlas, textures) = self.ui_data.take().unwrap();
             let words = self.words.clone().unwrap_or_default();
-            self.hud = Some((crate::ui::Vui::new(words, textures, atlas), assets, crate::hud::Hud::new()));
+            let vui = crate::ui::Vui::new(words, textures, atlas);
+            let mut assets = assets;
+            assets.glyphs = Some(crate::pointer::GlyphTable::new(&vui));
+            self.hud = Some((vui, assets, crate::hud::Hud::new()));
             self.wnd_chat = Some(crate::chat::WndChat::new());
         }
     }
@@ -3979,10 +4096,17 @@ impl Play {
                 };
                 self.hud_menus.draw(vui, &mut r, now as i64, &name);
             }
+            // `EQOA_GLYPHS=1`: the button glyphs drawn, whenever they change
+            if std::env::var_os("EQOA_GLYPHS").is_some() && r.glyphs.list != self.glyphs.list {
+                let list: Vec<String> = r.glyphs.list.iter().map(|g| format!("{} {:?}", crate::input::key_name(g.key), g.rect.map(|v| v as i32))).collect();
+                eprintln!("glyphs (mode {}): {}", self.mode, list.join(", "));
+            }
+            self.glyphs = std::mem::take(&mut r.glyphs);
             r.ui.end();
             self.hud = Some((vui_o, assets, hud_o));
         }
         self.start_actions(actions);
+        self.pump_keys();
     }
 
     /// An entity's actor position, while it is drawn.

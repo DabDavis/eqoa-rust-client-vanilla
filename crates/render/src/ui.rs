@@ -424,6 +424,21 @@ impl Ui {
         self.quads.push(q);
     }
 
+    /// Where frame point `p` made now lands, as a frame point: `push`'s
+    /// placing of a quad's corner (the viewport's corner, then `anchor`).
+    /// For what is picked on the screen later.
+    pub fn placed(&self, p: [f32; 2]) -> [f32; 2] {
+        let (mut x, mut y) = (p[0], p[1]);
+        if let Some([x1, y1, _, _]) = self.viewport {
+            x += x1 as f32;
+            y += y1 as f32;
+        }
+        if self.side > 0.0 && self.anchor != Anchor::Middle {
+            x = self.anchor.place(x, self.side);
+        }
+        [x, y]
+    }
+
     /// A quad, placed in and cut to the current viewport, then moved across
     /// a wider target by `anchor`.
     pub fn push(&mut self, mut q: Quad) {

@@ -7,7 +7,9 @@
 //! corner.
 //!
 //! As in `startmenu`, the window tree's messages come back up as values
-//! (`ListUp`), and the parent does what its `OnMessage` does. An icon is
+//! (`ListUp`), and the parent does what its `OnMessage` does. The rows are
+//! noted where they are drawn, for a pointer (`pointer`): a click selects a
+//! list's row and uses the selection; a popup's row is used at once. An icon is
 //! there when the raster has its surface (`Raster::has`): the client's icon
 //! cache (`VIClientPart06D50`) streams them, here ITEMICON.ESF is resident,
 //! so an icon is either drawn or missing (the cache's state 2: the empty row
@@ -16,6 +18,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use crate::client_image::Menus;
+use crate::pointer::{Hits, MOVED, key};
 use crate::startmenu::KeyFlash;
 use vi::ui::{FrameParam, Raster, Vui, Window, wide};
 
@@ -69,11 +72,13 @@ pub struct WndList {
     cur: Row,
     pub flash: KeyFlash,
     window: Window,
+    /// the rows drawn, by index (a popup's frame -1), for a pointer
+    pub hits: Hits,
 }
 
 impl Default for WndList {
     fn default() -> Self {
-        WndList { x60: false, x64: true, sel: 0, top: 0, count: 0, pos: [0, 0], sel_row: -1, style: 0, alpha: 1.0, x80: 1, x7c: 1.0, x84: true, time: 0, items: Vec::new(), cur: Row::default(), flash: KeyFlash::default(), window: Window::default() }
+        WndList { x60: false, x64: true, sel: 0, top: 0, count: 0, pos: [0, 0], sel_row: -1, style: 0, alpha: 1.0, x80: 1, x7c: 1.0, x84: true, time: 0, items: Vec::new(), cur: Row::default(), flash: KeyFlash::default(), window: Window::default(), hits: Hits::default() }
     }
 }
 
@@ -81,6 +86,24 @@ impl WndList {
     /// `Count`: the rows with something in them.
     pub fn count(&self) -> i32 {
         self.items.iter().filter(|r| r.flags != 0).count() as i32
+    }
+
+    /// The row drawn under frame point `p`, an index into the items.
+    pub fn row_at(&self, p: [f32; 2]) -> Option<i32> {
+        self.hits.at(p).filter(|&i| i >= 0)
+    }
+
+    /// A pointer on row `row`: the selection moved there, the marker's
+    /// blink started over as `Scroll` starts it (`MOVED`); ✕ on the
+    /// selection already there.
+    pub fn pick(&mut self, row: i32) -> i32 {
+        if row == self.sel {
+            return key::CROSS;
+        }
+        self.sel = row;
+        self.x80 = 1;
+        self.x7c = 1.0;
+        MOVED
     }
 
     /// `SetX64`.
@@ -247,9 +270,11 @@ impl WndList {
         }
         let mut i = 0;
         let mut row = self.top;
+        self.hits.clear();
         while row < count {
             let lit = self.x64 && row == self.sel && !self.x60;
             let item = self.items[row as usize];
+            self.hits.push([pos[0], pos[1], pos[0] + 114, pos[1] + 44], row);
             self.draw_item(vui, r, &item, pos, lit, self.alpha);
             if row == self.sel && self.x60 {
                 let cur = self.cur;
@@ -361,6 +386,7 @@ impl WndList {
         let c = [color[0], color[1], color[2], color[3] * self.alpha];
         vui.draw_centered_string_ex(r, &wide(vui.words.get(title, vui.language)), pos[0] + 57, pos[1] + 14, c, 0, true);
         pos[1] += 30;
+        self.hits.clear();
         for i in 0..rows {
             let row = i + self.top;
             if row >= count {
@@ -368,6 +394,7 @@ impl WndList {
             }
             let lit = self.x64 && row == self.sel;
             let item = self.items[row as usize];
+            self.hits.push([pos[0], pos[1], pos[0] + 114, pos[1] + 44], row);
             self.draw_item(vui, r, &item, pos, lit, 1.0);
             pos[1] += 44;
         }
@@ -450,6 +477,18 @@ impl MiniMenu {
         self.list.flash.reset();
     }
 
+    /// A pointer at frame point `p`: `None` off the popup; on it, a row
+    /// selected and ✕ to use it at once (a popup is a menu of actions), or
+    /// nothing for its bare frame.
+    pub fn point(&mut self, p: [f32; 2]) -> Option<Option<i32>> {
+        let row = self.list.hits.at(p)?;
+        if row < 0 {
+            return Some(None);
+        }
+        self.list.sel = row;
+        Some(Some(key::CROSS))
+    }
+
     /// `OnKeyDown`/`OnKeyUp`.
     pub fn key(&mut self, menus: &Menus, key: i32, down: bool, cues: &mut Vec<i32>) -> ListUp {
         if !down {
@@ -514,10 +553,13 @@ impl MiniMenu {
         let stretch = [(self.size[0] - corner.uv1[0]).max(0), self.size[1] - top.uv1[1] - corner.uv1[1] + 1];
         vui.stretch_blit_ex(r, 61, [pos[0], pos[1] + top.uv1[1] - 1], stretch, 3, a.min(0.75));
         vui.blit_frame(r, pos, self.size, &fp, 3, a, true);
+        self.list.hits.clear();
+        self.list.hits.push([pos[0], pos[1], pos[0] + self.size[0], pos[1] + self.size[1]], -1);
         let mut p = [pos[0] + 20, pos[1] + 10];
         vui.draw_string_ex(r, &self.title, p[0], p[1], white, true);
         p = [p[0] + h * 2, p[1] + h * 2];
         for (i, &(w, _, _)) in rows.iter().enumerate() {
+            self.list.hits.push([pos[0] + 4, p[1] - h / 2, pos[0] + self.size[0] - 4, p[1] + h - h / 2], i as i32);
             // DrawItem
             let lit = self.list.x64 && i as i32 == self.list.sel;
             if lit {
@@ -564,9 +606,13 @@ impl MiniMenu {
         let stretch = [(self.size[0] - corner.uv1[0]).max(0), self.size[1] - top.uv1[1] - corner.uv1[1] + 1];
         vui.stretch_blit_ex(r, 61, [pos[0], pos[1] + top.uv1[1] - 1], stretch, 3, 0.75);
         vui.blit_frame(r, pos, self.size, &fp, 0, 1.0, false);
+        self.list.hits.clear();
+        self.list.hits.push([pos[0], pos[1], pos[0] + self.size[0], pos[1] + self.size[1]], -1);
+        let x0 = pos[0];
         pos = [pos[0] + 35, pos[1] + 20];
         if self.size == size {
             for (i, it) in self.list.items.clone().iter().enumerate() {
+                self.list.hits.push([x0 + 4, pos[1] - 9, x0 + size[0] - 4, pos[1] + 10], i as i32);
                 let lit = self.list.x64 && i as i32 == self.list.sel;
                 let (yellow, white) = ([1.0, 1.0, 0.0, self.list.alpha], [1.0, 1.0, 1.0, self.list.alpha]);
                 if lit {
@@ -624,6 +670,26 @@ impl WndMenu {
             self.list.x84 = false;
         }
         self.list.flash.reset();
+    }
+
+    /// A pointer at frame point `p`: with the popup up, its row used, or
+    /// off it the popup closed (△) and the row under the pointer selected;
+    /// else a row selected, or the selection used (✕). The keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        if let Some(s) = self.sub.as_mut().filter(|s| s.visible) {
+            if let Some(k) = s.point(p) {
+                return k.into_iter().collect();
+            }
+            let mut keys = Vec::new();
+            if let Some(row) = self.list.row_at(p)
+                && self.list.pick(row) == MOVED
+            {
+                keys.push(MOVED);
+            }
+            keys.push(key::TRIANGLE);
+            return keys;
+        }
+        self.list.row_at(p).map(|row| self.list.pick(row)).into_iter().collect()
     }
 
     /// `OnKeyDown`/`OnKeyUp`, to the popup when it is up.
@@ -733,5 +799,57 @@ impl WndMenu {
         if let Some(s) = self.sub.as_mut().filter(|s| s.visible) {
             s.draw(vui, r, menus, now, cues);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client_image::{Menu, MenuEntry};
+    use crate::pointer::testing::{NullRaster, vui};
+
+    fn menus(n: usize) -> Menus {
+        let mut m = Menus::default();
+        let sub = m.push(Menu { x00: -1, x04: -1, entries: (0..3).map(|k| MenuEntry { word: 10 + k, msg: 0x100 + k as u32, id: k, ..Default::default() }).collect() });
+        m.push(Menu { x00: -1, x04: -1, entries: (0..n as i32).map(|k| MenuEntry { word: k, msg: 0, id: k, icon: -1, icon2: -1, number: -1, x08: -1, sub: Some(sub) }).collect() });
+        m
+    }
+
+    /// A row is selected by a click and used by a second; a click on the
+    /// popup uses its row at once; off the popup it closes, and the row
+    /// under the pointer is selected; rows not shown are not there.
+    #[test]
+    fn a_menu_takes_a_pointer_as_its_keys() {
+        let (vui, mut r) = (vui(), NullRaster);
+        let ms = menus(9);
+        let mut m = WndMenu::new([32, 48], 1);
+        m.menu = 1;
+        m.reset();
+        let mut cues = Vec::new();
+        m.draw(&vui, &mut r, &ms, 0, &mut cues);
+        // style 1: rows 44 high from (32, 48), six shown
+        let row = |i: i32| [32.0 + 50.0, 48.0 + 44.0 * i as f32 + 20.0];
+        assert_eq!(m.point(row(2)), vec![MOVED]);
+        assert_eq!(m.list.sel, 2);
+        assert_eq!(m.point(row(2)), vec![key::CROSS], "the selection: used");
+        assert!(m.point(row(6)).is_empty(), "the seventh row is not shown");
+        assert!(m.point([20.0, 60.0]).is_empty(), "beside the rows");
+        // ✕ opens the popup beside row 2; it grows, then its rows are there
+        m.key(&ms, key::CROSS, true, 0, &mut cues);
+        let s = m.sub.as_ref().unwrap();
+        assert!(s.visible);
+        for t in [100, 200, 300, 400, 500] {
+            m.draw(&vui, &mut r, &ms, t, &mut cues);
+        }
+        let s = m.sub.as_ref().unwrap();
+        let at = s.list.pos;
+        // DrawPlain: rows 19 apart from (+35, +20)
+        assert_eq!(m.point([(at[0] + 40) as f32, (at[1] + 20 + 19) as f32]), vec![key::CROSS]);
+        assert_eq!(m.sub.as_ref().unwrap().list.sel, 1);
+        assert!(m.point([(at[0] + 40) as f32, (at[1] + 4) as f32]).is_empty(), "the popup's frame: nothing");
+        // off the popup, on row 4: the popup closed, row 4 selected
+        assert_eq!(m.point(row(4)), vec![MOVED, key::TRIANGLE]);
+        assert_eq!(m.list.sel, 4);
+        assert_eq!(m.point([600.0, 400.0]), vec![key::TRIANGLE], "off everything: closed only");
     }
 }

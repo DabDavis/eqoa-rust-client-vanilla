@@ -3,6 +3,7 @@
 //! of up to four columns, and `VIWndMessage` (`viwndmessage.cpp`), the
 //! titled message box with an Ok, Ok/Cancel or Yes/No row.
 
+use crate::pointer::{Hits, key, rows_rect};
 use vi::ui::{Raster, UI_COLORS, Vui, Window, wide};
 
 /// `VITextLine`: each column's x and text.
@@ -23,6 +24,8 @@ pub struct TextList {
     pub sel: i32,
     pub show_sel: bool,
     lines: Vec<Line>,
+    /// the lines drawn, by index, for a pointer
+    hits: Hits,
 }
 
 impl TextList {
@@ -43,6 +46,11 @@ impl TextList {
 
     pub fn count(&self) -> i32 {
         self.lines.len() as i32
+    }
+
+    /// The line drawn under frame point `p` (`pointer`).
+    pub fn line_at(&self, p: [f32; 2]) -> Option<i32> {
+        self.hits.at(p)
     }
 
     /// `AddLine`: one column; the line's index.
@@ -138,11 +146,13 @@ impl TextList {
         if self.show_sel && n == 0 {
             w.tick_r(vui, r, x, y, false);
         }
+        self.hits.clear();
         for row in 0..self.rows {
             let k = self.top + row;
             if k >= n {
                 break;
             }
+            self.hits.push(rows_rect(w, vui, r, x, y + row, self.width, 1), k);
             if self.sel != -1 && k == self.sel && self.show_sel {
                 w.tick_r(vui, r, x, y + row, true);
             }
@@ -176,6 +186,8 @@ pub struct Message {
     width: i32,
     rows: i32,
     sel: i32,
+    /// the choices drawn, for a pointer
+    hits: Hits,
 }
 
 impl Message {
@@ -197,6 +209,12 @@ impl Message {
         self.window.set_title(Some(&self.title));
         self.sel = if prompt == PROMPT_OK { 0 } else { 1 };
         self.visible = true;
+    }
+
+    /// A pointer at frame point `p`: a choice chosen at once (✕).
+    pub fn point(&mut self, p: [f32; 2]) -> Option<i32> {
+        self.sel = self.hits.at(p)?;
+        Some(key::CROSS)
     }
 
     /// `OnKeyDown`: Some(selection) when it closes.
@@ -236,14 +254,18 @@ impl Message {
         self.window.text_box(vui, r, &self.text, 40, 1, w - 80, self.rows - 2, c, 8);
         let word = |id: i32| vui.words.get(id, vui.language).to_string();
         let choice = |on: bool, id: i32| wide(&if on { format!("|q{}|w", word(id)) } else { word(id) });
+        self.hits.clear();
         match self.prompt {
             PROMPT_OK => {
                 self.window.text_box(vui, r, &choice(true, 786), 0, self.rows - 1, w, 1, c, 8);
+                self.hits.push(rows_rect(&self.window, vui, r, w / 2 - 80, self.rows - 1, 160, 1), 0);
             }
             p => {
                 let (a, b) = if p == PROMPT_OKCANCEL { (786, 213) } else { (21, 22) };
                 self.window.text_box(vui, r, &choice(self.sel == 0, a), col[0] - 100, self.rows - 1, 200, 1, c, 8);
                 self.window.text_box(vui, r, &choice(self.sel == 1, b), col[1] - 100, self.rows - 1, 200, 1, c, 8);
+                self.hits.push(rows_rect(&self.window, vui, r, col[0] - 80, self.rows - 1, 160, 1), 0);
+                self.hits.push(rows_rect(&self.window, vui, r, col[1] - 80, self.rows - 1, 160, 1), 1);
             }
         }
     }

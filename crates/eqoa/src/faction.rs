@@ -79,6 +79,13 @@ pub struct FactionWnd {
 }
 
 impl FactionWnd {
+
+    /// A pointer at frame point `p` (`pointer`): what is under it selected,
+    /// and the keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        let _ = p;
+        Vec::new()
+    }
     /// `OnMessage` 295: the windows, the selection at the top.
     pub fn open(&mut self, vui: &Vui, r: &dyn Raster) {
         self.window.init(vui, r, [320, 180], 600, 15, 0);

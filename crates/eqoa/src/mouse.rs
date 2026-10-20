@@ -12,6 +12,9 @@
 //! - a click (a press let go within a few pixels) targets the creature under
 //!   it; a double click or a right click also talks to it, or opens its
 //!   corpse (`InteractWithTarget`, or `ToggleAutoAttack`'s loot request).
+//!
+//! A window up takes the clicks first (`Play::point`, `pointer`): a right
+//! click is △ there, and the wheel the d-pad's up and down.
 
 use crate::walker::Walker;
 use vi::fpu::{Ee, F};
@@ -28,10 +31,20 @@ const STICK_PER_PIXEL: f32 = 0.05;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Click {
-    /// target what is under (x, y)
+    /// a click or a tap: target what is under (x, y)
     Target(f64, f64),
-    /// target it and talk to it (or open its corpse)
+    /// a double click or tap: target it and talk to it (or open its corpse)
     Interact(f64, f64),
+    /// a right click: in play as `Interact`, on a window △
+    Right(f64, f64),
+}
+
+impl Click {
+    /// Where it was, window pixels.
+    pub fn at(self) -> (f64, f64) {
+        let (Click::Target(x, y) | Click::Interact(x, y) | Click::Right(x, y)) = self;
+        (x, y)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -89,7 +102,7 @@ impl Mouse {
         }
         let (x, y) = p.at;
         if p.right {
-            return Some(Click::Interact(x, y));
+            return Some(Click::Right(x, y));
         }
         let double = self.last_click.is_some_and(|(at, t)| now.duration_since(t) < DOUBLE && ((x - at.0).powi(2) + (y - at.1).powi(2)).sqrt() <= SLOP);
         if double {
@@ -102,6 +115,11 @@ impl Mouse {
 
     pub fn wheel(&mut self, lines: f32) {
         self.wheel += lines;
+    }
+
+    /// The wheel since the last frame, taken.
+    pub fn take_wheel(&mut self) -> f32 {
+        std::mem::take(&mut self.wheel)
     }
 
     /// This frame's drag and wheel let go of (a window up, the camera held).
@@ -213,9 +231,9 @@ mod tests {
         assert!(m.dragging());
         assert_eq!(m.button(false, false, t0 + Duration::from_millis(2100)), None);
         assert_eq!(m.look, (37.0, -11.0), "the move that passes the slop counts whole");
-        // a right click interacts at once
+        // a right click, at once
         m.button(true, true, t0 + Duration::from_millis(3000));
-        assert_eq!(m.button(true, false, t0 + Duration::from_millis(3050)), Some(Click::Interact(140.0, 90.0)));
+        assert_eq!(m.button(true, false, t0 + Duration::from_millis(3050)), Some(Click::Right(140.0, 90.0)));
         // a slow second click is a click again
         m.button(false, true, t0 + Duration::from_millis(4000));
         m.button(false, false, t0 + Duration::from_millis(4010));

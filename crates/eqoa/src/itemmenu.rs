@@ -8,6 +8,8 @@
 //! list, and the quick-slot mode.
 //!
 //! What it asks of the client comes back as `ItemOut`, which `play` sends.
+//! A pointer (`pointer`) takes the tabs, the rows and their popups, the
+//! quick-slot column and the windows it opens.
 
 #![allow(clippy::too_many_arguments)]
 
@@ -15,6 +17,7 @@ use crate::client_image::{Menu, MenuEntry, Menus};
 use crate::dialog::{BoxAnswer, Key as BoxKey, MBox};
 use crate::infotext::{self, Info};
 use crate::inventory;
+use crate::pointer::{Hits, key};
 use crate::quantity::{Quantity, QuantityUp};
 use crate::startmenu::KeyFlash;
 use crate::wndlist::{ListUp, WndMenu};
@@ -228,6 +231,9 @@ pub struct ItemMenu {
     pub visible: bool,
     /// the four inventory menus as this frame built them (`set_built`)
     built: (Menus, [usize; 4]),
+    /// the tabs and the quick slots, where they were drawn
+    tab_hits: Hits,
+    slot_hits: Hits,
 }
 
 impl Default for ItemMenu {
@@ -252,11 +258,47 @@ impl Default for ItemMenu {
             focus: Focus::Menu,
             visible: false,
             built: (Menus::default(), [0; 4]),
+            tab_hits: Hits::default(),
+            slot_hits: Hits::default(),
         }
     }
 }
 
 impl ItemMenu {
+
+    /// A pointer at frame point `p` (`pointer`), to the window with the
+    /// focus: a tab is the left or right steps to it (the popup closed
+    /// first); a row, its popup's rows, the quick slots (up and down to it,
+    /// `ChangeSlot`'s rules), the quantity picker and the box take it as
+    /// theirs. The keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        match self.focus {
+            // the description scrolls on the wheel; its legend is glyphs
+            Focus::Inspect => Vec::new(),
+            Focus::Quantity => self.quantity.point(p),
+            Focus::MBox => self.mbox.point(p).then_some(key::CROSS).into_iter().collect(),
+            Focus::Slots => match self.slot_hits.at(p) {
+                Some(i) if i == self.slot => vec![key::CROSS],
+                Some(i) => crate::pointer::steps(self.slot, i, key::UP, key::DOWN),
+                None => Vec::new(),
+            },
+            Focus::Menu if self.menu >= 0 => {
+                let m = &mut self.menus[self.menu as usize];
+                match self.tab_hits.at(p) {
+                    Some(t) => {
+                        let mut keys = Vec::new();
+                        if m.sub.as_ref().is_some_and(|s| s.visible) {
+                            keys.push(key::TRIANGLE);
+                        }
+                        keys.extend(crate::pointer::steps(self.menu, t, key::LEFT, key::RIGHT));
+                        keys
+                    }
+                    None => m.point(p),
+                }
+            }
+            Focus::Menu => Vec::new(),
+        }
+    }
     /// The frame's four menus (`SetMenuA`..`D` point the tabs at them).
     pub fn set_built(&mut self, built: (Menus, [usize; 4])) {
         for (m, &k) in self.menus.iter_mut().zip(&built.1) {
@@ -626,8 +668,11 @@ impl ItemMenu {
         let mut pos = [110, 20];
         let mut lift = pos;
         vui.blit_bar(r, &[], black, [70, 8], 33, 34, 500, 0, 1.0, 0, true);
+        self.tab_hits.clear();
         for (k, (word, step)) in [(437, 100), (438, 140), (1473, 140), (439, 0)].iter().enumerate() {
-            vui.draw_centered_string_ex(r, &wide(vui.words.get(*word, vui.language)), pos[0], pos[1], white, 1, true);
+            let label = wide(vui.words.get(*word, vui.language));
+            self.tab_hits.push([pos[0] - 25, 8, pos[0] + vui.string_width(r, &label) + 10, 34], k as i32);
+            vui.draw_centered_string_ex(r, &label, pos[0], pos[1], white, 1, true);
             if self.tab == k as i32 {
                 lift[0] = pos[0] - 25;
             }
@@ -687,7 +732,9 @@ impl ItemMenu {
             base[1] += h;
         }
         vui.blit_ex_size(r, 158, base, [top.uv1[0], 3], 0, 1.0, 2);
+        self.slot_hits.clear();
         for (i, &icon) in SLOT_ICONS.iter().enumerate() {
+            self.slot_hits.push([pos[0] - 6, pos[1] - 4, pos[0] + 28, pos[1] + 28], i as i32);
             if i as i32 == self.slot {
                 vui.blit_ex(r, 86, [pos[0] - 25, pos[1] + 2], 3, self.alpha, 1);
             }

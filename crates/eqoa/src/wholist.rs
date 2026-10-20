@@ -6,6 +6,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
+use crate::pointer::{Hits, key, rows_rect};
 use crate::startmenu::KeyFlash;
 use net::stream::{Reader, Writer};
 use vi::ui::{Raster, UI_COLORS, Vui, Window, wide};
@@ -79,9 +80,23 @@ pub struct OptionList {
     pub sel: i32,
     pub visible: bool,
     window: Window,
+    /// the choices drawn, for a pointer
+    hits: Hits,
 }
 
 impl OptionList {
+    /// A pointer at frame point `p`: `None` off the window; on a choice, it
+    /// chosen at once (✕); on the rest of it, nothing.
+    pub fn point(&mut self, p: [f32; 2]) -> Option<Option<i32>> {
+        match self.hits.at(p)? {
+            -1 => Some(None),
+            i => {
+                self.sel = i;
+                Some(Some(key::CROSS))
+            }
+        }
+    }
+
     /// `Setup(title, options, count, center, width)`.
     pub fn setup(&mut self, vui: &Vui, r: &dyn Raster, title: &[u16], options: Vec<Vec<u16>>, center: [i32; 2], width: i32) {
         self.title = title.to_vec();
@@ -148,8 +163,12 @@ impl OptionList {
     /// `OnDrawSelf`.
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster) {
         self.window.draw(vui, r);
+        self.hits.clear();
+        let (tl, br) = (self.window.top_left(), self.window.bottom_right());
+        self.hits.push([tl[0], tl[1], br[0], br[1]], -1);
         for (i, o) in self.options.iter().enumerate() {
             self.window.text(vui, r, o, 40, i as i32 + 1, UI_COLORS[(self.sel == i as i32) as usize], 0);
+            self.hits.push(rows_rect(&self.window, vui, r, 40, i as i32 + 1, self.width - 80, 1), i as i32);
         }
         self.window.tick_r(vui, r, 36, self.sel + 1, true);
         let w = |id: i32| vui.words.get(id, vui.language).to_string();
@@ -188,6 +207,13 @@ pub struct WhoList {
 }
 
 impl WhoList {
+
+    /// A pointer at frame point `p` (`pointer`): what is under it selected,
+    /// and the keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        let _ = p;
+        Vec::new()
+    }
     /// `OnMessage` 295 from outside: the window and the status box set up
     /// and titled (730, 271), the popup's three choices (425, 942, 515)
     /// under 422.

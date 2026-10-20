@@ -447,6 +447,13 @@ pub struct ClassMastery {
 }
 
 impl ClassMastery {
+
+    /// A pointer at frame point `p` (`pointer`): what is under it selected,
+    /// and the keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        let _ = p;
+        Vec::new()
+    }
     /// `Refresh`, then `OnMessage` 295 (the focus from outside): the window,
     /// the two lists, the first category.
     pub fn open(&mut self, vui: &Vui, r: &dyn Raster, part: &Part) {

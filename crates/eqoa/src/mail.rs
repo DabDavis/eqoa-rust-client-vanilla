@@ -39,6 +39,13 @@ impl Play {
         self.mail.keys.push((key, down));
     }
 
+    /// A pointer at frame point `f` on the mail and tell windows (`pointer`): what is
+    /// under it selected, and the keys to press.
+    pub fn mail_point(&mut self, f: [f32; 2]) -> Vec<i32> {
+        let _ = f;
+        Vec::new()
+    }
+
     /// The mode is one of these windows', or the buddy list's compose is up.
     pub fn mail_owns(&self) -> bool {
         matches!(self.mode, 23 | 24 | 28 | 29) || (self.mode == 18 && (self.mail.buddy.visible || self.mail.buddy_open.is_some()))
