@@ -11,6 +11,10 @@
 //!
 //! Without an audio device (or with `EQOA_AUDIO=0`) a thread runs the driver
 //! on the wall clock instead, so the game sees the same IOP either way.
+//!
+//! In a page there is no thread to give it: the driver runs on the game's,
+//! mixing a little ahead of the page's audio clock once a frame (`feed`) for
+//! an AudioWorklet that only plays what it is handed (web/sound.js).
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use snd::device::Link;
@@ -61,16 +65,49 @@ pub struct Audio {
     shared: Arc<Mutex<Shared>>,
     _stream: Option<cpal::Stream>,
     pub describe: String,
+    #[cfg(target_arch = "wasm32")]
+    page: Option<Page>,
+}
+
+/// 48 kHz frames the page's output is kept ahead of its clock: 100 ms, and
+/// 50 ms more each time a frame came later than that, up to 300 ms; 25 ms
+/// back after each ten seconds without one.
+#[cfg(target_arch = "wasm32")]
+const LEAD: (u64, u64, u64) = (4800, 2400, 14400);
+
+/// The driver in a page (`Audio::web`).
+#[cfg(target_arch = "wasm32")]
+struct Page {
+    /// starts the disc reads the music asked for (`web::bgm`)
+    fetch: Box<dyn FnMut()>,
+    /// the driver's clock and the page's (48 kHz frames) when they were last
+    /// lined up, and whether the page's was its audio output's
+    base: Option<(u64, f64, bool)>,
+    lead: u64,
+    /// when the output last ran dry, on the wall clock (s)
+    dry_at: f64,
+    dry: u32,
+    wall: web_time::Instant,
 }
 
 impl Audio {
+    fn with_shared(shared: Arc<Mutex<Shared>>, stream: Option<cpal::Stream>, describe: String) -> Audio {
+        Audio {
+            shared,
+            _stream: stream,
+            describe,
+            #[cfg(target_arch = "wasm32")]
+            page: None,
+        }
+    }
+
     /// The driver, playing on the default output device.
     pub fn open(disc: Box<dyn Disc>) -> Audio {
         let shared = Arc::new(Mutex::new(Shared { drv: Driver::new(disc), status: [0; 128], pcm: Vec::new() }));
         let off = std::env::var("EQOA_AUDIO").is_ok_and(|v| v == "0");
         let stream = if off { Err("EQOA_AUDIO=0".to_string()) } else { Self::stream(shared.clone()) };
         match stream {
-            Ok((stream, describe)) => Audio { shared, _stream: Some(stream), describe },
+            Ok((stream, describe)) => Self::with_shared(shared, Some(stream), describe),
             Err(e) => {
                 let s = shared.clone();
                 std::thread::spawn(move || {
@@ -85,7 +122,7 @@ impl Audio {
                         g.pcm.clear();
                     }
                 });
-                Audio { shared, _stream: None, describe: format!("no audio output ({e}): the driver runs on the wall clock") }
+                Self::with_shared(shared, None, format!("no audio output ({e}): the driver runs on the wall clock"))
             }
         }
     }
@@ -159,8 +196,81 @@ impl Audio {
     /// The driver with no output and no thread: `render` advances it.
     pub fn offline(disc: Box<dyn Disc>) -> Audio {
         let shared = Arc::new(Mutex::new(Shared { drv: Driver::new(disc), status: [0; 128], pcm: Vec::new() }));
-        Audio { shared, _stream: None, describe: "offline".into() }
+        Self::with_shared(shared, None, "offline".into())
     }
+
+    /// In a page: the driver on the game's thread, mixed once a frame for the
+    /// page's AudioWorklet (`feed`); `fetch` starts the disc reads the music
+    /// asked for (`web::bgm`).
+    #[cfg(target_arch = "wasm32")]
+    pub fn web(disc: Box<dyn Disc>, fetch: Box<dyn FnMut()>) -> Audio {
+        let shared = Arc::new(Mutex::new(Shared { drv: Driver::new(disc), status: [0; 128], pcm: Vec::new() }));
+        let mut a = Self::with_shared(shared, None, "the page's AudioWorklet".into());
+        a.page = Some(Page { fetch, base: None, lead: LEAD.0, dry_at: 0.0, dry: 0, wall: web_time::Instant::now() });
+        a
+    }
+
+    /// Once a frame (`Sound::frame`). Natively nothing: the device's callback
+    /// pulls. In a page: the music's disc reads started, then the driver
+    /// mixed up to the page's audio clock (`web::audio_clock`, 48 kHz frames
+    /// played) plus the lead, and the frames handed to the AudioWorklet
+    /// (`web::audio_push`). With no output running it keeps to the wall
+    /// clock and its frames are dropped, as natively. A frame later than the
+    /// lead (a stall, a hidden page) leaves the output dry for a moment: the
+    /// driver is paused for it, so nothing is skipped, and the lead grows.
+    pub fn feed(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        if let Some(p) = self.page.as_mut() {
+            (p.fetch)();
+            let wall = p.wall.elapsed().as_secs_f64();
+            let (now, live) = match crate::web::audio_clock() {
+                Some(c) => (c, true),
+                None => (wall * 48000.0, false),
+            };
+            let mut g = self.shared.lock().unwrap();
+            let drv = g.drv.now;
+            let mut played = match p.base {
+                Some((d, c, l)) if l == live => d + (now - c).max(0.0) as u64,
+                _ => {
+                    p.base = Some((drv, now, live));
+                    drv
+                }
+            };
+            if played > drv {
+                p.base = Some((drv, now, live));
+                played = drv;
+                if live {
+                    p.dry += 1;
+                    p.dry_at = wall;
+                    p.lead = (p.lead + LEAD.1).min(LEAD.2);
+                }
+            } else if wall - p.dry_at > 10.0 && p.lead > LEAD.0 {
+                p.dry_at = wall;
+                p.lead -= LEAD.1 / 2;
+            }
+            let target = played + if live { p.lead } else { 0 };
+            let ahead = g.drv.now;
+            if target > ahead {
+                g.pump(target - ahead);
+            }
+            let pcm = std::mem::take(&mut g.pcm);
+            drop(g);
+            if live && !pcm.is_empty() {
+                crate::web::audio_push(&pcm);
+            }
+            PAGE_SOUND[0].store((p.lead / 48) as u32, std::sync::atomic::Ordering::Relaxed);
+            PAGE_SOUND[1].store(p.dry, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+}
+
+/// In a page, for its status line (`web::rate`): the lead the sound is
+/// mixed with (ms) and how often the output has run dry.
+#[cfg(target_arch = "wasm32")]
+pub static PAGE_SOUND: [std::sync::atomic::AtomicU32; 2] = [std::sync::atomic::AtomicU32::new(0), std::sync::atomic::AtomicU32::new(0)];
+
+impl Audio {
 
     /// Offline: the next `frames` 48 kHz frames, interleaved.
     pub fn render(&self, frames: u64) -> Vec<i16> {
@@ -196,19 +306,39 @@ impl Link for AudioLink {
 
     fn dma(&mut self, addr: u32, data: &[u8]) {
         // a call still waiting may yet read the IOP buffer: let it finish
-        let start = Instant::now();
-        loop {
-            let mut g = self.0.lock().unwrap();
-            if !g.drv.busy() || start.elapsed() > Duration::from_millis(100) {
-                g.drv.io.dma(addr, data);
-                return;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let start = Instant::now();
+            loop {
+                let mut g = self.0.lock().unwrap();
+                if !g.drv.busy() || start.elapsed() > Duration::from_millis(100) {
+                    g.drv.io.dma(addr, data);
+                    return;
+                }
+                drop(g);
+                std::thread::sleep(Duration::from_millis(1));
             }
-            drop(g);
-            std::thread::sleep(Duration::from_millis(1));
+        }
+        // in a page the driver runs on this thread: on to the vblank the call
+        // waits for (a second at most), the frames mixed kept for the output
+        #[cfg(target_arch = "wasm32")]
+        {
+            let mut g = self.0.lock().unwrap();
+            for _ in 0..100 {
+                if !g.drv.busy() {
+                    break;
+                }
+                g.pump(480);
+            }
+            g.drv.io.dma(addr, data);
         }
     }
 
     fn busy(&mut self) -> bool {
         self.0.lock().unwrap().drv.busy()
+    }
+
+    fn bgm_ready(&mut self, path: &str) -> bool {
+        self.0.lock().unwrap().drv.disc_ready(path)
     }
 }

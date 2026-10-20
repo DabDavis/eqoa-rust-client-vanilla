@@ -32,6 +32,18 @@ const BGM_HALF: usize = 0x10000;
 pub trait Disc: Send {
     fn search(&mut self, name: &str) -> Option<(u32, u32)>;
     fn read(&mut self, lsn: u32, sectors: u32, buf: &mut [u8]) -> bool;
+    /// Whether the file `name` (as `search` takes it) can be read at once.
+    /// A disc that can only be read asynchronously (a page's) fetches the
+    /// file first and says no until it has it; the device holds the BGM
+    /// back meanwhile (`Link::bgm_ready`).
+    fn ready(&mut self, _name: &str) -> bool {
+        true
+    }
+}
+
+/// CDSTREAM's name for a BGM's path (`bgm\theme.bgm`): `\BGM\THEME.BGM;1`.
+pub fn cd_name(path: &str) -> String {
+    format!("\\{path};1").chars().map(|c| if c == '/' { '\\' } else { c.to_ascii_uppercase() }).collect()
 }
 
 /// No disc: every BGM fails to open.
@@ -243,6 +255,11 @@ impl Driver {
 
     pub fn answer(&self) -> Option<[u32; 128]> {
         self.answered.then_some(self.status)
+    }
+
+    /// `Disc::ready` for the BGM path the device would send (`bgm\x.bgm`).
+    pub fn disc_ready(&mut self, path: &str) -> bool {
+        self.disc.ready(&cd_name(path))
     }
 
     pub fn busy(&self) -> bool {
@@ -832,8 +849,7 @@ impl Driver {
     // Names are upper-cased and given ISO 9660's `\NAME;1` form.
 
     fn cd_open(&mut self, name: &str) -> i32 {
-        let path: String = format!("\\{name};1").chars().map(|c| if c == '/' { '\\' } else { c.to_ascii_uppercase() }).collect();
-        match self.disc.search(&path) {
+        match self.disc.search(&cd_name(name)) {
             Some((lsn, size)) => {
                 self.bgm.cd_lsn = lsn;
                 self.bgm.cd_size = size;

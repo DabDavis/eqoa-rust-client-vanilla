@@ -27,6 +27,12 @@ pub trait Link {
     fn busy(&mut self) -> bool {
         false
     }
+    /// Whether the BGM `path` can start streaming now: always on a console
+    /// and natively; a page's disc has to fetch the file first
+    /// (`Disc::ready`), and the request waits for it.
+    fn bgm_ready(&mut self, _path: &str) -> bool {
+        true
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -671,7 +677,7 @@ impl<M: Model> SoundDevice<M> {
         if self.bgm_pending != self.bgm_playing {
             if !self.bgm_playing.is_empty() {
                 self.bgm_fade_dir = -1;
-            } else {
+            } else if link.bgm_ready(&self.bgm_pending) {
                 self.bgm_playing = self.bgm_pending.clone();
                 // strcpy into the argument words: the bytes past the NUL keep
                 // what the last command left there

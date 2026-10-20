@@ -49,9 +49,10 @@ async def main(a):
     prof.mkdir(parents=True, exist_ok=True)
     tmp = prof.parent / "tmp"
     tmp.mkdir(exist_ok=True)
+    # sound starts without a gesture: the page's clicks here are not the user's
     flags = [shutil.which("chromium") or "chromium", "--headless=new", f"--user-data-dir={prof}",
              f"--remote-debugging-port={a.port}", "--no-first-run", "--no-default-browser-check",
-             f"--window-size={a.size}", "--enable-unsafe-swiftshader"]
+             f"--window-size={a.size}", "--enable-unsafe-swiftshader", "--autoplay-policy=no-user-gesture-required"]
     if a.gpu:
         flags += ["--use-angle=vulkan", "--enable-features=Vulkan", "--ignore-gpu-blocklist", "--enable-gpu"]
     if a.webgpu:

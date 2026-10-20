@@ -1,5 +1,6 @@
 #!/bin/sh
-# The browser client: web/dist/ gets the page, eqoa.js and eqoa_bg.wasm
+# The browser client: web/dist/ gets the page (with its worker, unpack.js, and
+# its AudioWorklet, sound.js), eqoa.js and eqoa_bg.wasm
 # (wasm-bindgen 0.2.129, the version Cargo.lock pins: `cargo install
 # wasm-bindgen-cli --version 0.2.129`). wasm-opt is used when it is on the
 # PATH or in ~/emsdk. No game data is in dist/: the player picks their own disc
@@ -18,5 +19,5 @@ if [ -n "$OPT" ]; then
     "$OPT" -O2 --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext --enable-mutable-globals \
         --enable-reference-types --enable-multivalue web/dist/eqoa_bg.wasm -o web/dist/eqoa_bg.wasm
 fi
-cp web/index.html web/main.js web/unpack.js web/dist/
+cp web/index.html web/main.js web/unpack.js web/sound.js web/dist/
 ls -la web/dist

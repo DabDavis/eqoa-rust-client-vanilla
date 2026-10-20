@@ -5,6 +5,6 @@
 set -e
 cd "$(dirname "$0")/dist"
 DEST="${EQOA_WEB_DEST:?set EQOA_WEB_DEST to user@host:/path/ (rsync syntax)}"
-for f in eqoa_bg.wasm eqoa.js main.js unpack.js index.html; do gzip -9 -k -f "$f"; done
+for f in eqoa_bg.wasm eqoa.js main.js unpack.js sound.js index.html; do gzip -9 -k -f "$f"; done
 rsync -a --delete ./ "$DEST"
 echo "published to $DEST"

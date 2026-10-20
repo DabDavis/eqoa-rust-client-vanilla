@@ -138,19 +138,39 @@ pub struct Sound {
     pub outdoors: F<Ee>,
 }
 
+thread_local! {
+    /// A sound made before the world, with the files it starts with read
+    /// already (a page's, `web::play`): the viewer takes it (`make`).
+    static MADE: std::cell::RefCell<Option<Sound>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The sound the viewer starts the world with: one made for it (`give`),
+/// else a new one on the disc image at `iso_path`.
+pub fn make(iso_path: &std::path::Path) -> Option<Sound> {
+    MADE.with(|m| m.borrow_mut().take()).or_else(|| Sound::new(iso_path))
+}
+
+/// Leaves a sound for the viewer (`make`).
+#[cfg(target_arch = "wasm32")]
+pub fn give(s: Sound) {
+    MADE.with(|m| *m.borrow_mut() = Some(s));
+}
+
 impl Sound {
     /// The device on a fresh audio output, with AMBTRACK.ESF for the tracks.
     pub fn new(iso_path: &std::path::Path) -> Option<Sound> {
         let disc = iso::Iso::open(iso_path).ok()?;
         let audio = Audio::open(Box::new(crate::audio::IsoDisc(disc)));
         eprintln!("{}", audio.describe);
-        Self::with(iso_path, audio)
+        let mut iso = iso::Iso::open(iso_path).ok()?;
+        Self::with(&mut |path| iso.read(path).ok(), audio)
     }
 
     /// The same with no output: `audio().render` runs the driver.
     pub fn offline(iso_path: &std::path::Path) -> Option<Sound> {
         let disc = iso::Iso::open(iso_path).ok()?;
-        Self::with(iso_path, Audio::offline(Box::new(crate::audio::IsoDisc(disc))))
+        let mut iso = iso::Iso::open(iso_path).ok()?;
+        Self::with(&mut |path| iso.read(path).ok(), Audio::offline(Box::new(crate::audio::IsoDisc(disc))))
     }
 
     pub fn audio(&self) -> &Audio {
@@ -176,7 +196,10 @@ impl Sound {
         )
     }
 
-    fn with(iso_path: &std::path::Path, audio: Audio) -> Option<Sound> {
+    /// The device over `audio`, with the files it starts with read by
+    /// `read` (a path on the disc, as `iso::Iso::read` takes it): AMBTRACK.ESF,
+    /// the resident files' waves and UISOUND.TXT.
+    pub fn with(read: &mut dyn FnMut(&str) -> Option<Vec<u8>>, audio: Audio) -> Option<Sound> {
         let mut link = audio.link();
         // sBgmVersion is 1 in every live game (set outside the decompiled code)
         let mut dev = SoundDevice::new(1);
@@ -184,7 +207,7 @@ impl Sound {
             eprintln!("sound: VISoundDevice::Init failed");
             return None;
         }
-        let ambtrack = iso::Iso::open(iso_path).ok().and_then(|mut d| d.read("DATA/AMBTRACK.ESF").ok()).and_then(|b| esf::Container::open(b).ok());
+        let ambtrack = read("DATA/AMBTRACK.ESF").and_then(|b| esf::Container::open(b).ok());
         Some(Sound {
             dev,
             link,
@@ -206,7 +229,7 @@ impl Sound {
             outdoors: F::ONE,
         })
         .map(|mut s| {
-            s.load_resident(iso_path);
+            s.load_resident(read);
             s
         })
     }
@@ -254,10 +277,9 @@ impl Sound {
     /// rain and the thunder, loaded with the scene's shared files), the UI's
     /// sound names, and their volumes once SUPPORT's image is there
     /// (`modules`).
-    fn load_resident(&mut self, iso_path: &std::path::Path) {
-        let Ok(mut disc) = iso::Iso::open(iso_path) else { return };
+    fn load_resident(&mut self, read: &mut dyn FnMut(&str) -> Option<Vec<u8>>) {
         for f in ["DATA2/UI.CSF", "DATA2/FX.CSF", "DATA2/SKY.CSF"] {
-            let Some(c) = disc.read(f).ok().and_then(|b| esf::Container::open(b).ok()) else { continue };
+            let Some(c) = read(f).and_then(|b| esf::Container::open(b).ok()) else { continue };
             for w in esf::sound::all(&c).0 {
                 let i = self.dev.create_wave(w.channels, w.blocks, w.rate, w.volume, w.pan, w.looped, &w.adpcm);
                 if i >= 0 {
@@ -270,7 +292,7 @@ impl Sound {
         self.dev.flush(&mut self.link);
         // VIScene::Init: the underwater ambience by name
         self.track.p20 = self.dict.get(&vi::hash::hash_resource_id("amb_underwater")).copied().unwrap_or(-1);
-        self.ui_names = disc.read("DATA/UISOUND.TXT").ok().and_then(|b| vi::strtab::StringTable::parse(&b));
+        self.ui_names = read("DATA/UISOUND.TXT").and_then(|b| vi::strtab::StringTable::parse(&b));
         if self.ui_names.is_none() {
             eprintln!("sound: no UI sounds (UISOUND.TXT is not on the disc)");
         }
@@ -428,6 +450,7 @@ impl Sound {
         self.update_stream_emitters(world, eye);
         self.set_sound_track(world, eye, hour, time);
         self.dev.process(&mut self.link);
+        self.audio.feed();
     }
 
     /// The streamed music: of the streamed-audio regions at the camera, the

@@ -922,7 +922,7 @@ impl App {
                 }
                 match &mut self.sound {
                     Some(s) => s.world_changed(),
-                    None => self.sound = crate::sound::Sound::new(std::path::Path::new(&crate::disc_path(None))),
+                    None => self.sound = crate::sound::make(std::path::Path::new(&crate::disc_path(None))),
                 }
             }
             self.clock = Instant::now();

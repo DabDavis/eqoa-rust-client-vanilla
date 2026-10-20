@@ -23,6 +23,11 @@ The Rust client. README.md is the plan and the crate table; keep it current.
   VISoundDevice TUs in the EE layout above it (op 910). `crates/snd/tests/oracle_snd{,dev}.rs`
   compare sample for sample and packet for packet. Live audio tests: `EQOA_AUDIO=0` (the driver
   runs on the wall clock, silent), or `eqoa listen` to a WAV; the user's speakers are real.
+  In a page the driver runs on the game's thread and an AudioWorklet plays what `Audio::feed`
+  mixes (`web/sound.js`); the music comes through `bgm.rs` (a BGM read whole before the device may
+  start it, `Disc::ready`/`Link::bgm_ready`, always true natively). Headless: `web/drive.py` passes
+  `--autoplay-policy=no-user-gesture-required`; `--js T=JSON.stringify(eqoaAudio.stats())` reads the
+  worklet's counts (dry counts only after the first frames came).
 - CLIENT and SUPPORT (the start menu, gWorldInfo, the race cameras; the HUD's atlas, the UI sounds'
   volumes) are read at run time out of images of those modules (`eqoa/src/modules.rs`): the player's
   decrypted ones when given (`run/client.bin`, `run/support.bin`, untracked; here links into

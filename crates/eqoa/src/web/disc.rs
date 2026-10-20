@@ -26,7 +26,7 @@ fn err(e: JsValue) -> String {
 }
 
 /// `len` bytes at `off` of the image.
-async fn read_blob(file: &web_sys::File, off: u64, len: usize) -> Result<Vec<u8>, String> {
+pub(super) async fn read_blob(file: &web_sys::File, off: u64, len: usize) -> Result<Vec<u8>, String> {
     let end = (off + len as u64).min(file.size() as u64);
     let blob = file.slice_with_f64_and_f64(off as f64, end as f64).map_err(err)?;
     let buf = JsFuture::from(blob.array_buffer()).await.map_err(err)?;
@@ -85,6 +85,11 @@ impl WebDisc {
         let mut d = WebDisc { file, len, entries: Vec::new(), sparse: Sparse::new(len) };
         d.entries = d.drive(iso::list).await.map_err(|e| format!("not an EQOA disc image: {e}"))?;
         Ok(d)
+    }
+
+    /// The player's image (the music reads it as it plays, `bgm`).
+    pub fn file(&self) -> web_sys::File {
+        self.file.clone()
     }
 
     /// `len` bytes at `off` of the image.

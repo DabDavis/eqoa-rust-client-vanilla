@@ -17,7 +17,13 @@
 //! holds only encrypted: the page's workers (`web/unpack.js`) run this same
 //! module's `unpack_module` on them, the disc's own DNAS library in crate
 //! `dnas`, while the session goes on (`unpack_modules`).
+//!
+//! The sound is the native client's (`sound`, SNDDRV in `snd`), its driver
+//! mixed on this thread a little ahead of the page's audio clock and played
+//! by an AudioWorklet (`window.eqoaAudio`, main.js; web/sound.js), the music
+//! read off the disc whole before it starts (`bgm`).
 
+mod bgm;
 mod disc;
 mod relay;
 
@@ -45,6 +51,27 @@ fn call_page(name: &str, arg: &JsValue) {
     }
 }
 
+/// The page's sound output (`window.eqoaAudio.clock`, main.js): 48 kHz
+/// frames it has played, or `None` while it is not running.
+pub fn audio_clock() -> Option<f64> {
+    let w = web_sys::window()?;
+    let a = js_sys::Reflect::get(&w, &"eqoaAudio".into()).ok()?;
+    let f = js_sys::Reflect::get(&a, &"clock".into()).ok()?.dyn_into::<js_sys::Function>().ok()?;
+    f.call0(&a).ok()?.as_f64().filter(|&c| c >= 0.0)
+}
+
+/// Hands the output interleaved 48 kHz stereo frames
+/// (`window.eqoaAudio.push`).
+pub fn audio_push(pcm: &[i16]) {
+    let Some(w) = web_sys::window() else { return };
+    let Ok(a) = js_sys::Reflect::get(&w, &"eqoaAudio".into()) else { return };
+    if let Ok(f) = js_sys::Reflect::get(&a, &"push".into())
+        && let Some(f) = f.dyn_ref::<js_sys::Function>()
+    {
+        let _ = f.call1(&a, &js_sys::Int16Array::from(pcm));
+    }
+}
+
 /// A line for the page's status (`window.eqoaStatus`) and the console.
 pub fn status(s: &str) {
     log(s);
@@ -65,7 +92,10 @@ fn rate(what: &'static str) {
             sleep(1000).await;
             let n = viewer::FRAMES.load(std::sync::atomic::Ordering::Relaxed);
             let mem = wasm_bindgen::memory().dyn_into::<js_sys::WebAssembly::Memory>().map_or(0.0, |m| m.buffer().dyn_into::<js_sys::ArrayBuffer>().map_or(0.0, |b| b.byte_length() as f64));
-            status(&format!("{what} · {} fps · {:.0} MB", n.wrapping_sub(last), mem / 1048576.0));
+            let [lead, dry] = &crate::audio::PAGE_SOUND;
+            let lead = lead.load(std::sync::atomic::Ordering::Relaxed);
+            let sound = if lead > 0 { format!(" · sound +{lead} ms, dry {}", dry.load(std::sync::atomic::Ordering::Relaxed)) } else { String::new() };
+            status(&format!("{what} · {} fps · {:.0} MB{sound}", n.wrapping_sub(last), mem / 1048576.0));
             last = n;
         }
     });
@@ -467,6 +497,14 @@ pub async fn play(file: web_sys::File, user: String, password: String, opts: JsV
             status(&format!("reading {name}"));
             shared.push((*name, disc.container(name).await?));
         }
+        // The sound's own files: the ambient tracks, the resident waves, the
+        // UI sounds' names (`Sound::with`).
+        let mut sound_files = std::collections::HashMap::new();
+        for path in ["DATA/AMBTRACK.ESF", "DATA2/UI.CSF", "DATA2/FX.CSF", "DATA2/SKY.CSF", "DATA/UISOUND.TXT"] {
+            if let Ok(b) = disc.read(path).await {
+                sound_files.insert(path.to_string(), b);
+            }
+        }
         let words = disc.read("WORDS.TXT").await.ok().and_then(|b| vi::strtab::StringTable::parse(&b));
         // The HUD's texture names (its atlas is SUPPORT's, `unpack_modules`).
         let textures = disc.read("TEXTURES.TXT").await.ok().and_then(|b| vi::strtab::StringTable::parse(&b));
@@ -507,6 +545,17 @@ pub async fn play(file: web_sys::File, user: String, password: String, opts: JsV
         let mut play = play::Play::new(s, player, dump);
         play.words = words;
         play.ui_textures = textures;
+        // The sound, left for the viewer (`sound::make`): the driver on this
+        // thread for the page's AudioWorklet, the music off the disc.
+        let bgm = crate::bgm::Bgm::new(&disc.entries);
+        let fetch = {
+            let (bgm, file) = (bgm.clone(), disc.file());
+            Box::new(move || bgm::fetch(&bgm, &file))
+        };
+        match crate::sound::Sound::with(&mut |p| sound_files.remove(p), crate::audio::Audio::web(Box::new(bgm), fetch)) {
+            Some(s) => crate::sound::give(s),
+            None => log("no sound: VISoundDevice::Init failed"),
+        }
         let pending = gfx(canvas()?).await?;
         status("in the world");
         call_page("eqoaInWorld", &JsValue::NULL);

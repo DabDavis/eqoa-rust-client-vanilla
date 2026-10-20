@@ -16,6 +16,49 @@ const $ = (id) => document.getElementById(id);
 const status = (t) => { $('status').textContent = t; };
 window.eqoaStatus = status;
 
+// ---- sound: an AudioContext at 48 kHz, made on the click that starts a
+// session (a page may only start sound from its user's gesture), playing
+// through an AudioWorklet (sound.js) what the client mixes on its own thread
+// a little ahead of this context's clock (crates/eqoa/src/audio.rs, `feed`).
+
+let audio = null;
+
+function startAudio() {
+  if (audio) {
+    if (audio.ctx.state !== 'running') audio.ctx.resume().catch(() => {});
+    return;
+  }
+  let ctx;
+  try {
+    ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
+  } catch {
+    try {
+      ctx = new AudioContext(); // the device's rate: the worklet resamples
+    } catch {
+      return;
+    }
+  }
+  audio = { ctx, node: null, stats: {} };
+  ctx.audioWorklet.addModule(new URL('sound.js', import.meta.url)).then(() => {
+    const node = new AudioWorkletNode(ctx, 'eqoa-out', { numberOfInputs: 0, outputChannelCount: [2] });
+    node.port.onmessage = ({ data }) => { audio.stats = data; };
+    node.connect(ctx.destination);
+    audio.node = node;
+  }).catch((e) => console.log('no sound: ' + e));
+}
+
+window.eqoaAudio = {
+  // 48 kHz frames this context has played, -1 while it is not running
+  clock: () => (audio && audio.node && audio.ctx.state === 'running' ? audio.ctx.currentTime * 48000 : -1),
+  push: (pcm) => { if (audio && audio.node) audio.node.port.postMessage(pcm, [pcm.buffer]); },
+  stats: () => (audio ? { state: audio.ctx.state, rate: audio.ctx.sampleRate, ...audio.stats } : { state: 'none' }),
+};
+
+// a context the browser kept suspended starts on the next key or click
+for (const ev of ['pointerdown', 'keydown']) {
+  addEventListener(ev, () => { if (audio && audio.ctx.state === 'suspended') audio.ctx.resume().catch(() => {}); });
+}
+
 // The client's wasm, compiled once: the page runs it, and so does the worker
 // that unpacks CLIENT off the disc (unpack.js), from the same compiled module.
 const wasmModule = fetch(new URL('eqoa_bg.wasm', import.meta.url)).then((r) => {
@@ -89,6 +132,7 @@ function busy(on) {
 
 $('login').addEventListener('submit', async (ev) => {
   ev.preventDefault();
+  startAudio(); // in the gesture itself, before anything is awaited
   const file = $('iso').files[0];
   const user = $('user').value.trim();
   const pass = $('pass').value;
