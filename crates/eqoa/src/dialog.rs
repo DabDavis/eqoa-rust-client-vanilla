@@ -70,6 +70,9 @@ pub struct Response {
     focus: bool,
     /// The UI sound the last key asked for (`VIClient::PlaySound`).
     pub cue: Option<i32>,
+    /// Where each option was drawn last (its index, frame x0 y0 x1 y1), for
+    /// a pointer.
+    hits: Vec<(i32, [i32; 4])>,
 }
 
 /// What a key did to the response window.
@@ -172,6 +175,15 @@ impl Response {
         Answer::None
     }
 
+    /// A pointer at frame point `p` (the client's own): on an option, that
+    /// option selected, for Enter to take. True when it was one.
+    pub fn point(&mut self, p: [f32; 2]) -> bool {
+        let (x, y) = (p[0] as i32, p[1] as i32);
+        let Some(&(index, _)) = self.hits.iter().find(|(_, r)| (r[0]..r[2]).contains(&x) && (r[1]..r[3]).contains(&y)) else { return false };
+        self.sel = index;
+        true
+    }
+
     /// `OnDrawSelf` (with `Build`'s sizing and the focus's open).
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster) {
         self.window.init(vui, r, [320, 224], 500, 32, 1);
@@ -190,6 +202,9 @@ impl Response {
         let text = self.text.clone();
         self.window.text_box(vui, r, &text, 20, 0, 460, lines, [0.8, 0.8, 0.8, 1.0], 3);
         let mut row = lines + 1;
+        let lh = vui.font_height(r) - 4;
+        let x0 = self.window.top_left()[0];
+        self.hits.clear();
         for (n, o) in self.options.iter().enumerate() {
             let on = n as i32 + self.first == self.sel;
             let c = if on { [1.0, 1.0, 0.0, 1.0] } else { [1.0; 4] };
@@ -198,6 +213,8 @@ impl Response {
             if on {
                 self.window.tick_r(vui, r, 40, row, true);
             }
+            let (a, b) = (self.window.row_center(vui, r, row)[1], self.window.row_center(vui, r, row + lines.max(1) - 1)[1]);
+            self.hits.push((o.index, [x0 + 30, a - lh / 2, x0 + 490, b + lh - lh / 2]));
             row += lines;
         }
         row += 1;
@@ -234,6 +251,8 @@ pub struct MBox {
     /// `m_timeout`: the time the box cancels itself at, or -1
     pub timeout: i64,
     window: Window,
+    /// Where each button was drawn last (frame x0 y0 x1 y1), for a pointer.
+    hits: Vec<[i32; 4]>,
 }
 
 /// What a box answered: `OnMessage` 268 (yes / OK) or 260 (no, cancel).
@@ -245,7 +264,7 @@ pub enum BoxAnswer {
 
 impl Default for MBox {
     fn default() -> Self {
-        MBox { kind: 0, text: Vec::new(), sel: 0, p1: 0, p2: 0, alpha: 0.0, time: 0, pos: [80, 115], timeout: -1, window: Window::default() }
+        MBox { kind: 0, text: Vec::new(), sel: 0, p1: 0, p2: 0, alpha: 0.0, time: 0, pos: [80, 115], timeout: -1, window: Window::default(), hits: Vec::new() }
     }
 }
 
@@ -304,6 +323,17 @@ impl MBox {
         }
     }
 
+    /// A pointer at frame point `p` (the client's own): on a button, that
+    /// button selected, for Enter to take. True when it was one.
+    pub fn point(&mut self, p: [f32; 2]) -> bool {
+        let (x, y) = (p[0] as i32, p[1] as i32);
+        let Some(k) = self.hits.iter().position(|r| (r[0]..r[2]).contains(&x) && (r[1]..r[3]).contains(&y)) else { return false };
+        if self.kind == 1 {
+            self.sel = k as i32;
+        }
+        true
+    }
+
     /// `OnDrawSelf` (no item icon). `Update` runs in it: a timeout that has
     /// passed cancels the box (260), which is returned.
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, now: i64) -> Option<BoxAnswer> {
@@ -355,8 +385,12 @@ impl MBox {
             _ => &[],
         };
         let sel = if self.kind == 1 { self.sel } else { 0 };
+        let fh = vui.font_height(r);
+        self.hits.clear();
         for (k, &(id, x)) in buttons.iter().enumerate() {
             vui.draw_centered_string_ex(r, &word(id), x, y, if k as i32 == sel { yellow } else { white }, 3, true);
+            let w = vui.string_width(r, &word(id)) >> 1;
+            self.hits.push([x - w - 24, y - fh, x + w + 24, y + fh]);
         }
         if let Some(&(id, x)) = buttons.get(sel as usize) {
             let w = vui.string_width(r, &word(id)) >> 1;

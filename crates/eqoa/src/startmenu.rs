@@ -293,6 +293,27 @@ impl MainMenu {
         Up::None
     }
 
+    /// A pointer at frame point `p` (the client's own; the game takes the
+    /// pad and the keyboard): on a bar of the focused menu (this one or one
+    /// opened over it, the only one drawn), that entry selected. True when
+    /// it was one.
+    pub fn point(&mut self, p: [f32; 2], menus: &Menus) -> bool {
+        if let Some(s) = self.sub.as_mut().filter(|s| s.visible && s.focused()) {
+            return s.point(p, menus);
+        }
+        let count = menus.list[self.menu].entries.len() as i32;
+        let (x, y) = (p[0] as i32, p[1] as i32);
+        // the bars: from (18, 56), 27 apart, seven shown
+        let i = (y - 56).div_euclid(27);
+        if !(18..18 + 150).contains(&x) || !(0..7).contains(&i) || (y - 56).rem_euclid(27) >= 26 || self.top + i >= count {
+            return false;
+        }
+        self.sel = self.top + i;
+        self.blink_dir = 1;
+        self.blink = 1.0;
+        true
+    }
+
     /// `Scroll`: the selection moved by `d`, wrapping, seven bars shown.
     fn scroll_by(&mut self, d: i32, count: i32, now: i64, cues: &mut Vec<i32>) {
         let i = self.sel + d;
@@ -586,6 +607,11 @@ pub struct StartMenu {
 impl StartMenu {
     pub fn new(menu: usize) -> Self {
         StartMenu { main: MainMenu::new(menu, false), visible: false }
+    }
+
+    /// A pointer on the focused menu's bars (`MainMenu::point`).
+    pub fn point(&mut self, p: [f32; 2], menus: &Menus) -> bool {
+        self.visible && self.main.point(p, menus)
     }
 
     /// `ShowMain(a)`.

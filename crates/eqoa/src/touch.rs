@@ -407,7 +407,8 @@ mod tests {
         p.touch(2, Phase::Moved, [c[0] + l.stick_r, c[1] - l.stick_r], t, SIZE);
         let r = p.report();
         assert_eq!(r.buttons, bit::CROSS);
-        assert!((r.sticks[2] - 0.7071).abs() < 1e-3 && (r.sticks[3] + 0.7071).abs() < 1e-3, "{:?}", r.sticks);
+        let d = std::f32::consts::FRAC_1_SQRT_2;
+        assert!((r.sticks[2] - d).abs() < 1e-3 && (r.sticks[3] + d).abs() < 1e-3, "{:?}", r.sticks);
         p.touch(1, Phase::Ended, cross, t, SIZE);
         p.touch(2, Phase::Ended, c, t, SIZE);
         assert_eq!(p.report(), Report::default());

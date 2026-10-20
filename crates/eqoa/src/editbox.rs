@@ -390,6 +390,55 @@ impl EditBox {
         if k[0] + k[1] * 11 == 64 && self.multi_line { 6 } else { c }
     }
 
+    /// A pointer on the box (frame point `p`, the client's own: the game
+    /// takes the pad and the keyboard only). On a soft keyboard's key: the
+    /// cursor there at once, and the key that presses it (X, 134); on the
+    /// legend beside it: its key (R2 done, square back, circle a space,
+    /// triangle cancel). `Some(None)` on the box elsewhere, `None` off it.
+    pub fn point(&mut self, p: [f32; 2]) -> Option<Option<i32>> {
+        self.point_with(p, !pad_only())
+    }
+
+    /// `point`, with the soft keyboard showing or not.
+    fn point_with(&mut self, p: [f32; 2], soft: bool) -> Option<Option<i32>> {
+        let (x, y) = (p[0] as i32, p[1] as i32);
+        let rows = self.rows;
+        let h = if !soft { rows * 17 + 68 } else { rows * 17 + 203 };
+        if x < self.pos[0] || x >= self.pos[0] + 452 || y < self.pos[1] - 28 || y >= self.pos[1] + h {
+            return None;
+        }
+        if !soft {
+            return Some(None);
+        }
+        // the keys: 26-pixel cells 27 apart
+        let base = [self.pos[0] + 16, self.pos[1] + rows * 17 + 28];
+        let (dx, dy) = (x - base[0], y - base[1]);
+        if dx >= 0 && dy >= 0 && dx % 27 < 26 && dy % 27 < 26 && dx / 27 < 11 && dy / 27 < 6 {
+            let k = [dx / 27, dy / 27];
+            if self.cell(k) != 0 {
+                self.key = k;
+                self.last_key = k;
+                self.glide = 0.0;
+                return Some(Some(134));
+            }
+        }
+        // the legend, a row each 27 apart (Space's left out where spaces are)
+        let lx = self.pos[0] + 320;
+        let mut ly = self.pos[1] + rows * 17 + 28;
+        for (k, key) in [None, Some(143), Some(133), Some(135), Some(132)].into_iter().enumerate() {
+            if k == 3 && !self.allow_spaces {
+                continue;
+            }
+            if k > 0 {
+                ly += 27;
+            }
+            if (lx..lx + 120).contains(&x) && (ly - 2..ly + 24).contains(&y) {
+                return Some(key);
+            }
+        }
+        Some(None)
+    }
+
     /// `MoveKey`: a step, wrapping at the edges and over empty cells.
     fn move_key(&mut self, d: [i32; 2], cues: &mut Vec<i32>) {
         cues.push(11);
@@ -720,6 +769,31 @@ mod tests {
         e.move_key([-1, 0], &mut cues);
         assert_eq!(e.key, [10, 0]);
         assert!(cues.iter().all(|&c| c == 11));
+    }
+
+    /// A pointer on the soft keyboard: a key puts the cursor there and
+    /// presses it, an empty cell or the gap between keys nothing, the
+    /// legend its keys (Space's left out where spaces are not allowed),
+    /// the compact face nothing, off the box `None`.
+    #[test]
+    fn a_pointer_presses_the_key_or_legend_under_it() {
+        let mut e = EditBox::default();
+        let base = [e.pos[0] + 16, e.pos[1] + e.rows * 17 + 28];
+        let at = |c: i32, r: i32| [(base[0] + c * 27 + 13) as f32, (base[1] + r * 27 + 13) as f32];
+        assert_eq!(e.point_with(at(7, 1), true), Some(Some(134)));
+        assert_eq!((e.key, e.cell(e.key)), ([7, 1], b'6'));
+        assert_eq!(e.point_with(at(9, 5), true), Some(None), "cell 64 is empty in a one-line box");
+        assert_eq!(e.point_with([at(1, 1)[0] + 13.5, at(1, 1)[1]], true), Some(None), "between two keys");
+        let lx = e.pos[0] + 340;
+        let legend = |row: i32| [lx as f32, (base[1] + row * 27 + 10) as f32];
+        assert_eq!(e.point_with(legend(1), true), Some(Some(143)), "R2: done");
+        assert_eq!(e.point_with(legend(3), true), Some(Some(135)), "circle: a space");
+        e.allow_spaces = false;
+        assert_eq!(e.point_with(legend(3), true), Some(Some(132)), "no Space row: triangle moves up");
+        let text = [(e.pos[0] + 100) as f32, (e.pos[1] + 20) as f32];
+        assert_eq!(e.point_with(text, false), Some(None), "the compact face: on the box, no key");
+        assert_eq!(e.point_with(at(7, 1), false), None, "the compact face is shorter: no keys there");
+        assert_eq!(e.point_with([(lx - 345) as f32, at(0, 0)[1]], true), None, "left of the box");
     }
 
     /// `InsertChar`: spaces refused where not allowed, the buffer kept one

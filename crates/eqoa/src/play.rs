@@ -1628,6 +1628,65 @@ impl Play {
         best.map(|b| b.0)
     }
 
+    /// A click or a tap on the game's windows at window point `at` of a
+    /// `size` window (the client's own: the game takes the pad and the
+    /// keyboard): what it is on, as the keys that window takes. The soft
+    /// keyboard's keys and its legend, the start menu's bars, a dialog's
+    /// options and a box's buttons, the HUD's quick menus. True when a window
+    /// took it (another window up takes every one), so it targets nothing.
+    pub fn point(&mut self, at: (f64, f64), size: (u32, u32)) -> bool {
+        use crate::dialog::Key as D;
+        let f = render::ui::frame_from_window(size, [at.0 as f32, at.1 as f32]);
+        let press = |p: &mut Play, k: i32, f: fn(&mut Play, i32, bool)| {
+            f(p, k, true);
+            f(p, k, false);
+        };
+        match self.mode {
+            0 => {
+                // the quick menus are drawn out at a wide window's right
+                let side = render::ui::side(size);
+                match self.hud_menus.point([f[0] - side, f[1]]) {
+                    Some(k) => {
+                        self.hud_key(k);
+                        true
+                    }
+                    None => false,
+                }
+            }
+            2 => {
+                if let Some(Some(k)) = self.edit.point(f) {
+                    press(self, k, Play::edit_key);
+                }
+                true
+            }
+            13 => {
+                if let Some(s) = self.start.as_mut()
+                    && s.menu.point(f, &s.menus)
+                {
+                    press(self, crate::startmenu::keys::CROSS, Play::start_key);
+                }
+                true
+            }
+            7 => {
+                if self.response.point(f) {
+                    self.dialog_key(D::Enter);
+                }
+                true
+            }
+            9 => {
+                self.dialog_key(D::Enter);
+                true
+            }
+            14 => {
+                if self.mbox.point(f) {
+                    self.dialog_key(D::Enter);
+                }
+                true
+            }
+            _ => true,
+        }
+    }
+
     /// Where creature `name` is drawn in a `size` window seen through
     /// `view_proj`, the middle of its upright, when it is on screen (for
     /// scripted clicks); `*` is the first creature that is (not the player).

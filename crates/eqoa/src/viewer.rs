@@ -392,6 +392,11 @@ pub fn shot_with(
             for c in touch.take_clicks() {
                 if let (Some(p), Some(vp)) = (play.as_mut(), last_view) {
                     let (crate::mouse::Click::Target(x, y) | crate::mouse::Click::Interact(x, y)) = c;
+                    let mode = p.mode;
+                    if p.point((x, y), (w, h)) {
+                        eprintln!("touch tap: {c:?} on a window (mode {mode})");
+                        continue;
+                    }
                     let id = p.creature_at((x, y), (w, h), vp);
                     eprintln!("touch tap: {c:?} on {id:?}");
                     p.click(id, matches!(c, crate::mouse::Click::Interact(..)));
@@ -411,6 +416,11 @@ pub fn shot_with(
                 let click = mouse.play(&step, (w, h), Instant::now());
                 if let (Some(c), Some(p), Some(vp)) = (click, play.as_mut(), last_view) {
                     let (crate::mouse::Click::Target(x, y) | crate::mouse::Click::Interact(x, y)) = c;
+                    let mode = p.mode;
+                    if p.point((x, y), (w, h)) {
+                        eprintln!("mouse {step}: {c:?} on a window (mode {mode})");
+                        continue;
+                    }
                     let id = p.creature_at((x, y), (w, h), vp);
                     eprintln!("mouse {step}: {:?} on {id:?}", c);
                     p.click(id, matches!(c, crate::mouse::Click::Interact(..)));
@@ -1284,6 +1294,11 @@ impl App {
     fn click(&mut self, c: crate::mouse::Click) {
         let (Some(p), Some(g), Some(vp)) = (self.play.as_mut(), self.gfx.as_ref(), self.last_view) else { return };
         let size = (g.config.width, g.config.height);
+        // a window under it takes it first
+        let (crate::mouse::Click::Target(x, y) | crate::mouse::Click::Interact(x, y)) = c;
+        if p.point((x, y), size) {
+            return;
+        }
         match c {
             crate::mouse::Click::Target(x, y) => p.click(p.creature_at((x, y), size, vp), false),
             crate::mouse::Click::Interact(x, y) => p.click(p.creature_at((x, y), size, vp), true),

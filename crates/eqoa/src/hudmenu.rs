@@ -41,7 +41,7 @@ const SLOT_ICONS: [i32; 4] = [5, 5, 3, 2];
 
 /// A key for the menus, as `VIWndHUDMenu::OnKeyDown` and `VIWndGame`'s
 /// pad keys take them.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Key {
     /// W / pad up (138): the selection up
     Up,
@@ -268,6 +268,31 @@ impl HudMenus {
         self.menus[k].draw(vui, r, &def, now, name);
     }
 
+    /// A pointer at frame point `p`, in the menu's own place (before a wide
+    /// window moves it out to the right; the client's own, as the game takes
+    /// the pad and the keyboard): on an entry of the menu up, that entry
+    /// selected and the key that uses it; on the title bar, the next menu
+    /// (as the d-pad's right).
+    pub fn point(&mut self, p: [f32; 2]) -> Option<Key> {
+        let k = self.sel.clamp(0, 2) as usize;
+        let count = self.defs[k].count;
+        let m = &mut self.menus[k];
+        let at = m.pos;
+        let (x, y) = (p[0] as i32, p[1] as i32);
+        if (at[0]..at[0] + 162).contains(&x) && (at[1]..at[1] + 28).contains(&y) {
+            return Some(Key::Right);
+        }
+        // the carousel from the selection down: a list's rows 31 apart from
+        // (+163, -4), the stack's slots 32 apart from (+169, +3)
+        let (x0, y0, w, step) = if k < 2 { (at[0] + 163, at[1] - 4, 36, 31) } else { (at[0] + 169, at[1] + 3, 28, 32) };
+        let row = (y - y0).div_euclid(step);
+        if count <= 0 || !(x0..x0 + w).contains(&x) || !(0..count).contains(&row) {
+            return None;
+        }
+        m.sel = (m.sel + row).rem_euclid(count);
+        Some(Key::Use)
+    }
+
     /// A key in play: the menu up takes up, down and use (lit for 20 s);
     /// left and right switch menus, menu 1 only with the expansion's second
     /// bar (`second`). Returns what was used: (message, id).
@@ -326,5 +351,30 @@ impl HudMenus {
         m.lit = 1;
         m.alpha = 0.3;
         m.time = now + 20000;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A pointer on the quick menu up: the title bar is the next menu, a
+    /// row of the carousel (counted from the selection) is selected and
+    /// used, anything else is nothing.
+    #[test]
+    fn a_pointer_selects_and_uses_the_row_under_it() {
+        let mut h = HudMenus::default();
+        h.defs[0] = MenuDef { count: 4, entries: vec![Entry::default(); 4] };
+        h.menus[0].sel = 3;
+        let at = h.menus[0].pos;
+        assert_eq!(h.point([(at[0] + 50) as f32, (at[1] + 10) as f32]), Some(Key::Right));
+        // the third row down from the selection (3): entry (3 + 2) % 4
+        assert_eq!(h.point([(at[0] + 180) as f32, (at[1] - 4 + 2 * 31 + 15) as f32]), Some(Key::Use));
+        assert_eq!(h.menus[0].sel, 1);
+        assert_eq!(h.point([(at[0] + 180) as f32, (at[1] - 4 + 4 * 31 + 15) as f32]), None, "past the last row");
+        assert_eq!(h.point([(at[0] + 120) as f32, (at[1] + 60) as f32]), None, "beside the rows");
+        // an empty menu takes nothing but its title
+        h.defs[0].count = 0;
+        assert_eq!(h.point([(at[0] + 180) as f32, (at[1] + 11) as f32]), None);
     }
 }
