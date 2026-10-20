@@ -74,6 +74,7 @@ mod zones;
 mod particles;
 mod play;
 mod pointer;
+mod rings;
 mod scene;
 mod sky;
 mod touch;

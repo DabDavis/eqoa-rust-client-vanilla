@@ -143,6 +143,8 @@ pub struct Play {
     pub effects: net::dump::Effects,
     /// The floating damage numbers (`m_p4FD28`).
     damage: crate::damage::Damage,
+    /// The selection rings round the target (`TrackTarget`).
+    rings: crate::rings::Rings,
     /// The player's actor position and its slot 4 this frame, while it is
     /// drawn.
     self_at: Option<([f32; 3], Option<[f32; 3]>)>,
@@ -702,7 +704,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, self_shown: true, cam_inside: false, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, start: None, quit: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, cast_window: (0, 0), rooted: false, locks: (true, true), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, self_shown: true, cam_inside: false, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, start: None, quit: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, cast_window: (0, 0), rooted: false, locks: (true, true), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None };
         p.take_abilities();
         p.npcw_world_entry();
         p
@@ -786,8 +788,9 @@ impl Play {
         let mut new_model = None;
         for e in self.session.pump() {
             match e {
-                Event::TargetInfo { disposition, title, guild, .. } => {
+                Event::TargetInfo { disposition, b, title, guild, .. } => {
                     self.target_info = Some(disposition);
+                    self.rings.con = Some(b);
                     self.target_title = title;
                     self.target_guild = guild;
                 }
@@ -1551,6 +1554,30 @@ impl Play {
             .collect();
         spells.frame(&mut bodies, &casts, if has_self { SELF } else { -1 }, Some(&mut walker.cam.effect), game_ms, &walker.eye, lib, sound);
         self.rumbles.append(&mut spells.rumbles);
+    }
+
+    /// `UpdateGame`'s `TrackTarget`: the selection rings round the target
+    /// (`rings.rs`), drawn over the scene (`Renderer::set_overlay`). The
+    /// target's actor is the player's own (its walker's position and slot 4)
+    /// or the creature's in its slot, at slot 4 when its sprite is a
+    /// character's; none (no target, or one with no actor) resets them, as
+    /// the HUD turned off would (here it is always up).
+    pub fn draw_rings(&mut self, r: &mut Renderer, device: &wgpu::Device, queue: &wgpu::Queue, walker: &Walker, view_proj: glam::Mat4, lib: &Library) {
+        let me = self.self_id32();
+        let target = (self.target != u32::MAX).then_some(self.target);
+        let aim = target.and_then(|id| {
+            if Some(id) == me {
+                return self.self_at.map(|(pos, slot4)| crate::rings::Aim { id, pos, slot4 });
+            }
+            let k = self.entities.slots.iter().position(|e| e.as_ref().is_some_and(|e| e.id == id))?;
+            let p = self.puppets.get(k)?.as_ref()?;
+            Some(crate::rings::Aim { id, pos: self.entities.slots[k].as_ref()?.actor_pos, slot4: p.sprite.as_ref().and(p.slot4_at) })
+        });
+        // UpdateGame: the target info stops counting while the target's
+        // +0x19 is 0
+        let valid = self.target_info.is_some() && !self.entities.slots.iter().flatten().any(|e| Some(e.id) == target && e.p19 == 0);
+        let tris = self.rings.frame(lib, walker, aim, me, valid, self.cam_inside, view_proj);
+        r.set_overlay(device, queue, view_proj, &tris, &render::library_textures(lib));
     }
 
     /// `SetName`'s plates for every creature drawn: its name, in
@@ -4373,6 +4400,6 @@ impl Play {
         let n = self.entities.slots.iter().flatten().count();
         let on_bar = self.abilities.values().filter(|a| a.valid != 0).count();
         let fx = self.spells.as_ref().map_or_else(String::new, |s| format!(", {}", s.describe()));
-        format!("{n} entities, {} items, {} abilities ({on_bar} on a bar), {} packets sent{fx}", self.dump.inventory.items.len(), self.abilities.len(), self.session.packets_sent)
+        format!("{n} entities, {} items, {} abilities ({on_bar} on a bar), {} packets sent{fx}, {}", self.dump.inventory.items.len(), self.abilities.len(), self.session.packets_sent, self.rings.describe())
     }
 }
