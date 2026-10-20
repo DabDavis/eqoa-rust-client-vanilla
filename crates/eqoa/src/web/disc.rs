@@ -149,6 +149,37 @@ impl WebDisc {
         Ok(c)
     }
 
+    /// `stream::open_world` in a page (`stream::set_world_opener`): on a
+    /// reader of its own, the world file opened with its zones left on the
+    /// disc and the zones round the arrival read, as the first world was
+    /// (`container`, `fill`).
+    pub fn world_opener(&self) -> crate::stream::Opener {
+        let (file, len, entries) = (self.file.clone(), self.len, self.entries.clone());
+        Box::new(move |name, x, z| {
+            let out: crate::stream::Arrival = Default::default();
+            let mut d = WebDisc { file: file.clone(), len, entries: entries.clone(), sparse: Sparse::new(len) };
+            let (o, name) = (out.clone(), name.to_string());
+            wasm_bindgen_futures::spawn_local(async move {
+                let t = web_time::Instant::now();
+                let r = async {
+                    let c = d.container(&name).await?;
+                    let mut lib = esf::Library::new();
+                    let f = lib.add(&name, c);
+                    let base = d.find(&name).ok_or("the world left the disc")?.lba as u64 * iso::SECTOR;
+                    let mut zones = Vec::new();
+                    for (zi, off, n) in crate::stream::fill_set(&lib, f, x, z) {
+                        zones.push((zi, d.read_at(base + off, n).await?));
+                    }
+                    super::log(&format!("{name} opened, {} zones read round the arrival ({} ms)", zones.len(), t.elapsed().as_millis()));
+                    Ok::<_, String>((std::mem::replace(&mut lib.files[f].1, esf::Container::empty()), zones))
+                }
+                .await;
+                *o.borrow_mut() = Some(r);
+            });
+            out
+        })
+    }
+
     /// `stream::set_source_factory`'s argument: every deferred world's zones
     /// read as slices of this image.
     pub fn zone_sources(&self) -> crate::stream::Factory {

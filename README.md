@@ -208,6 +208,14 @@ the player read before the walk starts (`stream::fill_set`, awaited), the rest
 as the walk comes near them (`web::disc::WebZones`, a `stream::ZoneSource`
 whose reads finish on a later frame): in Freeport at the display's rate, 60
 fps in Chromium, with 248 MB of wasm heap (the whole file read was 1.8 GB).
+A world change (a teleport into another world, 0x00B2) is the same reads
+(`stream::open_world`: the world file opened on a reader of its own and the zones
+round the arrival read) while the old world plays on under a black screen (the
+fade, as the console's loading screen hides it), then the walk begins again there
+on the frame they are in: Lavastorm in 21-35 ms, Tunaria with four zones in 260-400
+ms, and back to 60 fps a second later. The game's clock runs on through it, as
+VITimer does (the viewer used to restart it, which put the creatures' animations
+before their start and panicked on a frame of -1).
 
 Between the login and the world the page is the character screen, driven by
 the session: the list (0x002C) is drawn in the page, and its Play, Delete and
@@ -244,8 +252,8 @@ EQOA_PASSWORD=... web/drive.py --base https://host/eqoa/play/ --iso run/eqoa.iso
 The page takes `?relay=` and `?server=` (an IPv4 address; by default the
 page's own host, as the relay resolves it), and `?webgl` for WebGL2 where
 WebGPU works (the same frame, 60 fps in Chromium through ANGLE). Not in the browser
-yet: a world change, touch controls, a 3D preview on the character screens; CHAR.ESF
-(148 MB) is still read whole.
+yet: touch controls, a 3D preview on the character screens; CHAR.ESF (148 MB) is
+still read whole.
 
 The sound is the native client's. A page can give the driver no thread of its own,
 so it runs on the game's: once a frame it is mixed up to the page's audio clock plus a

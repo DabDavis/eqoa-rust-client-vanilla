@@ -485,6 +485,7 @@ pub async fn play(file: web_sys::File, user: String, password: String, opts: JsV
         status("reading the disc");
         let mut disc = WebDisc::open(file).await?;
         crate::stream::set_source_factory(disc.zone_sources());
+        crate::stream::set_world_opener(disc.world_opener());
         unpack_modules(&disc).await;
         // What every world needs, before the session starts its clock.
         let mut common = Vec::new();

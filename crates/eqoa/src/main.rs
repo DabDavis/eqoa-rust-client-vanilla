@@ -106,6 +106,14 @@ fn main() -> ExitCode {
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+/// A line for whoever runs the client: the console in a page, stderr natively.
+pub fn say(s: &str) {
+    #[cfg(target_arch = "wasm32")]
+    web::log(s);
+    #[cfg(not(target_arch = "wasm32"))]
+    eprintln!("{s}");
+}
+
 /// The disc image's path: the argument, `$EQOA_ISO`, or `run/eqoa.iso`.
 pub fn disc_path(arg: Option<&String>) -> String {
     arg.cloned().or_else(|| std::env::var("EQOA_ISO").ok()).unwrap_or_else(|| "run/eqoa.iso".into())

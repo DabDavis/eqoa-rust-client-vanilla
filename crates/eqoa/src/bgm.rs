@@ -79,7 +79,7 @@ impl snd::Disc for Bgm {
         let Some(k) = c.files.iter().position(held) else {
             if !c.missed {
                 c.missed = true;
-                say(&format!("music: sector {lsn} read before its file was"));
+                crate::say(&format!("music: sector {lsn} read before its file was"));
             }
             return false;
         };
@@ -106,13 +106,6 @@ impl snd::Disc for Bgm {
         }
         false
     }
-}
-
-fn say(s: &str) {
-    #[cfg(target_arch = "wasm32")]
-    crate::web::log(s);
-    #[cfg(not(target_arch = "wasm32"))]
-    eprintln!("{s}");
 }
 
 #[cfg(test)]

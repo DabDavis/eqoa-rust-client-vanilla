@@ -623,6 +623,7 @@ pub fn shot_with(
                         }
                         Err(e) => eprintln!("world change to {file}: {e}"),
                     }
+                    p.world_entered();
                 }
                 std::thread::sleep(std::time::Duration::from_millis(16));
             }
@@ -828,6 +829,9 @@ struct App {
     body_at: usize,
     /// Where the sky's models start in `Gfx::models`.
     sky_at: Option<usize>,
+    /// A world change under way: the world's file, the arrival and heading,
+    /// and its reads (`stream::open_world`), entered once they are in.
+    entering: Option<(String, [f32; 3], f32, crate::stream::Arrival)>,
     clock: Instant,
     gfx: Option<Gfx>,
     /// Made before the loop (a browser's), taken when it resumes.
@@ -871,6 +875,7 @@ pub fn run_with_gfx(lib: Library, source: Source, play: Option<crate::play::Play
         sky_batches: Vec::new(),
         body_at: 0,
         sky_at: None,
+        entering: None,
         clock: Instant::now(),
         gfx: None,
         pending,
@@ -925,18 +930,27 @@ impl App {
                     None => self.sound = crate::sound::make(std::path::Path::new(&crate::disc_path(None))),
                 }
             }
-            self.clock = Instant::now();
+            // On a server the game's clock runs on through a world change, as
+            // VITimer does: what plays was started on it (the creatures'
+            // animations), and going back would put them before their start.
+            // The walk skips the gap since its spawn, as the console's does.
+            if self.play.is_none() {
+                self.clock = Instant::now();
+            }
             report(&g.renderer);
             g.window.set_title(&format!("eqoa — {}", self.summary));
             g.window.request_redraw();
         }
     }
 
-    /// A world change in the window: the file replaces the world's, and
-    /// `load` begins the walk again at the arrival.
-    fn enter_world(&mut self, file: &str, pos: [f32; 3], heading: f32) -> Result<(), Error> {
-        let c = stream::open_file(std::path::Path::new(&crate::disc_path(None)), file)?;
+    /// A world change in the window, once its reads are in
+    /// (`stream::open_world`): the file replaces the world's, the zones read
+    /// round the arrival go in, and `load` begins the walk again there.
+    fn enter_world(&mut self, file: &str, c: esf::Container, zones: Vec<(usize, Vec<u8>)>, pos: [f32; 3], heading: f32) -> Result<(), Error> {
         self.lib.replace(0, file, c);
+        for (zi, b) in zones {
+            stream::install(&mut self.lib, 0, zi, b)?;
+        }
         let index = vi::world::World::<vi::fpu::Ee>::zone_at(self.lib.file(0), pos[0], pos[2]).ok_or("no zone at the arrival")?;
         stream::load_zone_now(&mut self.lib, 0, index)?;
         let Source::Walk { character, .. } = self.source else { return Err("not walking".into()) };
@@ -1603,10 +1617,21 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                // A teleport into another world: its reads begun (a page's take
+                // frames, the old world played meanwhile under the black
+                // screen), and the walk begun again there once they are in.
                 if let Some((file, pos, heading)) = self.play.as_mut().and_then(|p| p.take_world_change()) {
-                    match self.enter_world(&file, pos, heading) {
-                        Ok(()) => {}
-                        Err(e) => eprintln!("world change to {file}: {e}"),
+                    let reads = stream::open_world(&file, pos[0], pos[2]);
+                    self.entering = Some((file, pos, heading, reads));
+                }
+                if let Some(r) = self.entering.as_ref().and_then(|e| e.3.borrow_mut().take()) {
+                    let (file, pos, heading, _) = self.entering.take().unwrap();
+                    match r.map_err(Error::from).and_then(|(c, zones)| self.enter_world(&file, c, zones, pos, heading)) {
+                        Ok(()) => crate::say(&format!("entered {file} at {pos:?}")),
+                        Err(e) => crate::say(&format!("world change to {file}: {e}")),
+                    }
+                    if let Some(p) = self.play.as_mut() {
+                        p.world_entered();
                     }
                 }
                 self.fly();

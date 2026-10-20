@@ -687,6 +687,9 @@ impl Play {
                             Some(f) => {
                                 eprintln!("play: teleport to world {world} ({f}) at {pos:?}");
                                 self.world_change = Some((f.to_string(), pos, hpr[0]));
+                                // black until the new world is entered (`world_entered`),
+                                // the old one not shown while it loads
+                                self.fade.set(1.0, 0.0);
                                 self.player.world = world as i64;
                                 self.player.pos = pos;
                                 // The walker is rebuilt: dress it again.
@@ -1465,6 +1468,12 @@ impl Play {
     /// A world change for the viewer to carry out (`EnterWorld` -> `LoadWorld`).
     pub fn take_world_change(&mut self) -> Option<(String, [f32; 3], f32)> {
         self.world_change.take()
+    }
+
+    /// The viewer has carried the world change out (or given it up): the
+    /// screen black since the teleport shows again.
+    pub fn world_entered(&mut self) {
+        self.fade.set(0.0, 0.0);
     }
 
     /// The creatures' names, slot order.
