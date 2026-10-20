@@ -418,5 +418,110 @@ window.eqoaUnpack = async (name, util, aut) => {
   return out;
 };
 
+// ---- graphics: which path the client will take (web::gfx asks for a WebGPU
+// adapter the same way, else WebGL2), and how to get WebGPU where it is off.
+// A page cannot change a browser's flags or open chrome:// itself, so the
+// help copies each address for the player to paste.
+
+function el(tag, props, ...kids) {
+  const e = Object.assign(document.createElement(tag), props);
+  e.append(...kids);
+  return e;
+}
+
+function flag(url) {
+  const copy = el('button', { type: 'button', className: 'small', textContent: 'Copy' });
+  copy.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      copy.textContent = 'Copied: paste it in the address bar';
+    } catch {
+      const r = document.createRange();
+      r.selectNodeContents(code);
+      getSelection().removeAllRanges();
+      getSelection().addRange(r);
+      copy.textContent = 'Selected: copy it with Ctrl+C';
+    }
+  };
+  const code = el('code', { textContent: url });
+  return el('div', { className: 'flag' }, code, copy);
+}
+
+function browser() {
+  const ua = navigator.userAgent;
+  const brands = (navigator.userAgentData && navigator.userAgentData.brands || []).map((b) => b.brand);
+  const chromium = brands.some((b) => /Chromium/.test(b)) || /Chrome\/|Chromium\/|Edg\//.test(ua);
+  return {
+    chromium,
+    firefox: /Firefox\//.test(ua),
+    safari: !chromium && /Safari\//.test(ua),
+    linux: /Linux/.test(ua) && !/Android/.test(ua),
+  };
+}
+
+function gfxHelp(b, why) {
+  const help = $('gfx-help');
+  help.replaceChildren();
+  if (b.chromium && b.linux) {
+    help.append(
+      el('p', { textContent: why + ' Chromium-based browsers on Linux keep WebGPU behind two flags. To turn it on:' }),
+      el('ol', {},
+        el('li', {}, 'Paste this in the address bar and set it to Enabled:', flag('chrome://flags/#enable-unsafe-webgpu')),
+        el('li', {}, 'The same for this one:', flag('chrome://flags/#enable-vulkan')),
+        el('li', { textContent: 'Press Relaunch at the bottom of the flags page, then reload this page.' })));
+  } else if (b.chromium) {
+    help.append(
+      el('p', { textContent: why + ' WebGPU is normally on in this browser, so graphics acceleration is probably off. To turn it on:' }),
+      el('ol', {},
+        el('li', {}, 'Open this and turn on "Use graphics acceleration when available":', flag('chrome://settings/system')),
+        el('li', { textContent: 'Relaunch the browser, then reload this page.' }),
+        el('li', {}, 'Still not on? This page says why:', flag('chrome://gpu'))));
+  } else if (b.firefox) {
+    help.append(el('p', { textContent: why + ' Firefox offers WebGPU only on some systems (Windows, from Firefox 141); elsewhere it cannot be switched on. For WebGPU, open this page in a Chromium-based browser.' }));
+  } else if (b.safari) {
+    help.append(el('p', { textContent: why + ' Safari has WebGPU from Safari 26: update the system, or open this page in a Chromium-based browser.' }));
+  } else {
+    help.append(el('p', { textContent: why + ' For WebGPU, open this page in a Chromium-based browser.' }));
+  }
+}
+
+async function checkGraphics() {
+  const state = $('gfx-state');
+  const b = browser();
+  const say = (cls, text) => { state.className = 'state ' + cls; state.textContent = text; };
+  if (params.has('webgl')) {
+    say('meh', 'Graphics: WebGL2, chosen by ?webgl in the address.');
+    return;
+  }
+  let adapter = null;
+  if (navigator.gpu) {
+    try { adapter = await navigator.gpu.requestAdapter(); } catch { /* none */ }
+  }
+  const info = adapter && adapter.info || {};
+  if (adapter && !(info.architecture === 'swiftshader' || adapter.isFallbackAdapter || info.isFallbackAdapter)) {
+    say('ok', 'Graphics: WebGPU' + (info.vendor ? ', on ' + info.vendor.toUpperCase() : '') + '. The fastest path.');
+    return;
+  }
+  if (adapter) {
+    say('meh', 'Graphics: WebGPU, but drawn in software (no GPU). It will be slow.');
+    gfxHelp(b, 'The browser is not using the graphics card.');
+    return;
+  }
+  let renderer = '';
+  try {
+    const gl = document.createElement('canvas').getContext('webgl2');
+    const ext = gl && gl.getExtension('WEBGL_debug_renderer_info');
+    renderer = gl ? String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER)) : '';
+  } catch { /* no WebGL2 either: the client says so when it starts */ }
+  if (/swiftshader|llvmpipe|softpipe|software/i.test(renderer)) {
+    say('meh', 'Graphics: WebGL2, drawn in software (no GPU). It will be slow.');
+    gfxHelp(b, 'The browser is not using the graphics card.');
+    return;
+  }
+  say('meh', 'Graphics: WebGL2. It works, but costs about twice the CPU of WebGPU.');
+  gfxHelp(b, 'WebGPU is not available here.');
+}
+
+checkGraphics();
 setMode('login');
 init({ module_or_path: wasmModule }).then(() => status('ready')).catch((e) => status('could not load the client: ' + e));
