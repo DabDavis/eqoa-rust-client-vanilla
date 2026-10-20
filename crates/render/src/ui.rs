@@ -129,10 +129,14 @@ impl Ui {
             ],
         });
         // Texels to pixels one for one at 640x448, so the nearest texel;
-        // a rotated quad (the compass) the GS also samples point.
+        // a rotated quad (the compass) the GS also samples point. Repeating,
+        // as the blit material's layer does (`InitSolidFill`'s flags 1, so
+        // CLAMP_1 is 0): a blit bigger than its surface tiles it, which is
+        // how the menus' panels and frame edges are drawn (every UI surface
+        // is a power of two, as the GS's wrap needs).
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
             ..Default::default()
         });
         let shader = device.create_shader_module(wgpu::include_wgsl!("ui.wgsl"));
