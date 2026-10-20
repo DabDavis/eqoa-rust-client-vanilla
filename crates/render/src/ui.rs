@@ -12,7 +12,10 @@
 //!
 //! The frame keeps its 4:3 shape in a wider target, in the middle, and a
 //! quad made under an `Anchor` other than the middle's moves out with the
-//! side it belongs to: the HUD reaches the window's edges.
+//! side it belongs to: the HUD reaches the window's edges, and the start
+//! menu's panels with it. A quad with the frame that is the frame's whole
+//! width (a window's backdrop, which on a TV runs off both sides) runs the
+//! target's whole width.
 
 use bytemuck::{Pod, Zeroable};
 use std::collections::HashMap;
@@ -72,6 +75,10 @@ pub enum Anchor {
     /// Frame x `.0` with the left side and `.1` with the right, stretched
     /// between: a backdrop that joins a left piece to a right one.
     Span(i32, i32),
+    /// With the frame, but cut to the target's sides rather than the
+    /// frame's: what is laid out at a wider width than the frame's (the
+    /// start menu's band and middle frame, as wide as the panels leave).
+    Wide,
 }
 
 impl Anchor {
@@ -83,13 +90,27 @@ impl Anchor {
             Anchor::Left => x - side,
             Anchor::Right => x + side,
             Anchor::Span(a, b) => x - side + 2.0 * side * (x - a as f32) / (b - a).max(1) as f32,
+            Anchor::Wide => x,
+        }
+    }
+
+    /// Whether quads under it reach the target's left side, or its right.
+    fn reaches(self) -> (bool, bool) {
+        match self {
+            Anchor::Middle => (false, false),
+            Anchor::Left => (true, false),
+            Anchor::Right => (false, true),
+            Anchor::Span(..) | Anchor::Wide => (true, true),
         }
     }
 }
 
 /// `Ui::push`'s placing: relative to the viewport's corner and cut to it
 /// (the GS's offset and scissor), then across the target by `anchor`, the
-/// cut too (the whole frame's, without a viewport).
+/// cut too (the whole frame's, without a viewport). A cut at the frame's own
+/// side, moved out to the target's, takes the target's edge (past the whole
+/// frame pixels of `side`, its fraction of one). With the frame and no
+/// viewport, a quad the frame's whole width runs the target's (`widen`).
 fn place(q: &mut Quad, viewport: Option<[i32; 4]>, anchor: Anchor, side: f32) {
     if let Some([x1, y1, x2, y2]) = viewport {
         for p in &mut q.pos {
@@ -106,8 +127,35 @@ fn place(q: &mut Quad, viewport: Option<[i32; 4]>, anchor: Anchor, side: f32) {
         }
         let [x0, y0, x1, y1] = q.clip.unwrap_or([0, 0, SCREEN_W as i32, SCREEN_H as i32]);
         let x = |v: i32| anchor.place(v as f32, side).round() as i32;
-        q.clip = Some([x(x0), y0, x(x1), y1]);
+        let (left, right) = anchor.reaches();
+        let edge = side as i32 + 1;
+        let l = if left && x0 <= 0 { -edge } else { x(x0) };
+        let r = if right && x1 >= SCREEN_W as i32 { SCREEN_W as i32 + edge } else { x(x1) };
+        q.clip = Some([l, y0, r, y1]);
+    } else if side > 0.0 && viewport.is_none() {
+        widen(q, side);
     }
+}
+
+/// A quad with the frame that is the frame's whole width (a window's
+/// backdrop or band: on a TV it runs off both sides) run across the target's
+/// whole width, its texture carried on at its own scale (a blit's texels
+/// repeat). An axis-aligned quad only.
+fn widen(q: &mut Quad, side: f32) {
+    let (lo, hi) = q.pos.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p[0]), b.max(p[0])));
+    let ([a, _], [b, _]) = (q.pos[0], q.pos[1]);
+    if lo > 0.0 || hi < SCREEN_W || q.pos[0][1] != q.pos[1][1] || a == b {
+        return;
+    }
+    let k = [(q.uv[1][0] - q.uv[0][0]) / (b - a), (q.uv[1][1] - q.uv[0][1]) / (b - a)];
+    let e = side + 1.0;
+    for (p, uv) in q.pos.iter_mut().zip(q.uv.iter_mut()) {
+        let d = if p[0] == lo { -e } else { e };
+        p[0] += d;
+        uv[0] += d * k[0];
+        uv[1] += d * k[1];
+    }
+    q.clip = Some(WHOLE);
 }
 
 /// The frame rectangle an opaque quad covers (its bounds within its cut):
@@ -147,9 +195,10 @@ fn settle(quads: &mut [Quad], sided: &[(usize, f32)], opaque: &[(usize, [f32; 4]
             for p in &mut q.pos {
                 p[0] -= dx;
             }
+            // back with the frame, cut to it
             if let Some(c) = &mut q.clip {
-                c[0] -= dx as i32;
-                c[2] -= dx as i32;
+                c[0] = (c[0] - dx as i32).max(0);
+                c[2] = (c[2] - dx as i32).min(SCREEN_W as i32);
             }
         }
     }
@@ -519,7 +568,7 @@ mod tests {
 
     #[test]
     fn a_four_by_three_target_places_every_anchor_as_the_frame() {
-        for a in [Anchor::Middle, Anchor::Left, Anchor::Right, Anchor::Span(-1, 202)] {
+        for a in [Anchor::Middle, Anchor::Left, Anchor::Right, Anchor::Span(-1, 202), Anchor::Wide] {
             let (mut q, mut v) = (quad(5.0, 25.0), quad(5.0, 25.0));
             place(&mut q, None, a, 0.0);
             assert_eq!((q.pos, q.clip), (quad(5.0, 25.0).pos, None), "{a:?}");
@@ -535,8 +584,9 @@ mod tests {
         let mut l = quad(10.0, 69.0);
         place(&mut l, None, Anchor::Left, s);
         assert_eq!([l.pos[0][0], l.pos[1][0]], [10.0 - s, 69.0 - s]);
-        // cut to the frame moved with it: the target's left side
-        assert_eq!(l.clip, Some([-106, 0, 534, 448]));
+        // cut to the frame moved with it: the target's left side, the
+        // fraction of a pixel past the whole ones too
+        assert_eq!(l.clip, Some([-107, 0, 534, 448]));
         let mut r = quad(430.0, 592.0);
         place(&mut r, Some([400, 20, 599, 59]), Anchor::Right, s);
         assert_eq!([r.pos[0][0], r.pos[1][0]], [830.0 + s, 992.0 + s]);
@@ -545,6 +595,39 @@ mod tests {
         let mut m = quad(300.0, 340.0);
         place(&mut m, None, Anchor::Middle, s);
         assert_eq!((m.pos[0][0], m.clip), (300.0, None));
+        // wide: placed as the frame, cut to the target's sides
+        let mut w = quad(176.0 - s, 451.0 + s);
+        place(&mut w, None, Anchor::Wide, s);
+        assert_eq!([w.pos[0][0], w.pos[1][0]], [176.0 - s, 451.0 + s]);
+        assert_eq!(w.clip, Some([-107, 0, 747, 448]));
+    }
+
+    /// A backdrop the frame's whole width runs the target's, its texture at
+    /// its own scale (one texel a pixel, mirrored or not); a quad short of
+    /// either side, under a viewport or on a 4:3 target stays as made.
+    #[test]
+    fn a_quad_the_frames_whole_width_runs_the_targets() {
+        let s = 106.0;
+        let mut b = quad(-1.0, 641.0);
+        b.uv = [[0.0, 0.0], [642.0 / 64.0, 0.0], [642.0 / 64.0, 1.0], [0.0, 1.0]];
+        place(&mut b, None, Anchor::Middle, s);
+        assert_eq!([b.pos[0][0], b.pos[1][0], b.pos[2][0], b.pos[3][0]], [-108.0, 748.0, 748.0, -108.0]);
+        let texel = 1.0 / 64.0;
+        assert_eq!(b.uv[0], [-107.0 * texel, 0.0]);
+        assert_eq!(b.uv[1][0], (642.0 + 107.0) * texel);
+        assert_eq!(b.uv[3], [-107.0 * texel, 1.0]);
+        assert!(b.clip.is_some_and(|c| c[0] < -1000 && c[2] > 1000), "cut to the target, {:?}", b.clip);
+        // mirrored (u runs back)
+        let mut m = quad(0.0, 640.0);
+        m.uv = [[10.0, 0.0], [0.0, 0.0], [0.0, 1.0], [10.0, 1.0]];
+        place(&mut m, None, Anchor::Middle, s);
+        assert_eq!((m.uv[0][0], m.uv[1][0]), (10.0 + 107.0 / 64.0, -107.0 / 64.0));
+        // the controls
+        for (x0, x1, vp, side) in [(-1.0, 639.0, None, s), (1.0, 641.0, None, s), (-1.0, 641.0, Some([0, 0, 639, 447]), s), (-1.0, 641.0, None, 0.0)] {
+            let mut q = quad(x0, x1);
+            place(&mut q, vp, Anchor::Middle, side);
+            assert_eq!([q.pos[0][0], q.pos[1][0]], [x0, x1], "{x0}..{x1} {vp:?} {side}");
+        }
     }
 
     #[test]

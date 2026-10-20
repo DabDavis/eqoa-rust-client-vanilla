@@ -170,14 +170,17 @@ impl Walker {
         let env = self.scene.env_flags(&self.cam.walk.phys.position);
         let p = &self.cam.walk.phys;
         format!(
-            "at ({:.1}, {:.1}, {:.1}) heading {:.2} loco {} flags {:#06x} env {env:#x} cam dist {:.2} anim {:?}",
+            "at ({:.1}, {:.1}, {:.1}) heading {:.2} loco {} flags {:#06x} env {env:#x} cam mode {} dist {:.2} pitch {:.3} (default {:.3}) anim {:?}",
             p.position.x.0,
             p.position.y.0,
             p.position.z.0,
             p.angles.x.0,
             p.loco_state,
             p.flags,
+            self.cam.camera_mode,
             self.cam.cur.dist.0,
+            self.cam.cur.orbit.y.0,
+            self.cam.def_orbit_pitch.0,
             self.sprite.as_ref().map(|s| [s.cur[0].anim, s.cur[1].anim])
         )
     }

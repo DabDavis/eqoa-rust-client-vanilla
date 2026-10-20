@@ -1628,7 +1628,8 @@ impl Play {
             return;
         }
         match key {
-            143 => {
+            // R2, or the keyboard's C (`OnKeyUp` 67, 99, 143)
+            143 | 67 | 99 => {
                 if let Some(c) = self.wnd_chat.as_mut() {
                     c.set_scroll(0);
                 }
@@ -2179,6 +2180,28 @@ impl Play {
         }
     }
 
+    /// The mouse wheel past the closest zoom, or out of first person (the
+    /// client's own: `mouse::Zoom`), in play: into first person as P's
+    /// `InitCameraStyle` goes there, saved as it saves, the camera it left
+    /// kept in `back`; out to that camera's style, distance and tilt (or,
+    /// first person having come by P, P's way out).
+    pub fn wheel_style(&mut self, walker: &mut Walker, zoom: crate::mouse::Zoom, back: &mut Option<crate::camstyle::ZoomBack>) {
+        use crate::mouse::Zoom;
+        if self.mode != 0 || zoom == Zoom::None {
+            return;
+        }
+        let rc = self.race_camera();
+        match (zoom, back.take()) {
+            (Zoom::In, _) => *back = Some(crate::camstyle::zoom_in(&mut walker.cam, rc, &mut walker.scene)),
+            (_, Some(b)) => crate::camstyle::zoom_out(&mut walker.cam, &b, rc, &mut walker.scene),
+            (_, None) => {
+                self.camera_style_key(walker);
+                return;
+            }
+        }
+        self.cam_saved = crate::camstyle::save(&walker.cam);
+    }
+
     /// Quit answered yes (`m_p2EC28`, `Process`'s LOGOUT): 0x09B0 to the
     /// server, sent now, then `Disconnect(9, 1)`: in a page its login screen
     /// again, saying word 820 ("Logged out."), as the console goes back to
@@ -2277,6 +2300,8 @@ impl Play {
             // stop a player standing still (the Sandstorm capture's longest
             // silence is 2.6 s)
             timed_out: false,
+            // the keyboard's held axes: the viewer's (`game_keys`)
+            keys: [0.0; 8],
         }
     }
 
@@ -2670,7 +2695,7 @@ impl Play {
             match s.menu.key(vui, r, &s.menus, key, down, now, loc, &mut cues) {
                 crate::startmenu::Up::Items => {
                     // ShowItems
-                    self.items.open(vui, r, now);
+                    self.items.open(vui, r);
                     self.waiting = false;
                 }
                 crate::startmenu::Up::Back => {
@@ -3569,6 +3594,48 @@ impl Play {
         self.session.send(&w.data);
     }
 
+    /// The keyboard's C (99) held in play: the chat box's history, as R2
+    /// (mode 33, movement and the camera allowed, `SetP06DC0(1, 1)`); in it,
+    /// the keys to the chat box (its up and down 19 and 20), C let go back
+    /// to play (`chat_scroll_key`).
+    pub fn chat_history_key(&mut self, key: i32, down: bool) {
+        match self.mode {
+            0 if down && key == 99 => {
+                self.mode = 33;
+                self.locks = (true, true);
+                if let Some(c) = self.wnd_chat.as_mut() {
+                    c.set_scroll(1);
+                }
+            }
+            33 => self.chat_scroll_key(key, down),
+            _ => {}
+        }
+    }
+
+    /// `SelectTarget(which)`, the keyboard's 1 to 6 in play: 1 the player,
+    /// 2 to 5 the group's others in roster order (a place holding the player
+    /// gives the next), 6 the pet; past the group, or anything else, none.
+    /// The auto-attack stops; 0x0010 with the token and the choice.
+    pub fn select_target(&mut self, which: i32) {
+        let me = self.self_id32();
+        let ids: Vec<u32> = self.group.members[..self.group.count()].iter().map(|m| m.id).collect();
+        let n = ids.len() as i32;
+        self.target = match which {
+            1 => me.unwrap_or(u32::MAX),
+            2..=5 if which <= n => {
+                let k = (which - 2) as usize;
+                if Some(ids[k]) == me { ids.get(k + 1).copied().unwrap_or(u32::MAX) } else { ids[k] }
+            }
+            6 => self.pet_id,
+            _ => u32::MAX,
+        };
+        self.auto_attack = false;
+        self.target_info = None;
+        let mut w = net::stream::Writer::op(0x0010);
+        w.u32(0).u32(self.target);
+        self.session.send(&w.data);
+    }
+
     /// A pad key for the HUD's quick menus in play (`VIWndHUDMenu::OnKeyDown`
     /// and `VIWndGame`'s left and right): using an ability sends 0x0032.
     pub fn hud_key(&mut self, key: crate::hudmenu::Key) {
@@ -4301,7 +4368,6 @@ impl Play {
             self.book_actions(book_out);
             if let Some(s) = self.start.as_mut() {
                 let mut cues = Vec::new();
-                s.menu.edges = r.ui.side() > 0.0;
                 s.menu.draw(vui, &mut r, &s.menus, now as i64, &start_stats, &mut cues);
                 if s.menu.visible && self.items.visible {
                     let pl = &self.dump.player;

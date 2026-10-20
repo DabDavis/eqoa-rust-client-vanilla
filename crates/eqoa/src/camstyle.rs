@@ -5,6 +5,11 @@
 //! saved to and put back from (`SaveCameraPreset`, `ApplyCameraPreset`), and
 //! `ApplyRaceCamera`, the start menu's framing of the character from
 //! `gRaceCameras` (CLIENT data, read out of `run/client.bin`).
+//!
+//! The client's own, beside them: the follow orbit zooms out to 11.0 where
+//! the game stops at 8.0 (`FOLLOW_MAX_DISTANCE`), and the mouse wheel goes
+//! into first person past the closest zoom and back out (`zoom_in`,
+//! `zoom_out`).
 
 use crate::client_image::ClientImage;
 use vi::camera::WalkCamera;
@@ -76,6 +81,10 @@ pub fn apply(cam: &mut WalkCamera<Ee>, p: &Preset) {
     cam.set_orbit_angle(p.angle);
 }
 
+/// The follow orbit's (style 3's) zoom-out ceiling: the client's 11.0
+/// where the game stores 8.0 (`set_style`).
+pub const FOLLOW_MAX_DISTANCE: f32 = 11.0;
+
 /// `SetCameraStyle(style)`.
 pub fn set_style<S: Scene<Ee>>(cam: &mut WalkCamera<Ee>, style: i32, rc: Option<RaceCamera>, scene: &mut S) {
     let f = F::<Ee>::new;
@@ -97,7 +106,14 @@ pub fn set_style<S: Scene<Ee>>(cam: &mut WalkCamera<Ee>, style: i32, rc: Option<
         3 => {
             cam.target_height = f(1.68);
             cam.min_orbit_distance = f(1.5);
-            cam.max_orbit_distance = f(8.0);
+            // The client's, not the game's: SetCameraStyle(3) stores 8.0, and
+            // on a big modern screen that felt cramped (F3 report
+            // 20261020-193543), so the follow orbit zooms out 11.0, about 40%
+            // further; walls still pull it in (`min_collision_dist` and the
+            // sweep in `move_camera` are the game's). The QOL ELF raised the
+            // same ceiling on the PS2 (claude-notes/qol-patches-20260816.md,
+            // the cave on `VIWalkCamera::Process` storing +0x264).
+            cam.max_orbit_distance = f(FOLLOW_MAX_DISTANCE);
             cam.min_collision_dist = f(3.5);
             cam.set_orbit_distance(f(3.38));
             cam.walk.set_pitch_range(f(-std::f32::consts::FRAC_PI_4), half_pi);
@@ -151,6 +167,42 @@ pub fn cycle<S: Scene<Ee>>(cam: &mut WalkCamera<Ee>, fixed_option: bool, rc: Opt
     };
     set_style(cam, style, rc, scene);
     save(cam)
+}
+
+/// What the wheel's way into first person leaves to come back to (the
+/// client's own: `mouse::Zoom`, `Play::wheel_style`): the camera as
+/// `SaveCameraPreset` keeps it, and mode 3's default pitch (the mouse's
+/// tilt, which its preset's pitch does not hold near a wall).
+#[derive(Clone, Copy, Debug)]
+pub struct ZoomBack {
+    pub preset: Preset,
+    pub def_pitch: F<Ee>,
+}
+
+/// The wheel past the closest zoom: into first person as P's cycle goes
+/// there (style 0); what to come back to.
+pub fn zoom_in<S: Scene<Ee>>(cam: &mut WalkCamera<Ee>, rc: Option<RaceCamera>, scene: &mut S) -> ZoomBack {
+    let back = ZoomBack { preset: save(cam), def_pitch: cam.def_orbit_pitch };
+    set_style(cam, 0, rc, scene);
+    back
+}
+
+/// The wheel out of first person: back to `back`'s style (behind the
+/// player at a clear angle, as `SetCameraStyle` chooses), its distance and
+/// its tilt.
+pub fn zoom_out<S: Scene<Ee>>(cam: &mut WalkCamera<Ee>, back: &ZoomBack, rc: Option<RaceCamera>, scene: &mut S) {
+    set_style(cam, back.preset.mode, rc, scene);
+    match back.preset.mode {
+        3 => {
+            cam.set_def_orbit_pitch_angle(back.def_pitch);
+            cam.set_orbit_distance(back.preset.distance);
+        }
+        1 => {
+            cam.set_orbit_pitch_angle(back.preset.pitch);
+            cam.set_orbit_distance(back.preset.distance);
+        }
+        _ => {}
+    }
 }
 
 /// `ToggleCameraStyle`: the option's orbit, from behind, saved.

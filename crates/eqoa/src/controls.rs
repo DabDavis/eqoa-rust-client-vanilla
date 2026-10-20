@@ -14,10 +14,13 @@
 //! stops both (`Client::timed_out`, which the client leaves off: see
 //! `Play::control_client`).
 //!
-//! The keyboard here is a pad's sticks too (`walker::Controls`: WASD the left,
-//! I/J/K/L or the arrows the right), merged in axis by axis; the PS2's own
-//! keyboard axes (`m_keys[17..24]`, its arrow keys) are the d-pad here and
-//! stay 0, though the arithmetic they take part in is kept.
+//! The keyboard's own axes are the game's (`Client::keys`, `m_keys[17..=24]`,
+//! the cursor block as `VIKeyboard::Read` codes it): the arrows walk and turn
+//! (in mode 3 strafe), Home and End orbit mode 3, Page Up and Page Down pitch
+//! (zoom in the orbits); left out while a chat line is up. The viewer feeds
+//! Home, End, Page Up and Page Down; its arrows are the quick menus' d-pad,
+//! because WASD walks there, a pad's left stick (`walker::Controls`, with the
+//! client's own right stick on I/J/K/L).
 //!
 //! Not here: the modal look (mode 38, which holding L1 or R1 begins; the
 //! camera effect's blend into a scripted camera is not ported) and follow
@@ -60,11 +63,14 @@ pub struct Client {
     pub rooted: bool,
     /// `IsTimedOut`: nothing has come for 8 s
     pub timed_out: bool,
+    /// `m_keys[17..=24]`, the keyboard's keys held, 1 or 0: left, right, up,
+    /// down, page up, page down, end, home
+    pub keys: [f32; 8],
 }
 
 impl Default for Client {
     fn default() -> Self {
-        Client { has_chat: false, inverted: false, auto_attack: false, swung: false, target: None, autorun: false, casting: false, move_ok: true, look_ok: true, rooted: false, timed_out: false }
+        Client { has_chat: false, inverted: false, auto_attack: false, swung: false, target: None, autorun: false, casting: false, move_ok: true, look_ok: true, rooted: false, timed_out: false, keys: [0.0; 8] }
     }
 }
 
@@ -97,8 +103,8 @@ pub trait Walk {
 pub fn update_controls(w: &mut impl Walk, keys: [f32; 4], c: &Client) -> bool {
     let f = Fe::new;
     let k = keys.map(f);
-    // `m_keys[17..24]`: the PS2 keyboard's arrows, the d-pad here
-    let kb = |_: usize| Fe::ZERO;
+    // `m_keys[17..=24]`: the keyboard's cursor block
+    let kb = |i: usize| f(c.keys[i - 17]);
     let mut orbit = -k[0];
     let mut turn = Fe::ZERO;
     let mut strafe = k[2];
@@ -372,6 +378,34 @@ mod tests {
         assert_eq!(run(0, [0.5, 0.0, 0.0, 0.0], swung).0[1], "turn -0.5");
         // and nothing without a fight or a swing
         assert_eq!(run(0, [0.0; 4], Client { auto_attack: false, ..fight }).0[1], "turn 0");
+    }
+
+    /// The keyboard's cursor block (`m_keys[17..=24]`) as the game reads it:
+    /// up walks forward, left turns left in first person and the fixed
+    /// follow and strafes left in the follow orbit, Home and End orbit it,
+    /// Page Down and Page Up pitch (zoom it); with a chat line up they do
+    /// nothing (the control: the same keys, no calls moved).
+    #[test]
+    fn the_keyboard_axes_walk_and_turn_as_the_game_reads_them() {
+        let key = |held: &[usize]| {
+            let mut k = [0.0; 8];
+            for &i in held {
+                k[i - 17] = 1.0;
+            }
+            Client { keys: k, ..Client::default() }
+        };
+        // up and left (19, 17): forward, turning left; page down (22): pitch down
+        assert_eq!(run(0, [0.0; 4], key(&[19, 17, 22])).0, ["move 1 0", "turn 1", "pitch 1"]);
+        assert_eq!(run(2, [0.0; 4], key(&[20, 18])).0, ["move -1 0", "turn -1", "pitch 0"]);
+        // mode 3: left strafes left, home orbits one way and end the
+        // other, page up zooms out
+        assert_eq!(run(3, [0.0; 4], key(&[17, 24, 21])).0, ["vmove 0 -1", "in 1", "right -1"]);
+        assert_eq!(run(3, [0.0; 4], key(&[18, 23])).0, ["vmove 0 1", "in -0", "right 1"]);
+        // the sticks and the keys add
+        assert_eq!(run(0, [0.0, 0.0, 0.0, -0.5], key(&[19])).0[0], "move 1.5 0");
+        let chat = Client { has_chat: true, ..key(&[19, 17, 22, 24]) };
+        assert_eq!(run(0, [0.0; 4], chat).0, ["move -0 0", "turn -0", "pitch 0"]);
+        assert_eq!(run(3, [0.0; 4], chat).0, ["vmove -0 0", "in -0", "right 0"]);
     }
 
     #[test]

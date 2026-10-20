@@ -1,14 +1,21 @@
 //! The mouse in play. The PS2 game reads none, so this is the client's own,
 //! laid over the game's inputs rather than replacing any:
 //!
-//! - a drag (either button) looks round, as the right stick does: across, in
-//!   the orbiting camera modes (1 and 3), the orbit angle itself, a pixel at
-//!   a time and the view turning the way the mouse goes (`SetOrbitAngle`);
-//!   in first person and the follow camera (0 and 2) the right stick's x,
-//!   which turns the body. Up and down is the right stick's y: the orbit
-//!   camera zooms on it, first person pitches. The options' Camera Pitch
-//!   Axis turns them round as it does the stick.
-//! - the wheel zooms the orbiting cameras (`SetOrbitDistance`).
+//! - a drag (either button) looks round: across, in the orbiting camera
+//!   modes (1 and 3), the orbit angle itself, a pixel at a time and the view
+//!   turning the way the mouse goes (`SetOrbitAngle`); in first person and
+//!   the follow camera (0 and 2) the right stick's x, which turns the body.
+//!   Up and down tilts the orbiting camera (`tilt`: the view looks up as the
+//!   mouse goes up, the camera going lower, between level-ish and nearly
+//!   overhead; in mode 3 the default pitch its own snaps go back to), where
+//!   the right stick's y would zoom it; in first person and the follow
+//!   camera it is the stick's y, the pitch. The options' Camera Pitch Axis
+//!   turns them round as it does the stick.
+//! - the wheel zooms the orbiting cameras (`SetOrbitDistance`); past the
+//!   closest it goes into first person (`Zoom::In`, as P's style 0), and out
+//!   of first person back to the camera it came from (`Zoom::Out`,
+//!   `Play::wheel_style`). The follow camera, which does not zoom, goes into
+//!   first person on the wheel's first notch in.
 //! - both buttons held run forward (the left stick all the way up), the
 //!   way the view faces in the orbiting camera, as many PC games do; a drag
 //!   meanwhile steers. Letting go after it is no click.
@@ -20,6 +27,7 @@
 //! click is △ there, and the wheel the d-pad's up and down.
 
 use crate::walker::Walker;
+use vi::camera::WalkCamera;
 use vi::fpu::{Ee, F};
 use web_time::{Duration, Instant};
 
@@ -31,6 +39,64 @@ const DOUBLE: Duration = Duration::from_millis(400);
 const ORBIT_PER_PIXEL: f32 = 0.008;
 /// A pixel of drag as the stick's push for a frame.
 const STICK_PER_PIXEL: f32 = 0.05;
+/// The tilt for a pixel of drag (radians), as the orbit's turn.
+const TILT_PER_PIXEL: f32 = 0.008;
+/// The orbit's pitch a drag keeps to: 10 degrees below level (the camera
+/// under the head, looking up at it) to 75 overhead. The game's own pitches
+/// lie between: style 3's default 15, style 1's 25, the alternate near a
+/// wall 60.
+pub const MIN_TILT: f32 = -0.17453292;
+pub const MAX_TILT: f32 = 1.3089969;
+
+/// What the wheel asks of the camera's style, beyond the orbit's zoom.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Zoom {
+    None,
+    /// in past the closest zoom (or in, in the follow camera): first person
+    In,
+    /// out, in first person: back to the camera it came from
+    Out,
+}
+
+/// The wheel's `lines` (in positive) on `cam`: whether it changes the
+/// camera's style rather than zooming. An orbit already at its closest goes
+/// into first person; first person comes out.
+pub fn zoom_step(cam: &WalkCamera<Ee>, lines: f32) -> Zoom {
+    match cam.camera_mode {
+        1 | 3 if lines > 0.0 && cam.cur.dist <= cam.min_orbit_distance => Zoom::In,
+        2 if lines > 0.0 => Zoom::In,
+        0 if lines < 0.0 => Zoom::Out,
+        _ => Zoom::None,
+    }
+}
+
+/// The orbit's pitch moved by `d` (radians, up positive: the camera
+/// higher), kept within `MIN_TILT`..`MAX_TILT`. Mode 3 snaps its pitch back
+/// to the default whenever the orbit is clear at it, and to the alternate
+/// pitch near a wall (`move_camera`'s flags 8), so there the DEFAULT is what
+/// moves (`SetDefOrbitPitchAngle`), and the camera with it when it rests
+/// there; at the alternate pitch or on its way somewhere it is left to its
+/// snaps, which go to the new default once the orbit is clear. Mode 1 has no
+/// snaps: its pitch moves. The game has no tilt; this is the client's mouse.
+pub fn tilt(cam: &mut WalkCamera<Ee>, d: F<Ee>) {
+    let (lo, hi) = (F::new(MIN_TILT), F::new(MAX_TILT));
+    match cam.camera_mode {
+        3 => {
+            let resting = cam.cur.flags & 8 == 0 && cam.cur.orbit.y == cam.def_orbit_pitch;
+            let p = vi::fpu::clamp(cam.def_orbit_pitch + d, lo, hi);
+            if resting {
+                cam.set_def_orbit_pitch_angle(p);
+            } else {
+                cam.def_orbit_pitch = p;
+            }
+        }
+        1 => {
+            let p = vi::fpu::clamp(cam.cur.orbit.y + d, lo, hi);
+            cam.set_orbit_pitch_angle(p);
+        }
+        _ => {}
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Click {
@@ -70,6 +136,8 @@ pub struct Mouse {
     /// window's steps (a notch one)
     wheel: f32,
     steps: f32,
+    /// the camera the wheel went into first person from (`Zoom`)
+    pub back: Option<crate::camstyle::ZoomBack>,
 }
 
 impl Mouse {
@@ -165,36 +233,50 @@ impl Mouse {
         self.steps = 0.0;
     }
 
-    /// This frame's drag and wheel on the walker's camera (`look`).
-    pub fn look(&mut self, w: &mut Walker, inverted: bool) -> [f32; 2] {
+    /// This frame's drag and wheel on the walker's camera (`look`), and
+    /// what the wheel asks of its style (`zoom_step`, which the caller
+    /// carries out: `Play::wheel_style`); a wheel that does is no zoom.
+    pub fn look(&mut self, w: &mut Walker, inverted: bool) -> ([f32; 2], Zoom) {
         let (dx, dy) = std::mem::take(&mut self.look);
         let wheel = std::mem::take(&mut self.wheel);
         self.steps = 0.0;
-        look(w, dx as f32, dy as f32, wheel, inverted)
+        let zoom = zoom_step(&w.cam, wheel);
+        let wheel = if zoom == Zoom::None { wheel } else { 0.0 };
+        (look(w, dx as f32, dy as f32, wheel, inverted), zoom)
     }
 }
 
 /// A drag of (dx, dy) window pixels and `wheel` lines on the walker's
-/// camera: the orbit and the distance moved at once in the orbiting modes,
-/// and the rest as the right stick's push (rx, ry) for `UpdateControls`.
+/// camera (`look_cam`).
 pub fn look(w: &mut Walker, dx: f32, dy: f32, wheel: f32, inverted: bool) -> [f32; 2] {
+    look_cam(&mut w.cam, dx, dy, wheel, inverted)
+}
+
+/// A drag of (dx, dy) window pixels and `wheel` lines on `cam`: in the
+/// orbiting modes the orbit, its tilt and its distance moved at once;
+/// otherwise the right stick's push (rx, ry) for `UpdateControls`.
+pub fn look_cam(cam: &mut WalkCamera<Ee>, dx: f32, dy: f32, wheel: f32, inverted: bool) -> [f32; 2] {
     let mut stick = [0.0f32; 2];
-    let mode = w.cam.camera_mode;
+    let mode = cam.camera_mode;
     if mode == 1 || mode == 3 {
         if dx != 0.0 {
             // the view turns the way the mouse goes: the orbit the other way
             let d = dx * ORBIT_PER_PIXEL * if inverted { 1.0 } else { -1.0 };
-            let a = w.cam.cur.orbit.x;
-            w.cam.set_orbit_angle(a + F::<Ee>::new(d));
+            let a = cam.cur.orbit.x;
+            cam.set_orbit_angle(a + F::<Ee>::new(d));
+        }
+        if dy != 0.0 {
+            // the view looks the way the mouse goes: up, the camera lower
+            tilt(cam, F::new(dy * TILT_PER_PIXEL * if inverted { -1.0 } else { 1.0 }));
         }
         if wheel != 0.0 {
-            let d = w.cam.cur.dist.0 * 0.9f32.powf(wheel);
-            w.cam.set_orbit_distance(F::new(d));
+            let d = cam.cur.dist.0 * 0.9f32.powf(wheel);
+            cam.set_orbit_distance(F::new(d));
         }
     } else {
         stick[0] = (dx * STICK_PER_PIXEL).clamp(-1.0, 1.0);
+        stick[1] = (dy * STICK_PER_PIXEL).clamp(-1.0, 1.0);
     }
-    stick[1] = (dy * STICK_PER_PIXEL).clamp(-1.0, 1.0);
     stick
 }
 
@@ -308,6 +390,139 @@ mod tests {
         // the control: one button is a click as before
         m.button(false, true, t0 + Duration::from_millis(3000));
         assert_eq!(m.button(false, false, t0 + Duration::from_millis(3010)), Some(Click::Target(130.0, 100.0)));
+    }
+
+    /// Open ground: nothing to hit, no liquid.
+    struct Open;
+
+    impl vi::scene::Scene<Ee> for Open {
+        fn time(&self) -> i64 {
+            0
+        }
+        fn collide_sphere(&mut self, _: &mut vi::coll::CollSphere<Ee>, _: &mut vi::scene::Filter) -> bool {
+            false
+        }
+        fn collide_env(&mut self, _: &mut vi::coll::EnvRay<Ee>) -> bool {
+            false
+        }
+        fn env_flags(&self, _: &vi::vect::Vect3<Ee>) -> u32 {
+            0
+        }
+    }
+
+    /// The play camera, as the first world entry leaves it: style 3, the
+    /// follow orbit.
+    fn follow() -> WalkCamera<Ee> {
+        let mut cam = WalkCamera::<Ee>::default();
+        cam.init(vi::vect::Vect3::of(100.0, 0.0, 100.0), vi::vect::Vect3::of(0.5, 0.0, 0.0), &mut Open);
+        crate::camstyle::set_style(&mut cam, 3, None, &mut Open);
+        cam
+    }
+
+    /// A drag up and down tilts the follow orbit (the default pitch, and the
+    /// camera resting there with it), within its range, the option turning
+    /// it round; it no longer zooms (no stick y). In first person the drag
+    /// is still the stick's y, the pitch (the control).
+    #[test]
+    fn a_drag_up_and_down_tilts_the_orbit() {
+        let mut cam = follow();
+        let (def, dist) = (cam.def_orbit_pitch.0, cam.cur.dist.0);
+        assert_eq!(def, 0.261_799_4, "style 3's default pitch");
+        // up 50 pixels: the view looks up, the camera 0.4 lower
+        let stick = look_cam(&mut cam, 0.0, -50.0, 0.0, false);
+        assert_eq!(stick, [0.0, 0.0], "no zoom on the stick");
+        assert_eq!(cam.def_orbit_pitch, F::new(def) + F::new(-0.4));
+        assert_eq!(cam.cur.orbit.y, cam.def_orbit_pitch, "resting there, the camera with it");
+        assert_eq!(cam.last.orbit.y, cam.def_orbit_pitch);
+        assert_eq!(cam.cur.dist.0, dist, "the distance as it was");
+        // past the bottom of the range, then the option turning it round
+        look_cam(&mut cam, 0.0, -500.0, 0.0, false);
+        assert_eq!(cam.def_orbit_pitch.0, MIN_TILT);
+        look_cam(&mut cam, 0.0, -500.0, 0.0, true);
+        assert_eq!(cam.def_orbit_pitch.0, MAX_TILT, "inverted: up raises it, to the top");
+        // on its way to the alternate pitch (a wall), only the default moves
+        cam.cur.flags |= 8;
+        cam.cur.orbit.y = F::new(1.0);
+        look_cam(&mut cam, 0.0, 100.0, 0.0, false);
+        assert_eq!(cam.def_orbit_pitch, vi::fpu::clamp(F::new(MAX_TILT) + F::new(0.8), F::new(MIN_TILT), F::new(MAX_TILT)));
+        assert_eq!(cam.cur.orbit.y.0, 1.0, "left to its snap");
+        // first person: the stick's y
+        crate::camstyle::set_style(&mut cam, 0, None, &mut Open);
+        let pitch = cam.def_orbit_pitch;
+        let stick = look_cam(&mut cam, 0.0, -10.0, 0.0, false);
+        assert_eq!(stick, [0.0, -0.5]);
+        assert_eq!(cam.def_orbit_pitch, pitch);
+    }
+
+    /// The wheel zooms the orbit until its closest; one more notch in is
+    /// first person, and out of first person it is the orbit again at the
+    /// distance and tilt it left, the follow camera's ceiling the client's
+    /// 11.
+    #[test]
+    fn the_wheel_goes_into_first_person_and_back() {
+        let mut cam = follow();
+        assert_eq!(cam.max_orbit_distance.0, crate::camstyle::FOLLOW_MAX_DISTANCE);
+        // out all the way: 11, not the game's 8
+        look_cam(&mut cam, 0.0, 0.0, -40.0, false);
+        assert_eq!(cam.cur.dist.0, 11.0);
+        assert_eq!(zoom_step(&cam, 1.0), Zoom::None, "far out: a notch in zooms");
+        // in all the way: 1.5 is the closest; there a notch in is first person
+        look_cam(&mut cam, 0.0, 0.0, 40.0, false);
+        assert_eq!(cam.cur.dist.0, 1.5);
+        assert_eq!(zoom_step(&cam, -1.0), Zoom::None, "out zooms");
+        assert_eq!(zoom_step(&cam, 1.0), Zoom::In);
+        look_cam(&mut cam, 0.0, -25.0, 0.0, false);
+        let tilt = cam.def_orbit_pitch;
+        let back = crate::camstyle::zoom_in(&mut cam, None, &mut Open);
+        assert_eq!(cam.camera_mode, 0, "first person");
+        assert_eq!(zoom_step(&cam, 1.0), Zoom::None, "in, in first person: nothing");
+        assert_eq!(zoom_step(&cam, -1.0), Zoom::Out);
+        crate::camstyle::zoom_out(&mut cam, &back, None, &mut Open);
+        assert_eq!((cam.camera_mode, cam.cur.dist.0), (3, 1.5), "the orbit at its closest again");
+        assert_eq!(cam.def_orbit_pitch, tilt, "the tilt kept");
+        assert_eq!(cam.cur.orbit.y, tilt);
+        // the follow camera does not zoom: in is first person at once
+        crate::camstyle::set_style(&mut cam, 2, None, &mut Open);
+        assert_eq!(zoom_step(&cam, 0.5), Zoom::In);
+        assert_eq!(zoom_step(&cam, -0.5), Zoom::None);
+    }
+
+    /// A wall `.1` behind the head at time `.0`: any sweep reaching further
+    /// is stopped.
+    struct Wall(i64, f32);
+
+    impl vi::scene::Scene<Ee> for Wall {
+        fn time(&self) -> i64 {
+            self.0
+        }
+        fn collide_sphere(&mut self, s: &mut vi::coll::CollSphere<Ee>, _: &mut vi::scene::Filter) -> bool {
+            let (a, b) = (s.ray.start, s.ray.end);
+            let (dx, dz) = (b.x.0 - a.x.0, b.z.0 - a.z.0);
+            dx * dx + dz * dz > self.1 * self.1
+        }
+        fn collide_env(&mut self, _: &mut vi::coll::EnvRay<Ee>) -> bool {
+            false
+        }
+        fn env_flags(&self, _: &vi::vect::Vect3<Ee>) -> u32 {
+            0
+        }
+    }
+
+    /// The client's longer reach does not go through walls: zoomed out to
+    /// 11, the orbit blocked past 5 comes in to the game's
+    /// `min_collision_dist` (3.5) as it did from 8; in the open it stays
+    /// out (the control).
+    #[test]
+    fn walls_still_stop_the_longer_orbit() {
+        for (reach, want) in [(5.0, 3.5), (100.0, 11.0)] {
+            let mut cam = follow();
+            look_cam(&mut cam, 0.0, 0.0, -40.0, false);
+            assert_eq!(cam.cur.dist.0, 11.0);
+            for t in 1..=200 {
+                cam.process(&mut Wall(t * 16, reach));
+            }
+            assert_eq!(cam.cur.dist.0, want, "a wall {reach} behind");
+        }
     }
 
     #[test]

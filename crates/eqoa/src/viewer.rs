@@ -431,7 +431,10 @@ pub fn shot_with(
             let (tx, ty, pinch) = touch.take_look();
             if !play.as_ref().is_some_and(|p| p.is_dead()) && play.as_ref().is_none_or(|p| p.look_free()) {
                 let inverted = play.as_ref().is_some_and(|p| p.options.inverted != 0);
-                let look = mouse.look(&mut walker, inverted);
+                let (look, zoom) = mouse.look(&mut walker, inverted);
+                if let Some(p) = play.as_mut() {
+                    p.wheel_style(&mut walker, zoom, &mut mouse.back);
+                }
                 let feel = crate::mouse::look(&mut walker, tx, ty, pinch, inverted);
                 for i in 0..2 {
                     for m in [look[i], feel[i]] {
@@ -930,6 +933,24 @@ fn touch_first() -> bool {
     std::env::var("EQOA_TOUCH").is_ok_and(|v| v == "1")
 }
 
+/// A key's name in the held set (`App::held`): the cursor block's and
+/// Shift by name, a character as itself in lower case.
+fn held_name(k: &Key) -> Option<String> {
+    Some(match k {
+        Key::Named(NamedKey::Shift) => "shift".to_string(),
+        Key::Named(NamedKey::ArrowLeft) => "left".to_string(),
+        Key::Named(NamedKey::ArrowRight) => "right".to_string(),
+        Key::Named(NamedKey::ArrowUp) => "up".to_string(),
+        Key::Named(NamedKey::ArrowDown) => "down".to_string(),
+        Key::Named(NamedKey::PageUp) => "pageup".to_string(),
+        Key::Named(NamedKey::PageDown) => "pagedown".to_string(),
+        Key::Named(NamedKey::End) => "end".to_string(),
+        Key::Named(NamedKey::Home) => "home".to_string(),
+        Key::Character(c) => c.to_lowercase(),
+        _ => return None,
+    })
+}
+
 /// `EQOA_WALK=fwd,strafe,orbit,ms[;...]`: each set of controls held for its
 /// ms, one after another, then none (`shot`'s script, in the window too).
 fn walk_script() -> Option<Vec<(Controls, i64)>> {
@@ -1250,8 +1271,25 @@ impl App {
         }
     }
 
-    /// The walker's controls from the held keys (`UpdateControls`'s keyboard
-    /// half): W/S forward, A/D strafe, ←/→ (or J/L) orbit, ↑/↓ (or I/K) zoom.
+    /// The keyboard's axes `UpdateControls` reads (`m_keys[17..=24]`, the
+    /// codes `VIKeyboard::Read` gives the cursor block: 17 left, 18 right,
+    /// 19 up, 20 down, 21 page up, 22 page down, 23 end, 24 home), held or
+    /// not: Home and End orbit the follow camera, Page Up and Page Down pitch
+    /// or zoom. The arrows, which walk and turn in the game, stay 0: here
+    /// WASD walks and the arrows are the quick menus' d-pad (the user's
+    /// choice, 2026-10-20; the game has W/S/A/D on the quick menus).
+    fn game_keys(&self) -> [f32; 8] {
+        if self.play.as_ref().is_some_and(|p| p.is_dead()) {
+            return [0.0; 8];
+        }
+        let h = |k: &str| self.held.contains(k) as i32 as f32;
+        [0.0, 0.0, 0.0, 0.0, h("pageup"), h("pagedown"), h("end"), h("home")]
+    }
+
+    /// The walker's controls from the held keys (a pad's sticks): W/S
+    /// forward, A/D strafe, the client's own; I/J/K/L a right stick (orbit
+    /// and zoom), which the game's keyboard leaves free (its own camera keys
+    /// are Home, End, Page Up and Page Down, `game_keys`).
     fn controls(&self) -> Controls {
         // dead: `UpdateControls` is not run
         if self.play.as_ref().is_some_and(|p| p.is_dead()) {
@@ -1262,8 +1300,7 @@ impl App {
             return segs.iter().find(|s| t <= s.1).map_or(Controls::default(), |s| s.0);
         }
         let k = |a: &str, b: &str| self.held.contains(a) as i32 as f32 - self.held.contains(b) as i32 as f32;
-        let either = |x: f32, y: f32| if x != 0.0 { x } else { y };
-        Controls { fwd: k("w", "s"), strafe: k("d", "a"), orbit: either(k("right", "left"), k("l", "j")), pitch: either(k("down", "up"), k("k", "i")) }
+        Controls { fwd: k("w", "s"), strafe: k("d", "a"), orbit: k("l", "j"), pitch: k("k", "i") }
     }
 
     /// The pad, once a frame: every source as libpad's one port
@@ -1311,7 +1348,7 @@ impl App {
         let dead = self.play.as_ref().is_some_and(|p| p.is_dead());
         let free = !dead && self.play.as_ref().is_none_or(|p| p.look_free());
         let inverted = self.play.as_ref().is_some_and(|p| p.options.inverted != 0);
-        let (look, feel) = match self.walker.as_mut() {
+        let ((look, zoom), feel) = match self.walker.as_mut() {
             Some(w) if free => (self.mouse.look(w, inverted), crate::mouse::look(w, tx, ty, pinch, inverted)),
             _ => {
                 // a window up: the wheel and a finger's drag are its up and down
@@ -1321,9 +1358,13 @@ impl App {
                 if let Some(p) = self.play.as_mut() {
                     p.window_wheel(lines);
                 }
-                ([0.0; 2], [0.0; 2])
+                (([0.0; 2], crate::mouse::Zoom::None), [0.0; 2])
             }
         };
+        // the wheel past the closest zoom: first person, and back
+        if let (Some(p), Some(w)) = (self.play.as_mut(), self.walker.as_mut()) {
+            p.wheel_style(w, zoom, &mut self.mouse.back);
+        }
         if dead {
             return a;
         }
@@ -1432,6 +1473,8 @@ impl App {
                 c.dist.0,
                 c.flags
             );
+            let cam = &w.cam;
+            let _ = writeln!(o, "camera: distance {:.2} of {:.2}, pitch {:.3} (default {:.3})", cam.cur.dist.0, cam.max_orbit_distance.0, cam.cur.orbit.y.0, cam.def_orbit_pitch.0);
         }
         if let Some(e) = &self.entering {
             let _ = writeln!(o, "entering {} at {:?}", e.0, e.1);
@@ -1568,6 +1611,14 @@ impl ApplicationHandler for App {
                     if let Some(p) = self.play.as_mut() {
                         p.keyboard = true;
                     }
+                }
+                // a key let go is let go of, whichever window takes the
+                // event: an arrow held to walk and let go over the start
+                // menu would walk on after it
+                if event.state == ElementState::Released
+                    && let Some(n) = held_name(&event.logical_key)
+                {
+                    self.held.remove(&n);
                 }
                 // The edit box (mode 2) takes the keyboard: characters type,
                 // Backspace, Escape (cancel), Enter (done), the arrows move the
@@ -1941,8 +1992,29 @@ impl ApplicationHandler for App {
                             return;
                         }
                         // Q: InteractWithTarget.
-                        (None, Key::Character(c)) if c.eq_ignore_ascii_case("q") => {
+                        (None, Key::Character(c)) if p.mode == 0 && c.eq_ignore_ascii_case("q") => {
                             p.interact_with_target();
+                            return;
+                        }
+                        // ` and ~ (96, 126): L1's cycle, the player, the
+                        // group, the pet (`CycleTarget(1)`).
+                        (None, Key::Character(c)) if p.mode == 0 && (c.as_str() == "`" || c.as_str() == "~") => {
+                            if let (Some(w), Some(g)) = (self.walker.as_ref(), self.gfx.as_ref()) {
+                                let (proj, v) = w.view(g.config.width as f32 / g.config.height as f32);
+                                let dir = Vec3::from(w.eye.direction.to_array());
+                                p.cycle_target(true, w.eye_position(), dir, proj * v);
+                            }
+                            return;
+                        }
+                        // X (88, 120): autorun (`ToggleP74`), as L3.
+                        (None, Key::Character(c)) if p.mode == 0 && c.eq_ignore_ascii_case("x") => {
+                            p.toggle_autorun();
+                            return;
+                        }
+                        // 1 to 6: `SelectTarget`, the player, the group's
+                        // others, the pet.
+                        (None, Key::Character(c)) if p.mode == 0 && matches!(c.as_str(), "1" | "2" | "3" | "4" | "5" | "6") => {
+                            p.select_target(c.as_bytes()[0] as i32 - 48);
                             return;
                         }
                         // P: InitCameraStyle (first person and back).
@@ -1992,6 +2064,26 @@ impl ApplicationHandler for App {
                 if self.play.as_ref().is_some_and(|p| p.typing.is_some()) {
                     return;
                 }
+                // C (67, 99) held: the chat box's history, as R2 holds it
+                // (mode 33), its up and down the arrows (19, 20); let go,
+                // play again (`OnKeyDown`/`OnKeyUp` 67, `VIWndChat`).
+                if let Some(p) = self.play.as_mut()
+                    && (p.mode == 0 || p.mode == 33)
+                {
+                    let down = event.state == ElementState::Pressed;
+                    let k = match &event.logical_key {
+                        Key::Character(c) if c.eq_ignore_ascii_case("c") => Some(99),
+                        Key::Named(NamedKey::ArrowUp) if p.mode == 33 => Some(19),
+                        Key::Named(NamedKey::ArrowDown) if p.mode == 33 => Some(20),
+                        _ => None,
+                    };
+                    if let Some(k) = k
+                        && !(down && event.repeat)
+                    {
+                        p.chat_history_key(k, down);
+                        return;
+                    }
+                }
                 // Q released: the target's info window closes (`OnKeyUp` 81).
                 if let (Some(p), Key::Character(c)) = (self.play.as_mut(), &event.logical_key)
                     && c.eq_ignore_ascii_case("q")
@@ -2002,17 +2094,18 @@ impl ApplicationHandler for App {
                 }
                 // Space: attack, held (`ToggleAutoAttack` / `MaybeStopAutoAttack`).
                 if let (Some(p), Key::Named(NamedKey::Space)) = (self.play.as_mut(), &event.logical_key) {
-                    if event.state == ElementState::Pressed && !event.repeat {
+                    if event.state == ElementState::Pressed && !event.repeat && p.mode == 0 {
                         p.attack_press();
                     } else if event.state == ElementState::Released {
                         p.attack_release();
                     }
                     return;
                 }
-                // The d-pad (arrows) and X (E) in play: the HUD's quick menus
-                // (`VIWndHUDMenu`: up/down the selection, left/right the menu,
-                // E uses it). The camera is on I/J/K/L then, a keyboard's
-                // right stick.
+                // The HUD's quick menus in play on the arrows, the d-pad
+                // (`VIWndHUDMenu`: up and down the selection, left and right
+                // the menu), and E uses it (as circle). The game's keyboard
+                // has them on W/S and A/D and walks on the arrows; here WASD
+                // walks (`controls`), the user's choice.
                 if let Some(p) = self.play.as_mut()
                     && p.mode == 0
                 {
@@ -2054,21 +2147,14 @@ impl ApplicationHandler for App {
                 if event.state == ElementState::Pressed
                     && event.logical_key == Key::Named(NamedKey::Tab)
                     && let (Some(p), Some(w), Some(g)) = (self.play.as_mut(), self.walker.as_ref(), self.gfx.as_ref())
+                    && p.mode == 0
                 {
                     let (proj, v) = w.view(g.config.width as f32 / g.config.height as f32);
                     let dir = Vec3::from(w.eye.direction.to_array());
                     p.cycle_target(false, w.eye_position(), dir, proj * v);
                     return;
                 }
-                let name = match &event.logical_key {
-                    Key::Named(NamedKey::Shift) => Some("shift".to_string()),
-                    Key::Named(NamedKey::ArrowLeft) => Some("left".to_string()),
-                    Key::Named(NamedKey::ArrowRight) => Some("right".to_string()),
-                    Key::Named(NamedKey::ArrowUp) => Some("up".to_string()),
-                    Key::Named(NamedKey::ArrowDown) => Some("down".to_string()),
-                    Key::Character(c) => Some(c.to_lowercase()),
-                    _ => None,
-                };
+                let name = held_name(&event.logical_key);
                 if event.state == ElementState::Pressed {
                     match event.logical_key {
                         Key::Named(NamedKey::Escape) => el.exit(),
@@ -2196,6 +2282,7 @@ impl ApplicationHandler for App {
                 mark(&mut self.perf, 0);
                 let sticks = self.sticks();
                 self.sticks_used = sticks;
+                let game_keys = self.game_keys();
                 let now = self.clock.elapsed().as_millis() as i64;
                 let Some(g) = &mut self.gfx else { return };
                 let body_at = self.body_at;
@@ -2214,8 +2301,10 @@ impl ApplicationHandler for App {
                 let console = &mut self.console;
                 let pads = &mut self.pads;
                 let walk_view = self.walker.as_mut().map(|w| {
-                    // UpdateControls, on the sticks, as the client stands
-                    let client = play.as_ref().filter(|p| !p.is_dead()).map(|p| p.control_client()).unwrap_or_default();
+                    // UpdateControls, on the sticks and the keyboard's axes,
+                    // as the client stands
+                    let mut client = play.as_ref().filter(|p| !p.is_dead()).map(|p| p.control_client()).unwrap_or_default();
+                    client.keys = game_keys;
                     if w.frame_with(sticks, now, &client)
                         && let Some(p) = play.as_mut()
                     {
