@@ -153,8 +153,12 @@ fn dist(a: [f32; 2], b: [f32; 2]) -> f32 {
 #[derive(Default)]
 pub struct TouchPad {
     fingers: Vec<Finger>,
-    /// drawn, and a source on the port
+    /// drawn, and its fingers read
     pub shown: bool,
+    /// shown at least once: from then on it stays a source on the port,
+    /// hidden or not, as a pad left plugged in does (else a key that hides
+    /// it unplugs it, and the game says the controller was disconnected)
+    pub used: bool,
     /// the looking fingers' drag since the last frame, and the pinch (in
     /// the wheel's lines)
     look: [f32; 2],
@@ -169,12 +173,13 @@ pub struct TouchPad {
 impl TouchPad {
     /// A pad, shown from the start or from the first touch.
     pub fn new(shown: bool) -> Self {
-        TouchPad { shown, ..Default::default() }
+        TouchPad { shown, used: shown, ..Default::default() }
     }
 
     /// A finger's event in a `size` window, at window pixels `at`.
     pub fn touch(&mut self, id: u64, phase: Phase, at: [f32; 2], now: Instant, size: (u32, u32)) {
         self.shown = true;
+        self.used = true;
         self.size = size;
         let l = layout(size);
         match phase {
@@ -413,6 +418,20 @@ mod tests {
         p.touch(2, Phase::Ended, c, t, SIZE);
         assert_eq!(p.report(), Report::default());
         assert!(p.take_clicks().is_empty(), "neither was a tap");
+    }
+
+    #[test]
+    fn hidden_it_lets_go_of_every_finger_but_stays_used() {
+        let t = Instant::now();
+        let l = layout(SIZE);
+        let mut p = TouchPad::new(false);
+        assert!(!p.used, "never touched: no source");
+        let cross = l.buttons.iter().find(|b| b.bit == bit::CROSS).unwrap().at;
+        p.touch(1, Phase::Started, cross, t, SIZE);
+        assert_eq!(p.report().buttons, bit::CROSS);
+        p.hide();
+        assert_eq!((p.shown, p.used, p.report()), (false, true, Report::default()));
+        assert!(TouchPad::new(true).used, "shown from the start: a source at once");
     }
 
     #[test]

@@ -367,12 +367,10 @@ pub fn shot_with(
                 touch.touch(99, crate::touch::Phase::Started, [x as f32, y as f32], Instant::now(), (w, h));
                 touch.touch(99, crate::touch::Phase::Ended, [x as f32, y as f32], Instant::now(), (w, h));
             }
-            if pad_script.is_some() || touch.shown {
+            if pad_script.is_some() || touch.used {
                 let dead = play.as_ref().is_some_and(|p| p.is_dead());
                 let mut report = pad_script.as_ref().map_or_else(Default::default, |s| s.at(t));
-                if touch.shown {
-                    report.merge(&touch.report());
-                }
+                report.merge(&touch.report());
                 let keys = console.poll(report, true, false, dead);
                 if let Some(p) = play.as_mut() {
                     p.pad_mode(console.mode());
@@ -1246,7 +1244,7 @@ impl App {
             report.merge(&s.at(self.clock.elapsed().as_millis() as i64));
             connected = true;
         }
-        if self.touch.shown {
+        if self.touch.used {
             report.merge(&self.touch.report());
             connected = true;
         }
