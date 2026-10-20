@@ -731,7 +731,7 @@ pub fn shot_with(
                         }
                         Err(e) => eprintln!("world change to {file}: {e}"),
                     }
-                    p.world_entered();
+                    p.world_entered(&mut walker);
                 }
                 std::thread::sleep(std::time::Duration::from_millis(16));
             }
@@ -2087,8 +2087,8 @@ impl ApplicationHandler for App {
                             crate::web::problem("world", &format!("The world change to {file} failed: {e}"));
                         }
                     }
-                    if let Some(p) = self.play.as_mut() {
-                        p.world_entered();
+                    if let (Some(p), Some(w)) = (self.play.as_mut(), self.walker.as_mut()) {
+                        p.world_entered(w);
                     }
                 }
                 self.fly();
