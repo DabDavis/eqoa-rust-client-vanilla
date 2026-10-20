@@ -61,6 +61,8 @@ pub fn lit(
     let rgb = |c: [F<Ee>; 3]| Vec3::new(c[0].0, c[1].0, c[2].0);
     let mut v = View {
         view_proj,
+        // the camera, which the models are drawn relative to
+        eye: view.inverse().w_axis.truncate(),
         sun_dir: Vec3::from(dir.to_array()),
         sun: rgb(sun),
         ambient: rgb(amb),
@@ -2061,6 +2063,17 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                // A page on WebGL2 draws at most 30 frames a second
+                // (`web::frame_due`): an animation frame before the next is
+                // due is skipped whole, the game included, so its clocks see
+                // longer frames rather than fewer ticks.
+                #[cfg(target_arch = "wasm32")]
+                if !crate::web::frame_due() {
+                    if let Some(g) = &self.gfx {
+                        g.window.request_redraw();
+                    }
+                    return;
+                }
                 FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let frame_start = Instant::now();
                 if let Some(p) = &mut self.perf {
