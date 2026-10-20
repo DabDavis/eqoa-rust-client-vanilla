@@ -12,7 +12,9 @@ page's console, and screenshots it.
 
 --shot SECONDS=FILE.png screenshots that long after the button (repeatable);
 --until TEXT exits 0 once a console line has it; --keys SECONDS=KEYS holds
-keys for a while (w, a, s, d, ArrowLeft...: 'w:2000' holds w for 2 s);
+keys for a while (w, a, s, d, ArrowLeft...: 'w:2000' holds w for 2 s; 'w:down'
+and 'w:up' press it and let it go apart, the canvas focused only for the press,
+so a --js between them can move the focus: a key let go elsewhere);
 --js SECONDS=EXPR evaluates EXPR in the page then (the character screens:
 "document.querySelector('#charlist button.primary').click()"), its value
 printed. --new-account makes the account first (the page's New account tab).
@@ -297,12 +299,16 @@ async def drive(a, base, ws_url):
                 await call("Emulation.setDeviceMetricsOverride", width=w, height=h, deviceScaleFactor=a.scale, mobile=False)
                 out(f"resized to {w}x{h}")
             else:
-                await js("document.getElementById('eqoa').focus()")
                 for part in arg.split(","):
                     k, ms = part.split(":")
-                    await key(k, True)
-                    await asyncio.sleep(int(ms) / 1000)
-                    await key(k, False)
+                    if ms != "up":
+                        await js("document.getElementById('eqoa').focus()")
+                        await key(k, True)
+                    if ms not in ("down", "up"):
+                        await asyncio.sleep(int(ms) / 1000)
+                    if ms != "down":
+                        await key(k, False)
+                    out(f"keys {part}")
         while time.monotonic() < deadline and not until.is_set() and a.until:
             await asyncio.sleep(0.1)
         if a.final_shot:
