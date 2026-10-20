@@ -620,9 +620,19 @@ impl Play {
         self.session.self_id.map(|s| s as u32)
     }
 
+    /// What play reads out of CLIENT's image: the start menu (its menus and
+    /// `gWorldInfo`'s bounds) and the race cameras.
+    pub fn client_data(&mut self, img: &crate::client_image::ClientImage) {
+        self.start = Some(crate::startmenu::StartData::from_image(img));
+        self.race_cams = Some(crate::camstyle::race_cameras(img));
+    }
+
     /// One frame. Returns the player's model when the server has just named
     /// a different one (the caller re-dresses the walker).
     pub fn frame(&mut self, walker: &mut Walker, lib: &Library, mut g: Gpu, game_ms: i64, mut sound: Option<&mut crate::sound::Sound>) -> Option<u32> {
+        if let Some(img) = crate::client_image::arrived() {
+            self.client_data(&img);
+        }
         let now = self.session.now();
         let mut new_model = None;
         for e in self.session.pump() {

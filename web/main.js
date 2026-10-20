@@ -16,6 +16,15 @@ const $ = (id) => document.getElementById(id);
 const status = (t) => { $('status').textContent = t; };
 window.eqoaStatus = status;
 
+// The client's wasm, compiled once: the page runs it, and so does the worker
+// that unpacks CLIENT off the disc (unpack.js), from the same compiled module.
+const wasmModule = fetch(new URL('eqoa_bg.wasm', import.meta.url)).then((r) => {
+  if (!r.ok) throw new Error(`the client did not load (${r.status})`);
+  return (r.headers.get('Content-Type') || '').startsWith('application/wasm')
+    ? WebAssembly.compileStreaming(r)
+    : r.arrayBuffer().then((b) => WebAssembly.compile(b));
+});
+
 const params = new URLSearchParams(location.search);
 const store = {
   get(k) { try { return localStorage.getItem('eqoa.' + k) || ''; } catch { return ''; } },
@@ -298,5 +307,64 @@ $('create').addEventListener('submit', (ev) => {
 
 $('eqoa').addEventListener('pointerdown', () => $('eqoa').focus());
 
+// ---- a DNAS module off the disc (CLIENT, for the start menu): unpacked by
+// the disc's own library in a worker (unpack.js), and kept in this origin's
+// private storage under the SHA-256 of what went in, so a later visit reads
+// it back instead of unpacking it again.
+
+async function cacheName(name, util, aut) {
+  if (!crypto.subtle) return null; // not a secure context: no cache
+  const both = new Uint8Array(util.length + aut.length);
+  both.set(util);
+  both.set(aut, util.length);
+  const h = new Uint8Array(await crypto.subtle.digest('SHA-256', both));
+  return `${name}-${Array.from(h, (b) => b.toString(16).padStart(2, '0')).join('')}.snr1`;
+}
+
+async function cacheDir() {
+  return (await navigator.storage.getDirectory()).getDirectoryHandle('dnas', { create: true });
+}
+
+async function cached(file) {
+  const f = await (await (await cacheDir()).getFileHandle(file)).getFile();
+  const b = new Uint8Array(await f.arrayBuffer());
+  // an SNR1 module, not a write that never finished
+  return b.length > 4 && b[0] === 0x53 && b[1] === 0x4e && b[2] === 0x52 && b[3] === 0x31 ? b : null;
+}
+
+async function keep(file, b) {
+  const w = await (await (await cacheDir()).getFileHandle(file, { create: true })).createWritable();
+  await w.write(b);
+  await w.close();
+}
+
+function unpackInWorker(util, aut) {
+  return new Promise((resolve, reject) => {
+    const w = new Worker(new URL('unpack.js', import.meta.url), { type: 'module' });
+    w.onmessage = ({ data }) => {
+      w.terminate();
+      if (data.error) reject(new Error(data.error));
+      else resolve(data.out);
+    };
+    w.onerror = (e) => {
+      w.terminate();
+      reject(new Error(e.message || 'the unpacking worker failed'));
+    };
+    wasmModule.then((module) => w.postMessage({ module, util, aut }, [util.buffer, aut.buffer]), reject);
+  });
+}
+
+// (name, UTIL.REL, the .AUT) -> the module; the client calls it (web::unpack_client).
+window.eqoaUnpack = async (name, util, aut) => {
+  const file = await cacheName(name, util, aut).catch(() => null);
+  if (file) {
+    const hit = await cached(file).catch(() => null);
+    if (hit) return hit;
+  }
+  const out = await unpackInWorker(util, aut);
+  if (file) keep(file, out).catch(() => { /* no storage here: unpacked again next time */ });
+  return out;
+};
+
 setMode('login');
-init().then(() => status('ready')).catch((e) => status('could not load the client: ' + e));
+init({ module_or_path: wasmModule }).then(() => status('ready')).catch((e) => status('could not load the client: ' + e));

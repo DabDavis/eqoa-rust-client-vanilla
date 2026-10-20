@@ -310,10 +310,10 @@ fn run(args: &[String]) -> Result<()> {
             // The start menu's definitions are CLIENT's data: out of the
             // decrypted image (EQOA_CLIENT, else run/client.bin).
             let client = std::env::var("EQOA_CLIENT").unwrap_or_else(|_| "run/client.bin".into());
-            play.start = startmenu::StartData::load(std::path::Path::new(&client));
-            play.race_cams = client_image::ClientImage::open(std::path::Path::new(&client)).map(|img| camstyle::race_cameras(&img));
-            if play.start.is_none() {
-                eprintln!("no start menu: it needs a decrypted CLIENT image at {client} (EQOA_CLIENT)");
+            match client_image::ClientImage::open(std::path::Path::new(&client)) {
+                Some(img) if img.is_frontiers() => play.client_data(&img),
+                Some(_) => eprintln!("no start menu: {client} is not the Frontiers CLIENT"),
+                None => eprintln!("no start menu: it needs a decrypted CLIENT image at {client} (EQOA_CLIENT)"),
             }
             let play = Some(play);
             if args[0] == "playshot" {

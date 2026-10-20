@@ -662,13 +662,12 @@ pub struct StartData {
 }
 
 impl StartData {
-    pub fn load(path: &std::path::Path) -> Option<Self> {
-        let img = crate::client_image::ClientImage::open(path)?;
+    pub fn from_image(img: &crate::client_image::ClientImage) -> Self {
         let mut menus = Menus::default();
         // (entries, count) of gStartItems, X, Bank, BankX
         let roots = [(0x00CCFFF0, 0x00CD0130), (0x00CCFD40, 0x00CCFE80), (0x00CD0138, 0x00CD0298), (0x00CCFE88, 0x00CCFFE8)];
-        let tables = roots.map(|(e, c)| menus.table(&img, e + 32, img.i32_at(c) - 1));
-        let bounds = std::array::from_fn(|w| crate::client_image::world_bounds(&img, w as i32));
+        let tables = roots.map(|(e, c)| menus.table(img, e + 32, img.i32_at(c) - 1));
+        let bounds = std::array::from_fn(|w| crate::client_image::world_bounds(img, w as i32));
         let menu = StartMenu::new(tables[0]);
         // gEquipMenu is set up by vimenudefs.cpp's static initialiser (its
         // icon is a hashed name), so the image holds no count: 40 there
@@ -676,9 +675,9 @@ impl StartData {
         item_counts[3] = 40;
         let attack_words = (0..11u32).map(|k| (img.i32_at(0x00CDF6A0 + 8 * k), img.i32_at(0x00CDF6A4 + 8 * k) as i64)).collect();
         let slot_words = (0..23u32).map(|k| (img.i32_at(0x00CDF6F8 + 8 * k), img.i32_at(0x00CDF6FC + 8 * k) as i64)).collect();
-        let buddy_menu = menus.def(&img, 0x00CD03B0);
-                let ignore_menu = menus.def(&img, 0x00CD0340);
-        Some(StartData { menus, tables, bounds, item_counts, attack_words, slot_words, buddy_menu, ignore_menu, menu })
+        let buddy_menu = menus.def(img, 0x00CD03B0);
+        let ignore_menu = menus.def(img, 0x00CD0340);
+        StartData { menus, tables, bounds, item_counts, attack_words, slot_words, buddy_menu, ignore_menu, menu }
     }
 
     /// `OpenStartMenu`'s table: the bank's when a banker is in range, the
@@ -718,10 +717,12 @@ mod tests {
     #[test]
     fn the_start_tables_read_out_of_client() {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/client.bin");
-        let Some(mut d) = StartData::load(&path) else {
+        let Some(img) = crate::client_image::ClientImage::open(&path) else {
             eprintln!("SKIP: no run/client.bin");
             return;
         };
+        assert!(img.is_frontiers());
+        let mut d = StartData::from_image(&img);
         for (bank, x) in [(false, 0), (false, 2), (true, 0), (true, 2)] {
             d.pick(bank, x);
             let m = &d.menus.list[d.menu.main.menu];

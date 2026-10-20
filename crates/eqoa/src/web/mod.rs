@@ -12,6 +12,11 @@
 //! answers through the exports `choose_character`, `create_character`,
 //! `delete_character` and `random_name` (the game's `SelectCharacter`,
 //! `CreateCharacter`, `DeleteCharacter` and `Send0012`).
+//!
+//! The start menu reads CLIENT's data, which the disc holds only encrypted:
+//! the page's worker (`web/unpack.js`) runs this same module's
+//! `unpack_module` on it, the disc's own DNAS library in crate `dnas`, while
+//! the session goes on (`unpack_client`).
 
 mod disc;
 mod relay;
@@ -199,6 +204,52 @@ pub async fn view(file: web_sys::File, args: String) -> Result<(), JsValue> {
     }
     .await;
     r.map_err(js)
+}
+
+/// One of the disc's DNAS modules unpacked by the disc's own library
+/// (`dnas::unpack`): `UTIL.REL` and the `.AUT` in, the un-relocated SNR1
+/// module out. For the page's worker (`web/unpack.js`); ~300M interpreted
+/// instructions, so never on the page's own thread.
+#[wasm_bindgen]
+pub fn unpack_module(util: &[u8], aut: &[u8]) -> Result<Vec<u8>, JsValue> {
+    dnas::unpack(util, aut).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+/// CLIENT's image for the start menu: `UTIL.REL` and `CLIENT.AUT` read off
+/// the disc here, unpacked by the page (`window.eqoaUnpack`: a worker, and
+/// the page's own cache of what it unpacked before) while the session goes
+/// on, and handed to play when it comes (`client_image::arrive`).
+async fn unpack_client(disc: &WebDisc) {
+    let files = async { Ok::<_, String>((disc.read("UTIL.REL").await?, disc.read("CLIENT.AUT").await?)) }.await;
+    let (util, aut) = match files {
+        Ok(f) => f,
+        Err(e) => return log(&format!("no start menu: {e}")),
+    };
+    wasm_bindgen_futures::spawn_local(async move {
+        let t = web_time::Instant::now();
+        let r = async {
+            let w = web_sys::window().ok_or("no window")?;
+            let f = js_sys::Reflect::get(&w, &"eqoaUnpack".into()).ok().and_then(|f| f.dyn_into::<js_sys::Function>().ok()).ok_or("the page has no eqoaUnpack")?;
+            let p = f.call3(&JsValue::NULL, &"CLIENT".into(), &js_sys::Uint8Array::from(&util[..]), &js_sys::Uint8Array::from(&aut[..])).map_err(err)?;
+            let v = wasm_bindgen_futures::JsFuture::from(js_sys::Promise::resolve(&p)).await.map_err(err)?;
+            Ok::<_, String>(js_sys::Uint8Array::new(&v).to_vec())
+        }
+        .await;
+        match r.map(crate::client_image::ClientImage::from_bytes) {
+            Ok(Some(img)) if img.is_frontiers() => {
+                log(&format!("CLIENT's image in {:.1} s (unpacked off the disc, or the page's copy from before): the start menu is in", t.elapsed().as_secs_f64()));
+                crate::client_image::arrive(img);
+            }
+            Ok(Some(_)) => log("no start menu: this disc's CLIENT is not the Frontiers one"),
+            Ok(None) => log("no start menu: what came back is not an SNR1 module"),
+            Err(e) => log(&format!("no start menu: {e}")),
+        }
+    });
+}
+
+/// A thrown value as text.
+fn err(e: JsValue) -> String {
+    e.dyn_ref::<js_sys::Error>().map(|e| String::from(e.message())).or_else(|| e.as_string()).unwrap_or_else(|| format!("{e:?}"))
 }
 
 /// What `opts` names (`relay`, `server`, `authPort`, `gamePort`, `character`).
@@ -390,6 +441,7 @@ pub async fn play(file: web_sys::File, user: String, password: String, opts: JsV
         status("reading the disc");
         let mut disc = WebDisc::open(file).await?;
         crate::stream::set_source_factory(disc.zone_sources());
+        unpack_client(&disc).await;
         // What every world needs, before the session starts its clock.
         let mut common = Vec::new();
         for name in ["CHAR.ESF", "ITEM.ESF", "ARIAL.CSF", "UI.CSF", "ARIALUI.CSF", "ITEMICON.ESF", "SPELLFX.CSF", "FX.CSF", "ADDART.CSF"] {

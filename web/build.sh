@@ -18,5 +18,5 @@ if [ -n "$OPT" ]; then
     "$OPT" -O2 --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext --enable-mutable-globals \
         --enable-reference-types --enable-multivalue web/dist/eqoa_bg.wasm -o web/dist/eqoa_bg.wasm
 fi
-cp web/index.html web/main.js web/dist/
+cp web/index.html web/main.js web/unpack.js web/dist/
 ls -la web/dist

@@ -1,11 +1,13 @@
 //! CLIENT's data, read out of the player's decrypted CLIENT image
-//! (`run/client.bin`, untracked, as `run/support.bin` is SUPPORT's): the menu
-//! definitions the decomp leaves `extern` (eqoa-port's gendata reads the same
-//! roots, `data/client.txt`) and `gWorldInfo`. Addresses are the decomp's
-//! (CLIENT at 0x00BB4980); a pointer word is resolved through the image's
-//! SNR1 relocation table (`R_WORD`, no import), as gendata does. Nothing read
+//! (`run/client.bin`, untracked, as `run/support.bin` is SUPPORT's; in a
+//! page, unpacked off the disc by crate `dnas`): the menu definitions the
+//! decomp leaves `extern` (eqoa-port's gendata reads the same roots,
+//! `data/client.txt`) and `gWorldInfo`. Addresses are the decomp's (CLIENT
+//! at 0x00BB4980); a pointer word is resolved through the image's SNR1
+//! relocation table (`R_WORD`, no import), as gendata does. Nothing read
 //! here is committed.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 /// Where the decomp's CLIENT addresses put the image.
@@ -20,7 +22,11 @@ pub struct ClientImage {
 
 impl ClientImage {
     pub fn open(path: &std::path::Path) -> Option<Self> {
-        let data = std::fs::read(path).ok()?;
+        Self::from_bytes(std::fs::read(path).ok()?)
+    }
+
+    /// An un-relocated SNR1 image, as `VILauncher::UnpackAndVerify` leaves it.
+    pub fn from_bytes(data: Vec<u8>) -> Option<Self> {
         if data.get(0..4)? != b"SNR1" {
             return None;
         }
@@ -37,6 +43,13 @@ impl ClientImage {
         Some(ClientImage { data, words })
     }
 
+    /// Whether this is the Frontiers CLIENT these addresses are read from
+    /// (another build keeps its data elsewhere): `gStartItems` begins with
+    /// the "TEST" entry (word 143) and counts its entries sanely.
+    pub fn is_frontiers(&self) -> bool {
+        self.i32_at(0x00CCFFF0 + 12) == 143 && (2..=64).contains(&self.i32_at(0x00CD0130))
+    }
+
     pub fn i32_at(&self, va: u32) -> i32 {
         let o = va.wrapping_sub(BASE) as usize;
         self.data.get(o..o + 4).map_or(0, |b| i32::from_le_bytes(b.try_into().unwrap()))
@@ -47,6 +60,24 @@ impl ClientImage {
     pub fn ptr_at(&self, va: u32) -> Option<u32> {
         self.words.get(&va.wrapping_sub(BASE)).map(|t| t + BASE)
     }
+}
+
+thread_local! {
+    /// An image that comes after play began: a page unpacks CLIENT off the
+    /// disc in a worker (`web::unpack_client`), and play takes it up on its
+    /// next frame (`Play::client_data`).
+    static ARRIVED: RefCell<Option<ClientImage>> = const { RefCell::new(None) };
+}
+
+/// Hands play an image from elsewhere, for its next frame.
+#[cfg(target_arch = "wasm32")]
+pub fn arrive(img: ClientImage) {
+    ARRIVED.with(|a| *a.borrow_mut() = Some(img));
+}
+
+/// The image that has come, once.
+pub fn arrived() -> Option<ClientImage> {
+    ARRIVED.with(|a| a.borrow_mut().take())
 }
 
 /// `VIMenuEntry`, its sub-menu as an index into `Menus`.
