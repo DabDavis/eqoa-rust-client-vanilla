@@ -13,12 +13,19 @@
 //! 32) and `VIWndReadCS` (`Read`, the inbox's reader). Each draws a status
 //! window while the client waits, and acts when it is free again on what it
 //! saw it wait for.
+//!
+//! A pointer (`pointer`) goes where the keys go: the editor's soft keyboard,
+//! the box's buttons, a category picker's line (taken at once; off the
+//! picker, △ closes it), the reader's option list; else a field of the form
+//! or a row of the inbox is selected and the selected one used (✕). Nothing
+//! a pad cannot do: not while the client waits, not a reply's category.
 
 #![allow(clippy::too_many_arguments)]
 
 use crate::dialog::{BoxAnswer, MBox};
 use crate::editbox::{EditBox, EditUp};
-use crate::gram::{Date, Dots, box_key, capped, edit_field, word};
+use crate::gram::{Date, Dots, box_key, capped, edit_field, field_click, word};
+use crate::pointer::{Hits, key, rows_rect};
 use crate::wholist::OptionList;
 use net::stream::{Reader, Writer};
 use vi::ui::{Raster, UI_COLORS, Vui, Window, wide};
@@ -409,6 +416,13 @@ pub struct Request {
     mbox: MBox,
     mbox_up: bool,
     dots: Dots,
+    /// the fields drawn (Category, Subcategory, the text, Submit) and the
+    /// picker's (its window -1, its lines by index), for a pointer; the
+    /// frame's time; the client busy (the fields take no keys then)
+    hits: Hits,
+    pick_hits: Hits,
+    time: i64,
+    busy: bool,
 }
 
 impl Request {
@@ -443,7 +457,48 @@ impl Request {
             mbox,
             mbox_up: false,
             dots: Dots::default(),
+            hits: Hits::default(),
+            pick_hits: Hits::default(),
+            time: 0,
+            busy: false,
         }
+    }
+
+    /// A pointer at frame point `p`, where the keys go: the editor's soft
+    /// keyboard, the box's buttons; a picker open, its line taken at once
+    /// (off the picker, △ closes it); else, the client free, a field the
+    /// form can reach selected as up and down select it (a reply's starts
+    /// at its text), and the selected one used (✕). The keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        if self.editing {
+            return self.edit.point(p).flatten().into_iter().collect();
+        }
+        if self.mbox_up {
+            return self.mbox.point(p).then_some(key::CROSS).into_iter().collect();
+        }
+        if self.picking || self.picking_sub {
+            // a picker still opening takes no keys
+            if !self.list.is_open() {
+                return Vec::new();
+            }
+            return match self.pick_hits.at(p) {
+                Some(-1) => Vec::new(),
+                Some(i) => {
+                    if self.picking {
+                        self.cat_sel = i;
+                    } else {
+                        self.sub_sel = i;
+                    }
+                    vec![key::CROSS]
+                }
+                None => vec![key::TRIANGLE],
+            };
+        }
+        if self.busy {
+            return Vec::new();
+        }
+        let first = if self.reply { 2 } else { 0 };
+        field_click(&mut self.sel, &mut self.window, self.time, self.hits.at(p).filter(|&f| f >= first))
     }
 
     /// 295, the focus from elsewhere: the windows, and everything emptied.
@@ -723,6 +778,8 @@ impl Request {
     fn draw_list(&mut self, vui: &Vui, r: &mut dyn Raster, cs: &CsClient) -> bool {
         self.list.init(vui, r, [320, 180], 330, 10, 0);
         self.list.draw(vui, r);
+        let (tl, br) = (self.list.top_left(), self.list.bottom_right());
+        self.pick_hits.push([tl[0], tl[1], br[0], br[1]], -1);
         self.list.is_open() && cs.state == 0
     }
 
@@ -739,6 +796,7 @@ impl Request {
         self.list.draw_frame_vscroll(vui, r, 25, 1, w - 60, 7, t);
         for i in self.x4cc..(self.x4cc + 7).min(n) {
             let row = i - self.x4cc + 1;
+            self.pick_hits.push(rows_rect(&self.list, vui, r, 42, row, 250, 1), i);
             self.list.text_box(vui, r, &names[i as usize], 42, row, 250, 1, UI_COLORS[(sel == i) as usize], 2);
             if sel == i {
                 self.list.tick_r(vui, r, 40, row, true);
@@ -767,6 +825,12 @@ impl Request {
         self.window.text(vui, r, &wide(&legend), 40, 13, c(false), 0);
         if (0..4).contains(&self.sel) {
             self.window.tick_r(vui, r, 36, [1, 3, 5, 11][self.sel as usize], !picking);
+        }
+        self.time = now;
+        self.hits.clear();
+        self.pick_hits.clear();
+        for (field, row, rows) in [(0, 1, 1), (1, 3, 1), (2, 5, 5), (3, 11, 1)] {
+            self.hits.push(rows_rect(&self.window, vui, r, 40, row, w - 80, rows), field);
         }
         // the categories offered: the client's, less the hidden ones
         self.cat_ids = cs.categories.iter().filter(|c| !c.hidden).map(|c| c.id).collect();
@@ -824,6 +888,8 @@ impl Request {
         if self.mbox_up {
             self.mbox.draw(vui, r, now);
         }
+        // what the next keys will find (a request may have gone out above)
+        self.busy = cs.state != 0;
         up
     }
 }
@@ -1026,6 +1092,23 @@ impl Read {
         self.request.visible && self.request.typing()
     }
 
+    /// A pointer at frame point `p`, where the keys go: the reply form, the
+    /// option list (a line taken at once; off it, △ closes it). The text
+    /// itself takes nothing (the wheel scrolls it, its legend's ✕ offers
+    /// the options). The keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        if self.request.visible {
+            return self.request.point(p);
+        }
+        if self.options.visible {
+            return match self.options.point(p) {
+                Some(k) => k.into_iter().collect(),
+                None => vec![key::TRIANGLE],
+            };
+        }
+        Vec::new()
+    }
+
     fn scroll(&mut self, d: i32, cues: &mut Vec<i32>) {
         if d < 0 {
             if self.top > 0 {
@@ -1207,6 +1290,11 @@ pub struct Inbox {
     repeat: Repeat,
     pub read: Read,
     dots: Dots,
+    /// the rows drawn, by index, for a pointer; the frame's time; the client
+    /// busy (the rows take no keys then)
+    hits: Hits,
+    time: i64,
+    busy: bool,
 }
 
 /// `FindCategory(category, subcategory)`: the two names (the category's even
@@ -1254,6 +1342,19 @@ impl Inbox {
 
     pub fn typing(&self) -> bool {
         self.read.visible && self.read.typing()
+    }
+
+    /// A pointer at frame point `p`: to the reader while it is up; else,
+    /// the client free, a row selected as up and down select it, and the
+    /// selected one read (✕). The keys to press.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        if self.read.visible {
+            return self.read.point(p);
+        }
+        if self.busy {
+            return Vec::new();
+        }
+        field_click(&mut self.sel, &mut self.window, self.time, self.hits.at(p))
     }
 
     fn step(&mut self, d: i32, cs: &CsClient, now: i64, cues: &mut Vec<i32>) {
@@ -1369,11 +1470,14 @@ impl Inbox {
         }
         let t = if n == 11 { 0.0 } else { self.top as f32 / (n - 11) as f32 };
         self.window.draw_frame_vscroll(vui, r, 40, 1, w - 80, 11, t);
+        self.time = now;
+        self.hits.clear();
         if focused {
             let end = if self.top + 11 > n { n } else { self.top + 11 };
             for i in self.top..end {
                 let h = cs.header(i);
                 let row = i - self.top + 1;
+                self.hits.push(rows_rect(&self.window, vui, r, x[0], row, w - 44 - x[0], 1), i);
                 let c = UI_COLORS[(self.sel == i) as usize];
                 self.window.text_box(vui, r, &wide(&h.id.to_string()), x[0], row, x[1] - x[0] - 10, 1, c, 2);
                 if h.unread != 0 {
@@ -1430,6 +1534,8 @@ impl Inbox {
                 None => {}
             }
         }
+        // what the next keys will find (a request may have gone out above)
+        self.busy = cs.state > 0;
         up
     }
 }
@@ -1560,5 +1666,120 @@ mod tests {
         let n = t.len();
         wrap(&mut t, n + 1, 64, 300, &mut m);
         assert_eq!(t, wide("a b"), "a carriage return becomes a space");
+    }
+
+    use crate::pointer::testing::{NullRaster, mid, vui};
+    use crate::pointer::{MOVED, key};
+
+    fn categories() -> Vec<Category> {
+        let sub = |id: i32, n: &str| Subcategory { id, hidden: false, name: wide(n) };
+        vec![
+            Category { id: 1, hidden: false, name: wide("Bugs"), subs: vec![sub(10, "Crash"), sub(11, "Art")] },
+            Category { id: 2, hidden: false, name: wide("Help"), subs: vec![sub(20, "Stuck")] },
+        ]
+    }
+
+    /// The request form: a field selected and then used (✕ on Category
+    /// opens its picker); the picker takes nothing while it opens, then a
+    /// line at once (the category picked, on to its subcategories), nothing
+    /// for its frame, and off it △; the fields take nothing while the
+    /// client waits.
+    #[test]
+    fn a_pointer_on_the_request_form() {
+        let (vui, mut r) = (vui(), NullRaster);
+        let mut cues = Vec::new();
+        let mut cs = CsClient { categories: categories(), ..Default::default() };
+        let mut q = Request::new(false);
+        q.refresh(&mut cs);
+        cs.state = 0;
+        q.visible = true;
+        q.focus(&vui, &r);
+        q.draw(&vui, &mut r, &mut cs, 1000, &mut cues);
+        let w = q.window.size[0];
+        let field = |q: &Request, row: i32, rows: i32| mid(rows_rect(&q.window, &vui, &NullRaster, 40, row, w - 80, rows));
+        assert_eq!(q.point(field(&q, 3, 1)), vec![MOVED]);
+        assert_eq!((q.sel, q.window.pulse_time), (1, 1000));
+        assert_eq!(q.point(field(&q, 1, 1)), vec![MOVED]);
+        assert_eq!(q.point(field(&q, 1, 1)), vec![key::CROSS], "Category: its picker");
+        q.key(&vui, &mut r, &mut cs, key::CROSS, true, 1016, &mut cues);
+        assert!(q.picking);
+        q.draw(&vui, &mut r, &mut cs, 1016, &mut cues);
+        let line = |q: &Request, row: i32| mid(rows_rect(&q.list, &vui, &NullRaster, 42, row, 250, 1));
+        assert!(q.point(line(&q, 2)).is_empty(), "still opening");
+        for t in 1..8 {
+            q.draw(&vui, &mut r, &mut cs, 1016 + 16 * t, &mut cues);
+        }
+        assert_eq!(q.point(line(&q, 2)), vec![key::CROSS]);
+        assert_eq!(q.cat_sel, 1, "Help");
+        q.key(&vui, &mut r, &mut cs, key::CROSS, true, 1200, &mut cues);
+        assert_eq!((q.category.clone(), q.picking_sub), (wide("Help"), true));
+        for t in 0..8 {
+            q.draw(&vui, &mut r, &mut cs, 1216 + 16 * t, &mut cues);
+        }
+        assert!(q.point(line(&q, 2)).is_empty(), "Help has one subcategory: the second line is the picker's frame");
+        assert_eq!(q.point([5.0, 5.0]), vec![key::TRIANGLE], "off the picker");
+        q.key(&vui, &mut r, &mut cs, key::TRIANGLE, true, 1400, &mut cues);
+        assert!(!q.picking_sub);
+        // waiting: the fields take nothing
+        cs.state = 3;
+        q.draw(&vui, &mut r, &mut cs, 1416, &mut cues);
+        let sel = q.sel;
+        assert!(q.point(field(&q, 11, 1)).is_empty());
+        assert_eq!(q.sel, sel);
+    }
+
+    /// The inbox: rows selected and read, not past the list, not while the
+    /// client waits; the reader its option list (a line at once, off it △);
+    /// its Reply's form, which starts at the text and cannot reach the
+    /// category.
+    #[test]
+    fn a_pointer_on_the_inbox_the_reader_and_the_reply() {
+        let (vui, mut r) = (vui(), NullRaster);
+        let mut cues = Vec::new();
+        let mut cs = CsClient { categories: categories(), ..Default::default() };
+        let mut ib = Inbox::default();
+        ib.open(&vui, &r, &mut cs, 0);
+        cs.state = 0;
+        cs.count = 2;
+        cs.headers = vec![header(7, 1, 10), header(9, 2, 20)];
+        ib.draw(&vui, &mut r, &mut cs, 1000, &mut cues);
+        let w = ib.window.size[0];
+        let row = |ib: &Inbox, row: i32| mid(rows_rect(&ib.window, &vui, &NullRaster, 58, row, w - 44 - 58, 1));
+        assert_eq!(ib.point(row(&ib, 2)), vec![MOVED]);
+        assert_eq!(ib.sel, 1);
+        assert_eq!(ib.point(row(&ib, 2)), vec![key::CROSS], "read");
+        assert!(ib.point(row(&ib, 3)).is_empty(), "two listed");
+        // asked for: nothing while it comes, then the reader
+        ib.key(&vui, &mut r, &mut cs, key::CROSS, true, 1016, &mut cues);
+        assert_eq!(cs.state, 2);
+        ib.draw(&vui, &mut r, &mut cs, 1032, &mut cues);
+        assert!(ib.point(row(&ib, 1)).is_empty(), "waiting");
+        assert_eq!(ib.sel, 1);
+        cs.state = 0;
+        ib.draw(&vui, &mut r, &mut cs, 1048, &mut cues);
+        assert!(ib.read.visible);
+        assert!(ib.point(row(&ib, 1)).is_empty(), "the reader's text takes nothing");
+        assert_eq!(ib.sel, 1);
+        ib.read.options.visible = true;
+        ib.draw(&vui, &mut r, &mut cs, 1064, &mut cues);
+        // the option list, 300 wide round (320, 180) and titled: Reply on
+        // y 167, Delete on 179
+        assert_eq!(ib.point([310.0, 179.0]), vec![key::CROSS]);
+        assert_eq!(ib.read.options.sel, 1);
+        assert_eq!(ib.point([10.0, 10.0]), vec![key::TRIANGLE], "off it: closed");
+        // Reply: the form over the reader
+        assert_eq!(ib.point([310.0, 167.0]), vec![key::CROSS]);
+        ib.key(&vui, &mut r, &mut cs, key::CROSS, true, 1080, &mut cues);
+        assert!(ib.read.request.visible);
+        cs.state = 0;
+        ib.draw(&vui, &mut r, &mut cs, 1096, &mut cues);
+        let q = &ib.read.request;
+        let rw = q.window.size[0];
+        let field = |q: &Request, row: i32| mid(rows_rect(&q.window, &vui, &NullRaster, 40, row, rw - 80, 1));
+        let (category, text, submit) = (field(q, 1), field(q, 5), field(q, 11));
+        assert!(ib.point(category).is_empty(), "a reply's category is not the form's to pick");
+        assert_eq!(ib.point(text), vec![key::CROSS], "a reply starts on its text");
+        assert_eq!(ib.point(submit), vec![MOVED]);
+        assert_eq!(ib.read.request.sel, 3);
     }
 }
