@@ -17,7 +17,13 @@ vi = { path = "crates/vi" }
 drdp = { path = "crates/drdp" }
 net = { path = "crates/net" }
 snd = { path = "crates/snd" }
+dnas = { path = "crates/dnas" }
 flate2 = "1"
 crc32fast = "1"
 serde_json = "1"
 web-time = "1.1"
+
+# dnas interprets ~300M EE instructions a module: optimized in debug and
+# test builds too.
+[profile.dev.package.dnas]
+opt-level = 3

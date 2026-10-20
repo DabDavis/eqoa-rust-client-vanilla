@@ -1,0 +1,12 @@
+[package]
+name = "dnas"
+description = "The disc's DNAS-encrypted modules (SUPPORT.AUT, CLIENT.AUT) unpacked by the disc's own DNAS library, run in a small EE interpreter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+flate2.workspace = true
+
+[dev-dependencies]
+iso.workspace = true
