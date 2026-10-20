@@ -58,10 +58,18 @@ The Rust client. README.md is the plan and the crate table; keep it current.
 - Input (README "the pad", "the mouse and the touch screen"): the pad is the game's own path
   (`vi::pad` held to oracle ops 50-52; `input.rs` libpad on the host, `PadKeys`, `Play::set_key`,
   `controls.rs` UpdateControls). Headless: `EQOA_PAD` (`start@2500;stick l 0 -1@1500+2000`),
-  `EQOA_MOUSE` (`click @<name>@ms`), `EQOA_TOUCH=1`, `EQOA_TOUCHES`, `EQOA_TAP=<name|*>@ms` in a
-  playshot; `drive.py --gamepad/--mobile/--touch` in a page; `EQOA_PAD_TRACE=1` / `?padtrace`. A
-  DualSense is plugged in here and gilrs drives its motors: rumble is as real as the speakers.
+  `EQOA_MOUSE` (`click @<name>@ms`, `click X Y@ms`, `rclick`, `wheel N`), `EQOA_TOUCH=1`,
+  `EQOA_TOUCHES`, `EQOA_TAP=<name|*>@ms` in a playshot; `drive.py --gamepad/--mobile/--touch/--mouse`
+  in a page; `EQOA_PAD_TRACE=1` / `?padtrace`; `EQOA_GLYPHS=1` prints the button glyphs a frame drew.
+  A DualSense is plugged in here and gilrs drives its motors: rumble is as real as the speakers.
   The local server spawns a character at a random heading each login, so click by name, not pixel.
+- A pointer on the windows (`pointer.rs`, `Play::point`): every button glyph is its button (the
+  HUD's raster notes them), and each window notes where it drew its rows (`pointer::Hits`) and
+  answers `point(p) -> Vec<i32>`: the keys to press, `pointer::MOVED` for a selection it moved
+  itself. Keys go through `Play::press`'s queue, one a frame, held through the next HUD frame
+  (`KeyFlash` acts only on a key still down when the window draws). A new window gets a `point`,
+  its route in `Play::window_point` (as `window_key` routes keys) and a test through
+  `pointer::testing`'s null raster that fails without its hit notes.
 - The browser build (`web/`, README "In a browser"): `web/build.sh`, then `web/drive.py` (headless
   Chromium over the DevTools protocol, the disc image handed to the page's file input). Platform
   code goes behind `net::session::Datagrams`, `net::auth::Exchange`, `iso::Source`/`iso::Sparse`
