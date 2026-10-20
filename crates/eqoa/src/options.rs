@@ -7,9 +7,16 @@
 //! Vibration only once saved. Save asks first (`VIWndMessage`), shows
 //! "Saving..." for four frames and applies; Triangle on the menu puts every
 //! setting back as it was and applies. The memory card is not written.
+//!
+//! A pointer (`pointer`): a menu row is chosen at once; a page's row is
+//! reached with up and down (a page knows which setting its row is only as
+//! it draws, so left and right must wait for it), its label then steps its
+//! value on, left or right of a value's middle (a slider's knob) is left or
+//! right; the box's choices are taken at once.
 
 #![allow(clippy::too_many_arguments)]
 
+use crate::pointer::{Hits, key, rows_rect};
 use vi::fpu::{Ee, F};
 use vi::ui::{Raster, UI_COLORS, Vui, Window, wide};
 
@@ -92,9 +99,17 @@ struct Message {
     sel: i32,
     visible: bool,
     window: Window,
+    /// the choices drawn (for a pointer)
+    hits: Hits,
 }
 
 impl Message {
+    /// A pointer at frame point `p`: a choice taken at once (✕).
+    fn point(&mut self, p: [f32; 2]) -> Option<i32> {
+        self.sel = self.hits.at(p)?;
+        Some(key::CROSS)
+    }
+
     /// `Setup(title, text, prompt, center, width)`.
     fn setup(&mut self, vui: &Vui, r: &mut dyn Raster, title: Vec<u16>, text: Vec<u16>, prompt: i32, center: [i32; 2], width: i32) {
         self.title = title;
@@ -160,14 +175,18 @@ impl Message {
         let w = |id: i32| vui.words.get(id, vui.language).to_string();
         let lit = |s: String, on: bool| wide(&if on { format!("|q{s}|w") } else { s });
         let row = self.rows - 1;
+        self.hits.clear();
         match self.prompt {
             0 => {
                 self.window.text_box(vui, r, &lit(w(786), true), 0, row, width, 1, c0, 8);
+                self.hits.push(rows_rect(&self.window, vui, r, width / 2 - 80, row, 160, 1), 0);
             }
             p => {
                 let (a, b) = if p == 1 { (786, 213) } else { (21, 22) };
                 self.window.text_box(vui, r, &lit(w(a), self.sel == 0), col[0] - 100, row, 200, 1, c0, 8);
                 self.window.text_box(vui, r, &lit(w(b), self.sel == 1), col[1] - 100, row, 200, 1, c0, 8);
+                self.hits.push(rows_rect(&self.window, vui, r, col[0] - 80, row, 160, 1), 0);
+                self.hits.push(rows_rect(&self.window, vui, r, col[1] - 80, row, 160, 1), 1);
             }
         }
     }
@@ -196,15 +215,42 @@ pub struct WndOptions {
     window3: Window,
     /// the preview last asked for
     preview: Option<i32>,
+    /// what was drawn where, for a pointer: the menu's rows (their index),
+    /// a page's labels (10 + row), the left and right of its values (20 +
+    /// row, 30 + row); and when
+    hits: Hits,
+    now: i64,
 }
 
 impl WndOptions {
-
-    /// A pointer at frame point `p` (`pointer`): what is under it selected,
-    /// and the keys to press.
+    /// A pointer at frame point `p` (`pointer`): the box's choices; a menu
+    /// row chosen at once (✕); a page's row reached with up and down, its
+    /// label then its value stepped on (right), left or right of a value's
+    /// middle (a slider's knob) left or right. Nothing while saving. The
+    /// keys to press.
     pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
-        let _ = p;
-        Vec::new()
+        if self.message.visible {
+            return self.message.point(p).into_iter().collect();
+        }
+        if self.save_count != 0 {
+            return Vec::new();
+        }
+        let Some(h) = self.hits.at(p) else { return Vec::new() };
+        let k = h % 10;
+        if h < 10 {
+            // the menu: `Prev`/`Next` start the tick's pulse over
+            self.sel = k;
+            self.window.reset_tick_pulse(self.now);
+            return vec![key::CROSS];
+        }
+        let mut keys = crate::pointer::steps(self.row, k, key::UP, key::DOWN);
+        match h / 10 {
+            1 if keys.is_empty() => keys.push(key::RIGHT),
+            2 => keys.push(key::LEFT),
+            3 => keys.push(key::RIGHT),
+            _ => {}
+        }
+        keys
     }
     /// `OnMessage` 295 with the focus coming from outside: the window (300
     /// wide, seven rows, titled 788) opening, the values kept, the menu.
@@ -406,6 +452,8 @@ impl WndOptions {
     /// `OnDrawSelf`: the Sound page previews the Battle Music choice, the
     /// menu, the page, then "Saving..." for four frames before the save.
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, o: &GameOptions, ups: &mut Vec<OptionsUp>) {
+        self.now = vui.time;
+        self.hits.clear();
         let focused = !self.message.visible;
         if !focused {
             self.window.reset_tick_pulse(vui.time);
@@ -456,6 +504,9 @@ impl WndOptions {
             let on = self.sel == k as i32;
             let s = if on { format!("|q{}|w", w(id)) } else { w(id) };
             self.window.text_box(vui, r, &wide(&s), 40, k as i32 + 1, width - 80, 1, UI_COLORS[on as usize], 8);
+            if self.page == -1 {
+                self.hits.push(rows_rect(&self.window, vui, r, 40, k as i32 + 1, width - 80, 1), k as i32);
+            }
         }
         let legend = wide(&format!("|x {}   |t {}", w(212), w(753)));
         self.window.text(vui, r, &legend, 40, 6, UI_COLORS[0], 0);
@@ -470,6 +521,7 @@ impl WndOptions {
         for (k, &id) in labels.iter().enumerate() {
             let c = UI_COLORS[(self.row == k as i32) as usize];
             self.window2.text_box(vui, r, &wide(vui.words.get(id, vui.language)), 40, k as i32 + 1, width - 80, 1, c, 0);
+            self.hits.push(rows_rect(&self.window2, vui, r, 40, k as i32 + 1, width - 176 - 48, 1), 10 + k as i32);
         }
         self.window2.tick_r(vui, r, 36, self.row + 1, true);
         for (k, v) in values.iter().enumerate() {
@@ -477,7 +529,17 @@ impl WndOptions {
             let row = k as i32 + 1;
             self.window2.draw_frame(vui, r, width - 176, row, 132, 1, if self.row == k as i32 { 96 } else { 64 });
             self.window2.text_box(vui, r, v, width - 176, row, 132, 1, UI_COLORS[0], 8);
+            // the frame's two halves (its side arrows are glyphs)
+            let at = self.window2.top_left()[0] + width - 176;
+            self.halves(rows_rect(&self.window2, vui, r, width - 176, row, 132, 1), at - 4, at + 66, at + 136, k as i32);
         }
+    }
+
+    /// A value's left and right, `x0..mid` and `mid..x1` over the rows of
+    /// `rr`, as row `k`'s (for a pointer).
+    fn halves(&mut self, rr: [i32; 4], x0: i32, mid: i32, x1: i32, k: i32) {
+        self.hits.push([x0, rr[1], mid, rr[3]], 20 + k);
+        self.hits.push([mid, rr[1], x1, rr[3]], 30 + k);
     }
 
     /// The pages' legend: Triangle, Back.
@@ -521,6 +583,13 @@ impl WndOptions {
         let width = self.window2.size[0];
         self.window2.draw_hscroll(vui, r, width - 180, 2, 140, o.fx_volume.0, if self.row == 1 { 32 } else { 0 });
         self.window2.draw_hscroll(vui, r, width - 180, 3, 140, o.music_volume.0, if self.row == 2 { 32 } else { 0 });
+        // each slider's left and right of its knob
+        let knob = vui.entry(166).uv1[0];
+        let at = self.window2.top_left()[0] + width - 180;
+        for (k, v) in [(1, o.fx_volume.0), (2, o.music_volume.0)] {
+            let mid = at + (v * (140 - knob) as f32) as i32 + knob / 2;
+            self.halves(rows_rect(&self.window2, vui, r, width - 180, k + 1, 140, 1), at - 4, mid, at + 144, k);
+        }
         self.back_legend(vui, r, 6);
     }
 }
@@ -586,4 +655,63 @@ mod tests {
         assert_eq!(cues.last(), Some(&9));
         assert_ne!(o.music_volume, F::ZERO, "the other volume is untouched");
     }
+
+    /// A pointer on the options: a menu row chosen at once; a page's row
+    /// reached by up and down, then its label steps it on; left or right of
+    /// a value's middle, or of a slider's knob, is left or right; the save
+    /// box's choices taken at once; nothing while saving.
+    #[test]
+    fn a_pointer_on_the_options() {
+        use crate::pointer::key;
+        use crate::pointer::testing::{NullRaster, mid, vui};
+        let vui = vui();
+        let mut r = NullRaster;
+        let mut o = GameOptions::default();
+        let mut w = WndOptions::default();
+        w.open(&vui, &r, &o);
+        let (mut cues, mut ups) = (Vec::new(), Vec::new());
+        w.draw(&vui, &mut r, &o, &mut ups);
+        let menu = |w: &WndOptions, k: i32| mid(rows_rect(&w.window, &vui, &NullRaster, 40, k + 1, 200, 1));
+        assert_eq!(w.point(menu(&w, 2)), vec![key::CROSS]);
+        assert_eq!(w.sel, 2, "Sound");
+        assert!(w.point([5.0, 5.0]).is_empty());
+        // ✕ opens the Sound page: rows Battle Music, two sliders, Output
+        w.key(&vui, &mut r, &mut o, 134, 0, &mut cues, &mut ups);
+        assert_eq!(w.page, 2);
+        w.draw(&vui, &mut r, &o, &mut ups);
+        let width = w.window2.size[0];
+        let left = w.window2.top_left()[0];
+        let label = |w: &WndOptions, k: i32| mid(rows_rect(&w.window2, &vui, &NullRaster, 40, k + 1, 100, 1));
+        let y = |w: &WndOptions, k: i32| w.window2.row_center(&vui, &NullRaster, k + 1)[1] as f32;
+        assert_eq!(w.point(label(&w, 3)), vec![key::DOWN, key::DOWN, key::DOWN], "up and down to it");
+        assert_eq!(w.row, 0, "the keys move it, not the pointer");
+        // the value frame of row 0 (Battle Music): its halves
+        let frame = (left + width - 176) as f32;
+        assert_eq!(w.point([frame + 20.0, y(&w, 0)]), vec![key::LEFT]);
+        assert_eq!(w.point([frame + 110.0, y(&w, 0)]), vec![key::RIGHT]);
+        assert_eq!(w.point(label(&w, 0)), vec![key::RIGHT], "the selected row's label steps it on");
+        // a slider: left and right of its knob (Music Volume, row 2)
+        let slider = (left + width - 180) as f32;
+        assert_eq!(w.point([slider + 20.0, y(&w, 2)]), vec![key::DOWN, key::DOWN, key::LEFT], "volume 1: the knob at the right end");
+        o.music_volume = F::ZERO;
+        w.draw(&vui, &mut r, &o, &mut ups);
+        assert_eq!(w.point([slider + 20.0, y(&w, 2)]), vec![key::DOWN, key::DOWN, key::RIGHT], "volume 0: the knob at the left end");
+        // back to the menu, Save Changes: the box's choices
+        w.key(&vui, &mut r, &mut o, 132, 0, &mut cues, &mut ups);
+        w.sel = 3;
+        w.key(&vui, &mut r, &mut o, 134, 0, &mut cues, &mut ups);
+        assert!(w.message.visible);
+        w.draw(&vui, &mut r, &o, &mut ups);
+        let mw = w.message.window.size[0];
+        let yes = mid(rows_rect(&w.message.window, &vui, &NullRaster, mw / 3 - 50, w.message.rows - 1, 100, 1));
+        assert_eq!(w.message.sel, 1, "a two-choice box starts on the second");
+        assert_eq!(w.point(yes), vec![key::CROSS]);
+        assert_eq!(w.message.sel, 0, "Yes");
+        assert!(w.point(menu(&w, 1)).is_empty(), "the menu behind the box");
+        // saving: nothing
+        w.message.visible = false;
+        w.save_count = 4;
+        assert!(w.point(menu(&w, 1)).is_empty());
+    }
+
 }
