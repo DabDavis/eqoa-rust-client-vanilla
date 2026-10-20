@@ -25,9 +25,11 @@ a time and proved against a reference:
 
 - **Game logic** (walking, camera, collision, animation) uses the EE's float model,
   crate `ee`: round toward zero, denormals flushed on the way in and out, saturation
-  instead of infinity, conditioned compares. Every rule was measured on a console
-  (`go-eqoa-vi`). Rust never fuses `a*b+c` on its own, so written order is executed
-  order.
+  instead of infinity, conditioned compares, an adder with one guard bit. Every rule
+  but the last was measured in a running game through the tracer (`go-eqoa-vi`); the
+  tracer runs PCSX2's interpreter, whose adder keeps every bit, and the guard bit is
+  PCSX2's recompiler's, which the game plays on. Rust never fuses `a*b+c` on its own,
+  so written order is executed order.
 - **The reference** is eqoa-port, which runs the game's own functions on the host: a
   test gives the original and the rewrite the same inputs and compares the bits.
   Until that harness exists, crates are held to the fixtures the earlier ports were.
@@ -46,7 +48,7 @@ UI, network (DRDP), sound.
 
 | crate | what | checked against |
 |---|---|---|
-| `ee` | the EE FPU: `mul` `add` `sub` `div` `sqrt` `lt` `le` `eq`; and `ee::libm`, newlib as SUPPORT has it compiled: `sinf` `cosf` `powf` (with its `_XOPEN_` wrapper) `atanf` `atan2f` (wrapper too) `acosf` `sqrtf` `fmodf` `scalbnf`. Computed natively and branch-free, inlined into the game logic (about half a million calls a frame in play, more than half with a zero operand): the f64 product or sum truncated to 24 bits by a mask, the edges by selects, and only operands 53 or more exponents apart sent through the exact error of the sum; `mul4`/`add4` take four lanes at once on SSE2 (`Matrix44::mul`) | console-measured goldens from `go-eqoa-vi`; the libm bit for bit against go-eqoa-vi's console-checked ports over a 24,000-input corpus (`tools/vimath-corpus` writes it), except `atan2f(denormal, ±0)`, where the wrapper's `c.eq.s` flushes the denormal (disassembly at 0x0012711C) and the Go does not; and against its first implementation, kept verbatim in `tests/reference.rs`: `sqrt` and `operand` over all 2^32 patterns, the binary operations and compares over 1,592 chosen values pairwise and random pairs in every regime the shortcuts branch on (`EE_PAIRS=100000000` checked 500M), four lanes against four calls; five planted shortcut bugs and a bound one exponent too loose each fail it |
+| `ee` | the EE FPU: `mul` `add` `sub` `div` `sqrt` `lt` `le` `eq`; and `ee::libm`, newlib as SUPPORT has it compiled: `sinf` `cosf` `powf` (with its `_XOPEN_` wrapper) `atanf` `atan2f` (wrapper too) `acosf` `sqrtf` `fmodf` `scalbnf`. The adder aligns the smaller operand with one guard bit and no sticky bit, as PCSX2's recompiler models the EE (`FPU_ADD_SUB`): bits shifted past the guard are dropped first, and an operand 25 or more exponents below adds only its sign, so `x + -tiny` is `x`. go-eqoa-vi's goldens were measured through the tracer's `call`, which runs PCSX2's interpreter, whose adder keeps every bit (the exact sum toward zero): that one is `ee::interp` (with `interp::libm`, the same newlib over it), kept for the ports checked against it. With it a body creeping on a trace of velocity moved a float step toward the world's origin every walk tick for twenty seconds after a stop (2026-10-20, F3: the slide). Computed natively and branch-free, inlined into the game logic (about half a million calls a frame in play, more than half with a zero operand): the f64 product or sum truncated to 24 bits by a mask, the alignment's masks by selects; `mul4`/`add4` take four lanes at once on SSE2 (`Matrix44::mul`), the alignment's shifts as a float's conversion | goldens from `go-eqoa-vi`; `interp::libm` bit for bit against go-eqoa-vi's ports over a 24,000-input corpus (`tools/vimath-corpus` writes it), except `atan2f(denormal, ±0)`, where the wrapper's `c.eq.s` flushes the denormal (disassembly at 0x0012711C) and the Go does not, and `libm` where the adders part (`cosf(pi)` is -1 exactly); and against its first implementation, kept verbatim in `tests/reference.rs` (the reference for `interp`), and `FPU_ADD_SUB` written out step for step (for `add`/`sub`): `sqrt` and `operand` over all 2^32 patterns, the binary operations and compares over 1,592 chosen values pairwise and random pairs in every regime the shortcuts branch on (`EE_PAIRS=100000000` checked 500M), four lanes against four calls; five planted shortcut bugs and a bound one exponent too loose each fail it, and the alignment's edge one exponent off (scalar and four-lane) or without its partial mask |
 | `iso` | ISO 9660 walk, read one file | the disc |
 | `dnas` | The disc's DNAS-encrypted modules (the `.AUT`s: SUPPORT, CLIENT, SETUP, STATION, MCERR) unpacked as `VILauncher::UnpackAndVerify` unpacks them, by the disc's own DNAS library: `UTIL.REL` (on the disc in the clear) loaded and relocated as SN's DLL loader does it, its imports (libc, the kernel's semaphores, libcdvd's S-command RPC) bound to stand-ins, and an interpreter for the EE's integer core running its constructors, its init and the four personalize and extract calls (each word decoded once, the library's self-decrypting code decoded again when it is rewritten); then the inflate. The standard functions the library spends half its instructions in are computed natively (`src/native.rs`): SHA-1's compression, RC6-32/20 and BSAFE's CBC decrypt over it, libgcc's `__muldi3`, `dpmul`, `litodp` and `dptoul`, BSAFE's bignum multiply-accumulate and the stream's buffer reader, each only where its code's CRC-32 is the proved one (else interpreted) and free to decline a call to the interpreter; DNAS's own state machine stays interpreted. No key and no part of the library is in the code. About 110M interpreted instructions a module: 1.2 s natively (5.5 s interpreting all 320M), 1.9-2.7 s in Chromium; the client unpacks CLIENT and SUPPORT on threads of their own (a page's workers) and keeps them (`eqoa/src/modules.rs`) | `tests/discs.rs`: every module with a reference on hand, byte for byte against what the game's own `UnpackAndVerify` returned in PCSX2: the Frontiers disc's SUPPORT and CLIENT through its ISO, and 30 more off six other discs (EQOA's 2002-10-20 beta, USA, Europe, Europe En/Fr/De and its demo, the Frontiers beta of 2003-07-18); one bit flipped in a `.AUT`'s header, body or trailer is refused by the library itself. `tests/natives.rs`: every native call of two whole unpacks (246,000 and 250,000) against the interpreter running the function, the registers a call keeps, its result and every byte either wrote (an undo log), and 200,000 calls of the pure ones on random arguments; a native wrong in its result, its bytes or by a stray write fails it |
 | `esf` | CSF inflate, the OBJF record tree, DictIDs, surfaces, PrimBuffers, materials, sprites flattened to models; `Library`, the dictionary across files; zones (terrain with pre-translations, actors); a world opened with its zones left on the disc (`Container::open_deferred` through a `ReadAt`: the root and the world walked header by header, every zone a stub naming its byte range; TUNARIA is 20,772 bytes read in 180 reads instead of 997 MB), a zone parsed on its own (`parse_records`), and `Library::add_zone`, which registers a zone's DictIDs at its world's place (ranked by the record's offset), so lookups answer as with the whole file loaded | `go-eqoa-esf-tools-v2`: per-surface CRCs (801 surfaces) and per-model geometry (766 models: counts, bbox bits, position CRC); which records register a DictID, and that the first file loaded wins, from the decomp; the deferred open's world-level records, and each zone parsed alone, against the whole parse record for record (`tests/deferred.rs`; a changed byte and a range one byte late fail) |
@@ -138,6 +140,33 @@ and 9.4 ms on WebGL2 (25 ms and 39 fps before, wgpu's GL path being the
 costlier one). The sound driver's SPU2 is under 0.4 ms of that, and natively
 on a thread of its own.
 
+### The game's frame at any display rate
+
+The console's loop runs 30 frames a second (CLIENT's 20 ms floor, then the
+raster's wait for a field); the client draws at the display's rate, 165 a
+second on one tester's monitor. What the game moves by its clock (the walk
+and camera in 32 ms ticks, animation, particles, the weather) runs every
+frame drawn, with one difference left: the walk's damped integrator, whose
+accelerations are set for the 32 ms tick, reaches a higher terminal speed
+in shorter steps (running 9.07 m/s at 60 Hz and 9.26 at 165 against 8.81:
+see Not yet). What it counts in frames runs on a clock of the game's frames,
+30 a second (`frames.rs`): the HUD and every window (`VIKeyFlash`'s repeat
+after 16 frames, `VIUIWindow` opening by 0.15 a frame, `VIUITextScroll`'s two
+pixels a frame and 30-frame pause, the quick menus' light, the glows, the
+"..." dots) is made once a frame of the game's and its quads drawn again in
+between (`render::ui::Ui::keep`/`again`); the damage numbers are laid out
+then (their `rand()`s are the game's) and placed through every view drawn;
+`TrackTarget`'s colour easing, `DeathCamera`'s swing and `VICameraEffect`'s
+shake samples step on it too. Run every frame at 165 Hz they went 5.5 times
+as fast: the target's name rocked at 330 pixels a second with 0.18 s pauses
+(the console's 60 and 1 s), the menus' first repeat came after 97 ms (533).
+`frames.rs`'s tests drive the repeat, the name's scroll and the rings at 30,
+60, 144 and 165 Hz against the console's times, each with its control. A key
+let go before its first pulse still fires once (a keyboard's tap can fall
+between two of the game's frames; a pad read once a frame cannot), and a
+mouse's drag pushes the stick for a sixtieth of a second a pixel, whatever
+the rate. `EQOA_FRAME_MS=n` gives a `shot` or `playshot` frames n ms long.
+
 ### The dictionary
 
 The game keeps one dictionary per stage, and every file it loads registers into
@@ -181,6 +210,14 @@ order per stage is not yet measured.
   Weapon trails are (`vi::trail` against `oracle_trail`; `ProcessWeaponTrails`
   on the weapon group's two point sprites, by reading).
 - `VICameraEffect`'s blend into a scripted camera (a quaternion slerp).
+- The walk and camera stepped on the game's 30 Hz frames. `VIWalkControl::Process`
+  integrates `v = (v + F dt) d` with `d = damping^dt` and accelerations set for
+  its 32 ms tick (`InitIntermediate`), so its terminal velocity, `F dt d / (1 - d)`,
+  grows as the step shrinks: a display's frame of 16.7 ms runs 3.6% further than the
+  console's 32 ms tick and a 1-2 ms remainder each frame, 6 ms (165 Hz) 4.8%
+  (`EQOA_FRAME_MS`: |velocity| 9.26, 9.07, 8.81 m/s at 6, 16, 33 ms). The turn and
+  the orbit springs are built the same way. Stepping them on `frames.rs`'s clock
+  needs the body and the eye interpolated between its frames for display.
 - Time of day: `InitTimeOfDay`'s table, `SetupTimeOfDayLights` (with the
   overcast weight and the lightning flash), `SetupTimeOfDayFog` (the four
   env-flag fogs too) and the sky colour of `SetupTimeOfDaySky` are ported

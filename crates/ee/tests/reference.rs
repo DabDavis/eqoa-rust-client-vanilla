@@ -18,6 +18,13 @@
 //!
 //! `mul4`/`add4` (the same, four lanes at once) against four scalar calls.
 //!
+//! The adder (2026-10-20): the first implementation's `add` and `sub` are the
+//! exact sum chopped, which is PCSX2's interpreter, where the tracer measured
+//! (kept here verbatim as `interp_add`/`interp_sub`, the reference for
+//! `ee::interp`). The console's (`ee::add`) aligns the smaller operand with one
+//! guard bit first, as PCSX2's recompiler models it; its reference is that
+//! code, `FPU_ADD_SUB` in `pcsx2/x86/iFPU.cpp`, written out step for step.
+//!
 //! `EE_PAIRS=n` sets the random pairs per regime (default 2,000,000; the
 //! release build checks 100,000,000 in about a minute).
 
@@ -82,14 +89,44 @@ mod reference {
         chop(operand(a) as f64 * operand(b) as f64)
     }
 
-    pub fn add(a: f32, b: f32) -> f32 {
+    pub fn interp_add(a: f32, b: f32) -> f32 {
         let (s, e) = two_sum(operand(a) as f64, operand(b) as f64);
         chop_sum(s, e)
     }
 
-    pub fn sub(a: f32, b: f32) -> f32 {
+    pub fn interp_sub(a: f32, b: f32) -> f32 {
         let (s, e) = two_sum(operand(a) as f64, -(operand(b) as f64));
         chop_sum(s, e)
+    }
+
+    /// PCSX2's `FPU_ADD_SUB` (`iFPU.cpp`), on the conditioned operands: the
+    /// exponent difference; 25 or more, the smaller keeps its sign only; 1 to
+    /// 24, its bits masked by `0xffffffff << (diff - 1)`; then the operation,
+    /// SSE's under the EE's rounding (the exact result toward zero).
+    fn fpu_add_sub(a: f32, b: f32, sub: bool) -> f32 {
+        let mut d = operand(a).to_bits();
+        let mut t = operand(b).to_bits();
+        let diff = ((d >> 23) & 0xff) as i32 - ((t >> 23) & 0xff) as i32;
+        if diff >= 25 {
+            t &= 0x8000_0000;
+        } else if diff > 0 {
+            t &= 0xffff_ffff << (diff - 1);
+        } else if diff <= -25 {
+            d &= 0x8000_0000;
+        } else if diff < 0 {
+            d &= 0xffff_ffff << (-diff - 1);
+        }
+        let (x, y) = (f32::from_bits(d) as f64, f32::from_bits(t) as f64);
+        let (s, e) = two_sum(x, if sub { -y } else { y });
+        chop_sum(s, e)
+    }
+
+    pub fn add(a: f32, b: f32) -> f32 {
+        fpu_add_sub(a, b, false)
+    }
+
+    pub fn sub(a: f32, b: f32) -> f32 {
+        fpu_add_sub(a, b, true)
     }
 
     pub fn div(a: f32, b: f32) -> f32 {
@@ -131,11 +168,13 @@ type Pair = fn(&mut Rng) -> (u32, u32);
 
 /// Every binary operation on one pair; the first difference, described.
 fn check_pair(a: f32, b: f32) -> Result<(), String> {
-    let ops: [(&str, Op, Op); 4] = [
+    let ops: [(&str, Op, Op); 6] = [
         ("mul", ee::mul, reference::mul),
         ("div", ee::div, reference::div),
         ("add", ee::add, reference::add),
         ("sub", ee::sub, reference::sub),
+        ("interp add", ee::interp::add, reference::interp_add),
+        ("interp sub", ee::interp::sub, reference::interp_sub),
     ];
     for (name, fast, slow) in ops {
         let (f, s) = (fast(a, b), slow(a, b));
@@ -396,6 +435,35 @@ fn four_lanes_agree() {
             assert!(same(s[lane], ee::add(x, y)), "add4 lane {lane}: {x:e} [{:08X}] + {y:e} [{:08X}]", x.to_bits(), y.to_bits());
         }
     }
+}
+
+/// The alignment is not idle: over random pairs a fixed distance apart, the
+/// console's adder and the interpreter's differ on many (both references
+/// passing above means `ee` has each), and an alignment with its edge one
+/// exponent off (sign only from 26 apart) differs from the console's too.
+#[test]
+fn the_guard_bit_shows() {
+    let off_by_one = |a: f32, b: f32| -> f32 {
+        let (x, y) = (ee::operand(a).to_bits(), ee::operand(b).to_bits());
+        let diff = ((x >> 23) & 0xff) as i32 - ((y >> 23) & 0xff) as i32;
+        let y = if diff >= 26 { y & 0x8000_0000 } else if diff > 0 { y & (0xffff_ffff << (diff - 1).min(31)) } else { y };
+        ee::interp::add(f32::from_bits(x), f32::from_bits(y))
+    };
+    let mut rng = Rng(0x0BAD_5EED_1234_5678);
+    let (mut interp, mut edge) = (0, 0);
+    for _ in 0..200_000 {
+        let a = rng.u32() & 0x7FFF_FFFF | 0x0080_0000;
+        let ea = ((a >> 23) & 0xFF) as i32;
+        let eb = (ea - (rng.u32() % 30) as i32).clamp(1, 254) as u32;
+        let b = (rng.u32() & 0x807F_FFFF) | eb << 23;
+        let (a, b) = (f32::from_bits(a), f32::from_bits(b));
+        if (a.abs() as f64) < 1e30 {
+            interp += (!same(ee::add(a, b), ee::interp::add(a, b))) as usize;
+            edge += (!same(ee::add(a, b), off_by_one(a, b))) as usize;
+        }
+    }
+    assert!(interp > 10_000, "the two adders differ on {interp}");
+    assert!(edge > 1_000, "the edge one off differs on {edge}");
 }
 
 /// The comparison catches a difference: a reference one step off on one

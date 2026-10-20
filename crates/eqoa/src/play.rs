@@ -214,7 +214,11 @@ pub struct Play {
     death: Option<crate::death::DeathCam>,
     fade: crate::death::Fade,
     dead_casters: Vec<i32>,
+    /// When the death camera last stepped, and the eye it left, which the
+    /// frames between the game's keep (`DeathCamera` swings by a step a
+    /// frame of the game's).
     death_ms: i64,
+    death_eye: Option<(Vect3<Ee>, Vect3<Ee>)>,
     /// The camera: the race cameras (CLIENT's, when its image was read), the
     /// preset the start menu's framing put aside (`m_camPreset`) and the
     /// style's (`m_camSaved`), whether the world was entered (`m_p2BD50`),
@@ -709,7 +713,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, start: None, quit: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, cast_window: (0, 0), rooted: false, locks: (true, true), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, cast_window: (0, 0), rooted: false, locks: (true, true), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None };
         p.take_abilities();
         p.npcw_world_entry();
         p
@@ -786,8 +790,10 @@ impl Play {
     }
 
     /// One frame. Returns the player's model when the server has just named
-    /// a different one (the caller re-dresses the walker).
-    pub fn frame(&mut self, walker: &mut Walker, lib: &Library, mut g: Gpu, game_ms: i64, mut sound: Option<&mut crate::sound::Sound>) -> Option<u32> {
+    /// a different one (the caller re-dresses the walker). `game_frame`: one
+    /// of the game's frames (`frames.rs`), which what it counts in frames
+    /// steps on.
+    pub fn frame(&mut self, walker: &mut Walker, lib: &Library, mut g: Gpu, game_ms: i64, game_frame: bool, mut sound: Option<&mut crate::sound::Sound>) -> Option<u32> {
         self.take_modules(sound.as_deref_mut());
         let now = self.session.now();
         let mut new_model = None;
@@ -1473,18 +1479,31 @@ impl Play {
             }
             _ => {}
         }
-        // DeathCamera: the eye swung round the body, the fade at 4 s
-        if let Some(d) = self.death.as_mut() {
-            let dt = ((game_ms - self.death_ms).clamp(0, 1000)) as f32 * 0.001;
-            let body = walker.cam.walk.phys.smooth_location().to_array();
-            let (eye, dir, fade) = d.step(body, dt);
-            walker.eye.position = eye;
-            walker.eye.direction = dir;
-            if fade {
-                self.fade.set(1.0, 4.0);
+        // DeathCamera: the eye swung round the body, the fade at 4 s; a step
+        // a frame of the game's (it rises and turns by a constant a frame),
+        // the eye it left kept between them
+        match self.death.as_mut() {
+            Some(d) => {
+                if game_frame {
+                    let dt = ((game_ms - self.death_ms).clamp(0, 1000)) as f32 * 0.001;
+                    let body = walker.cam.walk.phys.smooth_location().to_array();
+                    let (eye, dir, fade) = d.step(body, dt);
+                    self.death_eye = Some((eye, dir));
+                    if fade {
+                        self.fade.set(1.0, 4.0);
+                    }
+                    self.death_ms = game_ms;
+                }
+                if let Some((eye, dir)) = self.death_eye {
+                    walker.eye.position = eye;
+                    walker.eye.direction = dir;
+                }
+            }
+            None => {
+                self.death_ms = game_ms;
+                self.death_eye = None;
             }
         }
-        self.death_ms = game_ms;
         new_model
     }
 
@@ -1577,8 +1596,11 @@ impl Play {
     /// target's actor is the player's own (its walker's position and slot 4)
     /// or the creature's in its slot, at slot 4 when its sprite is a
     /// character's; none (no target, or one with no actor) resets them, as
-    /// the HUD turned off would (here it is always up).
-    pub fn draw_rings(&mut self, r: &mut Renderer, device: &wgpu::Device, queue: &wgpu::Queue, walker: &Walker, view_proj: glam::Mat4, lib: &Library) {
+    /// the HUD turned off would (here it is always up). `step`: one of the
+    /// game's frames, which the rings' clock and colour step on; between
+    /// them the rings are placed again for the view as they are.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_rings(&mut self, r: &mut Renderer, device: &wgpu::Device, queue: &wgpu::Queue, walker: &Walker, view_proj: glam::Mat4, lib: &Library, step: bool) {
         let me = self.self_id32();
         let target = (self.target != u32::MAX).then_some(self.target);
         let aim = target.and_then(|id| {
@@ -1592,7 +1614,7 @@ impl Play {
         // UpdateGame: the target info stops counting while the target's
         // +0x19 is 0
         let valid = self.target_info.is_some() && !self.entities.slots.iter().flatten().any(|e| Some(e.id) == target && e.p19 == 0);
-        let tris = self.rings.frame(lib, walker, aim, me, valid, self.cam_inside, view_proj);
+        let tris = self.rings.frame(lib, walker, aim, me, valid, self.cam_inside, view_proj, step);
         r.set_overlay(device, queue, view_proj, &tris, &render::library_textures(lib));
     }
 
@@ -2138,6 +2160,7 @@ impl Play {
         }
         let body = walker.cam.walk.phys.smooth_location().to_array();
         self.death = Some(crate::death::DeathCam::new(walker.eye.position.to_array(), walker.eye.direction.to_array(), body));
+        self.death_eye = None;
     }
 
     /// The dump again, Msg000D's end: `ClearPC1B0` (the death camera off,
@@ -4210,8 +4233,24 @@ impl Play {
         touch.draw(ui, size, self.mode != 0, &|id| glyphs.iter().find(|g| g.0 == id).map(|g| g.1));
     }
 
-    /// The HUD's quads for this frame (`VIWndGame::OnDrawSelf`).
-    pub fn draw_hud(&mut self, ui: &mut render::ui::Ui, walker: &Walker, time_ms: i64, view_proj: glam::Mat4, size: (u32, u32)) {
+    /// The HUD on a frame drawn: on one of the game's (`step`, `frames.rs`)
+    /// made again and kept, else the kept quads drawn again; and either way
+    /// the damage numbers under it, placed through this frame's view.
+    pub fn hud(&mut self, ui: &mut render::ui::Ui, walker: &Walker, time_ms: i64, view_proj: glam::Mat4, size: (u32, u32), step: bool) {
+        if step {
+            self.draw_hud(ui, walker, time_ms, view_proj, size);
+            ui.keep();
+        } else {
+            ui.again();
+        }
+        let under = self.damage.place(view_proj, size);
+        ui.quads.splice(0..0, under);
+    }
+
+    /// The HUD's quads for one of the game's frames (`VIWndGame::OnDrawSelf`),
+    /// its windows stepped (their pulses, animations and scrolls count
+    /// frames).
+    fn draw_hud(&mut self, ui: &mut render::ui::Ui, walker: &Walker, time_ms: i64, view_proj: glam::Mat4, size: (u32, u32)) {
         ui.begin(size);
         // VIWndEdit::OnDrawSelf's `sPadOnly`: a keyboard in use and the
         // options' Soft Keyboard on show the compact face
@@ -4283,7 +4322,7 @@ impl Play {
             // VIClient's m_p4FD28.Process: after the scene, before the windows
             let font = assets.surface(vi::hash::hash_resource_id("damage_font.tga"));
             let (slots, puppets, self_at, me) = (&self.entities.slots, &self.puppets, self.self_at, self.self_id32());
-            self.damage.process(ui, font, time_ms, view_proj, size, |id| {
+            self.damage.frame(font, time_ms, view_proj, |id| {
                 let k = slots.iter().position(|e| e.as_ref().is_some_and(|e| e.id == id))?;
                 if Some(id) == me {
                     return self_at.map(|(pos, slot4)| crate::damage::Target { pos, slot4 });

@@ -1,9 +1,17 @@
 //! The newlib port against go-eqoa-vi/vimath, whose functions were checked
-//! against the running console: 24,000 inputs from the regimes each function
-//! branches on (`tools/vimath-corpus`, `go run . > ../../crates/ee/tests/libm_corpus.txt`:
-//! a line a record, the op, the bit patterns of a, b and Go's answer in hex,
-//! and whether Go answers), every answer compared bit for bit. Plus the
-//! console values the Go code records as literals.
+//! against the running game through the tracer: 24,000 inputs from the
+//! regimes each function branches on (`tools/vimath-corpus`, `go run . >
+//! ../../crates/ee/tests/libm_corpus.txt`: a line a record, the op, the bit
+//! patterns of a, b and Go's answer in hex, and whether Go answers), every
+//! answer compared bit for bit. Plus the values the Go code records as
+//! literals.
+//!
+//! The tracer's `call` runs guest code in PCSX2's interpreter, whose adder
+//! keeps every bit of the smaller operand; the console's drops those past its
+//! guard bit (the crate root's `add`). So the corpus is compared with
+//! `ee::interp::libm`, the same code over the interpreter's adder, and the
+//! game's `ee::libm` (that code over the console's) is checked where the two
+//! adders part (`the_consoles_adder_parts_from_the_interpreters`).
 //!
 //! ONE deliberate difference: `atan2f`'s wrapper tests its arguments with
 //! `c.eq.s` (SUPPORT 0x0012711C, 0x0012712C), which on the EE flushes a
@@ -12,7 +20,7 @@
 //! measured the same flush in `powf`'s wrapper. Those records are checked
 //! against the wrapper's answer instead, and counted.
 
-use ee::libm;
+use ee::interp::libm;
 
 #[test]
 fn matches_console_checked_go() {
@@ -67,6 +75,45 @@ fn matches_console_checked_go() {
         summary.join(", ")
     );
     assert!(counts.iter().all(|&c| c > 1000));
+}
+
+/// The same functions over the console's adder: equal to the interpreter's
+/// wherever no dropped bit would have borrowed, and where one would, the
+/// console's answer. `cosf(pi)` is -1 exactly on the console (its last
+/// `1 - (z*0.5 - ...)` adds a term 25 exponents under 1, which the guard bit
+/// drops) and one step short of it in the interpreter. Most records agree.
+#[test]
+fn the_consoles_adder_parts_from_the_interpreters() {
+    use ee::libm as console;
+    let pi = f32::from_bits(0x4049_0FDB);
+    assert_eq!(libm::cosf(pi).to_bits(), 0xBF7F_FFFF);
+    assert_eq!(console::cosf(pi).to_bits(), 0xBF80_0000);
+    // sin of pi/2 a step either side of the float nearest it: 1 exactly
+    assert_eq!(console::sinf(f32::from_bits(0x3FC9_0FD0)).to_bits(), 0x3F80_0000);
+    assert_eq!(libm::sinf(f32::from_bits(0x3FC9_0FD0)).to_bits(), 0x3F7F_FFFF);
+    // what does not borrow is the same: sqrtf (integer) and fmodf entirely,
+    // and most of the rest
+    let corpus = include_str!("libm_corpus.txt");
+    let (mut same, mut all) = (0usize, 0usize);
+    for line in corpus.lines() {
+        let f: Vec<&str> = line.split(' ').collect();
+        let u = |k: usize| f32::from_bits(u32::from_str_radix(f[k], 16).unwrap());
+        let (a, b) = (u(1), u(2));
+        let pair = match f[0] {
+            "6" => Some((libm::sqrtf(a).to_bits(), console::sqrtf(a).to_bits())),
+            "7" => Some((libm::fmodf(a, b).to_bits(), console::fmodf(a, b).to_bits())),
+            "3" => Some((libm::atanf(a).to_bits(), console::atanf(a).to_bits())),
+            _ => None,
+        };
+        if let Some((i, c)) = pair {
+            all += 1;
+            same += (i == c) as usize;
+            if f[0] == "6" || f[0] == "7" {
+                assert_eq!(i, c, "{line}");
+            }
+        }
+    }
+    assert!(same * 10 > all * 6, "{same} of {all} the same");
 }
 
 #[test]

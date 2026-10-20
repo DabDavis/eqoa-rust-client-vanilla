@@ -37,7 +37,10 @@ const SLOP: f64 = 5.0;
 const DOUBLE: Duration = Duration::from_millis(400);
 /// The orbit's turn for a pixel of drag (radians): half a turn over 390.
 const ORBIT_PER_PIXEL: f32 = 0.008;
-/// A pixel of drag as the stick's push for a frame.
+/// A pixel of drag as the stick's push for a sixtieth of a second (a frame
+/// at 60 Hz, where it was set). The push acts for the frame it is given in
+/// (`UpdateControls`' thrusts are integrated over the frame), so it is
+/// scaled by the frame's length: a drag turns or zooms the same at any rate.
 const STICK_PER_PIXEL: f32 = 0.05;
 /// The tilt for a pixel of drag (radians), as the orbit's turn.
 const TILT_PER_PIXEL: f32 = 0.008;
@@ -233,30 +236,33 @@ impl Mouse {
         self.steps = 0.0;
     }
 
-    /// This frame's drag and wheel on the walker's camera (`look`), and
-    /// what the wheel asks of its style (`zoom_step`, which the caller
-    /// carries out: `Play::wheel_style`); a wheel that does is no zoom.
-    pub fn look(&mut self, w: &mut Walker, inverted: bool) -> ([f32; 2], Zoom) {
+    /// This frame's drag and wheel on the walker's camera (`look`), for a
+    /// frame `frame_s` seconds long, and what the wheel asks of its style
+    /// (`zoom_step`, which the caller carries out: `Play::wheel_style`); a
+    /// wheel that does is no zoom.
+    pub fn look(&mut self, w: &mut Walker, inverted: bool, frame_s: f32) -> ([f32; 2], Zoom) {
         let (dx, dy) = std::mem::take(&mut self.look);
         let wheel = std::mem::take(&mut self.wheel);
         self.steps = 0.0;
         let zoom = zoom_step(&w.cam, wheel);
         let wheel = if zoom == Zoom::None { wheel } else { 0.0 };
-        (look(w, dx as f32, dy as f32, wheel, inverted), zoom)
+        (look(w, dx as f32, dy as f32, wheel, inverted, frame_s), zoom)
     }
 }
 
 /// A drag of (dx, dy) window pixels and `wheel` lines on the walker's
-/// camera (`look_cam`).
-pub fn look(w: &mut Walker, dx: f32, dy: f32, wheel: f32, inverted: bool) -> [f32; 2] {
-    look_cam(&mut w.cam, dx, dy, wheel, inverted)
+/// camera in a frame `frame_s` seconds long (`look_cam`).
+pub fn look(w: &mut Walker, dx: f32, dy: f32, wheel: f32, inverted: bool, frame_s: f32) -> [f32; 2] {
+    look_cam(&mut w.cam, dx, dy, wheel, inverted, frame_s)
 }
 
-/// A drag of (dx, dy) window pixels and `wheel` lines on `cam`: in the
-/// orbiting modes the orbit, its tilt and its distance moved at once;
-/// otherwise the right stick's push (rx, ry) for `UpdateControls`.
-pub fn look_cam(cam: &mut WalkCamera<Ee>, dx: f32, dy: f32, wheel: f32, inverted: bool) -> [f32; 2] {
+/// A drag of (dx, dy) window pixels and `wheel` lines on `cam` in a frame
+/// `frame_s` seconds long: in the orbiting modes the orbit, its tilt and its
+/// distance moved at once; otherwise the right stick's push (rx, ry) for
+/// `UpdateControls`.
+pub fn look_cam(cam: &mut WalkCamera<Ee>, dx: f32, dy: f32, wheel: f32, inverted: bool, frame_s: f32) -> [f32; 2] {
     let mut stick = [0.0f32; 2];
+    let per_pixel = stick_per_pixel(frame_s);
     let mode = cam.camera_mode;
     if mode == 1 || mode == 3 {
         if dx != 0.0 {
@@ -274,10 +280,16 @@ pub fn look_cam(cam: &mut WalkCamera<Ee>, dx: f32, dy: f32, wheel: f32, inverted
             cam.set_orbit_distance(F::new(d));
         }
     } else {
-        stick[0] = (dx * STICK_PER_PIXEL).clamp(-1.0, 1.0);
-        stick[1] = (dy * STICK_PER_PIXEL).clamp(-1.0, 1.0);
+        stick[0] = (dx * per_pixel).clamp(-1.0, 1.0);
+        stick[1] = (dy * per_pixel).clamp(-1.0, 1.0);
     }
     stick
+}
+
+/// The stick's push for a pixel of drag in a frame `frame_s` seconds long
+/// (`STICK_PER_PIXEL`); a frame under a millisecond counts as one.
+fn stick_per_pixel(frame_s: f32) -> f32 {
+    STICK_PER_PIXEL * (1.0 / 60.0) / frame_s.max(0.001)
 }
 
 /// `EQOA_MOUSE`, for headless runs: `;`-separated steps at a time in ms,
@@ -429,27 +441,27 @@ mod tests {
         let (def, dist) = (cam.def_orbit_pitch.0, cam.cur.dist.0);
         assert_eq!(def, 0.261_799_4, "style 3's default pitch");
         // up 50 pixels: the view looks up, the camera 0.4 lower
-        let stick = look_cam(&mut cam, 0.0, -50.0, 0.0, false);
+        let stick = look_cam(&mut cam, 0.0, -50.0, 0.0, false, 1.0 / 60.0);
         assert_eq!(stick, [0.0, 0.0], "no zoom on the stick");
         assert_eq!(cam.def_orbit_pitch, F::new(def) + F::new(-0.4));
         assert_eq!(cam.cur.orbit.y, cam.def_orbit_pitch, "resting there, the camera with it");
         assert_eq!(cam.last.orbit.y, cam.def_orbit_pitch);
         assert_eq!(cam.cur.dist.0, dist, "the distance as it was");
         // past the bottom of the range, then the option turning it round
-        look_cam(&mut cam, 0.0, -500.0, 0.0, false);
+        look_cam(&mut cam, 0.0, -500.0, 0.0, false, 1.0 / 60.0);
         assert_eq!(cam.def_orbit_pitch.0, MIN_TILT);
-        look_cam(&mut cam, 0.0, -500.0, 0.0, true);
+        look_cam(&mut cam, 0.0, -500.0, 0.0, true, 1.0 / 60.0);
         assert_eq!(cam.def_orbit_pitch.0, MAX_TILT, "inverted: up raises it, to the top");
         // on its way to the alternate pitch (a wall), only the default moves
         cam.cur.flags |= 8;
         cam.cur.orbit.y = F::new(1.0);
-        look_cam(&mut cam, 0.0, 100.0, 0.0, false);
+        look_cam(&mut cam, 0.0, 100.0, 0.0, false, 1.0 / 60.0);
         assert_eq!(cam.def_orbit_pitch, vi::fpu::clamp(F::new(MAX_TILT) + F::new(0.8), F::new(MIN_TILT), F::new(MAX_TILT)));
         assert_eq!(cam.cur.orbit.y.0, 1.0, "left to its snap");
         // first person: the stick's y
         crate::camstyle::set_style(&mut cam, 0, None, &mut Open);
         let pitch = cam.def_orbit_pitch;
-        let stick = look_cam(&mut cam, 0.0, -10.0, 0.0, false);
+        let stick = look_cam(&mut cam, 0.0, -10.0, 0.0, false, 1.0 / 60.0);
         assert_eq!(stick, [0.0, -0.5]);
         assert_eq!(cam.def_orbit_pitch, pitch);
     }
@@ -463,15 +475,15 @@ mod tests {
         let mut cam = follow();
         assert_eq!(cam.max_orbit_distance.0, crate::camstyle::FOLLOW_MAX_DISTANCE);
         // out all the way: 11, not the game's 8
-        look_cam(&mut cam, 0.0, 0.0, -40.0, false);
+        look_cam(&mut cam, 0.0, 0.0, -40.0, false, 1.0 / 60.0);
         assert_eq!(cam.cur.dist.0, 11.0);
         assert_eq!(zoom_step(&cam, 1.0), Zoom::None, "far out: a notch in zooms");
         // in all the way: 1.5 is the closest; there a notch in is first person
-        look_cam(&mut cam, 0.0, 0.0, 40.0, false);
+        look_cam(&mut cam, 0.0, 0.0, 40.0, false, 1.0 / 60.0);
         assert_eq!(cam.cur.dist.0, 1.5);
         assert_eq!(zoom_step(&cam, -1.0), Zoom::None, "out zooms");
         assert_eq!(zoom_step(&cam, 1.0), Zoom::In);
-        look_cam(&mut cam, 0.0, -25.0, 0.0, false);
+        look_cam(&mut cam, 0.0, -25.0, 0.0, false, 1.0 / 60.0);
         let tilt = cam.def_orbit_pitch;
         let back = crate::camstyle::zoom_in(&mut cam, None, &mut Open);
         assert_eq!(cam.camera_mode, 0, "first person");
@@ -516,13 +528,30 @@ mod tests {
     fn walls_still_stop_the_longer_orbit() {
         for (reach, want) in [(5.0, 3.5), (100.0, 11.0)] {
             let mut cam = follow();
-            look_cam(&mut cam, 0.0, 0.0, -40.0, false);
+            look_cam(&mut cam, 0.0, 0.0, -40.0, false, 1.0 / 60.0);
             assert_eq!(cam.cur.dist.0, 11.0);
             for t in 1..=200 {
                 cam.process(&mut Wall(t * 16, reach));
             }
             assert_eq!(cam.cur.dist.0, want, "a wall {reach} behind");
         }
+    }
+
+    #[test]
+    fn a_drag_pushes_the_stick_for_the_same_time_at_any_rate() {
+        // 120 pixels a second of drag for a second: the push times the
+        // frame's length, summed, is what UpdateControls integrates
+        let total = |hz: f32| -> f32 {
+            let frame = 1.0 / hz;
+            (0..hz as usize).map(|_| (120.0 * frame * stick_per_pixel(frame)).clamp(-1.0, 1.0) * frame).sum()
+        };
+        let (a, b, c) = (total(30.0), total(60.0), total(165.0));
+        assert!((a - b).abs() < 1e-3 && (b - c).abs() < 1e-3, "{a} {b} {c}");
+        // at 60 Hz the push is what it was (0.05 a pixel)
+        assert!((stick_per_pixel(1.0 / 60.0) - STICK_PER_PIXEL).abs() < 1e-6);
+        // control: a push a frame not scaled shrinks with the frame rate
+        let plain = |hz: f32| -> f32 { (0..hz as usize).map(|_| (120.0 / hz * STICK_PER_PIXEL).clamp(-1.0, 1.0) / hz).sum() };
+        assert!(plain(165.0) < plain(60.0) * 0.5);
     }
 
     #[test]

@@ -44,6 +44,9 @@ pub struct Walker {
     pub sprite: Option<CSprite<Ee>>,
     pub anims: AnimScene<Ee>,
     rand: Rand,
+    /// The camera shake's sample the last of the game's frames applied
+    /// (`frame_with`).
+    shake: i32,
 }
 
 impl Walker {
@@ -73,7 +76,7 @@ impl Walker {
         cam.set_orbit_distance(dist);
         cam.set_orbit_angle_behind();
         let eye = cam.process(&mut scene);
-        Walker { cam, scene, eye, sprite: None, anims: AnimScene::default(), rand: Rand(1) }
+        Walker { cam, scene, eye, sprite: None, anims: AnimScene::default(), rand: Rand(1), shake: 0 }
     }
 
     /// `Respawn`'s placing: the character stood at `pos` (on the ground
@@ -139,16 +142,29 @@ impl Walker {
 
     /// One frame: the controls, then the clock moved to `now_ms` and stepped.
     pub fn frame(&mut self, c: Controls, now_ms: i64) {
-        self.frame_with(c.axes(), now_ms, &crate::controls::Client::default());
+        self.frame_with(c.axes(), now_ms, &crate::controls::Client::default(), true);
     }
 
     /// One frame on the sticks `keys` (rx, ry, lx, ly) for the client
     /// `c`: `UpdateControls`, then the clock moved to `now_ms` and
-    /// `Process`. True when the stick cancelled autorun.
-    pub fn frame_with(&mut self, keys: [f32; 4], now_ms: i64, c: &crate::controls::Client) -> bool {
+    /// `Process`. True when the stick cancelled autorun. `game_frame`: one of
+    /// the game's frames (`frames.rs`). Everything here steps by the clock
+    /// but the camera shake (`VICameraEffect::Apply` takes the next of its
+    /// samples a call), which moves on only then: between them the eye is
+    /// shaken by the sample the last of the game's frames took.
+    pub fn frame_with(&mut self, keys: [f32; 4], now_ms: i64, c: &crate::controls::Client, game_frame: bool) -> bool {
         let toggled = crate::controls::update_controls(self, keys, c);
         self.scene.time = now_ms;
+        let next = self.cam.effect.sample;
+        if !game_frame {
+            self.cam.effect.sample = self.shake;
+        }
         self.eye = self.cam.process(&mut self.scene);
+        if game_frame {
+            self.shake = next;
+        } else {
+            self.cam.effect.sample = next;
+        }
         toggled
     }
 

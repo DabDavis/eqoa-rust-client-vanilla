@@ -118,12 +118,16 @@ pub struct Track<M: Model> {
     pub color: [F<M>; 4],
     /// the palette's layer colours, by material then layer
     pub layers: Vec<Vec<[u8; 4]>>,
+    /// the passes the last of the game's frames made, which the frames
+    /// between draw (the first material's second layer eased twice that
+    /// frame, its first once: they cannot be made again without easing)
+    last: Option<[Pass<M>; 2]>,
 }
 
 impl<M: Model> Track<M> {
     /// The constructor's (and `EnterGameLoad`'s -1) state over a palette.
     pub fn new(layers: Vec<Vec<[u8; 4]>>) -> Self {
-        Track { id: u32::MAX, t: f(1.2), p154: 0, color: grey(), layers }
+        Track { id: u32::MAX, t: f(1.2), p154: 0, color: grey(), layers, last: None }
     }
 
     /// `UpdateGame` with nothing to track (no target, no actor, the HUD off).
@@ -132,6 +136,7 @@ impl<M: Model> Track<M> {
         self.t = f(1.2);
         self.color = grey();
         self.p154 = 0;
+        self.last = None;
     }
 
     /// `TrackTarget` for target `id`, its rings at `at`: the billboard (the
@@ -140,14 +145,18 @@ impl<M: Model> Track<M> {
     /// is the target and the view is first person (or the manual camera's, or
     /// inside the player's head). `on_screen`: `at` projects inside the
     /// screen. `con`: `m_p2BB70` while the target info is valid. `dt`: the
-    /// particle system's frame delta.
+    /// particle system's frame delta. `step`: one of the game's frames
+    /// (`frames.rs`); the clock and the colour's easing (a twentieth a call)
+    /// move only then, and between them the rings are placed for the view
+    /// with the passes as the last frame left them.
     #[allow(clippy::too_many_arguments)]
-    pub fn track(&mut self, id: u32, hide_self: bool, at: &Vect3<M>, on_screen: bool, look: &Look<M>, con: Option<u8>, dt: F<M>) -> Option<(Matrix44<M>, [Pass<M>; 2])> {
+    pub fn track(&mut self, id: u32, hide_self: bool, at: &Vect3<M>, on_screen: bool, look: &Look<M>, con: Option<u8>, dt: F<M>, step: bool) -> Option<(Matrix44<M>, [Pass<M>; 2])> {
         if hide_self {
             self.t = f(0.2);
             self.color = grey();
             self.id = id;
             self.p154 = 0;
+            self.last = None;
             return None;
         }
         if !on_screen {
@@ -158,6 +167,7 @@ impl<M: Model> Track<M> {
             self.color = grey();
             self.id = id;
             self.p154 = 0;
+            self.last = None;
         }
         let cp = look.position;
         let mut d = Vect3::new(at.x - cp.x, at.y - cp.y, at.z - cp.z);
@@ -180,8 +190,13 @@ impl<M: Model> Track<M> {
                 Vect4::new(d.x, d.y, d.z, F::ONE),
             ],
         };
-        self.t -= dt * f(2.5);
-        self.t = vimax(f(0.2), self.t);
+        if !step && let Some(p) = &self.last {
+            return Some((rot, p.clone()));
+        }
+        if step {
+            self.t -= dt * f(2.5);
+            self.t = vimax(f(0.2), self.t);
+        }
         let t = self.t - f(0.2);
         let t2 = t * t;
         // the rings' alpha from the clock; the first material's colour eased
@@ -190,7 +205,7 @@ impl<M: Model> Track<M> {
             for c in mat.iter_mut() {
                 c[3] = byte(t2 * f(255.0));
                 if i == 0 {
-                    if let Some(w) = con.and_then(|k| CON_COLORS.get(k as usize)) {
+                    if let Some(w) = con.and_then(|k| CON_COLORS.get(k as usize)).filter(|_| step) {
                         for (k, &w) in w.iter().enumerate() {
                             let want = F::<M>::from_int(w as i32) / f(255.0);
                             self.color[k] += (want - self.color[k]) * f(0.05);
@@ -210,6 +225,9 @@ impl<M: Model> Track<M> {
             }
         }
         let second = Pass { scale: F::ONE - (self.t - f(0.2)), colors: self.layers.clone() };
+        if step {
+            self.last = Some([first.clone(), second.clone()]);
+        }
         Some((rot, [first, second]))
     }
 }
@@ -303,9 +321,10 @@ impl Rings {
     /// the player's id; `info_valid` is `m_targetInfoValid`; `cam_inside` is
     /// `m_p00088` (the follow camera inside the player's head this frame).
     #[allow(clippy::too_many_arguments)]
-    pub fn frame(&mut self, lib: &esf::Library, walker: &Walker, aim: Option<Aim>, me: Option<u32>, info_valid: bool, cam_inside: bool, view_proj: glam::Mat4) -> Vec<Tri> {
+    pub fn frame(&mut self, lib: &esf::Library, walker: &Walker, aim: Option<Aim>, me: Option<u32>, info_valid: bool, cam_inside: bool, view_proj: glam::Mat4, step: bool) -> Vec<Tri> {
         let now = walker.scene.time;
-        let dt = self.delta.step(now);
+        // the particle system's delta, a frame of the game's at a time
+        let dt = if step { self.delta.step(now) } else { F::ZERO };
         if self.sprite.is_none() && self.looked != lib.files.len() {
             self.looked = lib.files.len();
             self.sprite = Sprite::load(lib);
@@ -324,7 +343,7 @@ impl Rings {
         let at = aim.slot4.unwrap_or(aim.pos);
         let look = Look::new(walker.eye.position, walker.eye.direction);
         let con = if info_valid { Some(self.con.unwrap_or(2)) } else { None };
-        let Some((rot, passes)) = track.track(aim.id, hide_self, &Vect3::of(at[0], at[1], at[2]), on_screen(view_proj, at), &look, con, dt) else { return Vec::new() };
+        let Some((rot, passes)) = track.track(aim.id, hide_self, &Vect3::of(at[0], at[1], at[2]), on_screen(view_proj, at), &look, con, dt, step) else { return Vec::new() };
         // VIHSprite::Raster, twice: the pose at the scene's time, the centre
         // transform, each attachment at its node
         sprite.anims.time = now;
@@ -414,11 +433,11 @@ mod tests {
     fn the_rings_scale_in_and_settle() {
         let mut t = Track::<Ieee>::new(palette());
         let at = Vect3::of(0.0, 0.0, 5.0);
-        let (_, p) = t.track(7, false, &at, true, &look(), None, f(0.0)).unwrap();
+        let (_, p) = t.track(7, false, &at, true, &look(), None, f(0.0), true).unwrap();
         assert_eq!((p[0].scale.0, p[0].colors[0][0][3], p[0].colors[1][0][3]), (0.0, 255, 255));
         assert_eq!((p[1].scale.0, p[1].colors[0][0][3], p[1].colors[1][0][3]), (0.0, 0, 255));
         // 0.2 s on: the clock at 0.7, t - 0.2 = 0.5, its square a quarter
-        let (_, p) = t.track(7, false, &at, true, &look(), None, f(0.2)).unwrap();
+        let (_, p) = t.track(7, false, &at, true, &look(), None, f(0.2), true).unwrap();
         assert!((t.t.0 - 0.7).abs() < 1e-6, "{:?}", t.t);
         assert!((p[0].scale.0 - 0.75 * 2.2).abs() < 1e-6, "{:?}", p[0].scale);
         assert_eq!((p[0].colors[0][0][3], p[0].colors[1][0][3]), (63, 63));
@@ -427,7 +446,7 @@ mod tests {
         // so the ring's alpha is 63, not 64
         assert_eq!((p[1].colors[0][0][3], p[1].colors[0][1][3], p[1].colors[1][0][3]), (63, 63, 63));
         // and settled: the ring at its size and half alpha, the rest gone
-        let (_, p) = t.track(7, false, &at, true, &look(), None, f(1.0)).unwrap();
+        let (_, p) = t.track(7, false, &at, true, &look(), None, f(1.0), true).unwrap();
         assert_eq!(t.t.0, 0.2);
         assert_eq!((p[0].scale.0, p[0].colors[0][0][3], p[0].colors[1][0][3]), (2.2, 0, 0));
         assert_eq!((p[1].scale.0, p[1].colors[0][0][3], p[1].colors[1][0][3]), (1.0, 128, 0));
@@ -444,9 +463,9 @@ mod tests {
     fn the_first_material_eases_once_a_layer() {
         let mut t = Track::<Ieee>::new(palette());
         let at = Vect3::of(0.0, 0.0, 5.0);
-        let (_, p) = t.track(7, false, &at, true, &look(), None, f(0.0)).unwrap();
+        let (_, p) = t.track(7, false, &at, true, &look(), None, f(0.0), true).unwrap();
         assert_eq!(p[0].colors[0][0][..3], [127, 127, 127], "grey until the info comes");
-        let (_, p) = t.track(7, false, &at, true, &look(), Some(0), f(0.0)).unwrap();
+        let (_, p) = t.track(7, false, &at, true, &look(), Some(0), f(0.0), true).unwrap();
         // red: 0.5 -> 0.525 -> 0.54875; green and blue 0.5 -> 0.475 -> 0.45125
         let one = 0.5f32 + (1.0 - 0.5) * 0.05;
         let two = one + (1.0 - one) * 0.05;
@@ -459,8 +478,41 @@ mod tests {
         assert_ne!((one * 255.0) as i32 as u8, (two * 255.0) as i32 as u8);
         // an index past the table eases nothing (the game reads past it)
         let before = t.color;
-        t.track(7, false, &at, true, &look(), Some(9), f(0.0)).unwrap();
+        t.track(7, false, &at, true, &look(), Some(9), f(0.0), true).unwrap();
         assert_eq!(t.color, before);
+    }
+
+    /// Stepped on the game's frames, a fifth of a second of a 165 Hz display
+    /// eases the colour and runs the clock as at 30; between them the passes
+    /// are the last frame's. Stepped every display frame (before 2026-10-20)
+    /// the colour went five times as many steps.
+    #[test]
+    fn the_rings_keep_the_games_frames_at_any_rate() {
+        let run = |hz: f64, gated: bool| {
+            let mut t = Track::<Ieee>::new(palette());
+            let mut d = Delta::<Ieee>::default();
+            let mut clock = crate::frames::Frames::default();
+            let at = Vect3::of(0.0, 0.0, 5.0);
+            let mut last = None;
+            for k in 0..(hz as i64 / 5) {
+                let ms = (k as f64 * 1000.0 / hz) as i64;
+                let step = clock.due(ms as f64) || !gated;
+                let dt = if step { d.step(ms) } else { F::ZERO };
+                let (_, p) = t.track(7, false, &at, true, &look(), Some(0), dt, step).unwrap();
+                if !step {
+                    assert_eq!(Some(&p), last.as_ref(), "between the game's frames, the last frame's passes");
+                }
+                last = Some(p);
+            }
+            (t.color[0].0, t.t.0)
+        };
+        let (red30, clock30) = run(30.0, true);
+        let (red165, clock165) = run(165.0, true);
+        assert!((red30 - red165).abs() < 0.01, "{red30} at 30 Hz, {red165} at 165");
+        assert!((clock30 - clock165).abs() < 0.05, "{clock30} {clock165}");
+        // control: stepped every frame, the colour all but there
+        let (red, _) = run(165.0, false);
+        assert!(red > red30 + 0.1, "{red} against {red30}");
     }
 
     /// The rings go along the line to the target, at its distance less one,
@@ -469,7 +521,7 @@ mod tests {
     fn the_rings_are_pulled_toward_the_camera() {
         let at_dist = |d: f32| {
             let mut t = Track::<Ieee>::new(palette());
-            let (rot, _) = t.track(7, false, &Vect3::of(0.0, 0.0, d), true, &look(), None, f(0.0)).unwrap();
+            let (rot, _) = t.track(7, false, &Vect3::of(0.0, 0.0, d), true, &look(), None, f(0.0), true).unwrap();
             rot.m[3].z.0
         };
         assert_eq!(at_dist(50.0), 9.0);
@@ -485,7 +537,7 @@ mod tests {
     fn the_rings_face_the_camera() {
         let l = Look::<Ieee>::new(Vect3::of(1.0, 2.0, 3.0), Vect3::of(1.0, 0.0, 0.0));
         let mut t = Track::<Ieee>::new(palette());
-        let (rot, _) = t.track(7, false, &Vect3::of(11.0, 2.0, 3.0), true, &l, None, f(0.0)).unwrap();
+        let (rot, _) = t.track(7, false, &Vect3::of(11.0, 2.0, 3.0), true, &l, None, f(0.0), true).unwrap();
         // looking along +x: forward x, right = x × y = z, up = z × x = y
         assert_eq!(rot.m[0].xyz().to_array(), [0.0, 0.0, 1.0]);
         assert_eq!(rot.m[1].xyz().to_array(), [0.0, 1.0, 0.0]);
@@ -501,19 +553,19 @@ mod tests {
     fn hidden_off_screen_new_and_none() {
         let mut t = Track::<Ieee>::new(palette());
         let at = Vect3::of(0.0, 0.0, 5.0);
-        assert!(t.track(1, true, &at, true, &look(), Some(5), f(0.0)).is_none());
+        assert!(t.track(1, true, &at, true, &look(), Some(5), f(0.0), true).is_none());
         assert_eq!((t.id, t.t.0, t.color[0].0), (1, 0.2, 0.5));
-        let (_, p) = t.track(1, false, &at, true, &look(), None, f(0.0)).unwrap();
+        let (_, p) = t.track(1, false, &at, true, &look(), None, f(0.0), true).unwrap();
         assert_eq!(p[1].colors[0][0][3], 128, "settled at once");
-        t.track(2, false, &at, true, &look(), None, f(0.1)).unwrap();
+        t.track(2, false, &at, true, &look(), None, f(0.1), true).unwrap();
         let clock = t.t;
-        assert!(t.track(2, false, &at, false, &look(), Some(5), f(0.1)).is_none());
+        assert!(t.track(2, false, &at, false, &look(), Some(5), f(0.1), true).is_none());
         assert_eq!((t.id, t.t), (2, clock), "off the screen the clock stands still");
         assert!((clock.0 - 1.2).abs() < 1e-6 || clock.0 < 1.2);
         t.reset();
         assert_eq!((t.id, t.t.0, t.p154), (u32::MAX, 1.2, 0));
         // control: had the hidden branch drawn, the first call returns Some
-        assert!(Track::<Ieee>::new(palette()).track(1, false, &at, true, &look(), None, f(0.0)).is_some());
+        assert!(Track::<Ieee>::new(palette()).track(1, false, &at, true, &look(), None, f(0.0), true).is_some());
     }
 
     /// The renderer's depth runs 0..1: a point in front of the camera is on

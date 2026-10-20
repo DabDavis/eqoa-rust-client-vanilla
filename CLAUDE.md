@@ -52,9 +52,15 @@ The Rust client. README.md is the plan and the crate table; keep it current.
   `EQOA_QUIT=s`, `EQOA_WALK` script a run. A renderer change is held to `shot` PNGs byte for byte
   (`EQOA_HOUR` pinned; a shot's layers scroll by its script time).
 - The `vi` structs are `#[repr(C)]` in the EE layout because the oracle compares raw bytes; keep it that way while ports are being proven. Later (not urgent): native runtime types beside them, converted at the edges, the layout types kept for oracle tests.
-- `ee::libm` is held to `tools/vimath-corpus` (Go, needs `../go-eqoa-vi`): regenerate the corpus with
-  `go run . > ../../crates/ee/tests/libm_corpus.txt` (Go build: `TMPDIR`/`GOTMPDIR` under `~/.cache`).
-  It is text and committed: the pre-commit hook refuses binaries, and `*.bin` is ignored.
+- `ee`'s adder has the EE's one guard bit (PCSX2's recompiler, `FPU_ADD_SUB`); go-eqoa-vi measured through
+  the tracer's `call`, which runs PCSX2's INTERPRETER (every bit kept): that adder is `ee::interp`.
+  `ee::interp::libm` (the same newlib over it) is held to `tools/vimath-corpus` (Go, needs `../go-eqoa-vi`):
+  regenerate the corpus with `go run . > ../../crates/ee/tests/libm_corpus.txt` (Go build: `TMPDIR`/`GOTMPDIR`
+  under `~/.cache`). It is text and committed: the pre-commit hook refuses binaries, and `*.bin` is ignored.
+- The game runs 30 frames a second; the client draws at the display's rate. What the game counts in frames
+  (the HUD and every window, `KeyFlash`, `TextScroll`, the rings' easing, the death camera, the shake) steps
+  on `frames.rs`'s clock (`game_frame`, `Play::hud`), never once a frame drawn; a new frame-counted thing
+  goes there, with a test at 30 and 165 Hz. What moves by the clock runs every frame drawn.
 - Input (README "the pad", "the mouse and the touch screen"): the pad is the game's own path
   (`vi::pad` held to oracle ops 50-52; `input.rs` libpad on the host, `PadKeys`, `Play::set_key`,
   `controls.rs` UpdateControls). Headless: `EQOA_PAD` (`start@2500;stick l 0 -1@1500+2000`),

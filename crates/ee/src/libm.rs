@@ -25,7 +25,7 @@
 // same return; they stay separate here so they read against the source.
 #![allow(clippy::if_same_then_else)]
 
-use crate::{add, div, mul, operand, sub};
+use super::arith::{add, div, mul, operand, sub};
 
 fn bits(f: f32) -> i32 {
     f.to_bits() as i32

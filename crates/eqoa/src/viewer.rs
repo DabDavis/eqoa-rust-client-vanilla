@@ -339,6 +339,13 @@ pub fn shot_with(
         let attack = std::env::var_os("EQOA_ATTACK").is_some();
         let trace_walk: Option<i64> = std::env::var("EQOA_TRACE_WALK").ok().and_then(|v| v.parse::<i64>().ok()).map(|v| (v / 16 * 16).max(16));
         let walk = walk_script();
+        // `EQOA_FRAME_MS=n`: frames of n ms instead of 16 (a display's rate:
+        // 6 is about 165 a second, 33 the console's 30)
+        let frame_ms: i64 = std::env::var("EQOA_FRAME_MS").ok().and_then(|v| v.parse().ok()).filter(|&v: &i64| v > 0).unwrap_or(16);
+        // the game's frames among them (`frames.rs`), and how many since `at`
+        let mut frames = crate::frames::Frames::default();
+        let mut game_frames = 0usize;
+        let mut hud_drawn = false;
         // `EQOA_PAD`: a pad by script, through the game's pad path;
         // `EQOA_MOUSE`: the mouse's, through the window's
         let pad_script = crate::input::Script::from_env();
@@ -350,7 +357,8 @@ pub fn shot_with(
         let touch_script = crate::touch::script();
         let mut touch = crate::touch::TouchPad::new(touch_first());
         while t < script.ms {
-            t += 16;
+            t += frame_ms;
+            let game_frame = frames.due(t as f64);
             let controls = match &walk {
                 Some(segs) => segs.iter().find(|s| t <= s.1).map_or(Controls::default(), |s| s.0),
                 None => script.controls,
@@ -431,11 +439,12 @@ pub fn shot_with(
             let (tx, ty, pinch) = touch.take_look();
             if !play.as_ref().is_some_and(|p| p.is_dead()) && play.as_ref().is_none_or(|p| p.look_free()) {
                 let inverted = play.as_ref().is_some_and(|p| p.options.inverted != 0);
-                let (look, zoom) = mouse.look(&mut walker, inverted);
+                let frame_s = frame_ms as f32 / 1000.0;
+                let (look, zoom) = mouse.look(&mut walker, inverted, frame_s);
                 if let Some(p) = play.as_mut() {
                     p.wheel_style(&mut walker, zoom, &mut mouse.back);
                 }
-                let feel = crate::mouse::look(&mut walker, tx, ty, pinch, inverted);
+                let feel = crate::mouse::look(&mut walker, tx, ty, pinch, inverted, frame_s);
                 for i in 0..2 {
                     for m in [look[i], feel[i]] {
                         if m * m > sticks[i] * sticks[i] {
@@ -456,16 +465,17 @@ pub fn shot_with(
                 }
             }
             let client = play.as_ref().filter(|p| !p.is_dead()).map(|p| p.control_client()).unwrap_or_default();
-            if walker.frame_with(sticks, t, &client)
+            if walker.frame_with(sticks, t, &client, game_frame)
                 && let Some(p) = play.as_mut()
             {
                 p.toggle_autorun();
             }
             // `EQOA_TRACE_WALK=ms`: the body and the camera every that often
             if let Some(every) = trace_walk
-                && t % every == 0
+                && t / every != (t - frame_ms) / every
             {
-                eprintln!("walk {t} ms: {} orbit {:.4} sticks {sticks:?} anim {:?}", walker.describe(), walker.cam.cur.orbit.x.0, walker.sprite.as_ref().map(|s| s.action));
+                let v = walker.cam.walk.phys.velocity;
+                eprintln!("walk {t} ms: {} vel ({:.4}, {:.4}, {:.4}) orbit {:.4} sticks {sticks:?} anim {:?}", walker.describe(), v.x.0, v.y.0, v.z.0, walker.cam.cur.orbit.x.0, walker.sprite.as_ref().map(|s| s.action));
             }
             let (proj, v) = walker.view(aspect);
             last_view = Some(proj * v);
@@ -559,10 +569,15 @@ pub fn shot_with(
                 // `EQOA_START_KEYS` (o open, u d l r e x, s square, c circle, t R1, any
                 // other character a pause):
                 // the start menu's
-                // keys, the spell book's while it is up, each held for a frame (pressed, then released on the next:
-                // the menus' auto-repeat pulses while a key is down).
-                let step = ((t - at) / 16 - 1) as usize;
+                // keys, the spell book's while it is up, each held for a frame of
+                // the game's (pressed, then released on the next: the menus'
+                // auto-repeat pulses once a frame of the game's while a key is down).
+                if t > at && game_frame {
+                    game_frames += 1;
+                }
+                let step = game_frames.saturating_sub(1);
                 if t > at
+                    && game_frame
                     && let Ok(keys) = std::env::var("EQOA_START_KEYS")
                     && let Some(k) = keys.chars().nth(step / 2)
                 {
@@ -720,7 +735,7 @@ pub fn shot_with(
                     p.attack_press();
                 }
                 let gpu = crate::play::Gpu { renderer: &mut renderer, device: &device, queue: &queue };
-                if let Some(model) = p.frame(&mut walker, &*lib, gpu, t, None)
+                if let Some(model) = p.frame(&mut walker, &*lib, gpu, t, game_frame, None)
                     && let Some(r) = lib.lookup(model as i32)
                 {
                     eprintln!("the server names the player's model {model:#010x}");
@@ -731,14 +746,16 @@ pub fn shot_with(
                 for (w, instant) in p.weather.drain(..) {
                     weather.set_weather(w, instant);
                 }
-                // The HUD steps each frame (its glows, the name's scroll).
+                // The HUD steps each of the game's frames (its glows, the
+                // name's scroll).
                 if let Some(u) = renderer.ui.as_mut() {
                     let (proj, v) = walker.view(w as f32 / h as f32);
-                    p.draw_hud(u, &walker, t, proj * v, (w, h));
+                    p.hud(u, &walker, t, proj * v, (w, h), game_frame);
+                    hud_drawn |= game_frame;
                 }
                 // TrackTarget too (the rings' clock); the last frame's are drawn
                 let (proj, v) = walker.view(w as f32 / h as f32);
-                p.draw_rings(&mut renderer, &device, &queue, &walker, proj * v, lib);
+                p.draw_rings(&mut renderer, &device, &queue, &walker, proj * v, lib, game_frame);
                 // A teleport into another world: that world's file in place
                 // of this one, and the walk begun again there.
                 if let Some((file, pos, heading)) = p.take_world_change() {
@@ -753,7 +770,7 @@ pub fn shot_with(
                     }
                     p.world_entered(&mut walker);
                 }
-                std::thread::sleep(std::time::Duration::from_millis(16));
+                std::thread::sleep(std::time::Duration::from_millis(frame_ms as u64));
             }
             // UpdateSprite runs every frame in the game.
             walker.pose();
@@ -871,7 +888,8 @@ pub fn shot_with(
         streamed = Some(streamer);
         if let Some(p) = &mut play {
             if let Some(u) = renderer.ui.as_mut() {
-                p.draw_hud(u, &walker, t, view.view_proj, (w, h));
+                // the last of the game's frames' HUD (made now if none came)
+                p.hud(u, &walker, t, view.view_proj, (w, h), !hud_drawn);
                 touch.textures(u, &device, &queue);
                 p.draw_touch(u, &touch, (w, h));
             }
@@ -1132,6 +1150,13 @@ struct App {
     last_view: Option<glam::Mat4>,
     /// The touch screen's pad (`touch.rs`).
     touch: crate::touch::TouchPad,
+    /// The game's frames among those drawn (`frames.rs`): what the game
+    /// counts in frames steps on these.
+    frames: crate::frames::Frames,
+    /// When the last frame was drawn, and how long it was (s): a mouse's
+    /// drag pushes the stick for a time, not a frame (`mouse::look`).
+    drawn_at: Option<Instant>,
+    frame_s: f32,
 }
 
 pub fn run(lib: Library, source: Source) -> Result<(), Error> {
@@ -1185,6 +1210,9 @@ pub fn run_with_gfx(lib: Library, source: Source, play: Option<crate::play::Play
         mouse: crate::mouse::Mouse::default(),
         last_view: None,
         touch: crate::touch::TouchPad::new(touch_first()),
+        frames: crate::frames::Frames::default(),
+        drawn_at: None,
+        frame_s: 1.0 / 60.0,
     };
     #[cfg(target_arch = "wasm32")]
     {
@@ -1349,7 +1377,7 @@ impl App {
         let free = !dead && self.play.as_ref().is_none_or(|p| p.look_free());
         let inverted = self.play.as_ref().is_some_and(|p| p.options.inverted != 0);
         let ((look, zoom), feel) = match self.walker.as_mut() {
-            Some(w) if free => (self.mouse.look(w, inverted), crate::mouse::look(w, tx, ty, pinch, inverted)),
+            Some(w) if free => (self.mouse.look(w, inverted, self.frame_s), crate::mouse::look(w, tx, ty, pinch, inverted, self.frame_s)),
             _ => {
                 // a window up: the wheel and a finger's drag are its up and down
                 let size = self.gfx.as_ref().map_or((640, 448), |g| (g.config.width, g.config.height));
@@ -2238,6 +2266,14 @@ impl ApplicationHandler for App {
                 }
                 FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let frame_start = Instant::now();
+                // one of the game's frames, 30 a second whatever the
+                // display's rate: what the game counts in frames (the HUD and
+                // its windows, the rings, the death camera, the shake) steps
+                // only on these (`frames.rs`)
+                let game_frame = self.frames.due(self.clock.elapsed().as_secs_f64() * 1000.0);
+                if let Some(at) = self.drawn_at.replace(frame_start) {
+                    self.frame_s = frame_start.duration_since(at).as_secs_f32().min(0.1);
+                }
                 if let Some(p) = &mut self.perf {
                     p.begin();
                 }
@@ -2305,7 +2341,7 @@ impl ApplicationHandler for App {
                     // as the client stands
                     let mut client = play.as_ref().filter(|p| !p.is_dead()).map(|p| p.control_client()).unwrap_or_default();
                     client.keys = game_keys;
-                    if w.frame_with(sticks, now, &client)
+                    if w.frame_with(sticks, now, &client, game_frame)
                         && let Some(p) = play.as_mut()
                     {
                         p.toggle_autorun();
@@ -2314,7 +2350,7 @@ impl ApplicationHandler for App {
                     if let Some(p) = play {
                         let gpu = crate::play::Gpu { renderer: &mut g.renderer, device: &g.device, queue: &g.queue };
                         // The server named the player's model: dress the walker in it.
-                        if let Some(model) = p.frame(w, lib, gpu, now, sound.as_mut())
+                        if let Some(model) = p.frame(w, lib, gpu, now, game_frame, sound.as_mut())
                             && let Some(r) = lib.lookup(model as i32)
                             && let Some(m) = lib.build_model(r)
                         {
@@ -2446,11 +2482,11 @@ impl ApplicationHandler for App {
                 self.last_view = Some(view.view_proj);
                 if let (Some(p), Some(w)) = (&mut self.play, &self.walker) {
                     if let Some(u) = g.renderer.ui.as_mut() {
-                        p.draw_hud(u, w, self.clock.elapsed().as_millis() as i64, view.view_proj, (g.config.width, g.config.height));
+                        p.hud(u, w, self.clock.elapsed().as_millis() as i64, view.view_proj, (g.config.width, g.config.height), game_frame);
                         self.touch.textures(u, &g.device, &g.queue);
                         p.draw_touch(u, &self.touch, (g.config.width, g.config.height));
                     }
-                    p.draw_rings(&mut g.renderer, &g.device, &g.queue, w, view.view_proj, &self.lib);
+                    p.draw_rings(&mut g.renderer, &g.device, &g.queue, w, view.view_proj, &self.lib, game_frame);
                     let plates = p.plates();
                     if let Some(t) = g.renderer.text.as_mut() {
                         t.labels = crate::play::labels(&plates, w.eye_position(), view.view_proj, t);
