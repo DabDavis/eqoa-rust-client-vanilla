@@ -34,11 +34,29 @@ impl std::fmt::Display for Trap {
 pub struct Mem {
     pub ram: Vec<u8>,
     pub spr: Vec<u8>,
+    /// The decoded words of a stretch of RAM (`watch_code`, the library's
+    /// image), from `code_at`: a write there undoes the decoding of each word
+    /// it touches, so code that is rewritten runs as rewritten.
+    code: Vec<Insn>,
+    code_at: usize,
+    /// The functions computed natively (`native.rs`), entry and length: the
+    /// entry decodes to `Op::Native`, its index here. A write into one's
+    /// bytes leaves it to the interpreter from then on (its entry becomes
+    /// `u32::MAX`), since what was proved is no longer the code.
+    pub(crate) natives: Vec<(u32, u32, &'static str)>,
+    /// While set, each write is first recorded here with the bytes it is
+    /// about to replace, keyed by RAM offset (the scratchpad's from
+    /// `SPR_KEY`): the undo log `Machine::check_native` compares runs by.
+    pub(crate) log: Option<Vec<(usize, Vec<u8>)>>,
 }
+
+/// Where the scratchpad's offsets start in `Mem::log`'s keys: past RAM's,
+/// within a 32-bit `usize` (the crate runs in a page's workers too).
+pub(crate) const SPR_KEY: usize = 1 << 30;
 
 impl Default for Mem {
     fn default() -> Self {
-        Mem { ram: vec![0; RAM_SIZE], spr: vec![0; SPR_SIZE] }
+        Mem { ram: vec![0; RAM_SIZE], spr: vec![0; SPR_SIZE], code: Vec::new(), code_at: 0, natives: Vec::new(), log: None }
     }
 }
 
@@ -71,9 +89,64 @@ impl Mem {
     #[inline(always)]
     pub fn slice_mut(&mut self, va: u32, len: usize) -> Option<&mut [u8]> {
         match Self::map(va, len) {
-            Ok(p) => Some(&mut self.ram[p..p + len]),
-            Err(Some(p)) => Some(&mut self.spr[p..p + len]),
+            Ok(p) => {
+                let at = p.wrapping_sub(self.code_at);
+                if at < self.code.len() * 4 || (p < self.code_at && p + len > self.code_at) {
+                    self.undecode(p, len);
+                }
+                if let Some(log) = &mut self.log {
+                    log.push((p, self.ram[p..p + len].to_vec()));
+                }
+                Some(&mut self.ram[p..p + len])
+            }
+            Err(Some(p)) => {
+                if let Some(log) = &mut self.log {
+                    log.push((SPR_KEY + p, self.spr[p..p + len].to_vec()));
+                }
+                Some(&mut self.spr[p..p + len])
+            }
             Err(None) => None,
+        }
+    }
+
+    /// The `len` bytes at a `log` key.
+    pub(crate) fn logged(&self, key: usize, len: usize) -> &[u8] {
+        if key >= SPR_KEY { &self.spr[key - SPR_KEY..key - SPR_KEY + len] } else { &self.ram[key..key + len] }
+    }
+
+    /// Puts bytes back at a `log` key (no logging, no undecoding: what it
+    /// restores is what was there).
+    pub(crate) fn restore(&mut self, key: usize, bytes: &[u8]) {
+        let to = if key >= SPR_KEY { &mut self.spr[key - SPR_KEY..key - SPR_KEY + bytes.len()] } else { &mut self.ram[key..key + bytes.len()] };
+        to.copy_from_slice(bytes);
+    }
+
+    /// The words of `len` bytes of RAM from `p` are to be decoded again.
+    #[cold]
+    fn undecode(&mut self, p: usize, len: usize) {
+        let first = p.saturating_sub(self.code_at) / 4;
+        let end = ((p + len).saturating_sub(self.code_at)).div_ceil(4).min(self.code.len());
+        for d in &mut self.code[first.min(end)..end] {
+            d.op = Op::Undecoded;
+        }
+        for (at, n, _) in &mut self.natives {
+            // RAM below 0x20000000 is mapped as is
+            let (lo, hi) = (*at as usize & 0x1FFF_FFFF, (*at as usize & 0x1FFF_FFFF) + *n as usize);
+            if *at != u32::MAX && p < hi && p + len > lo {
+                let entry = (lo.wrapping_sub(self.code_at)) / 4;
+                if let Some(d) = self.code.get_mut(entry) {
+                    d.op = Op::Undecoded;
+                }
+                *at = u32::MAX;
+            }
+        }
+    }
+
+    /// Words from `va` (in RAM) for `len` bytes run decoded (`Cpu::run`).
+    pub fn watch_code(&mut self, va: u32, len: u32) {
+        if let Ok(p) = Self::map(va, len as usize) {
+            self.code_at = p;
+            self.code = vec![Insn::UNDECODED; len as usize / 4];
         }
     }
 
@@ -119,6 +192,7 @@ fn sx32(v: u64) -> u64 {
 /// The register file. `gpr` holds each register's low 64 bits, `gpu` the
 /// high 64 that only `lq`/`sq` and the MMI touch (PCSX2 writes `UD[0]` for
 /// every other instruction, so the high half survives them).
+#[derive(Clone)]
 pub struct Cpu {
     pub gpr: [u64; 32],
     pub gpu: [u64; 32],
@@ -725,6 +799,398 @@ impl Cpu {
         if r != 0 {
             self.gpr[r] = lo;
             self.gpu[r] = hi;
+        }
+    }
+}
+
+// ---- decoded execution --------------------------------------------------------
+//
+// The same instructions as `exec`, each word decoded once (`Mem::watch_code`):
+// its fields taken out, a branch's or jump's target worked out from its own
+// address, and one arm a word. What has no arm here goes to `exec`.
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+enum Op {
+    Undecoded,
+    /// `exec` runs it
+    Exec,
+    /// the entry of a function computed natively (`imm`: its index in
+    /// `Mem::natives`)
+    Native,
+    Sll,
+    Srl,
+    Sra,
+    Sllv,
+    Srlv,
+    Srav,
+    Jr,
+    Jalr,
+    Movz,
+    Movn,
+    Mfhi,
+    Mthi,
+    Mflo,
+    Mtlo,
+    Dsllv,
+    Dsrlv,
+    Dsrav,
+    Mult,
+    Multu,
+    Div,
+    Divu,
+    Addu,
+    Subu,
+    And,
+    Or,
+    Xor,
+    Nor,
+    Slt,
+    Sltu,
+    Daddu,
+    Dsubu,
+    Dsll,
+    Dsrl,
+    Dsra,
+    Dsll32,
+    Dsrl32,
+    Dsra32,
+    Bltz,
+    Bgez,
+    Bltzl,
+    Bgezl,
+    J,
+    Jal,
+    Beq,
+    Bne,
+    Blez,
+    Bgtz,
+    Beql,
+    Bnel,
+    Blezl,
+    Bgtzl,
+    Addiu,
+    Slti,
+    Sltiu,
+    Andi,
+    Ori,
+    Xori,
+    Lui,
+    Daddiu,
+    Lb,
+    Lh,
+    Lw,
+    Lbu,
+    Lhu,
+    Lwu,
+    Ld,
+    Sb,
+    Sh,
+    Sw,
+    Sd,
+}
+
+/// One word, decoded. `imm` is what the op takes: the immediate sign- or
+/// zero-extended as the instruction does, `lui`'s shifted, or a branch's or
+/// jump's target; `word` is the instruction, for `exec`.
+#[derive(Clone, Copy, Debug)]
+pub struct Insn {
+    op: Op,
+    rs: u8,
+    rt: u8,
+    rd: u8,
+    sa: u8,
+    imm: u32,
+    word: u32,
+}
+
+impl Insn {
+    const UNDECODED: Insn = Insn { op: Op::Undecoded, rs: 0, rt: 0, rd: 0, sa: 0, imm: 0, word: 0 };
+}
+
+/// The word at `pc`, decoded.
+fn decode(word: u32, pc: u32) -> Insn {
+    let rs = ((word >> 21) & 31) as u8;
+    let rt = ((word >> 16) & 31) as u8;
+    let rd = ((word >> 11) & 31) as u8;
+    let sa = ((word >> 6) & 31) as u8;
+    let simm = word as u16 as i16 as i32 as u32;
+    let zimm = word & 0xFFFF;
+    let target = pc.wrapping_add(4).wrapping_add(simm << 2);
+    let jump = (pc.wrapping_add(4) & 0xF000_0000) | ((word & 0x03FF_FFFF) << 2);
+    let (op, imm) = match word >> 26 {
+        0x00 => (
+            match word & 0x3F {
+                0x00 => Op::Sll,
+                0x02 => Op::Srl,
+                0x03 => Op::Sra,
+                0x04 => Op::Sllv,
+                0x06 => Op::Srlv,
+                0x07 => Op::Srav,
+                0x08 => Op::Jr,
+                0x09 => Op::Jalr,
+                0x0A => Op::Movz,
+                0x0B => Op::Movn,
+                0x10 => Op::Mfhi,
+                0x11 => Op::Mthi,
+                0x12 => Op::Mflo,
+                0x13 => Op::Mtlo,
+                0x14 => Op::Dsllv,
+                0x16 => Op::Dsrlv,
+                0x17 => Op::Dsrav,
+                0x18 => Op::Mult,
+                0x19 => Op::Multu,
+                0x1A => Op::Div,
+                0x1B => Op::Divu,
+                0x20 | 0x21 => Op::Addu,
+                0x22 | 0x23 => Op::Subu,
+                0x24 => Op::And,
+                0x25 => Op::Or,
+                0x26 => Op::Xor,
+                0x27 => Op::Nor,
+                0x2A => Op::Slt,
+                0x2B => Op::Sltu,
+                0x2C | 0x2D => Op::Daddu,
+                0x2E | 0x2F => Op::Dsubu,
+                0x38 => Op::Dsll,
+                0x3A => Op::Dsrl,
+                0x3B => Op::Dsra,
+                0x3C => Op::Dsll32,
+                0x3E => Op::Dsrl32,
+                0x3F => Op::Dsra32,
+                _ => Op::Exec,
+            },
+            0,
+        ),
+        0x01 => match rt {
+            0x00 => (Op::Bltz, target),
+            0x01 => (Op::Bgez, target),
+            0x02 => (Op::Bltzl, target),
+            0x03 => (Op::Bgezl, target),
+            _ => (Op::Exec, 0),
+        },
+        0x02 => (Op::J, jump),
+        0x03 => (Op::Jal, jump),
+        0x04 => (Op::Beq, target),
+        0x05 => (Op::Bne, target),
+        0x06 => (Op::Blez, target),
+        0x07 => (Op::Bgtz, target),
+        0x08 | 0x09 => (Op::Addiu, simm),
+        0x0A => (Op::Slti, simm),
+        0x0B => (Op::Sltiu, simm),
+        0x0C => (Op::Andi, zimm),
+        0x0D => (Op::Ori, zimm),
+        0x0E => (Op::Xori, zimm),
+        0x0F => (Op::Lui, zimm << 16),
+        0x14 => (Op::Beql, target),
+        0x15 => (Op::Bnel, target),
+        0x16 => (Op::Blezl, target),
+        0x17 => (Op::Bgtzl, target),
+        0x18 | 0x19 => (Op::Daddiu, simm),
+        0x20 => (Op::Lb, simm),
+        0x21 => (Op::Lh, simm),
+        0x23 => (Op::Lw, simm),
+        0x24 => (Op::Lbu, simm),
+        0x25 => (Op::Lhu, simm),
+        0x27 => (Op::Lwu, simm),
+        0x37 => (Op::Ld, simm),
+        0x28 => (Op::Sb, simm),
+        0x29 => (Op::Sh, simm),
+        0x2B => (Op::Sw, simm),
+        0x3F => (Op::Sd, simm),
+        _ => (Op::Exec, 0),
+    };
+    Insn { op, rs, rt, rd, sa, imm, word }
+}
+
+/// Why `Cpu::run` returned.
+pub enum Stop {
+    /// `pc` left the decoded stretch, or the instruction budget ran out
+    Left,
+    /// `pc` is at the entry of `Mem::natives[k]`, not yet run
+    Native(usize),
+}
+
+impl Cpu {
+    /// Runs decoded words while `pc` stays in `Mem::watch_code`'s stretch, at
+    /// most until `insns` reaches `end`; returns at the first `pc` outside it
+    /// (a stand-in, the caller's return address), which the caller steps, or
+    /// at a native function's entry.
+    pub fn run(&mut self, m: &mut Mem, end: u64) -> Result<Stop, Trap> {
+        let base = m.code_at as u32;
+        while self.insns < end {
+            let cur = self.pc;
+            let i = (cur.wrapping_sub(base) >> 2) as usize;
+            if cur & 3 != 0 || i >= m.code.len() {
+                return Ok(Stop::Left);
+            }
+            let mut d = m.code[i];
+            if d.op == Op::Undecoded {
+                let word = m.r32(cur).ok_or(Trap::Fault { pc: cur, va: cur })?;
+                d = match m.natives.iter().position(|&(a, _, _)| a == cur) {
+                    Some(k) => Insn { op: Op::Native, imm: k as u32, word, ..Insn::UNDECODED },
+                    None => decode(word, cur),
+                };
+                m.code[i] = d;
+            }
+            if d.op == Op::Native {
+                return Ok(Stop::Native(d.imm as usize));
+            }
+            self.pc = self.npc;
+            self.npc = self.npc.wrapping_add(4);
+            self.insns += 1;
+            self.exec_decoded(m, d, cur)?;
+        }
+        Ok(Stop::Left)
+    }
+
+    #[inline(always)]
+    fn exec_decoded(&mut self, m: &mut Mem, d: Insn, cur: u32) -> Result<(), Trap> {
+        let (rs, rt, rd) = (d.rs as usize, d.rt as usize, d.rd as usize);
+        let s = self.gpr[rs];
+        let t = self.gpr[rt];
+        let simm = d.imm as i32 as i64 as u64;
+        let ea = (s as u32).wrapping_add(d.imm);
+        let fault = |va: u32| Trap::Fault { pc: cur, va };
+        let sa = d.sa as u32;
+        match d.op {
+            Op::Undecoded | Op::Native => unreachable!(),
+            Op::Exec => return self.exec(m, d.word, cur),
+            Op::Sll => self.set(rd, sx32(((t as u32) << sa) as u64)),
+            Op::Srl => self.set(rd, sx32(((t as u32) >> sa) as u64)),
+            Op::Sra => self.set(rd, ((t as u32 as i32) >> sa) as i64 as u64),
+            Op::Sllv => self.set(rd, sx32(((t as u32) << (s & 31)) as u64)),
+            Op::Srlv => self.set(rd, sx32(((t as u32) >> (s & 31)) as u64)),
+            Op::Srav => self.set(rd, ((t as u32 as i32) >> (s & 31)) as i64 as u64),
+            Op::Jr => self.npc = s as u32,
+            Op::Jalr => {
+                self.set(rd, cur.wrapping_add(8) as u64);
+                self.npc = s as u32;
+            }
+            Op::Movz => {
+                if t == 0 {
+                    self.set(rd, s)
+                }
+            }
+            Op::Movn => {
+                if t != 0 {
+                    self.set(rd, s)
+                }
+            }
+            Op::Mfhi => self.set(rd, self.hi),
+            Op::Mthi => self.hi = s,
+            Op::Mflo => self.set(rd, self.lo),
+            Op::Mtlo => self.lo = s,
+            Op::Dsllv => self.set(rd, t << (s & 63)),
+            Op::Dsrlv => self.set(rd, t >> (s & 63)),
+            Op::Dsrav => self.set(rd, ((t as i64) >> (s & 63)) as u64),
+            Op::Mult => {
+                let r = (s as u32 as i32 as i64).wrapping_mul(t as u32 as i32 as i64);
+                self.lo = sx32(r as u64);
+                self.hi = sx32((r >> 32) as u64);
+                self.set(rd, self.lo);
+            }
+            Op::Multu => {
+                let r = (s as u32 as u64).wrapping_mul(t as u32 as u64);
+                self.lo = sx32(r);
+                self.hi = sx32(r >> 32);
+                self.set(rd, self.lo);
+            }
+            Op::Div => (self.lo, self.hi) = div32(s as u32 as i32, t as u32 as i32),
+            Op::Divu => (self.lo, self.hi) = divu32(s as u32, t as u32),
+            Op::Addu => self.set(rd, sx32(s.wrapping_add(t))),
+            Op::Subu => self.set(rd, sx32(s.wrapping_sub(t))),
+            Op::And => self.set(rd, s & t),
+            Op::Or => self.set(rd, s | t),
+            Op::Xor => self.set(rd, s ^ t),
+            Op::Nor => self.set(rd, !(s | t)),
+            Op::Slt => self.set(rd, ((s as i64) < (t as i64)) as u64),
+            Op::Sltu => self.set(rd, (s < t) as u64),
+            Op::Daddu => self.set(rd, s.wrapping_add(t)),
+            Op::Dsubu => self.set(rd, s.wrapping_sub(t)),
+            Op::Dsll => self.set(rd, t << sa),
+            Op::Dsrl => self.set(rd, t >> sa),
+            Op::Dsra => self.set(rd, ((t as i64) >> sa) as u64),
+            Op::Dsll32 => self.set(rd, t << (sa + 32)),
+            Op::Dsrl32 => self.set(rd, t >> (sa + 32)),
+            Op::Dsra32 => self.set(rd, ((t as i64) >> (sa + 32)) as u64),
+            Op::Bltz => self.take((s as i64) < 0, d.imm),
+            Op::Bgez => self.take((s as i64) >= 0, d.imm),
+            Op::Bltzl => self.take_likely((s as i64) < 0, d.imm),
+            Op::Bgezl => self.take_likely((s as i64) >= 0, d.imm),
+            Op::J => self.npc = d.imm,
+            Op::Jal => {
+                self.gpr[RA] = cur.wrapping_add(8) as u64;
+                self.npc = d.imm;
+            }
+            Op::Beq => self.take(s == t, d.imm),
+            Op::Bne => self.take(s != t, d.imm),
+            Op::Blez => self.take(s as i64 <= 0, d.imm),
+            Op::Bgtz => self.take(s as i64 > 0, d.imm),
+            Op::Beql => self.take_likely(s == t, d.imm),
+            Op::Bnel => self.take_likely(s != t, d.imm),
+            Op::Blezl => self.take_likely(s as i64 <= 0, d.imm),
+            Op::Bgtzl => self.take_likely(s as i64 > 0, d.imm),
+            Op::Addiu => self.set(rt, sx32(s.wrapping_add(simm))),
+            Op::Slti => self.set(rt, ((s as i64) < simm as i64) as u64),
+            Op::Sltiu => self.set(rt, (s < simm) as u64),
+            Op::Andi => self.set(rt, s & d.imm as u64),
+            Op::Ori => self.set(rt, s | d.imm as u64),
+            Op::Xori => self.set(rt, s ^ d.imm as u64),
+            Op::Lui => self.set(rt, sx32(d.imm as u64)),
+            Op::Daddiu => self.set(rt, s.wrapping_add(simm)),
+            Op::Lb => {
+                let v = m.r8(ea).ok_or(fault(ea))?;
+                self.set(rt, v as i8 as i64 as u64);
+            }
+            Op::Lh => {
+                let v = m.r16(ea).ok_or(fault(ea))?;
+                self.set(rt, v as i16 as i64 as u64);
+            }
+            Op::Lw => {
+                let v = m.r32(ea).ok_or(fault(ea))?;
+                self.set(rt, v as i32 as i64 as u64);
+            }
+            Op::Lbu => {
+                let v = m.r8(ea).ok_or(fault(ea))?;
+                self.set(rt, v as u64);
+            }
+            Op::Lhu => {
+                let v = m.r16(ea).ok_or(fault(ea))?;
+                self.set(rt, v as u64);
+            }
+            Op::Lwu => {
+                let v = m.r32(ea).ok_or(fault(ea))?;
+                self.set(rt, v as u64);
+            }
+            Op::Ld => {
+                let v = m.r64(ea).ok_or(fault(ea))?;
+                self.set(rt, v);
+            }
+            Op::Sb => m.w8(ea, t as u8).ok_or(fault(ea))?,
+            Op::Sh => m.w16(ea, t as u16).ok_or(fault(ea))?,
+            Op::Sw => m.w32(ea, t as u32).ok_or(fault(ea))?,
+            Op::Sd => m.w64(ea, t).ok_or(fault(ea))?,
+        }
+        Ok(())
+    }
+
+    /// A branch to `target` when `taken`, after its delay slot.
+    #[inline(always)]
+    fn take(&mut self, taken: bool, target: u32) {
+        if taken {
+            self.npc = target;
+        }
+    }
+
+    /// A branch-likely: when not taken its delay slot is skipped.
+    #[inline(always)]
+    fn take_likely(&mut self, taken: bool, target: u32) {
+        if taken {
+            self.npc = target;
+        } else {
+            self.pc = self.npc;
+            self.npc = self.pc.wrapping_add(4);
         }
     }
 }

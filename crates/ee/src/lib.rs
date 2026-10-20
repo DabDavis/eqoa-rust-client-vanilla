@@ -20,37 +20,29 @@
 
 pub mod libm;
 
-/// Reduces `x` to `f32` rounding toward zero, then flushes a denormal result.
-/// An overflowing `x` lands on ±`f32::MAX`, which is the EE's saturation.
+/// The f64 bit pattern of 2^-126, the least normal f32.
+const MIN_NORMAL: u64 = 0x3810_0000_0000_0000;
+/// The f64 bit pattern of 2^128, the least magnitude an f32 cannot hold.
+const OVERFLOW: u64 = 0x47F0_0000_0000_0000;
+
+// The game's logic makes about half a million of these calls a frame, and more
+// than half of them have a zero operand (measured in play, 2026-10-20), so
+// the usual path has no branch to mispredict: selects, not tests.
+
+/// Reduces a finite `x` to `f32` rounding toward zero; a result below the
+/// least normal flushes to a signed zero, and one at or past 2^128 lands on
+/// ±`f32::MAX`, which is the EE's saturation.
+///
+/// Toward zero is a truncation: the f64 kept to the 24 significant bits an
+/// f32 holds converts exactly, whatever the host's rounding mode.
+#[inline(always)]
 fn chop(x: f64) -> f32 {
-    if x.is_nan() {
-        return f32::NAN;
-    }
-    let mut f = x as f32;
-    // `as f32` rounds to nearest-even; if that moved away from zero, step back.
-    if (f as f64).abs() > x.abs() {
-        f = next_toward_zero(f);
-    }
-    ftz(f)
-}
-
-/// Steps one representable value toward zero. Decrementing the bit pattern
-/// works for both signs, since the magnitude lives in the low bits.
-fn next_toward_zero(f: f32) -> f32 {
-    let b = f.to_bits();
-    if b & 0x7FFF_FFFF == 0 {
-        return f;
-    }
-    f32::from_bits(b - 1)
-}
-
-/// Flushes a denormal to a zero of the same sign.
-fn ftz(f: f32) -> f32 {
-    let b = f.to_bits();
-    if b & 0x7F80_0000 == 0 {
-        return f32::from_bits(b & 0x8000_0000);
-    }
-    f
+    let b = x.to_bits();
+    let mag = b & 0x7FFF_FFFF_FFFF_FFFF;
+    let sign = ((b >> 32) as u32) & 0x8000_0000;
+    let t = (f64::from_bits(b & !0x1FFF_FFFF) as f32).to_bits();
+    let r = if mag < MIN_NORMAL { sign } else { t };
+    f32::from_bits(if mag >= OVERFLOW { sign | 0x7F7F_FFFF } else { r })
 }
 
 /// Conditions a value the way the FPU does before computing with it: a
@@ -61,55 +53,69 @@ fn ftz(f: f32) -> f32 {
 /// value built from `powf(0, -0.032)`, which returns `0xFF800000`, and the
 /// console answers 31.25 exactly (`0x41FA0000`) only if that pattern is read
 /// as -Fmax rather than -2^128.
+#[inline(always)]
 pub fn operand(f: f32) -> f32 {
     let b = f.to_bits();
-    if b & 0x7F80_0000 == 0x7F80_0000 {
-        return if b >> 31 != 0 { -f32::MAX } else { f32::MAX };
-    }
-    ftz(f)
+    let sign = b & 0x8000_0000;
+    let e = b & 0x7F80_0000;
+    let r = if e == 0 { sign } else { b };
+    f32::from_bits(if e == 0x7F80_0000 { sign | 0x7F7F_FFFF } else { r })
 }
 
-/// Returns `s = fl(x + y)` and the exact error `e`, so that `s + e == x + y`.
+/// EE `mul.s`. The f64 product of two f32s is exact, so the chop is the only
+/// rounding.
+#[inline(always)]
+pub fn mul(a: f32, b: f32) -> f32 {
+    chop(operand(a) as f64 * operand(b) as f64)
+}
+
+/// EE `add.s`: the exact sum, rounded toward zero.
 ///
-/// Needed because a float64 cannot always hold the exact sum of two float32s
-/// when their exponents are far apart: `1.0 + -5e-17` rounds to 1.0 in f64,
-/// and the console's answer is one step below 1.0.
-fn two_sum(x: f64, y: f64) -> (f64, f64) {
-    let s = x + y;
-    let b = s - x;
-    let e = (x - (s - b)) + (y - b);
-    (s, e)
+/// The f64 sum `s` misses the exact one by less than half an f64 step, and
+/// every f32 is an f64, so unless `s` lands on an f32 the exact sum lies
+/// between the same two f32s and chops as `s` does. An inexact `s` lands on
+/// one only when the smaller operand is at most half an f64 step of the
+/// larger, 53 or more exponents below it (`1.0 + -5e-17` rounds to 1.0 in
+/// f64, and the console's answer is one step below 1.0): `add_far` settles
+/// those by the error of the sum. Nearer than that, or with a zero, `s` will do.
+#[inline(always)]
+pub fn add(a: f32, b: f32) -> f32 {
+    let (a, b) = (operand(a), operand(b));
+    let (ea, eb) = ((a.to_bits() >> 23) & 0xFF, (b.to_bits() >> 23) & 0xFF);
+    if ea.abs_diff(eb) > 52 && ea != 0 && eb != 0 {
+        return add_far(a, b);
+    }
+    chop(a as f64 + b as f64)
 }
 
-/// Reduces the exact value `s + e` to `f32`, rounding toward zero.
-fn chop_sum(s: f64, e: f64) -> f32 {
+/// `add` of conditioned operands 53 or more exponents apart: when the f64 sum
+/// lands on an f32, the error of the sum (`two_sum`) tells which side of it the
+/// exact sum was.
+#[inline(never)]
+fn add_far(a: f32, b: f32) -> f32 {
+    let (x, y) = (a as f64, b as f64);
+    let s = x + y;
+    let bb = s - x;
+    let e = (x - (s - bb)) + (y - bb);
     let r = chop(s);
     if e == 0.0 || r == 0.0 {
         return r;
     }
     let rem = (s - r as f64) + e;
     if (r > 0.0 && rem < 0.0) || (r < 0.0 && rem > 0.0) {
-        return ftz(next_toward_zero(r));
+        // one step toward zero, which in the bit pattern is down for both
+        // signs; flushed if that left the normal range
+        let b = r.to_bits() - 1;
+        return f32::from_bits(if b & 0x7F80_0000 == 0 { b & 0x8000_0000 } else { b });
     }
     r
 }
 
-/// EE `mul.s`. The f64 product of two f32s is exact, so the chop is the only
-/// rounding.
-pub fn mul(a: f32, b: f32) -> f32 {
-    chop(operand(a) as f64 * operand(b) as f64)
-}
-
-/// EE `add.s`.
-pub fn add(a: f32, b: f32) -> f32 {
-    let (s, e) = two_sum(operand(a) as f64, operand(b) as f64);
-    chop_sum(s, e)
-}
-
-/// EE `sub.s`.
+/// EE `sub.s`: `add` with the second operand's sign flipped (conditioning
+/// keeps the sign, so the two orders agree).
+#[inline(always)]
 pub fn sub(a: f32, b: f32) -> f32 {
-    let (s, e) = two_sum(operand(a) as f64, -(operand(b) as f64));
-    chop_sum(s, e)
+    add(a, neg(b))
 }
 
 /// EE `div.s`, and VU0's `VDIV`, which agree.
@@ -117,6 +123,9 @@ pub fn sub(a: f32, b: f32) -> f32 {
 /// Division by zero saturates to ±`f32::MAX` with the combined sign, and 0/0
 /// does not produce a NaN (measured: `VIMatrix44::InvertAffine` on a singular
 /// matrix divides by -0.0 and the console builds rows from -3.4028235e+38).
+/// The f64 quotient is within half an f64 step of the exact one and can sit on
+/// an f32 only when it is exact, so its chop is the exact quotient's.
+#[inline]
 pub fn div(a: f32, b: f32) -> f32 {
     let (a, b) = (operand(a), operand(b));
     if b == 0.0 {
@@ -127,27 +136,146 @@ pub fn div(a: f32, b: f32) -> f32 {
 
 /// EE `sqrt.s`. The engine also calls newlib's `sqrtf`, which rounds to
 /// nearest; the two are different functions and a port must use the one the
-/// guest called.
+/// guest called. A negative operand answers NaN here, for the caller's retest.
+#[inline]
 pub fn sqrt(a: f32) -> f32 {
-    chop((operand(a) as f64).sqrt())
+    let a = operand(a);
+    if a < 0.0 {
+        return f32::NAN;
+    }
+    chop((a as f64).sqrt())
+}
+
+/// Four [`mul`]s at once, lane by lane: the same four answers, with SSE2 on
+/// x86_64 (two f64 lanes a register) and one at a time elsewhere.
+#[inline(always)]
+pub fn mul4(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    #[cfg(target_arch = "x86_64")]
+    // SAFETY: SSE2 is part of the x86_64 baseline.
+    return unsafe { simd::mul4(a, b) };
+    #[cfg(not(target_arch = "x86_64"))]
+    [mul(a[0], b[0]), mul(a[1], b[1]), mul(a[2], b[2]), mul(a[3], b[3])]
+}
+
+/// Four [`add`]s at once, as [`mul4`]; a lane whose operands are 53 or more
+/// exponents apart sends all four through `add`.
+#[inline(always)]
+pub fn add4(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    #[cfg(target_arch = "x86_64")]
+    // SAFETY: SSE2 is part of the x86_64 baseline.
+    if let Some(r) = unsafe { simd::add4(a, b) } {
+        return r;
+    }
+    [add(a[0], b[0]), add(a[1], b[1]), add(a[2], b[2]), add(a[3], b[3])]
+}
+
+/// `mul`, `add` and their helpers on SSE2 registers, step for step.
+#[cfg(target_arch = "x86_64")]
+mod simd {
+    use super::{MIN_NORMAL, OVERFLOW};
+    use std::arch::x86_64::*;
+
+    /// `m ? x : y`, lane by lane (each lane of `m` all ones or all zeros).
+    #[inline(always)]
+    unsafe fn select(m: __m128i, x: __m128i, y: __m128i) -> __m128i {
+        unsafe { _mm_or_si128(_mm_and_si128(m, x), _mm_andnot_si128(m, y)) }
+    }
+
+    /// `operand` on four lanes.
+    #[inline(always)]
+    unsafe fn operand4(v: [f32; 4]) -> __m128i {
+        unsafe {
+            let b = _mm_castps_si128(_mm_loadu_ps(v.as_ptr()));
+            let e = _mm_and_si128(b, _mm_set1_epi32(0x7F80_0000));
+            let sign = _mm_and_si128(b, _mm_set1_epi32(i32::MIN));
+            let r = select(_mm_cmpeq_epi32(e, _mm_setzero_si128()), sign, b);
+            select(_mm_cmpeq_epi32(e, _mm_set1_epi32(0x7F80_0000)), _mm_or_si128(sign, _mm_set1_epi32(0x7F7F_FFFF)), r)
+        }
+    }
+
+    /// `chop` on two f64 lanes (never NaN), the two f32 in the low half.
+    #[inline(always)]
+    unsafe fn chop2(x: __m128d) -> __m128i {
+        unsafe {
+            let abs = _mm_and_pd(x, _mm_castsi128_pd(_mm_set1_epi64x(0x7FFF_FFFF_FFFF_FFFF)));
+            let tiny = _mm_castpd_si128(_mm_cmplt_pd(abs, _mm_set1_pd(f64::from_bits(MIN_NORMAL))));
+            let huge = _mm_castpd_si128(_mm_cmpge_pd(abs, _mm_set1_pd(f64::from_bits(OVERFLOW))));
+            let t = _mm_castps_si128(_mm_cvtpd_ps(_mm_and_pd(x, _mm_castsi128_pd(_mm_set1_epi64x(!0x1FFF_FFFF)))));
+            // each 64-bit mask's low dword, packed below like t's two floats
+            let tiny = _mm_shuffle_epi32(tiny, 0b00_00_10_00);
+            let huge = _mm_shuffle_epi32(huge, 0b00_00_10_00);
+            let sign = _mm_and_si128(t, _mm_set1_epi32(i32::MIN));
+            let r = select(tiny, sign, t);
+            select(huge, _mm_or_si128(sign, _mm_set1_epi32(0x7F7F_FFFF)), r)
+        }
+    }
+
+    /// The low two lanes and the high two of `v` as f64 pairs.
+    #[inline(always)]
+    unsafe fn widen(v: __m128i) -> (__m128d, __m128d) {
+        unsafe {
+            let f = _mm_castsi128_ps(v);
+            (_mm_cvtps_pd(f), _mm_cvtps_pd(_mm_movehl_ps(f, f)))
+        }
+    }
+
+    #[inline(always)]
+    unsafe fn store(lo: __m128i, hi: __m128i) -> [f32; 4] {
+        let mut out = [0f32; 4];
+        unsafe { _mm_storeu_ps(out.as_mut_ptr(), _mm_castsi128_ps(_mm_unpacklo_epi64(lo, hi))) };
+        out
+    }
+
+    #[inline(always)]
+    pub unsafe fn mul4(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+        unsafe {
+            let ((a0, a1), (b0, b1)) = (widen(operand4(a)), widen(operand4(b)));
+            store(chop2(_mm_mul_pd(a0, b0)), chop2(_mm_mul_pd(a1, b1)))
+        }
+    }
+
+    /// `None` when a lane's operands are 53 or more exponents apart, both
+    /// nonzero (`add_far`'s).
+    #[inline(always)]
+    pub unsafe fn add4(a: [f32; 4], b: [f32; 4]) -> Option<[f32; 4]> {
+        unsafe {
+            let (a, b) = (operand4(a), operand4(b));
+            let exp = |v| _mm_srli_epi32(_mm_and_si128(v, _mm_set1_epi32(0x7F80_0000)), 23);
+            let (ea, eb) = (exp(a), exp(b));
+            let far = _mm_or_si128(
+                _mm_cmpgt_epi32(_mm_sub_epi32(ea, eb), _mm_set1_epi32(52)),
+                _mm_cmpgt_epi32(_mm_sub_epi32(eb, ea), _mm_set1_epi32(52)),
+            );
+            let zero = _mm_or_si128(_mm_cmpeq_epi32(ea, _mm_setzero_si128()), _mm_cmpeq_epi32(eb, _mm_setzero_si128()));
+            if _mm_movemask_epi8(_mm_andnot_si128(zero, far)) != 0 {
+                return None;
+            }
+            let ((a0, a1), (b0, b1)) = (widen(a), widen(b));
+            Some(store(chop2(_mm_add_pd(a0, b0)), chop2(_mm_add_pd(a1, b1))))
+        }
+    }
 }
 
 /// Negation is a sign flip in a register (`neg.s`), with no conditioning.
+#[inline(always)]
 pub fn neg(a: f32) -> f32 {
     f32::from_bits(a.to_bits() ^ 0x8000_0000)
 }
 
 /// EE `c.lt.s`: the operands are conditioned first.
+#[inline(always)]
 pub fn lt(a: f32, b: f32) -> bool {
     operand(a) < operand(b)
 }
 
 /// EE `c.le.s`.
+#[inline(always)]
 pub fn le(a: f32, b: f32) -> bool {
     operand(a) <= operand(b)
 }
 
 /// EE `c.eq.s`. There is no `c.ne.s`; the guest writes `!eq`.
+#[inline(always)]
 pub fn eq(a: f32, b: f32) -> bool {
     operand(a) == operand(b)
 }

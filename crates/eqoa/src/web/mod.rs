@@ -101,6 +101,11 @@ fn rate(what: &'static str) {
     });
 }
 
+/// Whether the page's address has `?name` (or `&name`) in its query.
+pub fn page_flag(name: &str) -> bool {
+    web_sys::window().and_then(|w| w.location().search().ok()).is_some_and(|q| q.split(['?', '&']).any(|p| p == name))
+}
+
 pub async fn sleep(ms: i32) {
     let p = js_sys::Promise::new(&mut |resolve, _| {
         if let Some(w) = web_sys::window() {
@@ -126,7 +131,7 @@ async fn gfx(canvas: web_sys::HtmlCanvasElement) -> Result<viewer::PendingGfx, S
     canvas.set_height(h);
     // `?webgl` in the page's address: WebGL2 even where WebGPU works (a test,
     // and a way round a WebGPU that misbehaves).
-    let webgl = web_sys::window().and_then(|w| w.location().search().ok()).is_some_and(|q| q.split(['?', '&']).any(|p| p == "webgl"));
+    let webgl = page_flag("webgl");
     let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
     let instance = if webgl {
         desc.backends = wgpu::Backends::GL;

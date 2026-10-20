@@ -68,10 +68,17 @@ impl<M: Model> Matrix44<M> {
 
     /// `this = a * b`.
     pub fn mul(a: &Self, b: &Self) -> Self {
-        let (b0, b1, b2, b3) = (b.m[0], b.m[1], b.m[2], b.m[3]);
+        // Each element is ((b0·x + b1·y) + b2·z) + b3·w of its column of b's
+        // rows and a's row: the four of a row computed side by side, each in
+        // that order (`Model::mul4`, `add4`).
+        let lanes = |v: &Vect4<M>| [v.x.0, v.y.0, v.z.0, v.w.0];
+        let (b0, b1, b2, b3) = (lanes(&b.m[0]), lanes(&b.m[1]), lanes(&b.m[2]), lanes(&b.m[3]));
         let row = |r: &Vect4<M>| {
-            let c = |k: fn(&Vect4<M>) -> F<M>| ((k(&b0) * r.x + k(&b1) * r.y) + k(&b2) * r.z) + k(&b3) * r.w;
-            Vect4::new(c(|q| q.x), c(|q| q.y), c(|q| q.z), c(|q| q.w))
+            let s = M::mul4(b0, [r.x.0; 4]);
+            let s = M::add4(s, M::mul4(b1, [r.y.0; 4]));
+            let s = M::add4(s, M::mul4(b2, [r.z.0; 4]));
+            let s = M::add4(s, M::mul4(b3, [r.w.0; 4]));
+            Vect4::new(F::new(s[0]), F::new(s[1]), F::new(s[2]), F::new(s[3]))
         };
         Matrix44 { m: [row(&a.m[0]), row(&a.m[1]), row(&a.m[2]), row(&a.m[3])] }
     }

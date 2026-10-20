@@ -46,6 +46,17 @@ pub trait Model: Copy + Default + fmt::Debug + PartialEq + 'static {
     fn cvt_s_w(i: i32) -> f32 {
         i as f32
     }
+    /// Four `mul`s, lane by lane: the same answers as four calls (a model
+    /// may compute them at once).
+    #[inline(always)]
+    fn mul4(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+        [Self::mul(a[0], b[0]), Self::mul(a[1], b[1]), Self::mul(a[2], b[2]), Self::mul(a[3], b[3])]
+    }
+    /// Four `add`s, lane by lane.
+    #[inline(always)]
+    fn add4(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+        [Self::add(a[0], b[0]), Self::add(a[1], b[1]), Self::add(a[2], b[2]), Self::add(a[3], b[3])]
+    }
 }
 
 /// eqoa-port's arithmetic: IEEE single, round to nearest, the host's libm.
@@ -53,48 +64,63 @@ pub trait Model: Copy + Default + fmt::Debug + PartialEq + 'static {
 pub struct Ieee;
 
 impl Model for Ieee {
+    #[inline]
     fn add(a: f32, b: f32) -> f32 {
         a + b
     }
+    #[inline]
     fn sub(a: f32, b: f32) -> f32 {
         a - b
     }
+    #[inline]
     fn mul(a: f32, b: f32) -> f32 {
         a * b
     }
+    #[inline]
     fn div(a: f32, b: f32) -> f32 {
         a / b
     }
+    #[inline]
     fn sqrt(a: f32) -> f32 {
         a.sqrt()
     }
+    #[inline]
     fn lt(a: f32, b: f32) -> bool {
         a < b
     }
+    #[inline]
     fn le(a: f32, b: f32) -> bool {
         a <= b
     }
+    #[inline]
     fn eq(a: f32, b: f32) -> bool {
         a == b
     }
+    #[inline]
     fn sinf(a: f32) -> f32 {
         a.sin()
     }
+    #[inline]
     fn cosf(a: f32) -> f32 {
         a.cos()
     }
+    #[inline]
     fn powf(a: f32, b: f32) -> f32 {
         a.powf(b)
     }
+    #[inline]
     fn atan2f(a: f32, b: f32) -> f32 {
         a.atan2(b)
     }
+    #[inline]
     fn atanf(a: f32) -> f32 {
         a.atan()
     }
+    #[inline]
     fn fmodf(a: f32, b: f32) -> f32 {
         a % b
     }
+    #[inline]
     fn acosf(a: f32) -> f32 {
         a.acos()
     }
@@ -105,53 +131,77 @@ impl Model for Ieee {
 pub struct Ee;
 
 impl Model for Ee {
+    #[inline]
     fn add(a: f32, b: f32) -> f32 {
         ee::add(a, b)
     }
+    #[inline]
     fn sub(a: f32, b: f32) -> f32 {
         ee::sub(a, b)
     }
+    #[inline]
     fn mul(a: f32, b: f32) -> f32 {
         ee::mul(a, b)
     }
+    #[inline]
     fn div(a: f32, b: f32) -> f32 {
         ee::div(a, b)
     }
     /// `sqrt.s`, and the guest's retest: a NaN result calls newlib `sqrtf`.
+    #[inline]
     fn sqrt(a: f32) -> f32 {
         let s = ee::sqrt(a);
         if s.is_nan() { ee::libm::sqrtf(a) } else { s }
     }
+    #[inline]
     fn lt(a: f32, b: f32) -> bool {
         ee::lt(a, b)
     }
+    #[inline]
     fn le(a: f32, b: f32) -> bool {
         ee::le(a, b)
     }
+    #[inline]
     fn eq(a: f32, b: f32) -> bool {
         ee::eq(a, b)
     }
+    #[inline]
     fn sinf(a: f32) -> f32 {
         ee::libm::sinf(a)
     }
+    #[inline]
     fn cosf(a: f32) -> f32 {
         ee::libm::cosf(a)
     }
+    #[inline]
     fn powf(a: f32, b: f32) -> f32 {
         ee::libm::powf(a, b).unwrap_or_else(|| ee::operand(a).powf(ee::operand(b)))
     }
+    #[inline]
     fn atan2f(a: f32, b: f32) -> f32 {
         ee::libm::atan2f(a, b)
     }
+    #[inline]
     fn atanf(a: f32) -> f32 {
         ee::libm::atanf(a)
     }
+    #[inline]
     fn fmodf(a: f32, b: f32) -> f32 {
         ee::libm::fmodf(a, b)
     }
+    #[inline]
     fn acosf(a: f32) -> f32 {
         ee::libm::acosf(a).unwrap_or_else(|| ee::operand(a).acos())
     }
+    #[inline(always)]
+    fn mul4(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+        ee::mul4(a, b)
+    }
+    #[inline(always)]
+    fn add4(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+        ee::add4(a, b)
+    }
+    #[inline]
     fn cvt_s_w(i: i32) -> f32 {
         let f = i as f32;
         // rounded away from zero by the host's nearest: one ulp back

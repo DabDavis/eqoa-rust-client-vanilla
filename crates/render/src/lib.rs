@@ -124,6 +124,123 @@ impl GpuModel {
     }
 }
 
+/// Models uploaded together (`Renderer::upload_group`), a streamed zone's:
+/// one vertex, index, instance and static-light buffer for all of them, the
+/// materials shared with every other group's that are the same, and each
+/// pass's commands recorded once into render bundles, validated then and
+/// replayed every frame. What changes afterwards is buffer contents (the
+/// props' instances, `set_group_instances`), which a bundle reads as they
+/// are at the draw.
+///
+/// It is what wgpu's per-frame cost is counted in: a model of its own costs
+/// a vertex, instance, static-light and palette buffer, an index buffer a
+/// batch and a uniform buffer and bind group a layer, each tracked again at
+/// every submit (Tunaria round Freeport: 1,134 models, ~14,000 resources).
+///
+/// The members are recorded in runs of `RUN` (in their order, so the order
+/// they are drawn in is the order given) and a run wholly outside the view is
+/// skipped (`Run::bounds`).
+pub struct GpuGroup {
+    vertices: wgpu::Buffer,
+    indices: wgpu::Buffer,
+    instances: wgpu::Buffer,
+    statics: wgpu::Buffer,
+    members: Vec<Member>,
+    runs: Vec<Run>,
+}
+
+/// Members a run of a group.
+const RUN: usize = 32;
+
+/// Consecutive members of a group, recorded and drawn as one.
+struct Run {
+    /// What they can cover in the world: the static ones' transformed bounds,
+    /// and round each moving one's instances a sphere of its size and
+    /// `MOVING_SLACK` more.
+    bounds: Option<(Vec3, Vec3)>,
+    /// the first pass's commands and the deferred pass's, if it draws any
+    bundles: [Option<wgpu::RenderBundle>; 2],
+    /// models with anything in either pass, and each pass's draw calls
+    drawn: (u32, [u32; 2]),
+}
+
+/// One model of a group: its first instance and their count, and each
+/// batch's index range in the group's buffer with its layer passes.
+struct Member {
+    instance0: u32,
+    instances: u32,
+    batches: Vec<(std::ops::Range<u32>, Vec<Material>)>,
+}
+
+/// A layer pass whose bind group (texture, sampler, uniform) every layer
+/// with the same three shares.
+#[derive(Clone)]
+struct Material {
+    blend: usize,
+    bg: wgpu::BindGroup,
+}
+
+/// A model as `upload_group` takes it: the mesh, a matrix per instance
+/// (column-major) and their static lights (fewer: (0, 0, 0, 1) for the rest).
+pub struct GroupPart<'a> {
+    pub model: &'a esf::Model,
+    pub instances: &'a [[[f32; 4]; 4]],
+    pub statics: &'a [[f32; 4]],
+    /// Its instances move after the upload (`set_group_instances`: a zone's
+    /// animated props), so its bounds are taken loosely.
+    pub moves: bool,
+}
+
+/// How far past its own size a moving part's bounds reach from where its
+/// instances were at the upload (a prop's parts swing about their nodes).
+const MOVING_SLACK: f32 = 50.0;
+
+/// The world-space box a part's instances cover (`GpuGroup::bounds`).
+fn part_bounds(p: &GroupPart) -> Option<(Vec3, Vec3)> {
+    let (first, rest) = p.model.pos.split_first()?;
+    let (lo, hi) = rest.iter().fold((Vec3::from(*first), Vec3::from(*first)), |(lo, hi), q| (lo.min(Vec3::from(*q)), hi.max(Vec3::from(*q))));
+    let mut out: Option<(Vec3, Vec3)> = None;
+    for m in p.instances {
+        let m = Mat4::from_cols_array_2d(m);
+        let (a, b) = if p.moves {
+            let scale = m.x_axis.truncate().length().max(m.y_axis.truncate().length()).max(m.z_axis.truncate().length());
+            let r = scale * lo.abs().max(hi.abs()).length() + MOVING_SLACK;
+            let c = m.w_axis.truncate();
+            (c - Vec3::splat(r), c + Vec3::splat(r))
+        } else {
+            (0..8).map(|k| m.transform_point3(Vec3::new([lo.x, hi.x][k & 1], [lo.y, hi.y][k >> 1 & 1], [lo.z, hi.z][k >> 2]))).fold(
+                (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),
+                |(a, b), w| (a.min(w), b.max(w)),
+            )
+        };
+        out = Some(out.map_or((a, b), |(lo, hi)| (lo.min(a), hi.max(b))));
+    }
+    out
+}
+
+/// The planes a box must be inside (left, right, bottom, top, far) for any of
+/// it to be drawn through `view_proj`, as (normal, distance) with the inside
+/// positive; the near plane is left out (it would save little).
+fn frustum(view_proj: Mat4) -> [glam::Vec4; 5] {
+    let (r0, r1, r2, r3) = (view_proj.row(0), view_proj.row(1), view_proj.row(2), view_proj.row(3));
+    [r3 + r0, r3 - r0, r3 + r1, r3 - r1, r3 - r2]
+}
+
+/// Whether the box `(lo, hi)` may show through the planes: outside one of
+/// them wholly, it cannot.
+fn in_view(planes: &[glam::Vec4; 5], (lo, hi): (Vec3, Vec3)) -> bool {
+    planes.iter().all(|p| {
+        let far = Vec3::new(if p.x >= 0.0 { hi.x } else { lo.x }, if p.y >= 0.0 { hi.y } else { lo.y }, if p.z >= 0.0 { hi.z } else { lo.z });
+        p.truncate().dot(far) + p.w >= 0.0
+    })
+}
+
+/// What `draw` draws, in order.
+pub enum Draw<'a> {
+    Model(&'a GpuModel),
+    Group(&'a GpuGroup),
+}
+
 /// A texture source: the decoded image a DictID names, if any.
 pub type Textures<'a> = dyn Fn(i32) -> Option<esf::Image> + 'a;
 
@@ -146,6 +263,10 @@ pub struct Renderer {
     /// DictIDs a batch asked for that no loaded file holds.
     pub missing_textures: std::collections::BTreeSet<i32>,
     start: web_time::Instant,
+    /// The time the layers' UVs scroll by, in seconds: the wall clock since
+    /// the renderer was made, unless set (`shot` sets its script's time, so a
+    /// shot is the same picture every run).
+    pub scroll_time: Option<f32>,
     format: wgpu::TextureFormat,
     /// Labels (name plates), once a font is set.
     pub text: Option<text::Text>,
@@ -156,6 +277,12 @@ pub struct Renderer {
     /// Strips (lightning) drawn with the next particles, before them, as
     /// the spell effects draw theirs before `VIParticleSystem::Render`.
     pub strips: Vec<billboard::Strips>,
+    /// The last `draw`'s models and draw calls (`EQOA_PERF`).
+    pub drawn: std::cell::Cell<(u32, u32)>,
+    /// Groups' materials by texture, sampler and uniform bytes.
+    materials: std::collections::HashMap<(i32, usize, [u32; 16]), wgpu::BindGroup>,
+    /// The palette every group's models draw with: theirs is never set.
+    identity_palette: wgpu::BindGroup,
 }
 
 /// What to draw this frame. The lights are the VU1 strip programs' uniforms:
@@ -345,6 +472,16 @@ impl Renderer {
             sampler(wgpu::AddressMode::MirrorRepeat),
         ];
         let white = upload_rgba(device, queue, 1, 1, &[255; 4]);
+        let identity = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("identity palette"),
+            contents: bytemuck::cast_slice(&[IDENTITY; MAX_BONES]),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let identity_palette = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("identity palette"),
+            layout: &palette_layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: identity.as_entire_binding() }],
+        });
         Renderer {
             pipelines,
             sky_pipelines,
@@ -359,11 +496,15 @@ impl Renderer {
             textures: Default::default(),
             missing_textures: Default::default(),
             start: web_time::Instant::now(),
+            scroll_time: None,
             format,
             text: None,
             ui: None,
             billboards: None,
             strips: Vec::new(),
+            drawn: Default::default(),
+            materials: Default::default(),
+            identity_palette,
         }
     }
 
@@ -394,16 +535,7 @@ impl Renderer {
         instances: &[[[f32; 4]; 4]],
         textures: &Textures,
     ) -> GpuModel {
-        let verts: Vec<Vertex> = (0..m.pos.len())
-            .map(|i| Vertex {
-                pos: m.pos[i],
-                uv: m.uv[i],
-                normal: m.normal[i],
-                color: m.color[i],
-                bones: m.bones.get(i).copied().unwrap_or([255; 4]),
-                weights: m.weights.get(i).copied().unwrap_or([0; 4]),
-            })
-            .collect();
+        let verts = vertices_of(m);
         let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("vertices"),
             contents: bytemuck::cast_slice(&verts),
@@ -425,42 +557,15 @@ impl Renderer {
             if b.indices.is_empty() {
                 continue;
             }
-            // A material with no layer at all draws once, untextured.
-            let untextured = [esf::Layer {
-                flags: 1,
-                texture: 0,
-                wrap: 0,
-                blend: 0,
-                color: [255; 4],
-                uv_transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
-                lod_bias: 0.8,
-                uv_rate: [0.0, 0.0],
-            }];
-            let layers: &[esf::Layer] = if b.layers.is_empty() { &untextured } else { &b.layers };
             let mut passes = Vec::new();
-            for l in layers {
+            for l in layers_of(b) {
                 let view = self.texture(device, queue, l.texture, textures);
-                let blend = (l.blend.clamp(0, 4)) as usize;
-                let k = l.uv_coeffs();
-                // The layer colour reaches the GS as c/255 × 128 and modulates
-                // by /128: a tint of c/255.
-                let tint = l.color.map(|c| c as f32 / 255.0);
-                let base = LayerUniform {
-                    tint,
-                    flags: [view.is_some() as i32 as f32, (blend != 0) as i32 as f32, 0.0, 0.0],
-                    uv0: [k[0], k[1], k[2], k[3]],
-                    uv1: [k[4], k[5], l.uv_rate[0], l.uv_rate[1]],
-                };
+                let (blend, base, si) = layer_state(l, view.is_some());
                 let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("layer"),
                     contents: bytemuck::bytes_of(&base),
                     usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 });
-                let si = match l.wrap {
-                    1 | 2 => 1,
-                    3 => 2,
-                    _ => 0,
-                };
                 let sampler = &self.samplers[si];
                 let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("layer"),
@@ -615,12 +720,12 @@ impl Renderer {
         target: &wgpu::TextureView,
         depth: &wgpu::TextureView,
         view: &View,
-        models: &[&GpuModel],
+        items: &[Draw],
     ) {
         let uniform = FrameUniform {
             view_proj: view.view_proj.to_cols_array_2d(),
             sun_dir: view.sun_dir.normalize().extend(0.0).to_array(),
-            sun: view.sun.extend(self.start.elapsed().as_secs_f32()).to_array(),
+            sun: view.sun.extend(self.scroll_time.unwrap_or_else(|| self.start.elapsed().as_secs_f32())).to_array(),
             ambient: view.ambient.extend(0.0).to_array(),
             fog_color: match view.fog {
                 Some((_, _, c)) => c.extend(1.0).to_array(),
@@ -672,7 +777,11 @@ impl Renderer {
         // The sky: its own view, no depth, every layer in order.
         if view.sky_view_proj.is_some() {
             pass.set_bind_group(0, &self.sky_frame_bg, &[]);
-            for m in models.iter().filter(|m| m.sky && m.visible && m.instance_count > 0) {
+            let sky = items.iter().filter_map(|i| match i {
+                Draw::Model(m) => Some(*m),
+                Draw::Group(_) => None,
+            });
+            for m in sky.filter(|m| m.sky && m.visible && m.instance_count > 0) {
                 pass.set_vertex_buffer(0, m.vertices.slice(..));
                 pass.set_vertex_buffer(1, m.instances.slice(..));
                 pass.set_vertex_buffer(2, m.statics.slice(..));
@@ -687,38 +796,267 @@ impl Renderer {
                 }
             }
         }
-        pass.set_bind_group(0, &self.frame_bg, &[]);
+        let planes = frustum(view.view_proj);
+        let shown = |r: &&Run| r.bounds.is_some_and(|b| in_view(&planes, b));
+        let (mut drawn_models, mut draws) = (0u32, 0u32);
+        for item in items {
+            match item {
+                Draw::Model(m) => drawn_models += Self::draws_anything(m) as u32,
+                Draw::Group(g) => drawn_models += g.runs.iter().filter(shown).map(|r| r.drawn.0).sum::<u32>(),
+            }
+        }
         // Two passes, as VIScene::Render's: a material whose layer 0 is
         // opaque (MaterialHasDepthSort) draws all its layers at once in the
         // first, one whose layer 0 blends is deferred whole to the second
         // (DrawPrimBuffer's flags; RenderDeferredList).
         for deferred in [false, true] {
+            // the pass's state, unset again by each bundle it executes
+            let mut bound = false;
             let mut current = usize::MAX;
-            for m in models {
-                if m.instance_count == 0 || m.sky || !m.visible {
-                    continue;
-                }
-                pass.set_vertex_buffer(0, m.vertices.slice(..));
-                pass.set_vertex_buffer(1, m.instances.slice(..));
-                pass.set_vertex_buffer(2, m.statics.slice(..));
-                pass.set_bind_group(2, &m.palette_bg, &[]);
-                for (indices, count, passes) in &m.batches {
-                    if passes.first().is_none_or(|p| (p.blend != 0) != deferred) {
-                        continue;
-                    }
-                    pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
-                    for p in passes.iter().take(m.passes_used) {
-                        if p.blend != current {
-                            pass.set_pipeline(&self.pipelines[p.blend]);
-                            current = p.blend;
+            for item in items {
+                match item {
+                    Draw::Model(m) => {
+                        if !Self::draws_anything(m) {
+                            continue;
                         }
-                        pass.set_bind_group(1, &p.bg, &[]);
-                        pass.draw_indexed(0..*count, 0, 0..m.instance_count);
+                        if !bound {
+                            pass.set_bind_group(0, &self.frame_bg, &[]);
+                            bound = true;
+                            current = usize::MAX;
+                        }
+                        draws += self.encode_model(&mut pass, m, deferred, &mut current);
+                    }
+                    Draw::Group(g) => {
+                        for r in g.runs.iter().filter(shown) {
+                            if let Some(b) = &r.bundles[deferred as usize] {
+                                pass.execute_bundles([b]);
+                                bound = false;
+                            }
+                            draws += r.drawn.1[deferred as usize];
+                        }
                     }
                 }
             }
         }
+        self.drawn.set((drawn_models, draws));
     }
+
+    /// Whether `draw` draws `m` at all (the sky draws apart).
+    fn draws_anything(m: &GpuModel) -> bool {
+        m.instance_count > 0 && !m.sky && m.visible
+    }
+
+    /// One model's commands for one of the two passes, into a pass or a
+    /// bundle; `current` is the blend mode whose pipeline is set. Returns the
+    /// draw calls.
+    fn encode_model<'a, E: wgpu::util::RenderEncoder<'a>>(&'a self, e: &mut E, m: &'a GpuModel, deferred: bool, current: &mut usize) -> u32 {
+        let in_pass = |passes: &[Pass]| passes.first().is_some_and(|p| (p.blend != 0) == deferred);
+        if !m.batches.iter().any(|(_, _, passes)| in_pass(passes)) {
+            return 0;
+        }
+        e.set_vertex_buffer(0, Some(m.vertices.slice(..)));
+        e.set_vertex_buffer(1, Some(m.instances.slice(..)));
+        e.set_vertex_buffer(2, Some(m.statics.slice(..)));
+        e.set_bind_group(2, Some(&m.palette_bg), &[]);
+        let mut draws = 0;
+        for (indices, count, passes) in &m.batches {
+            if !in_pass(passes) {
+                continue;
+            }
+            e.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
+            for p in passes.iter().take(m.passes_used) {
+                if p.blend != *current {
+                    e.set_pipeline(&self.pipelines[p.blend]);
+                    *current = p.blend;
+                }
+                e.set_bind_group(1, Some(&p.bg), &[]);
+                e.draw_indexed(0..*count, 0, 0..m.instance_count);
+                draws += 1;
+            }
+        }
+        draws
+    }
+
+    /// The shared bind group of a layer (cached by texture, sampler and
+    /// uniform), and its blend mode.
+    fn material(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, l: &esf::Layer, textures: &Textures) -> Material {
+        let view = self.texture(device, queue, l.texture, textures);
+        let (blend, base, si) = layer_state(l, view.is_some());
+        let key = (l.texture, si, bytemuck::cast(base));
+        if let Some(bg) = self.materials.get(&key) {
+            return Material { blend, bg: bg.clone() };
+        }
+        let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("material"),
+            contents: bytemuck::bytes_of(&base),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("material"),
+            layout: &self.material_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view.as_ref().unwrap_or(&self.white)) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.samplers[si]) },
+                wgpu::BindGroupEntry { binding: 2, resource: uniform.as_entire_binding() },
+            ],
+        });
+        self.materials.insert(key, bg.clone());
+        Material { blend, bg }
+    }
+
+    /// Uploads `parts` as one [`GpuGroup`], drawn as `draw` would draw them
+    /// one by one as models, in this order.
+    pub fn upload_group(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, parts: &[GroupPart], textures: &Textures) -> GpuGroup {
+        let (mut verts, mut indices, mut instances, mut statics) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let mut members = Vec::new();
+        for p in parts {
+            let base = verts.len() as u32;
+            verts.extend(vertices_of(p.model));
+            let mut batches = Vec::new();
+            for b in p.model.batches.iter().filter(|b| !b.indices.is_empty()) {
+                let first = indices.len() as u32;
+                // rebased here: WebGL2 has no base vertex
+                indices.extend(b.indices.iter().map(|&i| i + base));
+                let passes = layers_of(b).iter().map(|l| self.material(device, queue, l, textures)).collect();
+                batches.push((first..indices.len() as u32, passes));
+            }
+            let instance0 = instances.len() as u32;
+            instances.extend_from_slice(p.instances);
+            statics.extend((0..p.instances.len()).map(|k| p.statics.get(k).copied().unwrap_or([0.0, 0.0, 0.0, 1.0])));
+            members.push(Member { instance0, instances: p.instances.len() as u32, batches });
+        }
+        // a buffer of no bytes cannot be made; an empty group draws nothing
+        let buffer = |label: &str, bytes: &[u8], usage: wgpu::BufferUsages| {
+            let mut bytes = bytes.to_vec();
+            bytes.resize(bytes.len().max(16), 0);
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents: &bytes, usage })
+        };
+        let mut g = GpuGroup {
+            vertices: buffer("group vertices", bytemuck::cast_slice(&verts), wgpu::BufferUsages::VERTEX),
+            indices: buffer("group indices", bytemuck::cast_slice(&indices), wgpu::BufferUsages::INDEX),
+            instances: buffer("group instances", bytemuck::cast_slice(&instances), wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST),
+            statics: buffer("group static lights", bytemuck::cast_slice(&statics), wgpu::BufferUsages::VERTEX),
+            members,
+            runs: Vec::new(),
+        };
+        for at in (0..parts.len()).step_by(RUN) {
+            let span = at..(at + RUN).min(parts.len());
+            let bounds = parts[span.clone()].iter().filter_map(part_bounds).reduce(|(a, b), (c, d)| (a.min(c), b.max(d)));
+            let drawn = g.members[span.clone()].iter().filter(|m| m.instances > 0 && !m.batches.is_empty()).count() as u32;
+            let mut run = Run { bounds, bundles: [None, None], drawn: (drawn, [0, 0]) };
+            for deferred in [false, true] {
+                let mut e = device.create_render_bundle_encoder(&wgpu::RenderBundleEncoderDescriptor {
+                    label: Some("group"),
+                    color_formats: &[Some(self.format)],
+                    depth_stencil: Some(wgpu::RenderBundleDepthStencil { format: DEPTH_FORMAT, depth_read_only: false, stencil_read_only: true }),
+                    sample_count: 1,
+                    multiview: None,
+                });
+                let n = self.encode_run(&mut e, &g, &g.members[span.clone()], deferred);
+                if n > 0 {
+                    run.bundles[deferred as usize] = Some(e.finish(&wgpu::RenderBundleDescriptor { label: Some("group") }));
+                }
+                run.drawn.1[deferred as usize] = n;
+            }
+            g.runs.push(run);
+        }
+        g
+    }
+
+    /// The commands of some of a group's members for one of the two passes,
+    /// as `encode_model` issues a model's. Returns the draw calls.
+    fn encode_run<'a>(&'a self, e: &mut wgpu::RenderBundleEncoder<'a>, g: &'a GpuGroup, members: &'a [Member], deferred: bool) -> u32 {
+        let in_pass = |passes: &[Material]| passes.first().is_some_and(|p| (p.blend != 0) == deferred);
+        e.set_bind_group(0, &self.frame_bg, &[]);
+        e.set_bind_group(2, &self.identity_palette, &[]);
+        e.set_vertex_buffer(0, g.vertices.slice(..));
+        e.set_index_buffer(g.indices.slice(..), wgpu::IndexFormat::Uint32);
+        let mut current = usize::MAX;
+        let mut draws = 0;
+        for m in members.iter().filter(|m| m.instances > 0) {
+            if !m.batches.iter().any(|(_, passes)| in_pass(passes)) {
+                continue;
+            }
+            let (i0, n) = (m.instance0 as u64, m.instances as u64);
+            e.set_vertex_buffer(1, g.instances.slice(i0 * 64..(i0 + n) * 64));
+            e.set_vertex_buffer(2, g.statics.slice(i0 * 16..(i0 + n) * 16));
+            for (range, passes) in &m.batches {
+                if !in_pass(passes) {
+                    continue;
+                }
+                for p in passes {
+                    if p.blend != current {
+                        e.set_pipeline(&self.pipelines[p.blend]);
+                        current = p.blend;
+                    }
+                    e.set_bind_group(1, &p.bg, &[]);
+                    e.draw_indexed(range.clone(), 0, 0..m.instances);
+                    draws += 1;
+                }
+            }
+        }
+        draws
+    }
+
+    /// Moves the instances of a group's `member`-th model (as many as it was
+    /// uploaded with).
+    pub fn set_group_instances(&self, queue: &wgpu::Queue, g: &GpuGroup, member: usize, instances: &[[[f32; 4]; 4]]) {
+        let Some(m) = g.members.get(member) else { return };
+        let n = instances.len().min(m.instances as usize);
+        queue.write_buffer(&g.instances, m.instance0 as u64 * 64, bytemuck::cast_slice(&instances[..n]));
+    }
+}
+
+/// The vertices of a model as the shader takes them.
+fn vertices_of(m: &esf::Model) -> Vec<Vertex> {
+    (0..m.pos.len())
+        .map(|i| Vertex {
+            pos: m.pos[i],
+            uv: m.uv[i],
+            normal: m.normal[i],
+            color: m.color[i],
+            bones: m.bones.get(i).copied().unwrap_or([255; 4]),
+            weights: m.weights.get(i).copied().unwrap_or([0; 4]),
+        })
+        .collect()
+}
+
+/// A material with no layer at all draws once, untextured.
+const UNTEXTURED: [esf::Layer; 1] = [esf::Layer {
+    flags: 1,
+    texture: 0,
+    wrap: 0,
+    blend: 0,
+    color: [255; 4],
+    uv_transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+    lod_bias: 0.8,
+    uv_rate: [0.0, 0.0],
+}];
+
+fn layers_of(b: &esf::Batch) -> &[esf::Layer] {
+    if b.layers.is_empty() { &UNTEXTURED } else { &b.layers }
+}
+
+/// A layer's blend mode, uniform and sampler (0 repeat, 1 clamp, 2 mirror),
+/// `textured` if its texture resolved.
+fn layer_state(l: &esf::Layer, textured: bool) -> (usize, LayerUniform, usize) {
+    let blend = (l.blend.clamp(0, 4)) as usize;
+    let k = l.uv_coeffs();
+    // The layer colour reaches the GS as c/255 × 128 and modulates by /128:
+    // a tint of c/255.
+    let tint = l.color.map(|c| c as f32 / 255.0);
+    let base = LayerUniform {
+        tint,
+        flags: [textured as i32 as f32, (blend != 0) as i32 as f32, 0.0, 0.0],
+        uv0: [k[0], k[1], k[2], k[3]],
+        uv1: [k[4], k[5], l.uv_rate[0], l.uv_rate[1]],
+    };
+    let si = match l.wrap {
+        1 | 2 => 1,
+        3 => 2,
+        _ => 0,
+    };
+    (blend, base, si)
 }
 
 fn uniform_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
@@ -777,10 +1115,10 @@ pub fn capture(
     w: u32,
     h: u32,
     view: &View,
-    models: &[&GpuModel],
+    items: &[Draw],
     particles: Option<(Mat4, Mat4, &[billboard::Batch], &Textures)>,
 ) -> Vec<u8> {
-    capture_with_sky(device, queue, renderer, w, h, view, models, particles, None)
+    capture_with_sky(device, queue, renderer, w, h, view, items, particles, None)
 }
 
 /// `capture`, with the sky's billboards (the stars, the lightning patches)
@@ -793,7 +1131,7 @@ pub fn capture_with_sky(
     w: u32,
     h: u32,
     view: &View,
-    models: &[&GpuModel],
+    items: &[Draw],
     particles: Option<(Mat4, Mat4, &[billboard::Batch], &Textures)>,
     sky: Option<(Mat4, Mat4, &[billboard::Batch], &Textures)>,
 ) -> Vec<u8> {
@@ -818,7 +1156,7 @@ pub fn capture_with_sky(
     let depth = depth_view(device, w, h);
     let mut enc = device.create_command_encoder(&Default::default());
     let tv = target.create_view(&Default::default());
-    renderer.draw(queue, &mut enc, &tv, &depth, view, models);
+    renderer.draw(queue, &mut enc, &tv, &depth, view, items);
     if let Some((v, p, batches, textures)) = sky {
         renderer.draw_sky_billboards(device, queue, &mut enc, &tv, &depth, v, p, batches, textures);
     }

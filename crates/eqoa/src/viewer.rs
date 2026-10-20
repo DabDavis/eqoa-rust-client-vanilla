@@ -293,6 +293,7 @@ pub fn shot_with(
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))?;
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default()))?;
     let mut renderer = Renderer::new(&device, &queue, render::TARGET_FORMAT);
+    renderer.scroll_time = Some(script.as_ref().map_or(0, |s| s.ms) as f32 / 1000.0);
     if let Some(f) = arial(lib) {
         renderer.set_font(&device, &queue, &f);
     }
@@ -334,20 +335,7 @@ pub fn shot_with(
         // `EQOA_AT=ms`: when the target (and then Q, attack) steps happen.
         let at: i64 = std::env::var("EQOA_AT").ok().and_then(|v| v.parse().ok()).map_or(2000, |v: i64| v / 16 * 16);
         let attack = std::env::var_os("EQOA_ATTACK").is_some();
-        // `EQOA_WALK=fwd,strafe,orbit,ms[;...]`: each set of controls for
-        // its ms, one after another, then none.
-        let walk: Option<Vec<(Controls, i64)>> = std::env::var("EQOA_WALK").ok().map(|w| {
-            let mut end = 0;
-            w.split(';')
-                .filter_map(|seg| {
-                    let v: Vec<f32> = seg.split(',').filter_map(|x| x.trim().parse().ok()).collect();
-                    (v.len() == 4).then(|| {
-                        end += v[3] as i64;
-                        (Controls { fwd: v[0], strafe: v[1], orbit: v[2], pitch: 0.0 }, end)
-                    })
-                })
-                .collect()
-        });
+        let walk = walk_script();
         while t < script.ms {
             t += 16;
             let controls = match &walk {
@@ -760,7 +748,12 @@ pub fn shot_with(
             }
         }
     }
-    let refs: Vec<&GpuModel> = gpu.iter().chain(streamed.iter().flat_map(|s| s.models())).chain(play.iter().flat_map(|p| p.models())).collect();
+    let refs: Vec<render::Draw> = gpu
+        .iter()
+        .map(render::Draw::Model)
+        .chain(streamed.iter().flat_map(|s| s.draws()))
+        .chain(play.iter().flat_map(|p| p.models()).map(render::Draw::Model))
+        .collect();
     let textures = render::library_textures(lib);
     let particles = billboard_view.map(|(v, p)| (v, p, batches.as_slice(), &textures as &render::Textures));
     let sky = sky_billboards.as_ref().map(|(v, p, b)| (*v, *p, b.as_slice(), &textures as &render::Textures));
@@ -772,6 +765,44 @@ pub fn shot_with(
     eprintln!("{out}: {} ({cam:?})", s.summary);
     report(&renderer);
     Ok(())
+}
+
+/// The texture an `EQOA_OFFSCREEN` run draws into.
+fn offscreen_target(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("offscreen"),
+        size: wgpu::Extent3d { width: config.width, height: config.height, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: config.format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    })
+}
+
+/// `EQOA_WALK=fwd,strafe,orbit,ms[;...]`: each set of controls held for its
+/// ms, one after another, then none (`shot`'s script, in the window too).
+fn walk_script() -> Option<Vec<(Controls, i64)>> {
+    std::env::var("EQOA_WALK").ok().map(|w| {
+        let mut end = 0;
+        w.split(';')
+            .filter_map(|seg| {
+                let v: Vec<f32> = seg.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                (v.len() == 4).then(|| {
+                    end += v[3] as i64;
+                    (Controls { fwd: v[0], strafe: v[1], orbit: v[2], pitch: 0.0 }, end)
+                })
+            })
+            .collect()
+    })
+}
+
+/// `Perf::mark`, when measuring.
+fn mark(perf: &mut Option<Perf>, phase: usize) {
+    if let Some(p) = perf {
+        p.mark(phase);
+    }
 }
 
 /// Frames drawn so far (the browser page's rate readout).
@@ -790,13 +821,89 @@ pub struct PendingGfx {
 
 struct Gfx {
     window: Arc<Window>,
-    surface: wgpu::Surface<'static>,
+    /// None under `EQOA_OFFSCREEN`: frames go to `offscreen` and are never
+    /// presented.
+    surface: Option<wgpu::Surface<'static>>,
+    offscreen: Option<wgpu::Texture>,
+    /// The last offscreen frame's submission, waited for before the next is
+    /// sent (one frame in flight, as a swap chain keeps it).
+    in_flight: Option<wgpu::SubmissionIndex>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     depth: wgpu::TextureView,
     renderer: Renderer,
     models: Vec<GpuModel>,
+}
+
+/// `EQOA_PERF=1` (in a page, `?perf`): each frame's CPU time by phase,
+/// summed over five seconds and printed; `EQOA_QUIT=<s>` ends the run after
+/// that many seconds.
+struct Perf {
+    since: Instant,
+    mark: Instant,
+    frames: u32,
+    worst: f64,
+    /// seconds per phase since `since`
+    total: [f64; Perf::NAMES.len()],
+    /// the last frame's models and draw calls
+    drawn: (u32, u32),
+}
+
+impl Perf {
+    const NAMES: [&str; 14] = [
+        "stream", "walk", "play", "pose", "zones", "sound", "weather", "particles", "lights", "acquire", "hud", "encode", "submit",
+        "gpu wait",
+    ];
+
+    fn from_env() -> Option<Perf> {
+        #[cfg(target_arch = "wasm32")]
+        let on = crate::web::page_flag("perf");
+        #[cfg(not(target_arch = "wasm32"))]
+        let on = std::env::var_os("EQOA_PERF").is_some();
+        on.then(|| {
+            let now = Instant::now();
+            Perf { since: now, mark: now, frames: 0, worst: 0.0, total: [0.0; Perf::NAMES.len()], drawn: (0, 0) }
+        })
+    }
+
+    fn begin(&mut self) {
+        self.mark = Instant::now();
+    }
+
+    /// The time since the last mark goes to phase `i`.
+    fn mark(&mut self, i: usize) {
+        let now = Instant::now();
+        self.total[i] += (now - self.mark).as_secs_f64();
+        self.mark = now;
+    }
+
+    fn end(&mut self, frame_start: Instant) {
+        self.frames += 1;
+        self.worst = self.worst.max(frame_start.elapsed().as_secs_f64());
+        let span = self.since.elapsed().as_secs_f64();
+        if span < 5.0 {
+            return;
+        }
+        let n = self.frames as f64;
+        let cpu: f64 = self.total.iter().sum();
+        let phases: Vec<String> = Perf::NAMES
+            .iter()
+            .zip(&self.total)
+            .filter(|(_, t)| **t * 1e3 / n >= 0.005)
+            .map(|(name, t)| format!("{name} {:.2}", t * 1e3 / n))
+            .collect();
+        crate::say(&format!(
+            "perf: {:.1} fps, cpu {:.2} ms/frame (worst {:.1}), {} models in {} draws: {}",
+            n / span,
+            cpu * 1e3 / n,
+            self.worst * 1e3,
+            self.drawn.0,
+            self.drawn.1,
+            phases.join(", ")
+        ));
+        *self = Perf { since: Instant::now(), mark: Instant::now(), frames: 0, worst: 0.0, total: [0.0; Perf::NAMES.len()], drawn: (0, 0) };
+    }
 }
 
 struct App {
@@ -837,6 +944,10 @@ struct App {
     /// Made before the loop (a browser's), taken when it resumes.
     pending: Option<PendingGfx>,
     display: winit::event_loop::OwnedDisplayHandle,
+    perf: Option<Perf>,
+    /// `EQOA_QUIT`: when the run ends (s on `clock`)
+    quit_at: Option<f64>,
+    walk: Option<Vec<(Controls, i64)>>,
 }
 
 pub fn run(lib: Library, source: Source) -> Result<(), Error> {
@@ -880,6 +991,9 @@ pub fn run_with_gfx(lib: Library, source: Source, play: Option<crate::play::Play
         gfx: None,
         pending,
         display,
+        perf: Perf::from_env(),
+        quit_at: std::env::var("EQOA_QUIT").ok().and_then(|s| s.parse().ok()),
+        walk: walk_script(),
     };
     #[cfg(target_arch = "wasm32")]
     {
@@ -973,6 +1087,10 @@ impl App {
         if self.play.as_ref().is_some_and(|p| p.is_dead()) {
             return Controls::default();
         }
+        if let Some(segs) = &self.walk {
+            let t = self.clock.elapsed().as_millis() as i64;
+            return segs.iter().find(|s| t <= s.1).map_or(Controls::default(), |s| s.0);
+        }
         let k = |a: &str, b: &str| self.held.contains(a) as i32 as f32 - self.held.contains(b) as i32 as f32;
         let either = |x: f32, y: f32| if x != 0.0 { x } else { y };
         Controls { fwd: k("w", "s"), strafe: k("d", "a"), orbit: either(k("right", "left"), k("l", "j")), pitch: either(k("down", "up"), k("k", "i")) }
@@ -1005,8 +1123,9 @@ impl App {
         v != Vec3::ZERO
     }
 
-    /// The renderer on a configured surface, then the scene.
-    fn attach(&mut self, window: Arc<Window>, surface: wgpu::Surface<'static>, config: wgpu::SurfaceConfiguration, device: wgpu::Device, queue: wgpu::Queue) {
+    /// The renderer on a configured surface (or none: an offscreen target of
+    /// the configuration's size), then the scene.
+    fn attach(&mut self, window: Arc<Window>, surface: Option<wgpu::Surface<'static>>, config: wgpu::SurfaceConfiguration, device: wgpu::Device, queue: wgpu::Queue) {
         let mut renderer = Renderer::new(&device, &queue, config.format);
         if let Some(f) = arial(&self.lib) {
             renderer.set_font(&device, &queue, &f);
@@ -1015,7 +1134,8 @@ impl App {
             p.attach_ui(&mut renderer, &device, &queue, config.format, &self.lib);
         }
         let depth = render::depth_view(&device, config.width, config.height);
-        self.gfx = Some(Gfx { window, surface, device, queue, config, depth, renderer, models: Vec::new() });
+        let offscreen = surface.is_none().then(|| offscreen_target(&device, &config));
+        self.gfx = Some(Gfx { window, surface, offscreen, in_flight: None, device, queue, config, depth, renderer, models: Vec::new() });
         self.load();
     }
 }
@@ -1027,10 +1147,35 @@ impl ApplicationHandler for App {
         }
         if let Some(p) = self.pending.take() {
             let window = Arc::new(el.create_window(p.attrs).expect("window"));
-            self.attach(window, p.surface, p.config, p.device, p.queue);
+            self.attach(window, Some(p.surface), p.config, p.device, p.queue);
             return;
         }
         let window = Arc::new(el.create_window(Window::default_attributes().with_title("eqoa")).expect("window"));
+        // `EQOA_OFFSCREEN=WxH`: drawn on the adapter the environment names
+        // into a texture of that size, never presented. A GPU with no display
+        // to present on (an X server without DRI3) measures as it plays.
+        if let Some((w, h)) = std::env::var("EQOA_OFFSCREEN").ok().and_then(|v| {
+            let (w, h) = v.split_once('x')?;
+            Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?))
+        }) {
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+            let adapter = pollster::block_on(instance.request_adapter(&Default::default())).expect("adapter");
+            eprintln!("offscreen {w}x{h} on {:?}", adapter.get_info().name);
+            let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).expect("device");
+            let config = wgpu::SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                format: render::TARGET_FORMAT,
+                width: w,
+                height: h,
+                present_mode: wgpu::PresentMode::Fifo,
+                desired_maximum_frame_latency: 2,
+                alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+                view_formats: Vec::new(),
+                color_space: wgpu::SurfaceColorSpace::Auto,
+            };
+            self.attach(window, None, config, device, queue);
+            return;
+        }
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(self.display.clone())));
         let surface = instance.create_surface(window.clone()).expect("surface");
@@ -1045,7 +1190,7 @@ impl ApplicationHandler for App {
         // The bytes go out as the GS's do: no sRGB encode (render::TARGET_FORMAT).
         config.format = config.format.remove_srgb_suffix();
         surface.configure(&device, &config);
-        self.attach(window, surface, config, device, queue);
+        self.attach(window, Some(surface), config, device, queue);
     }
 
     fn about_to_wait(&mut self, _: &ActiveEventLoop) {
@@ -1063,9 +1208,10 @@ impl ApplicationHandler for App {
             _ if self.play.as_ref().is_some_and(|p| p.quit) => el.exit(),
             WindowEvent::Resized(s) if s.width > 0 && s.height > 0 => {
                 let Some(g) = &mut self.gfx else { return };
+                let Some(surface) = &g.surface else { return };
                 g.config.width = s.width;
                 g.config.height = s.height;
-                g.surface.configure(&g.device, &g.config);
+                surface.configure(&g.device, &g.config);
                 g.depth = render::depth_view(&g.device, s.width, s.height);
                 g.window.request_redraw();
             }
@@ -1617,6 +1763,14 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let frame_start = Instant::now();
+                if let Some(p) = &mut self.perf {
+                    p.begin();
+                }
+                if self.quit_at.is_some_and(|q| self.clock.elapsed().as_secs_f64() >= q) {
+                    el.exit();
+                    return;
+                }
                 // A teleport into another world: its reads begun (a page's take
                 // frames, the old world played meanwhile under the black
                 // screen), and the walk begun again there once they are in.
@@ -1642,6 +1796,7 @@ impl ApplicationHandler for App {
                 {
                     p.add_from(&w.scene, first);
                 }
+                mark(&mut self.perf, 0);
                 let controls = self.controls();
                 let now = self.clock.elapsed().as_millis() as i64;
                 let Some(g) = &mut self.gfx else { return };
@@ -1657,6 +1812,7 @@ impl ApplicationHandler for App {
                 let mut bb_view = None;
                 let play = &mut self.play;
                 let lib = &self.lib;
+                let perf = &mut self.perf;
                 let walk_view = self.walker.as_mut().map(|w| {
                     // the Camera Pitch Axis option, in modes 0 and 2
                     let mut controls = controls;
@@ -1664,6 +1820,7 @@ impl ApplicationHandler for App {
                         controls.pitch = -controls.pitch;
                     }
                     w.frame(controls, now);
+                    mark(perf, 1);
                     if let Some(p) = play {
                         let gpu = crate::play::Gpu { renderer: &mut g.renderer, device: &g.device, queue: &g.queue };
                         // The server named the player's model: dress the walker in it.
@@ -1686,6 +1843,7 @@ impl ApplicationHandler for App {
                         // the HUD, once SUPPORT's atlas has come
                         p.attach_ui(&mut g.renderer, &g.device, &g.queue, g.config.format, lib);
                     }
+                    mark(perf, 2);
                     if let Some(s) = sound.as_mut() {
                         let ids = w.sprite.as_ref().map(|cs| cs.sounds()).unwrap_or_default();
                         if ids != *walker_sounds {
@@ -1709,6 +1867,7 @@ impl ApplicationHandler for App {
                             body.visible = false;
                         }
                     }
+                    mark(perf, 3);
                     if let Some(s) = streamer {
                         // One zone a frame, as the game's loader takes them.
                         let at = Vec3::from(w.cam.walk.phys.position.to_array());
@@ -1716,6 +1875,7 @@ impl ApplicationHandler for App {
                         s.update(at, &mut w.scene, lib, gpu, Some(1));
                         s.animate(&mut w.scene, &g.renderer, &g.queue);
                     }
+                    mark(perf, 4);
                     let cues: Vec<crate::sound::Cue> = play.as_mut().map(|p| std::mem::take(&mut p.cues)).unwrap_or_default();
                     if let Some(s) = sound {
                         for c in &cues {
@@ -1730,9 +1890,11 @@ impl ApplicationHandler for App {
                         Some(p) => g.window.set_title(&format!("eqoa — {} — {} — {}", p.player.name, w.describe(), p.describe())),
                         None => g.window.set_title(&format!("eqoa — walking {}", w.describe())),
                     }
+                    mark(perf, 5);
                     if let Some(wx) = weather.as_mut() {
                         wx.frame(&mut w.scene, sound.as_mut(), &w.eye, now, hour(clock));
                     }
+                    mark(perf, 6);
                     let (proj, v) = w.view(g.config.width as f32 / g.config.height as f32);
                     if let Some(ps) = particles.as_mut() {
                         *batches = ps.frame(&w.scene, lib, w.eye_position(), proj * v, now);
@@ -1747,6 +1909,7 @@ impl ApplicationHandler for App {
                     if let Some(p) = play.as_mut() {
                         g.renderer.strips.append(&mut p.trail_strips);
                     }
+                    mark(perf, 7);
                     let mut lights = lit(proj, v, clock, Some((w.eye_position(), &w.scene)), weather.as_mut());
                     if let Some(p) = play.as_mut() {
                         lights.0.point = p.point_light(w, now, hour(clock), weather.as_ref());
@@ -1757,15 +1920,20 @@ impl ApplicationHandler for App {
                         batches.extend(world);
                         bb_view = Some((v, proj));
                     }
+                    mark(perf, 8);
                     lights
                 });
-                let frame = match g.surface.get_current_texture() {
-                    wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
-                    _ => {
-                        g.surface.configure(&g.device, &g.config);
-                        return;
-                    }
+                let frame = match &g.surface {
+                    Some(surface) => match surface.get_current_texture() {
+                        wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => Some(f),
+                        _ => {
+                            surface.configure(&g.device, &g.config);
+                            return;
+                        }
+                    },
+                    None => None,
                 };
+                mark(&mut self.perf, 9);
                 let view = match walk_view {
                     Some((v, sky)) => {
                         if let (Some(f), Some(at)) = (sky, self.sky_at) {
@@ -1787,13 +1955,19 @@ impl ApplicationHandler for App {
                         t.labels.extend(chat);
                     }
                 }
-                let target = frame.texture.create_view(&Default::default());
+                mark(&mut self.perf, 10);
+                let target = match (&frame, &g.offscreen) {
+                    (Some(f), _) => f.texture.create_view(&Default::default()),
+                    (None, Some(t)) => t.create_view(&Default::default()),
+                    (None, None) => return,
+                };
                 let mut enc = g.device.create_command_encoder(&Default::default());
-                let refs: Vec<&GpuModel> = g
+                let refs: Vec<render::Draw> = g
                     .models
                     .iter()
-                    .chain(self.streamer.iter().flat_map(|s| s.models()))
-                    .chain(self.play.iter().flat_map(|p| p.models()))
+                    .map(render::Draw::Model)
+                    .chain(self.streamer.iter().flat_map(|s| s.draws()))
+                    .chain(self.play.iter().flat_map(|p| p.models()).map(render::Draw::Model))
                     .collect();
                 g.renderer.draw(&g.queue, &mut enc, &target, &g.depth, &view, &refs);
                 if let Some((v, p)) = bb_view {
@@ -1804,8 +1978,22 @@ impl ApplicationHandler for App {
                     g.renderer.draw_billboards(&g.device, &g.queue, &mut enc, &target, &g.depth, v, p, &self.batches, &textures);
                 }
                 g.renderer.draw_text(&g.device, &mut enc, &target, &g.depth, (g.config.width, g.config.height));
-                g.queue.submit([enc.finish()]);
-                g.queue.present(frame);
+                mark(&mut self.perf, 11);
+                let sent = g.queue.submit([enc.finish()]);
+                mark(&mut self.perf, 12);
+                match frame {
+                    Some(f) => g.queue.present(f),
+                    None => {
+                        if let Some(prev) = g.in_flight.replace(sent) {
+                            let _ = g.device.poll(wgpu::PollType::Wait { submission_index: Some(prev), timeout: None });
+                        }
+                    }
+                }
+                mark(&mut self.perf, 13);
+                if let Some(p) = &mut self.perf {
+                    p.drawn = g.renderer.drawn.get();
+                    p.end(frame_start);
+                }
             }
             _ => {}
         }

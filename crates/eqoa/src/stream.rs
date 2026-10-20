@@ -18,7 +18,7 @@ use crate::scene;
 use crate::walker::AnimatedProps;
 use esf::{Container, Library};
 use glam::Vec3;
-use render::{GpuModel, Renderer, wgpu};
+use render::{GpuGroup, GroupPart, Renderer, wgpu};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use vi::fpu::{Ee, F};
@@ -215,9 +215,11 @@ pub fn load_zone_now(lib: &mut Library, file: usize, zi: usize) -> Result<(), St
 }
 
 struct Loaded {
-    models: Vec<GpuModel>,
+    /// the zone's parts, then its animated props' models (from `props_at`),
+    /// uploaded and drawn as one group
+    group: GpuGroup,
     props: AnimatedProps,
-    prop_models: Vec<GpuModel>,
+    props_at: usize,
 }
 
 pub struct Streamer {
@@ -305,24 +307,16 @@ impl Streamer {
         for &z in &load[..n] {
             let Some((zf, zn)) = lib.zone(self.file, z) else { continue };
             let s = scene::zones(lib, zf, &[zn], &format!("zone {z}"), true);
-            let models = s
-                .parts
-                .iter()
-                .zip(&s.statics)
-                .map(|((m, mats), st)| {
-                    let gm = g.renderer.upload(g.device, g.queue, m, mats, &textures);
-                    g.renderer.set_static_lights(g.queue, &gm, st);
-                    gm
-                })
-                .collect();
             let props = AnimatedProps::new(world, lib, &s.hsprites);
-            let prop_models = props
-                .groups
-                .iter()
-                .zip(props.matrices(world))
-                .map(|(group, mats)| g.renderer.upload(g.device, g.queue, &group.model, &mats, &textures))
-                .collect();
-            self.zones.insert(z, Loaded { models, props, prop_models });
+            let prop_mats = props.matrices(world);
+            let mut parts: Vec<GroupPart> =
+                s.parts.iter().zip(&s.statics).map(|((m, mats), st)| GroupPart { model: m, instances: mats, statics: st, moves: false }).collect();
+            let props_at = parts.len();
+            parts.extend(
+                props.groups.iter().zip(&prop_mats).map(|(group, mats)| GroupPart { model: &group.model, instances: mats, statics: &[], moves: true }),
+            );
+            let group = g.renderer.upload_group(g.device, g.queue, &parts, &textures);
+            self.zones.insert(z, Loaded { group, props, props_at });
         }
         !release.is_empty() || n > 0
     }
@@ -330,14 +324,15 @@ impl Streamer {
     /// Poses every loaded zone's props for this frame.
     pub fn animate(&self, world: &mut World<Ee>, r: &Renderer, queue: &wgpu::Queue) {
         for l in self.zones.values() {
-            for (m, mats) in l.prop_models.iter().zip(l.props.matrices(world)) {
-                r.set_instances(queue, m, &mats);
+            for (k, mats) in l.props.matrices(world).iter().enumerate() {
+                r.set_group_instances(queue, &l.group, l.props_at + k, mats);
             }
         }
     }
 
-    pub fn models(&self) -> impl Iterator<Item = &GpuModel> {
-        self.zones.values().flat_map(|l| l.models.iter().chain(l.prop_models.iter()))
+    /// Each loaded zone's models, as `Renderer::draw` takes them.
+    pub fn draws(&self) -> impl Iterator<Item = render::Draw<'_>> {
+        self.zones.values().map(|l| render::Draw::Group(&l.group))
     }
 
     pub fn describe(&self) -> String {

@@ -38,8 +38,19 @@ The Rust client. README.md is the plan and the crate table; keep it current.
   now") and is SUPPORT's again (`vi::ui::read_atlas`). CLIENT's pointers resolve through the SNR1
   relocations (`eqoa/src/client_image.rs`). `dnas` is held to the modules the game itself unpacked
   (`tests/discs.rs`: `run/`, and `$EQOA_BUILDS`, default `../decomp-builds`) and builds at
-  `opt-level = 3` in dev too (~300M interpreted instructions a module); tests that need SUPPORT take
-  `run/support.bin`, else unpack it off the disc (`vi/tests/common`).
+  `opt-level = 3` in dev too (~110M interpreted instructions a module); tests that need SUPPORT take
+  `run/support.bin`, else unpack it off the disc (`vi/tests/common`). Its natives (`src/native.rs`:
+  SHA-1, RC6, CBC decrypt, libgcc's multiply and doubles, BSAFE's bignum, the buffer reader) stand in
+  only where the function's CRC-32 is the proved one; a new one goes into `tests/natives.rs`, which
+  checks every call of two whole unpacks against the interpreter (registers, result, every byte
+  written). DNAS's own (self-decrypting) state machine stays interpreted, on purpose.
+- `ee`'s arithmetic is the native fast path; its first implementation is the reference in
+  `ee/tests/reference.rs` (every unary input, 2M pairs a regime; `EE_PAIRS=100000000` for more). Change
+  `ee` only with that test passing and a planted bug failing it.
+- Speed: `EQOA_PERF=1` (page: `?perf`) prints CPU time by phase; `EQOA_OFFSCREEN=WxH` measures on the
+  real GPU without a presentable display (here: `DISPLAY=:99`, the Xvfb, whose Vulkan has no DRI3);
+  `EQOA_QUIT=s`, `EQOA_WALK` script a run. A renderer change is held to `shot` PNGs byte for byte
+  (`EQOA_HOUR` pinned; a shot's layers scroll by its script time).
 - The `vi` structs are `#[repr(C)]` in the EE layout because the oracle compares raw bytes; keep it that way while ports are being proven. Later (not urgent): native runtime types beside them, converted at the edges, the layout types kept for oracle tests.
 - `ee::libm` is held to `tools/vimath-corpus` (Go, needs `../go-eqoa-vi`): regenerate the corpus with
   `go run . > ../../crates/ee/tests/libm_corpus.txt` (Go build: `TMPDIR`/`GOTMPDIR` under `~/.cache`).
