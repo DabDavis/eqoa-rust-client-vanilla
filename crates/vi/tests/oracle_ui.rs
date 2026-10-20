@@ -15,8 +15,9 @@
 //! planted bug must disagree.
 //!
 //! The atlas is SUPPORT's data: the decomp's side has it from libsupport
-//! (gendata), this side from the decrypted image at run/support.bin. Needs
-//! that, the disc (TEXTURES.TXT, WORDS.TXT, ARIALUI.CSF) and the oracle;
+//! (gendata, out of the decrypted image), this side is the built-in table
+//! (`vi::ui::atlas`), so the two are compared through every blitter too.
+//! Needs the disc (TEXTURES.TXT, WORDS.TXT, ARIALUI.CSF) and the oracle;
 //! SKIPs without them.
 #![allow(clippy::too_many_arguments)]
 
@@ -454,11 +455,11 @@ fn script() -> Vec<Call> {
 fn the_ui_layer_records_what_the_decomp_records() {
     let Some(mut o) = Oracle::open_at("oracle_ui") else { return };
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let (iso_path, support) = (root.join("run/eqoa.iso"), root.join("run/support.bin"));
-    let (Ok(image), true) = (std::fs::read(&support), iso_path.exists()) else {
-        eprintln!("SKIP: needs run/eqoa.iso and run/support.bin");
+    let iso_path = root.join("run/eqoa.iso");
+    if !iso_path.exists() {
+        eprintln!("SKIP: needs run/eqoa.iso");
         return;
-    };
+    }
     let mut iso = iso::Iso::open(iso_path).unwrap();
     let textures = iso.read("TEXTURES.TXT").unwrap();
     let words = iso.read("WORDS.TXT").unwrap();
@@ -480,7 +481,7 @@ fn the_ui_layer_records_what_the_decomp_records() {
     let r = o.call(720, &b);
     assert_eq!(i32::from_le_bytes(r[0..4].try_into().unwrap()), 0, "oracle init");
 
-    let atlas = vi::ui::read_atlas(&image).expect("atlas");
+    let atlas = vi::ui::atlas();
     let side = || Side {
         vui: Vui::new(StringTable::parse(&words).unwrap(), StringTable::parse(&textures).unwrap(), atlas.clone()),
         win: Default::default(),

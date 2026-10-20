@@ -10,9 +10,13 @@
 //! An atlas entry names a ROW of TEXTURES.TXT; the row's name, as
 //! `P:\studio\eqps2\Game_Assets\UI\<name>.tga`, hashes to the DictID of a
 //! surface in UI.CSF, and the entry's rectangle is cut out of it. The table
-//! itself is SUPPORT's data (only `extern` in the decomp): it is read from
-//! the player's own decrypted SUPPORT image (`run/support.bin`), as
-//! eqoa-port's gendata reads it; nothing of it is in this repository.
+//! itself is SUPPORT's data (only `extern` in the decomp). It is built in
+//! (`atlas`), as the Go client builds it in, so the HUD needs nothing but
+//! the disc (a page has no decrypted SUPPORT to read it from): the Go
+//! client's table (`go-eqoa-client-v1/internal/ui/table.go`) in the decomp's
+//! nine fields, `x00` the entry's own index, mode 0 and alpha 1 for every
+//! entry. `tests/atlas.rs` holds it to a decrypted SUPPORT image
+//! (`read_atlas`) field for field.
 // The methods keep the decomp's parameter lists.
 #![allow(clippy::too_many_arguments)]
 
@@ -36,6 +40,17 @@ pub struct UiTexEntry {
     pub mode: i32,
     pub alpha: f32,
     pub flags: u32,
+}
+
+const fn e(x00: i32, row: i32, uv0: [i32; 2], uv1: [i32; 2], mode: i32, alpha: f32, flags: u32) -> UiTexEntry {
+    UiTexEntry { x00, row, uv0, uv1, mode, alpha, flags }
+}
+
+static ATLAS: [UiTexEntry; ATLAS_LEN] = include!("ui_atlas.in");
+
+/// The atlas, built in.
+pub fn atlas() -> Vec<UiTexEntry> {
+    ATLAS.to_vec()
 }
 
 /// The atlas out of a decrypted SUPPORT image.
