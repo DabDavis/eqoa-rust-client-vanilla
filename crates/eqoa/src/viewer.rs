@@ -709,6 +709,9 @@ pub fn shot_with(
                     let (proj, v) = walker.view(w as f32 / h as f32);
                     p.draw_hud(u, &walker, t, proj * v, (w, h));
                 }
+                // TrackTarget too (the rings' clock); the last frame's are drawn
+                let (proj, v) = walker.view(w as f32 / h as f32);
+                p.draw_rings(&mut renderer, &device, &queue, &walker, proj * v, lib);
                 // A teleport into another world: that world's file in place
                 // of this one, and the walk begun again there.
                 if let Some((file, pos, heading)) = p.take_world_change() {
@@ -2261,6 +2264,7 @@ impl ApplicationHandler for App {
                         self.touch.textures(u, &g.device, &g.queue);
                         p.draw_touch(u, &self.touch, (g.config.width, g.config.height));
                     }
+                    p.draw_rings(&mut g.renderer, &g.device, &g.queue, w, view.view_proj, &self.lib);
                     let plates = p.plates();
                     if let Some(t) = g.renderer.text.as_mut() {
                         t.labels = crate::play::labels(&plates, w.eye_position(), view.view_proj, t);
