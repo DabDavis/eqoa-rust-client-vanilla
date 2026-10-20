@@ -104,6 +104,12 @@ impl Mouse {
         self.wheel += lines;
     }
 
+    /// This frame's drag and wheel let go of (a window up, the camera held).
+    pub fn discard(&mut self) {
+        self.look = (0.0, 0.0);
+        self.wheel = 0.0;
+    }
+
     /// This frame's drag and wheel on the walker's camera (`look`).
     pub fn look(&mut self, w: &mut Walker, inverted: bool) -> [f32; 2] {
         let (dx, dy) = std::mem::take(&mut self.look);

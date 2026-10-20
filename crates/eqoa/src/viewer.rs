@@ -426,10 +426,12 @@ pub fn shot_with(
                     p.click(id, matches!(c, crate::mouse::Click::Interact(..)));
                 }
             }
-            if !play.as_ref().is_some_and(|p| p.is_dead()) {
+            // the pointers' looks, taken every frame, applied only in play
+            // with the camera free
+            let (tx, ty, pinch) = touch.take_look();
+            if !play.as_ref().is_some_and(|p| p.is_dead()) && play.as_ref().is_none_or(|p| p.look_free()) {
                 let inverted = play.as_ref().is_some_and(|p| p.options.inverted != 0);
                 let look = mouse.look(&mut walker, inverted);
-                let (tx, ty, pinch) = touch.take_look();
                 let feel = crate::mouse::look(&mut walker, tx, ty, pinch, inverted);
                 for i in 0..2 {
                     for m in [look[i], feel[i]] {
@@ -438,6 +440,8 @@ pub fn shot_with(
                         }
                     }
                 }
+            } else {
+                mouse.discard();
             }
             let client = play.as_ref().filter(|p| !p.is_dead()).map(|p| p.control_client()).unwrap_or_default();
             if walker.frame_with(sticks, t, &client)
@@ -1268,15 +1272,22 @@ impl App {
     /// camera itself), axis by axis the one further from rest.
     fn sticks(&mut self) -> [f32; 4] {
         let mut a = self.controls().axes();
-        if self.play.as_ref().is_some_and(|p| p.is_dead()) {
+        // the pointers' looks, taken every frame, applied only in play with
+        // the camera free
+        let (tx, ty, pinch) = self.touch.take_look();
+        let dead = self.play.as_ref().is_some_and(|p| p.is_dead());
+        let free = !dead && self.play.as_ref().is_none_or(|p| p.look_free());
+        let inverted = self.play.as_ref().is_some_and(|p| p.options.inverted != 0);
+        let (look, feel) = match self.walker.as_mut() {
+            Some(w) if free => (self.mouse.look(w, inverted), crate::mouse::look(w, tx, ty, pinch, inverted)),
+            _ => {
+                self.mouse.discard();
+                ([0.0; 2], [0.0; 2])
+            }
+        };
+        if dead {
             return a;
         }
-        let inverted = self.play.as_ref().is_some_and(|p| p.options.inverted != 0);
-        let (tx, ty, pinch) = self.touch.take_look();
-        let (look, feel) = match self.walker.as_mut() {
-            Some(w) => (self.mouse.look(w, inverted), crate::mouse::look(w, tx, ty, pinch, inverted)),
-            None => ([0.0; 2], [0.0; 2]),
-        };
         let pad = self.console.sticks();
         for (i, a) in a.iter_mut().enumerate() {
             let (m, t) = if i < 2 { (look[i], feel[i]) } else { (0.0, 0.0) };

@@ -1933,6 +1933,12 @@ impl Play {
         self.pad_mode = mode;
     }
 
+    /// Whether a pointer may look round: in play (no window up) and with the
+    /// camera free (the start menu's framing takes it, `m_p06DC4`).
+    pub fn look_free(&self) -> bool {
+        self.mode == 0 && self.locks.1
+    }
+
     /// What `UpdateControls` reads of the client this frame.
     pub fn control_client(&self) -> crate::controls::Client {
         let now = self.session.now();
