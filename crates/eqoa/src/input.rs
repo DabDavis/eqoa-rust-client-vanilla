@@ -85,17 +85,22 @@ pub fn stick_byte(v: f32) -> u8 {
     ((v * 1.33).clamp(-1.0, 1.0) * 127.5 + 127.5).round() as u8
 }
 
-/// The host's dead zone on a gamepad's stick, radial, in the stick's own
-/// travel: inside it the stick is at rest, outside it passes as it is, so
+/// The host's dead zone on a gamepad's stick, radial, on the stick as gilrs
+/// gives it: inside it the stick is at rest, outside it passes as it is, so
 /// the game's own dead zone and response are what they were. `ScaleStick`
-/// ignores bytes 88..167, which after the 1.33 is 0.236 of a stick's travel
-/// either way of its middle; a modern stick does not come back to its middle
-/// so well (Microsoft asks a game to ignore up to 0.24 of the left stick's
-/// travel and 0.265 of the right's), and one resting past 0.236 walks the
-/// player sideways with nothing held, or turns it slowly (F3 reports
-/// 20261020-103355 and -104019, a PowerA pad). A DualShock 2 rests in its
-/// middle, and PCSX2 leaves its "Analog Deadzone" to the player (none by
-/// default). In a page `?deadzone=<0..0.9>`, natively `EQOA_DEADZONE`.
+/// ignores bytes 88..167, which after the 1.33 is 0.236 of the stick as
+/// gilrs gives it either way of its middle. Natively that is the stick's own
+/// travel (gilrs's dead zone is the device's, an xpad's 0.004); in a page
+/// gilrs scales the stick past a radial 0.1 of its own (the Gamepad API names
+/// none), so the game's edge is at 0.312 of the travel and this one at 0.37.
+/// A modern stick does not come back to its middle that well (Microsoft asks
+/// a game to ignore up to 0.24 of the left stick's travel and 0.265 of the
+/// right's; a worn pad drifts further), and one resting past the game's edge
+/// walks the player sideways with nothing held, or turns it slowly (F3
+/// reports 20261020-103355 and -104019, Chrome, a PowerA pad). A DualShock 2
+/// rests in its middle, and PCSX2 leaves its "Analog Deadzone" to the player
+/// (none by default). In a page `?deadzone=<0..0.9>`, natively
+/// `EQOA_DEADZONE`; the page's problem reports carry the sticks as they came.
 pub const STICK_DEAD_ZONE: f32 = 0.3;
 
 /// [`STICK_DEAD_ZONE`], or the player's.
@@ -562,7 +567,8 @@ mod tests {
     }
 
     /// A stick resting as far off its middle as Microsoft allows (0.265 of
-    /// the right stick's travel) reads as rest through the host's dead zone;
+    /// the right stick's travel, or -0.29) reads as rest through the host's
+    /// dead zone;
     /// without it the game reads it as pushed (`ScaleStick` past 167), which
     /// walks the player. A push past the dead zone passes as it was.
     #[test]
