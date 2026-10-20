@@ -146,7 +146,10 @@ The console's loop runs 30 frames a second (CLIENT's 20 ms floor, then the
 raster's wait for a field); the client draws at the display's rate, 165 a
 second on one tester's monitor. What the game moves by its clock (the walk
 and camera in 32 ms ticks, animation, particles, the weather) runs every
-frame drawn. What it counts in frames runs on a clock of the game's frames,
+frame drawn, with one difference left: the walk's damped integrator, whose
+accelerations are set for the 32 ms tick, reaches a higher terminal speed
+in shorter steps (running 9.07 m/s at 60 Hz and 9.26 at 165 against 8.81:
+see Not yet). What it counts in frames runs on a clock of the game's frames,
 30 a second (`frames.rs`): the HUD and every window (`VIKeyFlash`'s repeat
 after 16 frames, `VIUIWindow` opening by 0.15 a frame, `VIUITextScroll`'s two
 pixels a frame and 30-frame pause, the quick menus' light, the glows, the
@@ -207,6 +210,14 @@ order per stage is not yet measured.
   Weapon trails are (`vi::trail` against `oracle_trail`; `ProcessWeaponTrails`
   on the weapon group's two point sprites, by reading).
 - `VICameraEffect`'s blend into a scripted camera (a quaternion slerp).
+- The walk and camera stepped on the game's 30 Hz frames. `VIWalkControl::Process`
+  integrates `v = (v + F dt) d` with `d = damping^dt` and accelerations set for
+  its 32 ms tick (`InitIntermediate`), so its terminal velocity, `F dt d / (1 - d)`,
+  grows as the step shrinks: a display's frame of 16.7 ms runs 3.6% further than the
+  console's 32 ms tick and a 1-2 ms remainder each frame, 6 ms (165 Hz) 4.8%
+  (`EQOA_FRAME_MS`: |velocity| 9.26, 9.07, 8.81 m/s at 6, 16, 33 ms). The turn and
+  the orbit springs are built the same way. Stepping them on `frames.rs`'s clock
+  needs the body and the eye interpolated between its frames for display.
 - Time of day: `InitTimeOfDay`'s table, `SetupTimeOfDayLights` (with the
   overcast weight and the lightning flash), `SetupTimeOfDayFog` (the four
   env-flag fogs too) and the sky colour of `SetupTimeOfDaySky` are ported
