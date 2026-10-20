@@ -196,6 +196,73 @@ pub fn read_stats(r: &mut Reader) -> Stats {
     s
 }
 
+/// The active effects (state channel 0x43): `VIClient`'s `m_effectCount`,
+/// `m_effectIcon` (an icon's DictID) and `m_effectName`.
+#[derive(Clone, Debug, Default)]
+pub struct Effects {
+    pub count: i32,
+    pub icon: [u32; 8],
+    pub name: [Vec<u16>; 8],
+}
+
+/// `VIClient::Channel43`: the count, at most 8, then a 132-byte record for
+/// each, the icon and the name (`ReadString(name, 64)`: a wide string of
+/// at most 31 characters, an empty one for a longer). As `VIMemStream`
+/// reads: a read past the end leaves what it would have written as it was,
+/// and every read after one has failed fails too.
+pub fn read_effects(e: &mut Effects, data: &[u8]) {
+    let mut s = MemStream { data, pos: 0, error: false };
+    if let Some(v) = s.u32() {
+        e.count = v as i32;
+    }
+    e.count = if e.count < 9 { e.count } else { 8 };
+    for i in 0..e.count.max(0) as usize {
+        if let Some(v) = s.u32() {
+            e.icon[i] = v;
+        }
+        match s.u32() {
+            // n + 1 <= MaxBytes / 2, unsigned
+            Some(n) if n.wrapping_add(1) <= 32 => match s.take((n as usize).saturating_mul(2)) {
+                Some(b) => e.name[i] = b.chunks(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect(),
+                // the characters are not read, and dst[n] = 0 cuts what was there
+                None => e.name[i].truncate(n as usize),
+            },
+            Some(n) => {
+                s.take((n as usize).saturating_mul(2));
+                e.name[i].clear();
+            }
+            // The length is not read, and the console goes on with whatever
+            // its slot held: undefined, so the name is left as it was.
+            None => {}
+        }
+        s.pos = 4 + (i + 1) * 132;
+    }
+}
+
+/// `VIMemStream::Read`/`Skip`: nothing taken past the end, and nothing
+/// after an error.
+struct MemStream<'a> {
+    data: &'a [u8],
+    pos: usize,
+    error: bool,
+}
+
+impl<'a> MemStream<'a> {
+    fn take(&mut self, n: usize) -> Option<&'a [u8]> {
+        if !self.error && self.data.len() as i64 - self.pos as i64 >= n as i64 {
+            self.pos += n;
+            Some(&self.data[self.pos - n..self.pos])
+        } else {
+            self.error = true;
+            None
+        }
+    }
+
+    fn u32(&mut self) -> Option<u32> {
+        self.take(4).map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+    }
+}
+
 /// `VIClientPart4EC58::ReadState`: Combat Mastery.
 #[derive(Clone, Debug, Default)]
 pub struct Mastery {
