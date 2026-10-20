@@ -56,6 +56,7 @@ mod itemmenu;
 mod classmastery;
 mod cs;
 mod faction;
+mod lod;
 mod loot;
 mod merchant;
 mod modules;

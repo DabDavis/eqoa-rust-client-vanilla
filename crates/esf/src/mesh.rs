@@ -211,6 +211,10 @@ pub struct Batch {
     /// The material's layers; the first with a texture is the base.
     pub layers: Vec<Layer>,
     pub indices: Vec<u32>,
+    /// The level of a skinned LOD body the triangles belong to (`VILODSprite`
+    /// draws one level at a time, by distance: [`Model::lod_dists`]), or `None`
+    /// for triangles drawn at every distance.
+    pub lod: Option<u8>,
 }
 
 impl Batch {
@@ -235,6 +239,10 @@ pub struct Model {
     pub skinned: bool,
     /// GroupSprite members naming a DictID this container does not hold.
     pub missing: u32,
+    /// A CSprite whose body is a skinned LOD sprite (0x2A40): each level's
+    /// distance (`m_levels[i].m_dist`), in level order. Its batches carry their
+    /// level ([`Batch::lod`]), and one level is drawn at a time.
+    pub lod_dists: Vec<f32>,
 }
 
 /// A model listed out of a container.
@@ -305,15 +313,18 @@ fn sprite_materials<'a>(c: &'a Container, sprite: NodeId, resolve: &Resolve<'a>)
         .collect()
 }
 
-/// Appends one sprite's PrimBuffer to `m`, placed.
+/// Appends one sprite's PrimBuffer to `m`, placed, its batches in LOD level
+/// `lod` (`None`: drawn at every distance).
+#[allow(clippy::too_many_arguments)]
 fn add_sprite<'a>(
     m: &mut Model,
-    keys: &mut Vec<(i32, Vec<Layer>)>,
+    keys: &mut Vec<(i32, Vec<Layer>, Option<u8>)>,
     c: &'a Container,
     sprite: NodeId,
     place: impl Fn([f32; 3]) -> [f32; 3],
     pre: &[[f32; 3]],
     resolve: &Resolve<'a>,
+    lod: Option<u8>,
 ) {
     let Some(pb) = c.child(sprite, PRIMBUF).or_else(|| c.child(sprite, SKINPRIMBUF)) else {
         return;
@@ -346,12 +357,13 @@ fn add_sprite<'a>(
             m.bones.extend_from_slice(&l.bones);
             m.weights.extend_from_slice(&l.weights);
         }
-        // One batch per distinct material (every layer), so per-race skin
-        // tones under one texture stay apart and layers are kept whole.
+        // One batch per distinct material (every layer) and LOD level, so
+        // per-race skin tones under one texture stay apart, layers are kept
+        // whole and one level can be drawn without the other.
         let material = if (l.material as usize) < mats.len() { l.material } else { -1 };
-        let bi = keys.iter().position(|k| k.0 == material && k.1 == layers).unwrap_or_else(|| {
-            keys.push((material, layers.clone()));
-            m.batches.push(Batch { material, layers: layers.clone(), indices: Vec::new() });
+        let bi = keys.iter().position(|k| k.0 == material && k.1 == layers && k.2 == lod).unwrap_or_else(|| {
+            keys.push((material, layers.clone(), lod));
+            m.batches.push(Batch { material, layers: layers.clone(), indices: Vec::new(), lod });
             keys.len() - 1
         });
         let idx = &mut m.batches[bi].indices;
@@ -388,31 +400,35 @@ pub fn build<'a>(c: &'a Container, id: NodeId, resolve: &Resolve<'a>) -> Option<
                         translation: [f32le(d, p + 20), f32le(d, p + 24), f32le(d, p + 28)],
                     };
                     match resolve(i32le(d, p)) {
-                        Some((mc, s)) => add_sprite(&mut m, &mut keys, mc, mc.resolve_lod(s), |q| place.apply(q), &[], resolve),
+                        Some((mc, s)) => add_sprite(&mut m, &mut keys, mc, mc.resolve_lod(s), |q| place.apply(q), &[], resolve, None),
                         None => m.missing += 1,
                     }
                     p += 32;
                 }
             }
-            add_sprite(&mut m, &mut keys, c, id, none, &[], resolve);
+            add_sprite(&mut m, &mut keys, c, id, none, &[], resolve, None);
         }
+        // The body: the sprite array's one member (every CSprite on the disc
+        // has one, the one its skin list's slot 0 names, `m_body[0]`). A
+        // skinned LOD sprite (0x2A40, `ParseSkinLODSpriteObj`) has two meshes,
+        // a near one and a far one, and `VILODSprite::Raster` draws ONE of
+        // them; both at once put the far mesh's flatter triangles through the
+        // near one's skin (the darker wedges on a barbarian's arm and back).
         CSPRITE => {
             for &k in c.child(id, CSPRITE_ARRAY).map_or(&[][..], |a| &c.node(a).children) {
                 if c.node(k).ty == CSPRITE_VARIANT {
-                    for &s in c.child(k, CSPRITE_VARIANT_MESHES).map_or(&[][..], |v| &c.node(v).children) {
-                        add_sprite(&mut m, &mut keys, c, s, none, &[], resolve);
-                    }
+                    add_lod_levels(&mut m, &mut keys, c, k, resolve);
                 } else {
-                    add_sprite(&mut m, &mut keys, c, k, none, &[], resolve);
+                    add_sprite(&mut m, &mut keys, c, k, none, &[], resolve, None);
                 }
             }
         }
         HSPRITE => {
             for &k in c.child(id, HSPRITE_ARRAY).map_or(&[][..], |a| &c.node(a).children) {
-                add_sprite(&mut m, &mut keys, c, k, none, &[], resolve);
+                add_sprite(&mut m, &mut keys, c, k, none, &[], resolve, None);
             }
         }
-        _ => add_sprite(&mut m, &mut keys, c, id, none, &[], resolve),
+        _ => add_sprite(&mut m, &mut keys, c, id, none, &[], resolve, None),
     }
     finish(m)
 }
@@ -423,9 +439,29 @@ pub fn build_terrain<'a>(c: &'a Container, patches: &[NodeId], pre: &[[f32; 3]],
     let mut m = Model::default();
     let mut keys = Vec::new();
     for &ss in patches {
-        add_sprite(&mut m, &mut keys, c, ss, |p| p, pre, resolve);
+        add_sprite(&mut m, &mut keys, c, ss, |p| p, pre, resolve, None);
     }
     finish(m)
+}
+
+/// A skinned LOD sprite's levels (`ParseSkinLODSpriteLevels`, 0x2A70: a count,
+/// then each level's sprite DictID and distance), each level's mesh added with
+/// its level. The ids name the sprites of its 0x2A60 array, found through the
+/// dictionary as the parser finds them (`m_dict->Find`).
+fn add_lod_levels<'a>(m: &mut Model, keys: &mut Vec<(i32, Vec<Layer>, Option<u8>)>, c: &'a Container, lod: NodeId, resolve: &Resolve<'a>) {
+    let Some(t) = c.child(lod, 0x2A70) else { return };
+    let d = c.body(t);
+    let n = if d.len() >= 4 { i32le(d, 0) } else { 0 };
+    for i in 0..n.clamp(0, 8) as usize {
+        let at = 4 + i * 8;
+        if at + 8 > d.len() {
+            break;
+        }
+        m.lod_dists.push(f32le(d, at + 4));
+        if let Some((sc, s)) = resolve(i32le(d, at)) {
+            add_sprite(m, keys, sc, s, |p| p, &[], resolve, Some(i as u8));
+        }
+    }
 }
 
 fn finish(m: Model) -> Option<Model> {

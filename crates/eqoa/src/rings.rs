@@ -583,7 +583,7 @@ mod tests {
             uv: vec![[1.0, 0.0], [1.0, 1.0], [0.0, 0.0], [0.0, 1.0]],
             normal: vec![[0.0, 0.0, 1.0]; 4],
             color: vec![[1.0; 4]; 4],
-            batches: vec![esf::Batch { material: 0, layers: vec![layer(11, 3), layer(12, 0)], indices: vec![0, 2, 1, 1, 2, 3] }],
+            batches: vec![esf::Batch { material: 0, layers: vec![layer(11, 3), layer(12, 0)], indices: vec![0, 2, 1, 1, 2, 3], lod: None }],
             ..Default::default()
         };
         let mut m = Matrix44::<Ee>::identity();

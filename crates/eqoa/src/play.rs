@@ -545,6 +545,18 @@ fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Optio
                 })
 }
 
+/// The walker's body as the game rasters the player's actor: hidden past its
+/// off distance from the camera (`VIScene::RasterActor`), and of an LOD body
+/// the level its centre's distance picks (`VILODSprite::Raster`). `matrix` is
+/// the centre transform `Walker::pose` returns. Whether it is shown.
+pub fn place_body(body: &mut GpuModel, walker: &Walker, matrix: [[f32; 4]; 4]) -> bool {
+    let at = walker.cam.walk.phys.smooth_location();
+    let shown = crate::lod::within(&at, &walker.eye.position, crate::lod::off_dist(&body.lod_dists));
+    crate::lod::place(body, &glam_to_matrix(matrix), &walker.eye.position);
+    body.visible = shown;
+    shown
+}
+
 /// Puts layer changes onto the batches of the palette entries they name.
 fn dress(model: &mut esf::Model, changes: &[vi::cust::LayerChange]) {
     for ch in changes {
@@ -1434,6 +1446,16 @@ impl Play {
             g.renderer.set_instances(g.queue, &p.gpu, &[matrix]);
             if !palette.is_empty() {
                 g.renderer.set_palette(g.queue, &p.gpu, &palette);
+            }
+            // As the game rasters it: past its off distance not at all
+            // (`VIScene::RasterActor`, at the actor's place), and of an LOD
+            // body the one level its distance picks (`VILODSprite::Raster`).
+            let at = Vect3::new(f(e.actor_pos[0]), f(e.actor_pos[1]), f(e.actor_pos[2]));
+            let shown = crate::lod::within(&at, &walker.eye.position, crate::lod::off_dist(&p.gpu.lod_dists));
+            crate::lod::place(&mut p.gpu, &p.centre, &walker.eye.position);
+            p.gpu.visible = shown;
+            for (_, a) in &mut p.attached {
+                a.visible = shown;
             }
         }
         self.spells_frame(walker, lib, game_ms, sound);
@@ -4434,12 +4456,17 @@ impl Play {
     }
 
     /// Places the dressed player with the walker's pose: the body at its
-    /// model matrix and palette, the attachments on the walker's nodes.
-    pub fn place_self(&self, walker: &Walker, matrix: [[f32; 4]; 4], palette: &[[[f32; 4]; 4]], r: &Renderer, queue: &wgpu::Queue) {
-        let Some(p) = &self.self_puppet else { return };
+    /// model matrix and palette (its LOD level and off distance as
+    /// `place_body` takes them), the attachments on the walker's nodes.
+    pub fn place_self(&mut self, walker: &Walker, matrix: [[f32; 4]; 4], palette: &[[[f32; 4]; 4]], r: &Renderer, queue: &wgpu::Queue) {
+        let Some(p) = &mut self.self_puppet else { return };
         r.set_instances(queue, &p.gpu, &[matrix]);
         if !palette.is_empty() {
             r.set_palette(queue, &p.gpu, palette);
+        }
+        let shown = place_body(&mut p.gpu, walker, matrix);
+        for (_, a) in &mut p.attached {
+            a.visible = shown;
         }
         let Some(cs) = walker.sprite.as_ref() else { return };
         let centre = glam_to_matrix(matrix);
