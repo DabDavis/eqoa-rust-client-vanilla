@@ -10,7 +10,14 @@
 //! The window sorts the category's skills into rank chains (a skill's
 //! parent is the one whose `x00` its `parent` names) and lists the highest
 //! rank owned of each, and the lowest rank available.
+//!
+//! A pointer (`pointer`) takes them as the keys reach them: the category
+//! and the pages and the share are left and right by the halves of their
+//! framed value, a skill is selected and the selected one opened, a window
+//! over the list is closed by a click off it (△), the message's choices are
+//! taken at once.
 
+use crate::pointer::{Hits, MOVED, key};
 use crate::startmenu::KeyFlash;
 use crate::textlist::{Message, PROMPT_YESNO, TextList};
 use net::dump::Mastery;
@@ -19,6 +26,24 @@ use vi::ui::{Raster, UI_COLORS, Vui, Window, wide};
 
 /// `sCategoryWords`: the five categories' names.
 const CATEGORY_WORDS: [i32; 5] = [1653, 1654, 1655, 511, 1656];
+
+/// `DrawFrame(x, row, width, 1, 0x20)`'s frame and its two side arrows, for
+/// a pointer: the left half is the left key, the right half the right key
+/// (the arrows' sides; `pointer::Hits` ids are the keys).
+fn push_halves(hits: &mut Hits, w: &Window, vui: &Vui, r: &dyn Raster, x: i32, row: i32, width: i32) {
+    let h = vui.font_height(r) - 4;
+    let at = [w.top_left()[0] + x - 4, w.row_center(vui, r, row)[1] - 7];
+    let (x1, y1) = (at[0] + width + 8, at[1] + h + 4);
+    let mid = (at[0] + x1) / 2;
+    hits.push([at[0] - 16, at[1], mid, y1], key::LEFT);
+    hits.push([mid, at[1], x1 + 16, y1], key::RIGHT);
+}
+
+/// A window's whole rectangle (a click on it is its own, off it closes it).
+fn push_window(hits: &mut Hits, w: &Window) {
+    let (tl, br) = (w.top_left(), w.bottom_right());
+    hits.push([tl[0], tl[1], br[0], br[1]], -1);
+}
 
 /// `VICMSkill`: one skill of the list (sub-op 8).
 #[derive(Clone, Debug, Default)]
@@ -444,15 +469,45 @@ pub struct ClassMastery {
     inspect: Pages,
     message: Message,
     require: Pages,
+    /// the category's halves; the window over the list (-1) and its halves
+    hits: Hits,
+    child_hits: Hits,
 }
 
 impl ClassMastery {
-
-    /// A pointer at frame point `p` (`pointer`): what is under it selected,
-    /// and the keys to press.
+    /// A pointer at frame point `p` (`pointer`), to the window with the
+    /// keys: in the list (not while a request is answered) the category's
+    /// halves are left and right, a skill is selected (`MOVED`) and the
+    /// selected one opened (✕); in the points or a skill's window the framed
+    /// value's halves (the share, the pages) are left and right, a click off
+    /// the window closes it (△); the message takes a click on a choice. The
+    /// keys to press.
     pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
-        let _ = p;
-        Vec::new()
+        match self.focus {
+            Focus::Main => {
+                if self.busy {
+                    return Vec::new();
+                }
+                if let Some(k) = self.hits.at(p) {
+                    return vec![k];
+                }
+                let list = if self.column == 0 { &mut self.owned } else { &mut self.available };
+                match list.line_at(p) {
+                    Some(i) if i == list.sel => vec![key::CROSS],
+                    Some(i) => {
+                        list.set_sel(i);
+                        vec![MOVED]
+                    }
+                    None => Vec::new(),
+                }
+            }
+            Focus::Inspect if self.message.visible => self.message.point(p).into_iter().collect(),
+            _ => match self.child_hits.at(p) {
+                Some(-1) => Vec::new(),
+                Some(k) => vec![k],
+                None => vec![key::TRIANGLE],
+            },
+        }
     }
     /// `Refresh`, then `OnMessage` 295 (the focus from outside): the window,
     /// the two lists, the first category.
@@ -721,6 +776,8 @@ impl ClassMastery {
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, part: &Part, cues: &mut Vec<i32>) {
         let word = |id: i32| vui.words.get(id, vui.language).to_string();
         let c0 = UI_COLORS[0];
+        self.hits.clear();
+        self.child_hits.clear();
         vui.blit_rect(r, 32, [-1, -1], [641, 332], 0, 1.0);
         let w = self.window.size[0];
         self.window.draw(vui, r);
@@ -728,6 +785,7 @@ impl ClassMastery {
         self.window.text(vui, r, &wide(&format!("{}/{}", part.m.x0c, part.m.x10)), 260, 1, c0, 0);
         self.window.text(vui, r, &wide("Category:"), 40, 2, c0, 0);
         self.window.draw_frame(vui, r, 260, 2, w - 300, 1, 32);
+        push_halves(&mut self.hits, &self.window, vui, r, 260, 2, w - 300);
         self.window.text_box(vui, r, &wide(&word(CATEGORY_WORDS[self.category as usize])), 260, 2, w - 300, 1, c0, 8);
         // DrawLists
         if self.column == 0 {
@@ -823,6 +881,7 @@ impl ClassMastery {
                 };
                 let p = if require { &mut self.require } else { &mut self.inspect };
                 p.window.draw(vui, r);
+                push_window(&mut self.child_hits, &p.window);
                 let legend = if require {
                     format!("|t {}", word(750))
                 } else if node.x04 != 0 {
@@ -834,6 +893,8 @@ impl ClassMastery {
                 };
                 p.window.text(vui, r, &wide(&legend), 40, 10, c0, 0);
                 p.draw_header(vui, r, require);
+                let pw = p.window.size[0];
+                push_halves(&mut self.child_hits, &p.window, vui, r, 40, 1, pw - 80);
                 p.list.draw(vui, r, &p.window, 40, 3);
                 if p.keys.pulse(138) {
                     let end = p.list.scroll(-1);
@@ -860,10 +921,12 @@ impl ClassMastery {
         let w = self.points.size[0];
         let word = |id: i32| vui.words.get(id, vui.language).to_string();
         self.points.draw(vui, r);
+        push_window(&mut self.child_hits, &self.points);
         self.points.text_box(vui, r, &wide("Available Mastery Points:"), 40, 1, w - 80, 1, c0, 0);
         self.points.text_box(vui, r, &wide(&part.m.x0c.to_string()), 40, 1, w - 80, 1, c0, 16);
         self.points.text_box(vui, r, &wide("Percentage of experience points to apply towards mastery points:"), 40, 3, w - 80, 3, c0, 8);
         self.points.draw_frame(vui, r, 150, 6, w - 300, 1, 32);
+        push_halves(&mut self.child_hits, &self.points, vui, r, 150, 6, w - 300);
         self.points.text_box(vui, r, &wide(&format!("{}%", self.percent)), 40, 6, w - 80, 1, c0, 8);
         self.points.text(vui, r, &wide(&format!("|x {}  |t {}", word(786), word(753))), 40, 8, c0, 0);
         for (k, d) in [(136, -1), (137, 1)] {
@@ -937,6 +1000,82 @@ mod tests {
         p.recv(&m);
         assert!(p.skills.is_empty(), "a skill cut short is not kept");
         assert_eq!(p.pending, 0);
+    }
+
+    /// A pointer on the list, the category, the points window, a skill's
+    /// window and its message, each as their keys; nothing while a request
+    /// is answered.
+    #[test]
+    fn a_pointer_takes_the_windows() {
+        use crate::pointer::rows_rect;
+        use crate::pointer::testing::{NullRaster, mid, vui};
+        let (vui, mut r) = (vui(), NullRaster);
+        let mut part = Part::default();
+        // three owned skills, each its own chain, and one known
+        for k in 0..3 {
+            part.skills.push(Skill { x00: k + 1, on: true, id: 10 + k, parent: 100 + k, name: wide(&format!("Skill {k}")), ..Default::default() });
+        }
+        part.skills.push(Skill { x00: 9, known: 1, id: 19, parent: 109, name: wide("Known"), ..Default::default() });
+        let mut c = ClassMastery::default();
+        c.open(&vui, &r, &part);
+        let mut cues = Vec::new();
+        c.draw(&vui, &mut r, &part, &mut cues);
+        let line = |c: &ClassMastery, i: i32| mid(rows_rect(&c.window, &vui, &NullRaster, 40, 5 + i, 400, 1));
+        assert_eq!(c.point(line(&c, 2)), vec![MOVED]);
+        assert_eq!(c.owned.sel, 2);
+        assert_eq!(c.point(line(&c, 2)), vec![key::CROSS], "the selection: opened");
+        assert!(c.point(line(&c, 3)).is_empty(), "past the three owned");
+        // the category's frame (x 260, row 2, 180 wide): its halves and arrows
+        let y = c.window.row_center(&vui, &NullRaster, 2)[1] as f32;
+        let x0 = (c.window.top_left()[0] + 256) as f32;
+        assert_eq!(c.point([x0 + 20.0, y]), vec![key::LEFT]);
+        assert_eq!(c.point([x0 - 10.0, y]), vec![key::LEFT], "the left arrow");
+        assert_eq!(c.point([x0 + 170.0, y]), vec![key::RIGHT]);
+        assert!(c.point([x0 + 20.0, y + 15.0]).is_empty(), "below the frame: the list's header");
+        // a request out: nothing
+        c.busy = true;
+        assert!(c.point(line(&c, 0)).is_empty());
+        assert!(c.point([x0 + 20.0, y]).is_empty());
+        c.busy = false;
+        // the points window: the share's halves, on it nothing, off it closed
+        c.key(&vui, &mut r, &mut part, key::SQUARE, true, 0, &mut cues);
+        assert_eq!(c.focus, Focus::Points);
+        c.draw(&vui, &mut r, &part, &mut cues);
+        let py = c.points.row_center(&vui, &NullRaster, 6)[1] as f32;
+        let px = (c.points.top_left()[0] + 146) as f32;
+        assert_eq!(c.point([px + 10.0, py]), vec![key::LEFT]);
+        assert_eq!(c.point([px + 100.0, py]), vec![key::RIGHT]);
+        assert!(c.point(mid([c.points.top_left()[0], c.points.top_left()[1], c.points.top_left()[0] + 40, c.points.top_left()[1] + 40])).is_empty());
+        assert_eq!(c.point([5.0, 5.0]), vec![key::TRIANGLE]);
+        assert_eq!(c.owned.sel, 2, "the list under it untouched");
+        // a skill's window: the pages' halves; its message's choices
+        c.focus = Focus::Main;
+        part.node = Some(Node { x04: 1, x08: 12, text: wide("text"), reqs: vec![(0, 1)], ..Default::default() });
+        assert!(c.show_node(&vui, &mut r, &part, true));
+        assert_eq!(c.focus, Focus::Inspect);
+        c.draw(&vui, &mut r, &part, &mut cues);
+        let w = c.inspect.window;
+        let hy = w.row_center(&vui, &NullRaster, 1)[1] as f32;
+        assert_eq!(c.point([(w.top_left()[0] + 50) as f32, hy]), vec![key::LEFT]);
+        assert_eq!(c.point([(w.top_left()[0] + 350) as f32, hy]), vec![key::RIGHT]);
+        assert_eq!(c.point([5.0, 400.0]), vec![key::TRIANGLE]);
+        c.key(&vui, &mut r, &mut part, key::CROSS, true, 0, &mut cues);
+        assert!(c.message.visible);
+        c.draw(&vui, &mut r, &part, &mut cues);
+        assert!(c.point([5.0, 400.0]).is_empty(), "the message: off it, nothing");
+        // its choices (a 300-wide box at the window's middle, three rows):
+        // No, then Yes, each taken at once
+        let mut mw = Window::default();
+        mw.init(&vui, &NullRaster, [320, 180], 300, 3, 0);
+        mw.set_title(Some(&[]));
+        let (cx, cy) = (mw.top_left()[0] as f32, mw.row_center(&vui, &NullRaster, 2)[1] as f32);
+        assert_eq!(c.point([cx + 250.0, cy]), vec![key::CROSS]);
+        assert_eq!(c.key(&vui, &mut r, &mut part, key::CROSS, true, 0, &mut cues), None, "No: nothing sent");
+        assert!(!c.message.visible);
+        c.key(&vui, &mut r, &mut part, key::CROSS, true, 0, &mut cues);
+        c.draw(&vui, &mut r, &part, &mut cues);
+        assert_eq!(c.point([cx + 60.0, cy]), vec![key::CROSS]);
+        assert!(matches!(c.key(&vui, &mut r, &mut part, key::CROSS, true, 0, &mut cues), Some(CmUp::Send(_))), "Yes: the request");
     }
 
     /// `VICMNode::Read`: the fields, three strings and three lists; a
