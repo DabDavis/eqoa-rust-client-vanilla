@@ -66,6 +66,7 @@ pub struct PatchMember {
 /// health when known (`GetGroupMemberHPKnown`) with `GroupMemberFlag4/8`.
 #[derive(Clone, Debug, Default)]
 pub struct MemberState {
+    pub id: u32,
     pub name: String,
     pub is_target: bool,
     pub hp: Option<(u8, bool, bool)>,
@@ -102,6 +103,20 @@ pub struct Hud {
     pub region: i8,
     /// `DrawPatch`'s static `start`: the clock when its material was made.
     patch_start: Option<i64>,
+    /// Where the player's frame, the group's bars and the pet's were drawn,
+    /// before the left side moves them (for a pointer: `Pick`).
+    hits: crate::pointer::Hits,
+    picks: Vec<Pick>,
+}
+
+/// What a pointer finds on the HUD's left side (`Hud::pick`): the player's
+/// own frame, a group member's bar (its id), the pet's bar. Each is what L1's
+/// cycle targets in turn.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Pick {
+    Me,
+    Member(u32),
+    Pet,
 }
 
 impl Hud {
@@ -116,7 +131,19 @@ impl Hud {
             scroll: TextScroll::default(),
             region: 0,
             patch_start: None,
+            hits: Default::default(),
+            picks: Vec::new(),
         }
+    }
+
+    /// What is under frame point `p` (before the left side's move).
+    pub fn pick(&self, p: [f32; 2]) -> Option<Pick> {
+        self.hits.at(p).and_then(|i| self.picks.get(i as usize).copied())
+    }
+
+    fn note(&mut self, r: [i32; 4], what: Pick) {
+        self.hits.push(r, self.picks.len() as i32);
+        self.picks.push(what);
     }
 
     /// `UpdateGlow`: each glow brightens while its flag is up and fades to
@@ -133,7 +160,10 @@ impl Hud {
     pub fn draw(&mut self, vui: &Vui, ui: &mut UiRaster, s: &HudState) {
         self.update_glow();
         ui.ui.anchor = Anchor::Left;
+        self.hits.clear();
+        self.picks.clear();
         let mut p = [10, 15];
+        self.note([10, 15, 200, 80], Pick::Me);
         vui.blit(ui, 6, p);
         if s.has_self {
             self.draw_compass(ui, s.heading);
@@ -188,6 +218,7 @@ impl Hud {
         let mut glowing = false;
         for m in &s.group {
             let start = p;
+            self.note([p[0], p[1], p[0] + 174, p[1] + 46], Pick::Member(m.id));
             let glow = if m.is_target { self.glow1 } else { 0.3 };
             glowing |= m.is_target;
             vui.blit_bar(ui, &[], [0.0; 4], p, 25, 26, 174, 3, glow, 0, true);
@@ -221,6 +252,7 @@ impl Hud {
             return;
         };
         let mut p = at;
+        self.note([p[0], p[1], p[0] + 174, p[1] + 46], Pick::Pet);
         self.glow2_on = if pet.is_target { 1 } else { -1 };
         let g = self.glow2;
         vui.blit_bar(ui, &[], [0.0; 4], p, 25, 26, 174, 3, g, 0, true);

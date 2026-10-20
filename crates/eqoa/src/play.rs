@@ -1653,15 +1653,33 @@ impl Play {
             if matches!(c, Click::Right(..)) {
                 return false;
             }
-            // the quick menus are drawn out at a wide window's right
+            // the quick menus and the chat box are drawn out at a wide
+            // window's right, the player's frame and the group's at its left
             let side = render::ui::side(size);
-            return match self.hud_menus.point([f[0] - side, f[1]]) {
-                Some(k) => {
-                    self.hud_key(k);
-                    true
-                }
-                None => false,
+            let (right, left) = ([f[0] - side, f[1]], [f[0] + side, f[1]]);
+            if let Some(k) = self.hud_menus.point(right) {
+                self.hud_key(k);
+                return true;
+            }
+            // the chat box: the chat line, as R3 opens it
+            if self.wnd_chat.as_ref().is_some_and(|w| w.contains(right)) {
+                self.open_edit(0xB0F0000, 128, -1, false);
+                self.edit.title = self.chat_title();
+                return true;
+            }
+            // the player's frame, a member's bar, the pet's: targeted, as
+            // L1's cycle targets each
+            let pick = self.hud.as_ref().and_then(|h| h.2.pick(left));
+            let id = match pick {
+                Some(crate::hud::Pick::Me) => self.self_id32(),
+                Some(crate::hud::Pick::Member(id)) => Some(id),
+                Some(crate::hud::Pick::Pet) => (self.pet_id != u32::MAX).then_some(self.pet_id),
+                None => return false,
             };
+            if let Some(id) = id.filter(|&id| id != self.target) {
+                self.target_id(id);
+            }
+            return true;
         }
         let keys = if matches!(c, Click::Right(..)) {
             vec![crate::pointer::key::TRIANGLE]
@@ -3925,7 +3943,7 @@ impl Play {
                 .filter(|m| Some(m.id) != me && m.active)
                 .map(|m| {
                     let flags = find(Some(m.id)).and_then(|e| e.creature.as_ref()).map_or(0, |c| c.flags262);
-                    crate::hud::MemberState { name: m.name.clone(), is_target: m.id == self.target, hp: (m.hp_known != 0).then_some((m.hp, flags & 4 != 0, flags & 8 != 0)) }
+                    crate::hud::MemberState { id: m.id, name: m.name.clone(), is_target: m.id == self.target, hp: (m.hp_known != 0).then_some((m.hp, flags & 4 != 0, flags & 8 != 0)) }
                 })
                 .collect(),
             patches: self.group.members[..self.group.count()]

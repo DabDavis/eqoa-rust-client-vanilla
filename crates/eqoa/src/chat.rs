@@ -157,6 +157,13 @@ pub struct WndChat {
 }
 
 impl WndChat {
+    /// Whether frame point `p` is on the box while it shows (before the right
+    /// side's move), for a pointer.
+    pub fn contains(&self, p: [f32; 2]) -> bool {
+        let (tl, br) = (self.window.top_left(), self.window.bottom_right());
+        (self.window.is_open() || self.window.is_opening()) && p[0] >= tl[0] as f32 && p[0] < br[0] as f32 && p[1] >= tl[1] as f32 && p[1] < br[1] as f32
+    }
+
     /// `Init`: the window is 462 wide and lines wrap at its width less 45.
     pub fn new() -> Self {
         WndChat { mode: 0, height: 0, target: 0, lines: 0, text: ChatText::new(462 - 45), window: Window::default(), scroll: 0, top: 0, bottom: 0, held: 0, repeat: 0.0, cues: Vec::new() }
