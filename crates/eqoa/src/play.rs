@@ -1414,22 +1414,32 @@ impl Play {
         let spells = self.spells.get_or_insert_with(|| Spells::load(lib, game_ms));
         let me = self.session.self_id.map(|s| s as u32);
         let mut bodies: Vec<Body> = Vec::new();
+        // each creature's hands as its sprite holds them (`SetAttackAction`'s
+        // types: an empty hand is 11, hand to hand)
+        let hands = |e: &net::entity::Entity| e.creature.as_ref().map_or([11, 11], crate::spells::hand_attack_types);
         for (slot, (e, p)) in self.entities.slots.iter().zip(self.puppets.iter_mut()).enumerate() {
             let Some(e) = e.as_ref().filter(|e| Some(e.id) != me) else { continue };
+            let attack = hands(e);
             match p {
-                Some(p) => bodies.push(Body { actor: slot as i32, sprite: p.sprite.as_mut().map(|cs| (cs, &p.anims, &mut p.rand)), transform: p.actor_m, centre: p.centre, attack: [0, 0] }),
+                Some(p) => bodies.push(Body { actor: slot as i32, sprite: p.sprite.as_mut().map(|cs| (cs, &p.anims, &mut p.rand)), transform: p.actor_m, centre: p.centre, attack }),
                 None => {
                     let m = Matrix44::transform(&v3(e.hpr), F::ONE, &v3(e.pos));
-                    bodies.push(Body { actor: slot as i32, sprite: None, transform: m, centre: m, attack: [0, 0] });
+                    bodies.push(Body { actor: slot as i32, sprite: None, transform: m, centre: m, attack });
                 }
             }
         }
-        // the player: its walker's body and the attack types in its hands
-        let mut attack = [0, 0];
+        // the player: its walker's body, and the attack types of what its
+        // hands hold. The game dresses its own sprite off its channel as any
+        // creature's (`hands`); go-eqoa-server leaves the channel's types 0,
+        // so they come from what the dump says is worn, put in the hands as
+        // `ApplyItems` puts them (the first: the primary or two-handed
+        // weapon; the second: the secondary or the ranged one), an empty
+        // hand 11
+        let mut attack = [11, 11];
         for it in &self.dump.inventory.items {
             match it.equip_slot {
-                14 => attack[0] = it.item.attack_type as i32,
-                15 => attack[1] = it.item.attack_type as i32,
+                14 | 16 => attack[0] = it.item.attack_type as i32,
+                15 | 18 => attack[1] = it.item.attack_type as i32,
                 _ => {}
             }
         }

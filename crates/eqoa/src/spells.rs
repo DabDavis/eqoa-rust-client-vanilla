@@ -45,6 +45,19 @@ pub struct Body<'a> {
     pub attack: [i32; 2],
 }
 
+/// The attack types a creature's sprite holds for its two hands
+/// (`VICSprite::m_items[0..2].m_attackType`, what `SetAttackAction` reads):
+/// `VICreatureEntity::ApplyItems` hands the look each hand's item off the
+/// channel (`m_itemOver` before `m_item`) with its type, and the look's
+/// `Apply` attaches an item with that type (`AttachItem`); a hand that holds
+/// nothing keeps the 11, hand to hand, that `Clear` and `DetachItem` leave.
+pub fn hand_attack_types(c: &net::entity::Creature) -> [i32; 2] {
+    std::array::from_fn(|i| {
+        let model = if c.items_over[i] != 0 { c.items_over[i] } else { c.items[i] };
+        if model != 0 { c.item_types[i] as i32 } else { 11 }
+    })
+}
+
 /// A sprite an effect names: its type (9 a sound, 4 an animated sprite),
 /// and a sound's radius, volume, wave, pan and attenuation (`VISoundSprite`).
 #[derive(Clone)]
@@ -513,5 +526,34 @@ impl SpellScene<Ee> for Scene<'_, '_, '_> {
 
     fn vibrate(&mut self, power: u8, time: u8, mode: i32) {
         self.rumbles.push((power, time, mode));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An empty hand is 11 (hand to hand), which the swing's play-attack
+    /// event (type 15) plays as action 23 or 22; read as 0, as it was, it
+    /// plays nothing. A held item takes the channel's type, the override's
+    /// model counting as the item.
+    #[test]
+    fn an_empty_hand_swings_hand_to_hand() {
+        use vi::spell::attack_action;
+        let bare = net::entity::Creature::default();
+        assert_eq!(hand_attack_types(&bare), [11, 11]);
+        assert_eq!(attack_action(hand_attack_types(&bare), 0, false), Some(23));
+        assert_eq!(attack_action(hand_attack_types(&bare), 1, false), Some(22));
+        // the negative control: the type an empty hand used to get
+        assert_eq!(attack_action([0, 0], 0, false), None);
+        let mut c = net::entity::Creature { item_types: [1, 5], ..Default::default() };
+        c.items[0] = 0x1234;
+        assert_eq!(hand_attack_types(&c), [1, 11]);
+        c.items_over[1] = 0x5678;
+        assert_eq!(hand_attack_types(&c), [1, 5]);
+        assert_eq!(attack_action(hand_attack_types(&c), 1, false), Some(27));
+        // an item whose type the channel leaves 0 swings nothing, as in the game
+        c.item_types = [0, 0];
+        assert_eq!(attack_action(hand_attack_types(&c), 0, false), None);
     }
 }
