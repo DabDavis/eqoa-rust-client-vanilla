@@ -81,10 +81,11 @@ impl UiRaster<'_> {
         }
     }
 
-    /// A blit's glyph noted (a visible button glyph at its own size), or
+    /// A blit's glyph noted (a button glyph at its own size, not wholly
+    /// faded: a pulsing arrow stays a button at its faintest), or
     /// that something else was blitted.
     fn note(&mut self, id: u32, flags: u32, at: [i32; 2], a: [i32; 2], b: [i32; 2], alpha: f32) {
-        match self.assets.glyphs.as_ref().and_then(|t| t.key(id, a, b, flags)).filter(|_| alpha > 0.05) {
+        match self.assets.glyphs.as_ref().and_then(|t| t.key(id, a, b, flags)).filter(|_| alpha > 0.0) {
             Some(key) => {
                 let (p, q) = (self.ui.placed([at[0] as f32, at[1] as f32]), self.ui.placed([(at[0] + b[0]) as f32, (at[1] + b[1]) as f32]));
                 self.glyphs.glyph([p[0], p[1], q[0], q[1]], key);
