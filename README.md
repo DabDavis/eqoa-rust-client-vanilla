@@ -144,6 +144,14 @@ and 9.4 ms on WebGL2 (25 ms and 39 fps before, wgpu's GL path being the
 costlier one). The sound driver's SPU2 is under 0.4 ms of that, and natively
 on a thread of its own.
 
+The effect volumes (`EQOA_PERF`'s "volumes", `fx::bench` for the CPU alone):
+0.2 ms a frame in Neriak's plaza (15 volumes rastered, 200 fans) and 1.2 ms
+in the densest place found, a dust storm in zone 16 (3 volumes, 1,330
+fans), most of it the EE's arithmetic placing four corners a fan
+(`Matrix44::apply`, now four lanes at a time: it was 1.4 ms); in a page on
+WebGL2, 0.25 ms at the local server's docks (2 volumes, 75 fans, 5 boids).
+`EQOA_FX=0` (`?nofx`) leaves them out, for comparing.
+
 ### The game's frame at any display rate
 
 The console's loop runs 30 frames a second (CLIENT's 20 ms floor, then the
