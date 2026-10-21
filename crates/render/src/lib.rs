@@ -13,6 +13,7 @@
 //! actors in the order its tree walk met them.
 
 pub mod billboard;
+pub mod map;
 pub mod overlay;
 pub mod text;
 pub mod ui;
