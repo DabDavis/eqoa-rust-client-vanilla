@@ -308,7 +308,7 @@ function show(k, title, intro, sendLabel) {
   $('rp-shot-row').hidden = k !== 'problem' || !shot;
   $('rp-pic').hidden = k !== 'problem' || !shot || !$('rp-shot').checked;
   $('rp-fine').textContent = k === 'problem'
-    ? 'It goes to the developer. The note and the picture appear on the public board (texturepacks.art/eqoa/reports/board); the client’s state and its log do not. Your account name and password are never sent.'
+    ? 'It goes to the developer. The note and the picture appear on the public board (eqoaclassic.com/eqoa/reports/board); the client’s state and its log do not. Your account name and password are never sent.'
     : 'It goes to the developer and is not shown anywhere. Your account name and password are never sent.';
   d.hidden = false;
   $('rp-note').focus();
