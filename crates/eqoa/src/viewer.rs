@@ -359,6 +359,7 @@ pub fn shot_with(
         // `EQOA_MOUSE`: the mouse's, through the window's
         let pad_script = crate::input::Script::from_env();
         let mut console = crate::input::Console::new();
+        let mut pad_edge = crate::binds::PadEdge::default();
         let mouse_script = crate::mouse::script();
         let mut mouse = crate::mouse::Mouse::default();
         let mut last_view: Option<glam::Mat4> = None;
@@ -398,6 +399,15 @@ pub fn shot_with(
             if pad_script.is_some() || touch.used {
                 let dead = play.as_ref().is_some_and(|p| p.is_dead());
                 let mut report = pad_script.as_ref().map_or_else(Default::default, |s| s.at(t));
+                // the script stands for a controller: the player's own
+                // buttons (`binds`), and a capture's, as the window's
+                let capturing = play.as_ref().is_some_and(|p| p.capturing().is_some());
+                let (fields, took) = crate::settings::with_binds(|b| pad_edge.frame(report.buttons, capturing, b));
+                report.buttons = fields;
+                if let (Some(i), Some(p)) = (took, play.as_mut()) {
+                    eprintln!("pad: button {} taken by the Controls page", crate::binds::BUTTONS[i as usize].0);
+                    p.capture_button(i);
+                }
                 report.merge(&touch.report());
                 let keys = console.poll(report, true, false, dead);
                 if let Some(p) = play.as_mut() {

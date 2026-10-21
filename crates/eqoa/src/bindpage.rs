@@ -23,9 +23,9 @@ pub enum Column {
     Pad,
 }
 
-/// The page's own rows besides the list: the header, the help (two), the
-/// windows' keys (two) and the legend.
-const FIXED_ROWS: i32 = 7;
+/// The page's own rows besides the list: the header, a gap, the help (two),
+/// the windows' keys (two) and the legend.
+const FIXED_ROWS: i32 = 8;
 /// Where the cells are, from the window's right edge.
 const KEY_X: i32 = 250;
 const KEY_W: i32 = 110;
@@ -74,10 +74,11 @@ impl ControlsPage {
         if col == 0 { !r.keys.is_empty() } else { matches!(r.pad, Pad::Button(_)) }
     }
 
-    /// The window's rows this page wants for a font `h` high (what fits the
-    /// frame, at most 24).
+    /// The window's rows this page wants for a font `h` high: what fits the
+    /// frame round its middle with the title's bar above it (11 over the
+    /// window's top) and a few pixels spare, at most 24.
     pub fn window_rows(h: i32) -> i32 {
-        ((448 - 8 - 48) / (h - 4).max(1)).clamp(FIXED_ROWS + 4, 24)
+        ((448 - 2 * 15 - 48) / (h - 4).max(1)).clamp(FIXED_ROWS + 4, 24)
     }
 
     /// The keys, as the window hands them on (pad keys and the keyboard's
@@ -322,7 +323,7 @@ impl ControlsPage {
             w.draw_vscroll(vui, r, [w.top_left()[0] + width - 26, top - 3], self.shown * h + 4, t);
         }
         // the help: what is awaited, the last change, or the row's help
-        let list_end = self.shown + 2;
+        let list_end = self.shown + 3;
         let help = if let Some(c) = self.capture {
             let what = label(vui, self.row as usize);
             match c {
@@ -385,14 +386,14 @@ pub fn expand(vui: &Vui, s: &str) -> String {
 
 /// The keys that are the windows' buttons now, by the glyph their legends
 /// draw: ✕ Enter and E, △ Escape and Backspace, □ Q, ○ C, R1 Tab, R3 Space
-/// (wherever the player moved those rows).
+/// (wherever the player moved those rows), on two lines.
 pub fn window_keys(b: &binds::Binds) -> String {
     let keys = |ids: &[&str]| -> String {
         let v: Vec<String> = ids.iter().filter_map(|id| binds::row_named(id)).filter_map(|r| b.key(r)).filter(|k| !k.is_empty()).map(binds::display).collect();
         if v.is_empty() { "-".into() } else { v.join(", ") }
     };
     format!(
-        "In a window:  |x {}   |t {}   |s {}   |c {}   |8 {}   |( {}",
+        "In a window:  |x {}   |t {}   |s {}\n|c {}   |8 {}   |( {}",
         keys(&["chat", "use"]),
         keys(&["start_menu", "back"]),
         keys(&["talk"]),
@@ -426,9 +427,9 @@ mod tests {
     #[test]
     fn the_windows_keys_say_which_key_is_which_glyph() {
         let mut b = binds::Binds::default();
-        assert_eq!(window_keys(&b), "In a window:  |x Enter, E   |t Esc, Backspace   |s Q   |c C   |8 Tab   |( Space");
+        assert_eq!(window_keys(&b), "In a window:  |x Enter, E   |t Esc, Backspace   |s Q\n|c C   |8 Tab   |( Space");
         b.bind_key(binds::row_named("talk").unwrap(), "7");
-        assert!(window_keys(&b).contains("|s 7 "), "{}", window_keys(&b));
+        assert!(window_keys(&b).contains("|s 7\n"), "{}", window_keys(&b));
         b.bind_key(binds::row_named("use").unwrap(), "q");
         assert!(window_keys(&b).contains("|x Enter, Q "), "{}", window_keys(&b));
     }
