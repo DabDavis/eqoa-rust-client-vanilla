@@ -163,8 +163,8 @@ pub struct Wait {
 #[derive(Default)]
 pub struct Screen {
     pub wait: Option<Wait>,
-    /// `EQOA_LOADING_HOLD=ms`: up at least that long (a headless shot of it
-    /// natively, where the loads take a frame)
+    /// `EQOA_LOADING_HOLD=ms` (in a page `?loadinghold=ms`): up at least
+    /// that long (a headless shot of it, where the loads take a frame)
     hold: i64,
     gears: Option<Gears>,
     /// how many files the library held when the gears were last looked for
@@ -180,7 +180,11 @@ impl Screen {
     pub fn begin(&mut self, at: [f32; 3], heading: f32, entering: bool, now: i64) {
         let since = self.wait.map_or(now, |w| w.since);
         self.wait = Some(Wait { at, heading, entering: entering || self.wait.is_some_and(|w| w.entering), since, held: None });
-        self.hold = std::env::var("EQOA_LOADING_HOLD").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+        #[cfg(target_arch = "wasm32")]
+        let hold = crate::web::page_value("loadinghold");
+        #[cfg(not(target_arch = "wasm32"))]
+        let hold = std::env::var("EQOA_LOADING_HOLD").ok();
+        self.hold = hold.and_then(|v| v.parse().ok()).unwrap_or(0);
     }
 
     pub fn up(&self) -> bool {
