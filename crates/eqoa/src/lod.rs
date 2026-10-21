@@ -5,7 +5,20 @@
 //! an actor is not drawn at all (`VICSprite::CalcLODOffDist`: an LOD body's
 //! last level, else `VISprite`'s 500). Both on the EE's floats, as the game
 //! computes them.
+//!
+//! The client's own, beside them. Its follow orbit zooms out past the
+//! game's 8.0 (to 11, or as far as 50 by the options' Camera Distance), and
+//! the levels and the off distances are measured from where the game's
+//! camera would be at its own ceiling (`eye`: the eye drawn in along its
+//! line to 8.0 from the orbit's pivot), so zooming further only moves the
+//! camera back: the player's own body keeps the near level it always had
+//! on the console (at the client's 11 a barbarian, nearer 11 than 10 from
+//! the camera, lost its muscle: F3 20261021-001920), and characters are
+//! drawn as far round the player, at the same levels, as the console drew
+//! them at its farthest. The options' Level of Detail off draws every LOD
+//! body's near level out to its off distance (`chosen`).
 
+use vi::camera::WalkCamera;
 use vi::fpu::{Ee, F};
 use vi::geom::Matrix44;
 use vi::vect::Vect3;
@@ -40,10 +53,45 @@ pub fn within(at: &Vect3<Ee>, eye: &Vect3<Ee>, off: f32) -> bool {
 }
 
 /// A character's body as the camera at `eye` sees it this frame: the level
-/// of its LOD body (if it has one) for its centre transform `centre`. Whether
-/// it is drawn at all is `within`'s, at the actor's place.
+/// of its LOD body (if it has one) for its centre transform `centre`, under
+/// the options' Level of Detail. Whether it is drawn at all is `within`'s,
+/// at the actor's place.
 pub fn place(body: &mut render::GpuModel, centre: &Matrix44<Ee>, eye: &Vect3<Ee>) {
-    body.level = level(&body.lod_dists, &from_eye(centre, eye));
+    body.level = chosen(&body.lod_dists, &from_eye(centre, eye), crate::settings::client().lod);
+}
+
+/// The level drawn of a body whose levels reach `dists`, `d` from the
+/// camera: `VILODSprite::Raster`'s with Level of Detail on (`lod`); off,
+/// the near one at any distance (past the off distance `within` hides it).
+/// A body with no levels has none either way.
+pub fn chosen(dists: &[f32], d: &Vect3<Ee>, lod: bool) -> Option<u8> {
+    if lod { level(dists, d) } else { (!dists.is_empty()).then_some(0) }
+}
+
+/// The game's zoom-out ceiling for the follow orbit (`SetCameraStyle(3)`
+/// stores 8.0), which the client's goes past.
+pub const GAME_CEILING: f32 = 8.0;
+
+/// Where the levels and off distances are measured from: the camera's
+/// `eye`, but in the follow orbit (mode 3) no farther from the orbit's pivot
+/// than the game's ceiling, along the same line. The pivot is the player's
+/// place raised by the target height and the height offset, as
+/// `MoveCamera` places the eye. Within the ceiling, and in the other modes
+/// (whose ceilings are the game's own), the eye itself.
+pub fn eye(cam: &WalkCamera<Ee>, eye: &Vect3<Ee>) -> Vect3<Ee> {
+    if cam.camera_mode != 3 {
+        return *eye;
+    }
+    let p = &cam.walk.phys;
+    let mut pivot = p.position;
+    pivot.y = pivot.y + cam.target_height + p.height_offset;
+    let len = eye.distance(&pivot);
+    let ceiling = F::new(GAME_CEILING);
+    if len <= ceiling {
+        return *eye;
+    }
+    let k = ceiling / len;
+    Vect3::new(pivot.x + (eye.x - pivot.x) * k, pivot.y + (eye.y - pivot.y) * k, pivot.z + (eye.z - pivot.z) * k)
 }
 
 /// The model-view translation `VILODSprite::Raster` reads, for a body whose
@@ -85,6 +133,55 @@ mod tests {
         let le = |d: f32| BODY.iter().take_while(|&&l| l * l <= d * d).count();
         assert_ne!(le(10.0), level(&BODY, &at(10.0)).unwrap() as usize);
         assert_eq!(level(&BODY, &at(9.0)), Some(0));
+    }
+
+    /// Level of Detail off: the near level at any distance (past 100 the
+    /// actor is not drawn at all: `within`); on, the game's. The control is
+    /// the game's rule at 50.
+    #[test]
+    fn level_of_detail_off_keeps_the_near_level() {
+        for x in [0.0, 10.001, 50.0, 100.0, 150.0] {
+            assert_eq!(chosen(&BODY, &at(x), false), Some(0), "{x}");
+        }
+        assert_eq!(chosen(&BODY, &at(50.0), true), Some(1));
+        assert_eq!(chosen(&BODY, &at(150.0), true), None);
+        assert_eq!(chosen(&[], &at(5.0), false), None, "no levels, none");
+    }
+
+    /// The follow orbit pulled out past the game's 8.0: the levels are
+    /// measured from 8.0 along the same line, so the player's own body (its
+    /// centre a little under the pivot) keeps the near level at 11 and at
+    /// 50, and a character 60 ahead stays within its off distance of 100;
+    /// within 8, and in the fixed follow camera (mode 2, whose 25 is the
+    /// game's), the eye itself. The control: the eye itself at 11 gives the
+    /// far level, and at 50 the character ahead is not drawn.
+    #[test]
+    fn levels_are_measured_from_the_games_farthest_camera() {
+        let mut cam = WalkCamera::<Ee> { camera_mode: 3, target_height: F::new(1.68), ..Default::default() };
+        cam.walk.phys.position = Vect3::of(1000.0, 50.0, 2000.0);
+        let pivot = Vect3::of(1000.0, 51.68, 2000.0);
+        // behind the player (-z), a little above
+        let back = |d: f32| {
+            let (s, c) = (0.26f32.sin(), 0.26f32.cos());
+            Vect3::of(1000.0, 51.68 + d * s, 2000.0 - d * c)
+        };
+        let centre = Vect3::of(1000.0, 51.0, 2000.0);
+        let ahead = Vect3::of(1000.0, 51.0, 2060.0);
+        for d in [11.0, 50.0] {
+            let e = eye(&cam, &back(d));
+            assert!((e.distance(&pivot).0 - 8.0).abs() < 1e-3, "{d}: drawn in to 8");
+            let own = Vect3::new(centre.x - e.x, centre.y - e.y, centre.z - e.z);
+            assert_eq!(level(&BODY, &own), Some(0), "{d}: the player's own body, near");
+            assert!(within(&ahead, &e, off_dist(&BODY)), "{d}: 60 ahead is drawn");
+        }
+        let near = back(5.0);
+        assert_eq!(eye(&cam, &near).to_array(), near.to_array(), "within the ceiling: the eye");
+        cam.camera_mode = 2;
+        assert_eq!(eye(&cam, &back(20.0)).to_array(), back(20.0).to_array(), "mode 2: the eye");
+        // the control: from the eye itself
+        let own = |e: Vect3<Ee>| Vect3::new(centre.x - e.x, centre.y - e.y, centre.z - e.z);
+        assert_eq!(level(&BODY, &own(back(11.0))), Some(1));
+        assert!(!within(&ahead, &back(50.0), off_dist(&BODY)));
     }
 
     #[test]

@@ -75,6 +75,7 @@ mod trade;
 mod trainer;
 mod trails;
 mod options;
+mod settings;
 mod social;
 mod wholist;
 mod zones;
@@ -297,6 +298,11 @@ fn run(args: &[String]) -> Result<()> {
             let host = args.get(1).ok_or("usage: eqoa play <host> <user> (password in EQOA_PASSWORD)")?;
             let user = args.get(2).ok_or("usage: eqoa play <host> <user>")?;
             let pass = std::env::var("EQOA_PASSWORD").map_err(|_| "set EQOA_PASSWORD")?;
+            // the options kept in the player's config directory (a playshot
+            // keeps them only in `$EQOA_CONFIG`: `settings`)
+            if args[0] == "play" {
+                settings::keep_in_user_dir();
+            }
             // CLIENT and SUPPORT (the start menu, the HUD): the player's
             // images, else off the disc, on threads of their own meanwhile.
             modules::load(std::path::Path::new(&disc_path(None)));

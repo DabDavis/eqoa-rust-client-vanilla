@@ -5,8 +5,19 @@
 //! Camera, pitch, volumes, output, battle music and the soft keyboard change
 //! as they are moved; Faction Messages, Loot Messages, Auto Attack and
 //! Vibration only once saved. Save asks first (`VIWndMessage`), shows
-//! "Saving..." for four frames and applies; Triangle on the menu puts every
-//! setting back as it was and applies. The memory card is not written.
+//! "Saving..." for four frames, keeps them (`SaveOptions`: the card's
+//! `game.opt`, here `settings::save`) and applies; Triangle on the menu puts
+//! every setting back as it was and applies.
+//!
+//! The client's own, beside the game's: an Extended page between Sound and
+//! Save Changes (the menu a row longer), its words the client's (no
+//! WORDS.TXT entry): Level of Detail (On: the game's levels of an LOD body;
+//! Off: its near level out to its off distance, `lod.rs`), Brightness (a
+//! slider, `settings::curve`), Frame Rate (30, 60 or the display's,
+//! `settings::frame_due`) and Camera Distance (a slider: the follow orbit's
+//! zoom-out ceiling, 8 to 50, `camstyle`), laid out and driven as the game's
+//! rows are. They change as they are moved, Triangle on the menu puts them
+//! back, and Save Changes keeps them with the game's (`client.opt`).
 //!
 //! A pointer (`pointer`): a menu row is chosen at once; a page's row is
 //! reached with up and down (a page knows which setting its row is only as
@@ -17,6 +28,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use crate::pointer::{Hits, key, rows_rect};
+use crate::settings::{BRIGHTNESS_STEPS, CAMERA_MAX, CAMERA_MIN, CAMERA_STEP, ClientOptions, FrameRate};
 use vi::fpu::{Ee, F};
 use vi::ui::{Raster, UI_COLORS, Vui, Window, wide};
 
@@ -195,9 +207,9 @@ impl Message {
 /// `VIWndOptions`.
 #[derive(Default)]
 pub struct WndOptions {
-    /// `m_sel`: the menu's row
+    /// `m_sel`: the menu's row (3 is the client's Extended, 4 Save Changes)
     sel: i32,
-    /// `m_page`: -1 the menu, 0 Game, 1 Interface, 2 Sound
+    /// `m_page`: -1 the menu, 0 Game, 1 Interface, 2 Sound, 3 Extended
     page: i32,
     /// `m_row`: the page's row
     row: i32,
@@ -205,6 +217,8 @@ pub struct WndOptions {
     item: i32,
     /// the values as the window opened, put back by Triangle
     saved: GameOptions,
+    /// the client's own as it opened, put back with them
+    saved_client: ClientOptions,
     /// `m_edit93` .. `m_edit97`: the four settings only Save commits, held
     /// the way the window holds them (faction and loot ON while set)
     edit: [u8; 4],
@@ -253,14 +267,16 @@ impl WndOptions {
         keys
     }
     /// `OnMessage` 295 with the focus coming from outside: the window (300
-    /// wide, seven rows, titled 788) opening, the values kept, the menu.
+    /// wide, seven rows and one for Extended, titled 788) opening, the values
+    /// kept, the menu.
     pub fn open(&mut self, vui: &Vui, r: &dyn Raster, o: &GameOptions) {
         self.window.close(true);
-        self.window.init(vui, r, [320, 246], 300, 7, 0);
+        self.window.init(vui, r, [320, 246], 300, 8, 0);
         self.window.open(false);
         self.window.set_title(Some(&wide(vui.words.get(788, vui.language))));
         self.message.visible = false;
         self.saved = *o;
+        self.saved_client = crate::settings::client();
         self.edit = [(o.no_faction == 0) as u8, (o.no_loot == 0) as u8, o.auto_attack, o.vibration];
         self.sel = 0;
         self.page = -1;
@@ -309,6 +325,7 @@ impl WndOptions {
                     o.music_volume = s.music_volume;
                     o.compact = s.compact;
                     o.no_damage = s.no_damage;
+                    crate::settings::set_client(self.saved_client);
                     ups.push(OptionsUp::Volume(0, o.fx_volume));
                     ups.push(OptionsUp::Volume(1, o.music_volume));
                     ups.push(OptionsUp::Apply);
@@ -329,12 +346,13 @@ impl WndOptions {
         }
     }
 
-    /// `Next`: the last row of each page; Interface gains Vibration.
+    /// `Next`: the last row of each page; Interface gains Vibration; the
+    /// menu and Extended are the client's.
     fn next(&mut self, now: i64, cues: &mut Vec<i32>) {
         let last = if self.page == -1 {
-            3
+            4
         } else {
-            let mut last = [2, 3, 3];
+            let mut last = [2, 3, 3, 3];
             if FEATURES & 0x100 != 0 {
                 last[1] = 4;
             }
@@ -351,7 +369,11 @@ impl WndOptions {
     }
 
     /// `Decrement` (`d` -1) and `Increment` (1): the item's value; a volume
-    /// stops at its end with sound 9.
+    /// stops at its end with sound 9. Items 12 to 15 are the client's
+    /// Extended rows: Level of Detail turns over, Brightness and Camera
+    /// Distance step as a volume does (stopping at their ends with sound 9),
+    /// Frame Rate goes round 30, 60 and the display's as Battle Music goes
+    /// round its tracks.
     fn change(&mut self, o: &mut GameOptions, d: i32, cues: &mut Vec<i32>, ups: &mut Vec<OptionsUp>) {
         let tracks = if FEATURES & 0x100 != 0 { 10 } else { 3 };
         let step = F::<Ee>::new(0.1);
@@ -387,9 +409,33 @@ impl WndOptions {
             6 => o.compact ^= 1,
             7 => o.no_damage = (o.no_damage == 0) as u8,
             8..=11 => self.edit[self.item as usize - 8] ^= 1,
+            12..=15 => {
+                let mut c = crate::settings::client();
+                // a slider's step, or sound 9 at its end
+                let mut slide = |v: &mut u8, lo: u8, hi: u8, by: u8| {
+                    if (d < 0 && *v > lo) || (d > 0 && *v < hi) {
+                        *v = (*v as i32 + d.signum() * by as i32).clamp(lo as i32, hi as i32) as u8;
+                        cues.push(11);
+                    } else {
+                        cues.push(9);
+                    }
+                };
+                match self.item {
+                    12 => c.lod = !c.lod,
+                    13 => slide(&mut c.brightness, 0, BRIGHTNESS_STEPS, 1),
+                    15 => slide(&mut c.camera_distance, CAMERA_MIN, CAMERA_MAX, CAMERA_STEP),
+                    // 14, Frame Rate
+                    _ => {
+                        let all = FrameRate::ALL;
+                        let at = all.iter().position(|&r| r == crate::settings::frame_rate()).unwrap_or(0);
+                        c.frame_rate = Some(all[(at + if d < 0 { all.len() - 1 } else { 1 }) % all.len()]);
+                    }
+                }
+                crate::settings::set_client(c);
+            }
             _ => {}
         }
-        if !(3..=4).contains(&self.item) && (0..=11).contains(&self.item) {
+        if !matches!(self.item, 3 | 4 | 13 | 15) && (0..=15).contains(&self.item) {
             cues.push(11);
         }
         if d < 0 {
@@ -410,7 +456,8 @@ impl WndOptions {
     }
 
     /// `Select`: X on the menu opens a page (its window 440 wide, six to
-    /// eight rows, an empty title), or on Save Changes asks (true).
+    /// eight rows, an empty title; the client's Extended six), or on Save
+    /// Changes asks (true).
     fn select(&mut self, vui: &Vui, r: &dyn Raster, cues: &mut Vec<i32>) -> bool {
         if self.page != -1 {
             cues.push(9);
@@ -428,6 +475,7 @@ impl WndOptions {
                 }
             }
             2 => 7,
+            3 => 7,
             _ => return true,
         };
         self.page = self.sel;
@@ -450,7 +498,8 @@ impl WndOptions {
     }
 
     /// `OnDrawSelf`: the Sound page previews the Battle Music choice, the
-    /// menu, the page, then "Saving..." for four frames before the save.
+    /// menu, the page, then "Saving..." for four frames before the save
+    /// (`SaveOptions`), which keeps them and applies.
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, o: &GameOptions, ups: &mut Vec<OptionsUp>) {
         self.now = vui.time;
         self.hits.clear();
@@ -473,6 +522,7 @@ impl WndOptions {
             0 => self.draw_game(vui, r, o),
             1 => self.draw_interface(vui, r, o),
             2 => self.draw_sound(vui, r, o),
+            3 => self.draw_extended(vui, r),
             _ => {}
         }
         let w = |id: i32| wide(vui.words.get(id, vui.language));
@@ -484,7 +534,9 @@ impl WndOptions {
             let width = self.window3.size[0];
             self.window3.text_box(vui, r, &w(1615), 40, 0, width - 80, 3, UI_COLORS[0], 8);
             if self.save_count == 0 {
-                // SaveOptions: the card is not written; it closes and applies
+                // SaveOptions: VIGameOptions::Save (a failure is said and
+                // play goes on), then it closes and applies
+                crate::settings::save(o);
                 ups.push(OptionsUp::Apply);
             }
         }
@@ -493,14 +545,14 @@ impl WndOptions {
         }
     }
 
-    /// `DrawMenu`: Game, Interface, Sound, Save Changes, the selected one
-    /// lit, and the legend.
+    /// `DrawMenu`: Game, Interface, Sound, the client's Extended, Save
+    /// Changes, the selected one lit, and the legend.
     fn draw_menu(&mut self, vui: &Vui, r: &mut dyn Raster) {
         self.item = -1;
         self.window.draw(vui, r);
-        let w = |id: i32| vui.words.get(id, vui.language).to_string();
+        let w = |id: i32| if id < 0 { EXTENDED.to_string() } else { vui.words.get(id, vui.language).to_string() };
         let width = self.window.size[0];
-        for (k, id) in [773, 778, 800, 482].into_iter().enumerate() {
+        for (k, id) in [773, 778, 800, -1, 482].into_iter().enumerate() {
             let on = self.sel == k as i32;
             let s = if on { format!("|q{}|w", w(id)) } else { w(id) };
             self.window.text_box(vui, r, &wide(&s), 40, k as i32 + 1, width - 80, 1, UI_COLORS[on as usize], 8);
@@ -509,18 +561,18 @@ impl WndOptions {
             }
         }
         let legend = wide(&format!("|x {}   |t {}", w(212), w(753)));
-        self.window.text(vui, r, &legend, 40, 6, UI_COLORS[0], 0);
+        self.window.text(vui, r, &legend, 40, 7, UI_COLORS[0], 0);
     }
 
     /// A page's rows: its labels, the tick, and each value in its frame
     /// (the arrows on the selected one); a value `None` is a slider drawn by
     /// the caller.
-    fn draw_rows(&mut self, vui: &Vui, r: &mut dyn Raster, labels: &[i32], values: &[Option<Vec<u16>>]) {
+    fn draw_rows(&mut self, vui: &Vui, r: &mut dyn Raster, labels: &[Vec<u16>], values: &[Option<Vec<u16>>]) {
         self.window2.draw(vui, r);
         let width = self.window2.size[0];
-        for (k, &id) in labels.iter().enumerate() {
+        for (k, label) in labels.iter().enumerate() {
             let c = UI_COLORS[(self.row == k as i32) as usize];
-            self.window2.text_box(vui, r, &wide(vui.words.get(id, vui.language)), 40, k as i32 + 1, width - 80, 1, c, 0);
+            self.window2.text_box(vui, r, label, 40, k as i32 + 1, width - 80, 1, c, 0);
             self.hits.push(rows_rect(&self.window2, vui, r, 40, k as i32 + 1, width - 176 - 48, 1), 10 + k as i32);
         }
         self.window2.tick_r(vui, r, 36, self.row + 1, true);
@@ -552,7 +604,7 @@ impl WndOptions {
     fn draw_game(&mut self, vui: &Vui, r: &mut dyn Raster, o: &GameOptions) {
         self.item = [8, 9, 7].get(self.row as usize).copied().unwrap_or(self.item);
         let on_off = |v: u8| Some(wide(vui.words.get(if v != 0 { 551 } else { 552 }, vui.language)));
-        self.draw_rows(vui, r, &[738, 739, 759], &[on_off(self.edit[0]), on_off(self.edit[1]), on_off((o.no_damage == 0) as u8)]);
+        self.draw_rows(vui, r, &words(vui, &[738, 739, 759]), &[on_off(self.edit[0]), on_off(self.edit[1]), on_off((o.no_damage == 0) as u8)]);
         self.back_legend(vui, r, 5);
     }
 
@@ -568,7 +620,7 @@ impl WndOptions {
             labels.push(1604);
             values.push(on_off(self.edit[3]));
         }
-        self.draw_rows(vui, r, &labels, &values);
+        self.draw_rows(vui, r, &words(vui, &labels), &values);
         self.back_legend(vui, r, if FEATURES & 0x200 != 0 { 7 } else { 6 });
     }
 
@@ -579,7 +631,7 @@ impl WndOptions {
         // sTracks: None, Song 1..8, Random
         let tracks = [517, 795, 796, 797, 798, 799, 1576, 1577, 1578, 1630];
         let track = word(tracks.get(o.battle as usize).copied().unwrap_or(517));
-        self.draw_rows(vui, r, &[751, 772, 782, 801], &[track, None, None, word(if o.stereo != 0 { 804 } else { 781 })]);
+        self.draw_rows(vui, r, &words(vui, &[751, 772, 782, 801]), &[track, None, None, word(if o.stereo != 0 { 804 } else { 781 })]);
         let width = self.window2.size[0];
         self.window2.draw_hscroll(vui, r, width - 180, 2, 140, o.fx_volume.0, if self.row == 1 { 32 } else { 0 });
         self.window2.draw_hscroll(vui, r, width - 180, 3, 140, o.music_volume.0, if self.row == 2 { 32 } else { 0 });
@@ -592,6 +644,42 @@ impl WndOptions {
         }
         self.back_legend(vui, r, 6);
     }
+
+    /// The client's Extended page, laid out as the Sound page is: Level of
+    /// Detail (the game's On and Off), Brightness (a slider as the volumes
+    /// are, and each side of its knob for a pointer), Frame Rate, Camera
+    /// Distance (a slider).
+    fn draw_extended(&mut self, vui: &Vui, r: &mut dyn Raster) {
+        self.item = [12, 13, 14, 15].get(self.row as usize).copied().unwrap_or(self.item);
+        let c = crate::settings::client();
+        let lod = wide(vui.words.get(if c.lod { 551 } else { 552 }, vui.language));
+        let rate = match crate::settings::frame_rate() {
+            FrameRate::Thirty => "30",
+            FrameRate::Sixty => "60",
+            FrameRate::Display => "Display",
+        };
+        self.draw_rows(vui, r, &EXTENDED_ROWS.map(wide), &[Some(lod), None, Some(wide(rate)), None]);
+        let width = self.window2.size[0];
+        let knob = vui.entry(166).uv1[0];
+        let at = self.window2.top_left()[0] + width - 180;
+        let camera = (c.camera_distance - CAMERA_MIN) as f32 / (CAMERA_MAX - CAMERA_MIN) as f32;
+        for (k, t) in [(1, c.brightness as f32 / BRIGHTNESS_STEPS as f32), (3, camera)] {
+            self.window2.draw_hscroll(vui, r, width - 180, k + 1, 140, t, if self.row == k { 32 } else { 0 });
+            let mid = at + (t * (140 - knob) as f32) as i32 + knob / 2;
+            self.halves(rows_rect(&self.window2, vui, r, width - 180, k + 1, 140, 1), at - 4, mid, at + 144, k);
+        }
+        self.back_legend(vui, r, 6);
+    }
+}
+
+/// The client's words for its own page (no WORDS.TXT entry): the menu's
+/// row and the page's three.
+const EXTENDED: &str = "Extended";
+const EXTENDED_ROWS: [&str; 4] = ["Level of Detail", "Brightness", "Frame Rate", "Camera Distance"];
+
+/// WORDS.TXT's entries `ids`, wide.
+fn words(vui: &Vui, ids: &[i32]) -> Vec<Vec<u16>> {
+    ids.iter().map(|&id| wide(vui.words.get(id, vui.language))).collect()
 }
 
 #[cfg(test)]
@@ -696,9 +784,10 @@ mod tests {
         o.music_volume = F::ZERO;
         w.draw(&vui, &mut r, &o, &mut ups);
         assert_eq!(w.point([slider + 20.0, y(&w, 2)]), vec![key::DOWN, key::DOWN, key::RIGHT], "volume 0: the knob at the left end");
-        // back to the menu, Save Changes: the box's choices
+        // back to the menu, Save Changes (past the client's Extended): the
+        // box's choices
         w.key(&vui, &mut r, &mut o, 132, 0, &mut cues, &mut ups);
-        w.sel = 3;
+        w.sel = 4;
         w.key(&vui, &mut r, &mut o, 134, 0, &mut cues, &mut ups);
         assert!(w.message.visible);
         w.draw(&vui, &mut r, &o, &mut ups);
@@ -712,6 +801,114 @@ mod tests {
         w.message.visible = false;
         w.save_count = 4;
         assert!(w.point(menu(&w, 1)).is_empty());
+    }
+
+    /// The client's Extended page, by the pad: down three rows on the menu
+    /// and ✕; each row's left and right (Level of Detail turns over,
+    /// Brightness and Camera Distance stop at their ends with sound 9, Frame
+    /// Rate goes round from the platform's); Triangle on the menu puts them
+    /// back; Save Changes keeps them, and the game's, where nothing was kept
+    /// before (the control).
+    #[test]
+    fn the_extended_page() {
+        use crate::pointer::testing::{NullRaster, vui};
+        use crate::settings::{self, testing};
+        testing::reset(false);
+        let vui = vui();
+        let mut r = NullRaster;
+        let mut o = GameOptions::default();
+        let mut w = WndOptions::default();
+        let (mut cues, mut ups) = (Vec::new(), Vec::new());
+        let mut press = |w: &mut WndOptions, o: &mut GameOptions, k: i32, cues: &mut Vec<i32>| {
+            w.key(&vui, &mut r, o, k, 0, cues, &mut ups);
+            w.draw(&vui, &mut NullRaster, o, &mut ups);
+        };
+        w.open(&vui, &NullRaster, &o);
+        w.draw(&vui, &mut NullRaster, &o, &mut Vec::new());
+        for k in [key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
+            press(&mut w, &mut o, k, &mut cues);
+        }
+        assert_eq!((w.sel, w.page, w.item), (3, 3, 12), "Extended, Level of Detail");
+        cues.clear();
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert!(!settings::client().lod);
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        for _ in 0..6 {
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
+        }
+        assert_eq!(settings::client().brightness, 10);
+        assert_eq!(&cues[cues.len() - 2..], &[11, 9], "the last step, then its end");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(settings::frame_rate(), FrameRate::Display, "the platform's");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!(settings::client().frame_rate, Some(FrameRate::Thirty), "round to 30");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert_eq!(settings::client().frame_rate, Some(FrameRate::Sixty));
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.item, 15, "Camera Distance");
+        for _ in 0..15 {
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
+        }
+        assert_eq!(settings::client().camera_distance, 50, "11 to 50 in 13 steps of 3");
+        assert_eq!(&cues[cues.len() - 3..], &[11, 9, 9]);
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.row, 3, "the last row");
+        // Triangle: the menu, then closed with every setting put back
+        press(&mut w, &mut o, key::TRIANGLE, &mut cues);
+        assert_eq!(w.page, -1);
+        press(&mut w, &mut o, key::TRIANGLE, &mut cues);
+        assert_eq!(settings::client(), settings::ClientOptions::default());
+        assert_eq!(testing::kept("client.opt"), None, "nothing kept yet");
+        // again, and saved this time, Auto Attack with it
+        w.open(&vui, &NullRaster, &o);
+        for k in [key::DOWN, key::CROSS, key::RIGHT, key::TRIANGLE, key::DOWN, key::DOWN, key::CROSS, key::DOWN, key::LEFT, key::TRIANGLE, key::DOWN, key::CROSS, key::LEFT, key::CROSS] {
+            press(&mut w, &mut o, k, &mut cues);
+        }
+        assert_eq!(w.save_count, 3, "Saving... (one frame drawn)");
+        for _ in 0..3 {
+            w.draw(&vui, &mut NullRaster, &o, &mut ups);
+        }
+        let kept = String::from_utf8(testing::kept("client.opt").unwrap()).unwrap();
+        assert_eq!(kept, "lod=on\nbrightness=4\ncamera_distance=11\n");
+        assert_eq!(GameOptions::from_card(&testing::kept("game.opt").unwrap()).unwrap().auto_attack, 1);
+        testing::reset(false);
+    }
+
+    /// A pointer on the Extended page: a label is reached by up and down,
+    /// a value's halves are left and right, each slider's sides of its knob
+    /// are; nothing where no row was drawn.
+    #[test]
+    fn a_pointer_on_the_extended_page() {
+        use crate::pointer::testing::{NullRaster, mid, vui};
+        crate::settings::testing::reset(false);
+        let vui = vui();
+        let mut r = NullRaster;
+        let mut o = GameOptions::default();
+        let mut w = WndOptions::default();
+        let (mut cues, mut ups) = (Vec::new(), Vec::new());
+        w.open(&vui, &r, &o);
+        w.sel = 3;
+        w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
+        w.draw(&vui, &mut r, &o, &mut ups);
+        assert_eq!(w.page, 3);
+        let width = w.window2.size[0];
+        let left = w.window2.top_left()[0] as f32;
+        let y = |w: &WndOptions, k: i32| w.window2.row_center(&vui, &NullRaster, k + 1)[1] as f32;
+        let label = |w: &WndOptions, k: i32| mid(rows_rect(&w.window2, &vui, &NullRaster, 40, k + 1, 100, 1));
+        assert_eq!(w.point(label(&w, 2)), vec![key::DOWN, key::DOWN], "Frame Rate's label");
+        assert_eq!(w.point(label(&w, 0)), vec![key::RIGHT], "Level of Detail's, selected: stepped on");
+        let frame = left + (width - 176) as f32;
+        assert_eq!(w.point([frame + 20.0, y(&w, 0)]), vec![key::LEFT]);
+        assert_eq!(w.point([frame + 110.0, y(&w, 2)]), vec![key::DOWN, key::DOWN, key::RIGHT]);
+        let slider = left + (width - 180) as f32;
+        // Brightness at 5 of 10: its knob mid-bar
+        assert_eq!(w.point([slider + 10.0, y(&w, 1)]), vec![key::DOWN, key::LEFT]);
+        assert_eq!(w.point([slider + 130.0, y(&w, 1)]), vec![key::DOWN, key::RIGHT]);
+        // Camera Distance at 11 of 8..50: its knob near the left end
+        assert_eq!(w.point([slider + 30.0, y(&w, 3)]), vec![key::DOWN, key::DOWN, key::DOWN, key::RIGHT]);
+        assert_eq!(w.point([slider + 2.0, y(&w, 3)]), vec![key::DOWN, key::DOWN, key::DOWN, key::LEFT]);
+        assert!(w.point([slider + 70.0, y(&w, 3) + 60.0]).is_empty(), "below the rows");
     }
 
 }

@@ -561,12 +561,14 @@ fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Optio
 
 /// The walker's body as the game rasters the player's actor: hidden past its
 /// off distance from the camera (`VIScene::RasterActor`), and of an LOD body
-/// the level its centre's distance picks (`VILODSprite::Raster`). `matrix` is
-/// the centre transform `Walker::pose` returns. Whether it is shown.
+/// the level its centre's distance picks (`VILODSprite::Raster`), both from
+/// no farther than the game's camera could be (`lod::eye`). `matrix` is the
+/// centre transform `Walker::pose` returns. Whether it is shown.
 pub fn place_body(body: &mut GpuModel, walker: &Walker, matrix: [[f32; 4]; 4]) -> bool {
     let at = walker.cam.walk.phys.smooth_location();
-    let shown = crate::lod::within(&at, &walker.eye.position, crate::lod::off_dist(&body.lod_dists));
-    crate::lod::place(body, &glam_to_matrix(matrix), &walker.eye.position);
+    let eye = crate::lod::eye(&walker.cam, &walker.eye.position);
+    let shown = crate::lod::within(&at, &eye, crate::lod::off_dist(&body.lod_dists));
+    crate::lod::place(body, &glam_to_matrix(matrix), &eye);
     body.visible = shown;
     shown
 }
@@ -738,6 +740,11 @@ impl Play {
         let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, cast_window: (0, 0), rooted: false, locks: (true, true), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0) };
         p.take_abilities();
         p.npcw_world_entry();
+        // the options kept (`settings`; `VIWndInitFromMC`'s Load), and the
+        // two sound classes' volumes set from them as it sets them
+        p.options = crate::settings::game_options();
+        p.sound_ops.push(crate::options::OptionsUp::Volume(0, p.options.fx_volume));
+        p.sound_ops.push(crate::options::OptionsUp::Volume(1, p.options.music_volume));
         p
     }
 
@@ -1290,7 +1297,8 @@ impl Play {
             self.options_tick();
         }
         // what the Options window asked of the sound device and the camera
-        for op in std::mem::take(&mut self.sound_ops) {
+        // (kept until there is a device: the volumes loaded with the options)
+        for op in if sound.is_some() { std::mem::take(&mut self.sound_ops) } else { Vec::new() } {
             let Some(s) = sound.as_deref_mut() else { continue };
             match op {
                 crate::options::OptionsUp::Volume(cls, v) => s.dev.set_sound_class_volume(cls, v.0),
@@ -1472,10 +1480,12 @@ impl Play {
             }
             // As the game rasters it: past its off distance not at all
             // (`VIScene::RasterActor`, at the actor's place), and of an LOD
-            // body the one level its distance picks (`VILODSprite::Raster`).
+            // body the one level its distance picks (`VILODSprite::Raster`),
+            // from no farther than the game's camera could be (`lod::eye`).
             let at = Vect3::new(f(e.actor_pos[0]), f(e.actor_pos[1]), f(e.actor_pos[2]));
-            let shown = crate::lod::within(&at, &walker.eye.position, crate::lod::off_dist(&p.gpu.lod_dists));
-            crate::lod::place(&mut p.gpu, &p.centre, &walker.eye.position);
+            let eye = crate::lod::eye(&walker.cam, &walker.eye.position);
+            let shown = crate::lod::within(&at, &eye, crate::lod::off_dist(&p.gpu.lod_dists));
+            crate::lod::place(&mut p.gpu, &p.centre, &eye);
             p.gpu.visible = shown;
             for (_, a) in &mut p.attached {
                 a.visible = shown;
@@ -1498,6 +1508,10 @@ impl Play {
         if !self.cam_entered && self.has_self() {
             self.cam_entered = true;
             self.cam_saved = crate::camstyle::toggle(&mut walker.cam, self.options.follow != 0, rc, &mut walker.scene);
+        }
+        // the options' Camera Distance as it moves: the follow orbit's ceiling
+        if walker.cam.camera_mode == 3 {
+            walker.cam.max_orbit_distance = F::new(crate::settings::camera_distance());
         }
         // Every OpenStartMenu frames (a return from the spell book or the
         // trainer too) and every CloseStartMenu restores, an entry's window
