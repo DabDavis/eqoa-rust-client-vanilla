@@ -68,11 +68,13 @@ impl ControlsPage {
         ROWS.len() as i32 + 1
     }
 
-    /// Whether entry `row`'s column `col` can be moved: a key of its own,
-    /// or a button (the sticks stay sticks).
+    /// Whether entry `row`'s column `col` can be moved: a key (△'s row,
+    /// which the game gives none, can be given one), or a button (the
+    /// sticks stay sticks).
     fn bindable(row: i32, col: i32) -> bool {
         let Some(r) = ROWS.get(row as usize) else { return false };
-        if col == 0 { !r.keys.is_empty() } else { matches!(r.pad, Pad::Button(_)) }
+        let button = matches!(r.pad, Pad::Button(_));
+        if col == 0 { !r.keys.is_empty() || button } else { button }
     }
 
     /// The window's rows this page wants for a font `h` high: what fits the
@@ -186,6 +188,7 @@ impl ControlsPage {
         self.capture = None;
         let me = format!("{}: {}.", label(vui, row), binds::display(name));
         self.note = Some(match moved {
+            Moved::Swapped(o) if b.key(o).is_none_or(str::is_empty) => format!("{me} {} has no key now.", label(vui, o)),
             Moved::Swapped(o) => format!("{me} {}: {}.", label(vui, o), binds::display(b.key(o).unwrap_or(""))),
             Moved::Freed(Some(old)) if !old.is_empty() => format!("{me} {} does nothing now.", binds::display(&old)),
             _ => me,
@@ -494,8 +497,9 @@ mod tests {
         testing::reset(false);
     }
 
-    /// A stick's button, a key-only row's button and △'s key cannot be
-    /// moved (sound 9, said); Defaults puts everything back.
+    /// A stick's button cannot be moved (sound 9, said); a row moved onto a
+    /// free key says its old key does nothing; △'s row takes a key, and a row
+    /// it takes one from is said to have none; Defaults puts everything back.
     #[test]
     fn what_cannot_move_and_defaults() {
         testing::reset(false);
@@ -505,13 +509,19 @@ mod tests {
         page.key(key::CROSS, true, 0, &mut cues);
         assert_eq!((page.capture, cues.last()), (None, Some(&9)), "walk forward's stick");
         assert_eq!(page.note.as_deref(), Some("The sticks stay sticks."));
-        page.row = binds::row_named("clear_target").unwrap() as i32;
+        page.row = binds::row_named("map").unwrap() as i32;
         page.col = 0;
         page.key(key::CROSS, true, 0, &mut cues);
-        assert_eq!(page.capture, None, "△ has no key");
-        page.row = binds::row_named("map").unwrap() as i32;
-        page.key(key::CROSS, true, 0, &mut cues);
         page.capture_key(&vui, "f2", &mut cues);
+        assert_eq!(page.note.as_deref(), Some("(null): F2. M does nothing now."));
+        // △'s row, which the game gives no key, takes one; Talk's, given it,
+        // is left with none
+        page.row = binds::row_named("clear_target").unwrap() as i32;
+        page.key(key::CROSS, true, 0, &mut cues);
+        assert_eq!(page.capture, Some(Column::Keyboard));
+        page.capture_key(&vui, "q", &mut cues);
+        assert_eq!(page.note.as_deref(), Some("Let the target go: Q. Talk (hold: (null)) has no key now."));
+        assert_eq!(settings::binds().alias("q"), binds::Alias::Button(crate::input::bit::TRIANGLE));
         assert!(!settings::binds().is_default());
         page.row = ROWS.len() as i32;
         page.key(key::CROSS, true, 0, &mut cues);

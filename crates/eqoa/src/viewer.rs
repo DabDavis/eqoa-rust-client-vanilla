@@ -1824,20 +1824,32 @@ impl ApplicationHandler for App {
                 }
                 // The player's own keys (`binds`, the client's, at the edge):
                 // a key a row was moved onto is that row's default key to all
-                // below, the row's old key nothing; text typed into an edit
-                // box is never remapped; a key lets go as what it was pressed
-                // as.
+                // below, the row's old key nothing; a key given to △'s row
+                // (which the game has no key for) presses △ as the pad's
+                // does; text typed into an edit box is never remapped; a key
+                // lets go as what it was pressed as.
                 let event = match crate::binds::name_of(&event.logical_key) {
                     Some(name) => {
+                        use crate::binds::Sent;
                         let typing = self.play.as_mut().is_some_and(|p| p.keyboard_typing());
                         let down = event.state == ElementState::Pressed;
                         match crate::settings::with_binds(|b| self.keys_edge.key(&name, down, event.repeat, typing, b)) {
-                            Some(to) if to == name => event,
-                            Some(to) => {
+                            Some(Sent::Key(to)) if to == name => event,
+                            Some(Sent::Key(to)) => {
                                 let mut e = event.clone();
                                 e.logical_key = crate::binds::key_of(&to);
                                 e.text = None;
                                 e
+                            }
+                            Some(Sent::Button(b)) => {
+                                let aspect = self.gfx.as_ref().map_or(4.0 / 3.0, |g| g.config.width as f32 / g.config.height as f32);
+                                if !event.repeat
+                                    && let (Some(p), Some(w), Some(k)) = (self.play.as_mut(), self.walker.as_mut(), crate::binds::pad_key(b))
+                                {
+                                    p.set_key(k, down, w, aspect);
+                                    p.keyboard = true;
+                                }
+                                return;
                             }
                             None => return,
                         }

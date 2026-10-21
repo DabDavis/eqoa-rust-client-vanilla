@@ -15,8 +15,10 @@
 //! in every place a key is read (play, the windows, the map), and the row's
 //! old key do nothing (`alias`). A key moves with everything it does: E is
 //! the quick menu's use in play and ✕ in a window, and both go with it. A key
-//! a row is moved to that another row was on swaps the two. Text typed into an
-//! edit box is never remapped (the viewer does not ask).
+//! a row is moved to that another row was on swaps the two. A row the game
+//! has no key for (△'s, let the target go) can be given one, which presses
+//! that button as the pad's would (`Alias::Button`). Text typed into an edit
+//! box is never remapped (the viewer does not ask).
 //!
 //! The controller: a permutation of the 16 buttons, the physical button on
 //! each of the game's `VIConsolePad` fields (`remap`, before `VIPad::Read`):
@@ -88,7 +90,7 @@ pub const ROWS: &[Row] = &[
     row("look_right", "Camera right", &["l"], Pad::Stick(true, Dir::Right), "Orbits the camera, or turns."),
     row("attack", "{1018} (hold)", &["space"], b(bit::CROSS), "With Auto Attack on, a toggle; on a corpse, its loot. In a window |x is {212}, and Space is |( (a trade's {424}). On the map: |x."),
     row("talk", "Talk (hold: {1403})", &["q"], b(bit::SQUARE), "In a window it is |s, the window's own: a trade's {478}, the who list asked again, the mail's inbox."),
-    row("clear_target", "Let the target go", &[], b(bit::TRIANGLE), "In a window |t is {217}: Escape or Backspace on the keyboard."),
+    row("clear_target", "Let the target go", &[], b(bit::TRIANGLE), "The game has no key for it: a key put here presses |t. In a window |t is {217}, Escape or Backspace on the keyboard."),
     row("use", "Quick menu: {120}", &["e"], b(bit::CIRCLE), "In a window E is |x {212}, as Enter is."),
     row("menu_up", "Quick menu: up", &["up"], b(bit::UP), "In a window, up a row. On the map: pan up."),
     row("menu_down", "Quick menu: down", &["down"], b(bit::DOWN), "In a window, down a row. On the map: pan down."),
@@ -164,6 +166,15 @@ pub const BUTTONS: [(&str, &str); 16] = [
     ("square", "|s"),
 ];
 
+/// The key `SetKey` takes for a button (`input::bit`): 128 + its
+/// `VIConsolePad` field, as `PadKeys` makes it.
+pub fn pad_key(b: u16) -> Option<i32> {
+    // the fields by bit index: select, l3, r3, start, up, right, down, left,
+    // l2, r2, l1, r1, triangle, circle, cross, square
+    const FIELD: [i32; 16] = [17, 18, 19, 16, 10, 9, 11, 8, 13, 15, 12, 14, 4, 7, 6, 5];
+    bit_index(b).map(|i| 128 + FIELD[i as usize])
+}
+
 /// A button's bit index (0..16) from its bit.
 pub fn bit_index(b: u16) -> Option<u8> {
     (b.count_ones() == 1).then(|| b.trailing_zeros() as u8)
@@ -183,6 +194,9 @@ pub enum Alias {
     To(&'static str),
     /// nothing: its row was moved off it
     Nothing,
+    /// a row with no key of its own (△'s) moved onto it: its button
+    /// (`input::bit`), pressed as the pad's
+    Button(u16),
 }
 
 /// The player's bindings.
@@ -245,7 +259,11 @@ impl Binds {
     /// other key itself.
     pub fn alias(&self, name: &str) -> Alias {
         if let Some(r) = self.keys.iter().position(|k| k.as_deref() == Some(name)) {
-            return Alias::To(ROWS[r].keys[0]);
+            return match (ROWS[r].keys.first(), ROWS[r].pad) {
+                (Some(k), _) => Alias::To(k),
+                (None, Pad::Button(b)) => Alias::Button(b),
+                (None, _) => Alias::Nothing,
+            };
         }
         match default_row(name) {
             Some(r) if self.moved(r) => Alias::Nothing,
@@ -254,11 +272,11 @@ impl Binds {
     }
 
     /// Moves `row` onto key `name`. A row on it already swaps with it,
-    /// taking the key `row` leaves; else that key is free. A row with no key
-    /// of its own (△'s) has none to move.
+    /// taking the key `row` leaves (a row that had none, △'s, leaves it no
+    /// key); else that key is free.
     pub fn bind_key(&mut self, row: usize, name: &str) -> Moved {
         let old = self.key(row).map(str::to_string);
-        if old.as_deref() == Some(name) || ROWS[row].keys.is_empty() {
+        if old.as_deref() == Some(name) || (ROWS[row].keys.is_empty() && !matches!(ROWS[row].pad, Pad::Button(_))) {
             return Moved::Already;
         }
         let other = self.row_on(name).filter(|&o| o != row);
@@ -421,32 +439,43 @@ impl PadEdge {
     }
 }
 
+/// What a key pressed or let go is sent on as.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Sent {
+    /// a key, by name, to the keyboard's dispatch
+    Key(String),
+    /// a pad button (`input::bit`), to the game's pad path (`SetKey`)
+    Button(u16),
+}
+
 /// The keys from press to release through the bindings: what each key
 /// pressed was made, so it is let go of as that, whatever changed between
 /// (an edit box opened, a binding moved).
 #[derive(Clone, Debug, Default)]
 pub struct KeyEdge {
-    pressed: std::collections::HashMap<String, Option<String>>,
+    pressed: std::collections::HashMap<String, Option<Sent>>,
 }
 
 impl KeyEdge {
-    /// Key `name` pressed (`down`, `repeat` the system's) or let go: the
-    /// name the dispatch is to see, None for nothing. While `typing` an edit
-    /// box has the keyboard and no key is remapped.
-    pub fn key(&mut self, name: &str, down: bool, repeat: bool, typing: bool, b: &Binds) -> Option<String> {
+    /// Key `name` pressed (`down`, `repeat` the system's) or let go: what it
+    /// is sent on as, None for nothing. While `typing` an edit box has the
+    /// keyboard and no key is remapped.
+    pub fn key(&mut self, name: &str, down: bool, repeat: bool, typing: bool, b: &Binds) -> Option<Sent> {
+        let same = |name: &str| Some(Sent::Key(name.to_string()));
         let now = |name: &str| match b.alias(name) {
-            Alias::Same => Some(name.to_string()),
-            Alias::To(k) => Some(k.to_string()),
+            Alias::Same => same(name),
+            Alias::To(k) => same(k),
+            Alias::Button(k) => Some(Sent::Button(k)),
             Alias::Nothing => None,
         };
         if !down {
-            return self.pressed.remove(name).unwrap_or_else(|| if typing { Some(name.to_string()) } else { now(name) });
+            return self.pressed.remove(name).unwrap_or_else(|| if typing { same(name) } else { now(name) });
         }
         if typing {
             if !repeat {
-                self.pressed.insert(name.to_string(), Some(name.to_string()));
+                self.pressed.insert(name.to_string(), same(name));
             }
-            return Some(name.to_string());
+            return same(name);
         }
         if repeat && let Some(was) = self.pressed.get(name) {
             return was.clone();
@@ -714,6 +743,21 @@ mod tests {
         d.bind_key(talk, "e");
         assert_eq!((d.key(attack), d.key(talk), d.key(use_)), (Some("q"), Some("e"), Some("space")));
         assert_eq!(d.alias("space"), Alias::To("e"));
+        // △'s row, with no key of its own: onto a free key it presses △;
+        // onto another row's key, that row is left with none
+        let mut t = Binds::default();
+        let clear = row_named("clear_target").unwrap();
+        assert_eq!(t.key(clear), None);
+        assert_eq!(t.bind_key(clear, "q"), Moved::Swapped(talk));
+        assert_eq!((t.key(clear), t.key(talk)), (Some("q"), Some("")), "Talk left with no key");
+        assert_eq!(t.alias("q"), Alias::Button(bit::TRIANGLE));
+        assert_eq!(t.bind_key(clear, "b"), Moved::Freed(Some("q".into())));
+        assert_eq!((t.alias("b"), t.alias("q")), (Alias::Button(bit::TRIANGLE), Alias::Nothing));
+        // from a key, onto another row's: that row takes the key it left
+        assert_eq!(t.bind_key(clear, "e"), Moved::Swapped(use_));
+        assert_eq!(t.key(use_), Some("b"));
+        // a stick's row has keys; no row without keys or a button exists to refuse
+        assert!(ROWS.iter().all(|r| !r.keys.is_empty() || matches!(r.pad, Pad::Button(_))));
     }
 
     /// The pad: a field moved onto another button swaps the two; the
@@ -772,27 +816,33 @@ mod tests {
     fn a_key_lets_go_as_what_it_was_pressed_as() {
         let mut b = Binds::default();
         b.bind_key(row_named("walk_forward").unwrap(), "up");
+        let key = |s: &str| Some(Sent::Key(s.to_string()));
         let mut e = KeyEdge::default();
-        assert_eq!(e.key("up", true, false, false, &b).as_deref(), Some("w"), "the arrow walks");
-        assert_eq!(e.key("up", true, true, false, &b).as_deref(), Some("w"), "a repeat");
-        assert_eq!(e.key("up", false, false, true, &b).as_deref(), Some("w"), "let go while typing: still w, so the walk stops");
-        assert_eq!(e.key("w", true, false, false, &b).as_deref(), Some("up"), "W took the arrow's place: the quick menu's up");
-        assert_eq!(e.key("w", false, false, false, &b).as_deref(), Some("up"));
+        assert_eq!(e.key("up", true, false, false, &b), key("w"), "the arrow walks");
+        assert_eq!(e.key("up", true, true, false, &b), key("w"), "a repeat");
+        assert_eq!(e.key("up", false, false, true, &b), key("w"), "let go while typing: still w, so the walk stops");
+        assert_eq!(e.key("w", true, false, false, &b), key("up"), "W took the arrow's place: the quick menu's up");
+        assert_eq!(e.key("w", false, false, false, &b), key("up"));
         b.bind_key(row_named("menu_up").unwrap(), "f2");
         assert_eq!(e.key("w", true, false, false, &b), None, "W's rows both moved off it: nothing");
         assert_eq!(e.key("w", false, false, false, &b), None);
         // typing: as it is
-        assert_eq!(e.key("up", true, false, true, &b).as_deref(), Some("up"));
-        assert_eq!(e.key("up", false, false, false, &b).as_deref(), Some("up"), "let go as pressed");
-        assert_eq!(e.key("w", true, false, true, &b).as_deref(), Some("w"));
+        assert_eq!(e.key("up", true, false, true, &b), key("up"));
+        assert_eq!(e.key("up", false, false, false, &b), key("up"), "let go as pressed");
+        assert_eq!(e.key("w", true, false, true, &b), key("w"));
         // a capture's key
         e.hold_back("f2");
         assert_eq!(e.key("f2", false, false, false, &b), None);
+        // △'s row, which has no key in the game, given B: B presses △
+        b.bind_key(row_named("clear_target").unwrap(), "b");
+        assert_eq!(e.key("b", true, false, false, &b), Some(Sent::Button(bit::TRIANGLE)));
+        assert_eq!(e.key("b", false, false, true, &b), Some(Sent::Button(bit::TRIANGLE)), "let go as pressed");
+        assert_eq!(e.key("b", true, false, true, &b), key("b"), "typed as itself");
         // the control
         let mut c = KeyEdge::default();
-        for k in ["up", "w", "e", "space", "7"] {
-            assert_eq!(c.key(k, true, false, false, &Binds::default()).as_deref(), Some(k));
-            assert_eq!(c.key(k, false, false, false, &Binds::default()).as_deref(), Some(k));
+        for k in ["up", "w", "e", "space", "7", "b"] {
+            assert_eq!(c.key(k, true, false, false, &Binds::default()), key(k));
+            assert_eq!(c.key(k, false, false, false, &Binds::default()), key(k));
         }
     }
 
@@ -819,6 +869,21 @@ mod tests {
         assert_eq!(cleared.alias("q"), Alias::Nothing);
         assert_eq!(cleared.key(row_named("talk").unwrap()), Some(""));
         assert_eq!(Binds::from_text(&cleared.to_text()), cleared);
+    }
+
+    /// `pad_key` is what the game's pad path makes of each button: the key
+    /// `VIPad::Read` and `PadKeys` give for it alone.
+    #[test]
+    fn a_buttons_key_is_the_pads() {
+        for (i, (name, _)) in BUTTONS.iter().enumerate() {
+            let b = 1u16 << i;
+            let mut c = crate::input::Console::new();
+            let r = crate::input::Report { buttons: b, sticks: [0.0; 4] };
+            c.poll(r, true, false, false);
+            assert_eq!(c.poll(r, true, false, false), vec![(pad_key(b).unwrap(), true)], "{name}");
+        }
+        assert_eq!(pad_key(bit::TRIANGLE), Some(132));
+        assert_eq!(pad_key(0), None);
     }
 
     #[test]
