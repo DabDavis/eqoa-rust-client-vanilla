@@ -38,9 +38,12 @@ use web_time::{Duration, Instant};
 /// The world's file in the library, in play (the viewer's file 0).
 pub const WORLD_FILE: usize = 0;
 
-/// Build time a frame: while the map is up, and behind the game.
-const OPEN_BUDGET: Duration = Duration::from_millis(6);
-const PLAY_BUDGET: Duration = Duration::from_millis(2);
+/// Build time a frame, while the map is up and behind the game: at most
+/// these, and at most this share of the frame's length, so a display faster
+/// than 60 a second keeps most of its rate (at 165 the map up builds 2.1 ms
+/// a frame, behind the game 0.7).
+const OPEN_BUDGET: (Duration, f32) = (Duration::from_millis(6), 0.35);
+const PLAY_BUDGET: (Duration, f32) = (Duration::from_millis(2), 0.12);
 /// How long after a world is entered the map starts drawing behind the
 /// game (the walk's own zones are read first).
 const PLAY_DELAY: Duration = Duration::from_secs(5);
@@ -342,8 +345,8 @@ impl Map {
         };
         let budget = match self.budget {
             Some(b) => Some(b),
-            None if self.open => Some(OPEN_BUDGET),
-            None => (w.made.elapsed() >= PLAY_DELAY).then_some(PLAY_BUDGET),
+            None if self.open => Some(budget(OPEN_BUDGET, cx.dt)),
+            None => (w.made.elapsed() >= PLAY_DELAY).then(|| budget(PLAY_BUDGET, cx.dt)),
         };
         if let Some(b) = budget {
             w.builder.step(cx.lib, &build::Gpu { device: cx.device, queue: cx.queue }, focus, b);
@@ -661,6 +664,12 @@ impl Map {
             None => "map: no world".into(),
         }
     }
+}
+
+/// A frame's build time, `b`'s most or its share of a frame `dt` seconds
+/// long, whichever is less (a frame counted no shorter than 1/240 s).
+fn budget(b: (Duration, f32), dt: f32) -> Duration {
+    b.0.min(Duration::from_secs_f32(dt.max(1.0 / 240.0) * b.1))
 }
 
 /// The tiles worth having for view `v` in a `size` window: the cells it

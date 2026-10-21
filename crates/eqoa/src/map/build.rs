@@ -152,7 +152,7 @@ enum Job {
 }
 
 /// Rows of a tile's PNG made a step.
-const ROWS_A_STEP: u32 = 64;
+const ROWS_A_STEP: u32 = 32;
 
 /// What a build has cost, for the log and the measurements.
 #[derive(Clone, Copy, Debug, Default)]
@@ -188,6 +188,8 @@ pub struct Builder {
     tiles_asked: BTreeSet<usize>,
     started: Option<Instant>,
     pub stats: Stats,
+    /// `trace()`, asked once
+    trace: bool,
 }
 
 impl Builder {
@@ -202,7 +204,7 @@ impl Builder {
             s.list();
         }
         let zones = (0..n).map(|z| if cells.cell_of[z].is_none() { Zone::Failed } else if listed { Zone::Missing } else { Zone::Unknown }).collect();
-        Builder { world, cells, zones, store, listed, source, job: Job::Idle, renderer: None, uploaded: HashSet::new(), shot: None, cells_out: Vec::new(), tiles_out: Vec::new(), tiles_asked: BTreeSet::new(), started: None, stats: Stats::default() }
+        Builder { world, cells, zones, store, listed, source, job: Job::Idle, renderer: None, uploaded: HashSet::new(), shot: None, cells_out: Vec::new(), tiles_out: Vec::new(), tiles_asked: BTreeSet::new(), started: None, stats: Stats::default(), trace: trace() }
     }
 
     /// Whether every zone is on the map (or has nothing to draw).
@@ -240,7 +242,7 @@ impl Builder {
         self.take_answers(t0, budget);
         self.ask_cells();
         // a piece at least, then pieces while the budget lasts
-        let trace = std::env::var_os("EQOA_MAP_TRACE").is_some();
+        let trace = self.trace;
         loop {
             let (t, what) = (Instant::now(), self.job_name());
             let more = self.advance(lib, g, focus);
@@ -259,7 +261,7 @@ impl Builder {
         }
     }
 
-    /// What the job is, for `EQOA_MAP_TRACE`.
+    /// What the job is, for the trace (`trace`).
     fn job_name(&self) -> &'static str {
         match &self.job {
             Job::Idle => "choosing",
@@ -276,7 +278,7 @@ impl Builder {
         while t0.elapsed() < budget {
             let t = Instant::now();
             let Some(got) = self.store.as_mut().and_then(|s| s.poll()) else { break };
-            if std::env::var_os("EQOA_MAP_TRACE").is_some() && t.elapsed() > Duration::from_millis(2) {
+            if self.trace && t.elapsed() > Duration::from_millis(2) {
                 crate::say(&format!("map: the cache's answer took {:.1} ms", t.elapsed().as_secs_f64() * 1e3));
             }
             match got {
@@ -535,6 +537,15 @@ impl Builder {
         let kept = self.store.as_ref().map_or("not kept".to_string(), |s| s.describe());
         format!("map: {shown} of {of} zones ({} drawn, {} from the cache: {kept})", self.stats.drawn, self.stats.kept)
     }
+}
+
+/// `EQOA_MAP_TRACE=1` (in a page `?maptrace`): each build step over 2 ms
+/// said, with what it was.
+fn trace() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    return crate::web::page_flag("maptrace");
+    #[cfg(not(target_arch = "wasm32"))]
+    std::env::var_os("EQOA_MAP_TRACE").is_some()
 }
 
 /// The cache's name for zone `zi`'s tile.

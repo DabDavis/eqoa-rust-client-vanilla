@@ -266,3 +266,18 @@ fn closing_lets_the_tiles_go() {
     assert!(!m.open);
     assert!(m.world.as_ref().unwrap().tiles.is_empty());
 }
+
+/// The build's time a frame is its most at 60 frames a second and 30, and a
+/// share of the frame at 165, so a fast display keeps most of its rate.
+/// The control: the most alone at 165 takes the whole 6 ms frame.
+#[test]
+fn the_build_takes_a_share_of_a_fast_frame() {
+    let ms = |d: Duration| d.as_secs_f64() * 1e3;
+    assert_eq!(ms(budget(OPEN_BUDGET, 1.0 / 60.0)).round(), 6.0);
+    assert_eq!(ms(budget(OPEN_BUDGET, 1.0 / 30.0)), 6.0);
+    assert_eq!(ms(budget(PLAY_BUDGET, 1.0 / 30.0)), 2.0);
+    let fast = ms(budget(OPEN_BUDGET, 1.0 / 165.0));
+    assert!((2.0..2.2).contains(&fast), "{fast}");
+    assert!(ms(budget(PLAY_BUDGET, 1.0 / 165.0)) < 0.8);
+    assert!(ms(OPEN_BUDGET.0) >= 1000.0 / 165.0 * 0.99, "the control: the most alone is the whole frame");
+}
