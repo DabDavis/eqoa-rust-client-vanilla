@@ -202,10 +202,56 @@ impl Raster for UiRaster<'_> {
     }
 
     fn set_viewport(&mut self, v: [i32; 4]) {
-        self.ui.viewport = Some(v);
+        // the whole screen is none: what `viewport` answers for none, set
+        // back, leaves a frame-wide backdrop free to run the target's width
+        self.ui.viewport = render::ui::viewport_of(v);
     }
 
     fn has(&self, id: u32) -> bool {
         self.assets.surface(id).is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A layer on the machine's GPU (any backend), as a window lays itself out
+    /// on it; None without an adapter.
+    fn layer() -> Option<Ui> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
+        let (device, _queue) = pollster::block_on(adapter.request_device(&Default::default())).ok()?;
+        Some(Ui::new(&device, render::TARGET_FORMAT, render::DEPTH_FORMAT))
+    }
+
+    /// A name scrolled (`VIUITextScroll`: the viewport saved, cut to its
+    /// window, set back) leaves the layer with no viewport, and a frame starts
+    /// with none: a full-screen window's backdrop made after it runs a wide
+    /// window's whole width. F3 2026-10-21 (Class Mastery, Factions, the
+    /// tradeskills): the scroll left the whole screen set as a viewport, kept
+    /// from frame to frame, and every backdrop stopped at the 4:3 frame's
+    /// sides. Needs a graphics adapter; without one it says so and passes.
+    #[test]
+    fn a_scrolled_name_leaves_no_viewport_behind() {
+        let Some(mut ui) = layer() else {
+            eprintln!("SKIP: no graphics adapter");
+            return;
+        };
+        let assets = UiAssets::default();
+        ui.begin((1920, 1080));
+        {
+            let mut r = assets.raster(&mut ui);
+            let saved = r.viewport();
+            assert_eq!(saved, [0, 0, 639, 447], "none answers the whole screen");
+            r.set_viewport([430, 25, 600, 50]);
+            assert_eq!(r.viewport(), [430, 25, 600, 50]);
+            r.set_viewport(saved);
+        }
+        assert_eq!(ui.viewport, None, "set back, the whole screen is none");
+        // a viewport left over from the frame before is gone at the next
+        ui.viewport = Some([430, 25, 600, 50]);
+        ui.begin((1920, 1080));
+        assert_eq!(ui.viewport, None);
     }
 }

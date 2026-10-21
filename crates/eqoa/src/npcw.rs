@@ -310,7 +310,7 @@ impl Play {
     }
 
     /// The three windows' opens, keys, drawing and what they ask.
-    pub(super) fn run_npcw(&mut self, vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster) {
+    pub(super) fn run_npcw(&mut self, vui: &vi::ui::Vui, r: &mut dyn crate::ui::Layout) {
         let now = vui.time;
         let flags = net::session::EXPANSION_FLAGS;
         if std::mem::take(&mut self.npcw.loot_open) {

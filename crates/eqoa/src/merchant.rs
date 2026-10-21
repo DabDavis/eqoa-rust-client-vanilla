@@ -15,6 +15,12 @@
 //! A pointer (`pointer`) goes to the window with the focus: the menu's
 //! Buy, Sell and Leave at once, the list's rows (a second click buys or
 //! sells), the picker and the box.
+//!
+//! In a window wider than 4:3 (the client's own, `ui::Layout`) the list's
+//! art that runs off a TV's sides runs to the window's: the left panel out
+//! to the left side under the list, the two rails across, the right frames
+//! out to the right side; what is on them stays where the game puts it. A
+//! 4:3 window draws it as the game does.
 
 #![allow(clippy::too_many_arguments)]
 
@@ -22,8 +28,10 @@ use crate::dialog::{BoxAnswer, Key as BoxKey, MBox};
 use crate::infotext::{self, Info};
 use crate::pointer::{Hits, key, rows_rect};
 use crate::quantity::{Quantity, QuantityUp};
+use crate::ui::Layout;
 use crate::wndlist::WndList;
 use net::dump::{ItemList, NetItem};
+use render::ui::Anchor;
 use vi::fpu::{Ee, F};
 use vi::ui::{FrameParam, Raster, UI_COLORS, Vui, Window, wide};
 
@@ -548,21 +556,27 @@ impl Merchant {
 
     /// `OnDrawSelf` (the panels behind the list and the text, the rows),
     /// then the children: the menu, the list, the picker, the box.
-    pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, view: &View, cues: &mut Vec<i32>, out: &mut Vec<MerchantOut>) {
+    pub fn draw(&mut self, vui: &Vui, r: &mut dyn Layout, view: &View, cues: &mut Vec<i32>, out: &mut Vec<MerchantOut>) {
         let now = vui.time;
         if view.shop.id.is_none() {
             return;
         }
         self.update_info(view, out);
         if self.mode != 0 {
+            let s = r.side();
             vui.blit_rect(r, 32, [-1, -1], [642, 332], 0, 1.0);
             let fp = FrameParam { tl: (44, 0), top: (45, 0), tr: (46, 0), right: (52, 0), br: (50, 0), bottom: (49, 0), bl: (48, 0), left: (47, 0) };
-            vui.blit_rect(r, 51, [-1, 48], [156, 265], 0, 1.0);
-            vui.blit_fill_frame(r, [456, 48], [184, 202], &fp, 35, 0, 1.0, true);
+            r.anchor(Anchor::Wide);
+            vui.blit_rect(r, 51, [-1 - s, 48], [156 + s, 265], 0, 1.0);
+            vui.blit_fill_frame(r, [456, 48], [184 + s, 202], &fp, 35, 0, 1.0, true);
             vui.blit_fill_frame(r, [167, 48], [289, 202], &fp, 35, 0, 1.0, true);
-            vui.blit_fill_frame(r, [167, 250], [473, 65], &fp, 35, 0, 1.0, true);
-            vui.blit_studded_horz(r, [-1, 37], 37, 38, 642, 5, 0, 1.0, 0);
-            vui.blit_studded_horz(r, [-1, 313], 40, 41, 642, 5, 0, 1.0, 0);
+            vui.blit_fill_frame(r, [167, 250], [473 + s, 65], &fp, 35, 0, 1.0, true);
+            // the rails' studs at about the game's spacing (five on its 642)
+            let w = 642 + 2 * s;
+            let studs = (w * 6 + 321) / 642 - 1;
+            vui.blit_studded_horz(r, [-1 - s, 37], 37, 38, w, studs, 0, 1.0, 0);
+            vui.blit_studded_horz(r, [-1 - s, 313], 40, 41, w, studs, 0, 1.0, 0);
+            r.anchor(Anchor::Middle);
             self.fill(view);
             self.draw_info(vui, r);
         }
@@ -620,6 +634,46 @@ mod tests {
     /// The menu's Sell is chosen at once by a click; then the list takes
     /// clicks (a row selected, the selection sold), and while the picker is
     /// up the list behind it takes none.
+    /// In a window wider than 4:3 the list's art runs to the window's sides,
+    /// the left panel out under the list, the rails across with their studs at
+    /// about the game's spacing, the right frames out to the right; the list
+    /// and the text stay where the game puts them, and a 4:3 window is the
+    /// game's (the control).
+    #[test]
+    fn the_merchants_art_runs_to_a_wide_windows_sides() {
+        use crate::pointer::testing::{Wide, vui};
+        use render::ui::Anchor::Wide as W;
+        let vui = vui();
+        let mut inv = ItemList::default();
+        inv.items.push(item(10, 0, 0));
+        let shop = Shop { id: Some(7), sell_rate: 100, buy_rate: 100, wares: inv.clone(), greeting: wide("Hello"), pending: false };
+        let base = [0; 29];
+        let info = Info { words: &vui.words, inv: &inv, hp: [0; 4], base: &base, class: 0, level: 1, attack_words: &[] };
+        let (can_use, icon) = (|_: &NetItem| true, |_: &NetItem| 1);
+        let view = View { info: &info, shop: &shop, coin: 0, can_use: &can_use, inv_icon: &icon };
+        let drawn = |side: i32| {
+            let (mut cues, mut out) = (Vec::new(), Vec::new());
+            let mut r = Wide::new(side);
+            let mut m = Merchant::default();
+            m.open(&vui, &mut r, &wide("Hello"));
+            m.key(&vui, &mut r, &view, 134, true, &mut cues, &mut out);
+            r.2.clear();
+            m.draw(&vui, &mut r, &view, &mut cues, &mut out);
+            r
+        };
+        let (tv, wide) = (drawn(0), drawn(106));
+        assert!(tv.2.contains(&(W, [-1, 48], [156, 265])), "the game's left panel");
+        assert!(wide.2.contains(&(W, [-107, 48], [262, 265])), "out to the left side");
+        // the rails across, seven studs where the game has five
+        let rail = |r: &Wide| r.2.iter().filter(|b| b.1[1] == 37).count();
+        assert_eq!((rail(&tv), rail(&wide)), (1 + 5, 1 + 7), "the bar (one stretch with no atlas), then the studs");
+        assert!(wide.2.iter().any(|b| b.0 == W && b.1 == [-107, 37]));
+        // what stays: everything drawn under the frame's own anchor
+        let middle = |r: &Wide| r.2.iter().filter(|b| b.0 != W).map(|b| (b.1, b.2)).collect::<Vec<_>>();
+        assert_eq!(middle(&tv), middle(&wide));
+        assert!(!middle(&wide).is_empty(), "the list and its text are drawn with the frame");
+    }
+
     #[test]
     fn a_pointer_through_the_merchant() {
         use crate::pointer::testing::{NullRaster, mid, vui};

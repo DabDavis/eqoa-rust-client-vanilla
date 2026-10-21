@@ -1,13 +1,17 @@
-//! The chat box: `VIChatText`, the 32-line ring it keeps, and
+//! The chat box: `VIChatText`, the ring of lines it keeps, and
 //! `VIWndChat::OnDrawSelf`, the window that slides up from the bottom of
 //! the screen to show the lines added in the last 20 seconds (at most
 //! five), or the last five lines in a fixed 85-pixel box while its mode is
 //! set or it is being scrolled: R2 held (`VIWndGame` mode 33) scrolls the
-//! last 32 lines with up and down, which repeat while held.
+//! history with up and down, which repeat while held.
 
 use vi::ui::{Raster, Vui, Window};
 
-const LINES: usize = 32;
+/// The ring's size. The game's is 32 (`VIChatText::m_lines`, 5,136 bytes of
+/// the PS2's memory), holding the last 31 lines; the client's holds the last
+/// 1,000 (F3 2026-10-21: lines went off the top of the history too soon),
+/// about 180 KB, scrolled as the game scrolls its 31.
+const LINES: usize = 1001;
 
 #[derive(Clone, Debug, Default)]
 pub struct ChatLine {
@@ -62,7 +66,7 @@ impl ChatText {
     pub fn prev(i: usize) -> usize {
         if i == 0 { LINES - 1 } else { i - 1 }
     }
-    /// `Count`: the lines held (31 once the ring has gone round).
+    /// `Count`: the lines held (`LINES - 1` once the ring has gone round).
     pub fn count(&self) -> usize {
         if self.tail < self.head { LINES - 1 } else { self.tail - self.head }
     }
@@ -327,5 +331,45 @@ impl WndChat {
         } else if self.target < self.height {
             self.height = (self.height - step).max(self.target);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The history holds the last 1,000 lines, and R2's scroll goes back
+    /// through all of them a line a step, sounding 9 at the oldest. The
+    /// game's ring of 32 kept 31 (F3 2026-10-21: "at least 1000 lines").
+    #[test]
+    fn the_history_keeps_a_thousand_lines() {
+        let mut c = WndChat::new();
+        let width = |s: &[u16]| s.len() as i32 * 8;
+        for k in 0..1500 {
+            c.text.add_text(&crate::ui::wide(&format!("line {k}")), [1.0; 4], 0, width);
+        }
+        assert_eq!(c.text.count(), 1000);
+        assert_eq!(c.text.line(c.text.first()).unwrap().text, crate::ui::wide("line 500"));
+        assert_eq!(c.text.line(ChatText::prev(c.text.end())).unwrap().text, crate::ui::wide("line 1499"));
+        // the scroll opens on the last five, and steps back to the first
+        c.set_scroll(1);
+        let mut steps = 0;
+        while c.top != c.text.first() {
+            c.scroll_up();
+            steps += 1;
+            assert!(steps <= 1000, "the scroll never reached the first line");
+        }
+        assert_eq!(steps, 995);
+        assert_eq!(c.text.index(c.top), 0);
+        c.cues.clear();
+        c.scroll_up();
+        assert_eq!(c.cues, vec![9], "the oldest line: the end's sound");
+        // and back down to the newest
+        let mut down = 0;
+        while c.bottom != c.text.end() {
+            c.scroll_down();
+            down += 1;
+        }
+        assert_eq!(down, 995);
     }
 }

@@ -63,6 +63,7 @@ mod itemmenu;
 mod classmastery;
 mod cs;
 mod faction;
+mod loading;
 mod lod;
 mod loot;
 mod map;
