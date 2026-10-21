@@ -26,10 +26,11 @@ pub enum Column {
 /// The page's own rows besides the list: the header, a gap, the help (two),
 /// the windows' keys (two) and the legend.
 const FIXED_ROWS: i32 = 8;
-/// Where the cells are, from the window's right edge.
-const KEY_X: i32 = 250;
+/// Where the cells are, from the window's right edge: room between them for
+/// the selected one's side arrows, and right of them for the scroll bar.
+const KEY_X: i32 = 280;
 const KEY_W: i32 = 110;
-const PAD_X: i32 = 130;
+const PAD_X: i32 = 138;
 const PAD_W: i32 = 90;
 /// A held direction repeats after this long, then this often (ms).
 const REPEAT_AFTER: i64 = 400;
@@ -320,7 +321,7 @@ impl ControlsPage {
             let h = vui.font_height(r) - 4;
             let top = w.row_center(vui, r, 2)[1] - 4;
             let t = self.top as f32 / (n - self.shown) as f32;
-            w.draw_vscroll(vui, r, [w.top_left()[0] + width - 26, top - 3], self.shown * h + 4, t);
+            w.draw_vscroll(vui, r, [w.top_left()[0] + width - 24, top - 3], self.shown * h + 4, t);
         }
         // the help: what is awaited, the last change, or the row's help
         let list_end = self.shown + 3;
@@ -339,7 +340,7 @@ impl ControlsPage {
         };
         w.text_box(vui, r, &wide(&help), 40, list_end, width - 80, 2, UI_COLORS[0], 2);
         w.text_box(vui, r, &wide(&window_keys(&b)), 40, list_end + 2, width - 80, 2, UI_COLORS[1], 0);
-        let legend = format!("|x Change   |t {}", vui.words.get(217, vui.language));
+        let legend = format!("|x Change   |V|v Keyboard, Controller   |t {}", vui.words.get(217, vui.language));
         w.text(vui, r, &wide(&legend), 40, rows - 1, UI_COLORS[0], 0);
     }
 }
