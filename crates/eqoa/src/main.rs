@@ -5,6 +5,7 @@
 //! eqoa ls   [iso]               every file on the disc
 //! eqoa tree [iso] <file>        a container's record tree
 //! eqoa zones <world.esf>        the zones in a world file
+//! eqoa volumes <world.esf>      every effect volume it places (fog, dust, shafts, leaves, flocks)
 //! eqoa view <file> [model]       a model (wgpu + winit)
 //! eqoa view <world> zone <n>     a zone: terrain and every placed actor
 //! eqoa view <world> walk <n>     the character, walking in a zone
@@ -78,6 +79,7 @@ mod options;
 mod social;
 mod wholist;
 mod zones;
+mod fx;
 mod particles;
 mod play;
 mod pointer;
@@ -214,6 +216,54 @@ fn listen(file: &str, x: f32, z: f32, secs: f32, out: &str, hour: f32, walk: boo
     Ok(())
 }
 
+/// `eqoa volumes`: every effect volume a world places, zone by zone (each
+/// zone read off the disc on its own and let go).
+fn volumes(file: &str) -> Result<()> {
+    use std::io::Write;
+    let iso = disc_path(None);
+    let mut lib = esf::Library::new();
+    let w = lib.add(file, stream::open_file(std::path::Path::new(&iso), file)?);
+    let mut src = stream::FileZones::open(std::path::Path::new(&iso), file);
+    let mut out = std::io::stdout().lock();
+    let mut count = std::collections::BTreeMap::<&str, usize>::new();
+    for zi in 0..lib.zone_count(w) {
+        let list = match (lib.zone(w, zi), lib.zone_range(w, zi), src.as_mut()) {
+            (Some((f, z)), _, _) => fx::placements(lib.file(f), z, zi),
+            (None, Some((off, len)), Some(s)) => {
+                use stream::ZoneSource;
+                s.request(zi, off, len);
+                let Some((_, Ok(b))) = s.poll() else { continue };
+                let c = esf::Container::parse_records(b);
+                let Some(&z) = c.roots.first() else { continue };
+                fx::placements(&c, z, zi)
+            }
+            _ => continue,
+        };
+        for p in list {
+            let (a, r) = (&p.actor, &p.record);
+            let size = [r.bbox[3] - r.bbox[0], r.bbox[4] - r.bbox[1], r.bbox[5] - r.bbox[2]];
+            match r.params {
+                Some(q) => {
+                    *count.entry(fx::type_name(q.ty)).or_default() += 1;
+                    writeln!(
+                        out,
+                        "zone {:3} at ({:8.1}, {:6.1}, {:8.1}) yaw {:5.2} scale {:4.2}  {:6} box {:5.1}x{:5.1}x{:5.1}  hours {:5.2}-{:5.2}  seen {:5.1}  strength {:4.2}  density {:4.2}  flags {}  surface {:#010x}{}  sprite {:#010x}{}",
+                        p.zone, a.pos[0], a.pos[1], a.pos[2], a.rot[0], a.scale, fx::type_name(q.ty), size[0], size[1], size[2], q.p34, q.p38, q.p30, q.p28, q.density, q.flags,
+                        q.surface as u32, if p.surface_found { "" } else if q.surface == -1 || q.surface == 0 { " (none)" } else { " (missing)" },
+                        q.sprite as u32, if p.sprite_found { "" } else if q.sprite == -1 || q.sprite == 0 { " (none)" } else { " (missing)" },
+                    )?;
+                }
+                None => {
+                    *count.entry("no params").or_default() += 1;
+                    writeln!(out, "zone {:3} at ({:8.1}, {:6.1}, {:8.1})  no 0xC330", p.zone, a.pos[0], a.pos[1], a.pos[2])?;
+                }
+            }
+        }
+    }
+    eprintln!("{file}: {count:?}");
+    Ok(())
+}
+
 fn run(args: &[String]) -> Result<()> {
     match args.first().map(String::as_str) {
         Some("ls") => {
@@ -253,6 +303,10 @@ fn run(args: &[String]) -> Result<()> {
                     lo[2]
                 );
             }
+        }
+        Some("volumes") => {
+            let file = args.get(1).ok_or("usage: eqoa volumes <world.esf>")?;
+            volumes(file)?;
         }
         Some("view") | Some("shot") => {
             let shot = args[0] == "shot";
