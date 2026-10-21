@@ -1436,7 +1436,7 @@ impl App {
         let free = self.walker.is_some() && !dead && self.play.as_ref().is_none_or(|p| p.look_free());
         let Some(g) = &self.gfx else { return };
         #[cfg(target_arch = "wasm32")]
-        if frame && self.mouse.lock_seen(crate::web::pointer_locked()) {
+        if frame && self.mouse.lock_seen(crate::web::pointer_locked(), Instant::now()) {
             crate::mouse::give_pointer(&g.window, self.mouse.home());
         }
         let _ = frame;

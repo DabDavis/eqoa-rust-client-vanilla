@@ -3,13 +3,16 @@
 //! of Warcraft's does (the user's choice, F3 reports of 2026-10-21):
 //!
 //! - a held button that drags takes the pointer (`Grab`, `take_pointer`):
-//!   the cursor hidden and held (a page's Pointer Lock; natively winit's
-//!   `Locked`, or `Confined` where the platform has no lock), and the look
-//!   rides the mouse's own motion (`motion`, winit's
-//!   `DeviceEvent::MouseMotion`), so no screen edge stops it. Let go, the
-//!   cursor is back where the press was. A window or the start menu opening,
-//!   the window losing the focus, Escape (which a browser keeps to end its
-//!   lock) and a death let go of it too, clicking nothing.
+//!   the cursor hidden and held (a page's Pointer Lock, asked for in the
+//!   drag's move within the press's activation, so a click never hides the
+//!   cursor, and in the press itself once the browser has refused that twice
+//!   running, `lock_seen`; natively winit's `Locked`, or `Confined` where
+//!   the platform has no lock), and the look rides the mouse's own motion
+//!   (`motion`, winit's `DeviceEvent::MouseMotion`), so no screen edge stops
+//!   it. Let go, the cursor is back where the press was. A window or the
+//!   start menu opening, the window losing the focus, Escape (which a
+//!   browser keeps to end its lock) and a death let go of it too, clicking
+//!   nothing.
 //! - the left button looks round the orbiting cameras (1 and 3) without
 //!   turning the body: across, the orbit angle (`SetOrbitAngle`, the view
 //!   turning the way the mouse goes); up and down the tilt (`tilt`: the view
@@ -61,6 +64,8 @@ use web_time::{Duration, Instant};
 const SLOP: f64 = 5.0;
 /// Two clicks this close in time and place are a double click.
 const DOUBLE: Duration = Duration::from_millis(400);
+/// A page's lock not granted this long after it was asked for: refused.
+const REFUSED: Duration = Duration::from_millis(500);
 /// The look's turn for a pixel of motion (radians): half a turn over 390.
 /// The orbit, the steered body and first person turn alike.
 const LOOK_PER_PIXEL: f32 = 0.008;
@@ -188,6 +193,9 @@ struct Press {
     right: bool,
     at: (f64, f64),
     dragged: bool,
+    /// the mouse's own motion since the press: past the slop it drags too
+    /// (a pointer held from the press keeps the cursor still)
+    travel: (f64, f64),
 }
 
 /// The pointer as the look holds it.
@@ -223,18 +231,27 @@ pub struct Mouse {
     grab: Grab,
     /// where the cursor goes back to when the grab ends: the press's place
     home: (f64, f64),
-    /// the mouse's own motion has come during this grab: until it does (a
-    /// platform without it), the cursor's moves are still the look
+    /// the platform gives the mouse's own motion (some has come): it is
+    /// the look, the cursor's moves only find the drag (a page hands both
+    /// for one move, the canvas's first); until it does, the cursor's moves
+    /// are the look
     raw: bool,
+    /// a page's lock: when this grab asked for it, whether it was found
+    /// refused, how many drags running were refused, and whether it is
+    /// now asked for in the press (`lock_seen`)
+    asked_at: Option<Instant>,
+    counted: bool,
+    refused: u8,
+    at_press: bool,
     /// the last frame steered the follow orbit (a new hold turns the body
     /// to the view first)
     steered: bool,
 }
 
 impl Mouse {
-    /// The cursor moved: a held button past the slop drags. Once the grab
-    /// has the mouse's own motion the cursor's moves are not the look (held,
-    /// it stays put or keeps in the window).
+    /// The cursor moved: a held button past the slop drags. Where the
+    /// platform gives the mouse's own motion that is the look, not the
+    /// cursor's moves (held, the cursor stays put or keeps in the window).
     pub fn moved(&mut self, x: f64, y: f64) {
         let (dx, dy) = (x - self.cursor.0, y - self.cursor.1);
         self.cursor = (x, y);
@@ -250,11 +267,19 @@ impl Mouse {
     }
 
     /// The mouse's own motion (winit's `DeviceEvent::MouseMotion`: a page's
-    /// `movementX`, natively the device's counts): the look while the
-    /// pointer is grabbed, whatever the screen's edges.
+    /// `movementX`, natively the device's counts): a drag's look, whatever
+    /// the screen's edges once the pointer is held; past the slop from the
+    /// press it drags as the cursor's moves do (a pointer taken at the press
+    /// keeps the cursor still).
     pub fn motion(&mut self, dx: f64, dy: f64) {
-        if matches!(self.grab, Grab::Asked | Grab::Held) && self.press.is_some_and(|p| p.dragged) {
-            self.raw = true;
+        self.raw = true;
+        let Some(p) = self.press.as_mut() else { return };
+        p.travel.0 += dx;
+        p.travel.1 += dy;
+        if !p.dragged && (p.travel.0.powi(2) + p.travel.1.powi(2)).sqrt() > SLOP {
+            p.dragged = true;
+        }
+        if p.dragged {
             self.look.0 += dx;
             self.look.1 += dy;
         }
@@ -273,7 +298,7 @@ impl Mouse {
         self.held[right as usize] = down;
         if down {
             match self.press.as_mut() {
-                None => self.press = Some(Press { right, at: self.cursor, dragged: false }),
+                None => self.press = Some(Press { right, at: self.cursor, dragged: false, travel: (0.0, 0.0) }),
                 Some(p) => p.dragged = true,
             }
             return None;
@@ -340,9 +365,6 @@ impl Mouse {
 
     /// The window's answer (`take_pointer`), or a page's lock seen granted.
     pub fn set_grab(&mut self, g: Grab) {
-        if matches!(g, Grab::Asked | Grab::Held) && !matches!(self.grab, Grab::Asked | Grab::Held) {
-            self.raw = false;
-        }
         self.grab = g;
     }
 
@@ -353,14 +375,15 @@ impl Mouse {
 
     /// What the window is to do with the pointer, `free` meaning the look
     /// may go on (in play, no window up, alive): `Some(true)` take it (a
-    /// drag began), `Some(false)` give it back (the drag ended; or a window,
-    /// the start menu or a death took the look, which ends that gesture
-    /// clicking nothing).
+    /// drag began; in a page whose browser refuses a lock asked for in a
+    /// move, a press), `Some(false)` give it back (the drag ended; or a
+    /// window, the start menu or a death took the look, which ends that
+    /// gesture clicking nothing).
     pub fn grab_change(&mut self, free: bool) -> Option<bool> {
         if !free && self.grab != Grab::Free {
             self.release_all();
         }
-        let want = free && self.press.is_some_and(|p| p.dragged);
+        let want = free && self.press.is_some_and(|p| p.dragged || self.at_press);
         match (want, self.grab) {
             (true, Grab::Free) => {
                 self.home = self.press.map_or(self.cursor, |p| p.at);
@@ -368,6 +391,8 @@ impl Mouse {
             }
             (false, Grab::Asked | Grab::Held) => {
                 self.grab = Grab::Free;
+                self.asked_at = None;
+                self.counted = false;
                 Some(false)
             }
             (false, Grab::Refused) => {
@@ -378,14 +403,30 @@ impl Mouse {
         }
     }
 
-    /// A page's lock as the browser has it now: an asked grab granted is
-    /// held; held and gone (Escape, or the browser's own reasons), the look
-    /// ends, clicking nothing. True when the page holds a lock nothing wants
-    /// (granted after its drag had ended), which is to be let go.
+    /// A page's lock as the browser has it now (once a frame, at `now`):
+    /// an asked grab granted is held; held and gone (Escape, or the
+    /// browser's own reasons), the look ends, clicking nothing. Asked and
+    /// not granted within `REFUSED` the drag goes on with the cursor; two
+    /// drags running refused (a browser that grants a lock only in the
+    /// press's own event, which the drag's move is not), and the lock is
+    /// asked for in the press from then on (`grab_change`). True when the
+    /// page holds a lock nothing wants (granted after its drag had ended),
+    /// which is to be let go.
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-    pub fn lock_seen(&mut self, locked: bool) -> bool {
+    pub fn lock_seen(&mut self, locked: bool, now: Instant) -> bool {
         match self.grab {
-            Grab::Asked if locked => self.grab = Grab::Held,
+            Grab::Asked if locked => {
+                self.grab = Grab::Held;
+                self.refused = 0;
+            }
+            Grab::Asked => {
+                let t = *self.asked_at.get_or_insert(now);
+                if !self.counted && now.duration_since(t) > REFUSED {
+                    self.counted = true;
+                    self.refused = self.refused.saturating_add(1);
+                    self.at_press |= self.refused >= 2;
+                }
+            }
             Grab::Held if !locked => self.release_all(),
             Grab::Free | Grab::Refused => return locked,
             _ => {}
@@ -639,12 +680,13 @@ impl Mouse {
             }
             // `press l|r` and `release l|r`: a button held across steps
             Some(s @ ("press" | "release")) => self.button(w.get(1) == Some(&"r"), s == "press", now),
-            // the mouse moved: a held pointer stays put, its motion the look
+            // the mouse moved, as a page hands it: the cursor (a held
+            // pointer stays put), then its own motion
             Some("move") => {
-                self.motion(num(1), num(2));
                 if !matches!(self.grab, Grab::Asked | Grab::Held) {
                     self.moved(self.cursor.0 + num(1), self.cursor.1 + num(2));
                 }
+                self.motion(num(1), num(2));
                 None
             }
             _ => None,
@@ -740,32 +782,38 @@ mod tests {
     }
 
     /// A press that drags takes the pointer (the window asked at the drag,
-    /// not at the press, so a click never hides the cursor), and held, the
-    /// mouse's own motion is the look, so no edge stops it; a page's cursor
-    /// stays put and a confined one's moves no longer count. Let go, no
-    /// click, the pointer back where the press was. The control: a still
-    /// press takes nothing and clicks.
+    /// not at the press, so a click never hides the cursor), and the mouse's
+    /// own motion is the look, so no edge stops it once it is held: a page
+    /// hands each move twice (the canvas's cursor, then the window's own
+    /// motion) and it is looked with once, a held cursor stays put and a
+    /// confined one's moves do not count. Let go, no click, the pointer back
+    /// where the press was. The control: a still press takes nothing and
+    /// clicks.
     #[test]
     fn a_drag_takes_the_pointer_and_rides_the_mouse_s_own_motion() {
         let t0 = Instant::now();
+        let page = |m: &mut Mouse, x: f64, y: f64| {
+            let d = (x - m.cursor.0, y - m.cursor.1);
+            m.moved(x, y);
+            m.motion(d.0, d.1);
+        };
         let mut m = Mouse::default();
-        m.moved(100.0, 100.0);
+        page(&mut m, 100.0, 100.0);
         m.button(true, true, t0);
         assert_eq!(m.grab_change(true), None, "a press takes nothing");
-        m.moved(103.0, 100.0);
-        m.motion(3.0, 0.0);
+        page(&mut m, 103.0, 100.0);
         assert_eq!(m.grab_change(true), None, "within the slop");
-        assert_eq!(m.look, (0.0, 0.0), "its own motion is not the look before the grab");
-        m.moved(110.0, 100.0);
-        assert_eq!(m.look, (7.0, 0.0), "the move past the slop, whole");
+        assert_eq!(m.look, (0.0, 0.0));
+        page(&mut m, 110.0, 100.0);
+        assert_eq!(m.look, (7.0, 0.0), "the move past the slop, whole and once");
         assert_eq!(m.grab_change(true), Some(true));
         assert_eq!(m.home(), (100.0, 100.0), "where the press was");
         m.set_grab(Grab::Held);
         assert_eq!(m.grab_change(true), None, "taken once");
         for _ in 0..100 {
+            m.moved(110.0, 100.0);
             m.motion(40.0, -2.0);
         }
-        m.moved(110.0, 100.0);
         m.moved(700.0, 100.0);
         assert_eq!(m.look, (4007.0, -200.0), "4,000 pixels of motion, the cursor's not counted");
         assert_eq!(m.button(true, false, t0), None, "a look is no click");
@@ -774,7 +822,7 @@ mod tests {
         m.motion(50.0, 0.0);
         assert_eq!(m.look, (4007.0, -200.0), "let go, its motion is nothing");
         // the control
-        m.moved(200.0, 200.0);
+        page(&mut m, 200.0, 200.0);
         m.button(true, true, t0);
         assert_eq!(m.grab_change(true), None);
         assert_eq!(m.button(true, false, t0), Some(Click::Right(200.0, 200.0)));
@@ -836,20 +884,88 @@ mod tests {
         assert!(!m.escape(), "Escape with nothing held is the game's");
         let mut m = grabbed();
         m.set_grab(Grab::Asked);
-        assert!(!m.lock_seen(false), "asked, not yet granted: waits");
-        assert!(!m.lock_seen(true));
+        assert!(!m.lock_seen(false, t0), "asked, not yet granted: waits");
+        assert!(!m.lock_seen(true, t0));
         assert_eq!(m.grab, Grab::Held, "granted");
-        assert!(!m.lock_seen(false), "lost (Escape in the browser)");
+        assert!(!m.lock_seen(false, t0), "lost (Escape in the browser)");
         assert_eq!(m.grab_change(true), Some(false));
         assert!(m.button(true, false, t0).is_none());
-        assert!(m.lock_seen(true), "a lock granted after its drag: let go");
-        assert!(!m.lock_seen(false));
+        assert!(m.lock_seen(true, t0), "a lock granted after its drag: let go");
+        assert!(!m.lock_seen(false, t0));
         // the control: with a window up and nothing grabbed a click is a click
         let mut m = Mouse::default();
         m.moved(50.0, 50.0);
         m.button(false, true, t0);
         assert_eq!(m.grab_change(false), None);
         assert_eq!(m.button(false, false, t0), Some(Click::Target(50.0, 50.0)));
+    }
+
+    /// A page whose browser refuses the lock asked for in a drag's move
+    /// (none granted within half a second, two drags running) asks for it
+    /// in the press from then on, inside the press's own event; a click
+    /// still clicks, its pointer given back. A lock granted between two
+    /// refusals starts the count again, and one refusal alone changes
+    /// nothing (the controls).
+    #[test]
+    fn a_page_refused_its_lock_in_the_move_asks_in_the_press() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        // a drag at `at`: asked, then `granted` or not within 600 ms, let go
+        let drag = |m: &mut Mouse, at: u64, granted: bool| {
+            m.moved(100.0, 100.0);
+            m.button(true, true, ms(at));
+            m.moved(120.0, 100.0);
+            assert_eq!(m.grab_change(true), Some(true));
+            m.set_grab(Grab::Asked);
+            for f in 0..40 {
+                m.lock_seen(granted && f > 2, ms(at + f * 16));
+            }
+            assert_eq!(m.grab, if granted { Grab::Held } else { Grab::Asked });
+            m.button(true, false, ms(at + 700));
+            assert_eq!(m.grab_change(true), Some(false));
+        };
+        let press_asks = |m: &mut Mouse| {
+            m.moved(100.0, 100.0);
+            m.button(false, true, t0);
+            let asked = m.grab_change(true) == Some(true);
+            m.release_all();
+            m.grab_change(true);
+            asked
+        };
+        let mut m = Mouse::default();
+        drag(&mut m, 0, false);
+        assert!(!press_asks(&mut m), "one refusal: still asked in the move");
+        drag(&mut m, 1000, true);
+        drag(&mut m, 2000, false);
+        assert!(!press_asks(&mut m), "a lock granted in between: counted again");
+        drag(&mut m, 3000, false);
+        assert!(press_asks(&mut m), "two refusals running: asked in the press");
+        // held from the press the cursor keeps still: its own motion finds
+        // the drag, the move past the slop counted whole
+        m.discard();
+        m.moved(150.0, 150.0);
+        m.button(true, true, ms(4000));
+        assert_eq!(m.grab_change(true), Some(true));
+        m.set_grab(Grab::Held);
+        m.moved(150.0, 150.0);
+        m.motion(3.0, 0.0);
+        assert!(!m.dragging(), "within the slop");
+        m.moved(150.0, 150.0);
+        m.motion(10.0, 0.0);
+        assert!(m.dragging());
+        assert_eq!(m.look, (10.0, 0.0));
+        m.button(true, false, ms(4500));
+        assert_eq!(m.grab_change(true), Some(false));
+        // a click still clicks, the pointer taken at the press and given back
+        m.button(false, true, ms(5000));
+        assert_eq!(m.grab_change(true), Some(true));
+        m.set_grab(Grab::Asked);
+        m.motion(2.0, 1.0);
+        assert_eq!(m.button(false, false, ms(5050)), Some(Click::Target(150.0, 150.0)));
+        assert_eq!(m.grab_change(true), Some(false));
+        // and with a window up nothing is taken
+        m.button(false, true, ms(6000));
+        assert_eq!(m.grab_change(false), None);
     }
 
     /// Open ground: nothing to hit, no liquid.

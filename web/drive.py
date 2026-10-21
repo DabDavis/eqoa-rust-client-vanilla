@@ -27,8 +27,10 @@ a phone's, 2 to 3).
 pointer is coarse); --touch SECONDS=STEPS touches the canvas then, steps
 ';'-separated: 'tap X Y', 'hold X Y MS', 'drag X0 Y0 X1 Y1 MS' (CSS pixels);
 --mouse SECONDS=STEPS moves the mouse over the canvas, steps ';'-separated:
-'click X Y', 'rclick X Y', 'wheel X Y LINES' (up positive), 'move X Y',
-'drag X0 Y0 X1 Y1 [MS]' (the left button held);
+'click X Y', 'rclick X Y', 'wheel X Y LINES' (up positive), 'move X Y [MS]'
+(there over MS, with what is held), 'drag X0 Y0 X1 Y1 [MS]' (the left button
+held), 'rdrag X0 Y0 X1 Y1 [MS]' (the right), 'press X Y [left|right]' and
+'release X Y [left|right]' (a button held across steps and events);
 --gamepad SECONDS=STEPS plays a gamepad the page sees through
 navigator.getGamepads (the standard layout's indices: 0 A, 1 B, 2 X, 3 Y,
 4 LB, 5 RB, 6 LT, 7 RT, 8 Back, 9 Start, 10 L3, 11 R3, 12-15 the d-pad):
@@ -222,14 +224,38 @@ async def drive(a, base, ws_url):
                     await touch("touchEnd", [])
                 out(f"touch {step}")
 
+        # the buttons a 'press' holds (1 left, 2 right) and where the mouse is
+        mouse = {"mask": 0, "at": (0.0, 0.0)}
+
+        async def moved(x, y):
+            m = mouse["mask"]
+            b = "left" if m & 1 else "right" if m & 2 else "none"
+            await call("Input.dispatchMouseEvent", type="mouseMoved", x=x, y=y, button=b, buttons=m)
+            mouse["at"] = (x, y)
+
         async def mice(spec):
             for step in spec.split(";"):
                 w = step.split()
                 if not w:
                     continue
                 x, y = float(w[1]), float(w[2])
-                await call("Input.dispatchMouseEvent", type="mouseMoved", x=x, y=y)
-                if w[0] in ("click", "rclick"):
+                if w[0] == "move":
+                    # there over MS (one step by default), with what is held
+                    ms = int(w[3]) if len(w) > 3 else 16
+                    n = max(1, ms // 16)
+                    x0, y0 = mouse["at"]
+                    for i in range(1, n + 1):
+                        await asyncio.sleep(ms / 1000 / n)
+                        await moved(x0 + (x - x0) * i / n, y0 + (y - y0) * i / n)
+                    out(f"mouse {step}")
+                    continue
+                await moved(x, y)
+                if w[0] in ("press", "release"):
+                    b = w[3] if len(w) > 3 else "left"
+                    bit = 1 if b == "left" else 2
+                    mouse["mask"] = mouse["mask"] | bit if w[0] == "press" else mouse["mask"] & ~bit
+                    await call("Input.dispatchMouseEvent", type="mousePressed" if w[0] == "press" else "mouseReleased", x=x, y=y, button=b, buttons=mouse["mask"], clickCount=1)
+                elif w[0] in ("click", "rclick"):
                     b = "left" if w[0] == "click" else "right"
                     for kind in ("mousePressed", "mouseReleased"):
                         await call("Input.dispatchMouseEvent", type=kind, x=x, y=y, button=b, clickCount=1)
@@ -237,16 +263,18 @@ async def drive(a, base, ws_url):
                 elif w[0] == "wheel":
                     # a line is a hundred pixels to Chromium; down is positive there
                     await call("Input.dispatchMouseEvent", type="mouseWheel", x=x, y=y, deltaX=0, deltaY=-100 * float(w[3]))
-                elif w[0] == "drag":
-                    # the left button held from (x, y) to (x1, y1) over MS (default 300)
+                elif w[0] in ("drag", "rdrag"):
+                    # the left (right) button held from (x, y) to (x1, y1) over MS (default 300)
                     x1, y1 = float(w[3]), float(w[4])
                     ms = int(w[5]) if len(w) > 5 else 300
-                    await call("Input.dispatchMouseEvent", type="mousePressed", x=x, y=y, button="left", buttons=1, clickCount=1)
+                    b, bit = ("left", 1) if w[0] == "drag" else ("right", 2)
+                    await call("Input.dispatchMouseEvent", type="mousePressed", x=x, y=y, button=b, buttons=bit, clickCount=1)
                     n = max(2, ms // 16)
                     for i in range(1, n + 1):
                         await asyncio.sleep(ms / 1000 / n)
-                        await call("Input.dispatchMouseEvent", type="mouseMoved", x=x + (x1 - x) * i / n, y=y + (y1 - y) * i / n, button="left", buttons=1)
-                    await call("Input.dispatchMouseEvent", type="mouseReleased", x=x1, y=y1, button="left", buttons=0, clickCount=1)
+                        await call("Input.dispatchMouseEvent", type="mouseMoved", x=x + (x1 - x) * i / n, y=y + (y1 - y) * i / n, button=b, buttons=bit)
+                    await call("Input.dispatchMouseEvent", type="mouseReleased", x=x1, y=y1, button=b, buttons=0, clickCount=1)
+                    mouse["at"] = (x1, y1)
                 out(f"mouse {step}")
 
         async def gamepad(spec):
