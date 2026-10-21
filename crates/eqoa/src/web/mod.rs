@@ -108,6 +108,13 @@ pub fn touch_first() -> bool {
         .is_some_and(|v| v.is_truthy())
 }
 
+/// Whether the page holds the pointer (`document.pointerLockElement`): the
+/// mouse look's lock (`mouse::Grab`), which the browser ends itself on
+/// Escape.
+pub fn pointer_locked() -> bool {
+    web_sys::window().and_then(|w| w.document()).and_then(|d| d.pointer_lock_element()).is_some()
+}
+
 /// Whether a connected gamepad can rumble (`window.eqoaCanRumble`).
 pub fn can_rumble() -> bool {
     let Some(w) = web_sys::window() else { return false };

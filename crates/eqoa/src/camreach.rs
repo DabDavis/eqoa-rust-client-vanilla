@@ -12,10 +12,12 @@
 //! a camera a wall had pulled to 3.5 stayed there once the wall was behind
 //! it (F3 20261021-002052: "distance 3.50 of 11.00").
 //!
-//! Here the distance the player chose is kept (`Reach::chosen`): set by
-//! whatever sets the distance between two frames (the wheel, a style, a
-//! touch screen's pinch) and by the stick's zoom (the spring moving while no
-//! pull is under way); back from the start menu's framing
+//! Here the distance the player chose is kept (`Reach::chosen`): set by the
+//! wheel (`mouse::zoom`: out from the choice, so a notch out while a wall
+//! holds the camera in waits for the room), by the stick's zoom (the spring
+//! moving while no pull is under way) and by whatever sets the distance
+//! between two frames (a style, a touch screen's pinch); back from the start
+//! menu's framing
 //! (mode 1, `ApplyCameraPreset`) the choice it had stands. Once the game's own
 //! sweep reaches the chosen distance clear, with the camera at rest (no snap,
 //! no pull, no zoom under way), it eases back out there (`ease`): its speed

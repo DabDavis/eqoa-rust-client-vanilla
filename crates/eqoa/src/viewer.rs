@@ -435,10 +435,16 @@ pub fn shot_with(
                     p.click(id, !matches!(c, crate::mouse::Click::Target(..)));
                 }
             }
+            // the pointer as a window holds it for a drag (`mouse::Grab`)
+            let look_free = !play.as_ref().is_some_and(|p| p.is_dead()) && play.as_ref().is_none_or(|p| p.look_free());
+            if let Some(on) = mouse.grab_change(look_free) {
+                mouse.set_grab(if on { crate::mouse::Grab::Held } else { crate::mouse::Grab::Free });
+                eprintln!("mouse: pointer {}", if on { "held" } else { "let go" });
+            }
             // the pointers' looks, taken every frame, applied only in play
             // with the camera free
             let (tx, ty, pinch) = touch.take_look();
-            if !play.as_ref().is_some_and(|p| p.is_dead()) && play.as_ref().is_none_or(|p| p.look_free()) {
+            if look_free {
                 let inverted = play.as_ref().is_some_and(|p| p.options.inverted != 0);
                 let frame_s = frame_ms as f32 / 1000.0;
                 let (look, zoom) = mouse.look(&mut walker, inverted, frame_s);
@@ -465,7 +471,8 @@ pub fn shot_with(
                     p.window_wheel(lines);
                 }
             }
-            let client = play.as_ref().filter(|p| !p.is_dead()).map(|p| p.control_client()).unwrap_or_default();
+            let mut client = play.as_ref().filter(|p| !p.is_dead()).map(|p| p.control_client()).unwrap_or_default();
+            client.steer = look_free && mouse.steer(walker.cam.camera_mode);
             if walker.frame_with(sticks, t, &client, game_frame)
                 && let Some(p) = play.as_mut()
             {
@@ -1419,6 +1426,37 @@ impl App {
         a
     }
 
+    /// The mouse look's hold on the pointer (`mouse::Grab`): taken while a
+    /// held button drags in play with the camera free, given back when the
+    /// drag ends or the look is taken (a window, the start menu, a death);
+    /// once a frame (`frame`) a page's lock is looked at, which the browser
+    /// ends itself on Escape.
+    fn grab_pointer(&mut self, frame: bool) {
+        let dead = self.play.as_ref().is_some_and(|p| p.is_dead());
+        let free = self.walker.is_some() && !dead && self.play.as_ref().is_none_or(|p| p.look_free());
+        let Some(g) = &self.gfx else { return };
+        #[cfg(target_arch = "wasm32")]
+        if frame && self.mouse.lock_seen(crate::web::pointer_locked()) {
+            crate::mouse::give_pointer(&g.window, self.mouse.home());
+        }
+        let _ = frame;
+        match self.mouse.grab_change(free) {
+            Some(true) => {
+                use crate::mouse::Grab;
+                let grab = if !crate::mouse::take_pointer(&g.window) {
+                    Grab::Refused
+                } else if cfg!(target_arch = "wasm32") {
+                    Grab::Asked
+                } else {
+                    Grab::Held
+                };
+                self.mouse.set_grab(grab);
+            }
+            Some(false) => crate::mouse::give_pointer(&g.window, self.mouse.home()),
+            None => {}
+        }
+    }
+
     /// A click in play (a finger's tap with `finger`): a window takes it
     /// first (`Play::point`); else the creature under it targeted (through
     /// the last frame's view), and with a double or right click talked to.
@@ -1590,6 +1628,13 @@ impl ApplicationHandler for App {
         self.attach(window, Some(surface), config, device, queue);
     }
 
+    /// The mouse's own motion: the look while it holds the pointer.
+    fn device_event(&mut self, _: &ActiveEventLoop, _: winit::event::DeviceId, event: winit::event::DeviceEvent) {
+        if let winit::event::DeviceEvent::MouseMotion { delta } = event {
+            self.mouse.motion(delta.0, delta.1);
+        }
+    }
+
     fn about_to_wait(&mut self, _: &ActiveEventLoop) {
         if (!self.held.is_empty() || self.walker.is_some())
             && let Some(g) = &self.gfx
@@ -1638,6 +1683,12 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
+                // Escape while the mouse look holds the pointer: it is let go
+                // (as a browser ends its lock on Escape), and nothing more
+                if event.state == ElementState::Pressed && event.logical_key == Key::Named(NamedKey::Escape) && self.mouse.escape() {
+                    self.grab_pointer(false);
+                    return;
+                }
                 // a keyboard in use (`gKeyboardAttached`): the edit boxes'
                 // compact face, with the options' Soft Keyboard on; the
                 // touch screen's pad goes
@@ -2275,8 +2326,12 @@ impl ApplicationHandler for App {
             WindowEvent::Focused(false) => {
                 self.mouse.release_all();
                 self.held.clear();
+                self.grab_pointer(false);
             }
-            WindowEvent::CursorLeft { .. } => self.mouse.release_all(),
+            WindowEvent::CursorLeft { .. } => {
+                self.mouse.release_all();
+                self.grab_pointer(false);
+            }
             WindowEvent::MouseInput { state, button, .. } if matches!(button, MouseButton::Left | MouseButton::Right) => {
                 let down = state == ElementState::Pressed;
                 if self.walker.is_some() {
@@ -2294,6 +2349,7 @@ impl ApplicationHandler for App {
                     {
                         self.click(c, false);
                     }
+                    self.grab_pointer(false);
                 } else if button == MouseButton::Left {
                     self.drag = down.then_some(self.cursor);
                 }
@@ -2301,6 +2357,10 @@ impl ApplicationHandler for App {
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = (position.x, position.y);
                 self.mouse.moved(position.x, position.y);
+                // a drag begun: the pointer taken, within the press's gesture
+                if self.walker.is_some() {
+                    self.grab_pointer(false);
+                }
                 if self.walker.is_none()
                     && let Some((x, y)) = self.drag
                 {
@@ -2396,8 +2456,12 @@ impl ApplicationHandler for App {
                 self.touch.window = self.play.as_ref().is_some_and(|p| p.mode != 0);
                 self.touch.dpad = self.play.as_mut().is_some_and(|p| p.quick_dpad());
                 mark(&mut self.perf, 0);
+                self.grab_pointer(true);
                 let sticks = self.sticks();
                 self.sticks_used = sticks;
+                // the mouse steering the body (`controls::Client::steer`)
+                let look_free = !self.play.as_ref().is_some_and(|p| p.is_dead()) && self.play.as_ref().is_none_or(|p| p.look_free());
+                let steer = look_free && self.walker.as_ref().is_some_and(|w| self.mouse.steer(w.cam.camera_mode));
                 let game_keys = self.game_keys();
                 let now = self.clock.elapsed().as_millis() as i64;
                 let Some(g) = &mut self.gfx else { return };
@@ -2421,6 +2485,7 @@ impl ApplicationHandler for App {
                     // as the client stands
                     let mut client = play.as_ref().filter(|p| !p.is_dead()).map(|p| p.control_client()).unwrap_or_default();
                     client.keys = game_keys;
+                    client.steer = steer;
                     if w.frame_with(sticks, now, &client, game_frame)
                         && let Some(p) = play.as_mut()
                     {

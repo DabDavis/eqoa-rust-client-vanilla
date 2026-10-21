@@ -2370,6 +2370,8 @@ impl Play {
             timed_out: false,
             // the keyboard's held axes: the viewer's (`game_keys`)
             keys: [0.0; 8],
+            // the mouse steering the body: the viewer's (`Mouse::steer`)
+            steer: false,
         }
     }
 

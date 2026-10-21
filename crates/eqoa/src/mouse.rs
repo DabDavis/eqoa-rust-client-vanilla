@@ -1,30 +1,56 @@
 //! The mouse in play. The PS2 game reads none, so this is the client's own,
-//! laid over the game's inputs rather than replacing any:
+//! laid over the game's inputs rather than replacing any. It works as World
+//! of Warcraft's does (the user's choice, F3 reports of 2026-10-21):
 //!
-//! - a drag (either button) looks round: across, in the orbiting camera
-//!   modes (1 and 3), the orbit angle itself, a pixel at a time and the view
-//!   turning the way the mouse goes (`SetOrbitAngle`); in first person and
-//!   the follow camera (0 and 2) the right stick's x, which turns the body.
-//!   Up and down tilts the orbiting camera (`tilt`: the view looks up as the
-//!   mouse goes up, the camera going lower, between level-ish and nearly
-//!   overhead; in mode 3 the default pitch its own snaps go back to), where
-//!   the right stick's y would zoom it; in first person and the follow
-//!   camera it is the stick's y, the pitch. The options' Camera Pitch Axis
-//!   turns them round as it does the stick.
-//! - the wheel zooms the orbiting cameras (`SetOrbitDistance`); past the
-//!   closest it goes into first person (`Zoom::In`, as P's style 0), and out
-//!   of first person back to the camera it came from (`Zoom::Out`,
-//!   `Play::wheel_style`). The follow camera, which does not zoom, goes into
-//!   first person on the wheel's first notch in.
-//! - both buttons held run forward (the left stick all the way up), the
-//!   way the view faces in the orbiting camera, as many PC games do; a drag
-//!   meanwhile steers. Letting go after it is no click.
-//! - a click (a press let go within a few pixels) targets the creature under
-//!   it; a double click or a right click also talks to it, or opens its
-//!   corpse (`InteractWithTarget`, or `ToggleAutoAttack`'s loot request).
+//! - a held button that drags takes the pointer (`Grab`, `take_pointer`):
+//!   the cursor hidden and held (a page's Pointer Lock; natively winit's
+//!   `Locked`, or `Confined` where the platform has no lock), and the look
+//!   rides the mouse's own motion (`motion`, winit's
+//!   `DeviceEvent::MouseMotion`), so no screen edge stops it. Let go, the
+//!   cursor is back where the press was. A window or the start menu opening,
+//!   the window losing the focus, Escape (which a browser keeps to end its
+//!   lock) and a death let go of it too, clicking nothing.
+//! - the left button looks round the orbiting cameras (1 and 3) without
+//!   turning the body: across, the orbit angle (`SetOrbitAngle`, the view
+//!   turning the way the mouse goes); up and down the tilt (`tilt`: the view
+//!   looks up as the mouse goes up, the camera lower, from 45 degrees under
+//!   the head, where the ground pulls it in as anything the game's camera
+//!   meets does, to 75 overhead; in mode 3 it is the default pitch the
+//!   camera's own snaps go back to).
+//! - the right button steers (`look_held`, `Mouse::steer`): in the follow
+//!   orbit (3) the body and the camera behind it turn together, the tilt as
+//!   the left button's, and the walk is on the body's own axes
+//!   (`controls::Client::steer`): W and S forward and back, A and D a
+//!   sidestep, the body facing the way the camera looks (turned there at
+//!   once as the hold begins) and the camera put back behind it every frame
+//!   (the game re-derives the orbit from where the camera was, so a sidestep
+//!   would drag it round); where the game would swing the camera round to a
+//!   clear angle it comes in to its closest instead.
+//! - both buttons run forward (the left stick all the way up), steered as
+//!   the right button steers; A and D add a sidestep, a diagonal.
+//! - in first person and the follow camera (0 and 2) either button turns the
+//!   body at once (`set_heading`: full circles) and pitches it (`pitch_body`)
+//!   within the walk's range: in first person 89.4 degrees up or down, where
+//!   the game's own stops short of straight up and down. At a liquid's
+//!   surface the game's pitch is a dive (`PitchDown`), so there the motion
+//!   is the right stick's, as before. The Camera Pitch Axis option turns the
+//!   pitch round, and in the orbits the orbit too, as it turns the stick's.
+//! - the wheel zooms the follow orbit (`zoom`): in from where the camera is
+//!   (a wall's pull included), out from the distance chosen, which
+//!   `camreach` keeps and eases the camera back out to after something
+//!   pulled it in; past the closest it goes into first person (`Zoom::In`,
+//!   as P's style 0), and out of first person back to the camera it came
+//!   from (`Zoom::Out`, `Play::wheel_style`). The follow camera, which does
+//!   not zoom, goes into first person on the wheel's first notch in.
+//! - a click (a press let go unmoved, within a few pixels) targets the
+//!   creature under it; a double click or a right click also talks to it,
+//!   or opens its corpse (`InteractWithTarget`, or `ToggleAutoAttack`'s loot
+//!   request).
 //!
-//! A window up takes the clicks first (`Play::point`, `pointer`): a right
-//! click is △ there, and the wheel the d-pad's up and down.
+//! With no button held the keys are what they were (WASD, the arrows, I J K
+//! L). A window up takes the clicks first (`Play::point`, `pointer`): a right
+//! click is △ there, and the wheel the d-pad's up and down. A finger on the
+//! touch screen looks as a drag did before (`look`, `look_cam`).
 
 use crate::walker::Walker;
 use vi::camera::WalkCamera;
@@ -35,21 +61,28 @@ use web_time::{Duration, Instant};
 const SLOP: f64 = 5.0;
 /// Two clicks this close in time and place are a double click.
 const DOUBLE: Duration = Duration::from_millis(400);
-/// The orbit's turn for a pixel of drag (radians): half a turn over 390.
-const ORBIT_PER_PIXEL: f32 = 0.008;
+/// The look's turn for a pixel of motion (radians): half a turn over 390.
+/// The orbit, the steered body and first person turn alike.
+const LOOK_PER_PIXEL: f32 = 0.008;
 /// A pixel of drag as the stick's push for a sixtieth of a second (a frame
 /// at 60 Hz, where it was set). The push acts for the frame it is given in
 /// (`UpdateControls`' thrusts are integrated over the frame), so it is
 /// scaled by the frame's length: a drag turns or zooms the same at any rate.
 const STICK_PER_PIXEL: f32 = 0.05;
-/// The tilt for a pixel of drag (radians), as the orbit's turn.
+/// The tilt for a pixel of motion (radians), as the orbit's turn.
 const TILT_PER_PIXEL: f32 = 0.008;
-/// The orbit's pitch a drag keeps to: 10 degrees below level (the camera
-/// under the head, looking up at it) to 75 overhead. The game's own pitches
-/// lie between: style 3's default 15, style 1's 25, the alternate near a
-/// wall 60.
-pub const MIN_TILT: f32 = -0.17453292;
+/// The orbit's pitch the look keeps to: 45 degrees below level (the camera
+/// under the head, looking up past it at the sky; the ground pulls it in,
+/// as the game's sweep pulls it in from anything it meets: `MoveCamera`'s
+/// flag 4, then its closest) to 75 overhead. The game's own pitches lie
+/// between: style 3's default 15, style 1's 25, the alternate near a wall
+/// 60. Lower, the camera at its closest (1.5 from a head 1.68 up) would
+/// meet flat ground with its 0.5 sphere: past 52 degrees.
+pub const MIN_TILT: f32 = -std::f32::consts::FRAC_PI_4;
 pub const MAX_TILT: f32 = 1.3089969;
+/// The walk camera's pi and two pi (`viwalkcamera.cpp`'s literals).
+const PI: f32 = std::f32::consts::PI;
+const TWO_PI: f32 = std::f32::consts::TAU;
 
 /// What the wheel asks of the camera's style, beyond the orbit's zoom.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -101,6 +134,36 @@ pub fn tilt(cam: &mut WalkCamera<Ee>, d: F<Ee>) {
     }
 }
 
+/// The body's heading set at once, the client's own (the game turns it
+/// only by torque, at most a quarter turn a second in first person): the
+/// working and committed states (wrapped as `UpdatePhysics` wraps it), the
+/// heading mode 3 tracks, no turn left coasting, and the walk's axes
+/// (`UpdateDirections`), which this frame's thrust is along.
+pub fn set_heading(cam: &mut WalkCamera<Ee>, h: F<Ee>) {
+    let h = h.fmodf(F::new(TWO_PI));
+    let w = &mut cam.walk;
+    for p in [&mut w.phys, &mut w.committed] {
+        p.angles.x = h;
+        p.target_heading = h;
+        p.angular_vel.x = F::ZERO;
+    }
+    w.update_directions();
+}
+
+/// The body's pitch moved by `d` at once (down positive), within the walk's
+/// range for the camera (`SetPitchRange`: first person's stops at
+/// `PITCH_LIMIT`, 89.4 degrees, never straight up or down), the client's
+/// own as `set_heading` is.
+pub fn pitch_body(cam: &mut WalkCamera<Ee>, d: F<Ee>) {
+    let w = &mut cam.walk;
+    let p = vi::fpu::clamp(w.phys.angles.y + d, w.min_pitch, w.max_pitch);
+    for s in [&mut w.phys, &mut w.committed] {
+        s.angles.y = p;
+        s.angular_vel.y = F::ZERO;
+    }
+    w.update_directions();
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Click {
     /// a click or a tap: target what is under (x, y)
@@ -119,11 +182,27 @@ impl Click {
     }
 }
 
+/// A gesture: from a button's press until no button is held.
 #[derive(Clone, Copy, Debug)]
 struct Press {
     right: bool,
     at: (f64, f64),
     dragged: bool,
+}
+
+/// The pointer as the look holds it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Grab {
+    /// the window's: the cursor shown, its moves a drag's look
+    #[default]
+    Free,
+    /// asked of the window (a page's lock comes a moment later, if it
+    /// comes): the cursor hidden, the mouse's own motion the look
+    Asked,
+    /// held: the cursor hidden and kept (where it is, or in the window)
+    Held,
+    /// the window would not: the drag goes on with the cursor, as before
+    Refused,
 }
 
 #[derive(Debug, Default)]
@@ -133,7 +212,7 @@ pub struct Mouse {
     /// the left and the right button held
     held: [bool; 2],
     last_click: Option<((f64, f64), Instant)>,
-    /// the drag since the last frame, window pixels
+    /// the look since the last frame (pixels of motion)
     look: (f64, f64),
     /// the wheel since the last frame, in lines (up positive), and in a
     /// window's steps (a notch one)
@@ -141,10 +220,21 @@ pub struct Mouse {
     steps: f32,
     /// the camera the wheel went into first person from (`Zoom`)
     pub back: Option<crate::camstyle::ZoomBack>,
+    grab: Grab,
+    /// where the cursor goes back to when the grab ends: the press's place
+    home: (f64, f64),
+    /// the mouse's own motion has come during this grab: until it does (a
+    /// platform without it), the cursor's moves are still the look
+    raw: bool,
+    /// the last frame steered the follow orbit (a new hold turns the body
+    /// to the view first)
+    steered: bool,
 }
 
 impl Mouse {
-    /// The cursor moved: a held button past the slop drags.
+    /// The cursor moved: a held button past the slop drags. Once the grab
+    /// has the mouse's own motion the cursor's moves are not the look (held,
+    /// it stays put or keeps in the window).
     pub fn moved(&mut self, x: f64, y: f64) {
         let (dx, dy) = (x - self.cursor.0, y - self.cursor.1);
         self.cursor = (x, y);
@@ -152,10 +242,21 @@ impl Mouse {
             if !p.dragged && ((x - p.at.0).powi(2) + (y - p.at.1).powi(2)).sqrt() > SLOP {
                 p.dragged = true;
             }
-            if p.dragged {
+            if p.dragged && !self.raw {
                 self.look.0 += dx;
                 self.look.1 += dy;
             }
+        }
+    }
+
+    /// The mouse's own motion (winit's `DeviceEvent::MouseMotion`: a page's
+    /// `movementX`, natively the device's counts): the look while the
+    /// pointer is grabbed, whatever the screen's edges.
+    pub fn motion(&mut self, dx: f64, dy: f64) {
+        if matches!(self.grab, Grab::Asked | Grab::Held) && self.press.is_some_and(|p| p.dragged) {
+            self.raw = true;
+            self.look.0 += dx;
+            self.look.1 += dy;
         }
     }
 
@@ -165,19 +266,22 @@ impl Mouse {
         self.press.is_some_and(|p| p.dragged)
     }
 
-    /// A button pressed or let go; a click when it is let go undragged.
+    /// A button pressed or let go; a click when the gesture ends (no button
+    /// held) undragged. The other button pressed meanwhile makes it no click
+    /// (both: a run), and letting go of one of two goes on with the other.
     pub fn button(&mut self, right: bool, down: bool, now: Instant) -> Option<Click> {
         self.held[right as usize] = down;
         if down {
             match self.press.as_mut() {
                 None => self.press = Some(Press { right, at: self.cursor, dragged: false }),
-                // the other one too: a run (`running`), no click after it
                 Some(p) => p.dragged = true,
             }
             return None;
         }
-        let p = self.press.filter(|p| p.right == right)?;
-        self.press = None;
+        if self.held[0] || self.held[1] {
+            return None;
+        }
+        let p = self.press.take().filter(|p| p.right == right)?;
         if p.dragged {
             return None;
         }
@@ -194,14 +298,19 @@ impl Mouse {
         Some(Click::Target(x, y))
     }
 
-    /// What is held, for a report: the buttons, and a press that drags.
+    /// What is held, for a report: the buttons, a press that drags, the
+    /// pointer's grab.
     #[cfg(target_arch = "wasm32")]
     pub fn describe(&self) -> String {
         let held: Vec<&str> = [(self.held[0], "left"), (self.held[1], "right")].iter().filter(|h| h.0).map(|h| h.1).collect();
+        let grab = match self.grab {
+            Grab::Free => String::new(),
+            g => format!(", pointer {g:?}"),
+        };
         match self.press {
-            Some(p) => format!("held [{}], {}", held.join(", "), if p.dragged { "dragging" } else { "pressed" }),
-            None if held.is_empty() => "none held".to_string(),
-            None => format!("held [{}]", held.join(", ")),
+            Some(p) => format!("held [{}], {}{grab}", held.join(", "), if p.dragged { "dragging" } else { "pressed" }),
+            None if held.is_empty() => format!("none held{grab}"),
+            None => format!("held [{}]{grab}", held.join(", ")),
         }
     }
 
@@ -210,11 +319,88 @@ impl Mouse {
         self.held[0] && self.held[1]
     }
 
-    /// The window lost the pointer or the focus: what was held is let go
-    /// (its release may never come), clicking nothing.
+    /// Whether the mouse steers the body in camera `mode` this frame
+    /// (`controls::Client::steer`): the right button in the follow orbit,
+    /// either in first person and the follow camera, which it turns itself.
+    pub fn steer(&self, mode: i32) -> bool {
+        match mode {
+            3 => self.held[1],
+            0 | 2 => self.held[0] || self.held[1],
+            _ => false,
+        }
+    }
+
+    /// The window lost the pointer or the focus, or the look was taken
+    /// (`grab_change`): what was held is let go (its release may never
+    /// come), clicking nothing.
     pub fn release_all(&mut self) {
         self.held = [false; 2];
         self.press = None;
+    }
+
+    /// The window's answer (`take_pointer`), or a page's lock seen granted.
+    pub fn set_grab(&mut self, g: Grab) {
+        if matches!(g, Grab::Asked | Grab::Held) && !matches!(self.grab, Grab::Asked | Grab::Held) {
+            self.raw = false;
+        }
+        self.grab = g;
+    }
+
+    /// Where the cursor goes back to when the grab ends.
+    pub fn home(&self) -> (f64, f64) {
+        self.home
+    }
+
+    /// What the window is to do with the pointer, `free` meaning the look
+    /// may go on (in play, no window up, alive): `Some(true)` take it (a
+    /// drag began), `Some(false)` give it back (the drag ended; or a window,
+    /// the start menu or a death took the look, which ends that gesture
+    /// clicking nothing).
+    pub fn grab_change(&mut self, free: bool) -> Option<bool> {
+        if !free && self.grab != Grab::Free {
+            self.release_all();
+        }
+        let want = free && self.press.is_some_and(|p| p.dragged);
+        match (want, self.grab) {
+            (true, Grab::Free) => {
+                self.home = self.press.map_or(self.cursor, |p| p.at);
+                Some(true)
+            }
+            (false, Grab::Asked | Grab::Held) => {
+                self.grab = Grab::Free;
+                Some(false)
+            }
+            (false, Grab::Refused) => {
+                self.grab = Grab::Free;
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// A page's lock as the browser has it now: an asked grab granted is
+    /// held; held and gone (Escape, or the browser's own reasons), the look
+    /// ends, clicking nothing. True when the page holds a lock nothing wants
+    /// (granted after its drag had ended), which is to be let go.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub fn lock_seen(&mut self, locked: bool) -> bool {
+        match self.grab {
+            Grab::Asked if locked => self.grab = Grab::Held,
+            Grab::Held if !locked => self.release_all(),
+            Grab::Free | Grab::Refused => return locked,
+            _ => {}
+        }
+        false
+    }
+
+    /// Escape while the look holds the pointer: let go of it (as a browser
+    /// ends its lock on Escape), the key taken. False otherwise.
+    pub fn escape(&mut self) -> bool {
+        let held = matches!(self.grab, Grab::Asked | Grab::Held);
+        if held {
+            self.release_all();
+        }
+        held
     }
 
     /// The wheel turned: `lines` for the camera's zoom, `steps` for a window
@@ -234,24 +420,120 @@ impl Mouse {
         self.look = (0.0, 0.0);
         self.wheel = 0.0;
         self.steps = 0.0;
+        self.steered = false;
     }
 
-    /// This frame's drag and wheel on the walker's camera (`look`), for a
-    /// frame `frame_s` seconds long, and what the wheel asks of its style
-    /// (`zoom_step`, which the caller carries out: `Play::wheel_style`); a
-    /// wheel that does is no zoom.
+    /// This frame's look and wheel on the walker (`look_held`, `zoom`), for a
+    /// frame `frame_s` seconds long: the right stick's push it leaves to
+    /// `UpdateControls` (first person's pitch at a liquid's surface), and
+    /// what the wheel asks of the camera's style (`zoom_step`, which the
+    /// caller carries out: `Play::wheel_style`); a wheel that does is no
+    /// zoom.
     pub fn look(&mut self, w: &mut Walker, inverted: bool, frame_s: f32) -> ([f32; 2], Zoom) {
         let (dx, dy) = std::mem::take(&mut self.look);
         let wheel = std::mem::take(&mut self.wheel);
         self.steps = 0.0;
         let zoom = zoom_step(&w.cam, wheel);
-        let wheel = if zoom == Zoom::None { wheel } else { 0.0 };
-        (look(w, dx as f32, dy as f32, wheel, inverted, frame_s), zoom)
+        let stick = look_held(&mut w.cam, self.held, dx as f32, dy as f32, inverted, frame_s, self.steered);
+        self.steered = self.held[1] && w.cam.camera_mode == 3;
+        if zoom == Zoom::None && wheel != 0.0 {
+            self::zoom(&mut w.cam, &mut w.reach, wheel);
+        }
+        (stick, zoom)
     }
 }
 
-/// A drag of (dx, dy) window pixels and `wheel` lines on the walker's
-/// camera in a frame `frame_s` seconds long (`look_cam`).
+/// The mouse's look this frame, (dx, dy) pixels of its motion with `held`
+/// (left, right) down, on `cam` (the module's doc): the follow orbit
+/// steered by the right button (`steering`: the last frame steered too, so
+/// the body need not be turned to the view first), the orbits looked round
+/// by the left, first person and the follow camera turned and pitched by
+/// either. The right stick's push it leaves to `UpdateControls`.
+pub fn look_held(cam: &mut WalkCamera<Ee>, held: [bool; 2], dx: f32, dy: f32, inverted: bool, frame_s: f32, steering: bool) -> [f32; 2] {
+    let mut stick = [0.0f32; 2];
+    let along = |d: f32| F::<Ee>::new(d * LOOK_PER_PIXEL * if inverted { 1.0 } else { -1.0 });
+    let up = |d: f32| F::<Ee>::new(d * TILT_PER_PIXEL * if inverted { -1.0 } else { 1.0 });
+    match cam.camera_mode {
+        3 if held[1] => {
+            // the body turned to the view as the hold begins, then by the
+            // mouse; the camera put back behind it
+            let from = if steering { cam.walk.phys.angles.x } else { cam.cur.orbit.x + F::new(PI) };
+            set_heading(cam, from + along(dx));
+            let behind = cam.walk.phys.angles.x + F::new(PI);
+            cam.set_orbit_angle(behind);
+            // an angle snap would swing the camera off the body: it ends
+            // where it is, and the camera comes in to its closest instead
+            // (as when `FindOrbitAngle` finds no clear angle)
+            if cam.cur.flags & 1 != 0 {
+                cam.cur.snap_angle = cam.cur.orbit.x;
+                cam.cur.flags |= 2;
+                cam.last.snap_angle = cam.cur.snap_angle;
+                cam.last.flags = cam.cur.flags;
+            }
+            if dy != 0.0 {
+                tilt(cam, up(dy));
+            }
+        }
+        1 | 3 => {
+            if dx != 0.0 {
+                // the view turns the way the mouse goes: the orbit the other way
+                let a = cam.cur.orbit.x;
+                cam.set_orbit_angle(a + along(dx));
+            }
+            if dy != 0.0 {
+                // the view looks the way the mouse goes: up, the camera lower
+                tilt(cam, up(dy));
+            }
+        }
+        0 | 2 if held[0] || held[1] => {
+            if dx != 0.0 {
+                let h = cam.walk.phys.angles.x;
+                set_heading(cam, h + F::new(-dx * LOOK_PER_PIXEL));
+            }
+            if dy != 0.0 {
+                if cam.walk.is_at_liquid_surface() {
+                    // a dive: the stick's (`UpdateControls` turns it round)
+                    stick[1] = (dy * stick_per_pixel(frame_s)).clamp(-1.0, 1.0);
+                } else {
+                    pitch_body(cam, F::new(dy * LOOK_PER_PIXEL * if inverted { -1.0 } else { 1.0 }));
+                }
+            }
+        }
+        _ => {}
+    }
+    stick
+}
+
+/// The wheel's `lines` notches (in positive) on the orbit's distance: in
+/// the follow orbit in from where the camera is (a wall's pull included)
+/// and out from the distance chosen (`camreach::Reach`), the choice kept and
+/// the camera there at once, unless that is out past a pull, which the
+/// camera eases back from when there is room (`Reach`); the other orbit at
+/// once.
+pub fn zoom(cam: &mut WalkCamera<Ee>, reach: &mut crate::camreach::Reach, lines: f32) {
+    let k = 0.9f32.powf(lines);
+    match cam.camera_mode {
+        3 => {
+            let chosen = reach.chosen(cam);
+            let from = if lines > 0.0 { vi::fpu::vimin(chosen, cam.cur.dist) } else { chosen };
+            let to = vi::fpu::clamp(F::new(from.0 * k), cam.min_orbit_distance, cam.max_orbit_distance);
+            reach.chosen = Some(to);
+            if to < cam.cur.dist || chosen <= cam.cur.dist {
+                cam.set_orbit_distance(to);
+            }
+        }
+        1 => {
+            let d = cam.cur.dist.0 * k;
+            cam.set_orbit_distance(F::new(d));
+        }
+        _ => {}
+    }
+}
+
+/// A finger's drag of (dx, dy) window pixels and `wheel` lines (its pinch)
+/// on the walker's camera in a frame `frame_s` seconds long (`look_cam`):
+/// the touch screen's look, as the mouse's drag was before it took the
+/// pointer.
 pub fn look(w: &mut Walker, dx: f32, dy: f32, wheel: f32, inverted: bool, frame_s: f32) -> [f32; 2] {
     look_cam(&mut w.cam, dx, dy, wheel, inverted, frame_s)
 }
@@ -267,7 +549,7 @@ pub fn look_cam(cam: &mut WalkCamera<Ee>, dx: f32, dy: f32, wheel: f32, inverted
     if mode == 1 || mode == 3 {
         if dx != 0.0 {
             // the view turns the way the mouse goes: the orbit the other way
-            let d = dx * ORBIT_PER_PIXEL * if inverted { 1.0 } else { -1.0 };
+            let d = dx * LOOK_PER_PIXEL * if inverted { 1.0 } else { -1.0 };
             let a = cam.cur.orbit.x;
             cam.set_orbit_angle(a + F::<Ee>::new(d));
         }
@@ -292,11 +574,36 @@ fn stick_per_pixel(frame_s: f32) -> f32 {
     STICK_PER_PIXEL * (1.0 / 60.0) / frame_s.max(0.001)
 }
 
+/// Takes the pointer for the look: the cursor hidden and held (a page's
+/// Pointer Lock, granted a moment later; natively winit's `Locked`, else
+/// `Confined`, the cursor kept in the window while the mouse's own motion
+/// is the look). False when the window will do neither.
+pub fn take_pointer(window: &winit::window::Window) -> bool {
+    use winit::window::CursorGrabMode;
+    let ok = window.set_cursor_grab(CursorGrabMode::Locked).or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined)).is_ok();
+    if ok {
+        window.set_cursor_visible(false);
+    }
+    ok
+}
+
+/// Gives the pointer back, shown again at `home` (natively put there; a
+/// page's browser puts it back where its lock began itself).
+pub fn give_pointer(window: &winit::window::Window, home: (f64, f64)) {
+    let _ = window.set_cursor_grab(winit::window::CursorGrabMode::None);
+    window.set_cursor_visible(true);
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = window.set_cursor_position(winit::dpi::PhysicalPosition::new(home.0, home.1));
+    #[cfg(target_arch = "wasm32")]
+    let _ = home;
+}
+
 /// `EQOA_MOUSE`, for headless runs: `;`-separated steps at a time in ms,
 /// `click <x> <y>@<ms>`, `rclick <x> <y>@<ms>`, `drag <dx> <dy>@<ms>` (from
-/// the window's middle), `wheel <lines>@<ms>` and `press l|r@<ms>` /
-/// `release l|r@<ms>`, played through a `Mouse` as the window's events
-/// would be.
+/// the window's middle), `wheel <lines>@<ms>`, `press l|r@<ms>` /
+/// `release l|r@<ms>` and `move <dx> <dy>@<ms>` (the mouse moved: the
+/// cursor, or once a drag holds the pointer its own motion), played
+/// through a `Mouse` as the window's events would be.
 pub fn script() -> Vec<(i64, String)> {
     let Ok(s) = std::env::var("EQOA_MOUSE") else { return Vec::new() };
     s.split(';')
@@ -332,6 +639,14 @@ impl Mouse {
             }
             // `press l|r` and `release l|r`: a button held across steps
             Some(s @ ("press" | "release")) => self.button(w.get(1) == Some(&"r"), s == "press", now),
+            // the mouse moved: a held pointer stays put, its motion the look
+            Some("move") => {
+                self.motion(num(1), num(2));
+                if !matches!(self.grab, Grab::Asked | Grab::Held) {
+                    self.moved(self.cursor.0 + num(1), self.cursor.1 + num(2));
+                }
+                None
+            }
             _ => None,
         }
     }
@@ -402,6 +717,139 @@ mod tests {
         // the control: one button is a click as before
         m.button(false, true, t0 + Duration::from_millis(3000));
         assert_eq!(m.button(false, false, t0 + Duration::from_millis(3010)), Some(Click::Target(130.0, 100.0)));
+    }
+
+    /// One of two buttons let go: the gesture goes on with the other (its
+    /// look, no click when it ends); the control, one button let go alone,
+    /// ends it.
+    #[test]
+    fn letting_go_of_one_of_two_buttons_goes_on_with_the_other() {
+        let t0 = Instant::now();
+        let mut m = Mouse::default();
+        m.moved(100.0, 100.0);
+        m.button(false, true, t0);
+        m.button(true, true, t0);
+        assert_eq!(m.button(false, false, t0), None);
+        m.moved(120.0, 100.0);
+        assert_eq!(m.look, (20.0, 0.0), "the right button still looks");
+        assert!(m.steer(3) && !m.running());
+        assert_eq!(m.button(true, false, t0), None, "no click after a run");
+        m.moved(140.0, 100.0);
+        assert_eq!(m.look, (20.0, 0.0), "the gesture is over");
+        assert!(!m.steer(3));
+    }
+
+    /// A press that drags takes the pointer (the window asked at the drag,
+    /// not at the press, so a click never hides the cursor), and held, the
+    /// mouse's own motion is the look, so no edge stops it; a page's cursor
+    /// stays put and a confined one's moves no longer count. Let go, no
+    /// click, the pointer back where the press was. The control: a still
+    /// press takes nothing and clicks.
+    #[test]
+    fn a_drag_takes_the_pointer_and_rides_the_mouse_s_own_motion() {
+        let t0 = Instant::now();
+        let mut m = Mouse::default();
+        m.moved(100.0, 100.0);
+        m.button(true, true, t0);
+        assert_eq!(m.grab_change(true), None, "a press takes nothing");
+        m.moved(103.0, 100.0);
+        m.motion(3.0, 0.0);
+        assert_eq!(m.grab_change(true), None, "within the slop");
+        assert_eq!(m.look, (0.0, 0.0), "its own motion is not the look before the grab");
+        m.moved(110.0, 100.0);
+        assert_eq!(m.look, (7.0, 0.0), "the move past the slop, whole");
+        assert_eq!(m.grab_change(true), Some(true));
+        assert_eq!(m.home(), (100.0, 100.0), "where the press was");
+        m.set_grab(Grab::Held);
+        assert_eq!(m.grab_change(true), None, "taken once");
+        for _ in 0..100 {
+            m.motion(40.0, -2.0);
+        }
+        m.moved(110.0, 100.0);
+        m.moved(700.0, 100.0);
+        assert_eq!(m.look, (4007.0, -200.0), "4,000 pixels of motion, the cursor's not counted");
+        assert_eq!(m.button(true, false, t0), None, "a look is no click");
+        assert_eq!(m.grab_change(true), Some(false), "given back");
+        assert_eq!(m.grab, Grab::Free);
+        m.motion(50.0, 0.0);
+        assert_eq!(m.look, (4007.0, -200.0), "let go, its motion is nothing");
+        // the control
+        m.moved(200.0, 200.0);
+        m.button(true, true, t0);
+        assert_eq!(m.grab_change(true), None);
+        assert_eq!(m.button(true, false, t0), Some(Click::Right(200.0, 200.0)));
+        assert_eq!(m.grab_change(true), None);
+    }
+
+    /// A platform with no motion of the mouse's own (a grab held, none
+    /// coming): the cursor's moves stay the look; a refused grab leaves the
+    /// drag as it was, asked for once.
+    #[test]
+    fn without_its_own_motion_the_cursor_still_looks() {
+        let t0 = Instant::now();
+        let mut m = Mouse::default();
+        m.moved(100.0, 100.0);
+        m.button(false, true, t0);
+        m.moved(110.0, 100.0);
+        assert_eq!(m.grab_change(true), Some(true));
+        m.set_grab(Grab::Held);
+        m.moved(150.0, 120.0);
+        assert_eq!(m.look, (50.0, 20.0));
+        m.button(false, false, t0);
+        assert_eq!(m.grab_change(true), Some(false));
+        m.button(false, true, t0);
+        m.moved(200.0, 120.0);
+        assert_eq!(m.grab_change(true), Some(true));
+        m.set_grab(Grab::Refused);
+        assert_eq!(m.grab_change(true), None, "not asked again");
+        m.moved(230.0, 120.0);
+        assert_eq!(m.look, (130.0, 20.0));
+        m.button(false, false, t0);
+        assert_eq!(m.grab_change(true), None, "nothing to give back");
+        assert_eq!(m.grab, Grab::Free);
+    }
+
+    /// The look taken away (a window, the start menu, a death: `free`
+    /// false), Escape, and a page's lock lost all end the gesture and give
+    /// the pointer back, its release clicking nothing; a lock the page holds
+    /// after its drag is let go. The controls: Escape with nothing held is
+    /// the game's (false), and a window up with no grab leaves its clicks.
+    #[test]
+    fn a_window_escape_or_a_lost_lock_lets_go_of_the_look() {
+        let t0 = Instant::now();
+        let grabbed = || {
+            let mut m = Mouse::default();
+            m.moved(100.0, 100.0);
+            m.button(true, true, t0);
+            m.moved(120.0, 100.0);
+            assert_eq!(m.grab_change(true), Some(true));
+            m.set_grab(Grab::Held);
+            m
+        };
+        let mut m = grabbed();
+        assert_eq!(m.grab_change(false), Some(false), "a window up");
+        assert!(!m.steer(3) && m.button(true, false, t0).is_none());
+        let mut m = grabbed();
+        assert!(m.escape());
+        assert_eq!(m.grab_change(true), Some(false));
+        assert!(m.button(true, false, t0).is_none());
+        assert!(!m.escape(), "Escape with nothing held is the game's");
+        let mut m = grabbed();
+        m.set_grab(Grab::Asked);
+        assert!(!m.lock_seen(false), "asked, not yet granted: waits");
+        assert!(!m.lock_seen(true));
+        assert_eq!(m.grab, Grab::Held, "granted");
+        assert!(!m.lock_seen(false), "lost (Escape in the browser)");
+        assert_eq!(m.grab_change(true), Some(false));
+        assert!(m.button(true, false, t0).is_none());
+        assert!(m.lock_seen(true), "a lock granted after its drag: let go");
+        assert!(!m.lock_seen(false));
+        // the control: with a window up and nothing grabbed a click is a click
+        let mut m = Mouse::default();
+        m.moved(50.0, 50.0);
+        m.button(false, true, t0);
+        assert_eq!(m.grab_change(false), None);
+        assert_eq!(m.button(false, false, t0), Some(Click::Target(50.0, 50.0)));
     }
 
     /// Open ground: nothing to hit, no liquid.
@@ -560,5 +1008,239 @@ mod tests {
         assert_eq!(to_segment(glam::Vec2::new(3.0, 5.0), a, b), 3.0);
         assert_eq!(to_segment(glam::Vec2::new(0.0, 14.0), a, b), 4.0);
         assert_eq!(to_segment(glam::Vec2::new(4.0, -3.0), a, b), 5.0);
+    }
+
+    /// An angle, wrapped into -pi..pi.
+    fn wrapped(a: f32) -> f32 {
+        let t = std::f32::consts::TAU;
+        (a % t + t + std::f32::consts::PI) % t - std::f32::consts::PI
+    }
+
+    /// The right button in the follow orbit: the body turned to the view as
+    /// the hold begins (the camera where it was), then the body and the
+    /// camera behind it turned together by the mouse, the tilt as the
+    /// left's. The control: the left button swings the orbit alone.
+    #[test]
+    fn the_right_button_turns_the_body_and_the_camera_behind_it() {
+        let mut cam = follow();
+        let h0 = cam.walk.phys.angles.x;
+        look_held(&mut cam, [true, false], -100.0, 0.0, false, 1.0 / 60.0, false);
+        assert_eq!(cam.walk.phys.angles.x, h0, "the left button leaves the body");
+        let view = cam.cur.orbit.x + F::new(PI);
+        assert!(wrapped((view - h0).0).abs() > 0.7, "the camera swung off its back");
+        let orbit = cam.cur.orbit.x;
+        look_held(&mut cam, [false, true], 0.0, 0.0, false, 1.0 / 60.0, false);
+        let h = cam.walk.phys.angles.x;
+        assert_eq!(h, view.fmodf(F::new(TWO_PI)), "the body to the view");
+        assert_eq!((cam.walk.committed.angles.x, cam.walk.phys.target_heading), (h, h));
+        assert!(wrapped((cam.cur.orbit.x - orbit).0).abs() < 1e-5, "the camera where it was");
+        // 50 pixels right: both turned 0.4, the camera behind
+        look_held(&mut cam, [false, true], 50.0, 0.0, false, 1.0 / 60.0, true);
+        let h1 = (h + F::new(-(50.0 * LOOK_PER_PIXEL))).fmodf(F::new(TWO_PI));
+        assert_eq!(cam.walk.phys.angles.x, h1);
+        assert_eq!(cam.cur.orbit.x, (h1 + F::new(PI)).fmodf(F::new(TWO_PI)));
+        // up: the tilt, as the left button's (the camera lower)
+        let pitch = cam.def_orbit_pitch;
+        look_held(&mut cam, [false, true], 0.0, -10.0, false, 1.0 / 60.0, true);
+        assert_eq!(cam.def_orbit_pitch, pitch + F::new(-10.0 * TILT_PER_PIXEL));
+        assert_eq!(cam.walk.phys.angles.x, h1, "no turn");
+    }
+
+    /// Steered, a snap of the orbit to a clear angle (the game's, near a
+    /// wall) would swing the camera off the body's back: it ends where it
+    /// is and the camera comes in to its closest. The control: unsteered
+    /// the game's snap goes on.
+    #[test]
+    fn steered_the_camera_comes_in_where_the_game_would_swing_it_round() {
+        for steered in [true, false] {
+            let mut cam = follow();
+            cam.cur.flags |= 1;
+            cam.cur.snap_angle = F::new(2.0);
+            look_held(&mut cam, [!steered, steered], 0.0, 0.0, false, 1.0 / 60.0, true);
+            if steered {
+                assert_eq!(cam.cur.snap_angle, cam.cur.orbit.x);
+                assert_eq!(cam.cur.flags & 3, 3, "the snap ends at once, the camera comes in");
+            } else {
+                assert_eq!((cam.cur.snap_angle.0, cam.cur.flags & 3), (2.0, 1));
+            }
+        }
+    }
+
+    /// First person: either button turns the body at once, a full turn and
+    /// more in one move (the stick's turn stops at a quarter turn a second),
+    /// and pitches it, stopping at the walk's 89.4 degrees up and down; the
+    /// option turns the pitch round, not the turn; at a liquid's surface
+    /// the pitch is the stick's (a dive). The control: the touch screen's
+    /// look there pushes the stick, all the way at most.
+    #[test]
+    fn first_person_turns_full_circles_and_stops_short_of_straight_up_and_down() {
+        let mut cam = follow();
+        crate::camstyle::set_style(&mut cam, 0, None, &mut Open);
+        let h0 = cam.walk.phys.angles.x;
+        let stick = look_held(&mut cam, [false, true], 1000.0, 0.0, false, 1.0 / 60.0, false);
+        assert_eq!(stick, [0.0, 0.0]);
+        let h1 = (h0 + F::new(-1000.0 * LOOK_PER_PIXEL)).fmodf(F::new(TWO_PI));
+        assert_eq!((cam.walk.phys.angles.x, cam.walk.committed.angles.x), (h1, h1), "8 radians");
+        look_held(&mut cam, [true, false], 0.0, 1000.0, false, 1.0 / 60.0, false);
+        assert_eq!(cam.walk.phys.angles.y.0, 1.5607964, "straight down, all but");
+        look_held(&mut cam, [true, false], 0.0, -1000.0, false, 1.0 / 60.0, false);
+        assert_eq!(cam.walk.phys.angles.y.0, -1.5607964, "straight up, all but");
+        look_held(&mut cam, [true, false], 0.0, 300.0, false, 1.0 / 60.0, false);
+        let p = cam.walk.phys.angles.y;
+        look_held(&mut cam, [true, false], 10.0, 10.0, true, 1.0 / 60.0, false);
+        assert_eq!(cam.walk.phys.angles.y, p + F::new(-10.0 * LOOK_PER_PIXEL), "inverted: down looks up");
+        assert_eq!(cam.walk.phys.angles.x, (h1 + F::new(-10.0 * LOOK_PER_PIXEL)).fmodf(F::new(TWO_PI)), "the turn as it was");
+        cam.walk.phys.flags |= vi::walk::flags::AT_WATER_SURFACE;
+        let p = cam.walk.phys.angles.y;
+        assert_eq!(look_held(&mut cam, [true, false], 0.0, 10.0, false, 1.0 / 60.0, false), [0.0, 0.5]);
+        assert_eq!(cam.walk.phys.angles.y, p, "the dive is the stick's");
+        // the control: the touch screen's look turns nothing itself
+        let h = cam.walk.phys.angles.x;
+        assert_eq!(look_cam(&mut cam, 1000.0, 0.0, 0.0, false, 1.0 / 60.0), [1.0, 0.0]);
+        assert_eq!(cam.walk.phys.angles.x, h);
+    }
+
+    /// The wheel in the follow orbit: out from the distance chosen, the
+    /// camera left where a wall pulled it (it eases back out when there is
+    /// room, `camreach`); in from where the camera is, at once; with no pull
+    /// both at once, as before.
+    #[test]
+    fn the_wheel_zooms_out_from_the_choice_and_in_from_the_camera() {
+        let mut cam = follow();
+        let mut reach = crate::camreach::Reach::default();
+        cam.set_orbit_distance(F::new(3.5));
+        reach.chosen = Some(F::new(8.0));
+        zoom(&mut cam, &mut reach, -1.0);
+        assert_eq!((reach.chosen(&cam).0, cam.cur.dist.0), (8.0 / 0.9, 3.5), "out: the choice");
+        zoom(&mut cam, &mut reach, 1.0);
+        assert_eq!((reach.chosen(&cam).0, cam.cur.dist.0), (3.5 * 0.9, 3.5 * 0.9), "in: from the camera");
+        zoom(&mut cam, &mut reach, -1.0);
+        assert_eq!((reach.chosen(&cam).0, cam.cur.dist.0), (3.5 * 0.9 / 0.9, 3.5 * 0.9 / 0.9), "no pull: at once");
+        zoom(&mut cam, &mut reach, -40.0);
+        assert_eq!((reach.chosen(&cam).0, cam.cur.dist.0), (11.0, 11.0), "the follow orbit's ceiling");
+    }
+
+    /// The walk camera on a room, driven as `Walker` drives it.
+    struct Rig {
+        cam: WalkCamera<Ee>,
+        eye: vi::camera::Eye<Ee>,
+        room: crate::camreach::testing::Room,
+    }
+
+    impl crate::controls::Walk for Rig {
+        fn camera_mode(&self) -> i32 {
+            self.cam.camera_mode
+        }
+        fn heading(&self) -> F<Ee> {
+            self.cam.walk.committed.angles.x
+        }
+        fn camera_dir(&self) -> vi::vect::Vect3<Ee> {
+            self.eye.direction
+        }
+        fn under_liquid(&self) -> bool {
+            self.cam.walk.is_under_liquid()
+        }
+        fn at_liquid_surface(&self) -> bool {
+            self.cam.walk.is_at_liquid_surface()
+        }
+        fn move_stick(&mut self, x: F<Ee>, y: F<Ee>) {
+            self.cam.walk.move_stick(x, y);
+        }
+        fn walk(&mut self, x: F<Ee>, y: F<Ee>) {
+            self.cam.walk.walk(x, y);
+        }
+        fn turn_left(&mut self, t: F<Ee>) {
+            self.cam.walk.turn_left(t);
+        }
+        fn pitch_down(&mut self, t: F<Ee>) {
+            self.cam.walk.pitch_down(t);
+        }
+        fn swim_up(&mut self, t: F<Ee>) {
+            self.cam.walk.swim_up(t);
+        }
+        fn view_relative_move(&mut self, r: &vi::vect::Vect3<Ee>, x: F<Ee>, y: F<Ee>) {
+            self.cam.walk.view_relative_move(r, x, y);
+        }
+        fn view_relative_walk(&mut self, r: &vi::vect::Vect3<Ee>, x: F<Ee>, y: F<Ee>) {
+            self.cam.walk.view_relative_walk(r, x, y);
+        }
+        fn set_target_heading(&mut self, h: F<Ee>) {
+            self.cam.walk.set_target_heading(h);
+        }
+        fn orbit_in(&mut self, t: F<Ee>) {
+            self.cam.orbit_in(t);
+        }
+        fn orbit_right(&mut self, t: F<Ee>) {
+            self.cam.orbit_right(t);
+        }
+    }
+
+    impl Rig {
+        /// The follow orbit on the room's floor, facing 0.5, settled.
+        fn new() -> Self {
+            let mut room = crate::camreach::testing::Room { t: 0, wall: f32::INFINITY };
+            let mut cam = WalkCamera::<Ee>::default();
+            cam.init(vi::vect::Vect3::of(100.0, 0.0, 100.0), vi::vect::Vect3::of(0.5, 0.0, 0.0), &mut room);
+            crate::camstyle::set_style(&mut cam, 3, None, &mut room);
+            let eye = cam.process(&mut room);
+            let mut r = Rig { cam, eye, room };
+            for _ in 0..30 {
+                r.frame([0.0; 4], false, None);
+            }
+            r
+        }
+
+        /// A 16 ms frame: the mouse's look (`held`, with the frames before
+        /// it steered), `UpdateControls` on `sticks`, `Process`.
+        fn frame(&mut self, sticks: [f32; 4], steer: bool, held: Option<([bool; 2], bool)>) {
+            if let Some((held, steering)) = held {
+                look_held(&mut self.cam, held, 0.0, 0.0, false, 0.016, steering);
+            }
+            let c = crate::controls::Client { steer, ..Default::default() };
+            crate::controls::update_controls(self, sticks, &c);
+            self.room.t += 16;
+            self.eye = self.cam.process(&mut self.room);
+        }
+    }
+
+    /// The right button and A: a sidestep along a line (the strafe's
+    /// animation), the body facing as it was, the camera behind it; both
+    /// buttons and A run the diagonal, forward and left at once. The
+    /// controls: unsteered the game turns the body to its way (and back
+    /// runs it round), and steered with the camera not put back behind it,
+    /// the camera is dragged round.
+    #[test]
+    fn steered_a_sidesteps_in_a_line_and_both_buttons_run_the_diagonal() {
+        for (both, steer, behind) in [(false, true, true), (true, true, true), (false, false, false), (false, true, false)] {
+            let mut r = Rig::new();
+            let (h0, p0) = (r.cam.walk.phys.angles.x.0, r.cam.walk.phys.position);
+            let sticks = [0.0, 0.0, -1.0, if both { -1.0 } else { 0.0 }];
+            for f in 0..90 {
+                r.frame(sticks, steer, behind.then_some(([both, true], f > 0)));
+            }
+            let (h, p) = (r.cam.walk.phys.angles.x.0, r.cam.walk.phys.position);
+            let (dx, dz) = (p.x.0 - p0.x.0, p.z.0 - p0.z.0);
+            let ahead = dx * h0.sin() + dz * h0.cos();
+            let left = dx * h0.cos() - dz * h0.sin();
+            let off = wrapped(r.cam.cur.orbit.x.0 - h - std::f32::consts::PI).abs();
+            let case = format!("both {both} steer {steer} behind {behind}: heading {h0} -> {h}, ahead {ahead}, left {left}, camera off its back {off}");
+            if !steer {
+                assert!(wrapped(h - h0).abs() > 0.5, "the game turns the body: {case}");
+                continue;
+            }
+            assert!(wrapped(h - h0).abs() < 1e-4, "{case}");
+            if both {
+                assert!(left > 5.0 && (ahead - left).abs() < 0.05 * left, "the diagonal: {case}");
+                assert_eq!(r.cam.walk.phys.loco_state, 3, "running");
+            } else {
+                assert!(left > 3.0 && ahead.abs() < 0.05 * left, "a line: {case}");
+                assert!(matches!(r.cam.walk.phys.loco_state, 10 | 11), "the strafe: {case}");
+            }
+            if behind {
+                assert!(off < 0.05, "{case}");
+            } else {
+                assert!(off > 0.3, "dragged round: {case}");
+            }
+        }
     }
 }
