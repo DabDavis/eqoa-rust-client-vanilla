@@ -1546,6 +1546,8 @@ impl App {
         if let Some(e) = &self.entering {
             let _ = writeln!(o, "entering {} at {:?}", e.0, e.1);
         }
+        // the hour the lights and the effect volumes take, and the volumes
+        let _ = writeln!(o, "hour {:.2}; {}", hour(self.clock), self.fx.as_ref().map_or("effect volumes off".into(), |f| f.describe()));
         if let (Some(p), Some(w)) = (&self.play, &self.walker) {
             o.push_str(&p.report(w.cam.walk.phys.position.to_array()));
         }
