@@ -456,7 +456,7 @@ impl WndOptions {
     }
 
     /// `Select`: X on the menu opens a page (its window 440 wide, six to
-    /// eight rows, an empty title; the client's Extended six), or on Save
+    /// eight rows, an empty title; the client's Extended seven), or on Save
     /// Changes asks (true).
     fn select(&mut self, vui: &Vui, r: &dyn Raster, cues: &mut Vec<i32>) -> bool {
         if self.page != -1 {
