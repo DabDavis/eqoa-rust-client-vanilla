@@ -149,6 +149,30 @@ fn the_mouse_drags_clicks_and_wheels() {
     assert!((still[0] - under[0]).abs() < 1e-2 && (still[1] - under[1]).abs() < 1e-2);
 }
 
+/// The wheel zooms about the pointer, and a frame later the point under it
+/// is still there: the map no longer follows the player. On the player (the
+/// middle), it zooms about the player and goes on following. The control:
+/// a map still following goes back to the player and the point moves.
+#[test]
+fn the_wheel_away_from_the_player_stops_following() {
+    let size = (1280, 720);
+    let mut m = up(size);
+    let under = m.view.unwrap().to_world(size, [300.0, 200.0]);
+    m.wheel(2.0, Some([300.0, 200.0]));
+    m.steer(size, 0.016, [0.0; 4], Some(FREEPORT));
+    let still = m.view.unwrap().to_world(size, [300.0, 200.0]);
+    assert!((still[0] - under[0]).abs() < 1e-2 && (still[1] - under[1]).abs() < 1e-2, "{still:?} vs {under:?}");
+    assert!(!m.follow);
+    let mut c = up(size);
+    c.wheel(2.0, None);
+    c.steer(size, 0.016, [0.0; 4], Some(FREEPORT));
+    assert!(c.follow && c.view.unwrap().center == FREEPORT, "on the player: still following");
+    c.zoom(ZOOM_STEP.powf(-2.0), [300.0, 200.0]);
+    c.steer(size, 0.016, [0.0; 4], Some(FREEPORT));
+    let moved = c.view.unwrap().to_world(size, [300.0, 200.0]);
+    assert!((moved[0] - under[0]).abs() > 1.0, "the control: following, the zoom's point is lost");
+}
+
 /// Two fingers apart zoom in as far as they went apart (`touch.rs`'s pinch
 /// in lines, a tenth a line), one drags. The control: the wheel's step for
 /// the same lines.

@@ -20,7 +20,8 @@ pub mod cells;
 pub mod chrome;
 pub mod picture;
 pub mod store;
-#[cfg(not(target_arch = "wasm32"))]
+// natively (a page has nothing to call it; it compiles there as main.rs's
+// commands do)
 pub mod tool;
 pub mod view;
 
@@ -252,10 +253,18 @@ impl Map {
     }
 
     /// The wheel's `lines` (up positive: in) about window pixel `at` (the
-    /// middle when none).
+    /// middle when none): the point under the pointer stays under it, so
+    /// the map stops following the player unless the pointer is on it.
     pub fn wheel(&mut self, lines: f32, at: Option<[f32; 2]>) {
+        if lines == 0.0 {
+            return;
+        }
         let size = self.size;
-        let at = at.unwrap_or([size.0 as f32 / 2.0, size.1 as f32 / 2.0]);
+        let middle = [size.0 as f32 / 2.0, size.1 as f32 / 2.0];
+        let at = at.unwrap_or(middle);
+        if (at[0] - middle[0]).abs() > SLOP || (at[1] - middle[1]).abs() > SLOP {
+            self.follow = false;
+        }
         self.zoom(ZOOM_STEP.powf(-lines), at);
     }
 
@@ -539,29 +548,7 @@ impl Map {
                 solid(ui, [world_rect[0], y - 0.5, world_rect[2], y + 0.5], GRID);
             }
         }
-        // the group's members, their compass colours (1 green, 2 blue, 3 cyan, the rest yellow)
-        for (pos, index) in &cx.group {
-            let p = v.to_window(size, [pos[0], pos[2]]);
-            let color = match index {
-                1 => [0.0, 1.0, 0.0, 1.0],
-                2 => [0.2, 0.4, 1.0, 1.0],
-                3 => [0.0, 1.0, 1.0, 1.0],
-                _ => [1.0, 1.0, 0.0, 1.0],
-            };
-            let r = 0.008 * size.1 as f32 + 2.0;
-            solid(ui, [p[0] - r - 1.5, p[1] - r - 1.5, p[0] + r + 1.5, p[1] + r + 1.5], OUTLINE);
-            solid(ui, [p[0] - r, p[1] - r, p[0] + r, p[1] + r], color);
-        }
-        // the player
-        if let Some((p, h)) = cx.player {
-            let at = v.to_window(size, [p[0], p[2]]);
-            let r = 0.022 * size.1 as f32 + 6.0;
-            for (rr, color) in [(r + 3.0, OUTLINE), (r, MARKER)] {
-                let d = view::dart(at, h, rr).map(f);
-                ui.push(Quad { tex: white, blend: 3, pos: d, uv: [[0.5, 0.5]; 4], color, clip: None });
-            }
-        }
-        // the names, the title, the buttons, the legend
+        // what the chrome shows: the names, the title, the build's progress
         let words = cx.words;
         let word = |id: i32| words.map(|t| t.get(id, 0).to_string()).filter(|s| s != "(null)" && !s.is_empty());
         let bounds = self.names.bounds.get(w.index.max(0) as usize).copied().flatten();
@@ -610,6 +597,30 @@ impl Map {
                 &fallback
             }
         };
+        // the names, then the group and the player over them, then the rest
+        chrome::names(&mut l.assets.raster(ui), vui, &c);
+        // the group's members, their compass colours (1 green, 2 blue, 3 cyan, the rest yellow)
+        for (pos, index) in &cx.group {
+            let p = v.to_window(size, [pos[0], pos[2]]);
+            let color = match index {
+                1 => [0.0, 1.0, 0.0, 1.0],
+                2 => [0.2, 0.4, 1.0, 1.0],
+                3 => [0.0, 1.0, 1.0, 1.0],
+                _ => [1.0, 1.0, 0.0, 1.0],
+            };
+            let r = 0.008 * size.1 as f32 + 2.0;
+            solid(&mut *ui, [p[0] - r - 1.5, p[1] - r - 1.5, p[0] + r + 1.5, p[1] + r + 1.5], OUTLINE);
+            solid(&mut *ui, [p[0] - r, p[1] - r, p[0] + r, p[1] + r], color);
+        }
+        // the player
+        if let Some((p, h)) = cx.player {
+            let at = v.to_window(size, [p[0], p[2]]);
+            let r = 0.022 * size.1 as f32 + 6.0;
+            for (rr, color) in [(r + 3.0, OUTLINE), (r, MARKER)] {
+                let d = view::dart(at, h, rr).map(f);
+                ui.push(Quad { tex: white, blend: 3, pos: d, uv: [[0.5, 0.5]; 4], color, clip: None });
+            }
+        }
         let mut r = l.assets.raster(ui);
         self.buttons = chrome::draw(&mut r, vui, &c);
         self.glyphs = r.glyphs;

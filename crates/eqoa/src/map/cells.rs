@@ -124,7 +124,7 @@ pub fn ninth(x: f32, z: f32, origin: [f32; 2]) -> i32 {
 /// each zone lies in the file, so another disc's world, or another build of
 /// the map, never answers for it.
 pub fn cache_key(name: &str, world_records: &[u8], ranges: &[(u64, usize)]) -> String {
-    const VERSION: &[u8] = b"eqoa-rs map 1: 512 a cell, pinned light";
+    const VERSION: &[u8] = b"eqoa-rs map 2: 512 a cell, terrain and placements, pinned light";
     let mut h = 0xCBF2_9CE4_8422_2325u64;
     let mut eat = |b: &[u8]| {
         for &x in b {

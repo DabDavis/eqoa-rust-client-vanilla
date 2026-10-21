@@ -43,14 +43,19 @@ fn panel(vui: &Vui, r: &mut dyn Raster, at: [i32; 2], w: i32, h: i32) {
 /// A button drawn: its frame rectangle (x0, y0, x1, y1) and its key.
 pub type Button = ([i32; 4], i32);
 
-/// Draws the chrome; where its buttons went, with their keys.
+/// The cells' names (under the marker, which goes over them).
+pub fn names(r: &mut dyn Raster, vui: &Vui, c: &Chrome) {
+    for (at, name) in &c.names {
+        vui.draw_centered_string_ex(r, &wide(name), at[0] as i32, at[1] as i32, NAME, 0, true);
+    }
+}
+
+/// Draws the chrome over everything; where its buttons went, with their
+/// keys.
 pub fn draw(r: &mut dyn Raster, vui: &Vui, c: &Chrome) -> Vec<Button> {
     let mut hits = Vec::new();
     let [tl, br] = c.corners.map(|p| [p[0].round() as i32, p[1].round() as i32]);
     let (m, line) = (8, r.point_size() + 6);
-    for (at, name) in &c.names {
-        vui.draw_centered_string_ex(r, &wide(name), at[0] as i32, at[1] as i32, NAME, 0, true);
-    }
     // the title, top left
     let s = wide(&c.title);
     let tw = r.string_width(&s).max(0);
@@ -89,12 +94,13 @@ pub fn draw(r: &mut dyn Raster, vui: &Vui, c: &Chrome) -> Vec<Button> {
             x += r.string_width(&s).max(0) + 12;
         }
     }
-    // the build, bottom right
+    // the build, under the title
     if let Some((done, of)) = c.progress {
         let s = wide(&format!("Drawing the map: {done} of {of} areas"));
         let tw = r.string_width(&s).max(0);
-        panel(vui, r, [br[0] - m - tw - 12, y], tw + 12, line);
-        vui.draw_string_ex(r, &s, br[0] - m - tw - 6, y + 3, NAME, true);
+        let y = tl[1] + m + line + 4;
+        panel(vui, r, [tl[0] + m, y], tw + 12, line);
+        vui.draw_string_ex(r, &s, tl[0] + m + 6, y + 3, NAME, true);
     }
     hits
 }

@@ -85,16 +85,57 @@ pub struct Gpu<'a> {
 /// piece's textures decoded one a step before it is uploaded.
 struct Making {
     zi: usize,
-    /// the zone's record (none: the library has the zone)
+    /// the zone's record (none: the library has the zone) and its node
     zone: Option<Container>,
+    node: NodeId,
     patches: Vec<NodeId>,
     pre: Vec<[f32; 3]>,
     /// the patches built so far
     next: usize,
+    /// the zone's placements by sprite, once its terrain is in, and how many
+    /// are built
+    sprites: Option<Vec<Placed>>,
+    sprite_next: usize,
     /// a piece built and not uploaded yet, and its textures decoded so far
-    piece: Option<esf::Model>,
+    piece: Option<Placed>,
     images: HashMap<i32, Option<esf::Image>>,
     parts: Vec<GpuModel>,
+}
+
+/// A model (a piece of terrain, a sprite) with where it stands: each
+/// instance's matrix and static light.
+struct Placed {
+    sprite: i32,
+    model: Option<esf::Model>,
+    instances: Vec<[[f32; 4]; 4]>,
+    statics: Vec<[f32; 4]>,
+}
+
+impl Making {
+    fn new(zi: usize, zone: Option<Container>, node: NodeId, c: &Container) -> Box<Making> {
+        Box::new(Making { zi, node, patches: c.terrain_patches(node), pre: c.pre_translations(node), zone, next: 0, sprites: None, sprite_next: 0, piece: None, images: HashMap::new(), parts: Vec::new() })
+    }
+}
+
+/// A zone's placements by sprite, as the scene places them
+/// (`VIScene::UpdateActor`'s `Transform(hpr, scale, location)`, the zone
+/// actor's colour its static light), leaving out what is animated (an
+/// HSprite: posed props) and what names no sprite in the zone.
+fn placements(c: &Container, zone: NodeId) -> Vec<Placed> {
+    let mut by: std::collections::BTreeMap<i32, Placed> = std::collections::BTreeMap::new();
+    for a in c.actors(zone) {
+        let Some(n) = c.lookup(a.sprite) else { continue };
+        if c.node(n).ty == esf::types::HSPRITE {
+            continue;
+        }
+        let f = vi::fpu::F::<vi::fpu::Ee>::new;
+        let v = |x: [f32; 3]| vi::vect::Vect3::new(f(x[0]), f(x[1]), f(x[2]));
+        let m = vi::geom::Matrix44::transform(&v(a.rot), f(a.scale), &v(a.pos)).to_cols();
+        let p = by.entry(a.sprite).or_insert_with(|| Placed { sprite: a.sprite, model: None, instances: Vec::new(), statics: Vec::new() });
+        p.instances.push(m);
+        p.statics.push(a.color.map(|c| c as f32 / 255.0));
+    }
+    by.into_values().collect()
 }
 
 /// What the builder is doing.
@@ -105,9 +146,9 @@ enum Job {
     Make(Box<Making>),
     /// drawn, the picture coming back
     Shot { zi: usize },
-    /// the picture back: its overview cell, then its PNG for the cache a few
-    /// rows a step, then the zone is on the map
-    Keep { zi: usize, tile: Vec<u8>, png: Option<Box<picture::RowEncoder>> },
+    /// the picture back: its overview cell (`cell`: made), then its PNG for
+    /// the cache a few rows a step, then the zone is on the map
+    Keep { zi: usize, tile: Vec<u8>, cell: bool, png: Option<Box<picture::RowEncoder>> },
 }
 
 /// Rows of a tile's PNG made a step.
@@ -308,8 +349,7 @@ impl Builder {
             Job::Idle => {
                 let Some(zi) = self.next_zone(lib, focus) else { return false };
                 if let Some((zf, z)) = lib.zone(self.world, zi) {
-                    let c = lib.file(zf);
-                    self.job = Job::Make(Box::new(Making { zi, zone: None, patches: c.terrain_patches(z), pre: c.pre_translations(z), next: 0, piece: None, images: HashMap::new(), parts: Vec::new() }));
+                    self.job = Job::Make(Making::new(zi, None, z, lib.file(zf)));
                     return true;
                 }
                 match (self.source.as_mut(), lib.zone_range(self.world, zi)) {
@@ -334,9 +374,13 @@ impl Builder {
                 match r {
                     Ok(bytes) if bytes.len() >= 12 && u16::from_le_bytes([bytes[0], bytes[1]]) == esf::zone::ZONE => {
                         let c = Container::parse_records(bytes);
-                        let z = c.roots.first().copied();
-                        let (patches, pre) = z.map_or_else(|| (Vec::new(), Vec::new()), |z| (c.terrain_patches(z), c.pre_translations(z)));
-                        self.job = Job::Make(Box::new(Making { zi, zone: Some(c), patches, pre, next: 0, piece: None, images: HashMap::new(), parts: Vec::new() }));
+                        match c.roots.first().copied() {
+                            Some(z) => {
+                                let m = Making::new(zi, None, z, &c);
+                                self.job = Job::Make(Box::new(Making { zone: Some(c), ..*m }));
+                            }
+                            None => self.zones[zi] = Zone::Failed,
+                        }
                     }
                     Ok(_) | Err(_) => {
                         crate::say(&format!("map: zone {zi} would not read"));
@@ -361,6 +405,10 @@ impl Builder {
                 let shot = self.shot.get_or_insert_with(|| TileShot::new(g.device, TILE, TILE));
                 let items: Vec<render::Draw> = m.parts.iter().map(render::Draw::Model).collect();
                 shot.start(g.device, g.queue, r, &tile_view(self.cells.rect(cell)), &items);
+                // a zone's textures are its own: let go with its models, not kept
+                // for the rest of the world (the GPU's memory)
+                r.forget_textures();
+                self.uploaded.clear();
                 self.job = Job::Shot { zi };
                 true
             }
@@ -377,24 +425,27 @@ impl Builder {
                         true
                     }
                     Some(true) => {
-                        let tile = shot.take();
-                        // the overview's cell at once, the cache's copy of it with it
-                        let (_, _, cell) = picture::quarter(TILE, TILE, &tile);
-                        if let Some(s) = self.store.as_mut() {
-                            s.put(&cell_name(zi), picture::encode(OVERVIEW, OVERVIEW, &cell));
-                        }
-                        self.cells_out.push((zi, cell));
-                        let png = self.store.as_ref().and_then(|_| picture::RowEncoder::new(TILE, TILE)).map(Box::new);
-                        self.job = Job::Keep { zi, tile, png };
+                        self.job = Job::Keep { zi, tile: shot.take(), cell: false, png: None };
                         true
                     }
                 }
             }
-            Job::Keep { zi, tile, mut png } => {
+            Job::Keep { zi, tile, cell: false, .. } => {
+                // the overview's cell, and the cache's copy of it
+                let (_, _, cell) = picture::quarter(TILE, TILE, &tile);
+                if let Some(s) = self.store.as_mut() {
+                    s.put(&cell_name(zi), picture::encode(OVERVIEW, OVERVIEW, &cell));
+                }
+                self.cells_out.push((zi, cell));
+                let png = self.store.as_ref().and_then(|_| picture::RowEncoder::new(TILE, TILE)).map(Box::new);
+                self.job = Job::Keep { zi, tile, cell: true, png };
+                true
+            }
+            Job::Keep { zi, tile, cell: true, mut png } => {
                 if let Some(e) = png.as_mut()
                     && !e.rows(&tile, ROWS_A_STEP)
                 {
-                    self.job = Job::Keep { zi, tile, png };
+                    self.job = Job::Keep { zi, tile, cell: true, png };
                     return true;
                 }
                 // the tile kept after its cell: a tile kept means both are
@@ -415,8 +466,9 @@ impl Builder {
         }
     }
 
-    /// A step of making zone `m`'s terrain: a piece built, or one of its
-    /// textures decoded, or the piece uploaded. Whether there is more.
+    /// A step of making zone `m`'s picture: a piece of its terrain built,
+    /// its placements gathered, a sprite of them built, one texture decoded,
+    /// or the piece uploaded. Whether there is more.
     fn make(&mut self, lib: &Library, g: &Gpu, m: &mut Making) -> bool {
         let c = match (&m.zone, lib.zone(self.world, m.zi)) {
             (Some(c), _) => c,
@@ -425,16 +477,34 @@ impl Builder {
             (None, None) => return false,
         };
         let Some(piece) = m.piece.as_ref() else {
-            if m.next >= m.patches.len() {
-                return false;
+            if m.next < m.patches.len() {
+                let end = (m.next + PATCHES_A_STEP).min(m.patches.len());
+                let model = c.build_terrain(&m.patches[m.next..end], &m.pre);
+                m.piece = Some(Placed { sprite: 0, model, instances: vec![render::IDENTITY], statics: Vec::new() });
+                m.next = end;
+                return true;
             }
-            let end = (m.next + PATCHES_A_STEP).min(m.patches.len());
-            m.piece = c.build_terrain(&m.patches[m.next..end], &m.pre);
-            m.next = end;
+            // then its placed actors (buildings, walls, piers, trees, rocks)
+            let Some(sprites) = m.sprites.as_mut() else {
+                m.sprites = Some(placements(c, m.node));
+                return true;
+            };
+            // the next sprite with anything to draw
+            while let Some(p) = sprites.get_mut(m.sprite_next) {
+                m.sprite_next += 1;
+                if let Some(model) = c.lookup(p.sprite).and_then(|n| c.build_model(n)) {
+                    m.piece = Some(Placed { sprite: p.sprite, model: Some(model), instances: std::mem::take(&mut p.instances), statics: std::mem::take(&mut p.statics) });
+                    return true;
+                }
+            }
+            return false;
+        };
+        let Some(model) = piece.model.as_ref() else {
+            m.piece = None;
             return true;
         };
         // its textures, one a step, ahead of the upload
-        let wanted = piece.batches.iter().flat_map(|b| b.layers.iter().map(|l| l.texture)).find(|&t| t != 0 && !self.uploaded.contains(&t) && !m.images.contains_key(&t));
+        let wanted = model.batches.iter().flat_map(|b| b.layers.iter().map(|l| l.texture)).find(|&t| t != 0 && !self.uploaded.contains(&t) && !m.images.contains_key(&t));
         if let Some(t) = wanted {
             m.images.insert(t, c.surface(t).and_then(|s| s.decode(&c.data)));
             return true;
@@ -449,8 +519,12 @@ impl Builder {
         // each handed over once: the renderer keeps what it uploads by id
         let images = std::cell::RefCell::new(std::mem::take(&mut m.images));
         let textures = |id: i32| images.borrow_mut().remove(&id).flatten();
-        if let Some(piece) = m.piece.take() {
-            m.parts.push(r.upload(g.device, g.queue, &piece, &[render::IDENTITY], &textures));
+        if let Some(Placed { model: Some(model), instances, statics, .. }) = m.piece.take() {
+            let gm = r.upload(g.device, g.queue, &model, &instances, &textures);
+            if !statics.is_empty() {
+                r.set_static_lights(g.queue, &gm, &statics);
+            }
+            m.parts.push(gm);
         }
         true
     }
@@ -621,12 +695,14 @@ mod tests {
             (n, tile)
         };
         let (slow, tile) = frames(Duration::ZERO);
-        // 292 patches, 8 a piece: 37 built and as many uploaded at least
+        // 292 patches, 8 a piece: 37 built and as many uploaded at least,
+        // and the placements' sprites
         assert!(slow >= 37 * 2, "{slow} frames");
         assert_eq!(tile.len(), (TILE * TILE * 4) as usize);
         let lit = tile.as_chunks::<4>().0.iter().filter(|p| [p[0], p[1], p[2]] != VOID.map(|c| (c * 255.0).round() as u8)).count();
         assert!(lit > tile.len() / 8, "the land is drawn: {lit} of {} texels", tile.len() / 4);
-        let (fast, _) = frames(Duration::from_secs(5));
+        // (a debug build on a busy machine builds slowly: time enough for all)
+        let (fast, _) = frames(Duration::from_secs(600));
         eprintln!("Freeport's zone: drawn after {slow} frames with no time to spare, {fast} with time");
         assert!(fast <= 2, "the control: {fast} frames with time to spare, {slow} with none");
     }

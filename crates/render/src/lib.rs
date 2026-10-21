@@ -645,6 +645,15 @@ impl Renderer {
         }
     }
 
+    /// Lets go of every texture uploaded so far (the models made keep
+    /// theirs while they live): for a renderer that draws one thing after
+    /// another and keeps nothing from one to the next (the map's tiles).
+    pub fn forget_textures(&mut self) {
+        self.textures.clear();
+        self.missing_textures.clear();
+        self.materials.clear();
+    }
+
     /// Re-points one layer pass of one batch, as `VIAtmosphere` changes the
     /// sky's materials: its texture (rebound when it changes), blend mode and
     /// colour (0..1, alpha included).
