@@ -35,6 +35,7 @@ pub mod particle;
 pub mod pick;
 pub mod quat;
 pub mod scene;
+pub mod textset;
 pub mod tod;
 pub mod trail;
 pub mod atmosphere;
