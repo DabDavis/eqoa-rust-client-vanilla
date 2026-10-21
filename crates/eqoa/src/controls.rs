@@ -25,6 +25,14 @@
 //! Not here: the modal look (mode 38, which holding L1 or R1 begins; the
 //! camera effect's blend into a scripted camera is not ported) and follow
 //! (`m_p00078`, `/follow`).
+//!
+//! The client's own, not the game's: `Client::steer`, the mouse steering the
+//! body (`mouse.rs`: its right button in the follow orbit, either button in
+//! first person and the follow camera, where the mouse turns the body itself).
+//! Then mode 3 walks as modes 0 and 2 do (`Move` or `Walk` on the body's own
+//! axes: forward, back and a sidestep, the body keeping the heading the mouse
+//! gave it, not turning to its motion), and no mode turns to the target. With
+//! it off (the pad, the keys, the touch screen) every call is the game's.
 
 // Written as the C writes it: its float literals (pi as 3.1415927), `a = a +
 // b`, and the nested tests.
@@ -66,11 +74,13 @@ pub struct Client {
     /// `m_keys[17..=24]`, the keyboard's keys held, 1 or 0: left, right, up,
     /// down, page up, page down, end, home
     pub keys: [f32; 8],
+    /// the client's own (the module's doc): the mouse steers the body
+    pub steer: bool,
 }
 
 impl Default for Client {
     fn default() -> Self {
-        Client { has_chat: false, inverted: false, auto_attack: false, swung: false, target: None, autorun: false, casting: false, move_ok: true, look_ok: true, rooted: false, timed_out: false, keys: [0.0; 8] }
+        Client { has_chat: false, inverted: false, auto_attack: false, swung: false, target: None, autorun: false, casting: false, move_ok: true, look_ok: true, rooted: false, timed_out: false, keys: [0.0; 8], steer: false }
     }
 }
 
@@ -133,7 +143,8 @@ pub fn update_controls(w: &mut impl Walk, keys: [f32; 4], c: &Client) -> bool {
         _ => {}
     }
     let mut face = None;
-    if (orbit == Fe::ZERO && c.swung) || c.auto_attack {
+    // (`!c.steer`: the client's own, the mouse's heading wins)
+    if !c.steer && ((orbit == Fe::ZERO && c.swung) || c.auto_attack) {
         if let Some((t, s)) = c.target {
             let mut d = Vect3::<Ee>::of(t[0], t[1], t[2]);
             d -= Vect3::of(s[0], s[1], s[2]);
@@ -200,14 +211,23 @@ pub fn update_controls(w: &mut impl Walk, keys: [f32; 4], c: &Client) -> bool {
             w.orbit_right(if c.inverted { orbit } else { -orbit });
         }
         3 => {
-            let dir = w.camera_dir();
-            if !walking {
-                w.view_relative_move(&dir, fwd, strafe);
+            if c.steer {
+                // the client's own: the body's own axes, as modes 0 and 2
+                if !walking {
+                    w.move_stick(fwd, strafe);
+                } else {
+                    w.walk(fwd, strafe);
+                }
             } else {
-                w.view_relative_walk(&dir, fwd, strafe);
-            }
-            if let Some(h) = face {
-                w.set_target_heading(h);
+                let dir = w.camera_dir();
+                if !walking {
+                    w.view_relative_move(&dir, fwd, strafe);
+                } else {
+                    w.view_relative_walk(&dir, fwd, strafe);
+                }
+                if let Some(h) = face {
+                    w.set_target_heading(h);
+                }
             }
             if !w.under_liquid() && !w.at_liquid_surface() {
                 w.orbit_in(-pitch);
@@ -406,6 +426,27 @@ mod tests {
         let chat = Client { has_chat: true, ..key(&[19, 17, 22, 24]) };
         assert_eq!(run(0, [0.0; 4], chat).0, ["move -0 0", "turn -0", "pitch 0"]);
         assert_eq!(run(3, [0.0; 4], chat).0, ["vmove -0 0", "in -0", "right 0"]);
+    }
+
+    /// The client's own steer (the mouse, `Client::steer`): mode 3 walks on
+    /// the body's own axes (modes 0 and 2's calls) and no mode turns to the
+    /// target; the stick's zoom and orbit stay, the cast walks. The controls:
+    /// without it the same sticks are the game's view-relative move and turn.
+    #[test]
+    fn the_mouse_steer_walks_mode_3_on_the_body_and_turns_to_no_target() {
+        let steer = Client { steer: true, ..Client::default() };
+        assert_eq!(run(3, STICKS, steer).0, ["move 1 -0.75", "in -0.25", "right 0.5"]);
+        assert_eq!(run(3, STICKS, Client::default()).0[0], "vmove 1 -0.75");
+        assert_eq!(run(3, STICKS, Client { casting: true, ..steer }).0[0], "walk 1 -0.75");
+        // a fight: the game turns to the target; steered, the mouse's heading stays
+        let me = [10.0, 0.0, 10.0];
+        let fight = Client { auto_attack: true, target: Some(([20.0, 3.0, 10.0], me)), ..Client::default() };
+        assert_eq!(run(3, [0.0; 4], fight).0, ["vmove 0 0", "heading 1.571", "in -0", "right -0"]);
+        assert_eq!(run(3, [0.0; 4], Client { steer: true, ..fight }).0, ["move 0 0", "in -0", "right -0"]);
+        assert_eq!(run(0, [0.0; 4], fight).0[1], "turn 1");
+        assert_eq!(run(0, [0.0; 4], Client { steer: true, ..fight }).0[1], "turn 0");
+        // both buttons (the stick's y all the way up) with A: forward and left
+        assert_eq!(run(3, [0.0, 0.0, -1.0, -1.0], steer).0[0], "move 1 -1");
     }
 
     #[test]

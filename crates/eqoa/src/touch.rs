@@ -9,8 +9,9 @@
 //! - the buttons are held while touched: the face buttons at the lower
 //!   right, the d-pad above the stick (the quick menus, every window),
 //!   L2 L1 L3 Select Start R3 R1 R2 along the top;
-//! - a finger dragged anywhere else looks round as the mouse does
-//!   (`mouse::look`), two of them pinch the orbit's distance;
+//! - a finger dragged anywhere else looks round (`mouse::look`: the
+//!   orbit, in first person the right stick's push), two of them pinch the
+//!   orbit's distance;
 //! - a tap there targets the creature under it, a double tap talks to it
 //!   (`mouse::Click`).
 //!

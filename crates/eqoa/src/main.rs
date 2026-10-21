@@ -32,6 +32,7 @@ mod dialog;
 mod auction;
 mod auctionwnd;
 mod bank;
+mod camreach;
 mod camstyle;
 mod client_image;
 mod controls;

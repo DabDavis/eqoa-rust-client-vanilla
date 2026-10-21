@@ -47,6 +47,9 @@ pub struct Walker {
     /// The camera shake's sample the last of the game's frames applied
     /// (`frame_with`).
     shake: i32,
+    /// The follow orbit's distance the player chose, and the way back out to
+    /// it after a pull (`camreach`, the client's own).
+    pub reach: crate::camreach::Reach,
 }
 
 impl Walker {
@@ -76,7 +79,7 @@ impl Walker {
         cam.set_orbit_distance(dist);
         cam.set_orbit_angle_behind();
         let eye = cam.process(&mut scene);
-        Walker { cam, scene, eye, sprite: None, anims: AnimScene::default(), rand: Rand(1), shake: 0 }
+        Walker { cam, scene, eye, sprite: None, anims: AnimScene::default(), rand: Rand(1), shake: 0, reach: Default::default() }
     }
 
     /// `Respawn`'s placing: the character stood at `pos` (on the ground
@@ -151,15 +154,17 @@ impl Walker {
     /// the game's frames (`frames.rs`). Everything here steps by the clock
     /// but the camera shake (`VICameraEffect::Apply` takes the next of its
     /// samples a call), which moves on only then: between them the eye is
-    /// shaken by the sample the last of the game's frames took.
+    /// shaken by the sample the last of the game's frames took. The camera's
+    /// `Process` goes through `reach` (the follow orbit's way back out).
     pub fn frame_with(&mut self, keys: [f32; 4], now_ms: i64, c: &crate::controls::Client, game_frame: bool) -> bool {
         let toggled = crate::controls::update_controls(self, keys, c);
+        let dt_s = (now_ms - self.scene.time).clamp(0, 100) as f32 / 1000.0;
         self.scene.time = now_ms;
         let next = self.cam.effect.sample;
         if !game_frame {
             self.cam.effect.sample = self.shake;
         }
-        self.eye = self.cam.process(&mut self.scene);
+        self.eye = self.reach.process(&mut self.cam, &mut self.scene, dt_s);
         if game_frame {
             self.shake = next;
         } else {
