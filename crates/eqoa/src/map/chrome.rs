@@ -17,7 +17,7 @@ pub const BUTTONS: [(&str, i32); 4] = [("Close", key::TRIANGLE), ("+", key::R1),
 /// The legend for the pad: the inline glyphs (△ 65, ✕ 66, L1 185, R1 187)
 /// and what each does.
 const PAD_LEGEND: [(i32, &str); 5] = [(65, "Close"), (66, "Center"), (185, ""), (187, "Zoom"), (-1, "Sticks, drag, pinch: pan and zoom")];
-const KEY_LEGEND: &str = "M Close   Space Center   + - or wheel Zoom   Arrows, WASD or drag Pan";
+const KEY_LEGEND: [&str; 4] = ["M Close", "Space Center", "+ - or wheel Zoom", "Arrows, WASD or drag Pan"];
 
 pub const NAME: [f32; 4] = [1.0, 0.97, 0.85, 1.0];
 const PANEL: i32 = 61;
@@ -51,16 +51,13 @@ pub fn names(r: &mut dyn Raster, vui: &Vui, c: &Chrome) {
 }
 
 /// Draws the chrome over everything; where its buttons went, with their
-/// keys.
+/// keys. In a window too narrow for a row, the title goes under the buttons
+/// and the legend onto as many lines as it needs, from the foot up.
 pub fn draw(r: &mut dyn Raster, vui: &Vui, c: &Chrome) -> Vec<Button> {
     let mut hits = Vec::new();
     let [tl, br] = c.corners.map(|p| [p[0].round() as i32, p[1].round() as i32]);
     let (m, line) = (8, r.point_size() + 6);
-    // the title, top left
-    let s = wide(&c.title);
-    let tw = r.string_width(&s).max(0);
-    panel(vui, r, [tl[0] + m, tl[1] + m], tw + 12, line);
-    vui.draw_string_ex(r, &s, tl[0] + m + 6, tl[1] + m + 3, NAME, true);
+    let avail = br[0] - tl[0] - 2 * m;
     // the buttons, top right
     let mut x = br[0] - m;
     for (label, k) in BUTTONS {
@@ -72,35 +69,52 @@ pub fn draw(r: &mut dyn Raster, vui: &Vui, c: &Chrome) -> Vec<Button> {
         hits.push(([at[0], at[1], at[0] + bw, at[1] + line], k));
         x = at[0] - 6;
     }
-    // the legend, bottom left
-    let y = br[1] - m - line;
-    if c.keyboard {
-        let s = wide(KEY_LEGEND);
+    // the title, top left (under the buttons when they would meet), and the
+    // build's progress under it
+    let s = wide(&c.title);
+    let tw = r.string_width(&s).max(0);
+    let mut y = tl[1] + m;
+    if tl[0] + m + tw + 12 > x {
+        y += line + 4;
+    }
+    panel(vui, r, [tl[0] + m, y], tw + 12, line);
+    vui.draw_string_ex(r, &s, tl[0] + m + 6, y + 3, NAME, true);
+    if let Some((done, of)) = c.progress {
+        let s = wide(&format!("Drawing the map: {done} of {of} areas"));
         let tw = r.string_width(&s).max(0);
+        let y = y + line + 4;
         panel(vui, r, [tl[0] + m, y], tw + 12, line);
         vui.draw_string_ex(r, &s, tl[0] + m + 6, y + 3, NAME, true);
-    } else {
+    }
+    // the legend: its pieces (a glyph or none, and words) in lines that fit
+    let pieces: Vec<(i32, &str)> = if c.keyboard { KEY_LEGEND.iter().map(|s| (-1, *s)).collect() } else { PAD_LEGEND.to_vec() };
+    let width = |r: &dyn Raster, (g, s): (i32, &str)| if g >= 0 { vui.entry(g).uv1[0] + 2 } else { 0 } + r.string_width(&wide(s)).max(0) + 12;
+    let mut lines: Vec<Vec<(i32, &str)>> = vec![Vec::new()];
+    let mut used = 0;
+    for p in pieces {
+        let w = width(r, p);
+        if used + w > avail && !lines.last().unwrap().is_empty() {
+            lines.push(Vec::new());
+            used = 0;
+        }
+        used += w;
+        lines.last_mut().unwrap().push(p);
+    }
+    for (k, pieces) in lines.iter().enumerate() {
+        let y = br[1] - m - line - (lines.len() - 1 - k) as i32 * (line + 4);
+        let w: i32 = pieces.iter().map(|p| width(r, *p)).sum();
+        panel(vui, r, [tl[0] + m, y], w + 6, line);
         let mut x = tl[0] + m + 6;
-        let w: i32 = PAD_LEGEND.iter().map(|(g, s)| if *g >= 0 { vui.entry(*g).uv1[0] } else { 0 } + r.string_width(&wide(s)).max(0) + 14).sum();
-        panel(vui, r, [tl[0] + m, y], w, line);
-        for (glyph, label) in PAD_LEGEND {
+        for &(glyph, label) in pieces {
             if glyph >= 0 {
                 let e = vui.entry(glyph);
                 vui.blit(r, glyph, [x, y + (line - e.uv1[1]) / 2]);
                 x += e.uv1[0] + 2;
             }
             let s = wide(label);
-            r.draw_string([x, y + 3], NAME, &s);
+            vui.draw_string_ex(r, &s, x, y + 3, NAME, true);
             x += r.string_width(&s).max(0) + 12;
         }
-    }
-    // the build, under the title
-    if let Some((done, of)) = c.progress {
-        let s = wide(&format!("Drawing the map: {done} of {of} areas"));
-        let tw = r.string_width(&s).max(0);
-        let y = tl[1] + m + line + 4;
-        panel(vui, r, [tl[0] + m, y], tw + 12, line);
-        vui.draw_string_ex(r, &s, tl[0] + m + 6, y + 3, NAME, true);
     }
     hits
 }
@@ -109,6 +123,53 @@ pub fn draw(r: &mut dyn Raster, vui: &Vui, c: &Chrome) -> Vec<Button> {
 mod tests {
     use super::*;
     use crate::pointer::testing::{NullRaster, mid, vui};
+
+    /// In a phone's tall window (frame units 640 wide) the legend breaks into
+    /// lines that each fit, the foot's last, and the buttons stay inside the
+    /// window; in a wide one it is one line. The control: the wide window's
+    /// one line is wider than the narrow window.
+    #[test]
+    fn a_narrow_window_breaks_the_legend_into_lines() {
+        #[derive(Default)]
+        struct Panels(Vec<[i32; 4]>);
+        impl crate::ui::Layout for Panels {}
+        impl Raster for Panels {
+            fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+            fn stretch_blit(&mut self, _: u32, _: u32, at: [i32; 2], size: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {
+                self.0.push([at[0], at[1], at[0] + size[0], at[1] + size[1]]);
+            }
+            fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+            fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+            fn draw_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16]) {}
+            fn draw_centered_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16], _: u32) {}
+            // ArialUI's letters run about 12 frame pixels with their gap
+            fn string_width(&self, s: &[u16]) -> i32 {
+                s.len() as i32 * 12
+            }
+            fn point_size(&self) -> i32 {
+                16
+            }
+            fn viewport(&self) -> [i32; 4] {
+                [0, 0, 640, 448]
+            }
+            fn set_viewport(&mut self, _: [i32; 4]) {}
+        }
+        // a stand-in atlas: every entry 61 (the panel) of surface 1, so panels draw
+        let atlas: Vec<vi::ui::UiTexEntry> = (0..252).map(|i| vi::ui::UiTexEntry { x00: i, uv0: [0, 0], uv1: [16, 16], ..Default::default() }).collect();
+        let v = vi::ui::Vui::new(Default::default(), Default::default(), atlas);
+        let tall = Chrome { corners: [[0.0, -470.0], [640.0, 918.0]], ..chrome(false) };
+        let mut r = Panels::default();
+        let hits = draw(&mut r, &v, &tall);
+        let foot: Vec<&[i32; 4]> = r.0.iter().filter(|p| p[1] > 600).collect();
+        assert!(foot.len() >= 2, "{} lines: {foot:?}", foot.len());
+        assert!(foot.iter().all(|p| p[2] <= 640 - 8 + 6), "each line inside the window: {foot:?}");
+        assert!(hits.iter().all(|h| h.0[0] >= 0 && h.0[2] <= 640), "{hits:?}");
+        let mut w = Panels::default();
+        draw(&mut w, &v, &Chrome { corners: [[-300.0, 0.0], [940.0, 448.0]], ..chrome(false) });
+        let one: Vec<&[i32; 4]> = w.0.iter().filter(|p| p[1] > 380).collect();
+        assert_eq!(one.len(), 1, "a wide window's one line");
+        assert!(one[0][2] - one[0][0] > 640 - 16, "the control: wider than the narrow window");
+    }
 
     fn chrome(keyboard: bool) -> Chrome {
         Chrome { corners: [[-106.0, 0.0], [746.0, 448.0]], title: "Tunaria: Freeport (North)".into(), names: Vec::new(), keyboard, progress: Some((3, 175)) }
