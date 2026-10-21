@@ -466,7 +466,7 @@ impl RecipeWnd {
         self.mbox.pos = [160, 115];
         let white = [1.0; 4];
         self.hits.clear();
-        vui.blit_rect(r, 32, [-1, -1], [642, 332], 0, 1.0);
+        crate::ui::window_backdrop(vui, r, 642);
         let head = printf16(
             &wide("%s: %S %d, %S %d %S"),
             &[Arg::S(&wide(player)), Arg::S(&word(vui, 503)), Arg::D(part.slot04(self.skill) as i64), Arg::S(&word(vui, 537)), Arg::D(part.slot08(self.skill) as i64), Arg::S(&Self::skill_name(vui, self.skill))],
@@ -801,7 +801,7 @@ impl ExperimentWnd {
         self.refresh(part, icon);
         (self.menu.list.sel, self.menu.list.top) = sel_row;
         let white = [1.0; 4];
-        vui.blit_rect(r, 32, [-1, -1], [642, 332], 0, 1.0);
+        crate::ui::window_backdrop(vui, r, 642);
         let title = word(vui, 1546);
         let w = vui.string_width(r, &title) + 64;
         vui.blit_bar(r, &title, white, [320 - w / 2, 10], 33, 34, w, 0, 1.0, 0, true);

@@ -235,7 +235,7 @@ impl QuestLog {
         self.clamp_sel(count);
         self.drawn = now;
         self.hits.clear();
-        vui.blit_rect(r, 32, [-1, -1], [641, 332], 0, 1.0);
+        crate::ui::window_backdrop(vui, r, 641);
         self.window.draw(vui, r);
         let w = |id: i32| vui.words.get(id, vui.language).to_string();
         self.window.text(vui, r, &wide(&format!("|x{}   |t{}", w(516), w(161))), 40, 13, UI_COLORS[0], 0);

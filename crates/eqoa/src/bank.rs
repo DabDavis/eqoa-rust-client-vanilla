@@ -560,7 +560,7 @@ impl Bank {
     /// and the lists drawn.
     fn draw_items(&mut self, vui: &Vui, r: &mut dyn Raster, info: &Info, v: &View, icon: &dyn Fn(&NetItem) -> i32, can_use: &dyn Fn(&NetItem) -> bool, now: i64, cues: &mut Vec<i32>) {
         let white = [1.0, 1.0, 1.0, 1.0];
-        vui.blit_rect(r, 32, [-1, -1], [642, 332], 0, 1.0);
+        crate::ui::window_backdrop(vui, r, 642);
         let title = wide(vui.words.get(300, vui.language));
         let w = vui.string_width(r, &title) + 64;
         vui.blit_bar(r, &title, white, [(640 - w) / 2, 8], 33, 34, w, 0, 1.0, 0, true);

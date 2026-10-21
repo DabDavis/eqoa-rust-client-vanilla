@@ -1019,7 +1019,7 @@ impl Trade {
             let theirs: Vec<&NetItem> = st.theirs.iter().map(|o| &o.item).collect();
             fill(&mut self.theirs, &theirs, 4, icon, can_use);
             let white = [1.0; 4];
-            vui.blit_rect(r, 32, [-1, -1], [642, 332], 0, 1.0);
+            crate::ui::window_backdrop(vui, r, 642);
             self.window.init(vui, r, [395, 183], 480, 15, 0);
             self.window.open(true);
             let word = |id: i32| wide(vui.words.get(id, vui.language));

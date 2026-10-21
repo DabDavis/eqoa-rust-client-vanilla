@@ -740,7 +740,7 @@ impl WndGuild {
         let hl = [10.0 / 255.0, 50.0 / 255.0, 70.0 / 255.0, 1.0];
         let black = [0.0, 0.0, 0.0, 1.0];
         let line_h = vui.font_height(r) - 4;
-        vui.blit_rect(r, 32, [-1, -1], [642, 332], 0, 1.0);
+        crate::ui::window_backdrop(vui, r, 642);
         self.window.set_title(Some(&wide(&g.name)));
         self.window.draw(vui, r);
         let mut legend = wide("|x");

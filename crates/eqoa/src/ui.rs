@@ -255,3 +255,11 @@ mod tests {
         assert_eq!(ui.viewport, None);
     }
 }
+
+/// The backdrop a full-screen window puts under itself: `BlitRect` of atlas
+/// entry 32 over the frame's top 332 lines, `width` wide (642; Class
+/// Mastery's 641), which on a TV hides the world behind the window. The
+/// client leaves it out, so the world shows round the window (the user's
+/// choice, F3 20261021-043455, once the wide fix had run it to the window's
+/// sides); the start menu keeps its own band and the chat box its own.
+pub fn window_backdrop(_vui: &vi::ui::Vui, _r: &mut dyn vi::ui::Raster, _width: i32) {}

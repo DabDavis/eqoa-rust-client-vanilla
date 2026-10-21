@@ -778,7 +778,7 @@ impl ClassMastery {
         let c0 = UI_COLORS[0];
         self.hits.clear();
         self.child_hits.clear();
-        vui.blit_rect(r, 32, [-1, -1], [641, 332], 0, 1.0);
+        crate::ui::window_backdrop(vui, r, 641);
         let w = self.window.size[0];
         self.window.draw(vui, r);
         self.window.text(vui, r, &wide("Points Available/Spent:"), 40, 1, c0, 0);

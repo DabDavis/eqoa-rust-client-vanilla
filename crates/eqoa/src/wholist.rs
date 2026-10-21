@@ -321,7 +321,7 @@ impl WhoList {
         let n = who.list.len() as i32;
         self.now = now;
         self.hits.clear();
-        vui.blit_rect(r, 32, [-1, -1], [642, 332], 0, 1.0);
+        crate::ui::window_backdrop(vui, r, 642);
         self.window.draw(vui, r);
         if self.sel > n - 1 {
             self.sel = n - 1;

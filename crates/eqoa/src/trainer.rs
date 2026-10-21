@@ -403,7 +403,7 @@ impl Trainer {
         self.time = now;
         self.hits.clear();
         let word = |id: i32| vui.words.get(id, vui.language).to_string();
-        vui.blit_rect(r, 32, [-1, -1], [642, 332], 0, 1.0);
+        crate::ui::window_backdrop(vui, r, 642);
         self.window.init(vui, r, [320, 162], 640, 17, 0);
         self.window.open(true);
         self.window.draw(vui, r);

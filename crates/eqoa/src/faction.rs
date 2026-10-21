@@ -194,7 +194,7 @@ impl FactionWnd {
         let c0 = UI_COLORS[0];
         self.drawn = now;
         self.hits.clear();
-        vui.blit_rect(r, 32, [-1, -1], [642, 332], 0, 1.0);
+        crate::ui::window_backdrop(vui, r, 642);
         let title = wide("Factions");
         let tw = vui.string_width(r, &title) + 64;
         vui.blit_bar(r, &title, [1.0; 4], [320 - tw / 2, 15], 33, 34, tw, 0, 1.0, 0, true);

@@ -564,7 +564,7 @@ impl Merchant {
         self.update_info(view, out);
         if self.mode != 0 {
             let s = r.side();
-            vui.blit_rect(r, 32, [-1, -1], [642, 332], 0, 1.0);
+            crate::ui::window_backdrop(vui, r, 642);
             let fp = FrameParam { tl: (44, 0), top: (45, 0), tr: (46, 0), right: (52, 0), br: (50, 0), bottom: (49, 0), bl: (48, 0), left: (47, 0) };
             r.anchor(Anchor::Wide);
             vui.blit_rect(r, 51, [-1 - s, 48], [156 + s, 265], 0, 1.0);

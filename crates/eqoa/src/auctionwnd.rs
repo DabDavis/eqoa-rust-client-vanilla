@@ -761,7 +761,7 @@ impl SearchWnd {
         let now = v.now;
         self.fill_menu(auction, v);
         let wd = |id: i32| wide(vui.words.get(id, vui.language));
-        vui.blit_rect(r, 32, [-1, -1], [642, 332], 0, 1.0);
+        crate::ui::window_backdrop(vui, r, 642);
         let title = wd(match self.mode {
             1 => 1674,
             2 => 1675,

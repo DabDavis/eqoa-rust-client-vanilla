@@ -330,7 +330,7 @@ impl IgnoreList {
         self.hits.clear();
         let w = |id: i32| vui.words.get(id, vui.language).to_string();
         let black = [0.0, 0.0, 0.0, 1.0];
-        vui.blit_rect(r, 32, [-1, -1], [642, 332], 0, 1.0);
+        crate::ui::window_backdrop(vui, r, 642);
         self.window.set_title(Some(&wide(&w(612))));
         self.window.draw(vui, r);
         self.window.text(vui, r, &wide(&format!("|x{}   |t{}", w(212), w(161))), 20, 13, black, 0);

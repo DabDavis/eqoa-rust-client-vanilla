@@ -565,7 +565,7 @@ impl SpellBook {
         self.hits.clear();
         let s = r.side();
         self.side = s;
-        vui.blit_rect(r, 32, [-1, -1], [642, 332], 0, 1.0);
+        crate::ui::window_backdrop(vui, r, 642);
         let fp = FrameParam { tl: (44, 0), top: (45, 0), tr: (46, 0), right: (52, 0), br: (50, 0), bottom: (49, 0), bl: (48, 0), left: (47, 0) };
         r.anchor(Anchor::Wide);
         vui.blit_fill_frame(r, [150 - s, 50], [300 + 2 * s, 177], &fp, 35, 0, 1.0, true);

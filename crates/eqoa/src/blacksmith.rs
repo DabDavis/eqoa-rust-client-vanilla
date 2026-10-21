@@ -174,7 +174,7 @@ impl Blacksmith {
         self.refresh(view);
         let black = UI_COLORS[0];
         let word = |id: i32| vui.words.get(id, vui.language).to_string();
-        vui.blit_rect(r, 32, [-1, -1], [642, 332], 0, 1.0);
+        crate::ui::window_backdrop(vui, r, 642);
         let banner = wide(&word(609));
         let w = vui.string_width(r, &banner) + 64;
         vui.blit_bar(r, &banner, [1.0; 4], [(640 - w) / 2, 8], 33, 34, w, 0, 1.0, 0, true);
