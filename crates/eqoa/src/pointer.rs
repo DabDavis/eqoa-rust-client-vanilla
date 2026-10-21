@@ -273,6 +273,48 @@ pub mod testing {
         Vui::new(Default::default(), Default::default(), Vec::new())
     }
 
+    /// A picture `.0` frame pixels wider each side than 4:3 that records
+    /// each blit's anchor, place and size (`ui::Layout`).
+    pub struct Wide(pub i32, pub render::ui::Anchor, pub Vec<(render::ui::Anchor, [i32; 2], [i32; 2])>);
+
+    impl Wide {
+        pub fn new(side: i32) -> Self {
+            Wide(side, render::ui::Anchor::Middle, Vec::new())
+        }
+    }
+
+    impl crate::ui::Layout for Wide {
+        fn side(&self) -> i32 {
+            self.0
+        }
+        fn anchor(&mut self, a: render::ui::Anchor) {
+            self.1 = a;
+        }
+    }
+
+    impl Raster for Wide {
+        fn blit(&mut self, _: u32, _: u32, at: [i32; 2], _: [i32; 2], b: [i32; 2], _: i32, _: f32) {
+            self.2.push((self.1, at, b));
+        }
+        fn stretch_blit(&mut self, _: u32, _: u32, at: [i32; 2], size: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {
+            self.2.push((self.1, at, size));
+        }
+        fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+        fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+        fn draw_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16]) {}
+        fn draw_centered_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16], _: u32) {}
+        fn string_width(&self, s: &[u16]) -> i32 {
+            s.len() as i32 * 8
+        }
+        fn point_size(&self) -> i32 {
+            16
+        }
+        fn viewport(&self) -> [i32; 4] {
+            [0, 0, 639, 447]
+        }
+        fn set_viewport(&mut self, _: [i32; 4]) {}
+    }
+
     /// The middle of a hit rectangle, as a frame point.
     pub fn mid(r: [i32; 4]) -> [f32; 2] {
         [(r[0] + r[2]) as f32 / 2.0, (r[1] + r[3]) as f32 / 2.0]

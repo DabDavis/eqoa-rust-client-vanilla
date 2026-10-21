@@ -812,42 +812,6 @@ mod tests {
         Ability { id, display_index: index, level, valid: valid as i64, slot, p14: 1, icon_back: -1, ..Default::default() }
     }
 
-    /// A layout of `.0` frame pixels each side that records each blit's
-    /// anchor, place and size.
-    struct Rec(i32, Anchor, Vec<(Anchor, [i32; 2], [i32; 2])>);
-
-    impl Raster for Rec {
-        fn blit(&mut self, _: u32, _: u32, at: [i32; 2], _: [i32; 2], b: [i32; 2], _: i32, _: f32) {
-            self.2.push((self.1, at, b));
-        }
-        fn stretch_blit(&mut self, _: u32, _: u32, at: [i32; 2], size: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {
-            self.2.push((self.1, at, size));
-        }
-        fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
-        fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
-        fn draw_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16]) {}
-        fn draw_centered_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16], _: u32) {}
-        fn string_width(&self, s: &[u16]) -> i32 {
-            s.len() as i32 * 8
-        }
-        fn point_size(&self) -> i32 {
-            16
-        }
-        fn viewport(&self) -> [i32; 4] {
-            [0, 0, 639, 447]
-        }
-        fn set_viewport(&mut self, _: [i32; 4]) {}
-    }
-
-    impl Layout for Rec {
-        fn side(&self) -> i32 {
-            self.0
-        }
-        fn anchor(&mut self, a: Anchor) {
-            self.1 = a;
-        }
-    }
-
     /// In a window wider than 4:3 the book lays out as the start menu does:
     /// the side panels and their rails at the window's sides, the middle
     /// frame and the parchments as wide as they leave; on a 4:3 one every
@@ -859,7 +823,7 @@ mod tests {
         let vui = crate::pointer::testing::vui();
         let drawn = |side: i32, mode: i32| {
             let (mut b, map) = book(&[ability(1, 3, 1, false, -1), ability(2, 4, 1, false, -1), ability(3, 8, 1, false, -1)]);
-            let mut r = Rec(side, Anchor::Middle, Vec::new());
+            let mut r = crate::pointer::testing::Wide::new(side);
             b.open(&vui, &r, 0, 0);
             b.mode = mode;
             b.draw(&vui, &mut r, &map, 0, 0, 0);
@@ -879,7 +843,7 @@ mod tests {
         assert!(wide.2.iter().any(|b| b.0 == W && b.1 == [139 - 106, 39]));
         assert!(wide.2.iter().any(|b| b.0 == W && b.1 == [150 - 106, 50]));
         assert!(tv.2.iter().any(|b| b.1 == [139, 39]) && tv.2.iter().any(|b| b.1 == [150, 50]));
-        let plain = |r: &Rec| r.2.iter().filter(|b| b.0 != W).map(|b| (b.1, b.2)).collect::<Vec<_>>();
+        let plain = |r: &crate::pointer::testing::Wide| r.2.iter().filter(|b| b.0 != W).map(|b| (b.1, b.2)).collect::<Vec<_>>();
         assert_eq!(plain(&tv), plain(&wide));
         // the pointer: the third row and the third tab where they went left
         assert_eq!(b.point([40.0 - 106.0, (50 + 44 * 2 + 20) as f32]), vec![MOVED]);
