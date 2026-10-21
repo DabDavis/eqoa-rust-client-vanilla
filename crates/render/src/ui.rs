@@ -27,6 +27,16 @@ pub const SCREEN_H: f32 = 448.0;
 /// A quad's clip that is the whole target (`Ui::push_whole`).
 pub const WHOLE: [i32; 4] = [i32::MIN / 4, i32::MIN / 4, i32::MAX / 4, i32::MAX / 4];
 
+/// `VIRaster::Viewport(x1, y1, x2, y2)` as the layer keeps it (`Ui::viewport`):
+/// the whole screen is no viewport. A window that saves the viewport and sets
+/// it back (`VIUITextScroll` round a long name) leaves the layer as it found
+/// it, so a backdrop the frame's width made after it still runs the target's
+/// (`widen`); kept as a viewport, every backdrop after the first long name
+/// stopped at the frame's sides.
+pub fn viewport_of(v: [i32; 4]) -> Option<[i32; 4]> {
+    (v != [0, 0, SCREEN_W as i32 - 1, SCREEN_H as i32 - 1]).then_some(v)
+}
+
 /// Where the frame sits in a `size` target: its offset and its scale. The
 /// frame keeps its 4:3 shape (a PS2 shows it on a 4:3 picture): the full
 /// height, in the middle of a wider target (eqoa-port's widescreen does the
@@ -175,18 +185,22 @@ fn opaque_rect(q: &Quad) -> Option<[f32; 4]> {
 }
 
 /// What `Ui::push` notes of quad `i` for `end`: how far it went to a side,
-/// or, placed with the frame, what it covers.
+/// or, placed with the frame, what it covers when it is a full-screen
+/// window's backdrop (opaque, the frame's whole width: `widen`'s). A box
+/// (the edit box, a dialog, the quick chat, the options) leaves the HUD at
+/// the window's edges, where its 4:3 place is not covered (F3 2026-10-21:
+/// the say box took the compass and the gauges back under it).
 fn note(i: usize, q: &Quad, anchor: Anchor, side: f32, sided: &mut Vec<(usize, f32)>, opaque: &mut Vec<(usize, [f32; 4])>) {
     match anchor {
         Anchor::Left | Anchor::Right if side > 0.0 => sided.push((i, anchor.place(0.0, side))),
-        Anchor::Middle => opaque.extend(opaque_rect(q).map(|r| (i, r))),
+        Anchor::Middle => opaque.extend(opaque_rect(q).filter(|r| r[0] <= 0.0 && r[2] >= SCREEN_W).map(|r| (i, r))),
         _ => {}
     }
 }
 
-/// `Ui::end`: each quad moved `dx` to a side goes back with the frame when an
-/// opaque quad made after it (with the frame) covers its middle, as that
-/// window covers it on a 4:3 screen.
+/// `Ui::end`: each quad moved `dx` to a side goes back with the frame when a
+/// full-screen window's backdrop made after it (`note`) covers its middle, as
+/// that window covers it on a 4:3 screen.
 fn settle(quads: &mut [Quad], sided: &[(usize, f32)], opaque: &[(usize, [f32; 4])]) {
     for &(i, dx) in sided {
         let q = &mut quads[i];
@@ -355,13 +369,14 @@ impl Ui {
     }
 
     /// A new frame's quads, for a `size` target: none yet, and those made
-    /// next go with the frame (`anchor`).
+    /// next go with the frame (`anchor`) under the whole screen (`viewport`).
     pub fn begin(&mut self, size: (u32, u32)) {
         self.quads.clear();
         self.sided.clear();
         self.opaque.clear();
         self.side = side(size);
         self.anchor = Anchor::Middle;
+        self.viewport = None;
     }
 
     /// The whole frame pixels the target shows beyond each side of the
@@ -370,10 +385,11 @@ impl Ui {
         self.side
     }
 
-    /// The frame's quads are made: a piece moved to a side that a window
-    /// made after it covers on a 4:3 screen goes back under that window, so
-    /// a menu hides what it hides there (and the piece is not cut by its
-    /// edge); what no window covers stays at the side.
+    /// The frame's quads are made: a piece moved to a side that a
+    /// full-screen window made after it covers on a 4:3 screen goes back
+    /// under that window, so a menu hides what it hides there (and the piece
+    /// is not cut by its edge); what no such window covers, a box's 4:3
+    /// place included, stays at the side.
     pub fn end(&mut self) {
         settle(&mut self.quads, &self.sided, &self.opaque);
         self.sided.clear();
@@ -563,7 +579,7 @@ impl Ui {
 
 #[cfg(test)]
 mod tests {
-    use super::{Anchor, Quad, note, place, settle, side};
+    use super::{Anchor, Quad, note, place, settle, side, viewport_of};
 
     fn quad(x0: f32, x1: f32) -> Quad {
         Quad { tex: 0, blend: 0, pos: [[x0, 10.0], [x1, 10.0], [x1, 20.0], [x0, 20.0]], uv: [[0.0; 2]; 4], color: [1.0; 4], clip: None }
@@ -644,6 +660,26 @@ mod tests {
         }
     }
 
+    /// The whole screen set as the viewport (what `VIUITextScroll` leaves:
+    /// it saves the viewport, cuts to its window and sets it back) is no
+    /// viewport, so a backdrop the frame's width made after it still runs the
+    /// target's; a smaller viewport stays one.
+    #[test]
+    fn the_whole_screen_set_back_is_no_viewport() {
+        assert_eq!(viewport_of([0, 0, 639, 447]), None);
+        assert_eq!(viewport_of([10, 20, 300, 400]), Some([10, 20, 300, 400]));
+        assert_eq!(viewport_of([0, 0, 640, 448]), Some([0, 0, 640, 448]));
+        let s = 106.0;
+        let mut b = quad(-1.0, 641.0);
+        place(&mut b, viewport_of([0, 0, 639, 447]), Anchor::Middle, s);
+        assert_eq!([b.pos[0][0], b.pos[1][0]], [-108.0, 748.0]);
+        // control: kept as a viewport (before 2026-10-21) the backdrop
+        // stayed the frame's, the world showing at its sides
+        let mut k = quad(-1.0, 641.0);
+        place(&mut k, Some([0, 0, 639, 447]), Anchor::Middle, s);
+        assert_eq!([k.pos[0][0], k.pos[1][0]], [-1.0, 641.0]);
+    }
+
     #[test]
     fn a_span_is_one_stretch_so_tiles_stay_edge_to_edge_and_reach_the_right_piece() {
         // The chat backdrop: the HUD's piece at -1..202 (tiled as BlitRect
@@ -700,6 +736,38 @@ mod tests {
         // nothing moves on a 4:3 screen
         let q = layer(0.0, &[compass, backdrop]);
         assert_eq!((q[0].pos[0][0], q[0].clip), (10.0, None));
+    }
+
+    /// A box over a piece's 4:3 place leaves it at its side: only a
+    /// full-screen window, whose backdrop is the frame's whole width, takes
+    /// it back. F3 2026-10-21: the say box (`VIWndEdit` at the top) took the
+    /// compass and the gauges back under itself, off the window's edge.
+    #[test]
+    fn a_box_leaves_the_hud_at_the_sides() {
+        let s = 213.0;
+        let compass = (10.0, 69.0, 15.0, 84.0, 0, 1.0, Anchor::Left);
+        let gauges = (72.0, 130.0, 30.0, 70.0, 0, 1.0, Anchor::Left);
+        // the say box's frame, opaque, over both on a 4:3 screen
+        let edit = (17.0, 468.0, 28.0, 140.0, 0, 1.0, Anchor::Middle);
+        let q = layer(s, &[compass, gauges, edit]);
+        assert_eq!((q[0].pos[0][0], q[1].pos[0][0]), (10.0 - s, 72.0 - s));
+        // a full-screen window's backdrop still takes them back (its own
+        // runs the target's width over the sides)
+        let backdrop = (-1.0, 641.0, -1.0, 331.0, 0, 1.0, Anchor::Middle);
+        let q = layer(s, &[compass, gauges, edit, backdrop]);
+        assert_eq!((q[0].pos[0][0], q[1].pos[0][0]), (10.0, 72.0));
+        // one under the whole screen's viewport (cut to the frame, not
+        // widened) is still a full-screen window's
+        let mut quads = vec![Quad { tex: 0, blend: 0, pos: [[10.0, 15.0], [69.0, 15.0], [69.0, 84.0], [10.0, 84.0]], uv: [[0.0; 2]; 4], color: [1.0; 4], clip: None }];
+        let mut b = Quad { tex: 0, blend: 0, pos: [[-1.0, -1.0], [641.0, -1.0], [641.0, 331.0], [-1.0, 331.0]], uv: [[0.0; 2]; 4], color: [1.0; 4], clip: None };
+        let (mut sided, mut opaque) = (Vec::new(), Vec::new());
+        place(&mut quads[0], None, Anchor::Left, s);
+        note(0, &quads[0], Anchor::Left, s, &mut sided, &mut opaque);
+        place(&mut b, Some([0, 0, 639, 447]), Anchor::Middle, s);
+        note(1, &b, Anchor::Middle, s, &mut sided, &mut opaque);
+        quads.push(b);
+        settle(&mut quads, &sided, &opaque);
+        assert_eq!(quads[0].pos[0][0], 10.0);
     }
 
     #[test]
