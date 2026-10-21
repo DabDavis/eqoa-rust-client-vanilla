@@ -426,8 +426,11 @@ impl Play {
     /// A key for the dialog windows: true when one took it.
     pub fn dialog_key(&mut self, key: crate::dialog::Key) -> bool {
         match self.mode {
+            // VIWndPrivChat::OnKeyDown: Enter and ✕ (13, 134) send 279, Escape
+            // and △ (27, 132) send 260; VIWndGame::OnMessage hides the box on
+            // either (F3 20261021-024123: △ did not close it)
             9 => {
-                if matches!(key, crate::dialog::Key::Enter) {
+                if matches!(key, crate::dialog::Key::Enter | crate::dialog::Key::Escape) {
                     self.close_dialog();
                 }
                 true
@@ -2009,11 +2012,6 @@ impl Play {
                 #[cfg(target_arch = "wasm32")]
                 Some(crate::hud::Pick::Report) => {
                     crate::web::open_report();
-                    return true;
-                }
-                // the client's Controls page (F1)
-                Some(crate::hud::Pick::Controls) => {
-                    self.open_controls();
                     return true;
                 }
                 Some(crate::hud::Pick::Me) => self.self_id32(),
