@@ -334,8 +334,8 @@ pub struct Stats {
 }
 
 /// `Fx::scene`'s: the host, the zones' volumes, the cards, the rand, the
-/// raster's normal.
-type Parts<'a> = (Scene<'a>, &'a mut BTreeMap<usize, Vec<Instance>>, &'a Cards<Ee>, &'a mut Rand, &'a mut Vect3<Ee>);
+/// raster's output (its normal carried from fan to fan).
+type Parts<'a> = (Scene<'a>, &'a mut BTreeMap<usize, Vec<Instance>>, &'a Cards<Ee>, &'a mut Rand, &'a mut Draw<Ee>);
 
 /// The effect volumes of the zones streamed in round the camera.
 pub struct Fx {
@@ -349,14 +349,16 @@ pub struct Fx {
     anims: AnimScene<Ee>,
     cache: AnimCache,
     seed: u64,
-    /// the raster's normal, which a fan inherits unless its volume sets one
-    normal: Vect3<Ee>,
     /// this frame's fans, a run per material
     pub runs: Vec<Run>,
     /// the flocks' models, by their CSprite
     models: HashMap<Ref, Option<esf::Model>>,
     /// the camera this frame was rastered from
     eye: Vect3<Ee>,
+    /// where the zones were last streamed for, and how many the world had in
+    streamed: Option<(Vec3, usize)>,
+    /// the raster's immediate-mode output, kept for its room
+    draw: Draw<Ee>,
     pub stats: Stats,
 }
 
@@ -379,10 +381,11 @@ impl Fx {
             anims: AnimScene::default(),
             cache: AnimCache::new(),
             seed: 0,
-            normal: Vect3::default(),
             runs: Vec::new(),
             models: HashMap::new(),
             eye: Vect3::default(),
+            streamed: None,
+            draw: Draw::default(),
             stats: Stats::default(),
         }
     }
@@ -390,7 +393,7 @@ impl Fx {
     /// The host the volumes ask, beside the rest of what a raster takes.
     fn scene<'a>(&'a mut self, lib: &'a Library, hour: F<Ee>) -> Parts<'a> {
         let s = Scene { lib, materials: &mut self.materials, sprites: &mut self.sprites, spare: &mut self.spare, anims: &mut self.anims, cache: &mut self.cache, seed: &mut self.seed, hour };
-        (s, &mut self.zones, &self.cards, &mut self.rand, &mut self.normal)
+        (s, &mut self.zones, &self.cards, &mut self.rand, &mut self.draw)
     }
 
     /// The zones in and out round `at` as `VIWorld::StreamLeaf` takes them
@@ -398,6 +401,12 @@ impl Fx {
     /// gets its volumes, a copy each (`CreateActor`, `Copy`); a zone let go
     /// takes them with it (`StreamRoomStaticsOut`: `ReleaseActor`, `Free`).
     pub fn stream(&mut self, at: Vec3, world: &World<Ee>, lib: &Library) {
+        // nothing to do until the place moves or another zone comes in
+        let ready = world.loaded.iter().filter(|&&l| l).count();
+        if self.streamed.is_some_and(|(p, n)| n == ready && (p - at).length_squared() < 1.0) {
+            return;
+        }
+        self.streamed = Some((at, ready));
         let loaded: BTreeSet<usize> = self.zones.keys().copied().collect();
         let (load, release) = world.stream(&Vect3::of(at.x, at.y, at.z), &loaded);
         for z in release {
@@ -475,7 +484,7 @@ impl Fx {
         let planes = crate::particles::frustum(view_proj);
         let mut runs: Vec<Run> = Vec::new();
         let mut stats = Stats::default();
-        let (mut host, zones, cards, rand, normal) = self.scene(lib, F::new(hour));
+        let (mut host, zones, cards, rand, draw) = self.scene(lib, F::new(hour));
         let eye_d = eye.as_dvec3();
         for inst in zones.values_mut().flatten() {
             stats.volumes += 1;
@@ -485,9 +494,10 @@ impl Fx {
             }
             stats.rastered += 1;
             let modelview = Matrix44::mul(&inst.m, &cam.view);
-            let mut draw = Draw { normal: *normal, ..Default::default() };
-            inst.vs.raster(cam, &modelview, now, cards, rand, &mut host, &mut draw);
-            *normal = draw.normal;
+            // the raster's normal carries on from the last fan drawn
+            draw.fans.clear();
+            draw.sprites.clear();
+            inst.vs.raster(cam, &modelview, now, cards, rand, &mut host, draw);
             for fan in &draw.fans {
                 // the material, or the raster's solid fill (`SetSolidFillUIAVGMaterial`:
                 // untextured, blended, Z written)
@@ -770,7 +780,7 @@ mod tests {
 
     /// The disc's TUNARIA.ESF round Neriak, with what a walk there needs:
     /// the zones round (x, z) read and the collision world made.
-    fn neriak(x: f32, z: f32) -> Option<(Library, World<Ee>)> {
+    pub(super) fn neriak(x: f32, z: f32) -> Option<(Library, World<Ee>)> {
         let iso_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
         if !iso_path.exists() {
             eprintln!("SKIP: no run/eqoa.iso");
@@ -892,5 +902,42 @@ mod tests {
         let mut far = Fx::new();
         run(&mut far, &lib, &world, at + Vec3::new(0.0, 2.0, -200.0), Vec3::new(0.0, 0.0, 1.0), 12.0, 30, 2000);
         assert_eq!(far.boids().len(), 0);
+    }
+}
+
+#[cfg(test)]
+mod bench {
+    use super::*;
+
+    /// `cargo test --release -p eqoa fx::bench -- --ignored --nocapture`:
+    /// the volumes' CPU a frame where they cost most (a dust storm, 1,300
+    /// fans) and in Neriak's plaza, the best of five runs of 200 frames.
+    #[test]
+    #[ignore]
+    fn volumes_cost() {
+        for (x, y, z, dir) in [(19150.0, 57.0, 4640.0, Vec3::new(0.3, -0.3, 1.0)), (25087.0, 3.0, 8775.0, Vec3::new(0.0, -0.2, 1.0))] {
+            let Some((lib, world)) = tests::neriak(x, z) else { return };
+            let eye = Vec3::new(x, y, z);
+            let proj = glam::camera::rh::proj::directx::perspective(45f32.to_radians(), 16.0 / 9.0, 0.3, 6000.0);
+            let view = glam::camera::rh::view::look_to_mat4(eye, dir, Vec3::Y);
+            let cam = camera(Vect3::of(eye.x, eye.y, eye.z), Vect3::of(dir.x, dir.y, dir.z));
+            let mut fx = Fx::new();
+            fx.stream(eye, &world, &lib);
+            let mut t = 0;
+            for _ in 0..200 {
+                fx.frame(&world, &lib, &cam, proj * view, eye, t, 12.0);
+                t += 16;
+            }
+            let mut best = f64::MAX;
+            for _ in 0..5 {
+                let start = std::time::Instant::now();
+                for _ in 0..200 {
+                    fx.frame(&world, &lib, &cam, proj * view, eye, t, 12.0);
+                    t += 16;
+                }
+                best = best.min(start.elapsed().as_secs_f64() * 1000.0 / 200.0);
+            }
+            eprintln!("at ({x}, {z}): {:.3} ms a frame; {}", best, fx.describe());
+        }
     }
 }
