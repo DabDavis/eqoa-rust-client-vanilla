@@ -182,10 +182,18 @@ impl Map {
         self.press = None;
     }
 
+    /// Closes the map; its tiles leave the GPU (they come back from the
+    /// cache when it is opened again), the overview stays.
     pub fn close(&mut self) {
         self.open = false;
         self.held = [false; 6];
         self.press = None;
+        let tiles = self.world.as_mut().map(|w| std::mem::take(&mut w.tiles)).unwrap_or_default();
+        if let Some(l) = self.layers.as_mut() {
+            for (t, _) in tiles.into_values() {
+                l.map.free(t);
+            }
+        }
     }
 
     /// A key (the pad's codes, `SetKey`'s: 128 + the field) while the map is

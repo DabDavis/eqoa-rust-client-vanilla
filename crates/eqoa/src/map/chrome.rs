@@ -16,7 +16,7 @@ pub const BUTTONS: [(&str, i32); 4] = [("Close", key::TRIANGLE), ("+", key::R1),
 
 /// The legend for the pad: the inline glyphs (△ 65, ✕ 66, L1 185, R1 187)
 /// and what each does.
-const PAD_LEGEND: [(i32, &str); 5] = [(65, "Close"), (66, "Center"), (185, ""), (187, "Zoom"), (-1, "Sticks: pan and zoom")];
+const PAD_LEGEND: [(i32, &str); 5] = [(65, "Close"), (66, "Center"), (185, ""), (187, "Zoom"), (-1, "Sticks, drag, pinch: pan and zoom")];
 const KEY_LEGEND: &str = "M Close   Space Center   + - or wheel Zoom   Arrows, WASD or drag Pan";
 
 pub const NAME: [f32; 4] = [1.0, 0.97, 0.85, 1.0];

@@ -251,3 +251,18 @@ fn the_keyboard_works_the_map() {
     m.keyboard_key("escape", true, false);
     assert!(!m.open);
 }
+
+/// Closed, the map lets its tiles go (they come back from the cache when it
+/// opens again); the overview stays. The control: a map closed by a window
+/// opening (the same close) and one only hidden keep nothing either way, and
+/// before the close the tiles are there.
+#[test]
+fn closing_lets_the_tiles_go() {
+    let mut m = up((1280, 720));
+    m.world.as_mut().unwrap().tiles.insert(84, (3, 1));
+    m.world.as_mut().unwrap().tiles.insert(85, (4, 1));
+    assert_eq!(m.world.as_ref().unwrap().tiles.len(), 2, "the control: there before");
+    m.key(key::TRIANGLE, true);
+    assert!(!m.open);
+    assert!(m.world.as_ref().unwrap().tiles.is_empty());
+}

@@ -680,9 +680,10 @@ mod tests {
             for (zi, z) in b.zones.iter_mut().enumerate() {
                 *z = if zi == 84 { Zone::Missing } else { Zone::Shown };
             }
-            // the frames until the tile is drawn (what follows waits on the GPU)
+            // the frames until the tile is drawn (what follows waits on the
+            // GPU, unless it answers at once)
             let mut n = 0;
-            while b.job_name() != "picture" && n < 100_000 {
+            while b.job_name() != "picture" && b.zones[84] != Zone::Shown && n < 100_000 {
                 b.step(&lib, &g, [25000.0, 15000.0], budget);
                 n += 1;
             }
