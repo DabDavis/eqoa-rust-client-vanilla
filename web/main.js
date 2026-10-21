@@ -519,6 +519,54 @@ window.eqoaUnpack = async (name, util, aut, fresh) => {
   return out;
 };
 
+// ---- the map's pictures (the client's map, M: map/store.rs): each zone's
+// tile and overview cell, kept in this origin's private storage under
+// map/<the world's key>, so a world's map is drawn once. A write commits
+// whole on close; a page with no storage (plain http to another host) keeps
+// nothing and draws the map again each visit.
+
+async function mapDir(key, create) {
+  const root = await navigator.storage.getDirectory();
+  return (await root.getDirectoryHandle('map', { create })).getDirectoryHandle(key, { create });
+}
+
+window.eqoaMapGet = async (key, name) => {
+  try {
+    const f = await (await (await mapDir(key, false)).getFileHandle(name)).getFile();
+    return new Uint8Array(await f.arrayBuffer());
+  } catch {
+    return null;
+  }
+};
+
+window.eqoaMapPut = async (key, name, bytes) => {
+  try {
+    const w = await (await (await mapDir(key, true)).getFileHandle(name, { create: true })).createWritable();
+    await w.write(bytes);
+    await w.close();
+  } catch { /* no storage here: drawn again next time */ }
+};
+
+window.eqoaMapList = async (key) => {
+  const out = [];
+  try {
+    for await (const name of (await mapDir(key, false)).keys()) out.push(name);
+  } catch { /* none kept */ }
+  return out;
+};
+
+// the same world's older pictures (another build of the map or of the
+// world's file): directories named for its file but not `key`
+window.eqoaMapPrune = async (key) => {
+  try {
+    const stem = key.slice(0, key.lastIndexOf('-'));
+    const map = await (await navigator.storage.getDirectory()).getDirectoryHandle('map', { create: true });
+    for await (const name of map.keys()) {
+      if (name !== key && name.slice(0, name.lastIndexOf('-')) === stem) await map.removeEntry(name, { recursive: true });
+    }
+  } catch { /* nothing to let go */ }
+};
+
 // ---- graphics: which path the client will take (web::gfx asks for a WebGPU
 // adapter the same way, else WebGL2), and how to get WebGPU where it is off.
 // A page cannot change a browser's flags or open chrome:// itself, so the

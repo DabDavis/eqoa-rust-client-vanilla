@@ -141,3 +141,13 @@ pub fn world_bounds(img: &ClientImage, world: i32) -> Option<[i32; 4]> {
     let va = 0x00CF3738 + 0x20 * world as u32;
     Some([img.i32_at(va + 0x0C), img.i32_at(va + 0x10), img.i32_at(va + 0x14), img.i32_at(va + 0x18)])
 }
+
+/// `gWorldInfo[i].m_nameWord` (+0x08, a halfword): the world's name, a
+/// WORDS.TXT word (`VIWndGoto` draws it).
+pub fn world_name_word(img: &ClientImage, world: i32) -> Option<u16> {
+    if !(0..6).contains(&world) {
+        return None;
+    }
+    let w = (img.i32_at(0x00CF3738 + 0x20 * world as u32 + 8) & 0xFFFF) as u16;
+    (w != 0).then_some(w)
+}

@@ -15,6 +15,7 @@
 pub mod billboard;
 pub mod curve;
 pub mod fans;
+pub mod map;
 pub mod overlay;
 pub mod text;
 pub mod ui;
@@ -650,6 +651,15 @@ impl Renderer {
             level: Some(0),
             lod_dists: m.lod_dists.clone(),
         }
+    }
+
+    /// Lets go of every texture uploaded so far (the models made keep
+    /// theirs while they live): for a renderer that draws one thing after
+    /// another and keeps nothing from one to the next (the map's tiles).
+    pub fn forget_textures(&mut self) {
+        self.textures.clear();
+        self.missing_textures.clear();
+        self.materials.clear();
     }
 
     /// Re-points one layer pass of one batch, as `VIAtmosphere` changes the

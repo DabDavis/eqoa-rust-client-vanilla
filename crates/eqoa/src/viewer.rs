@@ -373,7 +373,13 @@ pub fn shot_with(
                 None => script.controls,
             };
             let mut sticks = controls.axes();
-            touch.window = play.as_ref().is_some_and(|p| p.mode != 0);
+            // `EQOA_MAP=ms`: the map opened then (M)
+            if let Some(p) = play.as_mut()
+                && std::env::var("EQOA_MAP").ok().and_then(|v| v.parse::<i64>().ok()).is_some_and(|ms| ms / 16 * 16 == t)
+            {
+                p.map.show();
+            }
+            touch.window = play.as_ref().is_some_and(|p| p.mode != 0 || p.map.open);
             touch.dpad = play.as_mut().is_some_and(|p| p.quick_dpad());
             for (_, id, phase, at) in touch_script.iter().filter(|e| e.0 == t) {
                 touch.touch(*id, *phase, *at, Instant::now(), (w, h));
@@ -447,7 +453,14 @@ pub fn shot_with(
             // the pointers' looks, taken every frame, applied only in play
             // with the camera free
             let (tx, ty, pinch) = touch.take_look();
-            if !play.as_ref().is_some_and(|p| p.is_dead()) && play.as_ref().is_none_or(|p| p.look_free()) {
+            if let Some(p) = play.as_mut().filter(|p| p.map.open) {
+                // the map up: a finger's drag and pinch, the wheel, its; the
+                // pad's sticks go to it (`map_frame`), the walk stands
+                p.map.touch(tx, ty, pinch);
+                p.map.wheel(mouse.take_wheel(), None);
+                mouse.discard();
+                sticks = [0.0; 4];
+            } else if !play.as_ref().is_some_and(|p| p.is_dead()) && play.as_ref().is_none_or(|p| p.look_free()) {
                 let inverted = play.as_ref().is_some_and(|p| p.options.inverted != 0);
                 let frame_s = frame_ms as f32 / 1000.0;
                 let (look, zoom) = mouse.look(&mut walker, inverted, frame_s);
@@ -771,6 +784,8 @@ pub fn shot_with(
                 // TrackTarget too (the rings' clock); the last frame's are drawn
                 let (proj, v) = walker.view(w as f32 / h as f32);
                 p.draw_rings(&mut renderer, &device, &queue, &walker, proj * v, lib, game_frame);
+                // the map (`map.rs`): its build, and its view while up
+                p.map_frame(&walker, lib, &device, &queue, render::TARGET_FORMAT, (w, h), frame_ms as f32 / 1000.0, console.sticks());
                 // A teleport into another world: that world's file in place
                 // of this one, and the walk begun again there.
                 if let Some((file, pos, heading)) = p.take_world_change() {
@@ -954,7 +969,12 @@ pub fn shot_with(
     let sky = sky_billboards.as_ref().map(|(v, p, b)| (*v, *p, b.as_slice(), &textures as &render::Textures));
     // the options' Brightness (kept only under `$EQOA_CONFIG` for a shot)
     renderer.curve.set(crate::settings::curve(crate::settings::client().brightness));
-    let rgba = render::capture_with_sky(&device, &queue, &mut renderer, w, h, &view, &refs, particles, sky);
+    let mut rgba = render::capture_with_sky(&device, &queue, &mut renderer, w, h, &view, &refs, particles, sky);
+    // the map up covers the frame: the picture is the map's
+    if let Some(p) = play.as_ref().filter(|p| p.map.open) {
+        rgba = crate::map::tool::capture(&p.map, &device, &queue, (w, h))?;
+        eprintln!("{}", p.map.describe());
+    }
     let mut enc = png::Encoder::new(std::io::BufWriter::new(std::fs::File::create(out)?), w, h);
     enc.set_color(png::ColorType::Rgba);
     enc.set_depth(png::BitDepth::Eight);
@@ -1410,6 +1430,14 @@ impl App {
     /// pad's and the mouse's drag (`Mouse::look`, which moves an orbiting
     /// camera itself), axis by axis the one further from rest.
     fn sticks(&mut self) -> [f32; 4] {
+        // the map up (`map.rs`): a finger's drag and pinch are its, the walk
+        // stands (the pad's sticks go to it in `Play::map_frame`)
+        if let Some(p) = self.play.as_mut().filter(|p| p.map.open) {
+            let (tx, ty, pinch) = self.touch.take_look();
+            p.map.touch(tx, ty, pinch);
+            self.mouse.discard();
+            return [0.0; 4];
+        }
         let mut a = self.controls().axes();
         // the pointers' looks, taken every frame, applied only in play with
         // the camera free
@@ -1703,6 +1731,20 @@ impl ApplicationHandler for App {
                     && let Some(n) = held_name(&event.logical_key)
                 {
                     self.held.remove(&n);
+                }
+                // The map (`map.rs`), while it is up, takes every key.
+                if let Some(p) = self.play.as_mut().filter(|p| p.map.open) {
+                    let name = match &event.logical_key {
+                        Key::Named(NamedKey::Escape) => Some("escape".to_string()),
+                        Key::Named(NamedKey::Backspace) => Some("backspace".to_string()),
+                        Key::Named(NamedKey::Enter) => Some("enter".to_string()),
+                        Key::Named(NamedKey::Space) => Some("space".to_string()),
+                        k => held_name(k),
+                    };
+                    if let Some(n) = name {
+                        p.map.keyboard_key(&n, event.state == ElementState::Pressed, event.repeat);
+                    }
+                    return;
                 }
                 // The edit box (mode 2) takes the keyboard: characters type,
                 // Backspace, Escape (cancel), Enter (done), the arrows move the
@@ -2147,6 +2189,12 @@ impl ApplicationHandler for App {
                             p.open_quick_chat();
                             return;
                         }
+                        // M: the map (the client's own; free in the game's
+                        // keyboard table, `map.rs`; dead, it closes again).
+                        (None, Key::Character(c)) if p.mode == 0 && c.eq_ignore_ascii_case("m") && !event.repeat => {
+                            p.map.show();
+                            return;
+                        }
                         // X (88, 120): autorun (`ToggleP74`), as L3.
                         (None, Key::Character(c)) if p.mode == 0 && c.eq_ignore_ascii_case("x") => {
                             p.toggle_autorun();
@@ -2324,10 +2372,26 @@ impl ApplicationHandler for App {
             WindowEvent::Focused(false) => {
                 self.mouse.release_all();
                 self.held.clear();
+                if let Some(p) = self.play.as_mut() {
+                    p.map.let_go();
+                }
             }
-            WindowEvent::CursorLeft { .. } => self.mouse.release_all(),
+            WindowEvent::CursorLeft { .. } => {
+                self.mouse.release_all();
+                if let Some(p) = self.play.as_mut() {
+                    p.map.let_go();
+                }
+            }
             WindowEvent::MouseInput { state, button, .. } if matches!(button, MouseButton::Left | MouseButton::Right) => {
                 let down = state == ElementState::Pressed;
+                // the map up: a drag pans it, a click is its (`map.rs`)
+                let at = [self.cursor.0 as f32, self.cursor.1 as f32];
+                if let Some(c) = self.play.as_mut().filter(|p| p.map.open).map(|p| p.map.mouse_button(button == MouseButton::Right, down, at)) {
+                    if let Some(c) = c {
+                        self.click(c, false);
+                    }
+                    return;
+                }
                 if self.walker.is_some() {
                     // the left button on a quick-chat choice holds its
                     // direction while it is down (`Play::point_press`), and
@@ -2349,6 +2413,9 @@ impl ApplicationHandler for App {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = (position.x, position.y);
+                if let Some(p) = self.play.as_mut().filter(|p| p.map.open) {
+                    p.map.mouse_moved([position.x as f32, position.y as f32]);
+                }
                 self.mouse.moved(position.x, position.y);
                 if self.walker.is_none()
                     && let Some((x, y)) = self.drag
@@ -2367,7 +2434,9 @@ impl ApplicationHandler for App {
                     MouseScrollDelta::LineDelta(_, y) => (y, y.clamp(-1.0, 1.0)),
                     MouseScrollDelta::PixelDelta(p) => (p.y as f32 / 40.0, p.y as f32 / 100.0),
                 };
-                if self.walker.is_some() {
+                if let Some(p) = self.play.as_mut().filter(|p| p.map.open) {
+                    p.map.wheel(steps, Some([self.cursor.0 as f32, self.cursor.1 as f32]));
+                } else if self.walker.is_some() {
                     self.mouse.wheel(d, steps);
                 } else if let Camera::Orbit { zoom, .. } = &mut self.camera {
                     *zoom = (*zoom * 0.9f32.powf(d)).clamp(0.05, 20.0);
@@ -2449,7 +2518,7 @@ impl ApplicationHandler for App {
                 for c in self.touch.take_clicks() {
                     self.click(c, true);
                 }
-                self.touch.window = self.play.as_ref().is_some_and(|p| p.mode != 0);
+                self.touch.window = self.play.as_ref().is_some_and(|p| p.mode != 0 || p.map.open);
                 self.touch.dpad = self.play.as_mut().is_some_and(|p| p.quick_dpad());
                 mark(&mut self.perf, 0);
                 let sticks = self.sticks();
@@ -2633,6 +2702,8 @@ impl ApplicationHandler for App {
                         p.draw_touch(u, &self.touch, (g.config.width, g.config.height));
                     }
                     p.draw_rings(&mut g.renderer, &g.device, &g.queue, w, view.view_proj, &self.lib, game_frame);
+                    // the map (`map.rs`): its build behind the game, and its view while up
+                    p.map_frame(w, &self.lib, &g.device, &g.queue, g.config.format, (g.config.width, g.config.height), self.frame_s, self.console.sticks());
                     let plates = p.plates();
                     if let Some(t) = g.renderer.text.as_mut() {
                         t.labels = crate::play::labels(&plates, w.eye_position(), view.view_proj, t);
@@ -2675,6 +2746,9 @@ impl ApplicationHandler for App {
                 }
                 g.renderer.curve.apply(&g.queue, &mut enc, &target);
                 g.renderer.draw_text(&g.device, &mut enc, &target, &g.depth, (g.config.width, g.config.height));
+                if let Some(p) = &self.play {
+                    p.map.draw(&g.device, &mut enc, &target, &g.depth, (g.config.width, g.config.height));
+                }
                 mark(&mut self.perf, 11);
                 let sent = g.queue.submit([enc.finish()]);
                 mark(&mut self.perf, 12);
