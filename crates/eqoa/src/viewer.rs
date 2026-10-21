@@ -924,6 +924,8 @@ pub fn shot_with(
     let textures = render::library_textures(lib);
     let particles = billboard_view.map(|(v, p)| (v, p, batches.as_slice(), &textures as &render::Textures));
     let sky = sky_billboards.as_ref().map(|(v, p, b)| (*v, *p, b.as_slice(), &textures as &render::Textures));
+    // the options' Brightness (kept only under `$EQOA_CONFIG` for a shot)
+    renderer.curve.set(crate::settings::curve(crate::settings::client().brightness));
     let rgba = render::capture_with_sky(&device, &queue, &mut renderer, w, h, &view, &refs, particles, sky);
     let mut enc = png::Encoder::new(std::io::BufWriter::new(std::fs::File::create(out)?), w, h);
     enc.set_color(png::ColorType::Rgba);
@@ -1469,6 +1471,7 @@ impl App {
             let _ = writeln!(o, "surface {}x{} {:?}", g.config.width, g.config.height, g.config.format);
         }
         let _ = writeln!(o, "files: {}", self.lib.files.iter().map(|f| f.0.as_str()).collect::<Vec<_>>().join(", "));
+        let _ = writeln!(o, "options, extended: {}", crate::settings::describe());
         // the controls: a pad's sticks as they came (before the host's dead
         // zone), as the game reads them and with the keys, the mouse and the
         // touch screen's merged in (what `UpdateControls` got), the camera's
@@ -1590,10 +1593,22 @@ impl ApplicationHandler for App {
         self.attach(window, Some(surface), config, device, queue);
     }
 
-    fn about_to_wait(&mut self, _: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, _el: &ActiveEventLoop) {
         if (!self.held.is_empty() || self.walker.is_some())
             && let Some(g) = &self.gfx
         {
+            // the options' Frame Rate natively: under a cap the loop sleeps
+            // until the next frame is due instead of asking for frames it
+            // would skip (a page skips animation frames: `web::frame_due`)
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                use winit::event_loop::ControlFlow;
+                if let Some(d) = crate::settings::frame_wait() {
+                    _el.set_control_flow(ControlFlow::WaitUntil(Instant::now() + d));
+                    return;
+                }
+                _el.set_control_flow(ControlFlow::Wait);
+            }
             g.window.request_redraw();
         }
     }
@@ -2343,6 +2358,13 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
+                // natively the same cap, the options' Frame Rate: a frame
+                // asked for early (a resize, the wheel) waits for its time
+                // (`about_to_wait` sleeps until it is due)
+                #[cfg(not(target_arch = "wasm32"))]
+                if !crate::settings::frame_due() {
+                    return;
+                }
                 FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let frame_start = Instant::now();
                 // one of the game's frames, 30 a second whatever the
@@ -2589,14 +2611,20 @@ impl ApplicationHandler for App {
                     .chain(self.streamer.iter().flat_map(|s| s.draws()))
                     .chain(self.play.iter().flat_map(|p| p.models()).map(render::Draw::Model))
                     .collect();
-                g.renderer.draw(&g.queue, &mut enc, &target, &g.depth, &view, &refs);
+                // the options' Brightness: the scene through its curve (none
+                // at the default), the labels and the HUD after it as drawn
+                g.renderer.curve.set(crate::settings::curve(crate::settings::client().brightness));
+                let scene = g.renderer.curve.scene_target(&g.device, (g.config.width, g.config.height));
+                let st = scene.as_ref().unwrap_or(&target);
+                g.renderer.draw(&g.queue, &mut enc, st, &g.depth, &view, &refs);
                 if let Some((v, p)) = bb_view {
                     let textures = render::library_textures(&self.lib);
                     let mut rot = v;
                     rot.w_axis = glam::Vec4::W;
-                    g.renderer.draw_sky_billboards(&g.device, &g.queue, &mut enc, &target, &g.depth, rot, p, &self.sky_batches, &textures);
-                    g.renderer.draw_billboards(&g.device, &g.queue, &mut enc, &target, &g.depth, v, p, &self.batches, &textures);
+                    g.renderer.draw_sky_billboards(&g.device, &g.queue, &mut enc, st, &g.depth, rot, p, &self.sky_batches, &textures);
+                    g.renderer.draw_billboards(&g.device, &g.queue, &mut enc, st, &g.depth, v, p, &self.batches, &textures);
                 }
+                g.renderer.curve.apply(&g.queue, &mut enc, &target);
                 g.renderer.draw_text(&g.device, &mut enc, &target, &g.depth, (g.config.width, g.config.height));
                 mark(&mut self.perf, 11);
                 let sent = g.queue.submit([enc.finish()]);

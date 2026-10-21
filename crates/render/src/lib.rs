@@ -13,6 +13,7 @@
 //! actors in the order its tree walk met them.
 
 pub mod billboard;
+pub mod curve;
 pub mod overlay;
 pub mod text;
 pub mod ui;
@@ -300,6 +301,8 @@ pub struct Renderer {
     materials: std::collections::HashMap<(i32, usize, [u32; 16]), wgpu::BindGroup>,
     /// The palette every group's models draw with: theirs is never set.
     identity_palette: wgpu::BindGroup,
+    /// The options' Brightness over the scene (`curve`): none until set.
+    pub curve: curve::Curve,
 }
 
 /// What to draw this frame. The lights are the VU1 strip programs' uniforms:
@@ -531,6 +534,7 @@ impl Renderer {
             drawn: Default::default(),
             materials: Default::default(),
             identity_palette,
+            curve: curve::Curve::new(format),
         }
     }
 
@@ -1227,13 +1231,17 @@ pub fn capture_with_sky(
     let depth = depth_view(device, w, h);
     let mut enc = device.create_command_encoder(&Default::default());
     let tv = target.create_view(&Default::default());
-    renderer.draw(queue, &mut enc, &tv, &depth, view, items);
+    // the scene into the Brightness curve's texture when one is set
+    let scene = renderer.curve.scene_target(device, (w, h));
+    let st = scene.as_ref().unwrap_or(&tv);
+    renderer.draw(queue, &mut enc, st, &depth, view, items);
     if let Some((v, p, batches, textures)) = sky {
-        renderer.draw_sky_billboards(device, queue, &mut enc, &tv, &depth, v, p, batches, textures);
+        renderer.draw_sky_billboards(device, queue, &mut enc, st, &depth, v, p, batches, textures);
     }
     if let Some((v, p, batches, textures)) = particles {
-        renderer.draw_billboards(device, queue, &mut enc, &tv, &depth, v, p, batches, textures);
+        renderer.draw_billboards(device, queue, &mut enc, st, &depth, v, p, batches, textures);
     }
+    renderer.curve.apply(queue, &mut enc, &tv);
     renderer.draw_text(device, &mut enc, &tv, &depth, (w, h));
     enc.copy_texture_to_buffer(
         target.as_image_copy(),

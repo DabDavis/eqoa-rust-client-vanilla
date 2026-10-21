@@ -82,7 +82,8 @@ pub fn apply(cam: &mut WalkCamera<Ee>, p: &Preset) {
 }
 
 /// The follow orbit's (style 3's) zoom-out ceiling: the client's 11.0
-/// where the game stores 8.0 (`set_style`).
+/// where the game stores 8.0 (`set_style`), by default; the options'
+/// Camera Distance sets it from 8 to 50 (`settings::camera_distance`).
 pub const FOLLOW_MAX_DISTANCE: f32 = 11.0;
 
 /// `SetCameraStyle(style)`.
@@ -113,7 +114,7 @@ pub fn set_style<S: Scene<Ee>>(cam: &mut WalkCamera<Ee>, style: i32, rc: Option<
             // sweep in `move_camera` are the game's). The QOL ELF raised the
             // same ceiling on the PS2 (claude-notes/qol-patches-20260816.md,
             // the cave on `VIWalkCamera::Process` storing +0x264).
-            cam.max_orbit_distance = f(FOLLOW_MAX_DISTANCE);
+            cam.max_orbit_distance = f(crate::settings::camera_distance());
             cam.min_collision_dist = f(3.5);
             cam.set_orbit_distance(f(3.38));
             cam.walk.set_pitch_range(f(-std::f32::consts::FRAC_PI_4), half_pi);
