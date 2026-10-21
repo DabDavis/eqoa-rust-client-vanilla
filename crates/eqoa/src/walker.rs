@@ -92,6 +92,19 @@ impl Walker {
         self.eye = self.cam.process(&mut self.scene);
     }
 
+    /// The character put back at `at` (no floor looked for), facing
+    /// `heading`, the camera behind, when it has moved off it at all: what
+    /// the loading screen holds the walk at while the game's frame would
+    /// stop (`loading.rs`).
+    pub fn hold(&mut self, at: [f32; 3], heading: f32) {
+        if self.cam.walk.phys.position.to_array() == at {
+            return;
+        }
+        self.cam.set_location(Vect3::of(at[0], at[1], at[2]), Vect3::of(heading, 0.0, 0.0), &mut self.scene);
+        self.cam.set_orbit_angle_behind();
+        self.eye = self.cam.process(&mut self.scene);
+    }
+
     /// Loads the character as a VICSprite from `r` (a 0x2700 record).
     pub fn set_character(&mut self, lib: &esf::Library, r: esf::Ref) {
         self.anims.time = self.scene.time;

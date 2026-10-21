@@ -63,6 +63,13 @@ pub fn frame_from_window(size: (u32, u32), px: [f32; 2]) -> [f32; 2] {
     [(px[0] - ox) / sx, (px[1] - oy) / sy]
 }
 
+/// A point of the frame as a point of a `size` target in its own pixels (y
+/// down): `frame_from_window` undone.
+pub fn window_from_frame(size: (u32, u32), p: [f32; 2]) -> [f32; 2] {
+    let (ox, oy, sx, sy) = frame(size);
+    [ox + p[0] * sx, oy + p[1] * sy]
+}
+
 /// The whole frame pixels a `size` target shows beyond each side of the
 /// frame: none when it is 4:3 or narrower.
 pub fn side(size: (u32, u32)) -> f32 {
@@ -678,6 +685,24 @@ mod tests {
         let mut k = quad(-1.0, 641.0);
         place(&mut k, Some([0, 0, 639, 447]), Anchor::Middle, s);
         assert_eq!([k.pos[0][0], k.pos[1][0]], [-1.0, 641.0]);
+    }
+
+    /// On a 4:3 target neither change moves a pixel: a viewport set back to
+    /// the whole screen cuts to the frame as no viewport does, and nothing is
+    /// moved to a side for a window to take back.
+    #[test]
+    fn a_four_by_three_target_is_the_games_whatever_the_viewport() {
+        for vp in [None, Some([0, 0, 639, 447]), viewport_of([0, 0, 639, 447])] {
+            let mut q = quad(-1.0, 641.0);
+            place(&mut q, vp, Anchor::Middle, 0.0);
+            assert_eq!([q.pos[0][0], q.pos[1][0]], [-1.0, 641.0]);
+            assert_eq!(q.clip.unwrap_or([0, 0, 640, 448]), [0, 0, 640, 448], "{vp:?}");
+        }
+        let compass = (10.0, 69.0, 15.0, 84.0, 0, 1.0, Anchor::Left);
+        let edit = (17.0, 468.0, 28.0, 140.0, 0, 1.0, Anchor::Middle);
+        let backdrop = (-1.0, 641.0, -1.0, 331.0, 0, 1.0, Anchor::Middle);
+        assert_eq!(layer(0.0, &[compass, edit])[0].pos[0], [10.0, 15.0]);
+        assert_eq!(layer(0.0, &[compass, backdrop])[0].pos[0], [10.0, 15.0]);
     }
 
     #[test]

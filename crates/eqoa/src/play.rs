@@ -361,6 +361,9 @@ pub struct Play {
     alarm: crate::alarm::Alarm,
     /// `EQOA_QUICK_TEXT`'s progress: the piece, the character.
     quick_typed: (usize, usize),
+    /// The loading screen (`VIClient::LoadingProgress`, `loading.rs`): up
+    /// from a move or world entry until the zones round the arrival are in.
+    loading: crate::loading::Screen,
 }
 
 /// `gWorldInfo`'s paths on the Frontiers disc, by world index (CLIENT's
@@ -735,9 +738,12 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, cast_window: (0, 0), rooted: false, locks: (true, true), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0) };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, cast_window: (0, 0), rooted: false, locks: (true, true), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), loading: Default::default() };
         p.take_abilities();
         p.npcw_world_entry();
+        // world entry: LoadModels and StreamFillCache under the loading screen
+        let now = p.session.now() as i64;
+        p.loading.begin(p.player.pos, p.player.hpr[0], false, now);
         p
     }
 
@@ -803,6 +809,9 @@ impl Play {
             (None, None, false) => "waiting for SUPPORT",
         };
         let _ = writeln!(o, "start menu: {start}; HUD: {hud}");
+        if let Some(w) = self.loading.wait {
+            let _ = writeln!(o, "loading screen: up {} ms, for the zones round {:?}{}", self.session.now() as i64 - w.since, w.at, if w.entering { ", the world's file first" } else { "" });
+        }
         let _ = writeln!(o, "entities: {} of {SLOTS}", self.entities.slots.iter().flatten().count());
         for e in self.entities.slots.iter().flatten() {
             let name = e.creature.as_ref().map_or("", |c| c.name.as_str());
@@ -818,6 +827,8 @@ impl Play {
     pub fn frame(&mut self, walker: &mut Walker, lib: &Library, mut g: Gpu, game_ms: i64, game_frame: bool, mut sound: Option<&mut crate::sound::Sound>) -> Option<u32> {
         self.take_modules(sound.as_deref_mut());
         let now = self.session.now();
+        // the loading screen's gears, turning by the clock (`SetTime(now)`)
+        self.loading.frame(lib, g.renderer, g.device, g.queue, now as i64);
         let mut new_model = None;
         for e in self.session.pump() {
             match e {
@@ -841,6 +852,7 @@ impl Play {
                             Some(f) => {
                                 eprintln!("play: teleport to world {world} ({f}) at {pos:?}");
                                 self.world_change = Some((f.to_string(), pos, hpr[0]));
+                                self.loading.begin(pos, hpr[0], true, now as i64);
                                 // black until the new world is entered (`world_entered`),
                                 // the old one not shown while it loads
                                 self.fade.set(1.0, 0.0);
@@ -855,6 +867,8 @@ impl Play {
                         eprintln!("play: teleport to {pos:?}");
                         walker.relocate(pos, hpr[0]);
                         self.player.pos = pos;
+                        // EnterWorld: StreamFillCache there under the loading screen
+                        self.loading.begin(pos, hpr[0], false, now as i64);
                     }
                     self.npcw_respawn();
                     self.bank_reset();
@@ -1246,6 +1260,7 @@ impl Play {
                     // a dump at the bind point), another world's file read
                     // first, black until it is in (`world_entered`)
                     let mut elsewhere = false;
+                    let (arrival, heading, here) = (player.pos, player.hpr[0], player.world == self.player.world);
                     if player.world != self.player.world {
                         match WORLD_FILES.get(player.world as usize) {
                             Some(f) => {
@@ -1267,6 +1282,9 @@ impl Play {
                         self.fade.set(1.0, 0.0);
                         // the walker is built again there (`world_entered`)
                         self.cam_carry = self.cam_entered.then_some((self.cam_saved.mode, None));
+                    }
+                    if here || elsewhere {
+                        self.loading.begin(arrival, heading, elsewhere, now as i64);
                     }
                     if self.cam_entered {
                         let rc = self.race_camera();
@@ -1640,6 +1658,11 @@ impl Play {
     /// them the rings are placed again for the view as they are.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_rings(&mut self, r: &mut Renderer, device: &wgpu::Device, queue: &wgpu::Queue, walker: &Walker, view_proj: glam::Mat4, lib: &Library, step: bool) {
+        // no scene under the loading screen
+        if self.loading.up() {
+            r.set_overlay(device, queue, view_proj, &[], &render::library_textures(lib));
+            return;
+        }
         let me = self.self_id32();
         let target = (self.target != u32::MAX).then_some(self.target);
         let aim = target.and_then(|id| {
@@ -1661,6 +1684,9 @@ impl Play {
     /// `NameColors[ApplyLook's pick]`, at its name node.
     pub fn plates(&self) -> Vec<Plate> {
         let mut out = Vec::new();
+        if self.loading.up() {
+            return out;
+        }
         for (slot, e) in self.entities.slots.iter().enumerate() {
             let (Some(e), Some(Some(p))) = (e, self.puppets.get(slot)) else { continue };
             let (Some(c), Some(at)) = (&e.creature, p.name_at) else { continue };
@@ -1796,6 +1822,7 @@ impl Play {
     /// the player.
     pub fn world_entered(&mut self, walker: &mut Walker) {
         self.fade.set(0.0, 0.0);
+        self.loading.entered();
         self.self_model = None;
         if let Some((mode, preset)) = self.cam_carry.take() {
             let rc = self.race_camera();
@@ -1805,6 +1832,38 @@ impl Play {
             }
             walker.cam.set_orbit_angle_behind();
             walker.eye = walker.cam.process(&mut walker.scene);
+        }
+    }
+
+    /// The loading screen while it is up: its view and the gears, which the
+    /// frame draws in place of the scene (`loading.rs`).
+    pub fn loading_scene(&self, size: (u32, u32)) -> Option<(render::View, Vec<&GpuModel>)> {
+        self.loading.up().then(|| (crate::loading::view(size), self.loading.models().collect()))
+    }
+
+    pub fn loading(&self) -> bool {
+        self.loading.up()
+    }
+
+    /// Where the loading screen waits for the zones: none while it is down
+    /// or another world's file is still being read.
+    pub fn loading_at(&self) -> Option<glam::Vec3> {
+        self.loading.waits_at().map(glam::Vec3::from)
+    }
+
+    /// A frame under the loading screen: once the zones round the arrival
+    /// are in and drawn (`settled`), or at the cap, the screen down; until
+    /// then the walk held where the move put it (the game's frame stops in
+    /// `StreamFillCache`), to go on from there on the ground that came.
+    pub fn loading_step(&mut self, walker: &mut Walker, settled: bool) {
+        let now = self.session.now() as i64;
+        if let Some(w) = self.loading.end(settled, now) {
+            crate::say(&format!("loading screen down: the zones round {:?} in after {} ms{}", w.at.map(|v| v.round()), now - w.since, if settled { "" } else { " (the cap)" }));
+            return;
+        }
+        let p = walker.cam.walk.phys.position;
+        if let Some((at, heading)) = self.loading.hold_at([p.x.0, p.y.0, p.z.0], walker.cam.walk.phys.angles.x.0) {
+            walker.hold(at, heading);
         }
     }
 
@@ -4502,14 +4561,18 @@ impl Play {
     /// made again and kept, else the kept quads drawn again; and either way
     /// the damage numbers under it, placed through this frame's view.
     pub fn hud(&mut self, ui: &mut render::ui::Ui, walker: &Walker, time_ms: i64, view_proj: glam::Mat4, size: (u32, u32), step: bool) {
-        if step {
+        // the loading screen up or down since the quads kept: made again now
+        if step || self.loading.kept != self.loading.up() {
+            self.loading.kept = self.loading.up();
             self.draw_hud(ui, walker, time_ms, view_proj, size);
             ui.keep();
         } else {
             ui.again();
         }
-        let under = self.damage.place(view_proj, size);
-        ui.quads.splice(0..0, under);
+        if !self.loading.up() {
+            let under = self.damage.place(view_proj, size);
+            ui.quads.splice(0..0, under);
+        }
     }
 
     /// The HUD's quads for one of the game's frames (`VIWndGame::OnDrawSelf`),
@@ -4517,6 +4580,16 @@ impl Play {
     /// frames).
     fn draw_hud(&mut self, ui: &mut render::ui::Ui, walker: &Walker, time_ms: i64, view_proj: glam::Mat4, size: (u32, u32)) {
         ui.begin(size);
+        // LoadingProgress in place of the game's frame: no HUD, no windows
+        if self.loading.up() {
+            let hud = self.hud.as_ref();
+            if let Some(assets) = hud.map(|h| &h.1).or(self.ui_assets.as_ref()) {
+                let mut r = assets.raster(ui);
+                crate::loading::draw_2d(hud.map(|h| &h.0), &mut r, net::session::EXPANSION_FLAGS & 2 != 0);
+            }
+            ui.end();
+            return;
+        }
         // VIWndEdit::OnDrawSelf's `sPadOnly`: a keyboard in use and the
         // options' Soft Keyboard on show the compact face
         crate::editbox::set_pad_only(self.keyboard && self.options.compact != 0);

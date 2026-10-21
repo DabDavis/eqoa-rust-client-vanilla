@@ -181,6 +181,24 @@ pub fn fill_set(lib: &Library, file: usize, x: f32, z: f32) -> Vec<(usize, u64, 
     want.into_iter().filter(|&(_, k)| lib.zone(file, k).is_none()).filter_map(|(_, k)| lib.zone_range(file, k).map(|(o, n)| (k, o, n))).collect()
 }
 
+/// Whether the zones round `at` are in and drawn, by each zone's bounds and
+/// what is known of it: every zone the world file has within the inner
+/// radius of `at` measured flat (what [`fill_set`] reads) is `installed` in
+/// the collision world, and every installed one within it measured whole
+/// (what `World::stream` hands the GPU) is `uploaded`.
+pub fn settled_round(at: Vec3, bounds: &[vi::geom::BBox<Ee>], installed: impl Fn(usize) -> bool, uploaded: impl Fn(usize) -> bool, on_disc: impl Fn(usize) -> bool) -> bool {
+    let p = Vect3::<Ee>::of(at.x, at.y, at.z);
+    let r = STREAM_INNER * STREAM_INNER;
+    bounds.iter().enumerate().all(|(k, b)| {
+        let mut flat = *b;
+        flat.min.y = F::new(-1e9);
+        flat.max.y = F::new(1e9);
+        let read = flat.distance_squared(&p).0 >= r || installed(k) || !on_disc(k);
+        let drawn = b.distance_squared(&p).0 >= r || !installed(k) || uploaded(k);
+        read && drawn
+    })
+}
+
 /// [`fill_set`] read through `src` and installed; the zones asked for that
 /// have not come yet (natively none: the disc answers at once), for the
 /// streamer to expect ([`Streamer::new`]).
@@ -321,6 +339,14 @@ impl Streamer {
         !release.is_empty() || n > 0
     }
 
+    /// Whether the zones round `at` are in and drawn: what the loading screen
+    /// waits for (`loading.rs`; `VIScene::StreamFillCache` returns once its
+    /// cache is filled there). See [`settled_round`].
+    pub fn settled(&self, at: Vec3, world: &World<Ee>, lib: &Library) -> bool {
+        let installed = |k: usize| world.loaded.get(k).copied().unwrap_or(false);
+        settled_round(at, &world.zone_bounds, installed, |k| self.zones.contains_key(&k), |k| lib.zone_range(self.file, k).is_some())
+    }
+
     /// Poses every loaded zone's props for this frame.
     pub fn animate(&self, world: &mut World<Ee>, r: &Renderer, queue: &wgpu::Queue) {
         for l in self.zones.values() {
@@ -337,5 +363,46 @@ impl Streamer {
 
     pub fn describe(&self) -> String {
         format!("{} zones streamed in", self.zones.len())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vi::geom::BBox;
+
+    fn bbox(min: [f32; 3], max: [f32; 3]) -> BBox<Ee> {
+        BBox { min: Vect3::of(min[0], min[1], min[2]), max: Vect3::of(max[0], max[1], max[2]) }
+    }
+
+    /// The loading screen's test: the zone at the arrival and its
+    /// neighbours within 900 (measured flat) in, those within 900 measured
+    /// whole drawn too; what is past them, or not in the file, does not
+    /// count. A zone near on the map but far below or above must be in,
+    /// though it need not be drawn yet.
+    #[test]
+    fn settled_is_every_zone_round_the_arrival_in_and_drawn() {
+        let at = Vec3::new(500.0, 0.0, 500.0);
+        let zones = [
+            bbox([0.0, -50.0, 0.0], [1000.0, 50.0, 1000.0]),       // 0: under the arrival
+            bbox([1000.0, -50.0, 0.0], [2000.0, 50.0, 1000.0]),    // 1: 500 off
+            bbox([5000.0, -50.0, 0.0], [6000.0, 50.0, 1000.0]),    // 2: far off
+            bbox([0.0, 2000.0, 1000.0], [1000.0, 2100.0, 2000.0]), // 3: 500 off on the map, 2000 above
+        ];
+        let all = |_: usize| true;
+        let none = |_: usize| false;
+        assert!(settled_round(at, &zones, all, all, all));
+        let not = |n: usize| move |k: usize| k != n;
+        assert!(!settled_round(at, &zones, not(1), all, all), "a neighbour not read");
+        assert!(!settled_round(at, &zones, all, not(1), all), "a neighbour read, not drawn");
+        assert!(settled_round(at, &zones, not(2), not(2), all), "a far zone does not count");
+        assert!(!settled_round(at, &zones, not(3), all, all), "near on the map: read first");
+        assert!(settled_round(at, &zones, all, not(3), all), "but far for the GPU");
+        assert!(settled_round(at, &zones, not(1), all, not(1)), "a zone the file lacks never comes");
+        assert!(!settled_round(at, &zones, none, none, all), "nothing in");
+        // control: measured whole, zone 3 (2000 above) would not be waited for
+        let p = Vect3::<Ee>::of(at.x, at.y, at.z);
+        let whole = |inst: &dyn Fn(usize) -> bool| zones.iter().enumerate().all(|(k, b)| b.distance_squared(&p).0 >= STREAM_INNER * STREAM_INNER || inst(k));
+        assert!(whole(&not(3)));
     }
 }

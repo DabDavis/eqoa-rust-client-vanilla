@@ -776,6 +776,14 @@ pub fn shot_with(
                     }
                     p.world_entered(&mut walker);
                 }
+                // under the loading screen the zones go up at once (the
+                // shot's own go up at its end), and it comes down once they are
+                if p.loading() {
+                    let at = Vec3::from(walker.cam.walk.phys.position.to_array());
+                    streamer.update(at, &mut walker.scene, lib, stream::Gpu { renderer: &mut renderer, device: &device, queue: &queue }, None);
+                    let settled = p.loading_at().is_some_and(|a| streamer.settled(a, &walker.scene, lib));
+                    p.loading_step(&mut walker, settled);
+                }
                 std::thread::sleep(std::time::Duration::from_millis(frame_ms as u64));
             }
             // UpdateSprite runs every frame in the game.
@@ -915,16 +923,16 @@ pub fn shot_with(
             }
         }
     }
-    let refs: Vec<render::Draw> = gpu
-        .iter()
-        .map(render::Draw::Model)
-        .chain(streamed.iter().flat_map(|s| s.draws()))
-        .chain(play.iter().flat_map(|p| p.models()).map(render::Draw::Model))
-        .collect();
+    // the loading screen in place of the scene: its gears through its own view
+    let loading = play.as_ref().and_then(|p| p.loading_scene((w, h)));
+    let refs: Vec<render::Draw> = match &loading {
+        Some((_, gears)) => gears.iter().map(|&m| render::Draw::Model(m)).collect(),
+        None => gpu.iter().map(render::Draw::Model).chain(streamed.iter().flat_map(|s| s.draws())).chain(play.iter().flat_map(|p| p.models()).map(render::Draw::Model)).collect(),
+    };
     let textures = render::library_textures(lib);
-    let particles = billboard_view.map(|(v, p)| (v, p, batches.as_slice(), &textures as &render::Textures));
-    let sky = sky_billboards.as_ref().map(|(v, p, b)| (*v, *p, b.as_slice(), &textures as &render::Textures));
-    let rgba = render::capture_with_sky(&device, &queue, &mut renderer, w, h, &view, &refs, particles, sky);
+    let particles = billboard_view.filter(|_| loading.is_none()).map(|(v, p)| (v, p, batches.as_slice(), &textures as &render::Textures));
+    let sky = sky_billboards.as_ref().filter(|_| loading.is_none()).map(|(v, p, b)| (*v, *p, b.as_slice(), &textures as &render::Textures));
+    let rgba = render::capture_with_sky(&device, &queue, &mut renderer, w, h, loading.as_ref().map_or(&view, |l| &l.0), &refs, particles, sky);
     let mut enc = png::Encoder::new(std::io::BufWriter::new(std::fs::File::create(out)?), w, h);
     enc.set_color(png::ColorType::Rgba);
     enc.set_depth(png::BitDepth::Eight);
@@ -2484,12 +2492,19 @@ impl ApplicationHandler for App {
                         }
                     }
                     mark(perf, 3);
-                    if let Some(s) = streamer {
-                        // One zone a frame, as the game's loader takes them.
+                    let loading = play.as_ref().is_some_and(|p| p.loading());
+                    if let Some(s) = streamer.as_mut() {
+                        // One zone a frame, as the game's loader takes them;
+                        // under the loading screen all at once.
                         let at = Vec3::from(w.cam.walk.phys.position.to_array());
                         let gpu = stream::Gpu { renderer: &mut g.renderer, device: &g.device, queue: &g.queue };
-                        s.update(at, &mut w.scene, lib, gpu, Some(1));
+                        s.update(at, &mut w.scene, lib, gpu, if loading { None } else { Some(1) });
                         s.animate(&mut w.scene, &g.renderer, &g.queue);
+                    }
+                    // the loading screen down once the zones round the arrival are in and drawn
+                    if loading && let Some(p) = play.as_mut() {
+                        let settled = p.loading_at().is_some_and(|a| streamer.as_ref().is_none_or(|s| s.settled(a, &w.scene, lib)));
+                        p.loading_step(w, settled);
                     }
                     mark(perf, 4);
                     let cues: Vec<crate::sound::Cue> = play.as_mut().map(|p| std::mem::take(&mut p.cues)).unwrap_or_default();
@@ -2582,15 +2597,20 @@ impl ApplicationHandler for App {
                     (None, None) => return,
                 };
                 let mut enc = g.device.create_command_encoder(&Default::default());
-                let refs: Vec<render::Draw> = g
-                    .models
-                    .iter()
-                    .map(render::Draw::Model)
-                    .chain(self.streamer.iter().flat_map(|s| s.draws()))
-                    .chain(self.play.iter().flat_map(|p| p.models()).map(render::Draw::Model))
-                    .collect();
-                g.renderer.draw(&g.queue, &mut enc, &target, &g.depth, &view, &refs);
-                if let Some((v, p)) = bb_view {
+                // the loading screen in place of the scene: its gears through its own view
+                let loading = self.play.as_ref().and_then(|p| p.loading_scene((g.config.width, g.config.height)));
+                let refs: Vec<render::Draw> = match &loading {
+                    Some((_, gears)) => gears.iter().map(|&m| render::Draw::Model(m)).collect(),
+                    None => g
+                        .models
+                        .iter()
+                        .map(render::Draw::Model)
+                        .chain(self.streamer.iter().flat_map(|s| s.draws()))
+                        .chain(self.play.iter().flat_map(|p| p.models()).map(render::Draw::Model))
+                        .collect(),
+                };
+                g.renderer.draw(&g.queue, &mut enc, &target, &g.depth, loading.as_ref().map_or(&view, |l| &l.0), &refs);
+                if let Some((v, p)) = bb_view.filter(|_| loading.is_none()) {
                     let textures = render::library_textures(&self.lib);
                     let mut rot = v;
                     rot.w_axis = glam::Vec4::W;
