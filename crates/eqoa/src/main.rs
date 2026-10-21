@@ -46,6 +46,8 @@ mod guild;
 // the music off a disc read asynchronously: a page's (natively, its tests)
 #[cfg(any(target_arch = "wasm32", test))]
 mod bgm;
+mod bindpage;
+mod binds;
 mod blacksmith;
 mod gram;
 mod hud;

@@ -111,12 +111,14 @@ pub struct Hud {
 
 /// What a pointer finds on the HUD's left side (`Hud::pick`): the player's
 /// own frame, a group member's bar (its id), the pet's bar. Each is what L1's
-/// cycle targets in turn. In a page, also the bug report's button.
+/// cycle targets in turn. The client's Controls page's button; in a page,
+/// also the bug report's.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Pick {
     Me,
     Member(u32),
     Pet,
+    Controls,
     #[cfg(target_arch = "wasm32")]
     Report,
 }
@@ -212,17 +214,33 @@ impl Hud {
         }
         self.draw_target(vui, ui, [20, 348], s);
         #[cfg(target_arch = "wasm32")]
-        self.draw_report(vui, ui, [20, 421]);
+        let x = 20 + self.draw_report(vui, ui, [20, 421]) + 6;
+        #[cfg(not(target_arch = "wasm32"))]
+        let x = 20;
+        self.draw_controls(vui, ui, [x, 421]);
     }
 
     /// The page's bug report (F3, web/report.js) as a button under the
     /// target's bar: the bar's art, solid as its words are (a tester asked
-    /// that it not fade), with its key and what it does on it.
+    /// that it not fade), with its key and what it does on it. Its width.
     #[cfg(target_arch = "wasm32")]
-    fn draw_report(&mut self, vui: &Vui, ui: &mut UiRaster, at: [i32; 2]) {
+    fn draw_report(&mut self, vui: &Vui, ui: &mut UiRaster, at: [i32; 2]) -> i32 {
         let label = wide("F3  Report a bug");
         let w = vui.string_width(ui, &label) + 28;
         self.note([at[0], at[1], at[0] + w, at[1] + vui.entry(26).uv1[1]], Pick::Report);
+        vui.blit_bar(ui, &label, [1.0, 1.0, 1.0, 1.0], at, 25, 26, w, 3, 1.0, 0, true);
+        w
+    }
+
+    /// The client's Controls page (`bindpage`: the keys and the buttons, a
+    /// legend for the keyboard; F3 20261021) as a button beside the report's
+    /// (natively where that is in a page), drawn as it is: its key as the
+    /// player has it, and its name.
+    fn draw_controls(&mut self, vui: &Vui, ui: &mut UiRaster, at: [i32; 2]) {
+        let key = crate::settings::with_binds(|b| crate::binds::row_named("controls").and_then(|r| b.key(r)).filter(|k| !k.is_empty()).map(crate::binds::display));
+        let label = wide(&key.map_or_else(|| "Controls".to_string(), |k| format!("{k}  Controls")));
+        let w = vui.string_width(ui, &label) + 28;
+        self.note([at[0], at[1], at[0] + w, at[1] + vui.entry(26).uv1[1]], Pick::Controls);
         vui.blit_bar(ui, &label, [1.0, 1.0, 1.0, 1.0], at, 25, 26, w, 3, 1.0, 0, true);
     }
 

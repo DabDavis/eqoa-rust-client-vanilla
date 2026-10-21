@@ -316,6 +316,8 @@ pub struct Play {
     ignore_wnd: crate::social::IgnoreList,
     panel_open: bool,
     panel_keys: Vec<(i32, bool)>,
+    /// the Options window to open on its Controls page (F1 from play)
+    controls_open: bool,
     /// The guild (`m_guild`), its commands and invitation (`m_p2EF24`), and
     /// `VIWndGuild` (modes 20, the invitation, and 21, the roster) with the
     /// mode it is to open in.
@@ -742,7 +744,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, cast_window: (0, 0), rooted: false, locks: (true, true), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, cast_window: (0, 0), rooted: false, locks: (true, true), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default() };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -2007,6 +2009,11 @@ impl Play {
                 #[cfg(target_arch = "wasm32")]
                 Some(crate::hud::Pick::Report) => {
                     crate::web::open_report();
+                    return true;
+                }
+                // the client's Controls page (F1)
+                Some(crate::hud::Pick::Controls) => {
+                    self.open_controls();
                     return true;
                 }
                 Some(crate::hud::Pick::Me) => self.self_id32(),
@@ -4432,6 +4439,57 @@ impl Play {
         self.panel_keys.clear();
     }
 
+    /// F1 in play, or the HUD's "F1 Controls": the Options window on its
+    /// Controls page (the client's own; F1 makes no key code in the game's
+    /// keyboard table, `VIKeyboard::Read`). Not without the start menu's
+    /// CLIENT, nor over another window.
+    pub fn open_controls(&mut self) {
+        if self.start.is_some() && self.hud_ready() && self.mode == 0 && !self.is_dead() {
+            self.open_panel(34);
+            self.controls_open = true;
+        }
+    }
+
+    /// What the Controls page waits for, if anything: a key pressed then is
+    /// its (`capture_key`), a controller's button too (`capture_button`).
+    pub fn capturing(&self) -> Option<crate::bindpage::Column> {
+        if self.mode == 34 { self.options_wnd.capturing() } else { None }
+    }
+
+    /// A key pressed while the Controls page waits, by its name.
+    pub fn capture_key(&mut self, name: &str) {
+        let mut cues = Vec::new();
+        if let Some(h) = self.hud.as_ref() {
+            self.options_wnd.capture_key(&h.0, name, &mut cues);
+        }
+        self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
+    }
+
+    /// A controller's button pressed while the Controls page waits (its bit
+    /// index as the controller has it).
+    pub fn capture_button(&mut self, phys: u8) {
+        let mut cues = Vec::new();
+        if let Some(h) = self.hud.as_ref() {
+            self.options_wnd.capture_button(&h.0, phys, &mut cues);
+        }
+        self.keyboard = false;
+        self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
+    }
+
+    /// Whether the keyboard is typing into an edit box (the edit box, the
+    /// quick chat's, the bank's, the NPC windows', support's and mail's
+    /// editors, the plain line before the HUD): its keys are never remapped
+    /// (`binds`).
+    pub fn keyboard_typing(&mut self) -> bool {
+        self.typing.is_some()
+            || self.mode == 2
+            || self.quick_typing()
+            || (self.bank_owns() && self.bank_typing())
+            || (self.npcw_owns() && self.npcw_typing())
+            || (self.support_owns() && self.support_typing())
+            || (self.mail_owns() && self.mail_typing())
+    }
+
     /// The modes whose window takes the start menu's keys.
     pub fn panel_up(&self) -> bool {
         matches!(self.mode, 17 | 18 | 20 | 21 | 26 | 34)
@@ -4462,6 +4520,7 @@ impl Play {
             match self.mode {
                 18 => self.buddy_wnd.open(vui, r),
                 26 => self.ignore_wnd.open(vui, r),
+                34 if std::mem::take(&mut self.controls_open) => self.options_wnd.open_controls(vui, r, &self.options),
                 34 => self.options_wnd.open(vui, r, &self.options),
                 _ => {}
             }
@@ -4471,13 +4530,17 @@ impl Play {
                 17 | 18 => buddy_ups.extend(self.buddy_wnd.key(menus, &self.buddies, &words, k, down, now, &mut cues)),
                 26 => ignore_ups.extend(self.ignore_wnd.key(menus, &self.ignore, &words, k, down, now, &mut cues)),
                 34 if down => self.options_wnd.key(vui, r, &mut self.options, k, now, &mut cues, &mut option_ups),
+                34 => self.options_wnd.release(k),
                 _ => {}
             }
         }
         match self.mode {
             17 | 18 => buddy_ups.extend(self.buddy_wnd.draw(vui, r, menus, &self.buddies, now, &mut cues)),
             26 => self.ignore_wnd.draw(vui, r, menus, &self.ignore, now, &mut cues),
-            34 => self.options_wnd.draw(vui, r, &self.options, &mut option_ups),
+            34 => {
+                self.options_wnd.draw(vui, r, &self.options, &mut option_ups);
+                cues.extend(self.options_wnd.take_cues());
+            }
             _ => {}
         }
         self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
