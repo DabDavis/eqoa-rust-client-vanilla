@@ -183,15 +183,28 @@ pub struct TouchPad {
     /// a window is up (the viewer sets it each frame): only the face
     /// buttons are the pad's
     pub window: bool,
+    /// with a window up the d-pad stays the pad's too (the viewer sets it
+    /// each frame): a quick-chat menu has the keys, whose choices are the
+    /// d-pad's directions, tapped or held
+    pub dpad: bool,
 }
 
 /// The face buttons, the only ones a window up leaves on the screen.
 const FACE: u16 = bit::CROSS | bit::CIRCLE | bit::SQUARE | bit::TRIANGLE;
 
+/// The d-pad's arms.
+const DPAD: u16 = bit::UP | bit::DOWN | bit::LEFT | bit::RIGHT;
+
 impl TouchPad {
     /// A pad, shown from the start or from the first touch.
     pub fn new(shown: bool) -> Self {
         TouchPad { shown, used: shown, ..Default::default() }
+    }
+
+    /// The buttons a window up leaves the pad: the face buttons, and the
+    /// d-pad over the quick-chat menus.
+    fn kept(&self) -> u16 {
+        FACE | if self.dpad { DPAD } else { 0 }
     }
 
     /// A finger's event in a `size` window, at window pixels `at`.
@@ -202,7 +215,7 @@ impl TouchPad {
         let l = layout(size);
         match phase {
             Phase::Started => {
-                let role = if let Some(b) = l.button_at(at).filter(|b| !self.window || b.bit & FACE != 0) {
+                let role = if let Some(b) = l.button_at(at).filter(|b| !self.window || b.bit & self.kept() != 0) {
                     Role::Button(b.bit)
                 } else if !self.window && l.in_stick_zone(at) && !self.fingers.iter().any(|f| matches!(f.role, Role::Stick { .. })) {
                     Role::Stick { centre: at }
@@ -339,7 +352,7 @@ impl TouchPad {
         let full = [0.0, 0.0, 1.0, 1.0];
         for b in &l.buttons {
             let on = held & b.bit != 0;
-            if dim && b.bit & FACE == 0 && !on {
+            if dim && b.bit & self.kept() == 0 && !on {
                 continue;
             }
             let fade = if dim { 0.7 } else { 1.0 };
@@ -416,6 +429,27 @@ mod tests {
         p.window = false;
         p.touch(10, Phase::Started, at(bit::UP), t, SIZE);
         assert_eq!(p.report().buttons, bit::TRIANGLE | bit::UP);
+    }
+
+    /// Over the quick-chat menus the d-pad stays the pad's (a direction is
+    /// held there to edit its choice); the top row is still the window's.
+    #[test]
+    fn the_quick_chat_keeps_the_d_pad() {
+        let t = Instant::now();
+        let l = layout(SIZE);
+        let at = |bit: u16| l.buttons.iter().find(|b| b.bit == bit).unwrap().at;
+        let mut p = TouchPad::new(true);
+        p.window = true;
+        p.dpad = true;
+        p.touch(1, Phase::Started, at(bit::LEFT), t, SIZE);
+        assert_eq!(p.report().buttons, bit::LEFT);
+        p.touch(2, Phase::Started, at(bit::START), t, SIZE);
+        assert_eq!(p.report().buttons, bit::LEFT, "Start is the window's");
+        p.touch(1, Phase::Ended, at(bit::LEFT), t, SIZE);
+        // control: another window
+        p.dpad = false;
+        p.touch(3, Phase::Started, at(bit::DOWN), t, SIZE);
+        assert_eq!(p.report().buttons, 0);
     }
 
     const SIZE: (u32, u32) = (2400, 1080);

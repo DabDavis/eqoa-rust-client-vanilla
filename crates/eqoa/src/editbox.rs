@@ -143,6 +143,11 @@ impl EditBox {
         self.multi_line = on;
     }
 
+    /// `SetPos`: the box's top left.
+    pub fn set_pos(&mut self, p: [i32; 2]) {
+        self.pos = p;
+    }
+
     /// `SetCenter`: the box placed round `p` for its rows.
     pub fn set_center(&mut self, p: [i32; 2]) {
         self.pos = [p[0] - 226, p[1] - ((self.rows * 17 + 203) >> 1)];

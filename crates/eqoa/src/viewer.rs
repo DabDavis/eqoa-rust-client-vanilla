@@ -365,6 +365,7 @@ pub fn shot_with(
             };
             let mut sticks = controls.axes();
             touch.window = play.as_ref().is_some_and(|p| p.mode != 0);
+            touch.dpad = play.as_mut().is_some_and(|p| p.quick_dpad());
             for (_, id, phase, at) in touch_script.iter().filter(|e| e.0 == t) {
                 touch.touch(*id, *phase, *at, Instant::now(), (w, h));
             }
@@ -630,7 +631,9 @@ pub fn shot_with(
                 // `EQOA_CS_TEXT`: the CS request's text, into its editor.
                 p.support_script_step();
                 // `EQOA_EDIT_TEXT`: typed into the edit box, a character a frame
-                // once it is up, then Enter.
+                // once it is up, then Enter; the same into the quick-chat
+                // editor's own (`EQOA_QUICK_TEXT`, each `|`-separated piece
+                // into the next one that opens).
                 if p.mode == 2
                     && let Ok(text) = std::env::var("EQOA_EDIT_TEXT")
                 {
@@ -641,6 +644,9 @@ pub fn shot_with(
                         None if k == text.chars().count() => p.edit_key(13, true),
                         None => {}
                     }
+                }
+                if let Ok(text) = std::env::var("EQOA_QUICK_TEXT") {
+                    p.quick_script_step(&text);
                 }
                 // `EQOA_QUESTS=a|b|...`: quests as if 0x007C had brought them.
                 if t == at
@@ -1678,6 +1684,58 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
+                // The quick-chat menus (mode 30): the arrows are the game's
+                // cursor keys (17-20), its directions, held to edit (a key's
+                // repeat would start the hold again, so it is dropped); Enter
+                // (13) is the chat line over a menu and X in the editor, as
+                // is E; Escape or Backspace (27) and Z (122) close a menu or
+                // back out of the editor. The editor's edit box takes the
+                // keyboard as the edit box does.
+                if let Some(p) = self.play.as_mut()
+                    && p.typing.is_none()
+                    && p.mode == 30
+                {
+                    let down = event.state == ElementState::Pressed;
+                    if p.quick_typing() {
+                        let soft = !p.edit_pad_only();
+                        let named = match &event.logical_key {
+                            Key::Named(NamedKey::Backspace) => Some(8),
+                            Key::Named(NamedKey::Escape) => Some(27),
+                            Key::Named(NamedKey::Enter) => Some(13),
+                            Key::Named(NamedKey::ArrowLeft) => Some(if soft { 136 } else { 17 }),
+                            Key::Named(NamedKey::ArrowRight) => Some(if soft { 137 } else { 18 }),
+                            Key::Named(NamedKey::ArrowUp) => Some(if soft { 138 } else { 19 }),
+                            Key::Named(NamedKey::ArrowDown) => Some(if soft { 139 } else { 20 }),
+                            Key::Named(NamedKey::Insert) => Some(134),
+                            _ => None,
+                        };
+                        if let Some(k) = named {
+                            p.quick_key(k, down);
+                        } else if down && let Some(t) = &event.text {
+                            for c in t.chars().filter(|c| c.is_ascii() && !c.is_ascii_control()) {
+                                p.quick_key(c as i32, true);
+                            }
+                        }
+                        return;
+                    }
+                    let k = match &event.logical_key {
+                        Key::Named(NamedKey::ArrowUp) => Some(19),
+                        Key::Named(NamedKey::ArrowLeft) => Some(17),
+                        Key::Named(NamedKey::ArrowRight) => Some(18),
+                        Key::Named(NamedKey::ArrowDown) => Some(20),
+                        Key::Named(NamedKey::Enter) => Some(13),
+                        Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(134),
+                        Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(27),
+                        Key::Character(c) if c.eq_ignore_ascii_case("z") => Some(122),
+                        _ => None,
+                    };
+                    if let Some(k) = k {
+                        if !(down && event.repeat) {
+                            p.quick_key(k, down);
+                        }
+                        return;
+                    }
+                }
                 // The bank (mode 11): the arrows, Enter or E (X), Escape
                 // (triangle); the auction form's editor takes the keyboard.
                 if let Some(p) = self.play.as_mut()
@@ -2035,6 +2093,11 @@ impl ApplicationHandler for App {
                             }
                             return;
                         }
+                        // Z (90, 122): the quick-chat menus, as L2.
+                        (None, Key::Character(c)) if p.mode == 0 && c.eq_ignore_ascii_case("z") => {
+                            p.open_quick_chat();
+                            return;
+                        }
                         // X (88, 120): autorun (`ToggleP74`), as L3.
                         (None, Key::Character(c)) if p.mode == 0 && c.eq_ignore_ascii_case("x") => {
                             p.toggle_autorun();
@@ -2217,7 +2280,18 @@ impl ApplicationHandler for App {
             WindowEvent::MouseInput { state, button, .. } if matches!(button, MouseButton::Left | MouseButton::Right) => {
                 let down = state == ElementState::Pressed;
                 if self.walker.is_some() {
-                    if let Some(c) = self.mouse.button(button == MouseButton::Right, down, Instant::now()) {
+                    // the left button on a quick-chat choice holds its
+                    // direction while it is down (`Play::point_press`), and
+                    // what it would click is not a click
+                    let mut held = false;
+                    if button == MouseButton::Left
+                        && let (Some(p), Some(g)) = (self.play.as_mut(), self.gfx.as_ref())
+                    {
+                        held = if down { p.point_press(self.cursor, (g.config.width, g.config.height)) } else { p.point_release() };
+                    }
+                    if let Some(c) = self.mouse.button(button == MouseButton::Right, down, Instant::now())
+                        && !held
+                    {
                         self.click(c, false);
                     }
                 } else if button == MouseButton::Left {
@@ -2320,6 +2394,7 @@ impl ApplicationHandler for App {
                     self.click(c, true);
                 }
                 self.touch.window = self.play.as_ref().is_some_and(|p| p.mode != 0);
+                self.touch.dpad = self.play.as_mut().is_some_and(|p| p.quick_dpad());
                 mark(&mut self.perf, 0);
                 let sticks = self.sticks();
                 self.sticks_used = sticks;

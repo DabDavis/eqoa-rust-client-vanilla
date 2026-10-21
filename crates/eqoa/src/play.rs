@@ -351,6 +351,16 @@ pub struct Play {
     /// A pointer's keys for the window up, and the one held (`press`).
     key_queue: std::collections::VecDeque<i32>,
     held: Option<i32>,
+    /// The quick-chat menus L2 opens (`VIWndMenu4`, mode 30) and the dump's
+    /// sets they show.
+    quick: crate::quickchat::QuickChat,
+    /// A mouse press on a quick-chat choice: its direction's key, held until
+    /// the button is let go (`point_press`).
+    quick_held: Option<i32>,
+    /// `m_alarm`: the play-time alarm.
+    alarm: crate::alarm::Alarm,
+    /// `EQOA_QUICK_TEXT`'s progress: the piece, the character.
+    quick_typed: (usize, usize),
 }
 
 /// `gWorldInfo`'s paths on the Frontiers disc, by world index (CLIENT's
@@ -725,7 +735,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, cast_window: (0, 0), rooted: false, locks: (true, true), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, cast_window: (0, 0), rooted: false, locks: (true, true), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0) };
         p.take_abilities();
         p.npcw_world_entry();
         p
@@ -1321,6 +1331,13 @@ impl Play {
         {
             let name = i.name.clone();
             self.show_invite(&name);
+        } else if self.mode == 0 && self.alarm.on {
+            let words = self.words.clone();
+            let w = move |n: i32| words.as_ref().map_or_else(|| format!("(word {n})"), |t| t.get(n, 0).to_string());
+            let now = self.session.now() as i64;
+            if let Some(o) = self.alarm.tick(now, &w) {
+                self.alarm_outs(vec![o]);
+            }
         }
         let self_id = self.session.self_id;
         // UpdateCreatures / VICreatureEntity::Walk: a creature with its own
@@ -1925,9 +1942,9 @@ impl Play {
     /// waiting). False in play.
     pub fn window_wheel(&mut self, lines: f32) -> bool {
         use crate::pointer::key;
-        if self.mode == 0 {
+        if self.mode == 0 || self.quick_dpad() {
             self.wheel = 0.0;
-            return false;
+            return self.mode != 0;
         }
         self.wheel += lines;
         while self.wheel.abs() >= 1.0 {
@@ -1946,6 +1963,9 @@ impl Play {
     fn window_point(&mut self, f: [f32; 2]) -> Vec<i32> {
         use crate::pointer::key;
         let one = |k: Option<i32>| k.into_iter().collect::<Vec<i32>>();
+        if self.mode == 30 {
+            return self.quick.point(f);
+        }
         if self.mode == 2 {
             return one(self.edit.point(f).flatten());
         }
@@ -2132,6 +2152,9 @@ impl Play {
                 self.session.send_op_byte(0x000E, back);
             }
             "/t" | "/tell" => self.session.say(text, target),
+            "/alarm" => self.alarm_command(&rest),
+            "/time" => self.do_action(0x0B0E_0008, 0),
+            "/follow" => self.do_action(0x0B0E_0007, 0),
             "/r" | "/reply" => {
                 if !self.reply_name.is_empty() {
                     let line = format!("/t {} {}", self.reply_name, rest);
@@ -2355,6 +2378,10 @@ impl Play {
     /// the chat box's history, a dialog. False in play (mode 0), where
     /// `VIWndGame` takes them.
     fn window_key(&mut self, key: i32, down: bool) -> bool {
+        if self.mode == 30 {
+            self.quick.key(key, down);
+            return true;
+        }
         if self.mode == 2 {
             self.edit_key(key, down);
             return true;
@@ -2499,13 +2526,16 @@ impl Play {
                     c.set_scroll(1);
                 }
             }
-            // L2: the quick-chat menu (mode 30, `VIWndMenu4`) is not ported
+            // L2: the quick-chat menus (mode 30, `VIWndMenu4`)
+            141 => self.open_quick_chat(),
             _ => {}
         }
     }
 
-    /// The dump's abilities, by id, and its token; its quests.
+    /// The dump's abilities, by id, and its token; its quests; its quick-chat
+    /// sets (`LoadTextSets`).
     fn take_abilities(&mut self) {
+        self.quick.load(&self.dump.text_sets);
         self.abilities = self.dump.abilities.iter().map(|a| (a.id, a.clone())).collect();
         self.ability_token = self.dump.p2bb60;
         // the dump's crafting token and slots (SetP78C0, ReadSlots)
@@ -3395,6 +3425,7 @@ impl Play {
                         self.session.send(&req);
                     }
                 }
+                0x0B0E_000A => self.alarm_command(&text),
                 0x0B0B_1002 => {
                     // the report asks first (word 1472)
                     let w = self.words.as_ref().map_or_else(Vec::new, |w| crate::ui::wide(w.get(1472, 0)));
@@ -3490,6 +3521,53 @@ impl Play {
             0x0902_0000 => {
                 let p = self.player.pos;
                 self.add_chat(format!("{:.1} {:.1} {:.1}", p[0], p[1], p[2]), [1.0; 4]);
+            }
+            // VIWndGame::OnMessage 261 in play, where DoAction hands these:
+            // the chat line with the channel's title, Tell, Reply
+            0x0301_0000 => {
+                self.open_edit(0xB0F0000, 128, -1, false);
+                self.edit.title = self.chat_title();
+            }
+            0x0B0D_0000 => self.open_mail(28),
+            0x0B0D_0001 => self.open_mail(29),
+            // m_p38300.OpenPanel: the ignore list; ShowTargetPlayerName:
+            // the edit box with the target's name, "Ignore Target" (995)
+            0x0B05_3000 => self.open_panel(26),
+            0x0B05_3001 => self.open_edit(id, 24, 995, true),
+            // Stop Ignoring: DoAction has no case for it (the start menu's
+            // entry asks for a name on its own path)
+            0x0B05_3002 => {}
+            // VIClientPart2EFCC::SendFlag: shouts heard or not (0x0C01, 1)
+            0x0B03_0003 => {
+                let mut w = net::stream::Writer::op(0x0C01);
+                w.u8(1).u8((arg != 0) as u8);
+                self.session.send(&w.data);
+            }
+            // m_p2EF24.SetChat: the guild's chat heard or not
+            0x0B05_100C => self.session.send(&crate::guild::Cmds::set_chat(arg != 0)),
+            // DefaultTextSets: the built-in quick-chat menus, sent
+            0x0B08_0000 => {
+                for m in crate::quickchat::default_text_sets(&mut self.quick.sets) {
+                    self.session.send(&m);
+                }
+            }
+            // VITimeOfDay::GetLocalTime, to the chat box
+            0x0B0E_0008 => {
+                let t = crate::alarm::local_time_text(crate::alarm::local_time());
+                self.add_chat(t, [1.0; 4]);
+            }
+            // the alarm: off, or the edit box for its time (ShowNameClear,
+            // word 1199, 256 long)
+            0x0B0E_0009 => {
+                if self.alarm.on {
+                    let words = self.words.clone();
+                    let w = move |n: i32| words.as_ref().map_or_else(|| format!("(word {n})"), |t| t.get(n, 0).to_string());
+                    let now = self.session.now() as i64;
+                    let outs = self.alarm.set(false, 0, 0, now, &w);
+                    self.alarm_outs(outs);
+                } else {
+                    self.open_edit(0x0B0E_000A, 256, 1199, false);
+                }
             }
             _ => eprintln!("play: DoAction {id:#x} ({arg}) not ported"),
         }
@@ -3655,6 +3733,171 @@ impl Play {
             33 => self.chat_scroll_key(key, down),
             _ => {}
         }
+    }
+
+    /// `VIWndGame::OnKeyDown`'s L2 (the keyboard's Z) in play: the
+    /// quick-chat menus over the root's set, with the keys (mode 30; the
+    /// effects' bar goes while they are up). In mode 30 the key reaches the
+    /// menus, which pass it up to close them.
+    pub fn open_quick_chat(&mut self) {
+        if self.mode == 0 && self.quick.open() {
+            self.mode = 30;
+        }
+    }
+
+    /// A key for the quick-chat menus (the game's codes; the keyboard's
+    /// cursor keys 17-20 are directions as the d-pad's are).
+    pub fn quick_key(&mut self, key: i32, down: bool) {
+        if self.mode == 30 {
+            self.quick.key(key, down);
+        }
+    }
+
+    /// The quick-chat editor's edit box has the keys: the keyboard types.
+    pub fn quick_typing(&mut self) -> bool {
+        self.mode == 30 && self.quick.typing()
+    }
+
+    /// A quick-chat menu (not its editor) has the keys: the touch screen's
+    /// pad keeps its d-pad, to hold a direction.
+    pub fn quick_dpad(&mut self) -> bool {
+        self.mode == 30 && self.quick.menu_has_keys()
+    }
+
+    /// `EQOA_QUICK_TEXT=a|b`: each piece typed into the quick-chat editor's
+    /// edit box as it opens, a character a frame, then Enter.
+    pub fn quick_script_step(&mut self, text: &str) {
+        if !self.quick_typing() {
+            if self.quick_typed.1 > 0 {
+                self.quick_typed = (self.quick_typed.0 + 1, 0);
+            }
+            return;
+        }
+        let (piece, k) = self.quick_typed;
+        let Some(t) = text.split('|').nth(piece) else { return };
+        match t.chars().nth(k) {
+            Some(c) => self.quick.key(c as i32, true),
+            None if k == t.chars().count() => self.quick.key(13, true),
+            None => return,
+        }
+        self.quick_typed.1 += 1;
+    }
+
+    /// The quick-chat menus' keys and drawing, on one of the game's frames
+    /// (each window there counts frames); what they asked, for after it.
+    fn run_quick(&mut self, vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster) -> Vec<crate::quickchat::Out> {
+        if self.mode != 30 {
+            if self.quick.visible() {
+                self.quick.close();
+            }
+            return Vec::new();
+        }
+        let (mut cues, mut outs) = (Vec::new(), Vec::new());
+        let mut ctx = crate::quickchat::Ctx { vui, now: self.session.now() as i64, cues: &mut cues, outs: &mut outs };
+        self.quick.run(r, &mut ctx);
+        self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
+        outs
+    }
+
+    /// What the quick-chat menus asked: a line said (`VIClientText::Expand`
+    /// first, `ChatLine`), 258 (closed, then the command's `DoAction`), the
+    /// server's messages, and the keys they passed up to `VIWndGame`: in
+    /// mode 30 Escape, △, L2 and Z close them, Enter and R3 open the chat
+    /// line in their place; ✕ and □ let go stop the attack and the target's
+    /// details.
+    fn quick_outs(&mut self, outs: Vec<crate::quickchat::Out>) {
+        use crate::quickchat::Out;
+        for o in outs {
+            match o {
+                Out::Say(line) => {
+                    let text = vi::ui::expand(&line, 256, false, &self.expand_context());
+                    self.chat_line(&String::from_utf16_lossy(&text));
+                }
+                Out::Done(msg, arg) => {
+                    if self.mode == 30 {
+                        self.mode = 0;
+                        if msg != -1 {
+                            self.do_action(msg as u32, arg);
+                        }
+                    }
+                }
+                Out::Send(m) => self.session.send(&m),
+                Out::Key(k, true) => match k {
+                    27 | 132 | 141 | 90 | 122 if self.mode == 30 => self.mode = 0,
+                    13 | 147 => {
+                        self.open_edit(0xB0F0000, 128, -1, false);
+                        self.edit.title = self.chat_title();
+                    }
+                    _ => {}
+                },
+                Out::Key(k, false) => match k {
+                    134 => self.attack_release(),
+                    133 => self.info_up = false,
+                    _ => {}
+                },
+            }
+        }
+    }
+
+    /// What `VIClientText::Expand` reads off the client: the player's name,
+    /// level and class (WORDS.TXT 165 + the class), the target's name.
+    fn expand_context(&self) -> vi::ui::ExpandContext {
+        let cls = self.dump.player.class;
+        let class_name = if (0..=14).contains(&cls) { self.words.as_ref().map_or_else(String::new, |w| w.get(165 + cls as i32, 0).to_string()) } else { String::new() };
+        vi::ui::ExpandContext { player_name: self.dump.player.name.clone(), level: self.dump.player.level as i32, class_name, target_name: self.target_name().unwrap_or_default() }
+    }
+
+    /// A mouse button pressed at window pixel `at`: on a quick-chat choice it
+    /// holds that direction until it is let go (`point_release`), as the
+    /// d-pad would: a click is a tap, a press of half a second the editor.
+    /// True when it took the press (its click is then not a click).
+    pub fn point_press(&mut self, at: (f64, f64), size: (u32, u32)) -> bool {
+        if self.mode != 30 || self.quick_held.is_some() {
+            return false;
+        }
+        let f = render::ui::frame_from_window(size, [at.0 as f32, at.1 as f32]);
+        let Some(k) = self.quick.choice_key(f) else { return false };
+        self.keyboard = true;
+        self.quick.key(k, true);
+        self.quick_held = Some(k);
+        true
+    }
+
+    /// The button let go: a held choice's direction let go. True when the
+    /// press was one (its click is dropped).
+    pub fn point_release(&mut self) -> bool {
+        let Some(k) = self.quick_held.take() else { return false };
+        if self.mode == 30 {
+            self.quick.key(k, false);
+        }
+        true
+    }
+
+    /// The alarm's lines and its ring (`VIAlarm`'s `ShowMsg`, `ShowText`,
+    /// `PromptText`).
+    fn alarm_outs(&mut self, outs: Vec<crate::alarm::AlarmOut>) {
+        use crate::alarm::AlarmOut;
+        for o in outs {
+            match o {
+                AlarmOut::Word(w) => self.show_word(w),
+                AlarmOut::Text(t) => self.add_chat(t, [1.0; 4]),
+                AlarmOut::Prompt(t) => {
+                    let now = self.session.now() as i64;
+                    self.mbox.prompt(&crate::ui::wide(&t), 0, 0, 0, now);
+                    self.mode = 14;
+                }
+            }
+        }
+    }
+
+    /// `VIAlarm::Command`: `/alarm`'s and the edit box's text.
+    fn alarm_command(&mut self, arg: &str) {
+        let words = self.words.clone();
+        let w = move |n: i32| words.as_ref().map_or_else(|| format!("(word {n})"), |t| t.get(n, 0).to_string());
+        let off = w(552);
+        let now = self.session.now() as i64;
+        let outs = self.alarm.command(arg, &off, now, &w);
+        self.alarm_outs(outs);
     }
 
     /// `SelectTarget(which)`, the keyboard's 1 to 6 in play: 1 the player,
@@ -4338,6 +4581,7 @@ impl Play {
         let dt = ((time_ms - self.hud_last).clamp(0, 250)) as f32 / 1000.0;
         self.hud_last = time_ms;
         let mut actions = Vec::new();
+        let mut quick_outs = Vec::new();
         if let Some((mut vui_o, assets, mut hud_o)) = self.hud.take() {
             let (vui, hud) = (&mut vui_o, &mut hud_o);
             vui.time = time_ms;
@@ -4392,6 +4636,7 @@ impl Play {
             if self.mode == 14 {
                 self.mbox.draw(vui, &mut r, now as i64);
             }
+            quick_outs = self.run_quick(vui, &mut r);
             actions = self.run_start_menu(vui, &mut r, &start_loc);
             self.run_who(vui, &mut r);
             self.run_quests(vui, &mut r);
@@ -4475,8 +4720,9 @@ impl Play {
                     }
                 }
             }
-            // UpdateQuickBars, then the menu up (the HUD's, in play)
-            if self.mode == 0 {
+            // UpdateQuickBars, then the menu up (the HUD's, in play; L2's
+            // menus open over it without `UpdateMode`, so it stays up there)
+            if self.mode == 0 || self.mode == 30 {
                 self.hud_menus.build(&self.abilities, &self.dump.inventory.items);
                 let abilities = &self.abilities;
                 let inventory = &self.dump.inventory.items;
@@ -4509,6 +4755,7 @@ impl Play {
             self.hud = Some((vui_o, assets, hud_o));
         }
         self.start_actions(actions);
+        self.quick_outs(quick_outs);
         self.pump_keys();
     }
 

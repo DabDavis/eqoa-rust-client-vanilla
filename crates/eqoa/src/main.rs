@@ -67,6 +67,8 @@ mod modules;
 mod mouse;
 mod quantity;
 mod questlog;
+mod quickchat;
+mod alarm;
 mod startmenu;
 mod textlist;
 mod trade;
