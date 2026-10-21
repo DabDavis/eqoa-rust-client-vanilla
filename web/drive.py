@@ -189,10 +189,24 @@ async def drive(a, base, ws_url):
             Path(path).write_bytes(base64.b64decode(r["data"]))
             out(f"screenshot {path}")
 
+        # A character as a US keyboard sends it: its physical key and the
+        # Windows key code (ord('#') is 35, VK_END: '#' arrived as End).
+        SYMBOLS = {"#": ("Digit3", 51), "!": ("Digit1", 49), "@": ("Digit2", 50), "$": ("Digit4", 52),
+                   "/": ("Slash", 191), "?": ("Slash", 191), " ": ("Space", 32), ".": ("Period", 190),
+                   "-": ("Minus", 189), "_": ("Minus", 189), "'": ("Quote", 222), "`": ("Backquote", 192),
+                   "~": ("Backquote", 192), "=": ("Equal", 187), "+": ("Equal", 187)}
+
         async def key(k, down):
-            code = {"w": "KeyW", "a": "KeyA", "s": "KeyS", "d": "KeyD"}.get(k, k)
+            if len(k) == 1 and k.isalpha():
+                code, vk = "Key" + k.upper(), ord(k.upper())
+            elif len(k) == 1 and k.isdigit():
+                code, vk = "Digit" + k, ord(k)
+            elif k in SYMBOLS:
+                code, vk = SYMBOLS[k]
+            else:
+                code, vk = k, 0
             await call("Input.dispatchKeyEvent", type="keyDown" if down else "keyUp", key=k, code=code,
-                       text=k if (down and len(k) == 1) else "", windowsVirtualKeyCode=ord(k.upper()) if len(k) == 1 else 0)
+                       text=k if (down and len(k) == 1) else "", windowsVirtualKeyCode=vk)
 
         async def touch(kind, pts):
             await call("Input.dispatchTouchEvent", type=kind, touchPoints=[{"x": x, "y": y, "id": 1} for x, y in pts])
