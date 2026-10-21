@@ -178,10 +178,14 @@ pub enum Event {
     Action { id: u32, action: u8 },
     /// 0x07A3: who last sent a tell (`/reply` answers them).
     ReplyName(String),
+    /// 0x0045 (`Msg0045`): the profanity filter's state, the server's answer
+    /// to the client's own 0x0045 (action 0x0B052000).
+    ProfanityFilter(bool),
     /// 0x00D9: the player's +0x2C.
     PlayerP2C(i32),
     /// A line for the chat log, in its colour (RGBA 0..1): 0x0A7A white,
-    /// 0x0A7B its own colour, 0x069E blue, 0x0758 (narrow) white.
+    /// 0x0A7B its own colour, 0x069E blue, 0x0758 (narrow) white, 0x00CE
+    /// (an error: "Tell Failed", an unknown command) red.
     Chat(String, [f32; 4]),
     /// A state channel's full value (0x00-0x17 entities, 0x42 stats...).
     State { channel: u8, data: Vec<u8> },
@@ -648,6 +652,7 @@ impl Session {
                 ev.push(Event::Action { id, action: r.u8() });
             }
             0x07A3 => ev.push(Event::ReplyName(String::from_utf8_lossy(&r.string(24)).into_owned())),
+            0x0045 => ev.push(Event::ProfanityFilter(r.signed() != 0)),
             0x00D9 => ev.push(Event::PlayerP2C(r.u32() as i32)),
             0x007E => ev.push(Event::Pet(Some(r.u32()))),
             0x003B => ev.push(Event::InvAdd(Box::new(crate::dump::read_net_item(&mut r)))),
@@ -698,6 +703,8 @@ impl Session {
                 ev.push(Event::TargetInfo { disposition, b, c, title, guild });
             }
             0x0A7A => ev.push(Event::Chat(r.wide(1024), [1.0; 4])),
+            // ReadString(buf, 2048), AddText in (1, .25, .25)
+            0x00CE => ev.push(Event::Chat(r.wide(1024), [1.0, 0.25, 0.25, 1.0])),
             0x0A7B => {
                 let text = r.wide(1024);
                 let (cr, cg, cb) = (r.u8(), r.u8(), r.u8());
@@ -890,6 +897,38 @@ mod tests {
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xA5, 0x07]);
         assert!(!ev.iter().any(|e| matches!(e, Event::Disconnected(_))), "{ev:?}");
         assert!(s.conn.is_some());
+    }
+
+    // 0x00CE, the server's error line, is a chat line in red, as CLIENT's
+    // dispatcher adds it; it was dropped, so a refused tell or an unknown
+    // command said nothing. The control: 0x0A7A is white.
+    #[test]
+    fn error_text_is_a_red_line() {
+        let wide = |op: u16, t: &str| {
+            let mut v = op.to_le_bytes().to_vec();
+            v.extend((t.encode_utf16().count() as u32).to_le_bytes());
+            v.extend(t.encode_utf16().flat_map(|c| c.to_le_bytes()));
+            v
+        };
+        let mut s = session();
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, wide(0x00CE, "Tell Failed"));
+        assert!(matches!(&ev[..], [Event::Chat(t, c)] if t == "Tell Failed" && *c == [1.0, 0.25, 0.25, 1.0]), "{ev:?}");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, wide(0x0A7A, "hi"));
+        assert!(matches!(&ev[..], [Event::Chat(t, c)] if t == "hi" && *c == [1.0; 4]), "{ev:?}");
+    }
+
+    // 0x0045's zigzag: 2 is on, 0 off (Msg0045's ReadSigned). The control:
+    // the byte read raw would make 2 "on" and 1 "on" too.
+    #[test]
+    fn profanity_filter_state() {
+        for (byte, on) in [(2u8, true), (0, false), (1, true)] {
+            let mut s = session();
+            let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x45, 0x00, byte]);
+            assert!(matches!(ev[..], [Event::ProfanityFilter(o)] if o == on), "{byte}: {ev:?}");
+        }
+        let mut s = session();
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x45, 0x00, 0x00]);
+        assert!(!matches!(ev[..], [Event::ProfanityFilter(true)]), "zero is off");
     }
 
     // A DRDP 0xFD carries the library's byte, mapped as PumpMessages maps it.

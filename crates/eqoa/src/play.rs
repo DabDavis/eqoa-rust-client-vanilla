@@ -828,6 +828,12 @@ impl Play {
                     self.target_guild = guild;
                 }
                 Event::ReplyName(n) => self.reply_name = n,
+                // Msg0045: "Profanity Filter: On" or "Off" (550, 551, 552)
+                Event::ProfanityFilter(on) => {
+                    let w = |n: i32| self.words.as_ref().map_or_else(|| format!("(word {n})"), |w| w.get(n, 0).to_string());
+                    let line = format!("{}: {}", w(550), w(if on { 551 } else { 552 }));
+                    self.add_chat(line, [1.0; 4]);
+                }
                 Event::Dialog { text, .. } => self.show_dialog(&text),
                 Event::DialogBox { id, text, options } => self.dialog_box(id, &text, &options),
                 Event::Opcode { op: 0x005E, .. } => self.msg_005e(walker),
@@ -2099,9 +2105,12 @@ impl Play {
     /// `ChatLine`: a typed line. A slash command picks its channel for the
     /// one line (`/say`, `/g`, `/gu`, `/s`; 0x000E sets it and puts the
     /// current one back), `/t` goes as typed, `/r` to whoever last sent a
-    /// tell; an unknown command is answered with word 826. Plain text goes
-    /// to the current channel. Not here: `/alarm`, `/time`, `/follow` and
-    /// the crafting commands.
+    /// tell. A command it does not know goes to the server as typed, where
+    /// the game answers it with word 826 itself: the client's own, as
+    /// Sandstorm's S2 forwards them, so the server's commands (a GM's
+    /// `/goto`, go-eqoa-server's dev console) can be typed with a slash.
+    /// Plain text goes to the current channel. Not here: the crafting
+    /// commands.
     pub fn chat_line(&mut self, text: &str) {
         let wide: Vec<u16> = text.encode_utf16().collect();
         if self.session.self_id.is_none() || wide.len() >= 128 {
@@ -2161,10 +2170,7 @@ impl Play {
                     self.session.say(&line, target);
                 }
             }
-            _ => {
-                let word = self.words.as_ref().map_or_else(|| "(word 826)".to_string(), |w| w.get(826, 0).to_string());
-                self.add_chat(format!("{word} \"{cmd}\"."), [1.0; 4]);
-            }
+            _ => self.session.say(text, target),
         }
     }
 
