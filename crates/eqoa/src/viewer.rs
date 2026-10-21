@@ -359,6 +359,7 @@ pub fn shot_with(
         // `EQOA_MOUSE`: the mouse's, through the window's
         let pad_script = crate::input::Script::from_env();
         let mut console = crate::input::Console::new();
+        let mut pad_edge = crate::binds::PadEdge::default();
         let mouse_script = crate::mouse::script();
         let mut mouse = crate::mouse::Mouse::default();
         let mut last_view: Option<glam::Mat4> = None;
@@ -398,6 +399,15 @@ pub fn shot_with(
             if pad_script.is_some() || touch.used {
                 let dead = play.as_ref().is_some_and(|p| p.is_dead());
                 let mut report = pad_script.as_ref().map_or_else(Default::default, |s| s.at(t));
+                // the script stands for a controller: the player's own
+                // buttons (`binds`), and a capture's, as the window's
+                let capturing = play.as_ref().is_some_and(|p| p.capturing().is_some());
+                let (fields, took) = crate::settings::with_binds(|b| pad_edge.frame(report.buttons, capturing, b));
+                report.buttons = fields;
+                if let (Some(i), Some(p)) = (took, play.as_mut()) {
+                    eprintln!("pad: button {} taken by the Controls page", crate::binds::BUTTONS[i as usize].0);
+                    p.capture_button(i);
+                }
                 report.merge(&touch.report());
                 let keys = console.poll(report, true, false, dead);
                 if let Some(p) = play.as_mut() {
@@ -1220,6 +1230,10 @@ struct App {
     console: crate::input::Console,
     pads: crate::input::Gamepads,
     pad_script: Option<crate::input::Script>,
+    /// The player's own keys and buttons (`binds`) at the input's edge: what
+    /// each key pressed was made, and the controllers' buttons a capture took.
+    keys_edge: crate::binds::KeyEdge,
+    pad_edge: crate::binds::PadEdge,
     /// the sticks `UpdateControls` got last frame: the pad's, the keys', the
     /// mouse's and the touch screen's (for a report)
     sticks_used: [f32; 4],
@@ -1286,6 +1300,8 @@ pub fn run_with_gfx(lib: Library, source: Source, play: Option<crate::play::Play
         console: crate::input::Console::new(),
         pads: crate::input::Gamepads::new(),
         pad_script: crate::input::Script::from_env(),
+        keys_edge: Default::default(),
+        pad_edge: Default::default(),
         sticks_used: [0.0; 4],
         mouse: crate::mouse::Mouse::default(),
         last_view: None,
@@ -1424,6 +1440,17 @@ impl App {
         if let Some(s) = &self.pad_script {
             report.merge(&s.at(self.clock.elapsed().as_millis() as i64));
             connected = true;
+        }
+        // the player's own buttons (`binds`, the client's): the controllers'
+        // (and a script's, which stands for one) on the game's fields; while
+        // the Controls page waits for a button the one pressed is its, and
+        // the game sees nothing of it. The touch screen's pad draws the
+        // game's glyphs, and stays as it is.
+        let capturing = self.play.as_ref().is_some_and(|p| p.capturing().is_some());
+        let (fields, took) = crate::settings::with_binds(|b| self.pad_edge.frame(report.buttons, capturing, b));
+        report.buttons = fields;
+        if let (Some(i), Some(p)) = (took, self.play.as_mut()) {
+            p.capture_button(i);
         }
         if self.touch.used {
             report.merge(&self.touch.report());
@@ -1576,6 +1603,7 @@ impl App {
         }
         let _ = writeln!(o, "files: {}", self.lib.files.iter().map(|f| f.0.as_str()).collect::<Vec<_>>().join(", "));
         let _ = writeln!(o, "options, extended: {}", crate::settings::describe());
+        let _ = writeln!(o, "keys and buttons: {}", crate::settings::with_binds(|b| b.describe()));
         // the controls: a pad's sticks as they came (before the host's dead
         // zone), as the game reads them and with the keys, the mouse and the
         // touch screen's merged in (what `UpdateControls` got), the camera's
@@ -1781,6 +1809,53 @@ impl ApplicationHandler for App {
                         p.keyboard = true;
                     }
                 }
+                // The Controls page waiting for a key (`bindpage`): the key
+                // pressed is its, as it is, and nothing else sees it or its
+                // release.
+                if let Some(p) = self.play.as_mut()
+                    && p.capturing().is_some()
+                    && event.state == ElementState::Pressed
+                    && !event.repeat
+                    && let Some(name) = crate::binds::name_of(&event.logical_key)
+                {
+                    p.capture_key(&name);
+                    self.keys_edge.hold_back(&name);
+                    return;
+                }
+                // The player's own keys (`binds`, the client's, at the edge):
+                // a key a row was moved onto is that row's default key to all
+                // below, the row's old key nothing; a key given to △'s row
+                // (which the game has no key for) presses △ as the pad's
+                // does; text typed into an edit box is never remapped; a key
+                // lets go as what it was pressed as.
+                let event = match crate::binds::name_of(&event.logical_key) {
+                    Some(name) => {
+                        use crate::binds::Sent;
+                        let typing = self.play.as_mut().is_some_and(|p| p.keyboard_typing());
+                        let down = event.state == ElementState::Pressed;
+                        match crate::settings::with_binds(|b| self.keys_edge.key(&name, down, event.repeat, typing, b)) {
+                            Some(Sent::Key(to)) if to == name => event,
+                            Some(Sent::Key(to)) => {
+                                let mut e = event.clone();
+                                e.logical_key = crate::binds::key_of(&to);
+                                e.text = None;
+                                e
+                            }
+                            Some(Sent::Button(b)) => {
+                                let aspect = self.gfx.as_ref().map_or(4.0 / 3.0, |g| g.config.width as f32 / g.config.height as f32);
+                                if !event.repeat
+                                    && let (Some(p), Some(w), Some(k)) = (self.play.as_mut(), self.walker.as_mut(), crate::binds::pad_key(b))
+                                {
+                                    p.set_key(k, down, w, aspect);
+                                    p.keyboard = true;
+                                }
+                                return;
+                            }
+                            None => return,
+                        }
+                    }
+                    None => event,
+                };
                 // a key let go is let go of, whichever window takes the
                 // event: an arrow held to walk and let go over the start
                 // menu would walk on after it
@@ -2246,6 +2321,12 @@ impl ApplicationHandler for App {
                             p.open_quick_chat();
                             return;
                         }
+                        // F1: the Options window's Controls page (the client's
+                        // own; F1 makes no code in the game's keyboard table).
+                        (None, Key::Named(NamedKey::F1)) if p.mode == 0 && !event.repeat => {
+                            p.open_controls();
+                            return;
+                        }
                         // M: the map (the client's own; free in the game's
                         // keyboard table, `map.rs`; dead, it closes again).
                         (None, Key::Character(c)) if p.mode == 0 && c.eq_ignore_ascii_case("m") && !event.repeat => {
@@ -2429,6 +2510,7 @@ impl ApplicationHandler for App {
             WindowEvent::Focused(false) => {
                 self.mouse.release_all();
                 self.held.clear();
+                self.keys_edge.clear();
                 self.grab_pointer(false);
                 if let Some(p) = self.play.as_mut() {
                     p.map.let_go();

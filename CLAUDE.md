@@ -70,6 +70,10 @@ The Rust client. README.md is the plan and the crate table; keep it current.
   in a page; `EQOA_PAD_TRACE=1` / `?padtrace`; `EQOA_GLYPHS=1` prints the button glyphs a frame drew.
   A DualSense is plugged in here and gilrs drives its motors: rumble is as real as the speakers.
   The local server spawns a character at a random heading each login, so click by name, not pixel.
+  The player's own keys and buttons (`binds.rs`, the options' Controls page) work at the edge only:
+  a moved key becomes its row's default key before the keyboard dispatch (never while typing), the
+  controllers' buttons the game's fields before `VIPad::Read`. A key added to the dispatch needs a
+  row in `binds::ROWS` (a test reads `viewer.rs` for them).
 - A pointer on the windows (`pointer.rs`, `Play::point`): every button glyph is its button (the
   HUD's raster notes them), and each window notes where it drew its rows (`pointer::Hits`) and
   answers `point(p) -> Vec<i32>`: the keys to press, `pointer::MOVED` for a selection it moved

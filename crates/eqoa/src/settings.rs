@@ -7,7 +7,9 @@
 //! not keep: it has no server select). The client does the same with the
 //! options it shows, and keeps its own beside them in `client.opt`: the
 //! Options window's Extended page (Level of Detail, Brightness, Frame Rate,
-//! Camera Distance), which the game does not have.
+//! Camera Distance), which the game does not have; and in `keys.opt` the
+//! Controls page's keys and buttons (`binds`), per device as the card keeps
+//! every option, not per character.
 //!
 //! Where: natively `$EQOA_CONFIG`, else `eqoa-rs` in the platform's config
 //! directory (`$XDG_CONFIG_HOME` or `~/.config`, `~/Library/Application
@@ -15,7 +17,7 @@
 //! (`keep_in_user_dir`); the other commands (`shot`, `playshot`) keep and read
 //! nothing unless `$EQOA_CONFIG` names a directory, so a player's settings
 //! never change a test's picture. In a page, the origin's localStorage
-//! (`eqoa.game.opt` and `eqoa.client.opt`, as hex), where every access may
+//! (`eqoa.game.opt`, `eqoa.client.opt` and `eqoa.keys.opt`, as hex), where every access may
 //! fail (a private window, storage turned off): the page then runs on the
 //! defaults and keeps nothing.
 //!
@@ -37,6 +39,7 @@ pub const CARD_SIZE: usize = 1024;
 const MAGIC: u32 = 0x0123_4567;
 const GAME_FILE: &str = "game.opt";
 const CLIENT_FILE: &str = "client.opt";
+const KEYS_FILE: &str = "keys.opt";
 
 impl GameOptions {
     /// `VIGameOptions` as `Save` writes it: `m_flags` 0, the settings, the
@@ -112,12 +115,48 @@ pub fn game_options() -> GameOptions {
 pub fn save(o: &GameOptions) -> bool {
     let game = store::write(GAME_FILE, &o.to_card());
     let client = store::write(CLIENT_FILE, client().to_text().as_bytes());
-    for (what, r) in [("the options", &game), ("the client's options", &client)] {
+    let keys = store::write(KEYS_FILE, with_binds(|b| b.to_text()).as_bytes());
+    for (what, r) in [("the options", &game), ("the client's options", &client), ("the keys and buttons", &keys)] {
         if let Err(e) = r {
             crate::say(&format!("{what} were not kept: {e}"));
         }
     }
-    game.is_ok() && client.is_ok()
+    game.is_ok() && client.is_ok() && keys.is_ok()
+}
+
+// ---- the client's own: the Controls page ----------------------------------------
+
+thread_local! {
+    /// The keys and buttons now (`binds`): read from the store the first
+    /// time they are asked for.
+    static BINDS: std::cell::RefCell<Option<crate::binds::Binds>> = const { std::cell::RefCell::new(None) };
+}
+
+/// `f` over the keys and buttons now: what was kept (`keys.opt`), as the
+/// Controls page changed them since.
+pub fn with_binds<R>(f: impl FnOnce(&crate::binds::Binds) -> R) -> R {
+    BINDS.with(|c| {
+        let mut c = c.borrow_mut();
+        let b = c.get_or_insert_with(|| {
+            let b = store::read(KEYS_FILE).map_or_else(Default::default, |b| crate::binds::Binds::from_text(&String::from_utf8_lossy(&b)));
+            if !b.is_default() {
+                crate::say(&format!("keys and buttons: {}", b.describe()));
+            }
+            b
+        });
+        f(b)
+    })
+}
+
+/// The keys and buttons now, a copy.
+pub fn binds() -> crate::binds::Binds {
+    with_binds(Clone::clone)
+}
+
+/// Changes them (the Controls page, as it moves them); kept only by Save
+/// Changes (`save`).
+pub fn set_binds(b: crate::binds::Binds) {
+    BINDS.with(|c| *c.borrow_mut() = Some(b));
 }
 
 // ---- the client's own: the Extended page ---------------------------------------
@@ -489,6 +528,7 @@ pub mod testing {
         super::store::FILES.with(|f| f.borrow_mut().clear());
         super::store::REFUSE.with(|r| r.set(refuse));
         super::CLIENT.with(|c| c.set(None));
+        super::BINDS.with(|c| *c.borrow_mut() = None);
         super::PLATFORM_RATE.with(|p| p.set(super::FrameRate::Display));
         super::FRAME_DUE.with(|d| d.set(0.0));
     }
@@ -589,6 +629,26 @@ mod tests {
         assert!(!save(&o));
         assert_eq!(game_options(), none);
         assert_eq!(client(), ClientOptions::default());
+        testing::reset(false);
+    }
+
+    /// The keys and buttons: kept by Save Changes in keys.opt and read back
+    /// as the next run reads them; nothing kept, the default layout; with the
+    /// store refusing, the defaults and a save that says it failed.
+    #[test]
+    fn keys_kept_between_runs() {
+        testing::reset(false);
+        assert!(binds().is_default());
+        let mut b = crate::binds::Binds::default();
+        b.bind_key(crate::binds::row_named("use").unwrap(), "q");
+        set_binds(b.clone());
+        assert!(save(&GameOptions::default()));
+        BINDS.with(|c| *c.borrow_mut() = None);
+        assert_eq!(binds(), b, "read back");
+        assert_eq!(testing::kept(KEYS_FILE).as_deref(), Some(&b"key.talk=e\nkey.use=q\n"[..]));
+        testing::reset(true);
+        assert!(binds().is_default());
+        assert!(!save(&GameOptions::default()));
         testing::reset(false);
     }
 

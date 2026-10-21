@@ -19,6 +19,10 @@
 //! rows are. They change as they are moved, Triangle on the menu puts them
 //! back, and Save Changes keeps them with the game's (`client.opt`).
 //!
+//! The client's own Controls page after it (`bindpage`): every key and
+//! button of the default layout, moved by pressing the one to put there,
+//! kept by Save Changes (`keys.opt`) and put back by Triangle as the rest.
+//!
 //! A pointer (`pointer`): a menu row is chosen at once; a page's row is
 //! reached with up and down (a page knows which setting its row is only as
 //! it draws, so left and right must wait for it), its label then steps its
@@ -27,6 +31,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
+use crate::bindpage::ControlsPage;
 use crate::pointer::{Hits, key, rows_rect};
 use crate::settings::{BRIGHTNESS_STEPS, CAMERA_MAX, CAMERA_MIN, CAMERA_STEP, ClientOptions, FrameRate};
 use vi::fpu::{Ee, F};
@@ -207,9 +212,11 @@ impl Message {
 /// `VIWndOptions`.
 #[derive(Default)]
 pub struct WndOptions {
-    /// `m_sel`: the menu's row (3 is the client's Extended, 4 Save Changes)
+    /// `m_sel`: the menu's row (3 is the client's Extended, 4 its Controls,
+    /// 5 Save Changes)
     sel: i32,
-    /// `m_page`: -1 the menu, 0 Game, 1 Interface, 2 Sound, 3 Extended
+    /// `m_page`: -1 the menu, 0 Game, 1 Interface, 2 Sound, 3 Extended, 4
+    /// Controls
     page: i32,
     /// `m_row`: the page's row
     row: i32,
@@ -219,6 +226,11 @@ pub struct WndOptions {
     saved: GameOptions,
     /// the client's own as it opened, put back with them
     saved_client: ClientOptions,
+    /// the keys and buttons as it opened, put back with them
+    saved_binds: crate::binds::Binds,
+    /// the Controls page, and the sounds it made drawing (a held key's steps)
+    controls: ControlsPage,
+    controls_cues: Vec<i32>,
     /// `m_edit93` .. `m_edit97`: the four settings only Save commits, held
     /// the way the window holds them (faction and loot ON while set)
     edit: [u8; 4],
@@ -249,6 +261,9 @@ impl WndOptions {
         if self.save_count != 0 {
             return Vec::new();
         }
+        if self.page == 4 {
+            return self.controls.point(p);
+        }
         let Some(h) = self.hits.at(p) else { return Vec::new() };
         let k = h % 10;
         if h < 10 {
@@ -267,22 +282,64 @@ impl WndOptions {
         keys
     }
     /// `OnMessage` 295 with the focus coming from outside: the window (300
-    /// wide, seven rows and one for Extended, titled 788) opening, the values
-    /// kept, the menu.
+    /// wide, seven rows and one each for Extended and Controls, titled 788)
+    /// opening, the values kept, the menu.
     pub fn open(&mut self, vui: &Vui, r: &dyn Raster, o: &GameOptions) {
         self.window.close(true);
-        self.window.init(vui, r, [320, 246], 300, 8, 0);
+        self.window.init(vui, r, [320, 246], 300, 9, 0);
         self.window.open(false);
         self.window.set_title(Some(&wide(vui.words.get(788, vui.language))));
         self.message.visible = false;
         self.saved = *o;
         self.saved_client = crate::settings::client();
+        self.saved_binds = crate::settings::binds();
         self.edit = [(o.no_faction == 0) as u8, (o.no_loot == 0) as u8, o.auto_attack, o.vibration];
         self.sel = 0;
         self.page = -1;
         self.item = -1;
         self.save_count = 0;
         self.preview = None;
+    }
+
+    /// The Controls page straight from play (F1, the HUD's "F1 Controls"):
+    /// the window opened as from the start menu, on its Controls row and
+    /// page; Triangle goes back to the menu as from there.
+    pub fn open_controls(&mut self, vui: &Vui, r: &dyn Raster, o: &GameOptions) {
+        self.open(vui, r, o);
+        self.sel = 4;
+        self.select(vui, r, &mut Vec::new());
+    }
+
+    /// A key let go: the Controls page's held up or down ends.
+    pub fn release(&mut self, key: i32) {
+        if self.page == 4 {
+            self.controls.key(key, false, self.now, &mut Vec::new());
+        }
+    }
+
+    /// What the Controls page waits for, if anything.
+    pub fn capturing(&self) -> Option<crate::bindpage::Column> {
+        if self.page == 4 && !self.message.visible { self.controls.capture } else { None }
+    }
+
+    /// A key pressed while the Controls page waits (`binds::name_of`).
+    pub fn capture_key(&mut self, vui: &Vui, name: &str, cues: &mut Vec<i32>) {
+        if self.capturing().is_some() {
+            self.controls.capture_key(vui, name, cues);
+        }
+    }
+
+    /// A controller's button pressed while the Controls page waits (its bit
+    /// index, before any remap).
+    pub fn capture_button(&mut self, vui: &Vui, phys: u8, cues: &mut Vec<i32>) {
+        if self.capturing().is_some() {
+            self.controls.capture_button(vui, phys, cues);
+        }
+    }
+
+    /// The sounds the Controls page made as it drew (a held key's steps).
+    pub fn take_cues(&mut self) -> Vec<i32> {
+        std::mem::take(&mut self.controls_cues)
     }
 
     /// `OnKeyDown`; the message box's while it is up.
@@ -299,6 +356,12 @@ impl WndOptions {
             return;
         }
         if self.save_count != 0 {
+            return;
+        }
+        if self.page == 4 {
+            if self.controls.key(key, true, now, cues) {
+                self.back(cues);
+            }
             return;
         }
         match key {
@@ -326,6 +389,7 @@ impl WndOptions {
                     o.compact = s.compact;
                     o.no_damage = s.no_damage;
                     crate::settings::set_client(self.saved_client);
+                    crate::settings::set_binds(self.saved_binds.clone());
                     ups.push(OptionsUp::Volume(0, o.fx_volume));
                     ups.push(OptionsUp::Volume(1, o.music_volume));
                     ups.push(OptionsUp::Apply);
@@ -347,10 +411,10 @@ impl WndOptions {
     }
 
     /// `Next`: the last row of each page; Interface gains Vibration; the
-    /// menu and Extended are the client's.
+    /// menu's Extended and Controls are the client's.
     fn next(&mut self, now: i64, cues: &mut Vec<i32>) {
         let last = if self.page == -1 {
-            4
+            5
         } else {
             let mut last = [2, 3, 3, 3];
             if FEATURES & 0x100 != 0 {
@@ -456,8 +520,9 @@ impl WndOptions {
     }
 
     /// `Select`: X on the menu opens a page (its window 440 wide, six to
-    /// eight rows, an empty title; the client's Extended seven), or on Save
-    /// Changes asks (true).
+    /// eight rows, an empty title; the client's Extended seven, its Controls
+    /// 600 wide over the middle of the frame, as many rows as fit), or on
+    /// Save Changes asks (true).
     fn select(&mut self, vui: &Vui, r: &dyn Raster, cues: &mut Vec<i32>) -> bool {
         if self.page != -1 {
             cues.push(9);
@@ -476,6 +541,15 @@ impl WndOptions {
             }
             2 => 7,
             3 => 7,
+            4 => {
+                self.page = 4;
+                self.controls.reset();
+                self.window2.close(true);
+                self.window2.init(vui, r, [320, 224], 600, ControlsPage::window_rows(vui.font_height(r)), 0);
+                self.window2.open(false);
+                self.window2.set_title(Some(&wide(CONTROLS)));
+                return false;
+            }
             _ => return true,
         };
         self.page = self.sel;
@@ -523,6 +597,7 @@ impl WndOptions {
             1 => self.draw_interface(vui, r, o),
             2 => self.draw_sound(vui, r, o),
             3 => self.draw_extended(vui, r),
+            4 => self.controls.draw(vui, r, &mut self.window2, &mut self.controls_cues),
             _ => {}
         }
         let w = |id: i32| wide(vui.words.get(id, vui.language));
@@ -545,14 +620,18 @@ impl WndOptions {
         }
     }
 
-    /// `DrawMenu`: Game, Interface, Sound, the client's Extended, Save
-    /// Changes, the selected one lit, and the legend.
+    /// `DrawMenu`: Game, Interface, Sound, the client's Extended and
+    /// Controls, Save Changes, the selected one lit, and the legend.
     fn draw_menu(&mut self, vui: &Vui, r: &mut dyn Raster) {
         self.item = -1;
         self.window.draw(vui, r);
-        let w = |id: i32| if id < 0 { EXTENDED.to_string() } else { vui.words.get(id, vui.language).to_string() };
+        let w = |id: i32| match id {
+            -1 => EXTENDED.to_string(),
+            -2 => CONTROLS.to_string(),
+            id => vui.words.get(id, vui.language).to_string(),
+        };
         let width = self.window.size[0];
-        for (k, id) in [773, 778, 800, -1, 482].into_iter().enumerate() {
+        for (k, id) in [773, 778, 800, -1, -2, 482].into_iter().enumerate() {
             let on = self.sel == k as i32;
             let s = if on { format!("|q{}|w", w(id)) } else { w(id) };
             self.window.text_box(vui, r, &wide(&s), 40, k as i32 + 1, width - 80, 1, UI_COLORS[on as usize], 8);
@@ -561,7 +640,7 @@ impl WndOptions {
             }
         }
         let legend = wide(&format!("|x {}   |t {}", w(212), w(753)));
-        self.window.text(vui, r, &legend, 40, 7, UI_COLORS[0], 0);
+        self.window.text(vui, r, &legend, 40, 8, UI_COLORS[0], 0);
     }
 
     /// A page's rows: its labels, the tick, and each value in its frame
@@ -672,9 +751,11 @@ impl WndOptions {
     }
 }
 
-/// The client's words for its own page (no WORDS.TXT entry): the menu's
-/// row and the page's three.
+/// The client's words for its own pages (no WORDS.TXT entry): the menu's
+/// rows and the Extended page's three. (WORDS.TXT's "CONTROLS", 1039, is in
+/// capitals and used by none of the game's modules.)
 const EXTENDED: &str = "Extended";
+const CONTROLS: &str = "Controls";
 const EXTENDED_ROWS: [&str; 4] = ["Level of Detail", "Brightness", "Frame Rate", "Camera Distance"];
 
 /// WORDS.TXT's entries `ids`, wide.
@@ -784,10 +865,10 @@ mod tests {
         o.music_volume = F::ZERO;
         w.draw(&vui, &mut r, &o, &mut ups);
         assert_eq!(w.point([slider + 20.0, y(&w, 2)]), vec![key::DOWN, key::DOWN, key::RIGHT], "volume 0: the knob at the left end");
-        // back to the menu, Save Changes (past the client's Extended): the
-        // box's choices
+        // back to the menu, Save Changes (past the client's Extended and
+        // Controls): the box's choices
         w.key(&vui, &mut r, &mut o, 132, 0, &mut cues, &mut ups);
-        w.sel = 4;
+        w.sel = 5;
         w.key(&vui, &mut r, &mut o, 134, 0, &mut cues, &mut ups);
         assert!(w.message.visible);
         w.draw(&vui, &mut r, &o, &mut ups);
@@ -862,7 +943,7 @@ mod tests {
         assert_eq!(testing::kept("client.opt"), None, "nothing kept yet");
         // again, and saved this time, Auto Attack with it
         w.open(&vui, &NullRaster, &o);
-        for k in [key::DOWN, key::CROSS, key::RIGHT, key::TRIANGLE, key::DOWN, key::DOWN, key::CROSS, key::DOWN, key::LEFT, key::TRIANGLE, key::DOWN, key::CROSS, key::LEFT, key::CROSS] {
+        for k in [key::DOWN, key::CROSS, key::RIGHT, key::TRIANGLE, key::DOWN, key::DOWN, key::CROSS, key::DOWN, key::LEFT, key::TRIANGLE, key::DOWN, key::DOWN, key::CROSS, key::LEFT, key::CROSS] {
             press(&mut w, &mut o, k, &mut cues);
         }
         assert_eq!(w.save_count, 3, "Saving... (one frame drawn)");
@@ -872,6 +953,58 @@ mod tests {
         let kept = String::from_utf8(testing::kept("client.opt").unwrap()).unwrap();
         assert_eq!(kept, "lod=on\nbrightness=4\ncamera_distance=11\n");
         assert_eq!(GameOptions::from_card(&testing::kept("game.opt").unwrap()).unwrap().auto_attack, 1);
+        testing::reset(false);
+    }
+
+    /// The client's Controls page: the menu's fifth row opens it; a key
+    /// moved there applies at once; Triangle on the menu puts it back (the
+    /// control: before it, moved), Save Changes keeps it in keys.opt; F1's
+    /// way opens straight on the page, and its Triangle goes to the menu.
+    #[test]
+    fn the_controls_page() {
+        use crate::bindpage::Column;
+        use crate::pointer::testing::{NullRaster, vui};
+        use crate::settings::{self, testing};
+        testing::reset(false);
+        let vui = vui();
+        let mut o = GameOptions::default();
+        let mut w = WndOptions::default();
+        let (mut cues, mut ups) = (Vec::new(), Vec::new());
+        let mut press = |w: &mut WndOptions, o: &mut GameOptions, k: i32| {
+            w.key(&vui, &mut NullRaster, o, k, 0, &mut cues, &mut ups);
+            w.release(k);
+            w.draw(&vui, &mut NullRaster, o, &mut ups);
+        };
+        w.open(&vui, &NullRaster, &o);
+        for k in [key::DOWN, key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
+            press(&mut w, &mut o, k);
+        }
+        assert_eq!((w.sel, w.page), (4, 4), "Controls");
+        assert_eq!(w.capturing(), None);
+        press(&mut w, &mut o, key::CROSS);
+        assert_eq!(w.capturing(), Some(Column::Keyboard), "Walk forward's key awaited");
+        w.capture_key(&vui, "up", &mut Vec::new());
+        assert_eq!(settings::binds().alias("up"), crate::binds::Alias::To("w"), "at once");
+        // Triangle: the menu, then closed and put back
+        press(&mut w, &mut o, key::TRIANGLE);
+        assert_eq!(w.page, -1);
+        assert!(!settings::binds().is_default(), "the control: still moved on the menu");
+        press(&mut w, &mut o, key::TRIANGLE);
+        assert!(settings::binds().is_default(), "put back");
+        assert_eq!(testing::kept("keys.opt"), None);
+        // again, kept with Save Changes
+        w.open_controls(&vui, &NullRaster, &o);
+        assert_eq!((w.sel, w.page), (4, 4), "F1's way: on the page");
+        press(&mut w, &mut o, key::CROSS);
+        w.capture_key(&vui, "up", &mut Vec::new());
+        for k in [key::TRIANGLE, key::DOWN, key::CROSS, key::LEFT, key::CROSS] {
+            press(&mut w, &mut o, k);
+        }
+        for _ in 0..3 {
+            w.draw(&vui, &mut NullRaster, &o, &mut ups);
+        }
+        assert_eq!(String::from_utf8(testing::kept("keys.opt").unwrap()).unwrap(), "key.walk_forward=up\nkey.menu_up=w\n");
+        settings::set_binds(Default::default());
         testing::reset(false);
     }
 
