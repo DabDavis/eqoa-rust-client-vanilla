@@ -260,6 +260,9 @@ pub struct Session {
     pub packets_sent: u64,
     /// `EQOA_NET_DEBUG`: every datagram and message on stderr.
     debug: bool,
+    /// `m_p382E4`, the chat mode: the last one 0x000E sent (`GroupChanged`
+    /// sends it again at every world entry).
+    pub chat_mode: u8,
     /// Events handed back to come out of the next `pump` first: what
     /// arrived with the world entry, after it (0x1005, 0x03D5), for the
     /// game to read once it is up.
@@ -307,6 +310,7 @@ impl Session {
             base,
             packets_sent: 0,
             debug: std::env::var_os("EQOA_NET_DEBUG").is_some(),
+            chat_mode: 0,
             held: Vec::new(),
         };
         let dst = address_to_endpoint(server.0, server.1, PORT_LEADER);
@@ -380,6 +384,9 @@ impl Session {
 
     /// `SendOpcodeByte(op, v)`.
     pub fn send_op_byte(&mut self, op: u16, v: u8) {
+        if op == 0x000E {
+            self.chat_mode = v;
+        }
         let mut w = Writer::op(op);
         w.u8(v);
         self.send(&w.data);
@@ -584,6 +591,7 @@ impl Session {
                 if self.debug || r.error || r.pos + 39 != r.data.len() {
                     debug_line(&format!("[net] MemoryDump: {} of {} bytes read{}", r.pos, r.data.len(), if r.error { ", SHORT" } else { "" }));
                 }
+                let dump_player = dump.player.clone();
                 // Msg000D goes on only when the whole dump read.
                 if !r.error {
                     let p = &dump.player;
@@ -600,14 +608,39 @@ impl Session {
                     };
                     self.self_id = Some(m.src);
                     self.send(&Writer::op(0x0014).data);
+                    // GroupChanged(m_p382E4): the chat mode kept
+                    self.send_op_byte(0x000E, self.chat_mode);
                     ev.push(Event::WorldEntry { self_id: m.src, player, dump: Box::new(dump) });
                 }
+                // SendOpByteByte(201, !m_p502D4, 0), (202, !m_p502D8, 0): the
+                // options' Faction and Loot Messages OFF bits (m_x93, m_x94),
+                // clear by default, as every capture sends them
                 let mut w = Writer::op(0x00C9);
-                w.u8(1).u8(0);
+                w.u8(0).u8(0);
                 self.send(&w.data);
                 let mut w = Writer::op(0x00CA);
-                w.u8(1).u8(0);
+                w.u8(0).u8(0);
                 self.send(&w.data);
+                if !r.error {
+                    // CLIENT's first frame after the dump writes the 0x40,
+                    // and its flush carries it beside the batch above (every
+                    // PS2 capture has 0x00CA beside its first 0x40): the
+                    // walker as SetLocation leaves it, still, on the floor.
+                    // Sandstorm needs it there: a first 0x40 in a later
+                    // packet leaves the player out of its world (its own
+                    // entity is all it sends, and it never moves it).
+                    let p = &dump_player;
+                    let phys = vi::walk::WalkPhysics::<Ee> {
+                        position: vi::vect::Vect3::of(p.pos[0], p.pos[1], p.pos[2]),
+                        angles: vi::vect::Vect3::of(p.hpr[0], 0.0, 0.0),
+                        target_heading: vi::fpu::F::new(p.hpr[0]),
+                        floor: vi::fpu::F::new(p.pos[1]),
+                        flags: vi::walk::flags::ON_FLOOR | vi::walk::flags::TRACK_HEADING,
+                        ..Default::default()
+                    };
+                    let msg = vi::selfstate::encode(p.world as u8, &phys, 0, u32::MAX);
+                    self.send_state(0x40, &msg);
+                }
             }
             0x00F8 => ev.push(Event::Speed(r.f32())),
             0x00C5 | 0x00C7 => ev.push(Event::Weather { weather: r.u8(), instant: op == 0x00C7 }),
@@ -817,7 +850,7 @@ fn read_shards(r: &mut Reader) -> Vec<Shard> {
     v
 }
 
-/// `CharacterList`: at most eight.
+/// `CharacterList`: at most eight (`m_charCount > 8 ? 8`).
 /// 0x002B's bytes (`SendNewChar`): the name as `WriteString` (the form's
 /// buffer is 24 bytes), nine zigzags, seven raw ints.
 pub fn new_char_message(c: &NewChar) -> Vec<u8> {
@@ -939,5 +972,160 @@ mod tests {
             let ev = deliver(&mut s, drdp::TYPE_DISCONNECT, vec![byte]);
             assert!(matches!(ev[..], [Event::Disconnected(r)] if r == reason), "{byte}: {ev:?}");
         }
+    }
+
+    /// Every datagram sent, kept.
+    struct Rec(std::rc::Rc<std::cell::RefCell<Vec<Vec<u8>>>>);
+    impl Datagrams for Rec {
+        fn send_to(&mut self, d: &[u8], _: [u8; 4], _: u16) {
+            self.0.borrow_mut().push(d.to_vec());
+        }
+        fn recv_from(&mut self) -> Option<(Vec<u8>, [u8; 4], u16)> {
+            None
+        }
+    }
+
+    /// A whole MemoryDump with nothing in its lists: the player at `pos`.
+    fn empty_dump(pos: [f32; 3], heading: f32) -> Vec<u8> {
+        let mut w = Writer::op(0x000D);
+        w.u8(0).string(b"data\\tunaria.esf");
+        w.signed(7).string(b"Tester");
+        for v in [12, 8, 49, 0, 0] {
+            w.signed(v);
+        }
+        w.u8(255);
+        for v in [0, 0, 0, 0, 0] {
+            w.signed(v);
+        }
+        for v in pos.into_iter().chain([heading, 0.0, 0.0]) {
+            w.u32(v.to_bits());
+        }
+        w.signed(0).u32(0).u32(0).u32(0); // text sets, the two tokens, quests
+        w.signed(0).u32(0); // inventory
+        w.signed(0).u32(0).signed(0).signed(0).u8(0); // bank, lots, bids
+        w.u8(0).signed(0).u32(8.0f32.to_bits()); // no corpse, no abilities, the speed
+        for _ in 0..25 {
+            w.u32(0); // the crafting slots
+        }
+        w.u32(0);
+        for _ in 0..4 {
+            w.signed(0);
+        }
+        w.u32(8.0f32.to_bits());
+        for _ in 0..36 {
+            w.signed(0); // Combat Mastery
+        }
+        w.bytes(&[0; 39]);
+        w.data
+    }
+
+    /// The messages in one of the client's datagrams: (type, payload), a
+    /// guaranteed one's payload starting with its opcode, a state's RLE undone.
+    fn messages(d: &[u8]) -> Vec<(u8, Vec<u8>)> {
+        use drdp::buffer::{Buffer, rle_decode};
+        let mut out = Vec::new();
+        let mut b = Buffer::reader(&d[..d.len() - 4]);
+        b.u16();
+        b.u16();
+        while b.remaining() > 0 && !b.overflow {
+            let h = drdp::read_segment_header(&mut b, 0, 0);
+            let mut s = Buffer::reader(&b.rest()[..(h.size as usize).min(b.rest().len())]);
+            b.skip(h.size as usize);
+            if h.flags & 0x30000 != 0 || s.max == 0 {
+                continue;
+            }
+            let f = s.u8();
+            if f & 0x40 != 0 {
+                s.u32();
+            }
+            s.u16();
+            if f & 1 != 0 {
+                s.u16();
+                if f & 4 != 0 {
+                    s.packed();
+                }
+            }
+            if f & 2 != 0 {
+                s.u16();
+                if f & 8 != 0 {
+                    s.packed();
+                }
+            }
+            if f & 0x10 != 0 {
+                while s.u8() != 248 && !s.overflow {
+                    s.u16();
+                }
+            }
+            while s.remaining() > 0 && !s.overflow {
+                let ty = s.u8();
+                let size = s.size() as usize;
+                if ty.wrapping_add(7) < 3 {
+                    s.u16();
+                    out.push((ty, s.rest()[..size].to_vec()));
+                    s.skip(size);
+                } else if ty == 252 {
+                    s.skip(size);
+                } else if ty < 248 {
+                    s.u16();
+                    s.u8();
+                    let mut v = vec![0; size];
+                    rle_decode(&mut s, &mut v);
+                    out.push((ty, v));
+                }
+            }
+        }
+        out
+    }
+
+    // Msg000D's world entry is ONE datagram, as every PS2 capture's is: 0x0014,
+    // GroupChanged's 0x000E with the chat mode kept, 0x00C9 and 0x00CA, and the
+    // first frame's 0x40 at the dump's place. Sandstorm needs the 0x40 there:
+    // sent in a later packet, the player is left out of its world (no entity
+    // but its own, and it never moves). The control: a dump cut short sends
+    // 0x00C9 and 0x00CA alone (Msg000D's Msg0777 path), and no 0x40.
+    #[test]
+    fn world_entry_carries_the_first_self_state() {
+        let pos = [25296.398, 54.125977, 15785.668];
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        s.flush();
+        s.send_op_byte(0x000E, 3);
+        s.flush();
+        sent.borrow_mut().clear();
+        let dump = empty_dump(pos, 3.5588355);
+        let mut ev = Vec::new();
+        s.route(drdp::Message { ty: drdp::TYPE_GUARANTEED, data: dump.clone(), connection: s.conn, src: 0x1d3d_8fa9, ..Default::default() }, &mut ev);
+        assert!(matches!(ev[..], [Event::WorldEntry { self_id: 0x1d3d_8fa9, .. }]), "{ev:?}");
+        s.flush();
+        let sent_now = sent.borrow().clone();
+        assert_eq!(sent_now.len(), 1, "the world entry is one datagram");
+        let m = messages(&sent_now[0]);
+        let kinds: Vec<(u8, u16)> = m.iter().map(|(t, d)| (*t, if *t == 251 { u16::from_le_bytes([d[0], d[1]]) } else { 0 })).collect();
+        assert_eq!(kinds, [(251, 0x0014), (251, 0x000E), (251, 0x00C9), (251, 0x00CA), (0x40, 0)], "{m:02x?}");
+        assert_eq!(m[1].1[2..], [3], "the chat mode kept");
+        assert_eq!(m[2].1[2..], [0, 0]);
+        assert_eq!(m[3].1[2..], [0, 0]);
+        let phys = vi::walk::WalkPhysics::<Ee> {
+            position: vi::vect::Vect3::of(pos[0], pos[1], pos[2]),
+            angles: vi::vect::Vect3::of(3.5588355, 0.0, 0.0),
+            target_heading: vi::fpu::F::new(3.5588355),
+            floor: vi::fpu::F::new(pos[1]),
+            flags: vi::walk::flags::ON_FLOOR | vi::walk::flags::TRACK_HEADING,
+            ..Default::default()
+        };
+        assert_eq!(m[4].1, vi::selfstate::encode(0, &phys, 0, u32::MAX), "the 0x40 at the dump's place");
+
+        // A dump cut short: no world entry, no 0x40.
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        s.flush();
+        sent.borrow_mut().clear();
+        let mut ev = Vec::new();
+        s.route(drdp::Message { ty: drdp::TYPE_GUARANTEED, data: dump[..dump.len() - 80].to_vec(), connection: s.conn, src: 0x1d3d_8fa9, ..Default::default() }, &mut ev);
+        assert!(ev.is_empty(), "{ev:?}");
+        s.flush();
+        let m = messages(&sent.borrow()[0]);
+        let kinds: Vec<(u8, u16)> = m.iter().map(|(t, d)| (*t, if *t == 251 { u16::from_le_bytes([d[0], d[1]]) } else { 0 })).collect();
+        assert_eq!(kinds, [(251, 0x00C9), (251, 0x00CA)], "{m:02x?}");
     }
 }
