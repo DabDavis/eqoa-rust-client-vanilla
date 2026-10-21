@@ -86,7 +86,7 @@ impl Walker {
     /// when the zone there is loaded, else at the height given), facing
     /// `heading`, the camera set behind.
     pub fn relocate(&mut self, pos: [f32; 3], heading: f32) {
-        let y = ground(&mut self.scene, pos[0], pos[2]).filter(|g| (g - pos[1]).abs() < 20.0).unwrap_or(pos[1]);
+        let y = arrival_floor(&mut self.scene, pos).unwrap_or(pos[1]);
         let p = Vect3::of(pos[0], y, pos[2]);
         // Respawn: SetLocation (not Init: the camera keeps its mode and
         // distance), then SetOrbitAngleBehind.
@@ -270,6 +270,23 @@ impl crate::controls::Walk for Walker {
 
 /// The ground under (x, z): a floor probe from high above, as CalcFloor drops
 /// one.
+/// `VIClient::Respawn`'s floor for a move (CLIENT 0x00BD5628, 0x00B2's
+/// teleport and a dump in play): a 0.1 sphere cast from 3 above the server's
+/// place to 3 below (`VISceneFilter`), the place put 0.2 under where it hits.
+/// Its second cast, "20 above the first hit", collides the same sphere
+/// again, so the first hit stands. The topmost floor within 20 (the client's
+/// rule until 2026-10-21) put a teleport on a stall's roof over the place.
+/// Nothing within 3 (the zones not read yet, on a far move) is None here,
+/// and the caller keeps the server's height; the game would go to the cast's
+/// end, 3.2 under it, safe only because its zones are always in.
+pub fn arrival_floor(w: &mut World<Ee>, pos: [f32; 3]) -> Option<f32> {
+    let y = F::<Ee>::new(pos[1]);
+    let mut s = CollSphere::<Ee>::default();
+    s.init(Vect3::new(F::new(pos[0]), y + F::new(3.0), F::new(pos[2])), Vect3::new(F::new(pos[0]), y - F::new(3.0), F::new(pos[2])), F::new(0.1));
+    let mut f = Filter::new(FilterKind::Scene, -1);
+    w.collide_sphere(&mut s, &mut f).then(|| (s.hit_point().y - F::new(0.2)).0)
+}
+
 pub fn ground(w: &mut World<Ee>, x: f32, z: f32) -> Option<f32> {
     let mut s = CollSphere::<Ee>::default();
     s.init(Vect3::of(x, 2000.0, z), Vect3::of(x, -2000.0, z), F::new(0.001));
@@ -331,5 +348,45 @@ impl AnimatedProps {
                 g.actors.iter().map(|a| Matrix44::mul(&node, a).to_cols()).collect()
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The disc's TUNARIA.ESF with the zones round (x, z) read and the
+    /// collision world made; None without `run/eqoa.iso`.
+    fn tunaria_round(x: f32, z: f32) -> Option<World<Ee>> {
+        let iso = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        if !iso.exists() {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return None;
+        }
+        let mut lib = esf::Library::new();
+        let w = lib.add("TUNARIA.ESF", crate::stream::open_file(&iso, "TUNARIA.ESF").unwrap());
+        let mut src = crate::stream::FileZones::open(&iso, "TUNARIA.ESF").unwrap();
+        crate::stream::fill(&mut lib, w, x, z, &mut src);
+        World::load(&lib, w)
+    }
+
+    /// A move lands on the floor under the server's place, as `Respawn`
+    /// casts: in Freeport's market, by Merchant Gilgash (54.4), on the
+    /// stall's floor, where the topmost floor within 20 (the control, the
+    /// old rule) is the stall's roof at 70; on open ground both agree; and
+    /// 50 over the ground there is nothing within 3 (the caller keeps the
+    /// server's height). F3 2026-10-21: a coach ride's arrival on a roof.
+    #[test]
+    fn a_move_lands_on_the_floor_under_it_not_a_roof_over_it() {
+        let (x, y, z) = (25476.0f32, 54.398438f32, 15707.797f32);
+        let Some(mut world) = tunaria_round(x, z) else { return };
+        let floor = arrival_floor(&mut world, [x, y, z]).expect("a floor within 3");
+        assert!((floor - y).abs() < 0.5, "the stall's floor: {floor}");
+        let top = ground(&mut world, x, z).unwrap();
+        assert!(top > y + 10.0 && (top - y).abs() < 20.0, "the control: the old rule took the roof at {top}");
+        let (px, pz) = (25275.115f32, 15766.627f32);
+        let open = arrival_floor(&mut world, [px, 54.125996, pz]).unwrap();
+        assert!((open - ground(&mut world, px, pz).unwrap()).abs() < 0.2, "open ground: {open}");
+        assert_eq!(arrival_floor(&mut world, [px, 104.0, pz]), None, "nothing within 3");
     }
 }
