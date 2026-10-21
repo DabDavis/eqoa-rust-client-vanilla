@@ -127,7 +127,10 @@ impl Source {
     /// a streamer for the zones to read and draw.
     pub fn walker(&self, lib: &mut Library, s: &Scene) -> Option<(Walker, esf::Model, Streamer)> {
         let Source::Walk { file, character, spawn: given, .. } = self else { return None };
-        // `EQOA_SPAWN=x,z[,heading]` picks the spot; else near the middle.
+        // `EQOA_SPAWN=x,z[,heading[,y]]` picks the spot; else near the middle.
+        // With a height the character stands there as `Respawn` places it
+        // (on the ground there, unless the ground the probe finds first is a
+        // roof: Neriak's plaza is under one).
         let c = (s.bounds.0 + s.bounds.1) * 0.5;
         let spawn: Vec<f32> = std::env::var("EQOA_SPAWN")
             .ok()
@@ -157,6 +160,9 @@ impl Source {
             t.elapsed()
         );
         let mut w = Walker::new(world, x, z, h);
+        if let [x, z, h, y, ..] = spawn.as_slice() {
+            w.relocate([*x, *y, *z], *h);
+        }
         w.set_character(lib, *character);
         Some((w, lib.build_model(*character)?, Streamer::new(*file, source, pending)))
     }
@@ -309,6 +315,8 @@ pub fn shot_with(
     let mut batches: Vec<render::billboard::Batch> = Vec::new();
     let mut billboard_view: Option<(glam::Mat4, glam::Mat4)> = None;
     let mut sky_billboards: Option<(glam::Mat4, glam::Mat4, Vec<render::billboard::Batch>)> = None;
+    // the effect volumes round the walk (`fx.rs`)
+    let mut fx: Option<crate::fx::Fx> = None;
     let cam = cam.unwrap_or_else(|| source.camera(s.bounds));
     let aspect = w as f32 / h as f32;
     let mut view = cam.view(s.bounds, aspect);
@@ -320,6 +328,7 @@ pub fn shot_with(
         let say = std::env::var("EQOA_SAY").ok();
         let tab = std::env::var_os("EQOA_TAB").is_some();
         let mut parts = crate::particles::Particles::new(&walker.scene, 0);
+        fx = crate::fx::enabled().then(crate::fx::Fx::new);
         // `EQOA_SPELL=n`: SPELLFX's n-th effect, cast by the character at a
         // stand-in 6 ahead of it at EQOA_AT (offline, no server).
         let mut trial = std::env::var("EQOA_SPELL").ok().and_then(|v| v.parse::<usize>().ok()).filter(|_| play.is_none()).map(|n| {
@@ -771,6 +780,7 @@ pub fn shot_with(
                             streamer = s2;
                             // the particles named the old world's actors
                             parts = crate::particles::Particles::new(&walker.scene, t);
+                            fx = crate::fx::enabled().then(crate::fx::Fx::new);
                         }
                         Err(e) => eprintln!("world change to {file}: {e}"),
                     }
@@ -821,6 +831,12 @@ pub fn shot_with(
             // the atmosphere every frame; the last frame's lights and render
             // are the shot's
             weather.frame(&mut walker.scene, None, &walker.eye, t, hour(Instant::now()));
+            // the effect volumes, stepped as the scene rasters them
+            if let Some(fx) = fx.as_mut() {
+                fx.stream(Vec3::from(walker.cam.walk.phys.position.to_array()), &walker.scene, lib);
+                let cam = crate::fx::camera(walker.eye.position, walker.eye.direction);
+                fx.frame(&walker.scene, lib, &cam, proj * v, walker.eye_position(), t, hour(Instant::now()));
+            }
             if t < script.ms {
                 let _ = lit(proj, v, Instant::now(), Some((walker.eye_position(), &walker.scene)), Some(&mut weather));
                 if let Some(p) = play.as_mut() {
@@ -858,6 +874,7 @@ pub fn shot_with(
         eprintln!("{}", streamer.describe());
         let (mut proj, mut v) = walker.view(aspect);
         let mut shot_eye = walker.eye_position();
+        let mut shot_dir = walker.eye.direction;
         // `EQOA_SHOT_EYE=dx,dy,dz`: look at the character from that offset
         // instead of through the game's camera (for checking poses).
         let eye: Vec<f32> = std::env::var("EQOA_SHOT_EYE")
@@ -877,6 +894,7 @@ pub fn shot_with(
             proj = glam::camera::rh::proj::directx::perspective(40f32.to_radians(), aspect, 0.1, 3000.0);
             let at = p + Vec3::new(*dx, *dy, *dz);
             shot_eye = at;
+            shot_dir = vi::vect::Vect3::of(p.x - at.x, p.y - at.y, p.z - at.z);
             v = glam::camera::rh::view::look_at_mat4(at, p, Vec3::Y);
         }
         billboard_view = Some((v, proj));
@@ -892,6 +910,15 @@ pub fn shot_with(
             crate::sky::update(&mut renderer, &device, &queue, &mut gpu, at, f, &textures);
         }
         view = frame.0;
+        // the volumes as the shot's camera sees them (the walk's clock does
+        // not move: nothing steps again)
+        if let Some(fx) = fx.as_mut() {
+            fx.stream(Vec3::from(walker.cam.walk.phys.position.to_array()), &walker.scene, lib);
+            let cam = crate::fx::camera(vi::vect::Vect3::of(shot_eye.x, shot_eye.y, shot_eye.z), shot_dir);
+            fx.frame(&walker.scene, lib, &cam, view.view_proj, view.eye, t, hour(Instant::now()));
+            fx.upload(&mut renderer, &device, &queue, lib);
+            eprintln!("{}", fx.describe());
+        }
         streamed = Some(streamer);
         if let Some(p) = &mut play {
             if let Some(u) = renderer.ui.as_mut() {
@@ -920,6 +947,7 @@ pub fn shot_with(
         .map(render::Draw::Model)
         .chain(streamed.iter().flat_map(|s| s.draws()))
         .chain(play.iter().flat_map(|p| p.models()).map(render::Draw::Model))
+        .chain(fx.iter().flat_map(|f| f.models()).map(render::Draw::Model))
         .collect();
     let textures = render::library_textures(lib);
     let particles = billboard_view.map(|(v, p)| (v, p, batches.as_slice(), &textures as &render::Textures));
@@ -1048,9 +1076,9 @@ struct Perf {
 }
 
 impl Perf {
-    const NAMES: [&str; 14] = [
+    const NAMES: [&str; 15] = [
         "stream", "walk", "play", "pose", "zones", "sound", "weather", "particles", "lights", "acquire", "hud", "encode", "submit",
-        "gpu wait",
+        "gpu wait", "volumes",
     ];
 
     fn from_env() -> Option<Perf> {
@@ -1125,6 +1153,8 @@ struct App {
     /// The world's particles, and this frame's billboards.
     particles: Option<crate::particles::Particles>,
     batches: Vec<render::billboard::Batch>,
+    /// The effect volumes round the walk (`fx.rs`).
+    fx: Option<crate::fx::Fx>,
     /// The sky and the weather (made once, kept across worlds as the
     /// scene's is), and this frame's sky billboards.
     weather: Option<crate::weather::Weather>,
@@ -1200,6 +1230,7 @@ pub fn run_with_gfx(lib: Library, source: Source, play: Option<crate::play::Play
         walker_sounds: Vec::new(),
         particles: None,
         batches: Vec::new(),
+        fx: None,
         weather: None,
         sky_batches: Vec::new(),
         body_at: 0,
@@ -1259,6 +1290,7 @@ impl App {
                 eprintln!("{}", streamer.describe());
                 self.streamer = Some(streamer);
                 self.particles = Some(crate::particles::Particles::new(&w.scene, 0));
+                self.fx = crate::fx::enabled().then(crate::fx::Fx::new);
                 w
             });
             self.sky_at = None;
@@ -1517,6 +1549,8 @@ impl App {
         if let Some(e) = &self.entering {
             let _ = writeln!(o, "entering {} at {:?}", e.0, e.1);
         }
+        // the hour the lights and the effect volumes take, and the volumes
+        let _ = writeln!(o, "hour {:.2}; {}", hour(self.clock), self.fx.as_ref().map_or("effect volumes off".into(), |f| f.describe()));
         if let (Some(p), Some(w)) = (&self.play, &self.walker) {
             o.push_str(&p.report(w.cam.walk.phys.position.to_array()));
         }
@@ -2430,6 +2464,7 @@ impl ApplicationHandler for App {
                 let walker_sounds = &mut self.walker_sounds;
                 let particles = &mut self.particles;
                 let batches = &mut self.batches;
+                let fx = &mut self.fx;
                 let weather = &mut self.weather;
                 let sky_batches = &mut self.sky_batches;
                 let mut bb_view = None;
@@ -2559,6 +2594,14 @@ impl ApplicationHandler for App {
                         bb_view = Some((v, proj));
                     }
                     mark(perf, 8);
+                    // the effect volumes (`VIScene::Render`'s deferred actors)
+                    if let Some(fx) = fx.as_mut() {
+                        fx.stream(Vec3::from(w.cam.walk.phys.position.to_array()), &w.scene, lib);
+                        let cam = crate::fx::camera(w.eye.position, w.eye.direction);
+                        fx.frame(&w.scene, lib, &cam, proj * v, lights.0.eye, now, hour(clock));
+                        fx.upload(&mut g.renderer, &g.device, &g.queue, lib);
+                    }
+                    mark(perf, 14);
                     lights
                 });
                 let frame = match &g.surface {
@@ -2610,6 +2653,7 @@ impl ApplicationHandler for App {
                     .map(render::Draw::Model)
                     .chain(self.streamer.iter().flat_map(|s| s.draws()))
                     .chain(self.play.iter().flat_map(|p| p.models()).map(render::Draw::Model))
+                    .chain(self.fx.iter().flat_map(|f| f.models()).map(render::Draw::Model))
                     .collect();
                 // the options' Brightness: the scene through its curve (none
                 // at the default), the labels and the HUD after it as drawn
@@ -2617,11 +2661,16 @@ impl ApplicationHandler for App {
                 let scene = g.renderer.curve.scene_target(&g.device, (g.config.width, g.config.height));
                 let st = scene.as_ref().unwrap_or(&target);
                 g.renderer.draw(&g.queue, &mut enc, st, &g.depth, &view, &refs);
+                let textures = render::library_textures(&self.lib);
                 if let Some((v, p)) = bb_view {
-                    let textures = render::library_textures(&self.lib);
                     let mut rot = v;
                     rot.w_axis = glam::Vec4::W;
                     g.renderer.draw_sky_billboards(&g.device, &g.queue, &mut enc, st, &g.depth, rot, p, &self.sky_batches, &textures);
+                }
+                // the effect volumes' fans, then the particles over them,
+                // all in the scene (the Brightness curve takes them too)
+                g.renderer.draw_fans(&g.queue, &mut enc, st, &g.depth, &view);
+                if let Some((v, p)) = bb_view {
                     g.renderer.draw_billboards(&g.device, &g.queue, &mut enc, st, &g.depth, v, p, &self.batches, &textures);
                 }
                 g.renderer.curve.apply(&g.queue, &mut enc, &target);

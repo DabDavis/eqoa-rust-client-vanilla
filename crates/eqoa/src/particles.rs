@@ -160,7 +160,7 @@ pub fn render(sys: &mut System<Ee>, time: i64) -> Vec<Batch> {
 
 /// The six planes of a view-projection (`dot(plane, (p, 1)) >= 0` inside),
 /// each scaled to unit normal length so a sphere's radius compares directly.
-fn frustum(m: Mat4) -> [Vec4; 6] {
+pub(crate) fn frustum(m: Mat4) -> [Vec4; 6] {
     let r = |i: usize| m.row(i);
     let mut p = [r(3) + r(0), r(3) - r(0), r(3) + r(1), r(3) - r(1), r(2), r(3) - r(2)];
     for q in p.iter_mut() {

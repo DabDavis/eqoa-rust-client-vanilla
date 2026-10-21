@@ -54,11 +54,17 @@ impl<M: Model> Matrix44<M> {
         }
     }
 
-    /// `sceVu0ApplyMatrix`: `out = v * M`, row vectors.
+    /// `sceVu0ApplyMatrix`: `out = v * M`, row vectors. Each lane is
+    /// ((r0·x + r1·y) + r2·z) + r3·w, the four computed side by side
+    /// (`Model::mul4`, `add4`), as `mul` computes a row.
+    #[inline]
     pub fn apply(&self, v: &Vect4<M>) -> Vect4<M> {
-        let r = &self.m;
-        let c = |k: fn(&Vect4<M>) -> F<M>| ((k(&r[0]) * v.x + k(&r[1]) * v.y) + k(&r[2]) * v.z) + k(&r[3]) * v.w;
-        Vect4::new(c(|q| q.x), c(|q| q.y), c(|q| q.z), c(|q| q.w))
+        let lanes = |r: &Vect4<M>| [r.x.0, r.y.0, r.z.0, r.w.0];
+        let s = M::mul4(lanes(&self.m[0]), [v.x.0; 4]);
+        let s = M::add4(s, M::mul4(lanes(&self.m[1]), [v.y.0; 4]));
+        let s = M::add4(s, M::mul4(lanes(&self.m[2]), [v.z.0; 4]));
+        let s = M::add4(s, M::mul4(lanes(&self.m[3]), [v.w.0; 4]));
+        Vect4::new(F::new(s[0]), F::new(s[1]), F::new(s[2]), F::new(s[3]))
     }
 
     /// `Mul(const VIVect3 &, VIVect3 &)`: a point (w = 1).
@@ -262,5 +268,67 @@ impl<M: Model> Sphere<M> {
         let mut d = b.max;
         d -= c;
         Sphere { c, r: d.magnitude() }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fpu::{Ee, Ieee};
+
+    /// `apply` lane by lane, one scalar operation at a time in the order the
+    /// guest computes it: what `apply` was before it went four lanes wide.
+    fn scalar<M: Model>(m: &Matrix44<M>, v: &Vect4<M>) -> [f32; 4] {
+        let r = &m.m;
+        let c = |k: fn(&Vect4<M>) -> F<M>| ((k(&r[0]) * v.x + k(&r[1]) * v.y) + k(&r[2]) * v.z) + k(&r[3]) * v.w;
+        [c(|q| q.x).0, c(|q| q.y).0, c(|q| q.z).0, c(|q| q.w).0]
+    }
+
+    /// Floats of every kind: zeros, denormals, the world's tens of
+    /// thousands, saturating ones, exponent-255 patterns.
+    fn floats(seed: &mut u64) -> f32 {
+        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let b = (*seed >> 32) as u32;
+        match b % 8 {
+            0 => 0.0,
+            1 => f32::from_bits(b & 0x807F_FFFF),
+            2 => f32::from_bits(b | 0x7F80_0000),
+            3 => (b % 60000) as f32 - 30000.0 + (b >> 16) as f32 / 65536.0,
+            _ => f32::from_bits((b & 0x80FF_FFFF) | (((b >> 24) % 80 + 88) << 23)),
+        }
+    }
+
+    fn check<M: Model>(n: usize) -> usize {
+        let mut seed = 7u64;
+        let mut differ = 0;
+        for _ in 0..n {
+            let mut m = Matrix44::<M>::identity();
+            for r in m.m.iter_mut() {
+                *r = Vect4::new(F::new(floats(&mut seed)), F::new(floats(&mut seed)), F::new(floats(&mut seed)), F::new(floats(&mut seed)));
+            }
+            let v = Vect4::new(F::new(floats(&mut seed)), F::new(floats(&mut seed)), F::new(floats(&mut seed)), F::new(floats(&mut seed)));
+            let a = m.apply(&v);
+            let want = scalar(&m, &v);
+            for (k, got) in [a.x.0, a.y.0, a.z.0, a.w.0].into_iter().enumerate() {
+                assert!(got.to_bits() == want[k].to_bits() || (got.is_nan() && want[k].is_nan()), "lane {k}: {got:e} [{:08X}], want {:e} [{:08X}]", got.to_bits(), want[k], want[k].to_bits());
+                // the control: the sum taken the other way round
+                let r = &m.m;
+                let g = |q: &Vect4<M>| [q.x, q.y, q.z, q.w][k];
+                let other = g(&r[0]) * v.x + (g(&r[1]) * v.y + (g(&r[2]) * v.z + g(&r[3]) * v.w));
+                differ += (other.0.to_bits() != want[k].to_bits()) as usize;
+            }
+        }
+        differ
+    }
+
+    /// Four lanes at once are the scalar operations bit for bit, on the
+    /// console's arithmetic and on IEEE's; the control (the same sum in
+    /// another order) differs on many of the same inputs.
+    #[test]
+    fn apply_is_the_scalar_sum_lane_by_lane() {
+        let n = 200_000;
+        let (ee, ieee) = (check::<Ee>(n), check::<Ieee>(n));
+        eprintln!("the other order differs on {ee} (Ee) and {ieee} (Ieee) of {} lanes", 4 * n);
+        assert!(ee > 1000 && ieee > 1000);
     }
 }

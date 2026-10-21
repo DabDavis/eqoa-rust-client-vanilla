@@ -14,6 +14,7 @@
 
 pub mod billboard;
 pub mod curve;
+pub mod fans;
 pub mod overlay;
 pub mod text;
 pub mod ui;
@@ -289,6 +290,8 @@ pub struct Renderer {
     pub ui: Option<ui::Ui>,
     /// The particles' pipelines, made at the first particle.
     billboards: Option<billboard::Billboards>,
+    /// The immediate-mode fans' (`set_fans`), made at the first fan.
+    fans: Option<fans::Fans>,
     /// What is drawn over the scene with Z off (`set_overlay`), made at the
     /// first.
     overlay: Option<overlay::Overlay>,
@@ -529,6 +532,7 @@ impl Renderer {
             text: None,
             ui: None,
             billboards: None,
+            fans: None,
             overlay: None,
             strips: Vec::new(),
             drawn: Default::default(),
@@ -1197,7 +1201,8 @@ pub fn capture(
 }
 
 /// `capture`, with the sky's billboards (the stars, the lightning patches)
-/// drawn behind the world through the sky's view.
+/// drawn behind the world through the sky's view, and the fans `set_fans`
+/// set after them.
 #[allow(clippy::too_many_arguments)]
 pub fn capture_with_sky(
     device: &wgpu::Device,
@@ -1238,6 +1243,7 @@ pub fn capture_with_sky(
     if let Some((v, p, batches, textures)) = sky {
         renderer.draw_sky_billboards(device, queue, &mut enc, st, &depth, v, p, batches, textures);
     }
+    renderer.draw_fans(queue, &mut enc, st, &depth, view);
     if let Some((v, p, batches, textures)) = particles {
         renderer.draw_billboards(device, queue, &mut enc, st, &depth, v, p, batches, textures);
     }
