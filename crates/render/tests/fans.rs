@@ -3,9 +3,9 @@
 //! drawn ONCE (its front face; the effect volumes' fans are both faces of a
 //! quad and VIRFan culls one), modulated by its texel, lit as VIRStrip
 //! lights a vertex (colour + ambient + sun, clamped), fogged by depth, and
-//! blended by its mode; nothing set, nothing drawn, and what was set is
-//! drawn once. Needs a graphics adapter (any backend); without one it says
-//! so and passes.
+//! blended by its mode; nothing set, nothing drawn, and fans are drawn only
+//! under the view they were made for. Needs a graphics adapter (any
+//! backend); without one it says so and passes.
 
 use glam::{Mat4, Vec3};
 use render::fans::{Quad, Run};
@@ -45,7 +45,7 @@ fn gpu() -> Option<Gpu> {
 fn pixel(g: &Gpu, r: &mut Renderer, view: &View, runs: Option<&[Run]>) -> [f32; 3] {
     let tex = |id: i32| (id == 7).then(|| esf::Image { width: 1, height: 1, rgba: TEXEL.to_vec(), alpha: true });
     if let Some(runs) = runs {
-        r.set_fans(&g.device, &g.queue, runs, &tex);
+        r.set_fans(&g.device, &g.queue, runs, view.eye, &tex);
     }
     let px = render::capture(&g.device, &g.queue, r, 4, 4, view, &[], None);
     let at = (2 * 4 + 2) * 4;
@@ -69,6 +69,7 @@ fn a_fan_is_lit_modulated_fogged_and_blended_once() {
 
     // nothing set: the clear
     close(pixel(&g, &mut r, &dark, None), v3(c), "no fans");
+    close(pixel(&g, &mut r, &dark, Some(&[])), v3(c), "none set");
 
     // a white fan at alpha 0.5, blended (mode 3) once: texel x light, alpha
     // the texel's times the fan's
@@ -81,8 +82,11 @@ fn a_fan_is_lit_modulated_fogged_and_blended_once() {
     let twice = t * 255.0 * a + once * (1.0 - a);
     assert!((0..3).any(|k| (got[k] - v3(twice)[k]).abs() > 2.0), "the control must differ: {got:?} {twice:?}");
 
-    // drawn once: a frame with nothing set again is the clear
-    close(pixel(&g, &mut r, &dark, None), v3(c), "what was set is drawn once");
+    // kept for their view: drawn again under it, not under another eye's
+    close(pixel(&g, &mut r, &dark, None), v3(once), "kept");
+    // (an eye so near that the quad would still cover the view if drawn)
+    let elsewhere = View { eye: Vec3::new(0.0, 0.0, 1e-3), ..dark };
+    close(pixel(&g, &mut r, &elsewhere, None), v3(c), "another view's");
 
     // mode 1 adds
     close(pixel(&g, &mut r, &dark, Some(&white(1, 0.5))), v3((c + t * 255.0 * a).min(Vec3::splat(255.0))), "mode 1");

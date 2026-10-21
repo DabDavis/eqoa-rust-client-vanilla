@@ -353,8 +353,10 @@ pub struct Fx {
     pub runs: Vec<Run>,
     /// the flocks' models, by their CSprite
     models: HashMap<Ref, Option<esf::Model>>,
-    /// the camera this frame was rastered from
+    /// the camera this frame was rastered from, and the eye its fans are
+    /// placed relative to (the view's)
     eye: Vect3<Ee>,
+    fans_eye: Vec3,
     /// where the zones were last streamed for, and how many the world had in
     streamed: Option<(Vec3, usize)>,
     /// the raster's immediate-mode output, kept for its room
@@ -384,6 +386,7 @@ impl Fx {
             runs: Vec::new(),
             models: HashMap::new(),
             eye: Vect3::default(),
+            fans_eye: Vec3::ZERO,
             streamed: None,
             draw: Draw::default(),
             stats: Stats::default(),
@@ -549,13 +552,14 @@ impl Fx {
         self.runs = runs;
         self.stats = stats;
         self.eye = cam.position;
+        self.fans_eye = eye;
     }
 
     /// This frame's fans to the renderer, and the boids' models posed (each
     /// uploaded the first time it is drawn).
     pub fn upload(&mut self, renderer: &mut render::Renderer, device: &wgpu::Device, queue: &wgpu::Queue, lib: &Library) {
         let textures = render::library_textures(lib);
-        renderer.set_fans(device, queue, &self.runs, &textures);
+        renderer.set_fans(device, queue, &self.runs, self.fans_eye, &textures);
         for s in self.sprites.slots.iter_mut().flatten() {
             let Sprite::Boid(b) = s else { continue };
             let Some((centre, palette)) = &b.pose else {

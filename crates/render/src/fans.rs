@@ -73,8 +73,10 @@ pub(crate) struct Fans {
     instances: Option<(wgpu::Buffer, u64)>,
     /// each texture's bind group, by DictID
     groups: HashMap<i32, wgpu::BindGroup>,
-    /// what `draw` draws next: each run's key, texture and quads
+    /// what `draw_fans` draws: each run's key, texture and quads
     pending: Vec<(Key, i32, std::ops::Range<u32>)>,
+    /// the eye their corners are relative to
+    eye: glam::Vec3,
 }
 
 impl Fans {
@@ -124,7 +126,7 @@ impl Fans {
             layout: &frame_layout,
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: frame_buf.as_entire_binding() }],
         });
-        Fans { shader, tex_layout, layout, pipelines: HashMap::new(), sampler, frame_buf, frame_bg, instances: None, groups: HashMap::new(), pending: Vec::new() }
+        Fans { shader, tex_layout, layout, pipelines: HashMap::new(), sampler, frame_buf, frame_bg, instances: None, groups: HashMap::new(), pending: Vec::new(), eye: glam::Vec3::ZERO }
     }
 
     fn pipeline(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat, key: Key) {
@@ -166,9 +168,10 @@ impl Fans {
 }
 
 impl Renderer {
-    /// The fans the next `draw_fans` draws, in this order (none: it draws
-    /// nothing at all). Their textures are uploaded here.
-    pub fn set_fans(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, runs: &[Run], textures: &Textures) {
+    /// The fans `draw_fans` draws from now on, in this order, their corners
+    /// relative to `eye` (none: it draws nothing at all). Their textures are
+    /// uploaded here.
+    pub fn set_fans(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, runs: &[Run], eye: glam::Vec3, textures: &Textures) {
         let n: usize = runs.iter().map(|r| r.quads.len()).sum();
         if n == 0 {
             if let Some(f) = self.fans.as_mut() {
@@ -217,12 +220,15 @@ impl Renderer {
             queue.write_buffer(buf, 0, bytemuck::cast_slice(&inst));
         }
         f.pending = pending;
+        f.eye = eye;
     }
 
     /// Draws the fans `set_fans` set, over what is already in `target` and
-    /// `depth`, under `view`'s lights and fog; then forgets them.
+    /// `depth`, under `view`'s lights and fog, if `view` is the one they were
+    /// made for (its eye theirs): a fan faces the camera it was made for, so
+    /// another view of the same frame (a map's, say) does not draw them.
     pub fn draw_fans(&mut self, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, depth: &wgpu::TextureView, view: &View) {
-        let Some(f) = self.fans.as_mut().filter(|f| !f.pending.is_empty()) else { return };
+        let Some(f) = self.fans.as_mut().filter(|f| !f.pending.is_empty() && f.eye == view.eye) else { return };
         let Some((buf, _)) = &f.instances else { return };
         let rel = (view.view_proj.as_dmat4() * glam::DMat4::from_translation(view.eye.as_dvec3())).as_mat4();
         let u = FrameU {
@@ -264,7 +270,5 @@ impl Renderer {
             pass.set_bind_group(1, &f.groups[texture], &[]);
             pass.draw(0..6, range.clone());
         }
-        drop(pass);
-        f.pending.clear();
     }
 }
