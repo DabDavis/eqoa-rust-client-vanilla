@@ -1442,14 +1442,7 @@ impl App {
         let _ = frame;
         match self.mouse.grab_change(free) {
             Some(true) => {
-                use crate::mouse::Grab;
-                let grab = if !crate::mouse::take_pointer(&g.window) {
-                    Grab::Refused
-                } else if cfg!(target_arch = "wasm32") {
-                    Grab::Asked
-                } else {
-                    Grab::Held
-                };
+                let grab = crate::mouse::take_pointer(&g.window).unwrap_or(crate::mouse::Grab::Refused);
                 self.mouse.set_grab(grab);
             }
             Some(false) => crate::mouse::give_pointer(&g.window, self.mouse.home()),
@@ -2357,9 +2350,15 @@ impl ApplicationHandler for App {
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = (position.x, position.y);
                 self.mouse.moved(position.x, position.y);
-                // a drag begun: the pointer taken, within the press's gesture
+                // a drag begun: the pointer taken, within the press's
+                // gesture; a confined cursor put back to the middle
                 if self.walker.is_some() {
                     self.grab_pointer(false);
+                    if let Some(g) = &self.gfx
+                        && let Some(at) = self.mouse.recentre((g.config.width, g.config.height))
+                    {
+                        crate::mouse::put_pointer(&g.window, at);
+                    }
                 }
                 if self.walker.is_none()
                     && let Some((x, y)) = self.drag

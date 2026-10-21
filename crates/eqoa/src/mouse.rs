@@ -6,13 +6,16 @@
 //!   the cursor hidden and held (a page's Pointer Lock, asked for in the
 //!   drag's move within the press's activation, so a click never hides the
 //!   cursor, and in the press itself once the browser has refused that twice
-//!   running, `lock_seen`; natively winit's `Locked`, or `Confined` where
-//!   the platform has no lock), and the look rides the mouse's own motion
-//!   (`motion`, winit's `DeviceEvent::MouseMotion`), so no screen edge stops
-//!   it. Let go, the cursor is back where the press was. A window or the
-//!   start menu opening, the window losing the focus, Escape (which a
-//!   browser keeps to end its lock) and a death let go of it too, clicking
-//!   nothing.
+//!   running, `lock_seen`; natively winit's `Locked`), and the look rides the
+//!   mouse's own motion (`motion`, winit's `DeviceEvent::MouseMotion`), so no
+//!   screen edge stops it. Where the platform has no lock (X11, Windows) the
+//!   pointer is `Confined` to the window instead, the cursor's own moves are
+//!   the look and it is put back to the window's middle as it nears an edge
+//!   (`recentre`): under X11's grab every raw motion comes twice (SDL drops
+//!   the second by its X time, which winit does not give). Let go, the
+//!   cursor is back where the press was. A window or the start menu
+//!   opening, the window losing the focus, Escape (which a browser keeps to
+//!   end its lock) and a death let go of it too, clicking nothing.
 //! - the left button looks round the orbiting cameras (1 and 3) without
 //!   turning the body: across, the orbit angle (`SetOrbitAngle`, the view
 //!   turning the way the mouse goes); up and down the tilt (`tilt`: the view
@@ -66,6 +69,9 @@ const SLOP: f64 = 5.0;
 const DOUBLE: Duration = Duration::from_millis(400);
 /// A page's lock not granted this long after it was asked for: refused.
 const REFUSED: Duration = Duration::from_millis(500);
+/// A confined cursor's move this near the window's middle, the middle asked
+/// for, is the window's own move back there (and whatever came with it).
+const WARP_NEAR: f64 = 24.0;
 /// The look's turn for a pixel of motion (radians): half a turn over 390.
 /// The orbit, the steered body and first person turn alike.
 const LOOK_PER_PIXEL: f32 = 0.008;
@@ -207,8 +213,11 @@ pub enum Grab {
     /// asked of the window (a page's lock comes a moment later, if it
     /// comes): the cursor hidden, the mouse's own motion the look
     Asked,
-    /// held: the cursor hidden and kept (where it is, or in the window)
+    /// held: the cursor hidden and kept where it is
     Held,
+    /// kept in the window, hidden (natively, where there is no lock): the
+    /// cursor's moves are the look, the cursor put back to the middle
+    Confined,
     /// the window would not: the drag goes on with the cursor, as before
     Refused,
 }
@@ -243,6 +252,10 @@ pub struct Mouse {
     counted: bool,
     refused: u8,
     at_press: bool,
+    /// confined: the middle the cursor was put back to, its move not yet
+    /// seen, and the moves seen since (`recentre`)
+    warp: Option<(f64, f64)>,
+    warp_age: u8,
     /// the last frame steered the follow orbit (a new hold turns the body
     /// to the view first)
     steered: bool,
@@ -253,17 +266,46 @@ impl Mouse {
     /// platform gives the mouse's own motion that is the look, not the
     /// cursor's moves (held, the cursor stays put or keeps in the window).
     pub fn moved(&mut self, x: f64, y: f64) {
-        let (dx, dy) = (x - self.cursor.0, y - self.cursor.1);
+        let mut from = self.cursor;
+        if let Some(w) = self.warp {
+            self.warp_age = self.warp_age.saturating_add(1);
+            if (x - w.0).abs() <= WARP_NEAR && (y - w.1).abs() <= WARP_NEAR {
+                // the window's move back to the middle: only what came with
+                // it (a move the platform folded into it) is looked with
+                from = w;
+                self.warp = None;
+            } else if self.warp_age > 8 {
+                self.warp = None;
+            }
+        }
+        let (dx, dy) = (x - from.0, y - from.1);
         self.cursor = (x, y);
+        let looks = !self.raw || self.grab == Grab::Confined;
         if let Some(p) = self.press.as_mut() {
             if !p.dragged && ((x - p.at.0).powi(2) + (y - p.at.1).powi(2)).sqrt() > SLOP {
                 p.dragged = true;
             }
-            if p.dragged && !self.raw {
+            if p.dragged && looks {
                 self.look.0 += dx;
                 self.look.1 += dy;
             }
         }
+    }
+
+    /// Confined: the cursor gone a quarter of the window (`size`) from its
+    /// middle, the middle it is to be put back to (the window's
+    /// `set_cursor_position`), or else a confined cursor would stop at the
+    /// edge; the move back is no look (`moved`).
+    pub fn recentre(&mut self, size: (u32, u32)) -> Option<(f64, f64)> {
+        let (w, h) = (size.0 as f64, size.1 as f64);
+        let c = (w / 2.0, h / 2.0);
+        let far = (self.cursor.0 - c.0).abs() > w / 4.0 || (self.cursor.1 - c.1).abs() > h / 4.0;
+        if self.grab != Grab::Confined || self.warp.is_some() || !far {
+            return None;
+        }
+        self.warp = Some(c);
+        self.warp_age = 0;
+        Some(c)
     }
 
     /// The mouse's own motion (winit's `DeviceEvent::MouseMotion`: a page's
@@ -273,6 +315,9 @@ impl Mouse {
     /// keeps the cursor still).
     pub fn motion(&mut self, dx: f64, dy: f64) {
         self.raw = true;
+        if self.grab == Grab::Confined {
+            return;
+        }
         let Some(p) = self.press.as_mut() else { return };
         p.travel.0 += dx;
         p.travel.1 += dy;
@@ -389,10 +434,11 @@ impl Mouse {
                 self.home = self.press.map_or(self.cursor, |p| p.at);
                 Some(true)
             }
-            (false, Grab::Asked | Grab::Held) => {
+            (false, Grab::Asked | Grab::Held | Grab::Confined) => {
                 self.grab = Grab::Free;
                 self.asked_at = None;
                 self.counted = false;
+                self.warp = None;
                 Some(false)
             }
             (false, Grab::Refused) => {
@@ -437,7 +483,7 @@ impl Mouse {
     /// Escape while the look holds the pointer: let go of it (as a browser
     /// ends its lock on Escape), the key taken. False otherwise.
     pub fn escape(&mut self) -> bool {
-        let held = matches!(self.grab, Grab::Asked | Grab::Held);
+        let held = matches!(self.grab, Grab::Asked | Grab::Held | Grab::Confined);
         if held {
             self.release_all();
         }
@@ -615,17 +661,27 @@ fn stick_per_pixel(frame_s: f32) -> f32 {
     STICK_PER_PIXEL * (1.0 / 60.0) / frame_s.max(0.001)
 }
 
-/// Takes the pointer for the look: the cursor hidden and held (a page's
-/// Pointer Lock, granted a moment later; natively winit's `Locked`, else
-/// `Confined`, the cursor kept in the window while the mouse's own motion
-/// is the look). False when the window will do neither.
-pub fn take_pointer(window: &winit::window::Window) -> bool {
+/// Takes the pointer for the look, the cursor hidden: held (a page's
+/// Pointer Lock, `Asked`, granted a moment later; natively winit's
+/// `Locked`), else kept in the window (`Confined`: X11, Windows). None
+/// when the window will do neither.
+pub fn take_pointer(window: &winit::window::Window) -> Option<Grab> {
     use winit::window::CursorGrabMode;
-    let ok = window.set_cursor_grab(CursorGrabMode::Locked).or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined)).is_ok();
-    if ok {
-        window.set_cursor_visible(false);
-    }
-    ok
+    let grab = if window.set_cursor_grab(CursorGrabMode::Locked).is_ok() {
+        if cfg!(target_arch = "wasm32") { Grab::Asked } else { Grab::Held }
+    } else if window.set_cursor_grab(CursorGrabMode::Confined).is_ok() {
+        Grab::Confined
+    } else {
+        return None;
+    };
+    window.set_cursor_visible(false);
+    Some(grab)
+}
+
+/// Puts the cursor at `at` (window pixels), a confined one's way back to
+/// the middle (`Mouse::recentre`).
+pub fn put_pointer(window: &winit::window::Window, at: (f64, f64)) {
+    let _ = window.set_cursor_position(winit::dpi::PhysicalPosition::new(at.0, at.1));
 }
 
 /// Gives the pointer back, shown again at `home` (natively put there; a
@@ -898,6 +954,56 @@ mod tests {
         m.button(false, true, t0);
         assert_eq!(m.grab_change(false), None);
         assert_eq!(m.button(false, false, t0), Some(Click::Target(50.0, 50.0)));
+    }
+
+    /// Confined (natively, no lock): the cursor's moves are the look and
+    /// the mouse's own motion is not (X11 hands each one twice under the
+    /// grab); a quarter of the window from the middle the cursor is to be
+    /// put back there, once until that move is seen, which is no look, but
+    /// what a platform folds into it (Windows' moves come as one) is. Let go
+    /// the warp is forgotten. The control: held (a lock), the cursor is not
+    /// put back and its own motion is the look.
+    #[test]
+    fn a_confined_cursor_looks_and_is_put_back_in_the_middle() {
+        let t0 = Instant::now();
+        let size = (800, 600);
+        let mut m = Mouse::default();
+        m.moved(400.0, 300.0);
+        m.motion(0.0, 0.0);
+        m.button(true, true, t0);
+        m.moved(420.0, 300.0);
+        assert_eq!(m.grab_change(true), Some(true));
+        m.set_grab(Grab::Confined);
+        m.discard();
+        m.motion(200.0, 0.0);
+        m.motion(200.0, 0.0);
+        m.moved(620.0, 300.0);
+        assert_eq!(m.look, (200.0, 0.0), "the cursor's 200, not its own motion twice");
+        assert_eq!(m.recentre(size), Some((400.0, 300.0)));
+        assert_eq!(m.recentre(size), None, "once until the move back is seen");
+        m.moved(650.0, 300.0);
+        assert_eq!(m.look, (230.0, 0.0), "a move before the way back");
+        m.moved(400.0, 300.0);
+        assert_eq!(m.look, (230.0, 0.0), "the way back is no look");
+        m.moved(500.0, 310.0);
+        assert_eq!(m.look, (330.0, 10.0), "from the middle on");
+        assert_eq!(m.recentre(size), None, "near enough the middle");
+        m.moved(700.0, 310.0);
+        assert_eq!(m.recentre(size), Some((400.0, 300.0)));
+        m.moved(410.0, 304.0);
+        assert_eq!(m.look, (540.0, 14.0), "a move folded into the way back counts");
+        m.button(true, false, t0);
+        assert_eq!(m.grab_change(true), Some(false));
+        assert_eq!(m.warp, None);
+        // the control: held, its own motion is the look, nothing put back
+        m.button(true, true, t0);
+        m.moved(430.0, 304.0);
+        assert_eq!(m.grab_change(true), Some(true));
+        m.set_grab(Grab::Held);
+        m.discard();
+        m.motion(300.0, 0.0);
+        m.moved(730.0, 304.0);
+        assert_eq!((m.look, m.recentre(size)), ((300.0, 0.0), None));
     }
 
     /// A page whose browser refuses the lock asked for in a drag's move
