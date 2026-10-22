@@ -2,6 +2,12 @@
 //! pages, the Station login. STAND-IN: logs in with `EQOA_USER` and
 //! `EQOA_PASSWORD`; the lane porting STATION replaces this file.
 
+mod dialog;
+mod fader;
+mod page;
+mod pak;
+mod xml;
+
 use super::{Ctx, Login, Next, Shared, res::Res};
 use vi::ui::wide;
 

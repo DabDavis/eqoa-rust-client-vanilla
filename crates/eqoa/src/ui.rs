@@ -25,6 +25,13 @@ pub trait Layout: Raster {
     /// A window's 3D goes here (`pregame::Scene`): the quads made so far
     /// are drawn under it, the rest over it.
     fn mark_split(&mut self) {}
+    /// A solid fill in a material of its own that blends by the colour's
+    /// alpha (STATION's `VIGUIObject::FillRect` and `VIFader` make theirs
+    /// with `SetLayerBlendMode(0, 3)`), where `fill_fan`'s, the UI's solid
+    /// fill, is opaque.
+    fn fill_blended(&mut self, color: [f32; 4], corners: [[i32; 2]; 4]) {
+        self.fill_fan(color, corners)
+    }
 }
 
 /// What the layer holds for the UI: surfaces by DictID, and the font.
@@ -122,6 +129,12 @@ impl Layout for UiRaster<'_> {
     }
     fn mark_split(&mut self) {
         self.ui.mark_split();
+    }
+    fn fill_blended(&mut self, color: [f32; 4], c: [[i32; 2]; 4]) {
+        let Some(tex) = self.assets.white else { return };
+        let pos = c.map(|p| [p[0] as f32, p[1] as f32]);
+        self.ui.push(Quad { tex, blend: 3, pos, uv: [[0.5, 0.5]; 4], color, clip: None });
+        self.glyphs.other();
     }
 }
 
