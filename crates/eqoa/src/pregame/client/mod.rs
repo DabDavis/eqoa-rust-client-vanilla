@@ -98,7 +98,12 @@ impl Client {
                 }
                 self.create.event(&e);
             }
-            match self.create.frame(cx, s, self.stage.as_mut()) {
+            let before = cx.music.len();
+            let out = self.create.frame(cx, s, self.stage.as_mut());
+            for m in &cx.music[before..] {
+                crate::say(&format!("creation: music {m:?}"));
+            }
+            match out {
                 create::Out::Done => {
                     let f = self.create.form();
                     crate::say(&format!("creation: sent {f:?}"));
