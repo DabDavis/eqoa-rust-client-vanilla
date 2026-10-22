@@ -21,11 +21,26 @@ use std::collections::HashMap;
 /// The files whose surfaces the 2D layer draws.
 const UI_FILES: &[&str] = &["UI.CSF", "SETUP.CSF", "ADDART.CSF", "STATUI.CSF", "PREGAME.CSF"];
 
+/// The world's library and walk, as `main.rs`'s `world_library` builds them.
+pub type World = (esf::Library, crate::viewer::Source);
+
+/// How a page reads the world entry's files (`set_world_loader`).
+pub type WorldLoader = Box<dyn Fn(&::net::session::Player) -> super::link::Later<World>>;
+
+thread_local! {
+    static WORLD_LOADER: std::cell::RefCell<Option<WorldLoader>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Makes `f` the way the world entry's files are read (a page's).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn set_world_loader(f: WorldLoader) {
+    WORLD_LOADER.with(|c| *c.borrow_mut() = Some(f));
+}
+
 /// The world's files being read for `Play` (natively on a thread).
 pub struct WorldLoad {
     pub entered: Box<Entered>,
-    #[cfg(not(target_arch = "wasm32"))]
-    rx: std::sync::mpsc::Receiver<Result<(esf::Library, crate::viewer::Source), String>>,
+    reads: super::link::Later<World>,
 }
 
 /// What the window does next.
@@ -275,43 +290,36 @@ impl Host {
     /// The world entry: its files read for `Play` (`main.rs`'s
     /// `world_library`), natively on a thread.
     fn begin_world(&mut self, e: Box<Entered>) {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let player = e.player.clone();
-            let (tx, rx) = std::sync::mpsc::channel();
-            std::thread::spawn(move || {
-                let r = crate::world_library(&player).map_err(|e| e.to_string());
-                let _ = tx.send(r);
-            });
-            self.world = Some(WorldLoad { entered: e, rx });
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            let _ = e;
-            crate::say("pregame: the world entry is not wired in a page yet");
-        }
+        let reads = match WORLD_LOADER.with(|c| c.borrow().as_ref().map(|f| f(&e.player))) {
+            Some(l) => l,
+            #[cfg(not(target_arch = "wasm32"))]
+            None => {
+                let player = e.player.clone();
+                let (tx, rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let r = crate::world_library(&player).map_err(|e| e.to_string());
+                    let _ = tx.send(r);
+                });
+                super::link::Later::Thread(rx)
+            }
+            #[cfg(target_arch = "wasm32")]
+            None => super::link::Later::ready(Err("no way to read the world's files".into())),
+        };
+        self.world = Some(WorldLoad { entered: e, reads });
     }
 
     fn world_done(&mut self) -> Option<Done> {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let w = self.world.as_ref()?;
-            let r = match w.rx.try_recv() {
-                Ok(r) => r,
-                Err(std::sync::mpsc::TryRecvError::Empty) => return None,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("the world's reading thread stopped".into()),
-            };
-            let w = self.world.take()?;
-            match r {
-                Ok((lib, src)) => Some(Done::Play(w.entered, lib, src)),
-                Err(e) => {
-                    crate::say(&format!("the world could not be read: {e}"));
-                    Some(Done::Quit)
-                }
+        let r = self.world.as_mut()?.reads.poll()?;
+        let w = self.world.take()?;
+        match r {
+            Ok((lib, src)) => Some(Done::Play(w.entered, lib, src)),
+            Err(e) => {
+                crate::say(&format!("the world could not be read: {e}"));
+                #[cfg(target_arch = "wasm32")]
+                crate::web::crash("The world could not be read", &e);
+                Some(Done::Quit)
             }
         }
-        #[cfg(target_arch = "wasm32")]
-        None
     }
 
     /// `EQOA_SHOTS`: the shots due at `now`, each once.

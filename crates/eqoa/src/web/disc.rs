@@ -87,6 +87,12 @@ impl WebDisc {
         Ok(d)
     }
 
+    /// Another reader of the same image, with a cache of its own (a task
+    /// that reads while others do).
+    pub fn copy(&self) -> WebDisc {
+        WebDisc { file: self.file.clone(), len: self.len, entries: self.entries.clone(), sparse: Sparse::new(self.len) }
+    }
+
     /// The player's image (the music reads it as it plays, `bgm`).
     pub fn file(&self) -> web_sys::File {
         self.file.clone()
