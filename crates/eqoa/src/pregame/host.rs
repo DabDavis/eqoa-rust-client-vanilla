@@ -49,8 +49,9 @@ pub struct Host {
     /// keys a pointer pressed, let go a frame later
     pointer_held: Vec<i32>,
     pub world: Option<WorldLoad>,
-    /// the world entry's loading screen: CLIENT's gears and bar
-    gears: Option<crate::loading::Gears>,
+    /// CLIENT's loading screen's gears (UI.CSF's `Loading_Gears`) on the GPU,
+    /// once looked for
+    gears: Option<Option<(crate::loading::Gears, Vec<render::GpuModel>)>>,
 }
 
 impl Host {
@@ -179,7 +180,7 @@ impl Host {
                     v.time = now;
                 }
                 let mut r = assets.raster(ui);
-                if self.world.is_some() {
+                if self.world.is_some() || self.pre.client_loading() {
                     // `LoadingProgress`'s 2D half (the gears are drawn by the window)
                     crate::loading::draw_2d(self.pre.res.vui(), &mut r, true);
                     self.pre.update(now);
@@ -196,6 +197,21 @@ impl Host {
                 ui.again();
             }
             self.pre.update(now);
+        }
+        // CLIENT's loading screen's gears, turning by the clock
+        if self.loading_screen() {
+            if self.gears.is_none() && self.pre.res.container("UI.CSF").is_some() {
+                self.gears = Some(crate::loading::Gears::load(&self.pre.res.lib).map(|g| {
+                    let textures = render::library_textures(&self.pre.res.lib);
+                    let models = g.parts.iter().map(|(_, m)| renderer.upload(device, queue, m, &[render::IDENTITY], &textures)).collect();
+                    (g, models)
+                }));
+            }
+            if let Some(Some((g, models))) = self.gears.as_mut() {
+                for (m, gpu) in g.pose(now).iter().zip(models.iter()) {
+                    renderer.set_instances(queue, gpu, &[m.to_cols()]);
+                }
+            }
         }
         // the sounds
         if let Some(s) = sound {
@@ -316,14 +332,17 @@ impl Host {
         !self.shots.is_empty()
     }
 
-    /// The loading screen's gears (UI.CSF's `Loading_Gears`), while the
-    /// world's files come.
-    pub fn gears(&mut self) -> Option<&mut crate::loading::Gears> {
-        self.world.as_ref()?;
-        if self.gears.is_none() {
-            self.gears = crate::loading::Gears::load(&self.pre.res.lib);
+    /// CLIENT's loading screen is up: its files being read, or the world's.
+    pub fn loading_screen(&self) -> bool {
+        self.world.is_some() || self.pre.client_loading()
+    }
+
+    /// The loading screen's gears, to draw through `loading::view`.
+    pub fn gears(&self) -> Vec<&render::GpuModel> {
+        match &self.gears {
+            Some(Some((_, models))) if self.loading_screen() => models.iter().collect(),
+            _ => Vec::new(),
         }
-        self.gears.as_mut()
     }
 }
 
