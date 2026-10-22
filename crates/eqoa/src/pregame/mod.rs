@@ -38,6 +38,7 @@ pub mod files;
 pub mod host;
 pub mod res;
 pub mod setup;
+pub mod stage;
 pub mod station;
 
 use std::collections::VecDeque;
