@@ -23,8 +23,10 @@ Porting CLIENT's character creation into `crates/eqoa/src/pregame/client/create/
   list's scroll top, 265 routed to the appearance page, `create_character` not called, and the
   race and class pages' hit notes.
 - Live on the local server (`vancreate`, TEMP hook): Vancrea (Elf female Bard, two points spent)
-  made and seen in the list; Generate Name gave "Talthas"; a second Vancrea refused with word
-  829, the form kept; pad only: Zandor (Dwarf female Cleric) made with the soft keyboard and seen.
+  made and seen in the list; Generate Name gave "Talthas"; a second Vancrea came back as
+  `Event::CreateRefused(829)` (logged by the TEMP hook: the word on screen is character select's,
+  CharSelectMsg; the form kept for a reopen is unit-tested, not live); pad only: Zandor (Dwarf
+  female Cleric) made with the soft keyboard and seen.
   Music: barbaria → darkelve → dwarves, none on a sex change. Test characters deleted after.
 - Shots in `~/.cache/vanilla-lane-create-shots/` (50-64 keyboard, 70-74 pad, 80-81 legend) against
   `~/.cache/vanilla-boot/ref2/50-56`.
