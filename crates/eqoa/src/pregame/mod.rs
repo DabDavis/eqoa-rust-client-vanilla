@@ -36,6 +36,7 @@ pub mod figure;
 pub mod client;
 pub mod files;
 pub mod host;
+pub mod link;
 pub mod res;
 pub mod setup;
 pub mod stage;
