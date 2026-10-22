@@ -73,8 +73,10 @@ Support/eqoa-rs`, `%APPDATA%\eqoa-rs`). On Linux it needs ALSA (`libasound2`),
 libudev and a Vulkan or OpenGL driver; the file dialog is the desktop's (its XDG
 desktop portal, else zenity), and where there is neither the image is named on
 the command line. The builds are not
-signed: macOS asks before opening one the first time (Control-click, Open), and
-Windows may too.
+signed: the first time, macOS refuses one that came through a browser; allow it
+in System Settings, Privacy & Security ("Open Anyway"), or run `xattr -d
+com.apple.quarantine eqoa`. Windows' SmartScreen may ask the first time ("More
+info", "Run anyway").
 
 ## Method
 
