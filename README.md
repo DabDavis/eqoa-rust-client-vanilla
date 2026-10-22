@@ -19,31 +19,22 @@ player's decrypted images serve instead when given (`run/client.bin` or
 
 ## Vanilla
 
-This is eqoa-rs (the modded client, private) without its mods, forked
-from it on 2026-10-22 at `41d74f9`, the commit before its ambient occlusion, with
-its world-entry fix (`e8c5ed7`) taken after. Left out:
+The game as the PS2 plays it, with the client's own additions for a PC, a phone
+or a browser (each described where it lives below):
 
-- **Ambient occlusion** (eqoa-rs's Extended page): a screen-space darkening the
-  PS2 never drew.
-- **The harvester** (`eqoa harvest`, `eqoa newchar`, `eqoa delchar`): a headless
-  tool that records what a server tells one client of its spells and wares, for
-  a server's own tables.
-- **Bug and crash reports**: the F3 dialog, the HUD's Report a bug, the cards'
-  links, the posts to a report server, the offer after a tab that died. What goes
-  wrong is still said on the page (`web/notices.js`); nothing is sent anywhere.
-
-Kept, as the client's own for a PC, a phone or a browser (each is described
-where it lives below): widescreen (the HUD at a wide window's edges, the menus
-across it); a frame rate untethered from the game's 30 (the game's logic still
-steps at 30); the mouse and the touch screen; the keyboard with WASD walking and
-the Controls page (every key and button rebound); 1,000 lines of chat history
-(the game's ring holds 31); the start menu's windows without their green
-backdrop; the Extended options page (Level of Detail, Brightness, Frame Rate,
-Camera Distance); and the map (M), drawn from the player's own disc for every
-world, on any server.
-
-The two share their history up to the fork, so a fix to the game's logic, sound
-or network moves between them by `git cherry-pick`.
+- **Widescreen**: the HUD at a wide window's edges, the menus across it.
+- **A frame rate untethered** from the game's 30 frames a second (the game's
+  logic still steps at 30).
+- **The mouse and the touch screen.**
+- **The keyboard**, with WASD walking, and the options' **Controls** page: every
+  key and button can be moved.
+- **1,000 lines of chat history** (the game's ring holds 31).
+- **The start menu's windows over the world**, with no green backdrop behind
+  them.
+- **The Extended options page**: Level of Detail, Brightness, Frame Rate, Camera
+  Distance.
+- **The map** (M), drawn from the player's own disc for every world, on any
+  server.
 
 ## Playing a release
 
