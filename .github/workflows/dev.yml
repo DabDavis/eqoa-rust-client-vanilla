@@ -78,14 +78,20 @@ jobs:
       # A Windows program's main thread has the stack its header reserves,
       # and the game's first frame needs more than the 1 MB default
       # (crates/eqoa/build.rs): a build without 8 MB dies before it draws.
-      - name: Check the stack reserve (Windows)
+      # And a console program opens a terminal beside the game: the header
+      # must say a Windows GUI program (main.rs's `windows_subsystem`).
+      - name: Check the stack reserve and the subsystem (Windows)
         if: matrix.os == 'windows'
         shell: pwsh
         run: |
           $dumpbin = Get-ChildItem 'C:\Program Files\Microsoft Visual Studio\2022\*\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe' | Select-Object -First 1
-          $line = (& $dumpbin.FullName /headers target\release\eqoa.exe | Select-String 'size of stack reserve').Line
+          $headers = & $dumpbin.FullName /headers target\release\eqoa.exe
+          $line = ($headers | Select-String 'size of stack reserve').Line
           Write-Output $line
           if ($line -notmatch '^\s*800000 size of stack reserve') { throw 'eqoa.exe does not reserve an 8 MB stack' }
+          $sub = ($headers | Select-String 'subsystem \(').Line
+          Write-Output $sub
+          if ($sub -notmatch '^\s*2 subsystem \(Windows GUI\)') { throw 'eqoa.exe is not a Windows GUI program: it would open a console window' }
 
       # One program for Apple silicon and Intel Macs.
       - name: Build (macOS, universal)

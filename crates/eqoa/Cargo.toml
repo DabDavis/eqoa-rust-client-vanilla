@@ -31,9 +31,10 @@ gilrs = "0.11.2"
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
 
 # Windows' Xbox controllers through XInput (`xinput`), which answers a window
-# that is not in front, as Windows.Gaming.Input (gilrs's) does not.
+# that is not in front, as Windows.Gaming.Input (gilrs's) does not; and the
+# terminal a program run from one writes to (`attach_console`).
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_LibraryLoader", "Win32_UI_Input_XboxController"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_LibraryLoader", "Win32_UI_Input_XboxController"] }
 
 # The browser build (`web/build.sh`): the page hands over the player's disc
 # image and the login; sockets go through a WebSocket relay; wgpu falls back

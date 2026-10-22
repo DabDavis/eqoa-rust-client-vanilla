@@ -22,6 +22,10 @@ keep it current.
   links 8 MB, as Linux and macOS give, and `dev.yml` refuses a build with less. Wine does not show an
   overflow there (its main thread gets more); a Windows machine does
   (`../claude-notes/windows-main-stack-20261022.md`: GitHub's Windows runners, a stand-in disc).
+  It is a GUI program (`main.rs`'s `windows_subsystem`; `dev.yml` refuses a console one): no
+  terminal beside the game. Run from a terminal it writes there (`attach_console`), but neither
+  cmd's `>` nor PowerShell's capture reaches it: capture a command's output with `Start-Process
+  -Wait -NoNewWindow -RedirectStandardOutput` (`../claude-notes/multibox-controllers-20261022.md`).
 
 - Toolchain: rustup in `~/.cargo`. `/tmp` is a small partition that old session scratchpads fill: building with `TMPDIR` under `~/.cache` avoids it.
 - `run/` is untracked: `run/eqoa.iso` links the Frontiers disc. Never commit game data.

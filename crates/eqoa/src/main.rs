@@ -31,6 +31,9 @@
 
 // The browser build runs none of the commands (the page calls `web`).
 #![cfg_attr(target_arch = "wasm32", allow(dead_code, unused_imports))]
+// On Windows no console window of its own: double-clicked, the game had a
+// terminal beside it. Run from a terminal it writes there (`attach_console`).
+#![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
 
 mod audio;
 mod chat;
@@ -129,12 +132,39 @@ fn main() {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> ExitCode {
+    #[cfg(windows)]
+    attach_console();
     let args: Vec<String> = std::env::args().skip(1).collect();
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("eqoa: {e}");
             ExitCode::FAILURE
+        }
+    }
+}
+
+/// Run from a terminal on Windows, the program writes to it: it has no
+/// console of its own (`windows_subsystem`), so it takes its parent's, and
+/// what was not redirected goes there. Double-clicked there is none, and
+/// nothing changes.
+#[cfg(windows)]
+fn attach_console() {
+    use std::os::windows::io::IntoRawHandle;
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole, GetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle};
+    // SAFETY: constants, and handles this process owns from here on
+    unsafe {
+        if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
+            return;
+        }
+        for which in [STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+            let h = GetStdHandle(which);
+            if (h.is_null() || h == INVALID_HANDLE_VALUE)
+                && let Ok(f) = std::fs::OpenOptions::new().write(true).open("CONOUT$")
+            {
+                SetStdHandle(which, f.into_raw_handle());
+            }
         }
     }
 }

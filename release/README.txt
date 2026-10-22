@@ -54,6 +54,8 @@ macOS: the program is not signed. The first time, macOS refuses it; allow it in
 System Settings, Privacy & Security ("Open Anyway"), or run
   xattr -d com.apple.quarantine eqoa
 Windows: SmartScreen may ask the first time ("More info", "Run anyway").
+eqoa.exe opens no console window; started from a terminal, its messages print
+there.
 
 This is a development build of master, replaced by the next one: only the
 newest build can be downloaded.

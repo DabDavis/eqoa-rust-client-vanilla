@@ -78,7 +78,8 @@ Support/eqoa-rs`, `%APPDATA%\eqoa-rs`). Several windows open at once each read
 their own controller (the first window the first; the Extended page's Controller
 Focus picks another, the same for several, or the window in front; on Windows a
 controller that is not an Xbox one, or passed off as one, reaches only the window
-in front). On Linux it needs glibc 2.34 or newer
+in front). On Windows `eqoa.exe` opens no console window: started from a terminal,
+its messages print there. On Linux it needs glibc 2.34 or newer
 (Ubuntu 22.04, Debian 12, Fedora 35 or later), ALSA (`libasound2`), libudev and a
 Vulkan or OpenGL driver; the file dialog is the desktop's (its XDG
 desktop portal, else zenity), and where there is neither the image is named on
