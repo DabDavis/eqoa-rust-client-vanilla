@@ -43,8 +43,11 @@ One build is published, **dev**: rebuilt from `master` on every push, for Linux
 [releases page](https://github.com/DabDavis/eqoa-rust-client-vanilla/releases/tag/dev).
 Each build replaces the one before, so only the newest can be downloaded.
 
-It is the `eqoa` program. You need your own *Frontiers* disc image (SLUS-20744)
-and an account on a server. From a terminal:
+It is the `eqoa` program, in an archive with its README and licence, or on its
+own (`eqoa-vanilla-linux-x86_64`, `eqoa-vanilla-windows-x86_64.exe`,
+`eqoa-vanilla-macos`: on Linux and macOS `chmod +x` it after the download). You
+need your own *Frontiers* disc image (SLUS-20744) and an account on a server.
+From a terminal:
 
 ```bash
 EQOA_ISO=/path/to/eqoa.iso EQOA_PASSWORD='...' ./eqoa play <server> <account>

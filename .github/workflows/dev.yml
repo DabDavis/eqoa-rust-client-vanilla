@@ -86,6 +86,8 @@ jobs:
             target/aarch64-apple-darwin/release/eqoa target/x86_64-apple-darwin/release/eqoa
           lipo -info target/release/eqoa
 
+      # Two assets a platform: an archive with the README and the licence,
+      # and the program on its own.
       - name: Package
         shell: bash
         run: |
@@ -94,26 +96,27 @@ jobs:
             windows) name=eqoa-vanilla-windows-x86_64 ;;
             macos) name=eqoa-vanilla-macos ;;
           esac
-          mkdir -p "dist/$name"
+          mkdir -p "dist/$name" out
           if [ "${{ matrix.os }}" = windows ]; then
             cp target/release/eqoa.exe "dist/$name/"
             # Windows Notepad reads the text with Windows line ends
             sed 's/$/\r/' release/README.txt > "dist/$name/README.txt"
             sed 's/$/\r/' LICENSE > "dist/$name/LICENSE.txt"
-            (cd dist && 7z a -tzip "$name.zip" "$name" > /dev/null)
-            echo "ASSET=dist/$name.zip" >> "$GITHUB_ENV"
+            (cd dist && 7z a -tzip "../out/$name.zip" "$name" > /dev/null)
+            cp target/release/eqoa.exe "out/$name.exe"
           else
             cp target/release/eqoa "dist/$name/"
             chmod +x "dist/$name/eqoa"
             cp release/README.txt LICENSE "dist/$name/"
-            tar -C dist -czf "dist/$name.tar.gz" "$name"
-            echo "ASSET=dist/$name.tar.gz" >> "$GITHUB_ENV"
+            tar -C dist -czf "out/$name.tar.gz" "$name"
+            cp target/release/eqoa "out/$name"
           fi
+          ls -la out
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.os }}
-          path: ${{ env.ASSET }}
+          path: out/
           # deleted by the publish job; a day at most if it never runs
           retention-days: 1
           if-no-files-found: error
@@ -138,11 +141,15 @@ jobs:
           {
             echo "The newest build of \`master\`: $(TZ=UTC git log -1 --format='%h, %cd: %s' --date=format-local:'%Y-%m-%d %H:%M UTC' "$GITHUB_SHA")."
             echo
-            echo "- Linux (x86-64): \`eqoa-vanilla-linux-x86_64.tar.gz\`"
-            echo "- Windows (x86-64): \`eqoa-vanilla-windows-x86_64.zip\`"
-            echo "- macOS (Apple silicon and Intel): \`eqoa-vanilla-macos.tar.gz\`"
+            echo "| | with README and licence | the program alone |"
+            echo "|---|---|---|"
+            echo "| Linux (x86-64) | \`eqoa-vanilla-linux-x86_64.tar.gz\` | \`eqoa-vanilla-linux-x86_64\` |"
+            echo "| Windows (x86-64) | \`eqoa-vanilla-windows-x86_64.zip\` | \`eqoa-vanilla-windows-x86_64.exe\` |"
+            echo "| macOS (Apple silicon and Intel) | \`eqoa-vanilla-macos.tar.gz\` | \`eqoa-vanilla-macos\` |"
             echo
-            echo "You need your own *Frontiers* disc image (SLUS-20744) and an account on a server; README.txt in each says how to run it, and the repository's README says more. Each push to \`master\` replaces this build: only the newest can be downloaded."
+            echo "The program alone, on Linux and macOS, needs \`chmod +x\` after the download (a download is not kept runnable)."
+            echo
+            echo "You need your own *Frontiers* disc image (SLUS-20744) and an account on a server; README.txt in each archive says how to run it, and the repository's README says more. Each push to \`master\` replaces this build: only the newest can be downloaded."
           } > notes.md
           cat notes.md
           ls -la dist
