@@ -449,6 +449,9 @@ impl Play {
                     Some(crate::dialog::BoxAnswer::Yes(0, 0x7020000)) => self.accept_invite(),
                     Some(crate::dialog::BoxAnswer::No(0, 0x7020000)) => self.decline_invite(),
                     Some(crate::dialog::BoxAnswer::Yes(0, 0x50E0000)) => self.session.send_op_byte(0x0041, 5),
+                    // SendD4On / SendD4Off: the summons or resurrection taken or refused
+                    Some(crate::dialog::BoxAnswer::Yes(2, _)) => self.session.send_op_byte(0x00D4, 1),
+                    Some(crate::dialog::BoxAnswer::No(2, _)) => self.session.send_op_byte(0x00D4, 0),
                     Some(crate::dialog::BoxAnswer::Yes(0, 0xA010000)) => self.do_action(0xA010000, 0),
                     Some(crate::dialog::BoxAnswer::Yes(0, 0xB051007)) => self.session.send(&crate::guild::Cmds::bare(2)),
                     Some(crate::dialog::BoxAnswer::Yes(0, 0xB051008)) => self.session.send(&crate::guild::Cmds::bare(3)),
@@ -1031,6 +1034,7 @@ impl Play {
                         }
                     }
                 }
+                Event::SummonPrompt { name, kind } => self.summon_prompt(&name, kind),
                 Event::GroupInviteGone(id) => {
                     // Msg0774
                     if let Some(k) = self.group.invites.iter().position(|i| i.id == id) {
@@ -2780,6 +2784,25 @@ impl Play {
         let text = crate::ui::wide(&fmt.replacen("%s", name, 1).replacen("%S", name, 1));
         let now = self.session.now() as i64;
         self.mbox.prompt(&text, 1, 0, 0x7020000, now);
+        self.mode = 14;
+    }
+
+    /// `Msg00D3`: a summons (word 610) or a resurrection (611) offered by
+    /// `name`, put up as `VIWndGame::Prompt(text, 1, 2, 0)` puts it, over
+    /// whatever was open (`SetMode(0)`); the answer is 0x00D4
+    /// (`dialog_key`). The space's buffer holds only its terminator, so the
+    /// name runs into the word, as on the console.
+    fn summon_prompt(&mut self, name: &str, kind: u8) {
+        if self.mode == 13 {
+            self.close_start_menu(0);
+        }
+        let word = if kind == 0 { 610 } else { 611 };
+        let mut text = crate::ui::wide(name);
+        text.extend(self.words.as_ref().map_or_else(Vec::new, |w| crate::ui::wide(w.get(word, 0))));
+        // text[128]
+        text.truncate(127);
+        let now = self.session.now() as i64;
+        self.mbox.prompt(&text, 1, 2, 0, now);
         self.mode = 14;
     }
 

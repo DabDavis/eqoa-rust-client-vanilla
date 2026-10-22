@@ -154,6 +154,10 @@ pub enum Event {
     GroupDisbanded,
     /// 0x069C: a group notice: sub 3 alone, 1/2/4/5 about a name.
     GroupNotice { sub: u8, name: String },
+    /// 0x00D3 (`Msg00D3`): `name` offers to summon the player (`kind` 0,
+    /// word 610) or to resurrect them (else, 611); the box's answer is
+    /// 0x00D4.
+    SummonPrompt { name: String, kind: u8 },
     /// The server opened the game connection (promotion).
     Promoted,
     /// 0x000D parsed: the player's own entity id and where they stand.
@@ -724,6 +728,13 @@ impl Session {
                 let name = if sub == 3 { String::new() } else { String::from_utf8_lossy(&r.string(24)).into_owned() };
                 ev.push(Event::GroupNotice { sub, name });
             }
+            0x00D3 => {
+                // ReadString(name, 64), widened by str8to16 up to a NUL
+                let name = r.string(64);
+                let n = name.iter().position(|&c| c == 0).unwrap_or(name.len());
+                let name = String::from_utf8_lossy(&name[..n]).into_owned();
+                ev.push(Event::SummonPrompt { name, kind: r.u8() });
+            }
             0x007F => ev.push(Event::Pet(None)),
             0x0010 => {
                 let (disposition, b, c) = (r.u8(), r.u8(), r.u8());
@@ -962,6 +973,26 @@ mod tests {
         let mut s = session();
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x45, 0x00, 0x00]);
         assert!(!matches!(ev[..], [Event::ProfanityFilter(true)]), "zero is off");
+    }
+
+    // 0x00D3, the summons and resurrection offer: the caster's name
+    // (ReadString(name, 64)) and the kind. It went by as an unhandled
+    // opcode, so a resurrection on eqoa.live put up no box. The control:
+    // a name of 64 bytes or more is read as empty, the kind still after it.
+    #[test]
+    fn summon_prompt_reads_the_name_and_kind() {
+        let msg = |name: &[u8], kind: u8| {
+            let mut w = Writer::op(0x00D3);
+            w.string(name).u8(kind);
+            w.data
+        };
+        let mut s = session();
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, msg(b"Healer", 1));
+        assert!(matches!(&ev[..], [Event::SummonPrompt { name, kind: 1 }] if name == "Healer"), "{ev:?}");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, msg(b"Mage\0junk", 0));
+        assert!(matches!(&ev[..], [Event::SummonPrompt { name, kind: 0 }] if name == "Mage"), "{ev:?}");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, msg(&[b'x'; 64], 1));
+        assert!(matches!(&ev[..], [Event::SummonPrompt { name, kind: 1 }] if name.is_empty()), "{ev:?}");
     }
 
     // A DRDP 0xFD carries the library's byte, mapped as PumpMessages maps it.
