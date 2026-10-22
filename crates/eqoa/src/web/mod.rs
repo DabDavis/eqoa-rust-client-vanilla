@@ -1,22 +1,18 @@
 //! The browser build. The page (`web/index.html`) hands over the player's
 //! own disc image (a `File`: nothing is uploaded, and no game data is
-//! served) and the login, and this runs the same client on its canvas, with
-//! wgpu on WebGPU or, without it, WebGL2. A page can open neither a UDP
-//! socket nor a TCP connection, so both go through a WebSocket relay
-//! (`relay`); and its disc reads are asynchronous, so the files the game
-//! reads synchronously are fetched before it starts, and a world's zones
-//! as the walk comes near them (`disc`).
-//!
-//! Between the login and the world the page is the character select and
-//! creation screen: the list goes to `window.eqoaCharacters`, and the page
-//! answers through the exports `choose_character`, `create_character`,
-//! `delete_character` and `random_name` (the game's `SelectCharacter`,
-//! `CreateCharacter`, `DeleteCharacter` and `Send0012`).
+//! served), and this runs the same client on its canvas from the game's boot
+//! (`boot`, the `pregame`: the loading screens, the licence and the title,
+//! Station's login screen, the server list, character select and creation,
+//! the world), with wgpu on WebGPU or, without it, WebGL2. A page can open
+//! neither a UDP socket nor a TCP connection, so both go through a WebSocket
+//! relay (`relay`), behind the pregame's `link`; and its disc reads are
+//! asynchronous, so the pregame's files, the world entry's and a world's zones
+//! are read as they are asked for and finish on later frames (`disc`).
 //!
 //! The start menu reads CLIENT's data and the HUD SUPPORT's, which the disc
 //! holds only encrypted: the page's workers (`web/unpack.js`) run this same
 //! module's `unpack_module` on them, the disc's own DNAS library in crate
-//! `dnas`, while the session goes on (`unpack_modules`).
+//! `dnas`, while the boot's pictures show (`unpack_modules`).
 //!
 //! The sound is the native client's (`sound`, SNDDRV in `snd`), its driver
 //! mixed on this thread a little ahead of the page's audio clock and played
@@ -33,12 +29,10 @@ mod disc;
 pub mod pad;
 mod relay;
 
-use crate::{play, sky, viewer};
+use crate::{sky, viewer};
 use disc::WebDisc;
 use esf::Library;
-use net::session::{Character, Event, NewChar, Session};
 use std::cell::RefCell;
-use std::collections::VecDeque;
 use std::rc::Rc;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
@@ -455,176 +449,6 @@ fn opt(opts: &JsValue, k: &str) -> Option<String> {
     js_sys::Reflect::get(opts, &k.into()).ok().and_then(|v| v.as_string()).filter(|v| !v.is_empty())
 }
 
-/// What the character screen asks of the session.
-enum Cmd {
-    Choose(i64),
-    Create(NewChar),
-    Delete(i64),
-    RandomName(i32, i32),
-}
-
-thread_local! {
-    static CMDS: RefCell<VecDeque<Cmd>> = const { RefCell::new(VecDeque::new()) };
-}
-
-fn push(c: Cmd) {
-    CMDS.with(|q| q.borrow_mut().push_back(c));
-}
-
-/// Play the character with this server id (`SelectCharacter`).
-#[wasm_bindgen]
-pub fn choose_character(server_id: f64) {
-    push(Cmd::Choose(server_id as i64));
-}
-
-/// Remove the character with this server id (`DeleteCharacter`, 0x002D).
-#[wasm_bindgen]
-pub fn delete_character(server_id: f64) {
-    push(Cmd::Delete(server_id as i64));
-}
-
-/// Ask the server for a name for this race and sex (`Send0012`); it comes
-/// back to `window.eqoaRandomName`.
-#[wasm_bindgen]
-pub fn random_name(race: i32, sex: i32) {
-    push(Cmd::RandomName(race, sex));
-}
-
-/// Make a character (`CreateCharacter`, 0x002B) from the form: `name`,
-/// `race`, `city`, `sex`, `class`, `face`, `hairStyle`, `hairLength`,
-/// `hairColor` and `stats` (the seven points spent, Strength first).
-#[wasm_bindgen]
-pub fn create_character(form: JsValue) -> Result<(), JsValue> {
-    let num = |k: &str| js_sys::Reflect::get(&form, &k.into()).ok().and_then(|v| v.as_f64()).map(|v| v as i32);
-    let name = js_sys::Reflect::get(&form, &"name".into()).ok().and_then(|v| v.as_string()).unwrap_or_default();
-    let mut stats = [0i32; 7];
-    if let Ok(a) = js_sys::Reflect::get(&form, &"stats".into())
-        && let Ok(a) = a.dyn_into::<js_sys::Array>()
-    {
-        for (i, s) in stats.iter_mut().enumerate() {
-            *s = a.get(i as u32).as_f64().unwrap_or(0.0) as i32;
-        }
-    }
-    let need = |k: &str| num(k).ok_or_else(|| JsValue::from_str(&format!("the form has no {k}")));
-    push(Cmd::Create(NewChar {
-        name,
-        race: need("race")?,
-        class: need("class")?,
-        sex: need("sex")?,
-        hair_color: need("hairColor")?,
-        hair_length: need("hairLength")?,
-        hair_style: need("hairStyle")?,
-        face: need("face")?,
-        city: num("city").unwrap_or(0),
-        stats,
-    }));
-    Ok(())
-}
-
-/// The list as the page reads it.
-fn characters_js(list: &[Character]) -> JsValue {
-    let a = js_sys::Array::new();
-    for c in list {
-        let o = js_sys::Object::new();
-        let set = |k: &str, v: JsValue| {
-            let _ = js_sys::Reflect::set(&o, &k.into(), &v);
-        };
-        set("name", c.name.as_str().into());
-        set("serverId", (c.server_id as f64).into());
-        set("race", (c.race as f64).into());
-        set("class", (c.class as f64).into());
-        set("level", (c.level as f64).into());
-        a.push(&o);
-    }
-    a.into()
-}
-
-/// The session from its hello to the world: the first shard, then the
-/// character screen, which the page drives (a character named in the
-/// options is played at once). Pumped every 16 ms.
-async fn enter_world(mut s: Session, mut want: Option<String>, words: Option<&vi::strtab::StringTable>) -> Result<(Session, net::session::Player, Box<net::dump::MemoryDump>), String> {
-    let start = web_time::Instant::now();
-    let mut chars: Vec<Character> = Vec::new();
-    let mut listed = false;
-    loop {
-        if !listed && start.elapsed().as_secs() > 30 {
-            return Err("no character list within 30 s".into());
-        }
-        let events = s.pump();
-        for (k, e) in events.iter().enumerate() {
-            match e {
-                Event::ShardList(list) => {
-                    log(&format!("shards: {list:?}"));
-                    if let Some(sh) = list.first() {
-                        status(&format!("joining {}", sh.name));
-                        s.connect_shard(sh.endpoint);
-                    }
-                }
-                Event::Characters(list) => {
-                    chars = list.clone();
-                    listed = true;
-                    if let Some(c) = want.take().and_then(|w| list.iter().find(|c| c.name.eq_ignore_ascii_case(&w)).cloned()) {
-                        status(&format!("entering the world as {}", c.name));
-                        s.select_character(&c);
-                    } else {
-                        status(&format!("{} character{}", list.len(), if list.len() == 1 { "" } else { "s" }));
-                        call_page("eqoaCharacters", &characters_js(list));
-                    }
-                }
-                Event::RandomName(n) => call_page("eqoaRandomName", &JsValue::from_str(n)),
-                Event::CreateRefused(word) => {
-                    let text = words.map(|w| w.get(*word, 0).to_string()).filter(|t| !t.is_empty()).unwrap_or_else(|| "Character create failed".into());
-                    call_page("eqoaRefused", &JsValue::from_str(&text));
-                }
-                Event::WorldEntry { player, dump, .. } => {
-                    let p = player.clone();
-                    let d = dump.clone();
-                    s.held = events[k + 1..].to_vec();
-                    return Ok((s, p, d));
-                }
-                Event::Disconnected(r) => return Err(format!("disconnected (reason {r})")),
-                _ => {}
-            }
-        }
-        while let Some(c) = CMDS.with(|q| q.borrow_mut().pop_front()) {
-            match c {
-                Cmd::Choose(id) => match chars.iter().find(|c| c.server_id == id) {
-                    Some(c) => {
-                        status(&format!("entering the world as {}", c.name));
-                        call_page("eqoaEntering", &JsValue::from_str(&c.name));
-                        s.select_character(&c.clone());
-                    }
-                    None => call_page("eqoaRefused", &JsValue::from_str("that character is not on the list")),
-                },
-                Cmd::Create(nc) => {
-                    status(&format!("creating {}", nc.name));
-                    s.create_character(&nc);
-                }
-                Cmd::Delete(id) => {
-                    status("deleting a character");
-                    s.delete_character(id);
-                }
-                Cmd::RandomName(race, sex) => s.random_name(race, sex),
-            }
-        }
-        sleep(16).await;
-    }
-}
-
-/// Keeps a session answered while the page reads files: every 50 ms a
-/// pump, its events kept for the game.
-fn keep_pumping(s: Rc<RefCell<Option<Session>>>, alive: Rc<RefCell<bool>>) {
-    wasm_bindgen_futures::spawn_local(async move {
-        while *alive.borrow() {
-            if let Some(s) = s.borrow_mut().as_mut() {
-                let ev = s.pump();
-                s.held.extend(ev);
-            }
-            sleep(50).await;
-        }
-    });
-}
-
 /// `eqoa` in the page: the game from its boot on the canvas (`pregame`):
 /// the loading screens, the licence and the title, Station's login, the
 /// server list, character select and creation, then the world. The page has
@@ -733,112 +557,4 @@ fn world_loader(disc: &WebDisc) -> crate::pregame::host::WorldLoader {
         });
         crate::pregame::link::Later::Slot(slot)
     })
-}
-
-/// `eqoa play` in the page: log in through the relay, the character screen,
-/// the world, and play on the canvas.
-#[wasm_bindgen]
-pub async fn play(file: web_sys::File, user: String, password: String, opts: JsValue) -> Result<(), JsValue> {
-    CMDS.with(|q| q.borrow_mut().clear());
-    let r: Result<(), String> = async {
-        let relay = opt(&opts, "relay").ok_or("no relay address")?;
-        let server_name = opt(&opts, "server").ok_or("no server address")?;
-        let server = relay::parse_ip(&server_name).ok_or_else(|| format!("{server_name}: not an IPv4 address"))?;
-        let auth_port = opt(&opts, "authPort").and_then(|p| p.parse().ok()).unwrap_or(9735);
-        let game_port = opt(&opts, "gamePort").and_then(|p| p.parse().ok()).unwrap_or(10070);
-        status("reading the disc");
-        let mut disc = WebDisc::open(file).await?;
-        crate::stream::set_source_factory(disc.zone_sources());
-        crate::stream::set_world_opener(disc.world_opener());
-        let (frontiers, which) = disc::describe(disc.boot().await.as_deref());
-        if !frontiers {
-            problem("disc", &which);
-        }
-        unpack_modules(&disc, frontiers).await;
-        // What every world needs, before the session starts its clock.
-        let mut common = Vec::new();
-        for name in ["CHAR.ESF", "ITEM.ESF", "ARIAL.CSF", "UI.CSF", "ARIALUI.CSF", "ITEMICON.ESF", "SPELLFX.CSF", "FX.CSF", "ADDART.CSF"] {
-            status(&format!("reading {name}"));
-            common.push((name, disc.container(name).await?));
-        }
-        let mut shared = Vec::new();
-        for name in SHARED {
-            status(&format!("reading {name}"));
-            shared.push((*name, disc.container(name).await?));
-        }
-        // The sound's own files: the ambient tracks, the resident waves, the
-        // UI sounds' names (`Sound::with`).
-        let mut sound_files = std::collections::HashMap::new();
-        for path in ["DATA/AMBTRACK.ESF", "DATA2/UI.CSF", "DATA2/FX.CSF", "DATA2/SKY.CSF", "DATA/UISOUND.TXT"] {
-            if let Ok(b) = disc.read(path).await {
-                sound_files.insert(path.to_string(), b);
-            }
-        }
-        let words = disc.read("WORDS.TXT").await.ok().and_then(|b| vi::strtab::StringTable::parse(&b));
-        // The HUD's texture names (its atlas is SUPPORT's, `unpack_modules`).
-        let textures = disc.read("TEXTURES.TXT").await.ok().and_then(|b| vi::strtab::StringTable::parse(&b));
-        if textures.is_none() && frontiers {
-            problem("hud-textures", "No HUD: TEXTURES.TXT (the HUD's texture names) could not be read off the disc.");
-        }
-        status(&format!("logging in as {user}"));
-        let l = relay::login(&relay, server, auth_port, &user, &password).await?;
-        let (sock, local) = relay::RelayUdp::open(&relay).await?;
-        let mut s = Session::connect_with(Box::new(sock), local, (server, game_port), &user, l.token).ok_or("could not open the game connection")?;
-        // `?netdebug`: the session's datagram trace on the console
-        if web_sys::window().and_then(|w| w.location().search().ok()).is_some_and(|q| q.contains("netdebug")) {
-            net::session::set_debug_sink(log);
-            s.set_debug(true);
-        }
-        let (s, player, dump) = enter_world(s, opt(&opts, "character"), words.as_ref()).await?;
-        // The world the dump names, by the path's last part, opened with its
-        // zones on the disc and the ones round the player read, while the
-        // session is kept answered.
-        let session = Rc::new(RefCell::new(Some(s)));
-        let alive = Rc::new(RefCell::new(true));
-        keep_pumping(session.clone(), alive.clone());
-        let world = player.world_path.rsplit(['\\', '/']).next().unwrap_or("tunaria.esf").to_uppercase();
-        let mut lib = Library::new();
-        let [x, _, z] = player.pos;
-        let loaded = async {
-            let main = add(&mut lib, &mut disc, &world).await?;
-            status("reading the zones round you");
-            let n = disc.fill(&mut lib, main, x, z).await?;
-            log(&format!("{n} zones read round the spawn"));
-            Ok::<usize, String>(main)
-        }
-        .await;
-        *alive.borrow_mut() = false;
-        let main = loaded?;
-        for (name, c) in shared {
-            lib.add(name, c);
-        }
-        for (name, c) in common {
-            lib.add(name, c);
-        }
-        let s = session.borrow_mut().take().ok_or("lost the session")?;
-        let index = vi::world::World::<vi::fpu::Ee>::zone_at(lib.file(main), x, z).ok_or("no zone at the player's position")?;
-        let character = lib.lookup(viewer::HUMAN).ok_or("no human model")?;
-        let src = viewer::Source::Walk { file: main, index, character, spawn: Some((x, z, player.hpr[0])) };
-        let mut play = play::Play::new(s, player, dump);
-        play.words = words;
-        play.ui_textures = textures;
-        // The sound, left for the viewer (`sound::make`): the driver on this
-        // thread for the page's AudioWorklet, the music off the disc.
-        let bgm = crate::bgm::Bgm::new(&disc.entries);
-        let fetch = {
-            let (bgm, file) = (bgm.clone(), disc.file());
-            Box::new(move || bgm::fetch(&bgm, &file))
-        };
-        match crate::sound::Sound::with(&mut |p| sound_files.remove(p), crate::audio::Audio::web(Box::new(bgm), fetch)) {
-            Some(s) => crate::sound::give(s),
-            None => problem("sound", "No sound: the sound device did not start (VISoundDevice::Init failed)."),
-        }
-        let pending = gfx(canvas()?).await?;
-        status("in the world");
-        call_page("eqoaInWorld", &JsValue::NULL);
-        rate("in the world");
-        viewer::run_with_gfx(lib, src, Some(play), Some(pending)).map_err(|e| e.to_string())
-    }
-    .await;
-    r.map_err(js)
 }

@@ -3,21 +3,24 @@
 
 Serves web/dist on a local port, opens the page in a Chromium of its own over
 the DevTools protocol, puts the disc image into the page's file input (the
-same as a player picking it), fills the form, presses View or Play, prints the
-page's console, and screenshots it.
+same as a player picking it), presses View or Start, prints the page's
+console, and screenshots it. After Start the game runs from its boot on the
+canvas (the licence, the title, Station's login screen...): drive it with
+--keys, --type, --gamepad and --mouse.
 
     web/drive.py --iso run/eqoa.iso --view 'CHAR.ESF 0x70D898C6' --shot 8=human.png
-    EQOA_PASSWORD=... web/drive.py --iso run/eqoa.iso --play dab \\
-        --params 'relay=ws://127.0.0.1:8790&server=203.0.113.10' --shot 30=world.png
+    web/drive.py --iso run/eqoa.iso --boot --params 'relay=ws://127.0.0.1:8790&server=203.0.113.10' \\
+        --keys 12=Enter:100 --type 20=dab --shot 30=station.png
 
 --shot SECONDS=FILE.png screenshots that long after the button (repeatable);
 --until TEXT exits 0 once a console line has it; --keys SECONDS=KEYS holds
 keys for a while (w, a, s, d, ArrowLeft...: 'w:2000' holds w for 2 s; 'w:down'
 and 'w:up' press it and let it go apart, the canvas focused only for the press,
 so a --js between them can move the focus: a key let go elsewhere);
---js SECONDS=EXPR evaluates EXPR in the page then (the character screens:
-"document.querySelector('#charlist button.primary').click()"), its value
-printed. --new-account makes the account first (the page's New account tab).
+--type SECONDS=TEXT types TEXT on the canvas then, a character at a time
+(an account's name into Station's login; a password from the environment:
+--type 20='$EQOA_PASSWORD'); --js SECONDS=EXPR evaluates EXPR in the page
+then, its value printed.
 WebGL/WebGPU run on the machine's GPU (--no-gpu: SwiftShader, every core).
 --headed opens a real window on $DISPLAY instead (F11 needs one); --resize
 SECONDS=WxH sets the page's viewport then, as a resized window would; --scale
@@ -144,7 +147,7 @@ async def drive(a, base, ws_url):
         await call("Runtime.enable")
         await call("Log.enable")
         await call("Page.enable")
-        q = "&".join(p for p in [a.params, f"character={a.character}" if a.character else ""] if p)
+        q = a.params
         if a.mobile:
             await call("Emulation.setTouchEmulationEnabled", enabled=True, maxTouchPoints=5)
         if a.gamepad:
@@ -178,11 +181,6 @@ async def drive(a, base, ws_url):
             await setv("viewargs", a.view)
             await js("document.getElementById('view').click()")
         else:
-            if a.new_account:
-                await js("document.getElementById('tab-new').click()")
-                await setv("pass2", os.environ.get("EQOA_PASSWORD", ""))
-            await setv("user", a.play)
-            await setv("pass", os.environ.get("EQOA_PASSWORD", ""))
             await js("document.getElementById('go').click()")
         t_click = time.monotonic()
 
@@ -330,6 +328,9 @@ async def drive(a, base, ws_url):
         for s in a.resize:
             t, size = s.split("=", 1)
             events.append((float(t), "resize", size))
+        for s in a.type:
+            t, text = s.split("=", 1)
+            events.append((float(t), "type", os.environ.get(text[1:], "") if text.startswith("$") else text))
         events.sort()
         deadline = t_click + a.timeout
         for t, kind, arg in events:
@@ -347,6 +348,14 @@ async def drive(a, base, ws_url):
                 await gamepad(arg)
             elif kind == "mouse":
                 await mice(arg)
+            elif kind == "type":
+                await js("document.getElementById('eqoa').focus()")
+                for ch in arg:
+                    await key(ch, True)
+                    await asyncio.sleep(0.04)
+                    await key(ch, False)
+                    await asyncio.sleep(0.06)
+                out(f"typed {len(arg)} characters")
             elif kind == "resize":
                 w, h = (int(v) for v in arg.split("x"))
                 await call("Emulation.setDeviceMetricsOverride", width=w, height=h, deviceScaleFactor=a.scale, mobile=False)
@@ -375,9 +384,8 @@ if __name__ == "__main__":
     ap.add_argument("--iso", required=True)
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--view", help="the viewer's file and arguments")
-    g.add_argument("--play", metavar="USER", help="log in as USER (password in EQOA_PASSWORD)")
-    ap.add_argument("--character", help="the page's ?character=: played at once, skipping the select screen")
-    ap.add_argument("--new-account", action="store_true")
+    g.add_argument("--boot", action="store_true", help="Start: the game from its boot")
+    ap.add_argument("--type", action="append", default=[], help="SECONDS=TEXT: typed on the canvas ($VAR: from the environment)")
     ap.add_argument("--js", action="append", default=[])
     ap.add_argument("--init", action="append", default=[], help="a script run before the page's own (wrap a constructor, say)")
     ap.add_argument("--params", default="", help="the page's query string")

@@ -25,6 +25,14 @@ pub trait Layout: Raster {
     /// A window's 3D goes here (`pregame::Scene`): the quads made so far
     /// are drawn under it, the rest over it.
     fn mark_split(&mut self) {}
+    /// A solid quad at float corners (fan order) in blend `mode`: what a
+    /// window draws through a solid-fill material of its own (`VIFader`'s
+    /// black, blended, where `FillRectangle`'s material is opaque).
+    fn solid(&mut self, _mode: i32, _color: [f32; 4], _corners: [[f32; 2]; 4]) {}
+    /// Surface `id` on a quad at float corners (fan order), `uv` over the
+    /// whole surface (0..1), in blend `mode`: what a window draws through a
+    /// material of its own (the title's bobbing island, `VISplashFx`).
+    fn textured(&mut self, _id: u32, _mode: i32, _color: [f32; 4], _corners: [[f32; 2]; 4], _uv: [[f32; 2]; 4]) {}
 }
 
 /// What the layer holds for the UI: surfaces by DictID, and the font.
@@ -122,6 +130,16 @@ impl Layout for UiRaster<'_> {
     }
     fn mark_split(&mut self) {
         self.ui.mark_split();
+    }
+    fn solid(&mut self, mode: i32, color: [f32; 4], corners: [[f32; 2]; 4]) {
+        let Some(tex) = self.assets.white else { return };
+        self.ui.push(Quad { tex, blend: mode as u8, pos: corners, uv: [[0.5, 0.5]; 4], color, clip: None });
+        self.glyphs.other();
+    }
+    fn textured(&mut self, id: u32, mode: i32, color: [f32; 4], corners: [[f32; 2]; 4], uv: [[f32; 2]; 4]) {
+        let Some(tex) = self.assets.surface(id) else { return };
+        self.ui.push(Quad { tex, blend: mode as u8, pos: corners, uv, color, clip: None });
+        self.glyphs.other();
     }
 }
 
