@@ -11,8 +11,11 @@
 //!
 //! Here: the arena's zone uploaded once (terrain and the 239 placed actors
 //! with their baked lighting, as `scene::zone` builds a zone), its collision
-//! world for the camera (`VIScene::Collide`), and the view a window draws its
-//! figure and the arena through (`pregame::Scene`).
+//! world for the camera (`VIScene::Collide`), the sky `SetSky` gives the scene
+//! (SKY.CSF's dome, sun, corona and moon, as the atmosphere sets them at
+//! 8:00 under a clear sky: made once, as nothing in it moves at a fixed
+//! hour), and the view a window draws its figure and the arena through
+//! (`pregame::Scene`).
 
 use crate::play::Gpu;
 use esf::Library;
@@ -40,6 +43,8 @@ pub struct Stage {
     pub eye: Eye<Ee>,
     /// the arena's zone on the GPU
     models: Vec<GpuModel>,
+    /// the sky's models, drawn through the view's rotation alone
+    sky: Vec<GpuModel>,
 }
 
 impl Stage {
@@ -63,7 +68,8 @@ impl Stage {
         let mut world = World::<Ee>::load(lib, f)?;
         let mut cam = WalkCamera::<Ee>::default();
         let eye = cam.init(Vect3::of(0.0, 0.0, 0.0), Vect3::of(0.0, 0.0, 0.0), &mut world);
-        Some(Stage { world, cam, eye, models })
+        let sky = sky(lib, &mut world, &eye, g).unwrap_or_default();
+        Some(Stage { world, cam, eye, models, sky })
     }
 
     /// `m_walkCam->Init(at, hpr, camera, scene)` and `SetCameraMode(1)`:
@@ -111,11 +117,49 @@ impl Stage {
             let c = tod.sky(hour, F::ZERO, &b);
             v.clear = glam::Vec3::new(c[0] as f32, c[1] as f32, c[2] as f32) / 255.0;
         }
+        if !self.sky.is_empty() {
+            let mut rot = view;
+            rot.w_axis = glam::Vec4::W;
+            v.sky_view_proj = Some(proj * rot);
+        }
         v
     }
 
-    /// The arena's models.
+    /// The arena's models, and the sky's.
     pub fn models(&self) -> impl Iterator<Item = &GpuModel> {
-        self.models.iter()
+        self.models.iter().chain(self.sky.iter())
     }
+}
+
+/// The scene's sky at 8:00 (`VIScene::SetSky`, the atmosphere's `SetSky`,
+/// `Update` and `SetupTimeOfDaySky` once): SKY.CSF's sprites on the GPU with
+/// their palettes and placements as `sky::update` sets them in play. SKY.CSF
+/// and FX.CSF are CLIENT's pregame files; their bytes are parsed again into
+/// a library of the sky's own (the atmosphere takes one to own).
+fn sky(lib: &Library, world: &mut World<Ee>, eye: &Eye<Ee>, g: &mut Gpu) -> Option<Vec<GpuModel>> {
+    let parse = |name: &str| lib.files.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).and_then(|(_, c)| esf::Container::parse(c.data.clone()).ok());
+    let mut l = Library::new();
+    l.add(crate::sky::FILE, parse("SKY.CSF")?);
+    if let Some(fx) = parse("FX.CSF") {
+        l.add("DATA2/FX.CSF", fx);
+    }
+    let mut wx = crate::weather::Weather::new(&mut l, 0);
+    wx.frame(world, None, eye, 0, HOUR);
+    if let Some(grid) = world.grid.as_ref() {
+        let b = grid.profile_blend(&eye.position);
+        let c = vi::tod::TimeOfDay::<Ee>::new().sky(F::new(HOUR), F::ZERO, &b);
+        wx.sky_colour(c, vi::tod::lavastorm_weight(&b));
+    }
+    let a = &wx.atm;
+    let frame = crate::sky::SkyFrame {
+        plane: a.p618,
+        lights: a.p618 == 0 && a.overcast != 0,
+        rot: vi::atmosphere::SkyRotations { sun: a.sky_rot, corona: a.corona_rot, moon: a.moon_rot },
+        pals: (0..5).map(|k| a.pals.get(&k).cloned().unwrap_or_default()).collect(),
+    };
+    let mut models = Vec::new();
+    let at = crate::sky::upload(g.renderer, g.device, g.queue, &l, &mut models)?;
+    let textures = render::library_textures(&l);
+    crate::sky::update(g.renderer, g.device, g.queue, &mut models, at, &frame, &textures);
+    Some(models)
 }
