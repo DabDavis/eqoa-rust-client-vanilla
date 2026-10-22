@@ -1,6 +1,22 @@
-# eqoa-rs
+# eqoa-rust-client-vanilla
 
-The Rust client. README.md is the plan and the crate table; keep it current.
+The Rust client without mods, and the only public EQOA client repository: eqoa-rs (`../eqoa-rs`,
+github.com/DabDavis/eqoa-rs) less its ambient occlusion, its harvester and its bug and crash
+reports. eqoa-rs, eqoa-port and the retired Go client (eqoa-client-v1) are private since
+2026-10-22. README.md is the plan, the crate table and what "vanilla" keeps (README "Vanilla");
+keep it current.
+
+- Vanilla: nothing that changes the game's picture or play beyond what README "Vanilla" keeps
+  (widescreen, the untethered frame rate, the mouse and the touch screen, the keyboard with WASD and
+  the Controls page, 1,000 lines of chat, no green backdrop behind the start menu's windows, the
+  Extended page, the map). A new client-side addition is the user's call: ask first. A fix to the
+  game's logic, sound or network goes both ways with eqoa-rs by `git cherry-pick` (remote `eqoa-rs`,
+  `git@github.com:DabDavis/eqoa-rs.git`). Link no private repository from anything public here.
+- Commit as Winfro <164797966+DabDavis@users.noreply.github.com> (the repo-local config; never the
+  global address). `.git/hooks/pre-commit` refuses private strings, binaries and files over 2 MB.
+- Releases are CI only (`.github/workflows/dev.yml`): every push to `master` builds Linux, Windows and
+  macOS and replaces the one `dev` release (its tag moved to the commit, its assets replaced, the run's
+  artifacts deleted), so no older build can be downloaded. No versioned releases, no other channel.
 
 - Toolchain: rustup in `~/.cargo`. `/tmp` is a small partition that old session scratchpads fill: building with `TMPDIR` under `~/.cache` avoids it.
 - `run/` is untracked: `run/eqoa.iso` links the Frontiers disc. Never commit game data.

@@ -1,0 +1,179 @@
+name: Dev build
+
+# Every push to master builds the client for Linux, Windows and macOS and
+# replaces the one release, `dev`: its tag is moved to the commit and its
+# assets are replaced, and the run's own artifacts are deleted once they are
+# up, so no older build stays downloadable. There are no versioned releases.
+
+on:
+  push:
+    branches: [ "master" ]
+    # Docs and the browser page are not the program.
+    paths-ignore:
+      - '**.md'
+      - 'web/**'
+  workflow_dispatch:
+
+concurrency:
+  # A newer push supersedes a build in flight.
+  group: dev-build
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  actions: write
+
+env:
+  # The toolchain the client is checked with locally.
+  RUST_TOOLCHAIN: 1.99.1
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: linux
+            runner: ubuntu-22.04
+          - os: windows
+            runner: windows-2022
+          - os: macos
+            runner: macos-14
+    runs-on: ${{ matrix.runner }}
+    name: build (${{ matrix.os }})
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        shell: bash
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+          if [ "${{ matrix.os }}" = macos ]; then rustup target add aarch64-apple-darwin x86_64-apple-darwin; fi
+
+      # cpal (ALSA) and gilrs (libudev) link these; the window and the GPU
+      # are opened at run time.
+      - name: Install the Linux libraries
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev pkg-config
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
+
+      # The tests that need the disc image, eqoa-port's oracles or a GPU
+      # skip without them; the rest gate the build.
+      - name: Test
+        if: matrix.os == 'linux'
+        run: cargo test --locked --workspace
+
+      - name: Build
+        if: matrix.os != 'macos'
+        shell: bash
+        run: cargo build --release --locked -p eqoa
+
+      # One program for Apple silicon and Intel Macs.
+      - name: Build (macOS, universal)
+        if: matrix.os == 'macos'
+        run: |
+          cargo build --release --locked -p eqoa --target aarch64-apple-darwin
+          cargo build --release --locked -p eqoa --target x86_64-apple-darwin
+          mkdir -p target/release
+          lipo -create -output target/release/eqoa \
+            target/aarch64-apple-darwin/release/eqoa target/x86_64-apple-darwin/release/eqoa
+          lipo -info target/release/eqoa
+
+      - name: Package
+        shell: bash
+        run: |
+          case "${{ matrix.os }}" in
+            linux) name=eqoa-vanilla-linux-x86_64 ;;
+            windows) name=eqoa-vanilla-windows-x86_64 ;;
+            macos) name=eqoa-vanilla-macos ;;
+          esac
+          mkdir -p "dist/$name"
+          if [ "${{ matrix.os }}" = windows ]; then
+            cp target/release/eqoa.exe "dist/$name/"
+            # Windows Notepad reads the text with Windows line ends
+            sed 's/$/\r/' release/README.txt > "dist/$name/README.txt"
+            sed 's/$/\r/' LICENSE > "dist/$name/LICENSE.txt"
+            (cd dist && 7z a -tzip "$name.zip" "$name" > /dev/null)
+            echo "ASSET=dist/$name.zip" >> "$GITHUB_ENV"
+          else
+            cp target/release/eqoa "dist/$name/"
+            chmod +x "dist/$name/eqoa"
+            cp release/README.txt LICENSE "dist/$name/"
+            tar -C dist -czf "dist/$name.tar.gz" "$name"
+            echo "ASSET=dist/$name.tar.gz" >> "$GITHUB_ENV"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.os }}
+          path: ${{ env.ASSET }}
+          # deleted by the publish job; a day at most if it never runs
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Write the release notes
+        run: |
+          {
+            echo "The newest build of \`master\`: $(TZ=UTC git log -1 --format='%h, %cd: %s' --date=format-local:'%Y-%m-%d %H:%M UTC' "$GITHUB_SHA")."
+            echo
+            echo "- Linux (x86-64): \`eqoa-vanilla-linux-x86_64.tar.gz\`"
+            echo "- Windows (x86-64): \`eqoa-vanilla-windows-x86_64.zip\`"
+            echo "- macOS (Apple silicon and Intel): \`eqoa-vanilla-macos.tar.gz\`"
+            echo
+            echo "You need your own *Frontiers* disc image (SLUS-20744) and an account on a server; README.txt in each says how to run it, and the repository's README says more. Each push to \`master\` replaces this build: only the newest can be downloaded."
+          } > notes.md
+          cat notes.md
+          ls -la dist
+
+      # The tag is moved, not added to, so the release always describes the
+      # tip of master and nothing else.
+      - name: Publish
+        run: |
+          git tag --force dev "$GITHUB_SHA"
+          git push --force origin refs/tags/dev
+          gh release view dev > /dev/null 2>&1 || \
+            gh release create dev --prerelease --title "Dev build" --notes-file notes.md
+          # an asset no longer built goes too
+          for old in $(gh release view dev --json assets --jq '.assets[].name'); do
+            [ -e "dist/$old" ] || gh release delete-asset dev "$old" --yes
+          done
+          gh release upload dev --clobber dist/*
+          gh release edit dev --prerelease --title "Dev build" --notes-file notes.md
+
+  # The run's own copies of the builds would be a second place to download
+  # one: gone once the release has them, or the run failed, or was replaced.
+  cleanup:
+    needs: [build, publish]
+    if: always()
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Delete the run's artifacts
+        run: |
+          for id in $(gh api "repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID/artifacts" --paginate --jq '.artifacts[].id'); do
+            gh api -X DELETE "repos/$GH_REPO/actions/artifacts/$id"
+          done

@@ -1,8 +1,8 @@
-# eqoa-rs: an EQOA client in Rust
+# eqoa-rust-client-vanilla: an EQOA client in Rust, without mods
 
 A native client for *EverQuest Online Adventures: Frontiers* that owns its own data
 structures, rather than running a PS2 inside a program the way
-[eqoa-port](https://github.com/DabDavis/eqoa-port) does. The goal is every platform,
+eqoa-port (the decomp as a native program) does. The goal is every platform,
 phones included (wgpu: Vulkan, Metal, DX12, WebGPU), 64-bit, with the feel of the
 original matched exactly.
 
@@ -16,6 +16,59 @@ while the session starts, and keeps them for the next run (`eqoa-rs/dnas` in the
 platform's cache directory, or `$EQOA_CACHE`; in a page, the origin's storage). The
 player's decrypted images serve instead when given (`run/client.bin` or
 `$EQOA_CLIENT`, `run/support.bin` or `$EQOA_SUPPORT`).
+
+## Vanilla
+
+This is eqoa-rs (the modded client, private) without its mods, forked
+from it on 2026-10-22 at `41d74f9`, the commit before its ambient occlusion, with
+its world-entry fix (`e8c5ed7`) taken after. Left out:
+
+- **Ambient occlusion** (eqoa-rs's Extended page): a screen-space darkening the
+  PS2 never drew.
+- **The harvester** (`eqoa harvest`, `eqoa newchar`, `eqoa delchar`): a headless
+  tool that records what a server tells one client of its spells and wares, for
+  a server's own tables.
+- **Bug and crash reports**: the F3 dialog, the HUD's Report a bug, the cards'
+  links, the posts to a report server, the offer after a tab that died. What goes
+  wrong is still said on the page (`web/notices.js`); nothing is sent anywhere.
+
+Kept, as the client's own for a PC, a phone or a browser (each is described
+where it lives below): widescreen (the HUD at a wide window's edges, the menus
+across it); a frame rate untethered from the game's 30 (the game's logic still
+steps at 30); the mouse and the touch screen; the keyboard with WASD walking and
+the Controls page (every key and button rebound); 1,000 lines of chat history
+(the game's ring holds 31); the start menu's windows without their green
+backdrop; the Extended options page (Level of Detail, Brightness, Frame Rate,
+Camera Distance); and the map (M), drawn from the player's own disc for every
+world, on any server.
+
+The two share their history up to the fork, so a fix to the game's logic, sound
+or network moves between them by `git cherry-pick`.
+
+## Playing a release
+
+One build is published, **dev**: rebuilt from `master` on every push, for Linux
+(x86-64), Windows (x86-64) and macOS, on the
+[releases page](https://github.com/DabDavis/eqoa-rust-client-vanilla/releases/tag/dev).
+Each build replaces the one before, so only the newest can be downloaded.
+
+It is the `eqoa` program. You need your own *Frontiers* disc image (SLUS-20744)
+and an account on a server. From a terminal:
+
+```bash
+EQOA_ISO=/path/to/eqoa.iso EQOA_PASSWORD='...' ./eqoa play <server> <account>
+```
+
+On Windows, `set EQOA_ISO=C:\path\to\eqoa.iso` and `set EQOA_PASSWORD=...`, then
+`eqoa.exe play <server> <account>`. It logs in, takes the account's first
+character (`EQOA_CHAR=<name>` for another) and opens a window on the world. The
+native client has no login or character screen yet: characters are made in the
+browser page ("In a browser", below) or on a PS2. The game's options and the keys
+are kept in `eqoa-rs` in the config directory (`~/.config/eqoa-rs`,
+`~/Library/Application Support/eqoa-rs`, `%APPDATA%\eqoa-rs`). On Linux it needs
+ALSA (`libasound2`), libudev and a Vulkan or OpenGL driver. The builds are not
+signed: macOS asks before opening one the first time (Control-click, Open), and
+Windows may too.
 
 ## Method
 

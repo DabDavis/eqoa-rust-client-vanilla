@@ -6,7 +6,7 @@ members = ["crates/*"]
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/DabDavis/eqoa-rs"
+repository = "https://github.com/DabDavis/eqoa-rust-client-vanilla"
 
 [workspace.dependencies]
 ee = { path = "crates/ee" }
