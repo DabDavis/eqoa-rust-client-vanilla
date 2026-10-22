@@ -1702,8 +1702,13 @@ impl App {
             report.merge(&s.at(self.clock.elapsed().as_millis() as i64));
             connected = true;
         }
-        let (fields, _) = crate::settings::with_binds(|b| self.pad_edge.frame(report.buttons, false, b));
+        // the player's own buttons, and a capture's for the title's Controls page
+        let capturing = self.host.as_ref().is_some_and(|h| h.pre.setup.capturing().is_some());
+        let (fields, took) = crate::settings::with_binds(|b| self.pad_edge.frame(report.buttons, capturing, b));
         report.buttons = fields;
+        if let (Some(i), Some(h)) = (took, self.host.as_mut()) {
+            h.pre.setup.capture_button(i);
+        }
         if self.touch.used {
             report.merge(&self.touch.report());
             connected = true;
@@ -1951,6 +1956,18 @@ impl ApplicationHandler for App {
             // (`VIKeyboard::Read`'s), and its clicks.
             WindowEvent::KeyboardInput { event, .. } if self.host.is_some() => {
                 self.touch.hide();
+                // the title's Options' Controls page waiting for a key: it is
+                // the page's, as play's is
+                let host = self.host.as_mut().unwrap();
+                if host.pre.setup.capturing().is_some()
+                    && event.state == ElementState::Pressed
+                    && !event.repeat
+                    && let Some(name) = crate::binds::name_of(&event.logical_key)
+                {
+                    host.pre.setup.capture_key(&name);
+                    self.keys_edge.hold_back(&name);
+                    return;
+                }
                 if let Some(k) = pregame_key(&event) {
                     let down = event.state == ElementState::Pressed;
                     // a held key repeats only where it types

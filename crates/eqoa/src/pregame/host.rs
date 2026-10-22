@@ -234,6 +234,16 @@ impl Host {
             for c in &cues {
                 s.cue(c);
             }
+            // the title's Options: the classes' volumes and the output, as play's apply them
+            for up in self.pre.setup.take_sound() {
+                match up {
+                    crate::options::OptionsUp::Volume(cls, v) => s.dev.set_sound_class_volume(cls, v.0),
+                    crate::options::OptionsUp::Output(stereo) => s.dev.set_output_mode(stereo as i32),
+                    crate::options::OptionsUp::Preview(t) => s.preview = Some(t),
+                    crate::options::OptionsUp::PreviewEnd => s.end_preview(),
+                    crate::options::OptionsUp::Apply => {}
+                }
+            }
             for m in music {
                 self.music(s, m);
             }
