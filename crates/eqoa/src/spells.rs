@@ -50,11 +50,13 @@ pub struct Body<'a> {
 /// `VICreatureEntity::ApplyItems` hands the look each hand's item off the
 /// channel (`m_itemOver` before `m_item`) with its type, and the look's
 /// `Apply` attaches an item with that type (`AttachItem`); a hand that holds
-/// nothing keeps the 11, hand to hand, that `Clear` and `DetachItem` leave.
-pub fn hand_attack_types(c: &net::entity::Creature) -> [i32; 2] {
+/// nothing keeps the 11, hand to hand, that `Clear` and `DetachItem` leave,
+/// and so does every hand of a sprite that holds no items (`holds_items`
+/// false: `AttachItem` returns before the type).
+pub fn hand_attack_types(c: &net::entity::Creature, holds_items: bool) -> [i32; 2] {
     std::array::from_fn(|i| {
         let model = if c.items_over[i] != 0 { c.items_over[i] } else { c.items[i] };
-        if model != 0 { c.item_types[i] as i32 } else { 11 }
+        if model != 0 && holds_items { c.item_types[i] as i32 } else { 11 }
     })
 }
 
@@ -541,19 +543,21 @@ mod tests {
     fn an_empty_hand_swings_hand_to_hand() {
         use vi::spell::attack_action;
         let bare = net::entity::Creature::default();
-        assert_eq!(hand_attack_types(&bare), [11, 11]);
-        assert_eq!(attack_action(hand_attack_types(&bare), 0, false), Some(23));
-        assert_eq!(attack_action(hand_attack_types(&bare), 1, false), Some(22));
+        assert_eq!(hand_attack_types(&bare, true), [11, 11]);
+        assert_eq!(attack_action(hand_attack_types(&bare, true), 0, false), Some(23));
+        assert_eq!(attack_action(hand_attack_types(&bare, true), 1, false), Some(22));
         // the negative control: the type an empty hand used to get
         assert_eq!(attack_action([0, 0], 0, false), None);
         let mut c = net::entity::Creature { item_types: [1, 5], ..Default::default() };
         c.items[0] = 0x1234;
-        assert_eq!(hand_attack_types(&c), [1, 11]);
+        assert_eq!(hand_attack_types(&c, true), [1, 11]);
         c.items_over[1] = 0x5678;
-        assert_eq!(hand_attack_types(&c), [1, 5]);
-        assert_eq!(attack_action(hand_attack_types(&c), 1, false), Some(27));
+        assert_eq!(hand_attack_types(&c, true), [1, 5]);
+        assert_eq!(attack_action(hand_attack_types(&c, true), 1, false), Some(27));
+        // a sprite that holds no items (a form) swings both hands bare
+        assert_eq!(hand_attack_types(&c, false), [11, 11]);
         // an item whose type the channel leaves 0 swings nothing, as in the game
         c.item_types = [0, 0];
-        assert_eq!(attack_action(hand_attack_types(&c), 0, false), None);
+        assert_eq!(attack_action(hand_attack_types(&c, true), 0, false), None);
     }
 }

@@ -2,7 +2,8 @@
 //! animation entries, the arbiter that picks one per body layer
 //! (`SetLocomotion` → `SetAnimation`) and the priorities it ranks them by
 //! (decomp `vicsprite.cpp`), and the sounds its animations' triggers fire
-//! (`Process`, through `SoundSink`). Not ported: items, particles, weapon
+//! (`Process`, through `SoundSink`). Not ported: items beyond `AttachItem`'s
+//! test (`item_node`; the client attaches them itself), particles, weapon
 //! trails, death, faces and armour (the `SetItemAction` call is a no-op).
 
 use crate::fpu::{F, Model};
@@ -95,6 +96,12 @@ pub struct CSprite<M: Model> {
     pub text_slots: [(i32, i32); 19],
     /// `m_items[i].m_node` (0x2920): the node each item slot hangs on.
     pub item_nodes: [i32; 6],
+    /// `m_flags & 1`, `Init`'s `npc` (the 0x2710 header's last field from
+    /// version 4, 1 below): while it is clear `AttachItem` attaches nothing
+    /// and leaves the hands' attack types at 11. Clear on the creatures a
+    /// form or an illusion makes of a player (Sandstorm's bard in Mouse Form
+    /// is 0x8150E6AF), which name item nodes all the same.
+    pub holds_items: bool,
     /// `m_node` (0x2915): named nodes; 8 is the helm's.
     pub node_ids: [i32; 10],
     pub dead: bool,
@@ -116,7 +123,9 @@ fn in_range(id: i32, lo: i32, n: u32) -> bool {
 }
 
 impl<M: Model> CSprite<M> {
-    pub fn new(h: HSprite<M>, skel_type: i32, race: i32, sex: i32, scale: F<M>) -> Self {
+    /// `Init(skel, race, sex, scale, npc)` on a cleared sprite, `npc` as
+    /// `holds_items`.
+    pub fn new(h: HSprite<M>, skel_type: i32, race: i32, sex: i32, scale: F<M>, holds_items: bool) -> Self {
         let mut h = h;
         h.default_scale = scale;
         CSprite {
@@ -126,6 +135,7 @@ impl<M: Model> CSprite<M> {
             sex,
             text_slots: [(-1, -1); 19],
             item_nodes: [-1; 6],
+            holds_items,
             node_ids: [-1; 10],
             dead: false,
             action_seq: 0,
@@ -138,6 +148,14 @@ impl<M: Model> CSprite<M> {
             body: -1,
             snd: ContSound { sound: 0, volume: F::ONE, channel: -1 },
         }
+    }
+
+    /// `AttachItem`'s test: the node an item in `slot` hangs on, or None when
+    /// the sprite attaches nothing there (`m_flags & 1` clear, or no
+    /// `m_items[slot].m_node`).
+    pub fn item_node(&self, slot: usize) -> Option<i32> {
+        let node = *self.item_nodes.get(slot)?;
+        (self.holds_items && node >= 0).then_some(node)
     }
 
     /// `SetAnimSoundChannels`: a two-layer skeleton sounds its first 17
@@ -538,5 +556,24 @@ impl<M: Model> CSprite<M> {
         }
         // layer 0: SetItemAction(0) -- items are not ported.
         1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fpu::Ee;
+
+    /// `AttachItem` attaches only to a sprite whose `m_flags & 1` is set, and
+    /// only where the slot names a node: a sprite with the flag clear holds
+    /// nothing however many nodes it names.
+    #[test]
+    fn attach_item_needs_the_flag_and_a_node() {
+        let mut cs = CSprite::<Ee>::new(HSprite::new(0), 2, 9, 0, F::ONE, false);
+        cs.item_nodes[..2].copy_from_slice(&[6, 10]);
+        assert_eq!((cs.item_node(0), cs.item_node(1), cs.item_node(2)), (None, None, None), "the flag clear: nothing");
+        cs.holds_items = true;
+        assert_eq!((cs.item_node(0), cs.item_node(1), cs.item_node(2)), (Some(6), Some(10), None), "the flag set: each slot's node");
+        assert_eq!(cs.item_node(6), None, "past the slots");
     }
 }

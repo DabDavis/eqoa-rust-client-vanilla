@@ -522,6 +522,19 @@ impl Play {
 }
 
 
+/// What a creature holds as the game dresses it: `ApplyItems` hands each
+/// item slot its item (the override if any) and `Apply` attaches it
+/// (`AttachItem`) on the node the sprite names for that slot, if the sprite
+/// holds items at all (`CSprite::item_node`: a player turned into a creature
+/// keeps its weapons on its channel, and the creature shows none). Per slot,
+/// the item's DictID and its node.
+fn held_items(cs: &CSprite<Ee>, c: &net::entity::Creature) -> [Option<(u32, i32)>; 3] {
+    std::array::from_fn(|i| {
+        let id = if c.items_over[i] != 0 { c.items_over[i] } else { c.items[i] };
+        cs.item_node(i).filter(|_| id != 0).map(|node| (id, node))
+    })
+}
+
 /// A creature's model as `Apply` dresses it: the look on its text slots, the
 /// items and helm on their nodes.
 fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64) -> Option<Puppet> {
@@ -531,19 +544,14 @@ fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Optio
                     let mut anims = AnimScene { time: game_ms, ..Default::default() };
                     let mut rand = Rand(slot as u64 + 1);
                     let sprite = load_csprite(lib, r, &mut anims, &mut AnimCache::new(), &mut rand);
-                    // Attach: the items in hand (ApplyItems: the override if
-                    // any) and the helm (SetHelm, at node 8, in the tint).
+                    // Attach: the items in hand (`held_items`) and the helm
+                    // (SetHelm, at node 8, in the tint).
                     let mut attached = Vec::new();
                     let mut helm_worn = false;
                     let mut weapons = [None; 3];
                     if let (Some(cs), Some(c)) = (&sprite, &e.creature) {
-                        #[allow(clippy::needless_range_loop)]
-                        for i in 0..3 {
-                            let id = if c.items_over[i] != 0 { c.items_over[i] } else { c.items[i] };
-                            let node = cs.item_nodes[i];
-                            if id == 0 || node < 0 {
-                                continue;
-                            }
+                        for (i, held) in held_items(cs, c).into_iter().enumerate() {
+                            let Some((id, node)) = held else { continue };
                             weapons[i] = crate::trails::weapon_points(lib, id).map(|w| (node, w));
                             if let Some(m) = lib.lookup(id as i32).and_then(|r| lib.build_model(r)) {
                                 attached.push((node, g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
@@ -740,6 +748,36 @@ mod own_actor {
         }
         let always = |_: bool, _: i32, _: bool, _: F<Ee>, _: u16| (true, false);
         assert!(cases.iter().any(|&((w, m, de, d, f), want)| always(w, m, de, d, f) != want), "the control must fail");
+    }
+}
+
+#[cfg(test)]
+mod held {
+    use super::*;
+
+    /// A player turned into a creature keeps its weapons on its channel
+    /// (Sandstorm's bard in Mouse Form, `pcaps/ps2_main_capture.pcap`: both
+    /// hands 0xF4DD991A, type 5): the creature's sprite holds no items, so
+    /// none is attached and both hands swing hand to hand. The same items on
+    /// a sprite that holds them hang on its nodes, the override first. The
+    /// control: the nodes alone, as the client went by before, attach both
+    /// weapons to the creature.
+    #[test]
+    fn a_form_shows_no_weapons() {
+        let mut c = net::entity::Creature { item_types: [5, 5], ..Default::default() };
+        c.items = [0xF4DD991A, 0xF4DD991A, 0];
+        let mut form = CSprite::<Ee>::new(vi::hsprite::HSprite::new(0), 2, 9, 0, F::ONE, false);
+        form.item_nodes[..2].copy_from_slice(&[6, 10]);
+        assert_eq!(held_items(&form, &c), [None; 3]);
+        assert_eq!(crate::spells::hand_attack_types(&c, form.holds_items), [11, 11]);
+        let by_node: Vec<usize> = (0..3).filter(|&i| c.items[i] != 0 && form.item_nodes[i] >= 0).collect();
+        assert_eq!(by_node, [0, 1], "the control: by the nodes alone both weapons hang on the creature");
+
+        let mut human = CSprite::<Ee>::new(vi::hsprite::HSprite::new(0), 1, 0, 0, F::ONE, true);
+        human.item_nodes[..3].copy_from_slice(&[18, 27, 28]);
+        c.items_over[1] = 0x1234;
+        assert_eq!(held_items(&human, &c), [Some((0xF4DD991A, 18)), Some((0x1234, 27)), None]);
+        assert_eq!(crate::spells::hand_attack_types(&c, human.holds_items), [5, 5]);
     }
 }
 
@@ -1573,11 +1611,15 @@ impl Play {
         let me = self.session.self_id.map(|s| s as u32);
         let mut bodies: Vec<Body> = Vec::new();
         // each creature's hands as its sprite holds them (`SetAttackAction`'s
-        // types: an empty hand is 11, hand to hand)
-        let hands = |e: &net::entity::Entity| e.creature.as_ref().map_or([11, 11], crate::spells::hand_attack_types);
+        // types: an empty hand is 11, hand to hand, and so is every hand of a
+        // sprite that holds no items)
+        let hands = |e: &net::entity::Entity, p: &Option<Puppet>| {
+            let holds = p.as_ref().and_then(|p| p.sprite.as_ref()).is_none_or(|cs| cs.holds_items);
+            e.creature.as_ref().map_or([11, 11], |c| crate::spells::hand_attack_types(c, holds))
+        };
         for (slot, (e, p)) in self.entities.slots.iter().zip(self.puppets.iter_mut()).enumerate() {
             let Some(e) = e.as_ref().filter(|e| Some(e.id) != me) else { continue };
-            let attack = hands(e);
+            let attack = hands(e, p);
             match p {
                 Some(p) => bodies.push(Body { actor: slot as i32, sprite: p.sprite.as_mut().map(|cs| (cs, &p.anims, &mut p.rand)), transform: p.actor_m, centre: p.centre, attack }),
                 None => {
@@ -1592,7 +1634,7 @@ impl Play {
         // so they come from what the dump says is worn, put in the hands as
         // `ApplyItems` puts them (the first: the primary or two-handed
         // weapon; the second: the secondary or the ranged one), an empty
-        // hand 11
+        // hand 11, and both 11 while its sprite holds no items (a form)
         let mut attack = [11, 11];
         for it in &self.dump.inventory.items {
             match it.equip_slot {
@@ -1600,6 +1642,9 @@ impl Play {
                 15 | 18 => attack[1] = it.item.attack_type as i32,
                 _ => {}
             }
+        }
+        if walker.sprite.as_ref().is_some_and(|cs| !cs.holds_items) {
+            attack = [11, 11];
         }
         let actor = Matrix44::transform(&Vect3::new(walker.cam.walk.phys.angles.x, F::ZERO, F::ZERO), F::ONE, &walker.cam.walk.phys.smooth_location());
         let has_self = me.is_some_and(|me| self.entities.slots.iter().flatten().any(|e| e.id == me));

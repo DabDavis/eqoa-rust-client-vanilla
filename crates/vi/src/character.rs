@@ -167,6 +167,8 @@ pub fn load_csprite<M: Model>(
     let skel = if hv >= 1 { r.i() } else { 0 };
     let scale: F<M> = if hv >= 2 { r.f() } else { F::ONE };
     let (race, sex) = if hv >= 3 { (r.i(), r.i()) } else { (-1, 0) };
+    // `npc`, which `Init` keeps as `m_flags & 1`: whether items attach at all
+    let npc = if hv >= 4 { r.i() } else { 1 };
 
     let children = &c.node(id).children;
     // The skeleton's ref map is the 0x5000 AFTER the hierarchy (the one
@@ -193,7 +195,7 @@ pub fn load_csprite<M: Model>(
             }
         }
     }
-    let mut cs = CSprite::new(h, skel, race, sex, scale);
+    let mut cs = CSprite::new(h, skel, race, sex, scale, npc != 0);
     if let Some(sl) = c.child(id, 0x2900) {
         let d = c.body(sl);
         for k in 0..i32_at(d, 0).max(0) as usize {
