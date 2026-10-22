@@ -12,6 +12,14 @@
 //! Without an audio device (or with `EQOA_AUDIO=0`) a thread runs the driver
 //! on the wall clock instead, so the game sees the same IOP either way.
 //!
+//! The callback mixes in the device's blocks, 25-30 ms apart here (PulseAudio,
+//! measured; 50 now and then), while on the console the IOP and the SPU2 run
+//! beside the EE all the time. So natively each call first brings the driver
+//! up to the output's present (`Shared::catch_up`), as the IOP would be: the
+//! status block the device reads then says what is playing now, not at the
+//! last callback, and a sound it played a frame ago is seen playing
+//! (`snd::device::process` stops one it has not seen three frames on).
+//!
 //! In a page there is no thread to give it: the driver runs on the game's,
 //! mixing a little ahead of the page's audio clock once a frame (`feed`) for
 //! an AudioWorklet that only plays what it is handed (web/sound.js).
@@ -42,9 +50,34 @@ struct Shared {
     status: [u32; 128],
     /// interleaved 48 kHz frames mixed and not yet played
     pcm: Vec<i16>,
+    /// natively, the output's last callback: when it came, and the driver's
+    /// clock at the end of what had been handed to the device then
+    handed: Option<(Instant, u64)>,
 }
 
+/// How far `catch_up` mixes past what was last handed to the device (100
+/// ms): while a device stalls (its callback later than this) the IOP's clock
+/// waits there, since what is mixed ahead is heard only once the device has
+/// taken it, and a sound played meanwhile would come that much late.
+const CATCH_UP_MAX: u64 = 4800;
+
 impl Shared {
+    fn new(disc: Box<dyn Disc>) -> Self {
+        Shared { drv: Driver::new(disc), status: [0; 128], pcm: Vec::new(), handed: None }
+    }
+
+    /// The driver mixed up to the output's present: what the device was last
+    /// handed and the time since, at 48 kHz (at most `CATCH_UP_MAX` past
+    /// it). The frames wait in `pcm` for the callback, which then mixes only
+    /// what it still lacks. Nothing before the first callback, nor offline.
+    fn catch_up(&mut self) {
+        let Some((at, handed)) = self.handed else { return };
+        let due = handed + ((at.elapsed().as_secs_f64() * 48000.0) as u64).min(CATCH_UP_MAX);
+        if due > self.drv.now {
+            self.pump(due - self.drv.now);
+        }
+    }
+
     fn take_answer(&mut self) {
         if let Some(st) = self.drv.answer() {
             self.status = st;
@@ -144,7 +177,7 @@ impl Audio {
 
     /// The driver, playing on the default output device.
     pub fn open(disc: Box<dyn Disc>) -> Audio {
-        let shared = Arc::new(Mutex::new(Shared { drv: Driver::new(disc), status: [0; 128], pcm: Vec::new() }));
+        let shared = Arc::new(Mutex::new(Shared::new(disc)));
         let off = std::env::var("EQOA_AUDIO").is_ok_and(|v| v == "0");
         let stream = if off { Err("EQOA_AUDIO=0".to_string()) } else { Self::stream(shared.clone()) };
         match stream {
@@ -161,6 +194,7 @@ impl Audio {
                         let n = due.saturating_sub(g.drv.now);
                         g.pump(n);
                         g.pcm.clear();
+                        g.handed = Some((Instant::now(), g.drv.now));
                     }
                 });
                 Self::with_shared(shared, None, format!("no audio output ({e}): the driver runs on the wall clock"))
@@ -207,6 +241,7 @@ impl Audio {
             let n = 2 * used.min(g.pcm.len() / 2);
             g.pcm.drain(..n);
             phase -= used as f64;
+            g.handed = Some((Instant::now(), g.drv.now - (g.pcm.len() / 2) as u64));
         };
         let stream = match default.sample_format() {
             cpal::SampleFormat::F32 => device.build_output_stream(
@@ -236,7 +271,7 @@ impl Audio {
 
     /// The driver with no output and no thread: `render` advances it.
     pub fn offline(disc: Box<dyn Disc>) -> Audio {
-        let shared = Arc::new(Mutex::new(Shared { drv: Driver::new(disc), status: [0; 128], pcm: Vec::new() }));
+        let shared = Arc::new(Mutex::new(Shared::new(disc)));
         Self::with_shared(shared, None, "offline".into())
     }
 
@@ -245,7 +280,7 @@ impl Audio {
     /// asked for (`web::bgm`).
     #[cfg(target_arch = "wasm32")]
     pub fn web(disc: Box<dyn Disc>, fetch: Box<dyn FnMut()>) -> Audio {
-        let shared = Arc::new(Mutex::new(Shared { drv: Driver::new(disc), status: [0; 128], pcm: Vec::new() }));
+        let shared = Arc::new(Mutex::new(Shared::new(disc)));
         let mut a = Self::with_shared(shared, None, "the page's AudioWorklet".into());
         a.page = Some(Page { fetch, base: None, lead: LEAD_START, last: None, moves: Default::default(), dry: 0, wall: web_time::Instant::now() });
         a
@@ -342,6 +377,7 @@ pub struct AudioLink(Arc<Mutex<Shared>>);
 impl Link for AudioLink {
     fn call(&mut self, fno: u32, packet: &[u32; 128]) -> [u32; 128] {
         let mut g = self.0.lock().unwrap();
+        g.catch_up();
         // the device refuses to flush while busy (`busy`): a call here
         // over a running one would be a packet lost
         if !g.drv.busy() {
@@ -358,6 +394,7 @@ impl Link for AudioLink {
             let start = Instant::now();
             loop {
                 let mut g = self.0.lock().unwrap();
+                g.catch_up();
                 if !g.drv.busy() || start.elapsed() > Duration::from_millis(100) {
                     g.drv.io.dma(addr, data);
                     return;
@@ -382,7 +419,9 @@ impl Link for AudioLink {
     }
 
     fn busy(&mut self) -> bool {
-        self.0.lock().unwrap().drv.busy()
+        let mut g = self.0.lock().unwrap();
+        g.catch_up();
+        g.drv.busy()
     }
 
     fn bgm_ready(&mut self, path: &str) -> bool {
@@ -390,9 +429,63 @@ impl Link for AudioLink {
     }
 }
 
+/// The output's callback in a test, on an offline `Audio`.
+#[cfg(test)]
+pub mod testing {
+    use super::*;
+
+    /// A callback taking `frames` 48 kHz frames, as the device's does (the
+    /// driver mixing what it lacks, two kept for the interpolation), what it
+    /// took appended to `out`; with `anchor`, the catch-up's anchor set as
+    /// the device's callback sets it (without, the driver keeps the
+    /// callbacks' clock alone, as before the catch-up).
+    pub fn callback(a: &Audio, frames: usize, anchor: bool, out: &mut Vec<i16>) {
+        let mut g = a.shared.lock().unwrap();
+        let need = (frames + 2).saturating_sub(g.pcm.len() / 2);
+        g.pump(need as u64);
+        let n = 2 * frames.min(g.pcm.len() / 2);
+        out.extend(g.pcm.drain(..n));
+        if anchor {
+            g.handed = Some((Instant::now(), g.drv.now - (g.pcm.len() / 2) as u64));
+        }
+    }
+
+    /// `ms` since the last callback, as the catch-up reads the time: its
+    /// anchor moved that far back from now.
+    pub fn since_callback(a: &Audio, ms: f64) {
+        let mut g = a.shared.lock().unwrap();
+        if let Some((_, h)) = g.handed {
+            g.handed = Some((Instant::now() - Duration::from_secs_f64(ms / 1000.0), h));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each call first mixes up to the output's present: what was last
+    /// handed to the device and the time since (at most `CATCH_UP_MAX` past
+    /// it, a stalled device), and nothing with no callback yet (offline).
+    #[test]
+    fn a_call_finds_the_driver_at_the_outputs_present() {
+        let a = Audio::offline(Box::new(snd::NoDisc));
+        let now = |a: &Audio| a.shared.lock().unwrap().drv.now;
+        let mut link = a.link();
+        link.busy();
+        assert_eq!(now(&a), 0, "offline: the driver waits for `render`");
+        let mut out = Vec::new();
+        testing::callback(&a, 1200, true, &mut out);
+        assert_eq!((out.len(), now(&a)), (2400, 1202), "a block taken, two kept");
+        testing::since_callback(&a, 20.0);
+        link.busy();
+        let n = now(&a);
+        assert!((2160..2170).contains(&n), "20 ms on: 960 frames past what was handed ({n})");
+        // control: a device stalled a second does not run the driver a second ahead
+        testing::since_callback(&a, 1000.0);
+        link.busy();
+        assert_eq!(now(&a), 1200 + CATCH_UP_MAX);
+    }
 
     /// The lead is the third largest move between feeds, half of it again and
     /// a margin, within its bounds; with no move yet, the start's. The

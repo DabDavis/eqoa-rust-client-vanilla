@@ -45,14 +45,20 @@ impl Frames {
     /// console's frames get longer when it cannot keep up); after a stall
     /// the next is a frame from now, not a burst to catch up.
     pub fn due(&mut self, now: f64) -> bool {
+        self.due_every(now, FRAME_MS)
+    }
+
+    /// `due` on a clock of another frame, `frame_ms` long (STATION's, two
+    /// to one of the game's: `pregame::host`'s sound device).
+    pub fn due_every(&mut self, now: f64, frame_ms: f64) -> bool {
         match self.due {
             Some(at) if now + EARLY_MS < at => false,
-            Some(at) if now - at <= FRAME_MS => {
-                self.due = Some(at + FRAME_MS);
+            Some(at) if now - at <= frame_ms => {
+                self.due = Some(at + frame_ms);
                 true
             }
             _ => {
-                self.due = Some(now + FRAME_MS);
+                self.due = Some(now + frame_ms);
                 true
             }
         }

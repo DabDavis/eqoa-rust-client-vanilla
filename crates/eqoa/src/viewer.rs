@@ -3085,7 +3085,13 @@ impl ApplicationHandler for App {
                         if let Some(p) = play.as_ref() {
                             s.battle_music(p.self_fighting());
                         }
-                        s.frame(&mut w.scene, &w.eye, hour(clock), now);
+                        // the game's sound on the game's frames, the output
+                        // fed between (`pregame::host`'s `sound_frame`)
+                        if game_frame {
+                            s.frame(&mut w.scene, &w.eye, hour(clock), now);
+                        } else {
+                            s.feed();
+                        }
                     }
                     match play {
                         Some(p) => g.window.set_title(&format!("eqoa — {} — {} — {}", p.player.name, w.describe(), p.describe())),

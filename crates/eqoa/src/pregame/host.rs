@@ -12,7 +12,8 @@
 //! what to type, at ms on the client's clock), `EQOA_SHOTS` writes PNGs of
 //! what was drawn (`3000=eula.png,9000=title.png`, under `EQOA_OFFSCREEN`).
 
-use super::{Entered, Music, Pregame};
+use super::{Entered, Music, Pregame, Stage};
+use crate::frames::{FRAME_MS, Frames};
 use crate::ui::UiAssets;
 use render::ui::{Quad, Ui};
 use render::{Renderer, wgpu};
@@ -66,6 +67,8 @@ pub struct Host {
     /// CLIENT's loading screen's gears (UI.CSF's `Loading_Gears`) on the GPU,
     /// once looked for
     gears: Option<Option<(crate::loading::Gears, Vec<render::GpuModel>)>>,
+    /// the sound device's frames (`sound_frame`)
+    sound_frames: Frames,
 }
 
 impl Host {
@@ -82,7 +85,23 @@ impl Host {
             pointer_held: Vec::new(),
             world: None,
             gears: None,
+            sound_frames: Frames::default(),
         }
+    }
+
+    /// Whether the frame drawn at `now` is one of the sound device's:
+    /// `VISoundDevice::Process` runs once a frame of the module's loop, SETUP's
+    /// and CLIENT's 30 a second and STATION's 59.94 (two to one of the game's,
+    /// as `station` runs them), never once a frame drawn. What it counts in
+    /// frames goes wrong at a window's rate (uncapped, 2,300-2,600 a second
+    /// in STATION): a sound whose voices it has not seen playing three frames
+    /// on is stopped (`snd::device::process`), and the output's callback
+    /// mixes 25-30 ms apart, so every click and key was stopped about a
+    /// millisecond after it was played, before a sample of it was heard; and
+    /// a BGM's fade, 0.05 a frame, took 8 ms.
+    fn sound_frame(&mut self, now: i64) -> bool {
+        let frame_ms = if self.pre.stage == Stage::Station { FRAME_MS / 2.0 } else { FRAME_MS };
+        self.sound_frames.due_every(now as f64, frame_ms)
     }
 
     /// The layer and its surfaces: made the first time, then the files read
@@ -230,6 +249,7 @@ impl Host {
             }
         }
         // the sounds
+        let device_frame = self.sound_frame(now);
         if let Some(s) = sound {
             s.take_support();
             for c in &cues {
@@ -248,7 +268,11 @@ impl Host {
             for m in music {
                 self.music(s, m);
             }
-            s.frame_alone();
+            if device_frame {
+                s.frame_alone();
+            } else {
+                s.feed();
+            }
         }
         // the world entry: its files read, then play
         if self.world.is_none()
@@ -442,5 +466,132 @@ mod tests {
         let k = parse_keys("enter@3000;down@3500;up@4000");
         assert_eq!(due_after(k.clone(), 3550), vec![(4000, 19, true), (4100, 19, false)]);
         assert_eq!(due_after(k.clone(), 0), k);
+    }
+
+    /// The sound device's frames over a second drawn at `hz`, in `stage`.
+    fn sound_frames(stage: Stage, hz: f64) -> usize {
+        let mut host = Host::new(Pregame::new(None), 0);
+        host.pre.stage = stage;
+        (0..hz as usize).filter(|&k| host.sound_frame((k as f64 * 1000.0 / hz) as i64)).count()
+    }
+
+    /// The device steps on the module's frames, whatever the window's rate:
+    /// SETUP's and CLIENT's 30 a second, STATION's 60; the control: drawn at
+    /// 1,000 frames a second, once a frame drawn would be 1,000.
+    #[test]
+    fn the_sound_device_steps_on_the_modules_frames() {
+        for hz in [60.0, 144.0, 1000.0] {
+            assert!((29..=31).contains(&sound_frames(Stage::Setup, hz)), "SETUP at {hz} Hz");
+            assert!((29..=31).contains(&sound_frames(Stage::Client, hz)), "CLIENT at {hz} Hz");
+            assert!((59..=61).contains(&sound_frames(Stage::Station, hz)), "STATION at {hz} Hz");
+        }
+        assert_eq!(sound_frames(Stage::Station, 30.0), 30, "a window at 30: every frame");
+    }
+
+    /// A click played in STATION (UISOUND.TXT's row 11, the move and the
+    /// keys' sound) is heard whole, the window drawing 1,000 frames a second
+    /// and the output taking its blocks 25 ms apart, the first 50 ms after
+    /// the click: the device steps on STATION's frames (`sound_frame`) and
+    /// each of its calls finds the driver at the output's present (`audio`'s
+    /// catch-up). The controls, the client as it was: the device's Process
+    /// once a frame drawn stops the click about a millisecond after it is
+    /// played, before a sample of it is mixed; and on STATION's frames but
+    /// with the driver on the output's clock alone, the 50 ms block leaves
+    /// the click unseen three frames on, and it is cut.
+    #[test]
+    fn a_click_in_station_is_heard_whole() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        if !path.exists() {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        }
+        let name = vi::strtab::StringTable::parse(&iso::Iso::open(&path).unwrap().read("DATA/UISOUND.TXT").unwrap()).unwrap().get(11, 0).to_string();
+        // the 48 kHz frames of the click that were heard
+        let heard = |gated: bool, catch_up: bool| -> usize {
+            let mut iso = iso::Iso::open(&path).unwrap();
+            let audio = crate::audio::Audio::offline(Box::new(crate::audio::IsoDisc(iso::Iso::open(&path).unwrap())));
+            let mut s = crate::sound::Sound::with(&mut |p| iso.read(p).ok(), audio).unwrap();
+            let mut host = Host::new(Pregame::new(None), 0);
+            host.pre.stage = Stage::Station;
+            let mut out = Vec::new();
+            crate::audio::testing::callback(s.audio(), 1200, catch_up, &mut out);
+            out.clear();
+            s.play_named(&name, 1.0);
+            let (mut last, mut next) = (0, 50);
+            for t in 0..600 {
+                if t == next {
+                    crate::audio::testing::callback(s.audio(), (t - last) as usize * 48, catch_up, &mut out);
+                    (last, next) = (t, t + 25);
+                }
+                crate::audio::testing::since_callback(s.audio(), (t - last) as f64);
+                if !gated || host.sound_frame(t) {
+                    s.frame_alone();
+                } else {
+                    s.feed();
+                }
+            }
+            out.chunks(2).filter(|f| f[0] != 0 || f[1] != 0).count()
+        };
+        let whole = heard(true, true);
+        // about 80 ms (the capture's 80-85 ms bursts)
+        assert!((3000..6000).contains(&whole), "the click, heard whole: {whole} frames");
+        let per_frame_drawn = heard(false, false);
+        assert!(per_frame_drawn < whole / 10, "control, once a frame drawn: {per_frame_drawn} of {whole} frames heard");
+        let output_clock = heard(true, false);
+        eprintln!("the click: {whole} frames heard; once a frame drawn {per_frame_drawn}; on the output's clock alone {output_clock}");
+        assert!(output_clock < whole * 3 / 4, "control, the output's clock alone: {output_clock} of {whole} frames heard");
+    }
+
+    /// A BGM's fade out (`stream_bgm`: 0.05 a frame of the device's, 20 of
+    /// them) takes the console's two thirds of a second in CLIENT, the window
+    /// drawing 1,000 frames a second; the control, the device's Process once
+    /// a frame drawn: 20 ms, a cut (character select's music into the world,
+    /// the battle music's end).
+    #[test]
+    fn a_bgm_fades_out_in_the_games_time() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        if !path.exists() {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        }
+        const BGM: &str = "bgm\\battle01.bgm";
+        // ms from the stop to the BGM gone
+        let fade = |gated: bool| -> i64 {
+            let mut iso = iso::Iso::open(&path).unwrap();
+            let audio = crate::audio::Audio::offline(Box::new(crate::audio::IsoDisc(iso::Iso::open(&path).unwrap())));
+            let mut s = crate::sound::Sound::with(&mut |p| iso.read(p).ok(), audio).unwrap();
+            let mut host = Host::new(Pregame::new(None), 0);
+            host.pre.stage = Stage::Client;
+            let mut out = Vec::new();
+            crate::audio::testing::callback(s.audio(), 1200, true, &mut out);
+            s.dev.play_bgm(0, BGM);
+            let (mut last, mut next) = (0, 25);
+            for t in 0..3000 {
+                if t == next {
+                    crate::audio::testing::callback(s.audio(), (t - last) as usize * 48, true, &mut out);
+                    out.clear();
+                    (last, next) = (t, t + 25);
+                }
+                crate::audio::testing::since_callback(s.audio(), (t - last) as f64);
+                if t == 1000 {
+                    assert_eq!(s.dev.bgm_playing(), BGM, "streaming before the stop");
+                    s.dev.stop_bgm(0);
+                }
+                if !gated || host.sound_frame(t) {
+                    s.frame_alone();
+                } else {
+                    s.feed();
+                }
+                if t > 1000 && s.dev.bgm_playing().is_empty() {
+                    return t - 1000;
+                }
+            }
+            panic!("the BGM never stopped");
+        };
+        let gated = fade(true);
+        assert!((620..=700).contains(&gated), "20 of the game's frames: {gated} ms");
+        let per_frame_drawn = fade(false);
+        eprintln!("the BGM's fade out: {gated} ms; once a frame drawn {per_frame_drawn} ms");
+        assert!(per_frame_drawn <= 25, "control, once a frame drawn: {per_frame_drawn} ms");
     }
 }

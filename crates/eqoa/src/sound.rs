@@ -444,17 +444,20 @@ impl Sound {
         self.dev.stop_bgm(1);
     }
 
-    /// The output fed between frames: a page capped below its display's rate
-    /// skips animation frames whole (`web::frame_due`), and feeding at those
-    /// too halves the time between feeds, which the lead is sized by
-    /// (`audio::lead_for`). Only mixing: the game's sound waits for its frame.
-    #[cfg(target_arch = "wasm32")]
+    /// The output fed between the game's frames: on every frame drawn that
+    /// is not one (`frame`, `frame_alone`), and a page's animation frames
+    /// that its cap skips (`web::frame_due`), since feeding there too halves
+    /// the time between feeds, which a page's lead is sized by
+    /// (`audio::lead_for`). Only mixing (natively nothing: the output's
+    /// callback mixes): the game's sound waits for its frame.
     pub fn feed(&mut self) {
         self.audio.feed();
     }
 
     /// One frame of the game's sound, for the camera `eye` at `hour` and the
-    /// scene time `time` (ms).
+    /// scene time `time` (ms): once a frame of the game's, never once a
+    /// frame drawn, as `VIClient::Process` runs `VISoundDevice::Process`
+    /// (`pregame::host`'s `sound_frame` says what it counts in frames).
     pub fn frame(&mut self, world: &mut World<Ee>, eye: &Eye<Ee>, hour: f32, time: i64) {
         self.update_stream_emitters(world, eye);
         self.set_sound_track(world, eye, hour, time);
@@ -465,7 +468,8 @@ impl Sound {
     // ---- before the world (`pregame`) -----------------------------------------
 
     /// One frame of the device with no world (`VISoundDevice::Process`, as
-    /// SETUP's, STATION's and the character screens' loops run it).
+    /// SETUP's, STATION's and the character screens' loops run it: once a
+    /// frame of theirs, `pregame::host`'s `sound_frame`).
     pub fn frame_alone(&mut self) {
         self.dev.process(&mut self.link);
         self.audio.feed();
