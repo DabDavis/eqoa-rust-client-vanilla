@@ -152,6 +152,11 @@ pub struct Create {
     random_name: Option<String>,
     /// what Create sent
     sent: NewChar,
+    /// the last key came from a keyboard (`gKeyboardAttached`), and the
+    /// options' Soft Keyboard is off (`m_x91`): the name's editor then shows
+    /// its compact face, else the soft keyboard (`sPadOnly`)
+    keyboard: bool,
+    compact: bool,
 }
 
 impl Default for Create {
@@ -170,6 +175,8 @@ impl Default for Create {
             keys: Vec::new(),
             random_name: None,
             sent: NewChar::default(),
+            keyboard: true,
+            compact: true,
         };
         c.reset();
         c
@@ -194,6 +201,7 @@ impl Create {
         self.page = Page::Race;
         self.activate = Some(Page::Race);
         self.keys.clear();
+        self.compact = crate::settings::game_options().compact != 0;
     }
 
     pub fn is_open(&self) -> bool {
@@ -283,7 +291,11 @@ impl Create {
         match self.page {
             Page::Race => self.race.draw(cx, &mut self.env, stage, &self.form, &mut sounds),
             Page::Class => self.class.draw(cx, &self.form, self.env.expansion),
-            Page::Name => self.name.draw(cx, &mut sounds),
+            Page::Name => {
+                // VIWndEdit::OnDrawSelf: sPadOnly from the keyboard in use and the option
+                crate::editbox::set_pad_only(self.keyboard && self.compact);
+                self.name.draw(cx, &mut sounds)
+            }
             Page::Misc => self.misc.draw(cx, &mut self.env, stage, &self.form),
             Page::Review => self.review.draw(cx, &mut self.env, stage, &self.form),
         }
@@ -370,6 +382,10 @@ impl Create {
 
     pub fn key(&mut self, key: i32, down: bool) {
         if self.open {
+            if down {
+                // the pad's keys are 128 and up
+                self.keyboard = key < 128;
+            }
             self.keys.push((key, down));
         }
     }
