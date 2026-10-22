@@ -70,6 +70,16 @@ pub fn window_from_frame(size: (u32, u32), p: [f32; 2]) -> [f32; 2] {
     [ox + p[0] * sx, oy + p[1] * sy]
 }
 
+/// How far up and left every quad is drawn, in frame pixels. The GS samples
+/// a frame pixel at its texel's centre (`VIRaster::Blit` puts the corners
+/// half a pixel in), but in a target scaled from 640x448 some pixel centres
+/// fall on a texel's edge, and the edge of a quad on one of them samples the
+/// texel past it: an atlas's black line round a sprite (the title's sail
+/// sailing right showed one at its stern), or the other side of a surface
+/// through the repeat. A hair up and left, each pixel takes the texel its
+/// frame pixel's centre would; at 640x448 nothing moves.
+pub const SAMPLE_BIAS: f32 = 1.0 / 32.0;
+
 /// The whole frame pixels a `size` target shows beyond each side of the
 /// frame: none when it is 4:3 or narrower.
 pub fn side(size: (u32, u32)) -> f32 {
@@ -567,7 +577,7 @@ impl Ui {
         let mut v = Vec::with_capacity(quads.len() * 6);
         for q in quads {
             let p = |i: usize| Vertex {
-                pos: [(ox + q.pos[i][0] * sx) / tw * 2.0 - 1.0, 1.0 - (oy + q.pos[i][1] * sy) / th * 2.0],
+                pos: [(ox + (q.pos[i][0] - SAMPLE_BIAS) * sx) / tw * 2.0 - 1.0, 1.0 - (oy + (q.pos[i][1] - SAMPLE_BIAS) * sy) / th * 2.0],
                 uv: q.uv[i],
                 color: q.color,
             };
