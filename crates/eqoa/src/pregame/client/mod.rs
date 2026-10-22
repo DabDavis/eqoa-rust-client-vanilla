@@ -4,6 +4,8 @@
 //! and the first character (`EQOA_CHAR` another); the lanes porting CLIENT's
 //! windows replace this file.
 
+pub mod create;
+
 use super::{Ctx, Entered, Next, Shared, res::Res};
 use net::session::{Event, Session};
 use vi::ui::wide;
