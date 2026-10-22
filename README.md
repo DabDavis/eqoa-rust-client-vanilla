@@ -7,7 +7,8 @@ phones included (wgpu: Vulkan, Metal, DX12, WebGPU), 64-bit, with the feel of th
 original matched exactly.
 
 **No game data is in this repository**, and none is downloaded: you need your own
-Frontiers disc image (`run/eqoa.iso`, or `$EQOA_ISO`). What the client reads out of
+Frontiers disc image (natively the client asks for it the first time and keeps its
+place, `discs.rs`; in a checkout `run/eqoa.iso`, or `$EQOA_ISO`). What the client reads out of
 the game's code modules, CLIENT (the start menu, `gWorldInfo`, the race cameras) and
 SUPPORT (the HUD's atlas, the UI sounds' volumes), it reads at run time, the way
 eqoa-port's gendata does. The disc holds those modules only DNAS-encrypted, so crate
@@ -49,15 +50,14 @@ It is the `eqoa` program, in an archive with its README and licence, or on its
 own (`eqoa-vanilla-linux-x86_64`, `eqoa-vanilla-windows-x86_64.exe`,
 `eqoa-vanilla-macos`: on Linux and macOS `chmod +x` it after the download). You
 need your own *Frontiers* disc image (SLUS-20744) and an account on a server
-(or make one on Station's login screen, where the server allows it). From a
-terminal:
-
-```bash
-EQOA_ISO=/path/to/eqoa.iso ./eqoa
-```
-
-On Windows, `set EQOA_ISO=C:\path\to\eqoa.iso`, then `eqoa.exe`. The game
-starts as the console does: the loading screens, the legal screen and the
+(or make one on Station's login screen, where the server allows it). Start
+`eqoa` (`eqoa.exe` on Windows; `./eqoa` on Linux and macOS). The first time, it
+asks for the disc image in the desktop's own file dialog, whatever the image is
+called and wherever it is, checks that it is *Frontiers* (by the program its
+SYSTEM.CNF starts, as the page does) and keeps its place for the next time.
+`eqoa /path/to/image.iso`, or the image dropped on `eqoa.exe`, plays and keeps
+that image instead, and `EQOA_ISO=/path/to/image.iso` names one for a run. The
+game starts as the console does: the loading screens, the legal screen and the
 licence, then the title. On the title, **Network Setup** takes the server's
 address (a host name or an IPv4 address, kept for the next time); **Play**
 brings Station's login screen (your account and password; Save Account keeps
@@ -66,10 +66,13 @@ news, the server list, character select (with creation on an empty slot) and
 the world. Quitting from the start menu goes back to the server list, as on a
 PS2. `eqoa boot <server>` starts with that server instead of the kept one, and
 `eqoa play <server> <account>` (password in `EQOA_PASSWORD`, `EQOA_CHAR=<name>`)
-goes straight into the world, for scripts. The game's options, the keys and the
-server are kept in `eqoa-rs` in the config directory (`~/.config/eqoa-rs`,
-`~/Library/Application Support/eqoa-rs`, `%APPDATA%\eqoa-rs`). On Linux it needs
-ALSA (`libasound2`), libudev and a Vulkan or OpenGL driver. The builds are not
+goes straight into the world, for scripts. The game's options, the keys, the
+server and the disc image's place (`disc.opt`, its path alone) are kept in
+`eqoa-rs` in the config directory (`~/.config/eqoa-rs`, `~/Library/Application
+Support/eqoa-rs`, `%APPDATA%\eqoa-rs`). On Linux it needs ALSA (`libasound2`),
+libudev and a Vulkan or OpenGL driver; the file dialog is the desktop's (its XDG
+desktop portal, else zenity), and where there is neither the image is named on
+the command line. The builds are not
 signed: macOS asks before opening one the first time (Control-click, Open), and
 Windows may too.
 

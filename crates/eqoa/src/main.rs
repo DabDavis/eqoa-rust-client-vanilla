@@ -4,6 +4,7 @@
 //! ```text
 //! eqoa [boot [server]]          the game: loading screens, licence, title, Station's login,
 //!                               the server list, character select, the world (`pregame`)
+//! eqoa <image>                  the game on that disc image (one dropped on the program), kept
 //! eqoa play <server> <account>  straight into the world (EQOA_PASSWORD; EQOA_CHAR picks)
 //! eqoa ls   [iso]               every file on the disc
 //! eqoa tree [iso] <file>        a container's record tree
@@ -24,7 +25,9 @@
 //! `yaw pitch zoom` for a model, `x y z yaw pitch` for a zone, and for a walk
 //! a script, `ms [fwd strafe orbit pitch]`, held for that much game time.
 //!
-//! `iso` defaults to `$EQOA_ISO`, then `run/eqoa.iso`.
+//! `iso` defaults to `$EQOA_ISO`, then `run/eqoa.iso`. The game (`eqoa`,
+//! `boot`, `play`) also takes the image the player picked last, and with none
+//! at hand `eqoa` asks for it in the desktop's file dialog (`discs`).
 
 // The browser build runs none of the commands (the page calls `web`).
 #![cfg_attr(target_arch = "wasm32", allow(dead_code, unused_imports))]
@@ -42,6 +45,7 @@ mod controls;
 mod craft;
 mod craftwnd;
 mod death;
+mod discs;
 mod editbox;
 mod frames;
 mod group;
@@ -146,9 +150,10 @@ pub fn say(s: &str) {
     eprintln!("{s}");
 }
 
-/// The disc image's path: the argument, `$EQOA_ISO`, or `run/eqoa.iso`.
+/// The disc image's path: the argument, the one the game took
+/// (`discs::taken`), `$EQOA_ISO`, or `run/eqoa.iso`.
 pub fn disc_path(arg: Option<&String>) -> String {
-    arg.cloned().or_else(|| std::env::var("EQOA_ISO").ok()).unwrap_or_else(|| "run/eqoa.iso".into())
+    arg.cloned().or_else(discs::taken).or_else(|| std::env::var("EQOA_ISO").ok()).unwrap_or_else(|| discs::CHECKOUT.into())
 }
 
 pub fn disc(arg: Option<&String>) -> Result<iso::Iso> {
@@ -284,18 +289,8 @@ fn volumes(file: &str) -> Result<()> {
 fn run(args: &[String]) -> Result<()> {
     match args.first().map(String::as_str) {
         // `eqoa` alone, or `eqoa boot [server]`: the game from the disc's
-        // boot, the loading screens, the licence and the title, Station's
-        // login, the server list and character select, into the world
-        // (`pregame`). The server is the one the title's Network Setup
-        // keeps, or the one named here.
-        None | Some("boot") => {
-            settings::keep_in_user_dir();
-            disc(None)?;
-            // CLIENT and SUPPORT (the UI's atlas, the start menu), off the
-            // disc on threads of their own while the boot's pictures show
-            modules::load(std::path::Path::new(&disc_path(None)));
-            viewer::run_boot(args.get(1).cloned())?;
-        }
+        // boot (`boot`)
+        None | Some("boot") => boot(None, args.get(1).cloned())?,
         Some("ls") => {
             for e in disc(args.get(1))?.entries() {
                 println!("{:>10}  {:>7}  {}", e.size, e.lba, e.path);
@@ -409,6 +404,8 @@ fn run(args: &[String]) -> Result<()> {
             if args[0] == "play" {
                 settings::keep_in_user_dir();
             }
+            // the disc: `$EQOA_ISO`, the one picked last, `run/eqoa.iso`
+            discs::boot_disc(None).ok_or("no disc image: start eqoa once to choose it, or set EQOA_ISO")?;
             // CLIENT and SUPPORT (the start menu, the HUD): the player's
             // images, else off the disc, on threads of their own meanwhile.
             modules::load(std::path::Path::new(&disc_path(None)));
@@ -431,8 +428,29 @@ fn run(args: &[String]) -> Result<()> {
                 viewer::run_with(lib, src, play)?;
             }
         }
-        _ => return Err("usage: eqoa ls|tree|zones|view|shot|login (see main.rs)".into()),
+        // `eqoa <image>`: the game on that disc image (a file dropped on the
+        // program), checked as a pick is and kept for the next time
+        Some(image) if std::path::Path::new(image).is_file() => boot(Some(image), None)?,
+        _ => return Err("usage: eqoa [boot [server]] | eqoa <image> | ls|tree|zones|view|shot|login (see main.rs)".into()),
     }
+    Ok(())
+}
+
+/// The game from the disc's boot, the loading screens, the licence and the
+/// title, Station's login, the server list and character select, into the
+/// world (`pregame`). The server is the one the title's Network Setup keeps,
+/// or `server`. The disc is the image `image` names, else the one at hand
+/// (`discs::boot_disc`), else the one the player picks as the game starts
+/// (`discs::settle`, in the window's event loop).
+fn boot(image: Option<&str>, server: Option<String>) -> Result<()> {
+    settings::keep_in_user_dir();
+    if let Some(iso) = discs::boot_disc(image) {
+        disc(None)?;
+        // CLIENT and SUPPORT (the UI's atlas, the start menu), off the
+        // disc on threads of their own while the boot's pictures show
+        modules::load(std::path::Path::new(&iso));
+    }
+    viewer::run_boot(server)?;
     Ok(())
 }
 

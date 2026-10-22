@@ -20,6 +20,12 @@ keep it current.
 
 - Toolchain: rustup in `~/.cargo`. `/tmp` is a small partition that old session scratchpads fill: building with `TMPDIR` under `~/.cache` avoids it.
 - `run/` is untracked: `run/eqoa.iso` links the Frontiers disc. Never commit game data.
+- A player's disc (`discs.rs`): the game (`eqoa`, `boot`, `eqoa <image>`) takes the named image, `EQOA_ISO`,
+  `disc.opt` (the last pick, in the config directory), `run/eqoa.iso`; with none it asks in rfd's native dialog
+  inside `resumed`, before the window (not before the event loop: a Mac has no running application there), judges
+  the pick by SYSTEM.CNF as the page does, and keeps it. `EQOA_OFFSCREEN` never shows a dialog. Test the Linux
+  dialogs on :99 with a private bus (`dbus-run-session`, xdg-desktop-portal-gtk) or none (zenity): the session
+  bus's portal draws on the user's own screen.
 - Game-logic floats go through `ee::*`, never host `f32` operators; every compare too.
 - Port from the decomp (`../decomp/src`), not from the Go client: the Go client's
   differences from the original are listed in `../claude-notes/go-client-vs-decomp-audit-20261015.md`.

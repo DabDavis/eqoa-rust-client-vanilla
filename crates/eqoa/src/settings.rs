@@ -9,12 +9,14 @@
 //! Options window's Extended page (Level of Detail, Brightness, Frame Rate,
 //! Camera Distance), which the game does not have; and in `keys.opt` the
 //! Controls page's keys and buttons (`binds`), per device as the card keeps
-//! every option, not per character.
+//! every option, not per character. `server.opt` holds the title's Network
+//! Setup's server, and natively `disc.opt` the disc image the player picked
+//! (`discs`).
 //!
 //! Where: natively `$EQOA_CONFIG`, else `eqoa-rs` in the platform's config
 //! directory (`$XDG_CONFIG_HOME` or `~/.config`, `~/Library/Application
-//! Support` on a Mac, `%APPDATA%` on Windows), for `eqoa play`
-//! (`keep_in_user_dir`); the other commands (`shot`, `playshot`) keep and read
+//! Support` on a Mac, `%APPDATA%` on Windows), for the game (`eqoa`, `eqoa
+//! boot`, `eqoa play`: `keep_in_user_dir`); the other commands (`shot`, `playshot`) keep and read
 //! nothing unless `$EQOA_CONFIG` names a directory, so a player's settings
 //! never change a test's picture. In a page, the origin's localStorage
 //! (`eqoa.game.opt`, `eqoa.client.opt` and `eqoa.keys.opt`, as hex), where every access may
@@ -212,6 +214,21 @@ pub fn server() -> Option<String> {
 /// Keeps `s` as the server (blank: none).
 pub fn set_server(s: &str) -> Result<(), String> {
     store::write(SERVER_FILE, s.trim().as_bytes())
+}
+
+// ---- the client's own: the disc image, as the player picked it (natively) --------
+
+const DISC_FILE: &str = "disc.opt";
+
+/// The disc image the player picked last (`disc.opt`: its path alone, on a
+/// line of its own), if one was (`discs`).
+pub fn disc() -> Option<String> {
+    store::read(DISC_FILE).map(|b| String::from_utf8_lossy(&b).trim_end_matches(['\r', '\n']).to_string()).filter(|s| !s.is_empty())
+}
+
+/// Keeps `path` as the disc image.
+pub fn set_disc(path: &str) -> Result<(), String> {
+    store::write(DISC_FILE, format!("{path}\n").as_bytes())
 }
 
 // ---- the client's own: the Controls page ----------------------------------------
@@ -887,6 +904,26 @@ mod tests {
         testing::reset(true);
         assert!(set_server("192.0.2.1").is_err(), "the control: a refusing store");
         assert_eq!(server(), None);
+        testing::reset(false);
+    }
+
+    /// The picked disc image: its path kept whole (spaces and all), read
+    /// back the same after an editor's line end, none when empty, and
+    /// nothing kept by a store that refuses.
+    #[test]
+    fn the_disc_image_is_kept_whole() {
+        testing::reset(false);
+        assert_eq!(disc(), None);
+        set_disc(r"C:\Games\EQOA Frontiers (USA).iso").unwrap();
+        assert_eq!(testing::kept(DISC_FILE).unwrap(), b"C:\\Games\\EQOA Frontiers (USA).iso\n");
+        assert_eq!(disc().as_deref(), Some(r"C:\Games\EQOA Frontiers (USA).iso"));
+        store::write(DISC_FILE, b" /home/player/my disc.iso \r\n").unwrap();
+        assert_eq!(disc().as_deref(), Some(" /home/player/my disc.iso "), "only the line end goes");
+        store::write(DISC_FILE, b"\n").unwrap();
+        assert_eq!(disc(), None, "empty is none");
+        testing::reset(true);
+        assert!(set_disc("/x.iso").is_err(), "the control: a refusing store");
+        assert_eq!(disc(), None);
         testing::reset(false);
     }
 }

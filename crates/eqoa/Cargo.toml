@@ -25,6 +25,10 @@ cpal = "0.16"
 # Gamepad API itself (`padmap`, `web::pad`).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 gilrs = "0.11.2"
+# The disc image's picker (`discs::settle`): the desktop's own file dialog,
+# Windows' common dialog, a Mac's open panel, on Linux the XDG desktop portal
+# (libdbus, opened at run time) or else zenity. Nothing more is linked.
+rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
 
 # The browser build (`web/build.sh`): the page hands over the player's disc
 # image and the login; sockets go through a WebSocket relay; wgpu falls back

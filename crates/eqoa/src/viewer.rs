@@ -1338,6 +1338,9 @@ struct App {
     /// `EQOA_SHOTS` (`ms=file.png,...`): what was drawn then, as PNGs, under
     /// `EQOA_OFFSCREEN` (the pregame's frames and play's alike).
     shots: Vec<(i64, String)>,
+    /// Why the loop ended before a window opened (natively: no disc image
+    /// was picked), for `run_app` to return.
+    failed: Option<String>,
 }
 
 pub fn run(lib: Library, source: Source) -> Result<(), Error> {
@@ -1415,6 +1418,7 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         host,
         booted: None,
         shots: crate::pregame::host::shot_script(),
+        failed: None,
     };
     #[cfg(target_arch = "wasm32")]
     {
@@ -1422,7 +1426,12 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         event_loop.spawn_app(app);
     }
     #[cfg(not(target_arch = "wasm32"))]
-    event_loop.run_app(&mut app)?;
+    {
+        event_loop.run_app(&mut app)?;
+        if let Some(e) = app.failed.take() {
+            return Err(e.into());
+        }
+    }
     Ok(())
 }
 
@@ -1900,6 +1909,27 @@ impl ApplicationHandler for App {
     fn resumed(&mut self, el: &ActiveEventLoop) {
         if self.gfx.is_some() {
             return;
+        }
+        // natively, the game from its boot with no disc image at hand: the
+        // player picks it before the window opens (`discs::settle`), and its
+        // CLIENT and SUPPORT start coming off it
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.host.is_some() && crate::discs::unsettled() {
+            match crate::discs::settle() {
+                Ok(iso) => {
+                    crate::modules::load(std::path::Path::new(&iso));
+                    // the pregame asked for its first files before there was
+                    // a disc to read them off: it begins again, on this one
+                    if let Some(h) = self.host.take() {
+                        self.host = Some(crate::pregame::host::Host::new(crate::pregame::Pregame::new(h.pre.shared.server), 0));
+                    }
+                }
+                Err(e) => {
+                    self.failed = Some(e);
+                    el.exit();
+                    return;
+                }
+            }
         }
         if let Some(p) = self.pending.take() {
             let window = Arc::new(el.create_window(p.attrs).expect("window"));

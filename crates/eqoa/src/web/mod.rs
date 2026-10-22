@@ -158,13 +158,13 @@ pub fn crash_test() {
     panic!("crash_test: the client stopped on purpose");
 }
 
-/// What the disc image `file` is (`disc::describe`): `[ok, line]`, ok when
+/// What the disc image `file` is (`discs::describe`): `[ok, line]`, ok when
 /// it is the Frontiers disc the client is made for. The page's login card
 /// shows the line when the image is picked.
 #[wasm_bindgen]
 pub async fn disc_id(file: web_sys::File) -> Result<JsValue, JsValue> {
     let disc = WebDisc::open(file).await.map_err(|e| JsValue::from_str(&e))?;
-    let (ok, line) = disc::describe(disc.boot().await.as_deref());
+    let (ok, line) = crate::discs::describe(disc.boot().await.as_deref());
     Ok(js_sys::Array::of2(&ok.into(), &line.into()).into())
 }
 
@@ -463,7 +463,7 @@ pub async fn boot(file: web_sys::File, opts: JsValue) -> Result<(), JsValue> {
         let disc = WebDisc::open(file).await?;
         crate::stream::set_source_factory(disc.zone_sources());
         crate::stream::set_world_opener(disc.world_opener());
-        let (frontiers, which) = disc::describe(disc.boot().await.as_deref());
+        let (frontiers, which) = crate::discs::describe(disc.boot().await.as_deref());
         if !frontiers {
             problem("disc", &which);
         }

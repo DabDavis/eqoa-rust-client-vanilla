@@ -5,14 +5,16 @@ Source and documentation: https://github.com/DabDavis/eqoa-rust-client-vanilla
 You need your own EverQuest Online Adventures: Frontiers disc image (SLUS-20744)
 and an account on a server. Nothing of the game is in this download.
 
-Run it from a terminal:
+Start eqoa (eqoa.exe on Windows; ./eqoa on Linux and macOS). The first time,
+it asks for your disc image in a file dialog: it may have any name and be in
+any folder. It checks that the image is Frontiers and keeps its place for the
+next time, so after that eqoa starts straight away (if the image is moved or
+deleted, it asks again).
 
-  Linux and macOS
-    EQOA_ISO=/path/to/eqoa.iso ./eqoa
-
-  Windows (Command Prompt)
-    set EQOA_ISO=C:\path\to\eqoa.iso
-    eqoa.exe
+To change the image, start eqoa with the new one's path,
+  eqoa /path/to/image.iso
+or on Windows drop the image on eqoa.exe: that one is kept from then on.
+EQOA_ISO=/path/to/image.iso names one for a single run.
 
 The game starts as the console does: the loading screens, the legal screen, the
 licence, the title. On the title, Network Setup takes the address of the server
@@ -28,15 +30,17 @@ EQOA_CHAR=<name> for a character other than the first) goes straight into the
 world. A server on other ports: EQOA_AUTH_PORT and EQOA_GAME_PORT (9735 and
 10070 by default), EQOA_NEWS_PORT (7000).
 
-The game's options, your keys and the server are kept in eqoa-rs in the config
-directory:
+The game's options, your keys, the server and the disc image's place (disc.opt,
+a text file holding its path) are kept in eqoa-rs in the config directory:
 ~/.config/eqoa-rs (Linux), ~/Library/Application Support/eqoa-rs (macOS),
 %APPDATA%\eqoa-rs (Windows).
 
 In play: Escape the start menu, F1 the keys and buttons (the Options window's
 Controls page), M the map, F11 full screen. A controller works as the PS2's did.
 
-Linux: needs ALSA (libasound2), libudev and a Vulkan or OpenGL driver.
+Linux: needs ALSA (libasound2), libudev and a Vulkan or OpenGL driver. The
+file dialog is your desktop's (its XDG desktop portal, or zenity); with neither,
+start it with the image's path as above.
 macOS: the program is not signed. The first time, macOS refuses it; allow it in
 System Settings, Privacy & Security ("Open Anyway"), or run
   xattr -d com.apple.quarantine eqoa
