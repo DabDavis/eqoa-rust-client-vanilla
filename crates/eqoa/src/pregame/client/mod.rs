@@ -26,8 +26,6 @@ use super::{Ctx, Entered, Login, Music, Next, Shared, res::Res};
 use crate::camstyle::RaceCamera;
 use crate::pregame::stage::Stage;
 use net::session::{Event, Session};
-use std::cell::RefCell;
-use std::rc::Rc;
 use vi::ui::{Vui, wide};
 
 /// What `VIClient::LoadWorld` ("PreGame Load") reads after the base files.
@@ -206,46 +204,25 @@ impl<'a> UiCx<'a> {
     }
 }
 
-/// A session being made: natively at once; in a page through its relay
-/// (`set_connector`), a frame or more later. An `Err` is `Disconnect`'s
-/// reason (2: the name did not resolve, 5: no socket).
-pub type SessionSlot = Rc<RefCell<Option<Result<Session, i32>>>>;
-
-/// How a page makes the session (the server, the login).
-pub type Connector = Box<dyn Fn(&str, &Login) -> SessionSlot>;
-
-thread_local! {
-    static CONNECTOR: RefCell<Option<Connector>> = const { RefCell::new(None) };
-}
-
-/// Makes `c` the way CLIENT's connection is made (a page's relay).
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-pub fn set_connector(c: Connector) {
-    CONNECTOR.with(|s| *s.borrow_mut() = Some(c));
-}
-
 /// `VIClient::Connect(host, port)`'s socket and first sends: the session to
-/// the server's login endpoint (`EQOA_GAME_PORT` another port).
-fn connect(server: &str, login: &Login) -> SessionSlot {
-    if let Some(s) = CONNECTOR.with(|c| c.borrow().as_ref().map(|f| f(server, login))) {
-        return s;
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    let r = {
-        let addr = std::net::ToSocketAddrs::to_socket_addrs(&(server, super::port("EQOA_GAME_PORT", super::GAME_PORT))).ok().and_then(|mut a| a.find(|a| a.is_ipv4()));
-        match addr {
-            None => Err(2),
-            Some(a) => Session::connect(a, &login.user, login.token).map_err(|_| 5),
-        }
-    };
-    #[cfg(target_arch = "wasm32")]
-    let r = Err(5);
-    Rc::new(RefCell::new(Some(r)))
+/// the server's login endpoint (`EQOA_GAME_PORT` another port), opened
+/// through `link` (natively the name resolved on a thread, in a page the
+/// relay's).
+fn connect(server: &str, login: &Login) -> crate::pregame::link::Opening {
+    crate::pregame::link::session(server, super::port("EQOA_GAME_PORT", super::GAME_PORT), &login.user, login.token)
+}
+
+/// `Connect`'s failures as `Disconnect`'s reasons: the name not resolved
+/// is 2 ("Server not found. (DNS error)"), anything else 5 ("Network
+/// Error.").
+fn open_failure(e: &str) -> i32 {
+    let e = e.to_ascii_lowercase();
+    if e.contains("no address") || e.contains("lookup") || e.contains("resolve") || e.contains("name or service") { 2 } else { 5 }
 }
 
 pub struct Client {
     session: Option<Session>,
-    making: Option<SessionSlot>,
+    making: Option<crate::pregame::link::Opening>,
     /// `m_p4F0E8`: 20 connecting, 21 connected and listed, else the last
     /// disconnect's reason
     state: i32,
@@ -584,13 +561,13 @@ impl Client {
     /// `PumpMessages`: the session made (a page's comes later), then its
     /// events as `ProcessMessage` and `ProcessMessageFC` take them.
     fn pump(&mut self, music: &mut Vec<Music>, cx: &Ctx) {
-        if let Some(slot) = self.making.as_ref() {
-            let r = slot.borrow_mut().take();
-            if let Some(r) = r {
-                self.making = None;
-                match r {
-                    Ok(s) => self.session = Some(s),
-                    Err(reason) => self.disconnect(reason, false, music),
+        if let Some(r) = self.making.as_mut().and_then(|o| o.poll()) {
+            self.making = None;
+            match r {
+                Ok(s) => self.session = Some(s),
+                Err(e) => {
+                    crate::say(&format!("the server list's connection: {e}"));
+                    self.disconnect(open_failure(&e), false, music);
                 }
             }
         }
@@ -876,6 +853,41 @@ mod tests {
         // an invalid shard (no endpoint) is not connectable
         let s = ShardEntry::of(&net::session::Shard { name: "Gone".into(), recommended: 1, endpoint: u64::MAX, language: 0 });
         assert!(!s.valid);
+    }
+
+    /// `Connect`'s two failures: the name, 2; the socket, 5.
+    #[test]
+    fn a_failed_opening_is_dns_or_network() {
+        assert_eq!(open_failure("eqoa.invalid: no address"), 2);
+        assert_eq!(open_failure("eqoa.invalid: failed to lookup address information: Name or service not known"), 2);
+        assert_eq!(open_failure("Address already in use (os error 98)"), 5, "the control");
+        assert_eq!(Client::disconnect_kind(2), 2);
+        assert_eq!(Client::disconnect_kind(5), 4);
+    }
+
+    /// `back_from_world`: a logout goes straight to the list, quietly; a
+    /// lost connection puts up the notice first, whose Ok goes by the kind.
+    #[test]
+    fn back_from_the_world() {
+        let (mut res, mut shared) = (Res::new(), Shared::default());
+        let mut c = Client::new();
+        c.back_from_world(&mut res, &mut shared, None);
+        assert_eq!((c.top, c.active, c.state), (Wnd::Server, Wnd::Server, 9));
+        let mut d = Client::new();
+        d.back_from_world(&mut res, &mut shared, Some(10));
+        assert_eq!((d.top, d.active, d.state), (Wnd::Notice, Wnd::Notice, 10));
+        d.key(134, true);
+        assert_eq!(d.reqs, vec![Req::Done(2)], "a lost connection: the list");
+        let mut e = Client::new();
+        e.back_from_world(&mut res, &mut shared, Some(3));
+        e.key(134, true);
+        e.run(std::mem::take(&mut e.reqs), &mut Vec::new());
+        assert!(matches!(e.next, Some(Next::Station)), "a refused login: STATION");
+        // the control: a key other than Ok leaves the notice up
+        let mut f = Client::new();
+        f.back_from_world(&mut res, &mut shared, Some(10));
+        f.key(132, true);
+        assert!(f.reqs.is_empty() && f.top == Wnd::Notice);
     }
 
     /// `SelectCharacter`: an empty slot opens creation; a character sends
