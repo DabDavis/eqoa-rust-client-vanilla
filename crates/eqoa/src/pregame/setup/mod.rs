@@ -1,54 +1,602 @@
-//! SETUP (`setup_main`, `VISetup`): the legal screen, the licence, the
-//! title. STAND-IN: the title's painting and Play; the lane porting SETUP
-//! replaces this file.
+//! SETUP (`setup_main`, `VISetup`, SETUP `visetup.cpp`): the legal screen,
+//! the licence and the title, as `VISetup::Process` runs them a frame at a
+//! time (30 a second), and the windows the title opens.
+//!
+//! `Process`'s order: the window manager hands the keys to the window with
+//! the focus and draws the root window and its children (`VIWnd::OnDraw`:
+//! itself, then each visible child), then the fade (`VIFader::Update`) over
+//! everything. A window gives its focus back (`SetFocus(0)`) when it is
+//! done, and `Process` moves on from there by `m_state`: the legal screen
+//! (state 0) to the licence (state 2), the licence to the intro movie and
+//! the title (state 3), and the title's Play to `RunPatcher`.
+//!
+//! Left out, each where it would be: the controller screen (no analog pad:
+//! the keyboard is a computer's), the language screen (feature flag 0x400,
+//! which SLUS does not set: it sets 0x300), the intro movie (`movies\eqoa.pss`:
+//! the user's "later"), the memory card's checks (MCERR), and Play's
+//! network steps: the card's network configurations (`VIWndConnect`), DNAS
+//! and the patcher (`RunPatcher`), of which the closing fade is kept. The
+//! title's Network Setup is the client's own page (`netsetup`), and its
+//! Options window is the client's `options::WndOptions`, which is the same
+//! code as SETUP's (CLIENT's `viwndoptions.cpp` differs only where it
+//! closes: `ApplyOptions` there, the focus back to the title here).
+//!
+//! Back from STATION (its Disconnect) SLUS starts over, so `start` begins
+//! again at the legal screen.
 
-use super::{Ctx, Next, Shared, res::Res};
+pub mod eula;
+pub mod fader;
+pub mod legal;
+pub mod netsetup;
+pub mod splash;
+pub mod splashfx;
+
+use super::{Ctx, Music, Next, Shared, res::Res};
+use crate::options::{GameOptions, OptionsUp, WndOptions};
+use crate::textlist::{Message, PROMPT_OK};
 use vi::ui::wide;
 
-/// What `VISetup::Init` reads after the base files.
+/// What `VISetup::Init` reads after the base files (UI.CSF, ARIALUI.CSF):
+/// SETUP.CSF (the painting, the splash effects' atlases, the title's music),
+/// ADDART.CSF, and the licence (`VIWndEula::Init`).
 pub const FILES: &[&str] = &["DATA2/SETUP.CSF", "DATA2/ADDART.CSF", "DATA/EULA.TXT"];
 
-#[derive(Default)]
+/// The client's words for Play with no server (the game's for a missing
+/// network configuration are 783 and 984).
+const NO_SERVER: &str = "No server is set. Select Network Setup to enter the address of the server to play on.";
+
+/// The window manager's root.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Root {
+    Legal,
+    Eula,
+    Title,
+}
+
+/// The window with the focus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Focus {
+    Legal,
+    Eula,
+    Title,
+    Options,
+    NetSetup,
+    /// the title's message box (Play with no server)
+    Message,
+}
+
 pub struct Setup {
-    started: bool,
-    go: bool,
+    /// `m_state`: 0 the intro screens, 2 the movie, 3 the title (4: done,
+    /// `setup_main` returned)
+    pub state: i32,
+    pub root: Root,
+    /// `mFocus`; None: given back, which `Process` moves on from
+    pub focus: Option<Focus>,
+    legal: legal::Legal,
+    eula: eula::Eula,
+    splash: splash::Splash,
+    fx: splashfx::SplashFx,
+    fader: fader::Fader,
+    /// `VIGetGameOptions()`, as `Init(1)` loads it
+    pub options: GameOptions,
+    options_wnd: WndOptions,
+    options_visible: bool,
+    message: Message,
+    net: netsetup::NetSetup,
+    net_visible: bool,
+    /// the keys since the last frame, for the window with the focus
+    keys: Vec<(i32, bool)>,
+    /// the Controls page's capture, for the next frame
+    captures: Vec<Capture>,
+    /// what the sound device is asked besides cues and music: the classes'
+    /// volumes and the output mode (`take_sound`)
+    sound: Vec<OptionsUp>,
+    /// `Init`'s half that needs the clock has run
+    began: bool,
+    /// the title's music is playing (`m_ambient`)
+    ambient: bool,
+    /// Play: `RunPatcher`'s closing fade under way
+    leaving: bool,
+    /// the last key came from a keyboard (`gKeyboardAttached`, for the
+    /// edit box's face)
+    keyboard: bool,
+    /// the edit box's face was set by this window
+    face_set: bool,
+    now: i64,
+}
+
+enum Capture {
+    Key(String),
+    Button(u8),
+}
+
+impl Default for Setup {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Setup {
     pub fn new() -> Self {
-        Self::default()
+        Setup {
+            state: 0,
+            root: Root::Legal,
+            focus: Some(Focus::Legal),
+            legal: Default::default(),
+            eula: Default::default(),
+            splash: Default::default(),
+            fx: splashfx::SplashFx::new(net::session::EXPANSION_FLAGS),
+            fader: Default::default(),
+            options: GameOptions::default(),
+            options_wnd: Default::default(),
+            options_visible: false,
+            message: Default::default(),
+            net: Default::default(),
+            net_visible: false,
+            keys: Vec::new(),
+            captures: Vec::new(),
+            sound: Vec::new(),
+            began: false,
+            ambient: false,
+            leaving: false,
+            keyboard: true,
+            face_set: false,
+            now: 0,
+        }
     }
 
-    pub fn start(&mut self, _res: &mut Res, _shared: &mut Shared) {
-        self.started = true;
+    /// `VISetup::Init(1)`: the options loaded, the windows made, the legal
+    /// screen the root with the focus. Its clock's half (the fade, the
+    /// focus's notice) is the first frame's.
+    pub fn start(&mut self, res: &mut Res, _shared: &mut Shared) {
+        self.options = crate::settings::game_options();
+        self.eula.init(res.raw("DATA/EULA.TXT").unwrap_or_default());
+        self.splash.init();
+        self.state = 0;
+        self.root = Root::Legal;
+        self.focus = Some(Focus::Legal);
+        self.options_visible = false;
+        self.message.visible = false;
+        self.net_visible = false;
+        self.keys.clear();
+        self.began = false;
+        self.leaving = false;
     }
 
-    pub fn frame(&mut self, cx: &mut Ctx) -> Next {
-        let (vui, r) = (cx.vui, &mut *cx.r);
-        vui.blit_id(r, vi::hash::hash_resource_id("splash00.tga"), [0, 0], 0, 1.0, 0);
-        vui.blit_id(r, vi::hash::hash_resource_id("splash10.tga"), [320, 0], 0, 1.0, 0);
-        vui.draw_centered_string_ex(r, &wide(&cx.res.word(790)), 320, 360, [1.0, 1.0, 0.0, 1.0], 0, true);
-        if std::mem::take(&mut self.go) {
-            if cx.shared.server.is_none() {
-                crate::say("no server: set one under Network Setup");
-                return Next::Stay;
+    /// A key the game reads, for the window with the focus at the next frame.
+    pub fn key(&mut self, key: i32, down: bool) {
+        self.keys.push((key, down));
+    }
+
+    /// A pointer at frame point `p`: the keys the window with the focus asks for.
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        match self.focus {
+            Some(Focus::Legal) => self.legal.point(p),
+            Some(Focus::Eula) => self.eula.point(p),
+            Some(Focus::Title) => self.splash.point(p, self.now),
+            Some(Focus::Options) => self.options_wnd.point(p),
+            Some(Focus::NetSetup) => self.net.point(p),
+            Some(Focus::Message) => self.message.point(p).into_iter().collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// An edit box has the keyboard (Network Setup's).
+    pub fn typing(&self) -> bool {
+        self.net_visible && self.net.editing
+    }
+
+    /// What the Options window's Controls page waits for, if anything: the
+    /// window then wants the next key's name (`capture_key`) or button's
+    /// bit (`capture_button`), as play's does.
+    pub fn capturing(&self) -> Option<crate::bindpage::Column> {
+        if self.focus == Some(Focus::Options) { self.options_wnd.capturing() } else { None }
+    }
+
+    pub fn capture_key(&mut self, name: &str) {
+        self.captures.push(Capture::Key(name.to_string()));
+    }
+
+    pub fn capture_button(&mut self, phys: u8) {
+        self.captures.push(Capture::Button(phys));
+    }
+
+    /// The sound device's requests besides cues and music, as play's
+    /// Options window makes them: the classes' volumes (the title's at its
+    /// start, and the Sound page's), the output mode.
+    pub fn take_sound(&mut self) -> Vec<OptionsUp> {
+        std::mem::take(&mut self.sound)
+    }
+
+    /// `Init`'s clocked half: the fade from black over half a second, the
+    /// splash effects' reset, the focus's notice to the legal screen.
+    fn begin(&mut self, now: i64) {
+        self.fader.init(1.0, now);
+        self.fader.begin(0.0, 0.5);
+        self.fx.reset(now);
+        self.legal.focus(now);
+        self.began = true;
+    }
+
+    /// The key for the window with the focus (`VIWindowManager::Update`).
+    fn dispatch(&mut self, cx: &mut Ctx, k: i32, down: bool) {
+        if down {
+            self.keyboard = k < 128;
+        }
+        let now = cx.now;
+        let mut cues = Vec::new();
+        match self.focus {
+            Some(Focus::Legal) if down => self.legal.key(k, now),
+            Some(Focus::Eula) => {
+                if !down {
+                    self.eula.key_up();
+                } else if self.eula.key(cx.vui, cx.r, k, now, &mut cues) {
+                    self.focus = None;
+                }
             }
-            return Next::Station;
+            Some(Focus::Title) if down => match self.splash.key(k, now, &mut cues) {
+                Some(splash::Pick::Play) => self.connect(cx),
+                Some(splash::Pick::NetworkSetup) => {
+                    self.net.open(cx.vui, cx.r, cx.shared.server.as_deref());
+                    self.net_visible = true;
+                    self.focus = Some(Focus::NetSetup);
+                }
+                Some(splash::Pick::Options) => {
+                    self.options_wnd.open(cx.vui, cx.r, &self.options);
+                    self.options_visible = true;
+                    self.focus = Some(Focus::Options);
+                }
+                None => {}
+            },
+            Some(Focus::Options) => {
+                if !down {
+                    self.options_wnd.release(k);
+                } else {
+                    let mut ups = Vec::new();
+                    self.options_wnd.key(cx.vui, cx.r, &mut self.options, k, now, &mut cues, &mut ups);
+                    self.options_up(cx, ups);
+                }
+            }
+            Some(Focus::NetSetup) => {
+                if !down {
+                    self.net.key_up(k);
+                } else {
+                    match self.net.key(cx.vui, cx.r, k, now, &mut cues) {
+                        netsetup::NetUp::Close => {
+                            self.net_visible = false;
+                            self.focus = Some(Focus::Title);
+                        }
+                        netsetup::NetUp::Kept(addr) => {
+                            if let Err(e) = crate::settings::set_server(addr.as_deref().unwrap_or("")) {
+                                crate::say(&format!("the server's address was not kept: {e}"));
+                            }
+                            cx.shared.server = addr;
+                        }
+                        netsetup::NetUp::None => {}
+                    }
+                }
+            }
+            // 307: the box closed, the focus back to the title
+            Some(Focus::Message) if down && self.message.key(k, now, &mut cues).is_some() => {
+                self.focus = Some(Focus::Title);
+            }
+            _ => {}
+        }
+        cx.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
+    }
+
+    /// The Options window's requests: the sound's, its battle music's
+    /// preview (BGM slot 0, as `VIBattleMusic` plays it), and its close
+    /// (`SetVisible(false)`, the focus back to the title).
+    fn options_up(&mut self, cx: &mut Ctx, ups: Vec<OptionsUp>) {
+        for up in ups {
+            match up {
+                OptionsUp::Volume(..) | OptionsUp::Output(_) => self.sound.push(up),
+                OptionsUp::Preview(t) if t > 0 => cx.music.push(Music::Bgm { slot: 0, path: format!("bgm\\battle{t:02}.bgm") }),
+                OptionsUp::Preview(_) | OptionsUp::PreviewEnd => cx.music.push(Music::StopBgm { slot: 0 }),
+                OptionsUp::Apply => {
+                    self.options_visible = false;
+                    self.focus = Some(Focus::Title);
+                    cx.music.push(Music::StopBgm { slot: 0 });
+                }
+            }
+        }
+    }
+
+    /// `VIWndSplash::Connect`, the PS2's steps left out (the card, its
+    /// network configurations): with no server the message box says to set
+    /// one; with one the title gives the focus up (`Process` then runs
+    /// `RunPatcher`).
+    fn connect(&mut self, cx: &mut Ctx) {
+        if cx.shared.server.is_none() {
+            let title = wide(cx.vui.words.get(767, cx.vui.language));
+            self.message.setup(cx.vui, cx.r, &title, &wide(NO_SERVER), PROMPT_OK, [320, 246], 400);
+            self.focus = Some(Focus::Message);
+        } else {
+            self.focus = None;
+        }
+    }
+
+    /// `StartAmbientSoundtrack`: SETUP.CSF's `splash_screen`, looped.
+    fn start_music(&mut self, cx: &mut Ctx) {
+        self.stop_music(cx);
+        cx.music.push(Music::Xm { tag: "title", id: vi::hash::hash_resource_id("splash_screen"), repeat: true, volume: 1.0 });
+        self.ambient = true;
+    }
+
+    /// `StopAmbientSoundtrack`.
+    fn stop_music(&mut self, cx: &mut Ctx) {
+        if self.ambient {
+            cx.music.push(Music::Stop { tag: "title" });
+            self.ambient = false;
+        }
+    }
+
+    /// One frame of `VISetup::Process`.
+    pub fn frame(&mut self, cx: &mut Ctx) -> Next {
+        self.now = cx.now;
+        if !self.began {
+            self.begin(cx.now);
+            self.focus_arrived(cx);
+        }
+        for (k, down) in std::mem::take(&mut self.keys) {
+            self.dispatch(cx, k, down);
+        }
+        for c in std::mem::take(&mut self.captures) {
+            let mut cues = Vec::new();
+            match c {
+                Capture::Key(name) => self.options_wnd.capture_key(cx.vui, &name, &mut cues),
+                Capture::Button(b) => self.options_wnd.capture_button(cx.vui, b, &mut cues),
+            }
+            cx.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
+        }
+        self.edit_face();
+        // the root and its children (`VIWindowManager::Update`, `VIWnd::OnDraw`)
+        let mut cues = Vec::new();
+        match self.root {
+            Root::Legal => {
+                if self.legal.draw(cx.vui, cx.r, cx.now) && self.focus == Some(Focus::Legal) {
+                    self.focus = None;
+                }
+            }
+            Root::Eula => self.eula.draw(cx.vui, cx.r, cx.now, &mut cues),
+            Root::Title => {
+                let focused = self.focus == Some(Focus::Title);
+                if self.splash.draw(cx.vui, cx.r, &mut self.fx, cx.now, focused) {
+                    // the card's check passed: the classes' volumes
+                    self.sound.push(OptionsUp::Volume(0, self.options.fx_volume));
+                    self.sound.push(OptionsUp::Volume(1, self.options.music_volume));
+                }
+                if self.options_visible {
+                    let mut ups = Vec::new();
+                    self.options_wnd.draw(cx.vui, cx.r, &self.options, &mut ups);
+                    cues.extend(self.options_wnd.take_cues());
+                    self.options_up(cx, ups);
+                }
+                if self.message.visible {
+                    self.message.draw(cx.vui, cx.r);
+                }
+                if self.net_visible {
+                    self.net.draw(cx.vui, cx.r, cx.now, &mut cues);
+                }
+            }
+        }
+        cx.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
+        self.fader.update(cx.r, cx.now);
+        if self.leaving {
+            // `RunPatcher`'s end: the fade out, then on (`Free` stops the music)
+            if self.fader.alpha() == 1.0 {
+                // SETUP is done (`setup_main` returns): nothing moves on
+                // again until `start`
+                self.leaving = false;
+                self.state = 4;
+                self.stop_music(cx);
+                self.restore_face();
+                return Next::Station;
+            }
+            return Next::Stay;
+        }
+        if self.focus.is_none() {
+            self.moved_on(cx);
         }
         Next::Stay
     }
 
-    pub fn key(&mut self, key: i32, down: bool) {
-        if down && matches!(key, 13 | 134) {
-            self.go = true;
+    /// `Process` after a window gave the focus up.
+    fn moved_on(&mut self, cx: &mut Ctx) {
+        match self.state {
+            0 => {
+                // the legal screen done: the licence
+                self.state = 2;
+                self.root = Root::Eula;
+                self.focus = Some(Focus::Eula);
+                self.focus_arrived(cx);
+            }
+            2 => {
+                // the licence accepted. Here the game plays the intro movie
+                // (`VIMovieStartup(640, 448)`, `VIMoviePlay("movies\\eqoa.pss")`,
+                // stoppable with START, X or Escape): left out, the user's
+                // "later". Then `Free` and `Init(0)`: the fade from black,
+                // the effects and the title from the top.
+                self.fader.init(1.0, cx.now);
+                self.fader.begin(0.0, 0.5);
+                self.fx.reset(cx.now);
+                self.splash.init();
+                self.state = 3;
+                self.fader.begin(1.0, 0.0);
+                self.root = Root::Title;
+                self.focus = Some(Focus::Title);
+                self.focus_arrived(cx);
+                self.fader.begin(0.0, 0.5);
+                self.start_music(cx);
+            }
+            3 => {
+                // `m_splash.Selection()`: Play gives the focus up (Connect);
+                // `RunPatcher` would follow: its closing fade is kept. (Network
+                // Setup's fade out to Sony's utility is the client's page here.)
+                if self.splash.sel == 0 && !self.leaving {
+                    self.fader.begin(1.0, 0.5);
+                    self.leaving = true;
+                }
+            }
+            _ => {}
         }
     }
 
-    pub fn point(&mut self, _p: [f32; 2]) -> Vec<i32> {
-        vec![134]
+    /// `OnMessage` 295 to the window the focus came to from outside it.
+    fn focus_arrived(&mut self, cx: &mut Ctx) {
+        match self.focus {
+            Some(Focus::Legal) => self.legal.focus(cx.now),
+            Some(Focus::Eula) => self.eula.focus(cx.vui, cx.r),
+            Some(Focus::Title) => self.splash.focus(cx.vui, cx.r),
+            _ => {}
+        }
     }
 
-    pub fn typing(&self) -> bool {
-        false
+    /// The edit box's face (`sPadOnly`, which `VIWndEdit::OnDrawSelf` sets
+    /// each frame from `gKeyboardAttached` and the options' Soft Keyboard):
+    /// set while Network Setup's box is open, the client's default
+    /// (compact) put back after.
+    fn edit_face(&mut self) {
+        if self.typing() {
+            crate::editbox::set_pad_only(self.keyboard && self.options.compact != 0);
+            self.face_set = true;
+        } else {
+            self.restore_face();
+        }
+    }
+
+    fn restore_face(&mut self) {
+        if self.face_set {
+            crate::editbox::set_pad_only(true);
+            self.face_set = false;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pointer::key;
+    use crate::pointer::testing::{NullRaster, vui};
+
+    struct Run {
+        s: Setup,
+        res: Res,
+        shared: Shared,
+        vui: vi::ui::Vui,
+        cues: Vec<crate::sound::Cue>,
+        music: Vec<Music>,
+        now: i64,
+    }
+
+    impl Run {
+        fn new(server: Option<&str>) -> Run {
+            crate::settings::testing::reset(false);
+            let mut res = Res::new();
+            res.put("DATA/EULA.TXT", (0..40).map(|k| format!("term {k}\n")).collect::<String>().into_bytes());
+            let mut shared = Shared { server: server.map(str::to_string), login: None };
+            let mut s = Setup::new();
+            s.start(&mut res, &mut shared);
+            Run { s, res, shared, vui: vui(), cues: Vec::new(), music: Vec::new(), now: 0 }
+        }
+
+        /// One of SETUP's frames, 33 ms on.
+        fn frame(&mut self) -> Next {
+            self.now += 33;
+            let mut r = NullRaster;
+            let mut cx = Ctx { now: self.now, game_frame: true, vui: &self.vui, r: &mut r, res: &self.res, shared: &mut self.shared, cues: &mut self.cues, music: &mut self.music, gpu: None };
+            self.s.frame(&mut cx)
+        }
+
+        fn frames(&mut self, n: usize) -> Vec<Next> {
+            (0..n).map(|_| self.frame()).filter(|n| !matches!(n, Next::Stay)).collect()
+        }
+
+        fn press(&mut self, k: i32) {
+            self.s.key(k, true);
+            self.frame();
+            self.s.key(k, false);
+            self.frame();
+        }
+    }
+
+    /// The order: the legal screen 7.5 s, the licence until accepted, then
+    /// the title with its music; Play with a server fades out and goes on.
+    #[test]
+    fn legal_then_the_licence_then_the_title_then_play() {
+        let mut run = Run::new(Some("192.0.2.1"));
+        run.frames(200);
+        assert_eq!(run.s.root, Root::Legal, "6.6 s in: still the legal screen");
+        run.frames(40);
+        assert_eq!((run.s.root, run.s.state), (Root::Eula, 2), "past 7.5 s: the licence");
+        run.press(13);
+        assert_eq!(run.s.root, Root::Eula, "declining keeps the licence");
+        run.press(13);
+        run.press(18);
+        run.press(13);
+        assert_eq!((run.s.root, run.s.state), (Root::Title, 3), "accepted: the title (the movie left out)");
+        assert!(run.music.iter().any(|m| matches!(m, Music::Xm { tag: "title", repeat: true, .. })), "its music");
+        run.frames(30);
+        assert!(run.s.take_sound().iter().any(|u| matches!(u, OptionsUp::Volume(0, _))), "ready: the classes' volumes");
+        run.press(key::CROSS);
+        let after = run.frames(30);
+        assert!(matches!(after.as_slice(), [Next::Station]), "a half-second fade, then Station");
+        assert!(run.music.contains(&Music::Stop { tag: "title" }), "the music stopped");
+    }
+
+    /// Play with no server says so and stays; Network Setup keeps one and
+    /// Play then goes on.
+    #[test]
+    fn play_needs_a_server_and_network_setup_keeps_one() {
+        let mut run = Run::new(None);
+        run.s.state = 2;
+        run.s.focus = None;
+        run.frames(32);
+        assert_eq!(run.s.root, Root::Title);
+        run.press(13);
+        assert_eq!(run.s.focus, Some(Focus::Message), "no server: the box");
+        assert!(run.frames(30).is_empty(), "and it stays");
+        run.press(13);
+        assert_eq!(run.s.focus, Some(Focus::Title), "the box closed");
+        run.press(18);
+        run.press(13);
+        assert_eq!(run.s.focus, Some(Focus::NetSetup));
+        run.press(13);
+        assert!(run.s.typing(), "X on the row: the edit box");
+        for ch in "eqoa.example.com".chars() {
+            run.press(ch as i32);
+        }
+        run.press(13);
+        assert_eq!(run.shared.server.as_deref(), Some("eqoa.example.com"));
+        assert_eq!(crate::settings::server().as_deref(), Some("eqoa.example.com"), "kept in server.opt");
+        run.press(key::TRIANGLE);
+        assert_eq!(run.s.focus, Some(Focus::Title));
+        run.press(17);
+        run.press(13);
+        assert!(matches!(run.frames(30).as_slice(), [Next::Station]));
+        crate::settings::testing::reset(false);
+    }
+
+    /// Options opens over the title with the client's window, and Triangle
+    /// on its menu gives the title its focus back.
+    #[test]
+    fn options_opens_and_triangle_comes_back() {
+        let mut run = Run::new(Some("192.0.2.1"));
+        run.s.state = 2;
+        run.s.focus = None;
+        run.frames(32);
+        run.press(18);
+        run.press(18);
+        run.press(13);
+        assert_eq!(run.s.focus, Some(Focus::Options));
+        run.press(key::TRIANGLE);
+        assert_eq!(run.s.focus, Some(Focus::Title));
+        // the control: the title's keys do not reach it while Options is up
+        run.press(18);
+        run.press(13);
+        run.press(17);
+        assert_eq!(run.s.focus, Some(Focus::Options));
+        assert_eq!(run.s.splash.sel, 2, "the title's choice did not move under Options");
     }
 }
