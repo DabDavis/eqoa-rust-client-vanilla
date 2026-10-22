@@ -188,6 +188,19 @@ impl CharSelect {
         }
     }
 
+    /// For the client's tests: the busy box, the Options box, the message
+    /// box (whether each is up), and setting the first two.
+    #[cfg(test)]
+    pub(super) fn pending(&self) -> (bool, bool, bool) {
+        (self.busy, self.choosing, self.child == Some(Child::MBox))
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_pending(&mut self) {
+        self.busy = true;
+        self.choosing = true;
+    }
+
     /// `ShowWord(id)`.
     pub fn show_word(&mut self, vui: &vi::ui::Vui, id: i32) {
         let s = wide(vui.words.get(id, vui.language));

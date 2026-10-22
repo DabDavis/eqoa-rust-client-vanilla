@@ -447,16 +447,13 @@ impl Client {
     /// `CharacterList`: the characters (eight at most), creation closed,
     /// character select up.
     fn character_list(&mut self, list: &[net::session::Character]) {
-        let was_creating = self.top == Wnd::Create;
-        let old: Vec<i64> = self.chars.iter().map(|c| c.server_id).collect();
         self.chars = list.iter().take(8).map(CharRecord::of).collect();
+        // creation's form and pages start over; the selection stays where
+        // it was (`CreateCharacter` left it on the new character's slot)
+        self.create.reset();
         self.select_up = true;
         self.top = Wnd::Select;
         self.set_active(Wnd::Select);
-        // `CreateCharacter` put the selection on the new character's slot
-        if was_creating && let Some(i) = self.chars.iter().position(|c| !old.contains(&c.server_id)) {
-            self.select.sel = i as i32;
-        }
     }
 
     /// One frame: the session's messages, then the window on top draws.
@@ -545,15 +542,54 @@ impl Client {
         self.next.take().unwrap_or(Next::Stay)
     }
 
-    /// What creation said.
+    /// What creation said: back out of its first page (`BackToLogin`,
+    /// creation reset itself), or Create (`CreateCharacter`).
     fn create_out(&mut self, out: create::Out) {
         match out {
             create::Out::Stay => {}
-            create::Out::Back | create::Out::Done => {
+            create::Out::Back => {
                 self.top = Wnd::Select;
                 self.set_active(Wnd::Select);
             }
+            create::Out::Done => {
+                let f = self.create.form().clone();
+                self.create_character(&f);
+            }
         }
+    }
+
+    /// `CreateCharacter`, once creation has sent the form (0x002B): the form
+    /// becomes the next entry with no server id yet (its race's model by
+    /// sex, no robe, level 1, the rest zero), selected and shown, and
+    /// `ShowWord(413)` (empty: the pending states end). The server's list
+    /// replaces it; a refusal takes it away.
+    fn create_character(&mut self, f: &net::session::NewChar) {
+        let rec = CharRecord {
+            server_id: -1,
+            model: create::tables::race(f.race).model_id(f.sex),
+            class: f.class,
+            race: f.race,
+            level: 1,
+            hair_color: f.hair_color,
+            hair_length: f.hair_length,
+            hair_style: f.hair_style,
+            face: f.face,
+            robe: -1,
+            ..Default::default()
+        };
+        self.select.sel = self.chars.len() as i32;
+        self.chars.push(rec);
+        self.top = Wnd::Select;
+        self.set_active(Wnd::Select);
+        self.select.show_text_none();
+    }
+
+    /// A refusal of 0x002B (0x002E 269, 0x0065 828, 0x002F 829): the word in
+    /// select's box and `m_charCount--` (`CreateCharacter`'s entry goes;
+    /// the console counts down whatever is last).
+    fn refused(&mut self, vui: &Vui, id: i32) {
+        self.select.show_word(vui, id);
+        self.chars.pop();
     }
 
     /// `PumpMessages`: the session made (a page's comes later), then its
@@ -581,29 +617,16 @@ impl Client {
                     }
                 }
                 Event::Characters(list) if matches!(self.phase, 2 | 3) => {
-                    if self.create.is_open() {
-                        let _ = self.create.event(e);
-                    }
                     self.phase = 3;
                     self.state = 21;
                     self.character_list(list);
                 }
-                Event::RandomName(_) if self.create.is_open() => {
+                // 0x0012: `m_wndCharCreate->SetName`, whatever is up
+                Event::RandomName(_) => {
                     let out = self.create.event(e);
                     self.create_out(out);
                 }
-                Event::CreateRefused(id) => {
-                    if self.create.is_open() {
-                        let out = self.create.event(e);
-                        self.create_out(out);
-                    } else {
-                        // `m_charCount--`: `CreateCharacter`'s entry goes
-                        if self.chars.last().is_some_and(|c| c.server_id == -1) {
-                            self.chars.pop();
-                        }
-                        self.select.show_word(cx.vui, *id);
-                    }
-                }
+                Event::CreateRefused(id) => self.refused(cx.vui, *id),
                 Event::Opcode { op, .. } => match op {
                     // `CharSelectMsg`
                     0x07F2 | 0x07F4 => self.char_select_msg(cx.vui, 1662),
@@ -905,5 +928,78 @@ mod tests {
         d.chars[0].server_id = 5;
         d.select_character(0);
         assert_eq!(d.phase, 4);
+    }
+
+    /// A session nothing answers (creation's pages send on it).
+    fn quiet_session() -> Session {
+        struct Nowhere;
+        impl net::session::Datagrams for Nowhere {
+            fn send_to(&mut self, _: &[u8], _: [u8; 4], _: u16) {}
+            fn recv_from(&mut self) -> Option<(Vec<u8>, [u8; 4], u16)> {
+                None
+            }
+        }
+        Session::connect_with(Box::new(Nowhere), ([127, 0, 0, 1], 5000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap()
+    }
+
+    /// `CreateCharacter`: the form creation sent becomes the next entry with
+    /// no server id yet (its race's model by sex, no robe, level 1, nothing
+    /// worn), selected, select up, its pending states ended (`ShowWord(413)`).
+    /// A refusal shows its word and takes the entry away; creation's back
+    /// adds none.
+    #[test]
+    fn a_created_character_waits_in_the_list() {
+        let mut c = Client::new();
+        c.chars = vec![CharRecord::of(&character("A", 1, vec![7; 32]))];
+        (c.top, c.active) = (Wnd::Create, Wnd::Create);
+        c.select.set_pending();
+        let form = net::session::NewChar { name: "Brakk".into(), race: 4, class: 9, sex: 1, hair_color: 2, hair_length: 1, hair_style: 3, face: 2, city: 0, stats: [0; 7] };
+        c.create_character(&form);
+        assert_eq!(c.chars.len(), 2);
+        let n = &c.chars[1];
+        assert_eq!((n.server_id, n.race, n.class, n.level, n.robe), (-1, 4, 9, 1, -1));
+        assert_eq!(n.model, vi::hash::hash_resource_id("DwarfFemale"));
+        assert_eq!((n.hair_color, n.hair_length, n.hair_style, n.face), (2, 1, 3, 2));
+        assert_eq!((n.armor, n.weapons, n.name.as_str()), ([0; 6], [0; 3], ""));
+        assert_eq!((c.select.sel, c.top, c.active), (1, Wnd::Select, Wnd::Select));
+        assert_eq!(c.select.pending(), (false, false, false), "ShowWord(413): nothing pending, no box");
+        let vui = crate::pointer::testing::vui();
+        c.refused(&vui, 269);
+        assert_eq!(c.chars.len(), 1);
+        assert_eq!(c.chars[0].name, "A", "the listed character stays");
+        assert!(c.select.pending().2, "the refusal's word in the box");
+        // the control: back out of creation leaves the list as it was
+        (c.top, c.active) = (Wnd::Create, Wnd::Create);
+        c.create_out(create::Out::Back);
+        assert_eq!((c.chars.len(), c.top), (1, Wnd::Select));
+    }
+
+    /// The server's list resets creation's form (`CharacterList`'s `Reset`)
+    /// and leaves the selection where it was (on the slot `CreateCharacter`
+    /// gave the new character).
+    #[test]
+    fn the_list_resets_creation_and_keeps_the_selection() {
+        let mut c = Client::new();
+        let mut s = quiet_session();
+        let v = create::tests_vui();
+        let mut r = crate::pointer::testing::NullRaster;
+        let res = crate::pregame::res::Res::new();
+        let mut shared = Shared::default();
+        let (mut cues, mut music) = (Vec::new(), Vec::new());
+        c.create.open();
+        for (t, k) in [(0, None), (40, Some(crate::pointer::key::CROSS))] {
+            if let Some(k) = k {
+                c.create.key(k, true);
+                c.create.key(k, false);
+            }
+            let mut cx = Ctx { now: t, game_frame: true, vui: &v, r: &mut r, res: &res, shared: &mut shared, cues: &mut cues, music: &mut music, gpu: None };
+            c.create.frame(&mut cx, &mut s, None);
+        }
+        assert_eq!(c.create.current().race, 6, "the control: the race page's choice is in the form");
+        c.select.sel = 1;
+        c.phase = 3;
+        c.character_list(&[character("A", 1, vec![0; 32]), character("B", 2, vec![0; 32])]);
+        assert_eq!(c.create.current(), &create::blank_form());
+        assert_eq!((c.select.sel, c.top, c.chars.len()), (1, Wnd::Select, 2));
     }
 }

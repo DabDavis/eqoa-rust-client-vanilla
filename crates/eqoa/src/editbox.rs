@@ -148,6 +148,23 @@ impl EditBox {
         self.pos = p;
     }
 
+    /// `SetAllowSpaces` (the character name's editor takes none).
+    pub fn set_allow_spaces(&mut self, on: bool) {
+        self.allow_spaces = on;
+    }
+
+    /// `GetPos`: the box's top left.
+    pub fn pos(&self) -> [i32; 2] {
+        self.pos
+    }
+
+    /// `GetEnd`: the box's bottom right (`m_pos + m_size`, the size its draw
+    /// gives it for the face showing).
+    pub fn end(&self) -> [i32; 2] {
+        let h = if pad_only() { self.rows * 17 + 42 + 26 } else { self.rows * 17 + 203 };
+        [self.pos[0] + 452, self.pos[1] + h]
+    }
+
     /// `SetCenter`: the box placed round `p` for its rows.
     pub fn set_center(&mut self, p: [i32; 2]) {
         self.pos = [p[0] - 226, p[1] - ((self.rows * 17 + 203) >> 1)];

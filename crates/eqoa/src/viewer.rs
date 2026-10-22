@@ -1029,6 +1029,27 @@ fn offscreen_target(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) 
     })
 }
 
+/// `EQOA_SHOTS`: the shots due at `now` taken off the offscreen target,
+/// each once.
+fn shoot(shots: &mut Vec<(i64, String)>, g: &Gfx, now: i64, what: &str) {
+    let due: Vec<String> = shots.iter().filter(|s| s.0 <= now).map(|s| s.1.clone()).collect();
+    if due.is_empty() {
+        return;
+    }
+    shots.retain(|s| s.0 > now);
+    let Some(t) = &g.offscreen else {
+        crate::say("EQOA_SHOTS needs EQOA_OFFSCREEN");
+        return;
+    };
+    let rgba = read_back(&g.device, &g.queue, t);
+    for f in due {
+        match write_png(&f, g.config.width, g.config.height, &rgba) {
+            Ok(()) => crate::say(&format!("shot {f} at {now} ms ({what})")),
+            Err(e) => crate::say(&format!("shot {f}: {e}")),
+        }
+    }
+}
+
 /// A texture's RGBA8 rows, read back (waits for the GPU).
 fn read_back(device: &wgpu::Device, queue: &wgpu::Queue, t: &wgpu::Texture) -> Vec<u8> {
     let (w, h) = (t.width(), t.height());
@@ -1311,6 +1332,12 @@ struct App {
     /// title, Station's login, the server list and character select; gone
     /// once the world is entered.
     host: Option<crate::pregame::host::Host>,
+    /// In a world entered from the game's own boot: the account and the
+    /// server, for the way back (a logout, a lost connection).
+    booted: Option<crate::pregame::Shared>,
+    /// `EQOA_SHOTS` (`ms=file.png,...`): what was drawn then, as PNGs, under
+    /// `EQOA_OFFSCREEN` (the pregame's frames and play's alike).
+    shots: Vec<(i64, String)>,
 }
 
 pub fn run(lib: Library, source: Source) -> Result<(), Error> {
@@ -1386,6 +1413,8 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         drawn_at: None,
         frame_s: 1.0 / 60.0,
         host,
+        booted: None,
+        shots: crate::pregame::host::shot_script(),
     };
     #[cfg(target_arch = "wasm32")]
     {
@@ -1778,19 +1807,7 @@ impl App {
             _ => g.renderer.draw_text(&g.device, &mut enc, &target, &g.depth, size),
         }
         g.queue.submit([enc.finish()]);
-        // `EQOA_SHOTS`: what was drawn, as PNGs (offscreen only)
-        let due = host.shots_due(now);
-        if !due.is_empty()
-            && let Some(t) = &g.offscreen
-        {
-            let rgba = read_back(&g.device, &g.queue, t);
-            for f in due {
-                match write_png(&f, size.0, size.1, &rgba) {
-                    Ok(()) => crate::say(&format!("shot {f} at {now} ms ({})", host.pre.describe())),
-                    Err(e) => crate::say(&format!("shot {f}: {e}")),
-                }
-            }
-        }
+        shoot(&mut self.shots, g, now, &host.pre.describe());
         match frame {
             Some(f) => g.queue.present(f),
             None => {
@@ -1804,6 +1821,48 @@ impl App {
         }
     }
 
+    /// Back from the world to the game's own screens (`Msg0777Done`): the
+    /// world let go (`UnloadWorld`), and the pregame at CLIENT again, its
+    /// files read anew under its loading screen, then the server list (a
+    /// logout) or the lost connection's notice.
+    fn back_to_pregame(&mut self, shared: crate::pregame::Shared) {
+        let disconnect = self.play.as_ref().and_then(|p| if p.quit { None } else { p.disconnected });
+        crate::say(&match disconnect {
+            None => "logged out: back to the server list".to_string(),
+            Some(r) => format!("disconnected (reason {r}): back to the game's screens"),
+        });
+        self.play = None;
+        self.walker = None;
+        self.streamer = None;
+        self.particles = None;
+        self.fx = None;
+        self.batches.clear();
+        self.sky_batches.clear();
+        self.entering = None;
+        self.sky_at = None;
+        if let Some(s) = self.sound.as_mut() {
+            s.world_changed();
+            s.battle_music(None);
+            s.release_sounds(&self.walker_sounds);
+        }
+        self.walker_sounds.clear();
+        if let Some(g) = &mut self.gfx {
+            g.models.clear();
+            g.renderer.ui = None;
+            if let Some(t) = g.renderer.text.as_mut() {
+                t.labels.clear();
+            }
+            g.renderer.strips.clear();
+            g.renderer.set_overlay(&g.device, &g.queue, glam::Mat4::IDENTITY, &[], &|_| None);
+            g.window.request_redraw();
+        }
+        self.lib = Library::new();
+        self.source = Source::Models { list: Vec::new(), index: 0 };
+        self.grab_pointer(false);
+        let now = self.clock.elapsed().as_millis() as i64;
+        self.host = Some(crate::pregame::host::Host::new(crate::pregame::Pregame::back(shared, disconnect, now)));
+    }
+
     /// The world entered from the pregame: its library and walk (`main.rs`'s
     /// `world_library`), and `Play` on the session, as `eqoa play` starts
     /// them.
@@ -1811,12 +1870,16 @@ impl App {
         let crate::pregame::Entered { session, player, dump } = *entered;
         crate::say(&format!("in the world as {} after the pregame", player.name));
         let mut play = crate::play::Play::new(session, player, dump);
-        if let Err(e) = crate::play_tables(&mut play) {
-            crate::say(&format!("play: {e}"));
+        play.booted = true;
+        // the game's words and the HUD's texture names, read with the pregame's files
+        if let Some(h) = &self.host {
+            play.words = h.pre.res.words.clone();
+            play.ui_textures = h.pre.res.textures.clone();
         }
         if let (Some(h), Some(s)) = (self.host.as_mut(), self.sound.as_mut()) {
             h.stop_music(s);
         }
+        self.booted = self.host.take().map(|h| h.pre.shared);
         self.host = None;
         self.lib = lib;
         self.source = src;
@@ -1917,8 +1980,12 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => el.exit(),
             // Quit, answered yes in the start menu (`m_p2EC28`), or the
-            // server ended the connection.
-            _ if self.play.as_ref().is_some_and(|p| p.quit || p.disconnected.is_some()) => el.exit(),
+            // server ended the connection: back to the game's own screens
+            // when it was booted (`Msg0777Done`), else the window closes.
+            _ if self.play.as_ref().is_some_and(|p| p.quit || p.disconnected.is_some()) => match self.booted.take() {
+                Some(shared) => self.back_to_pregame(shared),
+                None => el.exit(),
+            },
             WindowEvent::Resized(s) if s.width > 0 && s.height > 0 => {
                 let Some(g) = &mut self.gfx else { return };
                 let Some(surface) = &g.surface else { return };
@@ -3122,6 +3189,10 @@ impl ApplicationHandler for App {
                 }
                 mark(&mut self.perf, 11);
                 let sent = g.queue.submit([enc.finish()]);
+                if !self.shots.is_empty() {
+                    let what = self.play.as_ref().map_or_else(|| "viewer".to_string(), |p| format!("play as {}", p.player.name));
+                    shoot(&mut self.shots, g, self.clock.elapsed().as_millis() as i64, &what);
+                }
                 mark(&mut self.perf, 12);
                 match frame {
                     Some(f) => g.queue.present(f),

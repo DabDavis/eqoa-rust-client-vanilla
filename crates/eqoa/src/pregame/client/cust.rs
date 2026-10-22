@@ -10,7 +10,6 @@
 //! sprite in place: `SetFace`, `SetHair`), which starts its standing loop
 //! over.
 
-use super::races::get_race;
 use super::select::{framing, look_of};
 use super::{CharRecord, UiCx};
 use crate::pointer::{Hits, key};
@@ -134,7 +133,7 @@ impl Cust {
             self.figure = None;
         }
         if self.figure.is_none()
-            && let (Some(g), Some(lib), Some(st)) = (cx.gpu.as_mut(), cx.lib, stage.as_deref_mut())
+            && let (Some(g), Some(lib), Some(_)) = (cx.gpu.as_mut(), cx.lib, stage.as_deref_mut())
         {
             let mut rec = c.clone();
             (rec.face, rec.hair_style, rec.hair_length, rec.hair_color) = (self.face, self.style, self.length, self.color);
@@ -165,7 +164,6 @@ impl Cust {
             cx.r.mark_split();
             self.shown = true;
         }
-        let _ = get_race(c.race);
         None
     }
 
