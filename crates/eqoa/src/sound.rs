@@ -477,15 +477,20 @@ impl Sound {
 
     /// SETUP's `StartAmbientSoundtrack` and `VIStation::PlayMusic`: an XM out
     /// of a file the pregame read (SETUP.CSF's `splash_screen`), made on the
-    /// device, its repeat set, played at priority `priority` on class 0 (the
-    /// music's) at `volume`. The playback's handle and the device's sound
-    /// (to release with `stop_xm`), or None.
+    /// device and uploaded at once, its repeat set, played at priority
+    /// `priority` on class 0 (the music's) at `volume`. The playback's handle
+    /// and the device's sound (to release with `stop_xm`), or None. SETUP's
+    /// Init uploads what SETUP.CSF made before the title (`m_sound.Flush()`
+    /// after its parse), so the title's Play finds the XM resident; made here,
+    /// it is flushed here, or Play refuses it while it uploads (-2) and the
+    /// title has no music.
     pub fn play_xm_in(&mut self, c: &esf::Container, id: u32, repeat: bool, priority: i32, volume: f32) -> Option<(i32, i32)> {
         let x = c.lookup(id as i32).and_then(|n| esf::sound::xm(c, n))?;
         let i = self.dev.create_xm(x.volume, x.pan, x.module, x.samples);
         if i < 0 {
             return None;
         }
+        self.dev.flush(&mut self.link);
         self.dev.set_repeat(i, repeat as i32);
         let h = self.dev.play(i, priority, 0);
         if h < 0 {
@@ -746,5 +751,42 @@ impl vi::csprite::SoundSink for Sink<'_> {
     }
     fn rand(&mut self) -> i32 {
         self.0.rand.rand()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The title's music plays: SETUP.CSF's `splash_screen` is uploaded
+    /// before it is played, as SETUP's Init flushes, and a second of it at
+    /// 30 frames a second is not silence. The control: played as soon as it
+    /// is made, the device refuses it while it uploads.
+    #[test]
+    fn the_titles_music_plays() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        if !path.exists() {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        }
+        let mut iso = iso::Iso::open(&path).unwrap();
+        let setup = esf::Container::open(iso.read("DATA2/SETUP.CSF").unwrap()).unwrap();
+        let id = vi::hash::hash_resource_id("splash_screen");
+        let audio = Audio::offline(Box::new(crate::audio::IsoDisc(iso::Iso::open(&path).unwrap())));
+        let mut s = Sound::with(&mut |p| iso.read(p).ok(), audio).unwrap();
+        // control: made and played at once
+        let x = esf::sound::xm(&setup, setup.lookup(id as i32).unwrap()).unwrap();
+        let i = s.dev.create_xm(x.volume, x.pan, x.module, x.samples);
+        assert_eq!(s.dev.play(i, 127, 0), -2, "still uploading");
+        s.dev.release_sound(i);
+        let (h, _) = s.play_xm_in(&setup, id, true, 127, 1.0).expect("the title's music plays");
+        let mut pcm = Vec::new();
+        for _ in 0..30 {
+            s.frame_alone();
+            pcm.extend(s.audio.render(1600));
+        }
+        assert!(s.dev.is_playing(h), "still playing a second on");
+        let loud = pcm.iter().filter(|&&v| v.unsigned_abs() > 64).count();
+        assert!(loud > pcm.len() / 4, "music, not silence: {loud} of {} samples", pcm.len());
     }
 }
