@@ -232,11 +232,12 @@ impl ServerSelect {
         // the recommended shard gone invalid: the first valid one is
         if !shards.is_empty() && !self.home.is_empty() {
             for s in shards {
-                if s.name == self.home && !s.valid {
-                    if let Some(f) = shards.iter().find(|s| s.recommended && s.valid) {
-                        self.home = f.name.clone();
-                        break;
-                    }
+                if s.name == self.home
+                    && !s.valid
+                    && let Some(f) = shards.iter().find(|s| s.recommended && s.valid)
+                {
+                    self.home = f.name.clone();
+                    break;
                 }
             }
         }
@@ -447,15 +448,13 @@ mod tests {
     #[test]
     fn the_sort_keeps_the_name_by_its_first_half() {
         let shards = vec![shard("Zeta", true, true), shard("Alpha", true, true), shard("Marr's Fist", true, true)];
-        let mut s = ServerSelect::default();
-        s.name = wide("Marr's Fist");
+        let mut s = ServerSelect { name: wide("Marr's Fist"), ..Default::default() };
         s.sort(&shards);
         assert_eq!(s.order, vec![1, 2, 0], "by name");
         assert_eq!(s.sel, 1);
         // a name that matches only past its first half: half its bytes decide
         let shards2 = vec![shard("Abcdef", true, true), shard("Abcxyz", true, true)];
-        let mut t = ServerSelect::default();
-        t.name = wide("Abcxyz");
+        let mut t = ServerSelect { name: wide("Abcxyz"), ..Default::default() };
         t.sort(&shards2);
         assert_eq!(t.sel, 0, "\"Abc\" is half of six characters' bytes: the first match wins");
         assert!(name_prefix_eq(&wide("Abcxyz"), &wide("Abcdef")) && !name_prefix_eq(&wide("Abdxyz"), &wide("Abcdef")), "the control");

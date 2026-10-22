@@ -128,7 +128,7 @@ impl Cust {
         // the model (`CreateModel`), standing (`SetAction(0)`), the camera
         // (`UpdateCamera`), the scene into the viewport
         self.shown = false;
-        let Some(c) = chars.get(self.index) else { return None };
+        let c = chars.get(self.index)?;
         if self.made != Some(self.look()) {
             self.figure = None;
         }
@@ -142,9 +142,9 @@ impl Cust {
             self.figure = Figure::new(lib, g, rec.model, look_of(&rec, false), rec.weapons, self.pos, hpr, cx.now);
             self.made = Some(self.look());
         }
-        let Some(fig) = self.figure.as_mut() else { return None };
+        let fig = self.figure.as_mut()?;
         fig.set_action(0);
-        if let Some(st) = stage.as_deref_mut() {
+        if let Some(st) = stage {
             let rc = cx.race_cams.and_then(|t| crate::camstyle::race_camera(t, c.race, cx.expansion));
             if rc.is_some() {
                 let [h, l, p, d] = framing(rc, false);
@@ -217,7 +217,9 @@ impl Cust {
         let black = [0.0, 0.0, 0.0, 1.0];
         let pulse = self.window.tick_pulse(vui.time);
         let mut base = [27, 92];
-        let rows: [(i32, [i32; 2], i32, [i32; 2], i32, [i32; 2]); 4] = [
+        // the icon and its offset, the glow and its offset, the word and its offset
+        type Row = (i32, [i32; 2], i32, [i32; 2], i32, [i32; 2]);
+        let rows: [Row; 4] = [
             (131, [95, -40], 206, [9, 15], 604, [25, 60]),
             (132, [95, -40], 207, [23, 25], 605, [25, 60]),
             (133, [95, -40], 208, [1, 2], 606, [25, 60]),
@@ -302,7 +304,8 @@ impl Cust {
     /// The camera's orbit angle the selected row asks for (`Up`/`Down`'s
     /// `SetOrbitAngle`): the hair rows a twelfth of a turn.
     fn orbit_angle(&self) -> f32 {
-        if matches!(self.sel, 2 | 3) { 0.523_598_8 } else { 0.0 }
+        // the game's 0.5235988f, which is pi/6's float
+        if matches!(self.sel, 2 | 3) { std::f32::consts::FRAC_PI_6 } else { 0.0 }
     }
 
     /// A pointer: a row selects it (the selected one's left or right half
@@ -349,7 +352,8 @@ mod tests {
         cues.clear();
         c.key(139, 0, &mut cues);
         assert_eq!((c.sel, cues.as_slice()), (3, &[9][..]), "a buzz past the last row");
-        assert_eq!(c.turn, Some(0.523_598_8), "the hair rows turn the camera, at the end too");
+        assert_eq!(c.turn, Some(std::f32::consts::FRAC_PI_6), "the hair rows turn the camera, at the end too");
+        assert_eq!(std::f32::consts::FRAC_PI_6.to_bits(), 0x3F06_0A92, "the game's 0.5235988f");
         c.key(138, 0, &mut cues);
         c.key(138, 0, &mut cues);
         assert_eq!((c.sel, c.turn), (1, Some(0.0)), "the face and style rows face it");

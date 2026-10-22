@@ -182,7 +182,7 @@ const HOME_SHARD_LEN: usize = 128;
 /// keeps it (none when game.opt is not there or not the game's).
 pub fn home_shard() -> Option<String> {
     let b = store::read(GAME_FILE).filter(|b| GameOptions::from_card(b).is_some())?;
-    let w: Vec<u16> = b[HOME_SHARD..HOME_SHARD + HOME_SHARD_LEN].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|&c| c != 0).collect();
+    let w: Vec<u16> = b[HOME_SHARD..HOME_SHARD + HOME_SHARD_LEN].as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).take_while(|&c| c != 0).collect();
     (!w.is_empty()).then(|| String::from_utf16_lossy(&w))
 }
 

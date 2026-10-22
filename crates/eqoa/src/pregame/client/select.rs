@@ -393,8 +393,7 @@ impl CharSelect {
                 }
             }
             Some(Child::Cust) => {
-                let st = stage.as_deref_mut();
-                if let Some(out) = self.cust.draw(cx, chars, st) {
+                if let Some(out) = self.cust.draw(cx, chars, stage) {
                     self.cust_done(out, reqs);
                 }
             }

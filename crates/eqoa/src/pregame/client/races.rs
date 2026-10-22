@@ -1,10 +1,11 @@
 //! The race and class tables (SUPPORT's `virace.cpp` and `viclass.cpp`,
-//! decomp phase 61), as character select and creation read them: a race's
-//! names, its two models, its select place in the arena (`m_selectX/Z`), its
-//! music, the classes it may be; a class's names and the stats the creation
-//! page highlights. `gRaces` is built at static-init time (its model words
-//! are `VIHashResourceID` calls) and `s_classes` is initialised data: both
-//! are the public decomp's constants, written out here as there.
+//! decomp phase 61), whole, as character select reads them: a race's select
+//! place in the arena (`m_selectX/Z`) and music, a class's name. `gRaces` is
+//! built at static-init time (its model words are `VIHashResourceID` calls)
+//! and `s_classes` is initialised data: both are the public decomp's
+//! constants, written out here as there, and held to its source token for
+//! token. Creation's `create/tables.rs` carries the same data with its own
+//! readers: one of the two goes when the lanes meet.
 
 /// `VIRaceDef`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -29,6 +30,7 @@ pub struct RaceDef {
 
 const EMPTY_RACE: RaceDef = RaceDef { name: -1, short: -1, model: ["", ""], bonus: [0; 7], class_mask: -1, select: [0.0, 0.0], bgm: "", expansion: 0 };
 
+#[allow(clippy::too_many_arguments)]
 const fn race(name: i32, short: i32, model: [&'static str; 2], bonus: [i32; 7], class_mask: i32, select: [f32; 2], bgm: &'static str, expansion: u32) -> RaceDef {
     RaceDef { name, short, model, bonus, class_mask, select, bgm, expansion }
 }
@@ -61,15 +63,6 @@ pub const RACES: [RaceDef; 21] = [
 /// `GetRace(r)`: out of range is race 0, never none.
 pub fn get_race(r: i32) -> &'static RaceDef {
     &RACES[if (0..21).contains(&r) { r as usize } else { 0 }]
-}
-
-/// `m_model[sex]` as the game holds it: the name's `VIHashResourceID` (0 for
-/// an empty slot's).
-pub fn model_id(r: &RaceDef, sex: usize) -> u32 {
-    match r.model[sex.min(1)] {
-        "" => 0,
-        n => vi::hash::hash_resource_id(n),
-    }
 }
 
 /// `VIClassDef`.
@@ -111,39 +104,6 @@ pub const CLASSES: [ClassDef; 15] = [
 /// `GetClass(c)`: out of range is class 0.
 pub fn get_class(c: i32) -> &'static ClassDef {
     &CLASSES[if (0..15).contains(&c) { c as usize } else { 0 }]
-}
-
-/// `IsStatHighlighted(c, stat)`.
-pub fn is_stat_highlighted(c: i32, stat: i32) -> bool {
-    (0..7).contains(&stat) && (0..15).contains(&c) && (CLASSES[c as usize].stat_mask >> stat) & 1 != 0
-}
-
-/// `IsValidRaceClassCityCombo(race, c, city)`: the city is a human's only
-/// (0, and the menu's East 1 and West 2, each with its own classes). None
-/// where the game returns an uninitialised word: a human with a city outside
-/// 0..2.
-pub fn is_valid_race_class_city_combo(race: i32, c: i32, city: i32) -> Option<bool> {
-    if !(0..21).contains(&race) || !(0..15).contains(&c) {
-        return Some(false);
-    }
-    let mask = match (race, city) {
-        (0, 0) => RACES[0].class_mask,
-        (0, 1) => 0x7E69,
-        (0, 2) => 0x76F7,
-        (0, _) => return None,
-        _ => RACES[race as usize].class_mask,
-    };
-    Some((mask >> c) & 1 != 0)
-}
-
-/// `IsValidRaceClassCityComboExpansion`: the combination, and the race's and
-/// the class's expansion bits all owned.
-pub fn is_valid_combo_expansion(race: i32, c: i32, city: i32, owned: u32) -> bool {
-    if is_valid_race_class_city_combo(race, c, city) != Some(true) {
-        return false;
-    }
-    let need = get_class(c).expansion | get_race(race).expansion;
-    owned & need == need
 }
 
 #[cfg(test)]
@@ -260,23 +220,13 @@ mod tests {
         assert_ne!(ours, tokens(&body(&r, "gRaces[21] =")), "a changed table must not pass");
     }
 
+    /// `GetRace`/`GetClass` past either end are entry 0; the control: an
+    /// entry in range is its own.
     #[test]
-    fn out_of_range_is_entry_zero_and_the_human_cities_have_their_classes() {
+    fn out_of_range_is_entry_zero() {
         assert_eq!(get_race(21).name, 183);
         assert_eq!(get_race(-1).name, 183);
         assert_eq!(get_class(15).name, 165);
-        // East (1) has no Ranger (bit 1), West (2) has one; the race's own mask for city 0
-        assert_eq!(is_valid_race_class_city_combo(0, 1, 1), Some(false));
-        assert_eq!(is_valid_race_class_city_combo(0, 1, 2), Some(true));
-        assert_eq!(is_valid_race_class_city_combo(0, 1, 0), Some(true));
-        assert_eq!(is_valid_race_class_city_combo(0, 0, 3), None, "shipped: uninitialised");
-        // the Alchemist needs expansion bit 1 (2), the Ogre too
-        assert!(!is_valid_combo_expansion(4, 14, 0, 1) && is_valid_combo_expansion(2, 14, 0, 3));
-        assert!(!is_valid_combo_expansion(9, 0, 0, 1) && is_valid_combo_expansion(9, 0, 0, 2));
-        // a class past the 15 is never valid; an empty race slot allows nothing it does not ask for
-        assert_eq!(is_valid_race_class_city_combo(2, 15, 0), Some(false));
-        assert!(is_stat_highlighted(0, 0) && is_stat_highlighted(0, 1) && !is_stat_highlighted(0, 2) && !is_stat_highlighted(0, 7));
-        assert_eq!(model_id(get_race(0), 0), vi::hash::hash_resource_id("HumanMale"));
-        assert_eq!(model_id(&RACES[12], 1), 0);
+        assert_eq!((get_race(4).name, get_class(14).name), (188, 179));
     }
 }

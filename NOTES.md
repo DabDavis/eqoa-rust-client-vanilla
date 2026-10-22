@@ -30,11 +30,16 @@ and VIClient's pregame half.
   `settings::save` keeps the home shard.
 
 ## Checked live (local server, account vanselect)
-- list ("Marr's Fist", Recommended / Ready with a saved home shard), the three characters'
-  previews in their race sets, the empty slot, the Options box, customise (face, hair length with
-  the camera turned), back, Enter Game World into the world; a throwaway (Vanseldel, elf ranger,
-  made with mkchar) deleted through the box. Shots `~/.cache/vanilla-lane-select-shots/`
-  (`c*`, `d/t*`, `w/w*`) against `~/.cache/vanilla-lane-select-ref/shots/`.
+- Through master's real STATION (login typed on a fresh card, `v/v01..v12`): the list ("Marr's
+  Fist", Recommended), Select, the three characters' previews in their race sets, the Options box,
+  Enter Game World, in the world as Vanselhu.
+- With a saved home shard the list says Ready (as eqoa-port's run did); the empty slot; customise
+  (face, hair length with the camera turned) and back (`c*`, `w/w*`); a throwaway (Vanseldel, elf
+  ranger, made with mkchar) deleted through the box (`d/t*`); a creation from an empty slot through
+  select (Vanselcr, barbarian rogue: race, class, attributes, name, look, review, Submit; listed,
+  selected and shown), then deleted through the box (`cr/c01..c16`).
+- Shots under `~/.cache/vanilla-lane-select-shots/`, against `~/.cache/vanilla-lane-select-ref/shots/`.
+- clippy: clean in this lane's files; master's `create/misc.rs:143` trips `approx_constant` (deny).
 
 ## Judgment calls
 - The memory card's checks, the "Saving game options" box (1615) and the card error box are left out.
@@ -46,4 +51,5 @@ and VIClient's pregame half.
   retail run against eqoa-port showed.
 
 ## Left
-- creation live through select (needs the merged STATION login in the run).
+- the provisional entry was never caught on screen live (the local server lists the new character
+  within 300 ms); it is unit-tested.

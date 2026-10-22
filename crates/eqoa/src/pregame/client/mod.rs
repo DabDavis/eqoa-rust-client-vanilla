@@ -860,7 +860,7 @@ mod tests {
         let mut c = Client::new();
         c.show_login_window();
         c.phase = 0;
-        let shards = vec![net::session::Shard { name: "Marr's Fist".into(), recommended: 1, endpoint: 77, language: 0 }];
+        let shards = [net::session::Shard { name: "Marr's Fist".into(), recommended: 1, endpoint: 77, language: 0 }];
         c.shards = shards.iter().map(ShardEntry::of).collect();
         assert!(c.shards[0].valid && c.shards[0].recommended);
         c.phase = 2;
