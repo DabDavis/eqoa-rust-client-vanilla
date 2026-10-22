@@ -1975,6 +1975,10 @@ impl ApplicationHandler for App {
         let mut config = surface.get_default_config(&adapter, size.width.max(1), size.height.max(1)).expect("surface config");
         // The bytes go out as the GS's do: no sRGB encode (render::TARGET_FORMAT).
         config.format = config.format.remove_srgb_suffix();
+        // At the display's rate: the default is the driver's first present
+        // mode, Immediate on RADV, which drew 2,300-2,600 frames a second in
+        // STATION; the Frame Rate's caps still apply beneath it.
+        config.present_mode = wgpu::PresentMode::AutoVsync;
         surface.configure(&device, &config);
         self.attach(window, Some(surface), config, device, queue);
     }
