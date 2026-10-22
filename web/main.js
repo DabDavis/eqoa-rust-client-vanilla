@@ -3,8 +3,8 @@
 // then the game on the canvas. Query parameters override the defaults:
 // ?relay=ws://127.0.0.1:8790&server=203.0.113.10 for a local server, and
 // ?account= for the account service (default: /eqoa/account on this host).
-// Reports, notices and what goes wrong are report.js's (window.eqoaReport).
-import init, { play, view, choose_character, create_character, delete_character, random_name, client_state, want_shot, crash_test, disc_id } from './eqoa.js';
+// Notices and what goes wrong are notices.js's (window.eqoaNotices).
+import init, { play, view, choose_character, create_character, delete_character, random_name, crash_test, disc_id } from './eqoa.js';
 
 const RACES = ['Human', 'Elf', 'Dark Elf', 'Gnome', 'Dwarf', 'Troll', 'Barbarian', 'Halfling', 'Erudite', 'Ogre', 'Froglok'];
 const CITIES = { 1: 'Freeport', 2: 'Qeynos' };
@@ -14,16 +14,11 @@ const STATS = ['Strength', 'Stamina', 'Agility', 'Dexterity', 'Wisdom', 'Intelli
 const POINTS = 20;
 
 const $ = (id) => document.getElementById(id);
-// the client's own graphics line ("graphics: <adapter> (<backend>)"), for reports
-let clientGraphics = '';
-const status = (t) => {
-  $('status').textContent = t;
-  if (t.startsWith('graphics: ')) clientGraphics = t.slice(10);
-};
+const status = (t) => { $('status').textContent = t; };
 window.eqoaStatus = status;
-// report.js's, when it loaded (it is a module of its own, before this one)
-const report = window.eqoaReport || null;
-const problem = (key, text) => (report ? report.problem(key, text) : console.warn(text));
+// notices.js's, when it loaded (it is a module of its own, before this one)
+const notices = window.eqoaNotices || null;
+const problem = (key, text) => (notices ? notices.problem(key, text) : console.warn(text));
 
 // ---- sound: an AudioContext at 48 kHz, made on the click that starts a
 // session (a page may only start sound from its user's gesture), playing
@@ -253,7 +248,7 @@ $('view').addEventListener('click', async () => {
     show(null);
     $('eqoa').focus();
     await view(file, $('viewargs').value.trim() || 'CHAR.ESF 0x70D898C6');
-    if (report) report.running(true);
+    if (notices) notices.running(true);
   } catch (e) {
     show('login');
     busy(false);
@@ -319,9 +314,7 @@ window.eqoaEntering = (name) => { show(null); status('entering the world as ' + 
 window.eqoaInWorld = () => {
   show(null);
   $('eqoa').focus();
-  // the status line goes right: the HUD's report button is at the bottom left
-  document.body.classList.add('playing');
-  if (report) report.running(true);
+  if (notices) notices.running(true);
 };
 
 $('logout').onclick = () => location.reload();
@@ -675,24 +668,20 @@ async function checkGraphics() {
 // (web::disc_id), as soon as it is picked, so a disc other than Frontiers
 // is named before a session finds out without its HUD.
 
-let discLine = '';
 $('iso').addEventListener('change', async () => {
   const file = $('iso').files[0];
   const line = $('iso-what');
   line.textContent = '';
   line.className = 'note';
-  discLine = '';
   if (!file) return;
   try {
     await ready;
     const [ok, text] = await disc_id(file);
     line.className = 'note ' + (ok ? 'ok' : 'warn');
     line.textContent = text;
-    discLine = `${text} (${file.size} bytes)`;
   } catch (e) {
     line.className = 'note warn';
     line.textContent = String(e && e.message ? e.message : e);
-    discLine = `${line.textContent} (${file.size} bytes)`;
   }
 });
 
@@ -719,9 +708,9 @@ async function checkUpdate(force) {
   } catch {
     return latest; // offline, or the host is down: nothing to say
   }
-  if (!report) return latest;
+  if (!notices) return latest;
   if (!latest || latest === BUILD) {
-    report.notice('update');
+    notices.notice('update');
     return latest;
   }
   const untouched = !started && !$('iso').files.length && !$('pass').value && !$('pass2').value;
@@ -737,11 +726,11 @@ async function checkUpdate(force) {
     return latest;
   }
   if (laterFor !== latest) {
-    report.notice('update', '', started
+    notices.notice('update', '', started
       ? 'A new version of the client is out. Reloading leaves the game, and you log in again.'
       : 'A new version of the client is out.', [
       ['Reload', () => { session.set('reloadedFor', latest); location.reload(); }, true],
-      ['Later', () => { laterFor = latest; report.notice('update'); }],
+      ['Later', () => { laterFor = latest; notices.notice('update'); }],
     ]);
   }
   return latest;
@@ -751,38 +740,14 @@ setInterval(checkUpdate, 60000);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkUpdate(); });
 addEventListener('pageshow', (e) => { if (e.persisted) checkUpdate(); });
 
-// ---- reports (report.js): what this page adds to each, and the cards' buttons
-
-if (report) {
-  report.graphics = () => {
-    if (/\(Gl\)$/.test(clientGraphics)) return 'WebGL2';
-    if (/WebGpu/.test(clientGraphics)) return 'WebGPU';
-    const g = $('gfx-state').textContent;
-    return /WebGPU/.test(g) ? 'WebGPU' : /WebGL2/.test(g) ? 'WebGL2' : '';
-  };
-  report.facts = () => [
-    `update: ${!BUILD ? 'not a built page' : !latest ? 'not asked yet' : latest === BUILD ? 'this is the newest' : `the server has ${latest}`}`,
-    `graphics: ${$('gfx-state').textContent}${clientGraphics ? `; the client's: ${clientGraphics}` : ''}`,
-    `disc: ${discLine || ($('iso').files.length ? 'picked, not identified' : 'none picked')}`,
-    `panel: ${['login', 'chars', 'create'].find((v) => !$(v).hidden) || 'none (the game)'}, status: ${$('status').textContent}`,
-    `relay ${$('relay').value || '-'}, server ${$('server').value || '(this host)'}`,
-    `sound: ${JSON.stringify(window.eqoaAudio.stats())}`,
-  ];
-}
-for (const [button, where] of [['report-login', 'login'], ['report-chars', 'chars']]) {
-  $(button).onclick = () => {
-    const e = $(where + '-error').textContent.trim();
-    if (report) report.open(e ? `The page said: ${e}` : '');
-  };
-}
-
 checkGraphics();
 setMode('login');
 const ready = init({ module_or_path: wasmModule });
 ready.then(() => {
-  window.eqoaClient = { state: client_state, wantShot: want_shot, crashTest: crash_test };
+  // the page's crash notice is checked with a panic (web/pagetest.py)
+  window.eqoaClient = { crashTest: crash_test };
   status('ready');
 }).catch((e) => {
   status('could not load the client: ' + e);
-  problem('load', `The client did not load (${e}). Reload the page; if it keeps happening, send a report.`);
+  problem('load', `The client did not load (${e}). Reload the page; if it happens again, the site may be in the middle of an update: wait a minute.`);
 });

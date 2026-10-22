@@ -657,7 +657,7 @@ impl Map {
         l.ui.draw(device, &mut pass, size);
     }
 
-    /// For a report: the map's state.
+    /// The map's state (a shot's last lines).
     pub fn describe(&self) -> String {
         match &self.world {
             Some(w) => format!("{}{}", w.builder.describe(), if self.open { ", up" } else { "" }),

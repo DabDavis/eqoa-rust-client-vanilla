@@ -1234,9 +1234,6 @@ struct App {
     /// each key pressed was made, and the controllers' buttons a capture took.
     keys_edge: crate::binds::KeyEdge,
     pad_edge: crate::binds::PadEdge,
-    /// the sticks `UpdateControls` got last frame: the pad's, the keys', the
-    /// mouse's and the touch screen's (for a report)
-    sticks_used: [f32; 4],
     /// The mouse in play (`mouse.rs`), and the last frame's view (what a
     /// click picks through).
     mouse: crate::mouse::Mouse,
@@ -1302,7 +1299,6 @@ pub fn run_with_gfx(lib: Library, source: Source, play: Option<crate::play::Play
         pad_script: crate::input::Script::from_env(),
         keys_edge: Default::default(),
         pad_edge: Default::default(),
-        sticks_used: [0.0; 4],
         mouse: crate::mouse::Mouse::default(),
         last_view: None,
         touch: crate::touch::TouchPad::new(touch_first()),
@@ -1589,72 +1585,6 @@ impl App {
         let speed = if self.held.contains("shift") { 400.0 } else { 80.0 };
         *pos += v * speed * dt;
         v != Vec3::ZERO
-    }
-
-    /// What a report from the page says of the client (web/report.js): the
-    /// frames, the surface, the files in the library and play's own.
-    #[cfg(target_arch = "wasm32")]
-    fn report_state(&self) -> String {
-        use std::fmt::Write;
-        let mut o = String::new();
-        let _ = writeln!(o, "frames {}, clock {:.1} s", FRAMES.load(std::sync::atomic::Ordering::Relaxed), self.clock.elapsed().as_secs_f64());
-        if let Some(g) = &self.gfx {
-            let _ = writeln!(o, "surface {}x{} {:?}", g.config.width, g.config.height, g.config.format);
-        }
-        let _ = writeln!(o, "files: {}", self.lib.files.iter().map(|f| f.0.as_str()).collect::<Vec<_>>().join(", "));
-        let _ = writeln!(o, "options, extended: {}", crate::settings::describe());
-        let _ = writeln!(o, "keys and buttons: {}", crate::settings::with_binds(|b| b.describe()));
-        // the controls: a pad's sticks as they came (before the host's dead
-        // zone), as the game reads them and with the keys, the mouse and the
-        // touch screen's merged in (what `UpdateControls` got), the camera's
-        // mode; each pad as the browser gives it; what else is held
-        let mode = self.walker.as_ref().map_or(-1, |w| w.cam.camera_mode);
-        let _ = writeln!(
-            o,
-            "sticks rx ry lx ly: pad {:.3?} (dead zone {}), the game's {:.4?}, with the keys, mouse and touch {:.4?}; camera mode {mode}",
-            self.pads.raw,
-            self.pads.dead_zone,
-            self.console.sticks(),
-            self.sticks_used
-        );
-        for d in &self.pads.described {
-            let _ = writeln!(o, "  {d}");
-        }
-        let mut keys: Vec<&str> = self.held.iter().map(String::as_str).collect();
-        keys.sort_unstable();
-        let _ = writeln!(o, "keys held [{}]; mouse {}; touch pad {}", keys.join(", "), self.mouse.describe(), if self.touch.used { "in use" } else { "unused" });
-        // the body and the camera, for a report of either moving on its own
-        if let Some(w) = &self.walker {
-            let (p, c) = (&w.cam.walk.phys, &w.cam.cur);
-            let anim = w.sprite.as_ref().map(|s| [s.cur[0].anim, s.cur[1].anim]);
-            let v = p.velocity;
-            let _ = writeln!(
-                o,
-                "body: heading {:.4} (target {:.4}), velocity [{:.3}, {:.3}, {:.3}], flags {:#x}, loco {}, anim {anim:?}; camera: orbit {:.4}, pitch {:.4}, dist {:.2}, flags {:#x}",
-                p.angles.x.0,
-                p.target_heading.0,
-                v.x.0,
-                v.y.0,
-                v.z.0,
-                p.flags,
-                p.loco_state,
-                c.orbit.x.0,
-                c.orbit.y.0,
-                c.dist.0,
-                c.flags
-            );
-            let cam = &w.cam;
-            let _ = writeln!(o, "camera: distance {:.2} of {:.2} (chosen {:.2}), pitch {:.3} (default {:.3})", cam.cur.dist.0, cam.max_orbit_distance.0, w.reach.chosen(cam).0, cam.cur.orbit.y.0, cam.def_orbit_pitch.0);
-        }
-        if let Some(e) = &self.entering {
-            let _ = writeln!(o, "entering {} at {:?}", e.0, e.1);
-        }
-        // the hour the lights and the effect volumes take, and the volumes
-        let _ = writeln!(o, "hour {:.2}; {}", hour(self.clock), self.fx.as_ref().map_or("effect volumes off".into(), |f| f.describe()));
-        if let (Some(p), Some(w)) = (&self.play, &self.walker) {
-            o.push_str(&p.report(w.cam.walk.phys.position.to_array()));
-        }
-        o
     }
 
     /// The renderer on a configured surface (or none: an offscreen target of
@@ -2505,8 +2435,8 @@ impl ApplicationHandler for App {
             // Walking, the mouse is `mouse.rs`'s: a drag looks round, the
             // wheel zooms, a click targets and a double or right click talks.
             // a release that may never come: let go of what is held (a key
-            // let go while the report's dialog or another window has the
-            // keys would walk or turn the player on for good)
+            // let go while another window has the keys would walk or turn
+            // the player on for good)
             WindowEvent::Focused(false) => {
                 self.mouse.release_all();
                 self.held.clear();
@@ -2675,7 +2605,6 @@ impl ApplicationHandler for App {
                 mark(&mut self.perf, 0);
                 self.grab_pointer(true);
                 let sticks = self.sticks();
-                self.sticks_used = sticks;
                 // the mouse steering the body (`controls::Client::steer`)
                 let look_free = !self.play.as_ref().is_some_and(|p| p.is_dead()) && self.play.as_ref().is_none_or(|p| p.look_free());
                 let steer = look_free && self.walker.as_ref().is_some_and(|w| self.mouse.steer(w.cam.camera_mode));
@@ -2937,13 +2866,6 @@ impl ApplicationHandler for App {
                 if let Some(p) = &mut self.perf {
                     p.drawn = g.renderer.drawn.get();
                     p.end(frame_start);
-                }
-                // The page's picture of this frame, if it asked, and its
-                // report's state of the client (web/report.js).
-                #[cfg(target_arch = "wasm32")]
-                {
-                    crate::web::frame_drawn();
-                    crate::web::note_state(|| self.report_state());
                 }
             }
             _ => {}

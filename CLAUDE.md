@@ -88,7 +88,7 @@ The Rust client. README.md is the plan and the crate table; keep it current.
 - A build is `web/dist/v/<build>/`, never changed under its name (the host serves it immutable);
   only the page and `version.json` are revalidated, and `web/deploy.sh` publishes them in that
   order, after the build. Every file a page loads must be in its build (a new one goes into
-  `build.sh`'s copy list). Reports, crash reports and notices are the page's (`web/report.js`,
-  to reportd's `/eqoa/reports/`); the client feeds them through `web::problem`, `web::crash`,
-  `web::note_state` and `web::frame_drawn`, the browser build only. Never log a credential: the
-  console's last 200 lines go with every report. `web/pagetest.py` checks the page's half.
+  `build.sh`'s copy list). Notices are the page's (`web/notices.js`): the client raises them
+  through `web::problem` (a part gone: the player can dismiss it) and `web::crash` (the client
+  stopped: a Reload), the browser build only. Nothing is sent anywhere: no reports, no telemetry.
+  Never log a credential. `web/pagetest.py` checks the page's half.

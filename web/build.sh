@@ -1,6 +1,6 @@
 #!/bin/sh
 # The browser client: web/dist/ gets the page (index.html) and its build,
-# v/<build>/: main.js and report.js, the worker (unpack.js), the AudioWorklet
+# v/<build>/: main.js and notices.js, the worker (unpack.js), the AudioWorklet
 # (sound.js), eqoa.js and eqoa_bg.wasm (wasm-bindgen 0.2.129, the version
 # Cargo.lock pins: `cargo install wasm-bindgen-cli --version 0.2.129`), and
 # build.json. A build is named by the digest of its files, the page and the
@@ -24,7 +24,7 @@ if [ -n "$OPT" ]; then
     "$OPT" -O2 --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext --enable-mutable-globals \
         --enable-reference-types --enable-multivalue "$STAGE/eqoa_bg.wasm" -o "$STAGE/eqoa_bg.wasm"
 fi
-cp web/main.js web/report.js web/unpack.js web/sound.js "$STAGE/"
+cp web/main.js web/notices.js web/unpack.js web/sound.js "$STAGE/"
 # the commit, with a + when tracked files differ from it
 COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo none)"
 git diff --quiet HEAD 2>/dev/null || COMMIT="$COMMIT+"
@@ -32,9 +32,9 @@ BUILD="$( { (cd "$STAGE" && sha256sum -- *); sha256sum < web/index.html; echo "$
 printf '{"build":"%s","commit":"%s"}\n' "$BUILD" "$COMMIT" > "$STAGE/build.json"
 mkdir -p web/dist/v
 mv "$STAGE" "web/dist/v/$BUILD"
-sed -e "s|src=\"\./main\.js\"|src=\"./v/$BUILD/main.js\"|" -e "s|src=\"\./report\.js\"|src=\"./v/$BUILD/report.js\"|" web/index.html > web/dist/index.html
+sed -e "s|src=\"\./main\.js\"|src=\"./v/$BUILD/main.js\"|" -e "s|src=\"\./notices\.js\"|src=\"./v/$BUILD/notices.js\"|" web/index.html > web/dist/index.html
 # a page that names no build would load files that are not there
-grep -q "src=\"./v/$BUILD/main.js\"" web/dist/index.html && grep -q "src=\"./v/$BUILD/report.js\"" web/dist/index.html \
-    || { echo "web/index.html: its scripts are not ./main.js and ./report.js" >&2; exit 1; }
+grep -q "src=\"./v/$BUILD/main.js\"" web/dist/index.html && grep -q "src=\"./v/$BUILD/notices.js\"" web/dist/index.html \
+    || { echo "web/index.html: its scripts are not ./main.js and ./notices.js" >&2; exit 1; }
 cp "web/dist/v/$BUILD/build.json" web/dist/version.json
 ls -la "web/dist" "web/dist/v/$BUILD"

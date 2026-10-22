@@ -100,7 +100,7 @@ pub fn stick_byte(v: f32) -> u8 {
 /// reports 20261020-103355 and -104019, Chrome, a PowerA pad). A DualShock 2
 /// rests in its middle, and PCSX2 leaves its "Analog Deadzone" to the player
 /// (none by default). In a page `?deadzone=<0..0.9>`, natively
-/// `EQOA_DEADZONE`; the page's problem reports carry the sticks as they came.
+/// `EQOA_DEADZONE`.
 /// A page's default is 0.37, the edge it had through gilrs (0.1 + 0.3 x
 /// 0.9) when those reports were settled: a stick resting at 0.34 there stayed
 /// still and would walk at 0.3.
@@ -408,12 +408,6 @@ pub struct Gamepads {
     last: Report,
     /// [`dead_zone`]
     pub dead_zone: f32,
-    /// the pads' sticks as they came, before the dead zone (for a report)
-    pub raw: [f32; 4],
-    /// each pad as a report gives it: its id, mapping, layout, every axis
-    /// and every button pressed (in a page)
-    #[cfg(target_arch = "wasm32")]
-    pub described: Vec<String>,
 }
 
 impl Default for Gamepads {
@@ -452,9 +446,6 @@ impl Gamepads {
             trace: trace(),
             last: Report::default(),
             dead_zone: dead_zone(),
-            raw: [0.0; 4],
-            #[cfg(target_arch = "wasm32")]
-            described: Vec::new(),
         }
     }
 
@@ -469,7 +460,6 @@ impl Gamepads {
             }
         }
         let mut out = Report::default();
-        let mut raw = Report::default();
         let (mut any, mut motors) = (false, false);
         for (_, pad) in g.gamepads() {
             if !pad.is_connected() {
@@ -483,11 +473,9 @@ impl Gamepads {
                 self.seen.push(name);
             }
             let mut r = report_of(&pad);
-            raw.merge(&r);
             r.rest(self.dead_zone);
             out.merge(&r);
         }
-        self.raw = raw.sticks;
         if self.trace && out != self.last {
             crate::say(&format!("[pad] report {out:?}"));
             self.last = out;
@@ -502,8 +490,6 @@ impl Gamepads {
     pub fn poll(&mut self) -> (Report, bool, bool) {
         let pads = crate::web::pad::gamepads();
         let mut out = Report::default();
-        let mut raw = Report::default();
-        let mut described = Vec::new();
         let mut traced = Vec::new();
         for p in &pads {
             // a pad's reading is kept by its slot, anew when another pad
@@ -522,23 +508,18 @@ impl Gamepads {
                 crate::say(&format!("gamepad: {} (mapping {:?}, {})", p.id, p.mapping, map.how(p, self.browser)));
                 self.seen.push(p.id.clone());
             }
-            let d = map.describe(p, self.browser);
             if self.trace {
                 // `?padtrace`: a pad as it changes, its axes to 0.05
                 let coarse = format!("{} {:?} {:?}", p.index, p.buttons.iter().map(|b| b.0).collect::<Vec<_>>(), p.axes.iter().map(|v| (v * 20.0).round() as i32).collect::<Vec<_>>());
                 if !self.traced.contains(&coarse) {
-                    crate::say(&format!("[pad] {d}"));
+                    crate::say(&format!("[pad] {}", map.describe(p, self.browser)));
                 }
                 traced.push(coarse);
             }
-            described.push(d);
-            raw.merge(&r);
             r.rest(self.dead_zone);
             out.merge(&r);
         }
         self.traced = traced;
-        self.described = described;
-        self.raw = raw.sticks;
         if self.trace && out != self.last {
             crate::say(&format!("[pad] report {out:?}"));
             self.last = out;

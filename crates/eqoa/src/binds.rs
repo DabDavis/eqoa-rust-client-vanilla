@@ -138,11 +138,11 @@ fn default_row(name: &str) -> Option<usize> {
     ROWS.iter().position(|r| r.keys.contains(&name))
 }
 
-/// The keys a capture refuses: the page's and the window's own (F3 the
-/// report, F11 full screen, F12 a browser's tools), and the modifiers, which
-/// `name_of` gives no name.
+/// The keys a capture refuses: the page's and the window's own (F11 full
+/// screen, F12 a browser's tools), and the modifiers, which `name_of` gives
+/// no name.
 pub fn reserved(name: &str) -> bool {
-    matches!(name, "f3" | "f11" | "f12")
+    matches!(name, "f11" | "f12")
 }
 
 /// The 16 buttons by their bit (`input::bit`): their names in `keys.opt` and
@@ -390,7 +390,7 @@ impl Binds {
         }
     }
 
-    /// For a report: what was moved, or that nothing was.
+    /// What was moved, or that nothing was (said when the keys are read).
     pub fn describe(&self) -> String {
         if self.is_default() {
             return "the default layout".into();
