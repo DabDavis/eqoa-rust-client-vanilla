@@ -1357,7 +1357,7 @@ pub fn run_boot(server: Option<String>) -> Result<(), Error> {
 
 /// `run_boot` on a surface made beforehand (a page's).
 pub fn run_boot_gfx(server: Option<String>, pending: Option<PendingGfx>) -> Result<(), Error> {
-    let host = crate::pregame::host::Host::new(crate::pregame::Pregame::new(server));
+    let host = crate::pregame::host::Host::new(crate::pregame::Pregame::new(server), 0);
     run_app(Library::new(), Source::Models { list: Vec::new(), index: 0 }, None, pending, Some(host))
 }
 
@@ -1860,7 +1860,7 @@ impl App {
         self.source = Source::Models { list: Vec::new(), index: 0 };
         self.grab_pointer(false);
         let now = self.clock.elapsed().as_millis() as i64;
-        self.host = Some(crate::pregame::host::Host::new(crate::pregame::Pregame::back(shared, disconnect, now)));
+        self.host = Some(crate::pregame::host::Host::new(crate::pregame::Pregame::back(shared, disconnect, now), now));
     }
 
     /// The world entered from the pregame: its library and walk (`main.rs`'s

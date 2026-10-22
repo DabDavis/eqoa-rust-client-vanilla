@@ -69,13 +69,16 @@ pub struct Host {
 }
 
 impl Host {
-    pub fn new(pre: Pregame) -> Self {
+    /// The pregame's host from `now` on (ms on the client's clock): the key
+    /// script's keys still to come, so a host made when the world is left does
+    /// not press again what the script pressed before it.
+    pub fn new(pre: Pregame, now: i64) -> Self {
         Host {
             pre,
             assets: None,
             pictures: HashMap::new(),
             playing: HashMap::new(),
-            keys: key_script(),
+            keys: due_after(key_script(), now),
             pointer_held: Vec::new(),
             world: None,
             gears: None,
@@ -350,6 +353,26 @@ fn key_script() -> Vec<(i64, i32, bool)> {
     Vec::new()
 }
 
+/// The script's keys after `now`, less the releases of presses before it.
+fn due_after(keys: Vec<(i64, i32, bool)>, now: i64) -> Vec<(i64, i32, bool)> {
+    let mut held = Vec::new();
+    keys.into_iter()
+        .filter(|&(t, k, down)| {
+            if t <= now {
+                false
+            } else if down {
+                held.push(k);
+                true
+            } else if let Some(i) = held.iter().position(|&h| h == k) {
+                held.remove(i);
+                true
+            } else {
+                false
+            }
+        })
+        .collect()
+}
+
 /// The keyboard's codes by name, as `VIKeyboard::Read` gives them.
 pub fn key_code(name: &str) -> Option<i32> {
     Some(match name {
@@ -409,5 +432,15 @@ mod tests {
         assert_eq!(k, vec![(3000, 13, true), (3100, 13, false), (3500, 20, true), (3600, 20, false), (4000, 97, true), (4040, 97, false), (4080, 98, true), (4120, 98, false)]);
         // the control: an unknown key name is not a key
         assert_eq!(key_code("nonsense"), None);
+    }
+
+    /// A host made at 3,550 ms (back from the world) keeps only what is still
+    /// to come: the press at 3,500 is not pressed again, nor let go; the
+    /// control: a host from the start keeps them all.
+    #[test]
+    fn a_host_made_later_keeps_only_the_keys_to_come() {
+        let k = parse_keys("enter@3000;down@3500;up@4000");
+        assert_eq!(due_after(k.clone(), 3550), vec![(4000, 19, true), (4100, 19, false)]);
+        assert_eq!(due_after(k.clone(), 0), k);
     }
 }
