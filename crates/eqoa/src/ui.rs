@@ -33,6 +33,13 @@ pub trait Layout: Raster {
     /// whole surface (0..1), in blend `mode`: what a window draws through a
     /// material of its own (the title's bobbing island, `VISplashFx`).
     fn textured(&mut self, _id: u32, _mode: i32, _color: [f32; 4], _corners: [[f32; 2]; 4], _uv: [[f32; 2]; 4]) {}
+    /// A solid fill in a material of its own that blends by the colour's
+    /// alpha (STATION's `VIGUIObject::FillRect` and `VIFader` make theirs
+    /// with `SetLayerBlendMode(0, 3)`), where `fill_fan`'s, the UI's solid
+    /// fill, is opaque.
+    fn fill_blended(&mut self, color: [f32; 4], corners: [[i32; 2]; 4]) {
+        self.fill_fan(color, corners)
+    }
 }
 
 /// What the layer holds for the UI: surfaces by DictID, and the font.
@@ -139,6 +146,12 @@ impl Layout for UiRaster<'_> {
     fn textured(&mut self, id: u32, mode: i32, color: [f32; 4], corners: [[f32; 2]; 4], uv: [[f32; 2]; 4]) {
         let Some(tex) = self.assets.surface(id) else { return };
         self.ui.push(Quad { tex, blend: mode as u8, pos: corners, uv, color, clip: None });
+        self.glyphs.other();
+    }
+    fn fill_blended(&mut self, color: [f32; 4], c: [[i32; 2]; 4]) {
+        let Some(tex) = self.assets.white else { return };
+        let pos = c.map(|p| [p[0] as f32, p[1] as f32]);
+        self.ui.push(Quad { tex, blend: 3, pos, uv: [[0.5, 0.5]; 4], color, clip: None });
         self.glyphs.other();
     }
 }

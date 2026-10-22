@@ -22,8 +22,10 @@
 //! defaults and keeps nothing.
 //!
 //! `game.opt` is the game's 1,024 bytes, little-endian as the EE stores them,
-//! with the login (+0x10 the username, +0x50 the password) and the home shard
-//! (+0x98) always zero: the client never stores them.
+//! with the home shard (+0x98) always zero: the client never stores it. The
+//! login (+0x10 the username, +0x50 the password, +0x90 Save Account) is
+//! STATION's: kept when its Save Account is ticked, as the card kept it, the
+//! password in plain text (`save_login`); empty otherwise.
 //!
 //! The frame cap the Extended page's Frame Rate sets is kept here too
 //! (`frame_due`, `frame_wait`): a page's animation frames and the native
@@ -113,7 +115,7 @@ pub fn game_options() -> GameOptions {
 /// client's own settings beside the game's. Whether both were kept; a
 /// failure is said and play goes on (the game's `m_saveFailed`).
 pub fn save(o: &GameOptions) -> bool {
-    let mut card = o.to_card();
+    let mut card = with_login(o.to_card());
     // the home shard the server list keeps there stays (`set_home_shard`)
     if let Some(b) = store::read(GAME_FILE).filter(|b| GameOptions::from_card(b).is_some()) {
         card[HOME_SHARD..HOME_SHARD + HOME_SHARD_LEN].copy_from_slice(&b[HOME_SHARD..HOME_SHARD + HOME_SHARD_LEN]);
@@ -127,6 +129,47 @@ pub fn save(o: &GameOptions) -> bool {
         }
     }
     game.is_ok() && client.is_ok() && keys.is_ok()
+}
+
+/// The login STATION's Save Account kept (`VIGameOptions::m_username`,
+/// `m_password`, `m_x90`), from the card's whole record (`Load`): empty and
+/// off when there is none.
+pub fn saved_login() -> (String, String, bool) {
+    let Some(b) = store::read(GAME_FILE).filter(|b| GameOptions::from_card(b).is_some()) else {
+        return (String::new(), String::new(), false);
+    };
+    let text = |r: std::ops::Range<usize>| b[r].iter().take_while(|&&c| c != 0).map(|&c| c as char).collect();
+    (text(0x10..0x50), text(0x50..0x90), b[0x90] != 0)
+}
+
+/// `card` with the login kept on the card put back (`to_card` writes none).
+fn with_login(mut card: [u8; CARD_SIZE]) -> [u8; CARD_SIZE] {
+    if let Some(b) = store::read(GAME_FILE).filter(|b| GameOptions::from_card(b).is_some()) {
+        card[0x10..0x91].copy_from_slice(&b[0x10..0x91]);
+    }
+    card
+}
+
+/// STATION's `SaveAccount` and the `Save()` three frames on: the login
+/// (`SetUsername`, `SetPassword`, 63 characters and the terminator each) and
+/// the flag into the options, the rest of the record as it was (the
+/// defaults' when there was none). Whether it was kept.
+pub fn save_login(user: &str, password: &str, on: bool) -> bool {
+    let mut card = store::read(GAME_FILE).filter(|b| GameOptions::from_card(b).is_some()).and_then(|b| <[u8; CARD_SIZE]>::try_from(&b[..CARD_SIZE]).ok()).unwrap_or_else(|| game_options().to_card());
+    for (at, s) in [(0x10, user), (0x50, password)] {
+        card[at..at + 0x40].fill(0);
+        for (k, c) in s.chars().take(0x3F).enumerate() {
+            card[at + k] = if (c as u32) < 256 { c as u8 } else { b'?' };
+        }
+    }
+    card[0x90] = on as u8;
+    match store::write(GAME_FILE, &card) {
+        Ok(()) => true,
+        Err(e) => {
+            crate::say(&format!("the saved account was not kept: {e}"));
+            false
+        }
+    }
 }
 
 // ---- game.opt's home shard (`VIGameOptions::m_homeShard`) ---------------------------
@@ -776,6 +819,12 @@ mod tests {
         assert!(save(&GameOptions { battle: 3, ..game_options() }));
         assert_eq!(home_shard().as_deref(), Some("Marr's Fist"));
         assert_eq!(game_options().battle, 3);
+        // STATION's Save Account beside it: each keeps the other
+        assert!(save_login("player002", "pw", true));
+        assert_eq!(home_shard().as_deref(), Some("Marr's Fist"));
+        set_home_shard("Hodstock").unwrap();
+        assert_eq!(saved_login(), ("player002".to_string(), "pw".to_string(), true));
+        set_home_shard("Marr's Fist").unwrap();
         // a longer name is cut to 63 characters, the terminator kept
         set_home_shard(&"x".repeat(80)).unwrap();
         assert_eq!(home_shard().map(|s| s.len()), Some(63));
@@ -785,6 +834,44 @@ mod tests {
         store::write(GAME_FILE, &bad).unwrap();
         assert_eq!(home_shard(), None);
         testing::reset(false);
+    }
+
+    /// STATION's Save Account: the login at +0x10 and +0x50 (63 characters
+    /// and the terminator) and the flag at +0x90, the rest of the record as it
+    /// was; read back as `Load` reads it; kept through the Options window's
+    /// Save Changes; an untick writes them empty. The controls: nothing kept
+    /// is empty and off, and a store that refuses keeps nothing.
+    #[test]
+    fn save_account_keeps_the_login_where_the_card_did() {
+        testing::reset(false);
+        assert_eq!(saved_login(), (String::new(), String::new(), false));
+        let o = changed();
+        assert!(save(&o));
+        let long = "p".repeat(70);
+        assert!(save_login("player0001", &long, true));
+        let card = testing::kept(GAME_FILE).unwrap();
+        assert_eq!(&card[0x10..0x1A], b"player0001");
+        assert!(card[0x1A..0x50].iter().all(|&c| c == 0));
+        assert_eq!(&card[0x50..0x8F], "p".repeat(63).as_bytes(), "63 and the terminator");
+        assert_eq!(card[0x8F], 0);
+        assert_eq!(card[0x90], 1, "m_x90");
+        assert_eq!(GameOptions::from_card(&card), Some(o), "the settings as they were");
+        assert_eq!(saved_login(), ("player0001".to_string(), "p".repeat(63), true));
+        // Save Changes keeps the login
+        let mut quiet = o;
+        quiet.battle = 0;
+        assert!(save(&quiet));
+        assert_eq!(saved_login(), ("player0001".to_string(), "p".repeat(63), true));
+        assert_eq!(game_options(), quiet);
+        // unticked: empty
+        assert!(save_login("", "", false));
+        let card = testing::kept(GAME_FILE).unwrap();
+        assert!(card[0x10..0x91].iter().all(|&c| c == 0));
+        assert_eq!(saved_login(), (String::new(), String::new(), false));
+        testing::reset(true);
+        assert!(!save_login("player0001", "pw", true), "the control: a refusing store");
+        testing::reset(false);
+        assert_eq!(saved_login(), (String::new(), String::new(), false));
     }
 
     /// Network Setup's server: kept trimmed, a blank one is none, and a
