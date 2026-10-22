@@ -10,7 +10,7 @@
 //! back; the cursor's arrows pulse in alpha.
 
 use super::tables;
-use super::{Msg, legend, word};
+use super::{Msg, legend_sized, word};
 use crate::pointer::{Hits, key};
 use crate::pregame::Ctx;
 use net::session::NewChar;
@@ -343,7 +343,7 @@ impl ClassPage {
         let title = word(vui, if self.page != 0 { 603 } else { 258 });
         let w = r.string_width(&title) + 64;
         vui.blit_bar(r, &title, white, [(640 - w) / 2, 8], 33, 34, w, 0, 1.0, 0, true);
-        let [tri, cross] = legend(vui, r, 217, if self.page == 0 { 212 } else { 216 });
+        let [tri, cross] = legend_sized(vui, r, 217, if self.page == 0 { 212 } else { 216 }, 212);
         self.hits.push(tri, TRIANGLE);
         self.hits.push(cross, CROSS);
         // the classes

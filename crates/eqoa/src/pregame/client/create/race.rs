@@ -333,11 +333,7 @@ impl RacePage {
 /// style, hair length, hair colour.
 pub fn look_for(race: i32, city: i32, sex: i32, form: &NewChar, env: &Env) -> [i32; 4] {
     let def = if city == 1 {
-        if env.expansion & 2 != 0 {
-            if sex == 0 { [2, 2, 2, 1] } else { [0, 0, 3, 1] }
-        } else {
-            [2, 0, 2, 2]
-        }
+        if env.expansion & 2 != 0 { if sex == 0 { [2, 2, 2, 1] } else { [0, 0, 3, 1] } } else { [2, 0, 2, 2] }
     } else {
         let info = env.race_info(race);
         if sex == 0 { info.male } else { info.female }

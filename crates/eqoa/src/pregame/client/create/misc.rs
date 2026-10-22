@@ -207,12 +207,8 @@ impl MiscPage {
             self.hits.push(tri, TRIANGLE);
             self.hits.push(cross, CROSS);
             // the four rows: two plates, the picture (lit when picked), the word
-            let rows: [(i32, i32, [i32; 2], [i32; 2], i32, i32); 4] = [
-                (131, 206, [95, -40], [9, 15], 604, 60),
-                (132, 207, [95, -40], [23, 25], 605, 60),
-                (133, 208, [95, -40], [1, 2], 606, 60),
-                (134, 209, [95, -35], [5, 6], 607, 56),
-            ];
+            let rows: [(i32, i32, [i32; 2], [i32; 2], i32, i32); 4] =
+                [(131, 206, [95, -40], [9, 15], 604, 60), (132, 207, [95, -40], [23, 25], 605, 60), (133, 208, [95, -40], [1, 2], 606, 60), (134, 209, [95, -35], [5, 6], 607, 56)];
             let mut tl = [27, 92];
             for (i, &(pic, lit, off, lit_off, wd, wy)) in rows.iter().enumerate() {
                 vui.blit_ex(r, 135, tl, 0, 1.0, 0);

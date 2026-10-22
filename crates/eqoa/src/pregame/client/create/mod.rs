@@ -472,10 +472,16 @@ pub(crate) fn word(vui: &vi::ui::Vui, id: i32) -> Vec<u16> {
 /// black; where each glyph and word were drawn, as frame rectangles, for a
 /// pointer.
 pub(crate) fn legend(vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster, back: i32, select: i32) -> [[i32; 4]; 2] {
+    legend_sized(vui, r, back, select, select)
+}
+
+/// `legend`, the bar sized for word `sized` whatever `select` shows (the
+/// class page measures "Select" on both its pages).
+pub(crate) fn legend_sized(vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster, back: i32, select: i32, sized: i32) -> [[i32; 4]; 2] {
     let black = [0.0, 0.0, 0.0, 1.0];
     let (wb, ws) = (r.string_width(&word(vui, back)), r.string_width(&word(vui, select)));
     let mut at = [50, 408];
-    let w = wb + 110 + ws;
+    let w = wb + 110 + r.string_width(&word(vui, sized));
     vui.blit_bar(r, &[], black, at, 25, 26, w, 0, 1.0, 0, true);
     at = [at[0] + 20, at[1] + 4];
     let g = vui.entry(65).uv1;
