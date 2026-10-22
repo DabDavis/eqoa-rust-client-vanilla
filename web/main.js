@@ -1,17 +1,11 @@
-// The page around the client (crates/eqoa/src/web): the login or a new
-// account, the character screen (select, delete, create) the session drives,
-// then the game on the canvas. Query parameters override the defaults:
-// ?relay=ws://127.0.0.1:8790&server=203.0.113.10 for a local server, and
-// ?account= for the account service (default: /eqoa/account on this host).
-// Notices and what goes wrong are notices.js's (window.eqoaNotices).
-import init, { play, view, choose_character, create_character, delete_character, random_name, crash_test, disc_id } from './eqoa.js';
-
-const RACES = ['Human', 'Elf', 'Dark Elf', 'Gnome', 'Dwarf', 'Troll', 'Barbarian', 'Halfling', 'Erudite', 'Ogre', 'Froglok'];
-const CITIES = { 1: 'Freeport', 2: 'Qeynos' };
-const CLASSES = ['Warrior', 'Ranger', 'Paladin', 'Shadowknight', 'Monk', 'Bard', 'Rogue', 'Druid', 'Shaman',
-  'Cleric', 'Magician', 'Necromancer', 'Enchanter', 'Wizard', 'Alchemist'];
-const STATS = ['Strength', 'Stamina', 'Agility', 'Dexterity', 'Wisdom', 'Intelligence', 'Charisma'];
-const POINTS = 20;
+// The page around the client (crates/eqoa/src/web): a gate that asks for the
+// player's disc image, then the game on the canvas from its boot (web::boot:
+// the loading screens, the licence and the title, Station's login screen, the
+// server list, character select and creation, the world). Query parameters
+// override the defaults: ?relay=ws://127.0.0.1:8790&server=203.0.113.10 for a
+// local server. Notices and what goes wrong are notices.js's
+// (window.eqoaNotices).
+import init, { boot, view, crash_test, disc_id } from './eqoa.js';
 
 const $ = (id) => document.getElementById(id);
 const status = (t) => { $('status').textContent = t; };
@@ -112,10 +106,9 @@ const session = {
   set(k, v) { try { sessionStorage.setItem('eqoa.' + k, v); } catch { /* as above */ } },
 };
 const wsBase = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
-const accountBase = (params.get('account') || '/eqoa/account').replace(/\/+$/, '');
 // What the page offers when nothing is given: kept only when the player
 // changed it, so that a new default reaches everyone who did not.
-const defaults = { user: '', relay: wsBase + '/eqoa/relay', server: '', viewargs: '' };
+const defaults = { relay: wsBase + '/eqoa/relay', server: '', viewargs: '' };
 for (const k of Object.keys(defaults)) $(k).value = params.get(k) || store.get(k) || defaults[k];
 function keepFields() {
   for (const k of Object.keys(defaults)) {
@@ -129,32 +122,20 @@ function keepFields() {
 
 function show(id) {
   $('panel').hidden = id === null;
-  for (const v of ['login', 'chars', 'create']) $(v).hidden = v !== id;
+  for (const v of ['gate']) $(v).hidden = v !== id;
 }
 
 function error(where, text) {
   $(where + '-error').textContent = text || '';
 }
 
-// ---- log in, or a new account first
+// ---- the gate: the disc image, then the game from its boot
 
-let mode = 'login';
-let started = false; // a session or the viewer began: a reload would end it
-function setMode(m) {
-  mode = m;
-  $('tab-login').classList.toggle('on', m === 'login');
-  $('tab-new').classList.toggle('on', m === 'new');
-  $('newonly').hidden = m !== 'new';
-  $('pass2').required = m === 'new';
-  $('pass').autocomplete = m === 'new' ? 'new-password' : 'current-password';
-  $('go').textContent = m === 'new' ? 'Create account' : 'Log in';
-  error('login', '');
-}
-$('tab-login').onclick = () => setMode('login');
-$('tab-new').onclick = () => setMode('new');
+let started = false; // the game or the viewer began: a reload would end it
 
-// The game server's IPv4 address: given, or this page's host as the relay
-// resolves it (the relay reaches only the server's own ports anyway).
+// The game server's IPv4 address when the game's Network Setup names none:
+// given, or this page's host as the relay resolves it (the relay reaches
+// only the server's own ports anyway).
 async function serverAddress(relay) {
   const given = $('server').value.trim();
   if (given) return given;
@@ -165,82 +146,43 @@ async function serverAddress(relay) {
   return (await r.text()).trim();
 }
 
-async function register(user, pass) {
-  const r = await fetch(accountBase + '/api/register', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: user, password: pass }),
-  });
-  if (!r.ok) throw new Error('the account service answered ' + r.status);
-  const j = await r.json();
-  if (!j.success) throw new Error(j.error || 'the account was not made');
-}
-
 function busy(on) {
   for (const b of ['go', 'view']) $(b).disabled = on;
 }
 
-$('login').addEventListener('submit', async (ev) => {
+$('gate').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   startAudio(); // in the gesture itself, before anything is awaited
   const file = $('iso').files[0];
-  const user = $('user').value.trim();
-  const pass = $('pass').value;
-  if (!file) return error('login', 'Pick your disc image first.');
-  if (mode === 'new' && pass !== $('pass2').value) return error('login', 'The passwords differ.');
+  if (!file) return error('gate', 'Pick your disc image first.');
   keepFields();
   started = true;
   busy(true);
-  error('login', '');
-  $('takeover').hidden = true;
+  error('gate', '');
   try {
-    if (mode === 'new') {
-      status('making the account');
-      await register(user, pass);
-      status('account made; logging in');
-    }
     const relay = $('relay').value.trim().replace(/\/+$/, '');
-    const server = await serverAddress(relay);
-    // Resolves once the game is running; meanwhile the session calls the
-    // character screen's hooks below.
-    await play(file, user, pass, { relay, server, character: params.get('character') || '' });
+    let server = '';
+    try {
+      server = await serverAddress(relay);
+    } catch { /* the game's Network Setup can name one */ }
+    // resolves once the game is running on the canvas (window.eqoaBooted)
+    await boot(file, { relay, server });
   } catch (e) {
-    show('login');
+    show('gate');
     busy(false);
-    const msg = String(e && e.message ? e.message : e);
-    error('login', msg);
-    // one login at a time: the server refuses a second window on an account
-    // already in the game, and its owner may end the other one from here
-    $('takeover').hidden = !/already logged in/i.test(msg);
+    error('gate', String(e && e.message ? e.message : e));
   }
 });
 
-// "Log out the other window": the account's sessions in the game are ended
-// (each is told "You have logged in from another location."), then this
-// window logs in.
-$('takeover-go').addEventListener('click', async () => {
-  const user = $('user').value.trim();
-  const pass = $('pass').value;
-  if (!user || !pass) return error('login', 'Enter the account name and password first.');
-  $('takeover-go').disabled = true;
-  try {
-    const r = await fetch(accountBase + '/api/logout', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: user, password: pass }),
-    });
-    if (!r.ok) throw new Error('the account service answered ' + r.status);
-    const j = await r.json();
-    if (!j.success) throw new Error(j.error || 'the other window was not logged out');
-    $('takeover').hidden = true;
-    error('login', '');
-    $('login').requestSubmit();
-  } catch (e) {
-    error('login', String(e && e.message ? e.message : e));
-  } finally {
-    $('takeover-go').disabled = false;
-  }
-});
+window.eqoaBooted = () => {
+  show(null);
+  $('eqoa').focus();
+  if (notices) notices.running(true);
+};
 
 $('view').addEventListener('click', async () => {
   const file = $('iso').files[0];
-  if (!file) return error('login', 'Pick your disc image first.');
+  if (!file) return error('gate', 'Pick your disc image first.');
   keepFields();
   started = true;
   busy(true);
@@ -250,78 +192,14 @@ $('view').addEventListener('click', async () => {
     await view(file, $('viewargs').value.trim() || 'CHAR.ESF 0x70D898C6');
     if (notices) notices.running(true);
   } catch (e) {
-    show('login');
+    show('gate');
     busy(false);
-    error('login', String(e && e.message ? e.message : e));
+    error('gate', String(e && e.message ? e.message : e));
   }
 });
 
-// ---- the character screen
-
-let characters = [];
-let creating = null;   // the name sent, until the list or a refusal answers
-
-window.eqoaCharacters = (list) => {
-  characters = list;
-  if (creating !== null) {
-    const made = list.some((c) => c.name.toLowerCase() === creating.toLowerCase());
-    creating = null;
-    $('c-make').disabled = false;
-    if (!made) return; // a refusal said why; stay on the form
-  }
-  const ul = $('charlist');
-  ul.replaceChildren();
-  for (const c of list) {
-    const li = document.createElement('li');
-    const who = document.createElement('div');
-    who.className = 'who';
-    const name = document.createElement('div');
-    name.className = 'name';
-    name.textContent = c.name;
-    const what = document.createElement('div');
-    what.className = 'what';
-    what.textContent = `Level ${c.level} ${RACES[c.race] || 'race ' + c.race} ${CLASSES[c.class] || 'class ' + c.class}`;
-    who.append(name, what);
-    const playB = document.createElement('button');
-    playB.className = 'primary';
-    playB.textContent = 'Play';
-    playB.onclick = () => { error('chars', ''); choose_character(c.serverId); };
-    const del = document.createElement('button');
-    del.textContent = 'Delete';
-    del.onclick = () => {
-      if (confirm(`Delete ${c.name}? This cannot be undone.`)) delete_character(c.serverId);
-    };
-    li.append(who, del, playB);
-    ul.append(li);
-  }
-  $('nochars').hidden = list.length > 0;
-  $('new').disabled = list.length >= 8;
-  show('chars');
-};
-
-window.eqoaRefused = (text) => {
-  if (!$('create').hidden) {
-    creating = null;
-    $('c-make').disabled = false;
-    error('create', text);
-  } else {
-    error('chars', text);
-  }
-};
-
-window.eqoaRandomName = (name) => { $('c-name').value = name; };
-window.eqoaEntering = (name) => { show(null); status('entering the world as ' + name); };
-window.eqoaInWorld = () => {
-  show(null);
-  $('eqoa').focus();
-  if (notices) notices.running(true);
-};
-
-$('logout').onclick = () => location.reload();
-
-// The server ended the game's connection (0x07A4: the character logged in
-// from another window): the page starts over, so the sockets, the sound and
-// the GPU go with it, and the login screen says why.
+// The server ended the game's connection: the page starts over, so the
+// sockets, the sound and the GPU go with it, and the gate says why.
 window.eqoaDisconnected = (text) => {
   session.set('notice', text);
   location.reload();
@@ -330,124 +208,9 @@ window.eqoaDisconnected = (text) => {
   const notice = session.get('notice');
   if (notice) {
     session.set('notice', '');
-    error('login', notice);
+    error('gate', notice);
   }
 }
-
-// ---- character creation: what the server's templates allow
-// (GET /api/creation: one entry per race, city and class, with its stats)
-
-let combos = null;
-let spent = new Array(7).fill(0);
-
-async function loadCombos() {
-  if (combos) return combos;
-  const r = await fetch(accountBase + '/api/creation');
-  if (!r.ok) throw new Error('character creation is not offered here (' + r.status + ')');
-  combos = (await r.json()).combos;
-  return combos;
-}
-
-function homeKey(c) { return c.race + ':' + c.city; }
-
-function fillSelect(sel, items) {
-  sel.replaceChildren(...items.map(([v, t]) => Object.assign(document.createElement('option'), { value: v, textContent: t })));
-}
-
-function fillHomes() {
-  const seen = new Map();
-  for (const c of combos) {
-    const k = homeKey(c);
-    if (!seen.has(k)) seen.set(k, (RACES[c.race] || 'Race ' + c.race) + (c.race === 0 && CITIES[c.city] ? ` (${CITIES[c.city]})` : ''));
-  }
-  fillSelect($('c-race'), [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1])));
-}
-
-function current() {
-  const [race, city] = $('c-race').value.split(':').map(Number);
-  const cls = Number($('c-class').value);
-  return { race, city, cls, combo: combos.find((c) => c.race === race && c.city === city && c.class === cls) };
-}
-
-function fillClasses() {
-  const [race, city] = $('c-race').value.split(':').map(Number);
-  const keep = $('c-class').value;
-  const list = combos.filter((c) => c.race === race && c.city === city).map((c) => [c.class, CLASSES[c.class] || 'Class ' + c.class]);
-  fillSelect($('c-class'), list.sort((a, b) => a[1].localeCompare(b[1])));
-  if (list.some(([v]) => String(v) === keep)) $('c-class').value = keep;
-  fillStats();
-}
-
-function fillStats() {
-  const { combo } = current();
-  const base = combo ? combo.stats : new Array(7).fill(60);
-  const left = POINTS - spent.reduce((a, b) => a + b, 0);
-  $('c-points').textContent = left;
-  const t = $('c-stats');
-  t.replaceChildren();
-  STATS.forEach((name, i) => {
-    const tr = document.createElement('tr');
-    const td = (text, cls) => Object.assign(document.createElement('td'), { textContent: text, className: cls || '' });
-    const minus = Object.assign(document.createElement('button'), { type: 'button', textContent: '−', disabled: spent[i] === 0 });
-    const plus = Object.assign(document.createElement('button'), { type: 'button', textContent: '+', disabled: left === 0 });
-    minus.setAttribute('aria-label', 'less ' + name);
-    plus.setAttribute('aria-label', 'more ' + name);
-    minus.onclick = () => { spent[i]--; fillStats(); };
-    plus.onclick = () => { spent[i]++; fillStats(); };
-    const b = document.createElement('td');
-    b.append(minus, ' ', plus);
-    tr.append(td(name), td(String(base[i] + spent[i]), 'n'), td(spent[i] ? '+' + spent[i] : '', 'n'), b);
-    t.append(tr);
-  });
-}
-
-function numbered(n) { return Array.from({ length: n }, (_, i) => [i, String(i + 1)]); }
-fillSelect($('c-face'), numbered(4));
-fillSelect($('c-hstyle'), numbered(4));
-fillSelect($('c-hlength'), numbered(4));
-fillSelect($('c-hcolor'), numbered(8));
-
-$('new').onclick = async () => {
-  error('chars', '');
-  try {
-    await loadCombos();
-  } catch (e) {
-    return error('chars', String(e.message || e));
-  }
-  fillHomes();
-  fillClasses();
-  spent = new Array(7).fill(0);
-  // the look's defaults are the appearance page's (VIWndCharCreateMisc::Init)
-  $('c-face').value = 3; $('c-hstyle').value = 3; $('c-hlength').value = 3; $('c-hcolor').value = 0;
-  $('c-name').value = '';
-  error('create', '');
-  fillStats();
-  show('create');
-};
-$('c-race').onchange = () => { spent = new Array(7).fill(0); fillClasses(); };
-$('c-class').onchange = () => { spent = new Array(7).fill(0); fillStats(); };
-$('c-back').onclick = () => show('chars');
-$('c-random').onclick = () => {
-  const { race } = current();
-  random_name(race, Number($('c-sex').value));
-};
-
-$('create').addEventListener('submit', (ev) => {
-  ev.preventDefault();
-  const name = $('c-name').value.trim();
-  if (!/^[A-Za-z]{3,15}$/.test(name)) return error('create', 'A name is 3 to 15 letters.');
-  const { race, city, cls, combo } = current();
-  if (!combo) return error('create', 'Pick a class.');
-  error('create', '');
-  creating = name;
-  $('c-make').disabled = true;
-  create_character({
-    name, race, city, class: cls, sex: Number($('c-sex').value),
-    face: Number($('c-face').value), hairStyle: Number($('c-hstyle').value),
-    hairLength: Number($('c-hlength').value), hairColor: Number($('c-hcolor').value),
-    stats: spent.slice(),
-  });
-});
 
 $('eqoa').addEventListener('pointerdown', () => $('eqoa').focus());
 
@@ -687,7 +450,7 @@ $('iso').addEventListener('change', async () => {
 
 // ---- updates: this page is one build (web/build.sh puts each in
 // v/<build>/, kept as it is for good), and version.json beside the page names
-// the newest. A tab left open asks now and then: on an untouched login card
+// the newest. A tab left open asks now and then: on an untouched gate
 // it reloads at once, nothing being lost; anywhere else it says so, and the
 // player reloads when it suits them.
 
@@ -713,7 +476,7 @@ async function checkUpdate(force) {
     notices.notice('update');
     return latest;
   }
-  const untouched = !started && !$('iso').files.length && !$('pass').value && !$('pass2').value;
+  const untouched = !started && !$('iso').files.length;
   if (session.get('reloadedFor') === latest) {
     // reloaded for it once already and still this build: something between
     // here and the server keeps the old page
@@ -727,7 +490,7 @@ async function checkUpdate(force) {
   }
   if (laterFor !== latest) {
     notices.notice('update', '', started
-      ? 'A new version of the client is out. Reloading leaves the game, and you log in again.'
+      ? 'A new version of the client is out. Reloading leaves the game, and you sign in again.'
       : 'A new version of the client is out.', [
       ['Reload', () => { session.set('reloadedFor', latest); location.reload(); }, true],
       ['Later', () => { laterFor = latest; notices.notice('update'); }],
@@ -741,7 +504,6 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 addEventListener('pageshow', (e) => { if (e.persisted) checkUpdate(); });
 
 checkGraphics();
-setMode('login');
 const ready = init({ module_or_path: wasmModule });
 ready.then(() => {
   // the page's crash notice is checked with a panic (web/pagetest.py)
