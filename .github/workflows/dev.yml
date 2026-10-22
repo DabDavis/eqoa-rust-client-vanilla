@@ -147,28 +147,24 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
+      # the history and the tags: the notes tell this build from the last
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
 
+      # The build, its downloads and the update notes (release/notes.sh: what
+      # each build changed, UPDATE-NOTES.md's sections; this build's are the
+      # ones the previous build, which the dev tag still names, did not have).
       - name: Write the release notes
         run: |
-          {
-            echo "The newest build of \`master\`: $(TZ=UTC git log -1 --format='%h, %cd: %s' --date=format-local:'%Y-%m-%d %H:%M UTC' "$GITHUB_SHA")."
-            echo
-            echo "| | with README and licence | the program alone |"
-            echo "|---|---|---|"
-            echo "| Linux (x86-64) | \`eqoa-vanilla-linux-x86_64.tar.gz\` | \`eqoa-vanilla-linux-x86_64\` |"
-            echo "| Windows (x86-64) | \`eqoa-vanilla-windows-x86_64.zip\` | \`eqoa-vanilla-windows-x86_64.exe\` |"
-            echo "| macOS (Apple silicon and Intel) | \`eqoa-vanilla-macos.tar.gz\` | \`eqoa-vanilla-macos\` |"
-            echo
-            echo "The program alone, on Linux and macOS, needs \`chmod +x\` after the download (a download is not kept runnable)."
-            echo
-            echo "You need your own *Frontiers* disc image (SLUS-20744) and an account on a server; README.txt in each archive says how to run it, and the repository's README says more. Each push to \`master\` replaces this build: only the newest can be downloaded."
-          } > notes.md
+          prev=$(git rev-parse -q --verify 'refs/tags/dev^{commit}' || true)
+          bash release/notes.sh "$GITHUB_SHA" "$prev" > notes.md
           cat notes.md
           ls -la dist
 

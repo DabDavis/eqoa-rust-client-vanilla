@@ -49,7 +49,8 @@ or a browser (each described where it lives below):
 One build is published, **dev**: rebuilt from `master` on every push, for Linux
 (x86-64), Windows (x86-64) and macOS, on the
 [releases page](https://github.com/DabDavis/eqoa-rust-client-vanilla/releases/tag/dev).
-Each build replaces the one before, so only the newest can be downloaded.
+Each build replaces the one before, so only the newest can be downloaded; the
+release page's update notes (`UPDATE-NOTES.md`) say what each build changed.
 
 It is the `eqoa` program, in an archive with its README and licence, or on its
 own (`eqoa-vanilla-linux-x86_64`, `eqoa-vanilla-windows-x86_64.exe`,

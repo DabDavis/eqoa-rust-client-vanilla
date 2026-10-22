@@ -17,6 +17,11 @@ keep it current.
 - Releases are CI only (`.github/workflows/dev.yml`): every push to `master` builds Linux, Windows and
   macOS and replaces the one `dev` release (its tag moved to the commit, its assets replaced, the run's
   artifacts deleted), so no older build can be downloaded. No versioned releases, no other channel.
+- **Update notes**: a push that changes the program adds a section on top of `UPDATE-NOTES.md`
+  (`## <date> · <title>`, then bullets: what a player sees, in a player's words), in the same push.
+  The release page shows them, newest first (`release/notes.sh`): the sections new since the last build
+  marked as this build's, and a build with none lists its commits there instead ("not in the notes
+  yet"). An edit to the notes alone goes on the page through `.github/workflows/notes.yml`.
 - Windows: a program's main thread has the stack its header reserves (1 MB by default), and the game's
   first frame needs about that much, its frames holding their state by value: `crates/eqoa/build.rs`
   links 8 MB, as Linux and macOS give, and `dev.yml` refuses a build with less. Wine does not show an

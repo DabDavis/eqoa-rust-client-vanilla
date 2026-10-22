@@ -1,0 +1,47 @@
+name: Update notes
+
+# An edit to the update notes alone builds nothing (dev.yml leaves *.md be):
+# the release page's notes are written again here, for the build it already
+# holds (the dev tag's), which the page's last line names with the build
+# before it (release/notes.sh). A push that also changes the program is
+# dev.yml's, which writes them with the new build.
+
+on:
+  push:
+    branches: [ "master" ]
+    paths: [ "UPDATE-NOTES.md", "release/notes.sh" ]
+  workflow_dispatch:
+
+concurrency:
+  group: update-notes
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  notes:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Write the release page's notes again
+        run: |
+          before="${{ github.event.before }}"
+          if [ "${{ github.event_name }}" = push ] && git cat-file -e "$before^{commit}" 2>/dev/null \
+             && git diff --name-only "$before" "$GITHUB_SHA" | grep -qvE '(\.md$|^web/)'; then
+            echo "this push changes the program too: dev.yml writes the notes with its build"
+            exit 0
+          fi
+          body=$(gh release view dev --json body --jq .body)
+          build=$(git rev-parse 'refs/tags/dev^{commit}')
+          prev=$(printf '%s\n' "$body" | tr -d '\r' | sed -n 's/^<!-- notes: build=[0-9a-f]* previous=\([0-9a-f]*\) -->$/\1/p')
+          bash release/notes.sh "$build" "$prev" > notes.md
+          cat notes.md
+          gh release edit dev --notes-file notes.md
