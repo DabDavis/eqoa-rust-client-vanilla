@@ -65,18 +65,44 @@ for (const ev of ['keydown', 'keyup']) {
   addEventListener(ev, (e) => { if (e.key === 'F11') e.stopImmediatePropagation(); }, true);
 }
 
-// The gamepads' motors (the client reads the pads through gilrs, which drives
-// no motors in a page): the Gamepad API's dual-rumble, where the browser has
+// The gamepads' motors: the Gamepad API's dual-rumble, where the browser has
 // it. `strong` is the DualShock 2's large motor's level, `weak` its small
-// one, each 0..1, for `ms`; both 0 stops them.
+// one, each 0..1, for `ms`; both 0 stops them. `pads`: the indices of the
+// pads this window reads (its Controller Focus), every one when absent.
 const rumblers = () => [...(navigator.getGamepads ? navigator.getGamepads() : [])].filter((g) => g && g.connected && g.vibrationActuator);
 window.eqoaCanRumble = () => rumblers().length > 0;
+
+// The client's windows open in this browser (multibox.rs): each page takes
+// the first free place, a Web Lock `eqoa-window-<n>` held while it is open
+// (the browser lets go as it closes), and looks twice a second at the places
+// held. Which controller each window reads, the client keeps in
+// localStorage. Without Web Locks a page is alone.
+const windows = { ready: false, place: -1, live: [] };
+window.eqoaWindows = windows;
+(async () => {
+  if (!navigator.locks) return;
+  for (let n = 1; n <= 16 && windows.place < 0; n++) {
+    const held = await new Promise((done) => {
+      navigator.locks.request(`eqoa-window-${n}`, { ifAvailable: true }, (lock) => {
+        done(lock !== null);
+        return lock ? new Promise(() => {}) : undefined;
+      }).catch(() => done(false));
+    });
+    if (held) windows.place = n - 1;
+  }
+  const look = () => navigator.locks.query().then((q) => {
+    windows.live = (q.held || []).map((l) => /^eqoa-window-(\d+)$/.exec(l.name)).filter(Boolean).map((m) => +m[1] - 1);
+  }).catch(() => {});
+  await look();
+  setInterval(look, 500);
+})().catch(() => {}).finally(() => { windows.ready = true; });
 
 // A touch-first device (its main pointer is coarse: a phone or a tablet): the
 // client shows its on-screen pad from the start.
 window.eqoaTouchFirst = () => matchMedia('(pointer: coarse)').matches;
-window.eqoaRumble = (strong, weak, ms) => {
+window.eqoaRumble = (strong, weak, ms, pads) => {
   for (const g of rumblers()) {
+    if (Array.isArray(pads) && !pads.includes(g.index)) continue;
     const a = g.vibrationActuator;
     if (strong === 0 && weak === 0) {
       if (a.reset) a.reset().catch(() => {});

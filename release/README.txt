@@ -38,6 +38,14 @@ a text file holding its path) are kept in eqoa-rs in the config directory:
 In play: Escape the start menu, F1 the keys and buttons (the Options window's
 Controls page), M the map, F11 full screen. A controller works as the PS2's did.
 
+Several windows of eqoa at once (multiboxing): each reads its own controller,
+the first window the first controller, the second the next, whichever window
+is in front. Options, Extended, Controller Focus picks another for a window
+(windows on the same one are all driven by it), Window (the controllers follow
+the window in front) or Off. On Windows a controller that is not an Xbox one
+(or passed off as one, by Steam Input or DS4Windows) reaches only the window in
+front: Windows gives it to no other.
+
 Linux: needs glibc 2.34 or newer (Ubuntu 22.04, Debian 12, Fedora 35 or later),
 ALSA (libasound2), libudev and a Vulkan or OpenGL driver. The file dialog is
 your desktop's (its XDG desktop portal, or zenity); with neither, start it with

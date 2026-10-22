@@ -78,15 +78,48 @@ pub fn status(s: &str) {
     call_page("eqoaStatus", &JsValue::from_str(s));
 }
 
-/// The gamepads' motors (`window.eqoaRumble(strong, weak, ms)`, main.js:
-/// the Gamepad API's dual-rumble, which gilrs does not drive in a page).
-pub fn rumble(strong: f64, weak: f64, ms: u32) {
+/// The motors of the gamepads at `pads` (the Gamepad API's indices: those
+/// this window reads), `window.eqoaRumble(strong, weak, ms, pads)`, main.js:
+/// the Gamepad API's dual-rumble.
+pub fn rumble(strong: f64, weak: f64, ms: u32, pads: &[u32]) {
     let Some(w) = web_sys::window() else { return };
     if let Ok(f) = js_sys::Reflect::get(&w, &"eqoaRumble".into())
         && let Some(f) = f.dyn_ref::<js_sys::Function>()
     {
-        let _ = f.call3(&JsValue::NULL, &strong.into(), &weak.into(), &(ms as f64).into());
+        let list: js_sys::Array = pads.iter().map(|&i| JsValue::from(i)).collect();
+        let _ = f.call4(&JsValue::NULL, &strong.into(), &weak.into(), &(ms as f64).into(), &JsValue::from(list));
     }
+}
+
+/// main.js's `window.eqoaWindows`: this page's place among the site's pages
+/// open in this browser (a Web Lock) and the places held (`multibox`).
+fn windows_js() -> Option<JsValue> {
+    let w = web_sys::window()?;
+    js_sys::Reflect::get(&w, &"eqoaWindows".into()).ok().filter(|v| v.is_object())
+}
+
+/// This page's place, from 0: unknown while main.js takes it, then the
+/// place, or none for good (a browser without Web Locks, every place taken).
+pub fn window_place() -> Option<Option<usize>> {
+    let w = windows_js()?;
+    if !js_sys::Reflect::get(&w, &"ready".into()).ok()?.is_truthy() {
+        return None;
+    }
+    let place = js_sys::Reflect::get(&w, &"place".into()).ok().and_then(|v| v.as_f64()).unwrap_or(-1.0);
+    Some((place >= 0.0).then_some(place as usize))
+}
+
+/// The places the site's pages hold now, as main.js last looked (twice a
+/// second).
+pub fn window_places() -> Vec<usize> {
+    let Some(live) = windows_js().and_then(|w| js_sys::Reflect::get(&w, &"live".into()).ok()) else { return Vec::new() };
+    js_sys::Array::from(&live).iter().filter_map(|v| v.as_f64()).filter(|v| *v >= 0.0).map(|v| v as usize).collect()
+}
+
+/// Whether the page's document has the focus: its window is the one in
+/// front (Controller Focus's Window).
+pub fn has_focus() -> bool {
+    web_sys::window().and_then(|w| w.document()).and_then(|d| d.has_focus().ok()).unwrap_or(true)
 }
 
 /// Whether the page is on a touch-first device (`window.eqoaTouchFirst`:

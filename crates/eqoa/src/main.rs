@@ -79,6 +79,7 @@ mod map;
 mod merchant;
 mod modules;
 mod mouse;
+mod multibox;
 mod quantity;
 mod questlog;
 mod quickchat;
@@ -110,6 +111,10 @@ mod viewer;
 mod wndlist;
 mod walker;
 mod weather;
+// Windows' Xbox controllers, read in the background (its mapping checked
+// natively by its tests)
+#[cfg(any(windows, test))]
+mod xinput;
 
 #[cfg(target_arch = "wasm32")]
 mod web;

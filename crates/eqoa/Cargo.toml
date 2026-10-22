@@ -30,6 +30,11 @@ gilrs = "0.11.2"
 # (libdbus, opened at run time) or else zenity. Nothing more is linked.
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
 
+# Windows' Xbox controllers through XInput (`xinput`), which answers a window
+# that is not in front, as Windows.Gaming.Input (gilrs's) does not.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_LibraryLoader", "Win32_UI_Input_XboxController"] }
+
 # The browser build (`web/build.sh`): the page hands over the player's disc
 # image and the login; sockets go through a WebSocket relay; wgpu falls back
 # to WebGL2 where there is no WebGPU; CLIENT and SUPPORT are unpacked off the

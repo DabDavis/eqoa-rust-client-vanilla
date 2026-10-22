@@ -24,6 +24,8 @@
 //! after it is opened, as libpad finds one, so the actuator handshake runs and
 //! a controller that can rumble does.
 
+use crate::multibox::Seat;
+use crate::settings::Focus;
 use vi::fpu::{Ee, F};
 use vi::pad::{ConsolePad, Libpad, Pad};
 
@@ -386,14 +388,124 @@ pub fn trace() -> bool {
     return std::env::var_os("EQOA_PAD_TRACE").is_some();
 }
 
-/// The controllers: natively through gilrs (SDL's layout), in a page
-/// straight from the Gamepad API (`padmap`: every button and axis, and the
-/// layout each browser gives). Every connected pad as one report.
+/// A connected controller as a window reads it: its name among the client's
+/// windows (`multibox`: natively a Linux device node, `xinput<i>` for one of
+/// Windows' Xbox controllers, else `pad<k>` by gilrs's slot; in a page
+/// `pad<k>` by the Gamepad API's index), what it holds, whether it rumbles,
+/// and what it calls itself.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Controller {
+    pub name: String,
+    pub report: Report,
+    pub rumbles: bool,
+    pub label: String,
+    source: Source,
+    /// its place in the controllers' order: the first controller first
+    order: (u8, u64),
+}
+
+/// Where a controller is read, and its motors driven.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Source {
+    #[cfg(not(target_arch = "wasm32"))]
+    Gilrs(gilrs::GamepadId),
+    #[cfg(windows)]
+    XInput(u32),
+    #[cfg(target_arch = "wasm32")]
+    Page(u32),
+}
+
+/// What a window reads of the connected controllers (`pick`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Pick {
+    /// every one, OR'd on the one port
+    All,
+    /// that one alone, by its name
+    One(String),
+    /// none while some are connected: the pad at rest, not unplugged
+    /// (Window's, another window in front)
+    Idle,
+    /// none: the pad unplugged, as the game sees it
+    Nothing,
+}
+
+/// Which controllers a window reads (the Extended page's Controller Focus):
+/// `names` the connected ones in their order (the first controller first),
+/// `in_front` whether this window has the focus, `seat` it among the
+/// client's other windows open, `bound` the one it reads by Auto (or waits
+/// for: `Gamepads` lets go of one gone `WAIT_MS`).
+///
+/// Auto alone reads every one, as the client always did (on Windows while it
+/// is in front, as Windows.Gaming.Input gave them: `Gamepads::poll`). Among
+/// other windows each window's controller is worked out as every one of them
+/// works it out: a Pad's controller is that window's; then each Auto window, in
+/// place order, keeps the one it reads unless a window before it has it, and
+/// waits for it while it is gone (a controller off a moment, its battery or
+/// its radio, comes back to its own window, and no other moves); then each
+/// that has none takes the controller as far down the order as it is down the
+/// windows open (the first window the first controller, the second the next),
+/// or else the first nobody reads. A Pad is the controller at that place in
+/// the order, whatever else reads it.
+pub fn pick(focus: Focus, in_front: bool, names: &[&str], seat: &Seat, bound: Option<&str>) -> Pick {
+    match focus {
+        Focus::Off => Pick::Nothing,
+        Focus::Window if in_front => Pick::All,
+        Focus::Window if names.is_empty() => Pick::Nothing,
+        Focus::Window => Pick::Idle,
+        Focus::Pad(n) => usize::from(n).checked_sub(1).and_then(|k| names.get(k)).map_or(Pick::Nothing, |n| Pick::One(n.to_string())),
+        Focus::Auto if seat.alone() => Pick::All,
+        Focus::Auto => {
+            let mut taken: Vec<&str> = seat.others.iter().filter(|o| matches!(o.focus, Focus::Pad(_))).filter_map(|o| o.pad.as_deref()).collect();
+            // the Auto windows in place order, this one among them, with
+            // what each reads
+            let mut autos: Vec<(usize, Option<&str>)> = seat.others.iter().filter(|o| o.focus == Focus::Auto).map(|o| (o.place, o.pad.as_deref())).collect();
+            autos.push((seat.place, bound));
+            autos.sort_by_key(|a| a.0);
+            let mut got: Vec<Option<&str>> = vec![None; autos.len()];
+            let mut waits = vec![false; autos.len()];
+            for (k, &(_, b)) in autos.iter().enumerate() {
+                match b {
+                    Some(b) if !names.contains(&b) => waits[k] = true,
+                    Some(b) if !taken.contains(&b) => {
+                        taken.push(b);
+                        got[k] = Some(b);
+                    }
+                    _ => {}
+                }
+            }
+            for (k, &(place, _)) in autos.iter().enumerate() {
+                if got[k].is_some() || waits[k] {
+                    continue;
+                }
+                let rank = seat.others.iter().filter(|o| o.place < place).count() + usize::from(seat.place < place);
+                let free = |n: &&&str| !taken.contains(*n);
+                if let Some(&n) = names.get(rank).filter(free).or_else(|| names.iter().find(free)) {
+                    taken.push(n);
+                    got[k] = Some(n);
+                }
+            }
+            let me = autos.iter().position(|a| a.0 == seat.place).unwrap_or(0);
+            got[me].map_or(Pick::Nothing, |n| Pick::One(n.to_string()))
+        }
+    }
+}
+
+/// How long a window waits for its controller to come back before it takes
+/// another (`pick`): a wireless one waking takes a few seconds.
+const WAIT_MS: u128 = 15_000;
+
+/// The controllers: natively through gilrs (SDL's layout) and, on Windows,
+/// the Xbox controllers through XInput (`xinput`: every window reads them,
+/// in front or not); in a page straight from the Gamepad API (`padmap`:
+/// every button and axis, and the layout each browser gives). The ones this
+/// window reads (`pick`) as one report.
 pub struct Gamepads {
     #[cfg(not(target_arch = "wasm32"))]
     gilrs: Option<gilrs::Gilrs>,
     #[cfg(not(target_arch = "wasm32"))]
     effect: Option<gilrs::ff::Effect>,
+    #[cfg(windows)]
+    xinput: Option<crate::xinput::XInput>,
     /// each pad's reading, by its index and id (in a page)
     #[cfg(target_arch = "wasm32")]
     web: Vec<(u32, String, crate::padmap::PadMap)>,
@@ -408,6 +520,17 @@ pub struct Gamepads {
     last: Report,
     /// [`dead_zone`]
     pub dead_zone: f32,
+    /// natively, whether this window is the one in front (as it opened,
+    /// then the window's `Focused`); a page asks its document
+    pub focused: bool,
+    /// the controller this window reads by Auto among other windows, or
+    /// waits for, gone since when
+    bound: Option<String>,
+    gone: Option<web_time::Instant>,
+    /// what it reads, as last said
+    picked: Option<Pick>,
+    /// where the motors of the controllers it reads are
+    rumble_to: Vec<Source>,
 }
 
 impl Default for Gamepads {
@@ -420,7 +543,9 @@ impl Gamepads {
     pub fn new() -> Self {
         // `EQOA_GAMEPAD=0`: none (a script or the touch pad only)
         #[cfg(not(target_arch = "wasm32"))]
-        let gilrs = if std::env::var("EQOA_GAMEPAD").is_ok_and(|v| v == "0") {
+        let none = std::env::var("EQOA_GAMEPAD").is_ok_and(|v| v == "0");
+        #[cfg(not(target_arch = "wasm32"))]
+        let gilrs = if none {
             None
         } else {
             match gilrs::GilrsBuilder::new().with_force_feedback(true).build() {
@@ -436,6 +561,8 @@ impl Gamepads {
             gilrs,
             #[cfg(not(target_arch = "wasm32"))]
             effect: None,
+            #[cfg(windows)]
+            xinput: (!none).then(crate::xinput::XInput::default),
             #[cfg(target_arch = "wasm32")]
             web: Vec::new(),
             #[cfg(target_arch = "wasm32")]
@@ -446,35 +573,81 @@ impl Gamepads {
             trace: trace(),
             last: Report::default(),
             dead_zone: dead_zone(),
+            focused: true,
+            bound: None,
+            gone: None,
+            picked: None,
+            rumble_to: Vec::new(),
         }
     }
 
-    /// Every connected pad as one report; whether there is one, and whether
-    /// one can rumble.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// The controllers this window reads (`pick`, by its Controller Focus
+    /// and the client's other windows open) as one report; whether it reads
+    /// one (else the pad reads as unplugged), and whether one can rumble.
     pub fn poll(&mut self) -> (Report, bool, bool) {
-        let Some(g) = self.gilrs.as_mut() else { return (Report::default(), false, false) };
-        while let Some(ev) = g.next_event() {
-            if self.trace {
-                crate::say(&format!("[gilrs] {:?}", ev.event));
+        let pads = self.read();
+        let focus = crate::settings::focus();
+        let seat = crate::multibox::seat();
+        let names: Vec<&str> = pads.iter().map(|c| c.name.as_str()).collect();
+        // a controller gone this long is let go: the window takes another
+        let now = web_time::Instant::now();
+        match &self.bound {
+            Some(b) if !names.contains(&b.as_str()) => {
+                if self.gone.get_or_insert(now).elapsed().as_millis() >= WAIT_MS {
+                    crate::say(&format!("controllers: {b} gone {} s: let go", WAIT_MS / 1000));
+                    self.bound = None;
+                    self.gone = None;
+                }
             }
+            _ => self.gone = None,
+        }
+        let pick = pick(focus, self.in_front(), &names, &seat, self.bound.as_deref());
+        // Windows gave a window its controllers only while it was in front
+        // (Windows.Gaming.Input), so a window alone keeps that there: XInput,
+        // which reads them behind, is for a window among others
+        #[cfg(windows)]
+        let pick = if pick == Pick::All && focus == Focus::Auto && !self.in_front() { Pick::Idle } else { pick };
+        let one = match &pick {
+            Pick::One(n) => Some(n.clone()),
+            _ => None,
+        };
+        let waiting = self.bound.as_ref().is_some_and(|b| !names.contains(&b.as_str()));
+        if focus != Focus::Auto || seat.alone() || !waiting {
+            self.bound = one.clone().filter(|_| focus == Focus::Auto);
+        }
+        // what it reads (by Auto, or waits for), for the other windows
+        crate::multibox::say(if focus == Focus::Auto { self.bound.as_deref() } else { one.as_deref() }, focus);
+        let says = reads_text(&pick, &pads, &seat);
+        READS.with(|r| {
+            if *r.borrow() != says {
+                *r.borrow_mut() = says;
+            }
+        });
+        if self.picked.as_ref() != Some(&pick) {
+            crate::say(&describe(&pick, &pads, &seat, focus));
+            // a controller this window no longer reads is not its to shake
+            self.stop_motors();
+            self.picked = Some(pick.clone());
         }
         let mut out = Report::default();
         let (mut any, mut motors) = (false, false);
-        for (_, pad) in g.gamepads() {
-            if !pad.is_connected() {
-                continue;
-            }
+        self.rumble_to.clear();
+        for c in pads.iter().filter(|c| match &pick {
+            Pick::All => true,
+            Pick::One(n) => *n == c.name,
+            Pick::Idle | Pick::Nothing => false,
+        }) {
+            out.merge(&c.report);
             any = true;
-            motors |= pad.is_ff_supported();
-            let name = pad.name().to_string();
-            if !self.seen.contains(&name) {
-                crate::say(&format!("gamepad: {name}{}", if pad.is_ff_supported() { " (rumble)" } else { "" }));
-                self.seen.push(name);
+            motors |= c.rumbles;
+            if c.rumbles {
+                self.rumble_to.push(c.source);
             }
-            let mut r = report_of(&pad);
-            r.rest(self.dead_zone);
-            out.merge(&r);
+        }
+        if pick == Pick::Idle {
+            // still there, at rest: as it was found, motors and all
+            any = true;
+            motors = pads.iter().any(|c| c.rumbles);
         }
         if self.trace && out != self.last {
             crate::say(&format!("[pad] report {out:?}"));
@@ -483,13 +656,89 @@ impl Gamepads {
         (out, any, motors)
     }
 
-    /// Every connected pad as one report, read off the Gamepad API (each
-    /// pad laid out by `padmap`); whether there is one, and whether one can
-    /// rumble (the page's motors, `window.eqoaRumble`).
+    /// Whether this window is the one in front.
+    fn in_front(&self) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        return crate::web::has_focus();
+        #[cfg(not(target_arch = "wasm32"))]
+        return self.focused;
+    }
+
+    /// Every connected controller, in their order: on Windows the Xbox ones
+    /// by user index, then gilrs's (on Linux by device node, the order the
+    /// system made them in; elsewhere by gilrs's slot), each through the
+    /// host's dead zone.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn read(&mut self) -> Vec<Controller> {
+        let mut out = Vec::new();
+        // the XInput pads' USB ids, each to pass over one of gilrs's
+        #[cfg(windows)]
+        let mut xinput_ids: Vec<Option<(u16, u16)>> = Vec::new();
+        #[cfg(windows)]
+        if let Some(x) = self.xinput.as_mut() {
+            for crate::xinput::Found { index: i, pad: p, ids } in x.read() {
+                xinput_ids.push(ids);
+                let mut report = p.report();
+                report.rest(self.dead_zone);
+                let name = format!("xinput{i}");
+                if !self.seen.contains(&name) {
+                    crate::say(&format!("gamepad: an Xbox controller, XInput's player {} (rumble)", i + 1));
+                    self.seen.push(name.clone());
+                }
+                out.push(Controller { name, report, rumbles: true, label: format!("Xbox controller {}", i + 1), source: Source::XInput(i), order: (0, i as u64) });
+            }
+        }
+        let Some(g) = self.gilrs.as_mut() else { return out };
+        while let Some(ev) = g.next_event() {
+            if self.trace {
+                crate::say(&format!("[gilrs] {:?}", ev.event));
+            }
+        }
+        for (id, pad) in g.gamepads() {
+            if !pad.is_connected() {
+                continue;
+            }
+            // a Windows.Gaming.Input Gamepad (gilrs gives it no uuid) with an
+            // XInput pad's USB ids (any, where XInput does not say them) is
+            // that pad, XInput's; another (a DualShock 4) is gilrs's
+            #[cfg(windows)]
+            if pad.uuid() == [0; 16]
+                && let Some(k) = xinput_ids.iter().position(|x| x.is_none() || *x == pad.vendor_id().zip(pad.product_id()))
+            {
+                xinput_ids.remove(k);
+                continue;
+            }
+            let label = pad.name().to_string();
+            if !self.seen.contains(&label) {
+                crate::say(&format!("gamepad: {label}{}", if pad.is_ff_supported() { " (rumble)" } else { "" }));
+                self.seen.push(label.clone());
+            }
+            let slot = usize::from(id) as u64;
+            #[cfg(target_os = "linux")]
+            let (name, order) = {
+                use gilrs::LinuxGamepadExt;
+                let path = pad.devpath().to_string_lossy().into_owned();
+                let n = path.rsplit(|c: char| !c.is_ascii_digit()).next().and_then(|d| d.parse::<u64>().ok());
+                (path, n.map_or((2, slot), |n| (1, n)))
+            };
+            #[cfg(not(target_os = "linux"))]
+            let (name, order) = (format!("pad{slot}"), (1, slot));
+            let mut report = report_of(&pad);
+            report.rest(self.dead_zone);
+            out.push(Controller { name, report, rumbles: pad.is_ff_supported(), label, source: Source::Gilrs(id), order });
+        }
+        out.sort_by_key(|c| c.order);
+        out
+    }
+
+    /// Every connected pad, by the Gamepad API's index, each laid out by
+    /// `padmap` and through the dead zone; whether one can rumble is the
+    /// page's (its motors, `window.eqoaRumble`).
     #[cfg(target_arch = "wasm32")]
-    pub fn poll(&mut self) -> (Report, bool, bool) {
+    fn read(&mut self) -> Vec<Controller> {
         let pads = crate::web::pad::gamepads();
-        let mut out = Report::default();
+        let rumbles = !pads.is_empty() && web_can_rumble();
+        let mut out = Vec::new();
         let mut traced = Vec::new();
         for p in &pads {
             // a pad's reading is kept by its slot, anew when another pad
@@ -517,33 +766,43 @@ impl Gamepads {
                 traced.push(coarse);
             }
             r.rest(self.dead_zone);
-            out.merge(&r);
+            out.push(Controller { name: format!("pad{}", p.index), report: r, rumbles, label: p.id.clone(), source: Source::Page(p.index), order: (1, p.index as u64) });
         }
         self.traced = traced;
-        if self.trace && out != self.last {
-            crate::say(&format!("[pad] report {out:?}"));
-            self.last = out;
-        }
-        let any = !pads.is_empty();
-        (out, any, any && web_can_rumble())
+        out.sort_by_key(|c| c.order);
+        out
     }
 
-    /// The motors as `VIPad` set them: the small one on or off, the large
-    /// one's level, for at most `ms` (the longer one's time left; they are
-    /// set again when it ends).
+    /// The motors as `VIPad` set them, on the controllers this window reads:
+    /// the small one on or off, the large one's level, for at most `ms` (the
+    /// longer one's time left; they are set again when it ends).
     pub fn rumble(&mut self, act: [u8; 2], ms: i64) {
         let ms = ms.clamp(0, 5000) as u32;
         #[cfg(target_arch = "wasm32")]
-        crate::web::rumble(act[1] as f64 / 255.0, if act[0] != 0 { 1.0 } else { 0.0 }, ms);
+        {
+            let pads: Vec<u32> = self.rumble_to.iter().map(|s| match s {
+                Source::Page(i) => *i,
+            }).collect();
+            crate::web::rumble(act[1] as f64 / 255.0, if act[0] != 0 { 1.0 } else { 0.0 }, ms, &pads);
+        }
         #[cfg(not(target_arch = "wasm32"))]
         {
             use gilrs::ff::{BaseEffect, BaseEffectType, EffectBuilder, Repeat, Replay, Ticks};
+            #[cfg(windows)]
+            if let Some(x) = self.xinput.as_mut() {
+                for s in &self.rumble_to {
+                    if let Source::XInput(i) = s {
+                        x.vibrate(*i, act, ms);
+                    }
+                }
+            }
             self.effect = None;
             let Some(g) = self.gilrs.as_mut() else { return };
             if act == [0, 0] || ms == 0 {
                 return;
             }
-            let ids: Vec<gilrs::GamepadId> = g.gamepads().filter(|(_, p)| p.is_connected() && p.is_ff_supported()).map(|(id, _)| id).collect();
+            #[allow(irrefutable_let_patterns)]
+            let ids: Vec<gilrs::GamepadId> = self.rumble_to.iter().filter_map(|s| if let Source::Gilrs(id) = s { Some(*id) } else { None }).collect();
             if ids.is_empty() {
                 return;
             }
@@ -561,6 +820,76 @@ impl Gamepads {
                 Err(e) => crate::say(&format!("rumble: {e}")),
             }
         }
+    }
+
+    /// The motors this window set going, stopped (its controllers changed).
+    fn stop_motors(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        if !self.rumble_to.is_empty() {
+            self.rumble([0, 0], 0);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.effect = None;
+            #[cfg(windows)]
+            if let Some(x) = self.xinput.as_mut() {
+                x.stop();
+            }
+        }
+    }
+}
+
+thread_local! {
+    /// What this window reads, in a few words (`reads`).
+    static READS: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
+
+/// What this window reads of the controllers, in a few words, as the
+/// Extended page shows it under Controller Focus (empty before the first
+/// frame).
+pub fn reads() -> String {
+    READS.with(|r| r.borrow().clone())
+}
+
+/// `reads`' words: the window's number among others, and the controller by
+/// its place in the order.
+fn reads_text(pick: &Pick, pads: &[Controller], seat: &Seat) -> String {
+    let who = if seat.alone() { "Reads".to_string() } else { format!("Window {} reads", seat.place + 1) };
+    match pick {
+        Pick::All => format!("{who} every controller"),
+        Pick::One(n) => match pads.iter().position(|c| c.name == *n) {
+            Some(k) => format!("{who} controller {}", k + 1),
+            None => format!("{who} none"),
+        },
+        Pick::Idle => format!("{who} none: it is not in front"),
+        Pick::Nothing => format!("{who} none"),
+    }
+}
+
+/// What a window reads, said as it changes.
+fn describe(pick: &Pick, pads: &[Controller], seat: &Seat, focus: Focus) -> String {
+    let window = if seat.alone() { String::new() } else { format!("window {} of {}, ", seat.place + 1, seat.others.len() + 1) };
+    let what = match pick {
+        Pick::All if focus == Focus::Window => "every one while this window is in front".to_string(),
+        Pick::All => "every one".to_string(),
+        Pick::One(n) => match pads.iter().position(|c| c.name == *n) {
+            Some(k) => format!("controller {} ({}, {n})", k + 1, pads[k].label),
+            None => n.clone(),
+        },
+        Pick::Idle => "none while this window is not in front".to_string(),
+        Pick::Nothing if focus == Focus::Off => "none (Controller Focus Off)".to_string(),
+        Pick::Nothing => "none".to_string(),
+    };
+    format!("controllers: {window}{}: {what}", focus_name(focus))
+}
+
+/// A Controller Focus as the Extended page shows it.
+pub fn focus_name(f: Focus) -> String {
+    match f {
+        Focus::Auto => "Auto".into(),
+        Focus::Window => "Window".into(),
+        Focus::Pad(n) => format!("Pad {n}"),
+        Focus::Off => "Off".into(),
     }
 }
 
@@ -707,6 +1036,99 @@ mod tests {
         }
         n.rumble(1, 200, 100, true);
         assert_eq!(n.process(0), None);
+    }
+
+    fn seat(place: usize, others: &[(usize, Option<&str>, Focus)]) -> Seat {
+        let others = others.iter().map(|&(place, pad, focus)| crate::multibox::Other { place, pad: pad.map(str::to_string), focus }).collect();
+        Seat { place, others }
+    }
+
+    fn one(n: &str) -> Pick {
+        Pick::One(n.to_string())
+    }
+
+    /// Off, Window and a Pad, each as it says; Auto alone reads every one,
+    /// in front or not, as the client always did.
+    #[test]
+    fn a_window_reads_what_its_focus_says() {
+        let pads = ["p1", "p2", "p3"];
+        let alone = Seat::default();
+        assert_eq!(pick(Focus::Auto, true, &pads, &alone, None), Pick::All);
+        assert_eq!(pick(Focus::Auto, false, &pads, &alone, None), Pick::All, "in front or not");
+        assert_eq!(pick(Focus::Off, true, &pads, &alone, None), Pick::Nothing);
+        assert_eq!(pick(Focus::Window, true, &pads, &alone, None), Pick::All);
+        assert_eq!(pick(Focus::Window, false, &pads, &alone, None), Pick::Idle, "at rest, not unplugged");
+        assert_eq!(pick(Focus::Window, false, &[], &alone, None), Pick::Nothing);
+        assert_eq!(pick(Focus::Pad(2), false, &pads, &alone, None), one("p2"));
+        assert_eq!(pick(Focus::Pad(4), true, &pads, &alone, None), Pick::Nothing, "no fourth");
+    }
+
+    /// Auto among other windows, each worked out from its own seat: the
+    /// first window the first controller, the second the next, a third none;
+    /// one controller for two stays the first window's though it says
+    /// nothing yet (it read every one, alone), and the control: with the
+    /// first window Off, the second takes it.
+    #[test]
+    fn multiboxed_windows_take_a_controller_each_in_order() {
+        let pads = ["p1", "p2"];
+        let auto = Focus::Auto;
+        assert_eq!(pick(auto, true, &pads, &seat(0, &[(1, None, auto)]), None), one("p1"));
+        assert_eq!(pick(auto, false, &pads, &seat(1, &[(0, None, auto)]), None), one("p2"));
+        assert_eq!(pick(auto, false, &pads, &seat(2, &[(0, Some("p1"), auto), (1, Some("p2"), auto)]), None), Pick::Nothing);
+        assert_eq!(pick(auto, true, &["p1"], &seat(0, &[(1, None, auto)]), None), one("p1"));
+        assert_eq!(pick(auto, true, &["p1"], &seat(1, &[(0, None, auto)]), None), Pick::Nothing, "the first window's");
+        assert_eq!(pick(auto, true, &["p1"], &seat(1, &[(0, None, Focus::Off)]), None), one("p1"), "the control");
+        assert_eq!(pick(auto, true, &pads, &seat(1, &[(0, None, Focus::Off)]), None), one("p2"), "still the second for the second window");
+    }
+
+    /// A controller lost and found again: the window that had it waits for
+    /// it (reading none, and not the other window's, which keeps its own); it
+    /// comes back to that window, and so does another found once the wait
+    /// is over. The control: with what each read forgotten, the order alone
+    /// would swap them.
+    #[test]
+    fn a_lost_controller_moves_no_other_window() {
+        let auto = Focus::Auto;
+        assert_eq!(pick(auto, true, &["p2"], &seat(0, &[(1, Some("p2"), auto)]), Some("p1")), Pick::Nothing);
+        assert_eq!(pick(auto, true, &["p2"], &seat(1, &[(0, Some("p1"), auto)]), Some("p2")), one("p2"));
+        assert_eq!(pick(auto, true, &["p1", "p2"], &seat(0, &[(1, Some("p2"), auto)]), Some("p1")), one("p1"), "back");
+        // the wait over (let go), found again at a new place in the order
+        assert_eq!(pick(auto, true, &["p2"], &seat(0, &[(1, Some("p2"), auto)]), None), Pick::Nothing);
+        assert_eq!(pick(auto, true, &["p2", "p9"], &seat(0, &[(1, Some("p2"), auto)]), None), one("p9"));
+        assert_eq!(pick(auto, true, &["p2", "p9"], &seat(1, &[(0, None, auto)]), Some("p2")), one("p2"));
+        assert_eq!(pick(auto, true, &["p2", "p9"], &seat(1, &[(0, None, auto)]), None), one("p9"), "the control");
+    }
+
+    /// With a spare controller connected, a window whose own is gone a
+    /// moment waits for it rather than take the spare, and another window
+    /// sees it waiting (it says what it waits for) and leaves the spare be;
+    /// let go, it takes the spare. The control is that last.
+    #[test]
+    fn a_window_waits_for_its_own_controller_before_a_spare() {
+        let auto = Focus::Auto;
+        assert_eq!(pick(auto, true, &["p1", "p3"], &seat(1, &[(0, Some("p1"), auto)]), Some("p2")), Pick::Nothing, "waits");
+        assert_eq!(pick(auto, true, &["p1", "p3"], &seat(2, &[(0, Some("p1"), auto), (1, Some("p2"), auto)]), None), one("p3"), "a third window: the spare is free");
+        assert_eq!(pick(auto, true, &["p1", "p2", "p3"], &seat(1, &[(0, Some("p1"), auto)]), Some("p2")), one("p2"), "its own back");
+        assert_eq!(pick(auto, true, &["p1", "p3"], &seat(1, &[(0, Some("p1"), auto)]), None), one("p3"), "the control: let go");
+    }
+
+    /// A Pad is its window's whatever else: two windows on the same Pad are
+    /// both driven by it (one controller for several windows); an Auto
+    /// window passes over it, and one that read it by Auto lets it go; two
+    /// Auto windows that said one controller at once leave it to the first;
+    /// Window and Off windows take none but count in the order.
+    #[test]
+    fn a_chosen_controller_comes_first() {
+        let auto = Focus::Auto;
+        let pads = ["p1", "p2"];
+        assert_eq!(pick(Focus::Pad(1), false, &pads, &seat(1, &[(0, Some("p1"), Focus::Pad(1))]), None), one("p1"), "shared, behind");
+        assert_eq!(pick(Focus::Pad(1), true, &pads, &seat(0, &[(1, Some("p1"), Focus::Pad(1))]), None), one("p1"), "shared, in front");
+        assert_eq!(pick(Focus::Pad(2), true, &pads, &seat(0, &[(1, None, auto)]), None), one("p2"));
+        assert_eq!(pick(auto, true, &pads, &seat(1, &[(0, Some("p2"), Focus::Pad(2))]), None), one("p1"));
+        assert_eq!(pick(auto, true, &pads, &seat(0, &[(1, Some("p1"), Focus::Pad(1))]), Some("p1")), one("p2"));
+        assert_eq!(pick(auto, true, &pads, &seat(0, &[(1, Some("p1"), auto)]), Some("p1")), one("p1"));
+        assert_eq!(pick(auto, true, &pads, &seat(1, &[(0, Some("p1"), auto)]), Some("p1")), one("p2"));
+        assert_eq!(pick(auto, true, &pads, &seat(2, &[(0, None, Focus::Window), (1, None, Focus::Off)]), None), one("p1"), "the third window, two controllers: the first free");
     }
 
     #[test]

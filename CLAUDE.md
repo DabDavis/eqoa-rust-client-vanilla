@@ -101,6 +101,12 @@ keep it current.
   a moved key becomes its row's default key before the keyboard dispatch (never while typing), the
   controllers' buttons the game's fields before `VIPad::Read`. A key added to the dispatch needs a
   row in `binds::ROWS` (a test reads `viewer.rs` for them).
+  Multiboxing: each window reads the controllers its Controller Focus picks (`input::pick`, the
+  Extended page; per window by its place, `multibox.rs`: lock files in the config directory's
+  `windows/`, Web Locks in a page). Windows' Xbox pads are read through XInput (`xinput.rs`), which
+  answers a window behind another; gilrs's Windows.Gaming.Input answers only the one in front.
+  Test several windows natively with uinput pads (python-evdev, `/dev/uinput` is the user's) and a
+  shared `EQOA_CONFIG`; Windows on GitHub's runners with ViGEmBus pads.
 - A pointer on the windows (`pointer.rs`, `Play::point`): every button glyph is its button (the
   HUD's raster notes them), and each window notes where it drew its rows (`pointer::Hits`) and
   answers `point(p) -> Vec<i32>`: the keys to press, `pointer::MOVED` for a selection it moved

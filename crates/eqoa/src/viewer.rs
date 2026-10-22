@@ -1709,6 +1709,9 @@ impl App {
     /// The renderer on a configured surface (or none: an offscreen target of
     /// the configuration's size), then the scene.
     fn attach(&mut self, window: Arc<Window>, surface: Option<wgpu::Surface<'static>>, config: wgpu::SurfaceConfiguration, device: wgpu::Device, queue: wgpu::Queue) {
+        // in front or not as it opens: a window opened behind another (the
+        // system can refuse a program the front) has no `Focused` to say so
+        self.pads.focused = window.has_focus();
         let mut renderer = Renderer::new(&device, &queue, config.format);
         if let Some(f) = arial(&self.lib) {
             renderer.set_font(&device, &queue, &f);
@@ -2798,7 +2801,11 @@ impl ApplicationHandler for App {
             // a release that may never come: let go of what is held (a key
             // let go while another window has the keys would walk or turn
             // the player on for good)
+            // which window is in front: Controller Focus's Window reads the
+            // controllers only there
+            WindowEvent::Focused(true) => self.pads.focused = true,
             WindowEvent::Focused(false) => {
+                self.pads.focused = false;
                 self.mouse.release_all();
                 self.held.clear();
                 self.keys_edge.clear();

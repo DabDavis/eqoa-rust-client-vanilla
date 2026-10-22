@@ -7,7 +7,8 @@
 //! not keep: it has no server select). The client does the same with the
 //! options it shows, and keeps its own beside them in `client.opt`: the
 //! Options window's Extended page (Level of Detail, Brightness, Frame Rate,
-//! Camera Distance), which the game does not have; and in `keys.opt` the
+//! Camera Distance, and each window's Controller Focus by its place among the
+//! client's windows open, `multibox`), which the game does not have; and in `keys.opt` the
 //! Controls page's keys and buttons (`binds`), per device as the card keeps
 //! every option, not per character. `server.opt` holds the title's Network
 //! Setup's server, and natively `disc.opt` the disc image the player picked
@@ -123,7 +124,7 @@ pub fn save(o: &GameOptions) -> bool {
         card[HOME_SHARD..HOME_SHARD + HOME_SHARD_LEN].copy_from_slice(&b[HOME_SHARD..HOME_SHARD + HOME_SHARD_LEN]);
     }
     let game = store::write(GAME_FILE, &card);
-    let client = store::write(CLIENT_FILE, client().to_text().as_bytes());
+    let client = store::write(CLIENT_FILE, kept_client().to_text().as_bytes());
     let keys = store::write(KEYS_FILE, with_binds(|b| b.to_text()).as_bytes());
     for (what, r) in [("the options", &game), ("the client's options", &client), ("the keys and buttons", &keys)] {
         if let Err(e) = r {
@@ -313,6 +314,46 @@ impl FrameRate {
     }
 }
 
+/// The Extended page's Controller Focus: which controllers a window of the
+/// client reads (`input::Gamepads`), kept for each window by the place it
+/// takes among the client's windows open on the computer (`multibox`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Focus {
+    /// Alone, every controller, as the client always read them; with other
+    /// windows of the client open (multiboxing), one each: the first
+    /// window's the first controller, the second's the next, and so on,
+    /// each read whichever window is in front.
+    #[default]
+    Auto,
+    /// Every controller, while this window is the one in front: one
+    /// controller for several windows, following the front one.
+    Window,
+    /// That controller alone (1 to 4, a group's size), in front or not;
+    /// several windows on the same one are all driven by it.
+    Pad(u8),
+    /// None: the keyboard, the mouse and the touch screen only.
+    Off,
+}
+
+impl Focus {
+    /// The row's order, which left and right step through (and round).
+    pub const ALL: [Focus; 7] = [Focus::Auto, Focus::Window, Focus::Pad(1), Focus::Pad(2), Focus::Pad(3), Focus::Pad(4), Focus::Off];
+
+    /// As `client.opt` spells it.
+    pub fn key(self) -> String {
+        match self {
+            Focus::Auto => "auto".into(),
+            Focus::Window => "window".into(),
+            Focus::Pad(n) => format!("pad{n}"),
+            Focus::Off => "off".into(),
+        }
+    }
+
+    pub fn from_key(s: &str) -> Option<Focus> {
+        Focus::ALL.into_iter().find(|f| f.key() == s)
+    }
+}
+
 /// The client's own settings: the Options window's Extended page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ClientOptions {
@@ -327,20 +368,32 @@ pub struct ClientOptions {
     /// Camera Distance: the follow orbit's ceiling, `CAMERA_MIN` to
     /// `CAMERA_MAX`
     pub camera_distance: u8,
+    /// Controller Focus, each window's by its place (`focus`)
+    pub controller: [Focus; crate::multibox::PLACES],
 }
 
 impl Default for ClientOptions {
     fn default() -> Self {
-        ClientOptions { lod: true, brightness: BRIGHTNESS_AS_DRAWN, frame_rate: None, camera_distance: crate::camstyle::FOLLOW_MAX_DISTANCE as u8 }
+        ClientOptions {
+            lod: true,
+            brightness: BRIGHTNESS_AS_DRAWN,
+            frame_rate: None,
+            camera_distance: crate::camstyle::FOLLOW_MAX_DISTANCE as u8,
+            controller: [Focus::Auto; crate::multibox::PLACES],
+        }
     }
 }
 
 impl ClientOptions {
-    /// `client.opt`: a line a setting, `name=value`.
+    /// `client.opt`: a line a setting, `name=value`; a window's Controller
+    /// Focus as `controller.<window>` (from 1), and only when it is not Auto.
     pub fn to_text(self) -> String {
         let mut s = format!("lod={}\nbrightness={}\ncamera_distance={}\n", if self.lod { "on" } else { "off" }, self.brightness, self.camera_distance);
         if let Some(r) = self.frame_rate {
             s.push_str(&format!("frame_rate={}\n", r.key()));
+        }
+        for (k, f) in self.controller.iter().enumerate().filter(|(_, f)| **f != Focus::Auto) {
+            s.push_str(&format!("controller.{}={}\n", k + 1, f.key()));
         }
         s
     }
@@ -363,6 +416,12 @@ impl ClientOptions {
                 ("camera_distance", v) => {
                     if let Some(d) = v.parse::<u8>().ok().filter(|d| (CAMERA_MIN..=CAMERA_MAX).contains(d)) {
                         c.camera_distance = d;
+                    }
+                }
+                (k, v) if k.starts_with("controller.") => {
+                    let window = k["controller.".len()..].parse::<usize>().ok().filter(|w| (1..=crate::multibox::PLACES).contains(w));
+                    if let (Some(w), Some(f)) = (window, Focus::from_key(v)) {
+                        c.controller[w - 1] = f;
                     }
                 }
                 _ => {}
@@ -410,6 +469,34 @@ pub fn set_platform_rate(r: FrameRate) {
 /// The follow orbit's zoom-out ceiling now (Camera Distance).
 pub fn camera_distance() -> f32 {
     client().camera_distance as f32
+}
+
+/// This window's Controller Focus: its place's (`multibox::place`).
+pub fn focus() -> Focus {
+    client().controller[crate::multibox::place()]
+}
+
+/// Changes it (the Extended page, as its row moves); kept only by Save
+/// Changes (`save`), beside the other windows' own.
+pub fn set_focus(f: Focus) {
+    let mut c = client();
+    c.controller[crate::multibox::place()] = f;
+    set_client(c);
+}
+
+/// The client's settings as this window keeps them: its own, and the other
+/// windows' Controller Focus as the file has them now (another window may
+/// have saved its own since this one read them).
+fn kept_client() -> ClientOptions {
+    let mut c = client();
+    if let Some(b) = store::read(CLIENT_FILE) {
+        let kept = ClientOptions::from_text(&String::from_utf8_lossy(&b));
+        let me = crate::multibox::place();
+        for (k, f) in c.controller.iter_mut().enumerate().filter(|(k, _)| *k != me) {
+            *f = kept.controller[k];
+        }
+    }
+    c
 }
 
 /// The Frame Rate in effect: the player's, else the platform's.
@@ -496,6 +583,13 @@ pub fn frame_wait() -> Option<std::time::Duration> {
 
 // ---- where they are kept ---------------------------------------------------------
 
+/// Natively, the directory the settings are kept in, if there is one
+/// (`multibox` keeps the windows' places there too).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn config_dir() -> Option<std::path::PathBuf> {
+    store::dir()
+}
+
 /// `eqoa play` keeps its settings in the player's config directory; without
 /// this (the test commands) only `$EQOA_CONFIG` is used. A page has only its
 /// storage.
@@ -516,6 +610,11 @@ mod store {
         pub static REFUSE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
     pub static USER_DIR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    /// The tests keep nothing on disk.
+    pub fn dir() -> Option<std::path::PathBuf> {
+        None
+    }
 
     pub fn read(name: &str) -> Option<Vec<u8>> {
         if REFUSE.with(|r| r.get()) {
@@ -543,7 +642,7 @@ mod store {
 
     /// `$EQOA_CONFIG`, else (`keep_in_user_dir`) `eqoa-rs` in the
     /// platform's config directory.
-    fn dir() -> Option<PathBuf> {
+    pub fn dir() -> Option<PathBuf> {
         if let Some(d) = std::env::var_os("EQOA_CONFIG") {
             return Some(PathBuf::from(d));
         }
@@ -696,7 +795,7 @@ mod tests {
         let none = game_options();
         assert_eq!(none, GameOptions { compact: 1, ..Default::default() });
         let o = changed();
-        let mine = ClientOptions { lod: false, brightness: 8, frame_rate: Some(FrameRate::Sixty), camera_distance: 50 };
+        let mine = ClientOptions { lod: false, brightness: 8, frame_rate: Some(FrameRate::Sixty), camera_distance: 50, ..Default::default() };
         set_client(mine);
         assert!(save(&o));
         CLIENT.with(|c| c.set(None));
@@ -735,15 +834,41 @@ mod tests {
     fn client_text_round_trips_and_forgives() {
         for c in [
             ClientOptions::default(),
-            ClientOptions { lod: false, brightness: 0, frame_rate: Some(FrameRate::Thirty), camera_distance: 8 },
-            ClientOptions { lod: true, brightness: 10, frame_rate: Some(FrameRate::Display), camera_distance: 50 },
+            ClientOptions { lod: false, brightness: 0, frame_rate: Some(FrameRate::Thirty), camera_distance: 8, ..Default::default() },
+            ClientOptions { lod: true, brightness: 10, frame_rate: Some(FrameRate::Display), camera_distance: 50, ..Default::default() },
+            ClientOptions { controller: std::array::from_fn(|k| Focus::ALL[k % Focus::ALL.len()]), ..Default::default() },
         ] {
             assert_eq!(ClientOptions::from_text(&c.to_text()), c);
         }
-        assert_eq!(ClientOptions::default().to_text(), "lod=on\nbrightness=5\ncamera_distance=11\n", "no Frame Rate until one is chosen");
-        let odd = ClientOptions::from_text("brightness=11\nlod=maybe\nframe_rate=120\ncamera_distance=51\nwhat=ever\nnoise");
+        assert_eq!(ClientOptions::default().to_text(), "lod=on\nbrightness=5\ncamera_distance=11\n", "no Frame Rate until one is chosen, no window's Auto");
+        let odd = ClientOptions::from_text("brightness=11\nlod=maybe\nframe_rate=120\ncamera_distance=51\nwhat=ever\nnoise\ncontroller.0=pad1\ncontroller.17=pad1\ncontroller.2=pad5\ncontroller.x=off");
         assert_eq!(odd, ClientOptions::default());
         assert_eq!(ClientOptions::from_text("camera_distance=7").camera_distance, 11);
+        let two = ClientOptions::from_text("controller.2=pad3\ncontroller.16=window");
+        assert_eq!((two.controller[1], two.controller[15], two.controller[0]), (Focus::Pad(3), Focus::Window, Focus::Auto));
+    }
+
+    /// Controller Focus is each window's: Save Changes writes this window's
+    /// (here the first: no place taken) and keeps another window's as the
+    /// file has it, though this one read the file before that window saved
+    /// (its own copy says Auto there: written as it is, it would be lost).
+    #[test]
+    fn each_window_keeps_its_own_controller_focus() {
+        testing::reset(false);
+        assert_eq!(focus(), Focus::Auto);
+        set_focus(Focus::Pad(2));
+        assert_eq!(client().controller[..2], [Focus::Pad(2), Focus::Auto]);
+        // another window saves its own meanwhile
+        store::write(CLIENT_FILE, b"lod=on\nbrightness=5\ncamera_distance=11\ncontroller.2=window\n").unwrap();
+        assert!(save(&GameOptions::default()));
+        let kept = String::from_utf8(testing::kept(CLIENT_FILE).unwrap()).unwrap();
+        assert_eq!(kept, "lod=on\nbrightness=5\ncamera_distance=11\ncontroller.1=pad2\ncontroller.2=window\n");
+        // and this window's own goes back to Auto: the line goes
+        set_focus(Focus::Auto);
+        assert!(save(&GameOptions::default()));
+        let kept = String::from_utf8(testing::kept(CLIENT_FILE).unwrap()).unwrap();
+        assert_eq!(kept, "lod=on\nbrightness=5\ncamera_distance=11\ncontroller.2=window\n");
+        testing::reset(false);
     }
 
     /// The curve: none at 5; brighter above, darker below, black and white

@@ -14,8 +14,11 @@
 //! WORDS.TXT entry): Level of Detail (On: the game's levels of an LOD body;
 //! Off: its near level out to its off distance, `lod.rs`), Brightness (a
 //! slider, `settings::curve`), Frame Rate (30, 60 or the display's,
-//! `settings::frame_due`) and Camera Distance (a slider: the follow orbit's
-//! zoom-out ceiling, 8 to 50, `camstyle`), laid out and driven as the game's
+//! `settings::frame_due`), Camera Distance (a slider: the follow orbit's
+//! zoom-out ceiling, 8 to 50, `camstyle`) and Controller Focus (which
+//! controllers this window reads: Auto, Window, Pad 1 to 4 or Off,
+//! `input::pick`, kept for each window of the client open, `multibox`; what
+//! it reads now is said under it), laid out and driven as the game's
 //! rows are. They change as they are moved, Triangle on the menu puts them
 //! back, and Save Changes keeps them with the game's (`client.opt`).
 //!
@@ -33,7 +36,7 @@
 
 use crate::bindpage::ControlsPage;
 use crate::pointer::{Hits, key, rows_rect};
-use crate::settings::{BRIGHTNESS_STEPS, CAMERA_MAX, CAMERA_MIN, CAMERA_STEP, ClientOptions, FrameRate};
+use crate::settings::{BRIGHTNESS_STEPS, CAMERA_MAX, CAMERA_MIN, CAMERA_STEP, ClientOptions, Focus, FrameRate};
 use vi::fpu::{Ee, F};
 use vi::ui::{Raster, UI_COLORS, Vui, Window, wide};
 
@@ -416,7 +419,7 @@ impl WndOptions {
         let last = if self.page == -1 {
             5
         } else {
-            let mut last = [2, 3, 3, 3];
+            let mut last = [2, 3, 3, 4];
             if FEATURES & 0x100 != 0 {
                 last[1] = 4;
             }
@@ -433,11 +436,11 @@ impl WndOptions {
     }
 
     /// `Decrement` (`d` -1) and `Increment` (1): the item's value; a volume
-    /// stops at its end with sound 9. Items 12 to 15 are the client's
+    /// stops at its end with sound 9. Items 12 to 16 are the client's
     /// Extended rows: Level of Detail turns over, Brightness and Camera
     /// Distance step as a volume does (stopping at their ends with sound 9),
-    /// Frame Rate goes round 30, 60 and the display's as Battle Music goes
-    /// round its tracks.
+    /// Frame Rate goes round 30, 60 and the display's and Controller Focus
+    /// round its seven as Battle Music goes round its tracks.
     fn change(&mut self, o: &mut GameOptions, d: i32, cues: &mut Vec<i32>, ups: &mut Vec<OptionsUp>) {
         let tracks = if FEATURES & 0x100 != 0 { 10 } else { 3 };
         let step = F::<Ee>::new(0.1);
@@ -473,6 +476,11 @@ impl WndOptions {
             6 => o.compact ^= 1,
             7 => o.no_damage = (o.no_damage == 0) as u8,
             8..=11 => self.edit[self.item as usize - 8] ^= 1,
+            16 => {
+                let all = Focus::ALL;
+                let at = all.iter().position(|&f| f == crate::settings::focus()).unwrap_or(0);
+                crate::settings::set_focus(all[(at + if d < 0 { all.len() - 1 } else { 1 }) % all.len()]);
+            }
             12..=15 => {
                 let mut c = crate::settings::client();
                 // a slider's step, or sound 9 at its end
@@ -499,7 +507,7 @@ impl WndOptions {
             }
             _ => {}
         }
-        if !matches!(self.item, 3 | 4 | 13 | 15) && (0..=15).contains(&self.item) {
+        if !matches!(self.item, 3 | 4 | 13 | 15) && (0..=16).contains(&self.item) {
             cues.push(11);
         }
         if d < 0 {
@@ -520,7 +528,7 @@ impl WndOptions {
     }
 
     /// `Select`: X on the menu opens a page (its window 440 wide, six to
-    /// eight rows, an empty title; the client's Extended seven, its Controls
+    /// eight rows, an empty title; the client's Extended eight, its Controls
     /// 600 wide over the middle of the frame, as many rows as fit), or on
     /// Save Changes asks (true).
     fn select(&mut self, vui: &Vui, r: &dyn Raster, cues: &mut Vec<i32>) -> bool {
@@ -540,7 +548,7 @@ impl WndOptions {
                 }
             }
             2 => 7,
-            3 => 7,
+            3 => 8,
             4 => {
                 self.page = 4;
                 self.controls.reset();
@@ -724,12 +732,13 @@ impl WndOptions {
         self.back_legend(vui, r, 6);
     }
 
-    /// The client's Extended page, laid out as the Sound page is: Level of
-    /// Detail (the game's On and Off), Brightness (a slider as the volumes
+    /// The client's Extended page, laid out as the Interface page is: Level
+    /// of Detail (the game's On and Off), Brightness (a slider as the volumes
     /// are, and each side of its knob for a pointer), Frame Rate, Camera
-    /// Distance (a slider).
+    /// Distance (a slider), Controller Focus (Off the game's word), and under
+    /// them what this window reads (`input::reads`).
     fn draw_extended(&mut self, vui: &Vui, r: &mut dyn Raster) {
-        self.item = [12, 13, 14, 15].get(self.row as usize).copied().unwrap_or(self.item);
+        self.item = [12, 13, 14, 15, 16].get(self.row as usize).copied().unwrap_or(self.item);
         let c = crate::settings::client();
         let lod = wide(vui.words.get(if c.lod { 551 } else { 552 }, vui.language));
         let rate = match crate::settings::frame_rate() {
@@ -737,7 +746,11 @@ impl WndOptions {
             FrameRate::Sixty => "60",
             FrameRate::Display => "Display",
         };
-        self.draw_rows(vui, r, &EXTENDED_ROWS.map(wide), &[Some(lod), None, Some(wide(rate)), None]);
+        let focus = match crate::settings::focus() {
+            Focus::Off => vui.words.get(552, vui.language).to_string(),
+            f => crate::input::focus_name(f),
+        };
+        self.draw_rows(vui, r, &EXTENDED_ROWS.map(wide), &[Some(lod), None, Some(wide(rate)), None, Some(wide(&focus))]);
         let width = self.window2.size[0];
         let knob = vui.entry(166).uv1[0];
         let at = self.window2.top_left()[0] + width - 180;
@@ -747,16 +760,17 @@ impl WndOptions {
             let mid = at + (t * (140 - knob) as f32) as i32 + knob / 2;
             self.halves(rows_rect(&self.window2, vui, r, width - 180, k + 1, 140, 1), at - 4, mid, at + 144, k);
         }
-        self.back_legend(vui, r, 6);
+        self.window2.text_box(vui, r, &wide(&crate::input::reads()), 40, 6, width - 80, 1, UI_COLORS[0], 0);
+        self.back_legend(vui, r, 7);
     }
 }
 
 /// The client's words for its own pages (no WORDS.TXT entry): the menu's
-/// rows and the Extended page's three. (WORDS.TXT's "CONTROLS", 1039, is in
+/// rows and the Extended page's five. (WORDS.TXT's "CONTROLS", 1039, is in
 /// capitals and used by none of the game's modules.)
 const EXTENDED: &str = "Extended";
 const CONTROLS: &str = "Controls";
-const EXTENDED_ROWS: [&str; 4] = ["Level of Detail", "Brightness", "Frame Rate", "Camera Distance"];
+const EXTENDED_ROWS: [&str; 5] = ["Level of Detail", "Brightness", "Frame Rate", "Camera Distance", "Controller Focus"];
 
 /// WORDS.TXT's entries `ids`, wide.
 fn words(vui: &Vui, ids: &[i32]) -> Vec<Vec<u16>> {
@@ -934,7 +948,18 @@ mod tests {
         assert_eq!(settings::client().camera_distance, 50, "11 to 50 in 13 steps of 3");
         assert_eq!(&cues[cues.len() - 3..], &[11, 9, 9]);
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!(w.row, 3, "the last row");
+        assert_eq!(w.item, 16, "Controller Focus");
+        assert_eq!(settings::focus(), Focus::Auto);
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert_eq!(settings::focus(), Focus::Off, "round to Off");
+        for _ in 0..3 {
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
+        }
+        assert_eq!(settings::focus(), Focus::Pad(1), "Auto, Window, Pad 1");
+        assert_eq!(settings::client().controller[0], Focus::Pad(1), "the first window's: this one, with nowhere to take a place");
+        assert_eq!(cues.last(), Some(&11));
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.row, 4, "the last row");
         // Triangle: the menu, then closed with every setting put back
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!(w.page, -1);
@@ -1041,7 +1066,8 @@ mod tests {
         // Camera Distance at 11 of 8..50: its knob near the left end
         assert_eq!(w.point([slider + 30.0, y(&w, 3)]), vec![key::DOWN, key::DOWN, key::DOWN, key::RIGHT]);
         assert_eq!(w.point([slider + 2.0, y(&w, 3)]), vec![key::DOWN, key::DOWN, key::DOWN, key::LEFT]);
-        assert!(w.point([slider + 70.0, y(&w, 3) + 60.0]).is_empty(), "below the rows");
+        assert_eq!(w.point([frame + 110.0, y(&w, 4)]), vec![key::DOWN, key::DOWN, key::DOWN, key::DOWN, key::RIGHT], "Controller Focus's value");
+        assert!(w.point([slider + 70.0, y(&w, 4) + 60.0]).is_empty(), "below the rows");
     }
 
 }
