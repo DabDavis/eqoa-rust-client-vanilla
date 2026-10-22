@@ -136,7 +136,7 @@ pub fn start() {
 
 /// The client has stopped (`title`; `detail` says why): the page's notice
 /// (`window.eqoaCrash`, web/notices.js), which asks for a reload.
-fn crash(title: &str, detail: &str) {
+pub(crate) fn crash(title: &str, detail: &str) {
     let a = js_sys::Array::of2(&title.into(), &detail.into());
     call_page("eqoaCrash", &a);
 }
@@ -623,6 +623,116 @@ fn keep_pumping(s: Rc<RefCell<Option<Session>>>, alive: Rc<RefCell<bool>>) {
             sleep(50).await;
         }
     });
+}
+
+/// `eqoa` in the page: the game from its boot on the canvas (`pregame`):
+/// the loading screens, the licence and the title, Station's login, the
+/// server list, character select and creation, then the world. The page has
+/// only handed over the disc image and the relay; `opts.server` is the
+/// server to play on when the title's Network Setup keeps none (the page's
+/// own host, as the relay resolves it).
+#[wasm_bindgen]
+pub async fn boot(file: web_sys::File, opts: JsValue) -> Result<(), JsValue> {
+    let r: Result<(), String> = async {
+        let relay = opt(&opts, "relay").ok_or("no relay address")?;
+        status("reading the disc");
+        let disc = WebDisc::open(file).await?;
+        crate::stream::set_source_factory(disc.zone_sources());
+        crate::stream::set_world_opener(disc.world_opener());
+        let (frontiers, which) = disc::describe(disc.boot().await.as_deref());
+        if !frontiers {
+            problem("disc", &which);
+        }
+        // CLIENT and SUPPORT in their workers while the boot's pictures show
+        {
+            let d = disc.copy();
+            wasm_bindgen_futures::spawn_local(async move { unpack_modules(&d, frontiers).await });
+        }
+        // the pregame's files, a request at a time off the image
+        let d = disc.copy();
+        crate::pregame::files::set_reader(Box::new(move |paths| {
+            let slot: crate::pregame::files::Slot = Default::default();
+            let (out, d, paths) = (slot.clone(), d.copy(), paths.to_vec());
+            wasm_bindgen_futures::spawn_local(async move {
+                let mut files = Vec::new();
+                let mut r = Ok(());
+                for p in &paths {
+                    match d.read(p).await {
+                        Ok(b) => files.push((p.clone(), b)),
+                        Err(e) => {
+                            r = Err(e);
+                            break;
+                        }
+                    }
+                }
+                *out.borrow_mut() = Some(r.map(|_| files));
+            });
+            slot
+        }));
+        // Station's connection, the news and the game session, through the relay
+        let (rt, ru) = (relay.clone(), relay.clone());
+        crate::pregame::link::set_platform(crate::pregame::link::Platform {
+            stream: Box::new(move |host, port| Box::new(relay::RelayTcp::open(&rt, host, port))),
+            session: Box::new(move |host, port, user, token| relay::session(&ru, host, port, user, token)),
+        });
+        // the world entry's files, as `world_library` reads them natively
+        crate::pregame::host::set_world_loader(world_loader(&disc));
+        // the sound's own files, then the device (`Sound::with`)
+        let mut sound_files = std::collections::HashMap::new();
+        for path in ["DATA/AMBTRACK.ESF", "DATA2/UI.CSF", "DATA2/FX.CSF", "DATA2/SKY.CSF", "DATA/UISOUND.TXT"] {
+            if let Ok(b) = disc.read(path).await {
+                sound_files.insert(path.to_string(), b);
+            }
+        }
+        let bgm = crate::bgm::Bgm::new(&disc.entries);
+        let fetch = {
+            let (bgm, file) = (bgm.clone(), disc.file());
+            Box::new(move || bgm::fetch(&bgm, &file))
+        };
+        match crate::sound::Sound::with(&mut |p| sound_files.remove(p), crate::audio::Audio::web(Box::new(bgm), fetch)) {
+            Some(s) => crate::sound::give(s),
+            None => problem("sound", "No sound: the sound device did not start (VISoundDevice::Init failed)."),
+        }
+        let pending = gfx(canvas()?).await?;
+        status("");
+        call_page("eqoaBooted", &JsValue::NULL);
+        rate("booted");
+        let server = crate::settings::server().or_else(|| opt(&opts, "server"));
+        viewer::run_boot_gfx(server, Some(pending)).map_err(|e| e.to_string())
+    }
+    .await;
+    r.map_err(js)
+}
+
+/// The world entry's files in a page (`pregame::host::set_world_loader`):
+/// the world file with the zones round the player read, the character art
+/// every scene keeps, then CHAR.ESF and the rest, in `world_library`'s
+/// order, on a reader of its own.
+fn world_loader(disc: &WebDisc) -> crate::pregame::host::WorldLoader {
+    let d0 = disc.copy();
+    Box::new(move |player| {
+        let slot: Rc<RefCell<Option<Result<crate::pregame::host::World, String>>>> = Default::default();
+        let (out, mut d, player) = (slot.clone(), d0.copy(), player.clone());
+        wasm_bindgen_futures::spawn_local(async move {
+            let r = async {
+                let world = player.world_path.rsplit(['\\', '/']).next().unwrap_or("tunaria.esf").to_uppercase();
+                let mut lib = Library::new();
+                let main = add(&mut lib, &mut d, &world).await?;
+                let [x, _, z] = player.pos;
+                let n = d.fill(&mut lib, main, x, z).await?;
+                log(&format!("{n} zones read round the spawn"));
+                for name in SHARED.iter().copied().chain(["CHAR.ESF", "ITEM.ESF", "ARIAL.CSF", "UI.CSF", "ARIALUI.CSF", "ITEMICON.ESF", "SPELLFX.CSF", "FX.CSF", "ADDART.CSF"]) {
+                    add(&mut lib, &mut d, name).await?;
+                }
+                let index = vi::world::World::<vi::fpu::Ee>::zone_at(lib.file(main), x, z).ok_or("no zone at the player's position")?;
+                let character = lib.lookup(viewer::HUMAN).ok_or("no human model")?;
+                Ok::<_, String>((lib, viewer::Source::Walk { file: main, index, character, spawn: Some((x, z, player.hpr[0])) }))
+            }
+            .await;
+            *out.borrow_mut() = Some(r);
+        });
+        crate::pregame::link::Later::Slot(slot)
+    })
 }
 
 /// `eqoa play` in the page: log in through the relay, the character screen,

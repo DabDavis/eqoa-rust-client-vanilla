@@ -36,6 +36,7 @@ pub mod figure;
 pub mod client;
 pub mod files;
 pub mod host;
+pub mod link;
 pub mod res;
 pub mod setup;
 pub mod stage;
@@ -175,8 +176,9 @@ pub struct Pregame {
     pub picture: Option<(i32, i64)>,
     /// What the boot waits for before the title: the launcher's steps taken.
     boot_step: Option<boot::Step>,
-    /// The stage whose files are being read before it starts.
+    /// The stage whose files are being read before it starts, and since when.
     entering: Option<Stage>,
+    entering_since: i64,
     /// The keyboard's events not yet read: `VIKeyboard::Read` hands the
     /// window manager one a frame.
     keyboard: VecDeque<(i32, bool)>,
@@ -199,6 +201,7 @@ impl Pregame {
             picture: None,
             boot_step: None,
             entering: None,
+            entering_since: 0,
             keyboard: VecDeque::new(),
             entered: None,
             quit: false,
@@ -296,6 +299,7 @@ impl Pregame {
         if let Some(s) = self.entering
             && self.res.ready(self.files_of(s))
             && self.held(now)
+            && now - self.entering_since >= boot::HOLD_MS
             && self.res.vui_ready()
         {
             self.entering = None;
@@ -328,6 +332,7 @@ impl Pregame {
             self.show_picture(boot::Step::Station, now);
         }
         self.entering = Some(s);
+        self.entering_since = now;
     }
 
     /// One frame drawn: the stage's windows (once its files are in), and
@@ -366,6 +371,12 @@ impl Pregame {
             Next::World(e) => self.entered = Some(e),
             Next::Quit => self.quit = true,
         }
+    }
+
+    /// CLIENT's files are being read (`LoadWorld`, "PreGame Load"): CLIENT's
+    /// own loading screen is up (`LoadingProgress`), not the launcher's.
+    pub fn client_loading(&self) -> bool {
+        self.entering == Some(Stage::Client)
     }
 
     /// The world entry, once it has come.

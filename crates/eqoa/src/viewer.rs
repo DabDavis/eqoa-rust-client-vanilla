@@ -1748,9 +1748,11 @@ impl App {
             (None, None) => return,
         };
         let mut enc = g.device.create_command_encoder(&Default::default());
-        // the frame cleared black (`SetClearColor(0, 0, 0, 1)`), nothing in it yet
-        let black = render::View { clear: Vec3::ZERO, ..render::View::daylight(glam::Mat4::IDENTITY) };
-        g.renderer.draw(&g.queue, &mut enc, &target, &g.depth, &black, &[]);
+        // the frame cleared black (`SetClearColor(0, 0, 0, 1)`), with CLIENT's
+        // loading screen's gears in its corner while it is up
+        let gears: Vec<render::Draw> = host.gears().into_iter().map(render::Draw::Model).collect();
+        let view = if gears.is_empty() { render::View { clear: Vec3::ZERO, ..render::View::daylight(glam::Mat4::IDENTITY) } } else { crate::loading::view(size) };
+        g.renderer.draw(&g.queue, &mut enc, &target, &g.depth, &view, &gears);
         // a window's 3D (character select's preview, creation's model): the
         // 2D made before it under it, the rest over it
         let split = g.renderer.ui.as_ref().and_then(|u| u.split.map(|s| (s, u.quads.len())));
