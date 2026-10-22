@@ -193,14 +193,13 @@ pub struct UiCx<'a> {
     pub gpu: Option<crate::play::Gpu<'a>>,
     pub lib: Option<&'a esf::Library>,
     pub race_cams: Option<&'a [Vec<RaceCamera>; 2]>,
-    pub game_frame: bool,
 }
 
 impl<'a> UiCx<'a> {
     /// A context with nothing but the device (a test's).
     #[cfg(test)]
     pub fn bare(vui: &'a Vui, r: &'a mut dyn crate::ui::Layout) -> Self {
-        UiCx { vui, r, now: 0, state: 20, status: Vec::new(), home_shard: Vec::new(), expansion: DISC_EXPANSION, cues: Vec::new(), music: Vec::new(), gpu: None, lib: None, race_cams: None, game_frame: true }
+        UiCx { vui, r, now: 0, state: 20, status: Vec::new(), home_shard: Vec::new(), expansion: DISC_EXPANSION, cues: Vec::new(), music: Vec::new(), gpu: None, lib: None, race_cams: None }
     }
 }
 
@@ -507,7 +506,6 @@ impl Client {
             gpu,
             lib: Some(&cx.res.lib),
             race_cams: self.race_cams.as_ref(),
-            game_frame: cx.game_frame,
         };
         let mut reqs = Vec::new();
         // 295: the focus that moved since the last frame

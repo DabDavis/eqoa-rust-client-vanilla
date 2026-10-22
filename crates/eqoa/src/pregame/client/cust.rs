@@ -50,6 +50,13 @@ pub struct Cust {
     figure: Option<Figure>,
     /// the look the figure was made in
     made: Option<[i32; 4]>,
+    /// `m_pos`, `m_hpr`: select's spot and angles, kept before `SetChar`
+    /// re-aims the camera (the model stands there, turned off them)
+    pos: [f32; 3],
+    hpr: [f32; 3],
+    /// `SetOrbitAngle` from `Up`/`Down`, done at the next draw (the camera
+    /// is the stage's)
+    turn: Option<f32>,
     /// `SetChar` asked for, done at the next draw (it aims the camera)
     pending: Option<usize>,
     /// the focus arrived (295): the window made at the next draw
@@ -93,8 +100,9 @@ impl Cust {
             // place for it with the scenes' limits, orbiting
             self.index = i;
             (self.face, self.style, self.length, self.color) = (c.face, c.hair_style, c.hair_length, c.hair_color);
-            let pos = st.cam.walk.committed.position.to_array();
-            st.aim(pos, [0.0; 3]);
+            self.pos = st.cam.walk.committed.position.to_array();
+            self.hpr = st.cam.walk.committed.angles.to_array();
+            st.aim(self.pos, [0.0; 3]);
             let f = F::<Ee>::new;
             st.cam.min_orbit_distance = f(0.5);
             st.cam.max_orbit_distance = f(25.0);
@@ -130,11 +138,9 @@ impl Cust {
         {
             let mut rec = c.clone();
             (rec.face, rec.hair_style, rec.hair_length, rec.hair_color) = (self.face, self.style, self.length, self.color);
-            let pos = st.cam.walk.committed.position.to_array();
-            let hpr = st.cam.walk.committed.angles.to_array();
             // turned a little off the camera: the heading plus 5.934119
-            let hpr = [(F::<Ee>::new(hpr[0]) + F::new(5.934_119)).0, hpr[1], hpr[2]];
-            self.figure = Figure::new(lib, g, rec.model, look_of(&rec, false), rec.weapons, pos, hpr, cx.now);
+            let hpr = [(F::<Ee>::new(self.hpr[0]) + F::new(5.934_119)).0, self.hpr[1], self.hpr[2]];
+            self.figure = Figure::new(lib, g, rec.model, look_of(&rec, false), rec.weapons, self.pos, hpr, cx.now);
             self.made = Some(self.look());
         }
         let Some(fig) = self.figure.as_mut() else { return None };
@@ -148,6 +154,9 @@ impl Cust {
                 st.cam.look_at_height_above = f(l);
                 st.cam.set_def_orbit_pitch_angle(f(p));
                 st.cam.set_orbit_distance(f(d));
+            }
+            if let Some(a) = self.turn.take() {
+                st.cam.set_orbit_angle(F::new(a));
             }
             st.process(cx.now);
             if let Some(g) = cx.gpu.as_ref() {
@@ -263,8 +272,9 @@ impl Cust {
         None
     }
 
-    /// `Up` / `Down`: the hair rows turn the model a twelfth of a turn
-    /// (`SetOrbitAngle`: done at the next draw by the camera's own angle).
+    /// `Up` / `Down`: the hair rows turn the camera a twelfth of a turn
+    /// round the model (`SetOrbitAngle`, at the ends too: done at the next
+    /// draw, where the camera is).
     fn row(&mut self, d: i32, now: i64, cues: &mut Vec<i32>) {
         let s = self.sel + d;
         if !(0..=3).contains(&s) {
@@ -275,6 +285,7 @@ impl Cust {
             cues.push(11);
         }
         self.window.reset_tick_pulse(now);
+        self.turn = Some(self.orbit_angle());
     }
 
     /// `Prev` / `Next`: the row's value, wrapping (0..3, the colour 0..7).
@@ -292,7 +303,7 @@ impl Cust {
 
     /// The camera's orbit angle the selected row asks for (`Up`/`Down`'s
     /// `SetOrbitAngle`): the hair rows a twelfth of a turn.
-    pub fn orbit_angle(&self) -> f32 {
+    fn orbit_angle(&self) -> f32 {
         if matches!(self.sel, 2 | 3) { 0.523_598_8 } else { 0.0 }
     }
 
@@ -340,7 +351,12 @@ mod tests {
         cues.clear();
         c.key(139, 0, &mut cues);
         assert_eq!((c.sel, cues.as_slice()), (3, &[9][..]), "a buzz past the last row");
-        assert_eq!(c.orbit_angle(), 0.523_598_8);
+        assert_eq!(c.turn, Some(0.523_598_8), "the hair rows turn the camera, at the end too");
+        c.key(138, 0, &mut cues);
+        c.key(138, 0, &mut cues);
+        assert_eq!((c.sel, c.turn), (1, Some(0.0)), "the face and style rows face it");
+        c.key(139, 0, &mut cues);
+        c.key(139, 0, &mut cues);
         assert_eq!(c.key(134, 0, &mut cues), Some(Some((0, [3, 0, 1, 0]))));
         assert_eq!(c.key(132, 0, &mut cues), Some(None));
         // the control: up and down do not close it
