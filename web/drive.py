@@ -140,7 +140,7 @@ async def drive(a, base, ws_url):
                     out("EXCEPTION " + d.get("exception", {}).get("description", d.get("text", "")))
                 elif m.get("method") == "Log.entryAdded":
                     e = m["params"]["entry"]
-                    out(f"log {e.get('level')}: {e.get('text')}")
+                    out(f"log {e.get('level')}: {e.get('text')}" + (f" ({e['url']})" if e.get("url") else ""))
 
         t0 = time.monotonic()
         rt = asyncio.ensure_future(reader())
