@@ -462,6 +462,42 @@ impl Sound {
         self.audio.feed();
     }
 
+    // ---- before the world (`pregame`) -----------------------------------------
+
+    /// One frame of the device with no world (`VISoundDevice::Process`, as
+    /// SETUP's, STATION's and the character screens' loops run it).
+    pub fn frame_alone(&mut self) {
+        self.dev.process(&mut self.link);
+        self.audio.feed();
+    }
+
+    /// SETUP's `StartAmbientSoundtrack` and `VIStation::PlayMusic`: an XM out
+    /// of a file the pregame read (SETUP.CSF's `splash_screen`), made on the
+    /// device, its repeat set, played at priority `priority` on class 0 (the
+    /// music's) at `volume`. The playback's handle and the device's sound
+    /// (to release with `stop_xm`), or None.
+    pub fn play_xm_in(&mut self, c: &esf::Container, id: u32, repeat: bool, priority: i32, volume: f32) -> Option<(i32, i32)> {
+        let x = c.lookup(id as i32).and_then(|n| esf::sound::xm(c, n))?;
+        let i = self.dev.create_xm(x.volume, x.pan, x.module, x.samples);
+        if i < 0 {
+            return None;
+        }
+        self.dev.set_repeat(i, repeat as i32);
+        let h = self.dev.play(i, priority, 0);
+        if h < 0 {
+            self.dev.release_sound(i);
+            return None;
+        }
+        self.dev.set_volume(h, volume);
+        Some((h, i))
+    }
+
+    /// `VISoundDevice::Stop(handle)`, and the sound `play_xm_in` made let go.
+    pub fn stop_xm(&mut self, (h, i): (i32, i32)) {
+        self.dev.stop(h);
+        self.dev.release_sound(i);
+    }
+
     /// The streamed music: of the streamed-audio regions at the camera, the
     /// highest priority one plays on BGM slot 1 (restarted when it changes,
     /// or when it loops), and with none the slot stops.

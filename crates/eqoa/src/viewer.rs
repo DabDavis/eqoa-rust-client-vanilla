@@ -1014,7 +1014,8 @@ pub fn shot_with(
     Ok(())
 }
 
-/// The texture an `EQOA_OFFSCREEN` run draws into.
+/// The texture an `EQOA_OFFSCREEN` run draws into (read back for
+/// `EQOA_SHOTS`).
 fn offscreen_target(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some("offscreen"),
@@ -1023,8 +1024,67 @@ fn offscreen_target(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) 
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: config.format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
+    })
+}
+
+/// A texture's RGBA8 rows, read back (waits for the GPU).
+fn read_back(device: &wgpu::Device, queue: &wgpu::Queue, t: &wgpu::Texture) -> Vec<u8> {
+    let (w, h) = (t.width(), t.height());
+    let row = (w * 4).div_ceil(256) * 256;
+    let buf = device.create_buffer(&wgpu::BufferDescriptor { label: Some("shot"), size: (row * h) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+    let mut enc = device.create_command_encoder(&Default::default());
+    enc.copy_texture_to_buffer(
+        t.as_image_copy(),
+        wgpu::TexelCopyBufferInfo { buffer: &buf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(h) } },
+        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+    );
+    queue.submit([enc.finish()]);
+    buf.slice(..).map_async(wgpu::MapMode::Read, |r| r.expect("map the shot"));
+    device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+    let data = buf.slice(..).get_mapped_range().expect("the shot's bytes");
+    let mut out = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h as usize {
+        out.extend_from_slice(&data[y * row as usize..y * row as usize + w as usize * 4]);
+    }
+    out
+}
+
+fn write_png(path: &str, w: u32, h: u32, rgba: &[u8]) -> Result<(), Error> {
+    let mut enc = png::Encoder::new(std::io::BufWriter::new(std::fs::File::create(path)?), w, h);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    enc.write_header()?.write_image_data(rgba)?;
+    Ok(())
+}
+
+/// A key as the game's keyboard gives it (`VIKeyboard::Read`): 13 Enter,
+/// 27 Escape, 8 Backspace, 9 Tab, 17-20 the cursor keys (left, right, up,
+/// down), 21-24 Page Up, Page Down, End, Home; a character as itself.
+fn pregame_key(event: &KeyEvent) -> Option<i32> {
+    Some(match &event.logical_key {
+        Key::Named(NamedKey::Enter) => 13,
+        Key::Named(NamedKey::Escape) => 27,
+        Key::Named(NamedKey::Backspace) => 8,
+        Key::Named(NamedKey::Tab) => 9,
+        Key::Named(NamedKey::Space) => 32,
+        Key::Named(NamedKey::ArrowLeft) => 17,
+        Key::Named(NamedKey::ArrowRight) => 18,
+        Key::Named(NamedKey::ArrowUp) => 19,
+        Key::Named(NamedKey::ArrowDown) => 20,
+        Key::Named(NamedKey::PageUp) => 21,
+        Key::Named(NamedKey::PageDown) => 22,
+        Key::Named(NamedKey::End) => 23,
+        Key::Named(NamedKey::Home) => 24,
+        Key::Character(s) => {
+            let c = s.chars().next()?;
+            if !c.is_ascii() || c.is_ascii_control() {
+                return None;
+            }
+            c as i32
+        }
+        _ => return None,
     })
 }
 
@@ -1247,6 +1307,10 @@ struct App {
     /// drag pushes the stick for a time, not a frame (`mouse::look`).
     drawn_at: Option<Instant>,
     frame_s: f32,
+    /// The game before the world (`pregame`): the loading screens, the
+    /// title, Station's login, the server list and character select; gone
+    /// once the world is entered.
+    host: Option<crate::pregame::host::Host>,
 }
 
 pub fn run(lib: Library, source: Source) -> Result<(), Error> {
@@ -1258,9 +1322,25 @@ pub fn run_with(lib: Library, source: Source, play: Option<crate::play::Play>) -
     run_with_gfx(lib, source, play, None)
 }
 
+/// The game from its boot (`pregame`): the window opens on the launcher's
+/// loading screen and plays on into the world.
+pub fn run_boot(server: Option<String>) -> Result<(), Error> {
+    run_boot_gfx(server, None)
+}
+
+/// `run_boot` on a surface made beforehand (a page's).
+pub fn run_boot_gfx(server: Option<String>, pending: Option<PendingGfx>) -> Result<(), Error> {
+    let host = crate::pregame::host::Host::new(crate::pregame::Pregame::new(server));
+    run_app(Library::new(), Source::Models { list: Vec::new(), index: 0 }, None, pending, Some(host))
+}
+
 /// `run_with` on a surface made beforehand. In a browser the loop is handed
 /// to the page and this returns at once.
 pub fn run_with_gfx(lib: Library, source: Source, play: Option<crate::play::Play>, pending: Option<PendingGfx>) -> Result<(), Error> {
+    run_app(lib, source, play, pending, None)
+}
+
+fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pending: Option<PendingGfx>, host: Option<crate::pregame::host::Host>) -> Result<(), Error> {
     let event_loop = EventLoop::new()?;
     let display = event_loop.owned_display_handle();
     #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
@@ -1305,6 +1385,7 @@ pub fn run_with_gfx(lib: Library, source: Source, play: Option<crate::play::Play
         frames: crate::frames::Frames::default(),
         drawn_at: None,
         frame_s: 1.0 / 60.0,
+        host,
     };
     #[cfg(target_arch = "wasm32")]
     {
@@ -1600,6 +1681,129 @@ impl App {
         let depth = render::depth_view(&device, config.width, config.height);
         let offscreen = surface.is_none().then(|| offscreen_target(&device, &config));
         self.gfx = Some(Gfx { window, surface, offscreen, in_flight: None, device, queue, config, depth, renderer, models: Vec::new() });
+        // before the world there is nothing to load: the pregame draws
+        if self.host.is_some() {
+            if let Some(g) = &self.gfx {
+                g.window.request_redraw();
+            }
+            return;
+        }
+        self.load();
+    }
+
+    /// The pad before the world: every source as libpad's one port, its keys
+    /// to the pregame's window (`VIWindowManager::Update`'s 128..).
+    fn poll_pad_host(&mut self) {
+        let (mut report, mut connected, motors) = self.pads.poll();
+        if report.buttons != 0 || report.sticks.iter().any(|v| v.abs() > 0.5) {
+            self.touch.hide();
+        }
+        if let Some(s) = &self.pad_script {
+            report.merge(&s.at(self.clock.elapsed().as_millis() as i64));
+            connected = true;
+        }
+        let (fields, _) = crate::settings::with_binds(|b| self.pad_edge.frame(report.buttons, false, b));
+        report.buttons = fields;
+        if self.touch.used {
+            report.merge(&self.touch.report());
+            connected = true;
+        }
+        let keys = self.console.poll(report, connected, motors, false);
+        let Some(h) = self.host.as_mut() else { return };
+        for (k, down) in keys {
+            if crate::input::trace() {
+                crate::say(&format!("[pad] {} {}", crate::input::key_name(k), if down { "down" } else { "up" }));
+            }
+            h.key(k, down);
+        }
+    }
+
+    /// One frame before the world: the pregame's windows on the 2D layer
+    /// over a black frame (the loading screen's gears while the world's files
+    /// come), then the world entered once they are in.
+    fn host_frame(&mut self, el: &ActiveEventLoop, game_frame: bool) {
+        self.poll_pad_host();
+        if self.sound.is_none() {
+            self.sound = crate::sound::make(std::path::Path::new(&crate::disc_path(None)));
+        }
+        let now = self.clock.elapsed().as_millis() as i64;
+        let Some(g) = &mut self.gfx else { return };
+        let Some(host) = self.host.as_mut() else { return };
+        let size = (g.config.width, g.config.height);
+        let done = host.frame(&mut g.renderer, &g.device, &g.queue, g.config.format, size, now, game_frame, self.sound.as_mut());
+        g.window.set_title(&format!("eqoa — {}", host.pre.describe()));
+        let frame = match &g.surface {
+            Some(surface) => match surface.get_current_texture() {
+                wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => Some(f),
+                _ => {
+                    surface.configure(&g.device, &g.config);
+                    return;
+                }
+            },
+            None => None,
+        };
+        let target = match (&frame, &g.offscreen) {
+            (Some(f), _) => f.texture.create_view(&Default::default()),
+            (None, Some(t)) => t.create_view(&Default::default()),
+            (None, None) => return,
+        };
+        let mut enc = g.device.create_command_encoder(&Default::default());
+        // the frame cleared black (`SetClearColor(0, 0, 0, 1)`), nothing in it yet
+        let black = render::View { clear: Vec3::ZERO, ..render::View::daylight(glam::Mat4::IDENTITY) };
+        g.renderer.draw(&g.queue, &mut enc, &target, &g.depth, &black, &[]);
+        g.renderer.draw_text(&g.device, &mut enc, &target, &g.depth, size);
+        g.queue.submit([enc.finish()]);
+        // `EQOA_SHOTS`: what was drawn, as PNGs (offscreen only)
+        let due = host.shots_due(now);
+        if !due.is_empty()
+            && let Some(t) = &g.offscreen
+        {
+            let rgba = read_back(&g.device, &g.queue, t);
+            for f in due {
+                match write_png(&f, size.0, size.1, &rgba) {
+                    Ok(()) => crate::say(&format!("shot {f} at {now} ms ({})", host.pre.describe())),
+                    Err(e) => crate::say(&format!("shot {f}: {e}")),
+                }
+            }
+        }
+        match frame {
+            Some(f) => g.queue.present(f),
+            None => {
+                let _ = g.device.poll(wgpu::PollType::wait_indefinitely());
+            }
+        }
+        match done {
+            crate::pregame::host::Done::Stay => {}
+            crate::pregame::host::Done::Quit => el.exit(),
+            crate::pregame::host::Done::Play(entered, lib, src) => self.begin_play(entered, lib, src),
+        }
+    }
+
+    /// The world entered from the pregame: its library and walk (`main.rs`'s
+    /// `world_library`), and `Play` on the session, as `eqoa play` starts
+    /// them.
+    fn begin_play(&mut self, entered: Box<crate::pregame::Entered>, lib: Library, src: Source) {
+        let crate::pregame::Entered { session, player, dump } = *entered;
+        crate::say(&format!("in the world as {} after the pregame", player.name));
+        let mut play = crate::play::Play::new(session, player, dump);
+        if let Err(e) = crate::play_tables(&mut play) {
+            crate::say(&format!("play: {e}"));
+        }
+        if let (Some(h), Some(s)) = (self.host.as_mut(), self.sound.as_mut()) {
+            h.stop_music(s);
+        }
+        self.host = None;
+        self.lib = lib;
+        self.source = src;
+        self.play = Some(play);
+        if let Some(g) = &mut self.gfx {
+            // the name plates' font, as `attach` sets it
+            if let Some(f) = arial(&self.lib) {
+                g.renderer.set_font(&g.device, &g.queue, &f);
+            }
+            // the pregame's 2D layer goes; the HUD makes its own
+            g.renderer.ui = None;
+        }
         self.load();
     }
 }
@@ -1665,7 +1869,7 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, _el: &ActiveEventLoop) {
-        if (!self.held.is_empty() || self.walker.is_some())
+        if (!self.held.is_empty() || self.walker.is_some() || self.host.is_some())
             && let Some(g) = &self.gfx
         {
             // the options' Frame Rate natively: under a cap the loop sleeps
@@ -1722,6 +1926,25 @@ impl ApplicationHandler for App {
                         p.keyboard = false;
                     }
                 }
+            }
+            // Before the world: the pregame's keys, the game's codes
+            // (`VIKeyboard::Read`'s), and its clicks.
+            WindowEvent::KeyboardInput { event, .. } if self.host.is_some() => {
+                self.touch.hide();
+                if let Some(k) = pregame_key(&event) {
+                    let down = event.state == ElementState::Pressed;
+                    // a held key repeats only where it types
+                    let typing = matches!(k, 8 | 32..=126);
+                    if !event.repeat || typing {
+                        self.host.as_mut().unwrap().key(k, down);
+                    }
+                }
+            }
+            WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } if self.host.is_some() => {
+                let Some(g) = &self.gfx else { return };
+                let size = (g.config.width, g.config.height);
+                let p = render::ui::frame_from_window(size, [self.cursor.0 as f32, self.cursor.1 as f32]);
+                self.host.as_mut().unwrap().click(p);
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 // Escape while the mouse look holds the pointer: it is let go
@@ -2559,6 +2782,15 @@ impl ApplicationHandler for App {
                 let game_frame = self.frames.due(self.clock.elapsed().as_secs_f64() * 1000.0);
                 if let Some(at) = self.drawn_at.replace(frame_start) {
                     self.frame_s = frame_start.duration_since(at).as_secs_f32().min(0.1);
+                }
+                // before the world: the pregame's frame
+                if self.host.is_some() {
+                    if self.quit_at.is_some_and(|q| self.clock.elapsed().as_secs_f64() >= q) {
+                        el.exit();
+                        return;
+                    }
+                    self.host_frame(el, game_frame);
+                    return;
                 }
                 if let Some(p) = &mut self.perf {
                     p.begin();

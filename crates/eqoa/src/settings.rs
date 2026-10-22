@@ -124,6 +124,21 @@ pub fn save(o: &GameOptions) -> bool {
     game.is_ok() && client.is_ok() && keys.is_ok()
 }
 
+// ---- the client's own: the server, as the title's Network Setup keeps it ---------
+
+const SERVER_FILE: &str = "server.opt";
+
+/// The server the title's Network Setup keeps (`server.opt`: the address
+/// alone, a host name or IPv4 address), if one was set.
+pub fn server() -> Option<String> {
+    store::read(SERVER_FILE).map(|b| String::from_utf8_lossy(&b).trim().to_string()).filter(|s| !s.is_empty())
+}
+
+/// Keeps `s` as the server (blank: none).
+pub fn set_server(s: &str) -> Result<(), String> {
+    store::write(SERVER_FILE, s.trim().as_bytes())
+}
+
 // ---- the client's own: the Controls page ----------------------------------------
 
 thread_local! {
@@ -711,6 +726,22 @@ mod tests {
         assert!(frame_wait().is_some());
         set_client(ClientOptions { frame_rate: Some(FrameRate::Display), ..client() });
         assert!(frame_due() && frame_due() && frame_wait().is_none(), "no cap: every frame");
+        testing::reset(false);
+    }
+
+    /// Network Setup's server: kept trimmed, a blank one is none, and a
+    /// store that refuses keeps nothing.
+    #[test]
+    fn the_server_is_kept_trimmed_and_blank_is_none() {
+        testing::reset(false);
+        assert_eq!(server(), None);
+        set_server("  eqoa.example.com \n").unwrap();
+        assert_eq!(server().as_deref(), Some("eqoa.example.com"));
+        set_server("").unwrap();
+        assert_eq!(server(), None, "blank is none");
+        testing::reset(true);
+        assert!(set_server("192.0.2.1").is_err(), "the control: a refusing store");
+        assert_eq!(server(), None);
         testing::reset(false);
     }
 }

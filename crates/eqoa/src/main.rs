@@ -1,7 +1,10 @@
-//! The client binary. For now, the disc and container inspection commands the
-//! first slice is built on:
+//! The client binary: the game from its boot, and the disc and container
+//! inspection commands the first slice is built on:
 //!
 //! ```text
+//! eqoa [boot [server]]          the game: loading screens, licence, title, Station's login,
+//!                               the server list, character select, the world (`pregame`)
+//! eqoa play <server> <account>  straight into the world (EQOA_PASSWORD; EQOA_CHAR picks)
 //! eqoa ls   [iso]               every file on the disc
 //! eqoa tree [iso] <file>        a container's record tree
 //! eqoa zones <world.esf>        the zones in a world file
@@ -90,6 +93,7 @@ mod fx;
 mod particles;
 mod play;
 mod pointer;
+mod pregame;
 mod rings;
 mod scene;
 mod sky;
@@ -273,6 +277,19 @@ fn volumes(file: &str) -> Result<()> {
 
 fn run(args: &[String]) -> Result<()> {
     match args.first().map(String::as_str) {
+        // `eqoa` alone, or `eqoa boot [server]`: the game from the disc's
+        // boot, the loading screens, the licence and the title, Station's
+        // login, the server list and character select, into the world
+        // (`pregame`). The server is the one the title's Network Setup
+        // keeps, or the one named here.
+        None | Some("boot") => {
+            settings::keep_in_user_dir();
+            disc(None)?;
+            // CLIENT and SUPPORT (the UI's atlas, the start menu), off the
+            // disc on threads of their own while the boot's pictures show
+            modules::load(std::path::Path::new(&disc_path(None)));
+            viewer::run_boot(args.get(1).cloned())?;
+        }
         Some("ls") => {
             for e in disc(args.get(1))?.entries() {
                 println!("{:>10}  {:>7}  {}", e.size, e.lba, e.path);
@@ -390,43 +407,9 @@ fn run(args: &[String]) -> Result<()> {
             // images, else off the disc, on threads of their own meanwhile.
             modules::load(std::path::Path::new(&disc_path(None)));
             let (session, player, dump) = login(host, user, &pass)?;
-            // The world the dump names: its file, by the path's last part.
-            let file = player.world_path.rsplit(['\\', '/']).next().unwrap_or("tunaria.esf").to_uppercase();
-            let (lib, src) = source(&file, &[])?;
-            let mut lib = lib;
-            let main_file = 0;
-            lib.add("CHAR.ESF", esf::Container::open(disc(None)?.read("CHAR.ESF")?)?);
-            // What creatures hold: weapons and shields.
-            lib.add("ITEM.ESF", esf::Container::open(disc(None)?.read("ITEM.ESF")?)?);
-            // The name plates' font ("Arial").
-            lib.add("ARIAL.CSF", esf::Container::open(disc(None)?.read("ARIAL.CSF")?)?);
-            // The HUD's art and font ("ArialUI").
-            lib.add("UI.CSF", esf::Container::open(disc(None)?.read("UI.CSF")?)?);
-            lib.add("ARIALUI.CSF", esf::Container::open(disc(None)?.read("ARIALUI.CSF")?)?);
-            // The abilities' and items' icons (the HUD's quick menus).
-            lib.add("ITEMICON.ESF", esf::Container::open(disc(None)?.read("ITEMICON.ESF")?)?);
-            // The spell effects, and the lightning's texture.
-            lib.add("SPELLFX.CSF", esf::Container::open(disc(None)?.read("SPELLFX.CSF")?)?);
-            lib.add("FX.CSF", esf::Container::open(disc(None)?.read("FX.CSF")?)?);
-            // EnterGameLoad's last file (the card's copy when there is one):
-            // the compass's patch art.
-            lib.add("ADDART.CSF", esf::Container::open(disc(None)?.read("ADDART.CSF")?)?);
-            let [x, _, z] = player.pos;
-            let index = vi::world::World::<vi::fpu::Ee>::zone_at(lib.file(main_file), x, z).ok_or("no zone at the player's position")?;
-            // the player's zone off the disc; the walker reads the rest round it
-            stream::load_zone_now(&mut lib, main_file, index)?;
-            let character = lib.lookup(viewer::HUMAN).ok_or("no human model")?;
-            drop(src);
-            let src = viewer::Source::Walk { file: main_file, index, character, spawn: Some((x, z, player.hpr[0])) };
+            let (mut lib, src) = world_library(&player)?;
             let mut play = play::Play::new(session, player, dump);
-            // The game's words, for the lines the client writes itself.
-            play.words = disc(None)?.read("WORDS.TXT").ok().and_then(|b| vi::strtab::StringTable::parse(&b));
-            // The HUD's texture names off the disc; its atlas is SUPPORT's,
-            // and the start menu CLIENT's, taken up as they come (`modules`).
-            play.ui_textures = disc(None)?.read("TEXTURES.TXT").ok().and_then(|b| vi::strtab::StringTable::parse(&b));
-            if play.ui_textures.is_none() {
-                eprintln!("no HUD: TEXTURES.TXT is not on the disc");
-            }
+            play_tables(&mut play)?;
             let play = Some(play);
             if args[0] == "playshot" {
                 let out = args.get(3).ok_or("usage: eqoa playshot <host> <user> <out.png> [ms]")?;
@@ -443,6 +426,54 @@ fn run(args: &[String]) -> Result<()> {
             }
         }
         _ => return Err("usage: eqoa ls|tree|zones|view|shot|login (see main.rs)".into()),
+    }
+    Ok(())
+}
+
+/// The world the MemoryDump names, as `EnterGameLoad` loads it: the world
+/// file (its zones left on the disc, the player's own read now), the
+/// character art every scene keeps (`SHARED`), then CHAR.ESF and the rest,
+/// in this order (the dictionary's first registration wins); and the walk at
+/// the player's place.
+pub fn world_library(player: &net::session::Player) -> Result<(esf::Library, viewer::Source)> {
+    // The world the dump names: its file, by the path's last part.
+    let file = player.world_path.rsplit(['\\', '/']).next().unwrap_or("tunaria.esf").to_uppercase();
+    let (mut lib, src) = source(&file, &[])?;
+    let main_file = 0;
+    lib.add("CHAR.ESF", esf::Container::open(disc(None)?.read("CHAR.ESF")?)?);
+    // What creatures hold: weapons and shields.
+    lib.add("ITEM.ESF", esf::Container::open(disc(None)?.read("ITEM.ESF")?)?);
+    // The name plates' font ("Arial").
+    lib.add("ARIAL.CSF", esf::Container::open(disc(None)?.read("ARIAL.CSF")?)?);
+    // The HUD's art and font ("ArialUI").
+    lib.add("UI.CSF", esf::Container::open(disc(None)?.read("UI.CSF")?)?);
+    lib.add("ARIALUI.CSF", esf::Container::open(disc(None)?.read("ARIALUI.CSF")?)?);
+    // The abilities' and items' icons (the HUD's quick menus).
+    lib.add("ITEMICON.ESF", esf::Container::open(disc(None)?.read("ITEMICON.ESF")?)?);
+    // The spell effects, and the lightning's texture.
+    lib.add("SPELLFX.CSF", esf::Container::open(disc(None)?.read("SPELLFX.CSF")?)?);
+    lib.add("FX.CSF", esf::Container::open(disc(None)?.read("FX.CSF")?)?);
+    // EnterGameLoad's last file (the card's copy when there is one):
+    // the compass's patch art.
+    lib.add("ADDART.CSF", esf::Container::open(disc(None)?.read("ADDART.CSF")?)?);
+    let [x, _, z] = player.pos;
+    let index = vi::world::World::<vi::fpu::Ee>::zone_at(lib.file(main_file), x, z).ok_or("no zone at the player's position")?;
+    // the player's zone off the disc; the walker reads the rest round it
+    stream::load_zone_now(&mut lib, main_file, index)?;
+    let character = lib.lookup(viewer::HUMAN).ok_or("no human model")?;
+    drop(src);
+    Ok((lib, viewer::Source::Walk { file: main_file, index, character, spawn: Some((x, z, player.hpr[0])) }))
+}
+
+/// What `Play` reads off the disc beside the library: the game's words, for
+/// the lines the client writes itself, and the HUD's texture names (its atlas
+/// is SUPPORT's, and the start menu CLIENT's, taken up as they come,
+/// `modules`).
+pub fn play_tables(play: &mut play::Play) -> Result<()> {
+    play.words = disc(None)?.read("WORDS.TXT").ok().and_then(|b| vi::strtab::StringTable::parse(&b));
+    play.ui_textures = disc(None)?.read("TEXTURES.TXT").ok().and_then(|b| vi::strtab::StringTable::parse(&b));
+    if play.ui_textures.is_none() {
+        eprintln!("no HUD: TEXTURES.TXT is not on the disc");
     }
     Ok(())
 }
