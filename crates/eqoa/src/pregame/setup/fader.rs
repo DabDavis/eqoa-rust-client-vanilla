@@ -63,7 +63,7 @@ impl Fader {
     pub fn update(&mut self, r: &mut dyn Layout, now: i64) {
         let dt = F::<Ee>::from_int((now - self.time) as i32) * F::new(0.001);
         self.time = now;
-        self.alpha = self.alpha + self.rate * dt;
+        self.alpha += self.rate * dt;
         if F::ZERO < self.rate {
             self.alpha = if self.alpha < self.target { self.alpha } else { self.target };
         } else {

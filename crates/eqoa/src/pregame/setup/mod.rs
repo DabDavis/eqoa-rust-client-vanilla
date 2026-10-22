@@ -430,14 +430,12 @@ impl Setup {
                 self.fader.begin(0.0, 0.5);
                 self.start_music(cx);
             }
-            3 => {
-                // `m_splash.Selection()`: Play gives the focus up (Connect);
-                // `RunPatcher` would follow: its closing fade is kept. (Network
-                // Setup's fade out to Sony's utility is the client's page here.)
-                if self.splash.sel == 0 && !self.leaving {
-                    self.fader.begin(1.0, 0.5);
-                    self.leaving = true;
-                }
+            // `m_splash.Selection()`: Play gives the focus up (Connect);
+            // `RunPatcher` would follow: its closing fade is kept. (Network
+            // Setup's fade out to Sony's utility is the client's page here.)
+            3 if self.splash.sel == 0 && !self.leaving => {
+                self.fader.begin(1.0, 0.5);
+                self.leaving = true;
             }
             _ => {}
         }

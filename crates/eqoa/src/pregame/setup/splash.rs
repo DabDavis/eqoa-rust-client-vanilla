@@ -129,23 +129,21 @@ impl Splash {
                     cues.push(11);
                 }
             }
-            13 | key::CROSS => {
-                if self.ready {
-                    return Some(match self.sel {
-                        0 => {
-                            cues.push(15);
-                            Pick::Play
-                        }
-                        1 => {
-                            cues.push(13);
-                            Pick::NetworkSetup
-                        }
-                        _ => {
-                            cues.push(15);
-                            Pick::Options
-                        }
-                    });
-                }
+            13 | key::CROSS if self.ready => {
+                return Some(match self.sel {
+                    0 => {
+                        cues.push(15);
+                        Pick::Play
+                    }
+                    1 => {
+                        cues.push(13);
+                        Pick::NetworkSetup
+                    }
+                    _ => {
+                        cues.push(15);
+                        Pick::Options
+                    }
+                });
             }
             _ => {}
         }

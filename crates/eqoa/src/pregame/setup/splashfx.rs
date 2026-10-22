@@ -229,14 +229,14 @@ impl SplashFx {
                     r.blit(bird, 4, at, [sx, sy], [sw, sh], 3, self.flock_alpha.0);
                 }
                 match i {
-                    1 => self.flock[1][0] = self.flock[1][0] + F::new(0.11),
+                    1 => self.flock[1][0] += F::new(0.11),
                     2 => {
-                        self.flock[2][0] = self.flock[2][0] + F::new(0.06);
-                        self.flock[2][1] = self.flock[2][1] + F::new(0.12);
+                        self.flock[2][0] += F::new(0.06);
+                        self.flock[2][1] += F::new(0.12);
                     }
                     3 => {
-                        self.flock[3][0] = self.flock[3][0] + F::new(0.09);
-                        self.flock[3][1] = self.flock[3][1] + F::new(0.045);
+                        self.flock[3][0] += F::new(0.09);
+                        self.flock[3][1] += F::new(0.045);
                     }
                     _ => {}
                 }
@@ -377,7 +377,8 @@ impl SplashFx {
     /// The island's corner this frame: a 4000-frame swing of 17 across and
     /// a 340-frame one of 8 up and down, about (451, 110).
     pub fn island_at(&self) -> (F<Ee>, F<Ee>) {
-        let pi2 = F::<Ee>::new(2.0) * F::new(3.141_592_65);
+        // the game's 3.14159265f is this float
+        let pi2 = F::<Ee>::new(2.0) * F::new(std::f32::consts::PI);
         let x = (F::<Ee>::from_int(self.wave % 4000) / F::new(4000.0) * pi2).sinf() * F::new(17.0) + F::new(451.0);
         let y = (F::<Ee>::from_int(self.wave % 340) / F::new(340.0) * pi2).sinf() * F::new(8.0) + F::new(110.0);
         (x, y)
