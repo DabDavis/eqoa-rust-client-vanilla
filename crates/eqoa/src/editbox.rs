@@ -70,6 +70,9 @@ pub struct EditBox {
     pub title: Vec<u16>,
     /// `m_x24`: what Done is for
     pub purpose: u32,
+    /// `m_x18C`: every character drawn as a star (STATION's password
+    /// fields; CLIENT never sets it)
+    pub password: bool,
     pos: [i32; 2],
     /// the fade (`m_x168`), the Done key's pulse, the typed key's flash
     alpha: f32,
@@ -102,6 +105,7 @@ impl Default for EditBox {
             allow_spaces: true,
             title: Vec::new(),
             purpose: 0,
+            password: false,
             pos: [16, 40],
             alpha: 0.0,
             pulse: 0.0,
@@ -733,14 +737,19 @@ impl EditBox {
             let iu = i as usize;
             if iu < self.lines.len() {
                 let l = self.lines[iu];
-                let buf: Vec<u16> = self.text[l.start..l.start + l.len].iter().map(|&c| if c == b'\n' as u16 { b' ' as u16 } else { c }).collect();
+                let buf: Vec<u16> = self.text[l.start..l.start + l.len]
+                    .iter()
+                    .map(|&c| if c == b'\n' as u16 { b' ' as u16 } else if self.password { b'*' as u16 } else { c })
+                    .collect();
                 r.draw_string([self.pos[0] + 23, y + 1], shadow, &buf);
                 r.draw_string([self.pos[0] + 22, y], text_c, &buf);
             }
             if lc[1] == iu {
                 let l = self.line(iu);
                 let n = lc[0].min(self.text.len().saturating_sub(l.start));
-                caret = [self.pos[0] + vui.string_width(r, &self.text[l.start..l.start + n]) + 22, y + 5];
+                // measured on the line as drawn: the stars, for a password
+                let shown = if self.password { vec![b'*' as u16; n] } else { self.text[l.start..l.start + n].to_vec() };
+                caret = [self.pos[0] + vui.string_width(r, &shown) + 22, y + 5];
             }
             y = y - 4 + h;
         }

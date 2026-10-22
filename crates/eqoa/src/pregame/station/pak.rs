@@ -72,6 +72,7 @@ impl Pak {
     }
 
     /// Every file's path, in the order the pak made them (for tests).
+    #[cfg(test)]
     pub fn paths(&self) -> Vec<String> {
         fn walk(e: &[Entry], at: &str, out: &mut Vec<String>) {
             for x in e {

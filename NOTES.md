@@ -14,6 +14,14 @@ Porting STATION (the Station login) into `crates/eqoa/src/pregame/station/`.
   (`VIGUIDialog`), `station/fader.rs` (`VIFader`).
 - `ui.rs`: `Layout::fill_blended` (additive; STATION's fills blend, `fill_fan` is opaque).
 
+- merged master (`pregame::link`). `station/api.rs`: `VIStationAPI` over `link::Stream` (the
+  connection counts as up at the server's first bytes, its hello: a stream has no connect event).
+- `station/renderer.rs` (`VIWndGenericRenderer`: Load, PushPage/PageBack, OnAction's table, the
+  listener's calls, SaveAccount, the news over `link::HttpGet`), `station/mod.rs` (the stage:
+  `VIStation`'s frame twice a game frame, the first into `Quiet`; the fader; keys; pointer).
+- `settings.rs`: `saved_login`/`save_login` (+0x10, +0x50, +0x90, plain text as the card kept
+  it), `save` keeps them (was: always zero). `editbox.rs`: `password` (`m_x18C`, stars).
+
 ## Next
-- merge master (`pregame::link`), the API state machine on `link::Stream`, the news on
-  `link::HttpGet`, the renderer, the stage glue, editbox password stars, Save Account.
+- renderer tests (actions' requests byte for byte, navigation, Save Account, pointer),
+  live runs (login, a new account, a password change), shots against ref2.

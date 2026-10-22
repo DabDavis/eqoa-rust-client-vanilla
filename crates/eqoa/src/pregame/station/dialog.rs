@@ -56,6 +56,7 @@ impl Dialog {
         self.set_text(&s.chars().map(|c| if (c as u32) < 0x10000 { c as u16 } else { b'?' as u16 }).collect::<Vec<_>>());
     }
 
+    #[cfg(test)]
     pub fn text(&self) -> String {
         String::from_utf16_lossy(&self.text)
     }
