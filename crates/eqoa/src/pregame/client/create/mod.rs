@@ -99,9 +99,10 @@ pub enum Page {
 /// scene, the scene's personal light.
 #[derive(Default)]
 pub struct Env {
-    /// CLIENT's image, once it has come (`modules`): the race cameras and the
-    /// races' default looks
+    /// CLIENT's image, once it has come (`modules`): the races' default looks
     pub client: Option<ClientImage>,
+    /// its race cameras (`gRaceCameras`, `gRaceCamerasEx`)
+    pub race_cams: Option<[Vec<crate::camstyle::RaceCamera>; 2]>,
     /// the model (`m_actor`; one at a time, as each page creates and
     /// releases its own)
     pub figure: Option<Figure>,
@@ -124,8 +125,8 @@ impl Env {
     }
 
     /// `GetRaceCamera(race, ExpansionFlags())`.
-    pub fn race_camera(&self, race: i32) -> Option<tables::RaceCamera> {
-        self.client.as_ref().and_then(|c| tables::race_camera(c, race, self.expansion))
+    pub fn race_camera(&self, race: i32) -> Option<crate::camstyle::RaceCamera> {
+        self.race_cams.as_ref().and_then(|t| crate::camstyle::race_camera(t, race, self.expansion))
     }
 
     /// `GetRaceInfo(race, ExpansionFlags())`; zeros until CLIENT's image is in.
@@ -242,6 +243,7 @@ impl Create {
         }
         if self.env.client.is_none() {
             self.env.client = crate::modules::get(crate::modules::Module::Client).and_then(|i| ClientImage::from_bytes(i.to_vec()));
+            self.env.race_cams = self.env.client.as_ref().map(crate::camstyle::race_cameras);
         }
         // `VIClient::ExpansionFlags`: 0x07D1's mask and the disc's
         self.env.expansion = session.expansion & net::session::EXPANSION_FLAGS;

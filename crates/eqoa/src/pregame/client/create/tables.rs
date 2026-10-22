@@ -1,105 +1,15 @@
 //! The tables character creation reads: SUPPORT's race and class
-//! descriptors (`virace.cpp`'s `gRaces`, `viclass.cpp`'s `s_classes`, both
-//! in the decomp's source), their readers (`GetRace`, `GetClass`,
-//! `IsValidRaceClassCityCombo(Expansion)`, `IsStatHighlighted`), the pages'
-//! own lists (the race page's `sRaces`, the class page's `sClasses` and
-//! `sStats`, the review's `sHomes`), and what CLIENT keeps as data: the race
-//! cameras' creation framings (`gRaceCameras`/`gRaceCamerasEx`, `GetRaceCamera`)
-//! and the races' default looks (`gRaceInfo`/`gRaceInfoEx`, `GetRaceInfo`),
-//! read at run time out of CLIENT's image (`client_image`).
+//! descriptors (`gRaces`, `s_classes`: `../races.rs`, re-exported here),
+//! their readers (`IsValidRaceClassCityCombo(Expansion)`, `IsStatHighlighted`),
+//! the pages' own lists (the race page's `sRaces`, the class page's `sClasses`
+//! and `sStats`, the review's `sHomes`), and what CLIENT keeps as data: the
+//! races' default looks (`gRaceInfo`/`gRaceInfoEx`, `GetRaceInfo`), read at run
+//! time out of CLIENT's image (`client_image`). The race cameras' creation
+//! framings are `camstyle`'s, as play's and character select's are.
 
 use crate::client_image::ClientImage;
 
-/// `VIRaceDef` (the fields creation reads).
-#[derive(Clone, Copy, Debug)]
-pub struct RaceDef {
-    /// WORDS.TXT: the race's name
-    pub name: i32,
-    /// `VIHashResourceID("<Race>Male")`, `"<Race>Female"`, by sex
-    pub model: [&'static str; 2],
-    /// STR STA AGI DEX WIS INT CHA
-    pub bonus: [i32; 7],
-    /// bit N: class N allowed
-    pub class_mask: i32,
-    /// where the race stands in the select scene (ARENA.CSF's set)
-    pub select: [f32; 2],
-    pub bgm: &'static str,
-    pub expansion: u32,
-}
-
-const EMPTY: RaceDef = RaceDef { name: -1, model: ["", ""], bonus: [0; 7], class_mask: -1, select: [0.0, 0.0], bgm: "", expansion: 0 };
-
-/// `gRaces[21]` (`virace.cpp`): ten races, eleven empty slots.
-pub const RACES: [RaceDef; 21] = [
-    RaceDef { name: 183, model: ["HumanMale", "HumanFemale"], bonus: [5, 5, 5, 5, 5, 5, 5], class_mask: 0x7EFF, select: [0.0, -26.0], bgm: "bgm\\qeynos.bgm", expansion: 0 },
-    RaceDef { name: 185, model: ["ElfMale", "ElfFemale"], bonus: [0, 0, 0, 10, 10, 5, 10], class_mask: 0x76E6, select: [0.0, 0.0], bgm: "bgm\\elves.bgm", expansion: 0 },
-    RaceDef { name: 186, model: ["DarkElfMale", "DarkElfFemale"], bonus: [0, 5, 0, 10, 5, 15, 0], class_mask: 0x7E49, select: [-13.0, 0.0], bgm: "bgm\\darkelve.bgm", expansion: 0 },
-    RaceDef { name: 187, model: ["GnomeMale", "GnomeFemale"], bonus: [0, 0, 10, 10, 0, 15, 0], class_mask: 0x7E41, select: [13.0, 0.0], bgm: "bgm\\gnomes.bgm", expansion: 0 },
-    RaceDef { name: 188, model: ["DwarfMale", "DwarfFemale"], bonus: [10, 10, 0, 5, 10, 0, 0], class_mask: 0x0245, select: [-13.0, -13.0], bgm: "bgm\\dwarves.bgm", expansion: 0 },
-    RaceDef { name: 189, model: ["TrollMale", "TrollFemale"], bonus: [20, 15, 0, 0, 0, 0, 0], class_mask: 0x0109, select: [-13.0, 13.0], bgm: "bgm\\trolls.bgm", expansion: 0 },
-    RaceDef { name: 191, model: ["BarbarianMale", "BarbarianFemale"], bonus: [15, 10, 0, 5, 0, 5, 0], class_mask: 0x0141, select: [13.0, -13.0], bgm: "bgm\\barbaria.bgm", expansion: 0 },
-    RaceDef { name: 192, model: ["HalflingMale", "HalflingFemale"], bonus: [0, 10, 10, 15, 0, 0, 0], class_mask: 0x02C1, select: [0.0, -13.0], bgm: "bgm\\halfling.bgm", expansion: 0 },
-    RaceDef { name: 193, model: ["EruditeMale", "EruditeFemale"], bonus: [0, 0, 0, 5, 10, 20, 0], class_mask: 0x7E0C, select: [0.0, 13.0], bgm: "bgm\\erudites.bgm", expansion: 0 },
-    RaceDef { name: 190, model: ["OgreMale", "OgreFemale"], bonus: [20, 15, 0, 0, 0, 0, 0], class_mask: 0x0909, select: [13.0, 13.0], bgm: "bgm\\ogre.bgm", expansion: 2 },
-    EMPTY,
-    EMPTY,
-    EMPTY,
-    EMPTY,
-    EMPTY,
-    EMPTY,
-    EMPTY,
-    EMPTY,
-    EMPTY,
-    EMPTY,
-    EMPTY,
-];
-
-/// `GetRace`: out of range is race 0.
-pub fn race(r: i32) -> &'static RaceDef {
-    &RACES[if (0..21).contains(&r) { r as usize } else { 0 }]
-}
-
-impl RaceDef {
-    /// `m_model[sex]`: the model's DictID.
-    pub fn model_id(&self, sex: i32) -> u32 {
-        vi::hash::hash_resource_id(self.model[if sex == 1 { 1 } else { 0 }])
-    }
-}
-
-/// `VIClassDef`.
-#[derive(Clone, Copy, Debug)]
-pub struct ClassDef {
-    pub name: i32,
-    pub short: i32,
-    /// bit N: stat N highlighted on the class page
-    pub stat_mask: i32,
-    pub bonus: [i32; 7],
-    pub expansion: u32,
-}
-
-/// `s_classes[15]` (`viclass.cpp`).
-pub const CLASSES: [ClassDef; 15] = [
-    ClassDef { name: 165, short: 303, stat_mask: 3, bonus: [10, 15, 0, 0, -5, -10, -10], expansion: 0 },
-    ClassDef { name: 166, short: 304, stat_mask: 12, bonus: [0, 0, 10, 15, -5, -10, -10], expansion: 0 },
-    ClassDef { name: 167, short: 305, stat_mask: 3, bonus: [10, 15, 0, 0, -5, -10, -10], expansion: 0 },
-    ClassDef { name: 168, short: 306, stat_mask: 3, bonus: [10, 15, 0, 0, -10, -5, -10], expansion: 0 },
-    ClassDef { name: 169, short: 307, stat_mask: 10, bonus: [0, 10, 0, 15, -5, -10, -10], expansion: 0 },
-    ClassDef { name: 170, short: 308, stat_mask: 6, bonus: [-5, 10, 15, 0, -10, -10, 0], expansion: 0 },
-    ClassDef { name: 171, short: 309, stat_mask: 12, bonus: [0, 0, 10, 15, -10, -10, -5], expansion: 0 },
-    ClassDef { name: 172, short: 310, stat_mask: 24, bonus: [0, -10, -10, 10, 15, -5, 0], expansion: 0 },
-    ClassDef { name: 173, short: 311, stat_mask: 18, bonus: [-10, 10, 0, -5, 15, -10, 0], expansion: 0 },
-    ClassDef { name: 174, short: 312, stat_mask: 80, bonus: [0, 0, -5, -10, 15, -10, 10], expansion: 0 },
-    ClassDef { name: 175, short: 313, stat_mask: 36, bonus: [-10, 0, 10, -5, 0, 15, -10], expansion: 0 },
-    ClassDef { name: 176, short: 314, stat_mask: 34, bonus: [0, 10, -10, 0, -5, 15, -10], expansion: 0 },
-    ClassDef { name: 177, short: 315, stat_mask: 96, bonus: [-10, -10, 0, 0, -5, 15, 10], expansion: 0 },
-    ClassDef { name: 178, short: 316, stat_mask: 40, bonus: [0, -5, 0, 10, -10, 15, -10], expansion: 0 },
-    ClassDef { name: 179, short: 1190, stat_mask: 48, bonus: [-10, 0, -5, 0, 10, 15, -10], expansion: 2 },
-];
-
-/// `GetClass`: out of range is class 0.
-pub fn class(c: i32) -> &'static ClassDef {
-    &CLASSES[if (0..15).contains(&c) { c as usize } else { 0 }]
-}
+pub use super::super::races::{get_class, get_race, CLASSES, RACES};
 
 /// `IsStatHighlighted`.
 pub fn stat_highlighted(c: i32, stat: i32) -> bool {
@@ -132,7 +42,7 @@ pub fn valid_combo_expansion(race: i32, c: i32, city: i32, owned: u32) -> bool {
     if !valid_combo(race, c, city) {
         return false;
     }
-    let need = class(c).expansion | self::race(race).expansion;
+    let need = get_class(c).expansion | get_race(race).expansion;
     owned & need == need
 }
 
@@ -163,7 +73,7 @@ pub const RACE_ROWS: [RaceRow; 11] = [
 /// `VIWndCharCreateRace::BuildList`: the races the owned expansions allow
 /// (a race of no expansion always).
 pub fn race_list(owned: u32) -> Vec<RaceRow> {
-    RACE_ROWS.iter().copied().filter(|r| owned & race(r.race).expansion != 0 || race(r.race).expansion == 0).collect()
+    RACE_ROWS.iter().copied().filter(|r| owned & get_race(r.race).expansion != 0 || get_race(r.race).expansion == 0).collect()
 }
 
 /// The class page's list (`sClasses`, 0x00CE3490): a class and its
@@ -173,7 +83,7 @@ pub const CLASS_ROWS: [(i32, i32); 15] = [(14, 394), (5, 385), (9, 389), (7, 387
 /// `VIWndCharCreateClass::BuildList`: the classes whose expansion is all
 /// owned.
 pub fn class_list(owned: u32) -> Vec<(i32, i32)> {
-    CLASS_ROWS.iter().copied().filter(|&(c, _)| owned & class(c).expansion == class(c).expansion).collect()
+    CLASS_ROWS.iter().copied().filter(|&(c, _)| owned & get_class(c).expansion == get_class(c).expansion).collect()
 }
 
 /// `sStats` (0x00CE3508): each stat with its name's and description's words.
@@ -185,31 +95,6 @@ pub const HOMES: [(i32, i32, i32); 11] = [(6, 0, 364), (8, 0, 366), (2, 0, 360),
 /// `GetSexWord`: 163 Male, 164 Female.
 pub fn sex_word(sex: i32) -> i32 {
     if sex == 1 { 164 } else { 163 }
-}
-
-/// `VIRaceCamera`'s creation framings: the review's (the race and review
-/// pages, character select) and the appearance pages'.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct RaceCamera {
-    pub race: i32,
-    pub review: [f32; 4],
-    pub cust: [f32; 4],
-}
-
-/// `gRaceCameras` / `gRaceCamerasEx`: 21 records of 56 bytes.
-const RACE_CAMERAS: [u32; 2] = [0x00CD_D8A0, 0x00CD_DD38];
-
-/// `GetRaceCamera(race, expansion)`: the expansion's table with its bit 1,
-/// out of range race 0, the LAST record of the race; None for none.
-pub fn race_camera(img: &ClientImage, race: i32, expansion: u32) -> Option<RaceCamera> {
-    let race = if (0..21).contains(&race) { race } else { 0 };
-    let t = RACE_CAMERAS[(expansion & 2 != 0) as usize];
-    let f = |va: u32| f32::from_bits(img.i32_at(va) as u32);
-    (0..21u32).map(|i| t + 56 * i).filter(|&r| img.i32_at(r) == race).last().map(|r| RaceCamera {
-        race,
-        review: [f(r + 0x04), f(r + 0x08), f(r + 0x0C), f(r + 0x10)],
-        cust: [f(r + 0x14), f(r + 0x18), f(r + 0x1C), f(r + 0x20)],
-    })
 }
 
 /// `VIRaceInfo`: a race's default face, hair style, length and colour, by
@@ -275,7 +160,7 @@ mod tests {
     #[test]
     fn the_stats_are_the_base_the_race_and_the_class() {
         // a barbarian rogue: the reference picture's 75 70 70 80 50 55 55
-        let (r, c) = (race(6), class(6));
+        let (r, c) = (get_race(6), get_class(6));
         let shown: Vec<i32> = (0..7).map(|s| 60 + r.bonus[s] + c.bonus[s]).collect();
         assert_eq!(shown, vec![75, 70, 70, 80, 50, 55, 55]);
         // every race's bonuses sum to 35
@@ -293,9 +178,9 @@ mod tests {
 
     #[test]
     fn the_models_are_the_races_hashes() {
-        assert_eq!(race(0).model_id(0), vi::hash::hash_resource_id("HumanMale"));
-        assert_eq!(race(9).model_id(1), vi::hash::hash_resource_id("OgreFemale"));
-        assert_eq!(race(99).name, 183, "out of range is the human");
+        assert_eq!(get_race(0).model_id(0), vi::hash::hash_resource_id("HumanMale"));
+        assert_eq!(get_race(9).model_id(1), vi::hash::hash_resource_id("OgreFemale"));
+        assert_eq!(get_race(99).name, 183, "out of range is the human");
         assert_eq!(sex_word(1), 164);
     }
 }

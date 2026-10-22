@@ -115,7 +115,12 @@ pub fn game_options() -> GameOptions {
 /// client's own settings beside the game's. Whether both were kept; a
 /// failure is said and play goes on (the game's `m_saveFailed`).
 pub fn save(o: &GameOptions) -> bool {
-    let game = store::write(GAME_FILE, &with_login(o.to_card()));
+    let mut card = with_login(o.to_card());
+    // the home shard the server list keeps there stays (`set_home_shard`)
+    if let Some(b) = store::read(GAME_FILE).filter(|b| GameOptions::from_card(b).is_some()) {
+        card[HOME_SHARD..HOME_SHARD + HOME_SHARD_LEN].copy_from_slice(&b[HOME_SHARD..HOME_SHARD + HOME_SHARD_LEN]);
+    }
+    let game = store::write(GAME_FILE, &card);
     let client = store::write(CLIENT_FILE, client().to_text().as_bytes());
     let keys = store::write(KEYS_FILE, with_binds(|b| b.to_text()).as_bytes());
     for (what, r) in [("the options", &game), ("the client's options", &client), ("the keys and buttons", &keys)] {
@@ -165,6 +170,33 @@ pub fn save_login(user: &str, password: &str, on: bool) -> bool {
             false
         }
     }
+}
+
+// ---- game.opt's home shard (`VIGameOptions::m_homeShard`) ---------------------------
+
+/// `m_homeShard[64]` at +0x98: the server list's last pick, UTF-16.
+const HOME_SHARD: usize = 0x98;
+const HOME_SHARD_LEN: usize = 128;
+
+/// `HomeShardName()`: the shard the server list picked last, as game.opt
+/// keeps it (none when game.opt is not there or not the game's).
+pub fn home_shard() -> Option<String> {
+    let b = store::read(GAME_FILE).filter(|b| GameOptions::from_card(b).is_some())?;
+    let w: Vec<u16> = b[HOME_SHARD..HOME_SHARD + HOME_SHARD_LEN].as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).take_while(|&c| c != 0).collect();
+    (!w.is_empty()).then(|| String::from_utf16_lossy(&w))
+}
+
+/// `SetHomeShardName(name)` and `Save()` (`VIWndServerSelect::Connect`):
+/// the name into game.opt (63 characters at most), the rest of it as kept,
+/// or the options as they stand when there is none.
+pub fn set_home_shard(name: &str) -> Result<(), String> {
+    let mut b = store::read(GAME_FILE).filter(|b| GameOptions::from_card(b).is_some()).unwrap_or_else(|| game_options().to_card().to_vec());
+    let w: Vec<u16> = name.encode_utf16().take(HOME_SHARD_LEN / 2 - 1).collect();
+    b[HOME_SHARD..HOME_SHARD + HOME_SHARD_LEN].fill(0);
+    for (k, c) in w.iter().enumerate() {
+        b[HOME_SHARD + 2 * k..HOME_SHARD + 2 * k + 2].copy_from_slice(&c.to_le_bytes());
+    }
+    store::write(GAME_FILE, &b)
 }
 
 // ---- the client's own: the server, as the title's Network Setup keeps it ---------
@@ -769,6 +801,38 @@ mod tests {
         assert!(frame_wait().is_some());
         set_client(ClientOptions { frame_rate: Some(FrameRate::Display), ..client() });
         assert!(frame_due() && frame_due() && frame_wait().is_none(), "no cap: every frame");
+        testing::reset(false);
+    }
+
+    /// The server list's home shard: kept at game.opt's +0x98 as UTF-16,
+    /// the options beside it untouched, and an options save keeps it.
+    #[test]
+    fn the_home_shard_lives_in_game_opt() {
+        testing::reset(false);
+        assert_eq!(home_shard(), None);
+        set_home_shard("Marr's Fist").unwrap();
+        assert_eq!(home_shard().as_deref(), Some("Marr's Fist"));
+        let b = testing::kept(GAME_FILE).unwrap();
+        assert_eq!(&b[0x98..0x9C], &[b'M', 0, b'a', 0]);
+        assert!(GameOptions::from_card(&b).is_some(), "still the game's record");
+        // Save Changes keeps it
+        assert!(save(&GameOptions { battle: 3, ..game_options() }));
+        assert_eq!(home_shard().as_deref(), Some("Marr's Fist"));
+        assert_eq!(game_options().battle, 3);
+        // STATION's Save Account beside it: each keeps the other
+        assert!(save_login("player002", "pw", true));
+        assert_eq!(home_shard().as_deref(), Some("Marr's Fist"));
+        set_home_shard("Hodstock").unwrap();
+        assert_eq!(saved_login(), ("player002".to_string(), "pw".to_string(), true));
+        set_home_shard("Marr's Fist").unwrap();
+        // a longer name is cut to 63 characters, the terminator kept
+        set_home_shard(&"x".repeat(80)).unwrap();
+        assert_eq!(home_shard().map(|s| s.len()), Some(63));
+        // the control: a damaged game.opt has no home shard
+        let mut bad = testing::kept(GAME_FILE).unwrap();
+        bad[0x3FC] ^= 1;
+        store::write(GAME_FILE, &bad).unwrap();
+        assert_eq!(home_shard(), None);
         testing::reset(false);
     }
 

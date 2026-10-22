@@ -26,6 +26,11 @@ pub struct RaceCamera {
     pub distance: f32,
     /// `m_p34`: the eye height first person and style 3's look-at
     pub p34: f32,
+    /// +0x04..+0x10: character select's framing (`ApplyCamera`): target
+    /// height, look-at height above it, default pitch, distance
+    pub review: [f32; 4],
+    /// +0x14..+0x20: customise's and the appearance page's
+    pub cust: [f32; 4],
 }
 
 /// `gRaceCameras` and `gRaceCamerasEx`, 21 records of 56 bytes each.
@@ -35,7 +40,16 @@ pub fn race_cameras(img: &ClientImage) -> [Vec<RaceCamera>; 2] {
         (0..21u32)
             .map(|i| {
                 let r = t + 56 * i;
-                RaceCamera { race: img.i32_at(r), target_height: f(r + 0x24), look_at_height_above: f(r + 0x28), pitch: f(r + 0x2C), distance: f(r + 0x30), p34: f(r + 0x34) }
+                RaceCamera {
+                    race: img.i32_at(r),
+                    target_height: f(r + 0x24),
+                    look_at_height_above: f(r + 0x28),
+                    pitch: f(r + 0x2C),
+                    distance: f(r + 0x30),
+                    p34: f(r + 0x34),
+                    review: [f(r + 0x04), f(r + 0x08), f(r + 0x0C), f(r + 0x10)],
+                    cust: [f(r + 0x14), f(r + 0x18), f(r + 0x1C), f(r + 0x20)],
+                }
             })
             .collect()
     })

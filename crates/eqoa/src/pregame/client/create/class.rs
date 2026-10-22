@@ -154,7 +154,7 @@ impl ClassPage {
 
     /// `SetBaseStats`: the race's bonus and the class's.
     fn set_base_stats(&mut self, c: i32) {
-        let (race, class) = (tables::race(self.race), tables::class(c));
+        let (race, class) = (tables::get_race(self.race), tables::get_class(c));
         for &(s, _, _) in &tables::STAT_ROWS {
             self.stats[s] = race.bonus[s] + class.bonus[s];
         }
@@ -214,7 +214,7 @@ impl ClassPage {
             return;
         }
         let s = tables::STAT_ROWS[self.sel.clamp(0, 6) as usize].0;
-        let base = tables::race(self.race).bonus[s] + tables::class(self.class).bonus[s];
+        let base = tables::get_race(self.race).bonus[s] + tables::get_class(self.class).bonus[s];
         if delta < 0 && self.stats[s] == base {
             return;
         }
@@ -242,7 +242,7 @@ impl ClassPage {
                     self.update_text();
                     return Some(Msg::Class(c));
                 }
-                let (race, class) = (tables::race(self.race), tables::class(self.class));
+                let (race, class) = (tables::get_race(self.race), tables::get_class(self.class));
                 let mut c = [0; 7];
                 let mut total = 0;
                 for &(s, _, _) in &tables::STAT_ROWS {
@@ -360,7 +360,7 @@ impl ClassPage {
             if !valid {
                 colour = grey;
             }
-            r.draw_centered_string(at, colour, &word(vui, tables::class(c).name), 1);
+            r.draw_centered_string(at, colour, &word(vui, tables::get_class(c).name), 1);
             let rect = [at[0] - 32, at[1] - fh / 2, at[0] + 200, at[1] + 19 - fh / 2];
             self.class_rows.push(rect);
             if self.page == 0 && valid {

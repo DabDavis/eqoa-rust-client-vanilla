@@ -42,7 +42,7 @@ pub fn home_word(form: &NewChar) -> Option<i32> {
 /// The stats the review shows: each the form's points, the race's and the
 /// class's bonuses, over 60.
 pub fn shown_stats(form: &NewChar) -> [i32; 7] {
-    let (race, class) = (tables::race(form.race), tables::class(form.class));
+    let (race, class) = (tables::get_race(form.race), tables::get_class(form.class));
     std::array::from_fn(|i| form.stats[i] + race.bonus[i] + class.bonus[i] + 60)
 }
 
@@ -109,9 +109,9 @@ impl ReviewPage {
             let mut tp = [60, 96];
             r.draw_string(tp, black, &vi::ui::wide(&form.name));
             tp[1] += 19;
-            r.draw_string(tp, black, &word(vui, tables::race(form.race).name));
+            r.draw_string(tp, black, &word(vui, tables::get_race(form.race).name));
             tp[1] += 19;
-            r.draw_string(tp, black, &word(vui, tables::class(form.class).name));
+            r.draw_string(tp, black, &word(vui, tables::get_class(form.class).name));
             tp[1] += 38;
             for (i, v) in shown_stats(form).iter().enumerate() {
                 r.draw_string(tp, black, &word(vui, 248 + i as i32));
@@ -125,7 +125,7 @@ impl ReviewPage {
                 let c = &stage.cam.walk.committed;
                 let (at, hpr) = (c.position.to_array(), c.angles.to_array());
                 let look = [form.face, form.hair_style, form.hair_length, form.hair_color];
-                env.figure = create_model(cx, tables::race(form.race).model_id(form.sex), look, at, hpr);
+                env.figure = create_model(cx, tables::get_race(form.race).model_id(form.sex), look, at, hpr);
             }
             if self.time == -1 {
                 self.time = now;

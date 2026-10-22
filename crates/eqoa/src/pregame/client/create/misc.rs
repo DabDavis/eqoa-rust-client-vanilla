@@ -68,7 +68,7 @@ impl MiscPage {
     /// limits, mode 1.
     pub fn reactivate(&mut self, form: &NewChar, env: &mut Env) {
         let _ = env;
-        self.pending = Some(super::tables::race(form.race).select);
+        self.pending = Some(super::tables::get_race(form.race).select);
     }
 
     /// `OnMessage` 295: the four values from the form, or where it has none
@@ -140,7 +140,8 @@ impl MiscPage {
             self.sel += d;
         }
         if let Some(st) = stage {
-            st.cam.set_orbit_angle(F::<Ee>::new(if self.sel == 2 || self.sel == 3 { 0.523_598_8 } else { 0.0 }));
+            // the game's 0.5235988f, which is pi/6's float
+            st.cam.set_orbit_angle(F::<Ee>::new(if self.sel == 2 || self.sel == 3 { std::f32::consts::FRAC_PI_6 } else { 0.0 }));
         }
     }
 
@@ -259,7 +260,7 @@ impl MiscPage {
             stage.cam.max_orbit_distance = F::new(25.0);
             stage.cam.min_collision_dist = F::new(3.5);
         }
-        let race = super::tables::race(form.race);
+        let race = super::tables::get_race(form.race);
         if env.figure.is_none() {
             let c = &stage.cam.walk.committed;
             let (at, hpr) = (c.position.to_array(), c.angles.to_array());

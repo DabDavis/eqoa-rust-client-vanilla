@@ -217,12 +217,12 @@ impl RacePage {
                 let Some(&rr) = self.list.get(row) else { break };
                 let (left, mid, right, c) = if row == self.sel { (56, 57, 58, yellow) } else { (53, 54, 55, white) };
                 let name = if rr.race == 0 {
-                    let mut n = word(vui, tables::race(0).name);
+                    let mut n = word(vui, tables::get_race(0).name);
                     n.push(b'-' as u16);
                     n.extend(word(vui, rr.city_word));
                     n
                 } else {
-                    word(vui, tables::race(rr.race).name)
+                    word(vui, tables::get_race(rr.race).name)
                 };
                 vui.blit_bar3(r, &name, c, pos, left, right, mid, bw, 0, 1.0, 1, true);
                 let at = [pos[0] + bw, pos[1]];
@@ -274,7 +274,7 @@ impl RacePage {
         let Some(stage) = stage else { return };
         if env.figure.is_none() {
             let r = self.row();
-            let race = tables::race(r.race);
+            let race = tables::get_race(r.race);
             let at = [race.select[0], 0.0, race.select[1]];
             let hpr = stage.cam.walk.committed.angles.to_array();
             let look = self.look(form, env);
