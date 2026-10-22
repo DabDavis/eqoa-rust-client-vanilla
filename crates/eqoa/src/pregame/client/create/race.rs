@@ -293,7 +293,9 @@ impl RacePage {
                 }
             }
         }
+        // SetAction(0) on the scene's clock this frame
         if let Some(f) = env.figure.as_mut() {
+            f.anims.time = now;
             f.set_action(0);
         }
         // UpdateCamera: the race's review framing, turning

@@ -132,6 +132,7 @@ impl ReviewPage {
             }
             self.idle -= now - self.time;
             if let Some(f) = env.figure.as_mut() {
+                f.anims.time = now;
                 if self.idle <= 0 || self.idle > 10000 {
                     f.set_action(15);
                     self.idle = 10000;

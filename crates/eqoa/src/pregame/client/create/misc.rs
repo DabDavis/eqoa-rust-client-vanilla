@@ -277,6 +277,7 @@ impl MiscPage {
             redress(cx, f, self.look());
         }
         if let Some(f) = env.figure.as_mut() {
+            f.anims.time = now;
             f.set_action(0);
         }
         // UpdateCamera: the race's appearance framing (the original game's

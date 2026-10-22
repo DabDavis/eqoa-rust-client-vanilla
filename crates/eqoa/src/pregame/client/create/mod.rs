@@ -487,6 +487,7 @@ pub(crate) fn tests_vui() -> vi::ui::Vui {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pointer::key;
 
     /// The pages in the decomp's order, by the messages between them: race,
     /// class, name, appearance, review; each back goes where
@@ -550,6 +551,33 @@ mod tests {
         assert_eq!(c.current().name, "Arwen");
         c.reset();
         assert_eq!(c.current(), &blank_form(), "the control: the server's list resets it");
+    }
+
+    /// A pointer goes to the page up: the race page's legend while it is
+    /// up, the class page's after Enter; a closed creation takes none.
+    #[test]
+    fn a_pointer_goes_to_the_page_up() {
+        let mut c = Create::new();
+        let mut s = test_session();
+        let v = tests_vui();
+        let mut r = crate::pointer::testing::NullRaster;
+        let res = crate::pregame::res::Res::new();
+        let mut shared = crate::pregame::Shared::default();
+        let (mut cues, mut music) = (Vec::new(), Vec::new());
+        assert!(c.point([100.0, 420.0]).is_empty(), "closed: nothing");
+        c.open();
+        let mut cx = Ctx { now: 0, game_frame: true, vui: &v, r: &mut r, res: &res, shared: &mut shared, cues: &mut cues, music: &mut music, gpu: None };
+        c.frame(&mut cx, &mut s, None);
+        let legend: Vec<i32> = (40..400).step_by(2).flat_map(|x| c.point([x as f32, 420.0])).collect();
+        assert!(legend.contains(&key::TRIANGLE) && legend.contains(&key::CROSS));
+        // Enter through the pointer's key: the class page up
+        c.key(key::CROSS, true);
+        c.key(key::CROSS, false);
+        let mut cx = Ctx { now: 40, game_frame: true, vui: &v, r: &mut r, res: &res, shared: &mut shared, cues: &mut cues, music: &mut music, gpu: None };
+        c.frame(&mut cx, &mut s, None);
+        assert_eq!(c.page(), Page::Class);
+        assert_eq!(c.current().race, 6, "the barbarian, the list's first");
+        assert!(cues.iter().any(|c| matches!(c, Cue::Ui(13))), "the select sound");
     }
 
     thread_local! {
