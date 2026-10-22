@@ -47,10 +47,9 @@ impl Figure {
         let mut helm_worn = false;
         if let Some(cs) = &sprite {
             for (i, &id) in items.iter().enumerate() {
-                let node = cs.item_nodes[i];
-                if id == 0 || node < 0 {
-                    continue;
-                }
+                // `AttachItem`'s test: a node in the slot, on a sprite that
+                // holds items at all (`CSprite::item_node`)
+                let Some(node) = cs.item_node(i).filter(|_| id != 0) else { continue };
                 // `AttachItem`: the item, or `!Item` when it is not there
                 let m = lib.lookup(id as i32).or_else(|| lib.lookup(vi::hash::hash_resource_id("!Item") as i32)).and_then(|r| lib.build_model(r));
                 if let Some(m) = m {
