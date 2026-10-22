@@ -46,12 +46,6 @@ impl Fader {
         }
     }
 
-    /// `End`: at the target at once.
-    pub fn end(&mut self) {
-        self.alpha = self.target;
-        self.rate = F::ZERO;
-    }
-
     /// `Alpha()`.
     pub fn alpha(&self) -> f32 {
         self.alpha.0

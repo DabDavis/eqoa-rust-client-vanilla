@@ -171,15 +171,6 @@ impl Res {
     pub fn picture(&self, n: i32) -> Option<Vec<u8>> {
         self.raw(&super::boot::path(n)).and_then(super::boot::decode)
     }
-
-    /// A word of WORDS.TXT in the UI's language (`VIUI::m_words.GetString`).
-    pub fn word(&self, id: i32) -> String {
-        match (&self.vui, &self.words) {
-            (Some(v), _) => v.words.get(id, v.language).to_string(),
-            (None, Some(w)) => w.get(id, 0).to_string(),
-            _ => String::new(),
-        }
-    }
 }
 
 #[cfg(test)]

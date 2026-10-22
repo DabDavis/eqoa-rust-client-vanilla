@@ -9,14 +9,16 @@
 //! (`::net` is the crate: this module is `link`, not to shadow it.)
 
 use std::cell::RefCell;
-use std::collections::VecDeque;
 use std::rc::Rc;
 
 /// Something that comes later: polled until it gives its result, once.
 pub enum Later<T> {
+    /// a page's: its carrier fills the slot
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     Slot(Rc<RefCell<Option<Result<T, String>>>>),
     #[cfg(not(target_arch = "wasm32"))]
     Thread(std::sync::mpsc::Receiver<Result<T, String>>),
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     Done(Option<Result<T, String>>),
 }
 
@@ -34,6 +36,7 @@ impl<T> Later<T> {
         }
     }
 
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub fn ready(r: Result<T, String>) -> Self {
         Later::Done(Some(r))
     }
@@ -99,14 +102,17 @@ impl Stream {
     }
 
     /// A stream from a carrier of the caller's (a test's).
+    #[cfg(test)]
     pub fn from_carrier(c: Box<dyn Carrier>) -> Stream {
         Stream { inner: c }
     }
 }
 
 /// A carrier that only says why there is none.
+#[cfg(target_arch = "wasm32")]
 pub struct Refused(pub Option<String>);
 
+#[cfg(target_arch = "wasm32")]
 impl Carrier for Refused {
     fn send(&mut self, _: &[u8]) {}
     fn poll(&mut self) -> Option<Got> {
@@ -302,12 +308,14 @@ mod native {
 }
 
 /// A carrier a test drives: what was sent, and what is to come.
+#[cfg(test)]
 #[derive(Clone, Default)]
 pub struct Scripted {
     pub sent: Rc<RefCell<Vec<u8>>>,
-    pub incoming: Rc<RefCell<VecDeque<Got>>>,
+    pub incoming: Rc<RefCell<std::collections::VecDeque<Got>>>,
 }
 
+#[cfg(test)]
 impl Carrier for Scripted {
     fn send(&mut self, b: &[u8]) {
         self.sent.borrow_mut().extend_from_slice(b);

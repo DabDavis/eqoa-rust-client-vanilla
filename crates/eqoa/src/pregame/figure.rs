@@ -95,13 +95,6 @@ impl Figure {
         }
     }
 
-    /// `VICSprite::SetLocomotion(id)`.
-    pub fn set_locomotion(&mut self, id: i32) {
-        if let Some(cs) = self.sprite.as_mut() {
-            cs.set_locomotion(id, &self.anims, &mut self.rand);
-        }
-    }
-
     /// The actor's matrix (`CreateActor`'s place, heading and scale 1).
     pub fn actor(&self) -> Matrix44<Ee> {
         let f = F::<Ee>::new;

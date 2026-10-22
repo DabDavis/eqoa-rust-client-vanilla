@@ -271,6 +271,7 @@ mod tests {
     /// sides. Needs a graphics adapter; without one it says so and passes.
     #[test]
     fn a_scrolled_name_leaves_no_viewport_behind() {
+        let _gpu = crate::GPU_TEST.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut ui) = layer() else {
             eprintln!("SKIP: no graphics adapter");
             return;

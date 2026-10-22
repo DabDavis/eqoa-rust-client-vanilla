@@ -653,14 +653,14 @@ impl Page {
             }
             138 => {
                 result = 1;
-                if g.row - 1 >= 0 && g.cell(g.col, g.row - 1).is_some() {
+                if g.row > 0 && g.cell(g.col, g.row - 1).is_some() {
                     g.row -= 1;
                 }
             }
             136 => {
                 result = 1;
                 loop {
-                    if g.col - 1 >= 0 && g.cell(g.col - 1, g.row).is_some() {
+                    if g.col > 0 && g.cell(g.col - 1, g.row).is_some() {
                         g.col -= 1;
                         if g.cell(g.col, g.row) == g.cell(g.col + 1, g.row) {
                             continue;
@@ -1106,7 +1106,7 @@ impl Parser<'_> {
                 }
             } else if is("MaxChars") {
                 let n = e.prop_int("size", -1);
-                if n != -1 && n >= -1 {
+                if n > -1 {
                     o.max_chars = n;
                 }
             } else if is("Shadow") {

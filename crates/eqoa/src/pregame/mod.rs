@@ -65,8 +65,6 @@ pub enum Next {
     Client,
     /// in the world: `Play` takes it from here
     World(Box<Entered>),
-    /// the window closes (the licence declined, or a quit)
-    Quit,
 }
 
 /// The world entry, as `VIClient` has it after the MemoryDump.
@@ -84,10 +82,6 @@ pub struct Entered {
 pub struct Login {
     pub user: String,
     pub token: [u8; 32],
-    /// the reply's account id, status and game features (`VIStationReply37`)
-    pub account: u32,
-    pub status: u32,
-    pub features: u32,
 }
 
 /// What the stages hand each other.
@@ -113,7 +107,6 @@ pub fn port(var: &str, default: u16) -> u16 {
 
 pub const AUTH_PORT: u16 = 9735;
 pub const GAME_PORT: u16 = 10070;
-pub const NEWS_PORT: u16 = 7000;
 
 /// What a stage's frame has to draw and sound with.
 pub struct Ctx<'a> {
@@ -184,7 +177,6 @@ pub struct Pregame {
     keyboard: VecDeque<(i32, bool)>,
     /// A world entry, once.
     entered: Option<Box<Entered>>,
-    pub quit: bool,
     /// Back from the world (`back`): CLIENT starts by `back_from_world`
     /// with the disconnect's reason (None: the logout), not by `start`.
     back: Option<Option<i32>>,
@@ -207,7 +199,6 @@ impl Pregame {
             entering_since: 0,
             keyboard: VecDeque::new(),
             entered: None,
-            quit: false,
             back: None,
         };
         p.res.want(res::BASE);
@@ -285,16 +276,6 @@ impl Pregame {
             Stage::Setup => self.setup.point(p),
             Stage::Station => self.station.point(p),
             Stage::Client => self.client.point(p),
-        }
-    }
-
-    /// Whether an edit box has the keyboard (text goes in as it is typed).
-    pub fn typing(&self) -> bool {
-        match self.stage {
-            Stage::Setup => self.setup.typing(),
-            Stage::Station => self.station.typing(),
-            Stage::Client => self.client.typing(),
-            Stage::Boot => false,
         }
     }
 
@@ -397,7 +378,6 @@ impl Pregame {
             }
             Next::Client => self.enter(Stage::Client, cx_now),
             Next::World(e) => self.entered = Some(e),
-            Next::Quit => self.quit = true,
         }
     }
 

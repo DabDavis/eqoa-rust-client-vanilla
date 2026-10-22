@@ -672,6 +672,7 @@ mod tests {
             eprintln!("SKIP: no disc at {}", iso.display());
             return;
         }
+        let _gpu = crate::GPU_TEST.lock().unwrap_or_else(|e| e.into_inner());
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
             eprintln!("SKIP: no graphics adapter");

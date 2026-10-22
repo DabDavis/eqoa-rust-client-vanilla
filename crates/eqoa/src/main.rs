@@ -132,6 +132,12 @@ fn main() -> ExitCode {
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+/// What a test that makes a GPU device holds for its whole run: with two at
+/// once, this machine's Vulkan loader crashed (`vkSetDebugUtilsObjectNameEXT`)
+/// as one test's device went while the other's named a buffer.
+#[cfg(test)]
+pub static GPU_TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// A line for whoever runs the client: the console in a page, stderr natively.
 pub fn say(s: &str) {
     #[cfg(target_arch = "wasm32")]

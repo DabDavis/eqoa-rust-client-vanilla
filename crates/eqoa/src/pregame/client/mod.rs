@@ -552,7 +552,7 @@ impl Client {
                 self.set_active(Wnd::Select);
             }
             create::Out::Done => {
-                let f = self.create.form().clone();
+                let f = self.create.sent().clone();
                 self.create_character(&f);
             }
         }
@@ -777,10 +777,6 @@ impl Client {
             keys.retain(|&k| k != crate::pointer::MOVED);
         }
         keys
-    }
-
-    pub fn typing(&self) -> bool {
-        self.active == Wnd::Create && self.create.typing()
     }
 
     /// The 3D drawn this frame (character select's preview, customise's,

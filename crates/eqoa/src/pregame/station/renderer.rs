@@ -202,10 +202,8 @@ impl Renderer {
         // in stationLiveHosts.txt's place; the news from options.cfg
         self.server = server.to_string();
         self.api.add_server(server, port);
-        match self.pak.find("/stationdata/config/options.cfg") {
-            Some(f) => self.read_config(&String::from_utf8_lossy(f).into_owned()),
-            None => self.read_config("NewsURL:http://everquestonlineadventures.station.sony.com/privatebeta/news_blank.jsp"),
-        }
+        let cfg = self.pak.find("/stationdata/config/options.cfg").map(|f| String::from_utf8_lossy(f).into_owned());
+        self.read_config(cfg.as_deref().unwrap_or("NewsURL:http://everquestonlineadventures.station.sony.com/privatebeta/news_blank.jsp"));
     }
 
     /// `ReadConfig`: "name:value" lines; NewsURL is the only name.

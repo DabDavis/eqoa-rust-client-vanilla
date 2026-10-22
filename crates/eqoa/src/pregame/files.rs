@@ -31,6 +31,8 @@ pub enum Pending {
     Slot(Slot),
     #[cfg(not(target_arch = "wasm32"))]
     Thread(std::sync::mpsc::Receiver<Files>),
+    /// in hand already (a page's refusal)
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     Done(Option<Files>),
 }
 
@@ -71,10 +73,4 @@ pub fn read(paths: &[&str]) -> Pending {
     }
     #[cfg(target_arch = "wasm32")]
     Pending::Done(Some(Err(format!("no reader for {paths:?}"))))
-}
-
-/// Files already in hand (a test's).
-#[cfg(test)]
-pub fn ready(f: Files) -> Pending {
-    Pending::Done(Some(f))
 }

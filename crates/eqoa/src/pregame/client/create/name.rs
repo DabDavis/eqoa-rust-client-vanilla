@@ -132,10 +132,6 @@ impl NamePage {
         self.edit.key_up(k);
     }
 
-    pub fn typing(&self) -> bool {
-        !self.mbox_up
-    }
-
     /// `OnDrawSelf` and the children: the backdrop, the legend under the
     /// editor, then the editor (or the message box).
     pub fn draw(&mut self, cx: &mut Ctx, sounds: &mut Vec<i32>) {
@@ -223,9 +219,9 @@ mod tests {
         }
         assert_eq!(p.key(13, 0, &v, &r, &super::super::blank_form(), &mut sess, &mut s), None);
         assert!(p.mbox_up);
-        assert!(!p.typing(), "the box has the keys");
+        assert!(p.mbox_up, "the box has the keys");
         p.key(13, 0, &v, &r, &super::super::blank_form(), &mut sess, &mut s);
-        assert!(!p.mbox_up && p.typing());
+        assert!(!p.mbox_up);
         // Escape in the editor is the page's back
         assert_eq!(p.key(27, 0, &v, &r, &super::super::blank_form(), &mut sess, &mut s), Some(Msg::Back));
     }

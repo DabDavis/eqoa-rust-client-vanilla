@@ -256,9 +256,6 @@ impl Host {
         if let Some(done) = self.world_done() {
             return done;
         }
-        if self.pre.quit {
-            return Done::Quit;
-        }
         Done::Stay
     }
 

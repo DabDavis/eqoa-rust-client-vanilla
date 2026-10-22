@@ -205,6 +205,7 @@ impl Create {
         self.compact = crate::settings::game_options().compact != 0;
     }
 
+    #[cfg(test)]
     pub fn is_open(&self) -> bool {
         self.open
     }
@@ -222,15 +223,17 @@ impl Create {
 
     /// The form as Create sent it (0x002B): what character select makes its
     /// next entry from (`CreateCharacter`).
-    pub fn form(&self) -> &NewChar {
+    pub fn sent(&self) -> &NewChar {
         &self.sent
     }
 
     /// The form being filled.
+    #[cfg(test)]
     pub fn current(&self) -> &NewChar {
         &self.form
     }
 
+    #[cfg(test)]
     pub fn page(&self) -> Page {
         self.page
     }
@@ -406,11 +409,6 @@ impl Create {
         }
     }
 
-    /// The name page's editor has the keyboard.
-    pub fn typing(&self) -> bool {
-        self.open && self.page == Page::Name && self.name.typing()
-    }
-
     /// The page's 3D: its model in its race's set, through the stage's view,
     /// with the personal light the page set.
     pub fn scene<'a>(&'a self, stage: &'a Stage) -> Option<Scene<'a>> {
@@ -567,8 +565,8 @@ mod tests {
         s.flush();
         let after: Vec<Vec<u8>> = SENT.with(|v| v.borrow()[before..].to_vec());
         assert!(after.iter().any(|d| d.windows(5).any(|w| w == b"Arwen")), "0x002B went out with the name");
-        assert_eq!(c.form().name, "Arwen");
-        assert_eq!((c.form().race, c.form().city, c.form().class), (0, 2, 1));
+        assert_eq!(c.sent().name, "Arwen");
+        assert_eq!((c.sent().race, c.sent().city, c.sent().class), (0, 2, 1));
         assert!(!c.is_open());
         // opened again (a refusal came): the form as it was left
         c.open();

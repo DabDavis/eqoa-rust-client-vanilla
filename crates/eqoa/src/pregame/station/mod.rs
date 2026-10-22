@@ -117,7 +117,7 @@ impl Station {
             None => Next::Stay,
             Some(1) => {
                 let r = &run.r;
-                cx.shared.login = Some(Login { user: r.login.clone(), token: net::auth::udp_token(&r.password), account: r.uid as u32, status: r.login_status as u32, features: r.features as u32 });
+                cx.shared.login = Some(Login { user: r.login.clone(), token: net::auth::udp_token(&r.password) });
                 Next::Client
             }
             Some(_) => Next::Setup,
@@ -158,10 +158,6 @@ impl Station {
         }
     }
 
-    /// The editor has the keys: the keyboard types into it.
-    pub fn typing(&self) -> bool {
-        self.run.as_ref().is_some_and(|r| r.r.focus == Focus::Editor)
-    }
 }
 
 impl Run {
