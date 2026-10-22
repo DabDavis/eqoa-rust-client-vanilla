@@ -8,20 +8,28 @@ and an account on a server. Nothing of the game is in this download.
 Run it from a terminal:
 
   Linux and macOS
-    EQOA_ISO=/path/to/eqoa.iso EQOA_PASSWORD='your password' ./eqoa play <server> <account>
+    EQOA_ISO=/path/to/eqoa.iso ./eqoa
 
   Windows (Command Prompt)
     set EQOA_ISO=C:\path\to\eqoa.iso
-    set EQOA_PASSWORD=your password
-    eqoa.exe play <server> <account>
+    eqoa.exe
 
-It logs in, takes the account's first character (EQOA_CHAR=<name> for another)
-and opens a window on the world. There is no login or character screen in this
-program yet: characters are made where the server makes them (its web page) or
-on a PS2. A server on other ports: EQOA_AUTH_PORT and EQOA_GAME_PORT (9735 and
-10070 by default).
+The game starts as the console does: the loading screens, the legal screen, the
+licence, the title. On the title, Network Setup takes the address of the server
+to play on (a host name or an IPv4 address; it is kept). Play brings Station's
+login screen: your account and password (Create User Name makes an account where
+the server allows it; Save Account keeps them, the password in plain text, as the
+memory card did). Then the server's news, the server list, character select (an
+empty slot makes a new character) and the world. Quit in the start menu goes
+back to the server list.
 
-The game's options and your keys are kept in eqoa-rs in the config directory:
+For scripts: eqoa play <server> <account> (password in EQOA_PASSWORD,
+EQOA_CHAR=<name> for a character other than the first) goes straight into the
+world. A server on other ports: EQOA_AUTH_PORT and EQOA_GAME_PORT (9735 and
+10070 by default), EQOA_NEWS_PORT (7000).
+
+The game's options, your keys and the server are kept in eqoa-rs in the config
+directory:
 ~/.config/eqoa-rs (Linux), ~/Library/Application Support/eqoa-rs (macOS),
 %APPDATA%\eqoa-rs (Windows).
 

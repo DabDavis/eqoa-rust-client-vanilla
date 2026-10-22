@@ -97,6 +97,17 @@ keep it current.
   (`KeyFlash` acts only on a key still down when the window draws). A new window gets a `point`,
   its route in `Play::window_point` (as `window_key` routes keys) and a test through
   `pointer::testing`'s null raster that fails without its hit notes.
+- The pregame (`crates/eqoa/src/pregame/`, README "the pregame"): `eqoa` (or `eqoa boot [server]`) runs the game
+  from the disc's boot in SLUS's scene order (`boot.rs` the loading pictures, `setup/`, `station/`, `client/` with
+  `client/create/`), then hands `Play` the session (`host.rs`); a logout or a lost connection comes back to CLIENT
+  (`Pregame::back`). Port from `../decomp/modules/{setup,station,client}/src`; eqoa-port runs the real screens (pad
+  scripts in `~/.cache/vanilla-boot/ref{1,2}.pad`, `EQOA_NO_SETUP=1` for STATION on): compare shots. Files go through
+  `pregame::files` and the network through `pregame::link` (natively threads; in a page its reader and the relay),
+  so nothing in a stage is platform code. Headless: `DISPLAY=:99 EQOA_AUDIO=0 EQOA_OFFSCREEN=WxH EQOA_KEYS='enter@3000;
+  text name@4000' EQOA_PAD=... EQOA_SHOTS='3000=a.png' EQOA_QUIT=s eqoa boot <server>` (shots in play's frames too);
+  in a page `web/drive.py --boot --keys/--type`. One login at a time per account, and a run that is killed holds its
+  session about a minute: give each run's account time, or another account. `eqoa play <server> <account>` still goes
+  straight into the world for scripts and playshots.
 - The browser build (`web/`, README "In a browser"): `web/build.sh`, then `web/drive.py` (headless
   Chromium over the DevTools protocol, the disc image handed to the page's file input). Platform
   code goes behind `net::session::Datagrams`, `net::auth::Exchange`, `iso::Source`/`iso::Sparse`

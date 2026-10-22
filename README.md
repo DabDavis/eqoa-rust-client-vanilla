@@ -35,6 +35,8 @@ or a browser (each described where it lives below):
   Distance.
 - **The map** (M), drawn from the player's own disc for every world, on any
   server.
+- **Network Setup** on the title: the address of the server to play on (on a
+  PS2 it starts the console's network utility).
 
 ## Playing a release
 
@@ -46,19 +48,26 @@ Each build replaces the one before, so only the newest can be downloaded.
 It is the `eqoa` program, in an archive with its README and licence, or on its
 own (`eqoa-vanilla-linux-x86_64`, `eqoa-vanilla-windows-x86_64.exe`,
 `eqoa-vanilla-macos`: on Linux and macOS `chmod +x` it after the download). You
-need your own *Frontiers* disc image (SLUS-20744) and an account on a server.
-From a terminal:
+need your own *Frontiers* disc image (SLUS-20744) and an account on a server
+(or make one on Station's login screen, where the server allows it). From a
+terminal:
 
 ```bash
-EQOA_ISO=/path/to/eqoa.iso EQOA_PASSWORD='...' ./eqoa play <server> <account>
+EQOA_ISO=/path/to/eqoa.iso ./eqoa
 ```
 
-On Windows, `set EQOA_ISO=C:\path\to\eqoa.iso` and `set EQOA_PASSWORD=...`, then
-`eqoa.exe play <server> <account>`. It logs in, takes the account's first
-character (`EQOA_CHAR=<name>` for another) and opens a window on the world. The
-native client has no login or character screen yet: characters are made in the
-browser page ("In a browser", below) or on a PS2. The game's options and the keys
-are kept in `eqoa-rs` in the config directory (`~/.config/eqoa-rs`,
+On Windows, `set EQOA_ISO=C:\path\to\eqoa.iso`, then `eqoa.exe`. The game
+starts as the console does: the loading screens, the legal screen and the
+licence, then the title. On the title, **Network Setup** takes the server's
+address (a host name or an IPv4 address, kept for the next time); **Play**
+brings Station's login screen (your account and password; Save Account keeps
+both, the password in plain text, as the memory card kept them), the server's
+news, the server list, character select (with creation on an empty slot) and
+the world. Quitting from the start menu goes back to the server list, as on a
+PS2. `eqoa boot <server>` starts with that server instead of the kept one, and
+`eqoa play <server> <account>` (password in `EQOA_PASSWORD`, `EQOA_CHAR=<name>`)
+goes straight into the world, for scripts. The game's options, the keys and the
+server are kept in `eqoa-rs` in the config directory (`~/.config/eqoa-rs`,
 `~/Library/Application Support/eqoa-rs`, `%APPDATA%\eqoa-rs`). On Linux it needs
 ALSA (`libasound2`), libudev and a Vulkan or OpenGL driver. The builds are not
 signed: macOS asks before opening one the first time (Control-click, Open), and
@@ -328,12 +337,22 @@ directory, a world file's record headers) runs against `iso::Sparse`, a cache
 that answers `WouldBlock` for bytes it lacks and is filled between attempts
 (`tests/sparse.rs`: the listing in 2 fetches, 128 KB, equal to the file's).
 
-A page can open neither a UDP socket nor a TCP connection, so the session's
-datagrams (`net::session::Datagrams`: a UDP socket natively) and the Station
-login (`net::auth::Exchange`, the exchange with no socket in it) go through a
-relay: go-eqoa-server's `cmd/wsrelay`, which speaks eqoa-port's
-`tools/wsrelay.py` protocol, one WebSocket for the DRDP datagrams and one for
-the login. A world opens with its zones left on the disc and the ones round
+The page asks only for the player's disc image (the gate; the relay and the
+offline viewer are folded under "Server and viewer"); Start runs the game from
+its boot on the canvas, as natively: the loading screens, the licence, the title,
+Station's login screen (sign-in and Create User Name are the game's own pages),
+the news, the server list, character select and creation, the world. The
+pregame's files are read off the image as each stage asks for them
+(`pregame::files`), the world entry's in `world_library`'s order on a reader of
+their own. A page can open neither a UDP socket nor a TCP connection, so the
+session's datagrams (`net::session::Datagrams`: a UDP socket natively), Station's
+connection (its login, account creation and password change) and the news
+page's HTTP go through a relay, behind the pregame's `link`: go-eqoa-server's
+`cmd/wsrelay`, which speaks eqoa-port's `tools/wsrelay.py` protocol, one
+WebSocket for the DRDP datagrams and one per TCP connection (the relay must
+reach the server's ports 9735 and 7000 for them). A server named by host name in
+Network Setup is resolved by the relay; with none set, the page's own host is
+the server. A world opens with its zones left on the disc and the ones round
 the player read before the walk starts (`stream::fill_set`, awaited), the rest
 as the walk comes near them (`web::disc::WebZones`, a `stream::ZoneSource`
 whose reads finish on a later frame): in Freeport at the display's rate, 60
@@ -346,19 +365,6 @@ Tunaria with four zones in 260-400 ms, and back to 60 fps a second later. The
 game's clock runs on through it, as VITimer does (the viewer used to restart it,
 which put the creatures' animations before their start and panicked on a frame
 of -1).
-
-Between the login and the world the page is the character screen, driven by
-the session: the list (0x002C) is drawn in the page, and its Play, Delete and
-Create go out as the game's `SelectCharacter` (0x002A), `DeleteCharacter`
-(0x002D) and `CreateCharacter` (0x002B, `net::session::NewChar` as
-`SendNewChar` writes it, `tests/newchar.rs`), Random as `Send0012`. The form
-offers what the server's character templates hold (go-eqoa-server's
-`GET /api/creation`: race, city and class, with the starting stats), the look
-the appearance page allows (face, hair style and length 1-4, hair colour 1-8)
-and the 20 points the class page spends; a refusal shows the game's word for it
-(828, 829, 269). A new account is made through the account service
-(`POST /api/register`); logging in with a new name also makes one, as it does
-for a PS2.
 
 The start menu reads CLIENT's data and the HUD SUPPORT's, which the disc holds only
 encrypted. The page unpacks both off the player's disc with `dnas`, each in a Web
@@ -377,7 +383,8 @@ web/build.sh                                        # web/dist: the page, versio
 EQOA_WEB_DEST=user@host:/path/to/play/ web/deploy.sh
 web/pagetest.py --iso run/eqoa.iso                  # the page's updates, notices and crashes
 web/drive.py --iso run/eqoa.iso --view 'CHAR.ESF 0x70D898C6' --shot 6=human.png   # headless Chromium
-EQOA_PASSWORD=... web/drive.py --base https://host/eqoa/play/ --iso run/eqoa.iso --play <user> --shot 30=world.png
+web/drive.py --base https://host/eqoa/play/ --iso run/eqoa.iso --boot --keys 13=ArrowRight:100 \
+    --keys 13.6=Enter:100 --keys 17=Enter:100 --type 21=<user> --shot 30=station.png
 ```
 
 Each build is a directory of its own, `v/<build>/`, named by the digest of its files,
@@ -386,8 +393,8 @@ host serves `v/` as immutable and revalidates only the page and `version.json`.
 `web/deploy.sh` publishes the build's directory first, then the page that names it, then
 `version.json`. Builds stay two days, and the newest three always, for the pages still
 running them: a page fetches its worker and its worklet a while after it opened. A page
-already open asks for `version.json` every minute and whenever it is shown again. On a
-login card with nothing entered it reloads at once; anywhere else it says a new version
+already open asks for `version.json` every minute and whenever it is shown again. On the
+gate with no disc picked it reloads at once; anywhere else it says a new version
 is out and the player reloads when it suits them; a reload that brings the old page back
 is a problem notice, not another reload. Until 2026-10-20 a deploy rewrote the files in
 place one at a time: a page loaded during one could mix two builds (a tester's did, to
@@ -449,8 +456,8 @@ and 5 ms, 30-300 ms); the clock moves in the blocks the browser's output takes (
 ms in Chromium, 30 in Firefox on Linux). Key to the worklet, in the world: 53-61 ms
 median where it was 76-100 (and 150 in Firefox's first minute, its lead at 200). A
 feed later than the lead leaves a short gap and pauses the driver for it, so nothing
-is skipped. The AudioContext is made on the click that logs
-in, as a page may only start sound from its user's gesture. The streamed music is read
+is skipped. The AudioContext is made on the click that starts
+the game (Start), as a page may only start sound from its user's gesture. The streamed music is read
 whole off the disc (7 to 9 MB, 40-190 ms in Chromium) before the device starts it,
 and the last three files are kept. In Chromium, in Freeport: 60 fps with the sound,
 the region's music read and playing, no underrun after the world's first frames; the
