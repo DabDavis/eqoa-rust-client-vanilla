@@ -38,9 +38,10 @@ a text file holding its path) are kept in eqoa-rs in the config directory:
 In play: Escape the start menu, F1 the keys and buttons (the Options window's
 Controls page), M the map, F11 full screen. A controller works as the PS2's did.
 
-Linux: needs ALSA (libasound2), libudev and a Vulkan or OpenGL driver. The
-file dialog is your desktop's (its XDG desktop portal, or zenity); with neither,
-start it with the image's path as above.
+Linux: needs glibc 2.34 or newer (Ubuntu 22.04, Debian 12, Fedora 35 or later),
+ALSA (libasound2), libudev and a Vulkan or OpenGL driver. The file dialog is
+your desktop's (its XDG desktop portal, or zenity); with neither, start it with
+the image's path as above.
 macOS: the program is not signed. The first time, macOS refuses it; allow it in
 System Settings, Privacy & Security ("Open Anyway"), or run
   xattr -d com.apple.quarantine eqoa

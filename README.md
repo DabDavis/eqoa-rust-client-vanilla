@@ -69,8 +69,9 @@ PS2. `eqoa boot <server>` starts with that server instead of the kept one, and
 goes straight into the world, for scripts. The game's options, the keys, the
 server and the disc image's place (`disc.opt`, its path alone) are kept in
 `eqoa-rs` in the config directory (`~/.config/eqoa-rs`, `~/Library/Application
-Support/eqoa-rs`, `%APPDATA%\eqoa-rs`). On Linux it needs ALSA (`libasound2`),
-libudev and a Vulkan or OpenGL driver; the file dialog is the desktop's (its XDG
+Support/eqoa-rs`, `%APPDATA%\eqoa-rs`). On Linux it needs glibc 2.34 or newer
+(Ubuntu 22.04, Debian 12, Fedora 35 or later), ALSA (`libasound2`), libudev and a
+Vulkan or OpenGL driver; the file dialog is the desktop's (its XDG
 desktop portal, else zenity), and where there is neither the image is named on
 the command line. The builds are not
 signed: the first time, macOS refuses one that came through a browser; allow it
