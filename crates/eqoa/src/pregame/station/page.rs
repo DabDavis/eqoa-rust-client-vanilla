@@ -235,6 +235,8 @@ impl Obj {
                 image = self.focus_image;
             }
             vui.blit_id(r, image as u32, [x, y], 3, 1.0, 0);
+            // a backdrop half in a window wider than 4:3: carried on past the frame
+            crate::pregame::wide::half(r, image as u32, [x, y], 3);
         }
     }
 

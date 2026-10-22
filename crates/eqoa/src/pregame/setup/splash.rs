@@ -84,8 +84,12 @@ impl Splash {
             self.window.reset_tick_pulse(now);
         }
         let became_ready = self.count();
-        vui.blit_id(r, vi::hash::hash_resource_id("splash00.tga"), [0, 0], 0, 1.0, 0);
-        vui.blit_id(r, vi::hash::hash_resource_id("splash10.tga"), [320, 0], 0, 1.0, 0);
+        for (name, at) in [("splash00.tga", [0, 0]), ("splash10.tga", [320, 0])] {
+            let id = vi::hash::hash_resource_id(name);
+            vui.blit_id(r, id, at, 0, 1.0, 0);
+            // a window wider than 4:3: the picture carried on past the frame
+            crate::pregame::wide::half(r, id, at, 0);
+        }
         fx.render(r, now, true);
         let w = self.window.size[0] / 3;
         let x = [0, w, w * 2, w * 3];

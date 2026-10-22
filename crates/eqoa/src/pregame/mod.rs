@@ -41,6 +41,7 @@ pub mod res;
 pub mod setup;
 pub mod stage;
 pub mod station;
+pub mod wide;
 
 use std::collections::VecDeque;
 

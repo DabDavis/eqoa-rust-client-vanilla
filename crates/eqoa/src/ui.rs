@@ -40,6 +40,11 @@ pub trait Layout: Raster {
     fn fill_blended(&mut self, color: [f32; 4], corners: [[i32; 2]; 4]) {
         self.fill_fan(color, corners)
     }
+    /// Surface `id`'s texels `texels` (fan order, in the surface's own
+    /// pixels) on a quad at frame corners `corners` past the frame's sides,
+    /// in blend `mode`, cut only to the target: what the client lays beside
+    /// a full-screen picture in a wider window (`pregame::wide`).
+    fn beyond(&mut self, _id: u32, _mode: i32, _corners: [[f32; 2]; 4], _texels: [[f32; 2]; 4]) {}
 }
 
 /// What the layer holds for the UI: surfaces by DictID, and the font.
@@ -152,6 +157,13 @@ impl Layout for UiRaster<'_> {
         let Some(tex) = self.assets.white else { return };
         let pos = c.map(|p| [p[0] as f32, p[1] as f32]);
         self.ui.push(Quad { tex, blend: 3, pos, uv: [[0.5, 0.5]; 4], color, clip: None });
+        self.glyphs.other();
+    }
+    fn beyond(&mut self, id: u32, mode: i32, corners: [[f32; 2]; 4], texels: [[f32; 2]; 4]) {
+        let Some(tex) = self.assets.surface(id) else { return };
+        let (w, h) = self.ui.texture_size(tex);
+        let uv = texels.map(|t| [t[0] / w as f32, t[1] / h as f32]);
+        self.ui.push_whole(Quad { tex, blend: mode as u8, pos: corners, uv, color: [1.0; 4], clip: None });
         self.glyphs.other();
     }
 }
