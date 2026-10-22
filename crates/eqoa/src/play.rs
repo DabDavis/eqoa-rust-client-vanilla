@@ -44,6 +44,8 @@ struct Puppet {
     gpu: GpuModel,
     /// Items and the helm, each on its node (`Attach`).
     attached: Vec<(i32, GpuModel)>,
+    /// The items in hand as they were attached (`held_items`).
+    held: Held,
     /// The name plate's anchor this frame: 0.6 above the name node (3).
     name_at: Option<[f32; 3]>,
     /// Slot 4's place this frame (`CalcSlotWorldTransform(4)`), which a
@@ -53,9 +55,8 @@ struct Puppet {
     /// this frame (what an effect's node transform is under).
     actor_m: Matrix44<Ee>,
     centre: Matrix44<Ee>,
-    /// The three hands' weapon ends (the item's node and its two point
-    /// sprites) and the weapon trail.
-    weapons: [Option<(i32, crate::trails::Points)>; 3],
+    /// The three hands' weapon ends and the weapon trail.
+    weapons: Weapons,
     trail: crate::trails::State,
     /// `m_p2A8`: not yet seen a frame (a corpse seen first lies at once).
     first: bool,
@@ -528,7 +529,7 @@ impl Play {
 /// holds items at all (`CSprite::item_node`: a player turned into a creature
 /// keeps its weapons on its channel, and the creature shows none). Per slot,
 /// the item's DictID and its node.
-fn held_items(cs: &CSprite<Ee>, c: &net::entity::Creature) -> [Option<(u32, i32)>; 3] {
+fn held_items(cs: &CSprite<Ee>, c: &net::entity::Creature) -> Held {
     std::array::from_fn(|i| {
         let id = if c.items_over[i] != 0 { c.items_over[i] } else { c.items[i] };
         cs.item_node(i).filter(|_| id != 0).map(|node| (id, node))
@@ -544,41 +545,108 @@ fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Optio
                     let mut anims = AnimScene { time: game_ms, ..Default::default() };
                     let mut rand = Rand(slot as u64 + 1);
                     let sprite = load_csprite(lib, r, &mut anims, &mut AnimCache::new(), &mut rand);
-                    // Attach: the items in hand (`held_items`) and the helm
-                    // (SetHelm, at node 8, in the tint).
-                    let mut attached = Vec::new();
-                    let mut helm_worn = false;
-                    let mut weapons = [None; 3];
-                    if let (Some(cs), Some(c)) = (&sprite, &e.creature) {
-                        for (i, held) in held_items(cs, c).into_iter().enumerate() {
-                            let Some((id, node)) = held else { continue };
-                            weapons[i] = crate::trails::weapon_points(lib, id).map(|w| (node, w));
-                            if let Some(m) = lib.lookup(id as i32).and_then(|r| lib.build_model(r)) {
-                                attached.push((node, g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
-                            }
-                        }
-                        if cs.node_ids[8] >= 0
-                            && let Some(h) = vi::cust::helm(c.armor[5])
-                            && let Some(mut m) = lib.lookup(h as i32).and_then(|r| lib.build_model(r))
-                        {
-                            let tint = vi::cust::TINTS[(c.armor_tint[5] as usize).min(14)];
-                            for b in &mut m.batches {
-                                for l in &mut b.layers {
-                                    l.color = tint;
-                                }
-                            }
-                            helm_worn = true;
-                            attached.push((cs.node_ids[8], g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
-                        }
-                    }
+                    let held = held_by(sprite.as_ref(), e.creature.as_ref());
+                    let (attached, weapons, helm_worn) = match (&sprite, &e.creature) {
+                        (Some(cs), Some(c)) => attach(lib, g, cs, c, held),
+                        _ => (Vec::new(), [None; 3], false),
+                    };
                     // ApplyLook: the look's textures and tints on the layers the
                     // sprite's text slots name.
                     if let (Some(cs), Some(look)) = (&sprite, &look) {
                         dress(&mut model, &vi::cust::apply_look(cs, look, helm_worn, |id| lib.surface(id as i32).is_some()));
                     }
                     let gpu = g.renderer.upload(g.device, g.queue, &model, &[render::IDENTITY], &textures);
-                    Some(Puppet { model: e.model, look, sprite, anims, rand, gpu, attached, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true })
+                    Some(Puppet { model: e.model, look, sprite, anims, rand, gpu, attached, held, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true })
                 })
+}
+
+/// Per item slot, the item's DictID and its node (`held_items`).
+type Held = [Option<(u32, i32)>; 3];
+
+/// The three hands' weapon ends: the item's node and its two point sprites.
+type Weapons = [Option<(i32, crate::trails::Points)>; 3];
+
+/// `held_items` of a puppet's sprite: none without a sprite or a creature.
+fn held_by(sprite: Option<&CSprite<Ee>>, c: Option<&net::entity::Creature>) -> Held {
+    sprite.zip(c).map_or([None; 3], |(cs, c)| held_items(cs, c))
+}
+
+/// What `Apply` attaches to a creature's sprite: the items in hand (`held`,
+/// as `held_items` gives them) and the helm (SetHelm, at node 8, in the
+/// tint), each on its node. With them, the hands' weapon ends and whether a
+/// helm is worn.
+fn attach(lib: &Library, g: &mut Gpu, cs: &CSprite<Ee>, c: &net::entity::Creature, held: Held) -> (Vec<(i32, GpuModel)>, Weapons, bool) {
+    let textures = render::library_textures(lib);
+    let mut attached = Vec::new();
+    let mut weapons = [None; 3];
+    for (i, held) in held.into_iter().enumerate() {
+        let Some((id, node)) = held else { continue };
+        weapons[i] = crate::trails::weapon_points(lib, id).map(|w| (node, w));
+        if let Some(m) = lib.lookup(id as i32).and_then(|r| lib.build_model(r)) {
+            attached.push((node, g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
+        }
+    }
+    let mut helm_worn = false;
+    if cs.node_ids[8] >= 0
+        && let Some(h) = vi::cust::helm(c.armor[5])
+        && let Some(mut m) = lib.lookup(h as i32).and_then(|r| lib.build_model(r))
+    {
+        let tint = vi::cust::TINTS[(c.armor_tint[5] as usize).min(14)];
+        for b in &mut m.batches {
+            for l in &mut b.layers {
+                l.color = tint;
+            }
+        }
+        helm_worn = true;
+        attached.push((cs.node_ids[8], g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
+    }
+    (attached, weapons, helm_worn)
+}
+
+/// What `Apply` does to a creature's sprite when its entity is applied again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Redo {
+    Keep,
+    /// A new model or look: the creature made anew (`SetActorSprite`, then
+    /// every item and the whole look).
+    Build,
+    /// The same sprite, a hand's item changed: the items attached again
+    /// (`DetachItem`, `AttachItem`), the sprite kept mid-animation.
+    Items,
+}
+
+/// `Apply`'s tests, from what a puppet was made with (its model and look)
+/// and holds (`held_items`), and what its entity is now. An item is attached
+/// again when its model changes (`SetItem` and `Apply` test the item's
+/// DictID), not when only its type does.
+fn redo(was: (u32, Option<vi::cust::Look>, Held), now: (u32, Option<vi::cust::Look>, Held)) -> Redo {
+    if (was.0, was.1) != (now.0, now.1) {
+        Redo::Build
+    } else if was.2 != now.2 {
+        Redo::Items
+    } else {
+        Redo::Keep
+    }
+}
+
+/// `Apply` on a creature's puppet as `redo` decides it, from the entity as
+/// it is now, dressed in `look`. The puppet it replaced, when it was made
+/// anew.
+fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64) -> Option<Option<Puppet>> {
+    let r = p.as_ref().map_or(Redo::Build, |p| redo((p.model, p.look, p.held), (e.model, look, held_by(p.sprite.as_ref(), e.creature.as_ref()))));
+    match r {
+        Redo::Keep => None,
+        Redo::Build => Some(std::mem::replace(p, build_puppet(lib, g, e, look, slot, game_ms))),
+        Redo::Items => {
+            if let Some(p) = p.as_mut()
+                && let (Some(cs), Some(c)) = (&p.sprite, &e.creature)
+            {
+                p.held = held_items(cs, c);
+                (p.attached, p.weapons, _) = attach(lib, g, cs, c, p.held);
+            }
+            None
+        }
+    }
 }
 
 /// The walker's body as the game rasters the player's actor: hidden past its
@@ -778,6 +846,46 @@ mod held {
         c.items_over[1] = 0x1234;
         assert_eq!(held_items(&human, &c), [Some((0xF4DD991A, 18)), Some((0x1234, 27)), None]);
         assert_eq!(crate::spells::hand_attack_types(&c, human.holds_items), [5, 5]);
+    }
+
+    /// A weapon swapped with nothing else changed is attached again
+    /// (`Apply` tests each hand's item), on the sprite as it is; so is an
+    /// override taking a hand. A new model or look makes the creature anew,
+    /// and an item's type alone changes nothing, as `Apply` tests only the
+    /// item's model. A creature that holds no items has nothing to attach.
+    /// The control: going by the model and look alone, as the client did
+    /// before, keeps the old weapon in the hand.
+    #[test]
+    fn a_swapped_weapon_is_attached_again() {
+        let mut human = CSprite::<Ee>::new(vi::hsprite::HSprite::new(0), 1, 0, 0, F::ONE, true);
+        human.item_nodes[..3].copy_from_slice(&[18, 27, 28]);
+        let mut c = net::entity::Creature { item_types: [1, 11], ..Default::default() };
+        c.items = [0xF4DD991A, 0, 0];
+        let state = |cs: &CSprite<Ee>, c: &net::entity::Creature, model: u32| (model, Some(look_of(c)), held_items(cs, c));
+        let was = state(&human, &c, 0xC698D870);
+        assert_eq!(redo(was, was), Redo::Keep);
+
+        let mut swapped = c.clone();
+        swapped.items[0] = 0x845FECDD;
+        assert_eq!(redo(was, state(&human, &swapped, 0xC698D870)), Redo::Items);
+        let mut over = c.clone();
+        over.items_over[1] = 0x1234;
+        assert_eq!(redo(was, state(&human, &over, 0xC698D870)), Redo::Items);
+        let mut retyped = c.clone();
+        retyped.item_types[0] = 5;
+        assert_eq!(redo(was, state(&human, &retyped, 0xC698D870)), Redo::Keep);
+        let mut dyed = swapped.clone();
+        dyed.armor_tint[0] = 3;
+        assert_eq!(redo(was, state(&human, &dyed, 0xC698D870)), Redo::Build);
+        assert_eq!(redo(was, state(&human, &swapped, 0x9BBCEEB9)), Redo::Build);
+
+        let mut form = CSprite::<Ee>::new(vi::hsprite::HSprite::new(0), 2, 9, 0, F::ONE, false);
+        form.item_nodes[..2].copy_from_slice(&[6, 10]);
+        assert_eq!(redo(state(&form, &c, 0x8150E6AF), state(&form, &swapped, 0x8150E6AF)), Redo::Keep);
+
+        let by_model_and_look = |a: (u32, Option<vi::cust::Look>), b: (u32, Option<vi::cust::Look>)| if a != b { Redo::Build } else { Redo::Keep };
+        let now = state(&human, &swapped, 0xC698D870);
+        assert_eq!(by_model_and_look((was.0, was.1), (now.0, now.1)), Redo::Keep, "the control: by the model and look alone the old weapon stays");
     }
 }
 
@@ -1438,9 +1546,7 @@ impl Play {
                 && e.model != 0
             {
                 let look = e.creature.as_ref().map(look_of);
-                if self.self_puppet.as_ref().map(|p| (p.model, p.look)) != Some((e.model, look)) {
-                    self.self_puppet = build_puppet(lib, &mut g, e, look, slot, game_ms);
-                }
+                apply(lib, &mut g, &mut self.self_puppet, e, look, slot, game_ms);
             }
             // a creature's sounds are shared while it is loaded
             let sounds_of = |p: &Option<Puppet>| p.as_ref().and_then(|p| p.sprite.as_ref()).map(|cs| cs.sounds()).unwrap_or_default();
@@ -1452,13 +1558,11 @@ impl Play {
                 continue;
             };
             let look = e.creature.as_ref().map(look_of);
-            if self.puppets[slot].as_ref().map(|p| (p.model, p.look)) != Some((e.model, look)) {
-                let old = sounds_of(&self.puppets[slot]);
-                self.puppets[slot] = build_puppet(lib, &mut g, e, look, slot, game_ms);
-                if let Some(s) = sound.as_deref_mut() {
-                    s.share_sounds(lib, &sounds_of(&self.puppets[slot]));
-                    s.release_sounds(&old);
-                }
+            if let Some(old) = apply(lib, &mut g, &mut self.puppets[slot], e, look, slot, game_ms)
+                && let Some(s) = sound.as_deref_mut()
+            {
+                s.share_sounds(lib, &sounds_of(&self.puppets[slot]));
+                s.release_sounds(&sounds_of(&old));
             }
             let Some(p) = self.puppets[slot].as_mut() else { continue };
             let f = F::<Ee>::new;
