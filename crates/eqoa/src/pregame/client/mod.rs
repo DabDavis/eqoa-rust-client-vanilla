@@ -71,6 +71,12 @@ impl Client {
         self.session = None;
     }
 
+    /// Back from the world: the logout (None) or the connection lost.
+    pub fn back_from_world(&mut self, res: &mut Res, shared: &mut Shared, disconnect: Option<i32>) {
+        let _ = disconnect;
+        self.start(res, shared);
+    }
+
     pub fn frame(&mut self, cx: &mut Ctx) -> Next {
         cx.vui.draw_centered_string_ex(cx.r, &wide(&self.text), 320, 224, [1.0, 1.0, 1.0, 1.0], 0, true);
         // the chosen character in character select's viewport, then played

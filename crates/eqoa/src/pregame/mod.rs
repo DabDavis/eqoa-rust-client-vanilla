@@ -91,7 +91,7 @@ pub struct Login {
 }
 
 /// What the stages hand each other.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Shared {
     /// The server Network Setup keeps (`crate::settings::server`): the host
     /// STATION logs in at (TCP 9735), the news comes from (HTTP 7000) and
@@ -185,6 +185,9 @@ pub struct Pregame {
     /// A world entry, once.
     entered: Option<Box<Entered>>,
     pub quit: bool,
+    /// Back from the world (`back`): CLIENT starts by `back_from_world`
+    /// with the disconnect's reason (None: the logout), not by `start`.
+    back: Option<Option<i32>>,
 }
 
 impl Pregame {
@@ -205,8 +208,24 @@ impl Pregame {
             keyboard: VecDeque::new(),
             entered: None,
             quit: false,
+            back: None,
         };
         p.res.want(res::BASE);
+        p
+    }
+
+    /// Back from the world (`VIClient::Msg0777Done`): the start menu's
+    /// logout (`disconnect` None) or the connection lost (its reason). CLIENT
+    /// reads its pregame files again (`LoadWorld`, under its own loading
+    /// screen), then the server list, or the disconnect's notice first
+    /// (`Client::back_from_world`). The account and the server carry over.
+    pub fn back(shared: Shared, disconnect: Option<i32>, now: i64) -> Pregame {
+        let mut p = Pregame::new(shared.server.clone());
+        p.shared = shared;
+        p.back = Some(disconnect);
+        p.stage = Stage::Client;
+        p.boot_step = Some(boot::Step::Setup);
+        p.enter(Stage::Client, now);
         p
     }
 
@@ -297,6 +316,7 @@ impl Pregame {
             }
         }
         if let Some(s) = self.entering
+            && self.res.ready(res::BASE)
             && self.res.ready(self.files_of(s))
             && self.held(now)
             && now - self.entering_since >= boot::HOLD_MS
@@ -308,7 +328,10 @@ impl Pregame {
             match s {
                 Stage::Setup => self.setup.start(&mut self.res, &mut self.shared),
                 Stage::Station => self.station.start(&mut self.res, &mut self.shared),
-                Stage::Client => self.client.start(&mut self.res, &mut self.shared),
+                Stage::Client => match self.back.take() {
+                    Some(disconnect) => self.client.back_from_world(&mut self.res, &mut self.shared, disconnect),
+                    None => self.client.start(&mut self.res, &mut self.shared),
+                },
                 Stage::Boot => {}
             }
         }
@@ -328,8 +351,12 @@ impl Pregame {
     /// has its own loading screen, `client`).
     fn enter(&mut self, s: Stage, now: i64) {
         self.res.want(self.files_of(s));
-        if s == Stage::Station {
-            self.show_picture(boot::Step::Station, now);
+        match s {
+            Stage::Station => self.show_picture(boot::Step::Station, now),
+            // SLUS started over (STATION's Disconnect, a disconnect's restart):
+            // SETUP's Init shows the next picture while it loads
+            Stage::Setup if self.stage != Stage::Boot => self.show_picture(boot::Step::Setup, now),
+            _ => {}
         }
         self.entering = Some(s);
         self.entering_since = now;
@@ -359,6 +386,7 @@ impl Pregame {
             Next::Stay => {}
             Next::Setup => {
                 self.station.stop();
+                self.client.stop();
                 self.enter(Stage::Setup, cx_now);
             }
             Next::Station => {

@@ -60,7 +60,6 @@ pub struct Host {
     /// music playing: (playback, the device's sound) by the stage's tag
     playing: HashMap<&'static str, (i32, i32)>,
     keys: Vec<(i64, i32, bool)>,
-    shots: Vec<(i64, String)>,
     /// keys a pointer pressed, let go a frame later
     pointer_held: Vec<i32>,
     pub world: Option<WorldLoad>,
@@ -77,7 +76,6 @@ impl Host {
             pictures: HashMap::new(),
             playing: HashMap::new(),
             keys: key_script(),
-            shots: shot_script(),
             pointer_held: Vec::new(),
             world: None,
             gears: None,
@@ -332,24 +330,6 @@ impl Host {
         }
     }
 
-    /// `EQOA_SHOTS`: the shots due at `now`, each once.
-    pub fn shots_due(&mut self, now: i64) -> Vec<String> {
-        let mut due = Vec::new();
-        self.shots.retain(|(t, f)| {
-            if *t <= now {
-                due.push(f.clone());
-                false
-            } else {
-                true
-            }
-        });
-        due
-    }
-
-    pub fn shots_left(&self) -> bool {
-        !self.shots.is_empty()
-    }
-
     /// CLIENT's loading screen is up: its files being read, or the world's.
     pub fn loading_screen(&self) -> bool {
         self.world.is_some() || self.pre.client_loading()
@@ -413,7 +393,8 @@ pub fn parse_keys(s: &str) -> Vec<(i64, i32, bool)> {
     out
 }
 
-fn shot_script() -> Vec<(i64, String)> {
+/// `EQOA_SHOTS`: `ms=file.png`, comma-separated (the window takes them).
+pub fn shot_script() -> Vec<(i64, String)> {
     #[cfg(not(target_arch = "wasm32"))]
     if let Ok(s) = std::env::var("EQOA_SHOTS") {
         return s.split(',').filter_map(|p| p.split_once('=')).filter_map(|(t, f)| Some((t.trim().parse().ok()?, f.trim().to_string()))).collect();
