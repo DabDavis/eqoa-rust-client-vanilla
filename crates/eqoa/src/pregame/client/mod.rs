@@ -37,6 +37,10 @@ pub struct Client {
     chosen: Option<(net::session::Character, i64)>,
     figure: Option<crate::pregame::figure::Figure>,
     stage: Option<crate::pregame::stage::Stage>,
+    /// TEMP (lane create): `EQOA_CREATE=1` opens creation on the list
+    create: create::Create,
+    creating: bool,
+    created: bool,
 }
 
 impl Client {
@@ -72,6 +76,42 @@ impl Client {
     }
 
     pub fn frame(&mut self, cx: &mut Ctx) -> Next {
+        // TEMP (lane create): creation over the stand-in
+        if self.creating
+            && let Some(s) = self.session.as_mut()
+        {
+            if self.stage.is_none()
+                && let Some(g) = cx.gpu.as_mut()
+            {
+                self.stage = crate::pregame::stage::Stage::new(&cx.res.lib, g);
+            }
+            for e in s.pump() {
+                match &e {
+                    Event::Characters(list) => {
+                        for c in list {
+                            crate::say(&format!("creation: the list has {} (race {}, class {}, level {})", c.name, c.race, c.class, c.level));
+                        }
+                    }
+                    Event::CreateRefused(w) => crate::say(&format!("creation: refused, word {w}")),
+                    Event::RandomName(n) => crate::say(&format!("creation: the server's name {n}")),
+                    _ => {}
+                }
+                self.create.event(&e);
+            }
+            match self.create.frame(cx, s, self.stage.as_mut()) {
+                create::Out::Done => {
+                    let f = self.create.form();
+                    crate::say(&format!("creation: sent {f:?}"));
+                    self.created = true;
+                }
+                create::Out::Back => crate::say("creation: back to character select"),
+                create::Out::Stay => {}
+            }
+            if !self.create.is_open() && !self.created {
+                self.creating = false;
+            }
+            return Next::Stay;
+        }
         cx.vui.draw_centered_string_ex(cx.r, &wide(&self.text), 320, 224, [1.0, 1.0, 1.0, 1.0], 0, true);
         // the chosen character in character select's viewport, then played
         if let Some((c, at)) = self.chosen.clone() {
@@ -124,6 +164,11 @@ impl Client {
                 }
                 Event::Characters(list) => {
                     self.text = format!("{} characters", list.len());
+                    if std::env::var_os("EQOA_CREATE").is_some() {
+                        self.create.open();
+                        self.creating = true;
+                        continue;
+                    }
                     let want = std::env::var("EQOA_CHAR").ok();
                     if let Some(c) = list.iter().find(|c| want.as_deref() == Some(c.name.as_str())).or(list.first()) {
                         self.chosen = Some((c.clone(), cx.now));
@@ -147,19 +192,28 @@ impl Client {
     }
 
     pub fn key(&mut self, key: i32, down: bool) {
-        let _ = (key, down, self.failed);
+        let _ = self.failed;
+        if self.creating {
+            self.create.key(key, down);
+        }
     }
 
-    pub fn point(&mut self, _p: [f32; 2]) -> Vec<i32> {
+    pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        if self.creating {
+            return self.create.point(p);
+        }
         Vec::new()
     }
 
     pub fn typing(&self) -> bool {
-        false
+        self.creating && self.create.typing()
     }
 
     /// The 3D drawn this frame (character select's preview, creation's model).
     pub fn scene(&self) -> Option<super::Scene<'_>> {
+        if self.creating {
+            return self.create.scene(self.stage.as_ref()?);
+        }
         let f = self.figure.as_ref()?;
         let st = self.stage.as_ref()?;
         Some(super::Scene { view: st.view(), viewport: crate::pregame::stage::VIEWPORT, models: st.models().chain(f.models()).collect() })
