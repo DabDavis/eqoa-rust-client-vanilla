@@ -17,6 +17,11 @@ keep it current.
 - Releases are CI only (`.github/workflows/dev.yml`): every push to `master` builds Linux, Windows and
   macOS and replaces the one `dev` release (its tag moved to the commit, its assets replaced, the run's
   artifacts deleted), so no older build can be downloaded. No versioned releases, no other channel.
+- Windows: a program's main thread has the stack its header reserves (1 MB by default), and the game's
+  first frame needs about that much, its frames holding their state by value: `crates/eqoa/build.rs`
+  links 8 MB, as Linux and macOS give, and `dev.yml` refuses a build with less. Wine does not show an
+  overflow there (its main thread gets more); a Windows machine does
+  (`../claude-notes/windows-main-stack-20261022.md`: GitHub's Windows runners, a stand-in disc).
 
 - Toolchain: rustup in `~/.cargo`. `/tmp` is a small partition that old session scratchpads fill: building with `TMPDIR` under `~/.cache` avoids it.
 - `run/` is untracked: `run/eqoa.iso` links the Frontiers disc. Never commit game data.
