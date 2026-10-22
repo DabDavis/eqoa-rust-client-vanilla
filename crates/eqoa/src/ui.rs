@@ -22,6 +22,9 @@ pub trait Layout: Raster {
     }
     /// Where the quads made from now go.
     fn anchor(&mut self, _a: Anchor) {}
+    /// A window's 3D goes here (`pregame::Scene`): the quads made so far
+    /// are drawn under it, the rest over it.
+    fn mark_split(&mut self) {}
 }
 
 /// What the layer holds for the UI: surfaces by DictID, and the font.
@@ -116,6 +119,9 @@ impl Layout for UiRaster<'_> {
     }
     fn anchor(&mut self, a: Anchor) {
         self.ui.anchor = a;
+    }
+    fn mark_split(&mut self) {
+        self.ui.mark_split();
     }
 }
 

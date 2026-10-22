@@ -773,6 +773,44 @@ impl Renderer {
         view: &View,
         items: &[Draw],
     ) {
+        self.draw_in(queue, encoder, target, depth, view, items, None);
+    }
+
+    /// `draw` into the rectangle `rect` of the target (x, y, width, height in
+    /// its pixels), as `VIRaster::Viewport` puts a window's 3D into part of
+    /// the screen: what the target holds is kept (no clear), depth is cleared,
+    /// the view's projection fills the rectangle and nothing is drawn outside it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_viewport(&self, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, depth: &wgpu::TextureView, view: &View, items: &[Draw], rect: [u32; 4]) {
+        self.draw_in(queue, encoder, target, depth, view, items, Some(rect));
+    }
+
+    /// The 2D layer's quads in `range` alone, over what the target holds
+    /// (a window's quads under its 3D, then over it: `ui::Ui::split`).
+    pub fn draw_ui(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, depth: &wgpu::TextureView, size: (u32, u32), range: std::ops::Range<usize>) {
+        let Some(u) = self.ui.as_ref().filter(|u| !u.quads.is_empty()) else { return };
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("ui part"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth,
+                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Discard }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        u.draw_range(device, &mut pass, size, range);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_in(&self, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, depth: &wgpu::TextureView, view: &View, items: &[Draw], rect: Option<[u32; 4]>) {
         // The view-projection relative to the eye, in doubles: `view_proj`'s
         // translation is the projection of the eye's world position, which
         // the eye's own translation here cancels (shader.wgsl, vs_main).
@@ -813,12 +851,10 @@ impl Renderer {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: view.clear.x as f64,
-                        g: view.clear.y as f64,
-                        b: view.clear.z as f64,
-                        a: 1.0,
-                    }),
+                    load: match rect {
+                        Some(_) => wgpu::LoadOp::Load,
+                        None => wgpu::LoadOp::Clear(wgpu::Color { r: view.clear.x as f64, g: view.clear.y as f64, b: view.clear.z as f64, a: 1.0 }),
+                    },
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -831,6 +867,10 @@ impl Renderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
+        if let Some([x, y, w, h]) = rect {
+            pass.set_viewport(x as f32, y as f32, w as f32, h as f32, 0.0, 1.0);
+            pass.set_scissor_rect(x, y, w, h);
+        }
         // The sky: its own view, no depth, every layer in order.
         if view.sky_view_proj.is_some() {
             pass.set_bind_group(0, &self.sky_frame_bg, &[]);

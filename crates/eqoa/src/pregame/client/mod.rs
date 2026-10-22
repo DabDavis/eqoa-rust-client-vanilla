@@ -25,15 +25,15 @@ pub const FILES: &[&str] = &[
     "DATA2/SKY.CSF",
 ];
 
-/// The 3D a window wants drawn under its later 2D (character select's and
-/// creation's scene): filled in by the 3D stage.
-pub struct Scene;
-
 #[derive(Default)]
 pub struct Client {
     session: Option<Session>,
     text: String,
     failed: bool,
+    /// the character about to be played, shown for two seconds first (the
+    /// 3D path's check), and when it was chosen
+    chosen: Option<(net::session::Character, i64)>,
+    figure: Option<crate::pregame::figure::Figure>,
 }
 
 impl Client {
@@ -70,6 +70,25 @@ impl Client {
 
     pub fn frame(&mut self, cx: &mut Ctx) -> Next {
         cx.vui.draw_centered_string_ex(cx.r, &wide(&self.text), 320, 224, [1.0, 1.0, 1.0, 1.0], 0, true);
+        // the chosen character in character select's viewport, then played
+        if let Some((c, at)) = self.chosen.clone() {
+            if self.figure.is_none()
+                && let Some(g) = cx.gpu.as_mut()
+            {
+                let look = vi::cust::Look { hair: [c.hair_color as u8, c.hair_length as u8, c.hair_style as u8], face: c.face as u8, robe: -1, ..Default::default() };
+                self.figure = crate::pregame::figure::Figure::new(&cx.res.lib, g, c.model as u32, look, [0; 3], [0.0; 3], [0.0; 3], cx.now);
+            }
+            if let (Some(f), Some(g)) = (self.figure.as_mut(), cx.gpu.as_ref()) {
+                f.pose(g, cx.now);
+            }
+            cx.r.mark_split();
+            if cx.now - at >= 2000
+                && let Some(s) = self.session.as_mut()
+            {
+                self.chosen = None;
+                s.select_character(&c);
+            }
+        }
         let Some(s) = self.session.as_mut() else { return Next::Stay };
         let events = s.pump();
         for (k, e) in events.iter().enumerate() {
@@ -88,7 +107,7 @@ impl Client {
                     self.text = format!("{} characters", list.len());
                     let want = std::env::var("EQOA_CHAR").ok();
                     if let Some(c) = list.iter().find(|c| want.as_deref() == Some(c.name.as_str())).or(list.first()) {
-                        s.select_character(&c.clone());
+                        self.chosen = Some((c.clone(), cx.now));
                     }
                 }
                 Event::WorldEntry { player, dump, .. } => {
@@ -120,7 +139,16 @@ impl Client {
         false
     }
 
-    pub fn scene(&self) -> Option<&Scene> {
-        None
+    /// The 3D drawn this frame (character select's preview, creation's model).
+    pub fn scene(&self) -> Option<super::Scene<'_>> {
+        let f = self.figure.as_ref()?;
+        // a stand-in camera: 2.4 ahead of the figure at 1.1 up, looking at its chest
+        let (eye, at) = (glam::Vec3::new(0.0, 1.3, 2.6), glam::Vec3::new(0.0, 1.0, 0.0));
+        let aspect = (620.0 - 358.0 + 1.0) / (396.0 - 48.0 + 1.0);
+        let proj = glam::camera::rh::proj::directx::perspective(55f32.to_radians() / (10.0 / 7.0), aspect, 0.1, 900.0);
+        let view = glam::camera::rh::view::look_at_mat4(eye, at, glam::Vec3::Y);
+        let mut v = render::View::daylight(proj * view);
+        v.eye = eye;
+        Some(super::Scene { view: v, viewport: [358, 48, 620, 396], models: f.models().collect() })
     }
 }

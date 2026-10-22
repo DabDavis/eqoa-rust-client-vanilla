@@ -155,7 +155,10 @@ impl Host {
             w.entered.session.held.extend(events);
         }
         if game_frame {
-            let ui = renderer.ui.as_mut().unwrap();
+            // the layer out of the renderer while the windows draw on it, so a
+            // window's 3D can use the renderer meanwhile (`Ctx::gpu`)
+            let mut layer = renderer.ui.take().unwrap();
+            let ui = &mut layer;
             ui.begin(size);
             let assets = self.assets.as_ref().unwrap();
             if let Some(n) = self.pre.loading_picture() {
@@ -181,11 +184,13 @@ impl Host {
                     crate::loading::draw_2d(self.pre.res.vui(), &mut r, true);
                     self.pre.update(now);
                 } else {
-                    self.pre.frame(now, game_frame, &mut r, &mut cues, &mut music);
+                    let gpu = crate::play::Gpu { renderer: &mut *renderer, device, queue };
+                    self.pre.frame(now, game_frame, &mut r, &mut cues, &mut music, Some(gpu));
                 }
             }
             ui.end();
             ui.keep();
+            renderer.ui = Some(layer);
         } else {
             if let Some(ui) = renderer.ui.as_mut() {
                 ui.again();

@@ -1751,7 +1751,25 @@ impl App {
         // the frame cleared black (`SetClearColor(0, 0, 0, 1)`), nothing in it yet
         let black = render::View { clear: Vec3::ZERO, ..render::View::daylight(glam::Mat4::IDENTITY) };
         g.renderer.draw(&g.queue, &mut enc, &target, &g.depth, &black, &[]);
-        g.renderer.draw_text(&g.device, &mut enc, &target, &g.depth, size);
+        // a window's 3D (character select's preview, creation's model): the
+        // 2D made before it under it, the rest over it
+        let split = g.renderer.ui.as_ref().and_then(|u| u.split.map(|s| (s, u.quads.len())));
+        match (split, host.pre.scene()) {
+            (Some((s, n)), Some(scene)) => {
+                g.renderer.draw_ui(&g.device, &mut enc, &target, &g.depth, size, 0..s);
+                let [x0, y0, x1, y1] = scene.viewport;
+                let a = render::ui::window_from_frame(size, [x0 as f32, y0 as f32]);
+                let b = render::ui::window_from_frame(size, [(x1 + 1) as f32, (y1 + 1) as f32]);
+                let (x, y) = (a[0].clamp(0.0, size.0 as f32) as u32, a[1].clamp(0.0, size.1 as f32) as u32);
+                let (w, h) = ((b[0].clamp(0.0, size.0 as f32) as u32).saturating_sub(x), (b[1].clamp(0.0, size.1 as f32) as u32).saturating_sub(y));
+                if w > 0 && h > 0 {
+                    let draws: Vec<render::Draw> = scene.models.iter().map(|&m| render::Draw::Model(m)).collect();
+                    g.renderer.draw_viewport(&g.queue, &mut enc, &target, &g.depth, &scene.view, &draws, [x, y, w, h]);
+                }
+                g.renderer.draw_ui(&g.device, &mut enc, &target, &g.depth, size, s..n);
+            }
+            _ => g.renderer.draw_text(&g.device, &mut enc, &target, &g.depth, size),
+        }
         g.queue.submit([enc.finish()]);
         // `EQOA_SHOTS`: what was drawn, as PNGs (offscreen only)
         let due = host.shots_due(now);

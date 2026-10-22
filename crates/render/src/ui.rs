@@ -299,6 +299,10 @@ pub struct Ui {
     opaque: Vec<(usize, [f32; 4])>,
     /// The quads `keep` kept, which `again` makes the frame's.
     kept: Vec<Quad>,
+    /// Where a window's 3D goes among the quads (character select's and
+    /// creation's scene, drawn into its viewport): the quads before it are
+    /// under it, the rest over it. None: no 3D.
+    pub split: Option<usize>,
 }
 
 impl Ui {
@@ -372,7 +376,7 @@ impl Ui {
                 })
             })
             .collect();
-        Ui { layout, sampler, pipelines, textures: Vec::new(), fonts: Vec::new(), quads: Vec::new(), viewport: None, anchor: Anchor::Middle, side: 0.0, sided: Vec::new(), opaque: Vec::new(), kept: Vec::new() }
+        Ui { layout, sampler, pipelines, textures: Vec::new(), fonts: Vec::new(), quads: Vec::new(), viewport: None, anchor: Anchor::Middle, side: 0.0, sided: Vec::new(), opaque: Vec::new(), kept: Vec::new(), split: None }
     }
 
     /// A new frame's quads, for a `size` target: none yet, and those made
@@ -384,6 +388,12 @@ impl Ui {
         self.side = side(size);
         self.anchor = Anchor::Middle;
         self.viewport = None;
+        self.split = None;
+    }
+
+    /// The 3D goes here: the quads made so far are drawn under it.
+    pub fn mark_split(&mut self) {
+        self.split = Some(self.quads.len());
     }
 
     /// The whole frame pixels the target shows beyond each side of the
@@ -542,13 +552,20 @@ impl Ui {
     /// Draws the frame's quads into `pass` (a `size` target) and keeps them
     /// (the caller clears `quads` when it rebuilds them).
     pub fn draw<'a>(&'a self, device: &wgpu::Device, pass: &mut wgpu::RenderPass<'a>, size: (u32, u32)) {
-        if self.quads.is_empty() {
+        self.draw_range(device, pass, size, 0..self.quads.len());
+    }
+
+    /// `draw`, for the quads in `range` only (around a window's 3D, `split`).
+    pub fn draw_range<'a>(&'a self, device: &wgpu::Device, pass: &mut wgpu::RenderPass<'a>, size: (u32, u32), range: std::ops::Range<usize>) {
+        let range = range.start.min(self.quads.len())..range.end.min(self.quads.len());
+        if range.is_empty() {
             return;
         }
+        let quads = &self.quads[range];
         let (tw, th) = (size.0 as f32, size.1 as f32);
         let (ox, oy, sx, sy) = frame(size);
-        let mut v = Vec::with_capacity(self.quads.len() * 6);
-        for q in &self.quads {
+        let mut v = Vec::with_capacity(quads.len() * 6);
+        for q in quads {
             let p = |i: usize| Vertex {
                 pos: [(ox + q.pos[i][0] * sx) / tw * 2.0 - 1.0, 1.0 - (oy + q.pos[i][1] * sy) / th * 2.0],
                 uv: q.uv[i],
@@ -560,10 +577,10 @@ impl Ui {
         pass.set_vertex_buffer(0, buf.slice(..));
         // Runs of one texture, blend mode and viewport, in order.
         let mut i = 0;
-        while i < self.quads.len() {
-            let (tex, blend, clip) = (self.quads[i].tex, self.quads[i].blend, self.quads[i].clip);
+        while i < quads.len() {
+            let (tex, blend, clip) = (quads[i].tex, quads[i].blend, quads[i].clip);
             let mut j = i;
-            while j < self.quads.len() && self.quads[j].tex == tex && self.quads[j].blend == blend && self.quads[j].clip == clip {
+            while j < quads.len() && quads[j].tex == tex && quads[j].blend == blend && quads[j].clip == clip {
                 j += 1;
             }
             let [x0, y0, x1, y1] = clip.unwrap_or([0, 0, SCREEN_W as i32, SCREEN_H as i32]);

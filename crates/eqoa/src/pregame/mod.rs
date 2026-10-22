@@ -32,6 +32,7 @@
 //! steps on `frames.rs`'s clock (`Ctx::game_frame`).
 
 pub mod boot;
+pub mod figure;
 pub mod client;
 pub mod files;
 pub mod host;
@@ -129,6 +130,21 @@ pub struct Ctx<'a> {
     pub cues: &'a mut Vec<crate::sound::Cue>,
     /// music to start and stop
     pub music: &'a mut Vec<Music>,
+    /// the GPU, for a window's 3D (character select's, creation's): the
+    /// models it uploads and poses itself, drawn as its `scene` says
+    pub gpu: Option<crate::play::Gpu<'a>>,
+}
+
+/// A window's 3D this frame (character select's preview, creation's model):
+/// its models (uploaded and posed by the window through `Ctx::gpu`), the
+/// view they are drawn through, and the viewport they fill (frame pixels,
+/// inclusive, as `VIRaster::Viewport` takes them). It is drawn over the 2D
+/// layer's quads made before the window's `Layout::mark_split`, and under
+/// the rest.
+pub struct Scene<'a> {
+    pub view: render::View,
+    pub viewport: [i32; 4],
+    pub models: Vec<&'a render::GpuModel>,
 }
 
 /// What a stage asks of the sound device besides its cues.
@@ -315,7 +331,8 @@ impl Pregame {
 
     /// One frame drawn: the stage's windows (once its files are in), and
     /// what it asks for next.
-    pub fn frame(&mut self, cx_now: i64, game_frame: bool, r: &mut dyn crate::ui::Layout, cues: &mut Vec<crate::sound::Cue>, music: &mut Vec<Music>) {
+    #[allow(clippy::too_many_arguments)]
+    pub fn frame(&mut self, cx_now: i64, game_frame: bool, r: &mut dyn crate::ui::Layout, cues: &mut Vec<crate::sound::Cue>, music: &mut Vec<Music>, gpu: Option<crate::play::Gpu>) {
         self.update(cx_now);
         // the keyboard's next event, read once a frame of the game's
         if game_frame && let Some((k, down)) = self.keyboard.pop_front() {
@@ -325,7 +342,7 @@ impl Pregame {
             return;
         }
         let Some(vui) = self.res.vui() else { return };
-        let mut cx = Ctx { now: cx_now, game_frame, vui, r, res: &self.res, shared: &mut self.shared, cues, music };
+        let mut cx = Ctx { now: cx_now, game_frame, vui, r, res: &self.res, shared: &mut self.shared, cues, music, gpu };
         let next = match self.stage {
             Stage::Setup => self.setup.frame(&mut cx),
             Stage::Station => self.station.frame(&mut cx),
@@ -357,7 +374,7 @@ impl Pregame {
 
     /// The 3D the stage wants drawn this frame (character select's and
     /// creation's scene), under the 2D layer's later quads.
-    pub fn scene(&self) -> Option<&client::Scene> {
+    pub fn scene(&self) -> Option<Scene<'_>> {
         (self.stage == Stage::Client && self.entering.is_none()).then(|| self.client.scene()).flatten()
     }
 
