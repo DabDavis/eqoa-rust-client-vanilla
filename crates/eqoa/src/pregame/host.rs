@@ -21,11 +21,26 @@ use std::collections::HashMap;
 /// The files whose surfaces the 2D layer draws.
 const UI_FILES: &[&str] = &["UI.CSF", "SETUP.CSF", "ADDART.CSF", "STATUI.CSF", "PREGAME.CSF"];
 
+/// The world's library and walk, as `main.rs`'s `world_library` builds them.
+pub type World = (esf::Library, crate::viewer::Source);
+
+/// How a page reads the world entry's files (`set_world_loader`).
+pub type WorldLoader = Box<dyn Fn(&::net::session::Player) -> super::link::Later<World>>;
+
+thread_local! {
+    static WORLD_LOADER: std::cell::RefCell<Option<WorldLoader>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Makes `f` the way the world entry's files are read (a page's).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn set_world_loader(f: WorldLoader) {
+    WORLD_LOADER.with(|c| *c.borrow_mut() = Some(f));
+}
+
 /// The world's files being read for `Play` (natively on a thread).
 pub struct WorldLoad {
     pub entered: Box<Entered>,
-    #[cfg(not(target_arch = "wasm32"))]
-    rx: std::sync::mpsc::Receiver<Result<(esf::Library, crate::viewer::Source), String>>,
+    reads: super::link::Later<World>,
 }
 
 /// What the window does next.
@@ -49,8 +64,9 @@ pub struct Host {
     /// keys a pointer pressed, let go a frame later
     pointer_held: Vec<i32>,
     pub world: Option<WorldLoad>,
-    /// the world entry's loading screen: CLIENT's gears and bar
-    gears: Option<crate::loading::Gears>,
+    /// CLIENT's loading screen's gears (UI.CSF's `Loading_Gears`) on the GPU,
+    /// once looked for
+    gears: Option<Option<(crate::loading::Gears, Vec<render::GpuModel>)>>,
 }
 
 impl Host {
@@ -179,7 +195,7 @@ impl Host {
                     v.time = now;
                 }
                 let mut r = assets.raster(ui);
-                if self.world.is_some() {
+                if self.world.is_some() || self.pre.client_loading() {
                     // `LoadingProgress`'s 2D half (the gears are drawn by the window)
                     crate::loading::draw_2d(self.pre.res.vui(), &mut r, true);
                     self.pre.update(now);
@@ -196,6 +212,21 @@ impl Host {
                 ui.again();
             }
             self.pre.update(now);
+        }
+        // CLIENT's loading screen's gears, turning by the clock
+        if self.loading_screen() {
+            if self.gears.is_none() && self.pre.res.container("UI.CSF").is_some() {
+                self.gears = Some(crate::loading::Gears::load(&self.pre.res.lib).map(|g| {
+                    let textures = render::library_textures(&self.pre.res.lib);
+                    let models = g.parts.iter().map(|(_, m)| renderer.upload(device, queue, m, &[render::IDENTITY], &textures)).collect();
+                    (g, models)
+                }));
+            }
+            if let Some(Some((g, models))) = self.gears.as_mut() {
+                for (m, gpu) in g.pose(now).iter().zip(models.iter()) {
+                    renderer.set_instances(queue, gpu, &[m.to_cols()]);
+                }
+            }
         }
         // the sounds
         if let Some(s) = sound {
@@ -259,43 +290,36 @@ impl Host {
     /// The world entry: its files read for `Play` (`main.rs`'s
     /// `world_library`), natively on a thread.
     fn begin_world(&mut self, e: Box<Entered>) {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let player = e.player.clone();
-            let (tx, rx) = std::sync::mpsc::channel();
-            std::thread::spawn(move || {
-                let r = crate::world_library(&player).map_err(|e| e.to_string());
-                let _ = tx.send(r);
-            });
-            self.world = Some(WorldLoad { entered: e, rx });
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            let _ = e;
-            crate::say("pregame: the world entry is not wired in a page yet");
-        }
+        let reads = match WORLD_LOADER.with(|c| c.borrow().as_ref().map(|f| f(&e.player))) {
+            Some(l) => l,
+            #[cfg(not(target_arch = "wasm32"))]
+            None => {
+                let player = e.player.clone();
+                let (tx, rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let r = crate::world_library(&player).map_err(|e| e.to_string());
+                    let _ = tx.send(r);
+                });
+                super::link::Later::Thread(rx)
+            }
+            #[cfg(target_arch = "wasm32")]
+            None => super::link::Later::ready(Err("no way to read the world's files".into())),
+        };
+        self.world = Some(WorldLoad { entered: e, reads });
     }
 
     fn world_done(&mut self) -> Option<Done> {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let w = self.world.as_ref()?;
-            let r = match w.rx.try_recv() {
-                Ok(r) => r,
-                Err(std::sync::mpsc::TryRecvError::Empty) => return None,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("the world's reading thread stopped".into()),
-            };
-            let w = self.world.take()?;
-            match r {
-                Ok((lib, src)) => Some(Done::Play(w.entered, lib, src)),
-                Err(e) => {
-                    crate::say(&format!("the world could not be read: {e}"));
-                    Some(Done::Quit)
-                }
+        let r = self.world.as_mut()?.reads.poll()?;
+        let w = self.world.take()?;
+        match r {
+            Ok((lib, src)) => Some(Done::Play(w.entered, lib, src)),
+            Err(e) => {
+                crate::say(&format!("the world could not be read: {e}"));
+                #[cfg(target_arch = "wasm32")]
+                crate::web::crash("The world could not be read", &e);
+                Some(Done::Quit)
             }
         }
-        #[cfg(target_arch = "wasm32")]
-        None
     }
 
     /// `EQOA_SHOTS`: the shots due at `now`, each once.
@@ -316,14 +340,17 @@ impl Host {
         !self.shots.is_empty()
     }
 
-    /// The loading screen's gears (UI.CSF's `Loading_Gears`), while the
-    /// world's files come.
-    pub fn gears(&mut self) -> Option<&mut crate::loading::Gears> {
-        self.world.as_ref()?;
-        if self.gears.is_none() {
-            self.gears = crate::loading::Gears::load(&self.pre.res.lib);
+    /// CLIENT's loading screen is up: its files being read, or the world's.
+    pub fn loading_screen(&self) -> bool {
+        self.world.is_some() || self.pre.client_loading()
+    }
+
+    /// The loading screen's gears, to draw through `loading::view`.
+    pub fn gears(&self) -> Vec<&render::GpuModel> {
+        match &self.gears {
+            Some(Some((_, models))) if self.loading_screen() => models.iter().collect(),
+            _ => Vec::new(),
         }
-        self.gears.as_mut()
     }
 }
 

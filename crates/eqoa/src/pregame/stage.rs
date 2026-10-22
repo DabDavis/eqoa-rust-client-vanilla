@@ -1,0 +1,121 @@
+//! The character screens' 3D: CLIENT's pregame scene as `VIClient::LoadWorld`
+//! ("PreGame Load") makes it. ARENA.CSF is a world of its own, one zone of
+//! twelve small sets, a race's home each (the lava of Neriak, Erudin's blue
+//! marble, a halfling's burrow...): `VIWndCharacterSelect::ShowCharacter` and
+//! the creation pages stand the character in its race's set (`VIRaceDef`'s
+//! select place) and aim the walk camera at it (`VIWalkCamera::Init`,
+//! `SetCameraMode(1)`, the race camera's review framing, `OrbitRight`), the
+//! scene lit at 8:00 (`SetTimeOfDay(8.0)`), and render it into the window's
+//! viewport (`Viewport(358, 48, 620, 396)`) through `m_camera`: 55 degrees,
+//! the viewport's own shape (0.75287354), 0.1 to 900.
+//!
+//! Here: the arena's zone uploaded once (terrain and the 239 placed actors
+//! with their baked lighting, as `scene::zone` builds a zone), its collision
+//! world for the camera (`VIScene::Collide`), and the view a window draws its
+//! figure and the arena through (`pregame::Scene`).
+
+use crate::play::Gpu;
+use esf::Library;
+use render::GpuModel;
+use vi::camera::{Eye, WalkCamera};
+use vi::fpu::{Ee, F};
+use vi::vect::Vect3;
+use vi::world::World;
+
+/// `m_camera` in the character scenes: `LoadWorld`'s second `Init`.
+pub const FOV: f32 = 55.0;
+pub const ASPECT: f32 = 0.752_873_54;
+pub const NEAR: f32 = 0.1;
+pub const FAR: f32 = 900.0;
+/// `SetTimeOfDay(8.0)`.
+pub const HOUR: f32 = 8.0;
+/// The viewport the select and creation pages render into.
+pub const VIEWPORT: [i32; 4] = [358, 48, 620, 396];
+
+pub struct Stage {
+    /// the arena's collision (the camera's) and its clock
+    pub world: World<Ee>,
+    /// `m_walkCam`
+    pub cam: WalkCamera<Ee>,
+    pub eye: Eye<Ee>,
+    /// the arena's zone on the GPU
+    models: Vec<GpuModel>,
+}
+
+impl Stage {
+    /// The arena out of the pregame's library (ARENA.CSF, read with
+    /// CLIENT's files). None when it is not there.
+    pub fn new(lib: &Library, g: &mut Gpu) -> Option<Stage> {
+        let f = lib.files.iter().position(|(n, _)| n.eq_ignore_ascii_case("ARENA.CSF"))?;
+        let zone = *lib.file(f).zones().first()?;
+        let s = crate::scene::zone(lib, f, zone, 0);
+        let textures = render::library_textures(lib);
+        let models = s
+            .parts
+            .iter()
+            .zip(&s.statics)
+            .map(|((m, mats), st)| {
+                let gm = g.renderer.upload(g.device, g.queue, m, mats, &textures);
+                g.renderer.set_static_lights(g.queue, &gm, st);
+                gm
+            })
+            .collect();
+        let mut world = World::<Ee>::load(lib, f)?;
+        let mut cam = WalkCamera::<Ee>::default();
+        let eye = cam.init(Vect3::of(0.0, 0.0, 0.0), Vect3::of(0.0, 0.0, 0.0), &mut world);
+        Some(Stage { world, cam, eye, models })
+    }
+
+    /// `m_walkCam->Init(at, hpr, camera, scene)` and `SetCameraMode(1)`:
+    /// the camera's subject at `at`, facing `hpr`.
+    pub fn aim(&mut self, at: [f32; 3], hpr: [f32; 3]) {
+        self.eye = self.cam.init(Vect3::of(at[0], at[1], at[2]), Vect3::of(hpr[0], hpr[1], hpr[2]), &mut self.world);
+        self.cam.set_camera_mode(1);
+    }
+
+    /// `VIWalkCamera::Process`, after whatever the window set (the race
+    /// camera's framing, `OrbitRight`): the eye this frame.
+    pub fn process(&mut self, now: i64) {
+        self.world.time = now;
+        self.eye = self.cam.process(&mut self.world);
+    }
+
+    /// The view the window's viewport shows: `m_camera` (55 degrees, the
+    /// viewport's shape) at the walk camera's eye, the 8:00 lights.
+    pub fn view(&self) -> render::View {
+        let eye = glam::Vec3::from(self.eye.position.to_array());
+        let dir = glam::Vec3::from(self.eye.direction.to_array());
+        let proj = glam::camera::rh::proj::directx::perspective(FOV.to_radians(), ASPECT, NEAR, FAR);
+        let view = glam::camera::rh::view::look_to_mat4(eye, dir.normalize_or(glam::Vec3::Z), glam::Vec3::Y);
+        let tod = vi::tod::TimeOfDay::<Ee>::new();
+        let hour = F::new(HOUR);
+        let (amb, sun, dir) = tod.lights(hour, F::ZERO);
+        let rgb = |c: [F<Ee>; 3]| glam::Vec3::new(c[0].0, c[1].0, c[2].0);
+        let mut v = render::View {
+            view_proj: proj * view,
+            eye,
+            sun_dir: glam::Vec3::from(dir.to_array()),
+            sun: rgb(sun),
+            ambient: rgb(amb),
+            fog: None,
+            point: None,
+            clear: glam::Vec3::ZERO,
+            sky_view_proj: None,
+        };
+        // the fog and the sky's colour as the terrain profiles under the eye
+        // blend them, where the arena has a profile grid
+        if let Some(grid) = self.world.grid.as_ref() {
+            let b = grid.profile_blend(&self.eye.position);
+            let fog = tod.fog(hour, F::ZERO, &b, self.world.env_flags(&self.eye.position), &sun);
+            v.fog = Some((fog.near.0, fog.far.0, glam::Vec3::new(fog.color[0].0, fog.color[1].0, fog.color[2].0)));
+            let c = tod.sky(hour, F::ZERO, &b);
+            v.clear = glam::Vec3::new(c[0] as f32, c[1] as f32, c[2] as f32) / 255.0;
+        }
+        v
+    }
+
+    /// The arena's models.
+    pub fn models(&self) -> impl Iterator<Item = &GpuModel> {
+        self.models.iter()
+    }
+}

@@ -4,6 +4,8 @@
 //! and the first character (`EQOA_CHAR` another); the lanes porting CLIENT's
 //! windows replace this file.
 
+pub mod create;
+
 use super::{Ctx, Entered, Next, Shared, res::Res};
 use net::session::{Event, Session};
 use vi::ui::wide;
@@ -34,6 +36,7 @@ pub struct Client {
     /// 3D path's check), and when it was chosen
     chosen: Option<(net::session::Character, i64)>,
     figure: Option<crate::pregame::figure::Figure>,
+    stage: Option<crate::pregame::stage::Stage>,
 }
 
 impl Client {
@@ -75,11 +78,27 @@ impl Client {
             if self.figure.is_none()
                 && let Some(g) = cx.gpu.as_mut()
             {
+                // the Human's set (`GetRace(0)`'s select place), facing the camera's committed heading
+                let at = [0.0, 0.0, -26.0];
                 let look = vi::cust::Look { hair: [c.hair_color as u8, c.hair_length as u8, c.hair_style as u8], face: c.face as u8, robe: -1, ..Default::default() };
-                self.figure = crate::pregame::figure::Figure::new(&cx.res.lib, g, c.model as u32, look, [0; 3], [0.0; 3], [0.0; 3], cx.now);
+                self.figure = crate::pregame::figure::Figure::new(&cx.res.lib, g, c.model as u32, look, [0; 3], at, [0.0; 3], cx.now);
+                self.stage = crate::pregame::stage::Stage::new(&cx.res.lib, g);
+                if let Some(st) = self.stage.as_mut() {
+                    st.aim(at, [0.0; 3]);
+                }
             }
             if let (Some(f), Some(g)) = (self.figure.as_mut(), cx.gpu.as_ref()) {
                 f.pose(g, cx.now);
+            }
+            // `ApplyCamera` with no race camera: 1.1, 1.7, 40 degrees, 0.75; `OrbitRight(0.3)`
+            if let Some(st) = self.stage.as_mut() {
+                let f = vi::fpu::F::<vi::fpu::Ee>::new;
+                st.cam.target_height = f(1.1);
+                st.cam.look_at_height_above = f(1.7);
+                st.cam.set_def_orbit_pitch_angle(f(0.698_131_74));
+                st.cam.set_orbit_distance(f(0.75));
+                st.cam.orbit_right(f(0.3));
+                st.process(cx.now);
             }
             cx.r.mark_split();
             if cx.now - at >= 2000
@@ -142,13 +161,7 @@ impl Client {
     /// The 3D drawn this frame (character select's preview, creation's model).
     pub fn scene(&self) -> Option<super::Scene<'_>> {
         let f = self.figure.as_ref()?;
-        // a stand-in camera: 2.4 ahead of the figure at 1.1 up, looking at its chest
-        let (eye, at) = (glam::Vec3::new(0.0, 1.3, 2.6), glam::Vec3::new(0.0, 1.0, 0.0));
-        let aspect = (620.0 - 358.0 + 1.0) / (396.0 - 48.0 + 1.0);
-        let proj = glam::camera::rh::proj::directx::perspective(55f32.to_radians() / (10.0 / 7.0), aspect, 0.1, 900.0);
-        let view = glam::camera::rh::view::look_at_mat4(eye, at, glam::Vec3::Y);
-        let mut v = render::View::daylight(proj * view);
-        v.eye = eye;
-        Some(super::Scene { view: v, viewport: [358, 48, 620, 396], models: f.models().collect() })
+        let st = self.stage.as_ref()?;
+        Some(super::Scene { view: st.view(), viewport: crate::pregame::stage::VIEWPORT, models: st.models().chain(f.models()).collect() })
     }
 }

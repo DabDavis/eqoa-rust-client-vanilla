@@ -6,8 +6,11 @@
 //!   address toward the server, which is what the server will see), then
 //!   every binary message is one datagram behind a 6-byte header, the far
 //!   end's IPv4 address and its port (big-endian).
-//! - `/tcp?host=A.B.C.D&port=N`: the Station login. `ok ...` or `err ...`,
-//!   then the stream's bytes.
+//! - `/tcp?host=A.B.C.D&port=N`: the Station login, and the news page's
+//!   HTTP. `ok ...` or `err ...`, then the stream's bytes.
+//!
+//! A server named by host name is resolved by the relay first
+//! (`GET /resolve?name=`): it only reaches addresses.
 
 use super::sleep;
 use net::auth::{Exchange, Login, Step};
@@ -159,4 +162,107 @@ pub async fn login(relay: &str, host: [u8; 4], port: u16, user: &str, password: 
             None => return Err("auth: no answer in 10 s".into()),
         }
     }
+}
+
+/// `host`'s IPv4 address: itself when it is one, else as the relay
+/// resolves it (`GET /resolve?name=`, the relay's own resolver).
+pub async fn resolve(relay: &str, host: &str) -> Result<[u8; 4], String> {
+    if let Some(ip) = parse_ip(host) {
+        return Ok(ip);
+    }
+    let base = relay.replacen("wss://", "https://", 1).replacen("ws://", "http://", 1);
+    let url = format!("{base}/resolve?name={}", js_sys::encode_uri_component(host));
+    let w = web_sys::window().ok_or("no window")?;
+    let r = wasm_bindgen_futures::JsFuture::from(w.fetch_with_str(&url)).await.map_err(|e| format!("{url}: {e:?}"))?;
+    let r: web_sys::Response = r.dyn_into().map_err(|_| "not a response")?;
+    if !r.ok() {
+        return Err(format!("the relay could not resolve {host} ({})", r.status()));
+    }
+    let t = wasm_bindgen_futures::JsFuture::from(r.text().map_err(|e| format!("{e:?}"))?).await.map_err(|e| format!("{e:?}"))?;
+    let t = t.as_string().unwrap_or_default();
+    parse_ip(t.trim()).ok_or_else(|| format!("the relay resolved {host} to {t:?}"))
+}
+
+/// A TCP stream through the relay's `/tcp`, as the pregame's
+/// `link::Carrier`: the host resolved, the socket opened and its `ok`
+/// waited for on a task of its own; what is sent before then waits.
+pub struct RelayTcp {
+    state: Rc<RefCell<TcpState>>,
+}
+
+#[derive(Default)]
+struct TcpState {
+    sock: Option<Socket>,
+    waiting: Vec<Vec<u8>>,
+    failed: Option<String>,
+}
+
+impl RelayTcp {
+    pub fn open(relay: &str, host: &str, port: u16) -> RelayTcp {
+        let state: Rc<RefCell<TcpState>> = Default::default();
+        let (st, relay, host) = (state.clone(), relay.to_string(), host.to_string());
+        wasm_bindgen_futures::spawn_local(async move {
+            let r = async {
+                let [a, b, c, d] = resolve(&relay, &host).await?;
+                let sock = Socket::open(&format!("{relay}/tcp?host={a}.{b}.{c}.{d}&port={port}"))?;
+                sock.ready().await?;
+                Ok::<_, String>(sock)
+            }
+            .await;
+            let mut s = st.borrow_mut();
+            match r {
+                Ok(sock) => {
+                    for b in s.waiting.drain(..) {
+                        sock.send(&b);
+                    }
+                    s.sock = Some(sock);
+                }
+                Err(e) => s.failed = Some(e),
+            }
+        });
+        RelayTcp { state }
+    }
+}
+
+impl crate::pregame::link::Carrier for RelayTcp {
+    fn send(&mut self, b: &[u8]) {
+        let mut s = self.state.borrow_mut();
+        match &s.sock {
+            Some(sock) => sock.send(b),
+            None => s.waiting.push(b.to_vec()),
+        }
+    }
+
+    fn poll(&mut self) -> Option<crate::pregame::link::Got> {
+        use crate::pregame::link::Got;
+        let mut s = self.state.borrow_mut();
+        if let Some(e) = s.failed.take() {
+            return Some(Got::Failed(e));
+        }
+        let sock = s.sock.as_ref()?;
+        loop {
+            match sock.inbox.borrow_mut().pop_front()? {
+                Msg::Bin(b) => return Some(Got::Data(b)),
+                Msg::Text(_) => continue,
+                Msg::Closed => return Some(Got::Closed),
+            }
+        }
+    }
+}
+
+/// The game session through the relay's `/udp`, as the pregame's
+/// `link::session`.
+pub fn session(relay: &str, host: &str, port: u16, user: &str, token: [u8; 32]) -> crate::pregame::link::Later<net::session::Session> {
+    let slot: Rc<RefCell<Option<Result<net::session::Session, String>>>> = Default::default();
+    let (out, relay, host, user) = (slot.clone(), relay.to_string(), host.to_string(), user.to_string());
+    wasm_bindgen_futures::spawn_local(async move {
+        let r = async {
+            let ip = resolve(&relay, &host).await?;
+            let (sock, local) = RelayUdp::open(&relay).await?;
+            net::session::Session::connect_with(Box::new(sock), local, (ip, port), &user, token).ok_or_else(|| "could not open the game connection".to_string())
+        }
+        .await;
+        *out.borrow_mut() = Some(r);
+    });
+    crate::pregame::link::Later::Slot(slot)
 }

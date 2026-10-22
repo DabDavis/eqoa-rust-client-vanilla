@@ -118,7 +118,7 @@ pub fn view(size: (u32, u32)) -> render::View {
 pub struct Gears {
     hs: HSprite<Ee>,
     anims: AnimScene<Ee>,
-    parts: Vec<(i32, esf::Model)>,
+    pub parts: Vec<(i32, esf::Model)>,
 }
 
 impl Gears {
