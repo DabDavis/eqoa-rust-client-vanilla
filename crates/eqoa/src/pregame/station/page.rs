@@ -65,7 +65,7 @@ pub struct Obj {
     focus_image: i32,
     pub selected: bool,
     pub button: [i16; 2],
-    image_off: [i16; 2],
+    pub image_off: [i16; 2],
     pub alpha: f32,
     alpha_target: f32,
     normal_alpha: f32,

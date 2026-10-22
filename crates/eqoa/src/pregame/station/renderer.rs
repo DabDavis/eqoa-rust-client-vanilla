@@ -1501,3 +1501,402 @@ impl Renderer {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::super::api::testing::{Fake, framed, hello};
+    use super::*;
+    use crate::pointer::testing::NullRaster;
+    use crate::pregame::link::Got;
+
+    /// The disc's STATION.PAK and WORDS.TXT (the tests SKIP without it).
+    struct Disc {
+        pak: Vec<u8>,
+        words: StringTable,
+    }
+
+    fn disc() -> Option<Disc> {
+        let iso = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        if !iso.exists() {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return None;
+        }
+        let mut i = iso::Iso::open(&iso).unwrap();
+        Some(Disc { pak: i.read("STATION.PAK").unwrap(), words: StringTable::parse(&i.read("DATA/WORDS.TXT").unwrap()).unwrap() })
+    }
+
+    /// A renderer on the disc's pages, its API on a scripted server, drawn
+    /// on a raster that keeps nothing: STATION's frames, 17 ms apart.
+    struct T {
+        r: Renderer,
+        f: Fake,
+        vui: Vui,
+        now: i64,
+        cues: Vec<i32>,
+        news: std::rc::Rc<std::cell::RefCell<Vec<(String, u16, String)>>>,
+        news_reply: std::rc::Rc<std::cell::RefCell<Option<Result<Vec<u8>, String>>>>,
+    }
+
+    struct FakeNews(std::rc::Rc<std::cell::RefCell<Option<Result<Vec<u8>, String>>>>);
+
+    impl NewsFetch for FakeNews {
+        fn poll(&mut self) -> Option<Result<Vec<u8>, String>> {
+            self.0.borrow_mut().take()
+        }
+    }
+
+    impl T {
+        fn new(d: &Disc, saved: (&str, &str, bool)) -> T {
+            let f = Fake::default();
+            let mut r = Renderer::new(0, d.words.clone(), 0);
+            r.api = Api::with_connector(f.connector(), 0);
+            let news = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let news_reply = std::rc::Rc::new(std::cell::RefCell::new(None));
+            let (n, nr) = (news.clone(), news_reply.clone());
+            r.news_start = Box::new(move |h: &str, p: u16, path: &str| {
+                n.borrow_mut().push((h.to_string(), p, path.to_string()));
+                Box::new(FakeNews(nr.clone())) as Box<dyn NewsFetch>
+            });
+            r.load(&d.pak, (saved.0.to_string(), saved.1.to_string(), saved.2), "192.0.2.1", 9735);
+            let vui = Vui::new(d.words.clone(), Default::default(), Vec::new());
+            let mut t = T { r, f, vui, now: 0, cues: Vec::new(), news, news_reply };
+            // past the sixth frame the API connects; the server's hello
+            t.frames(8);
+            t.f.say(Got::Data(hello([7; 32])));
+            t.frames(2);
+            assert!(!t.r.api.connecting(), "the hello is the connect");
+            t
+        }
+
+        fn frames(&mut self, n: i32) {
+            for _ in 0..n {
+                self.now += 17;
+                self.r.draw(&self.vui, &mut NullRaster, self.now);
+            }
+        }
+
+        fn key(&mut self, k: i32) {
+            self.r.key_down(k, self.now, &mut self.cues);
+            self.frames(1);
+        }
+
+        fn page(&self) -> &str {
+            &self.r.page().unwrap().name
+        }
+
+        fn text(&self, name: &str) -> Option<String> {
+            self.r.page().unwrap().text(name).map(str::to_string)
+        }
+
+        /// The field `name` selected, X: the editor on it; `s` typed and
+        /// done (the editor's 259).
+        fn type_in(&mut self, name: &str, s: &str) {
+            self.r.pages.last_mut().unwrap().select(name);
+            self.key(134);
+            assert_eq!(self.r.focus, Focus::Editor, "{name} opens the editor");
+            self.r.editor.set_text(&wide(s));
+            self.r.edit_done(true);
+            assert_eq!(self.r.focus, Focus::Renderer);
+            assert_eq!(self.text(name).as_deref(), Some(s));
+        }
+
+        fn down(&mut self, n: i32) {
+            for _ in 0..n {
+                self.key(139);
+            }
+        }
+
+        fn word(&self, id: i32) -> String {
+            self.vui.words.get(id, 0).to_string()
+        }
+
+        fn dialog(&self) -> String {
+            self.r.dialog.text()
+        }
+
+        /// What the client sent since the last call.
+        fn sent(&mut self, from: &mut usize) -> Vec<u8> {
+            let all = self.f.sent();
+            let b = all[*from..].to_vec();
+            *from = all.len();
+            b
+        }
+
+        fn says(&mut self, b: Vec<u8>) {
+            self.f.say(Got::Data(b));
+            self.frames(2);
+        }
+    }
+
+    /// The login reply as STATION reads it (`VIStationReply37`, 168 bytes on
+    /// the wire): `result` at 12, uid 80, accstat 84, gamefeatures 164.
+    fn login_reply(result: u32, uid: u32, accstat: u32, features: u32) -> Vec<u8> {
+        framed(37, 168, |b| {
+            b[12..16].copy_from_slice(&result.to_be_bytes());
+            b[80..84].copy_from_slice(&uid.to_be_bytes());
+            b[84..88].copy_from_slice(&accstat.to_be_bytes());
+            b[164..168].copy_from_slice(&features.to_be_bytes());
+        })
+    }
+
+    /// Log In on the login page goes out as `ValidateLogin` makes it, the
+    /// dialog says so; the answer's success is conn.xml and the account. The
+    /// control: a refused login stays on the page and says so.
+    #[test]
+    fn a_login_goes_out_as_the_game_sends_it_and_its_answer_moves_on() {
+        let Some(d) = disc() else { return };
+        crate::settings::testing::reset(false);
+        let mut t = T::new(&d, ("", "", false));
+        assert_eq!(t.page(), "data/ui/login.xml");
+        let mut at = 0;
+        t.type_in("StationName", "player0001");
+        t.type_in("StationPassword", "password123");
+        assert_eq!(t.sent(&mut at), Vec::<u8>::new(), "nothing sent before Log In");
+        t.down(2);
+        t.key(134);
+        assert_eq!(t.r.dialog.window.title.chars(), wide(&t.word(1300)), "Logging in");
+        assert_eq!(t.dialog(), t.word(758));
+        assert_eq!(t.sent(&mut at), net::auth::login_request("player0001", "password123").to_vec());
+        // the control: refused
+        t.says(login_reply(1, 0, 0, 0));
+        assert_eq!(t.dialog(), t.word(1394));
+        assert_eq!(t.page(), "data/ui/login.xml");
+        assert!(!t.r.logged_in);
+        // accepted
+        t.key(134);
+        t.r.pages.last_mut().unwrap().select("LogInButton");
+        t.key(134);
+        assert_eq!(t.sent(&mut at), net::auth::login_request("player0001", "password123").to_vec());
+        t.says(login_reply(0, 4242, 3, 3));
+        assert_eq!(t.dialog(), t.word(1301), "Login Succeeded");
+        assert_eq!(t.page(), "data/ui/conn.xml");
+        assert!(t.r.logged_in);
+        assert_eq!((t.r.uid, t.r.login_status, t.r.features), (4242, 3, 3));
+        assert_eq!((t.r.login.as_str(), t.r.password.as_str()), ("player0001", "password123"));
+        crate::settings::testing::reset(false);
+    }
+
+    /// Save Account: ticked, a login keeps the account in game.opt three of
+    /// STATION's frames on (the "Saving" box meanwhile); the next run's login
+    /// page is filled and its Log In selected. The control: unticked, the
+    /// login keeps nothing and the next page is empty.
+    #[test]
+    fn save_account_keeps_the_login_for_the_next_run() {
+        let Some(d) = disc() else { return };
+        crate::settings::testing::reset(false);
+        let mut t = T::new(&d, ("", "", false));
+        t.type_in("StationName", "player0001");
+        t.type_in("StationPassword", "password123");
+        t.r.pages.last_mut().unwrap().select("SaveAccountToggle");
+        t.key(134);
+        assert!(t.r.page().unwrap().toggle("SaveAccountToggle"));
+        t.r.pages.last_mut().unwrap().select("LogInButton");
+        t.key(134);
+        t.f.say(Got::Data(login_reply(0, 7, 3, 3)));
+        t.frames(1);
+        assert_eq!(crate::settings::saved_login(), (String::new(), String::new(), false), "not before the save's frames");
+        t.frames(4);
+        assert_eq!(crate::settings::saved_login(), ("player0001".to_string(), "password123".to_string(), true));
+        let next = T::new(&d, ("player0001", "password123", true));
+        assert_eq!(next.text("StationName").as_deref(), Some("player0001"));
+        assert_eq!(next.text("StationPassword").as_deref(), Some("password123"));
+        let p = next.r.page().unwrap();
+        assert!(p.toggle("SaveAccountToggle"));
+        assert_eq!(p.grid.selected(), p.find("LogInButton"), "Log In selected");
+        // the control: unticked
+        let mut t = T::new(&d, ("player0001", "password123", true));
+        t.r.pages.last_mut().unwrap().select("SaveAccountToggle");
+        t.key(134);
+        t.r.pages.last_mut().unwrap().select("LogInButton");
+        t.key(134);
+        t.f.say(Got::Data(login_reply(0, 7, 3, 3)));
+        t.frames(5);
+        assert_eq!(crate::settings::saved_login(), (String::new(), String::new(), false));
+        let next = T::new(&d, ("", "", false));
+        assert_eq!(next.text("StationName").as_deref(), Some(""));
+        crate::settings::testing::reset(false);
+    }
+
+    /// Create User Name: IDCreate.xml with its dialog, the form's checks,
+    /// IDCreat2.xml with the disc's region's country, and the request as
+    /// `CreateAccount` makes it; the success logs the new account in. The
+    /// controls: passwords that differ and a US postal code that is not five
+    /// digits send nothing.
+    #[test]
+    fn a_new_account_from_the_pages() {
+        let Some(d) = disc() else { return };
+        crate::settings::testing::reset(false);
+        let mut t = T::new(&d, ("", "", false));
+        let mut at = 0;
+        t.down(4);
+        t.key(134);
+        assert_eq!(t.page(), "data/ui/IDCreate.xml");
+        assert_eq!(t.dialog(), t.word(1376), "the page's dialog");
+        t.key(134);
+        t.frames(3);
+        assert!(!t.r.dialog.is_open());
+        t.type_in("StationName", "newbie");
+        t.type_in("StationPassword", "newpass1");
+        t.type_in("StationPassword2", "secret13");
+        t.type_in("FirstName", "Van");
+        t.type_in("LastName", "Lane");
+        t.r.pages.last_mut().unwrap().select("LastName");
+        t.down(1);
+        t.key(134);
+        assert_eq!(t.dialog(), t.word(1314), "the control: the passwords differ");
+        assert_eq!(t.page(), "data/ui/IDCreate.xml");
+        t.key(134);
+        t.frames(3);
+        t.type_in("StationPassword2", "newpass1");
+        t.r.pages.last_mut().unwrap().select("LastName");
+        t.down(1);
+        t.key(134);
+        assert_eq!(t.page(), "data/ui/IDCreat2.xml");
+        assert_eq!(t.text("Country").as_deref(), Some("US - USA"), "the disc's region");
+        t.type_in("PostalCode", "1234");
+        t.r.pages.last_mut().unwrap().select("EmailAddress");
+        t.down(1);
+        t.key(134);
+        assert_eq!(t.dialog(), t.word(1354), "the control: not a zip code");
+        assert_eq!(t.sent(&mut at), Vec::<u8>::new());
+        t.key(134);
+        t.frames(3);
+        t.type_in("PostalCode", "12345");
+        t.r.pages.last_mut().unwrap().select("EmailAddress");
+        t.down(1);
+        t.key(134);
+        let a = net::auth::Account {
+            name: "newbie".into(),
+            password: "newpass1".into(),
+            first: "Van".into(),
+            middle: String::new(),
+            last: "Lane".into(),
+            country: "US - USA".into(),
+            postal: "12345".into(),
+            day: "1".into(),
+            month: "Jan".into(),
+            year: "1977".into(),
+            gender: "Male".into(),
+            email: String::new(),
+        };
+        assert_eq!(t.sent(&mut at), net::auth::create_account(&a));
+        assert_eq!(t.dialog(), t.word(758));
+        // created: the new account logs in
+        t.says(framed(41, 276, |b| b[12..16].copy_from_slice(&1u32.to_be_bytes())));
+        assert_eq!(t.dialog(), t.word(1384));
+        assert_eq!(t.sent(&mut at), net::auth::login_request("newbie", "newpass1").to_vec());
+        t.says(login_reply(0, 99, 3, 3));
+        assert_eq!(t.page(), "data/ui/conn.xml");
+        assert_eq!(t.dialog(), t.word(1384), "a new account's login keeps the creation's words");
+        t.frames(5);
+        assert_eq!(crate::settings::saved_login(), ("newbie".to_string(), "newpass1".to_string(), true), "a new account is saved");
+        crate::settings::testing::reset(false);
+    }
+
+    /// Manage Account, Change Password: the request as `ChangePassword`
+    /// makes it (the account's id, both passwords DES'd), and its success
+    /// the new password and the page before. The control: a current password
+    /// that is not the login's sends nothing.
+    #[test]
+    fn a_password_change_from_the_pages() {
+        let Some(d) = disc() else { return };
+        crate::settings::testing::reset(false);
+        let mut t = T::new(&d, ("", "", false));
+        let mut at = 0;
+        t.type_in("StationName", "player0001");
+        t.type_in("StationPassword", "password123");
+        t.r.pages.last_mut().unwrap().select("LogInButton");
+        t.key(134);
+        t.says(login_reply(0, 4242, 3, 3));
+        t.key(134);
+        t.frames(3);
+        t.sent(&mut at);
+        t.down(1);
+        t.key(134);
+        assert_eq!(t.page(), "data/ui/AcctMgmt.xml");
+        t.key(134);
+        assert_eq!(t.page(), "data/ui/PassChng.xml");
+        t.type_in("CurrentPassword", "wrong");
+        t.type_in("NewPassword", "password456");
+        t.type_in("NewPassword2", "password456");
+        t.down(1);
+        t.key(134);
+        assert_eq!(t.dialog(), t.word(1245), "the control: not the current password");
+        assert_eq!(t.sent(&mut at), Vec::<u8>::new());
+        t.key(134);
+        t.frames(3);
+        t.type_in("CurrentPassword", "password123");
+        t.r.pages.last_mut().unwrap().select("NewPassword2");
+        t.down(1);
+        t.key(134);
+        assert_eq!(t.sent(&mut at), net::auth::change_password(4242, "password123", "password456"));
+        t.says(framed(43, 272, |b| b[12..16].copy_from_slice(&1u32.to_be_bytes())));
+        assert_eq!(t.dialog(), t.word(1344));
+        assert_eq!(t.r.password, "password456");
+        assert_eq!(t.page(), "data/ui/AcctMgmt.xml");
+        crate::settings::testing::reset(false);
+    }
+
+    /// Play: "Getting News..." four frames with no prompt, the news fetched
+    /// from the server the player set at the URL's port and path, shown raw
+    /// under Frontiers' title, and X plays (the result 1); a failed fetch says
+    /// so in the same dialog, whose X plays too. The control: X while the
+    /// news is coming (a confirmation, Cancel) does not play.
+    #[test]
+    fn play_shows_the_news_then_plays() {
+        let Some(d) = disc() else { return };
+        crate::settings::testing::reset(false);
+        for ok in [true, false] {
+            let mut t = T::new(&d, ("", "", false));
+            t.type_in("StationName", "player0001");
+            t.type_in("StationPassword", "password123");
+            t.r.pages.last_mut().unwrap().select("LogInButton");
+            t.key(134);
+            t.says(login_reply(0, 4242, 3, 3));
+            t.key(134);
+            t.frames(3);
+            t.key(134);
+            assert_eq!(t.r.dialog.window.title.chars(), wide(&t.word(1275)));
+            assert!(!t.r.dialog.prompt, "no prompt while the news waits");
+            assert!(t.news.borrow().is_empty());
+            t.frames(4);
+            assert_eq!(*t.news.borrow(), vec![("192.0.2.1".to_string(), 7000, "/patch/web/eqoa/motd/news.html".to_string())]);
+            t.key(134);
+            assert_eq!(t.r.result, 0, "the control: X while the news is coming");
+            *t.news_reply.borrow_mut() = Some(if ok { Ok(b"\t\n<p>Welcome</p>".to_vec()) } else { Err("refused".into()) });
+            t.frames(6);
+            if ok {
+                assert_eq!(t.r.dialog.window.title.chars(), wide(&t.word(1804)));
+                assert_eq!(t.dialog(), "<p>Welcome</p>");
+            } else {
+                assert_eq!(t.dialog(), t.word(1238));
+            }
+            assert!(!t.r.dialog.confirm);
+            assert_eq!(t.r.result, 0);
+            t.key(134);
+            assert_eq!(t.r.result, 1);
+        }
+        crate::settings::testing::reset(false);
+    }
+
+    /// Triangle on the login page asks to disconnect; X on the question is
+    /// the result 2. The control: Triangle on a second page goes back.
+    #[test]
+    fn triangle_on_the_first_page_disconnects() {
+        let Some(d) = disc() else { return };
+        crate::settings::testing::reset(false);
+        let mut t = T::new(&d, ("", "", false));
+        t.down(5);
+        t.key(134);
+        assert_eq!(t.page(), "data/ui/FrgtPass.xml");
+        t.key(132);
+        assert_eq!(t.page(), "data/ui/login.xml", "back, not a disconnect");
+        assert!(!t.r.dialog.is_open());
+        t.key(132);
+        assert_eq!(t.r.dialog.window.title.chars(), wide(&t.word(1234)));
+        assert_eq!(t.r.result, 0);
+        t.key(134);
+        assert_eq!(t.r.result, 2);
+        crate::settings::testing::reset(false);
+    }
+}

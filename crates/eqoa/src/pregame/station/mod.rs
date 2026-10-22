@@ -244,3 +244,69 @@ impl Layout for Quiet<'_> {
     }
     fn fill_blended(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pointer::testing::{NullRaster, mid};
+
+    /// A Station on the disc's login page, drawn once (the page notes where
+    /// its objects went).
+    fn station() -> Option<(Station, Vui)> {
+        let iso = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        if !iso.exists() {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return None;
+        }
+        let mut i = iso::Iso::open(&iso).unwrap();
+        let words = vi::strtab::StringTable::parse(&i.read("DATA/WORDS.TXT").unwrap()).unwrap();
+        let mut r = Renderer::new(0, words.clone(), 0);
+        r.load(&i.read("STATION.PAK").unwrap(), (String::new(), String::new(), false), "192.0.2.1", 9735);
+        let vui = Vui::new(words, Default::default(), Vec::new());
+        r.draw(&vui, &mut NullRaster, 17);
+        let run = Run { r, fader: Fader::new(0.0, 0), running: true, keyboard: false, compact: true };
+        Some((Station { run: Some(Box::new(run)), ..Default::default() }, vui))
+    }
+
+    /// Where object `i` of the page on top was drawn.
+    fn rect_of(s: &Station, i: usize, vui: &Vui) -> [i32; 4] {
+        let o = &s.run.as_ref().unwrap().r.page().unwrap().objs[i];
+        let x0 = o.x as i32 + o.image_off[0] as i32;
+        let (w, h) = if o.width > 0 { (o.width as i32, o.height as i32) } else { (24, vui.font_height(&NullRaster)) };
+        [x0, o.y as i32, x0 + w, o.y as i32 + h]
+    }
+
+    /// A pointer on the login page: a field not selected is moved to (the
+    /// move's sound at the next frame), the one selected is pressed (X), the
+    /// legend's glyphs are their buttons; with a dialog up only its prompt
+    /// is. The controls: nothing under the pointer is no key, and a page
+    /// not yet drawn has nothing to hit.
+    #[test]
+    fn a_pointer_on_the_pages() {
+        let Some((mut s, vui)) = station() else { return };
+        let page = |s: &Station| s.run.as_ref().unwrap().r.page().unwrap().clone();
+        let pw = page(&s).find("StationPassword").unwrap();
+        let at = mid(rect_of(&s, pw, &vui));
+        assert_eq!(s.point(at), vec![crate::pointer::MOVED]);
+        assert!(s.moved, "the move sounds");
+        assert_eq!(page(&s).grid.selected(), Some(pw));
+        assert_eq!(s.point(at), vec![crate::pointer::key::CROSS], "the selection: X");
+        let x = page(&s).objs.iter().position(|o| o.texture == 173).unwrap();
+        let tri = page(&s).objs.iter().position(|o| o.texture == 175).unwrap();
+        assert_eq!(s.point(mid(rect_of(&s, x, &vui))), vec![134]);
+        assert_eq!(s.point(mid(rect_of(&s, tri, &vui))), vec![132]);
+        assert_eq!(s.point([630.0, 5.0]), Vec::<i32>::new(), "the control: nothing there");
+        // a dialog up: only its prompt
+        let r = &mut s.run.as_mut().unwrap().r;
+        r.on_action("Disconnect", 0);
+        r.draw(&vui, &mut NullRaster, 34);
+        assert_eq!(s.point(at), Vec::<i32>::new(), "the page under a dialog");
+        let d = &s.run.as_ref().unwrap().r.dialog;
+        let prompt = crate::pointer::rows_rect(&d.window, &vui, &NullRaster, 153, 10, 40, 1);
+        assert_eq!(s.point(mid(prompt)), vec![132], "a confirmation's prompt is Cancel");
+        // the control: before a draw, nothing was noted
+        let Some((mut fresh, _)) = station() else { return };
+        fresh.run.as_mut().unwrap().r.hits.clear();
+        assert_eq!(fresh.point(at), Vec::<i32>::new());
+    }
+}

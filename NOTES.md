@@ -22,6 +22,11 @@ Porting STATION (the Station login) into `crates/eqoa/src/pregame/station/`.
 - `settings.rs`: `saved_login`/`save_login` (+0x10, +0x50, +0x90, plain text as the card kept
   it), `save` keeps them (was: always zero). `editbox.rs`: `password` (`m_x18C`, stars).
 
+- tests on the disc's pages over a scripted server (`renderer.rs`): the login's bytes and both
+  answers, Save Account (ticked and not), a new account (both pages, the checks, the request
+  bytes, the login after), a password change, the news and Play, Disconnect; the stage's pointer.
+- live (local go-eqoa-server): login as vanstation through the pages, news, Play, CLIENT's list.
+
 ## Next
-- renderer tests (actions' requests byte for byte, navigation, Save Account, pointer),
-  live runs (login, a new account, a password change), shots against ref2.
+- live: a new account, a password change, Save Account; shots at 640x480 against ref2; planted
+  bugs; README.
