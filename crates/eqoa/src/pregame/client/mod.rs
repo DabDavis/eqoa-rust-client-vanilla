@@ -881,7 +881,8 @@ mod tests {
         let mut e = Client::new();
         e.back_from_world(&mut res, &mut shared, Some(3));
         e.key(134, true);
-        e.run(std::mem::take(&mut e.reqs), &mut Vec::new());
+        let reqs = std::mem::take(&mut e.reqs);
+        e.run(reqs, &mut Vec::new());
         assert!(matches!(e.next, Some(Next::Station)), "a refused login: STATION");
         // the control: a key other than Ok leaves the notice up
         let mut f = Client::new();
