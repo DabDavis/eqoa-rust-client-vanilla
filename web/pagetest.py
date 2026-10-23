@@ -297,6 +297,20 @@ async def tests(a, site, base, page):
     check("the log ring had them when it was kept (control)", any("kept tester1 and s3cretpw" in l for l in page.lines))
     await page.js("eqoaReport.running(false); localStorage.removeItem('eqoa.session')")
 
+    # ---- pointer: the mouse look's pointer lock refused (winit drops the
+    # promise the browser answers with) is no problem of the page's (F3
+    # 20261023-193535), only a line in the log; a rejection of the page's own
+    # nobody handles is one (the control)
+    await page.open(base + q)
+    await page.js("window.__refused = 0; document.addEventListener('pointerlockerror', () => { window.__refused += 1 }); document.getElementById('eqoa').requestPointerLock(); 0")
+    refused = await page.until("window.__refused > 0", 5)
+    await asyncio.sleep(0.5)
+    shown = await page.js(notices) or ""
+    check("a refused pointer lock is no problem", bool(refused) and "problem:page" not in shown
+          and any(l.startswith("the pointer lock was refused") for l in page.lines), f"refused {refused}, notices {shown}")
+    await page.js("Promise.reject(new Error('a test rejection')); 0")
+    check("an unhandled rejection is one (control)", bool(await page.until(f"{notices}.includes('problem:page')", 5)))
+
     # ---- crash
     n = len(site.posts)
     await page.js("try { eqoaClient.crashTest() } catch (e) { window.__trap = String(e) }")
@@ -344,7 +358,7 @@ async def tests(a, site, base, page):
         line = await page.until("document.getElementById('iso-what').className.includes('warn') && document.getElementById('iso-what').textContent", 10)
         check("another disc is named, and what it lacks", bool(line) and "Frontiers" in line, str(line))
 
-    errors = [l for l in page.lines if l.startswith("EXCEPTION") and "crash_test" not in l and "unreachable" not in l]
+    errors = [l for l in page.lines if l.startswith("EXCEPTION") and "crash_test" not in l and "unreachable" not in l and "a test rejection" not in l]
     check("no exception in the page beyond the crash test's", not errors, "; ".join(errors[:3]))
     return failed
 

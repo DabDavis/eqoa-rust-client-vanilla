@@ -70,6 +70,23 @@ for (const ev of ['keydown', 'keyup']) {
   addEventListener(ev, (e) => { if (e.key === 'F11') e.stopImmediatePropagation(); }, true);
 }
 
+// The mouse look asks for the pointer through winit, which drops the promise
+// a browser answers requestPointerLock with. One refused (asked again too soon
+// after the player let go of it with Escape, or a page not in front) is the
+// client's to see, and it does (mouse.rs, `lock_seen`: no lock came, the drag
+// goes on with the cursor), not the page failing: a line in the log, no
+// problem notice (F3 20261023-193535).
+{
+  const lock = Element.prototype.requestPointerLock;
+  if (lock) {
+    Element.prototype.requestPointerLock = function (...args) {
+      const p = lock.apply(this, args);
+      if (p && typeof p.catch === 'function') p.catch((e) => console.log(`the pointer lock was refused: ${e && e.message ? e.message : e}`));
+      return p;
+    };
+  }
+}
+
 // The gamepads' motors: the Gamepad API's dual-rumble, where the browser has
 // it. `strong` is the DualShock 2's large motor's level, `weak` its small
 // one, each 0..1, for `ms`; both 0 stops them. `pads`: the indices of the
