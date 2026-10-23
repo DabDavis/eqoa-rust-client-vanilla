@@ -5,6 +5,33 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-23 · Server updates and patches, the game's camera and fog
+- Play checks your server for updates first, as on a PS2: the Update window
+  shows the progress, the server's update messages open when something
+  changed, and Play at Done goes on to the login. Each server's update files
+  are kept in that server's own folder, so switching servers never mixes
+  them. If a server's update service doesn't answer, the game plays with the
+  files that server sent last time and says so.
+- On a server that sends its own patch, such as Sandstorm, the game plays as
+  that patch makes it: its 30 armour colours, armour set 9 with its helm,
+  robes 4 and 5, coloured damage numbers, the auction search up to level 60,
+  and Search, Register and Unregister in the Group menu.
+- The world is seen through the game's own camera, as on a PS2: you see more of
+  it, and the start menu's picture of your character shows all of it, head
+  included.
+- The game's fog: the world ends where the fog does, so far hills, trees and
+  buildings fade into the sky instead of standing out as pale shapes. Options
+  > Extended has a Fog slider (the game's in the middle, off at the left,
+  thicker to the right); the Extended page now scrolls a row.
+- The time of day follows the server's clock, so your sky, light and fog match
+  everyone else's. Before, every game started at ten in the morning.
+- The start menu, its windows and the merchant's window end at their bottom
+  frame: the green strip below it is gone and the world shows there.
+- The Who list and the guild's roster are sorted by name; ○ (C on the
+  keyboard) or a click on a column's heading sorts them by another column.
+- In a browser the update check and a server's own patch aren't there yet: the
+  page plays the original game as before.
+
 ## 2026-10-23 · Options per window, destroy asks, weapon swaps in step
 - Each game window keeps its own options: turn the sound off in one and keep it
   in another. The first window keeps the options you already have, and a new
