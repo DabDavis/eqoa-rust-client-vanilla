@@ -117,8 +117,14 @@ jobs:
         run: |
           bin=target/release/eqoa
           [ "${{ matrix.os }}" = windows ] && bin=target/release/eqoa.exe
-          # a program that does not carry its commit would not follow the release
-          grep -aq "$GITHUB_SHA" "$bin" || { echo "$bin does not carry $GITHUB_SHA: it would not update itself"; exit 1; }
+          # a program that does not carry its commit would not follow the
+          # release; read as bytes, by perl on every runner (macOS's grep
+          # found nothing in its build of af2b201, 2026-10-23)
+          perl -e 'local $/; open my $f, "<:raw", $ARGV[0] or exit 2; my $b = <$f>; exit(index($b, $ENV{GITHUB_SHA}) < 0 ? 1 : 0)' "$bin" || {
+            echo "$bin does not carry $GITHUB_SHA: it would not update itself"
+            LC_ALL=C grep -ac "$GITHUB_SHA" "$bin" || true
+            exit 1
+          }
           case "${{ matrix.os }}" in
             linux) name=eqoa-vanilla-linux-x86_64 ;;
             windows) name=eqoa-vanilla-windows-x86_64 ;;
