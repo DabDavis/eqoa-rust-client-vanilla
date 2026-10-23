@@ -454,11 +454,12 @@ mod tests {
     }
 
     /// A pointer finds the HUD's pieces where they were drawn: in a 4:3
-    /// window at the game's places; in one narrower than 4:3 (two side by
-    /// side, 798x828: 85 frame pixels above and below the frame) the
-    /// player's frame up with the top and the report's button down with the
-    /// bottom, where the game's places now hold neither (the control). Needs
-    /// a graphics adapter; without one it says so and passes.
+    /// window at the game's places; in a 16:9 one out at the left side (106
+    /// frame pixels); in one narrower than 4:3 (two side by side, 798x828:
+    /// 85 frame pixels above and below the frame) the player's frame up with
+    /// the top and the report's button down with the bottom, where the
+    /// game's places now hold neither (the control). Needs a graphics
+    /// adapter; without one it says so and passes.
     #[test]
     fn a_pointer_finds_the_pieces_where_a_tall_window_put_them() {
         let _gpu = crate::GPU_TEST.lock().unwrap_or_else(|e| e.into_inner());
@@ -472,13 +473,13 @@ mod tests {
         let vui = crate::ui::Vui::new(Default::default(), Default::default(), atlas);
         let assets = crate::ui::UiAssets::default();
         let (me, report) = ([100.0, 40.0], [30.0, 430.0]);
-        for (size, up) in [((640, 480), 0.0), ((798, 828), 85.0)] {
+        for (size, side, up) in [((640, 480), 0.0, 0.0), ((1280, 720), 106.0, 0.0), ((798, 828), 0.0, 85.0)] {
             ui.begin(size);
             let mut hud = Hud::new();
             hud.draw(&vui, &mut assets.raster(&mut ui), &HudState::default());
-            assert_eq!(hud.pick([me[0], me[1] - up]), Some(Pick::Me), "{size:?}");
-            assert_eq!(hud.pick([report[0], report[1] + up]), Some(Pick::Report), "{size:?}");
-            if up > 0.0 {
+            assert_eq!(hud.pick([me[0] - side, me[1] - up]), Some(Pick::Me), "{size:?}");
+            assert_eq!(hud.pick([report[0] - side, report[1] + up]), Some(Pick::Report), "{size:?}");
+            if side + up > 0.0 {
                 assert_eq!((hud.pick(me), hud.pick(report)), (None, None), "{size:?}: the game's places");
             }
         }
