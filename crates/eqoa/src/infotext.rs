@@ -28,6 +28,17 @@ fn find(table: &[(i32, i64)], id: i64) -> Option<i32> {
     table.iter().rev().find(|e| e.1 == id).map(|e| e.0)
 }
 
+/// `FindWearSlotWord(slot)`: the wear slot's word (`sWearSlotWords`).
+pub fn wear_slot_word(slot: i64) -> Option<i32> {
+    find(&WEAR_WORDS, slot)
+}
+
+/// `FindAttackWord(id)`: the attack type's word in `gAttackWords` (CLIENT's
+/// data, `StartData::attack_words`).
+pub fn attack_word(attack_words: &[(i32, i64)], id: i64) -> Option<i32> {
+    find(attack_words, id)
+}
+
 /// What the describers read off the client.
 pub struct Info<'a> {
     pub words: &'a StringTable,
@@ -73,7 +84,7 @@ impl Info<'_> {
 
     /// `AddEquipSlot`.
     fn equip_slot(&self, d: &mut String, v: i64) {
-        match find(&WEAR_WORDS, v) {
+        match wear_slot_word(v) {
             Some(w) => *d += &format!("{}: {}", self.w(490), self.w(w)),
             None => *d += &format!("{}: {v}", self.w(490)),
         }
@@ -81,7 +92,7 @@ impl Info<'_> {
 
     /// `AddAttackType`.
     fn attack_type(&self, d: &mut String, v: i64) {
-        match find(self.attack_words, v) {
+        match attack_word(self.attack_words, v) {
             Some(w) => *d += &format!("{}: {}", self.w(497), self.w(w)),
             None => *d += &format!("{}: {v}", self.w(497)),
         }
