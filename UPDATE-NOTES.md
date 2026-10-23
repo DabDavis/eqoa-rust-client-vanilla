@@ -5,6 +5,12 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-23 · The merchant in 4:3 too
+- In a wide window a merchant's buy and sell window is the game's 4:3 picture
+  too, in the middle with the world on either side, its sides closed off with
+  the frame's studded posts, as the start menu's are.
+- The compass stays in view while you shop.
+
 ## 2026-10-23 · The start menu in 4:3 again
 - In a wide window the start menu (Start, or Escape) is the game's 4:3 picture
   again, in the middle with the world on either side, instead of stretching out

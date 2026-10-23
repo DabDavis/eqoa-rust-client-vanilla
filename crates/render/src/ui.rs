@@ -15,7 +15,8 @@
 //! side it belongs to: the HUD reaches the window's edges. A quad with the
 //! frame that is the frame's whole width (a window's backdrop, which on a TV
 //! runs off both sides) runs the target's whole width; one made under
-//! `Anchor::Frame` (the start menu's art) stays the frame's.
+//! `Anchor::Frame` (the start menu's and the merchant's art) stays the
+//! frame's.
 
 use bytemuck::{Pod, Zeroable};
 use std::collections::HashMap;
@@ -103,15 +104,15 @@ pub enum Anchor {
     /// between: a backdrop that joins a left piece to a right one.
     Span(i32, i32),
     /// With the frame, but cut to the target's sides rather than the
-    /// frame's: what is laid out at a wider width than the frame's (the
-    /// merchant's panels and rails, run out to the window's sides).
+    /// frame's: what is laid out at a wider width than the frame's (STATION's
+    /// fader, across the whole window).
     Wide,
     /// With the frame and cut to it, as a 4:3 screen shows it: a full-screen
     /// window's art kept 4:3 in a wider target (the start menu, its
-    /// inventory, the spell book). Never widened, even the frame's whole
-    /// width (the start menu's band), and no window that takes the HUD back
-    /// (`settle`): the compass and the rest stay at the target's sides,
-    /// beside the picture (the user, 2026-10-23).
+    /// inventory, the spell book, the merchant). Never widened, even the
+    /// frame's whole width (the start menu's band, the merchant's rails), and
+    /// no window that takes the HUD back (`settle`): the compass and the rest
+    /// stay at the target's sides, beside the picture (the user, 2026-10-23).
     Frame,
 }
 
