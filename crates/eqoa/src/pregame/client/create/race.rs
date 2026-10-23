@@ -200,6 +200,9 @@ impl RacePage {
             let fp = FrameParam { tl: (36, 0), top: (37, 0), tr: (36, 1), right: (42, 1), br: (39, 1), bottom: (40, 0), bl: (39, 0), left: (42, 0) };
             let studs = FrameParam { tl: (0, 0), top: (38, 0), tr: (0, 0), right: (43, 1), br: (0, 0), bottom: (41, 0), bl: (0, 0), left: (43, 0) };
             vui.blit_studded_frame(r, [347, 37], [284, 377], &fp, &studs, 2, 3, 0, 1.0, true);
+            // the client's own, in a window wider than 4:3: the list's left
+            // edge closed, as character select's (`select::PANEL`)
+            crate::startmenu::close_edges(vui, r, crate::pregame::client::select::PANEL, false, [true, false]);
             let arrow = vui.entry(54);
             let step = arrow.uv1[1] - 3;
             let mut pos = [15, 48];
@@ -444,5 +447,28 @@ mod tests {
         // the control: without the hit notes nothing answers
         p.hits.clear();
         assert!(p.point(mid(rows[3])).is_empty());
+    }
+
+    /// In a window wider than 4:3 the list's open left edge is closed as
+    /// character select's is (the same layout, `select::PANEL`); a 4:3
+    /// window draws no post (the control), and the rest is the same.
+    #[test]
+    fn a_wide_window_closes_the_lists_left_edge() {
+        let v = crate::startmenu::posts::vui();
+        let res = crate::pregame::res::Res::new();
+        let form = super::super::blank_form();
+        let drawn = |side: i32| {
+            let mut r = crate::pointer::testing::Wide::new(side);
+            let (mut shared, mut cues, mut music) = (crate::pregame::Shared::default(), Vec::new(), Vec::new());
+            let mut cx = Ctx { now: 0, game_frame: true, vui: &v, r: &mut r, res: &res, shared: &mut shared, cues: &mut cues, music: &mut music, gpu: None };
+            page().draw(&mut cx, &mut Env::default(), None, &form, &mut Vec::new());
+            r.2
+        };
+        let (tv, wide) = (drawn(0), drawn(106));
+        let added: Vec<_> = wide.iter().filter(|b| !tv.contains(b)).copied().collect();
+        let panel = crate::pregame::client::select::PANEL;
+        assert_eq!(added, crate::startmenu::posts::made_at(render::ui::Anchor::Middle, panel, false, [true, false]));
+        let rest: Vec<_> = wide.iter().filter(|b| !added.contains(b)).copied().collect();
+        assert_eq!(rest, tv);
     }
 }
