@@ -79,3 +79,7 @@ web-sys = { version = "0.3.106", features = [
     "WebSocket",
     "Window",
 ] }
+
+# Tests that read what the client sent (its datagrams' guaranteed messages).
+[dev-dependencies]
+drdp.workspace = true
