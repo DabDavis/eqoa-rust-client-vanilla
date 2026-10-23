@@ -314,5 +314,16 @@ mod tests {
 /// (the user's choice, F3 20261021-043455, once the wide fix had run it to
 /// the window's sides; the blended three until 2026-10-23, their backdrop
 /// across a wide window and the compass under it); the start menu keeps its
-/// own band and the chat box its own.
+/// own band, and the strip under a fixed chat box goes too (`chat_strip`).
 pub fn window_backdrop(_vui: &vi::ui::Vui, _r: &mut dyn vi::ui::Raster, _width: i32) {}
+
+/// The strip under the chat box while a window fixes it (`VIWndChat::
+/// OnDrawSelf`'s `BlitEx` of atlas entry 32 at (200, 331), 442 by 118, with
+/// `m_mode` set) and `VIWndGame`'s left piece of it under the target (at
+/// (-1, 331), 203 by 125): the lower part of the backdrop that the merchant,
+/// the bank, the auction and a trade cover the screen with on a TV. The
+/// client leaves it out with that backdrop (`window_backdrop`), so the world
+/// shows under the chat box and the target there too (the user, F3
+/// 20261023-080729: "seeing green background bottom part of merchant
+/// screen"); the chat box keeps its own box.
+pub fn chat_strip(_vui: &vi::ui::Vui, _r: &mut dyn vi::ui::Raster, _at: [i32; 2], _size: [i32; 2]) {}
