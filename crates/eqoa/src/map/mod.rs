@@ -742,7 +742,7 @@ impl Map {
 }
 
 /// Whether frame point `f` (the HUD's own, before its left side moves out
-/// in a wide window) is on the compass's rose (`DrawCompass`: 44 pixels
+/// in a wide window or its top up a tall one) is on the compass's rose (`DrawCompass`: 44 pixels
 /// across about (39, 54)), which a click or a tap opens the map from.
 pub fn on_compass(f: [f32; 2]) -> bool {
     (f[0] - 39.0).powi(2) + (f[1] - 54.0).powi(2) <= 22.0 * 22.0

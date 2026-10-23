@@ -269,10 +269,10 @@ impl HudMenus {
     }
 
     /// A pointer at frame point `p`, in the menu's own place (before a wide
-    /// window moves it out to the right; the client's own, as the game takes
-    /// the pad and the keyboard): on an entry of the menu up, that entry
-    /// selected and the key that uses it; on the title bar, the next menu
-    /// (as the d-pad's right).
+    /// window moves it out to the right, or a tall one up to its top; the
+    /// client's own, as the game takes the pad and the keyboard): on an
+    /// entry of the menu up, that entry selected and the key that uses it;
+    /// on the title bar, the next menu (as the d-pad's right).
     pub fn point(&mut self, p: [f32; 2]) -> Option<Key> {
         let k = self.sel.clamp(0, 2) as usize;
         let count = self.defs[k].count;

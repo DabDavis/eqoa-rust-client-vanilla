@@ -8,7 +8,7 @@
 //! drawn by `play`.
 
 use crate::ui::{Raster, UiRaster, Vui, icon_id, wide};
-use render::ui::{Anchor, Quad};
+use render::ui::{Anchor, Quad, Vertical};
 use vi::ui::TextScroll;
 
 /// What the HUD reads off the client this frame.
@@ -104,7 +104,8 @@ pub struct Hud {
     /// `DrawPatch`'s static `start`: the clock when its material was made.
     patch_start: Option<i64>,
     /// Where the player's frame, the group's bars and the pet's were drawn,
-    /// before the left side moves them (for a pointer: `Pick`).
+    /// as placed (out at a wide window's left, up or down a tall one), for a
+    /// pointer: `Pick`.
     hits: crate::pointer::Hits,
     picks: Vec<Pick>,
 }
@@ -137,13 +138,16 @@ impl Hud {
         }
     }
 
-    /// What is under frame point `p` (before the left side's move).
+    /// What is under frame point `p`, where the pieces were placed.
     pub fn pick(&self, p: [f32; 2]) -> Option<Pick> {
         self.hits.at(p).and_then(|i| self.picks.get(i as usize).copied())
     }
 
-    fn note(&mut self, r: [i32; 4], what: Pick) {
-        self.hits.push(r, self.picks.len() as i32);
+    /// `what` drawn over frame rectangle `r`, noted where the layer places
+    /// it (`Ui::placed`: to a wide window's side, up or down a tall one).
+    fn note(&mut self, ui: &UiRaster, r: [i32; 4], what: Pick) {
+        let (a, b) = (ui.ui.placed([r[0] as f32, r[1] as f32]), ui.ui.placed([r[2] as f32, r[3] as f32]));
+        self.hits.push([a[0], a[1], b[0], b[1]].map(|v| v.round() as i32), self.picks.len() as i32);
         self.picks.push(what);
     }
 
@@ -157,14 +161,17 @@ impl Hud {
 
     /// `OnDrawSelf`, the drawing half. In a window wider than 4:3 its pieces
     /// keep to the left side (`Anchor`; a menu over them takes them back
-    /// under it, `Ui::end`).
+    /// under it, `Ui::end`), and in one narrower than 4:3 to its top (the
+    /// frame, the compass, the gauges, the group's and the pet's bars) or
+    /// its bottom (the target's bar, the report's button: `Vertical`).
     pub fn draw(&mut self, vui: &Vui, ui: &mut UiRaster, s: &HudState) {
         self.update_glow();
         ui.ui.anchor = Anchor::Left;
+        ui.ui.vertical = Vertical::Top;
         self.hits.clear();
         self.picks.clear();
         let mut p = [10, 15];
-        self.note([10, 15, 200, 80], Pick::Me);
+        self.note(ui, [10, 15, 200, 80], Pick::Me);
         vui.blit(ui, 6, p);
         if s.has_self {
             self.draw_compass(ui, s.heading);
@@ -201,6 +208,7 @@ impl Hud {
         self.draw_group(vui, ui, [20, 93], s);
         let y = 93 + ((s.group_count - 1) * 48).max(0);
         self.draw_pet(vui, ui, [20, y], s);
+        ui.ui.vertical = Vertical::Bottom;
         let p = [-3, 331];
         if s.chat_open {
             // the strip's left piece, left out with the strip (`ui::chat_strip`)
@@ -216,7 +224,7 @@ impl Hud {
     fn draw_report(&mut self, vui: &Vui, ui: &mut UiRaster, at: [i32; 2]) {
         let label = wide("F3  Report a bug");
         let w = vui.string_width(ui, &label) + 28;
-        self.note([at[0], at[1], at[0] + w, at[1] + vui.entry(26).uv1[1]], Pick::Report);
+        self.note(ui, [at[0], at[1], at[0] + w, at[1] + vui.entry(26).uv1[1]], Pick::Report);
         vui.blit_bar(ui, &label, [1.0, 1.0, 1.0, 1.0], at, 25, 26, w, 3, 1.0, 0, true);
     }
 
@@ -227,7 +235,7 @@ impl Hud {
         let mut glowing = false;
         for m in &s.group {
             let start = p;
-            self.note([p[0], p[1], p[0] + 174, p[1] + 46], Pick::Member(m.id));
+            self.note(ui, [p[0], p[1], p[0] + 174, p[1] + 46], Pick::Member(m.id));
             let glow = if m.is_target { self.glow1 } else { 0.3 };
             glowing |= m.is_target;
             vui.blit_bar(ui, &[], [0.0; 4], p, 25, 26, 174, 3, glow, 0, true);
@@ -261,7 +269,7 @@ impl Hud {
             return;
         };
         let mut p = at;
-        self.note([p[0], p[1], p[0] + 174, p[1] + 46], Pick::Pet);
+        self.note(ui, [p[0], p[1], p[0] + 174, p[1] + 46], Pick::Pet);
         self.glow2_on = if pet.is_target { 1 } else { -1 };
         let g = self.glow2;
         vui.blit_bar(ui, &[], [0.0; 4], p, 25, 26, 174, 3, g, 0, true);
@@ -419,7 +427,7 @@ pub fn draw_gauge(vui: &Vui, ui: &mut dyn Raster, bar: i32, frame: i32, at: [i32
 
 #[cfg(test)]
 mod tests {
-    use super::patch_point;
+    use super::{Hud, HudState, Pick, patch_point};
 
     fn near(a: [f32; 2], b: [f32; 2]) -> bool {
         (a[0] - b[0]).abs() < 1e-3 && (a[1] - b[1]).abs() < 1e-3
@@ -443,5 +451,36 @@ mod tests {
         // 2000 is the edge, measured before y is dropped
         assert!(patch_point(0.0, [0.0, 0.0, 2000.0]).is_some());
         assert!(patch_point(0.0, [0.0, 100.0, 1998.0]).is_none());
+    }
+
+    /// A pointer finds the HUD's pieces where they were drawn: in a 4:3
+    /// window at the game's places; in one narrower than 4:3 (two side by
+    /// side, 798x828: 85 frame pixels above and below the frame) the
+    /// player's frame up with the top and the report's button down with the
+    /// bottom, where the game's places now hold neither (the control). Needs
+    /// a graphics adapter; without one it says so and passes.
+    #[test]
+    fn a_pointer_finds_the_pieces_where_a_tall_window_put_them() {
+        let _gpu = crate::GPU_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut ui) = crate::ui::tests::layer() else {
+            eprintln!("SKIP: no graphics adapter");
+            return;
+        };
+        // the report's bar art 28 high (the atlas's entry 26)
+        let mut atlas = vec![vi::ui::UiTexEntry::default(); 27];
+        atlas[26].uv1 = [16, 28];
+        let vui = crate::ui::Vui::new(Default::default(), Default::default(), atlas);
+        let assets = crate::ui::UiAssets::default();
+        let (me, report) = ([100.0, 40.0], [30.0, 430.0]);
+        for (size, up) in [((640, 480), 0.0), ((798, 828), 85.0)] {
+            ui.begin(size);
+            let mut hud = Hud::new();
+            hud.draw(&vui, &mut assets.raster(&mut ui), &HudState::default());
+            assert_eq!(hud.pick([me[0], me[1] - up]), Some(Pick::Me), "{size:?}");
+            assert_eq!(hud.pick([report[0], report[1] + up]), Some(Pick::Report), "{size:?}");
+            if up > 0.0 {
+                assert_eq!((hud.pick(me), hud.pick(report)), (None, None), "{size:?}: the game's places");
+            }
+        }
     }
 }
