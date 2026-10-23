@@ -96,12 +96,15 @@ pub struct Tables {
     /// a robe past retail's four: its (chest, legs) DictIDs, robe 0's where
     /// one does not resolve
     pub robe_art: Vec<(u8, [u32; 2])>,
+    /// a set past `$Armor`'s nine: its five slots' DictIDs (Sandstorm's
+    /// set 9, `GetArmorSetTexture`'s hook)
+    pub armor_extra: Vec<(u8, [u32; 5])>,
 }
 
 impl Tables {
     /// The retail disc's.
     pub fn retail() -> Tables {
-        Tables { tints: TINTS.to_vec(), tint_limit: 15, armor_limit: 9, helm_remap: Vec::new(), robe_limit: 4, robe_art: Vec::new() }
+        Tables { tints: TINTS.to_vec(), tint_limit: 15, armor_limit: 9, helm_remap: Vec::new(), robe_limit: 4, robe_art: Vec::new(), armor_extra: Vec::new() }
     }
 
     /// A tint's colour as `SetArmorSlot` takes it: past the limit, tint 0.
@@ -187,7 +190,8 @@ pub fn apply_look_with<M: Model>(cs: &CSprite<M>, look: &Look, helm_worn: bool, 
             continue;
         }
         let set = if look.armor[i] >= t.armor_limit { 0 } else { look.armor[i] as usize };
-        let tex = if set == 0 { None } else { ARMOR.get(set).and_then(|a| found(a[i])) };
+        let extra = || t.armor_extra.iter().find(|(k, _)| *k as usize == set).map(|(_, a)| a[i]);
+        let tex = if set == 0 { None } else { ARMOR.get(set).map(|a| a[i]).or_else(extra).and_then(found) };
         if (set != 0 && tex.is_none()) || robed[i] {
             continue;
         }
@@ -250,7 +254,7 @@ mod tests {
     fn sandstorm() -> Tables {
         let mut tints = TINTS.to_vec();
         tints.extend((15..30u8).map(|i| [i, i, i, if i == 15 { 0 } else { 255 }]));
-        Tables { tints, tint_limit: 30, armor_limit: 10, helm_remap: vec![(9, 4)], robe_limit: 6, robe_art: vec![(4, [0xDEAD_BEEF, 0xCAFE_BABE]), (5, [0xDEAD_BEFE, 0xCAFE_BAEB])] }
+        Tables { tints, tint_limit: 30, armor_limit: 10, helm_remap: vec![(9, 4)], robe_limit: 6, robe_art: vec![(4, [0xDEAD_BEEF, 0xCAFE_BABE]), (5, [0xDEAD_BEFE, 0xCAFE_BAEB])], armor_extra: Vec::new() }
     }
 
     fn change(out: &[LayerChange], entry: i32) -> Option<LayerChange> {
@@ -289,6 +293,9 @@ mod tests {
         let look = Look { armor: [9; 6], ..Default::default() };
         assert_eq!(change(&apply_look_with(&cs, &look, false, all, &retail), 11), Some(LayerChange { entry: 11, layer: 0, texture: None, color: Some(TINTS[0]) }));
         assert_eq!(change(&apply_look_with(&cs, &look, false, all, &ss), 11), None);
+        // set 9 with the patch's art: its slots its own
+        let art = Tables { armor_extra: vec![(9, [0xC214_1C0A, 0x03C1_BE9E, 0x85EA_2A1D, 0x432C_4890, 0xB179_23D2])], ..sandstorm() };
+        assert_eq!(change(&apply_look_with(&cs, &look, false, all, &art), 11).unwrap().texture, Some(0x03C1_BE9E));
         // the helm: retail has none for set 9, the patch set 4's
         assert_eq!(helm_with(9, &retail), None);
         assert_eq!(helm_with(9, &ss), Some(HELM[4]));

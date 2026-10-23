@@ -524,6 +524,8 @@ pub fn world_library(player: &net::session::Player) -> Result<(esf::Library, vie
     let (mut lib, src) = source(&file, &[])?;
     let main_file = 0;
     lib.add("CHAR.ESF", esf::Container::open(disc(None)?.read("CHAR.ESF")?)?);
+    // a server's patch's own names for CHAR.ESF's art (`s2`: Sandstorm's set 9)
+    s2::get().register_art(&mut lib);
     // What creatures hold: weapons and shields.
     lib.add("ITEM.ESF", esf::Container::open(disc(None)?.read("ITEM.ESF")?)?);
     // The name plates' font ("Arial").

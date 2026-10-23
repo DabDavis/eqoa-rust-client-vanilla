@@ -373,6 +373,14 @@ mod at {
     pub const GET_HELM: u32 = 0x0042_94D0;
     /// `VICSpriteCust::GetRobeTexture`: slti v0, a0, 4
     pub const GET_ROBE_TEXTURE: u32 = 0x0042_9480;
+    /// `VICSpriteCust::GetArmorSetTexture`
+    pub const GET_ARMOR_SET_TEXTURE: u32 = 0x0042_93C8;
+    /// The arena's table of set 9's five new DictIDs and, after it, of the
+    /// CHAR.ESF records (by file offset) its SetResources hook registers
+    /// under them (the July and live S2s, and our server's, all keep them
+    /// here).
+    pub const SET9_IDS: u32 = 0x000F_9040;
+    pub const SET9_RECORDS: u32 = 0x000F_9060;
     /// `VIDictionary::FindTyped(id, type, &out)`
     pub const FIND_TYPED: u32 = 0x003E_43A8;
     /// `VIMemCardReadFile(name, buf, size)`
@@ -445,6 +453,9 @@ pub struct Features {
     pub worlds: Vec<World>,
     /// the Auctions window opens on this Max. Level
     pub auction_max_level: Option<i32>,
+    /// an armour set past retail's: its five slots' DictIDs, and the
+    /// CHAR.ESF records (by file offset) registered under them
+    pub armor_art: Vec<(u8, [u32; 5], [u32; 5])>,
 }
 
 impl Features {
@@ -476,7 +487,23 @@ impl Features {
             f.auction_max_level = Some(w as u16 as i16 as i32);
         }
         f.read_worlds(img);
+        f.read_set9(img);
         f
+    }
+
+    /// Set 9: GetArmorSetTexture jumps to the arena, which reads set 9 from
+    /// a slot table its SetResources hook fills, registering five CHAR.ESF
+    /// surfaces (by file offset) under five DictIDs of its own; both tables
+    /// are where every build keeps them, and only whole ones count.
+    fn read_set9(&mut self, img: &Image) {
+        if !img.jump_target(at::GET_ARMOR_SET_TEXTURE).is_some_and(in_cave) {
+            return;
+        }
+        let ids: Option<Vec<u32>> = (0..5).map(|i| img.word(at::SET9_IDS + 4 * i)).collect();
+        let records: Option<Vec<u32>> = (0..5).map(|i| img.word(at::SET9_RECORDS + 4 * i)).collect();
+        if let (Some(ids), Some(records)) = (ids, records) {
+            self.armor_art.push((9, ids.try_into().unwrap(), records.try_into().unwrap()));
+        }
     }
 
     /// GetTintColor becomes `return table + tint*4` (lui and ori or addiu of
@@ -658,6 +685,9 @@ pub struct Rules {
     /// the server's folder the patch came from: its art file, a world the
     /// disc does not carry
     pub dir: Option<PathBuf>,
+    /// an armour set past retail's: its slots' DictIDs, and the CHAR.ESF
+    /// records (by file offset) registered under them (`register_art`)
+    pub armor_art: Vec<(u8, [u32; 5], [u32; 5])>,
 }
 
 impl Default for Rules {
@@ -685,6 +715,7 @@ impl Rules {
             worlds: None,
             image: None,
             dir: None,
+            armor_art: Vec::new(),
         }
     }
 
@@ -737,8 +768,26 @@ impl Rules {
         if !f.worlds.is_empty() {
             r.worlds = Some(f.worlds.clone());
         }
+        r.armor_art = f.armor_art.clone();
         r.image = Some(Arc::new(img));
         r
+    }
+
+    /// The CHAR.ESF surfaces the patch registers under DictIDs of its own
+    /// (set 9's), registered in `lib` too once CHAR.ESF is in it: each a
+    /// Surface record at its file offset, else not registered.
+    pub fn register_art(&self, lib: &mut esf::Library) {
+        let Some(file) = lib.files.iter().position(|(n, _)| n.eq_ignore_ascii_case("CHAR.ESF")) else { return };
+        for (_, ids, records) in &self.armor_art {
+            for (&id, &off) in ids.iter().zip(records) {
+                let c = lib.file(file);
+                // a record's body follows its 12-byte header
+                let node = c.nodes.iter().position(|n| n.ty == esf::types::SURFACE && n.body == off as usize + 12);
+                if let Some(node) = node {
+                    lib.alias(id as i32, esf::Ref { file, node });
+                }
+            }
+        }
     }
 
     /// One line for the log and a problem report.
@@ -767,6 +816,7 @@ impl Rules {
         t.helm_remap = self.helm_remap.clone();
         t.robe_limit = self.robe_limit;
         t.robe_art = self.robe_art.clone();
+        t.armor_extra = self.armor_art.iter().map(|&(set, ids, _)| (set, ids)).collect();
         t
     }
 
@@ -898,6 +948,7 @@ mod tests {
         let w0 = &r.worlds.as_ref().unwrap()[0];
         assert_eq!((w0.name.as_str(), w0.name_id, w0.bounds[1], w0.bounds[3]), ("tunaria", 0x413, 12, 15));
         assert_eq!(r.world_file(6).as_deref(), Some("UNDERFOOT.ESF"));
+        assert_eq!(r.armor_art, vec![(9, [0xC214_1C0A, 0x03C1_BE9E, 0x85EA_2A1D, 0x432C_4890, 0xB179_23D2], [0x073BEC, 0x072257, 0x0C7D31, 0x06C8BE, 0x06AF29])]);
     }
 
     /// July's build is the live one without the auction change; ours raises
@@ -931,6 +982,28 @@ mod tests {
         assert!(with_rules(folder, || crate::stream::open_file(&iso, "UNDERFOOT.ESF")).is_ok());
         assert!(crate::stream::open_file(&iso, "UNDERFOOT.ESF").is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Set 9's art: the five CHAR.ESF records at the patch's file offsets
+    /// are surfaces, and once registered under its DictIDs they resolve;
+    /// retail's rules (the control) register nothing. Needs the disc.
+    #[test]
+    fn set_9s_art_out_of_char_esf() {
+        let iso = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Some(r) = rules("live") else { return };
+        if !iso.is_file() {
+            eprintln!("SKIP: no disc");
+            return;
+        }
+        let mut lib = esf::Library::new();
+        lib.add("CHAR.ESF", crate::stream::open_file(&iso, "CHAR.ESF").unwrap());
+        let ids = r.armor_art[0].1;
+        Rules::retail().register_art(&mut lib);
+        assert!(ids.iter().all(|&id| lib.surface(id as i32).is_none()));
+        r.register_art(&mut lib);
+        for id in ids {
+            assert!(lib.surface(id as i32).is_some(), "{id:08X}");
+        }
     }
 
     fn rec(addr: u32, data: &[u8]) -> Vec<u8> {
