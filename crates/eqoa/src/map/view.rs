@@ -87,6 +87,30 @@ pub fn dart(at: [f32; 2], h: f32, r: f32) -> [[f32; 2]; 4] {
     [p(1.0, 0.0), p(-0.7, 0.65), p(-0.35, 0.0), p(-0.7, -0.65)]
 }
 
+/// How many window pixels `lines` of the frame's 448 are in a `size`
+/// window: the HUD's own scale, so what is drawn by it keeps its size
+/// against the HUD whatever the window, and against nothing on the map.
+fn lines(size: (u32, u32), lines: f32) -> f32 {
+    let (a, b) = (render::ui::window_from_frame(size, [0.0, 0.0]), render::ui::window_from_frame(size, [0.0, lines]));
+    b[1] - a[1]
+}
+
+/// The player's marker (`dart`), from its middle to its tip, and its
+/// outline's width, in window pixels: 7 and 1 of the frame's lines, so the
+/// dart is 12 lines long, a little less than the map's names are tall, at
+/// every zoom (F3 20261023-050705: 0.022 of the window's height and 6
+/// pixels more, a dart 63 pixels long on a 1,417-line window, covered a
+/// zone's square once the map was zoomed out to the world).
+pub fn marker_radius(size: (u32, u32)) -> (f32, f32) {
+    (lines(size, 7.0), lines(size, 1.0))
+}
+
+/// A group member's dot, its half-width and its outline's, in window
+/// pixels: 2.5 and 0.5 of the frame's lines, a third of the player's dart.
+pub fn member_radius(size: (u32, u32)) -> (f32, f32) {
+    (lines(size, 2.5), lines(size, 0.5))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,5 +214,27 @@ mod tests {
         // the notch is behind the middle, the wings either side of the line
         let d = dart(at, PI, 10.0);
         assert!(d[2][1] > at[1] && d[1][0] != d[3][0]);
+    }
+
+    /// The markers are sized by the frame's lines (the HUD's scale): the
+    /// same in a window twice as tall in proportion, and nothing to do with
+    /// the zoom (they take only the window). F3 20261023-050705's window, 2560
+    /// by 1417: a dart 7 lines (22 pixels) to its tip. The control: the old
+    /// size, 0.022 of the height and 6 pixels (37 pixels there).
+    #[test]
+    fn the_markers_keep_the_huds_size() {
+        let near1 = |a: f32, b: f32| (a - b).abs() < 1e-3;
+        let (r, outline) = marker_radius((2560, 1417));
+        assert!(near1(r, 7.0 * 1417.0 / 448.0) && near1(outline, 1417.0 / 448.0), "{r} {outline}");
+        let (r1, _) = marker_radius((640, 448));
+        assert!(near1(r1, 7.0));
+        let (r2, _) = marker_radius((1280, 896));
+        assert!(near1(r2, 2.0 * r1), "twice the window, twice the dart");
+        // a window wider than 4:3 keeps the frame's full height: the same dart
+        assert!(near1(marker_radius((1920, 896)).0, r2));
+        let (d, o) = member_radius((640, 448));
+        assert!(near1(d, 2.5) && near1(o, 0.5));
+        let old = 0.022 * 1417.0 + 6.0;
+        assert!(!near1(marker_radius((2560, 1417)).0, old), "the control: the old size");
     }
 }
