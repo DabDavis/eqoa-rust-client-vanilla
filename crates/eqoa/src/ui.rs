@@ -406,10 +406,14 @@ mod tests {
         assert_eq!(ui.viewport, None);
     }
 
-    /// What a raster was asked: (call, flags, at, size, texels from, texels
-    /// big), a fill's corners as (`fill`, 0, top-left, bottom-right, ..).
+    /// A call a raster was asked: (call, flags, at, size, texels from,
+    /// texels big), a fill's corners as (`fill`, 0, top-left, bottom-right,
+    /// ..).
+    type Call = (&'static str, u32, [i32; 2], [i32; 2], [i32; 2], [i32; 2]);
+
+    /// What a raster was asked, and the anchor it was left at.
     #[derive(Default)]
-    struct Calls(Vec<(&'static str, u32, [i32; 2], [i32; 2], [i32; 2], [i32; 2])>, Anchor);
+    struct Calls(Vec<Call>, Anchor);
 
     impl Layout for Calls {
         fn side(&self) -> i32 {

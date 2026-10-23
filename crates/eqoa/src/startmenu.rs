@@ -940,15 +940,14 @@ mod tests {
 
     /// `drawn` with `vui`'s atlas.
     fn drawn_with(vui: &Vui, side: i32) -> (StartMenu, Menus, Wide) {
-        let vui = vui;
         let mut menus = Menus::default();
         let m = menus.push(Menu { x00: -1, x04: -1, entries: (0..7).map(|i| crate::client_image::MenuEntry { word: 100 + i, ..Default::default() }).collect() });
         let loc = Location { world: 0, pos: [0.0; 3], cols: 1, rows: 1, cell: 1.0, origin: [0.0; 3], bounds: None };
         let mut sm = StartMenu::new(m);
         sm.visible = true;
         let mut r = Wide(side, Anchor::Middle, Vec::new());
-        sm.show_main(&vui, &r, true, 0, &loc);
-        sm.draw(&vui, &mut r, &menus, 16, &Stats::default(), &mut Vec::new());
+        sm.show_main(vui, &r, true, 0, &loc);
+        sm.draw(vui, &mut r, &menus, 16, &Stats::default(), &mut Vec::new());
         (sm, menus, r)
     }
 
