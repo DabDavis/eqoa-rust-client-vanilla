@@ -320,6 +320,32 @@ impl Entry {
     }
 }
 
+/// `EQOA_SEARCH_FOUND=<n>`'s players (a test's, for a server that does not
+/// answer 0x1502): n 0x1500 bodies, the races, classes and levels in turn,
+/// some grouped, every fourth with a note, the fourth sent without its id,
+/// place or group.
+pub fn test_players(n: usize) -> Vec<Vec<u8>> {
+    const NAMES: [&str; 12] = ["Ashwind", "Brimble", "Corva", "Dunmore", "Elsabeth", "Fenwick", "Grisel", "Hollis", "Ivra", "Jorund", "Kestrel", "Lumara"];
+    (0..n)
+        .map(|i| {
+            let mut b = vec![(i % 10) as u8, (i * 7 % 15) as u8, (10 + i * 5 % 51) as u8];
+            let mut name = NAMES[i % NAMES.len()].as_bytes().to_vec();
+            name.resize(12, 0);
+            b.extend(name);
+            if i == 3 {
+                return b;
+            }
+            b.extend((0x1000 + i as u32).to_le_bytes());
+            b.extend([0, (3 + i % 9) as u8, (2 + i % 12) as u8]);
+            b.push((i % 5) as u8);
+            if i % 4 == 1 {
+                b.extend(b"LFG, any zone");
+            }
+            b
+        })
+        .collect()
+}
+
 /// A string as the window keeps it: to its first NUL.
 fn cut(s: &[u16]) -> &[u16] {
     &s[..s.iter().position(|&c| c == 0).unwrap_or(s.len())]

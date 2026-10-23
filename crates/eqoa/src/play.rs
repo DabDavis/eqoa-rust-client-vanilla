@@ -3977,7 +3977,17 @@ impl Play {
         }
         match self.search.key(key) {
             Some(Out::Close) => self.close_search(),
-            Some(Out::Send(m)) => self.session.send(&m),
+            Some(Out::Send(m)) => {
+                self.session.send(&m);
+                // `EQOA_SEARCH_FOUND=<n>`: a test's answer, at once, from a
+                // server that has none (0x1501, then n players)
+                if let Some(n) = std::env::var("EQOA_SEARCH_FOUND").ok().and_then(|v| v.parse::<usize>().ok()) {
+                    self.search.clear();
+                    for b in crate::searchwnd::test_players(n) {
+                        self.search.found(&b);
+                    }
+                }
+            }
             // FAA40: the window closed, then `OnKeyDown(84)`'s chat line,
             // its text the tell's
             Some(Out::Tell(text)) => {
