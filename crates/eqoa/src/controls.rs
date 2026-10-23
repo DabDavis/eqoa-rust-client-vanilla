@@ -90,11 +90,13 @@ pub struct Client {
     /// `UpdateGame`'s `m_walkCam.m_runSpeed`, which `Walker::frame_with`
     /// sets before `UpdateControls`: 1.05 times the speed while following
     pub run_speed: f32,
+    /// `m_walkCam.m_walkSpeed` as `SetSpeed` last set it
+    pub walk_speed: f32,
 }
 
 impl Default for Client {
     fn default() -> Self {
-        Client { has_chat: false, inverted: false, auto_attack: false, swung: false, target: None, autorun: false, casting: false, move_ok: true, look_ok: true, rooted: false, timed_out: false, keys: [0.0; 8], steer: false, follow: Follow::Off, run_speed: vi::walk::RUN_SPEED }
+        Client { has_chat: false, inverted: false, auto_attack: false, swung: false, target: None, autorun: false, casting: false, move_ok: true, look_ok: true, rooted: false, timed_out: false, keys: [0.0; 8], steer: false, follow: Follow::Off, run_speed: vi::walk::RUN_SPEED, walk_speed: 3.0 }
     }
 }
 

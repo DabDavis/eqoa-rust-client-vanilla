@@ -161,6 +161,9 @@ pub enum PartUp {
     Points(i32),
     /// sub-op 9: a skill opened, for the window
     Node,
+    /// sub-ops 5 and 6: a skill on or off, and the run speed it leaves,
+    /// for `SetSpeed`
+    Speed(f32),
 }
 
 impl Part {
@@ -235,6 +238,7 @@ impl Part {
                     self.skills[k].on = op == 5;
                 }
                 self.pending = 0;
+                return Some(PartUp::Speed(self.m.speed));
             }
             7 => {
                 let (id, flag) = (r.u32() as i32, r.u32() as i32);
@@ -1000,6 +1004,33 @@ mod tests {
         p.recv(&m);
         assert!(p.skills.is_empty(), "a skill cut short is not kept");
         assert_eq!(p.pending, 0);
+    }
+
+    /// Sub-ops 5 and 6 turn a skill on and off and hand the run speed they
+    /// carry on to `SetSpeed` (`m_owner->SetSpeed(m_speed)`), Sandstorm's
+    /// 8.833333 and Spirit of the Wolf's 11.483333 here; the control is
+    /// sub-op 4, which carries no speed and gives nothing.
+    #[test]
+    fn a_skill_on_or_off_gives_its_run_speed() {
+        let mut p = Part::default();
+        let msg = |op: u8, speed: u32| {
+            let mut m = vec![op];
+            m.extend(0x55u32.to_le_bytes());
+            m.extend(7u32.to_le_bytes());
+            if op == 5 {
+                m.extend(3u32.to_le_bytes());
+                m.extend(4u32.to_le_bytes());
+            }
+            m.extend(speed.to_le_bytes());
+            // the 29 stats and 7 bonuses, zero each, and no flags
+            m.extend([0u8; 36]);
+            m.extend(0u32.to_le_bytes());
+            m
+        };
+        assert_eq!(p.recv(&msg(5, 0x4137BBBB)), Some(PartUp::Speed(f32::from_bits(0x4137BBBB))));
+        assert_eq!((p.m.x0c, p.m.x10), (3, 4));
+        assert_eq!(p.recv(&msg(6, 0x410D5555)), Some(PartUp::Speed(f32::from_bits(0x410D5555))));
+        assert_eq!(p.recv(&[4, 1, 0, 0, 0]), None);
     }
 
     /// A pointer on the list, the category, the points window, a skill's

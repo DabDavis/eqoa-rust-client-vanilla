@@ -36,6 +36,37 @@ impl Controls {
     }
 }
 
+/// How a walk's first place is stood on: as the message that gave it stands
+/// the character there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Placing {
+    /// No height to go by (a walk with no server): the topmost floor under
+    /// (x, z), probed from high above (`ground`).
+    Ground,
+    /// The 0x000D dump's (a login, a respawn): `Msg000D`'s `SetLocation` at
+    /// the dump's place as it is (viclient.cpp:9826), no floor looked for.
+    AsGiven,
+    /// 0x00B2's: `Respawn`'s casts round the server's place
+    /// (`arrival_floor`).
+    Respawn,
+}
+
+/// Where a walk begins: the place, the heading, and how the place is stood
+/// on (a `Placing::Ground` place's height is not read).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Spawn {
+    pub pos: [f32; 3],
+    pub heading: f32,
+    pub placing: Placing,
+}
+
+impl Spawn {
+    /// A place with no height to go by: the ground under (x, z).
+    pub fn ground(x: f32, z: f32, heading: f32) -> Self {
+        Spawn { pos: [x, 0.0, z], heading, placing: Placing::Ground }
+    }
+}
+
 pub struct Walker {
     pub cam: WalkCamera<Ee>,
     pub scene: World<Ee>,
@@ -63,11 +94,25 @@ impl Walker {
     /// Stand the character at (x, z) on the terrain, facing `heading`, with
     /// the camera behind it.
     pub fn new(scene: World<Ee>, x: f32, z: f32, heading: f32) -> Self {
+        Self::arrive(scene, Spawn::ground(x, z, heading))
+    }
+
+    /// Stand the character at `spawn`, stood on as its `placing` says, with
+    /// the camera behind it. A login stands at the dump's height, as the
+    /// console does: a character that logged out in a house or a cave comes
+    /// back in it, where the topmost floor (every arrival's until 2026-10-23)
+    /// put it on the roof or on the ground above the cave.
+    pub fn arrive(scene: World<Ee>, spawn: Spawn) -> Self {
         let mut scene = scene;
-        let y = ground(&mut scene, x, z).unwrap_or(0.0);
+        let [x, y, z] = spawn.pos;
+        let y = match spawn.placing {
+            Placing::Ground => ground(&mut scene, x, z).unwrap_or(0.0),
+            Placing::AsGiven => y,
+            Placing::Respawn => arrival_floor(&mut scene, spawn.pos).unwrap_or(y),
+        };
         let mut cam = WalkCamera::<Ee>::default();
         let pos = Vect3::of(x, y, z);
-        let angles = Vect3::of(heading, 0.0, 0.0);
+        let angles = Vect3::of(spawn.heading, 0.0, 0.0);
         cam.init(pos, angles, &mut scene);
         // What a camera preset does (`VIClient::ApplyCameraPreset`): mode,
         // pitch, distance, angle. The preset's own numbers are not read yet;
@@ -87,9 +132,15 @@ impl Walker {
     /// `heading`, the camera set behind.
     pub fn relocate(&mut self, pos: [f32; 3], heading: f32) {
         let y = arrival_floor(&mut self.scene, pos).unwrap_or(pos[1]);
-        let p = Vect3::of(pos[0], y, pos[2]);
-        // Respawn: SetLocation (not Init: the camera keeps its mode and
-        // distance), then SetOrbitAngleBehind.
+        self.place([pos[0], y, pos[2]], heading);
+    }
+
+    /// `Msg000D`'s placing in play: the character stood at the dump's place
+    /// as it is, facing `heading`, the camera set behind (viclient.cpp:9826).
+    pub fn place(&mut self, pos: [f32; 3], heading: f32) {
+        let p = Vect3::of(pos[0], pos[1], pos[2]);
+        // SetLocation (not Init: the camera keeps its mode and distance),
+        // then SetOrbitAngleBehind.
         self.cam.set_location(p, Vect3::of(heading, 0.0, 0.0), &mut self.scene);
         self.cam.set_orbit_angle_behind();
         self.eye = self.cam.process(&mut self.scene);
@@ -172,11 +223,13 @@ impl Walker {
     /// goes through `reach` (the follow orbit's way back out).
     pub fn frame_with(&mut self, keys: [f32; 4], now_ms: i64, c: &crate::controls::Client, game_frame: bool) -> crate::controls::Changed {
         // UpdateGame sets the run speed and calls InitIntermediate every
-        // frame; with the speed unchanged that changes nothing the next
-        // `Process` reads, so it is done when the speed moves.
-        let run = F::<Ee>::new(c.run_speed);
-        if self.cam.walk.run_speed.bits() != run.bits() {
+        // frame (SetSpeed the walk speed, when one comes); with the speeds
+        // unchanged that changes nothing the next `Process` reads, so it is
+        // done when one moves.
+        let (run, walk) = (F::<Ee>::new(c.run_speed), F::<Ee>::new(c.walk_speed));
+        if self.cam.walk.run_speed.bits() != run.bits() || self.cam.walk.walk_speed.bits() != walk.bits() {
             self.cam.walk.run_speed = run;
+            self.cam.walk.walk_speed = walk;
             self.cam.walk.init_intermediate();
         }
         let changed = crate::controls::update_controls(self, keys, c);
@@ -403,5 +456,34 @@ mod tests {
         let open = arrival_floor(&mut world, [px, 54.125996, pz]).unwrap();
         assert!((open - ground(&mut world, px, pz).unwrap()).abs() < 0.2, "open ground: {open}");
         assert_eq!(arrival_floor(&mut world, [px, 104.0, pz]), None, "nothing within 3");
+    }
+
+    /// A login stands where the dump puts it, as `Msg000D`'s `SetLocation`
+    /// does, and stays on that floor as the walk goes on: in Gilgash's
+    /// stall (its roof at 70) and on Neriak's plaza (underground). A world
+    /// change stands the same way, a dump's as given and a teleport's on
+    /// `Respawn`'s floor. The control is `Placing::Ground`, the topmost
+    /// floor every login took until 2026-10-23: the roof, the land over the
+    /// cave (the user: "if you are logged underground or inside a building
+    /// you will log in on top of whatever you were in").
+    #[test]
+    fn a_login_stands_where_it_logged_out_not_on_what_is_over_it() {
+        for (x, y, z, what) in [(25476.0f32, 54.398438f32, 15707.797f32, "Gilgash's stall"), (25087.0, 0.5, 8786.0, "Neriak's plaza")] {
+            for placing in [Placing::AsGiven, Placing::Respawn, Placing::Ground] {
+                let Some(world) = tunaria_round(x, z) else { return };
+                let mut w = Walker::arrive(world, Spawn { pos: [x, y, z], heading: 0.0, placing });
+                let t0 = w.scene.time;
+                for i in 1..=90 {
+                    w.frame(Controls::default(), t0 + i * 33);
+                }
+                let at = w.cam.walk.phys.position.y.0;
+                eprintln!("{what}, {placing:?}: logged out at {y}, stands at {at} after 3 s");
+                if placing == Placing::Ground {
+                    assert!(at > y + 10.0, "{what}: the control stands over the place, at {at}");
+                } else {
+                    assert!((at - y).abs() < 1.0, "{what}, {placing:?}: stands at {at}, logged out at {y}");
+                }
+            }
+        }
     }
 }

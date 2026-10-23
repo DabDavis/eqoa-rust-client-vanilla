@@ -17,7 +17,7 @@ mod mail;
 #[path = "support.rs"]
 mod support;
 
-use crate::walker::Walker;
+use crate::walker::{Placing, Spawn, Walker};
 use esf::Library;
 use net::entity::{Entities, SLOTS};
 use net::session::{Event, Player, Session};
@@ -206,9 +206,9 @@ pub struct Play {
     response: crate::dialog::Response,
     /// `m_dialog` / `m_p2EBFC`: an option box waiting while another mode is up.
     pending_box: Option<crate::dialog::DialogBox>,
-    /// A teleport into another world, for the viewer to load: the world
-    /// file, where, the heading.
-    world_change: Option<(String, [f32; 3], f32)>,
+    /// A move into another world, for the viewer to load: the world file,
+    /// and where and how the walk begins there.
+    world_change: Option<(String, Spawn)>,
     /// The group and the invitations.
     pub group: crate::group::Group,
     /// `VIWndMBox` (mode 14).
@@ -376,6 +376,13 @@ pub struct Play {
     /// The loading screen (`VIClient::LoadingProgress`, `loading.rs`): up
     /// from a move or world entry until the zones round the arrival are in.
     loading: crate::loading::Screen,
+    /// `m_speed`: the run speed the server gives (the dump's, 0x00F8's and
+    /// Class Mastery's), which `UpdateGame` hands the walk every frame
+    /// (`control_client`).
+    speed: f32,
+    /// The walk's walk speed as `SetSpeed` leaves it: 3, or 0 with a run
+    /// speed of 0 (InitParms' 3 until then).
+    walk_speed: f32,
 }
 
 /// `gWorldInfo`'s paths on the Frontiers disc, by world index (CLIENT's
@@ -655,6 +662,15 @@ fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::En
     }
 }
 
+/// `ApplyLook`'s `SetVisible`: a creature whose `Flag1` is up (state byte
+/// 154's bit 1, an invisible one: Sandstorm sets it on the caster's own
+/// channel) has its skins hidden (`VIClientPart06D00::Apply`'s
+/// `SetSkinsVisible`), the body and all it wears; what it holds, its helm and
+/// its name stay. No creature (none sent yet) is shown.
+fn skins_shown(c: Option<&net::entity::Creature>) -> bool {
+    c.is_none_or(|c| c.flags262 & 1 == 0)
+}
+
 /// The walker's body as the game rasters the player's actor: hidden past its
 /// off distance from the camera (`VIScene::RasterActor`), and of an LOD body
 /// the level its centre's distance picks (`VILODSprite::Raster`), both from
@@ -903,7 +919,9 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default() };
+        // Msg000D reads `m_speed` out of the dump
+        let speed = dump.speed;
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0 };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -1037,7 +1055,8 @@ impl Play {
                         match WORLD_FILES.get(world as usize) {
                             Some(f) => {
                                 eprintln!("play: teleport to world {world} ({f}) at {pos:?}");
-                                self.world_change = Some((f.to_string(), pos, hpr[0]));
+                                // Respawn's casts at the arrival
+                                self.world_change = Some((f.to_string(), Spawn { pos, heading: hpr[0], placing: Placing::Respawn }));
                                 self.loading.begin(pos, hpr[0], true, now as i64);
                                 // black until the new world is entered (`world_entered`),
                                 // the old one not shown while it loads
@@ -1059,6 +1078,8 @@ impl Play {
                     self.npcw_respawn();
                     self.bank_reset();
                 }
+                // 0x00F8: `m_speed`, then SetSpeed (a speed buff, a snare)
+                Event::Speed(v) => self.set_speed(v),
                 Event::LevelExp { level, exp } => {
                     if self.dump.player.level < level {
                         self.cues.push(crate::sound::Cue::Ui(16));
@@ -1455,16 +1476,19 @@ impl Play {
                         match WORLD_FILES.get(player.world as usize) {
                             Some(f) => {
                                 eprintln!("play: the dump's world {} ({f}) at {:?}", player.world, player.pos);
-                                self.world_change = Some((f.to_string(), player.pos, player.hpr[0]));
+                                // SetLocation at the dump's place, as it is
+                                self.world_change = Some((f.to_string(), Spawn { pos: player.pos, heading: player.hpr[0], placing: Placing::AsGiven }));
                                 elsewhere = true;
                             }
                             None => eprintln!("play: the dump's world {}, which the disc's world table does not have", player.world),
                         }
                     } else {
-                        walker.relocate(player.pos, player.hpr[0]);
+                        walker.place(player.pos, player.hpr[0]);
                     }
                     self.filters_sent = None;
                     self.player = player;
+                    // Msg000D reads `m_speed` out of the dump (no SetSpeed)
+                    self.speed = dump.speed;
                     self.dump = dump;
                     self.take_abilities();
                     self.respawned(walker);
@@ -1683,7 +1707,7 @@ impl Play {
             let eye = crate::lod::eye(&walker.cam, &walker.eye.position);
             let shown = crate::lod::within(&at, &eye, crate::lod::off_dist(&p.gpu.lod_dists));
             crate::lod::place(&mut p.gpu, &p.centre, &eye);
-            p.gpu.visible = shown;
+            p.gpu.visible = shown && skins_shown(e.creature.as_ref());
             for (_, a) in &mut p.attached {
                 a.visible = shown;
             }
@@ -2010,7 +2034,7 @@ impl Play {
     }
 
     /// A world change for the viewer to carry out (`EnterWorld` -> `LoadWorld`).
-    pub fn take_world_change(&mut self) -> Option<(String, [f32; 3], f32)> {
+    pub fn take_world_change(&mut self) -> Option<(String, Spawn)> {
         self.world_change.take()
     }
 
@@ -2497,6 +2521,14 @@ impl Play {
     /// The dump again, Msg000D's end: `ClearPC1B0` (the death camera off,
     /// the body up), then `SetFade(1, 0)` and `SetFade(0, 1)`, the screen
     /// black and back over a second. A warp (0x00B2) does not end a death.
+    /// `VIClient::SetSpeed` (0x00F8, Class Mastery's 5 and 6): `m_speed`,
+    /// the walk's run speed, and its walk speed 3, or 0 when the run speed
+    /// is 0. The walk takes them on its next frame (`control_client`).
+    fn set_speed(&mut self, v: f32) {
+        self.speed = v;
+        self.walk_speed = if F::<Ee>::new(v) == F::ZERO { 0.0 } else { 3.0 };
+    }
+
     fn respawned(&mut self, walker: &mut Walker) {
         if self.death.take().is_some()
             && let Some(cs) = walker.sprite.as_mut()
@@ -2681,10 +2713,9 @@ impl Play {
         };
         crate::controls::Client {
             follow,
-            // UpdateGame: `m_speed`, 1.05 times it while following. The speed
-            // is the walk's own: the client applies none of the server's (the
-            // dump's, 0x00F8's).
-            run_speed: if self.following { (F::<Ee>::new(vi::walk::RUN_SPEED) * F::new(1.05)).0 } else { vi::walk::RUN_SPEED },
+            // UpdateGame: `m_speed`, 1.05 times it while following
+            run_speed: if self.following { (F::<Ee>::new(self.speed) * F::new(1.05)).0 } else { self.speed },
+            walk_speed: self.walk_speed,
             has_chat: matches!(self.mode, 2 | 28 | 29 | 30 | 33),
             inverted: self.options.inverted != 0,
             auto_attack: self.auto_attack,
@@ -3369,6 +3400,8 @@ impl Play {
                 }
                 // ShowNode < 0: the node cleared
                 Some(crate::classmastery::PartUp::Node) if !self.cm_wnd.show_node(vui, r, &self.cm, self.mode == 40) => self.cm.node = None,
+                // Recv05, Recv06: `m_owner->SetSpeed(m_speed)`
+                Some(crate::classmastery::PartUp::Speed(v)) => self.set_speed(v),
                 _ => {}
             }
         }
@@ -5290,12 +5323,15 @@ impl Play {
     /// model matrix and palette (its LOD level and off distance as
     /// `place_body` takes them), the attachments on the walker's nodes.
     pub fn place_self(&mut self, walker: &Walker, matrix: [[f32; 4]; 4], palette: &[[[f32; 4]; 4]], r: &Renderer, queue: &wgpu::Queue) {
+        let me = self.self_id32();
+        let skins = skins_shown(self.entities.slots.iter().flatten().find(|e| Some(e.id) == me).and_then(|e| e.creature.as_ref()));
         let Some(p) = &mut self.self_puppet else { return };
         r.set_instances(queue, &p.gpu, &[matrix]);
         if !palette.is_empty() {
             r.set_palette(queue, &p.gpu, palette);
         }
         let shown = place_body(&mut p.gpu, walker, matrix);
+        p.gpu.visible &= skins;
         for (_, a) in &mut p.attached {
             a.visible = shown;
         }
@@ -5334,6 +5370,11 @@ mod commands {
     /// Play on a session nothing answers, the player 0x100, no words (a
     /// word is said as "(word n)").
     fn play() -> Play {
+        play_with(Box::default())
+    }
+
+    /// `play` entered on `dump`.
+    fn play_with(dump: Box<net::dump::MemoryDump>) -> Play {
         struct Nowhere;
         impl net::session::Datagrams for Nowhere {
             fn send_to(&mut self, _: &[u8], _: [u8; 4], _: u16) {}
@@ -5343,7 +5384,7 @@ mod commands {
         }
         let mut s = Session::connect_with(Box::new(Nowhere), ([127, 0, 0, 1], 5000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
         s.self_id = Some(0x100);
-        Play::new(s, Player::default(), Box::default())
+        Play::new(s, Player::default(), dump)
     }
 
     fn last_line(p: &Play) -> &str {
@@ -5367,6 +5408,46 @@ mod commands {
         assert_eq!((p.channel, last_line(&p)), (4, "(word 599)"));
         p.do_action(0x0B01_0000, 0);
         assert_eq!((p.channel, last_line(&p)), (0, "(word 595)"), "Say takes it back");
+    }
+
+    /// The run speed is the server's, as `UpdateGame` hands `m_speed` to
+    /// the walk each frame: the dump's at world entry (Sandstorm's
+    /// 8.833333), then 0x00F8's `SetSpeed` (Spirit of the Wolf's 11.483333
+    /// and a snare's 7.243333 in a Sandstorm capture, the walk speed 3 with
+    /// either; a stop, 0, stops the walk too), and a dump's again (Msg000D:
+    /// no SetSpeed, the walk speed kept). The control is the walk's own
+    /// speed, the client's until 2026-10-23, which no buff moved (the user:
+    /// "sow and invis seems to have no effect on toons").
+    #[test]
+    fn the_run_speed_is_the_servers() {
+        let at = |p: &Play| (p.control_client().run_speed.to_bits(), p.control_client().walk_speed);
+        let mut p = play_with(Box::new(net::dump::MemoryDump { speed: f32::from_bits(0x410D5555), ..Default::default() }));
+        assert_eq!(at(&p), (0x410D5555, 3.0));
+        p.set_speed(f32::from_bits(0x4137BBBB));
+        assert_eq!(at(&p), (0x4137BBBB, 3.0));
+        assert_ne!(p.control_client().run_speed, vi::walk::RUN_SPEED, "the control: the walk's own speed");
+        p.set_speed(f32::from_bits(0x40E7C963));
+        assert_eq!(at(&p), (0x40E7C963, 3.0));
+        p.set_speed(0.0);
+        assert_eq!(at(&p), (0, 0.0));
+        // a denormal is 0 to the EE's compare
+        p.set_speed(f32::from_bits(1));
+        assert_eq!(at(&p).1, 0.0);
+        p.speed = f32::from_bits(0x410D5555);
+        assert_eq!(at(&p), (0x410D5555, 0.0), "a dump's speed leaves the walk speed as SetSpeed left it");
+    }
+
+    /// `ApplyLook`'s `Flag1` (state byte 154, bit 1): an invisible creature's
+    /// skins are hidden. The pet bits beside it (4 and 8) hide nothing; no
+    /// creature yet is shown. The control is the client until 2026-10-23,
+    /// which drew every body whatever the byte said.
+    #[test]
+    fn an_invisible_creature_has_its_skins_hidden() {
+        let c = |flags262: u8| net::entity::Creature { flags262, ..Default::default() };
+        assert!(!skins_shown(Some(&c(1))));
+        assert!(!skins_shown(Some(&c(0x1D))));
+        assert!(skins_shown(Some(&c(0))) && skins_shown(Some(&c(4))) && skins_shown(Some(&c(8))));
+        assert!(skins_shown(None));
     }
 
     /// `ToggleFollow`: a targeted member of the group is followed; the
@@ -5395,19 +5476,20 @@ mod commands {
 
     /// What `UpdateControls` is given: off; the member gone from the group
     /// or not in the scene, lost; and while following the run is 1.05 times
-    /// the walk's own.
+    /// the speed the server gave (the dump's, Sandstorm's 8.833333).
     #[test]
     fn the_follow_handed_to_the_controls() {
-        let mut p = play();
-        assert_eq!((p.control_client().follow, p.control_client().run_speed), (Follow::Off, vi::walk::RUN_SPEED));
+        let speed = f32::from_bits(0x410D5555);
+        let mut p = play_with(Box::new(net::dump::MemoryDump { speed, ..Default::default() }));
+        assert_eq!((p.control_client().follow, p.control_client().run_speed), (Follow::Off, speed));
         grouped(&mut p, &[0x100, 0x200]);
         p.target = 0x200;
         p.do_action(0x0B0E_0007, 0);
         let c = p.control_client();
         // no entity 0x200 in the scene: lost, for UpdateControls to end it
         assert_eq!(c.follow, Follow::Lost);
-        assert_eq!(c.run_speed, (F::<Ee>::new(vi::walk::RUN_SPEED) * F::new(1.05)).0);
-        assert!(c.run_speed > vi::walk::RUN_SPEED);
+        assert_eq!(c.run_speed, (F::<Ee>::new(speed) * F::new(1.05)).0);
+        assert!(c.run_speed > speed);
         p.controls_changed(crate::controls::Changed { autorun: false, follow: true });
         assert_eq!(p.control_client().follow, Follow::Off);
         // a follow that ends autorun says so, as the stick's does

@@ -8,7 +8,7 @@
 
 use crate::scene::{self, Scene};
 use crate::stream::{self, Streamer};
-use crate::walker::{Controls, Walker};
+use crate::walker::{Controls, Placing, Spawn, Walker};
 use esf::{Library, Ref};
 use glam::Vec3;
 use render::{GpuModel, Renderer, View, wgpu};
@@ -97,8 +97,9 @@ pub fn lit(
 pub enum Source {
     Models { list: Vec<(i32, Ref)>, index: usize },
     Zone { file: usize, zone: esf::NodeId, index: usize },
-    /// A zone with the character in it, walking.
-    Walk { file: usize, index: usize, character: Ref, spawn: Option<(f32, f32, f32)> },
+    /// A zone with the character in it, walking: at `spawn` when a server
+    /// gave the place.
+    Walk { file: usize, index: usize, character: Ref, spawn: Option<Spawn> },
 }
 
 /// The human (`claude-notes`: model ids by race; the wire value is the DictID).
@@ -127,21 +128,24 @@ impl Source {
     /// a streamer for the zones to read and draw.
     pub fn walker(&self, lib: &mut Library, s: &Scene) -> Option<(Walker, esf::Model, Streamer)> {
         let Source::Walk { file, character, spawn: given, .. } = self else { return None };
-        // `EQOA_SPAWN=x,z[,heading[,y]]` picks the spot; else near the middle.
-        // With a height the character stands there as `Respawn` places it
-        // (on the ground there, unless the ground the probe finds first is a
-        // roof: Neriak's plaza is under one).
+        // `EQOA_SPAWN=x,z[,heading[,y]]` picks the spot; else the server's
+        // place, else near the middle. With a height the character stands
+        // there as `Respawn` places it (on the floor within 3 of it, not the
+        // first floor a probe from above meets: Neriak's plaza is under a
+        // roof).
         let c = (s.bounds.0 + s.bounds.1) * 0.5;
         let spawn: Vec<f32> = std::env::var("EQOA_SPAWN")
             .ok()
             .map(|v| v.split(',').filter_map(|t| t.trim().parse().ok()).collect())
             .unwrap_or_default();
-        let (x, z, h) = match (spawn.as_slice(), given) {
-            ([x, z], _) => (*x, *z, 0.0),
-            ([x, z, h, ..], _) => (*x, *z, *h),
+        let spawn = match (spawn.as_slice(), given) {
+            ([x, z], _) => Spawn::ground(*x, *z, 0.0),
+            ([x, z, h], _) => Spawn::ground(*x, *z, *h),
+            ([x, z, h, y, ..], _) => Spawn { pos: [*x, *y, *z], heading: *h, placing: Placing::Respawn },
             (_, Some(at)) => *at,
-            _ => (c.x - 40.0, c.z + 40.0, 0.0),
+            _ => Spawn::ground(c.x - 40.0, c.z + 40.0, 0.0),
         };
+        let [x, _, z] = spawn.pos;
         let mut source = stream::source_for(lib, *file);
         let mut pending = Vec::new();
         if let Some(src) = source.as_mut() {
@@ -159,10 +163,7 @@ impl Source {
             world.actors.len(),
             t.elapsed()
         );
-        let mut w = Walker::new(world, x, z, h);
-        if let [x, z, h, y, ..] = spawn.as_slice() {
-            w.relocate([*x, *y, *z], *h);
-        }
+        let mut w = Walker::arrive(world, spawn);
         w.set_character(lib, *character);
         Some((w, lib.build_model(*character)?, Streamer::new(*file, source, pending)))
     }
@@ -235,13 +236,13 @@ fn upload(renderer: &mut Renderer, device: &wgpu::Device, queue: &wgpu::Queue, l
 
 /// A world change in a playshot: the world file replaced, and a walker and
 /// streamer for it at the arrival.
-fn change_world(lib: &mut Library, file: &str, pos: [f32; 3], heading: f32) -> Result<(Walker, Streamer), Error> {
+fn change_world(lib: &mut Library, file: &str, at: Spawn) -> Result<(Walker, Streamer), Error> {
     let c = stream::open_file(std::path::Path::new(&crate::disc_path(None)), file)?;
     lib.replace(0, file, c);
-    let index = vi::world::World::<vi::fpu::Ee>::zone_at(lib.file(0), pos[0], pos[2]).ok_or("no zone at the arrival")?;
+    let index = vi::world::World::<vi::fpu::Ee>::zone_at(lib.file(0), at.pos[0], at.pos[2]).ok_or("no zone at the arrival")?;
     stream::load_zone_now(lib, 0, index)?;
     let character = lib.lookup(HUMAN).ok_or("no human model")?;
-    let src = Source::Walk { file: 0, index, character, spawn: Some((pos[0], pos[2], heading)) };
+    let src = Source::Walk { file: 0, index, character, spawn: Some(at) };
     let s = src.scene(lib);
     let (w, _, st) = src.walker(lib, &s).ok_or("no walker")?;
     Ok((w, st))
@@ -815,8 +816,8 @@ pub fn shot_with(
                 p.map_frame(&walker, lib, &device, &queue, render::TARGET_FORMAT, (w, h), frame_ms as f32 / 1000.0, console.sticks());
                 // A teleport into another world: that world's file in place
                 // of this one, and the walk begun again there.
-                if let Some((file, pos, heading)) = p.take_world_change() {
-                    match change_world(lib, &file, pos, heading) {
+                if let Some((file, at)) = p.take_world_change() {
+                    match change_world(lib, &file, at) {
                         Ok((w, s2)) => {
                             walker = w;
                             streamer = s2;
@@ -1361,9 +1362,9 @@ struct App {
     body_at: usize,
     /// Where the sky's models start in `Gfx::models`.
     sky_at: Option<usize>,
-    /// A world change under way: the world's file, the arrival and heading,
-    /// and its reads (`stream::open_world`), entered once they are in.
-    entering: Option<(String, [f32; 3], f32, crate::stream::Arrival)>,
+    /// A world change under way: the world's file, the arrival, and its
+    /// reads (`stream::open_world`), entered once they are in.
+    entering: Option<(String, Spawn, crate::stream::Arrival)>,
     clock: Instant,
     gfx: Option<Gfx>,
     /// Made before the loop (a browser's), taken when it resumes.
@@ -1562,15 +1563,15 @@ impl App {
     /// A world change in the window, once its reads are in
     /// (`stream::open_world`): the file replaces the world's, the zones read
     /// round the arrival go in, and `load` begins the walk again there.
-    fn enter_world(&mut self, file: &str, c: esf::Container, zones: Vec<(usize, Vec<u8>)>, pos: [f32; 3], heading: f32) -> Result<(), Error> {
+    fn enter_world(&mut self, file: &str, c: esf::Container, zones: Vec<(usize, Vec<u8>)>, at: Spawn) -> Result<(), Error> {
         self.lib.replace(0, file, c);
         for (zi, b) in zones {
             stream::install(&mut self.lib, 0, zi, b)?;
         }
-        let index = vi::world::World::<vi::fpu::Ee>::zone_at(self.lib.file(0), pos[0], pos[2]).ok_or("no zone at the arrival")?;
+        let index = vi::world::World::<vi::fpu::Ee>::zone_at(self.lib.file(0), at.pos[0], at.pos[2]).ok_or("no zone at the arrival")?;
         stream::load_zone_now(&mut self.lib, 0, index)?;
         let Source::Walk { character, .. } = self.source else { return Err("not walking".into()) };
-        self.source = Source::Walk { file: 0, index, character, spawn: Some((pos[0], pos[2], heading)) };
+        self.source = Source::Walk { file: 0, index, character, spawn: Some(at) };
         self.load();
         Ok(())
     }
@@ -1834,7 +1835,7 @@ impl App {
             let _ = writeln!(o, "camera: distance {:.2} of {:.2} (chosen {:.2}), pitch {:.3} (default {:.3})", cam.cur.dist.0, cam.max_orbit_distance.0, w.reach.chosen(cam).0, cam.cur.orbit.y.0, cam.def_orbit_pitch.0);
         }
         if let Some(e) = &self.entering {
-            let _ = writeln!(o, "entering {} at {:?}", e.0, e.1);
+            let _ = writeln!(o, "entering {} at {:?}", e.0, e.1.pos);
         }
         // the hour the lights and the effect volumes take, and the volumes
         let _ = writeln!(o, "hour {:.2}; {}", hour(self.clock), self.fx.as_ref().map_or("effect volumes off".into(), |f| f.describe()));
@@ -3141,14 +3142,14 @@ impl ApplicationHandler for App {
                 // A teleport into another world: its reads begun (a page's take
                 // frames, the old world played meanwhile under the black
                 // screen), and the walk begun again there once they are in.
-                if let Some((file, pos, heading)) = self.play.as_mut().and_then(|p| p.take_world_change()) {
-                    let reads = stream::open_world(&file, pos[0], pos[2]);
-                    self.entering = Some((file, pos, heading, reads));
+                if let Some((file, at)) = self.play.as_mut().and_then(|p| p.take_world_change()) {
+                    let reads = stream::open_world(&file, at.pos[0], at.pos[2]);
+                    self.entering = Some((file, at, reads));
                 }
-                if let Some(r) = self.entering.as_ref().and_then(|e| e.3.borrow_mut().take()) {
-                    let (file, pos, heading, _) = self.entering.take().unwrap();
-                    match r.map_err(Error::from).and_then(|(c, zones)| self.enter_world(&file, c, zones, pos, heading)) {
-                        Ok(()) => crate::say(&format!("entered {file} at {pos:?}")),
+                if let Some(r) = self.entering.as_ref().and_then(|e| e.2.borrow_mut().take()) {
+                    let (file, at, _) = self.entering.take().unwrap();
+                    match r.map_err(Error::from).and_then(|(c, zones)| self.enter_world(&file, c, zones, at)) {
+                        Ok(()) => crate::say(&format!("entered {file} at {:?}", at.pos)),
                         Err(e) => {
                             crate::say(&format!("world change to {file}: {e}"));
                             #[cfg(target_arch = "wasm32")]

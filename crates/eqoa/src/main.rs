@@ -538,7 +538,9 @@ pub fn world_library(player: &net::session::Player) -> Result<(esf::Library, vie
     stream::load_zone_now(&mut lib, main_file, index)?;
     let character = lib.lookup(viewer::HUMAN).ok_or("no human model")?;
     drop(src);
-    Ok((lib, viewer::Source::Walk { file: main_file, index, character, spawn: Some((x, z, player.hpr[0])) }))
+    // Msg000D: SetLocation at the dump's place, its height the server's
+    let spawn = walker::Spawn { pos: player.pos, heading: player.hpr[0], placing: walker::Placing::AsGiven };
+    Ok((lib, viewer::Source::Walk { file: main_file, index, character, spawn: Some(spawn) }))
 }
 
 /// What `Play` reads off the disc beside the library: the game's words, for

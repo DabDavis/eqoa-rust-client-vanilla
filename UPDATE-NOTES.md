@@ -5,6 +5,18 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-23 · Logging in inside, Spirit of the Wolf, invisibility
+- You log back in where you logged out: inside a house, a stall or a cave you
+  come back inside it, not on its roof or on the ground above the cave. Coming
+  back from the dead, and arriving in another world, stand you where the
+  server says too.
+- Speed spells work: Spirit of the Wolf makes you run faster, and a snare
+  slows you, by what the server says, as on a PS2 (on Sandstorm a run is
+  8.8 and 11.5 under Spirit of the Wolf). Before, you always ran at the same
+  speed.
+- Invisibility shows: an invisible character's body is not drawn, yours too;
+  what it holds, its helm and its name stay, as on a PS2.
+
 ## 2026-10-23 · Report a problem, and crash reports
 - F3, or **Report a bug** under the target's bar, opens a box over the game
   (the screens before the world too): say what went wrong and press Send. A

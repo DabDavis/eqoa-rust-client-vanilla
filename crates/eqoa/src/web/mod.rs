@@ -641,7 +641,9 @@ fn world_loader(disc: &WebDisc) -> crate::pregame::host::WorldLoader {
                 }
                 let index = vi::world::World::<vi::fpu::Ee>::zone_at(lib.file(main), x, z).ok_or("no zone at the player's position")?;
                 let character = lib.lookup(viewer::HUMAN).ok_or("no human model")?;
-                Ok::<_, String>((lib, viewer::Source::Walk { file: main, index, character, spawn: Some((x, z, player.hpr[0])) }))
+                // Msg000D: SetLocation at the dump's place, its height the server's
+                let spawn = crate::walker::Spawn { pos: player.pos, heading: player.hpr[0], placing: crate::walker::Placing::AsGiven };
+                Ok::<_, String>((lib, viewer::Source::Walk { file: main, index, character, spawn: Some(spawn) }))
             }
             .await;
             *out.borrow_mut() = Some(r);
