@@ -451,6 +451,17 @@ impl Play {
         }
     }
 
+    /// Case 0x077A (no payload): the server refusing a fight it judges the
+    /// player outmatched in. `AddWord(1196)` in red ("You are outmatched.
+    /// Attacking again is not advised."), `StopAutoAttack`, and
+    /// `SendOpcode(1915)`: the 0x077B the server waits for.
+    fn msg_077a(&mut self) {
+        let text = self.words.as_ref().map_or_else(|| "(word 1196)".to_string(), |w| w.get(1196, 0).to_string());
+        self.add_chat(text, [1.0, 0.25, 0.25, 1.0]);
+        self.auto_attack = false;
+        self.session.send_opcode(0x077B);
+    }
+
     /// `Msg0034`: the text (128) and each option (64) expanded; shown at
     /// once in play, else kept in the one waiting slot (and refused, 0x0035
     /// 255, when that is taken).
@@ -1356,6 +1367,8 @@ impl Play {
                 // the training points as they now are (a level's, a refund's)
                 Event::Opcode { op: 0x0036, data } => self.msg_0036(&data),
                 Event::Opcode { op: 0x001C, data } => self.msg_001c(&data),
+                // OutMatched: the fight refused, said in red, auto-attack off
+                Event::Opcode { op: 0x077A, .. } => self.msg_077a(),
                 // Msg001D: the points spent come off, and the trainer refreshes
                 Event::Opcode { op: 0x001D, data } => {
                     let mut r = net::stream::Reader::new(&data);
@@ -5716,6 +5729,100 @@ mod commands {
 
     /// 0x001C: the trainer's stat cap (`m_p44`), four raw bytes; cut short,
     /// nothing (the control).
+    /// The guaranteed messages in the client's datagrams, each starting
+    /// with its opcode (read as `net`'s own tests read them; a state
+    /// message ends the datagram's reading, none goes out here).
+    fn guaranteed(datagrams: &[Vec<u8>]) -> Vec<Vec<u8>> {
+        use drdp::buffer::Buffer;
+        let mut out = Vec::new();
+        for d in datagrams {
+            let mut b = Buffer::reader(&d[..d.len().saturating_sub(4)]);
+            b.u16();
+            b.u16();
+            while b.remaining() > 0 && !b.overflow {
+                let h = drdp::read_segment_header(&mut b, 0, 0);
+                let mut s = Buffer::reader(&b.rest()[..(h.size as usize).min(b.rest().len())]);
+                b.skip(h.size as usize);
+                if h.flags & 0x30000 != 0 || s.max == 0 {
+                    continue;
+                }
+                let f = s.u8();
+                if f & 0x40 != 0 {
+                    s.u32();
+                }
+                s.u16();
+                if f & 1 != 0 {
+                    s.u16();
+                    if f & 4 != 0 {
+                        s.packed();
+                    }
+                }
+                if f & 2 != 0 {
+                    s.u16();
+                    if f & 8 != 0 {
+                        s.packed();
+                    }
+                }
+                if f & 0x10 != 0 {
+                    while s.u8() != 248 && !s.overflow {
+                        s.u16();
+                    }
+                }
+                while s.remaining() > 0 && !s.overflow {
+                    let ty = s.u8();
+                    let size = s.size() as usize;
+                    if ty.wrapping_add(7) < 3 {
+                        s.u16();
+                        if ty == drdp::TYPE_GUARANTEED {
+                            out.push(s.rest()[..size.min(s.rest().len())].to_vec());
+                        }
+                        s.skip(size);
+                    } else if ty == 252 {
+                        s.skip(size);
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Case 0x077A, the server's OutMatched: word 1196 ("You are
+    /// outmatched...") in red, auto-attack off, and 0x077B (1915) sent
+    /// back, as CLIENT's case does. The control: the same flush with
+    /// nothing received sends no 0x077B and leaves the attack on.
+    #[test]
+    fn outmatched_says_so_stops_the_attack_and_answers() {
+        struct Rec(std::rc::Rc<std::cell::RefCell<Vec<Vec<u8>>>>);
+        impl net::session::Datagrams for Rec {
+            fn send_to(&mut self, d: &[u8], _: [u8; 4], _: u16) {
+                self.0.borrow_mut().push(d.to_vec());
+            }
+            fn recv_from(&mut self) -> Option<(Vec<u8>, [u8; 4], u16)> {
+                None
+            }
+        }
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 5000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        s.self_id = Some(0x100);
+        let mut p = Play::new(s, Player::default(), Box::default());
+        p.session.flush();
+        assert!(guaranteed(&sent.borrow()).iter().any(|m| m.starts_with(&[0x04, 0x09])), "the reader reads the login");
+        sent.borrow_mut().clear();
+        p.auto_attack = true;
+        // the control: nothing received, nothing answered, the attack on
+        p.session.flush();
+        assert!(!guaranteed(&sent.borrow()).iter().any(|m| m[..] == [0x7B, 0x07]));
+        assert!(p.auto_attack);
+        p.msg_077a();
+        assert_eq!(p.chat.back(), Some(&("(word 1196)".to_string(), [1.0, 0.25, 0.25, 1.0])), "word 1196 in red");
+        assert!(!p.auto_attack, "auto-attack off");
+        p.session.flush();
+        let msgs = guaranteed(&sent.borrow());
+        assert!(msgs.iter().any(|m| m[..] == [0x7B, 0x07]), "0x077B answered: {msgs:02x?}");
+    }
+
     #[test]
     fn the_stat_cap_comes_from_0x001c() {
         let mut p = play();

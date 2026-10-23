@@ -573,6 +573,7 @@ dependencies = [
  "console_error_panic_hook",
  "cpal",
  "dnas",
+ "drdp",
  "ee",
  "esf",
  "flate2",
