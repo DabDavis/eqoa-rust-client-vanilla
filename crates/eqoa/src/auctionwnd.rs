@@ -4,18 +4,18 @@
 //! 0 the search form (name, class, race, the level and price ranges, wear
 //! slot, attack type, a flag, the seller, Search), 1 the result page in a
 //! `VIWndMenu` (each lot with Inspect and Bid), 2 a lot, 3 its bidders, 4
-//! the bid form (an amount, Bid, Buyout); 5..8 are the class, race, wear
-//! slot and attack type pickers.
+//! the bid form (an amount, Bid, Buyout); 5..8 are the race, class, wear
+//! slot and attack type pickers (Enter on the form's race, class, wear slot
+//! and attack type rows), seven rows of a list at a time.
 //!
-//! Not ported: the four pickers (their rows keep the "any" the form starts
-//! with) and Inspect (`DescribeAuctionItem`'s four describers).
+//! Not ported: Inspect (`DescribeAuctionItem`'s four describers).
 //!
 //! A pointer (`pointer`) goes to the child with the keys (the editor, the
 //! box, the page's menu and its popup); a click on the form from the page
 //! goes right to it, and one on the page's rows from the form left to them,
 //! the field or the row under the pointer selected; the form's fields, the
-//! bidders and the bid form's rows are selected by a click and used by a
-//! second.
+//! bidders, the bid form's rows and the pickers' rows are selected by a
+//! click and used by a second.
 
 #![allow(clippy::too_many_arguments)]
 
@@ -26,7 +26,55 @@ use crate::editbox::{EditBox, EditUp};
 use crate::pointer::{Hits, MOVED, key, rows_rect};
 use crate::wndlist::{ListUp, WndMenu};
 use net::dump::{AuctionItem, Bank, NetItem};
-use vi::ui::{Raster, Vui, Window, wide};
+use vi::ui::{Raster, UI_COLORS, Vui, Window, wide};
+
+/// The pickers' rows (`sRaces`, `sClasses`, `sWears`, `sAttacks`, CLIENT
+/// 0x00CE1380 .. 0x00CE148C): the value each row stands for. -1 is "any"
+/// (and the wear slot's -1 its "none"), the race's -2 "none", the wear
+/// slot's -2 "any".
+const RACES: [i32; 12] = [-1, -2, 6, 2, 4, 1, 8, 3, 7, 0, 9, 5];
+const CLASSES: [i32; 16] = [-1, 14, 5, 9, 7, 12, 10, 4, 11, 2, 1, 6, 3, 8, 0, 13];
+const WEARS: [i32; 27] = [-2, -1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 27];
+const ATTACKS: [i32; 11] = [-1, 0, 1, 2, 3, 4, 5, 6, 7, 9, 10];
+
+/// `gRaces[r].m_nameStrID` (`virace.cpp`), the ten races.
+const RACE_WORDS: [i32; 10] = [183, 185, 186, 187, 188, 189, 191, 192, 193, 190];
+
+/// `GetClass(c)->m_nameStrID` (`viclass.cpp`: 165..179; out of range is
+/// class 0's).
+fn class_word(c: i32) -> i32 {
+    if (0..15).contains(&c) { 165 + c } else { 165 }
+}
+
+/// `GetRace(r)->m_nameStrID` (`virace.cpp`: the ten races, then eleven
+/// empty slots whose name is -1; out of range is race 0's).
+fn race_word(r: i32) -> i32 {
+    match r {
+        0..=9 => RACE_WORDS[r as usize],
+        10..=20 => -1,
+        _ => RACE_WORDS[0],
+    }
+}
+
+/// A picker (states 5..8): its rows and its list's title. Its list scrolls
+/// over the rows past the seven shown (`m_top / (rows - 7)`).
+struct Picker {
+    rows: &'static [i32],
+    title: i32,
+}
+
+/// The picker of state `s`: 5 the races (`DrawRaces`), 6 the classes
+/// (`DrawClasses`), 7 the wear slots (`DrawTypes`), 8 the attack types
+/// (`DrawSlots`).
+fn picker(s: i32) -> Option<Picker> {
+    match s {
+        5 => Some(Picker { rows: &RACES, title: 1703 }),
+        6 => Some(Picker { rows: &CLASSES, title: 1702 }),
+        7 => Some(Picker { rows: &WEARS, title: 1704 }),
+        8 => Some(Picker { rows: &ATTACKS, title: 1705 }),
+        _ => None,
+    }
+}
 
 /// What the window asks of the client.
 #[derive(Clone, Debug, PartialEq)]
@@ -61,6 +109,8 @@ pub struct View<'a> {
     pub now: i64,
     pub icon: &'a dyn Fn(&NetItem) -> i32,
     pub can_use: &'a dyn Fn(&NetItem) -> bool,
+    /// `gAttackWords` (CLIENT's data): `FindAttackWord`'s table
+    pub attack_words: &'a [(i32, i64)],
 }
 
 pub struct SearchWnd {
@@ -243,7 +293,8 @@ impl SearchWnd {
                 }
                 _ => Vec::new(),
             },
-            4 => match self.list_hits.at(p) {
+            // the bid form's rows by the cursor, a picker's by its row
+            4..=8 => match self.list_hits.at(p) {
                 Some(c) if c == self.cursor => vec![key::CROSS],
                 Some(c) => {
                     self.cursor = c;
@@ -368,8 +419,11 @@ impl SearchWnd {
     /// `Select`: Enter on a form row.
     fn select(&mut self, vui: &Vui, auction: &mut Auction, now: i64, cues: &mut Vec<i32>, out: &mut Vec<SearchOut>) {
         match self.field {
-            // the pickers (states 6, 5, 7, 8) are not ported
-            1 | 2 | 5 | 6 => eprintln!("auction: the search form's picker {} is not ported", self.field),
+            // the pickers: class, race, wear slot, attack type
+            1 => self.set_state(6, now),
+            2 => self.set_state(5, now),
+            5 => self.set_state(7, now),
+            6 => self.set_state(8, now),
             0 | 3 | 4 | 7 | 8 | 10 => self.edit_field(vui, now),
             9 => self.x4f4 = 1 - self.x4f4,
             11 => {
@@ -712,6 +766,51 @@ impl SearchWnd {
                 }
                 _ => {}
             },
+            // the pickers: up and down stop at the ends (sound 9), Enter takes
+            // the row's value into the form's field, Escape leaves it
+            5..=8 => {
+                let Some(pk) = picker(self.state) else { return };
+                let last = pk.rows.len() as i32 - 1;
+                match key {
+                    19 | 138 => {
+                        if self.cursor <= 0 {
+                            cues.push(9);
+                            self.cursor = 0;
+                        } else {
+                            cues.push(11);
+                            self.cursor -= 1;
+                        }
+                        self.list.reset_tick_pulse(now);
+                    }
+                    20 | 139 => {
+                        if self.cursor >= last {
+                            cues.push(9);
+                            self.cursor = last;
+                        } else {
+                            cues.push(11);
+                            self.cursor += 1;
+                        }
+                        self.list.reset_tick_pulse(now);
+                    }
+                    13 | 134 => {
+                        if let Some(&v) = usize::try_from(self.cursor).ok().and_then(|c| pk.rows.get(c)) {
+                            match self.state {
+                                5 => self.race = v,
+                                6 => self.class = v,
+                                7 => self.wear = v,
+                                _ => self.attack = v,
+                            }
+                        }
+                        cues.push(13);
+                        self.set_state(0, now);
+                    }
+                    27 | 132 => {
+                        cues.push(8);
+                        self.set_state(0, now);
+                    }
+                    _ => {}
+                }
+            }
             _ => {}
         }
     }
@@ -782,18 +881,26 @@ impl SearchWnd {
             let ww = w.size[0];
             Self::draw_row(w, vui, r, 0, Some(&wd(1679)), None, cols[0], ww - 20, false, false, true);
             Self::draw_row(w, vui, r, 1, Some(&wd(1680)), Some(&wide(&self.name)), cols[0], cols[1], f == 0, own, true);
-            // class, race, wear and attack: the pickers are not ported, so these
-            // are the form's "any"
+            // the pickers' values: "any" (471), the race's "none" (302), else
+            // the name (413 for a wear slot or attack type with none)
             self.class = self.class.clamp(-1, 15);
-            Self::draw_row(w, vui, r, 2, Some(&wd(288)), Some(&wd(471)), cols[0], cols[1], f == 1, own, true);
+            let word = if self.class == -1 { 471 } else { class_word(self.class) };
+            Self::draw_row(w, vui, r, 2, Some(&wd(288)), Some(&wd(word)), cols[0], cols[1], f == 1, own, true);
             self.race = self.race.clamp(-2, 10);
-            Self::draw_row(w, vui, r, 3, Some(&wd(289)), Some(&wd(if self.race == -2 { 302 } else { 471 })), cols[0], cols[1], f == 2, own, true);
+            let word = match self.race {
+                -1 => 471,
+                -2 => 302,
+                n => race_word(n),
+            };
+            Self::draw_row(w, vui, r, 3, Some(&wd(289)), Some(&wd(word)), cols[0], cols[1], f == 2, own, true);
             self.min_level = self.min_level.clamp(0, 60);
             Self::draw_row(w, vui, r, 4, Some(&wd(1681)), Some(&wide(&self.min_level.to_string())), cols[0], cols[1], f == 3, own, true);
             self.max_level = self.min_level.max(self.max_level).min(60);
             Self::draw_row(w, vui, r, 5, Some(&wd(1682)), Some(&wide(&self.max_level.to_string())), cols[0], cols[1], f == 4, own, true);
-            Self::draw_row(w, vui, r, 6, Some(&wd(1683)), Some(&wd(471)), cols[0], cols[1], f == 5, own, true);
-            Self::draw_row(w, vui, r, 7, Some(&wd(1684)), Some(&wd(471)), cols[0], cols[1], f == 6, own, true);
+            let word = if self.wear == -2 { 471 } else { crate::infotext::wear_slot_word(self.wear as i64).unwrap_or(413) };
+            Self::draw_row(w, vui, r, 6, Some(&wd(1683)), Some(&wd(word)), cols[0], cols[1], f == 5, own, true);
+            let word = if self.attack == -1 { 471 } else { crate::infotext::attack_word(v.attack_words, self.attack as i64).unwrap_or(413) };
+            Self::draw_row(w, vui, r, 7, Some(&wd(1684)), Some(&wd(word)), cols[0], cols[1], f == 6, own, true);
             self.min_price = self.min_price.clamp(0, 999_999_999);
             Self::draw_row(w, vui, r, 8, Some(&wd(1685)), Some(&wide(&self.min_price.to_string())), cols[0], cols[1], f == 7, own, true);
             self.max_price = self.min_price.max(self.max_price).min(999_999_999);
@@ -828,6 +935,7 @@ impl SearchWnd {
             2 => self.draw_lot(vui, r, auction, v),
             3 => self.draw_rankings(vui, r, auction, v),
             4 => self.draw_bid(vui, r, auction, v),
+            5..=8 => self.draw_picker(vui, r, v),
             _ => {}
         }
         if v.searching {
@@ -988,6 +1096,63 @@ impl SearchWnd {
         let s = wide(&format!("|x{}   |t{}", vui.words.get(212, vui.language), vui.words.get(161, vui.language)));
         self.list.text_box(vui, r, &s, 20, 7, lw - 40, 1, [1.0, 1.0, 1.0, self.list.open], 0);
     }
+
+    /// `DrawRaces`, `DrawClasses`, `DrawTypes` (the wear slots) and
+    /// `DrawSlots` (the attack types), states 5..8: the list's title, seven
+    /// of its rows from `top` beside the scroll bar, the tick at the cursor
+    /// (the selected row in the selection's colour), and the legend.
+    fn draw_picker(&mut self, vui: &Vui, r: &mut dyn Raster, v: &View) {
+        let Some(pk) = picker(self.state) else { return };
+        self.list.init(vui, r, [320, 180], 290, 10, 0);
+        let wd = |id: i32| wide(vui.words.get(id, vui.language));
+        if self.list.is_open() || self.list.is_opening() || self.list.is_closing() {
+            self.list.set_title(Some(&wd(pk.title)));
+            self.list.draw(vui, r);
+        }
+        if self.cursor - self.top >= 7 {
+            self.top = self.cursor - 6;
+        } else if self.cursor < self.top {
+            self.top = self.cursor;
+        }
+        let n = pk.rows.len() as i32;
+        let lw = self.list.size[0];
+        self.list.draw_frame_vscroll(vui, r, 22, 1, lw - 55, 7, self.top as f32 / (n - 7) as f32);
+        let mut row = 1;
+        let mut i = self.top;
+        while i < n && row < 8 {
+            let sel = i == self.cursor;
+            if sel {
+                self.list.tick_r(vui, r, 36, row, true);
+            }
+            let value = pk.rows[i as usize];
+            // the first row of the wear slots and the attack types is "any" by
+            // its place, the others' by their value
+            let word = match self.state {
+                5 => match value {
+                    -1 => 471,
+                    -2 => 302,
+                    n => race_word(n),
+                },
+                6 => {
+                    if value == -1 {
+                        471
+                    } else {
+                        class_word(value)
+                    }
+                }
+                7 if i == 0 => 471,
+                7 => crate::infotext::wear_slot_word(value as i64).unwrap_or(413),
+                _ if i == 0 => 471,
+                _ => crate::infotext::attack_word(v.attack_words, value as i64).unwrap_or(413),
+            };
+            self.list.text_box(vui, r, &wd(word), 40, row, lw - 75, 1, UI_COLORS[sel as usize], 2);
+            self.list_hits.push(rows_rect(&self.list, vui, r, 40, row, lw - 75, 1), i);
+            i += 1;
+            row += 1;
+        }
+        let s = wide(&format!("|x{}   |t{}", vui.words.get(212, vui.language), vui.words.get(161, vui.language)));
+        self.list.text_box(vui, r, &s, 20, 9, lw - 40, 1, UI_COLORS[0], 0);
+    }
 }
 
 #[cfg(test)]
@@ -1049,20 +1214,20 @@ mod tests {
             self.a.arrived = 0;
             self.a.p7860 = 0;
             let (icon, can_use) = (|_: &NetItem| 7, |_: &NetItem| true);
-            let v = View { bank: &self.bank, idle: true, searching: false, player: 1, now: 0, icon: &icon, can_use: &can_use };
+            let v = View { bank: &self.bank, idle: true, searching: false, player: 1, now: 0, icon: &icon, can_use: &can_use, attack_words: &ATTACK_WORDS };
             self.w.fill_menu(&self.a, &v);
         }
 
         fn key(&mut self, k: i32) {
             let (icon, can_use) = (|_: &NetItem| 7, |_: &NetItem| true);
-            let v = View { bank: &self.bank, idle: true, searching: false, player: 1, now: 0, icon: &icon, can_use: &can_use };
+            let v = View { bank: &self.bank, idle: true, searching: false, player: 1, now: 0, icon: &icon, can_use: &can_use, attack_words: &ATTACK_WORDS };
             self.w.key(&self.vui, &NullRaster, &mut self.a, &v, k, true, &mut self.cues, &mut self.out);
             self.w.key(&self.vui, &NullRaster, &mut self.a, &v, k, false, &mut self.cues, &mut self.out);
         }
 
         fn draw(&mut self) {
             let (icon, can_use) = (|_: &NetItem| 7, |_: &NetItem| true);
-            let v = View { bank: &self.bank, idle: true, searching: false, player: 1, now: 0, icon: &icon, can_use: &can_use };
+            let v = View { bank: &self.bank, idle: true, searching: false, player: 1, now: 0, icon: &icon, can_use: &can_use, attack_words: &ATTACK_WORDS };
             self.w.draw(&self.vui, &mut NullRaster, &self.a, &v, &mut self.cues);
         }
     }
@@ -1210,5 +1375,239 @@ mod tests {
         let mut w2 = SearchWnd::default();
         assert!(w2.open(&vui, &NullRaster, 0xA801_0000, &mut a, &bank, 0).is_none());
         assert_eq!((w2.mode, w2.state), (0, 0));
+    }
+
+    /// A stand-in for `gAttackWords` (CLIENT's data, read off the image in
+    /// play): attack type t is word 900 + t.
+    const ATTACK_WORDS: [(i32, i64); 11] = [(900, 0), (901, 1), (902, 2), (903, 3), (904, 4), (905, 5), (906, 6), (907, 7), (908, 8), (909, 9), (910, 10)];
+
+    /// Opens the picker of form field `field` and takes row `row` with Enter.
+    fn choose(g: &mut Rig, field: i32, row: usize) {
+        g.w.field = field;
+        g.key(134);
+        for _ in 0..row {
+            g.key(139);
+        }
+        g.key(134);
+    }
+
+    /// Enter on the form's class, race, wear slot and attack type rows opens
+    /// their pickers (states 6, 5, 7, 8) at the first row; the d-pad moves
+    /// the row and stops at the ends; Enter takes the row's value into the
+    /// field, Escape leaves the field as it was.
+    #[test]
+    fn each_picker_takes_its_row_into_the_form() {
+        for (field, state, rows, row) in [(1, 6, &CLASSES[..], 3), (2, 5, &RACES[..], 4), (5, 7, &WEARS[..], 10), (6, 8, &ATTACKS[..], 2)] {
+            let mut g = Rig::new();
+            let before = (g.w.class, g.w.race, g.w.wear, g.w.attack);
+            g.w.field = field;
+            g.cues.clear();
+            g.key(134);
+            assert_eq!((g.w.state, g.w.cursor, g.w.top, g.cues.clone()), (state, 0, 0, vec![13]), "field {field}");
+            // up at the first row: sound 9, still the first
+            g.cues.clear();
+            g.key(138);
+            assert_eq!((g.w.cursor, g.cues.clone()), (0, vec![9]));
+            // Escape: the form again, the field untouched (the negative control)
+            g.key(139);
+            g.cues.clear();
+            g.key(132);
+            assert_eq!((g.w.state, g.cues.clone()), (0, vec![8]));
+            assert_eq!((g.w.class, g.w.race, g.w.wear, g.w.attack), before);
+            // down to the last row, and one more: sound 9
+            g.key(134);
+            for _ in 0..rows.len() - 1 {
+                g.key(139);
+            }
+            g.cues.clear();
+            g.key(139);
+            assert_eq!((g.w.cursor, g.cues.clone()), (rows.len() as i32 - 1, vec![9]));
+            g.key(132);
+            // the row taken
+            choose(&mut g, field, row);
+            assert_eq!(g.w.state, 0);
+            let got = match field {
+                1 => g.w.class,
+                2 => g.w.race,
+                5 => g.w.wear,
+                _ => g.w.attack,
+            };
+            assert_eq!(got, rows[row], "field {field}");
+        }
+    }
+
+    /// The search carries what the pickers chose: the class's and race's
+    /// bits, the wear slot and attack type with their kind bits, "none" for
+    /// a race (no bits) and for a wear slot (-1, searched for).
+    #[test]
+    fn the_search_carries_the_pickers_choices() {
+        let mut g = Rig::new();
+        choose(&mut g, 1, 3); // CLASSES[3] = 9, cleric
+        choose(&mut g, 2, 4); // RACES[4] = 4, dwarf
+        choose(&mut g, 5, 10); // WEARS[10] = 9, waist
+        choose(&mut g, 6, 2); // ATTACKS[2] = 1
+        g.w.field = 11;
+        g.key(134);
+        let q = &g.a.query;
+        assert_eq!((q.p9c, q.pa0, q.pb4, q.pb8, q.kind), (1 << 9, 1 << 4, 9, 1, 2 | 1));
+        let Some(SearchOut::Send(req, 5)) = g.out.last().cloned() else { panic!("{:?}", g.out) };
+        let mut w = net::stream::Writer::default();
+        q.write(&mut w);
+        assert!(req.ends_with(&w.data), "the request ends with the query");
+        // the first rows: any class, no race at all, any wear slot (kind 2
+        // off), no attack type chosen (kind 1 off)
+        let mut g = Rig::new();
+        choose(&mut g, 1, 0);
+        choose(&mut g, 2, 1);
+        choose(&mut g, 5, 0);
+        choose(&mut g, 6, 0);
+        g.w.field = 11;
+        g.key(134);
+        let q = &g.a.query;
+        assert_eq!((q.p9c, q.pa0, q.pb4, q.pb8, q.kind), (0xFFFF_FFFF, 0, -2, -1, 0));
+        // a wear slot of "none" is searched for
+        choose(&mut g, 5, 1);
+        g.w.field = 11;
+        g.key(134);
+        assert_eq!((g.a.query.pb4, g.a.query.kind & 2), (-1, 2));
+    }
+
+    /// Words as `wN` for WORDS.TXT line N, so a drawing says which it drew.
+    fn numbered_words() -> vi::strtab::StringTable {
+        let lines: Vec<String> = (1..=2000).map(|n| format!("w{n}")).collect();
+        vi::strtab::StringTable::parse(lines.join("\n").as_bytes()).unwrap()
+    }
+
+    /// The strings a drawing put down (each shadow too).
+    #[derive(Default)]
+    struct TextRaster(Vec<String>);
+
+    impl Raster for TextRaster {
+        fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn stretch_blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+        fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+        fn draw_string(&mut self, _: [i32; 2], _: [f32; 4], s: &[u16]) {
+            self.0.push(String::from_utf16_lossy(s));
+        }
+        fn draw_centered_string(&mut self, _: [i32; 2], _: [f32; 4], s: &[u16], _: u32) {
+            self.0.push(String::from_utf16_lossy(s));
+        }
+        fn string_width(&self, s: &[u16]) -> i32 {
+            s.len() as i32 * 8
+        }
+        fn point_size(&self) -> i32 {
+            16
+        }
+        fn viewport(&self) -> [i32; 4] {
+            [0, 0, 640, 448]
+        }
+        fn set_viewport(&mut self, _: [i32; 4]) {}
+    }
+
+    /// What the window drew, as the words in order, shadows dropped.
+    fn drawn(g: &mut Rig) -> Vec<String> {
+        let (icon, can_use) = (|_: &NetItem| 7, |_: &NetItem| true);
+        let v = View { bank: &g.bank, idle: true, searching: false, player: 1, now: 0, icon: &icon, can_use: &can_use, attack_words: &ATTACK_WORDS };
+        let mut r = TextRaster::default();
+        g.w.draw(&g.vui, &mut r, &g.a, &v, &mut g.cues);
+        let mut out: Vec<String> = Vec::new();
+        for s in r.0 {
+            if out.last() != Some(&s) {
+                out.push(s);
+            }
+        }
+        out
+    }
+
+    /// Each picker's list: its title, seven rows' names from the top (the
+    /// first wear slot and attack type "any" by their place), scrolled to
+    /// keep the cursor shown; the form's rows show the choice.
+    #[test]
+    fn the_pickers_name_their_rows() {
+        let mut g = Rig::new();
+        g.vui = Vui::new(numbered_words(), Default::default(), Vec::new());
+        let rows_of = |d: &[String], title: &str| -> Vec<String> {
+            let at = d.iter().position(|s| s == title).unwrap_or_else(|| panic!("no {title} in {d:?}"));
+            d[at + 1..at + 8].to_vec()
+        };
+        // the classes: any, then alchemist (14) .. as sClasses lists them
+        g.w.field = 1;
+        g.key(134);
+        let d = drawn(&mut g);
+        assert_eq!(rows_of(&d, "w1702"), ["w471", "w179", "w170", "w174", "w172", "w177", "w175"]);
+        // the last class: the list from the tenth row
+        for _ in 0..15 {
+            g.key(139);
+        }
+        let d = drawn(&mut g);
+        assert_eq!(g.w.top, 9);
+        assert_eq!(rows_of(&d, "w1702"), ["w167", "w166", "w171", "w168", "w173", "w165", "w178"]);
+        g.key(132);
+        // the races: any, none, then barbarian (6), dark elf (2) ..
+        g.w.field = 2;
+        g.key(134);
+        let d = drawn(&mut g);
+        assert_eq!(rows_of(&d, "w1703"), ["w471", "w302", "w191", "w186", "w188", "w185", "w193"]);
+        g.key(132);
+        // the wear slots: any by place, then -1's word (302, none), head ..
+        g.w.field = 5;
+        g.key(134);
+        let d = drawn(&mut g);
+        assert_eq!(rows_of(&d, "w1704"), ["w471", "w302", "w327", "w403", "w329", "w330", "w331"]);
+        g.key(132);
+        // the attack types: any by place, then gAttackWords' words
+        g.w.field = 6;
+        g.key(134);
+        let d = drawn(&mut g);
+        assert_eq!(rows_of(&d, "w1705"), ["w471", "w900", "w901", "w902", "w903", "w904", "w905"]);
+        g.key(132);
+        // the form shows a choice beside its label (negative control: "any")
+        let label_then = |d: &[String], label: &str| d[d.iter().position(|s| s == label).unwrap() + 1].clone();
+        let d = drawn(&mut g);
+        assert_eq!([label_then(&d, "w288"), label_then(&d, "w289"), label_then(&d, "w1683"), label_then(&d, "w1684")], ["w471", "w471", "w471", "w471"]);
+        choose(&mut g, 1, 3);
+        choose(&mut g, 2, 1);
+        choose(&mut g, 5, 2);
+        choose(&mut g, 6, 9);
+        let d = drawn(&mut g);
+        assert_eq!([label_then(&d, "w288"), label_then(&d, "w289"), label_then(&d, "w1683"), label_then(&d, "w1684")], ["w174", "w302", "w327", "w909"]);
+    }
+
+    /// A pointer on a picker: nothing before a drawing noted its rows; then
+    /// a click selects a row, a second takes it (Enter), and a scrolled list
+    /// answers by the rows it shows.
+    #[test]
+    fn a_pointer_on_the_pickers() {
+        use crate::pointer::testing::{mid, vui};
+        let mut g = Rig::new();
+        let gv = vui();
+        let mut list = Window::default();
+        list.init(&gv, &NullRaster, [320, 180], 290, 10, 0);
+        list.set_title(Some(&wide("x")));
+        let at = |row: i32| mid(rows_rect(&list, &gv, &NullRaster, 40, row, 290 - 75, 1));
+        g.w.field = 1;
+        g.key(134);
+        assert!(g.w.point(at(3)).is_empty(), "no rows noted before a draw");
+        g.draw();
+        assert_eq!(g.w.point(at(3)), vec![MOVED]);
+        assert_eq!(g.w.cursor, 2, "the third row");
+        assert!(g.w.point(at(9)).is_empty(), "the legend's row is no row");
+        assert_eq!(g.w.point(at(3)), vec![key::CROSS]);
+        g.key(key::CROSS);
+        assert_eq!((g.w.state, g.w.class), (0, CLASSES[2]));
+        // the races scrolled to their end: the first row shown is the sixth
+        g.w.field = 2;
+        g.key(134);
+        for _ in 0..11 {
+            g.key(139);
+        }
+        g.draw();
+        assert_eq!(g.w.top, 5);
+        assert_eq!(g.w.point(at(1)), vec![MOVED]);
+        assert_eq!(g.w.cursor, 5);
+        assert_eq!(g.w.point(at(1)), vec![key::CROSS]);
+        g.key(key::CROSS);
+        assert_eq!(g.w.race, RACES[5]);
     }
 }

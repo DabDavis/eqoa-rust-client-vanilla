@@ -250,12 +250,13 @@ impl Play {
         let (class, race, level, id) = (pl.class, pl.race, pl.level, pl.id);
         let icon = |it: &net::dump::NetItem| crate::inventory::item_icon(it, flags) as i32;
         let can_use = |it: &net::dump::NetItem| crate::inventory::can_use(it, class, race, level);
+        let attack_words = self.start.as_ref().map(|s| s.attack_words.clone()).unwrap_or_default();
         let mut cues = Vec::new();
         let mut out = Vec::new();
         let b = &mut self.bank;
         let now = self.session.now() as i64;
         for (k, down) in std::mem::take(&mut b.keys) {
-            let v = crate::auctionwnd::View { bank: &self.dump.bank, idle: b.state == 0, searching: b.state == 5, player: id, now, icon: &icon, can_use: &can_use };
+            let v = crate::auctionwnd::View { bank: &self.dump.bank, idle: b.state == 0, searching: b.state == 5, player: id, now, icon: &icon, can_use: &can_use, attack_words: &attack_words };
             b.search.key(vui, r, &mut b.auction, &v, k, down, &mut cues, &mut out);
             for o in &out {
                 if let crate::auctionwnd::SearchOut::Send(_, st) = o {
@@ -263,7 +264,7 @@ impl Play {
                 }
             }
         }
-        let v = crate::auctionwnd::View { bank: &self.dump.bank, idle: b.state == 0, searching: b.state == 5, player: id, now, icon: &icon, can_use: &can_use };
+        let v = crate::auctionwnd::View { bank: &self.dump.bank, idle: b.state == 0, searching: b.state == 5, player: id, now, icon: &icon, can_use: &can_use, attack_words: &attack_words };
         b.search.draw(vui, r, &b.auction, &v, &mut cues);
         self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
         for o in out {
