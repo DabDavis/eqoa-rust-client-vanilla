@@ -1094,7 +1094,10 @@ impl Play {
         let mut o = String::new();
         let p = &self.player;
         let _ = writeln!(o, "character: {} (server id {}), level {}, race {}, class {}", p.name, p.server_id, self.dump.player.level, p.race, p.class);
-        let _ = writeln!(o, "world {} ({}), at {at:?}", p.world, p.world_path);
+        // the world's file as the disc's table names it (the dump's path is
+        // the login's, and a teleport into another world does not change it)
+        let file = WORLD_FILES.get(p.world as usize).map_or_else(|| p.world_path.clone(), |f| f.to_string());
+        let _ = writeln!(o, "world {} ({file}), at {at:?}", p.world);
         let target = if self.target == u32::MAX { "none".to_string() } else { format!("{:#x}", self.target) };
         let _ = writeln!(o, "mode {}, target {target}, dead {}, autorun {}, auto-attack {}", self.mode, self.is_dead(), self.autorun, self.auto_attack);
         let start = match (&self.start, self.modules_taken[0]) {
@@ -1851,6 +1854,9 @@ impl Play {
         }
         // and its Camera Turn Speed: the view's turn by the stick and the keys
         crate::camstyle::turn_speed(&mut walker.cam, crate::settings::camera_turn());
+        // and its Screen Shake: off, the spell effects' shake ended before
+        // the camera applies it
+        crate::camstyle::screen_shake(&mut walker.cam, crate::settings::screen_shake());
         // Every OpenStartMenu frames (a return from the spell book or the
         // trainer too) and every CloseStartMenu restores, an entry's window
         // included (its message closes the menu first), so the windows open
@@ -3140,6 +3146,15 @@ impl Play {
         self.session.send_msg(0x0624, i.id, 1);
     }
 
+    /// `VIClient::m_worldId`: the world the client is in now, which
+    /// `UpdateLocation`'s `ZoneName` and the compass's group patches read. A
+    /// teleport into another world (`Msg00B2`) sets it and the next dump
+    /// does; the dump kept from the login does not (F3 20261023-053742: in
+    /// Rathe the start menu named Tunaria's Anu Village).
+    fn world_id(&self) -> i32 {
+        self.player.world as i32
+    }
+
     /// What the start menu's stats column and `UpdateLocation` read.
     fn start_view(&self, walker: &Walker) -> (crate::startmenu::Stats, crate::startmenu::Location) {
         let st = crate::startmenu::Stats {
@@ -3157,7 +3172,7 @@ impl Play {
         };
         let g = walker.scene.grid.as_ref();
         let p = walker.cam.walk.committed.position;
-        let world = self.dump.player.world as i32;
+        let world = self.world_id();
         let loc = crate::startmenu::Location {
             world,
             pos: [p.x.0, p.y.0, p.z.0],
@@ -5217,7 +5232,7 @@ impl Play {
                 .map(|(index, m)| {
                     // the entity's actor while it has one, else channel 0x40's place in this world
                     let actor = if Some(m.id) == me { self.self_at.map(|a| a.0) } else { self.actor_pos(m.id) };
-                    let pos = actor.or_else(|| (m.x == self.dump.player.world as i32).then_some(m.pos));
+                    let pos = actor.or_else(|| (m.x == self.world_id()).then_some(m.pos));
                     crate::hud::PatchMember { index, id: m.id, pos }
                 })
                 .collect(),
@@ -5625,6 +5640,28 @@ mod commands {
     /// him in `pcaps/ps2_sandstorm.pcap` (no robe: byte 109 is 255), so a
     /// report of a robe on someone shows what the server sent. An entity
     /// with no creature part has no look line (the control).
+    /// The start menu's Location and the compass's group patches go by the
+    /// world the client is in (`m_worldId`): after a teleport into Rathe
+    /// (`Msg00B2` sets the player's world, the dump keeps the login's) a
+    /// cell is named from Rathe's grid, and a report says RATHE.ESF. The
+    /// control: the dump's world, Tunaria, which named a Rathe cell "Anu
+    /// Village" (F3 20261023-053742).
+    #[test]
+    fn the_location_is_the_world_the_client_is_in() {
+        let mut p = play();
+        p.dump.player.world = 0;
+        p.player.world_path = "data\\tunaria.esf".into();
+        // what Msg00B2 into world 1 sets
+        p.player.world = 1;
+        assert_eq!(p.world_id(), 1);
+        let here = crate::zones::zone(p.world_id(), 1, 1);
+        assert_eq!(here, Some(1178), "Rathe's grid");
+        assert_ne!(crate::zones::zone(p.dump.player.world as i32, 1, 1), here, "the control: Tunaria's grid names it otherwise");
+        let r = p.report([0.0; 3]);
+        assert!(r.contains("world 1 (RATHE.ESF)"), "{r}");
+        assert!(!r.contains("tunaria.esf"), "the login's path is not the world now");
+    }
+
     #[test]
     fn a_report_shows_each_creatures_look() {
         let mut p = play();

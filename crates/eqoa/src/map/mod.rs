@@ -619,15 +619,15 @@ impl Map {
                 3 => [0.0, 1.0, 1.0, 1.0],
                 _ => [1.0, 1.0, 0.0, 1.0],
             };
-            let r = 0.008 * size.1 as f32 + 2.0;
-            solid(&mut *ui, [p[0] - r - 1.5, p[1] - r - 1.5, p[0] + r + 1.5, p[1] + r + 1.5], OUTLINE);
+            let (r, o) = view::member_radius(size);
+            solid(&mut *ui, [p[0] - r - o, p[1] - r - o, p[0] + r + o, p[1] + r + o], OUTLINE);
             solid(&mut *ui, [p[0] - r, p[1] - r, p[0] + r, p[1] + r], color);
         }
-        // the player
+        // the player: the HUD's size at every zoom (`view::marker_radius`)
         if let Some((p, h)) = cx.player {
             let at = v.to_window(size, [p[0], p[2]]);
-            let r = 0.022 * size.1 as f32 + 6.0;
-            for (rr, color) in [(r + 3.0, OUTLINE), (r, MARKER)] {
+            let (r, o) = view::marker_radius(size);
+            for (rr, color) in [(r + o, OUTLINE), (r, MARKER)] {
                 let d = view::dart(at, h, rr).map(f);
                 ui.push(Quad { tex: white, blend: 3, pos: d, uv: [[0.5, 0.5]; 4], color, clip: None });
             }
