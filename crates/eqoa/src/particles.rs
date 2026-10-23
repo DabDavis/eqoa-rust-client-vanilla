@@ -221,24 +221,92 @@ fn members(lib: &Library, r: Ref, base: &Matrix44<Ee>, depth: u32, out: &mut Vec
     }
 }
 
-/// One of the emitters in creatures' hands this frame: which (the holder,
-/// the hand, the item, its place among the item's), its world transform
-/// (the member's under the hand's node under the creature's centre
-/// transform), and whether its holder was drawn.
+/// One of a character sprite's own particle emitters (`VICSpritePartEmitter`,
+/// the CSprite's 0x2960 record as `ParseCSpritePartEmitters` reads it; their
+/// definitions are the CSprite's 0x2950, each a DictID): on which node, how
+/// it is placed and when it runs. 30 of CHAR.ESF's 568 CSprites carry them
+/// (the swarm a "Swarming Death" is, a fire creature's flames), none one-shot
+/// or the player's only.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PartEmitter {
+    pub def: Ref,
+    /// `m_oneShot`: runs only for `life` ms after an animation trigger
+    pub once: bool,
+    /// `m_flags & 1`: only on the player's own sprite (`SetIsPlayer`)
+    pub player_only: bool,
+    pub node: i32,
+    /// `m_useLocation`: at the node's place, aimed along its axes; else in
+    /// the node's space, from its origin up +z
+    pub use_location: bool,
+    /// the animation and trigger that restart a one-shot one
+    pub anim: i32,
+    pub trigger: i32,
+    pub life: i32,
+}
+
+/// A character sprite's own emitters (`model`'s CSprite), in their order;
+/// none for a sprite without them or not a CSprite. An entry whose
+/// definition is not loaded is left out (the game fails the whole sprite).
+pub fn part_emitters(lib: &Library, model: u32) -> Vec<PartEmitter> {
+    let Some(r) = lib.lookup(model as i32) else { return Vec::new() };
+    let c = lib.file(r.file);
+    if c.node(r.node).ty != esf::types::CSPRITE {
+        return Vec::new();
+    }
+    let Some(list) = c.child(r.node, 0x2960) else { return Vec::new() };
+    let d = c.body(list);
+    let word = |p: usize| d.get(p..p + 4).map(|b| i32::from_le_bytes(b.try_into().unwrap()));
+    let n = word(0).unwrap_or(0).clamp(0, 256) as usize;
+    let mut out = Vec::new();
+    for k in 0..n {
+        let p = 4 + k * 32;
+        let (Some(id), Some(once), Some(flags), Some(node), Some(loc), Some(anim), Some(trigger), Some(life)) =
+            (word(p), word(p + 4), word(p + 8), word(p + 12), word(p + 16), word(p + 20), word(p + 24), word(p + 28))
+        else {
+            break;
+        };
+        let Some(def) = lib.lookup(id) else { continue };
+        out.push(PartEmitter { def, once: once == 1, player_only: flags & 1 != 0, node, use_location: loc != 0, anim, trigger, life });
+    }
+    out
+}
+
+/// How an emitter a creature carries is placed and run.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum How {
+    /// an item's particle sprite, by its flags (`VIParticleSprite::Raster`)
+    Sprite(i32),
+    /// the creature's own emitter (`VICSprite::UpdateParticleEmitters`): by
+    /// `m_useLocation`; a one-shot one is placed but not run (nothing here
+    /// trips the animation triggers that would start it)
+    Part { use_location: bool, once: bool },
+}
+
+/// The key a creature's own emitters take in the hand's place.
+pub const OWN: usize = usize::MAX;
+
+/// One of the emitters creatures carry this frame: which (the holder, the
+/// hand or `OWN`, the item or the creature's model, its place among them),
+/// its world transform (the member's under the hand's node, or the
+/// emitter's node, under the creature's centre transform), how it runs, and
+/// whether its holder was drawn.
 pub struct InHand {
     pub key: (i32, usize, u32, usize),
     pub world: Matrix44<Ee>,
     pub def: Ref,
-    pub flags: i32,
+    pub how: How,
     pub drawn: bool,
 }
 
-/// The particles of the items creatures hold, on a particle system of their
-/// own. `AttachItem` attaches a COPY of an item whose sprite carries a
-/// particle sprite (its `GetInstType` is 1), so every hand has its own
-/// emitters; `DetachItem` releases the copy and its particles with it. Each
-/// is placed and updated as `VIParticleSprite::Raster` does under the
-/// attachment's model-view, while its holder is drawn.
+/// The particles creatures carry, on a particle system of their own: the
+/// items in their hands and their sprites' own emitters. `AttachItem`
+/// attaches a COPY of an item whose sprite carries a particle sprite (its
+/// `GetInstType` is 1), so every hand has its own emitters; `DetachItem`
+/// releases the copy and its particles with it. Each is placed and updated
+/// as `VIParticleSprite::Raster` does under the attachment's model-view,
+/// while its holder is drawn. A creature's copy of its sprite has its own
+/// emitters too (`VICSprite::Copy`), run by `VICSprite::Raster`'s
+/// `UpdateParticleEmitters`: while it is drawn.
 pub struct Held {
     sys: System<Ee>,
     rand: Rand,
@@ -281,7 +349,10 @@ impl Held {
                 }
             };
             if h.drawn {
-                raster_sprite(&mut self.sys, id, h.flags, &h.world, eye, &mut self.rand);
+                match h.how {
+                    How::Sprite(flags) => raster_sprite(&mut self.sys, id, flags, &h.world, eye, &mut self.rand),
+                    How::Part { use_location, once } => update_part(&mut self.sys, id, use_location, once, &h.world, eye, &mut self.rand),
+                }
             }
         }
         render(&mut self.sys, time)
@@ -290,18 +361,17 @@ impl Held {
     /// How many emitters are in hands, and their particles.
     pub fn describe(&self) -> String {
         let n: usize = self.emitters.values().map(|&id| self.sys.particle_count(id)).sum();
-        format!("{} held-item emitters, {n} particles", self.emitters.len())
+        let own = self.emitters.keys().filter(|k| k.1 == OWN).count();
+        format!("{} held-item emitters, {own} creatures' own, {n} particles", self.emitters.len() - own)
     }
 }
 
-/// `VIParticleSprite::Raster` for a particle sprite whose world transform is
-/// `c` (the model-view with the camera's view taken off): a free emitter
-/// (flags 0) placed at its translation and aimed along its axes, scale and
-/// all; a local one pinned at the origin, aimed down +z, in `c`'s space.
-/// Past 100 from the camera at `eye` it is purged rather than updated.
-fn raster_sprite(sys: &mut System<Ee>, id: usize, flags: i32, c: &Matrix44<Ee>, eye: &Vect3<Ee>, rand: &mut Rand) {
+/// An emitter put where `c` (its world transform) says: a free one (`free`)
+/// at `c`'s translation, aimed along its axes, scale and all; any other
+/// pinned at the origin, aimed down +z, in `c`'s space.
+fn place(sys: &mut System<Ee>, id: usize, free: bool, c: &Matrix44<Ee>) {
     let em = sys.emitter(id);
-    if flags == 0 {
+    if free {
         em.set_location(Vect3::new(c.m[3].x, c.m[3].y, c.m[3].z));
         em.direction = Matrix33 { m: [c.m[0].xyz(), c.m[1].xyz(), c.m[2].xyz()] };
     } else {
@@ -309,10 +379,35 @@ fn raster_sprite(sys: &mut System<Ee>, id: usize, flags: i32, c: &Matrix44<Ee>, 
         em.set_direction_vec(&Vect3::of(0.0, 0.0, 1.0));
         em.space = *c;
     }
+}
+
+/// `VIParticleSprite::Raster` for a particle sprite whose world transform is
+/// `c` (the model-view with the camera's view taken off): free when its
+/// flags are 0 (`place`). Past 100 from the camera at `eye` it is purged
+/// rather than updated.
+fn raster_sprite(sys: &mut System<Ee>, id: usize, flags: i32, c: &Matrix44<Ee>, eye: &Vect3<Ee>, rand: &mut Rand) {
+    place(sys, id, flags == 0, c);
     let p = Vect3::new(eye.x - c.m[3].x, eye.y - c.m[3].y, eye.z - c.m[3].z);
     if F::new(100.0) < p.magnitude() {
         sys.purge(id);
     } else {
+        sys.update(id, rand);
+    }
+}
+
+/// `VICSprite::UpdateParticleEmitters` for one emitter whose node's world
+/// transform is `w`: purged, not placed, when its node is farther than 100
+/// from the camera at `eye` (the squared distance against 10000); else
+/// placed (free by `m_useLocation`) and, unless it is a one-shot one not
+/// started, updated.
+fn update_part(sys: &mut System<Ee>, id: usize, use_location: bool, once: bool, w: &Matrix44<Ee>, eye: &Vect3<Ee>, rand: &mut Rand) {
+    let (dx, dy, dz) = (w.m[3].x - eye.x, w.m[3].y - eye.y, w.m[3].z - eye.z);
+    if F::new(10000.0) < (dx * dx + dy * dy) + dz * dz {
+        sys.purge(id);
+        return;
+    }
+    place(sys, id, use_location, w);
+    if !once {
         sys.update(id, rand);
     }
 }
@@ -380,7 +475,7 @@ mod tests {
         let Some(lib) = items() else { return };
         let e = item_emitters(&lib, 0x8A82B605)[0];
         let at = |x: f32, y: f32, z: f32| Matrix44::transform(&Vect3::of(0.0, 0.0, 0.0), F::ONE, &Vect3::of(x, y, z));
-        let hand = |world, drawn| [InHand { key: (3, 0, 0x8A82B605, 0), world, def: e.def, flags: e.flags, drawn }];
+        let hand = |world, drawn| [InHand { key: (3, 0, 0x8A82B605, 0), world, def: e.def, how: How::Sprite(e.flags), drawn }];
         let mut held = Held::new(0);
         let near = [100.0, 52.0, 195.0];
         let pts = run(&mut held, &lib, &hand(at(100.0, 50.0, 200.0), true), near, 0, 1000);
@@ -393,9 +488,78 @@ mod tests {
         assert!(!moved.is_empty() && moved.iter().all(|p| (p[0] - 110.0).abs() < 0.05), "{moved:?}");
         // the item put away: its emitter and its particles gone
         assert!(run(&mut held, &lib, &[], near, 1066, 66).is_empty());
-        assert_eq!(held.describe(), "0 held-item emitters, 0 particles");
+        assert_eq!(held.describe(), "0 held-item emitters, 0 creatures' own, 0 particles");
         // the controls: a holder not drawn emits nothing, nor one past 100
         assert!(run(&mut Held::new(0), &lib, &hand(at(100.0, 50.0, 200.0), false), near, 0, 1000).is_empty());
         assert!(run(&mut Held::new(0), &lib, &hand(at(100.0, 50.0, 200.0), true), [100.0, 50.0, 320.0], 0, 1000).is_empty());
+    }
+
+    /// CHAR.ESF off the disc, or None (the test SKIPs).
+    fn chars() -> Option<Library> {
+        let iso_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut disc) = iso::Iso::open(&iso_path) else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return None;
+        };
+        let mut lib = Library::new();
+        lib.add("CHAR.ESF", esf::Container::open(disc.read("CHAR.ESF").ok()?).ok()?);
+        Some(lib)
+    }
+
+    /// The character sprites' own emitters, read as `ParseCSpritePartEmitters`
+    /// reads the 0x2960 record: the Red Swarming Death (0x6E5E0E2A) is nine
+    /// of one swarm (0x8EB68DE1) at its nodes, each at the node's place; 30
+    /// of CHAR.ESF's 568 CSprites carry 73 in all, none one-shot or the
+    /// player's only. The controls: a human carries none, nor does a sprite
+    /// that is not a character's.
+    #[test]
+    fn the_creatures_own_emitters_off_the_disc() {
+        let Some(lib) = chars() else { return };
+        let swarm = part_emitters(&lib, 0x6E5E0E2A);
+        assert_eq!(swarm.len(), 9);
+        let c = lib.file(0);
+        for e in &swarm {
+            assert_eq!(c.node(e.def.node).ty, 0xC000);
+            assert_eq!(Some(e.def), lib.lookup(0x8EB68DE1_u32 as i32), "the swarm's own definition");
+            assert!(e.use_location && !e.once && !e.player_only && e.life == 500);
+        }
+        assert_eq!(swarm.iter().map(|e| e.node).take(5).collect::<Vec<_>>(), [6, 4, 8, 5, 1]);
+        assert!(part_emitters(&lib, 0x70D898C6).is_empty(), "a human");
+        assert!(part_emitters(&lib, 0x8EB68DE1).is_empty(), "a particle definition is no character");
+        let sprites: Vec<u32> = c.models().iter().filter(|m| m.ty == esf::types::CSPRITE).map(|m| m.dict_id as u32).collect();
+        assert_eq!(sprites.len(), 568);
+        let with: Vec<Vec<PartEmitter>> = sprites.iter().map(|&s| part_emitters(&lib, s)).filter(|e| !e.is_empty()).collect();
+        assert_eq!((with.len(), with.iter().map(Vec::len).sum::<usize>()), (30, 73));
+        assert!(with.iter().flatten().all(|e| !e.once && !e.player_only));
+    }
+
+    /// `VICSprite::UpdateParticleEmitters` for one of the swarm's emitters
+    /// at a node: its particles start at the node's place and move with it;
+    /// nothing while the creature is not rastered; purged when the node is
+    /// past 100 from the camera (the squared distance against 10000: 99.99
+    /// runs, 100.01 does not); a one-shot one never started runs nothing.
+    #[test]
+    fn a_creatures_own_emitters_run_at_their_nodes() {
+        let Some(lib) = chars() else { return };
+        let e = part_emitters(&lib, 0x6E5E0E2A)[0];
+        let at = |x: f32, y: f32, z: f32| Matrix44::transform(&Vect3::of(0.0, 0.0, 0.0), F::ONE, &Vect3::of(x, y, z));
+        let how = How::Part { use_location: e.use_location, once: e.once };
+        let own = |world, drawn, how| [InHand { key: (5, OWN, 0x6E5E0E2A, 0), world, def: e.def, how, drawn }];
+        let near = [100.0, 52.0, 195.0];
+        let mut held = Held::new(0);
+        let pts = run(&mut held, &lib, &own(at(100.0, 50.0, 200.0), true, how), near, 0, 1000);
+        assert!(pts.len() > 3, "{} particles", pts.len());
+        let close = |p: &[f32; 3], c: [f32; 3]| (p[0] - c[0]).abs() < 4.0 && (p[1] - c[1]).abs() < 4.0 && (p[2] - c[2]).abs() < 4.0;
+        assert!(pts.iter().all(|p| close(p, [100.0, 50.0, 200.0])), "{pts:?}");
+        assert!(held.describe().starts_with("0 held-item emitters, 1 creatures' own"), "{}", held.describe());
+        // the creature moves away, its swarm's new particles with it
+        let moved = run(&mut held, &lib, &own(at(130.0, 50.0, 200.0), true, how), near, 1000, 3000);
+        assert!(moved.iter().any(|p| close(p, [130.0, 50.0, 200.0])), "{moved:?}");
+        // the controls: not rastered, one-shot unstarted, and the distance
+        assert!(run(&mut Held::new(0), &lib, &own(at(100.0, 50.0, 200.0), false, how), near, 0, 1000).is_empty());
+        let once = How::Part { use_location: true, once: true };
+        assert!(run(&mut Held::new(0), &lib, &own(at(100.0, 50.0, 200.0), true, once), near, 0, 1000).is_empty());
+        assert!(!run(&mut Held::new(0), &lib, &own(at(100.0, 50.0, 299.99), true, how), [100.0, 50.0, 200.0], 0, 1000).is_empty());
+        assert!(run(&mut Held::new(0), &lib, &own(at(100.0, 50.0, 300.01), true, how), [100.0, 50.0, 200.0], 0, 1000).is_empty());
     }
 }
