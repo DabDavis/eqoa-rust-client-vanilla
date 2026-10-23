@@ -5,6 +5,11 @@
 //! then `/t name text`), Invite (`InviteToGroup`), Mail (not ported). A
 //! pointer (`pointer`) selects a row and opens its popup from the selection;
 //! off the popup it closes it.
+//!
+//! Not the game's: the rows' order. The game shows the list as the server
+//! sent it; here it is sorted (`Sort`, F3 20261023-085524 and -090229, the
+//! user's choice), by name from the start, and ○ (C on the keyboard) or a
+//! click on a column's heading sorts it by that column instead.
 
 #![allow(clippy::too_many_arguments)]
 
@@ -70,6 +75,70 @@ impl Who {
         self.pending = false;
     }
 }
+
+/// The column the who list is sorted by (the client's own: the game keeps
+/// the server's order). Names, races and classes from A to Z as the window
+/// spells them, levels from the highest; a tie by name, then as sent.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Sort {
+    #[default]
+    Name,
+    Race,
+    Class,
+    Level,
+}
+
+impl Sort {
+    /// The columns from the left, as ○ goes round them.
+    const ALL: [Sort; 4] = [Sort::Name, Sort::Race, Sort::Class, Sort::Level];
+
+    /// The column's heading (the window's own words).
+    pub fn word(self) -> i32 {
+        [509, 510, 511, 503][self as usize]
+    }
+
+    /// The next column to the right, round to the first.
+    pub fn next(self) -> Sort {
+        Sort::ALL[(self as usize + 1) % Sort::ALL.len()]
+    }
+}
+
+/// A row's race as the window shows it: the short word of races 0 to 9,
+/// none for 10 to 20, and the first past them (as `OnDrawSelf` reads it).
+fn race_word(race: u8) -> i32 {
+    const RACE_SHORT: [i32; 10] = [317, 318, 319, 320, 321, 322, 323, 324, 325, 1191];
+    if (race as usize) < 21 { RACE_SHORT.get(race as usize).copied().unwrap_or(-1) } else { 317 }
+}
+
+/// A row's class as the window shows it (the first past 14).
+fn class_word(class: u8) -> i32 {
+    [303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 1190][if class < 15 { class as usize } else { 0 }]
+}
+
+/// The rows in the order shown: indices into `list`, by `sort` (`word`
+/// spells a race's or class's word).
+pub fn order(sort: Sort, list: &[WhoRow], word: &dyn Fn(i32) -> String) -> Vec<usize> {
+    let name = |i: usize| list[i].name.to_lowercase();
+    let spelled = |id: i32| word(id).to_lowercase();
+    let mut v: Vec<usize> = (0..list.len()).collect();
+    v.sort_by(|&a, &b| {
+        let (ea, eb) = (&list[a], &list[b]);
+        let by = match sort {
+            Sort::Name => std::cmp::Ordering::Equal,
+            Sort::Race => spelled(race_word(ea.race)).cmp(&spelled(race_word(eb.race))),
+            Sort::Class => spelled(class_word(ea.class)).cmp(&spelled(class_word(eb.class))),
+            Sort::Level => eb.level.cmp(&ea.level),
+        };
+        by.then_with(|| name(a).cmp(&name(b))).then(a.cmp(&b))
+    });
+    v
+}
+
+/// The hit of a column's heading: `HEADING - column`.
+const HEADING: i32 = -10;
+
+/// The client's word for its sort in the legends (no WORDS.TXT entry).
+pub const SORT: &str = "Sort";
 
 /// `VIWndOptionList`: choices under a title, the chosen one ticked.
 #[derive(Default)]
@@ -206,9 +275,17 @@ pub struct WhoList {
     flash: KeyFlash,
     ticks: i32,
     dots: i32,
-    /// the rows drawn, by index into the list, and when (for a pointer)
+    /// the rows drawn, by their place on screen, and the headings
+    /// (`HEADING - column`), and when (for a pointer)
     hits: Hits,
     now: i64,
+    /// the column the rows are sorted by (the client's, kept while it runs)
+    pub sort: Sort,
+    /// the rows' order as last drawn (`order`)
+    view: Vec<usize>,
+    /// the row (an index into the list) to keep selected once a pointer's
+    /// sort is drawn
+    keep: Option<usize>,
 }
 
 impl WhoList {
@@ -222,7 +299,7 @@ impl WhoList {
                 return k.into_iter().collect();
             }
             let mut keys = Vec::new();
-            if let Some(row) = self.hits.at(p).filter(|&row| row != self.sel) {
+            if let Some(row) = self.hits.at(p).filter(|&row| row >= 0 && row != self.sel) {
                 self.select(row);
                 keys.push(MOVED);
             }
@@ -230,6 +307,18 @@ impl WhoList {
             return keys;
         }
         match self.hits.at(p) {
+            // a heading: the rows by its column (the client's), the
+            // selected one kept once drawn; the column already sorted by
+            // is nothing
+            Some(h) if h <= HEADING => {
+                let sort = Sort::ALL[(HEADING - h) as usize];
+                if sort == self.sort {
+                    return Vec::new();
+                }
+                self.keep = self.view.get(self.sel.max(0) as usize).copied();
+                self.sort = sort;
+                vec![MOVED]
+            }
             Some(row) if row == self.sel => vec![key::CROSS],
             Some(row) => {
                 self.select(row);
@@ -270,7 +359,8 @@ impl WhoList {
                 return None;
             }
             let (sel, ok) = self.options.key(key, now, cues)?;
-            let e = who.list.get(self.sel.max(0) as usize)?;
+            let view = order(self.sort, &who.list, &|id: i32| vui.words.get(id, vui.language).to_string());
+            let e = who.list.get(*view.get(self.sel.max(0) as usize)?)?;
             let name = e.name.clone();
             let up = match sel {
                 0 => WhoUp::Tell(name),
@@ -308,6 +398,18 @@ impl WhoList {
                 self.flash.reset();
                 return Some(WhoUp::Refresh);
             }
+            // ○ (the client's): the next column's order, the selected row
+            // kept selected
+            135 => {
+                let word = |id: i32| vui.words.get(id, vui.language).to_string();
+                let keep = order(self.sort, &who.list, &word).get(self.sel.max(0) as usize).copied();
+                self.sort = self.sort.next();
+                if let Some(at) = keep.and_then(|k| order(self.sort, &who.list, &word).iter().position(|&i| i == k)) {
+                    self.sel = at as i32;
+                }
+                self.window.reset_tick_pulse(now);
+                cues.push(11);
+            }
             _ => {}
         }
         None
@@ -321,6 +423,10 @@ impl WhoList {
         let n = who.list.len() as i32;
         self.now = now;
         self.hits.clear();
+        self.view = order(self.sort, &who.list, &|id: i32| vui.words.get(id, vui.language).to_string());
+        if let Some(at) = self.keep.take().and_then(|k| self.view.iter().position(|&i| i == k)) {
+            self.sel = at as i32;
+        }
         crate::ui::window_backdrop(vui, r, 642);
         self.window.draw(vui, r);
         if self.sel > n - 1 {
@@ -337,18 +443,20 @@ impl WhoList {
         self.window.draw_frame_vscroll(vui, r, 30, 1, width - 65, 10, t);
         let x = [50, 300, 400, 500];
         let c0 = UI_COLORS[0];
-        self.window.text_box(vui, r, &w(509), x[0], 0, x[1] - x[0], 1, c0, 0);
-        self.window.text_box(vui, r, &w(510), x[1], 0, x[2] - x[1], 1, c0, 0);
-        self.window.text_box(vui, r, &w(511), x[2], 0, x[3] - x[2], 1, c0, 0);
-        self.window.text_box(vui, r, &w(503), x[3], 0, width - x[3] - 40, 1, c0, 0);
+        // the headings, the one sorted by in the selection's colour (the
+        // client's), each a pointer's sort
+        let ends = [x[1], x[2], x[3], width - 40];
+        for (k, sort) in Sort::ALL.into_iter().enumerate() {
+            let c = UI_COLORS[(sort == self.sort) as usize];
+            self.window.text_box(vui, r, &w(sort.word()), x[k], 0, ends[k] - x[k], 1, c, 0);
+            self.hits.push(rows_rect(&self.window, vui, r, x[k], 0, ends[k] - x[k], 1), HEADING - k as i32);
+        }
         let mut row = 1;
         let mut i = self.top;
         while i < n && row < 11 {
-            let e = &who.list[i as usize];
+            let e = &who.list[self.view[i as usize]];
             let c = UI_COLORS[(i == self.sel) as usize];
-            const RACE_SHORT: [i32; 10] = [317, 318, 319, 320, 321, 322, 323, 324, 325, 1191];
-            let race = if (e.race as usize) < 21 { RACE_SHORT.get(e.race as usize).copied().unwrap_or(-1) } else { 317 };
-            let class = [303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 1190][if e.class < 15 { e.class as usize } else { 0 }];
+            let (race, class) = (race_word(e.race), class_word(e.class));
             self.window.text_box(vui, r, &wide(&e.name), x[0], row, x[1] - x[0], 1, c, 2);
             self.window.text_box(vui, r, &w(race), x[1], row, x[2] - x[1], 1, c, 2);
             self.window.text_box(vui, r, &w(class), x[2], row, x[3] - x[2], 1, c, 2);
@@ -361,7 +469,8 @@ impl WhoList {
             row += 1;
         }
         let word = |id: i32| vui.words.get(id, vui.language).to_string();
-        let legend = wide(&format!("|x{}   |t{}          |s{}", word(212), word(161), word(811)));
+        // the game's legend, and the client's ○ Sort with its column
+        let legend = wide(&format!("|x{}   |t{}   |s{}   |c{}: {}", word(212), word(161), word(811), SORT, word(self.sort.word())));
         self.window.text_box(vui, r, &legend, 30, 12, width - 60, 1, c0, 0);
         self.ticks -= 1;
         if self.ticks <= 0 {
@@ -480,4 +589,108 @@ mod tests {
         assert_eq!(l.point([5.0, 5.0]), vec![key::TRIANGLE], "off everything: closed only");
     }
 
+    /// Races and classes as a window would spell them (the test's own).
+    fn spelled(id: i32) -> String {
+        let classes = ["Warrior", "Ranger", "Paladin", "Shadowknight", "Monk", "Bard", "Rogue", "Druid", "Shaman", "Cleric", "Magician", "Necromancer", "Enchanter", "Wizard"];
+        let races = ["Human", "Elf", "Dark Elf", "Gnome", "Dwarf", "Troll", "Barbarian", "Halfling", "Erudite"];
+        match id {
+            303..=316 => classes[(id - 303) as usize].into(),
+            1190 => "Alchemist".into(),
+            317..=325 => races[(id - 317) as usize].into(),
+            1191 => "Ogre".into(),
+            _ => String::new(),
+        }
+    }
+
+    fn row(name: &str, race: u8, class: u8, level: u8) -> WhoRow {
+        WhoRow { name: name.into(), race, class, level, x1c: 0 }
+    }
+
+    /// The client's sort (F3 20261023-085524, -090229): by name from A to
+    /// Z, case aside, where the game keeps the server's order (the
+    /// control); by race and class as the window spells them (an Ogre after
+    /// a Human, an Alchemist, class 14, first), by level from the highest;
+    /// a tie by name.
+    #[test]
+    fn the_rows_sort_by_a_column() {
+        let list = vec![row("Zed", 9, 5, 30), row("amy", 0, 13, 50), row("Bob", 0, 14, 30), row("cal", 2, 5, 10)];
+        let names = |sort| order(sort, &list, &spelled).into_iter().map(|i| list[i].name.as_str()).collect::<Vec<_>>();
+        assert_eq!(Sort::default(), Sort::Name);
+        assert_eq!(names(Sort::Name), ["amy", "Bob", "cal", "Zed"]);
+        assert_ne!(list.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), names(Sort::Name), "the game's order is the server's");
+        // Dark Elf, Human (amy, Bob), Ogre
+        assert_eq!(names(Sort::Race), ["cal", "amy", "Bob", "Zed"]);
+        // Alchemist, Bard (cal, Zed), Wizard
+        assert_eq!(names(Sort::Class), ["Bob", "cal", "Zed", "amy"]);
+        // 50, 30 (Bob, Zed), 10
+        assert_eq!(names(Sort::Level), ["amy", "Bob", "Zed", "cal"]);
+        assert_eq!([Sort::Name, Sort::Race, Sort::Class, Sort::Level].map(Sort::next), [Sort::Race, Sort::Class, Sort::Level, Sort::Name]);
+    }
+
+    /// ○ goes round the columns with the selected row kept selected, and
+    /// the popup's Tell and Invite go to the row shown, not to the one the
+    /// server sent at that place.
+    #[test]
+    fn circle_sorts_and_the_popup_acts_on_the_row_shown() {
+        use crate::pointer::testing::{NullRaster, vui};
+        let vui = vui();
+        let mut r = NullRaster;
+        let who = Who { list: vec![WhoRow { x1c: 7, ..row("Zed", 0, 0, 30) }, WhoRow { x1c: 8, ..row("amy", 0, 0, 50) }, WhoRow { x1c: 9, ..row("Bob", 0, 0, 10) }], ..Default::default() };
+        let mut l = WhoList::default();
+        l.open(&vui, &r);
+        let mut cues = Vec::new();
+        l.draw(&vui, &mut r, &who, 0, true, &mut cues);
+        let shown = |l: &WhoList| l.view.iter().map(|&i| who.list[i].name.clone()).collect::<Vec<_>>();
+        assert_eq!(shown(&l), ["amy", "Bob", "Zed"]);
+        // Zed, shown third, selected
+        l.sel = 2;
+        // ○ three times: race and class (all alike here), then level
+        for _ in 0..3 {
+            l.key(&vui, &r, &who, 135, true, 0, &mut cues);
+        }
+        assert_eq!(l.sort, Sort::Level);
+        l.draw(&vui, &mut r, &who, 16, true, &mut cues);
+        assert_eq!(shown(&l), ["amy", "Zed", "Bob"]);
+        assert_eq!(l.sel, 1, "Zed still selected");
+        // the popup: Tell and Invite name Zed (the server sent amy second)
+        l.key(&vui, &r, &who, 134, true, 0, &mut cues);
+        assert_eq!(l.key(&vui, &r, &who, 134, true, 0, &mut cues), Some(WhoUp::Tell("Zed".into())));
+        l.key(&vui, &r, &who, 134, true, 0, &mut cues);
+        l.key(&vui, &r, &who, 139, true, 0, &mut cues);
+        assert_eq!(l.key(&vui, &r, &who, 134, true, 0, &mut cues), Some(WhoUp::Invite("Zed".into(), 7)));
+        // ○ once more: back to names
+        l.key(&vui, &r, &who, 135, true, 0, &mut cues);
+        assert_eq!(l.sort, Sort::Name);
+    }
+
+    /// A pointer on a heading sorts by its column, the selected row kept
+    /// once drawn; the column already sorted by is nothing; with the popup
+    /// up a heading only closes it.
+    #[test]
+    fn a_heading_sorts_by_its_column() {
+        use crate::pointer::testing::{NullRaster, mid, vui};
+        use crate::pointer::{MOVED, key};
+        let vui = vui();
+        let mut r = NullRaster;
+        let who = Who { list: vec![row("Zed", 0, 0, 30), row("amy", 0, 0, 50), row("Bob", 0, 0, 10)], ..Default::default() };
+        let mut l = WhoList::default();
+        l.open(&vui, &r);
+        let mut cues = Vec::new();
+        l.draw(&vui, &mut r, &who, 0, true, &mut cues);
+        l.sel = 2;
+        // the Level heading: x 500 to the window's last 40
+        let level = mid(rows_rect(&l.window, &vui, &NullRaster, 500, 0, 60, 1));
+        let name = mid(rows_rect(&l.window, &vui, &NullRaster, 50, 0, 200, 1));
+        assert!(l.point(name).is_empty(), "sorted by name already");
+        assert_eq!(l.point(level), vec![MOVED]);
+        assert_eq!(l.sort, Sort::Level);
+        l.draw(&vui, &mut r, &who, 16, true, &mut cues);
+        assert_eq!(l.view.iter().map(|&i| who.list[i].name.as_str()).collect::<Vec<_>>(), ["amy", "Zed", "Bob"]);
+        assert_eq!(l.sel, 1, "Zed kept");
+        assert!(l.point(level).is_empty(), "the same column: nothing");
+        l.key(&vui, &r, &who, 134, true, 0, &mut cues);
+        l.draw(&vui, &mut r, &who, 32, true, &mut cues);
+        assert_eq!(l.point(name), vec![key::TRIANGLE], "the popup closed, the sort kept");
+        assert_eq!(l.sort, Sort::Level);
+    }
 }
