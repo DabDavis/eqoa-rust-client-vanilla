@@ -124,6 +124,14 @@ pub fn has_focus() -> bool {
     web_sys::window().and_then(|w| w.document()).and_then(|d| d.has_focus().ok()).unwrap_or(true)
 }
 
+/// The tab's title (the window's, `viewer::title`: winit names only the
+/// canvas).
+pub fn set_title(t: &str) {
+    if let Some(d) = web_sys::window().and_then(|w| w.document()) {
+        d.set_title(t);
+    }
+}
+
 /// Whether the page is on a touch-first device (`window.eqoaTouchFirst`:
 /// its main pointer is coarse), so the touch screen's pad shows at once.
 pub fn touch_first() -> bool {
@@ -365,7 +373,7 @@ async fn gfx(canvas: web_sys::HtmlCanvasElement) -> Result<viewer::PendingGfx, S
     // The bytes go out as the GS's do: no sRGB encode (render::TARGET_FORMAT).
     config.format = config.format.remove_srgb_suffix();
     surface.configure(&device, &config);
-    let attrs = winit::window::Window::default_attributes().with_canvas(Some(canvas)).with_title("eqoa");
+    let attrs = winit::window::Window::default_attributes().with_canvas(Some(canvas)).with_title("EQOA");
     Ok(viewer::PendingGfx { attrs, surface, config, device, queue })
 }
 
