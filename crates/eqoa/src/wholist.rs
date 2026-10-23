@@ -10,12 +10,22 @@
 //! sent it; here it is sorted (`Sort`, F3 20261023-085524 and -090229, the
 //! user's choice), by name from the start, and ○ (C on the keyboard) or a
 //! click on a column's heading sorts it by that column instead.
+//!
+//! A server whose patch sorts the list itself (Sandstorm's S2, `PatchSort`)
+//! has it sorted as the patch sorts it: L1 and R1, or left and right, go
+//! round the columns, the selection keeping its place in the list (the row
+//! there now another player's), the heading sorted by marked before and
+//! after, and the legend the patch's (F3 20261023-185531). Its words and
+//! tables are read out of the patch where its code names them; with none,
+//! or a patch of another shape, the client's own sort above.
 
 #![allow(clippy::too_many_arguments)]
 
 use crate::pointer::{Hits, MOVED, key, rows_rect};
+use crate::s2::{CLIENT_BASE, Image};
 use crate::startmenu::KeyFlash;
 use net::stream::{Reader, Writer};
+use std::sync::Arc;
 use vi::ui::{Raster, UI_COLORS, Vui, Window, wide};
 
 /// `VIRec32_C035B0`: a row.
@@ -100,6 +110,159 @@ impl Sort {
     /// The next column to the right, round to the first.
     pub fn next(self) -> Sort {
         Sort::ALL[(self as usize + 1) % Sort::ALL.len()]
+    }
+
+    /// The next column to the left, round to the last.
+    pub fn prev(self) -> Sort {
+        Sort::ALL[(self as usize + Sort::ALL.len() - 1) % Sort::ALL.len()]
+    }
+}
+
+/// Where Sandstorm's S2 hooks the who list, and where in its code each
+/// word, table and number it uses is named, as the live S2 (ss-patch-60,
+/// 2026-10-15) has them.
+mod at {
+    // CLIENT, by offset from its base.
+    /// `VIClientPart38334::GetList`'s first word: j to the patch's sort
+    pub const GET_LIST: u32 = 0x4E7A8;
+    /// `VIWndWhoList`'s vtable, its `OnKeyDown` slot (the game's
+    /// 0x00CA30B8): the patch's keys
+    pub const ON_KEY_DOWN: u32 = 0x13D28C;
+    /// `OnDrawSelf`, after the headings: jal to the patch's marks
+    pub const MARKS: u32 = 0xEE33C;
+    /// `OnDrawSelf`, the legend's `snprintf16`: jal to the patch's format
+    pub const LEGEND: u32 = 0xEE53C;
+
+    /// In the patch's `GetList`, jal the sort; in the sort, jal the compare.
+    pub const SORT: u32 = 0x64;
+    pub const COMPARE: u32 = 0x60;
+    /// In the compare: the races' and the classes' order (lui and ori into
+    /// t3), and `li t5, n`, how many bytes of a name it compares.
+    pub const RACE_RANK: (u32, u32) = (0x3C, 0x40);
+    pub const CLASS_RANK: (u32, u32) = (0x78, 0x7C);
+    pub const NAME_BYTES: u32 = 0xD0;
+    /// In the keys: the four `li t1, key`, two a column back, two on, and
+    /// the `li t0` of each step (-1, then 1) their branches go to.
+    pub const KEYS: [u32; 4] = [0x04, 0x0C, 0x14, 0x1C];
+    pub const STEPS: [u32; 2] = [0x30, 0x3C];
+    /// In the marks: the tables' base (t9); the lw of the column's x before
+    /// the heading and the addiu that moves it; the mark before (a1); the lw
+    /// of the x after it; the mark after.
+    pub const BASE: (u32, u32) = (0x3C, 0x40);
+    pub const BEFORE: u32 = 0x50;
+    pub const BEFORE_BY: u32 = 0x54;
+    pub const MARK_BEFORE: u32 = 0x58;
+    pub const AFTER: u32 = 0x90;
+    pub const MARK_AFTER: u32 = 0x94;
+    /// In the legend: its format (a2) and the sort's word (t2).
+    pub const FORMAT: (u32, u32) = (0x00, 0x04);
+    pub const SORT_WORD: (u32, u32) = (0x08, 0x0C);
+}
+
+/// The registers the pairs and the immediates name.
+const T0: u32 = 8;
+const A1: u32 = 5;
+const A2: u32 = 6;
+const T1: u32 = 9;
+const T2: u32 = 10;
+const T3: u32 = 11;
+const T9: u32 = 25;
+
+/// A server's patch's own sort of the who list (Sandstorm's S2: its
+/// `GetList` sorts the list in place, a stable insertion sort, whenever a
+/// new one is there or a key has moved the column; its `OnKeyDown` moves the
+/// column; its `OnDrawSelf` marks the heading and puts the keys in the
+/// legend). The words and tables as the patch carries them (read out of the
+/// patched image: none of it is in this repository).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PatchSort {
+    /// the order of a race's and of a class's low four bits (the races and
+    /// the classes from A to Z as their short words spell them)
+    pub race_rank: [u8; 16],
+    pub class_rank: [u8; 16],
+    /// how many bytes of two names it compares
+    pub name_bytes: usize,
+    /// the keys that move the column one back (L1 and left) and one on (R1
+    /// and right)
+    pub back: [i32; 2],
+    pub on: [i32; 2],
+    /// the marks drawn before and after the heading sorted by, and where
+    /// each column's go (the heading's row, 12 wide)
+    pub marks: [Vec<u16>; 2],
+    pub before: [i32; 4],
+    pub after: [i32; 4],
+    /// the legend: its format (each `%S` a word: Select, Exit, Update, and
+    /// the sort's) and the sort's word
+    pub legend: Vec<u8>,
+    pub sort_word: Vec<u16>,
+}
+
+impl PatchSort {
+    /// Read out of the patched image where the hooks' code names it; None
+    /// when a hook is absent or its code is not this shape.
+    pub fn read(img: &Image) -> Option<PatchSort> {
+        let cave = crate::s2::in_cave;
+        let call = |a: u32| img.call_target(a).filter(|&t| cave(t));
+        let pair = |f: u32, (hi, lo): (u32, u32), r: u32| img.address(f + hi, f + lo, r).filter(|&a| cave(a));
+        // an instruction of `op` from `rs` into `rt`: its immediate
+        let imm = |a: u32, op: u32, rs: u32, rt: u32| img.word(a).filter(|&w| w >> 26 == op && (w >> 21) & 31 == rs && (w >> 16) & 31 == rt).map(|w| w as u16 as i16 as i32);
+        const LW: u32 = 0x23;
+        const ADDIU: u32 = 9;
+        let get_list = call(CLIENT_BASE + at::GET_LIST)?;
+        let compare = call(call(get_list + at::SORT)? + at::COMPARE)?;
+        let rank = |p: (u32, u32)| -> Option<[u8; 16]> { img.bytes(pair(compare, p, T3)?, 16)?.try_into().ok() };
+        let race_rank = rank(at::RACE_RANK)?;
+        let class_rank = rank(at::CLASS_RANK)?;
+        // li t5, n
+        let name_bytes = imm(compare + at::NAME_BYTES, ADDIU, 0, 13).filter(|&n| n > 0)? as usize;
+        let keys = img.word(CLIENT_BASE + at::ON_KEY_DOWN).filter(|&a| cave(a))?;
+        let key = |off: u32| imm(keys + off, ADDIU, 0, T1);
+        let (back, on) = ([key(at::KEYS[0])?, key(at::KEYS[1])?], [key(at::KEYS[2])?, key(at::KEYS[3])?]);
+        if imm(keys + at::STEPS[0], ADDIU, 0, T0) != Some(-1) || imm(keys + at::STEPS[1], ADDIU, 0, T0) != Some(1) {
+            return None;
+        }
+        let marks_at = call(CLIENT_BASE + at::MARKS)?;
+        let base = pair(marks_at, at::BASE, T9)?;
+        let column = |off: i32, by: i32| -> Option<[i32; 4]> {
+            let v: Option<Vec<i32>> = (0..4).map(|i| img.word(base.wrapping_add(off as u32) + 4 * i).map(|w| w as i32 + by)).collect();
+            v?.try_into().ok()
+        };
+        let before = column(imm(marks_at + at::BEFORE, LW, T1, A2)?, imm(marks_at + at::BEFORE_BY, ADDIU, A2, A2)?)?;
+        let after = column(imm(marks_at + at::AFTER, LW, T1, A2)?, 0)?;
+        let mark = |off: u32| img.wstring(base.wrapping_add(imm(marks_at + off, ADDIU, T9, A1)? as u32));
+        let marks = [mark(at::MARK_BEFORE)?, mark(at::MARK_AFTER)?];
+        let legend_at = call(CLIENT_BASE + at::LEGEND)?;
+        let legend = img.cstring(pair(legend_at, at::FORMAT, A2)?)?.into_bytes();
+        let sort_word = img.wstring(pair(legend_at, at::SORT_WORD, T2)?)?;
+        Some(PatchSort { race_rank, class_rank, name_bytes, back, on, marks, before, after, legend, sort_word })
+    }
+
+    /// The session's patch's, if it sorts the who list.
+    pub fn current() -> Option<Arc<PatchSort>> {
+        crate::s2::get().image.as_deref().and_then(PatchSort::read).map(Arc::new)
+    }
+
+    /// The rows in the order the patch leaves them, by `sort`: the list as
+    /// sent, sorted stably by the column (a race or a class by its rank,
+    /// levels from the highest) and then the names, byte by byte up to the
+    /// first that differs, a NUL or `name_bytes`.
+    pub fn order(&self, sort: Sort, list: &[WhoRow]) -> Vec<usize> {
+        let name = |e: &WhoRow| {
+            let b = e.name.as_bytes();
+            b[..b.len().min(self.name_bytes)].iter().copied().take_while(|&c| c != 0).collect::<Vec<u8>>()
+        };
+        let mut v: Vec<usize> = (0..list.len()).collect();
+        v.sort_by(|&a, &b| {
+            let (ea, eb) = (&list[a], &list[b]);
+            let by = match sort {
+                Sort::Name => std::cmp::Ordering::Equal,
+                Sort::Race => self.race_rank[(ea.race & 15) as usize].cmp(&self.race_rank[(eb.race & 15) as usize]),
+                Sort::Class => self.class_rank[(ea.class & 15) as usize].cmp(&self.class_rank[(eb.class & 15) as usize]),
+                Sort::Level => eb.level.cmp(&ea.level),
+            };
+            by.then_with(|| name(ea).cmp(&name(eb)))
+        });
+        v
     }
 }
 
@@ -286,9 +449,19 @@ pub struct WhoList {
     /// the row (an index into the list) to keep selected once a pointer's
     /// sort is drawn
     keep: Option<usize>,
+    /// the server's patch's own sort, when it has one (`PatchSort`)
+    patch: Option<Arc<PatchSort>>,
 }
 
 impl WhoList {
+    /// The rows in the order shown: the patch's sort's, or the client's.
+    fn order(&self, vui: &Vui, list: &[WhoRow]) -> Vec<usize> {
+        match &self.patch {
+            Some(p) => p.order(self.sort, list),
+            None => order(self.sort, list, &|id: i32| vui.words.get(id, vui.language).to_string()),
+        }
+    }
+
     /// A pointer at frame point `p` (`pointer`): with the popup up, its
     /// choice taken, or off it the popup closed (△) and the row under the
     /// pointer selected; else a row selected, or the selection's popup
@@ -308,14 +481,17 @@ impl WhoList {
         }
         match self.hits.at(p) {
             // a heading: the rows by its column (the client's), the
-            // selected one kept once drawn; the column already sorted by
-            // is nothing
+            // selected one kept once drawn (with the patch's sort, the
+            // selection's place, as its keys keep it); the column already
+            // sorted by is nothing
             Some(h) if h <= HEADING => {
                 let sort = Sort::ALL[(HEADING - h) as usize];
                 if sort == self.sort {
                     return Vec::new();
                 }
-                self.keep = self.view.get(self.sel.max(0) as usize).copied();
+                if self.patch.is_none() {
+                    self.keep = self.view.get(self.sel.max(0) as usize).copied();
+                }
                 self.sort = sort;
                 vec![MOVED]
             }
@@ -350,6 +526,7 @@ impl WhoList {
         self.sel = 0;
         self.top = 0;
         self.flash.reset();
+        self.patch = PatchSort::current();
     }
 
     /// `OnKeyDown`/`OnKeyUp` (the popup's while it is up).
@@ -359,7 +536,7 @@ impl WhoList {
                 return None;
             }
             let (sel, ok) = self.options.key(key, now, cues)?;
-            let view = order(self.sort, &who.list, &|id: i32| vui.words.get(id, vui.language).to_string());
+            let view = self.order(vui, &who.list);
             let e = who.list.get(*view.get(self.sel.max(0) as usize)?)?;
             let name = e.name.clone();
             let up = match sel {
@@ -398,13 +575,20 @@ impl WhoList {
                 self.flash.reset();
                 return Some(WhoUp::Refresh);
             }
+            // the patch's sort (S2's `OnKeyDown`, before the game's, which
+            // takes none of these): a column back or on, the selection left
+            // where it is in the list
+            k if self.patch.as_ref().is_some_and(|p| p.back.contains(&k)) => self.sort = self.sort.prev(),
+            k if self.patch.as_ref().is_some_and(|p| p.on.contains(&k)) => self.sort = self.sort.next(),
             // ○ (the client's): the next column's order, the selected row
-            // kept selected
+            // kept selected (with the patch's sort, its place, as the
+            // patch's keys keep it)
             135 => {
-                let word = |id: i32| vui.words.get(id, vui.language).to_string();
-                let keep = order(self.sort, &who.list, &word).get(self.sel.max(0) as usize).copied();
+                let keep = self.order(vui, &who.list).get(self.sel.max(0) as usize).copied();
                 self.sort = self.sort.next();
-                if let Some(at) = keep.and_then(|k| order(self.sort, &who.list, &word).iter().position(|&i| i == k)) {
+                if self.patch.is_none()
+                    && let Some(at) = keep.and_then(|k| self.order(vui, &who.list).iter().position(|&i| i == k))
+                {
                     self.sel = at as i32;
                 }
                 self.window.reset_tick_pulse(now);
@@ -423,7 +607,7 @@ impl WhoList {
         let n = who.list.len() as i32;
         self.now = now;
         self.hits.clear();
-        self.view = order(self.sort, &who.list, &|id: i32| vui.words.get(id, vui.language).to_string());
+        self.view = self.order(vui, &who.list);
         if let Some(at) = self.keep.take().and_then(|k| self.view.iter().position(|&i| i == k)) {
             self.sel = at as i32;
         }
@@ -444,12 +628,18 @@ impl WhoList {
         let x = [50, 300, 400, 500];
         let c0 = UI_COLORS[0];
         // the headings, the one sorted by in the selection's colour (the
-        // client's), each a pointer's sort
+        // client's) or, with the patch's sort, between its marks (S2's
+        // `OnDrawSelf`, after the headings), each a pointer's sort
         let ends = [x[1], x[2], x[3], width - 40];
         for (k, sort) in Sort::ALL.into_iter().enumerate() {
-            let c = UI_COLORS[(sort == self.sort) as usize];
+            let c = UI_COLORS[(sort == self.sort && self.patch.is_none()) as usize];
             self.window.text_box(vui, r, &w(sort.word()), x[k], 0, ends[k] - x[k], 1, c, 0);
             self.hits.push(rows_rect(&self.window, vui, r, x[k], 0, ends[k] - x[k], 1), HEADING - k as i32);
+        }
+        if let Some(p) = &self.patch {
+            let k = self.sort as usize;
+            self.window.text_box(vui, r, &p.marks[0], p.before[k], 0, 12, 1, c0, 0);
+            self.window.text_box(vui, r, &p.marks[1], p.after[k], 0, 12, 1, c0, 0);
         }
         let mut row = 1;
         let mut i = self.top;
@@ -469,8 +659,12 @@ impl WhoList {
             row += 1;
         }
         let word = |id: i32| vui.words.get(id, vui.language).to_string();
-        // the game's legend, and the client's ○ Sort with its column
-        let legend = wide(&format!("|x{}   |t{}   |s{}   |c{}: {}", word(212), word(161), word(811), SORT, word(self.sort.word())));
+        // the game's legend, and the client's ○ Sort with its column; the
+        // patch's, with its keys and its word, when it sorts
+        let legend = match &self.patch {
+            Some(p) => crate::searchwnd::format(&p.legend, &[&w(212), &w(161), &w(811), &p.sort_word], 256),
+            None => wide(&format!("|x{}   |t{}   |s{}   |c{}: {}", word(212), word(161), word(811), SORT, word(self.sort.word()))),
+        };
         self.window.text_box(vui, r, &legend, 30, 12, width - 60, 1, c0, 0);
         self.ticks -= 1;
         if self.ticks <= 0 {
@@ -692,5 +886,222 @@ mod tests {
         l.draw(&vui, &mut r, &who, 32, true, &mut cues);
         assert_eq!(l.point(name), vec![key::TRIANGLE], "the popup closed, the sort kept");
         assert_eq!(l.sort, Sort::Level);
+    }
+
+    /// What the patch's sort draws, by place: a recording raster.
+    #[derive(Default)]
+    struct Texts(Vec<([i32; 2], String)>);
+    impl crate::ui::Layout for Texts {}
+    impl Raster for Texts {
+        fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn stretch_blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+        fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+        fn draw_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16]) {}
+        fn draw_centered_string(&mut self, at: [i32; 2], _: [f32; 4], s: &[u16], _: u32) {
+            self.0.push((at, String::from_utf16_lossy(s)));
+        }
+        fn string_width(&self, s: &[u16]) -> i32 {
+            s.len() as i32 * 8
+        }
+        fn point_size(&self) -> i32 {
+            20
+        }
+        fn viewport(&self) -> [i32; 4] {
+            [0, 0, 640, 448]
+        }
+        fn set_viewport(&mut self, _: [i32; 4]) {}
+    }
+
+    /// The short words of the races and the classes, as the window shows
+    /// them (the test's own spelling of the game's words).
+    const RACE_SHORT: [&str; 10] = ["HUM", "ELF", "DELF", "GNO", "DWF", "TRL", "BAR", "HLF", "ERU", "OGR"];
+    const CLASS_SHORT: [&str; 15] = ["WAR", "RAN", "PAL", "SK", "MNK", "BRD", "RGE", "DRD", "SHA", "CL", "MAG", "NEC", "ENC", "WIZ", "ALC"];
+
+    /// A patch's sort stood in for a test: ranks from A to Z by the short
+    /// words, its keys, marks, places and legend the test's own.
+    fn patch_sort() -> PatchSort {
+        let rank = |words: &[&str]| {
+            let mut order: Vec<usize> = (0..words.len()).collect();
+            order.sort_by_key(|&i| words[i]);
+            let mut r = [words.len() as u8; 16];
+            for (k, &i) in order.iter().enumerate() {
+                r[i] = k as u8;
+            }
+            r
+        };
+        PatchSort {
+            race_rank: rank(&RACE_SHORT),
+            class_rank: rank(&CLASS_SHORT),
+            name_bytes: 29,
+            back: [140, 136],
+            on: [142, 137],
+            marks: [wide("<"), wide(">")],
+            before: [35, 285, 385, 485],
+            after: [102, 352, 464, 564],
+            legend: b"|x%S |t%S |s%S |v|V%S".to_vec(),
+            sort_word: wide("Order"),
+        }
+    }
+
+    /// Sandstorm's S2 sorts the who list itself: what its hooks use, read out
+    /// of the live S2 where its code names it. Its keys are L1 and left one
+    /// column back, R1 and right one on; its ranks put the races and the
+    /// classes in the order their short words spell; its marks are the ones
+    /// round the search window's sorted heading (read there too), placed
+    /// just before each heading and past its start; its legend takes four
+    /// words. The controls: an image without the patch has no sort, and one
+    /// whose race table is built into another register is refused.
+    #[test]
+    fn the_patchs_sort_is_read_out_of_the_live_s2() {
+        let Some(patch) = crate::searchwnd::testing::live() else { return };
+        let img = patch.apply(0);
+        let p = PatchSort::read(&img).expect("the live S2 sorts the who list");
+        assert_eq!((p.back, p.on), ([140, 136], [142, 137]));
+        let by_rank = |n: usize, rank: &[u8; 16]| {
+            let mut v: Vec<usize> = (0..n).collect();
+            v.sort_by_key(|&i| rank[i]);
+            v
+        };
+        let by_word = |words: &[&str]| {
+            let mut v: Vec<usize> = (0..words.len()).collect();
+            v.sort_by_key(|&i| words[i]);
+            v
+        };
+        assert_eq!(by_rank(10, &p.race_rank), by_word(&RACE_SHORT));
+        assert_eq!(by_rank(15, &p.class_rank), by_word(&CLASS_SHORT));
+        assert!(p.name_bytes >= 12, "at least a name's twelve");
+        let x = [50, 300, 400, 500];
+        for k in 0..4 {
+            assert!(p.before[k] + 12 <= x[k] && p.before[k] > x[k] - 30, "the mark before heading {k} at {}", p.before[k]);
+            assert!(p.after[k] > x[k], "the mark after heading {k} at {}", p.after[k]);
+        }
+        let art = crate::searchwnd::Art::read(&img).expect("the search window");
+        let marked = [p.marks[0].clone(), art.heads[0][0].clone(), p.marks[1].clone()].concat();
+        assert_eq!(art.heads[0][1], marked, "the search window's marks");
+        assert_eq!(p.legend.windows(2).filter(|w| w == b"%S").count(), 4);
+        assert!(!p.sort_word.is_empty());
+        assert!(PatchSort::read(&Image::default()).is_none(), "the control: no patch, no sort");
+        let compare = img.call_target(img.call_target(img.call_target(CLIENT_BASE + at::GET_LIST).unwrap() + at::SORT).unwrap() + at::COMPARE).unwrap();
+        let mut moved = patch.clone();
+        let mut found = false;
+        for rec in &mut moved.records {
+            let o = (compare + at::RACE_RANK.0).wrapping_sub(rec.addr & 0x7FFF_FFFF) as usize;
+            if rec.addr & 0x8000_0000 != 0 && o + 4 <= rec.data.len() {
+                // lui t3 made lui t4
+                rec.data[o + 2] = (rec.data[o + 2] & !31) | 12;
+                found = true;
+            }
+        }
+        assert!(found);
+        assert!(PatchSort::read(&moved.apply(0)).is_none(), "the control: a table built into another register");
+    }
+
+    /// The patch's order: the list as sent, stably by the column (a race or
+    /// a class by its rank, levels from the highest), then the names byte by
+    /// byte, capitals first, where the client's own goes by them case aside
+    /// (the control).
+    #[test]
+    fn the_patchs_order() {
+        let p = patch_sort();
+        let list = vec![row("Zed", 9, 5, 30), row("amy", 0, 13, 50), row("Bob", 0, 14, 30), row("cal", 2, 5, 10)];
+        let names = |v: Vec<usize>| v.into_iter().map(|i| list[i].name.as_str()).collect::<Vec<_>>();
+        assert_eq!(names(p.order(Sort::Name, &list)), ["Bob", "Zed", "amy", "cal"]);
+        assert_eq!(names(order(Sort::Name, &list, &spelled)), ["amy", "Bob", "cal", "Zed"], "the control: the client's");
+        // DELF (cal), HUM (Bob, amy), OGR (Zed)
+        assert_eq!(names(p.order(Sort::Race, &list)), ["cal", "Bob", "amy", "Zed"]);
+        // ALC (Bob), BRD (Zed, cal), WIZ (amy)
+        assert_eq!(names(p.order(Sort::Class, &list)), ["Bob", "Zed", "cal", "amy"]);
+        assert_eq!(names(p.order(Sort::Level, &list)), ["amy", "Bob", "Zed", "cal"]);
+        assert_eq!([Sort::Name, Sort::Race, Sort::Class, Sort::Level].map(Sort::prev), [Sort::Level, Sort::Name, Sort::Race, Sort::Class]);
+    }
+
+    /// With the patch's sort (F3 20261023-185531: "anchor to whatever
+    /// position in the list you are currently on"), R1 and right go a column
+    /// on and L1 and left one back, the selection staying where it is in the
+    /// list (the player there now another); ○ and a heading too. The
+    /// control: the client's own sort keeps the player selected instead.
+    #[test]
+    fn the_patchs_sort_keeps_the_selections_place() {
+        use crate::pointer::testing::{NullRaster, mid, vui};
+        let vui = vui();
+        let mut r = NullRaster;
+        let who = Who { list: vec![row("Zed", 0, 0, 30), row("Amy", 0, 0, 50), row("Bob", 0, 0, 10)], ..Default::default() };
+        let mut cues = Vec::new();
+        let shown = |l: &WhoList| l.view.iter().map(|&i| who.list[i].name.clone()).collect::<Vec<_>>();
+        let selected = |l: &WhoList| who.list[l.view[l.sel as usize]].name.clone();
+        let mut l = WhoList::default();
+        l.open(&vui, &r);
+        l.patch = Some(Arc::new(patch_sort()));
+        l.draw(&vui, &mut r, &who, 0, true, &mut cues);
+        assert_eq!(shown(&l), ["Amy", "Bob", "Zed"]);
+        l.sel = 2;
+        // R1: race (all alike), then right: class, then R1: level
+        for k in [142, 137, 142] {
+            l.key(&vui, &r, &who, k, true, 0, &mut cues);
+        }
+        assert_eq!(l.sort, Sort::Level);
+        l.draw(&vui, &mut r, &who, 16, true, &mut cues);
+        assert_eq!(shown(&l), ["Amy", "Zed", "Bob"]);
+        assert_eq!((l.sel, selected(&l).as_str()), (2, "Bob"), "the place kept, the player there another");
+        // L1 and left: back to class, then race
+        l.key(&vui, &r, &who, 140, true, 0, &mut cues);
+        l.key(&vui, &r, &who, 136, true, 0, &mut cues);
+        assert_eq!((l.sort, l.sel), (Sort::Race, 2));
+        // ○ and a heading keep the place too
+        l.key(&vui, &r, &who, 135, true, 0, &mut cues);
+        l.draw(&vui, &mut r, &who, 32, true, &mut cues);
+        assert_eq!((l.sort, l.sel), (Sort::Class, 2));
+        let level = mid(rows_rect(&l.window, &vui, &NullRaster, 500, 0, 60, 1));
+        assert_eq!(l.point(level), vec![MOVED]);
+        l.draw(&vui, &mut r, &who, 48, true, &mut cues);
+        assert_eq!((l.sort, l.sel, selected(&l).as_str()), (Sort::Level, 2, "Bob"));
+        // the control: without the patch ○ keeps the player
+        let mut c = WhoList::default();
+        c.open(&vui, &r);
+        c.draw(&vui, &mut r, &who, 0, true, &mut cues);
+        c.sel = 2;
+        for _ in 0..3 {
+            c.key(&vui, &r, &who, 135, true, 0, &mut cues);
+        }
+        c.draw(&vui, &mut r, &who, 16, true, &mut cues);
+        assert_eq!((c.sel, selected(&c).as_str()), (1, "Zed"));
+        // and the patch's keys are nothing to it
+        c.key(&vui, &r, &who, 142, true, 0, &mut cues);
+        assert_eq!(c.sort, Sort::Level);
+    }
+
+    /// With the patch's sort the heading sorted by is drawn between the
+    /// patch's marks at its places, in the headings' own colour, and the
+    /// legend is the patch's (its keys and its word); the control: the
+    /// client's sort draws no marks and its own legend.
+    #[test]
+    fn the_patchs_marks_and_legend_are_drawn() {
+        use crate::pointer::testing::vui;
+        let vui = vui();
+        let who = Who { list: vec![row("Zed", 0, 0, 30), row("Amy", 0, 0, 50)], ..Default::default() };
+        let mut cues = Vec::new();
+        let mut l = WhoList::default();
+        l.open(&vui, &Texts::default());
+        l.patch = Some(Arc::new(patch_sort()));
+        l.sort = Sort::Class;
+        let mut t = Texts::default();
+        l.draw(&vui, &mut t, &who, 0, true, &mut cues);
+        let at = |t: &Texts, s: &str| t.0.iter().find(|(_, x)| x == s).map(|(a, _)| *a);
+        // the first row's (Amy) a row under the headings
+        let heading_y = at(&t, "Amy").map(|a| a[1] - 16);
+        let (before, after) = (at(&t, "<").expect("the mark before"), at(&t, ">").expect("the mark after"));
+        let x0 = l.window.top_left()[0];
+        assert_eq!((before[0] - x0, after[0] - x0), (385, 464), "the class's places");
+        assert_eq!((Some(before[1]), Some(after[1])), (heading_y, heading_y), "on the headings' row");
+        // the legend's words between its glyphs: the patch's last
+        assert!(t.0.iter().any(|(_, s)| s == "Order") && !t.0.iter().any(|(_, s)| s.contains(SORT)), "the patch's legend: {:?}", t.0);
+        let mut c = WhoList::default();
+        c.open(&vui, &Texts::default());
+        c.sort = Sort::Class;
+        let mut t = Texts::default();
+        c.draw(&vui, &mut t, &who, 0, true, &mut cues);
+        assert!(at(&t, "<").is_none() && at(&t, ">").is_none(), "the control: no marks");
+        assert!(t.0.iter().any(|(_, s)| s.contains(SORT)) && !t.0.iter().any(|(_, s)| s == "Order"), "the client's legend");
     }
 }
