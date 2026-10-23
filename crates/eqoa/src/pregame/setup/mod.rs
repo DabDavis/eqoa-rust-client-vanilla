@@ -438,7 +438,8 @@ impl Setup {
 
     /// `Process` after a window gave the focus up.
     fn moved_on(&mut self, cx: &mut Ctx) {
-        match self.state {
+        let state = self.state;
+        match state {
             0 => {
                 // the legal screen done: the licence
                 self.state = 2;
@@ -468,11 +469,9 @@ impl Setup {
             // `RunPatcher` follows, or (nothing to patch with) its closing
             // fade. (Network Setup's fade out to Sony's utility is the
             // client's page here.)
-            3 if self.splash.sel == 0 && !self.leaving && self.patch.is_none() => {
-                if !self.run_patcher(cx) {
-                    self.fader.begin(1.0, 0.5);
-                    self.leaving = true;
-                }
+            3 if self.splash.sel == 0 && !self.leaving && self.patch.is_none() && !self.run_patcher(cx) => {
+                self.fader.begin(1.0, 0.5);
+                self.leaving = true;
             }
             _ => {}
         }
