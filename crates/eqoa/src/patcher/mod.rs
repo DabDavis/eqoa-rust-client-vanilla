@@ -19,6 +19,8 @@
 
 pub mod http;
 pub mod image;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod native;
 pub mod tree;
 
 use image::Images;

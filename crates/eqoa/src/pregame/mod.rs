@@ -216,6 +216,7 @@ impl Pregame {
     /// (`Client::back_from_world`). The account and the server carry over.
     pub fn back(shared: Shared, disconnect: Option<i32>, now: i64) -> Pregame {
         let mut p = Pregame::new(shared.server.clone());
+        p.res.set_server_words(shared.server.as_deref().and_then(crate::servers::words));
         p.shared = shared;
         p.back = Some(disconnect);
         p.stage = Stage::Client;
@@ -379,11 +380,17 @@ impl Pregame {
             Next::Setup => {
                 self.station.stop();
                 self.client.stop();
+                // back at the title: the disc's words until a server's patch
+                self.res.set_server_words(None);
                 self.enter(Stage::Setup, cx_now);
             }
             Next::Station => {
                 if self.stage == Stage::Client {
                     self.client.stop();
+                } else {
+                    // past the patch: the server's words, if its folder has them
+                    let words = self.shared.server.as_deref().and_then(crate::servers::words);
+                    self.res.set_server_words(words);
                 }
                 self.enter(Stage::Station, cx_now);
             }

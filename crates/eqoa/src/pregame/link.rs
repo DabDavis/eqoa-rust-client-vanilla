@@ -158,6 +158,33 @@ pub fn session(host: &str, port: u16, user: &str, token: [u8; 32]) -> Opening {
     Opening::Platform(Later::ready(Err(format!("no way to reach {host}:{port}"))))
 }
 
+/// SETUP's patcher (`patcher::run`) against the player's server, into that
+/// server's own folder (`servers::folder`): natively on a thread of its own
+/// (`patcher::native`), the window reading the status it returns each
+/// frame. None where it cannot run: in a page (a page cannot reach the
+/// patch port), and in a run that keeps nothing (the test commands).
+pub fn patch(host: &str, manifest: &str) -> Option<crate::patcher::Shared> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if !crate::servers::keeps() {
+            return None;
+        }
+        let st: crate::patcher::Shared = Default::default();
+        let cfg = crate::patcher::Config { host: host.to_string(), port: super::port("EQOA_PATCH_PORT", crate::patcher::PORT), manifest: manifest.to_string(), frame_ms: 33 };
+        let dir = crate::servers::folder(host);
+        let s = st.clone();
+        std::thread::spawn(move || {
+            crate::patcher::run(&cfg, &mut crate::patcher::native::Tcp, &mut crate::patcher::native::Disk(dir), &s);
+        });
+        Some(st)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (host, manifest);
+        None
+    }
+}
+
 /// An HTTP GET of `path` at `host:port` over a [`Stream`] (the news page,
 /// `VUrl::GetPoll`): the reply's body once the server closes, or why not.
 pub struct HttpGet {
