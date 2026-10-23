@@ -575,7 +575,20 @@ impl WndOptions {
         self.window2.close(true);
         self.window2.init(vui, r, self.window.center, 440, rows, 0);
         self.window2.open(false);
-        self.window2.set_title(Some(&[]));
+        if rows > 8 {
+            // the client's Extended page holds a row more than the game's
+            // pages (eight): it goes without their empty title bar (six
+            // pixels each way) and its top where theirs is, so the options
+            // window's title tab above it still shows and its bottom stays
+            // clear of the title's menu under it
+            self.window2.set_title(None);
+            let mut eight = Window::default();
+            eight.init(vui, r, self.window.center, 440, 8, 0);
+            eight.set_title(Some(&[]));
+            self.window2.center[1] += eight.top_left()[1] - self.window2.top_left()[1];
+        } else {
+            self.window2.set_title(Some(&[]));
+        }
         false
     }
 
@@ -1004,6 +1017,40 @@ mod tests {
         assert_eq!(kept, "lod=on\nbrightness=4\ncamera_distance=11\ncamera_turn=125\n");
         assert_eq!(GameOptions::from_card(&testing::kept("game.opt").unwrap()).unwrap().auto_attack, 1);
         testing::reset(false);
+    }
+
+    /// The Extended page, a row more than the game's eight-row pages, keeps
+    /// its top where theirs is (the Interface page's: under the options
+    /// window's title tab) and, without their empty title bar, ends less than
+    /// a row lower; the control: centred as the game's are, its top was half
+    /// a row higher, over the tab.
+    #[test]
+    fn the_extended_page_keeps_the_title_tab_in_view() {
+        use crate::pointer::testing::{NullRaster, vui};
+        crate::settings::testing::reset(false);
+        let vui = vui();
+        let mut r = NullRaster;
+        let mut o = GameOptions::default();
+        let mut w = WndOptions::default();
+        let (mut cues, mut ups) = (Vec::new(), Vec::new());
+        let page = |w: &mut WndOptions, sel: i32, r: &mut NullRaster, o: &mut GameOptions, cues: &mut Vec<i32>, ups: &mut Vec<OptionsUp>| {
+            w.open(&vui, r, o);
+            w.sel = sel;
+            w.key(&vui, r, o, key::CROSS, 0, cues, ups);
+            (w.window2.top_left()[1], w.window2.size[1])
+        };
+        let (top8, h8) = page(&mut w, 1, &mut r, &mut o, &mut cues, &mut ups);
+        assert_eq!(w.window2.rows, 8, "Interface: eight rows (Vibration)");
+        let (top9, h9) = page(&mut w, 3, &mut r, &mut o, &mut cues, &mut ups);
+        assert_eq!((w.window2.rows, w.window2.title_h), (9, 18), "a row more, no title bar");
+        assert_eq!(top9, top8, "the top where an eight-row page's is");
+        let d = vui.font_height(&r) - 4;
+        assert!((0..d).contains(&(h9 - h8)), "less than a row lower at the bottom: {} of {d}", h9 - h8);
+        // the control: nine rows laid out as the game's pages are, centred
+        let mut game = Window::default();
+        game.init(&vui, &r, w.window.center, 440, 9, 0);
+        game.set_title(Some(&[]));
+        assert!(game.top_left()[1] < top8, "centred, it reaches over the tab: {} vs {top8}", game.top_left()[1]);
     }
 
     /// The client's Controls page: the menu's fifth row opens it; a key
