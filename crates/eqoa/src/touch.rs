@@ -179,8 +179,12 @@ pub struct TouchPad {
     last_tap: Option<([f32; 2], Instant)>,
     clicks: Vec<Click>,
     size: (u32, u32),
-    /// the disc and the ring, once on the layer
-    tex: Option<(usize, usize)>,
+    /// the disc and the ring, once on the layer, and which layer that was
+    /// (`Ui::serial`): a session's end takes the HUD's layer with it, and the
+    /// discs kept from it named textures past the next one's end (five crash
+    /// reports of 2026-10-23 from a touch screen: "the len is 475 but the
+    /// index is 475")
+    tex: Option<(u64, usize, usize)>,
     /// a window is up (the viewer sets it each frame): only the face
     /// buttons are the pad's
     pub window: bool,
@@ -307,9 +311,10 @@ impl TouchPad {
     }
 
     /// The disc and the ring the buttons and the stick are drawn on, made
-    /// here (they are no game data) and put on the layer once.
+    /// here (they are no game data) and put on the layer once (on each new
+    /// layer once: the next session's HUD draws on another).
     pub fn textures(&mut self, ui: &mut Ui, device: &render::wgpu::Device, queue: &render::wgpu::Queue) {
-        if self.tex.is_some() {
+        if self.tex.is_some_and(|(layer, ..)| layer == ui.serial()) {
             return;
         }
         let n = 64u32;
@@ -328,7 +333,7 @@ impl TouchPad {
         }
         let d = ui.add_texture(device, queue, n, n, &disc);
         let r = ui.add_texture(device, queue, n, n, &ring);
-        self.tex = Some((d, r));
+        self.tex = Some((ui.serial(), d, r));
     }
 
     /// The overlay's quads over a `size` window. `glyph` answers an atlas
@@ -336,7 +341,10 @@ impl TouchPad {
     /// With `dim`, a window is up: only the face buttons, a little faded
     /// (a button still held is drawn while it is).
     pub fn draw(&self, ui: &mut Ui, size: (u32, u32), dim: bool, glyph: &dyn Fn(i32) -> Option<Glyph>) {
-        let (Some((disc, ring)), true) = (self.tex, self.shown) else { return };
+        let (Some((layer, disc, ring)), true) = (self.tex, self.shown) else { return };
+        if layer != ui.serial() {
+            return;
+        }
         let l = layout(size);
         let held = self.report().buttons;
         let quad = |tex: usize, c: [f32; 2], half: [f32; 2], uv: [f32; 4], color: [f32; 4]| {
@@ -537,5 +545,50 @@ mod tests {
         p.touch(5, Phase::Started, at, t + Duration::from_secs(2), SIZE);
         p.touch(5, Phase::Cancelled, at, t + Duration::from_secs(2), SIZE);
         assert!(p.take_clicks().is_empty());
+    }
+
+    /// The pad's discs are made on the layer they are drawn on. A session's
+    /// end takes the HUD's layer with it, and the next session's has as many
+    /// textures before the pad's, so the discs kept from the first named
+    /// textures past its end: five crash reports of 2026-10-23 from a touch
+    /// screen ("index out of bounds: the len is 475 but the index is 475").
+    /// The control: drawn on the new layer before the pad has made them there,
+    /// nothing is drawn, where the kept discs were. Needs a graphics adapter;
+    /// without one it says so and passes.
+    #[test]
+    fn the_discs_are_made_again_on_the_next_sessions_layer() {
+        let _gpu = crate::GPU_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let instance = render::wgpu::Instance::new(render::wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&render::wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("SKIP: no graphics adapter");
+            return;
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        // a session's layer: the HUD's textures first (one here), then the pad's
+        let layer = || {
+            let mut ui = Ui::new(&device, render::TARGET_FORMAT, render::DEPTH_FORMAT);
+            ui.add_texture(&device, &queue, 1, 1, &[255; 4]);
+            ui
+        };
+        let mut p = TouchPad::new(true);
+        let mut first = layer();
+        p.textures(&mut first, &device, &queue);
+        let (_, disc, ring) = p.tex.unwrap();
+        let mut next = layer();
+        assert_ne!(first.serial(), next.serial());
+        assert!(disc.max(ring) >= next.texture_count(), "the first layer's discs are past the next one's end");
+        next.begin(SIZE);
+        p.draw(&mut next, SIZE, false, &|_| None);
+        assert!(next.quads.is_empty(), "a disc made on another layer is not drawn");
+        p.textures(&mut next, &device, &queue);
+        next.begin(SIZE);
+        p.draw(&mut next, SIZE, false, &|_| None);
+        assert!(!next.quads.is_empty());
+        for q in &next.quads {
+            assert!(q.tex < next.texture_count() && next.texture_size(q.tex) == (64, 64), "texture {} of {}", q.tex, next.texture_count());
+        }
+        let n = next.texture_count();
+        p.textures(&mut next, &device, &queue);
+        assert_eq!(next.texture_count(), n, "once on a layer");
     }
 }

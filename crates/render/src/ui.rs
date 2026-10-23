@@ -20,6 +20,7 @@
 
 use bytemuck::{Pod, Zeroable};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use wgpu::util::DeviceExt;
 
 pub const SCREEN_W: f32 = 640.0;
@@ -322,7 +323,12 @@ pub struct Ui {
     /// creation's scene, drawn into its viewport): the quads before it are
     /// under it, the rest over it. None: no 3D.
     pub split: Option<usize>,
+    /// This layer's own number (`serial`).
+    serial: u64,
 }
+
+/// The layers made so far (`Ui::serial`).
+static LAYERS: AtomicU64 = AtomicU64::new(0);
 
 impl Ui {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat, depth: wgpu::TextureFormat) -> Self {
@@ -395,7 +401,7 @@ impl Ui {
                 })
             })
             .collect();
-        Ui { layout, sampler, pipelines, textures: Vec::new(), fonts: Vec::new(), quads: Vec::new(), viewport: None, anchor: Anchor::Middle, side: 0.0, sided: Vec::new(), opaque: Vec::new(), kept: Vec::new(), split: None }
+        Ui { layout, sampler, pipelines, textures: Vec::new(), fonts: Vec::new(), quads: Vec::new(), viewport: None, anchor: Anchor::Middle, side: 0.0, sided: Vec::new(), opaque: Vec::new(), kept: Vec::new(), split: None, serial: LAYERS.fetch_add(1, Ordering::Relaxed) }
     }
 
     /// A new frame's quads, for a `size` target: none yet, and those made
@@ -469,6 +475,19 @@ impl Ui {
         });
         self.textures.push(Texture { bg, width, height });
         self.textures.len() - 1
+    }
+
+    /// This layer's own number among every layer made. A texture index is
+    /// good only on the layer that made it, and a layer goes with its session
+    /// (the next one's HUD makes another), so what keeps an index from frame
+    /// to frame (the touch pad's discs) keeps the number with it.
+    pub fn serial(&self) -> u64 {
+        self.serial
+    }
+
+    /// How many textures the layer holds.
+    pub fn texture_count(&self) -> usize {
+        self.textures.len()
     }
 
     /// A texture's size.
