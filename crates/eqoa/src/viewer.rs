@@ -1615,6 +1615,46 @@ impl App {
         Controls { fwd: k("w", "s"), strafe: k("d", "a"), orbit: k("l", "j"), pitch: k("k", "i") }
     }
 
+    /// The game's UI sounds asked for outside a window of its own (the
+    /// update's question's).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn ui_cues(&mut self, cues: Vec<i32>) {
+        if let Some(s) = self.sound.as_mut() {
+            for c in cues {
+                s.cue(&crate::sound::Cue::Ui(c));
+            }
+        }
+    }
+
+    /// The pad's keys pressed for the update's question while it is up
+    /// (its own: ✕, △, the d-pad's left and right) taken by it; the rest,
+    /// and every release, go on.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn offer_pad(&mut self, keys: Vec<(i32, bool)>) -> Vec<(i32, bool)> {
+        if !crate::update::offer_shown() {
+            return keys;
+        }
+        let now = self.clock.elapsed().as_millis() as i64;
+        let mut rest = Vec::new();
+        for (k, down) in keys {
+            match down.then(|| crate::update::offer_key(k, now)).flatten() {
+                Some(cues) => self.ui_cues(cues),
+                None => rest.push((k, down)),
+            }
+        }
+        rest
+    }
+
+    /// A click on the update's question's buttons: true when it took it.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn offer_click(&mut self) -> bool {
+        let Some(g) = &self.gfx else { return false };
+        let p = render::ui::frame_from_window((g.config.width, g.config.height), [self.cursor.0 as f32, self.cursor.1 as f32]);
+        let Some(cues) = crate::update::offer_click(p, self.clock.elapsed().as_millis() as i64) else { return false };
+        self.ui_cues(cues);
+        true
+    }
+
     /// The pad, once a frame: every source as libpad's one port
     /// (`VIPad::Read`), its mode to the client (`UpdateControls`' opening),
     /// and `PadKeys`' keys to the window that has them (`SetKey`).
@@ -1645,6 +1685,8 @@ impl App {
         }
         let dead = self.play.as_ref().is_some_and(|p| p.is_dead());
         let keys = self.console.poll(report, connected, motors, dead);
+        #[cfg(not(target_arch = "wasm32"))]
+        let keys = self.offer_pad(keys);
         // `EQOA_PAD_TRACE=1`: every pad key, as the game gets it
         if crate::input::trace() {
             for &(k, down) in &keys {
@@ -1894,6 +1936,8 @@ impl App {
             connected = true;
         }
         let keys = self.console.poll(report, connected, motors, false);
+        #[cfg(not(target_arch = "wasm32"))]
+        let keys = self.offer_pad(keys);
         let Some(h) = self.host.as_mut() else { return };
         for (k, down) in keys {
             if crate::input::trace() {
@@ -1916,13 +1960,17 @@ impl App {
         let Some(host) = self.host.as_mut() else { return };
         let size = (g.config.width, g.config.height);
         let done = host.frame(&mut g.renderer, &g.device, &g.queue, g.config.format, size, now, game_frame, self.sound.as_mut());
-        // the report's dialog over the game's screens (`report`)
+        // the update's question, then the report's dialog, over the game's
+        // screens (`update`, `report`)
         #[cfg(not(target_arch = "wasm32"))]
         report_test(now);
         #[cfg(not(target_arch = "wasm32"))]
         if let (Some((vui, assets)), Some(ui)) = (host.ui_parts(), g.renderer.ui.as_mut()) {
             let mut r = assets.raster(ui);
             r.ui.anchor = render::ui::Anchor::Middle;
+            let quiet = host.pre.quiet() && !crate::report::is_open();
+            crate::update::offer_frame(crate::update::Moment { quiet, plain: quiet, world: false, now });
+            crate::update::offer_draw(vui, &mut r, now);
             crate::report::draw(vui, &mut r);
         }
         g.window.set_title(&format!("eqoa — {}", host.pre.describe()));
@@ -2187,6 +2235,9 @@ impl ApplicationHandler for App {
             // server ended the connection: back to the game's own screens
             // when it was booted (`Msg0777Done`), else the window closes.
             _ if self.play.as_ref().is_some_and(|p| p.quit || p.disconnected.is_some()) => match self.booted.take() {
+                // the update's restart (`update`): the window closes for the
+                // program in place
+                Some(_) if crate::update::restarting() => el.exit(),
                 Some(shared) => self.back_to_pregame(shared),
                 None => el.exit(),
             },
@@ -2251,6 +2302,20 @@ impl ApplicationHandler for App {
                     crate::report::click(render::ui::frame_from_window(size, [self.cursor.0 as f32, self.cursor.1 as f32]));
                 }
             }
+            // The update's question (`update`): its own keys pressed while it
+            // is up, and a click on its buttons; their releases and the rest
+            // go on to the game.
+            #[cfg(not(target_arch = "wasm32"))]
+            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed && crate::update::offer_shown() && pregame_key(&event).is_some_and(crate::update::Offer::takes) => {
+                if !event.repeat
+                    && let Some(k) = pregame_key(&event)
+                {
+                    let cues = crate::update::offer_key(k, self.clock.elapsed().as_millis() as i64);
+                    self.ui_cues(cues.unwrap_or_default());
+                }
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } if crate::update::offer_shown() && self.offer_click() => {}
             // Before the world: the pregame's keys, the game's codes
             // (`VIKeyboard::Read`'s), and its clicks.
             WindowEvent::KeyboardInput { event, .. } if self.host.is_some() => {
@@ -3371,14 +3436,26 @@ impl ApplicationHandler for App {
                         p.hud(u, w, self.clock.elapsed().as_millis() as i64, view.view_proj, (g.config.width, g.config.height), game_frame);
                         self.touch.textures(u, &g.device, &g.queue);
                         p.draw_touch(u, &self.touch, (g.config.width, g.config.height));
-                        // the report's dialog over the HUD and the touch
-                        // pad (`report`)
+                        // the update's question (its Yes logs out: the window
+                        // closes) and the report's dialog over the HUD and the
+                        // touch pad (`update`, `report`)
                         #[cfg(not(target_arch = "wasm32"))]
                         report_test(self.clock.elapsed().as_millis() as i64);
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let now = self.clock.elapsed().as_millis() as i64;
+                            let plain = p.plain() && !crate::report::is_open();
+                            let quiet = plain && p.quiet() && self.held.is_empty();
+                            crate::update::offer_frame(crate::update::Moment { quiet, plain, world: true, now });
+                            if crate::update::restarting() {
+                                p.log_out();
+                            }
+                        }
                         #[cfg(not(target_arch = "wasm32"))]
                         if let Some((vui, assets)) = p.ui_parts() {
                             let mut r = assets.raster(u);
                             r.ui.anchor = render::ui::Anchor::Middle;
+                            crate::update::offer_draw(vui, &mut r, self.clock.elapsed().as_millis() as i64);
                             crate::report::draw(vui, &mut r);
                         }
                     }

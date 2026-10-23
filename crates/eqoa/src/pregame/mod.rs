@@ -409,6 +409,21 @@ impl Pregame {
         (self.stage == Stage::Client && self.entering.is_none()).then(|| self.client.scene()).flatten()
     }
 
+    /// One of the game's screens up and waiting on the player, nothing being
+    /// typed and nothing loading or connecting: where a box of the client's
+    /// own may stand (`update`'s question). The title's menu, STATION's page
+    /// (not its editor), the server list and character select.
+    pub fn quiet(&self) -> bool {
+        self.entering.is_none()
+            && self.entered.is_none()
+            && match self.stage {
+                Stage::Setup => self.setup.focus == Some(setup::Focus::Title),
+                Stage::Station => self.station.quiet(),
+                Stage::Client => self.client.quiet(),
+                Stage::Boot => false,
+            }
+    }
+
     /// For the window's title: where the pregame stands.
     pub fn describe(&self) -> String {
         match (self.stage, self.entering) {

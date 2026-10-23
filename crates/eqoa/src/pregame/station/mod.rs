@@ -72,6 +72,11 @@ impl Station {
         Self::default()
     }
 
+    /// The page up and its editor not (nothing being typed): `Pregame::quiet`.
+    pub fn quiet(&self) -> bool {
+        self.run.as_ref().is_some_and(|r| r.running && r.r.focus == Focus::Renderer)
+    }
+
     /// `station_main`: what the run starts from (the renderer is made at
     /// the first frame, its `Load` at its first draw).
     pub fn start(&mut self, _res: &mut Res, shared: &mut Shared) {

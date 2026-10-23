@@ -292,6 +292,18 @@ impl Client {
         Self::default()
     }
 
+    /// The server list or character select up and waiting on the player,
+    /// none of their boxes up: `Pregame::quiet`.
+    pub fn quiet(&self) -> bool {
+        self.focus.is_none()
+            && self.entered.is_none()
+            && match (self.phase, self.active) {
+                (1, Wnd::Server) => self.server_wnd.quiet(),
+                (3, Wnd::Select) => self.select.quiet(),
+                _ => false,
+            }
+    }
+
     /// `client_main` with the login STATION handed SLUS: `InitBody`, then
     /// (the card's check left out) `ShowLoginWindow`.
     pub fn start(&mut self, _res: &mut Res, shared: &mut Shared) {
