@@ -1107,9 +1107,10 @@ fn write_png(path: &str, w: u32, h: u32, rgba: &[u8]) -> Result<(), Error> {
 
 /// `EQOA_REPORT_TEST=<note>@<ms>` (natively): the report's dialog opened
 /// then (or the crash report it offers, already open), the note typed and
-/// sent two seconds after, the picture taken between; `EQOA_CRASH_TEST=<ms>`:
-/// a panic then, as a bug would (a crash report for the next start). `now`:
-/// ms on the client's clock.
+/// sent two seconds after, the picture taken between (`EQOA_REPORT_NOPIC`:
+/// the picture turned off before it is sent, Tab to its row and Space, as a
+/// player would); `EQOA_CRASH_TEST=<ms>`: a panic then, as a bug would (a
+/// crash report for the next start). `now`: ms on the client's clock.
 #[cfg(not(target_arch = "wasm32"))]
 fn report_test(now: i64) {
     use std::sync::atomic::{AtomicU8, Ordering};
@@ -1129,6 +1130,11 @@ fn report_test(now: i64) {
         }
         1 if now >= at + 2000 => {
             crate::report::key(crate::report::Key::Text(note.to_string()));
+            if std::env::var_os("EQOA_REPORT_NOPIC").is_some() {
+                for k in [crate::report::Key::Tab, crate::report::Key::Tab, crate::report::Key::Text(" ".into())] {
+                    crate::report::key(k);
+                }
+            }
             crate::report::key(crate::report::Key::Enter);
             STEP.store(2, Ordering::Relaxed);
         }
