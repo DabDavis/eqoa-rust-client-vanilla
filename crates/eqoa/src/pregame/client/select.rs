@@ -18,6 +18,11 @@ use crate::pregame::{Music, Scene};
 use vi::fpu::{Ee, F};
 use vi::ui::{FrameParam, UI_COLORS, Window, wide};
 
+/// The view's studded frame (`OnDrawSelf`, at 347): its top and height,
+/// which the list's panel and rails at its left span too; the race page
+/// (`create/race.rs`) is laid out the same.
+pub const PANEL: [i32; 2] = [37, 377];
+
 /// `GetFrameRate()` (name the decomp's guess): the level cap, 60 with
 /// Frontiers' expansion bit, else 50. A character at it stands in the
 /// capped hall (`ShowCharacter`).
@@ -246,6 +251,10 @@ impl CharSelect {
         let frame = FrameParam { tl: (36, 0), top: (37, 0), tr: (36, 1), right: (42, 1), br: (39, 1), bottom: (40, 0), bl: (39, 0), left: (42, 0) };
         let studs = FrameParam { tl: (0, 0), top: (38, 0), tr: (0, 0), right: (43, 1), br: (0, 0), bottom: (41, 0), bl: (0, 0), left: (43, 0) };
         vui.blit_studded_frame(r, [347, 37], [284, 377], &frame, &studs, 2, 3, 0, 1.0, true);
+        // the client's own, in a window wider than 4:3: the list's panel and
+        // its rails run off a TV's left side (from x -1), so there they end
+        // cut; a post closes that edge, as the view's frame closes the right
+        crate::startmenu::close_edges(vui, r, PANEL, false, [true, false]);
         self.hits.clear();
         let mut pen = [15, 60];
         self.making = false;
@@ -798,5 +807,27 @@ mod tests {
             let changes = seen.windows(2).filter(|w| w[0] != w[1]).count();
             assert_eq!(changes, 3, "{hz} Hz");
         }
+    }
+
+    /// In a window wider than 4:3 (F3 20261023-033942) the list's open left
+    /// edge is closed by a post as tall as the view's frame, studded as that
+    /// frame's sides are (`close_edges`); the right edge, the view's own
+    /// frame, gets none. A 4:3 window draws no post (the control), and what
+    /// else either draws is the same.
+    #[test]
+    fn a_wide_window_closes_the_lists_left_edge() {
+        let chars = vec![rec("A", 1)];
+        let vui = crate::startmenu::posts::vui();
+        let drawn = |side: i32| {
+            let mut r = crate::pointer::testing::Wide::new(side);
+            let mut cx = UiCx::bare(&vui, &mut r);
+            CharSelect::default().draw(&mut cx, &chars, None, &mut Vec::new());
+            r.2
+        };
+        let (tv, wide) = (drawn(0), drawn(106));
+        let added: Vec<_> = wide.iter().filter(|b| !tv.contains(b)).copied().collect();
+        assert_eq!(added, crate::startmenu::posts::made_at(render::ui::Anchor::Middle, PANEL, false, [true, false]));
+        let rest: Vec<_> = wide.iter().filter(|b| !added.contains(b)).copied().collect();
+        assert_eq!(rest, tv);
     }
 }

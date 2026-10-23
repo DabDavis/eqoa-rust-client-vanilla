@@ -1258,6 +1258,34 @@ struct Gfx {
     depth: wgpu::TextureView,
     renderer: Renderer,
     models: Vec<GpuModel>,
+    /// The window's title as last set (`title`).
+    title: String,
+}
+
+/// The window's title (F3 20261023-045744, Liav: several windows told
+/// apart): "EQOA <n>", `n` this window's place among the client's windows
+/// open, from 1 (`multibox::place`, the order Controller Focus's Auto reads
+/// the controllers in), and in the world " - <character>". It never changes
+/// while a window stays where it is.
+fn title(name: Option<&str>) -> String {
+    let n = crate::multibox::place() + 1;
+    match name.filter(|s| !s.is_empty()) {
+        Some(name) => format!("EQOA {n} - {name}"),
+        None => format!("EQOA {n}"),
+    }
+}
+
+impl Gfx {
+    /// Names the window `t` (`title`), only when that is new; in a page the
+    /// tab too.
+    fn set_title(&mut self, t: String) {
+        if self.title != t {
+            self.window.set_title(&t);
+            #[cfg(target_arch = "wasm32")]
+            crate::web::set_title(&t);
+            self.title = t;
+        }
+    }
 }
 
 /// `EQOA_PERF=1` (in a page, `?perf`): each frame's CPU time by phase,
@@ -1555,7 +1583,7 @@ impl App {
                 self.clock = Instant::now();
             }
             report(&g.renderer);
-            g.window.set_title(&format!("eqoa — {}", self.summary));
+            g.set_title(title(self.play.as_ref().map(|p| p.player.name.as_str())));
             g.window.request_redraw();
         }
     }
@@ -1860,7 +1888,7 @@ impl App {
         }
         let depth = render::depth_view(&device, config.width, config.height);
         let offscreen = surface.is_none().then(|| offscreen_target(&device, &config));
-        self.gfx = Some(Gfx { window, surface, offscreen, in_flight: None, device, queue, config, depth, renderer, models: Vec::new() });
+        self.gfx = Some(Gfx { window, surface, offscreen, in_flight: None, device, queue, config, depth, renderer, models: Vec::new(), title: "EQOA".into() });
         // before the world there is nothing to load: the pregame draws
         if self.host.is_some() {
             if let Some(g) = &self.gfx {
@@ -1925,7 +1953,7 @@ impl App {
             r.ui.anchor = render::ui::Anchor::Middle;
             crate::report::draw(vui, &mut r);
         }
-        g.window.set_title(&format!("eqoa — {}", host.pre.describe()));
+        g.set_title(title(None));
         let frame = match &g.surface {
             Some(surface) => match surface.get_current_texture() {
                 wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => Some(f),
@@ -2093,7 +2121,7 @@ impl ApplicationHandler for App {
             self.attach(window, Some(p.surface), p.config, p.device, p.queue);
             return;
         }
-        let window = Arc::new(el.create_window(Window::default_attributes().with_title("eqoa")).expect("window"));
+        let window = Arc::new(el.create_window(Window::default_attributes().with_title("EQOA")).expect("window"));
         // `EQOA_OFFSCREEN=WxH`: drawn on the adapter the environment names
         // into a texture of that size, never presented. A GPU with no display
         // to present on (an X server without DRI3) measures as it plays.
@@ -3299,10 +3327,7 @@ impl ApplicationHandler for App {
                             s.feed();
                         }
                     }
-                    match play {
-                        Some(p) => g.window.set_title(&format!("eqoa — {} — {} — {}", p.player.name, w.describe(), p.describe())),
-                        None => g.window.set_title(&format!("eqoa — walking {}", w.describe())),
-                    }
+                    g.set_title(title(play.as_ref().map(|p| p.player.name.as_str())));
                     mark(perf, 5);
                     if let Some(wx) = weather.as_mut() {
                         wx.frame(&mut w.scene, sound.as_mut(), &w.eye, now, hour(clock));

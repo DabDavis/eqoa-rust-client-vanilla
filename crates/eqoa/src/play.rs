@@ -1757,6 +1757,8 @@ impl Play {
         if walker.cam.camera_mode == 3 {
             walker.cam.max_orbit_distance = F::new(crate::settings::camera_distance());
         }
+        // and its Camera Turn Speed: the view's turn by the stick and the keys
+        crate::camstyle::turn_speed(&mut walker.cam, crate::settings::camera_turn());
         // Every OpenStartMenu frames (a return from the spell book or the
         // trainer too) and every CloseStartMenu restores, an entry's window
         // included (its message closes the menu first), so the windows open

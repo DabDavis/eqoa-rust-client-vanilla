@@ -702,6 +702,13 @@ pub const MIDDLE: [i32; 2] = [37, 294];
 /// the start menu), else from the middle frame's top corner (the spell
 /// book). Made under the caller's anchor.
 pub fn close_sides(vui: &Vui, r: &mut dyn Layout, middle: [i32; 2], band: bool) {
+    close_edges(vui, r, middle, band, [true, true]);
+}
+
+/// `close_sides` at the picture's left edge, its right, or both (`edges`):
+/// a window whose other side is a frame of its own inside the picture
+/// (character select's view, the race page's) closes only the open edge.
+pub fn close_edges(vui: &Vui, r: &mut dyn Layout, middle: [i32; 2], band: bool, edges: [bool; 2]) {
     if r.side() <= 0 {
         return;
     }
@@ -711,6 +718,9 @@ pub fn close_sides(vui: &Vui, r: &mut dyn Layout, middle: [i32; 2], band: bool) 
     let top = if band { -1 } else { y + cap.uv1[1] };
     let step = h / 4 - stud.uv1[1] / 2;
     for (left, flip) in [(true, 0), (false, 1)] {
+        if !edges[flip as usize] {
+            continue;
+        }
         // a piece `w` wide against this edge of the picture
         let x = |w: i32| if left { 0 } else { 640 - w };
         if !band {
@@ -750,17 +760,24 @@ pub(crate) mod posts {
     /// window with a band, else from the top corner; at the picture's left
     /// edge, then its right.
     pub fn made(anchor: Anchor, y: i32, band: bool) -> Vec<(Anchor, [i32; 2], [i32; 2])> {
-        let bottom = y + 294 - 20;
+        made_at(anchor, [y, 294], band, [true, true])
+    }
+
+    /// `made` for a middle frame `middle` (its top and height), at the
+    /// picture's left edge, its right, or both (`edges`, `close_edges`').
+    pub fn made_at(anchor: Anchor, middle: [i32; 2], band: bool, edges: [bool; 2]) -> Vec<(Anchor, [i32; 2], [i32; 2])> {
+        let [y, h] = middle;
+        let bottom = y + h - 20;
         let top = if band { -1 } else { y + 12 };
         let mut want = Vec::new();
-        for x in [0, 630] {
+        for (x, _) in [0, 630].into_iter().zip(edges).filter(|e| e.1) {
             if !band {
                 want.push((anchor, [x, y], [10, 12]));
             }
             want.push((anchor, [x, top], [10, bottom - top]));
             want.push((anchor, [x, bottom], [10, 20]));
-            // the studs at the middle frame's spacing: 294 / 4 - 14 / 2
-            want.extend((1..=3).map(|k| (anchor, [x, y + 66 * k], [10, 14])));
+            // the studs at the middle frame's spacing: h / 4 - 14 / 2
+            want.extend((1..=3).map(|k| (anchor, [x, y + (h / 4 - 7) * k], [10, 14])));
         }
         want
     }
