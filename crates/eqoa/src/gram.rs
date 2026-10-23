@@ -781,7 +781,7 @@ impl Compose {
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, grams: &Grams, now: i64, cues: &mut Vec<i32>) -> Option<ComposeUp> {
         self.dots.step();
         let c = |on: bool| UI_COLORS[on as usize];
-        vui.blit_rect(r, 32, [-1, -1], [641, 332], 3, 1.0);
+        crate::ui::window_backdrop(vui, r, 641);
         self.window.draw(vui, r);
         let w = self.window.size[0];
         self.window.text(vui, r, &wide(&format!("{}:", word(vui, 881))), 40, 1, c(self.sel == 0), 0);
@@ -1216,7 +1216,7 @@ impl Inbox {
             self.window.reset_tick_pulse(now);
         }
         self.dots.step();
-        vui.blit_rect(r, 32, [-1, -1], [641, 332], 3, 1.0);
+        crate::ui::window_backdrop(vui, r, 641);
         self.window.draw(vui, r);
         let w = self.window.size[0];
         let x = [58, 160, w - 150];

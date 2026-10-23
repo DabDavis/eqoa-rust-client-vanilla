@@ -698,7 +698,7 @@ impl BuddyList {
         let word = |id: i32| wide(vui.words.get(id, vui.language));
         let black = [0.0, 0.0, 0.0, 1.0];
         let blue = [10.0 / 255.0, 50.0 / 255.0, 70.0 / 255.0, 1.0];
-        vui.blit_rect(r, 32, [-1, -1], [641, 332], 3, 1.0);
+        crate::ui::window_backdrop(vui, r, 641);
         self.window.draw(vui, r);
         let left = self.window.top_left()[0];
         let mut p = self.window.row_center(vui, r, 13);

@@ -5,6 +5,17 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-23 · The start menu in 4:3 again
+- In a wide window the start menu (Start, or Escape) is the game's 4:3 picture
+  again, in the middle with the world on either side, instead of stretching out
+  to the window's edges. So are the inventory and the spell book.
+- Its sides are closed off with the frame's studded posts, where on a TV they
+  ran off the screen.
+- The compass stays in view at the window's left while the menu is open.
+- The buddy list and the mail's windows show the world behind them too, as
+  every other window of the start menu does: their green backdrop no longer
+  fills the screen and covers the compass.
+
 ## 2026-10-23 · Logging in inside, Spirit of the Wolf, invisibility
 - You log back in where you logged out: inside a house, a stall or a cave you
   come back inside it, not on its roof or on the ground above the cave. Coming

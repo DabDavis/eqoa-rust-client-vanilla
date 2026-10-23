@@ -16,12 +16,10 @@
 //! popup (or places the one held), steps the level tabs round to the one
 //! clicked, and chooses a slot when the book asks for one.
 //!
-//! In a window wider than 4:3 (the client's own, `ui::Layout`) it lays out
-//! as the start menu does: its side panels run off a TV's sides, so they go
-//! to the window's, the list, its scroll bar and the tabs with the left one
-//! and the slots, the class's crest and the hint with the right one, and the
-//! middle frame and its two parchments are as wide as they leave, the text
-//! in their middle. A 4:3 window draws it as the game does.
+//! In a window wider than 4:3 (the client's own, `ui::Layout`) it stays the
+//! 4:3 picture the game draws, as the start menu does: its side panels and
+//! rails run off a TV's sides, and there posts close them at the picture's
+//! edges (`startmenu::close_sides`).
 #![allow(clippy::too_many_arguments)]
 
 use crate::client_image::Menus;
@@ -115,8 +113,6 @@ pub struct SpellBook {
     hits: Hits,
     /// the draw's time (a slot's tick pulse starts over then)
     drawn: i64,
-    /// the frame pixels the side panels went out by (`Layout::side`)
-    side: i32,
 }
 
 impl Default for SpellBook {
@@ -145,7 +141,6 @@ impl Default for SpellBook {
             popup: MiniMenu::fixed(&POPUP.map(|(w, m)| (w, m, 0))),
             hits: Hits::default(),
             drawn: 0,
-            side: 0,
         }
     }
 }
@@ -563,28 +558,21 @@ impl SpellBook {
         self.time = now;
         self.drawn = now;
         self.hits.clear();
-        let s = r.side();
-        self.side = s;
         crate::ui::window_backdrop(vui, r, 642);
         let fp = FrameParam { tl: (44, 0), top: (45, 0), tr: (46, 0), right: (52, 0), br: (50, 0), bottom: (49, 0), bl: (48, 0), left: (47, 0) };
-        r.anchor(Anchor::Wide);
-        vui.blit_fill_frame(r, [150 - s, 50], [300 + 2 * s, 177], &fp, 35, 0, 1.0, true);
-        vui.blit_fill_frame(r, [150 - s, 227], [300 + 2 * s, 88], &fp, 35, 0, 1.0, true);
+        r.anchor(Anchor::Frame);
+        vui.blit_fill_frame(r, [150, 50], [300, 177], &fp, 35, 0, 1.0, true);
+        vui.blit_fill_frame(r, [150, 227], [300, 88], &fp, 35, 0, 1.0, true);
         let fp = FrameParam { tl: (36, 0), top: (37, 0), tr: (36, 1), right: (42, 1), br: (39, 1), bottom: (40, 0), bl: (39, 0), left: (42, 0) };
         let studs = FrameParam { tl: (0, 0), top: (38, 0), tr: (0, 0), right: (43, 1), br: (0, 0), bottom: (41, 0), bl: (0, 0), left: (43, 0) };
-        r.anchor(Anchor::Left);
         vui.blit_rect(r, 51, [-1, 50], [140, 265], 0, 1.0);
-        r.anchor(Anchor::Right);
         vui.blit_rect(r, 51, [461, 50], [189, 265], 0, 1.0);
-        r.anchor(Anchor::Left);
         vui.blit_studded_horz(r, [-1, 39], 37, 38, 140, 1, 0, 1.0, 0);
         vui.blit_studded_horz(r, [-1, 315], 40, 41, 140, 1, 0, 1.0, 0);
-        r.anchor(Anchor::Right);
         vui.blit_studded_horz(r, [461, 39], 37, 38, 190, 1, 0, 1.0, 0);
         vui.blit_studded_horz(r, [461, 315], 40, 41, 190, 1, 0, 1.0, 0);
-        r.anchor(Anchor::Wide);
-        let w = 322 + 2 * s;
-        vui.blit_studded_frame(r, [139 - s, 39], [w, 294], &fp, &studs, studs_across(w), 3, 0, 1.0, false);
+        vui.blit_studded_frame(r, [139, 39], [322, 294], &fp, &studs, 2, 3, 0, 1.0, false);
+        r.anchor(Anchor::Middle);
         if self.sel - self.top >= 6 {
             self.top = self.sel - 5;
         } else if self.sel < self.top {
@@ -592,21 +580,17 @@ impl SpellBook {
         }
         let n = self.rows.len() as i32;
         let t = if n >= 7 { self.top as f32 / (n - 6) as f32 } else { 0.0 };
-        r.anchor(Anchor::Left);
         self.window.draw_vscroll(vui, r, [137, 47], 270, t);
-        r.anchor(Anchor::Right);
         if expansion & 2 != 0 {
             self.draw_slots10(vui, r, abilities);
         } else {
             self.draw_slots(vui, r, abilities);
         }
-        r.anchor(Anchor::Left);
         self.draw_tabs(vui, r);
         // the tabs' places: the left end's piece, then 73 a tab
         for k in 0..self.tab_count {
-            self.hits.push([if k == 0 { 0 } else { 37 + 73 * k } - s, 5, 110 + 73 * k - s, 39], TAB + k);
+            self.hits.push([if k == 0 { 0 } else { 37 + 73 * k }, 5, 110 + 73 * k, 39], TAB + k);
         }
-        r.anchor(Anchor::Middle);
         self.window.init(vui, r, [300, 135], 280, 9, 0);
         let text = self.text.clone();
         self.window.text_box(vui, r, &text, 0, 0, 280, 9, black, 2);
@@ -618,14 +602,13 @@ impl SpellBook {
             let s = wide(&format!("|x {}", vui.words.get(268, vui.language)));
             self.window.text_box(vui, r, &s, 0, 0, 280, 4, black, 2);
         }
-        r.anchor(Anchor::Left);
         let mut p = [4, 50];
         let mut i = self.top;
         let mut k = 0;
         while i < n && k < 6 {
             let lit = self.x3c && i == self.sel && self.mode == 0;
             let row = self.rows[i as usize];
-            self.hits.push([p[0] - s, p[1], p[0] + 132 - s, p[1] + 44], i);
+            self.hits.push([p[0], p[1], p[0] + 132, p[1] + 44], i);
             self.draw_icon(vui, r, &row, p, lit, 1.0);
             if i == self.sel && self.mode == 1 {
                 let held = self.held;
@@ -641,7 +624,6 @@ impl SpellBook {
             p[1] += 44;
             i += 1;
         }
-        r.anchor(Anchor::Right);
         let mut p = [right[0] + 60, right[1] + 262];
         for &(c, id) in &CLASS_ICONS {
             if c != class {
@@ -662,6 +644,10 @@ impl SpellBook {
         vui.blit(r, 73, p);
         p = [p[0] + 10, p[1] + 34];
         vui.draw_centered_string_ex(r, &wide(vui.words.get(161, vui.language)), p[0], p[1], white, 0, true);
+        // over the rows and the slots, which reach the picture's edges (the
+        // plates from x 4, the slots to 639): a TV's edge hides those ends
+        r.anchor(Anchor::Frame);
+        crate::startmenu::close_sides(vui, r, MIDDLE, false);
         r.anchor(Anchor::Middle);
         if self.x44 {
             if self.fade_dir == -1 {
@@ -746,7 +732,7 @@ impl SpellBook {
         let mut p = [464, 60];
         for i in 0..5 {
             let lit = self.mode == 2 && i == self.slot;
-            self.hits.push([p[0] + self.side, p[1] - 6, p[0] + 175 + self.side, p[1] + 33], SLOT + i);
+            self.hits.push([p[0], p[1] - 6, p[0] + 175, p[1] + 33], SLOT + i);
             let c = if lit { [1.0, 1.0, 0.0, 1.0] } else { [1.0; 4] };
             if lit {
                 vui.blit_bar3(r, &[], c, p, 56, 58, 57, 175, 0, 1.0, 0, true);
@@ -780,8 +766,7 @@ impl SpellBook {
         let w = self.window.size[0] - 40;
         for i in 0..10 {
             self.window.text_box(vui, r, &[], 20, i, w, 1, [0.0, 0.0, 0.0, 1.0], 4);
-            let [x0, y0, x1, y1] = crate::pointer::rows_rect(&self.window, vui, r, 20, i, w, 1);
-            self.hits.push([x0 + self.side, y0, x1 + self.side, y1], SLOT + i);
+            self.hits.push(crate::pointer::rows_rect(&self.window, vui, r, 20, i, w, 1), SLOT + i);
         }
         for &(id, slot, _) in &self.slots.clone() {
             let name = abilities.get(&id).map_or_else(Vec::new, |a| wide(&a.name));
@@ -797,12 +782,8 @@ impl SpellBook {
     }
 }
 
-/// The studs along the middle frame's top and bottom: the game's two on its
-/// 322, and on a wider middle (`SpellBook::draw`) as many as keep about its
-/// spacing, as the start menu's.
-fn studs_across(w: i32) -> i32 {
-    if w <= 322 { 2 } else { (w * 3 + 161) / 322 - 1 }
-}
+/// The book's middle frame (`SpellBook::draw`): its top and height.
+const MIDDLE: [i32; 2] = [39, 294];
 
 #[cfg(test)]
 mod tests {
@@ -812,15 +793,18 @@ mod tests {
         Ability { id, display_index: index, level, valid: valid as i64, slot, p14: 1, icon_back: -1, ..Default::default() }
     }
 
-    /// In a window wider than 4:3 the book lays out as the start menu does:
-    /// the side panels and their rails at the window's sides, the middle
-    /// frame and the parchments as wide as they leave; on a 4:3 one every
-    /// piece is where the game puts it (the control: nothing else moves);
-    /// and a pointer meets the rows, the tabs and the slots where they went.
+    /// In a window wider than 4:3 the book is the 4:3 picture the game draws,
+    /// as the start menu is: every piece at the game's place, nothing at a
+    /// side, and its open edges closed, a post at each from the middle
+    /// frame's top corner down to the bottom rail. A 4:3 window draws no post
+    /// (the control); what else either draws is the same. A pointer meets the
+    /// rows, the tabs and the slots at their places in the picture; where a
+    /// wide window had them, out at its sides until 2026-10-23, is off them.
     #[test]
-    fn the_book_goes_out_to_a_wide_windows_sides() {
-        use Anchor::{Left, Right, Wide as W};
-        let vui = crate::pointer::testing::vui();
+    fn the_book_stays_four_by_three_closed_at_its_edges() {
+        use crate::startmenu::posts;
+        use Anchor::{Frame, Middle};
+        let vui = posts::vui();
         let drawn = |side: i32, mode: i32| {
             let (mut b, map) = book(&[ability(1, 3, 1, false, -1), ability(2, 4, 1, false, -1), ability(3, 8, 1, false, -1)]);
             let mut r = crate::pointer::testing::Wide::new(side);
@@ -831,32 +815,27 @@ mod tests {
         };
         let (_, tv) = drawn(0, 0);
         let (mut b, wide) = drawn(106, 0);
-        assert!(wide.2.contains(&(Left, [-1, 50], [140, 265])), "the left panel");
-        assert!(wide.2.contains(&(Right, [461, 50], [189, 265])), "the right panel");
-        for at in [[-1, 39], [-1, 315], [4, 50]] {
-            assert!(wide.2.iter().any(|b| b.0 == Left && b.1 == at), "left {at:?}");
+        assert!(wide.2.iter().all(|b| b.0 == Frame || b.0 == Middle), "nothing at a side");
+        assert!(wide.2.contains(&(Frame, [-1, 50], [140, 265])), "the left panel");
+        assert!(wide.2.contains(&(Frame, [461, 50], [189, 265])), "the right panel");
+        for at in [[-1, 39], [-1, 315], [461, 39], [461, 315], [139, 39], [150, 50]] {
+            assert!(wide.2.iter().any(|b| b.0 == Frame && b.1 == at), "{at:?}");
         }
-        for at in [[461, 39], [461, 315]] {
-            assert!(wide.2.iter().any(|b| b.0 == Right && b.1 == at), "right {at:?}");
-        }
-        // the middle frame and the parchments from panel to panel
-        assert!(wide.2.iter().any(|b| b.0 == W && b.1 == [139 - 106, 39]));
-        assert!(wide.2.iter().any(|b| b.0 == W && b.1 == [150 - 106, 50]));
-        assert!(tv.2.iter().any(|b| b.1 == [139, 39]) && tv.2.iter().any(|b| b.1 == [150, 50]));
-        let plain = |r: &crate::pointer::testing::Wide| r.2.iter().filter(|b| b.0 != W).map(|b| (b.1, b.2)).collect::<Vec<_>>();
-        assert_eq!(plain(&tv), plain(&wide));
-        // the pointer: the third row and the third tab where they went left
-        assert_eq!(b.point([40.0 - 106.0, (50 + 44 * 2 + 20) as f32]), vec![MOVED]);
+        assert!(wide.2.iter().any(|b| b.0 == Middle && b.1 == [4, 50]), "the first row");
+        let added: Vec<_> = wide.2.iter().filter(|b| !tv.2.contains(b)).copied().collect();
+        assert_eq!(added, posts::made(Frame, MIDDLE[0], false));
+        let rest: Vec<_> = wide.2.iter().filter(|b| !added.contains(b)).copied().collect();
+        assert_eq!(rest, tv.2);
+        // the pointer: the third row and the third tab at their places
+        assert!(b.point([40.0 - 106.0, (50 + 44 * 2 + 20) as f32]).is_empty(), "where the row went");
+        assert_eq!(b.point([40.0, (50 + 44 * 2 + 20) as f32]), vec![MOVED]);
         assert_eq!(b.sel, 2);
-        assert_eq!(b.point([37.0 + 73.0 * 2.0 + 30.0 - 106.0, 20.0]), vec![key::RIGHT, key::RIGHT]);
-        // control: the row's place on a 4:3 picture is off it now
-        assert!(b.point([40.0, (50 + 44 + 20) as f32]).is_empty());
-        assert_eq!(b.sel, 2);
-        // the slots where they went right
+        assert_eq!(b.point([37.0 + 73.0 * 2.0 + 30.0, 20.0]), vec![key::RIGHT, key::RIGHT]);
+        // the slots (464 to 639; they went out to 570 to 745)
         let (mut s2, _) = drawn(106, 2);
-        assert_eq!(s2.point([500.0 + 106.0, (60 + 39 * 3 + 10) as f32]), vec![MOVED]);
+        assert!(s2.point([700.0, (60 + 39 + 10) as f32]).is_empty(), "where the slot went");
+        assert_eq!(s2.point([500.0, (60 + 39 * 3 + 10) as f32]), vec![MOVED]);
         assert_eq!(s2.slot, 3);
-        assert!(s2.point([500.0, (60 + 39 + 10) as f32]).is_empty(), "the slot's 4:3 place");
     }
 
     fn book(list: &[Ability]) -> (SpellBook, BTreeMap<i64, Ability>) {

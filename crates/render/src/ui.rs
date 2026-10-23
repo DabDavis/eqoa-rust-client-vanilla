@@ -12,10 +12,10 @@
 //!
 //! The frame keeps its 4:3 shape in a wider target, in the middle, and a
 //! quad made under an `Anchor` other than the middle's moves out with the
-//! side it belongs to: the HUD reaches the window's edges, and the start
-//! menu's panels with it. A quad with the frame that is the frame's whole
-//! width (a window's backdrop, which on a TV runs off both sides) runs the
-//! target's whole width.
+//! side it belongs to: the HUD reaches the window's edges. A quad with the
+//! frame that is the frame's whole width (a window's backdrop, which on a TV
+//! runs off both sides) runs the target's whole width; one made under
+//! `Anchor::Frame` (the start menu's art) stays the frame's.
 
 use bytemuck::{Pod, Zeroable};
 use std::collections::HashMap;
@@ -104,8 +104,15 @@ pub enum Anchor {
     Span(i32, i32),
     /// With the frame, but cut to the target's sides rather than the
     /// frame's: what is laid out at a wider width than the frame's (the
-    /// start menu's band and middle frame, as wide as the panels leave).
+    /// merchant's panels and rails, run out to the window's sides).
     Wide,
+    /// With the frame and cut to it, as a 4:3 screen shows it: a full-screen
+    /// window's art kept 4:3 in a wider target (the start menu, its
+    /// inventory, the spell book). Never widened, even the frame's whole
+    /// width (the start menu's band), and no window that takes the HUD back
+    /// (`settle`): the compass and the rest stay at the target's sides,
+    /// beside the picture (the user, 2026-10-23).
+    Frame,
 }
 
 impl Anchor {
@@ -113,18 +120,17 @@ impl Anchor {
     /// of the frame.
     pub fn place(self, x: f32, side: f32) -> f32 {
         match self {
-            Anchor::Middle => x,
+            Anchor::Middle | Anchor::Frame | Anchor::Wide => x,
             Anchor::Left => x - side,
             Anchor::Right => x + side,
             Anchor::Span(a, b) => x - side + 2.0 * side * (x - a as f32) / (b - a).max(1) as f32,
-            Anchor::Wide => x,
         }
     }
 
     /// Whether quads under it reach the target's left side, or its right.
     fn reaches(self) -> (bool, bool) {
         match self {
-            Anchor::Middle => (false, false),
+            Anchor::Middle | Anchor::Frame => (false, false),
             Anchor::Left => (true, false),
             Anchor::Right => (false, true),
             Anchor::Span(..) | Anchor::Wide => (true, true),
@@ -136,8 +142,9 @@ impl Anchor {
 /// (the GS's offset and scissor), then across the target by `anchor`, the
 /// cut too (the whole frame's, without a viewport). A cut at the frame's own
 /// side, moved out to the target's, takes the target's edge (past the whole
-/// frame pixels of `side`, its fraction of one). With the frame and no
-/// viewport, a quad the frame's whole width runs the target's (`widen`).
+/// frame pixels of `side`, its fraction of one). With the frame (`Middle`)
+/// and no viewport, a quad the frame's whole width runs the target's
+/// (`widen`); under `Frame` it stays the frame's.
 fn place(q: &mut Quad, viewport: Option<[i32; 4]>, anchor: Anchor, side: f32) {
     if let Some([x1, y1, x2, y2]) = viewport {
         for p in &mut q.pos {
@@ -148,7 +155,7 @@ fn place(q: &mut Quad, viewport: Option<[i32; 4]>, anchor: Anchor, side: f32) {
     } else {
         q.clip = None;
     }
-    if side > 0.0 && anchor != Anchor::Middle {
+    if side > 0.0 && !matches!(anchor, Anchor::Middle | Anchor::Frame) {
         for p in &mut q.pos {
             p[0] = anchor.place(p[0], side);
         }
@@ -159,7 +166,7 @@ fn place(q: &mut Quad, viewport: Option<[i32; 4]>, anchor: Anchor, side: f32) {
         let l = if left && x0 <= 0 { -edge } else { x(x0) };
         let r = if right && x1 >= SCREEN_W as i32 { SCREEN_W as i32 + edge } else { x(x1) };
         q.clip = Some([l, y0, r, y1]);
-    } else if side > 0.0 && viewport.is_none() {
+    } else if side > 0.0 && viewport.is_none() && anchor == Anchor::Middle {
         widen(q, side);
     }
 }
@@ -202,11 +209,12 @@ fn opaque_rect(q: &Quad) -> Option<[f32; 4]> {
 }
 
 /// What `Ui::push` notes of quad `i` for `end`: how far it went to a side,
-/// or, placed with the frame, what it covers when it is a full-screen
-/// window's backdrop (opaque, the frame's whole width: `widen`'s). A box
-/// (the edit box, a dialog, the quick chat, the options) leaves the HUD at
-/// the window's edges, where its 4:3 place is not covered (F3 2026-10-21:
-/// the say box took the compass and the gauges back under it).
+/// or, placed with the frame (`Middle`), what it covers when it is a
+/// full-screen window's backdrop (opaque, the frame's whole width: `widen`'s).
+/// A box (the edit box, a dialog, the quick chat, the options) leaves the
+/// HUD at the window's edges, where its 4:3 place is not covered (F3
+/// 2026-10-21: the say box took the compass and the gauges back under it),
+/// and so does a window kept 4:3 (`Frame`).
 fn note(i: usize, q: &Quad, anchor: Anchor, side: f32, sided: &mut Vec<(usize, f32)>, opaque: &mut Vec<(usize, [f32; 4])>) {
     match anchor {
         Anchor::Left | Anchor::Right if side > 0.0 => sided.push((i, anchor.place(0.0, side))),
@@ -632,7 +640,7 @@ mod tests {
 
     #[test]
     fn a_four_by_three_target_places_every_anchor_as_the_frame() {
-        for a in [Anchor::Middle, Anchor::Left, Anchor::Right, Anchor::Span(-1, 202), Anchor::Wide] {
+        for a in [Anchor::Middle, Anchor::Left, Anchor::Right, Anchor::Span(-1, 202), Anchor::Wide, Anchor::Frame] {
             let (mut q, mut v) = (quad(5.0, 25.0), quad(5.0, 25.0));
             place(&mut q, None, a, 0.0);
             assert_eq!((q.pos, q.clip), (quad(5.0, 25.0).pos, None), "{a:?}");
@@ -692,6 +700,45 @@ mod tests {
             place(&mut q, vp, Anchor::Middle, side);
             assert_eq!([q.pos[0][0], q.pos[1][0]], [x0, x1], "{x0}..{x1} {vp:?} {side}");
         }
+    }
+
+    /// Under `Frame` a quad stays the frame's, cut to it: the frame's whole
+    /// width too (the start menu's band), where the same quad with the frame
+    /// (`Middle`) runs the target's (the control); a post at its edge stays
+    /// at the edge.
+    #[test]
+    fn a_quad_kept_four_by_three_stays_the_frames() {
+        let s = 106.0;
+        let mut band = quad(-1.0, 641.0);
+        place(&mut band, None, Anchor::Frame, s);
+        assert_eq!(([band.pos[0][0], band.pos[1][0]], band.clip), ([-1.0, 641.0], None));
+        let mut wide = quad(-1.0, 641.0);
+        place(&mut wide, None, Anchor::Middle, s);
+        assert_eq!([wide.pos[0][0], wide.pos[1][0]], [-108.0, 748.0]);
+        let mut post = quad(629.0, 640.0);
+        place(&mut post, None, Anchor::Frame, s);
+        assert_eq!(([post.pos[0][0], post.pos[1][0]], post.clip), ([629.0, 640.0], None));
+    }
+
+    /// A window kept 4:3 (`Frame`) leaves the HUD at the target's sides,
+    /// the compass included, even under art the frame's whole height and
+    /// width (the user, 2026-10-23: "dont make compass hide"); the same
+    /// backdrop made with the frame (`Middle`, a full-screen window's) takes
+    /// the compass back under it (the control).
+    #[test]
+    fn a_window_kept_four_by_three_leaves_the_hud_at_the_sides() {
+        let s = 106.0;
+        let compass = (10.0, 69.0, 15.0, 84.0, 0, 1.0, Anchor::Left);
+        let gauges = (69.0, 205.0, 36.0, 46.0, 0, 1.0, Anchor::Left);
+        let band = (-1.0, 641.0, -1.0, 47.0, 0, 1.0, Anchor::Frame);
+        let panel = (-1.0, 175.0, 48.0, 313.0, 0, 1.0, Anchor::Frame);
+        let q = layer(s, &[compass, gauges, band, panel]);
+        assert_eq!((q[0].pos[0][0], q[1].pos[0][0]), (10.0 - s, 69.0 - s), "the compass and the gauges at the side");
+        assert_eq!([q[2].pos[0][0], q[2].pos[1][0]], [-1.0, 641.0], "the band the frame's");
+        let whole = (-1.0, 641.0, -1.0, 331.0, 0, 1.0, Anchor::Frame);
+        assert_eq!(layer(s, &[compass, whole])[0].pos[0][0], 10.0 - s);
+        let backdrop = (-1.0, 641.0, -1.0, 331.0, 0, 1.0, Anchor::Middle);
+        assert_eq!(layer(s, &[compass, backdrop])[0].pos[0][0], 10.0);
     }
 
     /// The whole screen set as the viewport (what `VIUITextScroll` leaves:

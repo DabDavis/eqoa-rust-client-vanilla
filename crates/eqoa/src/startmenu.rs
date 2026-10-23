@@ -158,9 +158,6 @@ pub struct MainMenu {
     window: Window,
     scroll: TextScroll,
     flash: KeyFlash,
-    /// how far its bars were drawn left of the frame's (`Layout::side`): a
-    /// pointer meets them there
-    side: i32,
 }
 
 impl MainMenu {
@@ -182,7 +179,6 @@ impl MainMenu {
             window: Window::default(),
             scroll: TextScroll::default(),
             flash: KeyFlash::default(),
-            side: 0,
         }
     }
 
@@ -324,8 +320,7 @@ impl MainMenu {
             return s.point(p, menus);
         }
         let count = menus.list[self.menu].entries.len() as i32;
-        // the left panel's, wherever it went (`Layout`)
-        let (x, y) = (p[0] as i32 + self.side, p[1] as i32);
+        let (x, y) = (p[0] as i32, p[1] as i32);
         // the bars: from (18, 56), 27 apart, seven shown
         let i = (y - 56).div_euclid(27);
         if !(18..18 + 150).contains(&x) || !(0..7).contains(&i) || (y - 56).rem_euclid(27) >= 26 || self.top + i >= count {
@@ -365,7 +360,7 @@ impl MainMenu {
     }
 
     /// `OnDrawSelf` (only with the focus), then the sub-menu over it.
-    pub fn draw(&mut self, vui: &Vui, r: &mut dyn Layout, menus: &Menus, now: i64, st: &Stats, cues: &mut Vec<i32>) {
+    pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, menus: &Menus, now: i64, st: &Stats, cues: &mut Vec<i32>) {
         if self.visible && self.x48 {
             self.draw_self(vui, r, menus, now, st, cues);
         }
@@ -374,14 +369,9 @@ impl MainMenu {
         }
     }
 
-    /// In a window wider than 4:3 the bars, their scroll bar and the key
-    /// hints go with the left panel to the left side, the stats with the
-    /// right panel to the right; the title stays in the middle.
-    fn draw_self(&mut self, vui: &Vui, r: &mut dyn Layout, menus: &Menus, now: i64, st: &Stats, cues: &mut Vec<i32>) {
+    fn draw_self(&mut self, vui: &Vui, r: &mut dyn Raster, menus: &Menus, now: i64, st: &Stats, cues: &mut Vec<i32>) {
         let dt = (now - self.time) as f32 * 0.001;
         self.time = now;
-        self.side = r.side();
-        r.anchor(Anchor::Left);
         let menu = &menus.list[self.menu];
         let count = menu.entries.len() as i32;
         let lit = [10.0 / 255.0, 50.0 / 255.0, 70.0 / 255.0, 1.0];
@@ -408,7 +398,6 @@ impl MainMenu {
         }
         let t = if count < 8 { 0.0 } else { self.top as f32 / (count - 7) as f32 };
         self.window.draw_vscroll(vui, r, [175, 46], 270, t);
-        r.anchor(Anchor::Middle);
         if menu.x04 > 0 {
             if self.x44 {
                 let w = vui.string_width(r, &word(menu.x04)) + 64;
@@ -420,16 +409,13 @@ impl MainMenu {
             let w = vui.string_width(r, &s) + 64;
             vui.blit_bar(r, &s, white, [(640 - w) / 2, 8], 33, 34, w, 0, 1.0, 0, true);
         }
-        r.anchor(Anchor::Right);
         self.draw_stats(vui, r, st);
-        r.anchor(Anchor::Left);
         let mut at = [20, 260];
         vui.blit_ex(r, 66, at, 0, 1.0, 0);
         draw_plain(vui, r, &word(212), [at[0] + 22, at[1] - 5], black);
         at[1] += 19;
         vui.blit_ex(r, 65, at, 0, 1.0, 0);
         draw_plain(vui, r, &word(161), [at[0] + 22, at[1] - 5], black);
-        r.anchor(Anchor::Middle);
         if self.blink_dir == -1 {
             self.blink = (self.blink - (dt + dt)).max(0.0);
             if self.blink == 0.0 {
@@ -677,44 +663,107 @@ impl StartMenu {
     /// `OnDrawSelf`: the black band, the left and right panels and the
     /// studded frame round the middle; then the main menu.
     ///
-    /// In a window wider than 4:3 (the client's own, `Layout`) the panels go
-    /// to its sides, each with its rails, the band runs its whole width and
-    /// the middle frame, where the character stands in the world, is as wide
-    /// as the panels leave, studded at about the game's spacing. A 4:3
-    /// window draws it as the game does.
+    /// In a window wider than 4:3 it stays the 4:3 picture the game draws, in
+    /// the middle (`Anchor::Frame`: the band too), its sides closed
+    /// (`close_sides`); the HUD stays at the window's sides beside it.
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Layout, menus: &Menus, now: i64, st: &Stats, cues: &mut Vec<i32>) {
         if !self.visible {
             return;
         }
-        let s = r.side();
-        r.anchor(Anchor::Wide);
-        vui.blit_rect(r, 32, [-1 - s, -1], [642 + 2 * s, 48], 0, 1.0);
-        r.anchor(Anchor::Left);
+        r.anchor(Anchor::Frame);
+        vui.blit_rect(r, 32, [-1, -1], [642, 48], 0, 1.0);
         let fp = FrameParam { tl: (44, 0), top: (45, 0), tr: (46, 0), right: (52, 0), br: (50, 0), bottom: (49, 0), bl: (48, 0), left: (47, 0) };
         vui.blit_fill_frame(r, [-1, 48], [176, 265], &fp, 35, 0, 1.0, true);
-        r.anchor(Anchor::Right);
         vui.blit_rect(r, 51, [451, 48], [199, 265], 0, 1.0);
         let fp = FrameParam { tl: (36, 0), top: (37, 0), tr: (36, 1), right: (42, 1), br: (39, 1), bottom: (40, 0), bl: (39, 0), left: (42, 0) };
         let studs = FrameParam { tl: (0, 0), top: (38, 0), tr: (0, 0), right: (43, 1), br: (0, 0), bottom: (41, 0), bl: (0, 0), left: (43, 0) };
-        r.anchor(Anchor::Left);
         vui.blit_studded_horz(r, [-1, 37], 37, 38, 177, 1, 0, 1.0, 0);
         vui.blit_studded_horz(r, [-1, 313], 40, 41, 177, 1, 0, 1.0, 0);
-        r.anchor(Anchor::Right);
         vui.blit_studded_horz(r, [451, 37], 37, 38, 200, 1, 0, 1.0, 0);
         vui.blit_studded_horz(r, [451, 313], 40, 41, 200, 1, 0, 1.0, 0);
-        r.anchor(Anchor::Wide);
-        let w = 275 + 2 * s;
-        vui.blit_studded_frame(r, [176 - s, 37], [w, 294], &fp, &studs, studs_across(w), 3, 0, 1.0, false);
+        vui.blit_studded_frame(r, [176, 37], [275, 294], &fp, &studs, 2, 3, 0, 1.0, false);
+        close_sides(vui, r, MIDDLE, true);
         r.anchor(Anchor::Middle);
         self.main.draw(vui, r, menus, now, st, cues);
     }
 }
 
-/// The studs along the middle frame's top and bottom: the game's two on its
-/// 275, and on a wider middle (`StartMenu::draw`) as many as keep about its
-/// spacing.
-fn studs_across(w: i32) -> i32 {
-    if w <= 275 { 2 } else { (w * 3 + 137) / 275 - 1 }
+/// The start menu's middle frame (`StartMenu::draw`): its top and height.
+pub const MIDDLE: [i32; 2] = [37, 294];
+
+/// The client's own, in a window wider than 4:3 (nothing on a 4:3 one): a
+/// full-screen window whose band, rails and side panels run off a TV's
+/// sides (from x -1, the right panel to 650) shows them cut at the 4:3
+/// picture's edges there, open. A post closes each edge: the middle frame's
+/// side (atlas 42, mirrored on the right) as tall as the middle frame
+/// `middle` (its top and height), with its three studs at its spacing
+/// (`blit_studded_frame`'s) and its bottom corner on the bottom rail; from
+/// the screen's top where the window's band runs off it as on a TV (`band`,
+/// the start menu), else from the middle frame's top corner (the spell
+/// book). Made under the caller's anchor.
+pub fn close_sides(vui: &Vui, r: &mut dyn Layout, middle: [i32; 2], band: bool) {
+    if r.side() <= 0 {
+        return;
+    }
+    let (cap, side, corner, stud) = (vui.entry(36), vui.entry(42), vui.entry(39), vui.entry(43));
+    let [y, h] = middle;
+    let bottom = y + h - corner.uv1[1];
+    let top = if band { -1 } else { y + cap.uv1[1] };
+    let step = h / 4 - stud.uv1[1] / 2;
+    for (left, flip) in [(true, 0), (false, 1)] {
+        // a piece `w` wide against this edge of the picture
+        let x = |w: i32| if left { 0 } else { 640 - w };
+        if !band {
+            vui.blit_ex(r, 36, [x(cap.uv1[0]), y], 0, 1.0, flip);
+        }
+        vui.blit_vert(r, [x(side.uv1[0]), top], 42, bottom - top, 0, 1.0, flip);
+        vui.blit_ex(r, 39, [x(corner.uv1[0]), bottom], 0, 1.0, flip);
+        for k in 1..=3 {
+            vui.blit_ex(r, 43, [x(stud.uv1[0]), y + step * k], 0, 1.0, flip);
+        }
+    }
+}
+
+/// What the tests of the windows that close their sides share
+/// (`close_sides`): its pieces at sizes of the tests' own, and the posts it
+/// makes of them.
+#[cfg(test)]
+pub(crate) mod posts {
+    use render::ui::Anchor;
+    use vi::ui::{UiTexEntry, Vui};
+
+    /// A `Vui` whose atlas has the pieces a post is made of, at sizes of the
+    /// test's own (not SUPPORT's): the middle frame's top corner (36), its
+    /// bottom corner (39), its side (42, on a row of its own, so drawn
+    /// stretched: one blit) and the side's stud (43). Every other entry is
+    /// empty, as `pointer::testing::vui`'s are.
+    pub fn vui() -> Vui {
+        let mut atlas = vec![UiTexEntry::default(); 252];
+        for (id, size, row) in [(36, [10, 12], 1), (39, [10, 20], 1), (42, [10, 64], 3), (43, [10, 14], 1)] {
+            atlas[id] = UiTexEntry { x00: id as i32, row, uv1: size, ..Default::default() };
+        }
+        Vui::new(Default::default(), Default::default(), atlas)
+    }
+
+    /// The posts `close_sides` makes with `vui`'s pieces for a middle frame
+    /// at `y`, 294 tall, as (anchor, place, size): from the screen's top on a
+    /// window with a band, else from the top corner; at the picture's left
+    /// edge, then its right.
+    pub fn made(anchor: Anchor, y: i32, band: bool) -> Vec<(Anchor, [i32; 2], [i32; 2])> {
+        let bottom = y + 294 - 20;
+        let top = if band { -1 } else { y + 12 };
+        let mut want = Vec::new();
+        for x in [0, 630] {
+            if !band {
+                want.push((anchor, [x, y], [10, 12]));
+            }
+            want.push((anchor, [x, top], [10, bottom - top]));
+            want.push((anchor, [x, bottom], [10, 20]));
+            // the studs at the middle frame's spacing: 294 / 4 - 14 / 2
+            want.extend((1..=3).map(|k| (anchor, [x, y + 66 * k], [10, 14])));
+        }
+        want
+    }
 }
 
 /// The start menu with what it reads out of CLIENT: every menu reached
@@ -830,7 +879,7 @@ mod tests {
 
     /// The start menu in a window `side` wider each side: open, drawn once.
     fn drawn(side: i32) -> (StartMenu, Menus, Wide) {
-        let vui = crate::pointer::testing::vui();
+        let vui = posts::vui();
         let mut menus = Menus::default();
         let m = menus.push(Menu { x00: -1, x04: -1, entries: (0..7).map(|i| crate::client_image::MenuEntry { word: 100 + i, ..Default::default() }).collect() });
         let loc = Location { world: 0, pos: [0.0; 3], cols: 1, rows: 1, cell: 1.0, origin: [0.0; 3], bounds: None };
@@ -842,45 +891,44 @@ mod tests {
         (sm, menus, r)
     }
 
-    /// In a window wider than 4:3 the panels go to its sides with their
-    /// rails and bars, the band runs its whole width and the middle frame is
-    /// as wide as they leave; on a 4:3 one every piece is where the game
-    /// puts it (the control), and the anchors move nothing there.
+    /// In a window wider than 4:3 the start menu is the 4:3 picture the game
+    /// draws: every piece at the game's place, nothing at a side, its art
+    /// the picture's (`Frame`: the band not run across the window); and its
+    /// open edges closed, a post at each from the screen's top down to the
+    /// bottom rail, studded as the middle frame's sides. A 4:3 window draws
+    /// no post (the control); what else either draws is the same.
     #[test]
-    fn the_start_menu_goes_out_to_a_wide_windows_sides() {
-        use Anchor::{Left, Right, Wide as W};
+    fn the_start_menu_stays_four_by_three_closed_at_its_edges() {
+        use Anchor::{Frame, Middle};
         let (_, _, tv) = drawn(0);
         let (_, _, wide) = drawn(106);
-        assert!(tv.2.contains(&(W, [-1, -1], [642, 48])), "the game's band");
-        assert!(wide.2.contains(&(W, [-107, -1], [854, 48])), "the band the window's whole width");
-        // the middle frame from the left panel's edge to the right one's
-        assert!(tv.2.iter().any(|b| b.1 == [176, 37]));
-        assert!(wide.2.iter().any(|b| b.0 == W && b.1 == [70, 37]), "its corner at the left panel's edge, moved out");
-        assert!(!wide.2.iter().any(|b| b.1 == [176, 37]));
-        // the panels at their own places, each with its side
-        for at in [[451, 48], [451, 37], [451, 313]] {
-            assert!(wide.2.iter().any(|b| b.0 == Right && b.1 == at), "right panel {at:?}");
+        assert!(wide.2.iter().all(|b| b.0 == Frame || b.0 == Middle), "nothing at a side");
+        assert!(wide.2.contains(&(Frame, [-1, -1], [642, 48])), "the game's band, the picture's");
+        assert!(wide.2.iter().any(|b| b.0 == Frame && b.1 == [176, 37]), "the middle frame at its place");
+        for at in [[451, 48], [451, 37], [451, 313], [-1, 37], [-1, 313]] {
+            assert!(wide.2.iter().any(|b| b.0 == Frame && b.1 == at), "a panel or rail at {at:?}");
         }
-        for at in [[-1, 37], [-1, 313], [18, 56], [18, 56 + 27 * 6], [20, 260]] {
-            assert!(wide.2.iter().any(|b| b.0 == Left && b.1 == at), "left panel {at:?}");
+        for at in [[18, 56], [18, 56 + 27 * 6], [20, 260]] {
+            assert!(wide.2.iter().any(|b| b.0 == Middle && b.1 == at), "the menu at {at:?}");
         }
-        // the same pieces either way but the band and the middle frame
-        let plain = |r: &Wide| r.2.iter().filter(|b| b.0 != W).map(|b| (b.1, b.2)).collect::<Vec<_>>();
-        assert_eq!(plain(&tv), plain(&wide));
+        let added: Vec<_> = wide.2.iter().filter(|b| !tv.2.contains(b)).copied().collect();
+        assert_eq!(added, posts::made(Frame, MIDDLE[0], true));
+        assert!(tv.2.iter().all(|b| !added.contains(b)), "no post on a 4:3 window");
+        let rest: Vec<_> = wide.2.iter().filter(|b| !added.contains(b)).copied().collect();
+        assert_eq!(rest, tv.2);
     }
 
-    /// A pointer meets the bars where they were drawn: at the left side of a
-    /// wide window (the control: the same point on a 4:3 picture is off
-    /// them, and the bar's own place there is on one).
+    /// A pointer meets the bars at their place in the picture, in a wide
+    /// window as in a 4:3 one; where a wide window had them, out at its left
+    /// side until 2026-10-23, is off them (the control).
     #[test]
-    fn a_pointer_follows_the_bars_to_the_side() {
-        let (mut sm, menus, _) = drawn(106);
-        let p = [18.0 + 40.0 - 106.0, 56.0 + 27.0 + 10.0];
-        assert!(sm.point(p, &menus));
-        assert_eq!(sm.main.sel, 1);
-        let (mut tv, menus, _) = drawn(0);
-        assert!(!tv.point(p, &menus));
-        assert!(tv.point([18.0 + 40.0, 56.0 + 27.0 + 10.0], &menus));
+    fn a_pointer_meets_the_bars_in_the_picture() {
+        for side in [0, 106] {
+            let (mut sm, menus, _) = drawn(side);
+            assert!(!sm.point([18.0 + 40.0 - 106.0, 56.0 + 27.0 + 10.0], &menus), "side {side}");
+            assert!(sm.point([18.0 + 40.0, 56.0 + 27.0 + 10.0], &menus), "side {side}");
+            assert_eq!(sm.main.sel, 1);
+        }
     }
 
     /// The start tables out of the player's CLIENT image (SKIPs without
