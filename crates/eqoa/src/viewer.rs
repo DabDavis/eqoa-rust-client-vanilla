@@ -1684,6 +1684,11 @@ impl App {
         crate::update::offer_stick(if s[3].abs() >= s[1].abs() { s[3] } else { s[1] }, self.frame_s, now);
         let mut rest = Vec::new();
         for (k, down) in keys {
+            // a stick leaving or coming back to rest (128-131) is the list's
+            // scrolling, not a key for what is behind
+            if (128..=131).contains(&k) {
+                continue;
+            }
             match down.then(|| crate::update::offer_key(k, now)).flatten() {
                 Some(cues) => self.ui_cues(cues),
                 None => rest.push((k, down)),

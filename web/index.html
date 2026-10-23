@@ -45,7 +45,7 @@
   #notices { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 20; width: min(560px, calc(100% - 32px)); display: grid; gap: 8px; pointer-events: none; }
   .notice { pointer-events: auto; display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 8px; font-size: 13px; box-shadow: 0 4px 16px #0009; }
   .notice.bad { border-left-color: var(--bad); }
-  .notice .text { flex: 1 1 260px; min-width: 0; overflow-wrap: anywhere; }
+  .notice .text { flex: 1 1 260px; min-width: 0; overflow-wrap: anywhere; white-space: pre-line; max-height: 45vh; overflow-y: auto; }
   .notice button { flex: 0 0 auto; padding: 6px 10px; font-weight: 500; }
   .modal { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 16px; overflow: auto; background: #0008; }
   .modal .card { max-height: calc(100vh - 32px); overflow: hidden auto; }

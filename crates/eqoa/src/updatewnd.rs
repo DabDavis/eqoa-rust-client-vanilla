@@ -103,11 +103,15 @@ fn wrap(w: &Window, vui: &Vui, r: &dyn Raster, text: &[u16], width: i32) -> Vec<
             out.push(std::mem::take(&mut cur));
             cur = word.to_vec();
         }
-        // a word wider than the line on its own: cut at the character
+        // a word wider than the line on its own: cut after the last '/'
+        // that fits (an address), else at the character
         while w.text_width(vui, r, &cur) > width && cur.len() > 1 {
             let mut k = cur.len() - 1;
             while k > 1 && w.text_width(vui, r, &cur[..k]) > width {
                 k -= 1;
+            }
+            if let Some(j) = cur[..k].iter().rposition(|&c| c == b'/' as u16).filter(|&j| j > 0) {
+                k = j + 1;
             }
             out.push(cur[..k].to_vec());
             cur = cur[k..].to_vec();
@@ -375,6 +379,8 @@ mod tests {
         assert_eq!(lines, vec![wide("aaaa bbbb"), wide("cccc dddd")]);
         assert_eq!(wrap(&w, &vui, &r, &wide("aaaa bbbb"), 200), vec![wide("aaaa bbbb")], "the control: it fits");
         assert_eq!(wrap(&w, &vui, &r, &wide("abcdefghijkl"), 40), vec![wide("abcde"), wide("fghij"), wide("kl")]);
+        assert_eq!(wrap(&w, &vui, &r, &wide("ab/cdefg/hijk"), 72), vec![wide("ab/cdefg/"), wide("hijk")], "an address breaks after the last '/' that fits");
+        assert_eq!(wrap(&w, &vui, &r, &wide("ab/cdefg/hijk"), 64), vec![wide("ab/"), wide("cdefg/"), wide("hijk")]);
         assert_eq!(wrap(&w, &vui, &r, &[], 40), vec![Vec::<u16>::new()]);
     }
 

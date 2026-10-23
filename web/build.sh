@@ -1,7 +1,7 @@
 #!/bin/sh
 # The browser client: web/dist/ gets the page (index.html) and its build,
 # v/<build>/: main.js and report.js, the worker (unpack.js), the AudioWorklet
-# (sound.js), eqoa.js and eqoa_bg.wasm (wasm-bindgen 0.2.129, the version
+# (sound.js), the update notes (update-notes.md), eqoa.js and eqoa_bg.wasm (wasm-bindgen 0.2.129, the version
 # Cargo.lock pins: `cargo install wasm-bindgen-cli --version 0.2.129`), and
 # build.json. A build is named by the digest of its files, the page and the
 # commit, so its files never change under that name: the host keeps them
@@ -25,6 +25,9 @@ if [ -n "$OPT" ]; then
         --enable-reference-types --enable-multivalue "$STAGE/eqoa_bg.wasm" -o "$STAGE/eqoa_bg.wasm"
 fi
 cp web/main.js web/report.js web/unpack.js web/sound.js "$STAGE/"
+# the update notes: an open page of an older build shows the sections this
+# build's have and its own lack, with its Reload notice (main.js)
+cp UPDATE-NOTES.md "$STAGE/update-notes.md"
 # the commit, with a + when tracked files differ from it
 COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo none)"
 git diff --quiet HEAD 2>/dev/null || COMMIT="$COMMIT+"
