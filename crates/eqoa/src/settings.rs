@@ -439,6 +439,8 @@ pub struct ClientOptions {
     pub lod: bool,
     /// Brightness, 0 to `BRIGHTNESS_STEPS` (`curve`)
     pub brightness: u8,
+    /// Fog, 0 (off) to `fog::STEPS`, the game's at `fog::GAME` (`fog`)
+    pub fog: u8,
     /// Frame Rate as chosen; `None` until it is, the platform's
     /// (`set_platform_rate`: 30 on a page's WebGL2, else the display's)
     pub frame_rate: Option<FrameRate>,
@@ -462,6 +464,7 @@ impl Default for ClientOptions {
         ClientOptions {
             lod: true,
             brightness: BRIGHTNESS_AS_DRAWN,
+            fog: crate::fog::GAME,
             frame_rate: None,
             camera_distance: crate::camstyle::FOLLOW_MAX_DISTANCE as u8,
             camera_turn: TURN_GAME,
@@ -473,10 +476,10 @@ impl Default for ClientOptions {
 }
 
 impl ClientOptions {
-    /// `client.opt`: a line a setting, `name=value`; Camera Turn Speed only
-    /// when it is not the game's, Screen Shake only when off, a window's
-    /// Controller Focus as `controller.<window>` (from 1) only when it is not
-    /// Auto, and Capture Controller only when on.
+    /// `client.opt`: a line a setting, `name=value`; Camera Turn Speed and
+    /// Fog only when they are not the game's, Screen Shake only when off, a
+    /// window's Controller Focus as `controller.<window>` (from 1) only when
+    /// it is not Auto, and Capture Controller only when on.
     pub fn to_text(self) -> String {
         let mut s = format!("lod={}\nbrightness={}\ncamera_distance={}\n", if self.lod { "on" } else { "off" }, self.brightness, self.camera_distance);
         if let Some(r) = self.frame_rate {
@@ -484,6 +487,9 @@ impl ClientOptions {
         }
         if self.camera_turn != TURN_GAME {
             s.push_str(&format!("camera_turn={}\n", self.camera_turn));
+        }
+        if self.fog != crate::fog::GAME {
+            s.push_str(&format!("fog={}\n", self.fog));
         }
         if !self.screen_shake {
             s.push_str("screen_shake=off\n");
@@ -520,6 +526,11 @@ impl ClientOptions {
                 ("camera_turn", v) => {
                     if let Some(t) = v.parse::<u16>().ok().filter(|t| (TURN_MIN..=TURN_MAX).contains(t)) {
                         c.camera_turn = t;
+                    }
+                }
+                ("fog", v) => {
+                    if let Some(f) = v.parse::<u8>().ok().filter(|&f| f <= crate::fog::STEPS) {
+                        c.fog = f;
                     }
                 }
                 ("screen_shake", "on") => c.screen_shake = true,
@@ -640,6 +651,11 @@ pub fn camera_turn() -> u16 {
     client().camera_turn
 }
 
+/// Fog now, 0 (off) to `fog::STEPS`, the game's at `fog::GAME`.
+pub fn fog() -> u8 {
+    client().fog
+}
+
 /// Whether the camera shakes as the game shakes it (Screen Shake).
 pub fn screen_shake() -> bool {
     client().screen_shake
@@ -713,9 +729,12 @@ pub fn describe() -> String {
         FrameRate::Display => "the display's",
     };
     format!(
-        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, frame rate {rate}{}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}; {}",
+        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}; {}",
         if c.lod { "on" } else { "off" },
         c.brightness,
+        c.fog,
+        crate::fog::STEPS,
+        if c.fog == crate::fog::GAME { " (the game's)" } else if c.fog == 0 { " (off)" } else { "" },
         if c.frame_rate.is_none() { " (not chosen)" } else { "" },
         c.camera_distance,
         c.camera_turn,
@@ -1075,9 +1094,12 @@ mod tests {
             ClientOptions { camera_turn: TURN_MAX, ..Default::default() },
             ClientOptions { controller: std::array::from_fn(|k| Focus::ALL[k % Focus::ALL.len()]), ..Default::default() },
             ClientOptions { screen_shake: false, capture: true, ..Default::default() },
+            ClientOptions { fog: 0, ..Default::default() },
+            ClientOptions { fog: crate::fog::STEPS, ..Default::default() },
         ] {
             assert_eq!(ClientOptions::from_text(&c.to_text()), c);
         }
+        assert_eq!(ClientOptions { fog: 0, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nfog=0\n", "Fog only when not the game's");
         assert_eq!(ClientOptions::default().to_text(), "lod=on\nbrightness=5\ncamera_distance=11\n", "no Frame Rate until one is chosen, no game's turn, no window's Auto");
         assert_eq!(ClientOptions { camera_turn: 250, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\ncamera_turn=250\n");
         assert_eq!(
@@ -1086,7 +1108,7 @@ mod tests {
             "Screen Shake only off, Capture Controller only on"
         );
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, frame rate the display's (not chosen), camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off; kept in the page's storage");
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off; kept in the page's storage");
         testing::reset(true);
         assert!(describe().ends_with("refused: nothing is kept"));
         testing::reset(false);
@@ -1099,6 +1121,9 @@ mod tests {
         assert_eq!(ClientOptions::from_text("camera_turn=300").camera_turn, 300);
         let two = ClientOptions::from_text("controller.2=pad3\ncontroller.16=window");
         assert_eq!((two.controller[1], two.controller[15], two.controller[0]), (Focus::Pad(3), Focus::Window, Focus::Auto));
+        for bad in ["fog=11", "fog=-1", "fog=thick"] {
+            assert_eq!(ClientOptions::from_text(bad).fog, crate::fog::GAME, "{bad}: the game's");
+        }
         for bad in ["screen_shake=no", "capture_controller=1", "capture_controller=yes"] {
             let c = ClientOptions::from_text(bad);
             assert!(c.screen_shake && !c.capture, "{bad}: the defaults");

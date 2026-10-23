@@ -78,6 +78,26 @@ pub const PROFILES: [Profile; 22] = [
     p(0.0, 600.0, b(140, 170, 160), 1, 1.0, 7, 0.0),
 ];
 
+/// `VIScene::CalcTimeOfDayClipPlanes`: the four profiles' near and far,
+/// blended. `SetupTimeOfDayFog` fogs between them and `CalcFarPlane` makes the
+/// far one the walk camera's far plane (`VIWalkCamera::SetCamera` with its
+/// flags, as `VIClient::Process` calls it): nothing past it is drawn.
+pub fn clip_planes<M: Model>(b: &ProfileBlend<M>) -> (F<M>, F<M>) {
+    let mut near = F::ZERO;
+    let mut far = F::ZERO;
+    for k in 0..4 {
+        let pr = PROFILES.get(b.index[k] as usize).unwrap_or(&PROFILES[0]);
+        if k == 0 {
+            near = F::new(pr.near) * b.weight[0];
+            far = F::new(pr.far) * b.weight[0];
+        } else {
+            near = near + F::new(pr.near) * b.weight[k];
+            far = far + F::new(pr.far) * b.weight[k];
+        }
+    }
+    (near, far)
+}
+
 /// A profile's tint as `SetProfiles` leaves it.
 pub fn profile_color<M: Model>(i: i32) -> [F<M>; 4] {
     let c = PROFILES.get(i as usize).map_or(U, |p| p.color);
@@ -218,19 +238,7 @@ impl<M: Model> TimeOfDay<M> {
     /// colour `SetupTimeOfDayLights` left (`m_p1FE4`), `cap` the streaming
     /// radius the far plane may not pass (`m_p2A58[2]`, 900).
     pub fn fog(&self, hour: F<M>, o: F<M>, b: &ProfileBlend<M>, flags: u32, sun: &Color<M>) -> Fog<M> {
-        // CalcTimeOfDayClipPlanes.
-        let mut near = F::ZERO;
-        let mut far = F::ZERO;
-        for k in 0..4 {
-            let pr = PROFILES.get(b.index[k] as usize).unwrap_or(&PROFILES[0]);
-            if k == 0 {
-                near = F::new(pr.near) * b.weight[0];
-                far = F::new(pr.far) * b.weight[0];
-            } else {
-                near = near + F::new(pr.near) * b.weight[k];
-                far = far + F::new(pr.far) * b.weight[k];
-            }
-        }
+        let (mut near, mut far) = clip_planes(b);
         // m_p1FE4 is the sun colour with alpha 0, so its floored alpha is 0.4.
         let lit = || sun.map(|c| vimax(c, f(0.4)));
         let a = f(0.4);

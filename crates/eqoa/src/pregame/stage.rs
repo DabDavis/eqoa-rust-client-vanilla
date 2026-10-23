@@ -91,7 +91,11 @@ impl Stage {
     pub fn view(&self) -> render::View {
         let eye = glam::Vec3::from(self.eye.position.to_array());
         let dir = glam::Vec3::from(self.eye.direction.to_array());
-        let proj = glam::camera::rh::proj::directx::perspective(FOV.to_radians(), ASPECT, NEAR, FAR);
+        let sky_proj = glam::camera::rh::proj::directx::perspective(FOV.to_radians(), ASPECT, NEAR, FAR);
+        // `SetFarPlane`: the terrain profiles' far at the eye, where the
+        // arena has a profile grid
+        let far = self.world.grid.as_ref().map_or(FAR, |g| g.far_plane(&self.eye.position).0);
+        let proj = crate::fog::with_far(sky_proj, far);
         let view = glam::camera::rh::view::look_to_mat4(eye, dir.normalize_or(glam::Vec3::Z), glam::Vec3::Y);
         let tod = vi::tod::TimeOfDay::<Ee>::new();
         let hour = F::new(HOUR);
@@ -120,7 +124,7 @@ impl Stage {
         if !self.sky.is_empty() {
             let mut rot = view;
             rot.w_axis = glam::Vec4::W;
-            v.sky_view_proj = Some(proj * rot);
+            v.sky_view_proj = Some(sky_proj * rot);
         }
         v
     }

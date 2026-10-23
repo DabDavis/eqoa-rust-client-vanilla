@@ -249,11 +249,14 @@ impl Walker {
     }
 
 
-    /// The projection and the view matrix through the game's camera.
+    /// The projection and the view matrix through the game's camera: its far
+    /// plane the terrain profiles' at the eye (`CalcFarPlane`, through the
+    /// Extended page's Fog, `fog::far_plane`).
     pub fn view(&self, aspect: f32) -> (Mat4, Mat4) {
         let eye = Vec3::from(self.eye.position.to_array());
         let dir = Vec3::from(self.eye.direction.to_array());
-        (projection(aspect), glam::camera::rh::view::look_to_mat4(eye, dir.normalize_or(Vec3::Z), Vec3::Y))
+        let far = crate::fog::far_plane(&self.scene, eye, crate::settings::fog());
+        (projection_to(aspect, far), glam::camera::rh::view::look_to_mat4(eye, dir.normalize_or(Vec3::Z), Vec3::Y))
     }
 
     /// Where the camera is.
@@ -295,7 +298,12 @@ pub const FRAME_ASPECT: f32 = 10.0 / 7.0;
 /// quarter larger than the game draws it: the start menu's view of the
 /// character took its head off (F3 20261023-091325).
 pub fn projection(aspect: f32) -> Mat4 {
-    glam::camera::rh::proj::directx::perspective(FOV.to_radians(), FRAME_ASPECT * aspect * 0.75, 0.3, 6000.0)
+    projection_to(aspect, 6000.0)
+}
+
+/// `projection` ending at `far` (the game's far plane, `fog::far_plane`).
+pub fn projection_to(aspect: f32, far: f32) -> Mat4 {
+    glam::camera::rh::proj::directx::perspective(FOV.to_radians(), FRAME_ASPECT * aspect * 0.75, 0.3, far)
 }
 
 #[cfg(test)]
@@ -485,6 +493,32 @@ mod tests {
         let mut src = crate::stream::FileZones::open(&iso, "TUNARIA.ESF").unwrap();
         crate::stream::fill(&mut lib, w, x, z, &mut src);
         World::load(&lib, w)
+    }
+
+    /// The view's far plane is the game's at the eye (`CalcFarPlane`: the
+    /// terrain profiles' far, 800 on Freeport's shore), through Fog: off, the
+    /// sky's; thickest, half. The control: the far plane the client had,
+    /// 6000, which drew the world past its fog.
+    #[test]
+    fn the_view_ends_at_the_games_far_plane() {
+        let Some(world) = tunaria_round(23508.0, 18925.0) else { return };
+        let w = Walker::arrive(world, Spawn::ground(23508.0, 18925.0, 2.74));
+        // f = b / (1 + a) for glam's [0, 1]-depth right-handed perspective
+        let far = |level: u8| {
+            crate::settings::set_client(crate::settings::ClientOptions { fog: level, ..Default::default() });
+            let (p, _) = w.view(16.0 / 9.0);
+            p.w_axis.z / (1.0 + p.z_axis.z)
+        };
+        let eye = Vec3::from(w.eye.position.to_array());
+        let game = w.scene.grid.as_ref().unwrap().far_plane(&vi::vect::Vect3::of(eye.x, eye.y, eye.z)).0;
+        assert!((game - 800.0).abs() < 0.01, "Freeport's shore's profiles: {game}");
+        let at = far(crate::fog::GAME);
+        assert!((at - game).abs() < 0.05, "{at}");
+        // (read back off an f32 matrix, a far plane that far is good to 1%)
+        assert!((far(0) - crate::fog::SKY_FAR).abs() < crate::fog::SKY_FAR * 0.01, "{}", far(0));
+        assert!((far(crate::fog::STEPS) - game * 0.5).abs() < 0.05);
+        assert!((at - 6000.0).abs() > 1000.0, "the old far plane");
+        crate::settings::set_client(crate::settings::ClientOptions::default());
     }
 
     /// A move lands on the floor under the server's place, as `Respawn`

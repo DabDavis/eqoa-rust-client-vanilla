@@ -274,6 +274,10 @@ pub struct Session {
     /// arrived with the world entry, after it (0x1005, 0x03D5), for the
     /// game to read once it is up.
     pub held: Vec<Event>,
+    /// `m_clockA`, `m_clockB`: the server's two clocks (0x0013), synced on
+    /// the local timer (`timer`); the time of day is clock B's
+    pub clock_a: SyncTime,
+    pub clock_b: SyncTime,
 }
 
 fn ipv4(a: &SocketAddr) -> [u8; 4] {
@@ -319,6 +323,8 @@ impl Session {
             debug: std::env::var_os("EQOA_NET_DEBUG").is_some(),
             chat_mode: 0,
             held: Vec::new(),
+            clock_a: SyncTime::default(),
+            clock_b: SyncTime::default(),
         };
         let dst = address_to_endpoint(server.0, server.1, PORT_LEADER);
         let sys = s.drdp.system_endpoint;
@@ -461,6 +467,21 @@ impl Session {
         self.base.wrapping_add(self.start.elapsed().as_millis() as u32)
     }
 
+    /// The local clock `VIClient` keeps (`m_p07568`), in VITimer's ticks,
+    /// 983.04 a second (BUSCLK/16 with a compare of 18,750, plus 2), from
+    /// the session's start: what the synced clocks are set and read against.
+    pub fn timer(&self) -> i64 {
+        (self.start.elapsed().as_micros() as i64).saturating_mul(98_304) / 100_000_000
+    }
+
+    /// `VIClient::UpdateTimeOfDay`: the hour, clock B (0x0013's second
+    /// reading, blended forward on the local timer) modulo 3,600,000 of its
+    /// units as 24 hours, as `VIScene::SetTimeOfDay` clamps it; none until
+    /// the server set the clock.
+    pub fn time_of_day(&self) -> Option<vi::fpu::F<Ee>> {
+        hour_of(&self.clock_b, self.timer())
+    }
+
 
     /// One frame: the clock, every datagram waiting, the arrived messages
     /// (as events), a flush, and the sends.
@@ -579,7 +600,12 @@ impl Session {
                 ev.push(Event::Expansion(self.expansion));
             }
             0x0013 => {
+                // SetTime: each clock moved to the server's reading at the
+                // local timer's now
                 let (a, b) = (r.u64(), r.u64());
+                let now = self.timer();
+                self.clock_a.set(a as i64, now);
+                self.clock_b.set(b as i64, now);
                 ev.push(Event::Time(a, b));
             }
             0x002C if matches!(self.state, State::Shard | State::Characters) => {
@@ -908,8 +934,107 @@ fn read_characters(r: &mut Reader) -> Vec<Character> {
         .collect()
 }
 
+/// `VISyncTime` (CLIENT `visynctime.cpp`): a clock synced to the server's.
+/// `set` moves it to a new reading without a jump: the difference is
+/// blended in over `BLEND_INTERVAL` of local time; `get` reads it at a local
+/// time. VIClient keeps two, both set by 0x0013 (`SetTime`); the time of day
+/// is clock B's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SyncTime {
+    /// `m_bReady`
+    pub ready: bool,
+    /// `m_Blend`: what is left to blend in
+    pub blend: i64,
+    /// `m_local`: the local clock at the last `set`
+    pub local: i64,
+    /// `m_remote`: the synced time then
+    pub remote: i64,
+}
+
+/// `BLEND_INTERVAL`, in the local clock's units.
+pub const BLEND_INTERVAL: i64 = 60_000;
+
+impl SyncTime {
+    /// `VISyncTime::Set(t, base)`.
+    pub fn set(&mut self, t: i64, base: i64) {
+        if self.ready {
+            let cur = self.get(base);
+            self.blend = t.wrapping_sub(cur);
+            self.remote = cur;
+            self.local = base;
+        } else {
+            self.ready = true;
+            self.local = base;
+            self.remote = t;
+            self.blend = 0;
+        }
+    }
+
+    /// `VISyncTime::GetTime(now)` (its `m_bReady` assert left out: callers
+    /// ask `ready` first).
+    pub fn get(&self, now: i64) -> i64 {
+        let dt = now.wrapping_sub(self.local);
+        let m = if dt > BLEND_INTERVAL { BLEND_INTERVAL } else { dt };
+        let r = self.blend.wrapping_mul(m) / BLEND_INTERVAL;
+        self.remote.wrapping_add(dt).wrapping_add(r)
+    }
+}
+
+/// `UpdateTimeOfDay`'s hour out of `clock` at local time `now`:
+/// `(float)(t % 3600000) / 3600000.0f * 24.0f`, then `SetTimeOfDay`'s clamp
+/// to 0..23.99999.
+pub fn hour_of(clock: &SyncTime, now: i64) -> Option<vi::fpu::F<Ee>> {
+    use vi::fpu::F;
+    if !clock.ready {
+        return None;
+    }
+    let t = clock.get(now) % 3_600_000;
+    let h = F::<Ee>::new(t as f32) / F::new(3_600_000.0) * F::new(24.0);
+    Some(vi::fpu::vimin(F::new(23.99999), vi::fpu::vimax(F::ZERO, h)))
+}
+
 #[cfg(test)]
 mod tests {
+    /// `VISyncTime` as visynctime.cpp has it: the first reading taken as it
+    /// is and read forward on the local clock; a later one blended in over
+    /// 60,000 of it (half the difference halfway, all of it after), never
+    /// jumped to. The control: a clock that jumps to the reading.
+    #[test]
+    fn a_synced_clock_blends_a_new_reading_in() {
+        use super::{BLEND_INTERVAL, SyncTime};
+        let mut c = SyncTime::default();
+        assert!(!c.ready);
+        c.set(1_000_000, 500);
+        assert_eq!((c.get(500), c.get(10_500)), (1_000_000, 1_010_000));
+        // 2,000 ahead at local 20,500, where the clock read 1,020,000
+        c.set(1_022_000, 20_500);
+        assert_eq!(c.get(20_500), 1_020_000, "no jump");
+        assert_eq!(c.get(50_500), 1_020_000 + 30_000 + 1_000, "half of it halfway");
+        assert_eq!(c.get(80_500), 1_022_000 + 60_000, "all of it after the interval");
+        assert_eq!(c.get(180_500), 1_022_000 + 160_000);
+        // C's division: toward zero
+        let at = c.get(200_000);
+        c.set(at - 7, 200_000);
+        assert_eq!(c.get(200_000 + BLEND_INTERVAL / 2), at + BLEND_INTERVAL / 2 - 3);
+        // the control
+        let jumped = |t: i64, base: i64, now: i64| t + (now - base);
+        assert_ne!(jumped(1_022_000, 20_500, 50_500), 1_020_000 + 30_000 + 1_000);
+    }
+
+    /// `UpdateTimeOfDay`: clock B modulo 3,600,000 as 24 hours, clamped as
+    /// `SetTimeOfDay` clamps; none before the server set the clock.
+    #[test]
+    fn the_time_of_day_is_clock_b_round_an_hour() {
+        use super::{SyncTime, hour_of};
+        let mut c = SyncTime::default();
+        assert!(hour_of(&c, 0).is_none(), "not set yet");
+        c.set(3_600_000 * 500_000 + 1_800_000, 0);
+        assert_eq!(hour_of(&c, 0).unwrap().0, 12.0);
+        assert_eq!(hour_of(&c, 900_000).unwrap().0, 18.0, "a quarter of the units on");
+        assert_eq!(hour_of(&c, 1_800_000).unwrap().0, 0.0, "round again");
+        assert_eq!(hour_of(&c, 1_799_999).unwrap().0, 23.99999, "clamped below 24");
+    }
+
     use super::*;
 
     struct Null;
@@ -963,6 +1088,24 @@ mod tests {
         assert!(matches!(&ev[..], [Event::Chat(t, c)] if t == "Tell Failed" && *c == [1.0, 0.25, 0.25, 1.0]), "{ev:?}");
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, wide(0x0A7A, "hi"));
         assert!(matches!(&ev[..], [Event::Chat(t, c)] if t == "hi" && *c == [1.0; 4]), "{ev:?}");
+    }
+
+    /// 0x0013 (`SetTime`) sets both clocks at the local timer's now, and the
+    /// time of day is clock B's; none before it came (the control).
+    #[test]
+    fn set_time_sets_the_clocks() {
+        let mut s = session();
+        assert!(s.time_of_day().is_none());
+        let (a, b) = (1_792_732_374_253u64, 3_600_000u64 * 498_000 + 900_000);
+        let mut m = 0x0013u16.to_le_bytes().to_vec();
+        m.extend(a.to_le_bytes());
+        m.extend(b.to_le_bytes());
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, m);
+        assert!(matches!(&ev[..], [Event::Time(x, y)] if (*x, *y) == (a, b)), "{ev:?}");
+        assert!(s.clock_a.ready && s.clock_b.ready);
+        assert_eq!(s.clock_b.remote, b as i64);
+        let h = s.time_of_day().unwrap().0;
+        assert!((6.0..6.01).contains(&h), "a quarter round clock B's hour: {h}");
     }
 
     // 0x0045's zigzag: 2 is on, 0 off (Msg0045's ReadSigned). The control:

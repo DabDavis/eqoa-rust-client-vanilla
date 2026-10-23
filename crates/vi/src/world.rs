@@ -209,6 +209,12 @@ impl<M: Model> Grid<M> {
         Some(Grid { rows, cols, subdiv, cell_size, origin, regions })
     }
 
+    /// `VIScene::CalcFarPlane`: the camera's far plane at `at`, the terrain
+    /// profiles' far there (`tod::clip_planes`), uncapped.
+    pub fn far_plane(&self, at: &Vect3<M>) -> F<M> {
+        crate::tod::clip_planes(&self.profile_blend(at)).1
+    }
+
     /// `VIWorld::CalcProfileBlend`.
     pub fn profile_blend(&self, at: &Vect3<M>) -> ProfileBlend<M> {
         let half = f(0.5);
