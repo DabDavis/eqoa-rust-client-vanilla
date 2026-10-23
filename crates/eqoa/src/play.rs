@@ -60,6 +60,9 @@ struct Puppet {
     trail: crate::trails::State,
     /// `m_p2A8`: not yet seen a frame (a corpse seen first lies at once).
     first: bool,
+    /// Rastered this frame: within its off distance (`VIScene::RasterActor`),
+    /// invisible or not, which is when its own emitters run.
+    shown: bool,
 }
 
 /// `VICSprite::NameColors`.
@@ -613,7 +616,7 @@ fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Optio
                         dress(&mut model, &vi::cust::apply_look(cs, look, helm_worn, |id| lib.surface(id as i32).is_some()));
                     }
                     let gpu = g.renderer.upload(g.device, g.queue, &model, &[render::IDENTITY], &textures);
-                    Some(Puppet { model: e.model, look, sprite, anims, rand, gpu, attached, held, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true })
+                    Some(Puppet { model: e.model, look, sprite, anims, rand, gpu, attached, held, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false })
                 })
 }
 
@@ -1826,6 +1829,7 @@ impl Play {
             let shown = crate::lod::within(&at, &eye, crate::lod::off_dist(&p.gpu.lod_dists));
             crate::lod::place(&mut p.gpu, &p.centre, &eye);
             p.gpu.visible = shown && skins_shown(e.creature.as_ref());
+            p.shown = shown;
             for (_, a) in &mut p.attached {
                 a.visible = shown;
             }
@@ -5467,13 +5471,18 @@ impl Play {
         self.entities.slots.iter().flatten().find(|e| e.id == me)?.creature.as_ref().map(|c| c.p263 != 0)
     }
 
-    /// Every particle sprite in a creature's hand this frame (each held
-    /// item's `particles::item_emitters`) under its hand's node: the
-    /// creatures' as `frame` posed them, the player's own on its walker's
-    /// pose (`matrix`, the centre transform `place_self` takes). Each is
+    /// Every emitter a creature carries this frame, the creatures' as `frame`
+    /// posed them, the player's own on its walker's pose (`matrix`, the
+    /// centre transform `place_self` takes): each particle sprite in its hands
+    /// (each held item's `particles::item_emitters`) under its hand's node,
     /// updated only while its item is drawn (`VICSprite::Raster` rasters what
-    /// a drawn sprite holds; an invisible creature's items are still drawn).
+    /// a drawn sprite holds; an invisible creature's items are still drawn);
+    /// and its sprite's own emitters (`particles::part_emitters`) under their
+    /// nodes, run while the creature is rastered (`UpdateParticleEmitters`,
+    /// from `VICSprite::Raster`), a player-only one on the player alone
+    /// (`SetIsPlayer`).
     pub fn in_hand(&self, lib: &Library, walker: &Walker, matrix: [[f32; 4]; 4]) -> Vec<crate::particles::InHand> {
+        use crate::particles::{How, InHand, OWN};
         let mut out = Vec::new();
         let mut add = |holder: i32, p: &Puppet, cs: &CSprite<Ee>, centre: &Matrix44<Ee>, shown: Option<bool>| {
             for (hand, h) in p.held.iter().enumerate() {
@@ -5482,8 +5491,17 @@ impl Play {
                 let drawn = shown.unwrap_or_else(|| p.attached.iter().any(|a| a.0 == node && a.1.visible));
                 let at = Matrix44::mul(&n.world, centre);
                 for (k, e) in crate::particles::item_emitters(lib, item).into_iter().enumerate() {
-                    out.push(crate::particles::InHand { key: (holder, hand, item, k), world: Matrix44::mul(&e.member, &at), def: e.def, flags: e.flags, drawn });
+                    out.push(InHand { key: (holder, hand, item, k), world: Matrix44::mul(&e.member, &at), def: e.def, how: How::Sprite(e.flags), drawn });
                 }
+            }
+            let player = holder == crate::spells::SELF;
+            for (k, e) in crate::particles::part_emitters(lib, p.model).into_iter().enumerate() {
+                let Some(n) = cs.h.nodes.get(e.node.max(0) as usize).filter(|_| e.node >= 0) else { continue };
+                if e.player_only && !player {
+                    continue;
+                }
+                let how = How::Part { use_location: e.use_location, once: e.once };
+                out.push(InHand { key: (holder, OWN, p.model, k), world: Matrix44::mul(&n.world, centre), def: e.def, how, drawn: shown.unwrap_or(p.shown) });
             }
         };
         for (slot, p) in self.puppets.iter().enumerate() {
