@@ -631,8 +631,9 @@ impl Search {
 
     /// A pointer at frame point `p`: the keys to press. A filter's row or a
     /// player's row is selected by a click (the keys go there), and used by
-    /// a second: a value's left or right half steps it, Search searches, a
-    /// player's row is its tell (✕); a heading sorts by its column. The
+    /// a second: Search searches, a player's row is its tell (✕); a value's
+    /// left or right half steps it down or up at once, its row selected with
+    /// it (as the options' sliders); a heading sorts by its column. The
     /// legend's buttons are the game's glyphs (`Play::point`).
     pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
         let Some(h) = self.hits.at(p) else { return Vec::new() };
@@ -710,7 +711,9 @@ impl Search {
         for (k, &(x, width)) in COLS.iter().enumerate() {
             let sorted = self.sort == k as i32;
             w.text_box(vui, r, &art.heads[k][sorted as usize], if sorted { x - 12 } else { x }, 0, width, 1, UI_COLORS[0], 0);
-            self.hits.push(rows_rect(w, vui, r, x, 0, width, 1), HEADING - k as i32);
+            // its column only (no room for a tick: the one to its left ends there)
+            let [x0, y0, x1, y1] = rows_rect(w, vui, r, x, 0, width, 1);
+            self.hits.push([x0 + 20, y0, x1, y1], HEADING - k as i32);
         }
         let legend = &art.legends[(self.list_keys && n > 0) as usize];
         w.text_box(vui, r, legend, 30, 13, w.size[0] - 60, 1, UI_COLORS[0], 0);
@@ -1112,6 +1115,10 @@ mod tests {
         assert_eq!(s.point(head), vec![MOVED]);
         assert_eq!((s.sort, s.sel), (3, 0));
         assert!(s.point(head).is_empty(), "sorted by it already");
+        // just left of the race heading (the name column's end): the name's
+        let name_end = [(16 + 298 - 6) as f32, head[1]];
+        assert_eq!(s.point(name_end), vec![MOVED]);
+        assert_eq!(s.sort, 0);
         assert!(s.point([2.0, 2.0]).is_empty(), "off the window");
         // the control: before it is drawn there is nothing to hit
         let mut fresh = Search::default();
