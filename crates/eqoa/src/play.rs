@@ -791,6 +791,26 @@ fn look_of(c: &net::entity::Creature) -> vi::cust::Look {
     vi::cust::Look { armor: c.armor, armor_tint: c.armor_tint, hair: c.hair, face: c.face, robe: c.robe as i8, robe_tint: c.robe_tint }
 }
 
+/// A creature's look and hands as its channel sent them, raw (a problem
+/// report's entity lines): what `ApplyLook` and `ApplyItems` dress it in, so
+/// a report shows whether the server sent a robe (byte 109: 0-127 is one,
+/// 4 and 5 Sandstorm's own, 128-255 none) rather than leaving it to a picture.
+fn look_line(c: &net::entity::Creature) -> String {
+    let hex = |ids: &[u32; 3]| ids.map(|id| format!("{id:#x}")).join(", ");
+    format!(
+        "look: robe {} tint {}, armor {:?} tints {:?}, hair {:?}, face {}; items [{}] over [{}] types {:?}",
+        c.robe,
+        c.robe_tint,
+        c.armor,
+        c.armor_tint,
+        c.hair,
+        c.face,
+        hex(&c.items),
+        hex(&c.items_over),
+        c.item_types
+    )
+}
+
 fn v3(a: [f32; 3]) -> Vect3<Ee> {
     Vect3::of(a[0], a[1], a[2])
 }
@@ -1011,6 +1031,9 @@ impl Play {
         for e in self.entities.slots.iter().flatten() {
             let name = e.creature.as_ref().map_or("", |c| c.name.as_str());
             let _ = writeln!(o, "  {:#x} kind {} model {:#x} {name:?} at {:?}", e.id, e.kind, e.model, e.pos);
+            if let Some(c) = &e.creature {
+                let _ = writeln!(o, "    {}", look_line(c));
+            }
         }
         o
     }
@@ -5394,6 +5417,31 @@ mod commands {
     fn grouped(p: &mut Play, ids: &[u32]) {
         p.group.in_group = true;
         p.group.members = ids.iter().map(|&id| crate::group::Member { id, ..Default::default() }).collect();
+    }
+
+    /// A problem report's entity lines carry each creature's look and hands
+    /// as its channel sent them: here Coachman Quicksteed as Sandstorm sent
+    /// him in `pcaps/ps2_sandstorm.pcap` (no robe: byte 109 is 255), so a
+    /// report of a robe on someone shows what the server sent. An entity
+    /// with no creature part has no look line (the control).
+    #[test]
+    fn a_report_shows_each_creatures_look() {
+        let mut p = play();
+        let mut c = net::entity::Creature { name: "Coachman Quicksteed".into(), robe: 255, hair: [2, 3, 1], face: 3, item_types: [1, 0], ..Default::default() };
+        c.armor = [0, 0, 0, 0, 2, 0];
+        c.armor_tint = [255; 6];
+        c.items = [0xBF7E7DCB, 0, 0];
+        p.entities.slots[15] = Some(net::entity::Entity { id: 0x2B1DE, kind: 130, model: 0x70D898C6, creature: Some(c), ..Default::default() });
+        p.entities.slots[3] = Some(net::entity::Entity { id: 0x42, kind: 129, model: 0x1234, ..Default::default() });
+        let r = p.report([0.0; 3]);
+        let lines: Vec<&str> = r.lines().collect();
+        let at = lines.iter().position(|l| l.contains("\"Coachman Quicksteed\"")).expect("the coachman's line");
+        assert_eq!(
+            lines.get(at + 1).copied(),
+            Some("    look: robe 255 tint 0, armor [0, 0, 0, 0, 2, 0] tints [255, 255, 255, 255, 255, 255], hair [2, 3, 1], face 3; items [0xbf7e7dcb, 0x0, 0x0] over [0x0, 0x0, 0x0] types [1, 0]")
+        );
+        let plain = lines.iter().position(|l| l.starts_with("  0x42 kind 129")).expect("the plain entity's line");
+        assert!(!lines.get(plain + 1).is_some_and(|l| l.contains("look:")), "an entity with no creature part has no look line");
     }
 
     /// The chat mode's Guild (`|17`, the start menu's): the guild's channel
