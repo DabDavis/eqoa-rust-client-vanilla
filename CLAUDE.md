@@ -22,7 +22,9 @@ current.
   artifacts deleted), so no older build can be downloaded. No versioned releases, no other channel.
 - **A push to `master` reaches every player at their next start** (the user chose it, 2026-10-23): the
   updater (`update.rs`) reads the release's `update.txt` (dev.yml writes it, uploaded after the programs)
-  and puts a build of another commit in place before the title. So master is always a build fit to play:
+  and puts a build of another commit in place before the title; while the game runs it looks again (3 minutes
+  after the start, then every 10) and asks the player in the game's Yes/No box to restart into a newer one
+  (`update::Offer`). So master is always a build fit to play:
   test before pushing, and never push a half-done change. Only a build that carries `EQOA_UPDATE_CHANNEL`
   and `EQOA_BUILD_COMMIT` (CI's) updates itself; dev.yml refuses one without its commit. Test the
   updater with `EQOA_UPDATE_URL=<base>` against a server of one's own, never by pushing.
