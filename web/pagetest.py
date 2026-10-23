@@ -8,7 +8,8 @@ memory), then plays deploys against an open page by writing new builds and
 version.json under it:
 
   update    an untouched page reloads into a new build at once; one with a
-            disc picked is told, and Later holds until a newer build; Reload
+            disc picked is told, and Later holds for its while (`?later=`)
+            or until a newer build; Reload
             brings the newest; a reload that still brings the old page is a
             problem, not a second reload
   report    F3 opens the problem dialog; Send posts what reportd takes, the
@@ -196,7 +197,7 @@ async def tests(a, site, base, page):
             failed.append(name)
 
     notices = "JSON.stringify([...document.querySelectorAll('#notices .notice')].map(n => n.dataset.key))"
-    q = "?reports=/reports"
+    q = "?reports=/reports&later=3000"
 
     # ---- update
     first = site.first
@@ -219,6 +220,10 @@ async def tests(a, site, base, page):
     await page.js("[...document.querySelectorAll('#notices .notice button')].find(b => b.textContent === 'Later').click()")
     await page.js("eqoaCheckUpdate()")
     check("Later holds for that build", "update" not in await page.js(notices))
+    await asyncio.sleep(3.2)
+    await page.js("eqoaCheckUpdate()")
+    check("Later's while over, it is told again", bool(await page.until(f"{notices}.includes('update')", 5)))
+    await page.js("[...document.querySelectorAll('#notices .notice button')].find(b => b.textContent === 'Later').click()")
     site.deploy("d" * 12)
     await page.js("eqoaCheckUpdate()")
     check("a newer build is told again after Later", bool(await page.until(f"{notices}.includes('update')", 5)))
