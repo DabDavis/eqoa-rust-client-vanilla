@@ -201,6 +201,35 @@ impl Image {
         None
     }
 
+    /// The NUL-terminated UTF-16 string at `a` (256 characters at most),
+    /// when the patch wrote it.
+    pub fn wstring(&self, a: u32) -> Option<Vec<u16>> {
+        let mut s = Vec::new();
+        for i in 0..256u32 {
+            let (lo, hi) = (*self.mem.get(&a.wrapping_add(2 * i))?, *self.mem.get(&a.wrapping_add(2 * i + 1))?);
+            match u16::from_le_bytes([lo, hi]) {
+                0 => return Some(s),
+                c => s.push(c),
+            }
+        }
+        None
+    }
+
+    /// The address a `lui r, hi` at `hi_at` and an `addiu` or `ori r, r, lo`
+    /// at `lo_at` build, when the patch wrote both and both are into `r`.
+    pub fn address(&self, hi_at: u32, lo_at: u32, r: u32) -> Option<u32> {
+        let (hi, lo) = (self.word(hi_at)?, self.word(lo_at)?);
+        if (hi >> 16) & 31 != r {
+            return None;
+        }
+        lui_pair(hi, lo)
+    }
+
+    /// Where the patch's j or jal at `a` goes.
+    pub fn call_target(&self, a: u32) -> Option<u32> {
+        self.jump_target(a)
+    }
+
     /// The end of the record that wrote `a`: a table's length is read off
     /// the record that holds it.
     fn record_end(&self, a: u32) -> Option<u32> {
@@ -266,7 +295,8 @@ impl Image {
     }
 }
 
-fn in_cave(a: u32) -> bool {
+/// Whether `a` is in the arena the stub allocates (at delta 0).
+pub fn in_cave(a: u32) -> bool {
     a.wrapping_sub(CAVE_LO) < CAVE_SIZE
 }
 
