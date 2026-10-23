@@ -128,6 +128,18 @@ pub fn record(host: &str) -> Option<Record> {
     Record::from_json(&String::from_utf8_lossy(&file(host, RECORD)?))
 }
 
+/// A problem report's line on the server's patch: what its folder holds, by
+/// the last patch that finished.
+pub fn report_line(host: Option<&str>) -> String {
+    match host {
+        None => "no server".into(),
+        Some(h) => match record(h) {
+            Some(r) => format!("{h}: {}", r.describe()),
+            None => format!("{h}: no patch kept"),
+        },
+    }
+}
+
 /// Writes the record beside the server's files.
 pub fn write_record(dir: &Path, r: &Record) -> Result<(), String> {
     #[cfg(not(target_arch = "wasm32"))]

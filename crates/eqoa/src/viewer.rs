@@ -1904,6 +1904,7 @@ impl App {
         let _ = writeln!(o, "files: {}", self.lib.files.iter().map(|f| f.0.as_str()).collect::<Vec<_>>().join(", "));
         let _ = writeln!(o, "options, extended: {}", crate::settings::describe());
         let _ = writeln!(o, "keys and buttons: {}", crate::settings::with_binds(|b| b.describe()));
+        let _ = writeln!(o, "the server's patch: {}", crate::servers::report_line(self.booted.as_ref().and_then(|s| s.server.as_deref())));
         // the controls: a pad's sticks as they came (before the host's dead
         // zone), as the game reads them and with the keys, the mouse and the
         // touch screen's merged in (what `UpdateControls` got), the camera's
@@ -2098,7 +2099,7 @@ impl App {
         // The page's picture of this frame, if it asked, and the report's
         // state of the client (`report`): which of the game's screens.
         crate::report::frame_drawn();
-        crate::report::note_state(|| format!("pregame: {}\nsurface {}x{} {:?}\noptions, extended: {}\nkeys and buttons: {}", host.pre.describe(), size.0, size.1, g.config.format, crate::settings::describe(), crate::settings::with_binds(|b| b.describe())));
+        crate::report::note_state(|| format!("pregame: {}\nsurface {}x{} {:?}\noptions, extended: {}\nkeys and buttons: {}\nthe server's patch: {}", host.pre.describe(), size.0, size.1, g.config.format, crate::settings::describe(), crate::settings::with_binds(|b| b.describe()), crate::servers::report_line(host.pre.shared.server.as_deref())));
         match done {
             crate::pregame::host::Done::Stay => {}
             crate::pregame::host::Done::Quit => el.exit(),

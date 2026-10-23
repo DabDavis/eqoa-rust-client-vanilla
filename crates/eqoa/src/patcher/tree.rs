@@ -220,10 +220,6 @@ impl Tree {
         self.nodes.len() - 1
     }
 
-    pub fn need_delete(&self, n: usize) -> bool {
-        self.nodes[n].delete
-    }
-
     /// `NeedDownload(flags)`: SETUP passes 0 (0x10 counts everything).
     pub fn need_download_for(&self, n: usize, flags: i32) -> i32 {
         let d = &self.nodes[n];

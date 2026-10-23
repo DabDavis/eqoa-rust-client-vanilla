@@ -100,6 +100,8 @@ pub struct Setup {
     pub patch_wnd: patchwnd::PatchWnd,
     /// the patch's end has been read
     patch_ended: bool,
+    /// how a patch starts (`link::patch`; a test's own)
+    patch_start: fn(&str, &str) -> Option<crate::patcher::Shared>,
     /// the keys since the last frame, for the window with the focus
     keys: Vec<(i32, bool)>,
     /// the Controls page's capture, for the next frame
@@ -152,6 +154,7 @@ impl Setup {
             patch: None,
             patch_wnd: Default::default(),
             patch_ended: false,
+            patch_start: crate::pregame::link::patch,
             keys: Vec::new(),
             captures: Vec::new(),
             sound: Vec::new(),
@@ -481,7 +484,7 @@ impl Setup {
     fn run_patcher(&mut self, cx: &mut Ctx) -> bool {
         let Some(host) = cx.shared.server.clone() else { return false };
         let manifest = psvrpath(cx.res);
-        let Some(st) = crate::pregame::link::patch(&host, &manifest) else { return false };
+        let Some(st) = (self.patch_start)(&host, &manifest) else { return false };
         self.patch = Some(st);
         self.patch_ended = false;
         self.patch_wnd.open(cx.vui, cx.r);
@@ -688,6 +691,76 @@ mod tests {
         run.press(key::TRIANGLE);
         assert_eq!(run.s.focus, Some(Focus::Title));
         run.press(17);
+        run.press(13);
+        assert!(matches!(run.frames(30).as_slice(), [Next::Station]));
+        crate::settings::testing::reset(false);
+    }
+
+    thread_local! {
+        static STATUS: std::cell::RefCell<Option<crate::patcher::Shared>> = const { std::cell::RefCell::new(None) };
+    }
+
+    /// The test's patch: the status the test holds.
+    fn started(_: &str, _: &str) -> Option<crate::patcher::Shared> {
+        STATUS.with(|s| s.borrow().clone())
+    }
+
+    fn set(st: &crate::patcher::Shared, f: impl FnOnce(&mut crate::patcher::Status)) {
+        f(&mut st.lock().unwrap());
+    }
+
+    /// Play runs the patch in its window: its status followed, the notes
+    /// opened by themselves when files changed, Done's Play then on to
+    /// STATION; a failure's Restart goes back to the title (the control: no
+    /// STATION), and a patch server that does not answer, with nothing kept,
+    /// goes straight on.
+    #[test]
+    fn play_runs_the_patch_in_its_window() {
+        use crate::patcher::state;
+        let st: crate::patcher::Shared = Default::default();
+        STATUS.with(|s| *s.borrow_mut() = Some(st.clone()));
+        let title = |run: &mut Run| {
+            run.s.patch_start = started;
+            run.s.state = 2;
+            run.s.focus = None;
+            run.frames(32);
+        };
+        let mut run = Run::new(Some("192.0.2.1"));
+        title(&mut run);
+        set(&st, |s| s.state = state::CHECKING);
+        run.press(13);
+        assert_eq!(run.s.focus, Some(Focus::Patcher), "Play: the patch's window");
+        run.frames(3);
+        assert_eq!(run.s.patch_wnd.state, state::CHECKING, "its status followed");
+        assert!(run.frames(30).is_empty(), "nothing goes on while it runs");
+        set(&st, |s| {
+            s.state = state::DONE;
+            s.progress = 1.0;
+            s.notes = "New this week.".into();
+            s.changed = true;
+            s.done = true;
+        });
+        run.frames(2);
+        assert_eq!(run.s.patch_wnd.notes.text, wide("New this week."), "the notes in");
+        run.press(key::TRIANGLE);
+        assert_eq!(run.s.patch_wnd.sel, 1, "they opened by themselves, Play behind them");
+        run.press(key::CROSS);
+        assert!(matches!(run.frames(30).as_slice(), [Next::Station]), "Play: the fade, then STATION");
+
+        // a failure: Restart is the title again
+        set(&st, |s| *s = crate::patcher::Status { state: state::FAILED, done: true, ..Default::default() });
+        let mut run = Run::new(Some("192.0.2.1"));
+        title(&mut run);
+        run.press(13);
+        run.frames(2);
+        run.press(key::CROSS);
+        assert_eq!(run.s.focus, Some(Focus::Title), "Restart: the title");
+        assert!(run.frames(30).is_empty(), "the control: no STATION");
+
+        // a patch server that never answered, nothing kept: straight on
+        set(&st, |s| *s = crate::patcher::Status { state: state::CONNECTING, done: true, unreachable: true, ..Default::default() });
+        let mut run = Run::new(Some("192.0.2.1"));
+        title(&mut run);
         run.press(13);
         assert!(matches!(run.frames(30).as_slice(), [Next::Station]));
         crate::settings::testing::reset(false);
