@@ -77,10 +77,34 @@ impl Play {
     /// The opcodes these windows read; true when handled.
     pub(super) fn npcw_opcode(&mut self, op: u16, data: &[u8]) -> bool {
         let mut r = net::stream::Reader::new(data);
-        if matches!(op, 0x0016 | 0x0018 | 0x001A | 0x00B7 | 0x00D7 | 0x0056 | 0x0057) {
+        if matches!(op, 0x0016 | 0x0018 | 0x0019 | 0x001A | 0x0085 | 0x00B7 | 0x00D7 | 0x0056 | 0x0057) {
             eprintln!("play: {op:#06x} ({} bytes) in mode {}", data.len(), self.mode);
         }
         match op {
+            0x0019 => {
+                // Msg0019(slot, b): the server's answer to LootOne, the
+                // corpse's item in that slot taken (`b` is not read)
+                let slot = r.u8() as usize;
+                let _ = r.signed();
+                if !r.error {
+                    self.msg_0019(slot);
+                }
+            }
+            0x0085 => {
+                // LootOptions: why the corpse did not open, in the chat box
+                // (`VIWndGame::LootOption`, `VIWndChat::AddWord`); any other
+                // byte says nothing
+                let word = match r.u8() {
+                    1 => Some(673),
+                    2 => Some(674),
+                    3 => Some(675),
+                    _ => None,
+                };
+                if let Some(id) = word.filter(|_| !r.error) {
+                    let text = self.words.as_ref().map_or_else(|| format!("(word {id})"), |w| w.get(id, 0).to_string());
+                    self.add_chat(text, [1.0; 4]);
+                }
+            }
             0x0018 => {
                 // the corpse: the window when in play, else LootNoWindow
                 self.npcw.corpse = Some(net::dump::read_item_list(&mut r));
@@ -146,6 +170,25 @@ impl Play {
             _ => return false,
         }
         true
+    }
+
+    /// `Msg0019`: the corpse's item in `slot` into the inventory as far as
+    /// it goes (`AddItem` with its own stack limit, 40 slots; unequipped),
+    /// and `Took` that many off the corpse. The corpse window shows the list
+    /// as it is left. `VIItemList::Get` hands over only an item a slot holds:
+    /// another slot (an assert in CLIENT's `Took`) changes nothing.
+    pub(super) fn msg_0019(&mut self, slot: usize) {
+        let Some(corpse) = self.npcw.corpse.as_mut() else { return };
+        let Some(item) = corpse.items.get(slot).filter(|it| it.quantity > 0) else {
+            eprintln!("play: 0x0019 for corpse slot {slot}, which holds nothing");
+            return;
+        };
+        let mut item = item.clone();
+        item.equip_slot = -1;
+        let limit = item.item.max_stack;
+        let n = crate::inventory::add_item(&mut self.dump.inventory, &item, limit, crate::inventory::CAPACITY);
+        crate::inventory::took(corpse, slot, n);
+        eprintln!("play: looted {n} of {} ({} on the corpse)", item.item.name, corpse.items.len());
     }
 
     /// 0x003B with the merchant open: sound 3, and the request answered.
@@ -377,6 +420,7 @@ impl Play {
         }
         self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
         for o in loot_out {
+            eprintln!("play: loot request {o:?}");
             match o {
                 LootOut::Close => self.session.send_opcode(0x0016),
                 LootOut::One(key, n) => {
@@ -452,5 +496,104 @@ impl Play {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use net::dump::{Item, NetItem};
+    use net::session::{Player, Session};
+
+    /// Play on a session nothing answers (as `play`'s own tests make it).
+    fn play() -> Play {
+        struct Nowhere;
+        impl net::session::Datagrams for Nowhere {
+            fn send_to(&mut self, _: &[u8], _: [u8; 4], _: u16) {}
+            fn recv_from(&mut self) -> Option<(Vec<u8>, [u8; 4], u16)> {
+                None
+            }
+        }
+        let mut s = Session::connect_with(Box::new(Nowhere), ([127, 0, 0, 1], 5000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        s.self_id = Some(0x100);
+        Play::new(s, Player::default(), Box::default())
+    }
+
+    /// A corpse record as 0x0018 carries it: the server's key in `m_invIndex`.
+    fn record(id: i64, quantity: i64, key: u32, max_stack: i64, name: &str) -> NetItem {
+        let item = Item { id, max_stack, name: name.into(), ..Default::default() };
+        NetItem { quantity, equip_slot: -1, quick_slot: -1, inv_index: key, item, ..Default::default() }
+    }
+
+    fn ids(l: &ItemList) -> Vec<(i64, i64)> {
+        l.items.iter().map(|i| (i.item.id, i.quantity)).collect()
+    }
+
+    /// 0x0019, the server's answer to a `LootOne` (Return Home's
+    /// `ServerLootItem`: the corpse slot's byte, then 1 as a 7-bit number,
+    /// zigzag 2): `Msg0019` moves that record into the inventory, whole, as
+    /// `Msg001A` does every record, and takes it off the corpse, so the
+    /// window shows what is left and the next request names a record the
+    /// server still has (vanilla dropped 0x0019: the looted record stayed on
+    /// the window and asking for it again had Sandstorm answer "item not
+    /// found"). The controls: a slot the corpse does not hold changes
+    /// nothing, and a message cut short is read as nothing.
+    #[test]
+    fn a_looted_record_goes_into_the_inventory() {
+        let mut p = play();
+        p.npcw.corpse = Some(ItemList { p04: 0, items: vec![record(7, 1, 3, 1, "Snake Fang"), record(9, 4, 5, 20, "Snake Scale")] });
+        assert!(p.npcw_opcode(0x0019, &[1, 0x02]));
+        assert_eq!(ids(p.npcw.corpse.as_ref().unwrap()), vec![(7, 1)], "the scales off the corpse");
+        let inv: Vec<_> = p.dump.inventory.items.iter().map(|i| (i.item.id, i.quantity, i.equip_slot)).collect();
+        assert_eq!(inv, vec![(9, 4, -1)], "the stack of four in the inventory");
+        // a slot past the corpse's: nothing moves
+        assert!(p.npcw_opcode(0x0019, &[5, 0x02]));
+        assert_eq!((ids(p.npcw.corpse.as_ref().unwrap()).len(), p.dump.inventory.items.len()), (1, 1));
+        // cut short (the slot and no count): nothing read
+        assert!(p.npcw_opcode(0x0019, &[0]));
+        assert_eq!((ids(p.npcw.corpse.as_ref().unwrap()).len(), p.dump.inventory.items.len()), (1, 1));
+        // the fang, now in slot 0
+        assert!(p.npcw_opcode(0x0019, &[0, 0x02]));
+        assert!(p.npcw.corpse.as_ref().unwrap().items.is_empty());
+        assert_eq!(p.dump.inventory.items.len(), 2);
+    }
+
+    /// A stack the inventory cannot take whole (`AddItem` on the record's
+    /// own limit) leaves the rest on the corpse, as `Took` takes only what
+    /// went in; the control: a limit large enough takes it all.
+    #[test]
+    fn a_stack_too_big_for_the_inventory_leaves_the_rest() {
+        let mut p = play();
+        let have = record(9, 18, 1, 20, "Snake Scale");
+        p.dump.inventory.items.push(have);
+        p.npcw.corpse = Some(ItemList { p04: 0, items: vec![record(9, 5, 2, 20, "Snake Scale")] });
+        assert!(p.npcw_opcode(0x0019, &[0, 0x02]));
+        assert_eq!(ids(p.npcw.corpse.as_ref().unwrap()), vec![(9, 3)], "two went in, three stay");
+        assert_eq!(ids(&p.dump.inventory), vec![(9, 20)]);
+        let mut q = play();
+        q.dump.inventory.items.push(record(9, 18, 1, 99, "Snake Scale"));
+        q.npcw.corpse = Some(ItemList { p04: 0, items: vec![record(9, 5, 2, 99, "Snake Scale")] });
+        assert!(q.npcw_opcode(0x0019, &[0, 0x02]));
+        assert!(q.npcw.corpse.as_ref().unwrap().items.is_empty());
+        assert_eq!(ids(&q.dump.inventory), vec![(9, 23)]);
+    }
+
+    /// 0x0085 (`LootOptions`): why a corpse did not open, as a line in the
+    /// chat box: 1 word 673 ("That corpse is already being looted by
+    /// another player"), 2 word 674 ("That entity is not lootable"), 3 word
+    /// 675 ("That corpse belongs to another player or group"). The
+    /// controls: any other byte, or none, says nothing.
+    #[test]
+    fn a_corpse_that_does_not_open_says_why() {
+        let mut p = play();
+        for (b, want) in [(1u8, "(word 673)"), (2, "(word 674)"), (3, "(word 675)")] {
+            assert!(p.npcw_opcode(0x0085, &[b]));
+            assert_eq!(p.chat.back().map(|l| l.0.as_str()), Some(want));
+        }
+        let lines = p.chat.len();
+        assert!(p.npcw_opcode(0x0085, &[0]));
+        assert!(p.npcw_opcode(0x0085, &[4]));
+        assert!(p.npcw_opcode(0x0085, &[]));
+        assert_eq!(p.chat.len(), lines, "nothing said");
     }
 }

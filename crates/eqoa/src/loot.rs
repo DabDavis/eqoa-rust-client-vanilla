@@ -1,13 +1,16 @@
 //! The corpse window (CLIENT `viwndloot.cpp`, `VIWndLoot`, the game
 //! window's mode 1): the inventory (40 rows, at (5, 10)) and the corpse (42
-//! rows at (144, 10): "take all" or "empty" on top, the items, "done" after
-//! them) as two lists rebuilt every frame, and the selected item's text in a
-//! window at (460, 152). Enter on the corpse list: the top row closes
-//! (`LootNoWindow`), an item takes it all (`LootOne`), the row after the
-//! items takes everything (`RequestLootAll`).
+//! rows at (144, 10): "LEAVE ALL" (word 119) or "Empty" (641) on top, the
+//! items, "TAKE ALL" (118) after them) as two lists rebuilt every frame, and
+//! the selected item's text in a window at (460, 152). Enter on the corpse
+//! list: the top row closes (`LootNoWindow`), an item takes it all
+//! (`LootOne`), the row after the items takes everything (`RequestLootAll`).
 //!
 //! The corpse itself is `VIClient::m_corpse`, read off 0x0018 (and the
-//! MemoryDump); 0x0016 closes the window and forgets it.
+//! MemoryDump); 0x0016 closes the window and forgets it. The server answers
+//! a `LootOne` with 0x0019 (that item moved into the inventory, `Msg0019`)
+//! and a `RequestLootAll` with 0x001A (every item, `Msg001A`), and a corpse
+//! it will not open with 0x0085 (why, in the chat box): `npcw.rs`.
 //!
 //! A pointer (`pointer`) takes the corpse list's rows, as its keys do; the
 //! inventory list beside it takes no keys, so no pointer either.
@@ -65,8 +68,8 @@ fn fill_inv(list: &mut WndList, inv: &ItemList, icon: &dyn Fn(usize) -> i32) {
     }
 }
 
-/// The corpse list's rows: "take all" (119) or "empty" (641) on top, the
-/// items, "done" (118) after them when there are any.
+/// The corpse list's rows: "LEAVE ALL" (119) or "Empty" (641) on top, the
+/// items, "TAKE ALL" (118) after them when there are any.
 fn fill_loot(list: &mut WndList, corpse: &ItemList, icon: &dyn Fn(usize) -> i32) {
     let n = corpse.items.len().min(40);
     list.set_item(0, 2, -1, -1, if n > 0 { 119 } else { 641 }, 0);
