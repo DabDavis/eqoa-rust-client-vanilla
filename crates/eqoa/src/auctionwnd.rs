@@ -815,9 +815,11 @@ impl SearchWnd {
         }
     }
 
-    /// `DrawRow`: a label, a (framed) value; ticked when selected.
+    /// `DrawRow`: a label, a (framed) value, in the window's colours
+    /// (`VIUICOLOR` 0, black; 1, the selection's dark blue); ticked when
+    /// selected.
     fn draw_row(w: &Window, vui: &Vui, r: &mut dyn Raster, row: i32, label: Option<&[u16]>, value: Option<&[u16]>, xa: i32, xb: i32, sel: bool, tick: bool, framed: bool) {
-        let color = if sel { [1.0, 1.0, 0.0, w.open] } else { [1.0, 1.0, 1.0, w.open] };
+        let color = UI_COLORS[sel as usize];
         if let Some(a) = label {
             w.text_box(vui, r, a, xa, row, xb - xa, 1, color, 0);
         }
@@ -956,7 +958,7 @@ impl SearchWnd {
                 s.push('.');
             }
             let sw = self.status.size[0];
-            self.status.text_box(vui, r, &wide(&s), 40, 1, sw - 40, 1, [1.0, 1.0, 1.0, self.status.open], 0);
+            self.status.text_box(vui, r, &wide(&s), 40, 1, sw - 40, 1, UI_COLORS[0], 0);
         } else {
             self.status.close(true);
         }
@@ -1021,7 +1023,7 @@ impl SearchWnd {
         t += &format!("{}: {}\n", w(1686), l.p2f8);
         t += &Self::format_time(vui, left, false);
         let lw = self.list.size[0] - 40;
-        let c = [1.0, 1.0, 1.0, self.list.open];
+        let c = UI_COLORS[0];
         self.list.text_box(vui, r, &wide(&t), 20, 0, lw, 8, c, 2);
         let legend = if left < 0 && self.mode != 1 {
             format!("|s{}  |-|x{}  |+|t{}", w(1694), w(1695), w(161))
@@ -1066,7 +1068,7 @@ impl SearchWnd {
             row += 1;
         }
         let s = wide(&format!("|t{}", vui.words.get(161, vui.language)));
-        self.list.text_box(vui, r, &s, 20, 9, lw - 40, 1, [1.0, 1.0, 1.0, self.list.open], 0);
+        self.list.text_box(vui, r, &s, 20, 9, lw - 40, 1, UI_COLORS[0], 0);
     }
 
     /// `DrawBid` (state 4): the amount clamped to above the high bid and at
@@ -1094,7 +1096,7 @@ impl SearchWnd {
             self.list_hits.push(rows_rect(&self.list, vui, r, cols[0], row, lw - 40 - cols[0], 1), cursor);
         }
         let s = wide(&format!("|x{}   |t{}", vui.words.get(212, vui.language), vui.words.get(161, vui.language)));
-        self.list.text_box(vui, r, &s, 20, 7, lw - 40, 1, [1.0, 1.0, 1.0, self.list.open], 0);
+        self.list.text_box(vui, r, &s, 20, 7, lw - 40, 1, UI_COLORS[0], 0);
     }
 
     /// `DrawRaces`, `DrawClasses`, `DrawTypes` (the wear slots) and
@@ -1478,20 +1480,20 @@ mod tests {
         vi::strtab::StringTable::parse(lines.join("\n").as_bytes()).unwrap()
     }
 
-    /// The strings a drawing put down (each shadow too).
+    /// The strings a drawing put down (each shadow too), with their colours.
     #[derive(Default)]
-    struct TextRaster(Vec<String>);
+    struct TextRaster(Vec<(String, [f32; 4])>);
 
     impl Raster for TextRaster {
         fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
         fn stretch_blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
         fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
         fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
-        fn draw_string(&mut self, _: [i32; 2], _: [f32; 4], s: &[u16]) {
-            self.0.push(String::from_utf16_lossy(s));
+        fn draw_string(&mut self, _: [i32; 2], c: [f32; 4], s: &[u16]) {
+            self.0.push((String::from_utf16_lossy(s), c));
         }
-        fn draw_centered_string(&mut self, _: [i32; 2], _: [f32; 4], s: &[u16], _: u32) {
-            self.0.push(String::from_utf16_lossy(s));
+        fn draw_centered_string(&mut self, _: [i32; 2], c: [f32; 4], s: &[u16], _: u32) {
+            self.0.push((String::from_utf16_lossy(s), c));
         }
         fn string_width(&self, s: &[u16]) -> i32 {
             s.len() as i32 * 8
@@ -1505,14 +1507,19 @@ mod tests {
         fn set_viewport(&mut self, _: [i32; 4]) {}
     }
 
-    /// What the window drew, as the words in order, shadows dropped.
-    fn drawn(g: &mut Rig) -> Vec<String> {
+    /// What the window drew: each string and its colour, in order.
+    fn drawn_colored(g: &mut Rig) -> Vec<(String, [f32; 4])> {
         let (icon, can_use) = (|_: &NetItem| 7, |_: &NetItem| true);
         let v = View { bank: &g.bank, idle: true, searching: false, player: 1, now: 0, icon: &icon, can_use: &can_use, attack_words: &ATTACK_WORDS };
         let mut r = TextRaster::default();
         g.w.draw(&g.vui, &mut r, &g.a, &v, &mut g.cues);
+        r.0
+    }
+
+    /// What the window drew, as the words in order, shadows dropped.
+    fn drawn(g: &mut Rig) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
-        for s in r.0 {
+        for (s, _) in drawn_colored(g) {
             if out.last() != Some(&s) {
                 out.push(s);
             }
@@ -1572,6 +1579,30 @@ mod tests {
         choose(&mut g, 6, 9);
         let d = drawn(&mut g);
         assert_eq!([label_then(&d, "w288"), label_then(&d, "w289"), label_then(&d, "w1683"), label_then(&d, "w1684")], ["w174", "w302", "w327", "w909"]);
+    }
+
+    /// The form's rows, a picker's and the bid form's are the window's
+    /// colours (`VIUICOLOR`): black, the selected row the selection's dark
+    /// blue, as `DrawRow` and the pickers' `TextBox` draw them.
+    #[test]
+    fn the_rows_are_the_windows_colours() {
+        let mut g = Rig::new();
+        g.vui = Vui::new(numbered_words(), Default::default(), Vec::new());
+        let colour_of = |d: &[(String, [f32; 4])], s: &str| d.iter().filter(|(t, _)| t == s).map(|(_, c)| *c).collect::<Vec<_>>();
+        g.w.field = 3;
+        let d = drawn_colored(&mut g);
+        // the minimum level's label selected, the keywords' not; each drawn
+        // once (no shadow)
+        assert_eq!(colour_of(&d, "w1681"), vec![UI_COLORS[1]]);
+        assert_eq!(colour_of(&d, "w1680"), vec![UI_COLORS[0]]);
+        assert_eq!(colour_of(&d, "w1673"), vec![UI_COLORS[0]], "Search");
+        // a picker's rows: the cursor's in the selection's colour
+        g.w.field = 1;
+        g.key(134);
+        g.key(139);
+        let d = drawn_colored(&mut g);
+        assert_eq!(colour_of(&d, "w179"), vec![UI_COLORS[1]], "alchemist, under the cursor");
+        assert_eq!(colour_of(&d, "w170"), vec![UI_COLORS[0]], "bard");
     }
 
     /// A pointer on a picker: nothing before a drawing noted its rows; then
