@@ -199,6 +199,15 @@ jobs:
           } > update.txt
           cat update.txt
 
+      # The update notes as the game reads them (crates/eqoa/src/update.rs's
+      # NOTES_FILE): UPDATE-NOTES.md beside the programs, uploaded with them,
+      # before update.txt, so a game that reads the new manifest finds the
+      # notes that go with it and shows the sections its own copy lacks.
+      - name: The update notes for the game
+        run: |
+          cp UPDATE-NOTES.md dist/update-notes.md
+          grep -c '^## ' dist/update-notes.md
+
       # The tag is moved, not added to, so the release always describes the
       # tip of master and nothing else.
       - name: Publish
@@ -212,9 +221,10 @@ jobs:
             [ -e "dist/$old" ] || [ "$old" = update.txt ] || gh release delete-asset dev "$old" --yes
           done
           gh release upload dev --clobber dist/*
-          # the manifest after the programs it names: a game reading it
-          # finds them there (one that reads the old one meanwhile is refused
-          # the new program by its hash, and asks again at its next start)
+          # the manifest after the programs it names and the notes (both in
+          # dist/): a game reading it finds them there (one that reads the
+          # old one meanwhile is refused the new program by its hash, and
+          # asks again at its next look)
           gh release upload dev --clobber update.txt
           gh release edit dev --prerelease --title "Dev build" --notes-file notes.md
 

@@ -3,8 +3,9 @@ name: Update notes
 # An edit to the update notes alone builds nothing (dev.yml leaves *.md be):
 # the release page's notes are written again here, for the build it already
 # holds (the dev tag's), which the page's last line names with the build
-# before it (release/notes.sh). A push that also changes the program is
-# dev.yml's, which writes them with the new build.
+# before it (release/notes.sh), and the game's copy (update-notes.md, which
+# the update's question reads) is put up again. A push that also changes the
+# program is dev.yml's, which writes them with the new build.
 
 on:
   push:
@@ -45,3 +46,6 @@ jobs:
           bash release/notes.sh "$build" "$prev" > notes.md
           cat notes.md
           gh release edit dev --notes-file notes.md
+          # the game's copy (dev.yml's dist/update-notes.md)
+          cp UPDATE-NOTES.md update-notes.md
+          gh release upload dev --clobber update-notes.md
