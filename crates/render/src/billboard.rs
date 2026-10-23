@@ -23,6 +23,18 @@ const UVS: [[f32; 2]; 28] = [
     [0.5, 1.0], [0.5, 0.0], [1.0, 1.0], [1.0, 0.0],
 ];
 
+/// The pipeline a run takes as the GS draws its material: `key` is (blend,
+/// Z test, Z write) as the material says, `textured` whether its texture is
+/// there. `VIMaterial::ConstructTextPass` gives a textured layer that blends
+/// the TEST that fails every pixel's alpha test and keeps its colour only
+/// (ATST never, AFAIL RGB only), so it never writes Z whatever its Z-write
+/// flag; a solid layer (`ConstructSolidFillPass`) and an opaque one write as
+/// the flag says.
+pub(crate) fn gs_key(key: (usize, bool, bool), textured: bool) -> (usize, bool, bool) {
+    let (blend, ztest, zwrite) = key;
+    (blend, ztest, zwrite && (blend == 0 || !textured))
+}
+
 /// One particle: its centre (world), half-size, frame (`m_frame << 2`, the
 /// first of its four UVs) and colour.
 #[derive(Clone, Copy, Debug)]
@@ -306,8 +318,9 @@ impl Renderer {
         }
         let mut draws = Vec::new();
         for &(key, texture, start, end) in runs {
-            let tex = self.texture(device, queue, texture, textures).unwrap_or_else(|| self.white.clone());
-            draws.push((key, start, end, tex));
+            let tex = self.texture(device, queue, texture, textures);
+            let key = gs_key(key, tex.is_some());
+            draws.push((key, start, end, tex.unwrap_or_else(|| self.white.clone())));
         }
         let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("billboards"), contents: bytemuck::cast_slice(verts), usage: wgpu::BufferUsages::VERTEX });
         let format = self.format;
