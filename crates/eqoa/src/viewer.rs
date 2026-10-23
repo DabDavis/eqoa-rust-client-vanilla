@@ -980,9 +980,8 @@ pub fn shot_with(
             }
             let plates = p.plates();
             if let Some(t) = renderer.text.as_mut() {
-                t.labels = crate::play::labels(&plates, shot_eye, view.view_proj, t);
-                let chat = crate::play::chat_labels(p, t, (w, h));
-                t.labels.extend(chat);
+                t.plates = crate::play::labels(&plates, shot_eye, view.view_proj, t);
+                t.labels = crate::play::chat_labels(p, t, (w, h));
             }
         }
         if let Some(p) = &play {
@@ -995,6 +994,12 @@ pub fn shot_with(
     }
     // the loading screen in place of the scene: its gears through its own view
     let loading = play.as_ref().and_then(|p| p.loading_scene((w, h)));
+    // the name plates are the scene's: none under the loading screen
+    if loading.is_some()
+        && let Some(t) = renderer.text.as_mut()
+    {
+        t.plates.clear();
+    }
     let refs: Vec<render::Draw> = match &loading {
         Some((_, gears)) => gears.iter().map(|&m| render::Draw::Model(m)).collect(),
         None => gpu
@@ -2017,6 +2022,7 @@ impl App {
             g.renderer.ui = None;
             if let Some(t) = g.renderer.text.as_mut() {
                 t.labels.clear();
+                t.plates.clear();
             }
             g.renderer.strips.clear();
             g.renderer.set_overlay(&g.device, &g.queue, glam::Mat4::IDENTITY, &[], &|_| None);
@@ -3387,9 +3393,8 @@ impl ApplicationHandler for App {
                     p.map_frame(w, &self.lib, &g.device, &g.queue, g.config.format, (g.config.width, g.config.height), self.frame_s, self.console.sticks());
                     let plates = p.plates();
                     if let Some(t) = g.renderer.text.as_mut() {
-                        t.labels = crate::play::labels(&plates, w.eye_position(), view.view_proj, t);
-                        let chat = crate::play::chat_labels(p, t, (g.config.width, g.config.height));
-                        t.labels.extend(chat);
+                        t.plates = crate::play::labels(&plates, w.eye_position(), view.view_proj, t);
+                        t.labels = crate::play::chat_labels(p, t, (g.config.width, g.config.height));
                     }
                 }
                 mark(&mut self.perf, 10);
@@ -3430,6 +3435,9 @@ impl ApplicationHandler for App {
                 // all in the scene (the Brightness curve takes them too)
                 if loading.is_none() {
                     g.renderer.draw_fans(&g.queue, &mut enc, st, &g.depth, &view);
+                    // the name plates where VIScene::Render draws them: the
+                    // particles and the rest after, over them
+                    g.renderer.draw_plates(&g.device, &mut enc, st, &g.depth, (g.config.width, g.config.height));
                 }
                 if let Some((v, p)) = bb_view {
                     g.renderer.draw_billboards(&g.device, &g.queue, &mut enc, st, &g.depth, v, p, &self.batches, &textures);

@@ -1,11 +1,14 @@
-//! The particles against what is drawn after them, as the GS draws them: a
-//! particle whose texture blends writes no depth (`VIMaterial::
-//! ConstructTextPass`: ATST never, AFAIL RGB only), whatever its definition's
-//! Z-write flag, while one with no texture writes as the flag says. Needs a
-//! graphics adapter (any backend); without one it says so and passes.
+//! The name plates against the particles, as `VIScene::Render` and the GS
+//! draw them: the plates after the world and before the particles (which
+//! blend over them), the screen's text after everything; and a particle
+//! whose texture blends writes no depth (`VIMaterial::ConstructTextPass`:
+//! ATST never, AFAIL RGB only), whatever its definition's Z-write flag, while
+//! one with no texture writes as the flag says. Needs a graphics adapter
+//! (any backend); without one it says so and passes.
 
 use glam::{Mat4, Vec3};
 use render::billboard::{Batch, Quad};
+use render::text::Label;
 use render::{Renderer, View};
 
 struct Gpu {
@@ -37,7 +40,8 @@ fn batch(texture: i32, blend: usize, ztest: bool, zwrite: bool, z: f32, color: [
 
 const CLEAR: Vec3 = Vec3::new(0.2, 0.4, 0.6);
 
-/// The pixel at (x, y) of a `size` frame: the clear, the particles over it.
+/// The pixel at (x, y) of a `size` frame: the clear, the plates and labels
+/// set on `r`, the particles over them.
 fn pixel(g: &Gpu, r: &mut Renderer, size: u32, at: (u32, u32), batches: &[Batch]) -> [f32; 3] {
     let view = View { clear: CLEAR, ..View::daylight(Mat4::IDENTITY) };
     let px = render::capture(&g.device, &g.queue, r, size, size, &view, &[], Some((Mat4::IDENTITY, Mat4::IDENTITY, batches, &tex)));
@@ -70,4 +74,29 @@ fn a_textured_particle_that_blends_writes_no_depth() {
     // and a textured one that asks for no Z write writes none either way
     let no_z = batch(7, 1, false, false, 0.3, [0.25, 0.0, 0.0, 1.0]);
     close(pixel(&g, &mut r, 8, (4, 4), &[no_z, behind]), over(added), "no Z write asked");
+}
+
+#[test]
+fn the_plates_go_under_the_particles_and_the_screens_text_over_them() {
+    let Some(g) = gpu() else { return };
+    let mut r = Renderer::new(&g.device, &g.queue, render::TARGET_FORMAT);
+    // a font of one character: 'A', 8 by 8, every texel opaque white
+    let font = esf::font::Font { id: 1, height: 8, glyphs: vec![esf::font::Glyph { code: b'A' as u16, width: 8, rgba: vec![255; 8 * 8 * 4] }] };
+    r.set_font(&g.device, &g.queue, &font);
+    // at 448 high a PS2 pixel is a pixel: the glyph covers the 8x8 about the
+    // label's centre
+    let size = 448;
+    let blue = [0.0, 0.0, 1.0, 1.0];
+    let red = batch(7, 1, true, false, 0.3, [0.25, 0.0, 0.0, 1.0]);
+    let t = r.text.as_mut().unwrap();
+    // a plate at the middle, behind the particle; a label of the screen's
+    // (the chat's, at depth 0) on the left
+    t.plates = vec![Label { at: [0.0, 0.0, 0.5], color: blue, text: "A".into() }];
+    t.labels = vec![Label { at: [-0.5, 0.0, 0.0], color: blue, text: "A".into() }];
+    // the plate drawn first, the red added over it
+    close(pixel(&g, &mut r, size, (224, 224), std::slice::from_ref(&red)), [0.25 * 255.0 * 0.5, 0.0, 255.0], "plate");
+    // the screen's text over the particle
+    close(pixel(&g, &mut r, size, (112, 224), std::slice::from_ref(&red)), [0.0, 0.0, 255.0], "label");
+    // the control: with the particle gone, the plate is its own colour
+    close(pixel(&g, &mut r, size, (224, 224), &[]), [0.0, 0.0, 255.0], "plate alone");
 }
