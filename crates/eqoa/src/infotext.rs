@@ -6,7 +6,7 @@
 //! stat would be with the item worn) is here too, over a copy of the list.
 
 use crate::inventory;
-use net::dump::{ItemList, NetItem};
+use net::dump::{AuctionItem, Item, ItemList, NetItem};
 use vi::strtab::StringTable;
 
 /// `sStatWords` (`vikeyflash.cpp`): (word, stat).
@@ -122,17 +122,22 @@ impl Info<'_> {
 
     /// The no-trade / no-rent / lore words and their line.
     fn flags(&self, d: &mut String, it: &NetItem, newline_first: bool) {
-        let any = it.item.no_trade != 0 || it.item.rent == 0 || it.item.lore != 0;
+        self.item_flags(d, &it.item, newline_first);
+    }
+
+    /// `flags` on the item record itself (an auction lot's).
+    fn item_flags(&self, d: &mut String, it: &Item, newline_first: bool) {
+        let any = it.no_trade != 0 || it.rent == 0 || it.lore != 0;
         if newline_first && any {
             *d += "\n";
         }
-        if it.item.no_trade > 0 {
+        if it.no_trade > 0 {
             *d += &format!("{} ", self.w(553));
         }
-        if it.item.rent == 0 {
+        if it.rent == 0 {
             *d += &format!("{} ", self.w(554));
         }
-        if it.item.lore > 0 {
+        if it.lore > 0 {
             *d += self.w(555);
         }
         if !newline_first && any {
@@ -494,6 +499,152 @@ impl Info<'_> {
         d
     }
 
+    /// `DescribeAuctionItem`: an auction lot by what its item is
+    /// (`IsWearable`, `IsMisc`, `IsUsable`, `IsCharged`, in that order),
+    /// nothing when it is none of them. Unlike the inventory's describers
+    /// these read the lot's own record: its count, hit points and charges.
+    pub fn auction_item(&self, lot: &AuctionItem) -> String {
+        let it = &lot.item;
+        if wearable(it) {
+            self.auction_equipment(lot)
+        } else if misc(it) {
+            self.auction_misc(lot)
+        } else if usable(it) {
+            self.auction_usable(lot)
+        } else if charged(it) {
+            self.auction_charged(lot)
+        } else {
+            String::new()
+        }
+    }
+
+    /// `AddStats(0, 8, 1, item)`: every stat of the lot's item, "Str: 5",
+    /// or its number when no word names it.
+    fn auction_stats(&self, d: &mut String, it: &Item) {
+        for s in &it.stats {
+            match find(&STAT_WORDS, s.id) {
+                Some(w) => *d += &format!("{}: {}\n", self.w(w), s.value),
+                None => *d += &format!("{}: {}\n", s.id, s.value),
+            }
+        }
+    }
+
+    /// `DescribeAuctionEquipment`.
+    fn auction_equipment(&self, lot: &AuctionItem) -> String {
+        let it = &lot.item;
+        let mut d = format!("{}\n\n", it.name);
+        if it.damage > 0 {
+            d += &format!("{}: {}", self.w(493), it.damage);
+            d += " ";
+        }
+        if it.attack_type != 0 {
+            self.attack_type(&mut d, it.attack_type);
+            d += "\n";
+        }
+        if it.wear_slot != -1 {
+            self.equip_slot(&mut d, it.wear_slot);
+            d += "\n";
+        }
+        if ranged(it) && it.range > 0 {
+            d += &format!("{}: {}", self.w(504), it.range);
+            d += "\n";
+        }
+        if it.max_hp > 0 {
+            self.hit_points(&mut d, lot.cur_hp, it.max_hp);
+            d += "\n";
+        }
+        if it.durability != 0 {
+            d += &format!("{}: {}", self.w(495), it.durability);
+            d += "\n";
+        }
+        if it.max_stack >= 2 {
+            self.stack(&mut d, lot.quantity, it.max_stack);
+            d += "\n";
+        }
+        if lot.charges > 0 {
+            self.charges(&mut d, lot.charges);
+            d += "\n";
+        }
+        self.mask(&mut d, 289, it.race_mask, &RACE_SHORT);
+        d += "\n";
+        self.mask(&mut d, 288, it.class_mask, &CLASS_SHORT);
+        d += "\n";
+        self.level(&mut d, it.level_req);
+        d += "\n";
+        self.item_flags(&mut d, it, false);
+        if !it.stats.is_empty() {
+            self.auction_stats(&mut d, it);
+            d += " \n";
+        }
+        d += &it.desc;
+        d
+    }
+
+    /// `DescribeAuctionMisc`: charges, masks and level only with a type.
+    fn auction_misc(&self, lot: &AuctionItem) -> String {
+        let it = &lot.item;
+        let mut d = format!("{}\n\n", it.name);
+        if it.max_stack >= 2 {
+            self.stack(&mut d, lot.quantity, it.max_stack);
+            d += "\n";
+        }
+        if it.p4c != 0 {
+            if lot.charges > 0 {
+                self.charges(&mut d, lot.charges);
+                d += "\n";
+            }
+            self.mask(&mut d, 289, it.race_mask, &RACE_SHORT);
+            d += "\n";
+            self.mask(&mut d, 288, it.class_mask, &CLASS_SHORT);
+            d += "\n";
+            self.level(&mut d, it.level_req);
+            d += "\n";
+        }
+        self.item_flags(&mut d, it, false);
+        d += &it.desc;
+        d
+    }
+
+    /// `DescribeAuctionUsable`.
+    fn auction_usable(&self, lot: &AuctionItem) -> String {
+        let it = &lot.item;
+        let mut d = format!("{}\n\n", it.name);
+        if it.max_stack >= 2 {
+            self.stack(&mut d, lot.quantity, it.max_stack);
+            d += "\n";
+        }
+        if lot.charges > 0 {
+            self.charges(&mut d, lot.charges);
+            d += "\n";
+        }
+        self.mask(&mut d, 289, it.race_mask, &RACE_SHORT);
+        d += "\n";
+        self.mask(&mut d, 288, it.class_mask, &CLASS_SHORT);
+        d += "\n";
+        self.level(&mut d, it.level_req);
+        d += "\n";
+        self.item_flags(&mut d, it, false);
+        d += &it.desc;
+        d
+    }
+
+    /// `DescribeAuctionCharged`: the stack and the hit points.
+    fn auction_charged(&self, lot: &AuctionItem) -> String {
+        let it = &lot.item;
+        let mut d = format!("{}\n\n", it.name);
+        if it.max_stack >= 2 {
+            self.stack(&mut d, lot.quantity, it.max_stack);
+            d += "\n";
+        }
+        if it.max_hp > 0 {
+            self.hit_points(&mut d, lot.cur_hp, it.max_hp);
+            d += "\n";
+        }
+        self.item_flags(&mut d, it, false);
+        d += &it.desc;
+        d
+    }
+
     /// `GetStatTotal`: the base stat plus every worn item's.
     pub fn stat_total(&self, stat: i64) -> i64 {
         let mut total = self.base.get(stat as usize).copied().unwrap_or(0) as i64;
@@ -586,27 +737,49 @@ pub fn add_item_key(l: &mut ItemList, item: &NetItem, limit: i64, capacity: usiz
 
 /// `IsRangedItem` / `VIInfoText::IsRanged`: attack types 7-10.
 pub fn is_ranged(it: &NetItem) -> bool {
-    (7..=10).contains(&it.item.attack_type)
+    ranged(&it.item)
 }
 
 /// `IsCharged`: a stack with a count, not type 8, not worn.
 pub fn is_charged(it: &NetItem) -> bool {
-    it.item.p54 > 0 && it.item.p4c != 8 && it.item.wear_slot == -1
+    charged(&it.item)
 }
 
 /// `IsWearable`.
 pub fn is_wearable(it: &NetItem) -> bool {
-    it.item.wear_slot != -1
+    wearable(&it.item)
 }
 
 /// `IsMisc`.
 pub fn is_misc(it: &NetItem) -> bool {
-    !matches!(it.item.p4c, 7 | 2 | 5 | 8) && it.item.p54 == 0 && it.item.wear_slot == -1
+    misc(&it.item)
 }
 
 /// `IsUsable`.
 pub fn is_usable(it: &NetItem) -> bool {
-    matches!(it.item.p4c, 7 | 2 | 5 | 8)
+    usable(&it.item)
+}
+
+// The predicates on the item record (`VIInfoText::Is*` take a `VIItem`, so
+// an auction lot's item too).
+fn ranged(it: &Item) -> bool {
+    (7..=10).contains(&it.attack_type)
+}
+
+fn charged(it: &Item) -> bool {
+    it.p54 > 0 && it.p4c != 8 && it.wear_slot == -1
+}
+
+fn wearable(it: &Item) -> bool {
+    it.wear_slot != -1
+}
+
+fn misc(it: &Item) -> bool {
+    !matches!(it.p4c, 7 | 2 | 5 | 8) && it.p54 == 0 && it.wear_slot == -1
+}
+
+fn usable(it: &Item) -> bool {
+    matches!(it.p4c, 7 | 2 | 5 | 8)
 }
 
 /// `VIClient::EquipSlotFor`: where the item would be worn (the second of a
@@ -660,6 +833,54 @@ pub fn equip_slot_for(l: &ItemList, it: &NetItem, class: i64, level: i64) -> i64
 mod tests {
     use super::*;
     use net::dump::ItemStat;
+
+    /// Words as `wN` for WORDS.TXT line N, so a description says which.
+    fn numbered() -> StringTable {
+        let lines: Vec<String> = (1..=2000).map(|n| format!("w{n}")).collect();
+        StringTable::parse(lines.join("\n").as_bytes()).unwrap()
+    }
+
+    /// A lot of 3 with 40 hit points left and 2 charges: the lot's own
+    /// record, which the describers read where the inventory's read a slot.
+    fn lot(item: Item) -> AuctionItem {
+        AuctionItem { lot_id: 9, quantity: 3, cur_hp: 40, charges: 2, item, ..Default::default() }
+    }
+
+    /// `DescribeAuctionItem` by the lot's kind, as the four describers write
+    /// it: a blank line after the name, the lot's count, hit points and
+    /// charges, the stats after the flags; a lot of no kind, nothing. A worn
+    /// charm of a usable type is equipment (`IsWearable` first).
+    #[test]
+    fn an_auction_lot_is_described_by_its_kind() {
+        let words = numbered();
+        let (inv, base) = (ItemList::default(), [0; 29]);
+        let info = Info { words: &words, inv: &inv, hp: [0; 4], base: &base, class: 0, level: 0, attack_words: &[(500, 1)] };
+        let stats = vec![ItemStat { id: 0, value: 5 }, ItemStat { id: 99, value: 7 }];
+        let sword = Item { name: "Sword".into(), damage: 12, attack_type: 1, wear_slot: 14, max_hp: 80, durability: 5, race_mask: 0x3FF, class_mask: 0b101, level_req: 30, no_trade: 1, rent: 1, lore: 1, stats, desc: "A blade.".into(), ..Default::default() };
+        assert_eq!(info.auction_item(&lot(sword)), "Sword\n\nw493: 12 w497: w500\nw490: w340\nw233: 40/80\nw495: 5\nw297: 2\nw289: w301\nw288: w303 w305 \nw503: 30\nw553 w555\nw226: 5\n99: 7\n \nA blade.");
+        // a bow: its range (attack types 7-10), an attack type no word names,
+        // no race or class, and a lot that may not be rented
+        let bow = Item { name: "Bow".into(), attack_type: 8, wear_slot: 16, range: 40, ..Default::default() };
+        assert_eq!(info.auction_item(&lot(bow)), "Bow\n\nw497: 8\nw490: w398\nw504: 40\nw297: 2\nw289: w302\nw288: w302\nw503: 0\nw554 \n");
+        // misc: the stack; untyped, nothing else
+        let gem = Item { name: "Gem".into(), wear_slot: -1, max_stack: 20, rent: 1, desc: "Shiny.".into(), ..Default::default() };
+        assert_eq!(info.auction_item(&lot(gem)), "Gem\n\nw491: 3/20\nShiny.");
+        // typed misc: charges, masks and level too
+        let rune = Item { name: "Rune".into(), wear_slot: -1, p4c: 3, race_mask: 0x3FF, class_mask: 0x7FFF, level_req: 10, rent: 1, ..Default::default() };
+        assert_eq!(info.auction_item(&lot(rune)), "Rune\n\nw297: 2\nw289: w301\nw288: w301\nw503: 10\n");
+        // usable (type 2): the stack, the charges, masks, level, lore
+        let potion = Item { name: "Potion".into(), wear_slot: -1, p4c: 2, max_stack: 5, race_mask: 0x3FF, class_mask: 0x7FFF, level_req: 1, rent: 1, lore: 1, desc: "Heals.".into(), ..Default::default() };
+        assert_eq!(info.auction_item(&lot(potion)), "Potion\n\nw491: 3/5\nw297: 2\nw289: w301\nw288: w301\nw503: 1\nw555\nHeals.");
+        // charged (a count, not type 8, not worn): the stack and hit points
+        let arrows = Item { name: "Arrows".into(), wear_slot: -1, p54: 5, max_stack: 50, max_hp: 100, rent: 1, ..Default::default() };
+        assert_eq!(info.auction_item(&lot(arrows)), "Arrows\n\nw491: 3/50\nw233: 40/100\n");
+        // worn and of a usable type: equipment
+        let charm = Item { name: "Charm".into(), wear_slot: 8, p4c: 2, rent: 1, ..Default::default() };
+        assert_eq!(info.auction_item(&lot(charm)), "Charm\n\nw490: w405\nw297: 2\nw289: w302\nw288: w302\nw503: 0\n");
+        // none of the four (a negative count): nothing
+        let odd = Item { name: "Odd".into(), wear_slot: -1, p54: -1, ..Default::default() };
+        assert_eq!(info.auction_item(&lot(odd)), "");
+    }
 
     fn it(wear: i64, p4c: i64, p54: i64) -> NetItem {
         let mut n = NetItem { quantity: 1, equip_slot: -1, quick_slot: -1, ..Default::default() };

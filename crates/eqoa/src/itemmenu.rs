@@ -166,6 +166,29 @@ impl Inspect {
         self.flash.reset();
     }
 
+    /// The keys of a window with no stats behind it (depth 1): Triangle
+    /// closes it (true, sound 8), the arrows scroll while held.
+    pub fn key(&mut self, key: i32, down: bool, cues: &mut Vec<i32>) -> bool {
+        if !down {
+            match key {
+                19 | 138 => self.flash.release(138),
+                20 | 139 => self.flash.release(139),
+                _ => {}
+            }
+            return false;
+        }
+        match key {
+            27 | 132 => {
+                cues.push(8);
+                return true;
+            }
+            19 | 138 => self.flash.press(138),
+            20 | 139 => self.flash.press(139),
+            _ => {}
+        }
+        false
+    }
+
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, cues: &mut Vec<i32>) {
         let white = [1.0; 4];
         self.window.draw(vui, r);
