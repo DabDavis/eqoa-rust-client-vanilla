@@ -32,6 +32,18 @@ fn hour(start: Instant) -> f32 {
     }
 }
 
+/// The hour of a game: `EQOA_HOUR` if set; else the server's, as
+/// `VIClient::UpdateTimeOfDay` keeps it (`Session::time_of_day`: 0x0013's
+/// clock B on the local timer); else, before the server set it, `hour`'s.
+pub fn game_hour(play: Option<&crate::play::Play>, start: Instant) -> f32 {
+    if std::env::var_os("EQOA_HOUR").is_none()
+        && let Some(h) = play.and_then(|p| p.session.time_of_day())
+    {
+        return h.0;
+    }
+    hour(start)
+}
+
 /// A frame's lights, fog and sky out of the time of day, for the camera at
 /// `eye` in `world` (its terrain profiles and env flags), if any, under the
 /// atmosphere's `weather`: its overcast (scaled by the profiles' for the
@@ -40,7 +52,7 @@ fn hour(start: Instant) -> f32 {
 pub fn lit(
     proj: glam::Mat4,
     view: glam::Mat4,
-    start: Instant,
+    hour_now: f32,
     eye: Option<(Vec3, &vi::world::World<vi::fpu::Ee>)>,
     mut weather: Option<&mut crate::weather::Weather>,
 ) -> (View, Option<crate::sky::SkyFrame>) {
@@ -49,7 +61,7 @@ pub fn lit(
     rot.w_axis = glam::Vec4::W;
     use vi::fpu::{Ee, F};
     let tod = vi::tod::TimeOfDay::<Ee>::new();
-    let hour = F::new(hour(start));
+    let hour = F::new(hour_now);
     let blend = eye.and_then(|(at, w)| w.grid.as_ref().map(|g| (g.profile_blend(&vi::vect::Vect3::of(at.x, at.y, at.z)), at, w)));
     let o = weather.as_deref().map_or(F::ZERO, |w| w.atm.overcast_interp());
     let k = blend.as_ref().map_or(F::ZERO, |(b, _, _)| vi::tod::overcast_weight(o, b));
@@ -213,7 +225,7 @@ impl Camera {
             Camera::Fly { pos, yaw, pitch } => (pos, pos + direction(yaw, pitch), 0.5, 6000.0),
         };
         let proj = glam::camera::rh::proj::directx::perspective(fov, aspect, near, far);
-        lit(proj, glam::camera::rh::view::look_at_mat4(eye, target, Vec3::Y), Instant::now(), None, None).0
+        lit(proj, glam::camera::rh::view::look_at_mat4(eye, target, Vec3::Y), hour(Instant::now()), None, None).0
     }
 
     fn drag(&mut self, dx: f32, dy: f32) {
@@ -896,23 +908,23 @@ pub fn shot_with(
             }
             // the atmosphere every frame; the last frame's lights and render
             // are the shot's
-            weather.frame(&mut walker.scene, None, &walker.eye, t, hour(Instant::now()));
+            weather.frame(&mut walker.scene, None, &walker.eye, t, game_hour(play.as_ref(), Instant::now()));
             // the effect volumes, stepped as the scene rasters them
             if let Some(fx) = fx.as_mut() {
                 fx.stream(Vec3::from(walker.cam.walk.phys.position.to_array()), &walker.scene, lib);
                 let cam = crate::fx::camera(walker.eye.position, walker.eye.direction);
-                fx.frame(&walker.scene, lib, &cam, proj * v, walker.eye_position(), t, hour(Instant::now()));
+                fx.frame(&walker.scene, lib, &cam, proj * v, walker.eye_position(), t, game_hour(play.as_ref(), Instant::now()));
             }
             if t < script.ms {
-                let _ = lit(proj, v, Instant::now(), Some((walker.eye_position(), &walker.scene)), Some(&mut weather));
+                let _ = lit(proj, v, game_hour(play.as_ref(), Instant::now()), Some((walker.eye_position(), &walker.scene)), Some(&mut weather));
                 if let Some(p) = play.as_mut() {
-                    point = p.point_light(&walker, t, hour(Instant::now()), Some(&weather));
+                    point = p.point_light(&walker, t, game_hour(Some(p), Instant::now()), Some(&weather));
                 }
                 let _ = weather.render(&walker.eye);
             }
         }
         if script.ms == 0 {
-            weather.frame(&mut walker.scene, None, &walker.eye, 0, hour(Instant::now()));
+            weather.frame(&mut walker.scene, None, &walker.eye, 0, game_hour(play.as_ref(), Instant::now()));
         }
         eprintln!("{}", parts.describe());
         eprintln!("{}", weather.describe());
@@ -968,7 +980,10 @@ pub fn shot_with(
             v = glam::camera::rh::view::look_at_mat4(at, p, Vec3::Y);
         }
         billboard_view = Some((v, proj));
-        let mut frame = lit(proj, v, Instant::now(), Some((shot_eye, &walker.scene)), Some(&mut weather));
+        let shot_hour = game_hour(play.as_ref(), Instant::now());
+        let server = std::env::var_os("EQOA_HOUR").is_none() && play.as_ref().is_some_and(|p| p.session.clock_b.ready);
+        eprintln!("hour {shot_hour:.2}{}", if server { " (the server's)" } else { "" });
+        let mut frame = lit(proj, v, shot_hour, Some((shot_eye, &walker.scene)), Some(&mut weather));
         frame.0.point = point;
         let (sky_bb, world_bb) = weather.render(&walker.eye);
         batches.extend(world_bb);
@@ -985,7 +1000,7 @@ pub fn shot_with(
         if let Some(fx) = fx.as_mut() {
             fx.stream(Vec3::from(walker.cam.walk.phys.position.to_array()), &walker.scene, lib);
             let cam = crate::fx::camera(vi::vect::Vect3::of(shot_eye.x, shot_eye.y, shot_eye.z), shot_dir);
-            fx.frame(&walker.scene, lib, &cam, view.view_proj, view.eye, t, hour(Instant::now()));
+            fx.frame(&walker.scene, lib, &cam, view.view_proj, view.eye, t, game_hour(play.as_ref(), Instant::now()));
             fx.upload(&mut renderer, &device, &queue, lib);
             eprintln!("{}", fx.describe());
         }
@@ -1961,7 +1976,7 @@ impl App {
             let _ = writeln!(o, "entering {} at {:?}", e.0, e.1.pos);
         }
         // the hour the lights and the effect volumes take, and the volumes
-        let _ = writeln!(o, "hour {:.2}; {}", hour(self.clock), self.fx.as_ref().map_or("effect volumes off".into(), |f| f.describe()));
+        let _ = writeln!(o, "hour {:.2}{}; {}", game_hour(self.play.as_ref(), self.clock), if self.play.as_ref().is_some_and(|p| p.session.clock_b.ready) { " (the server's)" } else { "" }, self.fx.as_ref().map_or("effect volumes off".into(), |f| f.describe()));
         if let (Some(p), Some(w)) = (&self.play, &self.walker) {
             o.push_str(&p.report(w.cam.walk.phys.position.to_array()));
         }
@@ -3458,7 +3473,7 @@ impl ApplicationHandler for App {
                         // the game's sound on the game's frames, the output
                         // fed between (`pregame::host`'s `sound_frame`)
                         if game_frame {
-                            s.frame(&mut w.scene, &w.eye, hour(clock), now);
+                            s.frame(&mut w.scene, &w.eye, game_hour(play.as_ref(), clock), now);
                         } else {
                             s.feed();
                         }
@@ -3466,7 +3481,7 @@ impl ApplicationHandler for App {
                     g.set_title(title(play.as_ref().map(|p| p.player.name.as_str())));
                     mark(perf, 5);
                     if let Some(wx) = weather.as_mut() {
-                        wx.frame(&mut w.scene, sound.as_mut(), &w.eye, now, hour(clock));
+                        wx.frame(&mut w.scene, sound.as_mut(), &w.eye, now, game_hour(play.as_ref(), clock));
                     }
                     mark(perf, 6);
                     let (proj, v) = w.view(g.config.width as f32 / g.config.height as f32);
@@ -3489,9 +3504,10 @@ impl ApplicationHandler for App {
                         g.renderer.strips.append(&mut p.trail_strips);
                     }
                     mark(perf, 7);
-                    let mut lights = lit(proj, v, clock, Some((w.eye_position(), &w.scene)), weather.as_mut());
+                    let hour_now = game_hour(play.as_ref(), clock);
+                    let mut lights = lit(proj, v, hour_now, Some((w.eye_position(), &w.scene)), weather.as_mut());
                     if let Some(p) = play.as_mut() {
-                        lights.0.point = p.point_light(w, now, hour(clock), weather.as_ref());
+                        lights.0.point = p.point_light(w, now, hour_now, weather.as_ref());
                     }
                     if let Some(wx) = weather.as_mut() {
                         let (sky, world) = wx.render(&w.eye);
@@ -3504,7 +3520,7 @@ impl ApplicationHandler for App {
                     if let Some(fx) = fx.as_mut() {
                         fx.stream(Vec3::from(w.cam.walk.phys.position.to_array()), &w.scene, lib);
                         let cam = crate::fx::camera(w.eye.position, w.eye.direction);
-                        fx.frame(&w.scene, lib, &cam, proj * v, lights.0.eye, now, hour(clock));
+                        fx.frame(&w.scene, lib, &cam, proj * v, lights.0.eye, now, hour_now);
                         fx.upload(&mut g.renderer, &g.device, &g.queue, lib);
                     }
                     mark(perf, 14);
