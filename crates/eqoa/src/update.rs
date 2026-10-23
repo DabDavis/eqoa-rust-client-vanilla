@@ -20,10 +20,31 @@
 //! next start removes `<exe>.old`. A failure anywhere leaves the program as it
 //! was, says so in the log, and the game goes on.
 //!
+//! While the game runs the thread goes on asking (`watch`): `FIRST` after the
+//! start, then every `EVERY`, the same `update.txt` (the release's, never the
+//! game server's, so a player hears of a build on any server). Another
+//! commit's program is put in place as at the start, or found there already
+//! (another window of the game put it there, or the start's own download came
+//! after the title); the program the update started (`EQOA_UPDATED`) watches
+//! too, without the start's check. Then the game asks the player, in its own
+//! Yes/No box (`Offer`, `VIWndMBox`'s; it starts on No), whether to restart
+//! now: it comes up only while nothing else is on the screen and nothing is
+//! being typed (`Play::quiet`, `Pregame::quiet`), and takes only its own keys
+//! (Enter, Escape, left and right; the pad's ✕, △ and the d-pad's left and
+//! right) and clicks on its buttons, so a key meant for the game is never
+//! taken; a window or an edit box of the game's put up meanwhile puts it
+//! away until it can come back. Yes logs out as the start menu's Quit does
+//! (0x09B0), the window closes, and `relaunch_if_requested` starts the
+//! program in place; No, or the box left `BOX_MS`, asks again after `LATER`.
+//! Each window of several asks its own player. A page asks its player itself
+//! (`web/main.js`: `version.json`, Reload / Later).
+//!
 //! Testing: `EQOA_UPDATE_URL=<base>` reads `<base>update.txt` and the files
 //! beside it instead of the release (a server of one's own, `python3 -m
 //! http.server`), offscreen too, and a build given `EQOA_UPDATE_CHANNEL=dev
-//! EQOA_BUILD_COMMIT=<commit>` follows it.
+//! EQOA_BUILD_COMMIT=<commit>` follows it; `EQOA_UPDATE_EVERY=<s>` asks
+//! the release again after `s` seconds and every `s` after, and again after
+//! a No three times that.
 
 use std::time::Duration;
 
@@ -48,6 +69,26 @@ pub const PLATFORM: Option<&str> = if cfg!(all(target_os = "linux", target_arch 
 /// lines; past this the game goes on, and a download still coming is put in
 /// place for the next start.
 pub const WAIT: Duration = Duration::from_secs(30);
+
+/// How long after the start the game asks the release again (`watch`),
+/// then how often; after a No it asks the player again no sooner than
+/// `LATER`.
+pub const FIRST: Duration = Duration::from_secs(3 * 60);
+pub const EVERY: Duration = Duration::from_secs(10 * 60);
+pub const LATER: Duration = Duration::from_secs(30 * 60);
+
+/// How long the box stands unanswered before it counts as a No (ms; the
+/// game's box counts the last ten seconds down).
+pub const BOX_MS: i64 = 60_000;
+
+/// `FIRST`, `EVERY` and `LATER`, or a test's (`EQOA_UPDATE_EVERY`'s
+/// seconds, the last three times them).
+pub fn intervals(test: Option<&str>) -> (Duration, Duration, Duration) {
+    match test.and_then(|s| s.trim().parse::<u64>().ok()).filter(|&s| s > 0) {
+        Some(s) => (Duration::from_secs(s), Duration::from_secs(s), Duration::from_secs(3 * s)),
+        None => (FIRST, EVERY, LATER),
+    }
+}
 
 /// One platform's program in `update.txt`.
 #[derive(Clone, Debug, PartialEq)]
@@ -159,9 +200,252 @@ pub fn line() -> Option<String> {
     None
 }
 
+/// The release's version of a program in place other than this running
+/// one (`watch`): the game offers to restart into it.
+pub fn ready() -> Option<String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    return native::ready();
+    #[cfg(target_arch = "wasm32")]
+    None
+}
+
+// ---- the question ----------------------------------------------------------
+
+#[cfg(not(target_arch = "wasm32"))]
+/// What the box first says: in the world, that the world is left.
+const ASK: &str = "A new version of the game is ready. Restart now to play it?";
+#[cfg(not(target_arch = "wasm32"))]
+const ASK_IN_WORLD: &str = "A new version of the game is ready. Restart now to play it? You leave the world and sign in again.";
+
+/// The game's moment, as the question reads it each frame.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Moment {
+    /// nothing else on the screen, nothing being typed, no fight: the box
+    /// may come up
+    pub quiet: bool,
+    /// nothing else on the screen and nothing being typed: it may stay up
+    pub plain: bool,
+    /// in the world
+    pub world: bool,
+    /// the clock the box fades and times out on (ms)
+    pub now: i64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// The question once a newer program is in place (`ready`): the game's own
+/// Yes/No box (`dialog::MBox`, `VIWndMBox` at (80, 115), starting on No),
+/// up only when the moment is quiet, taking only its own keys.
+pub struct Offer {
+    mbox: crate::dialog::MBox,
+    shown: bool,
+    /// a No, or the box left `BOX_MS`: not up again before this (ms)
+    later: Option<i64>,
+    later_ms: i64,
+    /// Yes: the program in place is to start
+    restart: bool,
+    /// the box's sounds (`VIClient::PlaySound`'s), for the caller
+    cues: Vec<i32>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Offer {
+    pub fn new(later: Duration) -> Offer {
+        Offer { mbox: Default::default(), shown: false, later: None, later_ms: later.as_millis() as i64, restart: false, cues: Vec::new() }
+    }
+
+    /// A frame: up when a program is `ready`, the moment quiet and no No
+    /// stands; put away (and asked again when it can be) when a window of
+    /// the game's or an edit box came up meanwhile.
+    pub fn frame(&mut self, ready: bool, m: Moment) {
+        if self.restart {
+            return;
+        }
+        if self.shown {
+            if !m.plain || !ready {
+                self.shown = false;
+            }
+            return;
+        }
+        if ready && m.quiet && self.later.is_none_or(|t| m.now >= t) {
+            let text = crate::ui::wide(if m.world { ASK_IN_WORLD } else { ASK });
+            self.mbox.prompt(&text, 1, 0, 0, m.now);
+            self.mbox.timeout = m.now + BOX_MS;
+            self.shown = true;
+        }
+    }
+
+    pub fn shown(&self) -> bool {
+        self.shown
+    }
+
+    /// Yes was answered.
+    pub fn restart(&self) -> bool {
+        self.restart
+    }
+
+    /// Whether a key is one the box takes: the game's codes (`VIKeyboard`'s
+    /// 13 Enter, 27 Escape, 17 and 18 left and right; the pad's 134 ✕, 132
+    /// △, 136 and 137 the d-pad's left and right).
+    pub fn takes(key: i32) -> bool {
+        matches!(key, 13 | 27 | 17 | 18 | 134 | 132 | 136 | 137)
+    }
+
+    /// A key pressed: true when the box took it (it is up, and the key is
+    /// one of its own).
+    pub fn key(&mut self, key: i32, now: i64) -> bool {
+        use crate::dialog::Key;
+        if !self.shown {
+            return false;
+        }
+        let k = match key {
+            13 | 134 => Key::Enter,
+            27 | 132 => Key::Escape,
+            17 | 136 => Key::Left,
+            18 | 137 => Key::Right,
+            _ => return false,
+        };
+        let a = self.mbox.key(k, &mut self.cues);
+        self.answer(a, now);
+        true
+    }
+
+    /// A click at frame point `p`: on a button, that button pressed; true
+    /// when it was one.
+    pub fn click(&mut self, p: [f32; 2], now: i64) -> bool {
+        if !self.shown || !self.mbox.point(p) {
+            return false;
+        }
+        let a = self.mbox.key(crate::dialog::Key::Enter, &mut self.cues);
+        self.answer(a, now);
+        true
+    }
+
+    /// The box over the frame (the 2D layer's, frame pixels), and its time
+    /// running out (a No).
+    pub fn draw(&mut self, vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster, now: i64) {
+        if !self.shown {
+            return;
+        }
+        let a = self.mbox.draw(vui, r, now);
+        self.answer(a, now);
+    }
+
+    fn answer(&mut self, a: Option<crate::dialog::BoxAnswer>, now: i64) {
+        match a {
+            Some(crate::dialog::BoxAnswer::Yes(..)) => {
+                self.shown = false;
+                self.restart = true;
+            }
+            Some(crate::dialog::BoxAnswer::No(..)) => {
+                self.shown = false;
+                self.later = Some(now + self.later_ms);
+            }
+            None => {}
+        }
+    }
+
+    /// The sounds the box asked for since the last call.
+    pub fn take_cues(&mut self) -> Vec<i32> {
+        std::mem::take(&mut self.cues)
+    }
+}
+
+/// The game's one question (natively; a page asks its own, `web/main.js`).
+#[cfg(not(target_arch = "wasm32"))]
+static OFFER: std::sync::Mutex<Option<Offer>> = std::sync::Mutex::new(None);
+
+/// `f` on the question, made the first time.
+#[cfg(not(target_arch = "wasm32"))]
+fn with_offer<T>(f: impl FnOnce(&mut Offer) -> T) -> T {
+    let mut o = OFFER.lock().unwrap_or_else(|e| e.into_inner());
+    f(o.get_or_insert_with(|| Offer::new(intervals(std::env::var("EQOA_UPDATE_EVERY").ok().as_deref()).2)))
+}
+
+/// Each frame there is a UI to draw on (the game's screens' or the HUD's):
+/// the box up or away by the moment.
+pub fn offer_frame(m: Moment) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let ready = ready().is_some();
+        with_offer(|o| o.frame(ready, m));
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = m;
+}
+
+/// Whether the box is up (it takes its own keys).
+pub fn offer_shown() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    return OFFER.lock().ok().is_some_and(|o| o.as_ref().is_some_and(Offer::shown));
+    #[cfg(target_arch = "wasm32")]
+    false
+}
+
+/// A key pressed, the game's code (`Offer::takes`): the sounds to play
+/// when the box took it. A Yes makes the program in place the one to start.
+pub fn offer_key(key: i32, now: i64) -> Option<Vec<i32>> {
+    #[cfg(not(target_arch = "wasm32"))]
+    return answered(|o| o.key(key, now));
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (key, now);
+        None
+    }
+}
+
+/// A click at frame point `p`: the sounds to play when the box took it.
+pub fn offer_click(p: [f32; 2], now: i64) -> Option<Vec<i32>> {
+    #[cfg(not(target_arch = "wasm32"))]
+    return answered(|o| o.click(p, now));
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (p, now);
+        None
+    }
+}
+
+/// The box over the frame, when it is up.
+pub fn offer_draw(vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster, now: i64) {
+    #[cfg(not(target_arch = "wasm32"))]
+    answered(|o| {
+        o.draw(vui, r, now);
+        true
+    });
+    #[cfg(target_arch = "wasm32")]
+    let _ = (vui, r, now);
+}
+
+/// `f` on the question, and a Yes it brought made good: the program in place
+/// to start (`native::accept`); the box's sounds when `f` took its input.
+#[cfg(not(target_arch = "wasm32"))]
+fn answered(f: impl FnOnce(&mut Offer) -> bool) -> Option<Vec<i32>> {
+    let (took, yes, cues) = with_offer(|o| {
+        let was = o.restart;
+        let took = f(o);
+        (took, o.restart && !was, o.take_cues())
+    });
+    if yes {
+        if native::accept() {
+            crate::say("update: restarting into the program in place");
+        } else {
+            with_offer(|o| o.restart = false);
+        }
+    }
+    took.then_some(cues)
+}
+
+/// Yes was answered: the game logs out and the window closes, for the
+/// program in place to start (`relaunch_if_requested`).
+pub fn restarting() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    return OFFER.lock().ok().is_some_and(|o| o.as_ref().is_some_and(Offer::restart));
+    #[cfg(target_arch = "wasm32")]
+    false
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
-    use super::{Build, COMMIT, CHANNEL, Manifest, PLATFORM, State};
+    use super::{Build, COMMIT, CHANNEL, Manifest, PLATFORM, State, WAIT};
     use sha2::{Digest, Sha256};
     use std::io::{Read, Write};
     use std::path::{Path, PathBuf};
@@ -178,6 +462,9 @@ mod native {
         /// running program by its new name, `<exe>.old`)
         exe: PathBuf,
         relaunch: bool,
+        /// the release's version of a program in place other than this
+        /// running one, found while the game runs (`watch`)
+        ready: Option<String>,
     }
 
     static UPDATER: Mutex<Option<Shared>> = Mutex::new(None);
@@ -195,14 +482,15 @@ mod native {
     }
 
     /// The updater's thread, when this build follows a channel and the run
-    /// is a player's (the module's doc).
+    /// is a player's (the module's doc): the start's check, then the watch.
     pub fn start() {
         clean_up();
         let (Some(_), Some(commit), Some(platform)) = (CHANNEL, COMMIT, PLATFORM) else { return };
-        if let Some(from) = std::env::var_os("EQOA_UPDATED") {
-            // the program an update just started: it does not ask again
-            crate::say(&format!("update: this is the release's build now ({})", from.to_string_lossy()));
-            return;
+        // the program an update just started does not ask at its start again
+        // (it watches, as any does)
+        let updated = std::env::var("EQOA_UPDATED").ok();
+        if let Some(from) = &updated {
+            crate::say(&format!("update: this is the release's build now ({from})"));
         }
         // (a server of one's own is a test of the updater: it runs offscreen too)
         let test = std::env::var("EQOA_UPDATE_URL").ok();
@@ -211,24 +499,106 @@ mod native {
         }
         let Ok(exe) = std::env::current_exe() else { return };
         let base = test.unwrap_or_else(|| RELEASE.to_string());
-        *UPDATER.lock().unwrap() = Some(Shared { state: State::Checking, since: Instant::now(), exe: exe.clone(), relaunch: false });
+        let every = super::intervals(std::env::var("EQOA_UPDATE_EVERY").ok().as_deref());
+        let state = if updated.is_some() { State::Done } else { State::Checking };
+        *UPDATER.lock().unwrap() = Some(Shared { state, since: Instant::now(), exe: exe.clone(), relaunch: false, ready: None });
         let spawned = std::thread::Builder::new().name("update".into()).spawn(move || {
-            let state = match update(&base, &exe, commit, platform, &set) {
-                Ok(Some(version)) => {
-                    crate::say(&format!("update: {version} is in place"));
-                    State::Staged { version }
+            // this program's own bytes, before anything is put in its place
+            let own = sha256_file(&exe).ok();
+            if updated.is_none() {
+                let state = match update(&base, &exe, commit, platform, &set) {
+                    Ok(Some(version)) => {
+                        crate::say(&format!("update: {version} is in place"));
+                        State::Staged { version }
+                    }
+                    Ok(None) => State::Done,
+                    Err(e) => {
+                        crate::say(&format!("update: {e}"));
+                        State::Done
+                    }
+                };
+                // in place after the boot went on without it: offered now
+                if let State::Staged { version } = &state
+                    && with(|_, waited| waited >= WAIT).unwrap_or(false)
+                {
+                    set_ready(version.clone());
                 }
-                Ok(None) => State::Done,
-                Err(e) => {
-                    crate::say(&format!("update: {e}"));
-                    State::Done
-                }
-            };
-            set(state);
+                set(state);
+            }
+            watch(&base, &exe, commit, platform, own.as_deref(), every);
         });
         if spawned.is_err() {
             set(State::Done);
         }
+    }
+
+    /// The version of a program in place other than this one (`watch`).
+    pub(super) fn ready() -> Option<String> {
+        UPDATER.lock().ok()?.as_ref()?.ready.clone()
+    }
+
+    fn set_ready(version: String) {
+        if let Ok(mut u) = UPDATER.lock()
+            && let Some(s) = u.as_mut()
+        {
+            s.ready = Some(version);
+        }
+    }
+
+    /// The player said Yes to the program in place: it is what
+    /// `relaunch_if_requested` starts once the window closes. False when
+    /// there is none (nothing to restart into).
+    pub(super) fn accept() -> bool {
+        let Ok(mut u) = UPDATER.lock() else { return false };
+        let Some(s) = u.as_mut() else { return false };
+        let Some(version) = s.ready.clone() else { return false };
+        s.state = State::Staged { version };
+        s.relaunch = true;
+        true
+    }
+
+    /// The release asked again while the game runs (the module's doc):
+    /// `first` after the start, then every `every`; a program other than
+    /// this one in place is `ready`. A failure is said once until it
+    /// changes (offline, every look would say it).
+    fn watch(base: &str, exe: &Path, commit: &str, platform: &str, own: Option<&str>, (first, every, _): (Duration, Duration, Duration)) {
+        let mut said = String::new();
+        std::thread::sleep(first);
+        loop {
+            match watch_once(base, exe, commit, platform, own) {
+                Ok(Some(version)) => {
+                    if ready().as_deref() != Some(version.as_str()) {
+                        crate::say(&format!("update: {version} is in place: the game offers to restart into it"));
+                    }
+                    set_ready(version);
+                    said.clear();
+                }
+                Ok(None) => said.clear(),
+                Err(e) => {
+                    if e != said {
+                        crate::say(&format!("update: {e}"));
+                        said = e;
+                    }
+                }
+            }
+            std::thread::sleep(every);
+        }
+    }
+
+    /// One look at the release while the game runs: the release's version
+    /// when a program other than this running one is in place now, put
+    /// there by this look as the start's puts it, or there already (another
+    /// window's, or the start's own download that came after the title);
+    /// else None. `own` is this program's SHA-256 as it started: the
+    /// release's program with this one's bytes (another commit's name on
+    /// the same build) is no update, or the game would offer to restart
+    /// into itself for good.
+    pub(super) fn watch_once(base: &str, exe: &Path, commit: &str, platform: &str, own: Option<&str>) -> Result<Option<String>, String> {
+        Ok(match look(base, exe, commit, platform, &|_| {})? {
+            Look::Current | Look::Busy => None,
+            Look::Staged(version) => Some(version),
+            Look::InPlace { version, sha256 } => own.filter(|o| *o != sha256).map(|_| version),
+        })
     }
 
     pub(super) fn request_relaunch() {
@@ -294,10 +664,33 @@ mod native {
             .into()
     }
 
+    /// What a look at the release found (`look`).
+    #[derive(Clone, Debug, PartialEq)]
+    pub(super) enum Look {
+        /// the release is this build's commit
+        Current,
+        /// the release's program (its SHA-256 `sha256`) is the one in place
+        /// already: another window put it there, or it is this one under
+        /// another commit's name
+        InPlace { version: String, sha256: String },
+        /// another window of the game is putting it in place
+        Busy,
+        /// downloaded and put in place by this look
+        Staged(String),
+    }
+
     /// The check and, when the release is another commit's, its program
     /// downloaded and put in place: the release's version, or None when
     /// there was nothing to do.
     pub(super) fn update(base: &str, exe: &Path, commit: &str, platform: &str, progress: &dyn Fn(State)) -> Result<Option<String>, String> {
+        Ok(match look(base, exe, commit, platform, progress)? {
+            Look::Staged(version) => Some(version),
+            _ => None,
+        })
+    }
+
+    /// `update`'s check and download, saying what it found.
+    fn look(base: &str, exe: &Path, commit: &str, platform: &str, progress: &dyn Fn(State)) -> Result<Look, String> {
         let agent = agent();
         let url = format!("{base}update.txt");
         let text = agent
@@ -314,23 +707,23 @@ mod native {
             return Err(format!("{url} names no commit"));
         }
         if m.commit.eq_ignore_ascii_case(commit) {
-            return Ok(None);
+            return Ok(Look::Current);
         }
         let b = m.build(platform).ok_or_else(|| format!("{url} has no {platform} build"))?;
-        // the same program under another commit's name: nothing to do
+        let version = if m.version.is_empty() { m.commit.clone() } else { m.version.clone() };
+        // the release's program in place already
         if sha256_file(exe).is_ok_and(|h| h == b.sha256) {
-            return Ok(None);
+            return Ok(Look::InPlace { version, sha256: b.sha256.clone() });
         }
         let Some(_lock) = Lock::take(exe) else {
             // another window of the game is updating it
-            return Ok(None);
+            return Ok(Look::Busy);
         };
         let new = sibling(exe, "new");
-        let version = if m.version.is_empty() { m.commit.clone() } else { m.version.clone() };
         progress(State::Downloading { version: version.clone(), done: 0, total: b.size });
         download(&agent, &format!("{base}{}", b.file), &new, b, &|done| progress(State::Downloading { version: version.clone(), done, total: b.size }))?;
         swap(exe, &new)?;
-        Ok(Some(version))
+        Ok(Look::Staged(version))
     }
 
     /// The file at `url` into `to`, held to the build's size and SHA-256;
@@ -434,7 +827,7 @@ mod native {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use super::native::{sha256_file, sibling, swap, update};
+    use super::native::{sha256_file, sibling, swap, update, watch_once};
     use super::*;
     use std::io::{Read, Write};
     use std::path::PathBuf;
@@ -600,5 +993,157 @@ mod tests {
         assert!(State::Staged { version: "v".into() }.settled(Duration::ZERO));
         assert_eq!(down.line().as_deref(), Some("Downloading the update (dev-2222222): 50%"));
         assert_eq!(State::Checking.line(), None);
+    }
+
+    /// While the game runs: another commit's program put in place is
+    /// offered, as is one another window put there first; the release's
+    /// program with this one's bytes (another commit's name on the same
+    /// build), this commit's own, and a window still updating are not.
+    #[test]
+    fn the_watch_offers_a_program_other_than_this_one() {
+        let d = dir("watch");
+        let exe = d.join("eqoa");
+        std::fs::write(&exe, OLD).unwrap();
+        let base = serve(vec![("update.txt", manifest(THEIRS, &sha(NEW), NEW.len())), ("eqoa-vanilla-linux-x86_64", NEW.to_vec())]);
+        let own = sha(OLD);
+        // this commit's own: nothing
+        assert_eq!(watch_once(&base, &exe, THEIRS, "linux-x86_64", Some(&own)), Ok(None));
+        // another window updating it: nothing yet
+        std::fs::write(sibling(&exe, "lock"), b"").unwrap();
+        assert_eq!(watch_once(&base, &exe, MINE, "linux-x86_64", Some(&own)), Ok(None));
+        assert_eq!(std::fs::read(&exe).unwrap(), OLD);
+        std::fs::remove_file(sibling(&exe, "lock")).unwrap();
+        // put in place by the look, and offered
+        assert_eq!(watch_once(&base, &exe, MINE, "linux-x86_64", Some(&own)), Ok(Some("dev-2222222".into())));
+        assert_eq!(std::fs::read(&exe).unwrap(), NEW);
+        // in place already (another window's, or this one's look before): offered again, nothing fetched
+        std::fs::remove_file(sibling(&exe, "old")).unwrap();
+        assert_eq!(watch_once(&base, &exe, MINE, "linux-x86_64", Some(&own)), Ok(Some("dev-2222222".into())));
+        assert!(!sibling(&exe, "old").exists(), "nothing was swapped");
+        // the control: this program IS the release's bytes under another commit's name
+        assert_eq!(watch_once(&base, &exe, MINE, "linux-x86_64", Some(&sha(NEW))), Ok(None));
+        // nor when this program's own bytes could not be read
+        assert_eq!(watch_once(&base, &exe, MINE, "linux-x86_64", None), Ok(None));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The watch's times, and a test's shorter ones; a bad value is none.
+    #[test]
+    fn the_watch_asks_now_and_then() {
+        assert_eq!(intervals(None), (FIRST, EVERY, LATER));
+        assert_eq!(intervals(Some("5")), (Duration::from_secs(5), Duration::from_secs(5), Duration::from_secs(15)));
+        assert_eq!(intervals(Some("0")), (FIRST, EVERY, LATER));
+        assert_eq!(intervals(Some("soon")), (FIRST, EVERY, LATER));
+        assert!(FIRST < EVERY && EVERY < LATER);
+    }
+
+    fn quiet(now: i64) -> Moment {
+        Moment { quiet: true, plain: true, world: true, now }
+    }
+
+    /// The question comes up only with a program ready and the moment
+    /// quiet; it starts on No, so Enter alone (or ✕) is a No, which keeps it
+    /// down until `LATER`; left then Enter is the Yes.
+    #[test]
+    fn the_question_starts_on_no_and_comes_back_later() {
+        let later = 1000;
+        let mut o = Offer::new(Duration::from_millis(later as u64));
+        o.frame(false, quiet(0));
+        assert!(!o.shown(), "nothing ready");
+        o.frame(true, Moment { quiet: false, ..quiet(0) });
+        assert!(!o.shown(), "not quiet");
+        assert!(!o.key(13, 0), "a key while it is down is not its");
+        o.frame(true, quiet(10));
+        assert!(o.shown());
+        // keys not its own go by
+        assert!(!o.key(119, 10) && !o.key(138, 10) && !o.key(32, 10) && o.shown());
+        // Enter on No
+        assert!(o.key(13, 20));
+        assert!(!o.shown() && !o.restart());
+        o.frame(true, quiet(20 + later - 1));
+        assert!(!o.shown(), "not again before LATER");
+        o.frame(true, quiet(20 + later));
+        assert!(o.shown(), "again after it");
+        // the pad: the d-pad's left to Yes, ✕
+        assert!(o.key(136, 30) && o.shown());
+        assert!(o.key(134, 30));
+        assert!(o.restart() && !o.shown());
+        o.frame(true, quiet(40));
+        assert!(!o.shown(), "answered Yes: no more questions");
+        // △ is a No too
+        let mut o = Offer::new(Duration::from_millis(later as u64));
+        o.frame(true, quiet(0));
+        assert!(o.key(132, 5) && !o.shown() && !o.restart());
+    }
+
+    /// A window or an edit box of the game's put up meanwhile puts the
+    /// question away, unanswered: it is back as soon as the moment is quiet
+    /// (where a No would keep it down).
+    #[test]
+    fn a_window_of_the_games_puts_it_away_unanswered() {
+        let mut o = Offer::new(LATER);
+        o.frame(true, quiet(0));
+        assert!(o.shown());
+        o.frame(true, Moment { quiet: false, plain: true, ..quiet(5) });
+        assert!(o.shown(), "a fight starting keeps it up");
+        o.frame(true, Moment { quiet: false, plain: false, ..quiet(10) });
+        assert!(!o.shown(), "a window up puts it away");
+        o.frame(true, quiet(20));
+        assert!(o.shown(), "back at once: it was not answered");
+        // the control: a No keeps it down
+        o.key(27, 30);
+        o.frame(true, quiet(40));
+        assert!(!o.shown());
+    }
+
+    /// Left standing it counts as a No (the game's box's timeout).
+    #[test]
+    fn left_standing_it_is_a_no() {
+        use crate::pointer::testing::{NullRaster, vui};
+        let (vui, mut r) = (vui(), NullRaster);
+        let mut o = Offer::new(Duration::from_millis(500));
+        o.frame(true, quiet(0));
+        o.draw(&vui, &mut r, BOX_MS - 1);
+        assert!(o.shown(), "the control: not yet");
+        o.draw(&vui, &mut r, BOX_MS + 1);
+        assert!(!o.shown() && !o.restart());
+        o.frame(true, quiet(BOX_MS + 2));
+        assert!(!o.shown(), "a No's wait");
+        o.frame(true, quiet(BOX_MS + 502));
+        assert!(o.shown());
+    }
+
+    /// A click on a button presses it (a pointer, `pointer`): Yes's is the
+    /// Yes; anywhere else is not the box's.
+    #[test]
+    fn a_click_on_its_buttons() {
+        use crate::pointer::testing::{NullRaster, vui};
+        let (vui, mut r) = (vui(), NullRaster);
+        let mid = |b: [i32; 4]| [(b[0] + b[2]) as f32 / 2.0, (b[1] + b[3]) as f32 / 2.0];
+        let mut o = Offer::new(LATER);
+        o.frame(true, quiet(0));
+        assert!(!o.click([320.0, 224.0], 0), "nothing drawn yet: nowhere to click");
+        o.draw(&vui, &mut r, 0);
+        let (yes, no) = (o.mbox.buttons()[0], o.mbox.buttons()[1]);
+        assert!(!o.click([2.0, 2.0], 0) && o.shown(), "the control: off the buttons");
+        assert!(o.click(mid(no), 0));
+        assert!(!o.shown() && !o.restart(), "No's button");
+        let mut o = Offer::new(LATER);
+        o.frame(true, quiet(0));
+        o.draw(&vui, &mut r, 0);
+        assert!(o.click(mid(yes), 0));
+        assert!(o.restart(), "Yes's button");
+    }
+
+    /// The box's keys are the game's: Enter, Escape, left and right, and the
+    /// pad's ✕, △ and the d-pad's two.
+    #[test]
+    fn the_question_takes_only_its_own_keys() {
+        for k in [13, 27, 17, 18, 134, 132, 136, 137] {
+            assert!(Offer::takes(k), "{k}");
+        }
+        for k in [8, 9, 19, 20, 32, 97, 119, 133, 135, 138, 139, 144] {
+            assert!(!Offer::takes(k), "{k}");
+        }
     }
 }

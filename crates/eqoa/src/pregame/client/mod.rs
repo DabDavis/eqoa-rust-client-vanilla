@@ -292,6 +292,18 @@ impl Client {
         Self::default()
     }
 
+    /// The server list or character select up and waiting on the player,
+    /// none of their boxes up: `Pregame::quiet`.
+    pub fn quiet(&self) -> bool {
+        self.focus.is_none()
+            && self.entered.is_none()
+            && match (self.phase, self.active) {
+                (1, Wnd::Server) => self.server_wnd.quiet(),
+                (3, Wnd::Select) => self.select.quiet(),
+                _ => false,
+            }
+    }
+
     /// `client_main` with the login STATION handed SLUS: `InitBody`, then
     /// (the card's check left out) `ShowLoginWindow`.
     pub fn start(&mut self, _res: &mut Res, shared: &mut Shared) {
@@ -823,6 +835,37 @@ mod tests {
         (t.face, t.hair_color) = (3, 7);
         let c = t.character();
         assert_eq!((c.server_id, c.face, c.hair_style, c.hair_length, c.hair_color), (9, 3, 3, 2, 7));
+    }
+
+    /// Where a box of the client's own may stand (`update`'s question): the
+    /// server list and character select up and waiting, none of their
+    /// boxes up; not creation, not while connecting, not before; and the
+    /// pregame's title menu, not its Network Setup nor the boot.
+    #[test]
+    fn quiet_is_a_list_waiting_on_the_player() {
+        let mut c = Client::new();
+        assert!(!c.quiet(), "the control: nothing up yet");
+        (c.phase, c.top, c.active) = (1, Wnd::Server, Wnd::Server);
+        assert!(c.quiet(), "the server list");
+        c.server_wnd.connecting = true;
+        assert!(!c.quiet(), "connecting to a shard");
+        c.server_wnd.connecting = false;
+        (c.phase, c.top, c.active) = (3, Wnd::Select, Wnd::Select);
+        assert!(c.quiet(), "character select");
+        c.select.set_pending();
+        assert!(!c.quiet(), "its busy box up");
+        let mut c = Client::new();
+        (c.phase, c.top, c.active) = (3, Wnd::Create, Wnd::Create);
+        assert!(!c.quiet(), "creation (a name is typed there)");
+        (c.phase, c.active) = (4, Wnd::Select);
+        assert!(!c.quiet(), "entering the world");
+        let mut p = crate::pregame::Pregame::new(None);
+        assert!(!p.quiet(), "the boot's pictures");
+        p.stage = crate::pregame::Stage::Setup;
+        p.setup.focus = Some(crate::pregame::setup::Focus::Title);
+        assert!(p.quiet(), "the title's menu");
+        p.setup.focus = Some(crate::pregame::setup::Focus::NetSetup);
+        assert!(!p.quiet(), "Network Setup (an address is typed there)");
     }
 
     /// `DisconnectKind` and `Msg0777Done`: a refused login goes to STATION,

@@ -296,8 +296,9 @@ impl Host {
         if let Some(done) = self.world_done() {
             return done;
         }
-        // the release's build in place: the window closes, and it starts
-        if self.pre.relaunch {
+        // the release's build in place, before the title or the player's Yes
+        // to it since (`update`): the window closes, and it starts
+        if self.pre.relaunch || crate::update::restarting() {
             return Done::Quit;
         }
         Done::Stay

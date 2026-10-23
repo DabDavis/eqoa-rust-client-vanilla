@@ -489,13 +489,16 @@ $('iso').addEventListener('change', async () => {
 // v/<build>/, kept as it is for good), and version.json beside the page names
 // the newest. A tab left open asks now and then: on an untouched gate
 // it reloads at once, nothing being lost; anywhere else it says so, and the
-// player reloads when it suits them.
+// player reloads when it suits them: Later holds for half an hour (as the
+// native game's question, update.rs's LATER), or until a newer build.
 
 const BUILD = (import.meta.url.match(/\/v\/([0-9a-f]+)\/main\.js(?:$|[?#])/) || [])[1] || null;
 window.eqoaBuild = BUILD;
 let latest = null;     // the newest build version.json named, when last asked
 let asked = 0;
-let laterFor = null;   // the build the player said "later" to
+let later = null;      // the build the player said "Later" to, and until when
+// how long a Later holds (`?later=<ms>` for tests)
+const LATER_MS = Number(new URLSearchParams(location.search).get('later')) || 30 * 60 * 1000;
 
 async function checkUpdate(force) {
   if (!BUILD) return null; // not a built page (no v/<build>/): nothing to compare
@@ -525,12 +528,12 @@ async function checkUpdate(force) {
     location.reload();
     return latest;
   }
-  if (laterFor !== latest) {
+  if (!later || later.build !== latest || Date.now() >= later.until) {
     report.notice('update', '', started
       ? 'A new version of the client is out. Reloading leaves the game, and you sign in again.'
       : 'A new version of the client is out.', [
       ['Reload', () => { session.set('reloadedFor', latest); location.reload(); }, true],
-      ['Later', () => { laterFor = latest; report.notice('update'); }],
+      ['Later', () => { later = { build: latest, until: Date.now() + LATER_MS }; report.notice('update'); }],
     ]);
   }
   return latest;

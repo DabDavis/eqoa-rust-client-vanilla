@@ -74,6 +74,11 @@ fn name_prefix_eq(name: &[u16], other: &[u16]) -> bool {
 }
 
 impl ServerSelect {
+    /// Not connecting, no message up: `Client::quiet`.
+    pub fn quiet(&self) -> bool {
+        !self.connecting && self.why.is_none() && self.pending.is_none()
+    }
+
     /// `OnMessage` 295 with the focus arriving: the window and the status
     /// box made again, the list's state from the top.
     pub fn focus(&mut self, cx: &UiCx, shards: &[ShardEntry]) {

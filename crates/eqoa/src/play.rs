@@ -2681,6 +2681,26 @@ impl Play {
         self.death.is_some()
     }
 
+    /// Play alone on the screen (no window, box or map up, nothing typed
+    /// into, no world change under way) and the player alive: where a box of
+    /// the client's own may stay (`update`'s question).
+    pub fn plain(&mut self) -> bool {
+        self.mode == 0 && !self.map.open && !self.keyboard_typing() && !self.is_dead() && self.world_change.is_none()
+    }
+
+    /// `plain`, and no fight on: where such a box may come up.
+    pub fn quiet(&mut self) -> bool {
+        self.plain() && !self.auto_attack && self.self_fighting() != Some(true)
+    }
+
+    /// Out of the world as the start menu's Quit leaves it (`logout`): for
+    /// the update's restart.
+    pub fn log_out(&mut self) {
+        if !self.quit {
+            self.logout();
+        }
+    }
+
     /// `UpdateGame`'s own actor, after `AutoAttackTick`: hidden in first
     /// person (`m_cameraMode` 0) while alive (a death leaves it as it was,
     /// `ResetCamera` having left first person); in the follow camera (2)

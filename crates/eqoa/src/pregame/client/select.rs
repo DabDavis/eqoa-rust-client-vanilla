@@ -206,6 +206,12 @@ impl CharSelect {
         self.choosing = true;
     }
 
+    /// None of its boxes up (busy, Options, a message, deleting):
+    /// `Client::quiet`.
+    pub fn quiet(&self) -> bool {
+        !self.busy && !self.choosing && !self.deleting && self.child.is_none()
+    }
+
     /// `ShowWord(id)`.
     pub fn show_word(&mut self, vui: &vi::ui::Vui, id: i32) {
         let s = wide(vui.words.get(id, vui.language));
