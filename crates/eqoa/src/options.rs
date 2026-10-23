@@ -15,7 +15,9 @@
 //! Off: its near level out to its off distance, `lod.rs`), Brightness (a
 //! slider, `settings::curve`), Frame Rate (30, 60 or the display's,
 //! `settings::frame_due`), Camera Distance (a slider: the follow orbit's
-//! zoom-out ceiling, 8 to 50, `camstyle`) and Controller Focus (which
+//! zoom-out ceiling, 8 to 50, `camstyle`), Camera Turn Speed (a slider: how
+//! fast the stick and the keys turn the view, half to three times the
+//! game's, `camstyle::turn_speed`) and Controller Focus (which
 //! controllers this window reads: Auto, Window, Pad 1 to 4 or Off,
 //! `input::pick`, kept for each window of the client open, `multibox`; what
 //! it reads now is said under it), laid out and driven as the game's
@@ -36,7 +38,7 @@
 
 use crate::bindpage::ControlsPage;
 use crate::pointer::{Hits, key, rows_rect};
-use crate::settings::{BRIGHTNESS_STEPS, CAMERA_MAX, CAMERA_MIN, CAMERA_STEP, ClientOptions, Focus, FrameRate};
+use crate::settings::{BRIGHTNESS_STEPS, CAMERA_MAX, CAMERA_MIN, CAMERA_STEP, ClientOptions, Focus, FrameRate, TURN_MAX, TURN_MIN, TURN_STEP};
 use vi::fpu::{Ee, F};
 use vi::ui::{Raster, UI_COLORS, Vui, Window, wide};
 
@@ -419,7 +421,7 @@ impl WndOptions {
         let last = if self.page == -1 {
             5
         } else {
-            let mut last = [2, 3, 3, 4];
+            let mut last = [2, 3, 3, 5];
             if FEATURES & 0x100 != 0 {
                 last[1] = 4;
             }
@@ -436,11 +438,11 @@ impl WndOptions {
     }
 
     /// `Decrement` (`d` -1) and `Increment` (1): the item's value; a volume
-    /// stops at its end with sound 9. Items 12 to 16 are the client's
-    /// Extended rows: Level of Detail turns over, Brightness and Camera
-    /// Distance step as a volume does (stopping at their ends with sound 9),
-    /// Frame Rate goes round 30, 60 and the display's and Controller Focus
-    /// round its seven as Battle Music goes round its tracks.
+    /// stops at its end with sound 9. Items 12 to 17 are the client's
+    /// Extended rows: Level of Detail turns over, Brightness, Camera Distance
+    /// and Camera Turn Speed (17) step as a volume does (stopping at their
+    /// ends with sound 9), Frame Rate goes round 30, 60 and the display's and
+    /// Controller Focus round its seven as Battle Music goes round its tracks.
     fn change(&mut self, o: &mut GameOptions, d: i32, cues: &mut Vec<i32>, ups: &mut Vec<OptionsUp>) {
         let tracks = if FEATURES & 0x100 != 0 { 10 } else { 3 };
         let step = F::<Ee>::new(0.1);
@@ -481,7 +483,7 @@ impl WndOptions {
                 let at = all.iter().position(|&f| f == crate::settings::focus()).unwrap_or(0);
                 crate::settings::set_focus(all[(at + if d < 0 { all.len() - 1 } else { 1 }) % all.len()]);
             }
-            12..=15 => {
+            12..=15 | 17 => {
                 let mut c = crate::settings::client();
                 // a slider's step, or sound 9 at its end
                 let mut slide = |v: &mut u8, lo: u8, hi: u8, by: u8| {
@@ -496,6 +498,15 @@ impl WndOptions {
                     12 => c.lod = !c.lod,
                     13 => slide(&mut c.brightness, 0, BRIGHTNESS_STEPS, 1),
                     15 => slide(&mut c.camera_distance, CAMERA_MIN, CAMERA_MAX, CAMERA_STEP),
+                    17 => {
+                        let t = &mut c.camera_turn;
+                        if (d < 0 && *t > TURN_MIN) || (d > 0 && *t < TURN_MAX) {
+                            *t = (*t as i32 + d.signum() * TURN_STEP as i32).clamp(TURN_MIN as i32, TURN_MAX as i32) as u16;
+                            cues.push(11);
+                        } else {
+                            cues.push(9);
+                        }
+                    }
                     // 14, Frame Rate
                     _ => {
                         let all = FrameRate::ALL;
@@ -507,7 +518,7 @@ impl WndOptions {
             }
             _ => {}
         }
-        if !matches!(self.item, 3 | 4 | 13 | 15) && (0..=16).contains(&self.item) {
+        if !matches!(self.item, 3 | 4 | 13 | 15 | 17) && (0..=17).contains(&self.item) {
             cues.push(11);
         }
         if d < 0 {
@@ -548,7 +559,7 @@ impl WndOptions {
                 }
             }
             2 => 7,
-            3 => 8,
+            3 => 9,
             4 => {
                 self.page = 4;
                 self.controls.reset();
@@ -735,10 +746,10 @@ impl WndOptions {
     /// The client's Extended page, laid out as the Interface page is: Level
     /// of Detail (the game's On and Off), Brightness (a slider as the volumes
     /// are, and each side of its knob for a pointer), Frame Rate, Camera
-    /// Distance (a slider), Controller Focus (Off the game's word), and under
-    /// them what this window reads (`input::reads`).
+    /// Distance and Camera Turn Speed (sliders), Controller Focus (Off the
+    /// game's word), and under them what this window reads (`input::reads`).
     fn draw_extended(&mut self, vui: &Vui, r: &mut dyn Raster) {
-        self.item = [12, 13, 14, 15, 16].get(self.row as usize).copied().unwrap_or(self.item);
+        self.item = [12, 13, 14, 15, 17, 16].get(self.row as usize).copied().unwrap_or(self.item);
         let c = crate::settings::client();
         let lod = wide(vui.words.get(if c.lod { 551 } else { 552 }, vui.language));
         let rate = match crate::settings::frame_rate() {
@@ -750,27 +761,28 @@ impl WndOptions {
             Focus::Off => vui.words.get(552, vui.language).to_string(),
             f => crate::input::focus_name(f),
         };
-        self.draw_rows(vui, r, &EXTENDED_ROWS.map(wide), &[Some(lod), None, Some(wide(rate)), None, Some(wide(&focus))]);
+        self.draw_rows(vui, r, &EXTENDED_ROWS.map(wide), &[Some(lod), None, Some(wide(rate)), None, None, Some(wide(&focus))]);
         let width = self.window2.size[0];
         let knob = vui.entry(166).uv1[0];
         let at = self.window2.top_left()[0] + width - 180;
         let camera = (c.camera_distance - CAMERA_MIN) as f32 / (CAMERA_MAX - CAMERA_MIN) as f32;
-        for (k, t) in [(1, c.brightness as f32 / BRIGHTNESS_STEPS as f32), (3, camera)] {
+        let turn = (c.camera_turn - TURN_MIN) as f32 / (TURN_MAX - TURN_MIN) as f32;
+        for (k, t) in [(1, c.brightness as f32 / BRIGHTNESS_STEPS as f32), (3, camera), (4, turn)] {
             self.window2.draw_hscroll(vui, r, width - 180, k + 1, 140, t, if self.row == k { 32 } else { 0 });
             let mid = at + (t * (140 - knob) as f32) as i32 + knob / 2;
             self.halves(rows_rect(&self.window2, vui, r, width - 180, k + 1, 140, 1), at - 4, mid, at + 144, k);
         }
-        self.window2.text_box(vui, r, &wide(&crate::input::reads()), 40, 6, width - 80, 1, UI_COLORS[0], 0);
-        self.back_legend(vui, r, 7);
+        self.window2.text_box(vui, r, &wide(&crate::input::reads()), 40, 7, width - 80, 1, UI_COLORS[0], 0);
+        self.back_legend(vui, r, 8);
     }
 }
 
 /// The client's words for its own pages (no WORDS.TXT entry): the menu's
-/// rows and the Extended page's five. (WORDS.TXT's "CONTROLS", 1039, is in
+/// rows and the Extended page's six. (WORDS.TXT's "CONTROLS", 1039, is in
 /// capitals and used by none of the game's modules.)
 const EXTENDED: &str = "Extended";
 const CONTROLS: &str = "Controls";
-const EXTENDED_ROWS: [&str; 5] = ["Level of Detail", "Brightness", "Frame Rate", "Camera Distance", "Controller Focus"];
+const EXTENDED_ROWS: [&str; 6] = ["Level of Detail", "Brightness", "Frame Rate", "Camera Distance", "Camera Turn Speed", "Controller Focus"];
 
 /// WORDS.TXT's entries `ids`, wide.
 fn words(vui: &Vui, ids: &[i32]) -> Vec<Vec<u16>> {
@@ -900,10 +912,10 @@ mod tests {
 
     /// The client's Extended page, by the pad: down three rows on the menu
     /// and ✕; each row's left and right (Level of Detail turns over,
-    /// Brightness and Camera Distance stop at their ends with sound 9, Frame
-    /// Rate goes round from the platform's); Triangle on the menu puts them
-    /// back; Save Changes keeps them, and the game's, where nothing was kept
-    /// before (the control).
+    /// Brightness, Camera Distance and Camera Turn Speed stop at their ends
+    /// with sound 9, Frame Rate goes round from the platform's); Triangle on
+    /// the menu puts them back; Save Changes keeps them, and the game's,
+    /// where nothing was kept before (the control).
     #[test]
     fn the_extended_page() {
         use crate::pointer::testing::{NullRaster, vui};
@@ -948,6 +960,19 @@ mod tests {
         assert_eq!(settings::client().camera_distance, 50, "11 to 50 in 13 steps of 3");
         assert_eq!(&cues[cues.len() - 3..], &[11, 9, 9]);
         press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.item, 17, "Camera Turn Speed");
+        assert_eq!(settings::camera_turn(), 100, "the game's");
+        for _ in 0..9 {
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
+        }
+        assert_eq!(settings::camera_turn(), 300, "100 to 300 in 8 steps of 25");
+        assert_eq!(&cues[cues.len() - 2..], &[11, 9], "the last step, then its end");
+        for _ in 0..11 {
+            press(&mut w, &mut o, key::LEFT, &mut cues);
+        }
+        assert_eq!(settings::camera_turn(), 50, "down to half");
+        assert_eq!(cues.last(), Some(&9));
+        press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!(w.item, 16, "Controller Focus");
         assert_eq!(settings::focus(), Focus::Auto);
         press(&mut w, &mut o, key::LEFT, &mut cues);
@@ -959,7 +984,7 @@ mod tests {
         assert_eq!(settings::client().controller[0], Focus::Pad(1), "the first window's: this one, with nowhere to take a place");
         assert_eq!(cues.last(), Some(&11));
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!(w.row, 4, "the last row");
+        assert_eq!(w.row, 5, "the last row");
         // Triangle: the menu, then closed with every setting put back
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!(w.page, -1);
@@ -968,7 +993,7 @@ mod tests {
         assert_eq!(testing::kept("client.opt"), None, "nothing kept yet");
         // again, and saved this time, Auto Attack with it
         w.open(&vui, &NullRaster, &o);
-        for k in [key::DOWN, key::CROSS, key::RIGHT, key::TRIANGLE, key::DOWN, key::DOWN, key::CROSS, key::DOWN, key::LEFT, key::TRIANGLE, key::DOWN, key::DOWN, key::CROSS, key::LEFT, key::CROSS] {
+        for k in [key::DOWN, key::CROSS, key::RIGHT, key::TRIANGLE, key::DOWN, key::DOWN, key::CROSS, key::DOWN, key::LEFT, key::DOWN, key::DOWN, key::DOWN, key::RIGHT, key::TRIANGLE, key::DOWN, key::DOWN, key::CROSS, key::LEFT, key::CROSS] {
             press(&mut w, &mut o, k, &mut cues);
         }
         assert_eq!(w.save_count, 3, "Saving... (one frame drawn)");
@@ -976,7 +1001,7 @@ mod tests {
             w.draw(&vui, &mut NullRaster, &o, &mut ups);
         }
         let kept = String::from_utf8(testing::kept("client.opt").unwrap()).unwrap();
-        assert_eq!(kept, "lod=on\nbrightness=4\ncamera_distance=11\n");
+        assert_eq!(kept, "lod=on\nbrightness=4\ncamera_distance=11\ncamera_turn=125\n");
         assert_eq!(GameOptions::from_card(&testing::kept("game.opt").unwrap()).unwrap().auto_attack, 1);
         testing::reset(false);
     }
@@ -1066,8 +1091,11 @@ mod tests {
         // Camera Distance at 11 of 8..50: its knob near the left end
         assert_eq!(w.point([slider + 30.0, y(&w, 3)]), vec![key::DOWN, key::DOWN, key::DOWN, key::RIGHT]);
         assert_eq!(w.point([slider + 2.0, y(&w, 3)]), vec![key::DOWN, key::DOWN, key::DOWN, key::LEFT]);
-        assert_eq!(w.point([frame + 110.0, y(&w, 4)]), vec![key::DOWN, key::DOWN, key::DOWN, key::DOWN, key::RIGHT], "Controller Focus's value");
-        assert!(w.point([slider + 70.0, y(&w, 4) + 60.0]).is_empty(), "below the rows");
+        // Camera Turn Speed at 100 of 50..300: its knob a fifth of the way
+        assert_eq!(w.point([slider + 70.0, y(&w, 4)]), vec![key::DOWN, key::DOWN, key::DOWN, key::DOWN, key::RIGHT]);
+        assert_eq!(w.point([slider + 2.0, y(&w, 4)]), vec![key::DOWN, key::DOWN, key::DOWN, key::DOWN, key::LEFT]);
+        assert_eq!(w.point([frame + 110.0, y(&w, 5)]), vec![key::DOWN, key::DOWN, key::DOWN, key::DOWN, key::DOWN, key::RIGHT], "Controller Focus's value");
+        assert!(w.point([slider + 70.0, y(&w, 5) + 60.0]).is_empty(), "below the rows");
     }
 
 }

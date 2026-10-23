@@ -167,6 +167,32 @@ pub fn set_style<S: Scene<Ee>>(cam: &mut WalkCamera<Ee>, style: i32, rc: Option<
     }
 }
 
+/// The Extended page's Camera Turn Speed (`settings::camera_turn`, percent
+/// of the game's), the client's own: how fast the stick and the keys turn
+/// the view. In the orbiting cameras (1 and 3) the orbit's push
+/// (`angle_accel`, `InitCameraIntermediate`'s from the default orbit speed,
+/// a quarter turn a second); in the two that look out of the body (0 and 2)
+/// the body's turn (`turn_rate`, `SetCameraStyle`'s quarter turn a second,
+/// and its push `turn_accel`, `InitIntermediate`'s, which `UpdateGame`
+/// recomputes from the rate every frame). The body's own turn in the orbits
+/// stays the game's. At 100 the game's values, bit for bit. Run every frame,
+/// as Camera Distance's ceiling is, so a slider moved applies at once; the
+/// mouse and the touch screen look by the pixel and are not changed.
+pub fn turn_speed(cam: &mut WalkCamera<Ee>, percent: u16) {
+    let f = F::<Ee>::new;
+    let scaled = |v: F<Ee>| if percent == crate::settings::TURN_GAME { v } else { v * f(percent as f32 / 100.0) };
+    let dt = F::new(cam.walk.tick_ms as f32) * f(0.001);
+    let d = cam.angle_damping.powf(dt);
+    let speed = scaled(cam.def_orbit_angle);
+    cam.angle_accel = (speed - speed * d) / (d * dt);
+    if matches!(cam.camera_mode, 0 | 2) {
+        let rate = scaled(f(std::f32::consts::FRAC_PI_2));
+        let d = cam.walk.turn_damping.powf(dt);
+        cam.walk.turn_rate = rate;
+        cam.walk.turn_accel = (rate - rate * d) / (d * dt);
+    }
+}
+
 /// `InitCameraStyle`: the P key's cycle (third person and the fixed follow
 /// to first person, first person to the option's orbit), then saved.
 pub fn cycle<S: Scene<Ee>>(cam: &mut WalkCamera<Ee>, fixed_option: bool, rc: Option<RaceCamera>, scene: &mut S) -> Preset {
@@ -243,4 +269,106 @@ pub fn apply_race<S: Scene<Ee>>(cam: &mut WalkCamera<Ee>, rc: Option<RaceCamera>
     cam.choose_orbit_angle(a, scene);
     cam.halt();
     Some(saved)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::f32::consts::{PI, TAU};
+    use vi::vect::Vect3;
+
+    /// A scene with nothing in it, its clock the test's.
+    struct Clock(i64);
+
+    impl Scene<Ee> for Clock {
+        fn time(&self) -> i64 {
+            self.0
+        }
+        fn collide_sphere(&mut self, _: &mut vi::coll::CollSphere<Ee>, _: &mut vi::scene::Filter) -> bool {
+            false
+        }
+        fn collide_env(&mut self, _: &mut vi::coll::EnvRay<Ee>) -> bool {
+            false
+        }
+        fn env_flags(&self, _: &Vect3<Ee>) -> u32 {
+            0
+        }
+    }
+
+    /// The play camera in camera style `style`.
+    fn styled(style: i32) -> (WalkCamera<Ee>, Clock) {
+        let mut scene = Clock(0);
+        let mut cam = WalkCamera::<Ee>::default();
+        cam.init(Vect3::of(100.0, 0.0, 100.0), Vect3::of(0.5, 0.0, 0.0), &mut scene);
+        set_style(&mut cam, style, None, &mut scene);
+        (cam, scene)
+    }
+
+    /// What the turn speed sets, as bits: the orbit's push, the body's turn
+    /// rate and its push.
+    fn turns(cam: &WalkCamera<Ee>) -> [u32; 3] {
+        [cam.angle_accel.bits(), cam.walk.turn_rate.bits(), cam.walk.turn_accel.bits()]
+    }
+
+    /// At the game's own speed every style keeps the game's numbers bit for
+    /// bit, and gets them back after another speed; another speed changes
+    /// them (the control), but never the body's own turn in the orbits.
+    #[test]
+    fn the_games_turn_speed_is_the_games_bit_for_bit() {
+        for style in 0..4 {
+            let (mut cam, _) = styled(style);
+            let game = turns(&cam);
+            turn_speed(&mut cam, 100);
+            assert_eq!(turns(&cam), game, "style {style}");
+            turn_speed(&mut cam, 175);
+            let fast = turns(&cam);
+            assert_ne!(fast[0], game[0], "style {style}: the orbit's push");
+            if matches!(style, 0 | 2) {
+                assert_ne!(fast[1..], game[1..], "style {style}: the body's turn");
+            } else {
+                assert_eq!(fast[1..], game[1..], "style {style}: the body's own turn stays the game's");
+            }
+            turn_speed(&mut cam, 100);
+            assert_eq!(turns(&cam), game, "style {style}: back to the game's");
+        }
+    }
+
+    /// How far the view turns in two seconds of the game's frames with the
+    /// stick held over: the orbit's angle in the orbiting styles (1 and 3),
+    /// the body's heading in the two that look out of it (0 and 2).
+    fn turned(style: i32, percent: u16) -> f32 {
+        let (mut cam, mut scene) = styled(style);
+        let orbit = matches!(style, 1 | 3);
+        let angle = |c: &WalkCamera<Ee>| if orbit { c.cur.orbit.x.0 } else { c.walk.phys.angles.x.0 };
+        let (mut total, mut last) = (0.0f32, angle(&cam));
+        for _ in 0..60 {
+            turn_speed(&mut cam, percent);
+            if orbit {
+                cam.orbit_right(F::ONE);
+            } else {
+                cam.walk.turn_left(F::ONE);
+            }
+            scene.0 += 33;
+            cam.process(&mut scene);
+            let a = angle(&cam);
+            let d = a - last;
+            total += if d > PI { d - TAU } else if d < -PI { d + TAU } else { d };
+            last = a;
+        }
+        total.abs()
+    }
+
+    /// Camera Turn Speed turns the view that much faster or slower, by the
+    /// stick and the keys alike (both are these inputs), in every style.
+    #[test]
+    fn the_turn_speed_scales_the_views_turn() {
+        for style in 0..4 {
+            let game = turned(style, 100);
+            assert!(game > 1.0, "style {style}: the game's turns ({game})");
+            let twice = turned(style, 200) / game;
+            assert!((1.9..2.1).contains(&twice), "style {style}: twice the game's, {twice}");
+            let half = turned(style, 50) / game;
+            assert!((0.45..0.55).contains(&half), "style {style}: half the game's, {half}");
+        }
+    }
 }

@@ -7,7 +7,7 @@
 //! not keep: it has no server select). The client does the same with the
 //! options it shows, and keeps its own beside them in `client.opt`: the
 //! Options window's Extended page (Level of Detail, Brightness, Frame Rate,
-//! Camera Distance, and each window's Controller Focus by its place among the
+//! Camera Distance, Camera Turn Speed, and each window's Controller Focus by its place among the
 //! client's windows open, `multibox`), which the game does not have; and in `keys.opt` the
 //! Controls page's keys and buttons (`binds`), per device as the card keeps
 //! every option, not per character. `server.opt` holds the title's Network
@@ -281,6 +281,14 @@ pub const CAMERA_MIN: u8 = 8;
 pub const CAMERA_MAX: u8 = 50;
 pub const CAMERA_STEP: u8 = 3;
 
+/// The Extended page's Camera Turn Speed, in percent of the game's own
+/// (`camstyle::turn_speed`): from half to three times it in quarters (11
+/// places on the slider), the game's own the default.
+pub const TURN_MIN: u16 = 50;
+pub const TURN_MAX: u16 = 300;
+pub const TURN_STEP: u16 = 25;
+pub const TURN_GAME: u16 = 100;
+
 /// The Extended page's Frame Rate: a cap on the frames drawn, or none (the
 /// display's rate).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -368,6 +376,8 @@ pub struct ClientOptions {
     /// Camera Distance: the follow orbit's ceiling, `CAMERA_MIN` to
     /// `CAMERA_MAX`
     pub camera_distance: u8,
+    /// Camera Turn Speed: percent of the game's, `TURN_MIN` to `TURN_MAX`
+    pub camera_turn: u16,
     /// Controller Focus, each window's by its place (`focus`)
     pub controller: [Focus; crate::multibox::PLACES],
 }
@@ -379,18 +389,23 @@ impl Default for ClientOptions {
             brightness: BRIGHTNESS_AS_DRAWN,
             frame_rate: None,
             camera_distance: crate::camstyle::FOLLOW_MAX_DISTANCE as u8,
+            camera_turn: TURN_GAME,
             controller: [Focus::Auto; crate::multibox::PLACES],
         }
     }
 }
 
 impl ClientOptions {
-    /// `client.opt`: a line a setting, `name=value`; a window's Controller
-    /// Focus as `controller.<window>` (from 1), and only when it is not Auto.
+    /// `client.opt`: a line a setting, `name=value`; Camera Turn Speed only
+    /// when it is not the game's, and a window's Controller Focus as
+    /// `controller.<window>` (from 1), only when it is not Auto.
     pub fn to_text(self) -> String {
         let mut s = format!("lod={}\nbrightness={}\ncamera_distance={}\n", if self.lod { "on" } else { "off" }, self.brightness, self.camera_distance);
         if let Some(r) = self.frame_rate {
             s.push_str(&format!("frame_rate={}\n", r.key()));
+        }
+        if self.camera_turn != TURN_GAME {
+            s.push_str(&format!("camera_turn={}\n", self.camera_turn));
         }
         for (k, f) in self.controller.iter().enumerate().filter(|(_, f)| **f != Focus::Auto) {
             s.push_str(&format!("controller.{}={}\n", k + 1, f.key()));
@@ -416,6 +431,11 @@ impl ClientOptions {
                 ("camera_distance", v) => {
                     if let Some(d) = v.parse::<u8>().ok().filter(|d| (CAMERA_MIN..=CAMERA_MAX).contains(d)) {
                         c.camera_distance = d;
+                    }
+                }
+                ("camera_turn", v) => {
+                    if let Some(t) = v.parse::<u16>().ok().filter(|t| (TURN_MIN..=TURN_MAX).contains(t)) {
+                        c.camera_turn = t;
                     }
                 }
                 (k, v) if k.starts_with("controller.") => {
@@ -469,6 +489,11 @@ pub fn set_platform_rate(r: FrameRate) {
 /// The follow orbit's zoom-out ceiling now (Camera Distance).
 pub fn camera_distance() -> f32 {
     client().camera_distance as f32
+}
+
+/// The camera's turn now, in percent of the game's (Camera Turn Speed).
+pub fn camera_turn() -> u16 {
+    client().camera_turn
 }
 
 /// This window's Controller Focus: its place's (`multibox::place`).
@@ -531,11 +556,12 @@ pub fn describe() -> String {
         FrameRate::Display => "the display's",
     };
     format!(
-        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, frame rate {rate}{}, camera distance {}, controller focus {}; {}",
+        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, frame rate {rate}{}, camera distance {}, camera turn speed {}%, controller focus {}; {}",
         if c.lod { "on" } else { "off" },
         c.brightness,
         if c.frame_rate.is_none() { " (not chosen)" } else { "" },
         c.camera_distance,
+        c.camera_turn,
         focus().key(),
         kept_where()
     )
@@ -832,7 +858,7 @@ mod tests {
         let none = game_options();
         assert_eq!(none, GameOptions { compact: 1, ..Default::default() });
         let o = changed();
-        let mine = ClientOptions { lod: false, brightness: 8, frame_rate: Some(FrameRate::Sixty), camera_distance: 50, ..Default::default() };
+        let mine = ClientOptions { lod: false, brightness: 8, frame_rate: Some(FrameRate::Sixty), camera_distance: 50, camera_turn: 175, ..Default::default() };
         set_client(mine);
         assert!(save(&o));
         CLIENT.with(|c| c.set(None));
@@ -873,19 +899,26 @@ mod tests {
             ClientOptions::default(),
             ClientOptions { lod: false, brightness: 0, frame_rate: Some(FrameRate::Thirty), camera_distance: 8, ..Default::default() },
             ClientOptions { lod: true, brightness: 10, frame_rate: Some(FrameRate::Display), camera_distance: 50, ..Default::default() },
+            ClientOptions { camera_turn: TURN_MIN, ..Default::default() },
+            ClientOptions { camera_turn: TURN_MAX, ..Default::default() },
             ClientOptions { controller: std::array::from_fn(|k| Focus::ALL[k % Focus::ALL.len()]), ..Default::default() },
         ] {
             assert_eq!(ClientOptions::from_text(&c.to_text()), c);
         }
-        assert_eq!(ClientOptions::default().to_text(), "lod=on\nbrightness=5\ncamera_distance=11\n", "no Frame Rate until one is chosen, no window's Auto");
+        assert_eq!(ClientOptions::default().to_text(), "lod=on\nbrightness=5\ncamera_distance=11\n", "no Frame Rate until one is chosen, no game's turn, no window's Auto");
+        assert_eq!(ClientOptions { camera_turn: 250, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\ncamera_turn=250\n");
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, frame rate the display's (not chosen), camera distance 11, controller focus auto; kept in the page's storage");
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, frame rate the display's (not chosen), camera distance 11, camera turn speed 100%, controller focus auto; kept in the page's storage");
         testing::reset(true);
         assert!(describe().ends_with("refused: nothing is kept"));
         testing::reset(false);
         let odd = ClientOptions::from_text("brightness=11\nlod=maybe\nframe_rate=120\ncamera_distance=51\nwhat=ever\nnoise\ncontroller.0=pad1\ncontroller.17=pad1\ncontroller.2=pad5\ncontroller.x=off");
         assert_eq!(odd, ClientOptions::default());
         assert_eq!(ClientOptions::from_text("camera_distance=7").camera_distance, 11);
+        for bad in ["camera_turn=49", "camera_turn=301", "camera_turn=fast", "camera_turn=-100"] {
+            assert_eq!(ClientOptions::from_text(bad).camera_turn, TURN_GAME, "{bad}: the game's");
+        }
+        assert_eq!(ClientOptions::from_text("camera_turn=300").camera_turn, 300);
         let two = ClientOptions::from_text("controller.2=pad3\ncontroller.16=window");
         assert_eq!((two.controller[1], two.controller[15], two.controller[0]), (Focus::Pad(3), Focus::Window, Focus::Auto));
     }
