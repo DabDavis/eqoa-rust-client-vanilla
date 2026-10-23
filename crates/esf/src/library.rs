@@ -35,6 +35,9 @@ pub struct Library {
     rank: Vec<(usize, u64)>,
     /// (world file, zone index) -> the file holding that zone, once loaded.
     zone_files: HashMap<(usize, usize), usize>,
+    /// DictIDs given to objects already loaded (`alias`), kept through a
+    /// `replace`.
+    aliases: Vec<(i32, Ref)>,
 }
 
 impl Library {
@@ -82,6 +85,22 @@ impl Library {
         for file in 0..self.files.len() {
             self.register(file);
         }
+        for &(id, r) in &self.aliases {
+            self.dict.entry(id).or_insert(r);
+        }
+    }
+
+    /// Registers `r` under `id` too, unless something already has `id` (the
+    /// dictionary's first registration wins): an object already loaded given
+    /// another DictID, as a server's patch does (Sandstorm's S2 registers
+    /// five CHAR.ESF surfaces under DictIDs of its own for its armour set 9).
+    pub fn alias(&mut self, id: i32, r: Ref) -> bool {
+        if self.dict.contains_key(&id) {
+            return false;
+        }
+        self.dict.insert(id, r);
+        self.aliases.push((id, r));
+        true
     }
 
     pub fn file(&self, i: usize) -> &Container {

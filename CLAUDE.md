@@ -54,6 +54,11 @@ current.
   the pick by SYSTEM.CNF as the page does, and keeps it. `EQOA_OFFSCREEN` never shows a dialog. Test the Linux
   dialogs on :99 with a private bus (`dbus-run-session`, xdg-desktop-portal-gtk) or none (zenity): the session
   bus's portal draws on the user's own screen.
+- A server's patch (`s2.rs`, README "the server's patch"): what a server's patcher puts in its folder (its S2, its art file,
+  WORDS.TXT) is read as Sandstorm's SS stub applies S2 on a PS2, feature by feature at the addresses S2 hooks; no S2, or one the
+  stub refuses, is retail. Never commit an S2 or anything read out of one (Sandstorm's code); tests take them from
+  `$EQOA_S2_BUILDS` (default: beside this repository) and skip without. A test that needs rules runs under `s2::with_rules`
+  (its thread's own), never `s2::set`.
 - Game-logic floats go through `ee::*`, never host `f32` operators; every compare too.
 - Port from the decomp (`../decomp/src`), not from the Go client: the Go client's
   differences from the original are listed in `../claude-notes/go-client-vs-decomp-audit-20261015.md`.

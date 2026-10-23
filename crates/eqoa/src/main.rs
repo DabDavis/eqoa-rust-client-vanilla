@@ -45,6 +45,8 @@ mod bank;
 mod camreach;
 mod camstyle;
 mod client_image;
+mod playersearch;
+mod s2;
 mod controls;
 mod craft;
 mod craftwnd;
@@ -518,11 +520,15 @@ fn boot(image: Option<&str>, server: Option<String>) -> Result<()> {
 /// in this order (the dictionary's first registration wins); and the walk at
 /// the player's place.
 pub fn world_library(player: &net::session::Player) -> Result<(esf::Library, viewer::Source)> {
+    // the server's patch (`s2`) before the world's files are read
+    s2::begin_session();
     // The world the dump names: its file, by the path's last part.
     let file = player.world_path.rsplit(['\\', '/']).next().unwrap_or("tunaria.esf").to_uppercase();
     let (mut lib, src) = source(&file, &[])?;
     let main_file = 0;
     lib.add("CHAR.ESF", esf::Container::open(disc(None)?.read("CHAR.ESF")?)?);
+    // a server's patch's own names for CHAR.ESF's art (`s2`: Sandstorm's set 9)
+    s2::get().register_art(&mut lib);
     // What creatures hold: weapons and shields.
     lib.add("ITEM.ESF", esf::Container::open(disc(None)?.read("ITEM.ESF")?)?);
     // The name plates' font ("Arial").
@@ -538,6 +544,17 @@ pub fn world_library(player: &net::session::Player) -> Result<(esf::Library, vie
     // EnterGameLoad's last file (the card's copy when there is one):
     // the compass's patch art.
     lib.add("ADDART.CSF", esf::Container::open(disc(None)?.read("ADDART.CSF")?)?);
+    // A server's patch's own art (`s2`: where CLIENT reads the card's added
+    // art, Sandstorm's S2 reads its ss-art.csf, robes 4 and 5), out of the
+    // server's folder.
+    if let Some(path) = s2::get().art_path() {
+        match std::fs::read(&path).map_err(|e| e.to_string()).and_then(|b| esf::Container::open(b).map_err(|e| format!("{e:?}"))) {
+            Ok(c) => {
+                lib.add(path.file_name().map_or_else(String::new, |n| n.to_string_lossy().to_uppercase()), c);
+            }
+            Err(e) => eprintln!("s2: {}: {e}", path.display()),
+        }
+    }
     let [x, _, z] = player.pos;
     let index = vi::world::World::<vi::fpu::Ee>::zone_at(lib.file(main_file), x, z).ok_or("no zone at the player's position")?;
     // the player's zone off the disc; the walker reads the rest round it
@@ -554,7 +571,8 @@ pub fn world_library(player: &net::session::Player) -> Result<(esf::Library, vie
 /// is SUPPORT's, and the start menu CLIENT's, taken up as they come,
 /// `modules`).
 pub fn play_tables(play: &mut play::Play) -> Result<()> {
-    play.words = disc(None)?.read("WORDS.TXT").ok().and_then(|b| vi::strtab::StringTable::parse(&b));
+    // the server's folder's copy first (`s2`: the patcher's), else the disc's
+    play.words = s2::get().words().or_else(|| disc(None).ok()?.read("WORDS.TXT").ok().and_then(|b| vi::strtab::StringTable::parse(&b)));
     play.ui_textures = disc(None)?.read("TEXTURES.TXT").ok().and_then(|b| vi::strtab::StringTable::parse(&b));
     if play.ui_textures.is_none() {
         eprintln!("no HUD: TEXTURES.TXT is not on the disc");

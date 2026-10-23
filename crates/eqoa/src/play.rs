@@ -276,6 +276,8 @@ pub struct Play {
     who: crate::wholist::Who,
     who_wnd: crate::wholist::WhoList,
     who_open: bool,
+    /// the who window shows a server's player search (`playersearch`)
+    search_mode: bool,
     who_keys: Vec<(i32, bool)>,
     /// Tradeskills (`VIClientPart3834C`) and their windows: the recipe book
     /// (mode 6) and the experiment (mode 37); the keys and what the part said
@@ -614,7 +616,7 @@ fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Optio
                     // ApplyLook: the look's textures and tints on the layers the
                     // sprite's text slots name.
                     if let (Some(cs), Some(look)) = (&sprite, &look) {
-                        dress(&mut model, &vi::cust::apply_look(cs, look, helm_worn, |id| lib.surface(id as i32).is_some()));
+                        dress(&mut model, &vi::cust::apply_look_with(cs, look, helm_worn, |id| lib.surface(id as i32).is_some(), &crate::s2::get().cust()));
                     }
                     let gpu = g.renderer.upload(g.device, g.queue, &model, &[render::IDENTITY], &textures);
                     Some(Puppet { model: e.model, look, sprite, anims, rand, gpu, attached, held, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false })
@@ -648,11 +650,13 @@ fn attach(lib: &Library, g: &mut Gpu, cs: &CSprite<Ee>, c: &net::entity::Creatur
         }
     }
     let mut helm_worn = false;
+    // the server's patch's tables (`s2`), retail's without one
+    let t = crate::s2::get().cust();
     if cs.node_ids[8] >= 0
-        && let Some(h) = vi::cust::helm(c.armor[5])
+        && let Some(h) = vi::cust::helm_with(c.armor[5], &t)
         && let Some(mut m) = lib.lookup(h as i32).and_then(|r| lib.build_model(r))
     {
-        let tint = vi::cust::TINTS[(c.armor_tint[5] as usize).min(14)];
+        let tint = t.tint_at_most(c.armor_tint[5]);
         for b in &mut m.batches {
             for l in &mut b.layers {
                 l.color = tint;
@@ -1029,9 +1033,12 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
+        // the server's patch (`s2`): as the patcher left its folder, or
+        // `EQOA_S2_DIR`'s
+        crate::s2::begin_session();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0 };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0 };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -1067,8 +1074,9 @@ impl Play {
             && let Some(img) = get(Module::Client)
         {
             self.modules_taken[0] = true;
+            // CLIENT's data as the server's patch leaves it (`s2`)
             if let Some(c) = crate::client_image::ClientImage::from_bytes(img.to_vec()) {
-                self.client_data(&c);
+                self.client_data(&c.patched(crate::s2::get().image.clone()));
             }
         }
         if !self.modules_taken[1]
@@ -1100,8 +1108,9 @@ impl Play {
         let _ = writeln!(o, "character: {} (server id {}), level {}, race {}, class {}", p.name, p.server_id, self.dump.player.level, p.race, p.class);
         // the world's file as the disc's table names it (the dump's path is
         // the login's, and a teleport into another world does not change it)
-        let file = WORLD_FILES.get(p.world as usize).map_or_else(|| p.world_path.clone(), |f| f.to_string());
+        let file = crate::s2::get().world_file(p.world).unwrap_or_else(|| p.world_path.clone());
         let _ = writeln!(o, "world {} ({file}), at {at:?}", p.world);
+        let _ = writeln!(o, "server's patch: {}", crate::s2::get().describe());
         let target = if self.target == u32::MAX { "none".to_string() } else { format!("{:#x}", self.target) };
         let _ = writeln!(o, "mode {}, target {target}, dead {}, autorun {}, auto-attack {}", self.mode, self.is_dead(), self.autorun, self.auto_attack);
         let start = match (&self.start, self.modules_taken[0]) {
@@ -1168,7 +1177,9 @@ impl Play {
                     self.autorun = false;
                     self.following = false;
                     if world as i64 != self.player.world {
-                        match WORLD_FILES.get(world as usize) {
+                        // the world table: the disc's six, or the server's
+                        // patch's (`s2`: Sandstorm's eight)
+                        match crate::s2::get().world_file(world as i64) {
                             Some(f) => {
                                 eprintln!("play: teleport to world {world} ({f}) at {pos:?}");
                                 // Respawn's casts at the arrival
@@ -1291,6 +1302,18 @@ impl Play {
                     self.cues.push(crate::sound::Cue::Ui(1));
                 }
                 Event::Opcode { op: 0x0E02, data } => self.who.recv(&data),
+                // a server's player search (`playersearch`, `s2`): 0x1501
+                // empties the list, a 0x1500 is a player found
+                Event::Opcode { op: 0x1501, .. } if self.search_mode => {
+                    self.who.list.clear();
+                    self.who.pending = false;
+                }
+                Event::Opcode { op: 0x1500, data } if self.search_mode => {
+                    if let Some(f) = crate::playersearch::Found::parse(&data) {
+                        self.who.list.push(f.row());
+                        self.who.pending = false;
+                    }
+                }
                 Event::Opcode { op: 0x007C, data } => self.quests.recv_add(&data),
                 // VIClientPart3834C::Recv1102
                 Event::Opcode { op: 0x1102, data } => {
@@ -1592,7 +1615,7 @@ impl Play {
                     let mut elsewhere = false;
                     let (arrival, heading, here) = (player.pos, player.hpr[0], player.world == self.player.world);
                     if player.world != self.player.world {
-                        match WORLD_FILES.get(player.world as usize) {
+                        match crate::s2::get().world_file(player.world) {
                             Some(f) => {
                                 eprintln!("play: the dump's world {} ({f}) at {:?}", player.world, player.pos);
                                 // SetLocation at the dump's place, as it is
@@ -3467,6 +3490,10 @@ impl Play {
         if r.error {
             return;
         }
+        // a server's patch (`s2`, Sandstorm's S2: its control panel's
+        // colours): three more bytes, when there, are the number's colour
+        let rest = &r.data[r.pos..];
+        let rgb = (crate::s2::get().damage_rgb && rest.len() >= 3).then(|| [rest[0], rest[1], rest[2]]);
         let me = self.self_id32();
         // the player's own hit: after a swap the swing timer follows the
         // server's rounds (`attackclock`), whatever the damage numbers show
@@ -3478,11 +3505,11 @@ impl Play {
             return;
         }
         if Some(attacker) == me {
-            self.damage.add(defender, amount, 0);
+            self.damage.add_colored(defender, amount, 0, rgb);
         } else if camera_mode != 0 && self.mode != 38
             && let Some(me) = me
         {
-            self.damage.add(me, amount, 1);
+            self.damage.add_colored(me, amount, 1, rgb);
         }
     }
 
@@ -3821,8 +3848,14 @@ impl Play {
                 crate::wholist::WhoUp::Close => {
                     // ClosePanel704: CloseWhoList, back to the start menu
                     self.who.close();
+                    self.search_mode = false;
                     self.mode = 0;
                     self.open_start_menu(false);
+                }
+                // the player search asks again (`playersearch`), the who list its own
+                crate::wholist::WhoUp::Refresh if self.search_mode => {
+                    self.who.pending = true;
+                    self.session.send(&crate::playersearch::search_all());
                 }
                 crate::wholist::WhoUp::Refresh => {
                     let req = self.who.open();
@@ -4040,9 +4073,22 @@ impl Play {
             0x0B03_0004 => {
                 let req = self.who.open();
                 self.session.send(&req);
+                self.search_mode = false;
                 self.who_open = true;
                 self.mode = 35;
             }
+            // a server's patch's Group menu (`s2`, Sandstorm's player
+            // search): Search (in the who window), Register, Unregister
+            0xFF00_0001 if crate::s2::get().player_search => {
+                self.who.close();
+                self.who.pending = true;
+                self.session.send(&crate::playersearch::search_all());
+                self.search_mode = true;
+                self.who_open = true;
+                self.mode = 35;
+            }
+            0xFF00_0002 if crate::s2::get().player_search => self.session.send(&crate::playersearch::register()),
+            0xFF00_0003 if crate::s2::get().player_search => self.session.send(&crate::playersearch::unregister()),
             // m_p2EF24.CanChat: in a guild its channel (word 599), else
             // word 570; any other answer "Guild error: n" (word 835)
             0x0B03_0002 => match crate::guild::Cmds::can_member(&self.guild) {
@@ -5705,6 +5751,55 @@ mod commands {
         let now = p.session.now();
         p.damage_indication(&hit(me), 0);
         assert_eq!(p.attack.due, now.wrapping_sub(crate::attackclock::PRESS_TO_FIRST_HIT).wrapping_add(4000), "the player's own");
+    }
+
+    /// A server's patch's Group menu (`s2`, Sandstorm's player search):
+    /// Search opens the who window on the search's results (mode 35, the
+    /// request out), and the who list proper takes the window back; without
+    /// the patch (the control) its message does nothing, as no retail menu
+    /// carries it.
+    #[test]
+    fn a_patchs_search_opens_the_who_window() {
+        let search = crate::s2::Rules { player_search: true, ..crate::s2::Rules::retail() };
+        crate::s2::with_rules(search, || {
+            let mut p = play();
+            p.do_action(0xFF00_0001, 0);
+            assert_eq!((p.mode, p.search_mode, p.who_open, p.who.pending), (35, true, true, true));
+            p.do_action(0x0B03_0004, 0);
+            assert!(!p.search_mode);
+        });
+        let mut p = play();
+        p.do_action(0xFF00_0001, 0);
+        assert_eq!((p.mode, p.search_mode, p.who_open), (0, false, false));
+    }
+
+    /// A server's patch that colours damage (`s2`: Sandstorm's S2) has the
+    /// three bytes after 0x00DB's body colour the number, the player's own
+    /// hit and one taken alike; without it (the control) they are passed
+    /// over and the number is the game's white.
+    #[test]
+    fn a_patchs_damage_colour() {
+        let hit = |attacker: u32, defender: u32| {
+            let mut w = net::stream::Writer::default();
+            w.u32(attacker).signed(-30).u32(defender).bytes(&[255, 128, 0]);
+            w.data
+        };
+        let shown = |p: &mut Play, id: u32| {
+            p.damage.step(33, |e| (e == id).then_some(crate::damage::Target { pos: [0.0; 3], slot4: None }))
+        };
+        let colored = crate::s2::Rules { damage_rgb: true, ..crate::s2::Rules::retail() };
+        let (s, me) = crate::s2::with_rules(colored, || {
+            let mut p = play();
+            let me = p.self_id32().expect("the player's id");
+            p.damage_indication(&hit(me, 0x200), 0);
+            (shown(&mut p, 0x200), me)
+        });
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].color, [1.0, 128.0 / 255.0, 0.0, 1.0]);
+        let mut p = play();
+        p.damage_indication(&hit(me, 0x200), 0);
+        let s = shown(&mut p, 0x200);
+        assert_eq!((s.len(), s[0].color), (1, [1.0; 4]));
     }
 
     /// 0x1402 sub-op 3 (`VIClientPart4EC58::Recv03`): a rise in Class

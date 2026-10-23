@@ -16,6 +16,10 @@ pub struct ClientImage {
     data: Vec<u8>,
     /// pointer site -> target, both image offsets
     words: HashMap<u32, u32>,
+    /// CLIENT's memory as a server's patch leaves it (`s2`): what the patch
+    /// wrote is read first, its arena too (the Group menu's Search, Register
+    /// and Unregister are a table of its)
+    patch: Option<std::sync::Arc<crate::s2::Image>>,
 }
 
 impl ClientImage {
@@ -34,7 +38,14 @@ impl ClientImage {
                 words.insert(site, target);
             }
         }
-        Some(ClientImage { data, words })
+        Some(ClientImage { data, words, patch: None })
+    }
+
+    /// The image as a server's patch leaves CLIENT's memory (`s2::Rules`'s
+    /// `image`; `None` is the disc's).
+    pub fn patched(mut self, patch: Option<std::sync::Arc<crate::s2::Image>>) -> Self {
+        self.patch = patch;
+        self
     }
 
     /// Whether this is the Frontiers CLIENT these addresses are read from
@@ -45,6 +56,9 @@ impl ClientImage {
     }
 
     pub fn i32_at(&self, va: u32) -> i32 {
+        if let Some(w) = self.patch.as_ref().and_then(|p| p.word(va)) {
+            return w as i32;
+        }
         let o = va.wrapping_sub(BASE) as usize;
         self.data.get(o..o + 4).map_or(0, |b| i32::from_le_bytes(b.try_into().unwrap()))
     }
@@ -52,6 +66,11 @@ impl ClientImage {
     /// The pointer stored at `va`, as an address (`None` for a null or a
     /// word nothing relocates).
     pub fn ptr_at(&self, va: u32) -> Option<u32> {
+        // a pointer the patch wrote is an address as the console has it
+        // (the arena's at the address it was linked at)
+        if let Some(w) = self.patch.as_ref().and_then(|p| p.word(va)) {
+            return (w != 0).then_some(w);
+        }
         self.words.get(&va.wrapping_sub(BASE)).map(|t| t + BASE)
     }
 }
@@ -150,4 +169,47 @@ pub fn world_name_word(img: &ClientImage, world: i32) -> Option<u16> {
     }
     let w = (img.i32_at(0x00CF3738 + 0x20 * world as u32 + 8) & 0xFFFF) as u16;
     (w != 0).then_some(w)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Sandstorm's S2 gives the Group menu (`VIMenuDef` 0x00CCED20) three
+    /// more entries out of its arena: Search, Register and Unregister, whose
+    /// messages its own code takes (0xFF000001-3); the disc's image (the
+    /// control) has the eight retail ones. Skipped without CLIENT's image
+    /// (`run/client.bin`) or the S2 (`s2`'s tests).
+    #[test]
+    fn a_patch_gives_the_group_menu_its_entries() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let Ok(img) = std::fs::read(root.join("run/client.bin")) else {
+            eprintln!("SKIP: no run/client.bin");
+            return;
+        };
+        let s2 = std::env::var_os("EQOA_S2_BUILDS").map(std::path::PathBuf::from).unwrap_or_else(|| root.join("..")).join("extracted-assets/sandstorm-patch-20261015/S2");
+        let Ok(s2) = std::fs::read(&s2) else {
+            eprintln!("SKIP: no S2 at {}", s2.display());
+            return;
+        };
+        let rules = crate::s2::Rules::from_patch(&crate::s2::Patch::parse(&s2).unwrap());
+        let group = |c: &ClientImage| {
+            let mut m = Menus::default();
+            let k = m.def(c, 0x00CC_ED20);
+            m.list[k].entries.iter().map(|e| (e.word, e.msg)).collect::<Vec<_>>()
+        };
+        let disc = ClientImage::from_bytes(img.clone()).unwrap();
+        let retail = group(&disc);
+        assert_eq!(retail.len(), 8);
+        assert_eq!(retail[0], (86, 0x0701_0000), "Invite");
+        let patched = ClientImage::from_bytes(img).unwrap().patched(rules.image.clone());
+        let s = group(&patched);
+        assert_eq!(&s[..8], &retail[..]);
+        assert_eq!(&s[8..], &[(1673, 0xFF00_0001), (1815, 0xFF00_0002), (1816, 0xFF00_0003)]);
+        // and the start menu reaches them (Community's Group)
+        let start = crate::startmenu::StartData::from_image(&patched);
+        assert!(start.menus.list.iter().any(|m| m.entries.iter().any(|e| e.msg == 0xFF00_0001)), "the start menu reaches the Group menu");
+        // the rest of the image is the disc's
+        assert_eq!(patched.i32_at(0x00CC_FFF0 + 12), disc.i32_at(0x00CC_FFF0 + 12));
+    }
 }
