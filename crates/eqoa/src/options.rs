@@ -22,8 +22,10 @@
 //! game's, `camstyle::turn_speed`), Screen Shake, Controller Focus (which
 //! controllers this window reads: Auto, Window, Pad 1 to 4 or Off,
 //! `input::pick`, kept for each window of the client open, `multibox`; what
-//! it reads now is said beside Back) and Capture Controller, laid out and
-//! driven as the game's rows are, eight at a time (the page scrolls a row). They change as they are moved, Triangle on the menu puts them
+//! it reads now is said beside Back), Capture Controller and Sound in
+//! Background (one setting for every window: off, a window not in front is
+//! not heard, `audio::set_heard`), laid out and driven as the game's rows
+//! are, eight at a time (the page scrolls two rows). They change as they are moved, Triangle on the menu puts them
 //! back, and Save Changes keeps them with the game's (`client.opt`).
 //!
 //! The client's own Controls page after it (`bindpage`): every key and
@@ -442,9 +444,9 @@ impl WndOptions {
     }
 
     /// `Decrement` (`d` -1) and `Increment` (1): the item's value; a volume
-    /// stops at its end with sound 9. Items 12 to 20 are the client's
-    /// Extended rows: Level of Detail, Screen Shake (18) and Capture
-    /// Controller (19) turn over, Brightness, Fog (20), Camera Distance and
+    /// stops at its end with sound 9. Items 12 to 21 are the client's
+    /// Extended rows: Level of Detail, Screen Shake (18), Capture Controller
+    /// (19) and Sound in Background (21) turn over, Brightness, Fog (20), Camera Distance and
     /// Camera Turn Speed (17) step as a volume does (stopping at their ends
     /// with sound 9), Frame Rate goes round 30, 60 and the display's and
     /// Controller Focus round its seven as Battle Music goes round its tracks.
@@ -488,7 +490,7 @@ impl WndOptions {
                 let at = all.iter().position(|&f| f == crate::settings::focus()).unwrap_or(0);
                 crate::settings::set_focus(all[(at + if d < 0 { all.len() - 1 } else { 1 }) % all.len()]);
             }
-            12..=15 | 17..=20 => {
+            12..=15 | 17..=21 => {
                 let mut c = crate::settings::client();
                 // a slider's step, or sound 9 at its end
                 let mut slide = |v: &mut u8, lo: u8, hi: u8, by: u8| {
@@ -503,6 +505,7 @@ impl WndOptions {
                     12 => c.lod = !c.lod,
                     18 => c.screen_shake = !c.screen_shake,
                     19 => c.capture = !c.capture,
+                    21 => c.background_sound = !c.background_sound,
                     13 => slide(&mut c.brightness, 0, BRIGHTNESS_STEPS, 1),
                     20 => slide(&mut c.fog, 0, crate::fog::STEPS, 1),
                     15 => slide(&mut c.camera_distance, CAMERA_MIN, CAMERA_MAX, CAMERA_STEP),
@@ -526,7 +529,7 @@ impl WndOptions {
             }
             _ => {}
         }
-        if !matches!(self.item, 3 | 4 | 13 | 15 | 17 | 20) && (0..=20).contains(&self.item) {
+        if !matches!(self.item, 3 | 4 | 13 | 15 | 17 | 20) && (0..=21).contains(&self.item) {
             cues.push(11);
         }
         if d < 0 {
@@ -778,7 +781,8 @@ impl WndOptions {
     /// of Detail (the game's On and Off), Brightness and Fog (sliders as the
     /// volumes are, and each side of a knob for a pointer), Frame Rate,
     /// Camera Distance and Camera Turn Speed (sliders), Screen Shake,
-    /// Controller Focus (Off the game's word) and Capture Controller; under
+    /// Controller Focus (Off the game's word), Capture Controller and Sound
+    /// in Background; under
     /// them, beside the Back legend, what this window reads (`input::reads`).
     /// Its rows and the legend are more than the game's pages hold (seven and
     /// the legend under an empty row): they start at the top row, with the
@@ -787,7 +791,7 @@ impl WndOptions {
     /// menu under it; eight rows show at a time, the selected one among them,
     /// with a scroll bar down the right as the Controls page has.
     fn draw_extended(&mut self, vui: &Vui, r: &mut dyn Raster) {
-        self.item = [12, 13, 20, 14, 15, 17, 18, 16, 19].get(self.row as usize).copied().unwrap_or(self.item);
+        self.item = [12, 13, 20, 14, 15, 17, 18, 16, 19, 21].get(self.row as usize).copied().unwrap_or(self.item);
         let n = EXTENDED_ROWS.len() as i32;
         if self.row < self.ext_top {
             self.ext_top = self.row;
@@ -808,7 +812,7 @@ impl WndOptions {
             Focus::Off => vui.words.get(552, vui.language).to_string(),
             f => crate::input::focus_name(f),
         };
-        let values = [Some(lod), None, None, Some(wide(rate)), None, None, Some(on_off(c.screen_shake)), Some(wide(&focus)), Some(on_off(c.capture))];
+        let values = [Some(lod), None, None, Some(wide(rate)), None, None, Some(on_off(c.screen_shake)), Some(wide(&focus)), Some(on_off(c.capture)), Some(on_off(c.background_sound))];
         let shown = top as usize..(top + EXTENDED_SHOWN).min(n) as usize;
         let labels: Vec<Vec<u16>> = EXTENDED_ROWS[shown.clone()].iter().map(|l| wide(l)).collect();
         self.draw_rows_from(vui, r, &labels, &values[shown], 0, top);
@@ -842,11 +846,11 @@ impl WndOptions {
 }
 
 /// The client's words for its own pages (no WORDS.TXT entry): the menu's
-/// rows and the Extended page's nine. (WORDS.TXT's "CONTROLS", 1039, is in
+/// rows and the Extended page's ten. (WORDS.TXT's "CONTROLS", 1039, is in
 /// capitals and used by none of the game's modules.)
 const EXTENDED: &str = "Extended";
 const CONTROLS: &str = "Controls";
-const EXTENDED_ROWS: [&str; 9] = ["Level of Detail", "Brightness", "Fog", "Frame Rate", "Camera Distance", "Camera Turn Speed", "Screen Shake", "Controller Focus", "Capture Controller"];
+const EXTENDED_ROWS: [&str; 10] = ["Level of Detail", "Brightness", "Fog", "Frame Rate", "Camera Distance", "Camera Turn Speed", "Screen Shake", "Controller Focus", "Capture Controller", "Sound in Background"];
 /// The Extended page's rows shown at a time: as many as nine rows' height
 /// holds with the legend's.
 const EXTENDED_SHOWN: i32 = 8;
@@ -1085,7 +1089,14 @@ mod tests {
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         assert!(settings::capture());
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (8, Some(&9)), "the last row");
+        assert_eq!(w.item, 21, "Sound in Background");
+        assert_eq!(w.ext_top, 2, "scrolled another row");
+        assert!(settings::background_sound(), "on: a window behind others keeps its sound");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert!(!settings::background_sound());
+        assert_eq!(cues.last(), Some(&11));
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (9, Some(&9)), "the last row");
         // Triangle: the menu, then closed with every setting put back
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!(w.page, -1);
@@ -1250,6 +1261,12 @@ mod tests {
         assert_eq!(w.point([frame + 110.0, y(&w, 7)]), vec![key::RIGHT], "Capture Controller's value, where the eighth row was");
         assert_eq!(w.point(label(&w, 0)), std::iter::repeat_n(key::UP, 7).collect::<Vec<_>>(), "the top row shown is Brightness");
         assert_eq!(w.point([slider + 130.0, y(&w, 1)]), std::iter::repeat_n(key::UP, 6).chain([key::RIGHT]).collect::<Vec<_>>(), "Fog's slider a row up");
+        // the last row, Sound in Background: two rows scrolled
+        w.key(&vui, &mut r, &mut o, key::DOWN, 0, &mut cues, &mut ups);
+        w.draw(&vui, &mut r, &o, &mut ups);
+        assert_eq!((w.row, w.ext_top, w.item), (9, 2, 21), "Sound in Background, two rows scrolled");
+        assert_eq!(w.point([frame + 110.0, y(&w, 7)]), vec![key::RIGHT], "its value, turned over");
+        assert_eq!(w.point([frame + 20.0, y(&w, 6)]), vec![key::UP, key::LEFT], "Capture Controller's a row up");
     }
 
 }

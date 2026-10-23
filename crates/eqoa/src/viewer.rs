@@ -1453,6 +1453,9 @@ struct App {
     /// and `EQOA_PAD`'s script.
     console: crate::input::Console,
     pads: crate::input::Gamepads,
+    /// macOS: ⌘ held (`ModifiersChanged`), for ⌘, as a key (`macos::ask`)
+    #[cfg(target_os = "macos")]
+    super_held: bool,
     pad_script: Option<crate::input::Script>,
     /// The player's own keys and buttons (`binds`) at the input's edge: what
     /// each key pressed was made, and the controllers' buttons a capture took.
@@ -1553,6 +1556,8 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         walk: walk_script(),
         console: crate::input::Console::new(),
         pads: crate::input::Gamepads::new(),
+        #[cfg(target_os = "macos")]
+        super_held: false,
         pad_script: crate::input::Script::from_env(),
         keys_edge: Default::default(),
         pad_edge: Default::default(),
@@ -2214,6 +2219,9 @@ impl App {
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, el: &ActiveEventLoop) {
+        // macOS: Settings… (⌘,) in the app menu winit made (`macos`), once
+        #[cfg(target_os = "macos")]
+        crate::macos::add_settings_item();
         if self.gfx.is_some() {
             return;
         }
@@ -2354,6 +2362,14 @@ impl ApplicationHandler for App {
             }
             // F11: full screen (borderless, on the window's monitor) and back.
             // A page leaves F11 to the browser (web/main.js).
+            // macOS: ⌘ held or not, and ⌘, (the settings' key) when no menu
+            // item took it, asking as Settings… does (`macos`)
+            #[cfg(target_os = "macos")]
+            WindowEvent::ModifiersChanged(m) => self.super_held = m.state().super_key(),
+            #[cfg(target_os = "macos")]
+            WindowEvent::KeyboardInput { event, .. } if self.super_held && event.state == ElementState::Pressed && matches!(&event.logical_key, Key::Character(c) if c == ",") => {
+                crate::macos::ask();
+            }
             WindowEvent::KeyboardInput { event: KeyEvent { logical_key: Key::Named(NamedKey::F11), state: ElementState::Pressed, repeat: false, .. }, .. } => {
                 if let Some(g) = &self.gfx {
                     let full = g.window.fullscreen().is_some();
@@ -3277,6 +3293,24 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                // Sound in Background (the Extended page): off, this window
+                // is heard only while it is the one in front (has the focus:
+                // a minimised window has not; one merely covered by another
+                // while it has it is still the player's)
+                crate::audio::set_heard(crate::settings::background_sound() || self.pads.in_front());
+                // macOS: Settings… (⌘,): the Options where the player is, in
+                // the world the Options window, at the title its Options
+                #[cfg(target_os = "macos")]
+                if crate::macos::take() {
+                    match self.play.as_mut() {
+                        Some(p) => p.open_options(),
+                        None => {
+                            if let Some(h) = self.host.as_mut() {
+                                h.pre.ask_options();
+                            }
+                        }
+                    }
+                }
                 // A page on WebGL2 draws at most 30 frames a second
                 // (`web::frame_due`): an animation frame before the next is
                 // due is skipped whole, the game included, so its clocks see

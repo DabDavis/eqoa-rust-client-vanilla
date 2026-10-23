@@ -36,6 +36,8 @@
 #![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
 
 mod audio;
+#[cfg(target_os = "macos")]
+mod macos;
 mod chat;
 mod dialog;
 mod attackclock;

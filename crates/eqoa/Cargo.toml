@@ -44,6 +44,14 @@ libc = "0.2.191"
 # Windows' Xbox controllers through XInput (`xinput`), which answers a window
 # that is not in front, as Windows.Gaming.Input (gilrs's) does not; and the
 # terminal a program run from one writes to (`attach_console`).
+[target.'cfg(target_os = "macos")'.dependencies]
+# The app menu's Settings… with ⌘, (`macos`): one item added to the menu
+# winit makes, its action on an object of a class of its own. The versions
+# another dependency already brings.
+objc2 = "0.6.5"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSMenu", "NSMenuItem", "NSResponder"] }
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_LibraryLoader", "Win32_UI_Input_XboxController"] }
 

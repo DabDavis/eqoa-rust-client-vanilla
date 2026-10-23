@@ -23,12 +23,65 @@
 //! In a page there is no thread to give it: the driver runs on the game's,
 //! mixing a little ahead of the page's audio clock once a frame (`feed`) for
 //! an AudioWorklet that only plays what it is handed (web/sound.js).
+//!
+//! Sound in Background (the Extended page) off, a window not in front is not
+//! heard: `set_heard(false)` takes the output's gain to nothing over about
+//! 10 ms (`ramp`), and back the same way. The driver mixes on all the while,
+//! so the game's sound keeps its clock and comes back where it is, with no
+//! burst of what was held.
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use snd::device::Link;
 use snd::{Disc, Driver};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+/// Whether this window is heard (`set_heard`).
+static HEARD: AtomicBool = AtomicBool::new(true);
+
+/// Whether this window is heard: Sound in Background off and the window not
+/// in front is false. The output fades to nothing and back (`ramp`); the
+/// driver mixes on regardless.
+pub fn set_heard(on: bool) {
+    if HEARD.swap(on, Ordering::Relaxed) != on {
+        crate::say(if on { "sound: heard" } else { "sound: not heard (behind other windows, Sound in Background off)" });
+    }
+}
+
+/// The output's gain wanted now: 1 heard, 0 not.
+fn heard_gain() -> f32 {
+    if HEARD.load(Ordering::Relaxed) { 1.0 } else { 0.0 }
+}
+
+/// The gain a frame on, `step` nearer `target` (no further): muting and
+/// coming back fade instead of clicking.
+fn ramp(gain: &mut f32, target: f32, step: f32) -> f32 {
+    if *gain < target {
+        *gain = (*gain + step).min(target);
+    } else if *gain > target {
+        *gain = (*gain - step).max(target);
+    }
+    *gain
+}
+
+/// The steps of 10 ms of 48 kHz frames: the fade's.
+const FADE_48K: f32 = 1.0 / 480.0;
+
+/// Interleaved stereo 48 kHz frames through the gain, fading it toward
+/// `target` a frame at a time (a page's output, `feed`).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn apply_gain(pcm: &mut [i16], gain: &mut f32, target: f32) {
+    if *gain == 1.0 && target == 1.0 {
+        return;
+    }
+    for f in pcm.chunks_mut(2) {
+        let g = ramp(gain, target, FADE_48K);
+        for v in f {
+            *v = (*v as f32 * g) as i16;
+        }
+    }
+}
 
 /// CDSTREAM over the disc image: `\MUSIC\MUSIC0\TORGIRAN.BGM;1` by its
 /// directory entry, sectors by number.
@@ -162,6 +215,8 @@ struct Page {
     moves: std::collections::VecDeque<(f64, u64)>,
     dry: u32,
     wall: web_time::Instant,
+    /// the output's gain (`set_heard`)
+    gain: f32,
 }
 
 impl Audio {
@@ -218,6 +273,9 @@ impl Audio {
         let config = cpal::StreamConfig { channels: channels as u16, sample_rate: cpal::SampleRate(rate), buffer_size: cpal::BufferSize::Default };
         let step = 48000.0 / rate as f64;
         let mut phase = 0.0f64;
+        // the output's gain (`set_heard`), faded over 10 ms of its frames
+        let mut gain = 1.0f32;
+        let fade = 1.0 / (rate as f32 * 0.01);
         let err = |e| eprintln!("audio: {e}");
         let s = shared.clone();
         let mut fill = move |out: &mut dyn FnMut(usize, f32), frames: usize| {
@@ -226,14 +284,16 @@ impl Audio {
             // interpolation
             let need = ((phase + frames as f64 * step).ceil() as usize + 2).saturating_sub(g.pcm.len() / 2);
             g.pump(need as u64);
+            let target = heard_gain();
             for k in 0..frames {
                 let i = phase as usize;
                 let t = (phase - i as f64) as f32;
+                let gk = ramp(&mut gain, target, fade);
                 for c in 0..channels {
                     let ch = c.min(1);
                     let a = g.pcm[2 * i + ch] as f32;
                     let b = g.pcm.get(2 * (i + 1) + ch).copied().unwrap_or(0) as f32;
-                    out(k * channels + c, (a + (b - a) * t) / 32768.0);
+                    out(k * channels + c, (a + (b - a) * t) / 32768.0 * gk);
                 }
                 phase += step;
             }
@@ -282,7 +342,7 @@ impl Audio {
     pub fn web(disc: Box<dyn Disc>, fetch: Box<dyn FnMut()>) -> Audio {
         let shared = Arc::new(Mutex::new(Shared::new(disc)));
         let mut a = Self::with_shared(shared, None, "the page's AudioWorklet".into());
-        a.page = Some(Page { fetch, base: None, lead: LEAD_START, last: None, moves: Default::default(), dry: 0, wall: web_time::Instant::now() });
+        a.page = Some(Page { fetch, base: None, lead: LEAD_START, last: None, moves: Default::default(), dry: 0, wall: web_time::Instant::now(), gain: 1.0 });
         a
     }
 
@@ -335,8 +395,9 @@ impl Audio {
             if target > ahead {
                 g.pump(target - ahead);
             }
-            let pcm = std::mem::take(&mut g.pcm);
+            let mut pcm = std::mem::take(&mut g.pcm);
             drop(g);
+            apply_gain(&mut pcm, &mut p.gain, heard_gain());
             if live && !pcm.is_empty() {
                 crate::web::audio_push(&pcm);
             }
@@ -463,6 +524,36 @@ pub mod testing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Sound in Background: a window not heard fades to nothing over 10 ms
+    /// of frames and stays silent, then fades back the same way; no frame
+    /// moves the gain more than a step (no click). The controls: heard all
+    /// along, the samples are untouched; and the frames past the fade are
+    /// all silent, not merely quieter.
+    #[test]
+    fn a_window_not_heard_fades_out_and_back() {
+        let tone = |n: usize| vec![12000i16; 2 * n];
+        let mut gain = 1.0f32;
+        let mut pcm = tone(960);
+        apply_gain(&mut pcm, &mut gain, 1.0);
+        assert_eq!(pcm, tone(960), "heard: untouched");
+        apply_gain(&mut pcm, &mut gain, 0.0);
+        assert_eq!(gain, 0.0);
+        assert!(pcm[..2 * 479].iter().all(|&v| v > 0), "fading over 10 ms, not cut");
+        assert!(pcm[2 * 480..].iter().all(|&v| v == 0), "then silent");
+        let steps = |p: &[i16]| p.chunks(2).zip(p.chunks(2).skip(1)).map(|(a, b)| (a[0] as i32 - b[0] as i32).abs()).max().unwrap_or(0);
+        assert!(steps(&pcm) <= (12000.0 * FADE_48K) as i32 + 1, "no click: {}", steps(&pcm));
+        let mut back = tone(960);
+        apply_gain(&mut back, &mut gain, 1.0);
+        assert_eq!(gain, 1.0);
+        assert!(back[0] < 100 && back[2 * 480..].iter().all(|&v| v == 12000), "back over 10 ms");
+        assert!(steps(&back) <= (12000.0 * FADE_48K) as i32 + 1);
+        // the flag: what `set_heard` says is the gain wanted
+        set_heard(false);
+        assert_eq!(heard_gain(), 0.0);
+        set_heard(true);
+        assert_eq!(heard_gain(), 1.0);
+    }
 
     /// Each call first mixes up to the output's present: what was last
     /// handed to the device and the time since (at most `CATCH_UP_MAX` past
