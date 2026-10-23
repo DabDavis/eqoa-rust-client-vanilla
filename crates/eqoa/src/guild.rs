@@ -7,6 +7,12 @@
 //! pointer (`pointer`) goes where the keys go: the box's buttons, the menu's
 //! rows (off the menu, it closes), a member's row.
 //!
+//! Not the game's: the roster's order. The game lists the members by id;
+//! here they are sorted (`Sort`, F3 20261023-090229, the user's choice), by
+//! name from the start, and ○ (C on the keyboard) or a click on a column's
+//! heading sorts them by that column instead. The member menu and its box
+//! act on the member shown.
+//!
 //! The invitation box's yes (268) sends sub 9 and its no, cancel or 45-second
 //! timeout (260) sub 10 with 1; the busy and already-in-a-guild refusals are
 //! sub 10 with 2 and 4. So 9 is the JOIN and 10 the refusal, and the decomp's
@@ -417,6 +423,58 @@ fn class_short(class: i32) -> Option<i32> {
 /// The rank names (`0x00CE9530`), indexed by rank (unclamped there).
 const RANK_WORDS: [i32; 4] = [541, 540, 539, 538];
 
+/// The column the roster is sorted by (the client's own: the game keeps
+/// its members in id order). Names, races and classes from A to Z as the
+/// window spells them, ranks and levels from the highest, the members online
+/// first; a tie by name, then by id.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Sort {
+    #[default]
+    Name,
+    Rank,
+    Race,
+    Class,
+    Level,
+    Online,
+}
+
+impl Sort {
+    /// The columns from the left, as ○ goes round them.
+    const ALL: [Sort; 6] = [Sort::Name, Sort::Rank, Sort::Race, Sort::Class, Sort::Level, Sort::Online];
+
+    /// The column's heading (the window's own words).
+    pub fn word(self) -> i32 {
+        [509, 537, 510, 511, 503, 521][self as usize]
+    }
+
+    /// The next column to the right, round to the first.
+    pub fn next(self) -> Sort {
+        Sort::ALL[(self as usize + 1) % Sort::ALL.len()]
+    }
+}
+
+/// The roster in the order shown: member ids, by `sort` (`word` spells a
+/// race's or class's word).
+pub fn order(sort: Sort, g: &Guild, word: &dyn Fn(i32) -> String) -> Vec<i32> {
+    let spelled = |id: Option<i32>| id.map_or_else(String::new, |id| word(id).to_lowercase());
+    let mut v: Vec<&Member> = g.members.values().collect();
+    v.sort_by(|a, b| {
+        let by = match sort {
+            Sort::Name => std::cmp::Ordering::Equal,
+            Sort::Rank => b.rank.cmp(&a.rank),
+            Sort::Race => spelled(race_short(a.race)).cmp(&spelled(race_short(b.race))),
+            Sort::Class => spelled(class_short(a.class)).cmp(&spelled(class_short(b.class))),
+            Sort::Level => b.level.cmp(&a.level),
+            Sort::Online => b.online.cmp(&a.online),
+        };
+        by.then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())).then(a.id.cmp(&b.id))
+    });
+    v.into_iter().map(|m| m.id).collect()
+}
+
+/// The hit of a column's heading: `HEADING - column`.
+const HEADING: i32 = -10;
+
 /// The member menu (`sMemberMenu`): (word, message, id).
 const MEMBER_MENU: [(i32, u32, i32); 4] = [(522, 0x0B05_1002, 0), (526, 0x0B05_1003, 0), (527, 0x0B05_1004, 0), (516, 0x0B05_1005, 0)];
 
@@ -455,8 +513,15 @@ pub struct WndGuild {
     pub mbox_visible: bool,
     pub menu: MiniMenu,
     flash: KeyFlash,
-    /// the members' rows drawn, by index (for a pointer)
+    /// the members' rows drawn, by their place on screen, and the headings
+    /// (`HEADING - column`) (for a pointer)
     hits: Hits,
+    /// the column the roster is sorted by (the client's, kept while it runs)
+    pub sort: Sort,
+    /// the members' ids in the order shown (`order`, at each key and draw)
+    order: Vec<i32>,
+    /// the member to keep selected once a pointer's sort is applied
+    keep: Option<i32>,
 }
 
 impl Default for WndGuild {
@@ -465,7 +530,25 @@ impl Default for WndGuild {
         menu.kind = 1;
         let mut mbox = MBox::default();
         mbox.pos = [80, 115];
-        WndGuild { mode: 1, sel: 0, top: 0, count: 0, focus: true, time: 0, fade_in: 1, alpha: 1.0, window: Window::default(), mbox, mbox_visible: false, menu, flash: KeyFlash::default(), hits: Hits::default() }
+        WndGuild {
+            mode: 1,
+            sel: 0,
+            top: 0,
+            count: 0,
+            focus: true,
+            time: 0,
+            fade_in: 1,
+            alpha: 1.0,
+            window: Window::default(),
+            mbox,
+            mbox_visible: false,
+            menu,
+            flash: KeyFlash::default(),
+            hits: Hits::default(),
+            sort: Sort::default(),
+            order: Vec::new(),
+            keep: None,
+        }
     }
 }
 
@@ -494,7 +577,7 @@ impl WndGuild {
                 return k.into_iter().collect();
             }
             let mut keys = Vec::new();
-            if let Some(row) = self.hits.at(p).filter(|&row| row != self.sel) {
+            if let Some(row) = self.hits.at(p).filter(|&row| row >= 0 && row != self.sel) {
                 self.select(row);
                 keys.push(MOVED);
             }
@@ -505,6 +588,17 @@ impl WndGuild {
             return Vec::new();
         }
         match self.hits.at(p) {
+            // a heading: the members by its column (the client's), the
+            // selected one kept; the column already sorted by is nothing
+            Some(h) if h <= HEADING => {
+                let sort = Sort::ALL[(HEADING - h) as usize];
+                if sort == self.sort {
+                    return Vec::new();
+                }
+                self.keep = self.order.get(self.sel.max(0) as usize).copied();
+                self.sort = sort;
+                vec![MOVED]
+            }
             Some(row) if row == self.sel => vec![key::CROSS],
             Some(row) => {
                 self.select(row);
@@ -520,6 +614,21 @@ impl WndGuild {
         self.sel = row;
         self.fade_in = 1;
         self.alpha = 1.0;
+    }
+
+    /// The member shown at `n` (the game's `m_members.Value(n)`, in the
+    /// client's order).
+    fn member<'a>(&self, g: &'a Guild, n: i32) -> Option<&'a Member> {
+        g.members.get(self.order.get(usize::try_from(n).ok()?)?)
+    }
+
+    /// The order shown, again: by `sort`, the member a pointer's sort kept
+    /// selected where it went.
+    fn reorder(&mut self, g: &Guild, word: &dyn Fn(i32) -> String) {
+        self.order = order(self.sort, g, word);
+        if let Some(at) = self.keep.take().and_then(|id| self.order.iter().position(|&m| m == id)) {
+            self.sel = at as i32;
+        }
     }
     /// 295 on gaining the focus: the window at (320, 180), 600 wide.
     fn gain_focus(&mut self, vui: &Vui, r: &dyn Raster, now: i64) {
@@ -568,7 +677,7 @@ impl WndGuild {
             BoxAnswer::Yes(1, _) => Some(Up::Join),
             BoxAnswer::No(1, _) => Some(Up::Refuse),
             BoxAnswer::Yes(p1, _) => {
-                let id = g.member(self.sel).map_or(-1, |m| m.id);
+                let id = self.member(g, self.sel).map_or(-1, |m| m.id);
                 let sub = match p1 as u32 {
                     0x0B05_1003 => 4,
                     0x0B05_1004 => 5,
@@ -585,9 +694,9 @@ impl WndGuild {
     fn chose(&mut self, msg: u32, g: &Guild, me: i32, words: &dyn Fn(i32) -> String, now: i64, cues: &mut Vec<i32>) -> Option<Up> {
         self.menu.visible = false;
         cues.push(13);
-        let id = g.member(self.sel).map_or(-1, |m| m.id);
+        let id = self.member(g, self.sel).map_or(-1, |m| m.id);
         let (err, word) = match msg {
-            0x0B05_1002 => return Some(Up::Tell(g.member(self.sel).map(|m| m.name.clone()).unwrap_or_default())),
+            0x0B05_1002 => return Some(Up::Tell(self.member(g, self.sel).map(|m| m.name.clone()).unwrap_or_default())),
             0x0B05_1003 => (Cmds::can_promote(g, me, id), 544),
             0x0B05_1004 => (Cmds::can_demote(g, me, id), 545),
             0x0B05_1005 => (Cmds::can_kick(g, me, id), 536),
@@ -610,6 +719,7 @@ impl WndGuild {
     /// `OnKeyDown`/`OnKeyUp`, the focused child's while one is up.
     #[allow(clippy::too_many_arguments)]
     pub fn key(&mut self, menus: &Menus, g: &Guild, me: i32, words: &dyn Fn(i32) -> String, key: i32, down: bool, now: i64, cues: &mut Vec<i32>) -> Option<Up> {
+        self.reorder(g, words);
         if self.mbox_visible {
             if !down {
                 return None;
@@ -642,7 +752,7 @@ impl WndGuild {
                 return Some(Up::Hide);
             }
             13 | 134 => {
-                if let Some(m) = g.member(self.sel).filter(|_| self.sel < g.count()) {
+                if let Some(m) = self.member(g, self.sel).filter(|_| self.sel < g.count()) {
                     cues.push(13);
                     // ShowMemberMenu(name)
                     self.menu.list.pos = [170, 50];
@@ -656,6 +766,16 @@ impl WndGuild {
             }
             19 | 138 => self.flash.press(138),
             20 | 139 => self.flash.press(139),
+            // ○ (the client's): the next column's order, the selected
+            // member kept selected
+            135 => {
+                self.keep = self.order.get(self.sel.max(0) as usize).copied();
+                self.sort = self.sort.next();
+                self.reorder(g, words);
+                self.fade_in = 1;
+                self.alpha = 1.0;
+                cues.push(11);
+            }
             _ => {}
         }
         None
@@ -708,6 +828,7 @@ impl WndGuild {
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, menus: &Menus, g: &Guild, now: i64, cues: &mut Vec<i32>) -> Option<Up> {
         let mut up = None;
         self.hits.clear();
+        self.reorder(g, &|id: i32| vui.words.get(id, vui.language).to_string());
         if self.mode == 2 {
             up = self.draw_roster(vui, r, g, now, cues);
         }
@@ -747,6 +868,9 @@ impl WndGuild {
         legend.extend(word(212));
         legend.extend(wide("   |t"));
         legend.extend(word(161));
+        // the client's ○ Sort, with its column
+        legend.extend(wide(&format!("   |c{}: ", crate::wholist::SORT)));
+        legend.extend(word(self.sort.word()));
         self.window.text(vui, r, &legend, 20, 13, black, 0);
         let count = g.count();
         let t = if count > 11 { self.top as f32 / (count - 11) as f32 } else { 0.0 };
@@ -755,8 +879,13 @@ impl WndGuild {
         let mut y = self.window.row_center(vui, r, 0)[1];
         let x = [65, 225, 325, 395, 465, 530];
         let cell = |r: &mut dyn Raster, s: &[u16], x: i32, y: i32, c: [f32; 4]| r.draw_centered_string([x, y], c, s, 1);
-        for (id, x) in [509, 537, 510, 511, 503, 521].into_iter().zip(x) {
-            cell(r, &word(id), x, y, black);
+        // the headings, the one sorted by in the selection's colour (the
+        // client's), each a pointer's sort, out to the columns between them
+        for (k, sort) in Sort::ALL.into_iter().enumerate() {
+            cell(r, &word(sort.word()), x[k], y, if sort == self.sort { hl } else { black });
+            let left = if k == 0 { x[0] - 27 } else { (x[k - 1] + x[k]) / 2 };
+            let right = if k == x.len() - 1 { x[k] + 60 } else { (x[k] + x[k + 1]) / 2 };
+            self.hits.push([left, y - line_h / 2, right, y + line_h - line_h / 2], HEADING - k as i32);
         }
         y += line_h;
         for i in 0..11 {
@@ -768,7 +897,7 @@ impl WndGuild {
             } else {
                 black
             };
-            let Some(m) = g.member(n) else { break };
+            let Some(m) = self.member(g, n) else { break };
             // the row, from the marker to the last column's end
             self.hits.push([x[0] - 27, y - line_h / 2, x[5] + 60, y + line_h - line_h / 2], n);
             // a name past eleven letters ends "..."
@@ -958,7 +1087,7 @@ mod tests {
         assert_eq!(w.sel, 3);
         assert_eq!(w.point(at(&w, 3, 500.0)), vec![key::CROSS], "any column of the selection");
         assert!(w.point(at(&w, 4, 300.0)).is_empty(), "past the roster");
-        assert!(w.point(at(&w, -1, 300.0)).is_empty(), "the headers");
+        assert!(w.point(at(&w, -1, 60.0)).is_empty(), "the heading sorted by already");
         // the member menu
         w.key(&menus, &g, 1, &|_| String::new(), 134, true, 0, &mut cues);
         assert!(w.menu.visible);
@@ -979,4 +1108,103 @@ mod tests {
         assert!(w.point(at(&w, 1, 300.0)).is_empty(), "mode 1 has no roster to pick from");
     }
 
+    /// Races and classes as the window would spell them (the test's own).
+    fn spelled(id: i32) -> String {
+        match id {
+            303 => "Warrior".into(),
+            308 => "Bard".into(),
+            316 => "Wizard".into(),
+            317 => "Human".into(),
+            319 => "Dark Elf".into(),
+            _ => String::new(),
+        }
+    }
+
+    fn roster(list: &[(i32, &str, i32, i32, i32, i32, bool)]) -> Guild {
+        let mut g = Guild { in_guild: true, name: "K".into(), ..Default::default() };
+        for &(id, name, class, race, level, rank, online) in list {
+            g.members.insert(id, Member { id, name: name.into(), class, race, level, rank, online });
+        }
+        g
+    }
+
+    /// The client's sort (F3 20261023-090229): by name from A to Z, case
+    /// aside, where the game lists the members by id (the control); ranks
+    /// and levels from the highest, races and classes as the window spells
+    /// them, the members online first; a tie by name.
+    #[test]
+    fn the_roster_sorts_by_a_column() {
+        let g = roster(&[(1, "Zed", 5, 0, 30, 0, false), (2, "amy", 13, 0, 50, 1, true), (3, "Bob", 0, 2, 30, 3, true), (4, "cal", 5, 2, 10, 1, false)]);
+        let names = |sort| order(sort, &g, &spelled).into_iter().map(|id| g.members[&id].name.as_str()).collect::<Vec<_>>();
+        assert_eq!(Sort::default(), Sort::Name);
+        assert_eq!(names(Sort::Name), ["amy", "Bob", "cal", "Zed"]);
+        assert_ne!(g.members.values().map(|m| m.name.as_str()).collect::<Vec<_>>(), names(Sort::Name), "the game's order is by id");
+        assert_eq!(names(Sort::Rank), ["Bob", "amy", "cal", "Zed"]);
+        // Dark Elf (Bob, cal), Human (amy, Zed)
+        assert_eq!(names(Sort::Race), ["Bob", "cal", "amy", "Zed"]);
+        // Bard (cal, Zed), Warrior, Wizard
+        assert_eq!(names(Sort::Class), ["cal", "Zed", "Bob", "amy"]);
+        assert_eq!(names(Sort::Level), ["amy", "Bob", "Zed", "cal"]);
+        assert_eq!(names(Sort::Online), ["amy", "Bob", "cal", "Zed"]);
+        let mut s = Sort::Name;
+        let round: Vec<Sort> = (0..6).map(|_| { s = s.next(); s }).collect();
+        assert_eq!(round, [Sort::Rank, Sort::Race, Sort::Class, Sort::Level, Sort::Online, Sort::Name]);
+    }
+
+    /// ○ goes round the columns with the selected member kept selected, and
+    /// the member menu's commands go to the member shown: a kick of Zed,
+    /// shown third, kicks Zed (id 1), not the member third by id (Bob).
+    #[test]
+    fn the_member_menu_acts_on_the_member_shown() {
+        use crate::pointer::testing::{NullRaster, vui};
+        let vui = vui();
+        let mut r = NullRaster;
+        let menus = Menus::default();
+        let g = roster(&[(1, "Zed", 0, 0, 30, 0, true), (2, "amy", 0, 0, 50, 0, true), (3, "Bob", 0, 0, 10, 3, true)]);
+        let mut w = WndGuild::default();
+        w.close(&vui, &r, 0);
+        let mut cues = Vec::new();
+        w.draw(&vui, &mut r, &menus, &g, 0, &mut cues);
+        assert_eq!(w.order, [2, 3, 1], "amy, Bob, Zed");
+        w.sel = 2;
+        let words = |_: i32| String::new();
+        // the kick's box, then its yes: Zed
+        assert_eq!(w.chose(0x0B05_1005, &g, 3, &words, 0, &mut cues), None);
+        assert!(w.mbox_visible);
+        assert_eq!(w.answered(BoxAnswer::Yes(0x0B05_1005u32 as i32, 1), &g), Some(Up::Member(6, 1)));
+        assert_eq!(g.member(w.sel).map(|m| m.id), Some(3), "by id the third is Bob: the game's order would kick him");
+        // Tell names the member shown
+        assert_eq!(w.chose(0x0B05_1002, &g, 3, &words, 0, &mut cues), Some(Up::Tell("Zed".into())));
+        // ○: rank (Bob first), Zed kept selected
+        w.key(&menus, &g, 3, &words, 135, true, 0, &mut cues);
+        assert_eq!(w.sort, Sort::Rank);
+        assert_eq!(w.order, [3, 2, 1], "Bob (rank 3), then amy and Zed by name");
+        assert_eq!(w.order[w.sel as usize], 1, "Zed kept");
+    }
+
+    /// A pointer on a heading sorts the roster by its column, the selected
+    /// member kept once drawn; the column already sorted by is nothing.
+    #[test]
+    fn a_heading_sorts_the_roster() {
+        use crate::pointer::testing::{NullRaster, vui};
+        use crate::pointer::MOVED;
+        let vui = vui();
+        let mut r = NullRaster;
+        let menus = Menus::default();
+        let g = roster(&[(1, "Zed", 0, 0, 30, 0, true), (2, "amy", 0, 0, 50, 0, true), (3, "Bob", 0, 0, 10, 3, true)]);
+        let mut w = WndGuild::default();
+        w.close(&vui, &r, 0);
+        let mut cues = Vec::new();
+        w.draw(&vui, &mut r, &menus, &g, 0, &mut cues);
+        w.sel = 2;
+        let heading = |w: &WndGuild, x: f32| [x, w.window.row_center(&vui, &NullRaster, 0)[1] as f32];
+        assert!(w.point(heading(&w, 65.0)).is_empty(), "Name: sorted by it already");
+        // Level, centred on x 465
+        assert_eq!(w.point(heading(&w, 465.0)), vec![MOVED]);
+        assert_eq!(w.sort, Sort::Level);
+        w.draw(&vui, &mut r, &menus, &g, 16, &mut cues);
+        assert_eq!(w.order, [2, 1, 3], "amy 50, Zed 30, Bob 10");
+        assert_eq!(w.sel, 1, "Zed kept");
+        assert!(w.point(heading(&w, 465.0)).is_empty(), "the same column: nothing");
+    }
 }

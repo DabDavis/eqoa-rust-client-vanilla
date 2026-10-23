@@ -2831,7 +2831,8 @@ impl ApplicationHandler for App {
                         }
                         return;
                     }
-                    // the who list (mode 35): Q asks again
+                    // the who list (mode 35): Q asks again, C (the windows'
+                    // ○) sorts by the next column
                     if p.mode == 35 {
                         let k = match &event.logical_key {
                             Key::Named(NamedKey::ArrowUp) => Some(K::UP),
@@ -2839,6 +2840,7 @@ impl ApplicationHandler for App {
                             Key::Named(NamedKey::Enter) => Some(K::CROSS),
                             Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
                             Key::Character(c) if c.eq_ignore_ascii_case("q") => Some(113),
+                            Key::Character(c) if c.eq_ignore_ascii_case("c") => Some(135),
                             Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
                             _ => None,
                         };
@@ -2874,8 +2876,9 @@ impl ApplicationHandler for App {
                         }
                         return;
                     }
-                    // the options, buddy and ignore lists (modes 34, 17/18,
-                    // 26): arrows, Enter or E, Escape
+                    // the options, buddy and ignore lists and the guild's
+                    // roster (modes 34, 17/18, 26, 20/21): arrows, Enter or
+                    // E, Escape; C (the windows' ○) the roster's sort
                     if p.panel_up() {
                         let k = match &event.logical_key {
                             Key::Named(NamedKey::ArrowUp) => Some(K::UP),
@@ -2884,6 +2887,7 @@ impl ApplicationHandler for App {
                             Key::Named(NamedKey::ArrowRight) => Some(K::RIGHT),
                             Key::Named(NamedKey::Enter) => Some(K::CROSS),
                             Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
+                            Key::Character(c) if c.eq_ignore_ascii_case("c") => Some(135),
                             Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
                             _ => None,
                         };
