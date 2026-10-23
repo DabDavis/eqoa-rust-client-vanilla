@@ -841,6 +841,48 @@ mod own_actor {
     }
 }
 
+/// What `UpdateCreatures` does with a creature's sprite each frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CreatureLoco {
+    /// `SetDeath` (once)
+    Death,
+    /// its walk control's `UpdateSprite`
+    Walk,
+    /// `SetLocomotion(state)`
+    State,
+}
+
+/// `UpdateCreatures`' order: state 14 is death first, walking (`m_p255`)
+/// or not; then a walking creature follows its walk control, and any other
+/// takes its state as its locomotion.
+fn creature_loco(state: u8, walks: bool) -> CreatureLoco {
+    if state == 14 {
+        CreatureLoco::Death
+    } else if walks {
+        CreatureLoco::Walk
+    } else {
+        CreatureLoco::State
+    }
+}
+
+#[cfg(test)]
+mod creature_sprite {
+    use super::*;
+
+    /// A creature that dies on the move dies: the death comes before the
+    /// walk. The control: the walk first, as the client had it, leaves it
+    /// walking.
+    #[test]
+    fn a_walking_creature_that_dies_dies() {
+        let cases = [((14, true), CreatureLoco::Death), ((14, false), CreatureLoco::Death), ((1, true), CreatureLoco::Walk), ((3, false), CreatureLoco::State), ((0, false), CreatureLoco::State)];
+        for ((state, walks), want) in cases {
+            assert_eq!(creature_loco(state, walks), want, "state {state}, walks {walks}");
+        }
+        let walk_first = |state: u8, walks: bool| if walks { CreatureLoco::Walk } else { creature_loco(state, false) };
+        assert!(cases.iter().any(|&((s, w), want)| walk_first(s, w) != want), "the control must fail");
+    }
+}
+
 #[cfg(test)]
 mod held {
     use super::*;
@@ -1650,20 +1692,22 @@ impl Play {
             let (matrix, palette) = match p.sprite.as_mut() {
                 Some(cs) => {
                     p.anims.time = game_ms;
-                    // UpdateCreatures: a walking creature's sprite follows its
-                    // walk control; any other takes SetLocomotion(state).
+                    // UpdateCreatures: a dead creature's sprite dies, a walking
+                    // one's follows its walk control, any other takes
+                    // SetLocomotion(state) (`creature_loco`).
                     if let Some(c) = &e.creature {
-                        match self.walks[slot].as_ref() {
-                            Some((_, w)) if c.p255 != 0 => {
-                                w.update_sprite(cs, &p.anims, &mut p.rand);
-                            }
-                            // UpdateCreatures: state 14 is death (laid down at
-                            // once for a corpse seen first), its spells ended
-                            _ if c.state == 14 => {
+                        let walk = self.walks[slot].as_ref().map(|(_, w)| w).filter(|_| c.p255 != 0);
+                        match (creature_loco(c.state, walk.is_some()), walk) {
+                            // laid down at once for a corpse seen first, its
+                            // spells ended
+                            (CreatureLoco::Death, _) => {
                                 if !cs.dead {
                                     cs.set_death(true, p.first, &p.anims, &mut p.rand, None);
                                     self.dead_casters.push(slot as i32);
                                 }
+                            }
+                            (CreatureLoco::Walk, Some(w)) => {
+                                w.update_sprite(cs, &p.anims, &mut p.rand);
                             }
                             _ => cs.set_locomotion(c.state as i32, &p.anims, &mut p.rand),
                         }
