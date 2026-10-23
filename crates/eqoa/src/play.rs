@@ -1108,7 +1108,7 @@ impl Play {
         let _ = writeln!(o, "character: {} (server id {}), level {}, race {}, class {}", p.name, p.server_id, self.dump.player.level, p.race, p.class);
         // the world's file as the disc's table names it (the dump's path is
         // the login's, and a teleport into another world does not change it)
-        let file = WORLD_FILES.get(p.world as usize).map_or_else(|| p.world_path.clone(), |f| f.to_string());
+        let file = crate::s2::get().world_file(p.world).unwrap_or_else(|| p.world_path.clone());
         let _ = writeln!(o, "world {} ({file}), at {at:?}", p.world);
         let _ = writeln!(o, "server's patch: {}", crate::s2::get().describe());
         let target = if self.target == u32::MAX { "none".to_string() } else { format!("{:#x}", self.target) };
@@ -1177,7 +1177,9 @@ impl Play {
                     self.autorun = false;
                     self.following = false;
                     if world as i64 != self.player.world {
-                        match WORLD_FILES.get(world as usize) {
+                        // the world table: the disc's six, or the server's
+                        // patch's (`s2`: Sandstorm's eight)
+                        match crate::s2::get().world_file(world as i64) {
                             Some(f) => {
                                 eprintln!("play: teleport to world {world} ({f}) at {pos:?}");
                                 // Respawn's casts at the arrival
@@ -1613,7 +1615,7 @@ impl Play {
                     let mut elsewhere = false;
                     let (arrival, heading, here) = (player.pos, player.hpr[0], player.world == self.player.world);
                     if player.world != self.player.world {
-                        match WORLD_FILES.get(player.world as usize) {
+                        match crate::s2::get().world_file(player.world) {
                             Some(f) => {
                                 eprintln!("play: the dump's world {} ({f}) at {:?}", player.world, player.pos);
                                 // SetLocation at the dump's place, as it is

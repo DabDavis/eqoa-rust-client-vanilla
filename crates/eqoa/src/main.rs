@@ -517,6 +517,8 @@ fn boot(image: Option<&str>, server: Option<String>) -> Result<()> {
 /// in this order (the dictionary's first registration wins); and the walk at
 /// the player's place.
 pub fn world_library(player: &net::session::Player) -> Result<(esf::Library, viewer::Source)> {
+    // the server's patch (`s2`) before the world's files are read
+    s2::begin_session();
     // The world the dump names: its file, by the path's last part.
     let file = player.world_path.rsplit(['\\', '/']).next().unwrap_or("tunaria.esf").to_uppercase();
     let (mut lib, src) = source(&file, &[])?;
@@ -537,6 +539,17 @@ pub fn world_library(player: &net::session::Player) -> Result<(esf::Library, vie
     // EnterGameLoad's last file (the card's copy when there is one):
     // the compass's patch art.
     lib.add("ADDART.CSF", esf::Container::open(disc(None)?.read("ADDART.CSF")?)?);
+    // A server's patch's own art (`s2`: where CLIENT reads the card's added
+    // art, Sandstorm's S2 reads its ss-art.csf, robes 4 and 5), out of the
+    // server's folder.
+    if let Some(path) = s2::get().art_path() {
+        match std::fs::read(&path).map_err(|e| e.to_string()).and_then(|b| esf::Container::open(b).map_err(|e| format!("{e:?}"))) {
+            Ok(c) => {
+                lib.add(path.file_name().map_or_else(String::new, |n| n.to_string_lossy().to_uppercase()), c);
+            }
+            Err(e) => eprintln!("s2: {}: {e}", path.display()),
+        }
+    }
     let [x, _, z] = player.pos;
     let index = vi::world::World::<vi::fpu::Ee>::zone_at(lib.file(main_file), x, z).ok_or("no zone at the player's position")?;
     // the player's zone off the disc; the walker reads the rest round it

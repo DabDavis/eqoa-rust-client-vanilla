@@ -126,7 +126,14 @@ pub fn open_world(name: &str, x: f32, z: f32) -> Arrival {
 /// its zones left on the disc, anything else whole. `EQOA_WHOLE_WORLD=1`
 /// reads every file whole.
 pub fn open_file(iso_path: &std::path::Path, name: &str) -> Result<Container, Box<dyn std::error::Error>> {
-    let e = iso::Iso::open(iso_path)?.find(name).ok_or_else(|| format!("{name}: not on the disc"))?.clone();
+    let Some(e) = iso::Iso::open(iso_path)?.find(name).cloned() else {
+        // a world a server's patch adds that no disc carries (`s2`:
+        // Sandstorm's world 6), out of the server's folder, whole
+        if let Some(path) = crate::s2::get().folder_file(name) {
+            return Ok(Container::open(std::fs::read(path)?)?);
+        }
+        return Err(format!("{name}: not on the disc").into());
+    };
     let mut src = esf::Window::new(std::fs::File::open(iso_path)?, e.lba as u64 * iso::SECTOR, e.size as u64);
     let whole = std::env::var_os("EQOA_WHOLE_WORLD").is_some_and(|v| v != "0");
     if !whole && is_world(&mut src) {

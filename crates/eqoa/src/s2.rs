@@ -783,9 +783,14 @@ impl Rules {
     /// The patch's art file in its server folder, when it is there (robes 4
     /// and 5 come out of it).
     pub fn art_path(&self) -> Option<PathBuf> {
+        self.folder_file(&self.art_file)
+    }
+
+    /// A file in the server's folder, its name in any case ("UNDERFOOT.ESF"
+    /// finds "Underfoot.esf").
+    pub fn folder_file(&self, name: &str) -> Option<PathBuf> {
         let dir = self.dir.as_ref()?;
-        let p = dir.join(&self.art_file);
-        p.is_file().then_some(p)
+        std::fs::read_dir(dir).ok()?.flatten().map(|e| e.path()).find(|p| p.is_file() && p.file_name().is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case(name)))
     }
 }
 
@@ -830,7 +835,10 @@ pub fn set(r: Rules) {
 /// rules stay as the patcher set them for the server (retail when none).
 pub fn begin_session() {
     if let Some(dir) = std::env::var_os("EQOA_S2_DIR") {
-        set(Rules::from_dir(Path::new(&dir)));
+        let dir = Path::new(&dir);
+        if get().dir.as_deref() != Some(dir) {
+            set(Rules::from_dir(dir));
+        }
     }
 }
 
@@ -902,6 +910,27 @@ mod tests {
         if let Some(r) = rules("ours") {
             assert_eq!((r.armor_set_limit, r.robe_limit, r.player_search), (11, 6, true));
         }
+    }
+
+    /// A world the disc does not carry comes whole out of the server's
+    /// folder (Sandstorm's world 6), its name in any case; without the
+    /// folder (the control) it is not there. Needs the disc (`run/eqoa.iso`)
+    /// and a container to stand in for the world (Sandstorm's ss-art.csf).
+    #[test]
+    fn a_world_out_of_the_servers_folder() {
+        let iso = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let art = std::env::var_os("EQOA_S2_BUILDS").map(PathBuf::from).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")).join("extracted-assets/sandstorm-patch-20261015/ss-art.csf");
+        let (true, Ok(bytes)) = (iso.is_file(), std::fs::read(&art)) else {
+            eprintln!("SKIP: no disc or no ss-art.csf");
+            return;
+        };
+        let dir = std::env::temp_dir().join(format!("eqoa-s2-world-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Underfoot.esf"), &bytes).unwrap();
+        let folder = Rules { dir: Some(dir.clone()), ..Rules::retail() };
+        assert!(with_rules(folder, || crate::stream::open_file(&iso, "UNDERFOOT.ESF")).is_ok());
+        assert!(crate::stream::open_file(&iso, "UNDERFOOT.ESF").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn rec(addr: u32, data: &[u8]) -> Vec<u8> {

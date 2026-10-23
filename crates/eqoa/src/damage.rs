@@ -85,6 +85,7 @@ impl Damage {
     /// `AddDamage`: a free number, set up and put at the end of the active
     /// list; the side's bounce slot moves on (0, 1, 2). With none free,
     /// nothing.
+    #[cfg(test)]
     pub fn add(&mut self, defender: u32, amount: i32, z: i16) {
         self.add_colored(defender, amount, z, None);
     }
