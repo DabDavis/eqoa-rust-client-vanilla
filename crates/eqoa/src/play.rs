@@ -21,7 +21,7 @@ use crate::walker::{Placing, Spawn, Walker};
 use esf::Library;
 use net::entity::{Entities, SLOTS};
 use net::session::{Event, Player, Session};
-use render::ui::Anchor;
+use render::ui::{Anchor, Vertical};
 use render::{GpuModel, Renderer, wgpu};
 use vi::character::{AnimCache, load_csprite};
 use vi::csprite::{CSprite, Rand};
@@ -2359,28 +2359,29 @@ impl Play {
             if matches!(c, Click::Right(..)) {
                 return false;
             }
+            // the quick menus and the chat box are drawn out at a wide
+            // window's right, the compass at its left; in a tall window the
+            // compass and the quick menus up at its top, the chat box down at
+            // its bottom (each answers in its own place)
+            let (side, up) = (render::ui::side(size), render::ui::top(size));
             // the compass opens the map (the touch screen's way to it)
-            if crate::map::on_compass([f[0] + render::ui::side(size), f[1]]) && self.hud.is_some() {
+            if crate::map::on_compass([f[0] + side, f[1] + up]) && self.hud.is_some() {
                 self.map.show();
                 return true;
             }
-            // the quick menus and the chat box are drawn out at a wide
-            // window's right, the player's frame and the group's at its left
-            let side = render::ui::side(size);
-            let (right, left) = ([f[0] - side, f[1]], [f[0] + side, f[1]]);
-            if let Some(k) = self.hud_menus.point(right) {
+            if let Some(k) = self.hud_menus.point([f[0] - side, f[1] + up]) {
                 self.hud_key(k);
                 return true;
             }
             // the chat box: the chat line, as R3 opens it
-            if self.wnd_chat.as_ref().is_some_and(|w| w.contains(right)) {
+            if self.wnd_chat.as_ref().is_some_and(|w| w.contains([f[0] - side, f[1] - up])) {
                 self.open_edit(0xB0F0000, 128, -1, false);
                 self.edit.title = self.chat_title();
                 return true;
             }
             // the player's frame, a member's bar, the pet's: targeted, as
-            // L1's cycle targets each
-            let pick = self.hud.as_ref().and_then(|h| h.2.pick(left));
+            // L1's cycle targets each (noted where they were placed)
+            let pick = self.hud.as_ref().and_then(|h| h.2.pick(f));
             let id = match pick {
                 // the bug report (`report`)
                 Some(crate::hud::Pick::Report) => {
@@ -5355,7 +5356,12 @@ impl Play {
             // bar at the left (`Hud::draw`); the chat box, the quick menus,
             // the breath gauge and the target's details at the right; the
             // boxes and the menus in the middle, with the frame, and a menu
-            // takes back under it what it covers on a 4:3 screen (`end`).
+            // takes back under it what it covers on a 4:3 screen (`end`). A
+            // window narrower than 4:3 has them at its top and bottom
+            // (`Vertical`): the frame, the gauges, the group, the effects, the
+            // quick menus and the breath gauge up with the top; the target's
+            // bar, the report's button and the chat box down with the bottom;
+            // the target's details, the boxes and the menus in the middle.
             // UpdateGame, before the HUD: while dead, "You have died." on a
             // bar in the middle, coming up over its first two seconds
             if let Some(d) = self.death.as_ref() {
@@ -5367,10 +5373,12 @@ impl Play {
             }
             hud.draw(vui, &mut r, &state);
             r.ui.anchor = Anchor::Left;
+            r.ui.vertical = Vertical::Top;
             if crate::influence::shown(self.mode) {
                 crate::influence::draw(vui, &mut r, &self.effects);
             }
             r.ui.anchor = Anchor::Right;
+            r.ui.vertical = Vertical::Bottom;
             if let Some(c) = self.wnd_chat.as_mut() {
                 for (text, color, at) in self.chat_pending.drain(..) {
                     let rr = &r;
@@ -5380,6 +5388,7 @@ impl Play {
                 self.cues.extend(c.cues.drain(..).map(crate::sound::Cue::Ui));
             }
             r.ui.anchor = Anchor::Middle;
+            r.ui.vertical = Vertical::Middle;
             if self.mode == 9 {
                 self.priv_chat.draw(vui, &mut r);
             }
@@ -5444,13 +5453,15 @@ impl Play {
                 self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
             }
             r.ui.anchor = Anchor::Right;
+            r.ui.vertical = Vertical::Top;
             // DrawStatus: under water, the breath gauge
             if under_liquid && (self.mode == 0 || self.mode == 36 || self.mode == 38) {
                 let at = [430, 50];
                 vui.draw_word_ex(&mut r, 911, at[0], at[1], [1.0; 4], true);
                 crate::hud::draw_gauge(vui, &mut r, 9, 136, [at[0], at[1] + 19], true, self.dump.player.p30 as f32 / 255.0);
             }
-            // the target's info window
+            // the target's info window, in the middle of a tall window's right
+            r.ui.vertical = Vertical::Middle;
             if self.info_up {
                 self.info_window.open(false);
             } else {
@@ -5473,6 +5484,7 @@ impl Play {
                     }
                 }
             }
+            r.ui.vertical = Vertical::Top;
             // UpdateQuickBars, then the menu up (the HUD's, in play; L2's
             // menus open over it without `UpdateMode`, so it stays up there)
             if self.mode == 0 || self.mode == 30 {

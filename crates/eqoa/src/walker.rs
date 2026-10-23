@@ -293,10 +293,14 @@ pub const FRAME_ASPECT: f32 = 10.0 / 7.0;
 /// The world's projection for a window `aspect` wide: the game's camera as a
 /// TV shows it, the frame's 10/7 across a 4:3 picture, carried on in step
 /// past a 4:3 picture's sides in a wider window (the height's view the
-/// game's, more of the world at the sides); near and far the client's.
-/// Until 2026-10-23 it was 45 degrees at the window's own shape, the world a
-/// quarter larger than the game draws it: the start menu's view of the
-/// character took its head off (F3 20261023-091325).
+/// game's, more of the world at the sides), and past its top and bottom in a
+/// narrower one (two windows side by side, a phone held upright: the width's
+/// view the game's, as the HUD's frame fills the width, more of the world
+/// above and below); near and far the client's. Until 2026-10-23 it was 45
+/// degrees at the window's own shape, the world a quarter larger than the
+/// game draws it: the start menu's view of the character took its head off
+/// (F3 20261023-091325); a narrower window kept the height's 55 degrees and
+/// so drew the world larger again, by the window's height over the frame's.
 #[cfg(test)]
 pub fn projection(aspect: f32) -> Mat4 {
     projection_to(aspect, 6000.0)
@@ -304,7 +308,19 @@ pub fn projection(aspect: f32) -> Mat4 {
 
 /// `projection` ending at `far` (the game's far plane, `fog::far_plane`).
 pub fn projection_to(aspect: f32, far: f32) -> Mat4 {
-    glam::camera::rh::proj::directx::perspective(FOV.to_radians(), FRAME_ASPECT * aspect * 0.75, 0.3, far)
+    glam::camera::rh::proj::directx::perspective(fov_y(aspect), FRAME_ASPECT * aspect * 0.75, 0.3, far)
+}
+
+/// The height's field of view for a window `aspect` wide, in radians: the
+/// game's 55 degrees in a 4:3 window or a wider one; in a narrower one what
+/// keeps the 4:3 picture's view across the width (the frame fits the width
+/// there, `render::ui`), 55 degrees over the frame's height in the middle.
+fn fov_y(aspect: f32) -> f32 {
+    let fov = FOV.to_radians();
+    if aspect >= 4.0 / 3.0 {
+        return fov;
+    }
+    2.0 * ((fov * 0.5).tan() * (4.0 / 3.0) / aspect).atan()
 }
 
 #[cfg(test)]
@@ -337,6 +353,34 @@ mod view_tests {
         let old = glam::camera::rh::proj::directx::perspective(45f32.to_radians(), 4.0 / 3.0, 0.3, 6000.0);
         let (_, y) = ndc(old, 0.0, t);
         assert!(y > 1.2, "the control: 45 degrees puts the game's top at {y}");
+    }
+
+    /// In a window narrower than 4:3 (two windows side by side at 798x828,
+    /// a phone held upright at 9:16) the frame fills the width, in the middle
+    /// of the height: the side of `VICamera::Init`'s frustum is the window's
+    /// side, its top the frame's top (the window's height times the frame's
+    /// share of it), so the frame shows what a TV shows. The control: the
+    /// height's 55 degrees kept puts the game's side well inside the window,
+    /// the world drawn larger.
+    #[test]
+    fn a_narrower_window_keeps_the_width_the_games() {
+        let t = (FOV.to_radians() * 0.5).tan();
+        for (w, h) in [(798.0f32, 828.0f32), (540.0, 960.0), (640.0, 900.0)] {
+            let aspect = w / h;
+            let tall = projection(aspect);
+            let (x, y) = ndc(tall, t * FRAME_ASPECT, t);
+            // the frame's share of the height: its 4:3 picture fits the width
+            let share = w * 0.75 / h;
+            assert!((x - 1.0).abs() < 1e-5, "{w}x{h}: the side at {x}");
+            assert!((y - share).abs() < 1e-5, "{w}x{h}: the top at {y}, the frame's at {share}");
+            let kept = glam::camera::rh::proj::directx::perspective(FOV.to_radians(), FRAME_ASPECT * aspect * 0.75, 0.3, 6000.0);
+            let (x, _) = ndc(kept, t * FRAME_ASPECT, t);
+            assert!(x > 1.2, "the control: the height's 55 degrees put the game's side at {x}");
+        }
+        // continuous at 4:3, and a 4:3 window is the game's
+        assert_eq!(fov_y(4.0 / 3.0), FOV.to_radians());
+        assert!((fov_y(4.0 / 3.0 - 1e-6) - FOV.to_radians()).abs() < 1e-5);
+        assert_eq!(projection(640.0 / 480.0), glam::camera::rh::proj::directx::perspective(FOV.to_radians(), FRAME_ASPECT * (640.0 / 480.0) * 0.75, 0.3, 6000.0));
     }
 }
 

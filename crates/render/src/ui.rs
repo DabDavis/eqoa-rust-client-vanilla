@@ -16,7 +16,10 @@
 //! frame that is the frame's whole width (a window's backdrop, which on a TV
 //! runs off both sides) runs the target's whole width; one made under
 //! `Anchor::Frame` (the start menu's and the merchant's art) stays the
-//! frame's.
+//! frame's. In a target narrower than 4:3 (two windows side by side, a phone
+//! held upright) the frame fills the width, in the middle of the height, and
+//! the HUD's pieces keep to the target's top or bottom the same way
+//! (`Vertical`).
 
 use bytemuck::{Pod, Zeroable};
 use std::collections::HashMap;
@@ -89,6 +92,43 @@ pub fn side(size: (u32, u32)) -> f32 {
     (ox / sx).floor()
 }
 
+/// The whole frame pixels a `size` target shows above and below the frame:
+/// none when it is 4:3 or wider.
+pub fn top(size: (u32, u32)) -> f32 {
+    let (_, oy, _, sy) = frame(size);
+    (oy / sy).floor()
+}
+
+/// Where the HUD's pieces made now go up a target taller than the frame
+/// (`Ui::vertical`): the game lays its HUD out for a 4:3 picture, and in a
+/// narrower window each piece keeps its distance from the top of the screen
+/// or from its bottom, as an `Anchor` keeps it from a side in a wider one.
+/// Only what goes to a side (`Left`, `Right`, `Span`) moves: the frame's own
+/// (`Middle`, `Frame`, `Wide`: the boxes, the menus, the windows) stays in
+/// the middle.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Vertical {
+    /// With the frame, in the middle of the target's height.
+    #[default]
+    Middle,
+    /// With the target's top.
+    Top,
+    /// With the target's bottom.
+    Bottom,
+}
+
+impl Vertical {
+    /// Where frame y `y` goes, `top` frame pixels showing above and below
+    /// the frame.
+    pub fn place(self, y: f32, top: f32) -> f32 {
+        match self {
+            Vertical::Middle => y,
+            Vertical::Top => y - top,
+            Vertical::Bottom => y + top,
+        }
+    }
+}
+
 /// Where the quads made now go across a target wider than the frame
 /// (`Ui::anchor`). The game lays its HUD out for a 4:3 picture; in a wider
 /// one each piece keeps its distance from its own side of the screen.
@@ -138,6 +178,12 @@ impl Anchor {
             Anchor::Span(..) | Anchor::Wide => (true, true),
         }
     }
+
+    /// Whether it is a HUD piece's, one that goes to a side (and up or down
+    /// a taller target, `Vertical`), rather than the frame's.
+    fn hud(self) -> bool {
+        matches!(self, Anchor::Left | Anchor::Right | Anchor::Span(..))
+    }
 }
 
 /// `Ui::push`'s placing: relative to the viewport's corner and cut to it
@@ -171,6 +217,27 @@ fn place(q: &mut Quad, viewport: Option<[i32; 4]>, anchor: Anchor, side: f32) {
     } else if side > 0.0 && viewport.is_none() && anchor == Anchor::Middle {
         widen(q, side);
     }
+}
+
+/// `Ui::push`'s placing up a target taller than the frame, after `place`: a
+/// HUD piece's quad (`Anchor::hud`) moved by `vertical` to the target's top
+/// or its bottom, its cut too (the whole frame's, without a viewport); a cut
+/// at the frame's own top or bottom, moved out, takes the target's edge (past
+/// the whole frame pixels of `top`, its fraction of one). The frame's quads
+/// stay where `place` put them, and nothing moves in a target 4:3 or wider.
+fn rise(q: &mut Quad, anchor: Anchor, vertical: Vertical, top: f32) {
+    if top <= 0.0 || vertical == Vertical::Middle || !anchor.hud() {
+        return;
+    }
+    for p in &mut q.pos {
+        p[1] = vertical.place(p[1], top);
+    }
+    let [x0, y0, x1, y1] = q.clip.unwrap_or([0, 0, SCREEN_W as i32, SCREEN_H as i32]);
+    let y = |v: i32| vertical.place(v as f32, top).round() as i32;
+    let edge = top as i32 + 1;
+    let t = if vertical == Vertical::Top && y0 <= 0 { -edge } else { y(y0) };
+    let b = if vertical == Vertical::Bottom && y1 >= SCREEN_H as i32 { SCREEN_H as i32 + edge } else { y(y1) };
+    q.clip = Some([x0, t, x1, b]);
 }
 
 /// A quad with the frame that is the frame's whole width (a window's
@@ -225,21 +292,35 @@ fn note(i: usize, q: &Quad, anchor: Anchor, side: f32, sided: &mut Vec<(usize, f
     }
 }
 
+/// What `Ui::push` notes for `end` of a quad `rise` moved: how far it went up
+/// or down, for a piece at a side (`Left`, `Right`), as `note` notes how far
+/// one went to its side.
+fn rose(anchor: Anchor, vertical: Vertical, top: f32) -> Option<f32> {
+    (top > 0.0 && vertical != Vertical::Middle && matches!(anchor, Anchor::Left | Anchor::Right)).then(|| vertical.place(0.0, top))
+}
+
 /// `Ui::end`: each quad moved `dx` to a side goes back with the frame when a
 /// full-screen window's backdrop made after it (`note`) covers its middle, as
 /// that window covers it on a 4:3 screen.
 fn settle(quads: &mut [Quad], sided: &[(usize, f32)], opaque: &[(usize, [f32; 4])]) {
-    for &(i, dx) in sided {
+    settle_along(quads, sided, opaque, 0);
+}
+
+/// `settle` along `axis` (0 across, 1 up and down: what `rise` moved).
+fn settle_along(quads: &mut [Quad], moved: &[(usize, f32)], opaque: &[(usize, [f32; 4])], axis: usize) {
+    for &(i, d) in moved {
         let q = &mut quads[i];
-        let c = [q.pos.iter().map(|p| p[0]).sum::<f32>() / 4.0 - dx, q.pos.iter().map(|p| p[1]).sum::<f32>() / 4.0];
+        let mut c = [q.pos.iter().map(|p| p[0]).sum::<f32>() / 4.0, q.pos.iter().map(|p| p[1]).sum::<f32>() / 4.0];
+        c[axis] -= d;
         if opaque.iter().any(|&(j, r)| j > i && c[0] >= r[0] && c[0] < r[2] && c[1] >= r[1] && c[1] < r[3]) {
             for p in &mut q.pos {
-                p[0] -= dx;
+                p[axis] -= d;
             }
             // back with the frame, cut to it
             if let Some(c) = &mut q.clip {
-                c[0] = (c[0] - dx as i32).max(0);
-                c[2] = (c[2] - dx as i32).min(SCREEN_W as i32);
+                let (lo, hi, max) = if axis == 0 { (0, 2, SCREEN_W) } else { (1, 3, SCREEN_H) };
+                c[lo] = (c[lo] - d as i32).max(0);
+                c[hi] = (c[hi] - d as i32).min(max as i32);
             }
         }
     }
@@ -311,11 +392,17 @@ pub struct Ui {
     pub viewport: Option<[i32; 4]>,
     /// Where the quads made now go across a wider target.
     pub anchor: Anchor,
-    /// The target's frame pixels beyond each side of the frame (`begin`).
+    /// Where the HUD's pieces made now go up a taller target.
+    pub vertical: Vertical,
+    /// The target's frame pixels beyond each side of the frame, and above
+    /// and below it (`begin`).
     side: f32,
-    /// The quads moved to a side, and how far; the opaque quads placed
-    /// with the frame, and what they cover (`end`).
+    top: f32,
+    /// The quads moved to a side, and how far, the quads moved up or down,
+    /// and how far; the opaque quads placed with the frame, and what they
+    /// cover (`end`).
     sided: Vec<(usize, f32)>,
+    risen: Vec<(usize, f32)>,
     opaque: Vec<(usize, [f32; 4])>,
     /// The quads `keep` kept, which `again` makes the frame's.
     kept: Vec<Quad>,
@@ -401,17 +488,21 @@ impl Ui {
                 })
             })
             .collect();
-        Ui { layout, sampler, pipelines, textures: Vec::new(), fonts: Vec::new(), quads: Vec::new(), viewport: None, anchor: Anchor::Middle, side: 0.0, sided: Vec::new(), opaque: Vec::new(), kept: Vec::new(), split: None, serial: LAYERS.fetch_add(1, Ordering::Relaxed) }
+        Ui { layout, sampler, pipelines, textures: Vec::new(), fonts: Vec::new(), quads: Vec::new(), viewport: None, anchor: Anchor::Middle, vertical: Vertical::Middle, side: 0.0, top: 0.0, sided: Vec::new(), risen: Vec::new(), opaque: Vec::new(), kept: Vec::new(), split: None, serial: LAYERS.fetch_add(1, Ordering::Relaxed) }
     }
 
     /// A new frame's quads, for a `size` target: none yet, and those made
-    /// next go with the frame (`anchor`) under the whole screen (`viewport`).
+    /// next go with the frame (`anchor`, `vertical`) under the whole screen
+    /// (`viewport`).
     pub fn begin(&mut self, size: (u32, u32)) {
         self.quads.clear();
         self.sided.clear();
+        self.risen.clear();
         self.opaque.clear();
         self.side = side(size);
+        self.top = top(size);
         self.anchor = Anchor::Middle;
+        self.vertical = Vertical::Middle;
         self.viewport = None;
         self.split = None;
     }
@@ -427,14 +518,16 @@ impl Ui {
         self.side
     }
 
-    /// The frame's quads are made: a piece moved to a side that a
-    /// full-screen window made after it covers on a 4:3 screen goes back
-    /// under that window, so a menu hides what it hides there (and the piece
-    /// is not cut by its edge); what no such window covers, a box's 4:3
-    /// place included, stays at the side.
+    /// The frame's quads are made: a piece moved to a side (or up or down a
+    /// taller target) that a full-screen window made after it covers on a
+    /// 4:3 screen goes back under that window, so a menu hides what it hides
+    /// there (and the piece is not cut by its edge); what no such window
+    /// covers, a box's 4:3 place included, stays at the side.
     pub fn end(&mut self) {
         settle(&mut self.quads, &self.sided, &self.opaque);
+        settle_along(&mut self.quads, &self.risen, &self.opaque, 1);
         self.sided.clear();
+        self.risen.clear();
         self.opaque.clear();
     }
 
@@ -565,8 +658,8 @@ impl Ui {
     }
 
     /// Where frame point `p` made now lands, as a frame point: `push`'s
-    /// placing of a quad's corner (the viewport's corner, then `anchor`).
-    /// For what is picked on the screen later.
+    /// placing of a quad's corner (the viewport's corner, then `anchor`,
+    /// then `vertical`). For what is picked on the screen later.
     pub fn placed(&self, p: [f32; 2]) -> [f32; 2] {
         let (mut x, mut y) = (p[0], p[1]);
         if let Some([x1, y1, _, _]) = self.viewport {
@@ -576,14 +669,21 @@ impl Ui {
         if self.side > 0.0 && self.anchor != Anchor::Middle {
             x = self.anchor.place(x, self.side);
         }
+        if self.top > 0.0 && self.anchor.hud() {
+            y = self.vertical.place(y, self.top);
+        }
         [x, y]
     }
 
     /// A quad, placed in and cut to the current viewport, then moved across
-    /// a wider target by `anchor`.
+    /// a wider target by `anchor`, or up a taller one by `vertical`.
     pub fn push(&mut self, mut q: Quad) {
         place(&mut q, self.viewport, self.anchor, self.side);
+        rise(&mut q, self.anchor, self.vertical, self.top);
         note(self.quads.len(), &q, self.anchor, self.side, &mut self.sided, &mut self.opaque);
+        if let Some(dy) = rose(self.anchor, self.vertical, self.top) {
+            self.risen.push((self.quads.len(), dy));
+        }
         self.quads.push(q);
     }
 
@@ -641,7 +741,7 @@ impl Ui {
 
 #[cfg(test)]
 mod tests {
-    use super::{Anchor, Quad, note, place, settle, side, viewport_of};
+    use super::{Anchor, Quad, Vertical, note, place, rise, rose, settle, settle_along, side, top, viewport_of};
 
     fn quad(x0: f32, x1: f32) -> Quad {
         Quad { tex: 0, blend: 0, pos: [[x0, 10.0], [x1, 10.0], [x1, 20.0], [x0, 20.0]], uv: [[0.0; 2]; 4], color: [1.0; 4], clip: None }
@@ -907,5 +1007,114 @@ mod tests {
         // a piece of another side is no window
         let sided = layer(s, &[compass, (-1.0, 641.0, -1.0, 331.0, 0, 1.0, Anchor::Right)]);
         assert_eq!(sided[0].pos[0][0], 10.0 - s);
+    }
+
+    #[test]
+    fn a_target_shows_whole_frame_pixels_above_and_below_only_when_narrower() {
+        assert_eq!(top((640, 480)), 0.0);
+        assert_eq!(top((1920, 1080)), 0.0);
+        assert_eq!(top((640, 448)), 0.0);
+        // two windows side by side: the frame 798 by 598.5 of 828, 114.75
+        // above it at 1.336 a frame pixel
+        assert_eq!(top((798, 828)), 85.0);
+        // a phone held upright (9:16)
+        assert_eq!(top((540, 960)), 306.0);
+        // and the sides then show nothing beyond the frame
+        assert_eq!((side((798, 828)), side((540, 960))), (0.0, 0.0));
+    }
+
+    /// A HUD piece's quad (made under `Left` or `Right`) in a taller target
+    /// keeps its distance from the top or the bottom, its cut moved with it
+    /// to the target's edge (past the whole frame pixels, the fraction of
+    /// one too); `Middle` leaves it with the frame.
+    #[test]
+    fn a_hud_piece_keeps_its_distance_from_the_top_or_the_bottom() {
+        let t = 85.0;
+        let mut compass = quad(10.0, 69.0);
+        place(&mut compass, None, Anchor::Left, 0.0);
+        rise(&mut compass, Anchor::Left, Vertical::Top, t);
+        assert_eq!([compass.pos[0], compass.pos[2]], [[10.0, 10.0 - t], [69.0, 20.0 - t]]);
+        assert_eq!(compass.clip, Some([0, -86, 640, 363]));
+        let mut target = quad(20.0, 194.0);
+        place(&mut target, Some([0, 300, 300, 420]), Anchor::Left, 0.0);
+        rise(&mut target, Anchor::Left, Vertical::Bottom, t);
+        assert_eq!(target.pos[0], [20.0, 310.0 + t]);
+        assert_eq!(target.clip, Some([0, 385, 301, 506]));
+        let mut chat = quad(191.0, 653.0);
+        place(&mut chat, None, Anchor::Right, 0.0);
+        rise(&mut chat, Anchor::Right, Vertical::Bottom, t);
+        assert_eq!((chat.pos[0], chat.clip), ([191.0, 10.0 + t], Some([0, 85, 640, 448 + 86])));
+        let mut middle = quad(300.0, 340.0);
+        place(&mut middle, None, Anchor::Left, 0.0);
+        rise(&mut middle, Anchor::Left, Vertical::Middle, t);
+        assert_eq!((middle.pos[0], middle.clip), ([300.0, 10.0], None));
+        assert_eq!(rose(Anchor::Left, Vertical::Top, t), Some(-t));
+        assert_eq!(rose(Anchor::Right, Vertical::Bottom, t), Some(t));
+        assert_eq!(rose(Anchor::Left, Vertical::Middle, t), None);
+    }
+
+    /// The frame's own quads never rise (the boxes, the menus, a window kept
+    /// 4:3, a band across the whole target), whatever `vertical` is left at;
+    /// and a target 4:3 or wider moves nothing up or down (the control:
+    /// the same piece rises in a taller one).
+    #[test]
+    fn only_a_hud_piece_rises_and_only_in_a_taller_target() {
+        for a in [Anchor::Middle, Anchor::Frame, Anchor::Wide] {
+            let mut q = quad(5.0, 25.0);
+            rise(&mut q, a, Vertical::Top, 85.0);
+            assert_eq!((q.pos, q.clip), (quad(5.0, 25.0).pos, None), "{a:?}");
+            assert_eq!(rose(a, Vertical::Bottom, 85.0), None, "{a:?}");
+        }
+        for (a, s) in [(Anchor::Left, 0.0), (Anchor::Right, 0.0), (Anchor::Left, 106.0), (Anchor::Right, 106.0)] {
+            let (mut q, mut want) = (quad(5.0, 25.0), quad(5.0, 25.0));
+            place(&mut q, None, a, s);
+            place(&mut want, None, a, s);
+            rise(&mut q, a, Vertical::Top, 0.0);
+            assert_eq!((q.pos, q.clip), (want.pos, want.clip), "{a:?} {s}");
+            assert_eq!(rose(a, Vertical::Bottom, 0.0), None);
+        }
+        let mut q = quad(5.0, 25.0);
+        rise(&mut q, Anchor::Left, Vertical::Top, 85.0);
+        assert_ne!(q.pos, quad(5.0, 25.0).pos);
+    }
+
+    /// Quads made under `Left` (and `vertical`) in a taller target, then a
+    /// full-screen window's backdrop with the frame: `Ui::end`'s settling up
+    /// and down, their top edges.
+    fn risen(t: f32, made: &[(f32, f32, f32, f32, u8, Anchor, Vertical)]) -> Vec<Quad> {
+        let (mut quads, mut moved, mut sided, mut opaque) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        for &(x0, x1, y0, y1, blend, a, v) in made {
+            let mut q = Quad { tex: 0, blend, pos: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], uv: [[0.0; 2]; 4], color: [1.0; 4], clip: None };
+            place(&mut q, None, a, 0.0);
+            rise(&mut q, a, v, t);
+            note(quads.len(), &q, a, 0.0, &mut sided, &mut opaque);
+            moved.extend(rose(a, v, t).map(|d| (quads.len(), d)));
+            quads.push(q);
+        }
+        assert!(sided.is_empty(), "nothing to a side in a taller target");
+        settle_along(&mut quads, &moved, &opaque, 1);
+        quads
+    }
+
+    /// As across a wider target: a full-screen window's backdrop made after a
+    /// risen piece takes it back under it where it covers its 4:3 place, cut
+    /// to the frame again; a box leaves it up, and so does a backdrop made
+    /// before it, or one kept 4:3 (`Frame`).
+    #[test]
+    fn a_menu_takes_back_what_it_covers_up_and_down_too() {
+        let t = 85.0;
+        let compass = (10.0, 69.0, 15.0, 84.0, 0, Anchor::Left, Vertical::Top);
+        let report = (20.0, 160.0, 421.0, 441.0, 0, Anchor::Left, Vertical::Bottom);
+        let backdrop = (-1.0, 641.0, -1.0, 449.0, 0, Anchor::Middle, Vertical::Middle);
+        let q = risen(t, &[compass, report, backdrop]);
+        assert_eq!((q[0].pos[0][1], q[1].pos[0][1]), (15.0, 421.0));
+        assert_eq!((q[0].clip, q[1].clip), (Some([0, 0, 640, 448]), Some([0, 0, 640, 448])), "cut to the frame again");
+        let edit = (17.0, 468.0, 28.0, 140.0, 0, Anchor::Middle, Vertical::Middle);
+        let q = risen(t, &[compass, report, edit]);
+        assert_eq!((q[0].pos[0][1], q[1].pos[0][1]), (15.0 - t, 421.0 + t));
+        let q = risen(t, &[backdrop, compass]);
+        assert_eq!(q[1].pos[0][1], 15.0 - t);
+        let kept = (-1.0, 641.0, -1.0, 449.0, 0, Anchor::Frame, Vertical::Middle);
+        assert_eq!(risen(t, &[compass, kept])[0].pos[0][1], 15.0 - t);
     }
 }

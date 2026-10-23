@@ -27,8 +27,8 @@
 //! `StreamFillCache` then `SetLocation` do. Loads here are fast where the
 //! PS2's took seconds: natively a frame or two, in a page as long as its
 //! reads. In a window wider than 4:3 the 2D half keeps to the middle and the
-//! gears to the right side's corner (the client's own, as the HUD's pieces
-//! keep to their sides).
+//! gears to the right side's corner, and in one narrower than 4:3 to the
+//! bottom's (the client's own, as the HUD's pieces keep to the edges).
 
 use crate::ui::{Layout, Vui, icon_id};
 use render::ui::Anchor;
@@ -80,12 +80,13 @@ const CORNER: [f32; 4] = [571.5, 400.5, 71.5, 50.5];
 /// space (x right, y up, z ahead, as `VICamera` builds it) to a `size`
 /// target's clip space: `VIRaster::Frustum` for 55 degrees and 10/7 from
 /// 0.1 to 900 (depth 0..1 here), then the corner's place in the target, the
-/// corner kept at the right side in a wider window (`render::ui::side`).
+/// corner kept at the right side in a wider window (`render::ui::side`) and
+/// at the bottom in a taller one (`render::ui::top`).
 pub fn corner_view_proj(size: (u32, u32)) -> glam::Mat4 {
     let proj = glam::camera::lh::proj::directx::perspective(55f32.to_radians(), 10.0 / 7.0, 0.1, 900.0);
     let (tw, th) = (size.0.max(1) as f32, size.1.max(1) as f32);
-    let side = render::ui::side(size);
-    let c = render::ui::window_from_frame(size, [CORNER[0] + side, CORNER[1]]);
+    let (side, top) = (render::ui::side(size), render::ui::top(size));
+    let c = render::ui::window_from_frame(size, [CORNER[0] + side, CORNER[1] + top]);
     let o = render::ui::window_from_frame(size, [0.0, 0.0]);
     let e = render::ui::window_from_frame(size, [CORNER[2], CORNER[3]]);
     let (hx, hy) = (e[0] - o[0], e[1] - o[1]);
@@ -376,6 +377,12 @@ mod tests {
         let (p, _) = frame_at((1920, 1080), glam::Vec3::new(0.0, 0.0, 0.7));
         assert!(close(p, [571.5 + 106.0, 400.5]), "{p:?}");
         // control: without the side it would sit in the frame's corner
+        assert!(!close(p, [571.5, 400.5]));
+        // two windows side by side (798x828): 85 whole frame pixels above
+        // and below, the corner with the bottom; without, the frame's
+        assert_eq!(render::ui::top((798, 828)), 85.0);
+        let (p, _) = frame_at((798, 828), glam::Vec3::new(0.0, 0.0, 0.7));
+        assert!(close(p, [571.5, 400.5 + 85.0]), "{p:?}");
         assert!(!close(p, [571.5, 400.5]));
         let (_, near) = frame_at((640, 480), glam::Vec3::new(0.0, 0.0, 0.1));
         let (_, far) = frame_at((640, 480), glam::Vec3::new(0.0, 0.0, 900.0));

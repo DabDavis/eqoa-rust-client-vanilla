@@ -363,12 +363,12 @@ impl Raster for UiRaster<'_> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// A layer on the machine's GPU (any backend), as a window lays itself out
     /// on it; None without an adapter.
-    fn layer() -> Option<Ui> {
+    pub(crate) fn layer() -> Option<Ui> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
         let (device, _queue) = pollster::block_on(adapter.request_device(&Default::default())).ok()?;
