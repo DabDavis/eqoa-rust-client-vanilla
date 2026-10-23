@@ -5,6 +5,23 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-23 · Options per window, destroy asks, weapon swaps in step
+- Each game window keeps its own options: turn the sound off in one and keep it
+  in another. The first window keeps the options you already have, and a new
+  window starts from them. Each window remembers its own saved account; the
+  keys you set on the Controls page are shared by every window.
+- Destroying an item always asks first ("Destroy item?"); before, only an
+  equipped, prepared or NO TRADE item did, as on a PS2.
+- Switch weapons in the middle of a fight, a bow to a sword say, and your swing
+  stays in step with the damage numbers instead of drifting apart.
+- Gaining a Class Mastery point opens the game's own box ("You have earned 1
+  mastery point."), as on a PS2, instead of a line in the chat box.
+- A dead creature's target bar no longer shows its face icon.
+- With the merchant, the bank or a trade open, the world shows under the chat
+  box and the target instead of a green strip.
+- The problem report (F3) can leave the picture out: "Send the picture of the
+  screen" under your name; Tab then Space, or a click.
+
 ## 2026-10-23 · Looting, auction Inspect, the spell book, creatures' own effects
 - Looting works: the item you take goes into your inventory and off the corpse
   at once. Before, it stayed on the corpse until you logged in again, and
