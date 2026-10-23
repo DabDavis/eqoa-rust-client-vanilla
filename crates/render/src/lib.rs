@@ -707,6 +707,35 @@ impl Renderer {
         self.text = Some(text::Text::new(device, queue, self.format, DEPTH_FORMAT, font));
     }
 
+    /// The name plates (`text.plates`), into the scene at their anchors'
+    /// depths, depth-tested against what `draw` drew and not writing it, as
+    /// the font's material draws them (`VIRFont`: Z test on, alpha blended,
+    /// so its TEST keeps colour only). `VIScene::Render` draws them after
+    /// the world and before the particles, the shadows, the spell lightning,
+    /// the trails and the weather, which blend over them: call it after
+    /// `draw_fans` and before `draw_billboards`.
+    pub fn draw_plates(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, depth: &wgpu::TextureView, size: (u32, u32)) {
+        let Some(t) = self.text.as_ref().filter(|t| !t.plates.is_empty()) else { return };
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("plates"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth,
+                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        t.draw_plates(device, &mut pass, size);
+    }
+
     /// The labels, over what `draw` drew (depth-tested against it, not
     /// writing it), then the overlay (`set_overlay`), then the 2D layer.
     /// `size` is the target's, in pixels.
@@ -1294,6 +1323,7 @@ pub fn capture_with_sky(
         renderer.draw_sky_billboards(device, queue, &mut enc, st, &depth, v, p, batches, textures);
     }
     renderer.draw_fans(queue, &mut enc, st, &depth, view);
+    renderer.draw_plates(device, &mut enc, st, &depth, (w, h));
     if let Some((v, p, batches, textures)) = particles {
         renderer.draw_billboards(device, queue, &mut enc, st, &depth, v, p, batches, textures);
     }

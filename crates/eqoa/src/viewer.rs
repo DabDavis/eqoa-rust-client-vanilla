@@ -329,6 +329,7 @@ pub fn shot_with(
         let say = std::env::var("EQOA_SAY").ok();
         let tab = std::env::var_os("EQOA_TAB").is_some();
         let mut parts = crate::particles::Particles::new(&walker.scene, 0);
+        let mut held_fx: Option<crate::particles::Held> = None;
         fx = crate::fx::enabled().then(crate::fx::Fx::new);
         // `EQOA_SPELL=n`: SPELLFX's n-th effect, cast by the character at a
         // stand-in 6 ahead of it at EQOA_AT (offline, no server).
@@ -840,7 +841,7 @@ pub fn shot_with(
                 std::thread::sleep(std::time::Duration::from_millis(frame_ms as u64));
             }
             // UpdateSprite runs every frame in the game.
-            walker.pose();
+            let (self_m, _) = walker.pose();
             let (proj, v) = walker.view(aspect);
             batches = parts.frame(&walker.scene, lib, walker.eye_position(), proj * v, t);
             if let Some((sp, n, rand)) = trial.as_mut() {
@@ -875,6 +876,11 @@ pub fn shot_with(
                 batches.append(&mut sp.batches);
                 renderer.strips = std::mem::take(&mut sp.strips);
             }
+            // the particles of the items in hands (an epic weapon's)
+            if let Some(p) = play.as_ref() {
+                let held = held_fx.get_or_insert_with(|| crate::particles::Held::new(t));
+                batches.extend(held.frame(lib, &p.in_hand(lib, &walker, self_m), &walker.eye.position, t));
+            }
             // the weapon trails (VITrailFxRender) after them
             if let Some(p) = play.as_mut() {
                 renderer.strips.append(&mut p.trail_strips);
@@ -903,6 +909,9 @@ pub fn shot_with(
         eprintln!("{}", weather.describe());
         if let Some((sp, _, _)) = &trial {
             eprintln!("{}", sp.describe());
+        }
+        if let Some(h) = &held_fx {
+            eprintln!("{}", h.describe());
         }
         let body = match play.as_ref().and_then(|p| p.self_model).and_then(|m| lib.lookup(m as i32)).and_then(|r| lib.build_model(r)) {
             Some(m) => m,
@@ -980,9 +989,8 @@ pub fn shot_with(
             }
             let plates = p.plates();
             if let Some(t) = renderer.text.as_mut() {
-                t.labels = crate::play::labels(&plates, shot_eye, view.view_proj, t);
-                let chat = crate::play::chat_labels(p, t, (w, h));
-                t.labels.extend(chat);
+                t.plates = crate::play::labels(&plates, shot_eye, view.view_proj, t);
+                t.labels = crate::play::chat_labels(p, t, (w, h));
             }
         }
         if let Some(p) = &play {
@@ -995,6 +1003,12 @@ pub fn shot_with(
     }
     // the loading screen in place of the scene: its gears through its own view
     let loading = play.as_ref().and_then(|p| p.loading_scene((w, h)));
+    // the name plates are the scene's: none under the loading screen
+    if loading.is_some()
+        && let Some(t) = renderer.text.as_mut()
+    {
+        t.plates.clear();
+    }
     let refs: Vec<render::Draw> = match &loading {
         Some((_, gears)) => gears.iter().map(|&m| render::Draw::Model(m)).collect(),
         None => gpu
@@ -1379,6 +1393,8 @@ struct App {
     walker_sounds: Vec<u32>,
     /// The world's particles, and this frame's billboards.
     particles: Option<crate::particles::Particles>,
+    /// The particles of the items in creatures' hands.
+    held_fx: Option<crate::particles::Held>,
     batches: Vec<render::billboard::Batch>,
     /// The effect volumes round the walk (`fx.rs`).
     fx: Option<crate::fx::Fx>,
@@ -1489,6 +1505,7 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         sound: None,
         walker_sounds: Vec::new(),
         particles: None,
+        held_fx: None,
         batches: Vec::new(),
         fx: None,
         weather: None,
@@ -2077,6 +2094,7 @@ impl App {
         self.walker = None;
         self.streamer = None;
         self.particles = None;
+        self.held_fx = None;
         self.fx = None;
         self.batches.clear();
         self.sky_batches.clear();
@@ -2093,6 +2111,7 @@ impl App {
             g.renderer.ui = None;
             if let Some(t) = g.renderer.text.as_mut() {
                 t.labels.clear();
+                t.plates.clear();
             }
             g.renderer.strips.clear();
             g.renderer.set_overlay(&g.device, &g.queue, glam::Mat4::IDENTITY, &[], &|_| None);
@@ -3283,6 +3302,7 @@ impl ApplicationHandler for App {
                 let sound = &mut self.sound;
                 let walker_sounds = &mut self.walker_sounds;
                 let particles = &mut self.particles;
+                let held_fx = &mut self.held_fx;
                 let batches = &mut self.batches;
                 let fx = &mut self.fx;
                 let weather = &mut self.weather;
@@ -3408,6 +3428,11 @@ impl ApplicationHandler for App {
                         batches.append(&mut sp.batches);
                         g.renderer.strips = std::mem::take(&mut sp.strips);
                     }
+                    // the particles of the items in hands (an epic weapon's)
+                    if let Some(p) = play.as_ref() {
+                        let held = held_fx.get_or_insert_with(|| crate::particles::Held::new(now));
+                        batches.extend(held.frame(lib, &p.in_hand(lib, w, m), &w.eye.position, now));
+                    }
                     // the weapon trails (VITrailFxRender) after them
                     if let Some(p) = play.as_mut() {
                         g.renderer.strips.append(&mut p.trail_strips);
@@ -3489,9 +3514,8 @@ impl ApplicationHandler for App {
                     p.map_frame(w, &self.lib, &g.device, &g.queue, g.config.format, (g.config.width, g.config.height), self.frame_s, self.console.sticks());
                     let plates = p.plates();
                     if let Some(t) = g.renderer.text.as_mut() {
-                        t.labels = crate::play::labels(&plates, w.eye_position(), view.view_proj, t);
-                        let chat = crate::play::chat_labels(p, t, (g.config.width, g.config.height));
-                        t.labels.extend(chat);
+                        t.plates = crate::play::labels(&plates, w.eye_position(), view.view_proj, t);
+                        t.labels = crate::play::chat_labels(p, t, (g.config.width, g.config.height));
                     }
                 }
                 mark(&mut self.perf, 10);
@@ -3532,6 +3556,9 @@ impl ApplicationHandler for App {
                 // all in the scene (the Brightness curve takes them too)
                 if loading.is_none() {
                     g.renderer.draw_fans(&g.queue, &mut enc, st, &g.depth, &view);
+                    // the name plates where VIScene::Render draws them: the
+                    // particles and the rest after, over them
+                    g.renderer.draw_plates(&g.device, &mut enc, st, &g.depth, (g.config.width, g.config.height));
                 }
                 if let Some((v, p)) = bb_view {
                     g.renderer.draw_billboards(&g.device, &g.queue, &mut enc, st, &g.depth, v, p, &self.batches, &textures);
