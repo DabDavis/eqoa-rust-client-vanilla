@@ -83,9 +83,26 @@ impl Here {
 }
 
 /// This window's place, from 0 (0 alone, with nowhere to keep one): which
-/// window's Controller Focus is its own (`settings::focus`).
+/// window's Controller Focus is its own (`settings::focus`), and whose
+/// options it keeps (`settings`: window 1's files as they always were).
 pub fn place() -> usize {
+    #[cfg(test)]
+    if let Some(n) = testing::PLACE.with(|p| p.get()) {
+        return n;
+    }
     HERE.with(|h| h.borrow_mut().place().map_or(0, |p| p.n))
+}
+
+#[cfg(test)]
+pub mod testing {
+    thread_local! {
+        pub(super) static PLACE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    }
+
+    /// This thread's window as if it held place `n` (`None`: as it finds).
+    pub fn set_place(n: Option<usize>) {
+        PLACE.with(|p| p.set(n));
+    }
 }
 
 /// This window's place let go (natively its lock closed), as the window
@@ -98,19 +115,24 @@ pub fn leave() {
 
 /// This window and the others open now, as last looked at.
 pub fn seat() -> Seat {
-    HERE.with(|h| {
+    let (seat, looked) = HERE.with(|h| {
         let mut h = h.borrow_mut();
-        let Some(n) = h.place().map(|p| p.n) else { return Seat::default() };
+        let Some(n) = h.place().map(|p| p.n) else { return (Seat::default(), false) };
         let now = web_time::Instant::now();
-        if h.looked.is_none_or(|t| now.duration_since(t).as_millis() >= LOOK_MS) {
+        let look = h.looked.is_none_or(|t| now.duration_since(t).as_millis() >= LOOK_MS);
+        if look {
             h.others = h.place().map(Place::others).unwrap_or_default();
             h.looked = Some(now);
-            // Capture Controller, one setting for every window: another
-            // window's save of it reaches this one here
-            crate::settings::look_shared();
         }
-        Seat { place: n, others: h.others.clone() }
-    })
+        (Seat { place: n, others: h.others.clone() }, look)
+    });
+    // Capture Controller, one setting for every window: another window's
+    // save of it reaches this one here, outside the borrow (the settings ask
+    // this window's place, `settings::client`)
+    if looked {
+        crate::settings::look_shared();
+    }
+    seat
 }
 
 /// Says which controller this window reads (none: `None`) and its

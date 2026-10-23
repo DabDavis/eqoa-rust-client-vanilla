@@ -14,13 +14,27 @@
 //! Setup's server, and natively `disc.opt` the disc image the player picked
 //! (`discs`).
 //!
+//! Each window of several keeps its own options by its place (`multibox`; F3
+//! 20261023, the user's choice): window 1 in `game.opt` and `client.opt` as the
+//! client always kept them, window n in `game-<n>.opt` and `client-<n>.opt`
+//! (`own_file`), so one window may play with sound and another without. A
+//! window that has kept none of its own yet starts from window 1's: its
+//! options and home shard, not its saved account (two windows cannot play one
+//! account at once). `client.opt` also holds what the windows share: every
+//! window's Controller Focus and Capture Controller, which a later window's
+//! save writes into it, window 1's own lines left as they are. The keys and
+//! buttons are the computer's (one keyboard), and a save writes them only when
+//! this window's Controls page changed them, so it never puts back what an
+//! older window still holds over another window's.
+//!
 //! Where: natively `$EQOA_CONFIG`, else `eqoa-rs` in the platform's config
 //! directory (`$XDG_CONFIG_HOME` or `~/.config`, `~/Library/Application
 //! Support` on a Mac, `%APPDATA%` on Windows), for the game (`eqoa`, `eqoa
 //! boot`, `eqoa play`: `keep_in_user_dir`); the other commands (`shot`, `playshot`) keep and read
 //! nothing unless `$EQOA_CONFIG` names a directory, so a player's settings
 //! never change a test's picture. In a page, the origin's localStorage
-//! (`eqoa.game.opt`, `eqoa.client.opt` and `eqoa.keys.opt`, as hex), where every access may
+//! (`eqoa.game.opt`, `eqoa.client.opt` and `eqoa.keys.opt`, as hex; a later
+//! window's `eqoa.game-<n>.opt` and `eqoa.client-<n>.opt`), where every access may
 //! fail (a private window, storage turned off): the page then runs on the
 //! defaults and keeps nothing.
 //!
@@ -42,9 +56,45 @@ use vi::fpu::{Ee, F};
 pub const CARD_SIZE: usize = 1024;
 /// `VIGameOptions::m_magic` (+0x3FC), which `Load` checks.
 const MAGIC: u32 = 0x0123_4567;
+/// Window 1's game.opt, and the one a later window starts from.
 const GAME_FILE: &str = "game.opt";
+/// Window 1's client.opt, which also holds what the windows share.
 const CLIENT_FILE: &str = "client.opt";
 const KEYS_FILE: &str = "keys.opt";
+
+/// This window's place among the client's windows open (`multibox`), from 0.
+fn place() -> usize {
+    crate::multibox::place()
+}
+
+/// The file a window keeps its own `base` options in: window 1's
+/// `<base>.opt`, as the client always kept them; window n's `<base>-<n>.opt`.
+fn own_file(base: &str, place: usize) -> String {
+    if place == 0 { format!("{base}.opt") } else { format!("{base}-{}.opt", place + 1) }
+}
+
+/// game.opt as this window keeps it, the whole record, when the game would
+/// load it (`from_card`): its own file; a later window that has kept none yet
+/// reads window 1's, its saved account left out (`0x10..0x91`: two windows
+/// cannot play one account at once).
+fn game_card() -> Option<Vec<u8>> {
+    let me = place();
+    let loads = |b: Vec<u8>| GameOptions::from_card(&b).is_some().then_some(b);
+    match store::read(&own_file("game", me)) {
+        Some(b) => loads(b),
+        None if me > 0 => {
+            let mut b = store::read(GAME_FILE).and_then(loads)?;
+            b[0x10..0x91].fill(0);
+            Some(b)
+        }
+        None => None,
+    }
+}
+
+/// Writes this window's game.opt.
+fn write_game(card: &[u8]) -> Result<(), String> {
+    store::write(&own_file("game", place()), card)
+}
 
 impl GameOptions {
     /// `VIGameOptions` as `Save` writes it: `m_flags` 0, the settings, the
@@ -107,7 +157,7 @@ impl GameOptions {
 /// (Compact: a keyboard is at hand), which `EQOA_SOFT_KEYBOARD` turns off
 /// whatever was kept (a test's).
 pub fn game_options() -> GameOptions {
-    let mut o = store::read(GAME_FILE).and_then(|b| GameOptions::from_card(&b)).unwrap_or(GameOptions { compact: 1, ..Default::default() });
+    let mut o = game_card().and_then(|b| GameOptions::from_card(&b)).unwrap_or(GameOptions { compact: 1, ..Default::default() });
     if std::env::var_os("EQOA_SOFT_KEYBOARD").is_some() {
         o.compact = 0;
     }
@@ -115,21 +165,18 @@ pub fn game_options() -> GameOptions {
 }
 
 /// Save Changes (`SaveOptions`: `VIGetGameOptions()->Save()`), with the
-/// client's own settings beside the game's. Whether both were kept; a
-/// failure is said and play goes on (the game's `m_saveFailed`).
+/// client's own settings beside the game's: this window's (`own_file`), and
+/// the keys and buttons when its Controls page changed them. Whether all were
+/// kept; a failure is said and play goes on (the game's `m_saveFailed`).
 pub fn save(o: &GameOptions) -> bool {
     let mut card = with_login(o.to_card());
     // the home shard the server list keeps there stays (`set_home_shard`)
-    if let Some(b) = store::read(GAME_FILE).filter(|b| GameOptions::from_card(b).is_some()) {
+    if let Some(b) = game_card() {
         card[HOME_SHARD..HOME_SHARD + HOME_SHARD_LEN].copy_from_slice(&b[HOME_SHARD..HOME_SHARD + HOME_SHARD_LEN]);
     }
-    let game = store::write(GAME_FILE, &card);
-    let kept = kept_client();
-    let client = store::write(CLIENT_FILE, kept.to_text().as_bytes());
-    if client.is_ok() {
-        FILE_CAPTURE.with(|f| f.set(Some(kept.capture)));
-    }
-    let keys = store::write(KEYS_FILE, with_binds(|b| b.to_text()).as_bytes());
+    let game = write_game(&card);
+    let client = save_client();
+    let keys = save_binds();
     for (what, r) in [("the options", &game), ("the client's options", &client), ("the keys and buttons", &keys)] {
         if let Err(e) = r {
             crate::say(&format!("{what} were not kept: {e}"));
@@ -142,7 +189,7 @@ pub fn save(o: &GameOptions) -> bool {
 /// `m_password`, `m_x90`), from the card's whole record (`Load`): empty and
 /// off when there is none.
 pub fn saved_login() -> (String, String, bool) {
-    let Some(b) = store::read(GAME_FILE).filter(|b| GameOptions::from_card(b).is_some()) else {
+    let Some(b) = game_card() else {
         return (String::new(), String::new(), false);
     };
     let text = |r: std::ops::Range<usize>| b[r].iter().take_while(|&&c| c != 0).map(|&c| c as char).collect();
@@ -151,7 +198,7 @@ pub fn saved_login() -> (String, String, bool) {
 
 /// `card` with the login kept on the card put back (`to_card` writes none).
 fn with_login(mut card: [u8; CARD_SIZE]) -> [u8; CARD_SIZE] {
-    if let Some(b) = store::read(GAME_FILE).filter(|b| GameOptions::from_card(b).is_some()) {
+    if let Some(b) = game_card() {
         card[0x10..0x91].copy_from_slice(&b[0x10..0x91]);
     }
     card
@@ -162,7 +209,7 @@ fn with_login(mut card: [u8; CARD_SIZE]) -> [u8; CARD_SIZE] {
 /// the flag into the options, the rest of the record as it was (the
 /// defaults' when there was none). Whether it was kept.
 pub fn save_login(user: &str, password: &str, on: bool) -> bool {
-    let mut card = store::read(GAME_FILE).filter(|b| GameOptions::from_card(b).is_some()).and_then(|b| <[u8; CARD_SIZE]>::try_from(&b[..CARD_SIZE]).ok()).unwrap_or_else(|| game_options().to_card());
+    let mut card = game_card().and_then(|b| <[u8; CARD_SIZE]>::try_from(&b[..CARD_SIZE]).ok()).unwrap_or_else(|| game_options().to_card());
     for (at, s) in [(0x10, user), (0x50, password)] {
         card[at..at + 0x40].fill(0);
         for (k, c) in s.chars().take(0x3F).enumerate() {
@@ -170,7 +217,7 @@ pub fn save_login(user: &str, password: &str, on: bool) -> bool {
         }
     }
     card[0x90] = on as u8;
-    match store::write(GAME_FILE, &card) {
+    match write_game(&card) {
         Ok(()) => true,
         Err(e) => {
             crate::say(&format!("the saved account was not kept: {e}"));
@@ -188,7 +235,7 @@ const HOME_SHARD_LEN: usize = 128;
 /// `HomeShardName()`: the shard the server list picked last, as game.opt
 /// keeps it (none when game.opt is not there or not the game's).
 pub fn home_shard() -> Option<String> {
-    let b = store::read(GAME_FILE).filter(|b| GameOptions::from_card(b).is_some())?;
+    let b = game_card()?;
     let w: Vec<u16> = b[HOME_SHARD..HOME_SHARD + HOME_SHARD_LEN].as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).take_while(|&c| c != 0).collect();
     (!w.is_empty()).then(|| String::from_utf16_lossy(&w))
 }
@@ -197,13 +244,13 @@ pub fn home_shard() -> Option<String> {
 /// the name into game.opt (63 characters at most), the rest of it as kept,
 /// or the options as they stand when there is none.
 pub fn set_home_shard(name: &str) -> Result<(), String> {
-    let mut b = store::read(GAME_FILE).filter(|b| GameOptions::from_card(b).is_some()).unwrap_or_else(|| game_options().to_card().to_vec());
+    let mut b = game_card().unwrap_or_else(|| game_options().to_card().to_vec());
     let w: Vec<u16> = name.encode_utf16().take(HOME_SHARD_LEN / 2 - 1).collect();
     b[HOME_SHARD..HOME_SHARD + HOME_SHARD_LEN].fill(0);
     for (k, c) in w.iter().enumerate() {
         b[HOME_SHARD + 2 * k..HOME_SHARD + 2 * k + 2].copy_from_slice(&c.to_le_bytes());
     }
-    store::write(GAME_FILE, &b)
+    write_game(&b)
 }
 
 // ---- the client's own: the server, as the title's Network Setup keeps it ---------
@@ -242,6 +289,9 @@ thread_local! {
     /// The keys and buttons now (`binds`): read from the store the first
     /// time they are asked for.
     static BINDS: std::cell::RefCell<Option<crate::binds::Binds>> = const { std::cell::RefCell::new(None) };
+    /// The keys and buttons as keys.opt had them when this window last read
+    /// or wrote it (`save_binds`).
+    static BINDS_KEPT: std::cell::RefCell<Option<crate::binds::Binds>> = const { std::cell::RefCell::new(None) };
 }
 
 /// `f` over the keys and buttons now: what was kept (`keys.opt`), as the
@@ -254,10 +304,25 @@ pub fn with_binds<R>(f: impl FnOnce(&crate::binds::Binds) -> R) -> R {
             if !b.is_default() {
                 crate::say(&format!("keys and buttons: {}", b.describe()));
             }
+            BINDS_KEPT.with(|k| *k.borrow_mut() = Some(b.clone()));
             b
         });
         f(b)
     })
+}
+
+/// Save Changes' half for keys.opt: written only when this window's keys and
+/// buttons are not what it last read or wrote there, so a window saving its
+/// sound never puts back the keys it read at its start over the ones another
+/// window saved since.
+fn save_binds() -> Result<(), String> {
+    let now = binds();
+    if BINDS_KEPT.with(|k| k.borrow().as_ref() == Some(&now)) {
+        return Ok(());
+    }
+    store::write(KEYS_FILE, now.to_text().as_bytes())?;
+    BINDS_KEPT.with(|k| *k.borrow_mut() = Some(now));
+    Ok(())
 }
 
 /// The keys and buttons now, a copy.
@@ -474,10 +539,60 @@ impl ClientOptions {
     }
 }
 
+impl ClientOptions {
+    /// A later window's own file (`client-<n>.opt`): the Extended page's rows,
+    /// the lines the windows share (Controller Focus, Capture Controller) left
+    /// to client.opt.
+    fn rows_text(self) -> String {
+        ClientOptions { controller: [Focus::Auto; crate::multibox::PLACES], capture: false, ..self }.to_text()
+    }
+}
+
+/// client.opt as it stands: window 1's rows, and what the windows share.
+fn read_shared() -> ClientOptions {
+    store::read(CLIENT_FILE).map_or_else(ClientOptions::default, |b| ClientOptions::from_text(&String::from_utf8_lossy(&b)))
+}
+
+/// The client's settings as this window keeps them: client.opt, with a later
+/// window's rows out of its own file when it has kept one (else window 1's,
+/// which it starts from).
+fn read_client() -> ClientOptions {
+    let shared = read_shared();
+    let me = place();
+    match store::read(&own_file("client", me)).filter(|_| me > 0) {
+        Some(b) => ClientOptions { controller: shared.controller, capture: shared.capture, ..ClientOptions::from_text(&String::from_utf8_lossy(&b)) },
+        None => shared,
+    }
+}
+
+/// Save Changes' half for the client's settings: window 1 writes client.opt
+/// whole (its rows, every window's Controller Focus, Capture Controller); a
+/// later window its rows to its own file, and its Controller Focus and
+/// Capture Controller into client.opt, window 1's rows and the other windows'
+/// own as the file has them now (another window may have saved its own since
+/// this one read them).
+fn save_client() -> Result<(), String> {
+    let me = place();
+    let mine = client();
+    let mut shared = read_shared();
+    shared.controller[me] = mine.controller[me];
+    shared.capture = mine.capture;
+    if me == 0 {
+        store::write(CLIENT_FILE, ClientOptions { controller: shared.controller, ..mine }.to_text().as_bytes())?;
+    } else {
+        store::write(&own_file("client", me), mine.rows_text().as_bytes())?;
+        store::write(CLIENT_FILE, shared.to_text().as_bytes())?;
+    }
+    FILE_CAPTURE.with(|f| f.set(Some(shared.capture)));
+    Ok(())
+}
+
 thread_local! {
-    /// The client's settings now (`client`): read from the store the first
-    /// time they are asked for.
-    static CLIENT: Cell<Option<ClientOptions>> = const { Cell::new(None) };
+    /// The client's settings now (`client`) and the place they are this
+    /// window's for: read from the store the first time they are asked for,
+    /// and again if the place changed (a page learns its place a moment after
+    /// it starts).
+    static CLIENT: Cell<Option<(usize, ClientOptions)>> = const { Cell::new(None) };
     /// The frame rate when none was chosen (`set_platform_rate`).
     static PLATFORM_RATE: Cell<FrameRate> = const { Cell::new(FrameRate::Display) };
     /// When the next capped frame is due (`now_ms`'s clock).
@@ -486,23 +601,26 @@ thread_local! {
     static FILE_CAPTURE: Cell<Option<bool>> = const { Cell::new(None) };
 }
 
-/// The client's settings now: what was kept (`client.opt`), as the page
-/// changed them since.
+/// The client's settings now: what this window kept (`read_client`), as the
+/// page changed them since.
 pub fn client() -> ClientOptions {
-    CLIENT.with(|c| {
-        c.get().unwrap_or_else(|| {
-            let v = store::read(CLIENT_FILE).map_or_else(ClientOptions::default, |b| ClientOptions::from_text(&String::from_utf8_lossy(&b)));
-            c.set(Some(v));
+    let me = place();
+    CLIENT.with(|c| match c.get() {
+        Some((p, v)) if p == me => v,
+        _ => {
+            let v = read_client();
+            c.set(Some((me, v)));
             FILE_CAPTURE.with(|f| f.set(Some(v.capture)));
             v
-        })
+        }
     })
 }
 
 /// Changes them (the Extended page, as its rows move); kept only by Save
 /// Changes (`save`).
 pub fn set_client(v: ClientOptions) {
-    CLIENT.with(|c| c.set(Some(v)));
+    let me = place();
+    CLIENT.with(|c| c.set(Some((me, v))));
 }
 
 /// The frame rate when the player chose none: a page on WebGL2 keeps 30
@@ -552,30 +670,15 @@ pub fn look_shared() {
 
 /// This window's Controller Focus: its place's (`multibox::place`).
 pub fn focus() -> Focus {
-    client().controller[crate::multibox::place()]
+    client().controller[place()]
 }
 
 /// Changes it (the Extended page, as its row moves); kept only by Save
 /// Changes (`save`), beside the other windows' own.
 pub fn set_focus(f: Focus) {
     let mut c = client();
-    c.controller[crate::multibox::place()] = f;
+    c.controller[place()] = f;
     set_client(c);
-}
-
-/// The client's settings as this window keeps them: its own, and the other
-/// windows' Controller Focus as the file has them now (another window may
-/// have saved its own since this one read them).
-fn kept_client() -> ClientOptions {
-    let mut c = client();
-    if let Some(b) = store::read(CLIENT_FILE) {
-        let kept = ClientOptions::from_text(&String::from_utf8_lossy(&b));
-        let me = crate::multibox::place();
-        for (k, f) in c.controller.iter_mut().enumerate().filter(|(k, _)| *k != me) {
-            *f = kept.controller[k];
-        }
-    }
-    c
 }
 
 /// The Frame Rate in effect: the player's, else the platform's.
@@ -624,12 +727,17 @@ pub fn describe() -> String {
 }
 
 /// Where the settings are kept, for `describe`: a page's storage, or
-/// natively the config directory (the home directory a report takes out).
+/// natively the config directory (the home directory a report takes out),
+/// and whose they are when this window is not the first.
 fn kept_where() -> String {
     #[cfg(any(target_arch = "wasm32", test))]
-    return (if store::available() { "kept in the page's storage" } else { "the page's storage refused: nothing is kept" }).to_string();
+    let at = (if store::available() { "kept in the page's storage" } else { "the page's storage refused: nothing is kept" }).to_string();
     #[cfg(all(not(target_arch = "wasm32"), not(test)))]
-    return store::dir().map_or_else(|| "not kept: no config directory".to_string(), |d| format!("kept in {}", d.display()));
+    let at = store::dir().map_or_else(|| "not kept: no config directory".to_string(), |d| format!("kept in {}", d.display()));
+    match place() {
+        0 => at,
+        me => format!("{at}, as window {}'s own ({}, {})", me + 1, own_file("game", me), own_file("client", me)),
+    }
 }
 
 // ---- the frame cap ---------------------------------------------------------------
@@ -826,6 +934,8 @@ pub mod testing {
         super::store::REFUSE.with(|r| r.set(refuse));
         super::CLIENT.with(|c| c.set(None));
         super::BINDS.with(|c| *c.borrow_mut() = None);
+        super::BINDS_KEPT.with(|c| *c.borrow_mut() = None);
+        crate::multibox::testing::set_place(None);
         super::PLATFORM_RATE.with(|p| p.set(super::FrameRate::Display));
         super::FRAME_DUE.with(|d| d.set(0.0));
         super::FILE_CAPTURE.with(|f| f.set(None));
@@ -1045,6 +1155,150 @@ mod tests {
         assert!(save(&GameOptions::default()));
         let kept = String::from_utf8(testing::kept(CLIENT_FILE).unwrap()).unwrap();
         assert_eq!(kept, "lod=on\nbrightness=5\ncamera_distance=11\ncontroller.2=window\n");
+        testing::reset(false);
+    }
+
+    /// Each window keeps its own options (F3 20261023-082517: sound in one
+    /// window, none in the other): window 1 in game.opt and client.opt as
+    /// ever, window 2 in game-2.opt and client-2.opt; a window 2 that has kept
+    /// none yet starts from window 1's. The control: window 2's save leaves
+    /// window 1's files byte for byte, and window 1 reads its own back.
+    #[test]
+    fn each_window_keeps_its_own_options() {
+        use crate::multibox::testing::set_place;
+        testing::reset(false);
+        // window 1 saves its sound and a brightness
+        set_place(Some(0));
+        let one = changed();
+        set_client(ClientOptions { brightness: 8, ..Default::default() });
+        assert!(save(&one));
+        let (game1, client1) = (testing::kept("game.opt").unwrap(), testing::kept("client.opt").unwrap());
+        // window 2 has kept nothing: it starts from window 1's
+        set_place(Some(1));
+        assert_eq!(game_options(), one, "window 1's options to start from");
+        assert_eq!(client().brightness, 8, "and its Extended rows");
+        // window 2 turns its sound off and its brightness down, and saves
+        let mut two = one;
+        two.fx_volume = F::new(0.0);
+        two.music_volume = F::new(0.0);
+        set_client(ClientOptions { brightness: 2, ..client() });
+        assert!(save(&two));
+        assert_eq!(GameOptions::from_card(&testing::kept("game-2.opt").unwrap()), Some(two), "its own file");
+        assert_eq!(String::from_utf8(testing::kept("client-2.opt").unwrap()).unwrap(), "lod=on\nbrightness=2\ncamera_distance=11\n");
+        assert_eq!(testing::kept("game.opt").unwrap(), game1, "the control: window 1's game.opt untouched");
+        assert_eq!(testing::kept("client.opt").unwrap(), client1, "and its client.opt");
+        // each reads its own back, as each would at its next start
+        set_place(Some(0));
+        CLIENT.with(|c| c.set(None));
+        assert_eq!((game_options(), client().brightness), (one, 8), "window 1: sound, its brightness");
+        set_place(Some(1));
+        CLIENT.with(|c| c.set(None));
+        assert_eq!((game_options(), client().brightness), (two, 2), "window 2: no sound, its brightness");
+        assert!(describe().ends_with("kept in the page's storage, as window 2's own (game-2.opt, client-2.opt)"));
+        testing::reset(false);
+    }
+
+    /// A later window starting from window 1's options does not take its
+    /// saved account (two windows cannot play one account at once), but does
+    /// its home shard; its own Save Account and home shard go to its own file.
+    /// The control: window 1 keeps its account and shard.
+    #[test]
+    fn a_later_window_saves_its_own_account() {
+        use crate::multibox::testing::set_place;
+        testing::reset(false);
+        set_place(Some(0));
+        assert!(save_login("alice", "secret1", true));
+        set_home_shard("Marr's Fist").unwrap();
+        set_place(Some(1));
+        assert_eq!(saved_login(), (String::new(), String::new(), false), "not window 1's account");
+        assert_eq!(home_shard().as_deref(), Some("Marr's Fist"), "window 1's shard to start from");
+        assert!(save_login("bob", "secret2", true));
+        set_home_shard("Hodstock").unwrap();
+        assert_eq!(saved_login(), ("bob".to_string(), "secret2".to_string(), true));
+        assert_eq!(home_shard().as_deref(), Some("Hodstock"));
+        assert!(testing::kept("game-2.opt").is_some());
+        set_place(Some(0));
+        assert_eq!(saved_login(), ("alice".to_string(), "secret1".to_string(), true), "the control: window 1's own");
+        assert_eq!(home_shard().as_deref(), Some("Marr's Fist"));
+        testing::reset(false);
+    }
+
+    /// What the windows share stays in client.opt: a later window's save puts
+    /// its Controller Focus and Capture Controller there, window 1's rows and
+    /// the other windows' focus as the file has them, and its own file holds
+    /// only its rows; window 1 sees the capture, and its save keeps window 2's
+    /// focus. The control: window 1's rows in client.opt are unchanged.
+    #[test]
+    fn what_the_windows_share_stays_in_client_opt() {
+        use crate::multibox::testing::set_place;
+        testing::reset(false);
+        set_place(Some(0));
+        set_client(ClientOptions { brightness: 8, ..Default::default() });
+        assert!(save(&GameOptions::default()));
+        // window 3 saved its focus meanwhile
+        let three = "lod=on\nbrightness=8\ncamera_distance=11\ncontroller.3=pad1\n";
+        testing::put("client.opt", three.as_bytes());
+        set_place(Some(1));
+        set_focus(Focus::Pad(2));
+        let mut c = client();
+        c.capture = true;
+        c.camera_distance = 50;
+        set_client(c);
+        assert!(save(&GameOptions::default()));
+        assert_eq!(String::from_utf8(testing::kept("client.opt").unwrap()).unwrap(), "lod=on\nbrightness=8\ncamera_distance=11\ncontroller.2=pad2\ncontroller.3=pad1\ncapture_controller=on\n", "window 1's rows as they were, the shared lines");
+        assert_eq!(String::from_utf8(testing::kept("client-2.opt").unwrap()).unwrap(), "lod=on\nbrightness=8\ncamera_distance=50\n", "its rows alone");
+        // window 1: the capture reaches it, its own rows stay, and its save
+        // keeps window 2's and window 3's focus
+        set_place(Some(0));
+        look_shared();
+        assert!(capture());
+        assert_eq!((client().camera_distance, focus()), (11, Focus::Auto));
+        assert!(save(&GameOptions::default()));
+        let kept = String::from_utf8(testing::kept("client.opt").unwrap()).unwrap();
+        assert!(kept.contains("controller.2=pad2\ncontroller.3=pad1\ncapture_controller=on\n"), "{kept}");
+        // window 2 again: its focus and capture out of client.opt, its rows its own
+        set_place(Some(1));
+        CLIENT.with(|c| c.set(None));
+        assert_eq!((focus(), capture(), client().camera_distance), (Focus::Pad(2), true, 50));
+        testing::reset(false);
+    }
+
+    /// A page learns its place a moment after it starts: settings read before
+    /// it are window 1's, and read again once the place is known.
+    #[test]
+    fn a_place_learned_late_reads_its_own() {
+        use crate::multibox::testing::set_place;
+        testing::reset(false);
+        testing::put("client.opt", b"lod=on\nbrightness=8\ncamera_distance=11\n");
+        testing::put("client-2.opt", b"lod=off\nbrightness=3\ncamera_distance=11\n");
+        set_place(Some(0));
+        assert_eq!(client().brightness, 8, "before the place: window 1's");
+        set_place(Some(1));
+        assert_eq!((client().brightness, client().lod), (3, false), "its own once it is window 2");
+        testing::reset(false);
+    }
+
+    /// keys.opt is the computer's: a save writes it only when this window's
+    /// Controls page changed the keys, so a window saving its sound does not
+    /// put back the keys it read at its start over another window's newer
+    /// ones. The control: a change of this window's own is written.
+    #[test]
+    fn a_save_keeps_another_windows_keys() {
+        testing::reset(false);
+        assert!(binds().is_default(), "read at the start: nothing moved");
+        // another window moves Use onto Q and saves
+        let mut theirs = crate::binds::Binds::default();
+        theirs.bind_key(crate::binds::row_named("use").unwrap(), "q");
+        testing::put(KEYS_FILE, theirs.to_text().as_bytes());
+        // this window saves its sound, its keys untouched
+        assert!(save(&GameOptions::default()));
+        assert_eq!(testing::kept(KEYS_FILE).as_deref(), Some(theirs.to_text().as_bytes()), "the other window's keys stay");
+        // this window moves a key of its own: then its keys are written
+        let mut mine = crate::binds::Binds::default();
+        mine.bind_key(crate::binds::row_named("use").unwrap(), "x");
+        set_binds(mine.clone());
+        assert!(save(&GameOptions::default()));
+        assert_eq!(testing::kept(KEYS_FILE).as_deref(), Some(mine.to_text().as_bytes()), "the control: its own change is kept");
         testing::reset(false);
     }
 
