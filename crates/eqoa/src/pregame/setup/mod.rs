@@ -92,6 +92,8 @@ pub struct Setup {
     pub options: GameOptions,
     options_wnd: WndOptions,
     options_visible: bool,
+    /// the Options asked for from outside the game's keys (`ask_options`)
+    options_asked: bool,
     message: Message,
     net: netsetup::NetSetup,
     net_visible: bool,
@@ -148,6 +150,7 @@ impl Setup {
             options: GameOptions::default(),
             options_wnd: Default::default(),
             options_visible: false,
+            options_asked: false,
             message: Default::default(),
             net: Default::default(),
             net_visible: false,
@@ -363,6 +366,13 @@ impl Setup {
     }
 
     /// One frame of `VISetup::Process`.
+    /// macOS's Settings… (⌘,): the title's Options at the next frame, if the
+    /// title's menu has the keys then.
+    #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+    pub fn ask_options(&mut self) {
+        self.options_asked = true;
+    }
+
     pub fn frame(&mut self, cx: &mut Ctx) -> Next {
         self.now = cx.now;
         if !self.began {
@@ -371,6 +381,14 @@ impl Setup {
         }
         for (k, down) in std::mem::take(&mut self.keys) {
             self.dispatch(cx, k, down);
+        }
+        // macOS's Settings… (⌘,): the title's Options, as its menu's Options
+        // opens them, when the title's menu has the keys; asked anywhere else
+        // (the licence, Network Setup, the patch) it is let go
+        if std::mem::take(&mut self.options_asked) && self.focus == Some(Focus::Title) {
+            self.options_wnd.open(cx.vui, cx.r, &self.options);
+            self.options_visible = true;
+            self.focus = Some(Focus::Options);
         }
         for c in std::mem::take(&mut self.captures) {
             let mut cues = Vec::new();
@@ -767,6 +785,28 @@ mod tests {
 
     /// Options opens over the title with the client's window, and Triangle
     /// on its menu gives the title its focus back.
+    /// macOS's Settings… opens the title's Options when the title's menu has
+    /// the keys, as its Options entry does; the control: asked while the
+    /// licence has them, nothing opens, and the asking is not kept for later.
+    #[test]
+    fn settings_from_outside_open_the_titles_options() {
+        let mut run = Run::new(Some("192.0.2.1"));
+        run.frames(5);
+        assert_ne!(run.s.focus, Some(Focus::Title), "the legal screen first");
+        run.s.ask_options();
+        run.frame();
+        assert!(!run.s.options_visible, "not over the legal screen");
+        run.s.state = 2;
+        run.s.focus = None;
+        run.frames(32);
+        assert_eq!(run.s.focus, Some(Focus::Title));
+        assert!(!run.s.options_visible, "the earlier asking was let go");
+        run.s.ask_options();
+        run.frame();
+        assert_eq!(run.s.focus, Some(Focus::Options));
+        assert!(run.s.options_visible);
+    }
+
     #[test]
     fn options_opens_and_triangle_comes_back() {
         let mut run = Run::new(Some("192.0.2.1"));

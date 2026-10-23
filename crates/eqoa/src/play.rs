@@ -4976,6 +4976,16 @@ impl Play {
         }
     }
 
+    /// macOS's Settings… (⌘,): the Options window on its menu, as the start
+    /// menu's Options entry opens it; as F1's Controls page, not over another
+    /// window, the start menu included (its Options are there), nor dead.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub fn open_options(&mut self) {
+        if self.start.is_some() && self.hud_ready() && self.mode == 0 && !self.is_dead() {
+            self.open_panel(34);
+        }
+    }
+
     /// What the Controls page waits for, if anything: a key pressed then is
     /// its (`capture_key`), a controller's button too (`capture_button`).
     pub fn capturing(&self) -> Option<crate::bindpage::Column> {
