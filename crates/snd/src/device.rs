@@ -901,6 +901,12 @@ impl<M: Model> SoundDevice<M> {
         0
     }
 
+    /// A sound class's volume (`m_classVolume`: 0 the effects', 1 the
+    /// music's), as the options set it.
+    pub fn sound_class_volume(&self, cls: i32) -> f32 {
+        self.class_volume.get(cls as usize).copied().unwrap_or(0.0)
+    }
+
     pub fn set_sound_class_volume(&mut self, cls: i32, v: f32) {
         self.class_volume[cls as usize] = v;
         for k in 0..self.active.len() {

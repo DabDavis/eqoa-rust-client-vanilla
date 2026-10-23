@@ -227,6 +227,13 @@ fn listen(file: &str, x: f32, z: f32, secs: f32, out: &str, hour: f32, walk: boo
     // the UI sounds' volumes are SUPPORT's: waited for here
     modules::load_now(modules::Module::Support, std::path::Path::new(&disc_path(None)));
     let mut sound = sound::Sound::offline(std::path::Path::new(&disc_path(None))).ok_or("no sound device")?;
+    // the options' Fx and Music Volume (`EQOA_FX_VOLUME`, `EQOA_MUSIC_VOLUME`,
+    // 0 to 1): the two sound classes' volumes, as the options set them
+    for (cls, var) in [(0, "EQOA_FX_VOLUME"), (1, "EQOA_MUSIC_VOLUME")] {
+        if let Some(v) = std::env::var(var).ok().and_then(|v| v.parse::<f32>().ok()) {
+            sound.dev.set_sound_class_volume(cls, v);
+        }
+    }
     // the weather (`EQOA_WEATHER`): its rain and thunder, and its dimming of the track
     let mut weather = weather::Weather::new(&mut lib, 0);
     let ids = walker.sprite.as_ref().map(|cs| cs.sounds()).unwrap_or_default();

@@ -1930,6 +1930,11 @@ impl App {
         let _ = writeln!(o, "options, extended: {}", crate::settings::describe());
         let _ = writeln!(o, "keys and buttons: {}", crate::settings::with_binds(|b| b.describe()));
         let _ = writeln!(o, "the server's patch: {}", crate::servers::report_line(self.booted.as_ref().and_then(|s| s.server.as_deref())));
+        // the sound: what plays, the ambient track and the terrain profile
+        // it was chosen by, and the two classes' volumes (Fx, Music)
+        if let Some(s) = &self.sound {
+            let _ = writeln!(o, "sound: {}", s.describe());
+        }
         // the controls: a pad's sticks as they came (before the host's dead
         // zone), as the game reads them and with the keys, the mouse and the
         // touch screen's merged in (what `UpdateControls` got), the camera's
