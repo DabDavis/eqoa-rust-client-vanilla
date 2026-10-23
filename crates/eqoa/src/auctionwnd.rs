@@ -8,7 +8,9 @@
 //! slot and attack type pickers (Enter on the form's race, class, wear slot
 //! and attack type rows), seven rows of a list at a time.
 //!
-//! Not ported: Inspect (`DescribeAuctionItem`'s four describers).
+//! The page's Inspect describes the selected lot (`DescribeAuctionItem`'s
+//! four describers, `infotext.rs`) in a `VIWndInspect` over the window: △
+//! closes it and the page has the keys again, the arrows scroll it.
 //!
 //! A pointer (`pointer`) goes to the child with the keys (the editor, the
 //! box, the page's menu and its popup); a click on the form from the page
@@ -23,9 +25,11 @@ use crate::auction::{Auction, Query, atoi};
 use crate::client_image::{Menu, MenuEntry, Menus};
 use crate::dialog::{BoxAnswer, Key as BoxKey, MBox};
 use crate::editbox::{EditBox, EditUp};
+use crate::infotext::Info;
+use crate::itemmenu::Inspect;
 use crate::pointer::{Hits, MOVED, key, rows_rect};
 use crate::wndlist::{ListUp, WndMenu};
-use net::dump::{AuctionItem, Bank, NetItem};
+use net::dump::{AuctionItem, Bank, ItemList, NetItem};
 use vi::ui::{Raster, UI_COLORS, Vui, Window, wide};
 
 /// The pickers' rows (`sRaces`, `sClasses`, `sWears`, `sAttacks`, CLIENT
@@ -95,6 +99,7 @@ enum Child {
     Menu,
     Edit,
     MBox,
+    Inspect,
 }
 
 /// What the window reads besides its own state.
@@ -139,6 +144,7 @@ pub struct SearchWnd {
     menus: Menus,
     edit: EditBox,
     mbox: MBox,
+    inspect: Inspect,
     child: Child,
     window: Window,
     list: Window,
@@ -184,6 +190,7 @@ impl Default for SearchWnd {
             menus,
             edit: EditBox::default(),
             mbox: MBox::default(),
+            inspect: Inspect::default(),
             child: Child::Own,
             window: Window::default(),
             list: Window::default(),
@@ -251,9 +258,11 @@ impl SearchWnd {
     /// from the form one on the page's rows goes left to them with the row
     /// selected (the keys say whether there is a page). The form's fields,
     /// the bid form's rows: a click selects, a second uses (Enter); the
-    /// bidders are selected. The keys to press.
+    /// bidders are selected. The inspect window none (its legend is a
+    /// glyph, the wheel scrolls it). The keys to press.
     pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
         match self.child {
+            Child::Inspect => return Vec::new(),
             Child::Edit => return self.edit.point(p).flatten().into_iter().collect(),
             Child::MBox => return self.mbox.point(p).then_some(key::CROSS).into_iter().collect(),
             Child::Menu => {
@@ -396,6 +405,21 @@ impl SearchWnd {
         auction.results.get(self.menu.list.sel.max(0) as usize).filter(|_| self.menu.list.sel >= 0)
     }
 
+    /// `Inspect(lot)`: the lot under the menu's selection (when the bank is
+    /// idle and has a page) described in the inspect window, which takes
+    /// the keys; the box and the editor put away.
+    fn inspect_lot(&mut self, vui: &Vui, r: &mut dyn Raster, auction: &Auction, v: &View, lot: i32) {
+        self.lot = lot;
+        let Some(l) = self.sel_lot(auction, v) else { return };
+        let (inv, base) = (ItemList::default(), [0; 29]);
+        let info = Info { words: &vui.words, inv: &inv, hp: [0; 4], base: &base, class: 0, level: 0, attack_words: v.attack_words };
+        let text = info.auction_item(l);
+        self.inspect.set(1, -1, &text);
+        self.inspect.visible = true;
+        self.inspect.focus(vui, r);
+        self.child = Child::Inspect;
+    }
+
     /// `FillMenu` / `FillRow`: the 40 rows emptied, then one per lot of the
     /// page (its icon, count, red arrows when unusable, Inspect and Bid).
     fn fill_menu(&mut self, auction: &Auction, v: &View) {
@@ -527,9 +551,19 @@ impl SearchWnd {
     }
 
     /// The keys: the children's, or `OnKeyDown` for the state.
-    pub fn key(&mut self, vui: &Vui, r: &dyn Raster, auction: &mut Auction, v: &View, key: i32, down: bool, cues: &mut Vec<i32>, out: &mut Vec<SearchOut>) {
+    pub fn key(&mut self, vui: &Vui, r: &mut dyn Raster, auction: &mut Auction, v: &View, key: i32, down: bool, cues: &mut Vec<i32>, out: &mut Vec<SearchOut>) {
         let now = v.now;
         match self.child {
+            // 260 from the inspect window: hidden, the state's keys again
+            Child::Inspect => {
+                if self.inspect.key(key, down, cues) {
+                    self.inspect.visible = false;
+                    self.child = Child::Own;
+                    let st = self.state;
+                    self.set_state(st, now);
+                }
+                return;
+            }
             Child::Edit => {
                 if !down {
                     self.edit.key_up(key);
@@ -594,7 +628,7 @@ impl SearchWnd {
                                     self.lot = id;
                                     self.set_state(2, now);
                                 }
-                                0xA804_0001 => eprintln!("auction: Inspect (DescribeAuctionItem) is not ported"),
+                                0xA804_0001 => self.inspect_lot(vui, r, auction, v, id),
                                 _ => {}
                             }
                         }
@@ -967,6 +1001,7 @@ impl SearchWnd {
             Child::MBox => {
                 self.mbox.draw(vui, r, now);
             }
+            Child::Inspect => self.inspect.draw(vui, r, cues),
             _ => {}
         }
     }
@@ -1223,8 +1258,8 @@ mod tests {
         fn key(&mut self, k: i32) {
             let (icon, can_use) = (|_: &NetItem| 7, |_: &NetItem| true);
             let v = View { bank: &self.bank, idle: true, searching: false, player: 1, now: 0, icon: &icon, can_use: &can_use, attack_words: &ATTACK_WORDS };
-            self.w.key(&self.vui, &NullRaster, &mut self.a, &v, k, true, &mut self.cues, &mut self.out);
-            self.w.key(&self.vui, &NullRaster, &mut self.a, &v, k, false, &mut self.cues, &mut self.out);
+            self.w.key(&self.vui, &mut NullRaster, &mut self.a, &v, k, true, &mut self.cues, &mut self.out);
+            self.w.key(&self.vui, &mut NullRaster, &mut self.a, &v, k, false, &mut self.cues, &mut self.out);
         }
 
         fn draw(&mut self) {
@@ -1525,6 +1560,81 @@ mod tests {
             }
         }
         out
+    }
+
+    /// Inspect on the page: the selected lot described in the inspect window
+    /// (sound 13), which takes the keys: the arrows scroll it (sound 11), △
+    /// closes it (sound 8) and the page has them again. A click on the
+    /// popup's Inspect does the same; while the window is up a click takes
+    /// nothing (its legend is a glyph) and the page's rows under it wait.
+    #[test]
+    fn inspect_describes_the_selected_lot() {
+        let mut g = Rig::new();
+        g.vui = Vui::new(numbered_words(), Default::default(), Vec::new());
+        let mut long = lot(6, 100);
+        long.item.name = "Bow".into();
+        long.item.desc = (0..200).map(|i| format!("word{i} ")).collect();
+        g.page(vec![lot(5, 100), long]);
+        g.key(136);
+        assert_eq!((g.w.state, g.w.child), (1, Child::Menu));
+        g.w.menu.list.sel = 1;
+        // Enter: the popup, Inspect its first row; Enter: Inspect
+        g.key(134);
+        g.cues.clear();
+        g.key(134);
+        assert_eq!((g.w.child, g.w.lot, g.cues.clone()), (Child::Inspect, 6, vec![13]));
+        // the name twice: the summary's and the description's first row
+        let names = |d: &[String]| d.iter().filter(|s| *s == "Bow").count();
+        let d = drawn(&mut g);
+        assert_eq!(names(&d), 2, "the lot's name: {d:?}");
+        assert!(d.iter().any(|s| s.starts_with("word0 ")), "its text: {d:?}");
+        // the arrows scroll it (the window steps at the end of its draw, so
+        // the next one shows it): the name's row goes off the top
+        g.cues.clear();
+        g.key(139);
+        g.draw();
+        assert_eq!(g.cues, vec![11]);
+        let d = drawn(&mut g);
+        assert_eq!(names(&d), 1, "scrolled: {d:?}");
+        // a click on the page under it takes nothing, its row stays
+        let row = |i: i32| [16.0 + 57.0, 37.0 + 44.0 * i as f32 + 22.0];
+        assert!(g.w.point(row(0)).is_empty());
+        assert_eq!(g.w.menu.list.sel, 1);
+        // triangle: closed, the page has the keys
+        g.cues.clear();
+        g.key(132);
+        assert_eq!((g.w.state, g.w.child, g.cues.clone()), (1, Child::Menu, vec![8]));
+        assert!(!drawn(&mut g).iter().any(|s| s.starts_with("word0 ")), "the window is gone");
+        // by pointer: the popup's Inspect row clicked (the popup grows in
+        // over its first frames, its rows noted once it has: drawn a second on)
+        g.w.menu.list.sel = 0;
+        g.key(134);
+        for now in [0, 1000] {
+            let (icon, can_use) = (|_: &NetItem| 7, |_: &NetItem| true);
+            let v = View { bank: &g.bank, idle: true, searching: false, player: 1, now, icon: &icon, can_use: &can_use, attack_words: &ATTACK_WORDS };
+            g.w.draw(&g.vui, &mut NullRaster, &g.a, &v, &mut g.cues);
+        }
+        let at = {
+            let s = g.w.menu.sub.as_ref().expect("the popup");
+            let mut found = None;
+            'scan: for y in (0..448).step_by(2) {
+                for x in (0..640).step_by(2) {
+                    let p = [x as f32, y as f32];
+                    if s.list.hits.at(p) == Some(0) {
+                        found = Some(p);
+                        break 'scan;
+                    }
+                }
+            }
+            found.expect("the popup's Inspect row")
+        };
+        let keys = g.w.point(at);
+        assert_eq!(keys, vec![key::CROSS]);
+        for k in keys {
+            g.key(k);
+        }
+        assert_eq!((g.w.child, g.w.lot), (Child::Inspect, 5));
+        assert_eq!(drawn(&mut g).iter().filter(|s| *s == "Sword").count(), 2, "its summary and its description");
     }
 
     /// Each picker's list: its title, seven rows' names from the top (the

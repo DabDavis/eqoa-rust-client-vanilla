@@ -70,28 +70,6 @@ fn box_key(key: i32) -> Option<Key> {
     })
 }
 
-/// The inspect window's keys: Triangle closes it (true), the arrows scroll.
-fn inspect_key(i: &mut Inspect, key: i32, down: bool, cues: &mut Vec<i32>) -> bool {
-    if !down {
-        match key {
-            19 | 138 => i.flash.release(138),
-            20 | 139 => i.flash.release(139),
-            _ => {}
-        }
-        return false;
-    }
-    match key {
-        27 | 132 => {
-            cues.push(8);
-            return true;
-        }
-        19 | 138 => i.flash.press(138),
-        20 | 139 => i.flash.press(139),
-        _ => {}
-    }
-    false
-}
-
 /// `VIWndRecipe`.
 pub struct RecipeWnd {
     pub skill: i32,
@@ -388,7 +366,7 @@ impl RecipeWnd {
                 self.focus = Focus::Main;
             }
             Focus::Inspect => {
-                if inspect_key(&mut self.inspect, key, down, cues) {
+                if self.inspect.key(key, down, cues) {
                     self.inspect.visible = false;
                     self.focus = Focus::Main;
                 }
@@ -750,7 +728,7 @@ impl ExperimentWnd {
                 }
             }
             Focus::Inspect => {
-                if inspect_key(&mut self.inspect, key, down, cues) {
+                if self.inspect.key(key, down, cues) {
                     self.inspect.visible = false;
                     self.focus = Focus::Menu;
                     self.menu.focus(true, now);
