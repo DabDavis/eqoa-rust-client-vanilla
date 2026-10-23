@@ -809,6 +809,13 @@ pub fn config_dir() -> Option<std::path::PathBuf> {
     store::dir()
 }
 
+/// Natively, the player's own config directory (`eqoa-rs` in the
+/// platform's), whether this run keeps its settings there or not.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn user_dir() -> Option<std::path::PathBuf> {
+    store::user_dir()
+}
+
 /// `eqoa play` keeps its settings in the player's config directory; without
 /// this (the test commands) only `$EQOA_CONFIG` is used. A page has only its
 /// storage.
@@ -832,6 +839,10 @@ mod store {
 
     /// The tests keep nothing on disk.
     pub fn dir() -> Option<std::path::PathBuf> {
+        None
+    }
+
+    pub fn user_dir() -> Option<std::path::PathBuf> {
         None
     }
 
@@ -872,6 +883,11 @@ mod store {
         if !USER_DIR.load(Ordering::Relaxed) {
             return None;
         }
+        user_dir()
+    }
+
+    /// `eqoa-rs` in the platform's config directory.
+    pub fn user_dir() -> Option<PathBuf> {
         let home = || std::env::var_os("HOME").map(PathBuf::from);
         let base = if cfg!(windows) {
             std::env::var_os("APPDATA").map(PathBuf::from)

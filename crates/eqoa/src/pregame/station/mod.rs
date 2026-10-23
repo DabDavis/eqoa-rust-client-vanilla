@@ -24,7 +24,7 @@ mod fader;
 mod page;
 mod pak;
 mod renderer;
-mod xml;
+pub mod xml;
 
 use super::{Ctx, Login, Next, Shared, res::Res};
 use crate::sound::Cue;
