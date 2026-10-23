@@ -256,8 +256,9 @@ impl PadMap {
         how
     }
 
-    /// The pad as `?padtrace` prints it: its id and mapping, how it is read,
-    /// every axis and every button pressed (an analog one with its value).
+    /// The pad as `?padtrace` prints it and a report carries it: its id and
+    /// mapping, how it is read, every axis and every button pressed (an
+    /// analog one with its value).
     pub fn describe(&self, pad: &WebPad, b: Browser) -> String {
         let how = self.how(pad, b);
         let axes: Vec<String> = pad.axes.iter().map(|v| format!("{v:.3}")).collect();
@@ -551,7 +552,7 @@ mod tests {
     }
 
     #[test]
-    fn a_trace_names_the_pad_its_layout_axes_and_buttons() {
+    fn a_report_names_the_pad_its_layout_axes_and_buttons() {
         let ff = Browser::new(FIREFOX_LINUX, None);
         let mut p = powera();
         press(&mut p, 3, 1.0);

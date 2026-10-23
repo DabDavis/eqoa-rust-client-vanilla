@@ -157,6 +157,12 @@ impl Host {
         }
     }
 
+    /// The game's UI as the 2D layer draws it, once it is in (the fonts and
+    /// the atlas, the layer's textures): what the report's dialog draws with.
+    pub fn ui_parts(&self) -> Option<(&vi::ui::Vui, &crate::ui::UiAssets)> {
+        Some((self.pre.res.vui()?, self.assets.as_ref()?))
+    }
+
     /// One frame drawn: the pregame's frame on one of the game's (its quads
     /// kept for the frames between), the sounds, and what comes next.
     #[allow(clippy::too_many_arguments)]

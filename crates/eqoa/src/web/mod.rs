@@ -19,10 +19,12 @@
 //! by an AudioWorklet (`window.eqoaAudio`, main.js; web/sound.js), the music
 //! read off the disc whole before it starts (`bgm`).
 //!
-//! What goes wrong is the page's to show (web/notices.js): a panic or a
-//! lost graphics device stops the client, and the page says so (`crash`);
-//! what only takes a part away (a module that would not unpack, a disc
-//! other than Frontiers, no sound) is a notice (`problem`).
+//! What goes wrong is the page's to show and to report (web/report.js): a
+//! panic or a lost graphics device stops the client and opens its crash
+//! report (`crash`); what only takes a part away (a module that would not
+//! unpack, a disc other than Frontiers, no sound) is a notice (`problem`).
+//! A report carries the state play last noted (`note_state`) and a picture
+//! of the frame drawn after the page asked for one (`want_shot`).
 
 mod bgm;
 mod disc;
@@ -151,8 +153,8 @@ pub fn can_rumble() -> bool {
 }
 
 /// `main`, in a browser: the page calls the exports below. A panic goes to
-/// the console and to the page's notices: the client stops there, and a
-/// player without the console open would see only a frame that no longer
+/// the console and to the page's crash report: the client stops there, and
+/// a player without the console open would see only a frame that no longer
 /// moves.
 pub fn start() {
     std::panic::set_hook(Box::new(|info| {
@@ -161,19 +163,69 @@ pub fn start() {
     }));
 }
 
-/// The client has stopped (`title`; `detail` says why): the page's notice
-/// (`window.eqoaCrash`, web/notices.js), which asks for a reload.
+thread_local! {
+    /// The client's state as the frame last noted it, and when (`note_state`).
+    static STATE: RefCell<(String, f64)> = const { RefCell::new((String::new(), f64::NEG_INFINITY)) };
+}
+
+/// Notes the client's state for a report, once a second at most: `state`
+/// runs only when a second has gone by.
+pub fn note_state(state: impl FnOnce() -> String) {
+    let now = js_sys::Date::now();
+    STATE.with(|c| {
+        if let Ok(mut c) = c.try_borrow_mut()
+            && now - c.1 >= 1000.0
+        {
+            *c = (state(), now);
+        }
+    });
+}
+
+/// The client's state as last noted, for the page's reports.
+#[wasm_bindgen]
+pub fn client_state() -> String {
+    STATE.with(|c| c.try_borrow().map(|c| c.0.clone()).unwrap_or_default())
+}
+
+/// The client has stopped (`title`; `detail` says why): the page's crash
+/// report (`window.eqoaCrash`, web/report.js), with the state last noted.
 pub(crate) fn crash(title: &str, detail: &str) {
-    let a = js_sys::Array::of2(&title.into(), &detail.into());
+    let text = format!("{detail}\n\n{}", client_state());
+    let a = js_sys::Array::of2(&title.into(), &text.into());
     call_page("eqoaCrash", &a);
 }
 
 /// Something the player should know went wrong, short of a crash: a notice
-/// on the page (`window.eqoaProblem`). `key` names it, so the same problem
-/// again replaces its notice.
+/// on the page with a way to report it (`window.eqoaProblem`). `key` names
+/// it, so the same problem again replaces its notice.
 pub fn problem(key: &str, text: &str) {
     log(text);
     call_page("eqoaProblem", &js_sys::Array::of2(&key.into(), &text.into()));
+}
+
+/// An account name and a password the game sent Station (its login, a new
+/// account, a password change; either may be empty): the page takes them
+/// out of everything a report carries (`window.eqoaSecret`, web/report.js).
+/// The page has no login form of its own to read them from any more.
+pub fn secret(account: &str, password: &str) {
+    call_page("eqoaSecret", &js_sys::Array::of2(&account.into(), &password.into()));
+}
+
+static SHOT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The page wants a picture of the next frame (a report's): it is told once
+/// that frame is drawn, while its image is still the canvas's (`frame_drawn`).
+#[wasm_bindgen]
+pub fn want_shot() {
+    SHOT.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// A frame is drawn: the page takes its picture now, if it asked
+/// (`window.eqoaFrameDrawn`).
+pub fn frame_drawn() {
+    if SHOT.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        call_page("eqoaFrameDrawn", &JsValue::NULL);
+    }
 }
 
 /// The server ended the connection in the world (`Play::disconnected`): the
@@ -184,8 +236,14 @@ pub fn disconnected(text: &str) {
     call_page("eqoaDisconnected", &JsValue::from_str(text));
 }
 
-/// Stops the client with a panic, as a bug would: how the page's crash
-/// notice is checked (`eqoaClient.crashTest()` in the page).
+/// The page's bug report, opened from the HUD's button (`hud::Pick::Report`;
+/// F3 is the page's own, `window.eqoaReportOpen`).
+pub fn open_report() {
+    call_page("eqoaReportOpen", &JsValue::NULL);
+}
+
+/// Stops the client with a panic, as a bug would: how the crash report is
+/// checked (`eqoaClient.crashTest()` in the page).
 #[wasm_bindgen]
 pub fn crash_test() {
     panic!("crash_test: the client stopped on purpose");
@@ -213,8 +271,8 @@ fn rate(what: &'static str) {
             let [lead, dry] = &crate::audio::PAGE_SOUND;
             let lead = lead.load(std::sync::atomic::Ordering::Relaxed);
             let sound = if lead > 0 { format!(" · sound +{lead} ms, dry {}", dry.load(std::sync::atomic::Ordering::Relaxed)) } else { String::new() };
-            // the status line only: once a second in the console would bury
-            // everything else there
+            // the status line only: once a second in the console would push
+            // everything else out of the last lines a report carries
             let line = format!("{what} · {} fps · {:.0} MB{sound}", n.wrapping_sub(last), mem / 1048576.0);
             call_page("eqoaStatus", &JsValue::from_str(&line));
             last = n;

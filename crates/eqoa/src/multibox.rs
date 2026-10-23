@@ -87,6 +87,14 @@ pub fn place() -> usize {
     HERE.with(|h| h.borrow_mut().place().map_or(0, |p| p.n))
 }
 
+/// This window's place let go (natively its lock closed), as the window
+/// closes for the updater to start the release's build in its place: that
+/// one takes the same place, though this program has not ended yet.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn leave() {
+    HERE.with(|h| h.borrow_mut().taken = Some(None));
+}
+
 /// This window and the others open now, as last looked at.
 pub fn seat() -> Seat {
     HERE.with(|h| {

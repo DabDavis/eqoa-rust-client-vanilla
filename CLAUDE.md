@@ -10,7 +10,8 @@ current.
 - Vanilla: nothing that changes the game's picture or play beyond what README "Vanilla" keeps
   (widescreen, the untethered frame rate, the mouse and the touch screen, the keyboard with WASD and
   the Controls page, 1,000 lines of chat, no green backdrop behind the start menu's windows, the
-  Extended page, the map, the updater). A new client-side addition is the user's call: ask first.
+  Extended page, the map, the updater, the problem and crash reports). A new client-side addition
+  is the user's call: ask first.
   Fixes are made here and are not carried to eqoa-rs any more (the user, 2026-10-23: "vanilla
   only"); its remote `eqoa-rs` stays for reading it. Link no private repository from anything
   public here.
@@ -149,7 +150,16 @@ current.
 - A build is `web/dist/v/<build>/`, never changed under its name (the host serves it immutable);
   only the page and `version.json` are revalidated, and `web/deploy.sh` publishes them in that
   order, after the build. Every file a page loads must be in its build (a new one goes into
-  `build.sh`'s copy list). Notices are the page's (`web/notices.js`): the client raises them
-  through `web::problem` (a part gone: the player can dismiss it) and `web::crash` (the client
-  stopped: a Reload), the browser build only. Nothing is sent anywhere: no reports, no telemetry.
-  Never log a credential. `web/pagetest.py` checks the page's half.
+  `build.sh`'s copy list). Its notices are `web/report.js`'s: the client raises them through
+  `web::problem` (a part gone: dismiss it or send a report) and `web::crash` (the client stopped:
+  the crash report). `web/pagetest.py` checks the page's half.
+- Reports (the user, 2026-10-23: the bug reports back from eqoa-rs, in the page and natively, crash
+  reports too): `report.rs` natively, `web/report.js` in a page, both to reportd on eqoaclassic
+  (`/eqoa/reports`, board `/eqoa/reports/board`). Nothing is sent unless the player presses Send,
+  and no telemetry. The account name and password are taken out of everything sent
+  (`report::secret`, called where the game sends Station's login), the home directory too; never
+  log a credential. Test against a reportd of one's own (`EQOA_REPORTS=<base>`, the scripts
+  `EQOA_REPORT_TEST=<note>@<ms>` and `EQOA_CRASH_TEST=<ms>`), never the live board. Natively stderr
+  goes through the log's pipe (`report::start`, `eqoa boot` only): anything that starts another
+  program in this one's place puts it back first (`report::restore_stderr`), or the new one
+  inherits a pipe nothing reads, and its first `eprintln!` panics.

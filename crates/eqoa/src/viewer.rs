@@ -1090,6 +1090,63 @@ fn write_png(path: &str, w: u32, h: u32, rgba: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
+/// `EQOA_REPORT_TEST=<note>@<ms>` (natively): the report's dialog opened
+/// then (or the crash report it offers, already open), the note typed and
+/// sent two seconds after, the picture taken between; `EQOA_CRASH_TEST=<ms>`:
+/// a panic then, as a bug would (a crash report for the next start). `now`:
+/// ms on the client's clock.
+#[cfg(not(target_arch = "wasm32"))]
+fn report_test(now: i64) {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static STEP: AtomicU8 = AtomicU8::new(0);
+    if let Some(at) = std::env::var("EQOA_CRASH_TEST").ok().and_then(|v| v.parse::<i64>().ok())
+        && now >= at
+    {
+        panic!("EQOA_CRASH_TEST: the client stopped on purpose at {now} ms");
+    }
+    let Ok(spec) = std::env::var("EQOA_REPORT_TEST") else { return };
+    let Some((note, at)) = spec.rsplit_once('@') else { return };
+    let Ok(at) = at.parse::<i64>() else { return };
+    match STEP.load(Ordering::Relaxed) {
+        0 if now >= at => {
+            crate::report::open();
+            STEP.store(1, Ordering::Relaxed);
+        }
+        1 if now >= at + 2000 => {
+            crate::report::key(crate::report::Key::Text(note.to_string()));
+            crate::report::key(crate::report::Key::Enter);
+            STEP.store(2, Ordering::Relaxed);
+        }
+        _ => {}
+    }
+}
+
+/// Whether the report's dialog is open (natively; a page's is its own).
+fn report_open() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    return crate::report::is_open();
+    #[cfg(target_arch = "wasm32")]
+    false
+}
+
+/// The report's picture of this frame, if its dialog wants one: the frame
+/// read back before it is presented (where the surface lets it be copied),
+/// as RGBA.
+#[cfg(not(target_arch = "wasm32"))]
+fn report_shot(g: &Gfx, frame: Option<&wgpu::SurfaceTexture>) {
+    if !crate::report::wants_shot() {
+        return;
+    }
+    let Some(t) = frame.map(|f| &f.texture).or(g.offscreen.as_ref()).filter(|t| t.usage().contains(wgpu::TextureUsages::COPY_SRC)) else { return };
+    let mut rgba = read_back(&g.device, &g.queue, t);
+    if matches!(t.format(), wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb) {
+        for px in rgba.as_chunks_mut::<4>().0 {
+            px.swap(0, 2);
+        }
+    }
+    crate::report::set_shot(t.width(), t.height(), &rgba);
+}
+
 /// A key as the game's keyboard gives it (`VIKeyboard::Read`): 13 Enter,
 /// 27 Escape, 8 Backspace, 9 Tab, 17-20 the cursor keys (left, right, up,
 /// down), 21-24 Page Up, Page Down, End, Home; a character as itself.
@@ -1325,6 +1382,9 @@ struct App {
     /// each key pressed was made, and the controllers' buttons a capture took.
     keys_edge: crate::binds::KeyEdge,
     pad_edge: crate::binds::PadEdge,
+    /// the sticks `UpdateControls` got last frame: the pad's, the keys', the
+    /// mouse's and the touch screen's (for a report)
+    sticks_used: [f32; 4],
     /// The mouse in play (`mouse.rs`), and the last frame's view (what a
     /// click picks through).
     mouse: crate::mouse::Mouse,
@@ -1419,6 +1479,7 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         pad_script: crate::input::Script::from_env(),
         keys_edge: Default::default(),
         pad_edge: Default::default(),
+        sticks_used: [0.0; 4],
         mouse: crate::mouse::Mouse::default(),
         last_view: None,
         touch: crate::touch::TouchPad::new(touch_first()),
@@ -1660,7 +1721,7 @@ impl App {
     /// ends itself on Escape.
     fn grab_pointer(&mut self, frame: bool) {
         let dead = self.play.as_ref().is_some_and(|p| p.is_dead());
-        let free = self.walker.is_some() && !dead && self.play.as_ref().is_none_or(|p| p.look_free());
+        let free = self.walker.is_some() && !dead && self.play.as_ref().is_none_or(|p| p.look_free()) && !report_open();
         let Some(g) = &self.gfx else { return };
         #[cfg(target_arch = "wasm32")]
         if frame && self.mouse.lock_seen(crate::web::pointer_locked(), Instant::now()) {
@@ -1714,6 +1775,73 @@ impl App {
         let speed = if self.held.contains("shift") { 400.0 } else { 80.0 };
         *pos += v * speed * dt;
         v != Vec3::ZERO
+    }
+
+    /// What a report says of the client (web/report.js's in a page, natively
+    /// `report`'s): the frames, the surface, the files in the library and
+    /// play's own.
+    fn report_state(&self) -> String {
+        use std::fmt::Write;
+        let mut o = String::new();
+        let _ = writeln!(o, "frames {}, clock {:.1} s", FRAMES.load(std::sync::atomic::Ordering::Relaxed), self.clock.elapsed().as_secs_f64());
+        if let Some(g) = &self.gfx {
+            let _ = writeln!(o, "surface {}x{} {:?}", g.config.width, g.config.height, g.config.format);
+        }
+        let _ = writeln!(o, "files: {}", self.lib.files.iter().map(|f| f.0.as_str()).collect::<Vec<_>>().join(", "));
+        let _ = writeln!(o, "options, extended: {}", crate::settings::describe());
+        let _ = writeln!(o, "keys and buttons: {}", crate::settings::with_binds(|b| b.describe()));
+        // the controls: a pad's sticks as they came (before the host's dead
+        // zone), as the game reads them and with the keys, the mouse and the
+        // touch screen's merged in (what `UpdateControls` got), the camera's
+        // mode; each pad as the browser gives it; what else is held
+        let mode = self.walker.as_ref().map_or(-1, |w| w.cam.camera_mode);
+        let _ = writeln!(
+            o,
+            "sticks rx ry lx ly: pad {:.3?} (dead zone {}), the game's {:.4?}, with the keys, mouse and touch {:.4?}; camera mode {mode}",
+            self.pads.raw,
+            self.pads.dead_zone,
+            self.console.sticks(),
+            self.sticks_used
+        );
+        #[cfg(target_arch = "wasm32")]
+        for d in &self.pads.described {
+            let _ = writeln!(o, "  {d}");
+        }
+        let mut keys: Vec<&str> = self.held.iter().map(String::as_str).collect();
+        keys.sort_unstable();
+        let _ = writeln!(o, "keys held [{}]; mouse {}; touch pad {}", keys.join(", "), self.mouse.describe(), if self.touch.used { "in use" } else { "unused" });
+        // the body and the camera, for a report of either moving on its own
+        if let Some(w) = &self.walker {
+            let (p, c) = (&w.cam.walk.phys, &w.cam.cur);
+            let anim = w.sprite.as_ref().map(|s| [s.cur[0].anim, s.cur[1].anim]);
+            let v = p.velocity;
+            let _ = writeln!(
+                o,
+                "body: heading {:.4} (target {:.4}), velocity [{:.3}, {:.3}, {:.3}], flags {:#x}, loco {}, anim {anim:?}; camera: orbit {:.4}, pitch {:.4}, dist {:.2}, flags {:#x}",
+                p.angles.x.0,
+                p.target_heading.0,
+                v.x.0,
+                v.y.0,
+                v.z.0,
+                p.flags,
+                p.loco_state,
+                c.orbit.x.0,
+                c.orbit.y.0,
+                c.dist.0,
+                c.flags
+            );
+            let cam = &w.cam;
+            let _ = writeln!(o, "camera: distance {:.2} of {:.2} (chosen {:.2}), pitch {:.3} (default {:.3})", cam.cur.dist.0, cam.max_orbit_distance.0, w.reach.chosen(cam).0, cam.cur.orbit.y.0, cam.def_orbit_pitch.0);
+        }
+        if let Some(e) = &self.entering {
+            let _ = writeln!(o, "entering {} at {:?}", e.0, e.1);
+        }
+        // the hour the lights and the effect volumes take, and the volumes
+        let _ = writeln!(o, "hour {:.2}; {}", hour(self.clock), self.fx.as_ref().map_or("effect volumes off".into(), |f| f.describe()));
+        if let (Some(p), Some(w)) = (&self.play, &self.walker) {
+            o.push_str(&p.report(w.cam.walk.phys.position.to_array()));
+        }
+        o
     }
 
     /// The renderer on a configured surface (or none: an offscreen target of
@@ -1787,6 +1915,15 @@ impl App {
         let Some(host) = self.host.as_mut() else { return };
         let size = (g.config.width, g.config.height);
         let done = host.frame(&mut g.renderer, &g.device, &g.queue, g.config.format, size, now, game_frame, self.sound.as_mut());
+        // the report's dialog over the game's screens (`report`)
+        #[cfg(not(target_arch = "wasm32"))]
+        report_test(now);
+        #[cfg(not(target_arch = "wasm32"))]
+        if let (Some((vui, assets)), Some(ui)) = (host.ui_parts(), g.renderer.ui.as_mut()) {
+            let mut r = assets.raster(ui);
+            r.ui.anchor = render::ui::Anchor::Middle;
+            crate::report::draw(vui, &mut r);
+        }
         g.window.set_title(&format!("eqoa — {}", host.pre.describe()));
         let frame = match &g.surface {
             Some(surface) => match surface.get_current_texture() {
@@ -1829,6 +1966,8 @@ impl App {
             _ => g.renderer.draw_text(&g.device, &mut enc, &target, &g.depth, size),
         }
         g.queue.submit([enc.finish()]);
+        #[cfg(not(target_arch = "wasm32"))]
+        report_shot(g, frame.as_ref());
         shoot(&mut self.shots, g, now, &host.pre.describe());
         match frame {
             Some(f) => g.queue.present(f),
@@ -1836,6 +1975,10 @@ impl App {
                 let _ = g.device.poll(wgpu::PollType::wait_indefinitely());
             }
         }
+        // The page's picture of this frame, if it asked, and the report's
+        // state of the client (`report`): which of the game's screens.
+        crate::report::frame_drawn();
+        crate::report::note_state(|| format!("pregame: {}\nsurface {}x{} {:?}\noptions, extended: {}\nkeys and buttons: {}", host.pre.describe(), size.0, size.1, g.config.format, crate::settings::describe(), crate::settings::with_binds(|b| b.describe())));
         match done {
             crate::pregame::host::Done::Stay => {}
             crate::pregame::host::Done::Quit => el.exit(),
@@ -1959,7 +2102,10 @@ impl ApplicationHandler for App {
         }) {
             let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
             let adapter = pollster::block_on(instance.request_adapter(&Default::default())).expect("adapter");
-            eprintln!("offscreen {w}x{h} on {:?}", adapter.get_info().name);
+            let info = adapter.get_info();
+            eprintln!("offscreen {w}x{h} on {:?}", info.name);
+            #[cfg(not(target_arch = "wasm32"))]
+            crate::report::set_gpu(format!("{} ({:?})", info.name, info.backend));
             let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).expect("device");
             let config = wgpu::SurfaceConfiguration {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -1988,6 +2134,16 @@ impl ApplicationHandler for App {
         let mut config = surface.get_default_config(&adapter, size.width.max(1), size.height.max(1)).expect("surface config");
         // The bytes go out as the GS's do: no sRGB encode (render::TARGET_FORMAT).
         config.format = config.format.remove_srgb_suffix();
+        // a report's picture is read off the frame before it is presented
+        // (`report_shot`), where the surface lets it be copied
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if surface.get_capabilities(&adapter).usages.contains(wgpu::TextureUsages::COPY_SRC) {
+                config.usage |= wgpu::TextureUsages::COPY_SRC;
+            }
+            let info = adapter.get_info();
+            crate::report::set_gpu(format!("{} ({:?})", info.name, info.backend));
+        }
         // At the display's rate: the default is the driver's first present
         // mode, Immediate on RADV, which drew 2,300-2,600 frames a second in
         // STATION; the Frame Rate's caps still apply beneath it.
@@ -2064,6 +2220,34 @@ impl ApplicationHandler for App {
                     if let Some(p) = self.play.as_mut() {
                         p.keyboard = false;
                     }
+                }
+            }
+            // The report's dialog (`report`): F3 opens it, over the game's
+            // screens or the world, once there is a UI to draw it on; while
+            // it is open it has the keyboard and the clicks.
+            #[cfg(not(target_arch = "wasm32"))]
+            WindowEvent::KeyboardInput { event, .. } if crate::report::is_open() || crate::report::is_report_key(&event.logical_key) => {
+                if event.state == ElementState::Pressed {
+                    if crate::report::is_open() {
+                        if let Some(k) = crate::report::key_of(&event) {
+                            crate::report::key(k);
+                        }
+                    } else if !event.repeat && (self.host.as_ref().is_some_and(|h| h.ui_parts().is_some()) || self.play.as_ref().is_some_and(|p| p.ui_parts().is_some())) {
+                        crate::report::open();
+                        // what was held is let go: the game would not see it go
+                        self.held.clear();
+                        self.keys_edge.clear();
+                        self.grab_pointer(false);
+                    }
+                }
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            WindowEvent::MouseInput { state, .. } if crate::report::is_open() => {
+                if state == ElementState::Pressed
+                    && let Some(g) = &self.gfx
+                {
+                    let size = (g.config.width, g.config.height);
+                    crate::report::click(render::ui::frame_from_window(size, [self.cursor.0 as f32, self.cursor.1 as f32]));
                 }
             }
             // Before the world: the pregame's keys, the game's codes
@@ -2809,8 +2993,8 @@ impl ApplicationHandler for App {
             // Walking, the mouse is `mouse.rs`'s: a drag looks round, the
             // wheel zooms, a click targets and a double or right click talks.
             // a release that may never come: let go of what is held (a key
-            // let go while another window has the keys would walk or turn
-            // the player on for good)
+            // let go while the report's dialog or another window has the
+            // keys would walk or turn the player on for good)
             // which window is in front: Controller Focus's Window reads the
             // controllers only there
             WindowEvent::Focused(true) => self.pads.focused = true,
@@ -2992,6 +3176,7 @@ impl ApplicationHandler for App {
                 mark(&mut self.perf, 0);
                 self.grab_pointer(true);
                 let sticks = self.sticks();
+                self.sticks_used = sticks;
                 // the mouse steering the body (`controls::Client::steer`)
                 let look_free = !self.play.as_ref().is_some_and(|p| p.is_dead()) && self.play.as_ref().is_none_or(|p| p.look_free());
                 let steer = look_free && self.walker.as_ref().is_some_and(|w| self.mouse.steer(w.cam.camera_mode));
@@ -3185,6 +3370,16 @@ impl ApplicationHandler for App {
                         p.hud(u, w, self.clock.elapsed().as_millis() as i64, view.view_proj, (g.config.width, g.config.height), game_frame);
                         self.touch.textures(u, &g.device, &g.queue);
                         p.draw_touch(u, &self.touch, (g.config.width, g.config.height));
+                        // the report's dialog over the HUD and the touch
+                        // pad (`report`)
+                        #[cfg(not(target_arch = "wasm32"))]
+                        report_test(self.clock.elapsed().as_millis() as i64);
+                        #[cfg(not(target_arch = "wasm32"))]
+                        if let Some((vui, assets)) = p.ui_parts() {
+                            let mut r = assets.raster(u);
+                            r.ui.anchor = render::ui::Anchor::Middle;
+                            crate::report::draw(vui, &mut r);
+                        }
                     }
                     p.draw_rings(&mut g.renderer, &g.device, &g.queue, w, view.view_proj, &self.lib, game_frame);
                     // the map (`map.rs`): its build behind the game, and its view while up
@@ -3245,6 +3440,8 @@ impl ApplicationHandler for App {
                 }
                 mark(&mut self.perf, 11);
                 let sent = g.queue.submit([enc.finish()]);
+                #[cfg(not(target_arch = "wasm32"))]
+                report_shot(g, frame.as_ref());
                 if !self.shots.is_empty() {
                     let what = self.play.as_ref().map_or_else(|| "viewer".to_string(), |p| format!("play as {}", p.player.name));
                     shoot(&mut self.shots, g, self.clock.elapsed().as_millis() as i64, &what);
@@ -3263,6 +3460,10 @@ impl ApplicationHandler for App {
                     p.drawn = g.renderer.drawn.get();
                     p.end(frame_start);
                 }
+                // The page's picture of this frame, if it asked, and the
+                // report's state of the client (`report`).
+                crate::report::frame_drawn();
+                crate::report::note_state(|| self.report_state());
             }
             _ => {}
         }

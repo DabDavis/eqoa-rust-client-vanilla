@@ -109,6 +109,7 @@ mod touch;
 mod sound;
 mod spells;
 mod stream;
+mod report;
 mod ui;
 mod update;
 mod viewer;
@@ -435,6 +436,8 @@ fn run(args: &[String]) -> Result<()> {
             let host = args.get(1).ok_or("usage: eqoa play <host> <user> (password in EQOA_PASSWORD)")?;
             let user = args.get(2).ok_or("usage: eqoa play <host> <user>")?;
             let pass = std::env::var("EQOA_PASSWORD").map_err(|_| "set EQOA_PASSWORD")?;
+            // taken out of a report, as Station's login is
+            report::secret(user, &pass);
             // the options kept in the player's config directory (a playshot
             // keeps them only in `$EQOA_CONFIG`: `settings`)
             if args[0] == "play" {
@@ -480,6 +483,9 @@ fn run(args: &[String]) -> Result<()> {
 /// (`discs::settle`, in the window's event loop).
 fn boot(image: Option<&str>, server: Option<String>) -> Result<()> {
     settings::keep_in_user_dir();
+    // the log a report carries, and the crash reports (`report`)
+    #[cfg(not(target_arch = "wasm32"))]
+    report::start();
     // a newer build on the release, asked for while the boot's pictures show
     #[cfg(not(target_arch = "wasm32"))]
     update::start();
@@ -490,9 +496,13 @@ fn boot(image: Option<&str>, server: Option<String>) -> Result<()> {
         modules::load(std::path::Path::new(&iso));
     }
     viewer::run_boot(server)?;
-    // the window closed for the release's build: it starts in this one's place
+    // the run closed (its log says so); the window closed for the release's
+    // build: it starts in this one's place
     #[cfg(not(target_arch = "wasm32"))]
-    update::relaunch_if_requested();
+    {
+        report::clean_exit();
+        update::relaunch_if_requested();
+    }
     Ok(())
 }
 

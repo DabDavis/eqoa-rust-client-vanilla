@@ -1,0 +1,1179 @@
+//! Problem reports and crash reports: what a player sends when something goes
+//! wrong, to the report server (reportd on eqoaclassic, `/report` and `/crash`;
+//! its public board, eqoaclassic.com/eqoa/reports/board, shows a report's note
+//! and picture and never the rest), as eqoa-rs sent them and the Go client
+//! before it (Dab's Mod's F3 and crash reports). Nothing is sent unless the
+//! player says so, and the account name and the password the game sent
+//! Station are taken out of all of it (`secret`), as is the home directory's
+//! path.
+//!
+//! In a page they are web/report.js's (its dialog, the canvas's picture, the
+//! page's own log and what it catches); the client hands it its state, the
+//! frame drawn, the secrets and the HUD's button through `crate::web`.
+//!
+//! Natively they are this module's (`native`):
+//! - the log: what the program writes to stderr goes through a pipe (`start`)
+//!   to the terminal it had, to `eqoa.log` in the config directory (the run
+//!   before kept as `eqoa.prev.log`; a second window open beside the first,
+//!   multiboxing, keeps `eqoa-2.log`, and so on) and to the last lines a
+//!   report carries;
+//! - F3, or the HUD's Report a bug, takes a picture of the next frame and
+//!   opens a dialog over the game, the pregame's screens too (`Dialog`): what
+//!   happened, a name to be credited by on the board, Send or Close;
+//! - a panic writes a crash report into `crashes/` at once (its message and
+//!   backtrace, the client's state, the log), and a run that ended without
+//!   closing (killed, or stopped by a fault no panic caught) is found by the
+//!   next start in the log it left; the next start offers what is waiting
+//!   (its first window only): Send, Not now or Delete.
+
+/// The account name and the password the game sent Station (its API's
+/// logins), taken out of every report.
+pub fn secret(account: &str, password: &str) {
+    #[cfg(target_arch = "wasm32")]
+    crate::web::secret(account, password);
+    #[cfg(not(target_arch = "wasm32"))]
+    native::secret(account, password);
+}
+
+/// The client's state for a report, noted once a second at most: `state`
+/// runs only then.
+pub fn note_state(state: impl FnOnce() -> String) {
+    #[cfg(target_arch = "wasm32")]
+    crate::web::note_state(state);
+    #[cfg(not(target_arch = "wasm32"))]
+    native::note_state(state);
+}
+
+/// A frame is drawn: a page takes its picture now if it asked (natively the
+/// frame's texture is read before it is presented, `native::take_shot`).
+pub fn frame_drawn() {
+    #[cfg(target_arch = "wasm32")]
+    crate::web::frame_drawn();
+}
+
+/// F3 or the HUD's Report a bug: the report's dialog.
+pub fn open() {
+    #[cfg(target_arch = "wasm32")]
+    crate::web::open_report();
+    #[cfg(not(target_arch = "wasm32"))]
+    native::open();
+}
+
+/// The report server: `EQOA_REPORTS=<base>` names another (a test's).
+pub const SERVER: &str = "https://eqoaclassic.com/eqoa/reports";
+
+/// A string as a JSON string, quotes and all.
+pub fn json_string(s: &str) -> String {
+    let mut o = String::with_capacity(s.len() + 2);
+    o.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => o.push_str("\\\""),
+            '\\' => o.push_str("\\\\"),
+            '\n' => o.push_str("\\n"),
+            '\r' => o.push_str("\\r"),
+            '\t' => o.push_str("\\t"),
+            c if (c as u32) < 0x20 => o.push_str(&format!("\\u{:04x}", c as u32)),
+            c => o.push(c),
+        }
+    }
+    o.push('"');
+    o
+}
+
+/// Standard base64, padded.
+pub fn base64(b: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut o = String::with_capacity(b.len().div_ceil(3) * 4);
+    for c in b.chunks(3) {
+        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        o.push(T[(n >> 18) as usize & 63] as char);
+        o.push(T[(n >> 12) as usize & 63] as char);
+        o.push(if c.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
+        o.push(if c.len() > 2 { T[n as usize & 63] as char } else { '=' });
+    }
+    o
+}
+
+/// `text` with every password and every account name (as a word, case
+/// kept: a character named after the account keeps its name) taken out,
+/// as web/report.js's `scrub`; a password under four characters is as
+/// likely to be part of a word and is left.
+pub fn scrub(text: &str, accounts: &[String], passwords: &[String]) -> String {
+    let mut t = text.to_string();
+    for p in passwords.iter().filter(|p| p.len() >= 4) {
+        t = t.replace(p.as_str(), "<password>");
+    }
+    for a in accounts.iter().filter(|a| !a.trim().is_empty()) {
+        let a = a.trim();
+        let mut out = String::with_capacity(t.len());
+        let mut rest = t.as_str();
+        while let Some(i) = rest.find(a) {
+            let before = rest[..i].chars().next_back();
+            let after = rest[i + a.len()..].chars().next();
+            let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+            out.push_str(&rest[..i]);
+            out.push_str(if word(before) || word(after) { a } else { "<account>" });
+            rest = &rest[i + a.len()..];
+        }
+        out.push_str(rest);
+        t = out;
+    }
+    t
+}
+
+/// `text` cut to `max` bytes (at a character), saying so.
+pub fn fit(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_string();
+    }
+    let mut end = max.saturating_sub(40);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}\n(cut to fit the report server)\n", &text[..end])
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use native::{Key, clean_exit, click, draw, is_open, is_report_key, key, key_of, restore_stderr, set_gpu, set_shot, start, wants_shot};
+
+#[cfg(not(target_arch = "wasm32"))]
+mod native {
+    use super::{SERVER, base64, fit, json_string, scrub};
+    use std::collections::VecDeque;
+    use std::fs::File;
+    use std::io::{BufRead, Write};
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
+    use std::sync::{Mutex, MutexGuard, mpsc};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+    use vi::ui::{Raster, Vui, wide};
+
+    /// The log lines a report carries, and how long each may be.
+    const LOG_LINES: usize = 200;
+    const LOG_LINE_MAX: usize = 400;
+    /// `eqoa.log` stops growing here (the ring goes on).
+    const LOG_FILE_MAX: u64 = 32 << 20;
+    const NOTE_MAX: usize = 1000;
+    const NAME_MAX: usize = 32;
+    /// the server keeps 512 KiB of a report and 256 KiB of a crash
+    const REPORT_MAX: usize = 500 * 1024;
+    const CRASH_MAX: usize = 240 * 1024;
+    const SHOT_WIDTH: u32 = 1280;
+    /// The crash reports kept waiting, at most.
+    const CRASHES_KEPT: usize = 5;
+    /// The line a run that closes writes last: a log without it is a run
+    /// that did not close.
+    const CLOSED: &str = "[eqoa] closed";
+
+    fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+        m.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    // ---- the log ------------------------------------------------------------
+
+    struct Log {
+        file: Option<File>,
+        bytes: u64,
+        ring: VecDeque<String>,
+        /// the program's stderr before the pipe (`restore_stderr`), and on
+        /// Windows the pipe's end that stands in for it (closed then)
+        #[cfg(unix)]
+        orig: Option<i32>,
+        #[cfg(windows)]
+        orig: Option<(usize, usize)>,
+        #[cfg(not(any(unix, windows)))]
+        orig: Option<()>,
+        /// what the pipe's reader says as it reaches the end
+        drained: Option<mpsc::Receiver<()>>,
+    }
+
+    static LOG: Mutex<Log> = Mutex::new(Log { file: None, bytes: 0, ring: VecDeque::new(), orig: None, drained: None });
+    /// Where stderr went before the pipe, to write to (a descriptor, a
+    /// handle), -1 without one: what must reach it before the program may end.
+    static TERMINAL: AtomicIsize = AtomicIsize::new(-1);
+    /// This run's name: when it started, and which window it is past the
+    /// first (`crash-<run>.txt` is its crash).
+    static RUN: Mutex<String> = Mutex::new(String::new());
+    static DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
+    /// This window, from 1 (`multibox`'s place): the files of its own.
+    static WINDOW: AtomicUsize = AtomicUsize::new(1);
+
+    fn dir() -> Option<PathBuf> {
+        lock(&DIR).clone()
+    }
+
+    /// One of this window's files: `eqoa.log` the first window's,
+    /// `eqoa-2.log` the second's.
+    fn own(base: &str, ext: &str) -> String {
+        match WINDOW.load(Ordering::Relaxed) {
+            0 | 1 => format!("{base}.{ext}"),
+            n => format!("{base}-{n}.{ext}"),
+        }
+    }
+
+    fn push_line(l: &mut Log, line: &str) {
+        if let Some(f) = l.file.as_mut()
+            && l.bytes < LOG_FILE_MAX
+            && f.write_all(line.as_bytes()).is_ok()
+            && f.write_all(b"\n").is_ok()
+        {
+            l.bytes += line.len() as u64 + 1;
+        }
+        let mut short: String = line.chars().take(LOG_LINE_MAX).collect();
+        if short.len() < line.len() {
+            short.push('…');
+        }
+        l.ring.push_back(short);
+        while l.ring.len() > LOG_LINES {
+            l.ring.pop_front();
+        }
+    }
+
+    /// The program's log for the game as players start it (main's `boot`):
+    /// stderr through a pipe to where it went, `eqoa.log` and the ring; the
+    /// run before checked for a crash it left; the panic hook.
+    pub fn start() {
+        let dir = crate::settings::config_dir();
+        // a window open beside others (multiboxing) has files of its own:
+        // its place's, taken now (`multibox`)
+        let window = crate::multibox::place() + 1;
+        WINDOW.store(window, Ordering::Relaxed);
+        let stamp = stamp(SystemTime::now());
+        let run = if window == 1 { stamp } else { format!("{stamp}-w{window}") };
+        *lock(&RUN) = run.clone();
+        *lock(&DIR) = dir.clone();
+        if let Some(d) = &dir {
+            let _ = std::fs::create_dir_all(d);
+            let (log, prev) = (d.join(own("eqoa", "log")), d.join(own("eqoa", "prev.log")));
+            if log.exists() {
+                let _ = std::fs::rename(&log, &prev);
+            }
+            ended_without_closing(d, &prev);
+            // the newest kept (one is offered a start)
+            let old = waiting();
+            for f in &old[..old.len().saturating_sub(CRASHES_KEPT)] {
+                let _ = std::fs::remove_file(f);
+            }
+            if let Ok(f) = File::create(&log) {
+                lock(&LOG).file = Some(f);
+            }
+        }
+        let mut l = lock(&LOG);
+        let head = format!("[eqoa] run {run}, {} ({}), {} {}, window {window}", version(), channel(), std::env::consts::OS, std::env::consts::ARCH);
+        push_line(&mut l, &head);
+        drop(l);
+        tee();
+        // the panic's message written here, not by the hook before (into the
+        // pipe): the pipe's reader is a thread the program does not wait for
+        // as a panic ends it, and the terminal would miss the message
+        std::panic::set_hook(Box::new(move |info| {
+            let bt = std::backtrace::Backtrace::force_capture();
+            let thread = std::thread::current().name().unwrap_or("unnamed").to_string();
+            write_crash(&format!("A panic on the {thread} thread: {info}\n\nbacktrace:\n{bt}"), None);
+            let text = format!("thread '{thread}' {info}");
+            if let Ok(mut l) = LOG.try_lock() {
+                for line in text.lines() {
+                    push_line(&mut l, line);
+                }
+            }
+            let shown = std::env::var("RUST_BACKTRACE").is_ok_and(|v| v != "0");
+            to_terminal(&if shown { format!("{text}\nstack backtrace:\n{bt}\n") } else { format!("{text}\n") });
+        }));
+    }
+
+    /// `text` to where stderr went before the pipe (stderr itself without
+    /// one).
+    fn to_terminal(text: &str) {
+        let t = TERMINAL.load(Ordering::Relaxed);
+        if t < 0 {
+            eprint!("{text}");
+            return;
+        }
+        // SAFETY: the copy `tee` made of the old stderr, never closed
+        #[cfg(unix)]
+        let f = unsafe { <File as std::os::fd::FromRawFd>::from_raw_fd(t as i32) };
+        #[cfg(windows)]
+        let f = unsafe { <File as std::os::windows::io::FromRawHandle>::from_raw_handle(t as _) };
+        #[cfg(any(unix, windows))]
+        {
+            let mut f = std::mem::ManuallyDrop::new(f);
+            let _ = f.write_all(text.as_bytes());
+        }
+    }
+
+    /// stderr into a pipe whose other end a thread reads, line by line, into
+    /// the log and back out to where stderr went. The thread never stops
+    /// reading (a full pipe would stop every writer, the game with it).
+    fn tee() {
+        let Ok((reader, writer)) = std::io::pipe() else { return };
+        #[cfg(unix)]
+        let to = {
+            use std::os::fd::{AsRawFd, FromRawFd};
+            // SAFETY: duplicating and replacing the process's own fd 2
+            let orig = unsafe { libc::dup(2) };
+            if orig < 0 || unsafe { libc::dup2(writer.as_raw_fd(), 2) } < 0 {
+                return;
+            }
+            lock(&LOG).orig = Some(orig);
+            drop(writer);
+            // SAFETY: a copy of the old stderr of its own (`orig` stays for
+            // `restore_stderr`), never closed
+            let copy = unsafe { libc::dup(orig) };
+            if copy >= 0 {
+                TERMINAL.store(copy as isize, Ordering::Relaxed);
+            }
+            (copy >= 0).then(|| unsafe { File::from_raw_fd(copy) })
+        };
+        #[cfg(windows)]
+        let to = {
+            use std::os::windows::io::{FromRawHandle, IntoRawHandle};
+            use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE, SetStdHandle};
+            // SAFETY: the process's own standard handles
+            let orig = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
+            let w = writer.into_raw_handle();
+            if unsafe { SetStdHandle(STD_ERROR_HANDLE, w as _) } == 0 {
+                return;
+            }
+            let valid = !orig.is_null() && orig as isize != -1;
+            lock(&LOG).orig = Some((orig as usize, w as usize));
+            if valid {
+                TERMINAL.store(orig as isize, Ordering::Relaxed);
+            }
+            // SAFETY: the old stderr, a console or a file the program was
+            // started with; never closed (ManuallyDrop below)
+            valid.then(|| unsafe { File::from_raw_handle(orig as _) })
+        };
+        #[cfg(not(any(unix, windows)))]
+        let to: Option<File> = {
+            drop(writer);
+            None
+        };
+        let (done, drained) = mpsc::channel();
+        lock(&LOG).drained = Some(drained);
+        let _ = std::thread::Builder::new().name("log".into()).spawn(move || {
+            let mut to = to.map(std::mem::ManuallyDrop::new);
+            let mut r = std::io::BufReader::new(reader);
+            let mut line = Vec::new();
+            loop {
+                line.clear();
+                match r.read_until(b'\n', &mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+                if let Some(t) = to.as_mut()
+                    && t.write_all(&line).is_err()
+                {
+                    to = None;
+                }
+                let text = String::from_utf8_lossy(&line);
+                push_line(&mut lock(&LOG), text.trim_end_matches(['\n', '\r']));
+            }
+            let _ = done.send(());
+        });
+    }
+
+    /// stderr back where it went before `start` (a program started in this
+    /// one's place inherits it, and would find a pipe nothing reads), and the
+    /// pipe's end closed: its reader reads what is left and stops.
+    pub fn restore_stderr() {
+        let Some(orig) = lock(&LOG).orig.take() else { return };
+        #[cfg(unix)]
+        // SAFETY: the copy of the old stderr `tee` kept; fd 2 was the pipe's
+        // only end to write to
+        unsafe {
+            libc::dup2(orig, 2);
+        }
+        #[cfg(windows)]
+        // SAFETY: the old stderr handle `tee` kept, and the pipe's end it
+        // stood in for, this module's alone
+        unsafe {
+            windows_sys::Win32::System::Console::SetStdHandle(windows_sys::Win32::System::Console::STD_ERROR_HANDLE, orig.0 as _);
+            windows_sys::Win32::Foundation::CloseHandle(orig.1 as _);
+        }
+        #[cfg(not(any(unix, windows)))]
+        let _ = orig;
+    }
+
+    /// The run closes: stderr to where it went, what the pipe holds read
+    /// into the log (half a second at most), and the log's last line says so.
+    pub fn clean_exit() {
+        restore_stderr();
+        let drained = lock(&LOG).drained.take();
+        if let Some(d) = drained {
+            let _ = d.recv_timeout(Duration::from_millis(500));
+        }
+        let mut l = lock(&LOG);
+        push_line(&mut l, CLOSED);
+        if let Some(f) = l.file.as_mut() {
+            let _ = f.flush();
+        }
+    }
+
+    fn tail(n: usize) -> Vec<String> {
+        let l = lock(&LOG);
+        l.ring.iter().skip(l.ring.len().saturating_sub(n)).cloned().collect()
+    }
+
+    // ---- the state, the secrets ---------------------------------------------
+
+    struct Noted {
+        state: String,
+        at: Option<Instant>,
+        saved: Option<Instant>,
+        accounts: Vec<String>,
+        passwords: Vec<String>,
+    }
+
+    static NOTED: Mutex<Noted> = Mutex::new(Noted { state: String::new(), at: None, saved: None, accounts: Vec::new(), passwords: Vec::new() });
+
+    pub(super) fn secret(account: &str, password: &str) {
+        let mut n = lock(&NOTED);
+        if !account.trim().is_empty() && !n.accounts.iter().any(|a| a == account.trim()) {
+            n.accounts.push(account.trim().to_string());
+        }
+        if password.len() >= 4 && !n.passwords.iter().any(|p| p == password) {
+            n.passwords.push(password.to_string());
+        }
+    }
+
+    pub(super) fn note_state(state: impl FnOnce() -> String) {
+        let mut n = lock(&NOTED);
+        if n.at.is_some_and(|t| t.elapsed() < Duration::from_secs(1)) {
+            return;
+        }
+        n.state = state();
+        n.at = Some(Instant::now());
+        // kept on disk now and then, scrubbed: what a run that does not
+        // close leaves the next start
+        if n.saved.is_none_or(|t| t.elapsed() >= Duration::from_secs(10))
+            && let Some(d) = dir()
+        {
+            n.saved = Some(Instant::now());
+            let text = clean(&n.state, &n);
+            let _ = std::fs::write(d.join(own("state", "txt")), text);
+        }
+    }
+
+    /// Scrubbed: the secrets, and the home directory as `~`.
+    fn clean(text: &str, n: &Noted) -> String {
+        let mut t = scrub(text, &n.accounts, &n.passwords);
+        for home in ["HOME", "USERPROFILE"].iter().filter_map(std::env::var_os) {
+            let h = home.to_string_lossy().into_owned();
+            if h.len() > 1 {
+                t = t.replace(&h, "~");
+            }
+        }
+        t
+    }
+
+    fn clean_now(text: &str) -> String {
+        match NOTED.try_lock() {
+            Ok(n) => clean(text, &n),
+            Err(_) => clean(text, &Noted { state: String::new(), at: None, saved: None, accounts: Vec::new(), passwords: Vec::new() }),
+        }
+    }
+
+    fn version() -> String {
+        crate::update::COMMIT.map_or_else(|| "local".to_string(), |c| format!("dev-{}", &c[..c.len().min(7)]))
+    }
+
+    fn channel() -> &'static str {
+        crate::update::CHANNEL.unwrap_or("local")
+    }
+
+    fn platform() -> String {
+        let os = match std::env::consts::OS {
+            "linux" => "Linux",
+            "windows" => "Windows",
+            "macos" => "macOS",
+            o => o,
+        };
+        let gpu = lock(&GPU).clone();
+        format!("{os} {}{}", std::env::consts::ARCH, if gpu.is_empty() { String::new() } else { format!(" {gpu}") }).chars().take(64).collect()
+    }
+
+    /// The graphics adapter, for a report's platform.
+    static GPU: Mutex<String> = Mutex::new(String::new());
+
+    /// The graphics adapter's name and API (the viewer's, as it opens one).
+    pub fn set_gpu(s: String) {
+        *lock(&GPU) = s;
+    }
+
+    // ---- crashes ------------------------------------------------------------
+
+    fn stamp(t: SystemTime) -> String {
+        let s = t.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let (days, secs) = (s / 86400, s % 86400);
+        // the civil date of a day count (Howard Hinnant's)
+        let z = days as i64 + 719468;
+        let era = z.div_euclid(146097);
+        let doe = z - era * 146097;
+        let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let d = doy - (153 * mp + 2) / 5 + 1;
+        let m = if mp < 10 { mp + 3 } else { mp - 9 };
+        let y = yoe + era * 400 + (m <= 2) as i64;
+        format!("{y:04}{m:02}{d:02}-{:02}{:02}{:02}", secs / 3600, secs / 60 % 60, secs % 60)
+    }
+
+    fn crashes() -> Option<PathBuf> {
+        Some(dir()?.join("crashes"))
+    }
+
+    /// A crash report on disk now (`crashes/crash-<run>.txt`): `detail`,
+    /// the state last noted, the log's last lines; scrubbed. `log` stands
+    /// in for this run's log (a run before's). Locks are only tried: a
+    /// panic may come while one is held.
+    fn write_crash(detail: &str, log: Option<(&str, &[String], &str)>) {
+        let Some(d) = crashes() else { return };
+        let _ = std::fs::create_dir_all(&d);
+        let run = RUN.try_lock().map(|r| r.clone()).unwrap_or_default();
+        let (name, state, lines) = match log {
+            Some((run, lines, state)) => (format!("crash-{run}.txt"), state.to_string(), lines.to_vec()),
+            None => {
+                let state = NOTED.try_lock().map(|n| n.state.clone()).unwrap_or_default();
+                let lines = LOG.try_lock().map(|l| l.ring.iter().cloned().collect()).unwrap_or_default();
+                (format!("crash-{run}.txt"), state, lines)
+            }
+        };
+        let text = format!(
+            "EQOA native client crash report\nversion: {} ({})\nwhen: {}\nplatform: {}\n\n--- crash ---\n{}\n\n[client, as last noted]\n{}\n\n[log] last {} lines\n{}\n",
+            version(),
+            channel(),
+            stamp(SystemTime::now()),
+            platform(),
+            detail.trim_end(),
+            if state.trim().is_empty() { "-" } else { state.trim_end() },
+            lines.len(),
+            lines.join("\n")
+        );
+        let _ = std::fs::write(d.join(name), clean_now(&text));
+    }
+
+    /// The run before (this window's), if it did not close (no `CLOSED` in
+    /// its log) and wrote no crash report of its own: one written for it,
+    /// from the log and the state it left.
+    fn ended_without_closing(dir: &Path, prev: &Path) {
+        let Ok(text) = std::fs::read_to_string(prev) else { return };
+        let lines: Vec<&str> = text.lines().collect();
+        let Some(first) = lines.first() else { return };
+        if lines.contains(&CLOSED) {
+            return;
+        }
+        let Some(run) = first.strip_prefix("[eqoa] run ").and_then(|r| r.split(',').next()) else { return };
+        if dir.join("crashes").join(format!("crash-{run}.txt")).exists() {
+            return;
+        }
+        let state = std::fs::read_to_string(dir.join(own("state", "txt"))).unwrap_or_default();
+        let tail: Vec<String> = lines[lines.len().saturating_sub(LOG_LINES)..].iter().map(|l| l.chars().take(LOG_LINE_MAX).collect()).collect();
+        write_crash(&format!("The run of {run} ended without closing: killed, or stopped by a fault no panic caught (its log's last line is the last it wrote)."), Some((run, &tail, &state)));
+    }
+
+    /// The crash reports waiting, oldest first.
+    fn waiting() -> Vec<PathBuf> {
+        let Some(d) = crashes() else { return Vec::new() };
+        let mut v: Vec<PathBuf> = std::fs::read_dir(d).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "txt")).collect();
+        v.sort();
+        v
+    }
+
+    // ---- sending ------------------------------------------------------------
+
+    fn server() -> String {
+        std::env::var("EQOA_REPORTS").unwrap_or_else(|_| SERVER.to_string()).trim_end_matches('/').to_string()
+    }
+
+    /// A POST of `body` (JSON) to the server's `route`: the report's id.
+    pub(super) fn post(route: &str, body: String) -> Result<String, String> {
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .timeout_connect(Some(Duration::from_secs(10)))
+            .timeout_global(Some(Duration::from_secs(60)))
+            .http_status_as_error(false)
+            .build()
+            .into();
+        let url = format!("{}/{route}", server());
+        let mut r = agent.post(&url).header("Content-Type", "application/json").send(body).map_err(|e| format!("the report server could not be reached ({e})"))?;
+        let status = r.status().as_u16();
+        let text = r.body_mut().with_config().limit(64 * 1024).read_to_string().unwrap_or_default();
+        let field = |k: &str| -> Option<String> {
+            let at = text.find(&format!("\"{k}\""))? + k.len() + 2;
+            let rest = text[at..].trim_start().strip_prefix(':')?.trim_start().strip_prefix('"')?;
+            Some(rest[..rest.find('"')?].to_string())
+        };
+        match field("id") {
+            Some(id) if (200..300).contains(&status) && text.contains("\"ok\"") && !text.contains("\"ok\":false") => Ok(id),
+            _ => Err(field("error").unwrap_or_else(|| format!("the report server answered {status}"))),
+        }
+    }
+
+    fn problem_body(note: &str, name: &str, shot: Option<&[u8]>) -> String {
+        let n = lock(&NOTED);
+        let state = n.state.clone();
+        drop(n);
+        let log = tail(LOG_LINES);
+        let report = fit(
+            &clean_now(&format!(
+                "EQOA native client problem report\nversion: {}\nchannel: {}\nname: {}\nnote: {}\n\n--- trace ---\neqoa native client trace {}\nplatform: {}\n\n[client]\n{}\n\n[log] last {} lines\n{}\n",
+                version(),
+                channel(),
+                if name.is_empty() { "-" } else { name },
+                if note.is_empty() { "-".to_string() } else { note.replace('\n', " ") },
+                stamp(SystemTime::now()),
+                platform(),
+                state.trim_end(),
+                log.len(),
+                log.join("\n")
+            )),
+            REPORT_MAX,
+        );
+        format!(
+            "{{\"report\":{},\"note\":{},\"name\":{},\"version\":{},\"platform\":{},\"channel\":{},\"screenshot\":{}}}",
+            json_string(&report),
+            json_string(&clean_now(note)),
+            json_string(name),
+            json_string(&version()),
+            json_string(&platform()),
+            json_string(channel()),
+            json_string(&shot.map(base64).unwrap_or_default())
+        )
+    }
+
+    fn crash_body(text: &str, note: &str) -> String {
+        let report = fit(&clean_now(&format!("{}\nnote: {}\n", text.trim_end(), if note.is_empty() { "-" } else { note })), CRASH_MAX);
+        format!(
+            "{{\"report\":{},\"note\":{},\"version\":{},\"platform\":{},\"channel\":{}}}",
+            json_string(&report),
+            json_string(&clean_now(note)),
+            json_string(&version()),
+            json_string(&platform()),
+            json_string(channel())
+        )
+    }
+
+    // ---- the dialog -----------------------------------------------------------
+
+    #[derive(Clone, Debug, PartialEq)]
+    pub(super) enum Kind {
+        /// F3: what happened and a name, with the frame's picture
+        Problem,
+        /// a crash report waiting (its file)
+        Crash(PathBuf),
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub(super) enum Field {
+        Note,
+        Name,
+    }
+
+    /// What the dialog is doing.
+    #[derive(Clone, Debug, PartialEq)]
+    pub(super) enum Status {
+        Editing,
+        Sending,
+        Sent(String),
+        Failed(String),
+    }
+
+    pub(super) struct Dialog {
+        pub(super) kind: Kind,
+        pub(super) note: String,
+        pub(super) name: String,
+        pub(super) field: Field,
+        pub(super) status: Status,
+        /// the picture, a PNG (a problem's)
+        shot: Option<Vec<u8>>,
+        /// waiting for the frame's picture (shown once it came, or after a
+        /// second without one)
+        pub(super) shot_wanted: Option<Instant>,
+        result: std::sync::Arc<Mutex<Option<Result<String, String>>>>,
+        /// the buttons, as last drawn (frame pixels): what a click finds
+        buttons: Vec<([i32; 4], Button)>,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Button {
+        Send,
+        Close,
+        Delete,
+    }
+
+    static DIALOG: Mutex<Option<Dialog>> = Mutex::new(None);
+    /// The crash reports were looked for this run (offered once).
+    static OFFERED: Mutex<bool> = Mutex::new(false);
+
+    fn name_kept() -> String {
+        dir().and_then(|d| std::fs::read_to_string(d.join("report-name.txt")).ok()).map(|s| s.trim().to_string()).unwrap_or_default()
+    }
+
+    pub(super) fn open() {
+        let mut d = lock(&DIALOG);
+        if d.is_some() {
+            return;
+        }
+        *d = Some(Dialog::new(Kind::Problem));
+    }
+
+    impl Dialog {
+        pub(super) fn new(kind: Kind) -> Dialog {
+            let problem = kind == Kind::Problem;
+            Dialog {
+                kind,
+                note: String::new(),
+                name: if problem { name_kept() } else { String::new() },
+                field: Field::Note,
+                status: Status::Editing,
+                shot: None,
+                shot_wanted: problem.then(Instant::now),
+                result: Default::default(),
+                buttons: Vec::new(),
+            }
+        }
+
+        fn shown(&self) -> bool {
+            self.shot_wanted.is_none_or(|t| t.elapsed() >= Duration::from_secs(1))
+        }
+
+        /// A key: true when it is the dialog's (it is open: every key is).
+        pub(super) fn key(&mut self, k: Key) -> Action {
+            if matches!(self.status, Status::Sending) {
+                return Action::Stay;
+            }
+            if let Status::Sent(_) = self.status {
+                return match k {
+                    Key::Enter | Key::Escape => Action::Close,
+                    _ => Action::Stay,
+                };
+            }
+            match k {
+                Key::Escape => Action::Close,
+                Key::Enter => Action::Send,
+                Key::Delete if matches!(self.kind, Kind::Crash(_)) => Action::Delete,
+                Key::Tab if self.kind == Kind::Problem => {
+                    self.field = if self.field == Field::Note { Field::Name } else { Field::Note };
+                    Action::Stay
+                }
+                Key::Backspace => {
+                    self.text().pop();
+                    Action::Stay
+                }
+                Key::Text(t) => {
+                    let max = if self.field == Field::Note { NOTE_MAX } else { NAME_MAX };
+                    let field = self.field;
+                    let s = self.text();
+                    for c in t.chars().filter(|c| !c.is_control()) {
+                        if s.chars().count() < max && (field == Field::Note || c != '\n') {
+                            s.push(c);
+                        }
+                    }
+                    Action::Stay
+                }
+                _ => Action::Stay,
+            }
+        }
+
+        fn text(&mut self) -> &mut String {
+            match self.field {
+                Field::Note => &mut self.note,
+                Field::Name => &mut self.name,
+            }
+        }
+
+        fn send(&mut self) {
+            self.status = Status::Sending;
+            let (note, name) = (self.note.trim().to_string(), self.name.replace(['\r', '\n', '\t'], " ").trim().to_string());
+            let body = match &self.kind {
+                Kind::Problem => {
+                    if let Some(d) = dir() {
+                        let _ = std::fs::write(d.join("report-name.txt"), &name);
+                    }
+                    ("report", problem_body(&note, &name, self.shot.as_deref()))
+                }
+                Kind::Crash(f) => ("crash", crash_body(&std::fs::read_to_string(f).unwrap_or_default(), &note)),
+            };
+            let result = self.result.clone();
+            let file = match &self.kind {
+                Kind::Crash(f) => Some(f.clone()),
+                Kind::Problem => None,
+            };
+            let _ = std::thread::Builder::new().name("report".into()).spawn(move || {
+                let r = post(body.0, body.1);
+                if r.is_ok()
+                    && let Some(f) = file
+                {
+                    let _ = std::fs::remove_file(f);
+                }
+                crate::say(&match &r {
+                    Ok(id) => format!("report: sent as {id}"),
+                    Err(e) => format!("report: not sent: {e}"),
+                });
+                *lock(&result) = Some(r);
+            });
+        }
+
+        /// The send's answer, once it came.
+        fn poll(&mut self) {
+            if let Some(r) = lock(&self.result).take() {
+                self.status = match r {
+                    Ok(id) => Status::Sent(id),
+                    Err(e) => Status::Failed(e),
+                };
+            }
+        }
+    }
+
+    /// A key as the dialog takes it (the viewer's, from the window's).
+    #[derive(Clone, Debug, PartialEq)]
+    pub enum Key {
+        Enter,
+        Escape,
+        Backspace,
+        Tab,
+        Delete,
+        Text(String),
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub(super) enum Action {
+        Stay,
+        Send,
+        Close,
+        Delete,
+    }
+
+    /// F3, the report's key (`binds::reserved` keeps it from the game).
+    pub fn is_report_key(k: &winit::keyboard::Key) -> bool {
+        *k == winit::keyboard::Key::Named(winit::keyboard::NamedKey::F3)
+    }
+
+    /// A key of the window's as the dialog takes it (the keyboard's own
+    /// table is `viewer.rs`'s and `binds`'s: these keys are the dialog's
+    /// alone, while it is open).
+    pub fn key_of(event: &winit::event::KeyEvent) -> Option<Key> {
+        use winit::keyboard::{Key as W, NamedKey as N};
+        Some(match &event.logical_key {
+            W::Named(N::Enter) => Key::Enter,
+            W::Named(N::Escape) => Key::Escape,
+            W::Named(N::Backspace) => Key::Backspace,
+            W::Named(N::Tab) => Key::Tab,
+            W::Named(N::Delete) => Key::Delete,
+            W::Named(N::Space) => Key::Text(" ".into()),
+            _ => Key::Text(event.text.as_ref()?.to_string()),
+        })
+    }
+
+    /// Whether the dialog is open: it has the keyboard.
+    pub fn is_open() -> bool {
+        lock(&DIALOG).is_some()
+    }
+
+    fn act(d: &mut Option<Dialog>, a: Action) {
+        let Some(dl) = d.as_mut() else { return };
+        match a {
+            Action::Stay => {}
+            Action::Send => dl.send(),
+            Action::Close => *d = None,
+            Action::Delete => {
+                if let Kind::Crash(f) = &dl.kind {
+                    let _ = std::fs::remove_file(f);
+                }
+                *d = None;
+            }
+        }
+    }
+
+    /// A key for the open dialog.
+    pub fn key(k: Key) {
+        let mut d = lock(&DIALOG);
+        let a = match d.as_mut() {
+            Some(dl) if dl.shown() => dl.key(k),
+            _ => return,
+        };
+        act(&mut d, a);
+    }
+
+    /// A click at frame point `p`: true when the dialog took it (it is
+    /// open: every click is).
+    pub fn click(p: [f32; 2]) -> bool {
+        let mut d = lock(&DIALOG);
+        let Some(dl) = d.as_mut() else { return false };
+        let hit = dl.buttons.iter().find(|(r, _)| p[0] >= r[0] as f32 && p[0] < r[2] as f32 && p[1] >= r[1] as f32 && p[1] < r[3] as f32).map(|b| b.1);
+        let a = match (hit, &dl.status) {
+            (_, Status::Sending) => Action::Stay,
+            (Some(Button::Close), _) => Action::Close,
+            (Some(Button::Send), Status::Sent(_)) => Action::Close,
+            (Some(Button::Send), _) => Action::Send,
+            (Some(Button::Delete), _) => Action::Delete,
+            (None, _) => Action::Stay,
+        };
+        act(&mut d, a);
+        true
+    }
+
+    /// Whether the dialog wants a picture of this frame (read before it is
+    /// presented: the viewer's).
+    pub fn wants_shot() -> bool {
+        lock(&DIALOG).as_ref().is_some_and(|d| d.shot_wanted.is_some_and(|t| t.elapsed() < Duration::from_secs(1)) && d.shot.is_none())
+    }
+
+    /// The frame's picture: RGBA rows, `w` by `h`, made at most `SHOT_WIDTH`
+    /// wide and kept as a PNG for the report.
+    pub fn set_shot(w: u32, h: u32, rgba: &[u8]) {
+        let k = (SHOT_WIDTH as f32 / w as f32).min(1.0);
+        let (ow, oh) = (((w as f32 * k) as u32).max(1), ((h as f32 * k) as u32).max(1));
+        let mut out = Vec::with_capacity((ow * oh * 4) as usize);
+        for y in 0..oh {
+            let sy = (y as f32 / k) as u32;
+            for x in 0..ow {
+                let s = ((sy.min(h - 1) * w + ((x as f32 / k) as u32).min(w - 1)) * 4) as usize;
+                out.extend_from_slice(&rgba[s..s + 4]);
+                // the frame's alpha is the GS's, not the picture's
+                *out.last_mut().unwrap() = 255;
+            }
+        }
+        let mut png = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut png, ow, oh);
+            enc.set_color(png::ColorType::Rgba);
+            enc.set_depth(png::BitDepth::Eight);
+            if let Ok(mut wr) = enc.write_header()
+                && wr.write_image_data(&out).is_ok()
+            {
+                drop(wr);
+            } else {
+                png.clear();
+            }
+        }
+        if let Some(d) = lock(&DIALOG).as_mut() {
+            d.shot = (!png.is_empty()).then_some(png);
+            d.shot_wanted = None;
+        }
+    }
+
+    /// The dialog over the frame, when it is open (and the crash reports
+    /// waiting offered, once, the first time there is a UI to offer them
+    /// on, by the first window: two would offer one): the 2D layer's `r`,
+    /// the game's `vui`.
+    pub fn draw(vui: &Vui, r: &mut dyn Raster) {
+        let mut d = lock(&DIALOG);
+        if d.is_none() {
+            let mut offered = lock(&OFFERED);
+            if !*offered {
+                *offered = true;
+                if WINDOW.load(Ordering::Relaxed) == 1
+                    && let Some(f) = waiting().into_iter().next_back()
+                {
+                    *d = Some(Dialog::new(Kind::Crash(f)));
+                }
+            }
+        }
+        let Some(dl) = d.as_mut() else { return };
+        dl.poll();
+        if !dl.shown() {
+            return;
+        }
+        let white = [1.0, 1.0, 1.0, 1.0];
+        let dim = [0.72, 0.72, 0.72, 1.0];
+        let gold = [1.0, 0.85, 0.45, 1.0];
+        let h = vui.font_height(r).max(10);
+        // the panel across the frame's middle; its height is what it holds
+        let (x0, x1) = (40, 600);
+        let (tx, tw) = (x0 + 16, x1 - x0 - 32);
+        let wrap = |r: &dyn Raster, s: &str, w: i32| -> Vec<String> {
+            let mut out = Vec::new();
+            for para in s.split('\n') {
+                let mut cur = String::new();
+                for word in para.split(' ') {
+                    let t = if cur.is_empty() { word.to_string() } else { format!("{cur} {word}") };
+                    if vui.string_width(r, &wide(&t)) > w && !cur.is_empty() {
+                        out.push(std::mem::take(&mut cur));
+                        cur = word.to_string();
+                    } else {
+                        cur = t;
+                    }
+                }
+                out.push(cur);
+            }
+            out
+        };
+        let caret = |on: bool| if on && blink() { "_" } else { "" };
+        let editing = dl.status == Status::Editing;
+        let (title, intro, label, fine) = match &dl.kind {
+            Kind::Problem => (
+                "Report a problem".to_string(),
+                "What went wrong, and what were you doing?",
+                "What happened",
+                "The note and the picture go on the public board (eqoaclassic.com/eqoa/reports/board), the rest to the developer only. Your account and password are never sent.",
+            ),
+            Kind::Crash(f) => (
+                format!("The game stopped last time ({})", when(f)),
+                "It wrote a crash report: sending it helps it get fixed.",
+                "What you were doing (optional)",
+                "It goes to the developer and is not shown anywhere. Your account and password are never sent.",
+            ),
+        };
+        // what goes where, top to bottom: (x, y, text, colour)
+        let mut lines: Vec<(i32, i32, String, [f32; 4])> = Vec::new();
+        let mut y = 0;
+        lines.push((tx, y, title, gold));
+        y += h + 6;
+        for l in wrap(r, intro, tw) {
+            lines.push((tx, y, l, dim));
+            y += h;
+        }
+        y += 6;
+        lines.push((tx, y, label.to_string(), white));
+        y += h + 2;
+        let rows = 3;
+        let note_box = (y, rows * h + 8);
+        let note = wrap(r, &format!("{}{}", dl.note, caret(editing && dl.field == Field::Note)), tw - 12);
+        for (k, l) in note[note.len().saturating_sub(rows as usize)..].iter().enumerate() {
+            lines.push((tx + 6, y + 4 + k as i32 * h, l.clone(), white));
+        }
+        y += note_box.1 + 8;
+        if dl.kind == Kind::Problem {
+            let n = format!("Your name on the board (Tab): {}{}", dl.name, caret(editing && dl.field == Field::Name));
+            lines.push((tx, y, n, if dl.field == Field::Name { white } else { dim }));
+            y += h + 2;
+            if dl.shot.is_some() {
+                lines.push((tx, y, "A picture of the screen goes with it.".to_string(), dim));
+                y += h + 2;
+            }
+        }
+        let status = match &dl.status {
+            Status::Editing => String::new(),
+            Status::Sending => "Sending…".to_string(),
+            Status::Sent(id) => format!("Sent as {id}. Thank you."),
+            Status::Failed(e) => format!("Not sent: {e}. Try again in a moment."),
+        };
+        if !status.is_empty() {
+            let c = if matches!(dl.status, Status::Failed(_)) { [1.0, 0.45, 0.45, 1.0] } else { [0.55, 1.0, 0.55, 1.0] };
+            for l in wrap(r, &status, tw) {
+                lines.push((tx, y, l, c));
+                y += h;
+            }
+        }
+        y += 6;
+        let sent = matches!(dl.status, Status::Sent(_));
+        let labels: Vec<(String, Button)> = match (&dl.kind, sent) {
+            (_, true) => vec![("Close (Enter)".into(), Button::Send)],
+            (Kind::Problem, false) => vec![("Send (Enter)".into(), Button::Send), ("Close (Esc)".into(), Button::Close)],
+            (Kind::Crash(_), false) => vec![("Send (Enter)".into(), Button::Send), ("Not now (Esc)".into(), Button::Close), ("Delete (Del)".into(), Button::Delete)],
+        };
+        let buttons_y = y;
+        y += h + 10 + 8;
+        let fine_y = y;
+        let fine = wrap(r, fine, tw);
+        y += fine.len() as i32 * h;
+        // the panel round it, the frame's middle
+        let height = y + 20;
+        let y0 = ((448 - height) / 2).max(4);
+        vui.fill_rectangle(r, [[x0, y0], [x1, y0 + height]], [0.02, 0.02, 0.05, 0.94]);
+        vui.fill_rectangle(r, [[x0, y0], [x1, y0 + 2]], gold);
+        let top = y0 + 10;
+        vui.fill_rectangle(r, [[tx, top + note_box.0], [x1 - 16, top + note_box.0 + note_box.1]], [0.13, 0.13, 0.17, 1.0]);
+        for (x, ly, text, c) in &lines {
+            vui.draw_string_ex(r, &wide(text), *x, top + ly, *c, false);
+        }
+        dl.buttons.clear();
+        let mut bx = tx;
+        for (label, b) in labels {
+            let w = vui.string_width(r, &wide(&label)) + 24;
+            let rect = [bx, top + buttons_y, bx + w, top + buttons_y + h + 10];
+            vui.fill_rectangle(r, [[rect[0], rect[1]], [rect[2], rect[3]]], if b == Button::Send { [0.4, 0.31, 0.08, 1.0] } else { [0.2, 0.2, 0.25, 1.0] });
+            vui.draw_string_ex(r, &wide(&label), bx + 12, rect[1] + 5, white, false);
+            dl.buttons.push((rect, b));
+            bx += w + 12;
+        }
+        for (k, l) in fine.iter().enumerate() {
+            vui.draw_string_ex(r, &wide(l), tx, top + fine_y + k as i32 * h, [0.55, 0.55, 0.55, 1.0], false);
+        }
+    }
+
+    /// The caret's half-second blink.
+    fn blink() -> bool {
+        static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+        (START.get_or_init(Instant::now).elapsed().as_millis() / 500).is_multiple_of(2)
+    }
+
+    /// A crash report's time, off its name (`crash-20261023-010203.txt`).
+    fn when(f: &Path) -> String {
+        let s = f.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let s = s.trim_start_matches("crash-");
+        if s.len() >= 13 && s.is_char_boundary(13) {
+            format!("{}-{}-{} {}:{} UTC", &s[0..4], &s[4..6], &s[6..8], &s[9..11], &s[11..13])
+        } else {
+            s.to_string()
+        }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    /// Strings as JSON strings: quotes, backslashes, line ends and control
+    /// characters escaped, the rest as it is.
+    #[test]
+    fn strings_go_out_as_json() {
+        assert_eq!(json_string("a \"b\" \\ c\nd\te\u{1}é"), "\"a \\\"b\\\" \\\\ c\\nd\\te\\u0001é\"");
+    }
+
+    /// Base64 as the standard has it, padding and all.
+    #[test]
+    fn base64_is_the_standard_one() {
+        for (b, s) in [(&b""[..], ""), (b"f", "Zg=="), (b"fo", "Zm8="), (b"foo", "Zm9v"), (b"foobar", "Zm9vYmFy"), (&[0xff, 0xfe, 0x00][..], "//4A")] {
+            assert_eq!(base64(b), s);
+        }
+    }
+
+    /// The password out wherever it is, the account as a word only: a
+    /// character named after it keeps its name; a short password stays.
+    #[test]
+    fn secrets_come_out_of_a_report() {
+        let t = "login zed with Tulip-7781; character Zedra; zed_x; (zed) said abc";
+        let s = scrub(t, &["zed".into()], &["Tulip-7781".into(), "abc".into()]);
+        assert_eq!(s, "login <account> with <password>; character Zedra; zed_x; (<account>) said abc");
+        assert_eq!(scrub(t, &[], &[]), t, "the control: nothing to take out");
+    }
+
+    /// The dialog's keys: Tab moves between the note and the name (a
+    /// problem's), Delete deletes a crash report (and nothing else), text
+    /// takes no control characters, and once sent only Enter and Escape do
+    /// anything.
+    #[test]
+    fn the_dialogs_keys() {
+        use native::{Action, Dialog, Field, Key, Kind, Status};
+        let mut d = Dialog::new(Kind::Problem);
+        d.shot_wanted = None;
+        assert_eq!(d.key(Key::Text("it fell over".into())), Action::Stay);
+        assert_eq!(d.key(Key::Tab), Action::Stay);
+        assert_eq!(d.field, Field::Name);
+        d.key(Key::Text("Zed\nra".into()));
+        d.key(Key::Backspace);
+        assert_eq!((d.note.as_str(), d.name.as_str()), ("it fell over", "Zedr"));
+        assert_eq!(d.key(Key::Delete), Action::Stay, "the control: a problem report has nothing to delete");
+        assert_eq!(d.key(Key::Enter), Action::Send);
+        let mut c = Dialog::new(Kind::Crash("crash-20261023-010203.txt".into()));
+        c.key(Key::Tab);
+        assert_eq!(c.field, Field::Note, "a crash report has no name");
+        assert_eq!(c.key(Key::Delete), Action::Delete);
+        assert_eq!(c.key(Key::Escape), Action::Close);
+        c.status = Status::Sending;
+        assert_eq!(c.key(Key::Escape), Action::Stay, "nothing while it is sent");
+        c.status = Status::Sent("x".into());
+        assert_eq!((c.key(Key::Delete), c.key(Key::Text("a".into())), c.key(Key::Enter)), (Action::Stay, Action::Stay, Action::Close));
+    }
+
+    /// A report too long for the server is cut, at a character, saying so.
+    #[test]
+    fn a_long_report_is_cut_to_fit() {
+        assert_eq!(fit("short", 100), "short");
+        let long = "é".repeat(100);
+        let f = fit(&long, 60);
+        assert!(f.len() < 60 && f.ends_with("(cut to fit the report server)\n"));
+    }
+}

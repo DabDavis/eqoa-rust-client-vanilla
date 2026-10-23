@@ -102,7 +102,7 @@ pub fn stick_byte(v: f32) -> u8 {
 /// reports 20261020-103355 and -104019, Chrome, a PowerA pad). A DualShock 2
 /// rests in its middle, and PCSX2 leaves its "Analog Deadzone" to the player
 /// (none by default). In a page `?deadzone=<0..0.9>`, natively
-/// `EQOA_DEADZONE`.
+/// `EQOA_DEADZONE`; the problem reports carry the sticks as they came.
 /// A page's default is 0.37, the edge it had through gilrs (0.1 + 0.3 x
 /// 0.9) when those reports were settled: a stick resting at 0.34 there stayed
 /// still and would walk at 0.3.
@@ -397,6 +397,8 @@ pub fn trace() -> bool {
 pub struct Controller {
     pub name: String,
     pub report: Report,
+    /// its sticks as they came, before the dead zone (for a report)
+    pub raw: [f32; 4],
     pub rumbles: bool,
     pub label: String,
     source: Source,
@@ -531,6 +533,13 @@ pub struct Gamepads {
     picked: Option<Pick>,
     /// where the motors of the controllers it reads are
     rumble_to: Vec<Source>,
+    /// the sticks of the controllers it reads as they came, before the dead
+    /// zone (for a report)
+    pub raw: [f32; 4],
+    /// each pad as a report gives it: its id, mapping, layout, every axis
+    /// and every button pressed (in a page)
+    #[cfg(target_arch = "wasm32")]
+    pub described: Vec<String>,
 }
 
 impl Default for Gamepads {
@@ -578,6 +587,9 @@ impl Gamepads {
             gone: None,
             picked: None,
             rumble_to: Vec::new(),
+            raw: [0.0; 4],
+            #[cfg(target_arch = "wasm32")]
+            described: Vec::new(),
         }
     }
 
@@ -630,6 +642,7 @@ impl Gamepads {
             self.picked = Some(pick.clone());
         }
         let mut out = Report::default();
+        let mut raw = Report::default();
         let (mut any, mut motors) = (false, false);
         self.rumble_to.clear();
         for c in pads.iter().filter(|c| match &pick {
@@ -638,6 +651,7 @@ impl Gamepads {
             Pick::Idle | Pick::Nothing => false,
         }) {
             out.merge(&c.report);
+            raw.merge(&Report { buttons: 0, sticks: c.raw });
             any = true;
             motors |= c.rumbles;
             if c.rumbles {
@@ -649,6 +663,7 @@ impl Gamepads {
             any = true;
             motors = pads.iter().any(|c| c.rumbles);
         }
+        self.raw = raw.sticks;
         if self.trace && out != self.last {
             crate::say(&format!("[pad] report {out:?}"));
             self.last = out;
@@ -679,13 +694,14 @@ impl Gamepads {
             for crate::xinput::Found { index: i, pad: p, ids } in x.read() {
                 xinput_ids.push(ids);
                 let mut report = p.report();
+                let raw = report.sticks;
                 report.rest(self.dead_zone);
                 let name = format!("xinput{i}");
                 if !self.seen.contains(&name) {
                     crate::say(&format!("gamepad: an Xbox controller, XInput's player {} (rumble)", i + 1));
                     self.seen.push(name.clone());
                 }
-                out.push(Controller { name, report, rumbles: true, label: format!("Xbox controller {}", i + 1), source: Source::XInput(i), order: (0, i as u64) });
+                out.push(Controller { name, report, raw, rumbles: true, label: format!("Xbox controller {}", i + 1), source: Source::XInput(i), order: (0, i as u64) });
             }
         }
         let Some(g) = self.gilrs.as_mut() else { return out };
@@ -724,8 +740,9 @@ impl Gamepads {
             #[cfg(not(target_os = "linux"))]
             let (name, order) = (format!("pad{slot}"), (1, slot));
             let mut report = report_of(&pad);
+            let raw = report.sticks;
             report.rest(self.dead_zone);
-            out.push(Controller { name, report, rumbles: pad.is_ff_supported(), label, source: Source::Gilrs(id), order });
+            out.push(Controller { name, report, raw, rumbles: pad.is_ff_supported(), label, source: Source::Gilrs(id), order });
         }
         out.sort_by_key(|c| c.order);
         out
@@ -740,6 +757,7 @@ impl Gamepads {
         let rumbles = !pads.is_empty() && web_can_rumble();
         let mut out = Vec::new();
         let mut traced = Vec::new();
+        let mut described = Vec::new();
         for p in &pads {
             // a pad's reading is kept by its slot, anew when another pad
             // takes the slot
@@ -757,18 +775,22 @@ impl Gamepads {
                 crate::say(&format!("gamepad: {} (mapping {:?}, {})", p.id, p.mapping, map.how(p, self.browser)));
                 self.seen.push(p.id.clone());
             }
+            let d = map.describe(p, self.browser);
             if self.trace {
                 // `?padtrace`: a pad as it changes, its axes to 0.05
                 let coarse = format!("{} {:?} {:?}", p.index, p.buttons.iter().map(|b| b.0).collect::<Vec<_>>(), p.axes.iter().map(|v| (v * 20.0).round() as i32).collect::<Vec<_>>());
                 if !self.traced.contains(&coarse) {
-                    crate::say(&format!("[pad] {}", map.describe(p, self.browser)));
+                    crate::say(&format!("[pad] {d}"));
                 }
                 traced.push(coarse);
             }
+            described.push(d);
+            let raw = r.sticks;
             r.rest(self.dead_zone);
-            out.push(Controller { name: format!("pad{}", p.index), report: r, rumbles, label: p.id.clone(), source: Source::Page(p.index), order: (1, p.index as u64) });
+            out.push(Controller { name: format!("pad{}", p.index), report: r, raw, rumbles, label: p.id.clone(), source: Source::Page(p.index), order: (1, p.index as u64) });
         }
         self.traced = traced;
+        self.described = described;
         out.sort_by_key(|c| c.order);
         out
     }

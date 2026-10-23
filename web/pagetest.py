@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
 """pagetest -- the page's own behaviour, in a headless Chromium: updates,
-its notices and what the page catches.
+problem reports, crash reports and what the page catches.
 
-Serves a copy of web/dist (build.sh's output), then plays deploys against an
-open page by writing new builds and version.json under it:
+Serves a copy of web/dist (build.sh's output) with a stand-in for the report
+server (cmd/reportd's /report and /crash, checked as it checks them, kept in
+memory), then plays deploys against an open page by writing new builds and
+version.json under it:
 
   update    an untouched page reloads into a new build at once; one with a
             disc picked is told, and Later holds until a newer build; Reload
             brings the newest; a reload that still brings the old page is a
             problem, not a second reload
-  crash     a panic says the client stopped, with a Reload; F3 is no
-            report dialog's, and nothing is posted anywhere
+  report    F3 opens the problem dialog; Send posts what reportd takes, the
+            account name and password taken out
+  crash     a panic opens the crash dialog; it posts to /crash, and F3 opens
+            nothing new after it
+  offer     a tab that died while shown is offered next visit; one hidden is
+            not
   missing   a page whose build is gone says so in its status line
   disc      the disc is named when picked (with a second image in --other-iso)
 
@@ -28,8 +34,7 @@ HERE = Path(__file__).resolve().parent
 
 
 class Site:
-    """A copy of web/dist to play deploys on, and what the page posted (it
-    should post nothing)."""
+    """A copy of web/dist to play deploys on, and what was reported."""
 
     def __init__(self, dist):
         tmp = Path("~/.cache/eqoa-rs-web").expanduser()
@@ -39,6 +44,7 @@ class Site:
         self.first = json.loads((self.root / "version.json").read_text())["build"]
         self.page = (dist / "index.html").read_text()
         self.posts = []
+        self.keep = None
 
     def deploy(self, build, page=True, version=True):
         """A build named `build` (a copy of the first's files): its directory,
@@ -72,10 +78,13 @@ class Site:
                 super().end_headers()
 
             def do_POST(self):
-                # the page posts nothing: anything that comes is counted
-                site.posts.append((self.path, self.rfile.read(int(self.headers.get("Content-Length", 0)))))
-                data = json.dumps({"ok": False, "error": "no such route"}).encode()
-                self.send_response(404)
+                route = self.path.split("?")[0]
+                body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                code, answer = 404, {"ok": False, "error": "no such route"}
+                if route in ("/reports/report", "/reports/crash"):
+                    code, answer = site.take(route.rsplit("/", 1)[1], body)
+                data = json.dumps(answer).encode()
+                self.send_response(code)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
@@ -86,6 +95,29 @@ class Site:
         httpd.daemon_threads = True
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         return httpd
+
+    def take(self, kind, body):
+        """reportd's checks on a /report or a /crash (cmd/reportd/main.go)."""
+        try:
+            req = json.loads(body)
+        except ValueError:
+            return 400, {"ok": False, "error": "bad body"}
+        fields = {"report": 512 * 1024, "note": 1000, "version": 64, "platform": 64, "channel": 64}
+        if kind == "report":
+            fields.update(name=64, screenshot=8 * 1024 * 1024)
+        else:
+            fields["report"] = 256 * 1024
+            fields["note"] = 200
+        for k, limit in fields.items():
+            v = req.get(k, "")
+            if not isinstance(v, str) or len(v) > limit:
+                return 400, {"ok": False, "error": f"bad {k}"}
+        if len(req["report"].strip()) < 32:
+            return 400, {"ok": False, "error": "empty report"}
+        self.posts.append((kind, req))
+        if self.keep:
+            (self.keep / f"{len(self.posts):03d}-{kind}.json").write_text(json.dumps(req))
+        return 200, {"ok": True, "id": f"test-{len(self.posts)}"}
 
 
 class Page:
@@ -164,7 +196,7 @@ async def tests(a, site, base, page):
             failed.append(name)
 
     notices = "JSON.stringify([...document.querySelectorAll('#notices .notice')].map(n => n.dataset.key))"
-    q = ""
+    q = "?reports=/reports"
 
     # ---- update
     first = site.first
@@ -205,21 +237,63 @@ async def tests(a, site, base, page):
     check("a reload that brings the old page is a problem, not a loop", still == "d" * 12 and bool(stale) and await page.stayed())
     site.deploy("e" * 12)
 
-    # ---- crash: the client stopped (a panic), and the page says so
+    # ---- report
     await page.open(base + q)
-    check("no crash notice before a panic (control)", "crash" not in await page.js(notices))
+    # what the client names when it sends Station a login (web::secret)
+    await page.js("eqoaSecret('tester1', 's3cretpw'); console.log('a line with tester1 and s3cretpw in it')")
     await page.js("document.getElementById('eqoa').focus()")
     await page.key("F3", "F3", 114)
-    await asyncio.sleep(0.5)
-    check("F3 opens no report dialog", await page.js("!document.getElementById('report') && !document.querySelector('.modal')") is True)
+    opened = await page.until("!document.getElementById('report').hidden && document.getElementById('rp-title').textContent", 5)
+    check("F3 opens the problem dialog", opened == "Report a problem", str(opened))
+    await page.js("document.getElementById('rp-note').value = 'the note'; document.getElementById('rp-name').value = 'Tester'; document.getElementById('rp-send').click()")
+    sent = await page.until("document.getElementById('rp-done').textContent.startsWith('Sent as')", 10)
+    kind, req = site.posts[-1] if site.posts else (None, {})
+    report = req.get("report", "")
+    check("Send posts a problem report reportd takes", bool(sent) and kind == "report" and req.get("channel") == "web"
+          and req.get("version", "").startswith("web-") and req.get("note") == "the note" and req.get("name") == "Tester"
+          and 0 < len(req.get("platform", "")) <= 64 and "--- trace ---" in report and "[log]" in report, json.dumps({k: v[:80] for k, v in req.items()}))
+    check("the account name and the password are taken out", "a line with <account> and <password> in it" in report
+          and "tester1" not in report and "s3cretpw" not in report)
+    check("the log ring had them (control)", any("a line with tester1 and s3cretpw" in l for l in page.lines))
+    await page.js("document.getElementById('rp-close').click()")
+    # the mark a running game keeps for a tab that dies is scrubbed as it is
+    # kept: the next visit may not know what this one signed in with
+    await page.js("console.log('kept tester1 and s3cretpw'); eqoaReport.running(true)")
+    kept = await page.js("localStorage.getItem('eqoa.session') || ''") or ""
+    check("the mark kept has them taken out", "kept <account> and <password>" in kept and "s3cretpw" not in kept, kept[:120])
+    check("the log ring had them when it was kept (control)", any("kept tester1 and s3cretpw" in l for l in page.lines))
+    await page.js("eqoaReport.running(false); localStorage.removeItem('eqoa.session')")
+
+    # ---- crash
+    n = len(site.posts)
     await page.js("try { eqoaClient.crashTest() } catch (e) { window.__trap = String(e) }")
-    said = await page.until(f"{notices}.includes('crash') && document.querySelector('#notices .notice[data-key=crash] .text').textContent", 5)
-    check("a panic says the client stopped", bool(said) and said.startswith("The client stopped") and "crash_test: the client stopped on purpose" in said, str(said))
-    reload_button = await page.js("[...document.querySelectorAll('#notices .notice[data-key=crash] button')].map(b => b.textContent).join(',')")
-    check("and offers a reload, nothing else", reload_button == "Reload", str(reload_button))
-    await page.stay()
-    await page.js("[...document.querySelectorAll('#notices .notice[data-key=crash] button')].find(b => b.textContent === 'Reload').click()")
-    check("Reload starts the page again", bool(await page.reloaded()) and "crash" not in await page.js(notices))
+    title = await page.until("!document.getElementById('report').hidden && document.getElementById('rp-title').textContent", 5)
+    check("a panic opens the crash dialog", title == "The client stopped", str(title))
+    await page.js("document.getElementById('rp-note').value = 'crashed'; document.getElementById('rp-send').click()")
+    await page.until("document.getElementById('rp-done').textContent.startsWith('Sent')", 10)
+    kind, req = site.posts[-1] if len(site.posts) > n else (None, {})
+    check("the crash report goes to /crash with the panic and the log", kind == "crash" and "crash_test: the client stopped on purpose" in req.get("report", "")
+          and "[log]" in req.get("report", "") and req.get("note") == "crashed")
+    await page.js("document.getElementById('rp-close').click()")
+    await page.key("F3", "F3", 114)
+    await asyncio.sleep(0.5)
+    check("after a crash F3 opens no problem report", await page.js("document.getElementById('rp-title').textContent") == "The client stopped")
+
+    # ---- offer: the mark a tab leaves when it dies while shown. The tab
+    # dies for real (its renderer crashed: no pagehide takes the mark away).
+    async def died(hidden):
+        await page.open(base + q)
+        mark = json.dumps({"when": int(time.time() * 1000), "build": "x", "version": "web-x", "hidden": hidden, "state": "s", "log": ["l"]})
+        await page.js(f"localStorage.setItem('eqoa.session', {json.dumps(mark)})")
+        asyncio.ensure_future(page.call("Page.crash")).add_done_callback(lambda f: f.exception())
+        await asyncio.sleep(1.5)
+        await page.open(base + q)
+        await asyncio.sleep(0.5)
+        return await page.js(notices) or ""
+
+    check("a tab that died while shown is offered", "last-session" in await died(False))
+    check("one that was hidden is not (control)", "last-session" not in await died(True))
+    await page.js("localStorage.removeItem('eqoa.session')")
 
     # ---- missing: a page naming a build that is not there
     (site.root / "gone.html").write_text(site.page.replace(f"v/{site.first}/", "v/" + "f" * 12 + "/"))
@@ -239,7 +313,6 @@ async def tests(a, site, base, page):
 
     errors = [l for l in page.lines if l.startswith("EXCEPTION") and "crash_test" not in l and "unreachable" not in l]
     check("no exception in the page beyond the crash test's", not errors, "; ".join(errors[:3]))
-    check("the page posted nothing", not site.posts, str(site.posts[:3]))
     return failed
 
 
@@ -248,10 +321,13 @@ async def main(a):
     if not (dist / "version.json").exists():
         sys.exit("no web/dist: run web/build.sh first")
     site = Site(dist)
+    if a.keep:
+        site.keep = Path(a.keep)
+        site.keep.mkdir(parents=True, exist_ok=True)
     httpd = site.serve(a.http_port)
     base = f"http://127.0.0.1:{httpd.server_address[1]}/"
     if a.serve:
-        print(f"serving {site.root} at {base}", flush=True)
+        print(f"serving {site.root} at {base} (reports at {base}reports, kept in memory)", flush=True)
         while True:
             await asyncio.sleep(3600)
     prof = Path(a.profile).expanduser()
@@ -296,7 +372,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--iso", default=str(HERE.parent / "run" / "eqoa.iso"))
     ap.add_argument("--other-iso", help="a disc image other than Frontiers, for the disc check's other half")
-    ap.add_argument("--serve", action="store_true", help="only serve the site")
+    ap.add_argument("--serve", action="store_true", help="only serve the site and the stand-in report server")
+    ap.add_argument("--keep", help="a directory for what the stand-in report server is sent, a JSON file each")
     ap.add_argument("--http-port", type=int, default=0)
     ap.add_argument("--port", type=int, default=9335)
     ap.add_argument("--profile", default="~/.cache/eqoa-rs-web/pagetest/profile")

@@ -368,6 +368,21 @@ impl Mouse {
         Some(Click::Target(x, y))
     }
 
+    /// What is held, for a report: the buttons, a press that drags, the
+    /// pointer's grab.
+    pub fn describe(&self) -> String {
+        let held: Vec<&str> = [(self.held[0], "left"), (self.held[1], "right")].iter().filter(|h| h.0).map(|h| h.1).collect();
+        let grab = match self.grab {
+            Grab::Free => String::new(),
+            g => format!(", pointer {g:?}"),
+        };
+        match self.press {
+            Some(p) => format!("held [{}], {}{grab}", held.join(", "), if p.dragged { "dragging" } else { "pressed" }),
+            None if held.is_empty() => format!("none held{grab}"),
+            None => format!("held [{}]{grab}", held.join(", ")),
+        }
+    }
+
     /// Both buttons held: the client's run forward.
     pub fn running(&self) -> bool {
         self.held[0] && self.held[1]

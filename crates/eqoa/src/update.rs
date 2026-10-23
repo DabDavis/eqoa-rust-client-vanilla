@@ -250,6 +250,11 @@ mod native {
         }) else {
             return;
         };
+        // stderr as it was before the log's pipe: the new program would
+        // inherit a pipe nothing reads any more; and this window's place
+        // (multiboxing) let go for it
+        crate::report::restore_stderr();
+        crate::multibox::leave();
         let mut c = std::process::Command::new(&exe);
         c.args(std::env::args_os().skip(1)).env("EQOA_UPDATED", &version);
         #[cfg(unix)]

@@ -956,6 +956,47 @@ impl Play {
         }
     }
 
+    /// The HUD's UI once it is built (its fonts and atlas, the layer's
+    /// textures): what the report's dialog draws with.
+    pub fn ui_parts(&self) -> Option<(&vi::ui::Vui, &crate::ui::UiAssets)> {
+        self.hud.as_ref().map(|h| (&h.0, &h.1))
+    }
+
+    /// What a report says of play (`report`): the character, where it is
+    /// (`at`, the walker's), the entities round it and what has come of
+    /// CLIENT and SUPPORT.
+    pub fn report(&self, at: [f32; 3]) -> String {
+        use std::fmt::Write;
+        let mut o = String::new();
+        let p = &self.player;
+        let _ = writeln!(o, "character: {} (server id {}), level {}, race {}, class {}", p.name, p.server_id, self.dump.player.level, p.race, p.class);
+        let _ = writeln!(o, "world {} ({}), at {at:?}", p.world, p.world_path);
+        let target = if self.target == u32::MAX { "none".to_string() } else { format!("{:#x}", self.target) };
+        let _ = writeln!(o, "mode {}, target {target}, dead {}, autorun {}, auto-attack {}", self.mode, self.is_dead(), self.autorun, self.auto_attack);
+        let start = match (&self.start, self.modules_taken[0]) {
+            (Some(_), _) => "in",
+            (None, true) => "CLIENT came but was not read",
+            (None, false) => "waiting for CLIENT",
+        };
+        let hud = match (&self.hud, &self.ui_data, self.modules_taken[1]) {
+            (Some(_), _, _) => "built",
+            (None, Some(_), _) => "its atlas is in, not built yet",
+            (None, None, true) => "SUPPORT came, but no atlas or no TEXTURES.TXT",
+            (None, None, false) => "waiting for SUPPORT",
+        };
+        let _ = writeln!(o, "start menu: {start}; HUD: {hud}");
+        let _ = writeln!(o, "{}", self.map.describe());
+        if let Some(w) = self.loading.wait {
+            let _ = writeln!(o, "loading screen: up {} ms, for the zones round {:?}{}", self.session.now() as i64 - w.since, w.at, if w.entering { ", the world's file first" } else { "" });
+        }
+        let _ = writeln!(o, "entities: {} of {SLOTS}", self.entities.slots.iter().flatten().count());
+        for e in self.entities.slots.iter().flatten() {
+            let name = e.creature.as_ref().map_or("", |c| c.name.as_str());
+            let _ = writeln!(o, "  {:#x} kind {} model {:#x} {name:?} at {:?}", e.id, e.kind, e.model, e.pos);
+        }
+        o
+    }
+
     /// One frame. Returns the player's model when the server has just named
     /// a different one (the caller re-dresses the walker). `game_frame`: one
     /// of the game's frames (`frames.rs`), which what it counts in frames
@@ -2152,6 +2193,11 @@ impl Play {
             // L1's cycle targets each
             let pick = self.hud.as_ref().and_then(|h| h.2.pick(left));
             let id = match pick {
+                // the bug report (`report`)
+                Some(crate::hud::Pick::Report) => {
+                    crate::report::open();
+                    return true;
+                }
                 Some(crate::hud::Pick::Me) => self.self_id32(),
                 Some(crate::hud::Pick::Member(id)) => Some(id),
                 Some(crate::hud::Pick::Pet) => (self.pet_id != u32::MAX).then_some(self.pet_id),

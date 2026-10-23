@@ -3,16 +3,21 @@
 // the loading screens, the licence and the title, Station's login screen, the
 // server list, character select and creation, the world). Query parameters
 // override the defaults: ?relay=ws://127.0.0.1:8790&server=203.0.113.10 for a
-// local server. Notices and what goes wrong are notices.js's
-// (window.eqoaNotices).
-import init, { boot, view, crash_test, disc_id } from './eqoa.js';
+// local server. Reports, notices and what goes wrong are report.js's
+// (window.eqoaReport).
+import init, { boot, view, client_state, want_shot, crash_test, disc_id } from './eqoa.js';
 
 const $ = (id) => document.getElementById(id);
-const status = (t) => { $('status').textContent = t; };
+// the client's own graphics line ("graphics: <adapter> (<backend>)"), for reports
+let clientGraphics = '';
+const status = (t) => {
+  $('status').textContent = t;
+  if (t.startsWith('graphics: ')) clientGraphics = t.slice(10);
+};
 window.eqoaStatus = status;
-// notices.js's, when it loaded (it is a module of its own, before this one)
-const notices = window.eqoaNotices || null;
-const problem = (key, text) => (notices ? notices.problem(key, text) : console.warn(text));
+// report.js's, when it loaded (it is a module of its own, before this one)
+const report = window.eqoaReport || null;
+const problem = (key, text) => (report ? report.problem(key, text) : console.warn(text));
 
 // ---- sound: an AudioContext at 48 kHz, made on the click that starts a
 // session (a page may only start sound from its user's gesture), playing
@@ -203,7 +208,9 @@ $('gate').addEventListener('submit', async (ev) => {
 window.eqoaBooted = () => {
   show(null);
   $('eqoa').focus();
-  if (notices) notices.running(true);
+  // the status line goes right: the HUD's report button is at the bottom left
+  document.body.classList.add('playing');
+  if (report) report.running(true);
 };
 
 $('view').addEventListener('click', async () => {
@@ -216,7 +223,7 @@ $('view').addEventListener('click', async () => {
     show(null);
     $('eqoa').focus();
     await view(file, $('viewargs').value.trim() || 'CHAR.ESF 0x70D898C6');
-    if (notices) notices.running(true);
+    if (report) report.running(true);
   } catch (e) {
     show('gate');
     busy(false);
@@ -457,20 +464,24 @@ async function checkGraphics() {
 // (web::disc_id), as soon as it is picked, so a disc other than Frontiers
 // is named before a session finds out without its HUD.
 
+let discLine = '';
 $('iso').addEventListener('change', async () => {
   const file = $('iso').files[0];
   const line = $('iso-what');
   line.textContent = '';
   line.className = 'note';
+  discLine = '';
   if (!file) return;
   try {
     await ready;
     const [ok, text] = await disc_id(file);
     line.className = 'note ' + (ok ? 'ok' : 'warn');
     line.textContent = text;
+    discLine = `${text} (${file.size} bytes)`;
   } catch (e) {
     line.className = 'note warn';
     line.textContent = String(e && e.message ? e.message : e);
+    discLine = `${line.textContent} (${file.size} bytes)`;
   }
 });
 
@@ -497,9 +508,9 @@ async function checkUpdate(force) {
   } catch {
     return latest; // offline, or the host is down: nothing to say
   }
-  if (!notices) return latest;
+  if (!report) return latest;
   if (!latest || latest === BUILD) {
-    notices.notice('update');
+    report.notice('update');
     return latest;
   }
   const untouched = !started && !$('iso').files.length;
@@ -515,11 +526,11 @@ async function checkUpdate(force) {
     return latest;
   }
   if (laterFor !== latest) {
-    notices.notice('update', '', started
+    report.notice('update', '', started
       ? 'A new version of the client is out. Reloading leaves the game, and you sign in again.'
       : 'A new version of the client is out.', [
       ['Reload', () => { session.set('reloadedFor', latest); location.reload(); }, true],
-      ['Later', () => { laterFor = latest; notices.notice('update'); }],
+      ['Later', () => { laterFor = latest; report.notice('update'); }],
     ]);
   }
   return latest;
@@ -529,13 +540,35 @@ setInterval(checkUpdate, 60000);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkUpdate(); });
 addEventListener('pageshow', (e) => { if (e.persisted) checkUpdate(); });
 
+// ---- reports (report.js): what this page adds to each, and the gate's button
+
+if (report) {
+  report.graphics = () => {
+    if (/\(Gl\)$/.test(clientGraphics)) return 'WebGL2';
+    if (/WebGpu/.test(clientGraphics)) return 'WebGPU';
+    const g = $('gfx-state').textContent;
+    return /WebGPU/.test(g) ? 'WebGPU' : /WebGL2/.test(g) ? 'WebGL2' : '';
+  };
+  report.facts = () => [
+    `update: ${!BUILD ? 'not a built page' : !latest ? 'not asked yet' : latest === BUILD ? 'this is the newest' : `the server has ${latest}`}`,
+    `graphics: ${$('gfx-state').textContent}${clientGraphics ? `; the client's: ${clientGraphics}` : ''}`,
+    `disc: ${discLine || ($('iso').files.length ? 'picked, not identified' : 'none picked')}`,
+    `panel: ${$('gate').hidden ? 'none (the game)' : 'gate'}, status: ${$('status').textContent}`,
+    `relay ${$('relay').value || '-'}, server ${$('server').value || '(this host)'}`,
+    `sound: ${JSON.stringify(window.eqoaAudio.stats())}`,
+  ];
+}
+$('report-gate').onclick = () => {
+  const e = $('gate-error').textContent.trim();
+  if (report) report.open(e ? `The page said: ${e}` : '');
+};
+
 checkGraphics();
 const ready = init({ module_or_path: wasmModule });
 ready.then(() => {
-  // the page's crash notice is checked with a panic (web/pagetest.py)
-  window.eqoaClient = { crashTest: crash_test };
+  window.eqoaClient = { state: client_state, wantShot: want_shot, crashTest: crash_test };
   status('ready');
 }).catch((e) => {
   status('could not load the client: ' + e);
-  problem('load', `The client did not load (${e}). Reload the page; if it happens again, the site may be in the middle of an update: wait a minute.`);
+  problem('load', `The client did not load (${e}). Reload the page; if it keeps happening, send a report.`);
 });

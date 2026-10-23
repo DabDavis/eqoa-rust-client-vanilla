@@ -521,6 +521,35 @@ pub fn curve(step: u8) -> Option<[u8; 256]> {
     Some(t)
 }
 
+/// The Extended page's settings in a line, and where they are kept (a
+/// report's).
+pub fn describe() -> String {
+    let c = client();
+    let rate = match frame_rate() {
+        FrameRate::Thirty => "30",
+        FrameRate::Sixty => "60",
+        FrameRate::Display => "the display's",
+    };
+    format!(
+        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, frame rate {rate}{}, camera distance {}, controller focus {}; {}",
+        if c.lod { "on" } else { "off" },
+        c.brightness,
+        if c.frame_rate.is_none() { " (not chosen)" } else { "" },
+        c.camera_distance,
+        focus().key(),
+        kept_where()
+    )
+}
+
+/// Where the settings are kept, for `describe`: a page's storage, or
+/// natively the config directory (the home directory a report takes out).
+fn kept_where() -> String {
+    #[cfg(any(target_arch = "wasm32", test))]
+    return (if store::available() { "kept in the page's storage" } else { "the page's storage refused: nothing is kept" }).to_string();
+    #[cfg(all(not(target_arch = "wasm32"), not(test)))]
+    return store::dir().map_or_else(|| "not kept: no config directory".to_string(), |d| format!("kept in {}", d.display()));
+}
+
 // ---- the frame cap ---------------------------------------------------------------
 
 /// Milliseconds on one clock since the first asked (`performance.now()`'s
@@ -630,6 +659,10 @@ mod store {
         FILES.with(|f| f.borrow_mut().insert(name.to_string(), b.to_vec()));
         Ok(())
     }
+
+    pub fn available() -> bool {
+        !REFUSE.with(|r| r.get())
+    }
 }
 
 /// Natively: files in the config directory.
@@ -683,6 +716,10 @@ mod store {
 mod store {
     fn storage() -> Option<web_sys::Storage> {
         web_sys::window()?.local_storage().ok().flatten()
+    }
+
+    pub fn available() -> bool {
+        storage().is_some()
     }
 
     pub fn read(name: &str) -> Option<Vec<u8>> {
@@ -841,6 +878,11 @@ mod tests {
             assert_eq!(ClientOptions::from_text(&c.to_text()), c);
         }
         assert_eq!(ClientOptions::default().to_text(), "lod=on\nbrightness=5\ncamera_distance=11\n", "no Frame Rate until one is chosen, no window's Auto");
+        testing::reset(false);
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, frame rate the display's (not chosen), camera distance 11, controller focus auto; kept in the page's storage");
+        testing::reset(true);
+        assert!(describe().ends_with("refused: nothing is kept"));
+        testing::reset(false);
         let odd = ClientOptions::from_text("brightness=11\nlod=maybe\nframe_rate=120\ncamera_distance=51\nwhat=ever\nnoise\ncontroller.0=pad1\ncontroller.17=pad1\ncontroller.2=pad5\ncontroller.x=off");
         assert_eq!(odd, ClientOptions::default());
         assert_eq!(ClientOptions::from_text("camera_distance=7").camera_distance, 11);

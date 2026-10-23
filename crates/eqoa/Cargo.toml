@@ -35,6 +35,10 @@ rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] 
 ureq = { version = "3.4.2", default-features = false, features = ["rustls"] }
 sha2 = "0.10.9"
 
+# The log's pipe (`report`): stderr duplicated and replaced.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.191"
+
 # Windows' Xbox controllers through XInput (`xinput`), which answers a window
 # that is not in front, as Windows.Gaming.Input (gilrs's) does not; and the
 # terminal a program run from one writes to (`attach_console`).

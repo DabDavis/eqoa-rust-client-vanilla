@@ -5,6 +5,20 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-23 · Report a problem, and crash reports
+- F3, or **Report a bug** under the target's bar, opens a box over the game
+  (the screens before the world too): say what went wrong and press Send. A
+  picture of the screen goes with it, and what the game knew at the time. Your
+  note and the picture appear on the report board
+  (eqoaclassic.com/eqoa/reports/board), with your name if you give one (Tab);
+  the rest goes to the developer only. Your account and password are never
+  sent.
+- When the game crashes, or has to be killed, it asks at the next start
+  whether to send what it wrote about it: Send, Not now or Delete.
+- The game keeps a log, `eqoa.log`, in its settings folder.
+- In the browser the same: F3, Report a bug, and the crash report when the page
+  stops.
+
 ## 2026-10-23 · The game updates itself
 - As it starts, the game looks for a newer build. When there is one it
   downloads it (the loading screen shows how far it is), checks it, and starts

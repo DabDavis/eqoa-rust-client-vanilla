@@ -374,7 +374,7 @@ impl Rings {
     }
 
     /// The colour the first material's layers are easing toward, and the
-    /// clock (the window's title, a shot's last line).
+    /// clock (the window's title, a shot's last line, a report).
     pub fn describe(&self) -> String {
         match &self.track {
             Some(t) if t.id != u32::MAX => format!("rings on {:#x}, clock {:.2}, colour {:.2?}", t.id, t.t.0, t.color.map(|c| c.0)),
