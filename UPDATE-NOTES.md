@@ -5,6 +5,18 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-23 · Looting, auction Inspect, the spell book, creatures' own effects
+- Looting works: the item you take goes into your inventory and off the corpse
+  at once. Before, it stayed on the corpse until you logged in again, and
+  taking it a second time said "item not found". A corpse that won't open now
+  says why.
+- In the auction search, Inspect on a lot shows its full description: damage,
+  slot, hit points, who can use it, its stats and its text.
+- The spell book looks like the start menu: the game's band across its top
+  behind the level tabs, and its side frames running all the way up the screen.
+- Creatures with effects of their own show them: the necromancer's Red
+  Swarming Death is a swarm, and a Flesh Fiend has its flies.
+
 ## 2026-10-23 · What's new in the update question, every hit heard
 - When a new version is ready, the game's question shows what's new in it: the
   update notes of every version since yours. Scroll them with the d-pad, a
