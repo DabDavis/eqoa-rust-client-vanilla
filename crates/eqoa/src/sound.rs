@@ -8,11 +8,13 @@
 //! the device's sound. The loader is synchronous: a track `Load`ed is made
 //! from AMBTRACK.ESF at once and is complete at the next call; its upload to
 //! the IOP then takes the device's frames, a block a frame, as on the console.
-//! The weather's intensity dims the track (`weather` is the atmosphere's);
-//! the rain and thunder are the atmosphere's own (`weather.rs`). Not ported:
-//! the outdoors intensity (`m_p30`, set each frame from the weather's probe), and the
-//! sound sprites' half of
-//! `UpdateSoundEmitters` (no world places one; SPELLFX does).
+//! The weather's intensity dims the track (`weather` is the atmosphere's), and
+//! so does the outdoors intensity (`m_p30`, `outdoors`, set each frame from
+//! the weather's probe); the rain and thunder are the atmosphere's own
+//! (`weather.rs`). The track plays on the effects' class (`SetSoundTrack`'s
+//! VISOUNDCLASS_SFX), so the options' Fx Volume sets it, not their Music
+//! Volume, as on a PS2. The sound sprites' half of `UpdateSoundEmitters` is
+//! `spells.rs`'s (no world places one; SPELLFX does).
 
 use crate::audio::{Audio, AudioLink};
 use snd::device::SoundDevice;
@@ -92,11 +94,15 @@ struct SoundTrack {
     /// the outdoors intensity
     p30: F<Ee>,
     state: [TrackState; 2],
+    /// the terrain profile the track was last chosen by, and its music
+    /// index (`TRACKS`' row), -1 before: for the sound's line in a report
+    profile: i32,
+    music: i32,
 }
 
 impl SoundTrack {
     fn cleared() -> Self {
-        SoundTrack { p00: 1, p04: F::ONE, p10: 15000, p18: 0, p20: -1, p24: -1, p30: F::ONE, state: [TrackState::cleared(); 2] }
+        SoundTrack { p00: 1, p04: F::ONE, p10: 15000, p18: 0, p20: -1, p24: -1, p30: F::ONE, state: [TrackState::cleared(); 2], profile: -1, music: -1 }
     }
 }
 
@@ -182,7 +188,7 @@ impl Sound {
         let st = self.audio.status();
         let t = &self.track;
         format!(
-            "battle {}, region music {} (bgm {} {:?}), ambient track {:08x}/{:08x} (states {}/{}), voices {:06x} {:06x}",
+            "battle {}, region music {} (bgm {} {:?}), ambient track {:08x}/{:08x} (states {}/{}; terrain profile {}, music {}, played as effects), voices {:06x} {:06x}; volumes: effects {:.2}, music {:.2}",
             self.battle.1,
             self.stream_best,
             if st[6] != 0 { "streaming" } else { "off" },
@@ -191,8 +197,12 @@ impl Sound {
             t.state[1].p20,
             t.state[0].p00,
             t.state[1].p00,
+            t.profile,
+            t.music,
             st[4],
-            st[5]
+            st[5],
+            self.dev.sound_class_volume(0),
+            self.dev.sound_class_volume(1)
         )
     }
 
@@ -581,6 +591,7 @@ impl Sound {
         let night = (hour < F::new(5.0) || F::new(20.0) < hour) as usize;
         let track = TRACKS.get(prof as usize).map_or(0, |t| t[night]);
         let t = &mut self.track;
+        (t.profile, t.music) = (b.index[k], prof);
 
         if (t.p10 < time - t.p18 || t.p00 != 0)
             && track != t.state[0].p20 {
@@ -757,6 +768,65 @@ impl vi::csprite::SoundSink for Sink<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The ambience at a spot of `world`, three seconds of it at `hour`, with
+    /// the two classes' volumes (Fx, Music) as the options set them: the
+    /// sound's line once the track plays, and its samples.
+    fn ambience_at(path: &std::path::Path, world: &str, x: f32, z: f32, hour: f32, fx: f32, music: f32) -> (String, Vec<i16>) {
+        // the world's zones off this disc image (the game's `disc_path` is
+        // the player's, which a test does not have)
+        let image = path.to_path_buf();
+        crate::stream::set_source_factory(Box::new(move |lib, file| crate::stream::FileZones::open(&image, &lib.files[file].0).map(|z| Box::new(z) as Box<dyn crate::stream::ZoneSource>)));
+        let mut lib = esf::Library::new();
+        let f = lib.add(world, crate::stream::open_file(path, world).unwrap());
+        if let Some(mut src) = crate::stream::source_for(&lib, f) {
+            crate::stream::fill(&mut lib, f, x, z, src.as_mut());
+        }
+        let w = vi::world::World::<Ee>::load(&lib, f).unwrap();
+        let mut walker = crate::walker::Walker::new(w, x, z, 0.0);
+        let mut s = Sound::offline(path).unwrap();
+        s.dev.set_sound_class_volume(0, fx);
+        s.dev.set_sound_class_volume(1, music);
+        let (mut line, mut pcm) = (String::new(), Vec::new());
+        for k in 0..90 {
+            let now = k * 1000 / 30;
+            walker.frame(crate::walker::Controls::default(), now);
+            let eye = walker.eye;
+            s.frame(&mut walker.scene, &eye, hour, now);
+            pcm.extend(s.audio.render(1600));
+            if k == 60 {
+                line = s.describe();
+            }
+        }
+        (line, pcm)
+    }
+
+    /// Bird's spot in Lavastorm (F3 20261023-140759): the terrain's profile
+    /// there is 19, the world's own storm profile, whose music is the eighth
+    /// (`VIWorld::SetProfiles`), so its day track plays, as on a PS2. The
+    /// track is the effects' (`SetSoundTrack` plays it on VISOUNDCLASS_SFX):
+    /// the options' Fx Volume at 0 makes it silent, their Music Volume at 0
+    /// leaves it as loud as it was. Each half is the other's control: a
+    /// track on the music's class fails both.
+    #[test]
+    fn the_ambience_is_the_effects_class() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        if !path.exists() {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        }
+        let loud = |pcm: &[i16]| pcm.iter().filter(|v| v.unsigned_abs() > 16).count();
+        let (line, full) = ambience_at(&path, "LAVASTM.ESF", 5239.9, 4431.2, 6.49, 1.0, 1.0);
+        assert!(line.contains("ambient track 1adcc066/") && line.contains("terrain profile 19, music 8"), "{line}");
+        assert!(line.contains("volumes: effects 1.00, music 1.00"), "{line}");
+        let n = loud(&full);
+        assert!(n > full.len() / 4, "the track plays: {n} of {}", full.len());
+        let (_, no_fx) = ambience_at(&path, "LAVASTM.ESF", 5239.9, 4431.2, 6.49, 0.0, 1.0);
+        assert_eq!(loud(&no_fx), 0, "Fx Volume 0: the ambience is silent");
+        let (line, no_music) = ambience_at(&path, "LAVASTM.ESF", 5239.9, 4431.2, 6.49, 1.0, 0.0);
+        assert!(line.contains("volumes: effects 1.00, music 0.00"), "{line}");
+        assert_eq!(no_music, full, "Music Volume 0: the ambience as it was");
+    }
 
     /// The title's music plays: SETUP.CSF's `splash_screen` is uploaded
     /// before it is played, as SETUP's Init flushes, and a second of it at
