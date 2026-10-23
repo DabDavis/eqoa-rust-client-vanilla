@@ -3548,11 +3548,13 @@ impl Play {
         }
         for data in std::mem::take(&mut self.cm_msgs) {
             match self.cm.recv(&data) {
-                // Recv03: ShowNotice, sound 7
+                // Recv03: `ShowNotice(text, 7)`: sound 7, then the text in
+                // a dialog opened without its own sound (`ShowDialog(0,
+                // text, 0, 0)`), queued behind one already up
                 Some(crate::classmastery::PartUp::Points(d)) => {
                     let text = self.words.as_ref().map_or_else(String::new, |w| if d > 1 { w.get(1627, 0).replace("%d", &d.to_string()) } else { w.get(1628, 0).to_string() });
-                    self.add_chat(text, [1.0; 4]);
                     cues.push(7);
+                    self.show_dialog_b(&vi::ui::wide(&text), false);
                 }
                 // ShowNode < 0: the node cleared
                 Some(crate::classmastery::PartUp::Node) if !self.cm_wnd.show_node(vui, r, &self.cm, self.mode == 40) => self.cm.node = None,
@@ -5651,6 +5653,55 @@ mod commands {
         assert_eq!(p.dump.player.p44, 40);
         p.msg_001c(&[7, 0]);
         assert_eq!(p.dump.player.p44, 40);
+    }
+
+    /// 0x1402 sub-op 3 (`VIClientPart4EC58::Recv03`): a rise in Class
+    /// Mastery points is `ShowNotice(text, 7)`: sound 7, then word 1628
+    /// for one point or 1627 for several (`%d` the rise) in a dialog opened
+    /// without sound 15 (`ShowDialog(0, text, 0, 0)`), queued behind a
+    /// window already up (F3 20261023-082704: it went to the chat box, no
+    /// dialog). The controls: the same points again, and fewer, say
+    /// nothing.
+    #[test]
+    fn a_class_mastery_point_is_a_dialog() {
+        let msg = |points: u32| {
+            let mut v = vec![3u8];
+            v.extend(points.to_le_bytes());
+            v.extend(0u32.to_le_bytes());
+            v
+        };
+        let sevens = |p: &Play| p.cues.iter().filter(|c| matches!(c, crate::sound::Cue::Ui(7))).count();
+        let fifteens = |p: &Play| p.cues.iter().filter(|c| matches!(c, crate::sound::Cue::Ui(15))).count();
+        let mut lines = vec![String::new(); 1628];
+        lines[1626] = "You have earned %d mastery points.".into();
+        lines[1627] = "You have earned 1 mastery point.".into();
+        let mut p = play();
+        p.words = vi::strtab::StringTable::parse(lines.join("\n").as_bytes());
+        let vui = crate::pointer::testing::vui();
+        let mut r = crate::pointer::testing::NullRaster;
+        let said = |s: &str| vi::ui::expand(&vi::ui::wide(s), 218, true, &vi::ui::ExpandContext::default());
+        // one point, nothing up: the dialog at once, sound 7, no sound 15
+        p.cm_msgs.push(msg(1));
+        p.run_class_mastery(&vui, &mut r);
+        assert_eq!((sevens(&p), fifteens(&p), p.mode), (1, 0, 9), "word 1628 in the dialog");
+        assert!(p.chat_pending.is_empty(), "not in the chat box");
+        // the same points again: no rise, nothing said
+        p.mode = 0;
+        p.cues.clear();
+        p.cm_msgs.push(msg(1));
+        p.run_class_mastery(&vui, &mut r);
+        assert_eq!((sevens(&p), p.mode, p.dialogs.len()), (0, 0, 0));
+        // three more behind the trainer: word 1627 with the rise, queued
+        p.mode = 12;
+        p.cm_msgs.push(msg(4));
+        p.run_class_mastery(&vui, &mut r);
+        assert_eq!((sevens(&p), p.mode), (1, 12));
+        assert_eq!(p.dialogs.back(), Some(&said("You have earned 3 mastery points.")));
+        // fewer (a point spent): nothing
+        p.cues.clear();
+        p.cm_msgs.push(msg(2));
+        p.run_class_mastery(&vui, &mut r);
+        assert_eq!((sevens(&p), p.dialogs.len()), (0, 1));
     }
 
     /// A problem report's entity lines carry each creature's look and hands
