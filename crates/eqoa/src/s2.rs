@@ -836,6 +836,15 @@ impl Rules {
         self.folder_file(&self.art_file)
     }
 
+    /// The game's words as the patcher left them in the server's folder
+    /// (WORDS.TXT: Sandstorm's adds 1815 Register and 1816 Unregister), the
+    /// card's copy read before the disc's as the game reads it; `None` with
+    /// no copy there.
+    pub fn words(&self) -> Option<vi::strtab::StringTable> {
+        let bytes = std::fs::read(self.folder_file("WORDS.TXT")?).ok()?;
+        vi::strtab::StringTable::parse(&bytes)
+    }
+
     /// A file in the server's folder, its name in any case ("UNDERFOOT.ESF"
     /// finds "Underfoot.esf").
     pub fn folder_file(&self, name: &str) -> Option<PathBuf> {
@@ -1004,6 +1013,22 @@ mod tests {
         for id in ids {
             assert!(lib.surface(id as i32).is_some(), "{id:08X}");
         }
+    }
+
+    /// The words come out of the server's folder when the patcher put a
+    /// WORDS.TXT there (Sandstorm's: Register and Unregister at 1815, 1816);
+    /// without a folder (the control) there are none of its own.
+    #[test]
+    fn the_words_out_of_the_servers_folder() {
+        let dir = std::env::var_os("EQOA_S2_BUILDS").map(PathBuf::from).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")).join("extracted-assets/sandstorm-patch-20261015");
+        if !dir.join("WORDS.TXT").is_file() {
+            eprintln!("SKIP: no WORDS.TXT at {}", dir.display());
+            return;
+        }
+        let r = Rules { dir: Some(dir), ..Rules::retail() };
+        let w = r.words().expect("its words");
+        assert_eq!((w.get(1815, 0), w.get(1816, 0)), ("Register", "Unregister"));
+        assert!(Rules::retail().words().is_none());
     }
 
     fn rec(addr: u32, data: &[u8]) -> Vec<u8> {

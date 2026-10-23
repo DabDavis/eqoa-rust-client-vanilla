@@ -568,7 +568,8 @@ pub fn world_library(player: &net::session::Player) -> Result<(esf::Library, vie
 /// is SUPPORT's, and the start menu CLIENT's, taken up as they come,
 /// `modules`).
 pub fn play_tables(play: &mut play::Play) -> Result<()> {
-    play.words = disc(None)?.read("WORDS.TXT").ok().and_then(|b| vi::strtab::StringTable::parse(&b));
+    // the server's folder's copy first (`s2`: the patcher's), else the disc's
+    play.words = s2::get().words().or_else(|| disc(None).ok()?.read("WORDS.TXT").ok().and_then(|b| vi::strtab::StringTable::parse(&b)));
     play.ui_textures = disc(None)?.read("TEXTURES.TXT").ok().and_then(|b| vi::strtab::StringTable::parse(&b));
     if play.ui_textures.is_none() {
         eprintln!("no HUD: TEXTURES.TXT is not on the disc");

@@ -2160,7 +2160,8 @@ impl App {
         play.booted = true;
         // the game's words and the HUD's texture names, read with the pregame's files
         if let Some(h) = &self.host {
-            play.words = h.pre.res.words.clone();
+            // the server's folder's copy first (`s2`: the patcher's)
+            play.words = crate::s2::get().words().or_else(|| h.pre.res.words.clone());
             play.ui_textures = h.pre.res.textures.clone();
         }
         if let (Some(h), Some(s)) = (self.host.as_mut(), self.sound.as_mut()) {
