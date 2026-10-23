@@ -122,9 +122,9 @@ fn character_animation_matches() {
     }
     push_i(&mut b, anim_time as i32);
 
-    // The script: 10 s in 32 ms ticks; locomotion changes, some mid-blend.
+    // The script: 14 s in 32 ms ticks; locomotion changes, some mid-blend.
     let mut script: Vec<(i32, i32, i32)> = Vec::new();
-    for k in 0..320 {
+    for k in 0..440 {
         let t = k * 32;
         let loco = match t {
             0..=999 => 0,
@@ -139,10 +139,18 @@ fn character_animation_matches() {
             7008 => 1023,
             7040 => 1025,
             8000 => 1034,
+            // Swimming (13 still, 12 on the move): a hit stays the hit (34,
+            // left out of SetAnimation's swim remap), on the upper body while
+            // the legs swim on; a swing becomes 44 on both layers.
+            9504 => 1034,
+            10528 => 1023,
+            11520 => 1034,
+            9000..=10999 => 13,
+            11000..=12999 => 12,
             // Death (2000 + erase): kept playing, then erased to its last
             // frame; the locomotion after it stays 14.
-            9024 => 2000,
-            9600 => 2001,
+            13024 => 2000,
+            13600 => 2001,
             _ => 0,
         };
         let lod = match k % 7 {
@@ -200,5 +208,13 @@ fn character_animation_matches() {
     }
     eprintln!("{} steps x {nn} nodes equal; {changes} layer changes, {actions} actions", script.len());
     assert!(changes >= 6);
-    assert_eq!(actions, 3);
+    assert_eq!(actions, 6);
+    // The swimming steps were what the game makes of them: the hit on the
+    // upper body over the legs' swim, the swing as the swim's own action.
+    let at = |t: i32| script.iter().position(|s| s.0 == t).unwrap();
+    for (t, want) in [(9504, [34, 13]), (10528, [44, 44]), (11520, [34, 12])] {
+        let off = 4 + at(t) * step;
+        let cur = [0, 2].map(|i| i32::from_le_bytes(res[off + i * 4..off + i * 4 + 4].try_into().unwrap()));
+        assert_eq!(cur, want, "t {t}: the decomp's layers");
+    }
 }
