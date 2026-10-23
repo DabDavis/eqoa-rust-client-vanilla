@@ -193,6 +193,19 @@ pub fn turn_speed(cam: &mut WalkCamera<Ee>, percent: u16) {
     }
 }
 
+/// The Extended page's Screen Shake (`settings::screen_shake`), the
+/// client's own: on, the view shakes as the game shakes it
+/// (`VICameraEffect`'s shake, which only the spell effects' shake events
+/// start: `VISpellEventDriver`'s `Shake`/`ShakeTerp`); off, a shake started
+/// is ended before the camera next applies it, so the view never shakes.
+/// Only the eye is shaken (the body, and what the server is sent, never
+/// were). Run every frame after the spell effects, as Camera Turn Speed is.
+pub fn screen_shake(cam: &mut WalkCamera<Ee>, on: bool) {
+    if !on {
+        cam.effect.reset();
+    }
+}
+
 /// `InitCameraStyle`: the P key's cycle (third person and the fixed follow
 /// to first person, first person to the option's orbit), then saved.
 pub fn cycle<S: Scene<Ee>>(cam: &mut WalkCamera<Ee>, fixed_option: bool, rc: Option<RaceCamera>, scene: &mut S) -> Preset {
@@ -356,6 +369,39 @@ mod tests {
             last = a;
         }
         total.abs()
+    }
+
+    /// The eye through eight of the game's frames, a spell's shake (fast,
+    /// amplitude 4) started at the second when `shake`, Screen Shake applied
+    /// each frame as `setting` says (None: not at all, the game's).
+    fn shaken(shake: bool, setting: Option<bool>) -> Vec<(u32, u32)> {
+        let (mut cam, mut scene) = styled(3);
+        let mut out = Vec::new();
+        for k in 0..8 {
+            if shake && k == 1 {
+                cam.effect.shake(3, F::new(4.0));
+            }
+            if let Some(on) = setting {
+                screen_shake(&mut cam, on);
+            }
+            scene.0 += 33;
+            let e = cam.process(&mut scene);
+            out.push((e.position.y.bits(), e.direction.y.bits()));
+        }
+        out
+    }
+
+    /// Screen Shake on is the game's shake bit for bit; off, a spell's shake
+    /// leaves the view as if none had come. The control: the shake moves the
+    /// eye when it is on.
+    #[test]
+    fn screen_shake_off_never_shakes_the_view() {
+        let game = shaken(true, None);
+        let calm = shaken(false, None);
+        assert_ne!(game, calm, "the control: the shake moves the eye");
+        assert_eq!(shaken(true, Some(true)), game, "on: the game's shake, bit for bit");
+        assert_eq!(shaken(true, Some(false)), calm, "off: as if no shake had come");
+        assert_eq!(shaken(false, Some(false)), calm, "off with no shake: the game's still view");
     }
 
     /// Camera Turn Speed turns the view that much faster or slower, by the
