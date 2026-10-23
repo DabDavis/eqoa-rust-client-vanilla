@@ -5,6 +5,12 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-23 · The Who list as Sandstorm sorts it
+- On Sandstorm, the Who list sorts the way Sandstorm's patch does. L1 and R1
+  (or left and right) change the column, and arrows mark the column it is
+  sorted by. The highlight stays at its place in the list instead of
+  jumping to follow the player.
+
 ## 2026-10-23 · Sandstorm's player search, tall windows, a touch screen crash
 - On Sandstorm, the Group menu's Search opens Sandstorm's own search window.
   It starts on levels around your own (45 to 60 at level 60), not every
