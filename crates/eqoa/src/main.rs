@@ -38,6 +38,7 @@
 mod audio;
 mod chat;
 mod dialog;
+mod attackclock;
 mod auction;
 mod auctionwnd;
 mod bank;

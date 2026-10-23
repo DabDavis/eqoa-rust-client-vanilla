@@ -120,8 +120,9 @@ pub struct Play {
     pub target: u32,
     /// `m_autoAttack`: held while the attack button is (the 0x40 carries it).
     pub auto_attack: bool,
-    /// `m_p071E8`: when the next 0x000F may go out, and the next swing.
-    attack_due: u32,
+    /// `m_p071E8`: when the next 0x000F may go out, and the next swing;
+    /// after a swap it follows the server's rounds (`attackclock`).
+    attack: crate::attackclock::AttackClock,
     /// `m_p071F0`: when the last swing landed in reach.
     pub swung: u32,
     /// `m_p00074`: autorun (`ToggleP74`: L3, or X on the PS2's keyboard).
@@ -1030,7 +1031,7 @@ impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0 };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0 };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -2520,8 +2521,8 @@ impl Play {
             return;
         }
         let toggle = self.options.auto_attack != 0;
-        if (!toggle || !self.auto_attack) && (self.attack_due == 0 || (self.attack_due.wrapping_sub(now) as i32) <= 0) {
-            self.attack_due = now;
+        if (!toggle || !self.auto_attack) && self.attack.may_press(now) {
+            self.attack.press(now);
             let mut w = net::stream::Writer::op(0x000F);
             w.u32(self.target);
             self.session.send(&w.data);
@@ -3462,10 +3463,19 @@ impl Play {
     fn damage_indication(&mut self, data: &[u8], camera_mode: i32) {
         let mut r = net::stream::Reader::new(data);
         let (attacker, amount, defender) = (r.u32(), r.signed() as i32, r.u32());
-        if r.error || self.options.no_damage != 0 {
+        if r.error {
             return;
         }
         let me = self.self_id32();
+        // the player's own hit: after a swap the swing timer follows the
+        // server's rounds (`attackclock`), whatever the damage numbers show
+        if Some(attacker) == me {
+            let delay = self.attack.kind().map_or(3500, |k| if vi::swing::swing_effect(k) == 0 { 3500 } else { vi::swing::swing_delay(k) });
+            self.attack.own_hit(self.session.now(), delay as u32);
+        }
+        if self.options.no_damage != 0 {
+            return;
+        }
         if Some(attacker) == me {
             self.damage.add(defender, amount, 0);
         } else if camera_mode != 0 && self.mode != 38
@@ -4518,7 +4528,7 @@ impl Play {
     /// (and the time is kept); otherwise the swing's animation plays and
     /// 0x00D8 goes out, and the next is 2 s off.
     fn auto_attack_tick(&mut self, walker: &mut Walker, now: u32) {
-        if !self.auto_attack || (now.wrapping_sub(self.attack_due) as i32) < 0 {
+        if !self.auto_attack || !self.attack.is_due(now) {
             return;
         }
         let (mut b14, mut b15, mut b16, mut b17, mut b18, mut b19, mut b20) = (false, false, false, false, false, false, false);
@@ -4550,6 +4560,9 @@ impl Play {
             }
         }
         let swing = vi::swing::get_swing(self.player.class as i32, self.player.level as i32, b14, b15, b16, b18, b17, b19, b20);
+        // a swing other than the last tick's (a swap) has the timer follow
+        // the server's rounds for the rest of the fight
+        self.attack.swing(swing);
         if vi::swing::swing_effect(swing) == 0 {
             no_effect = true;
         } else {
@@ -4573,7 +4586,7 @@ impl Play {
             self.session.send(&net::stream::Writer::op(0x00D8).data);
             delay = 2000;
         }
-        self.attack_due = self.attack_due.wrapping_add(delay as u32);
+        self.attack.add(delay as u32);
     }
 
     /// `TargetInRange(slot)`: melee within 4.5 (plus 3 or 5 for a large
@@ -5653,6 +5666,33 @@ mod commands {
         assert_eq!(p.dump.player.p44, 40);
         p.msg_001c(&[7, 0]);
         assert_eq!(p.dump.player.p44, 40);
+    }
+
+    /// The player's own hit (0x00DB, the player the attacker) reaches the
+    /// swing timer, with the damage numbers turned off too: after a swap
+    /// (the bow's swing, then a melee weapon's) the round's first hit puts
+    /// the next swing a fresh press's 660 ms before it, one melee delay on.
+    /// The control: another attacker's hit moves nothing.
+    #[test]
+    fn an_own_hit_reaches_the_swing_timer() {
+        let hit = |attacker: u32| {
+            let mut w = net::stream::Writer::default();
+            w.u32(attacker).signed(-30).u32(0x200);
+            w.data
+        };
+        let mut p = play();
+        p.options.no_damage = 1;
+        let me = p.self_id32().expect("the player's id");
+        p.attack.press(0);
+        p.attack.swing(9);
+        p.attack.add(5000);
+        p.attack.swing(4);
+        let due = p.attack.due;
+        p.damage_indication(&hit(me ^ 1), 0);
+        assert_eq!(p.attack.due, due, "another's hit");
+        let now = p.session.now();
+        p.damage_indication(&hit(me), 0);
+        assert_eq!(p.attack.due, now.wrapping_sub(crate::attackclock::PRESS_TO_FIRST_HIT).wrapping_add(4000), "the player's own");
     }
 
     /// 0x1402 sub-op 3 (`VIClientPart4EC58::Recv03`): a rise in Class
