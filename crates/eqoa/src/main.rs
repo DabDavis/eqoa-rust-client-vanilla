@@ -112,6 +112,8 @@ mod stream;
 mod report;
 mod ui;
 mod update;
+#[cfg(not(target_arch = "wasm32"))]
+mod updatewnd;
 mod viewer;
 mod wndlist;
 mod walker;

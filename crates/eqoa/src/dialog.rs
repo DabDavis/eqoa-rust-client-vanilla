@@ -334,12 +334,6 @@ impl MBox {
         true
     }
 
-    /// Where the buttons were drawn last (frame x0 y0 x1 y1), Yes first.
-    #[cfg(test)]
-    pub fn buttons(&self) -> &[[i32; 4]] {
-        &self.hits
-    }
-
     /// `OnDrawSelf` (no item icon). `Update` runs in it: a timeout that has
     /// passed cancels the box (260), which is returned.
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, now: i64) -> Option<BoxAnswer> {
