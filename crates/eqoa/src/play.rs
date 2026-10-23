@@ -390,15 +390,58 @@ pub struct Play {
 pub const WORLD_FILES: [&str; 6] = ["TUNARIA.ESF", "RATHE.ESF", "ODUS.ESF", "LAVASTM.ESF", "PLANESKY.ESF", "SECRETS.ESF"];
 
 impl Play {
-    /// `ShowDialog`: expanded (`%p` and the icon codes), shown now when
-    /// nothing else is up, else queued.
+    /// `ShowDialog` as 0x0046 calls it (`b` 1): expanded (`%p` and the icon
+    /// codes), shown now when nothing else is up, else queued.
     fn show_dialog(&mut self, text: &[u16]) {
+        self.show_dialog_b(text, true);
+    }
+
+    /// `ShowDialog(id, text, a, b)`: `b` is `OpenDialog`'s sound 15 when the
+    /// dialog opens at once; a queued one opens with it whatever `b` was.
+    fn show_dialog_b(&mut self, text: &[u16], b: bool) {
         let ctx = vi::ui::ExpandContext { player_name: self.dump.player.name.clone(), ..Default::default() };
         let buf = vi::ui::expand(text, 218, true, &ctx);
         if self.mode == 0 {
-            self.open_dialog(&buf);
+            self.open_dialog(&buf, b);
         } else if self.dialogs.len() < 11 {
             self.dialogs.push_back(buf);
+        }
+    }
+
+    /// Case 0x0036: a byte, then the player's training points
+    /// (`m_player.m_p40`, `ReadSigned` into an int); when they change,
+    /// `QuestStage(byte, change)`: sound 7 with the byte, word 625 ("You
+    /// have received more training points!") in a dialog (`b` 0), and the
+    /// trainer refreshed (`VIWndGame::Msg001D`). Its `ResetView`, while
+    /// `IsModal` (the manual camera, mode 38), has nothing to undo here: the
+    /// manual camera is not ported.
+    fn msg_0036(&mut self, data: &[u8]) {
+        let mut r = net::stream::Reader::new(data);
+        let flag = r.u8();
+        let points = r.signed() as i32 as i64;
+        if r.error {
+            return;
+        }
+        let old = self.dump.player.p40;
+        self.dump.player.p40 = points;
+        if points != old {
+            eprintln!("play: training points {old} -> {points} (0x0036)");
+            if flag != 0 {
+                self.cues.push(crate::sound::Cue::Ui(7));
+            }
+            let text = self.words.as_ref().map_or_else(|| "(word 625)".to_string(), |w| w.get(625, 0).to_string());
+            self.show_dialog_b(&vi::ui::wide(&text), false);
+            self.trainer_refresh = true;
+        }
+    }
+
+    /// Case 0x001C: the stat cap the trainer holds a stat under
+    /// (`m_player.m_p44`, `GetP44Total`), four raw bytes.
+    fn msg_001c(&mut self, data: &[u8]) {
+        let mut r = net::stream::Reader::new(data);
+        let cap = r.u32() as i32;
+        if !r.error {
+            self.dump.player.p44 = cap as i64;
         }
     }
 
@@ -494,11 +537,12 @@ impl Play {
         }
     }
 
-    /// `VIWndGame::OpenDialog`.
-    fn open_dialog(&mut self, text: &[u16]) {
-        // every dialog this client opens is ShowDialog's b = 1 (0x0046, and
-        // the queue): sound 15 with it
-        self.cues.push(crate::sound::Cue::Ui(15));
+    /// `VIWndGame::OpenDialog(text, b)`: sound 15 with `b` (0x0046's and
+    /// the queue's; 0x0036's word 625 opens without).
+    fn open_dialog(&mut self, text: &[u16], b: bool) {
+        if b {
+            self.cues.push(crate::sound::Cue::Ui(15));
+        }
         self.priv_chat.set_text(text);
         self.mode = 9;
     }
@@ -1279,6 +1323,9 @@ impl Play {
                     }
                 }
                 Event::Opcode { op: 0x07E2, data } => self.factions.recv(&data),
+                // the training points as they now are (a level's, a refund's)
+                Event::Opcode { op: 0x0036, data } => self.msg_0036(&data),
+                Event::Opcode { op: 0x001C, data } => self.msg_001c(&data),
                 // Msg001D: the points spent come off, and the trainer refreshes
                 Event::Opcode { op: 0x001D, data } => {
                     let mut r = net::stream::Reader::new(&data);
@@ -1615,11 +1662,12 @@ impl Play {
         if let Some(a) = self.emote.take() {
             walker.set_action(a);
         }
-        // UpdateGame: back in play, the next waiting dialog.
+        // UpdateGame: back in play, the next waiting dialog (OpenDialog's
+        // b 1).
         if self.mode == 0
             && let Some(d) = self.dialogs.pop_front()
         {
-            self.open_dialog(&d);
+            self.open_dialog(&d, true);
         } else if self.mode == 0
             && let Some(d) = self.pending_box.take()
         {
@@ -5515,6 +5563,61 @@ mod commands {
     fn grouped(p: &mut Play, ids: &[u32]) {
         p.group.in_group = true;
         p.group.members = ids.iter().map(|&id| crate::group::Member { id, ..Default::default() }).collect();
+    }
+
+    /// 0x0036 (case 0x0036, `QuestStage`): the training points as the server
+    /// now has them, a refund's as a level's. A change sets them, says word
+    /// 625 in a dialog opened without sound 15 (`b` 0), plays sound 7 when the
+    /// byte asks, and refreshes the trainer; queued behind an open window, the
+    /// dialog waits its turn. The controls: the same points again change
+    /// nothing, a byte of 0 plays no sound 7, and a message cut short is
+    /// read as nothing.
+    #[test]
+    fn training_points_come_from_0x0036() {
+        let msg = |flag: u8, points: i64| {
+            let mut w = net::stream::Writer::op(0x0036);
+            w.u8(flag).signed(points);
+            w.data[2..].to_vec()
+        };
+        let sevens = |p: &Play| p.cues.iter().filter(|c| matches!(c, crate::sound::Cue::Ui(7))).count();
+        let fifteens = |p: &Play| p.cues.iter().filter(|c| matches!(c, crate::sound::Cue::Ui(15))).count();
+        let mut p = play();
+        p.dump.player.p40 = 3;
+        p.msg_0036(&msg(1, 10));
+        assert_eq!(p.dump.player.p40, 10, "the refund's points");
+        assert_eq!((sevens(&p), fifteens(&p)), (1, 0), "sound 7 for the byte, no sound 15 (b 0)");
+        assert_eq!(p.mode, 9, "word 625 in the dialog, in play at once");
+        assert!(std::mem::take(&mut p.trainer_refresh), "the trainer refreshed");
+        // the same points again: QuestStage only on a change
+        p.mode = 0;
+        p.cues.clear();
+        p.msg_0036(&msg(1, 10));
+        assert_eq!((p.dump.player.p40, sevens(&p), p.mode, p.trainer_refresh), (10, 0, 0, false));
+        // a byte of 0: the dialog, no sound 7; behind the trainer it waits
+        p.mode = 12;
+        p.msg_0036(&msg(0, 4));
+        assert_eq!((p.dump.player.p40, sevens(&p), p.mode), (4, 0, 12));
+        let want = vi::ui::expand(&vi::ui::wide("(word 625)"), 218, true, &vi::ui::ExpandContext::default());
+        assert_eq!(p.dialogs.back(), Some(&want), "queued");
+        // cut short: nothing read
+        p.msg_0036(&[1]);
+        assert_eq!(p.dump.player.p40, 4);
+        // go-eqoa-server's buildTrainingPoints(true, 25) after its opcode:
+        // the byte 1, then zigzag 25
+        p.msg_0036(&[0x01, 50]);
+        assert_eq!(p.dump.player.p40, 25);
+    }
+
+    /// 0x001C: the trainer's stat cap (`m_p44`), four raw bytes; cut short,
+    /// nothing (the control).
+    #[test]
+    fn the_stat_cap_comes_from_0x001c() {
+        let mut p = play();
+        p.dump.player.p44 = 11;
+        p.msg_001c(&40u32.to_le_bytes());
+        assert_eq!(p.dump.player.p44, 40);
+        p.msg_001c(&[7, 0]);
+        assert_eq!(p.dump.player.p44, 40);
     }
 
     /// A problem report's entity lines carry each creature's look and hands
