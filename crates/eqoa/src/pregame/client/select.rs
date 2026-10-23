@@ -23,6 +23,16 @@ use vi::ui::{FrameParam, UI_COLORS, Window, wide};
 /// (`create/race.rs`) is laid out the same.
 pub const PANEL: [i32; 2] = [37, 377];
 
+/// `OnDrawSelf`'s dark plate over the view when no character is highlighted
+/// (an empty slot, Delete Character): atlas 91 tiled over the viewport the
+/// figure is drawn in (`stage::VIEWPORT`, inclusive: 263 by 349). The game
+/// blits it the viewport's width at (320, 47), 38 to the left of the
+/// viewport: it covered the list's right end and the view frame's left post
+/// and left the view's last 36 columns showing the arena, or with no figure
+/// the backdrop (F3 20261023-142644, Bird's; the PS2's own picture, put here
+/// where its size says it belongs).
+pub const PLATE: ([i32; 2], [i32; 2]) = ([VIEWPORT[0], VIEWPORT[1]], [VIEWPORT[2] - VIEWPORT[0] + 1, VIEWPORT[3] - VIEWPORT[1] + 1]);
+
 /// `GetFrameRate()` (name the decomp's guess): the level cap, 60 with
 /// Frontiers' expansion bit, else 50. A character at it stands in the
 /// capped hall (`ShowCharacter`).
@@ -362,7 +372,7 @@ impl CharSelect {
                 vui.draw_centered_string_ex(r, &word(get_class(c.class).name), 501, fh + 346, white, 0, true);
             }
         } else {
-            vui.blit_rect(r, 91, [320, 47], [264, 349], 0, 1.0);
+            vui.blit_rect(r, 91, PLATE.0, PLATE.1, 0, 1.0);
             cx.music.push(Music::StopBgm { slot: 0 });
             self.last_race = -1;
         }
@@ -812,6 +822,35 @@ mod tests {
             assert!((59..=61).contains(&seen.len()), "{hz} Hz: {}", seen.len());
             let changes = seen.windows(2).filter(|w| w[0] != w[1]).count();
             assert_eq!(changes, 3, "{hz} Hz");
+        }
+    }
+
+    /// The delete row's plate (atlas 91) covers the view's viewport, where
+    /// the figure is drawn, and nothing else: not the list's right end nor
+    /// the view frame's left post (the game's (320, 47) did), and to the
+    /// viewport's right edge (the game's left the last 36 columns open). Its
+    /// tiles are what the delete row draws beyond a highlighted character's
+    /// row, in a 4:3 window and a wide one alike (the plate is in the frame's
+    /// coordinates, as the viewport is).
+    #[test]
+    fn the_delete_rows_plate_covers_the_view() {
+        let chars = vec![rec("A", 1)];
+        let vui = crate::startmenu::posts::vui();
+        for side in [0, 106] {
+            let drawn = |sel: i32| {
+                let mut r = crate::pointer::testing::Wide::new(side);
+                let mut cx = UiCx::bare(&vui, &mut r);
+                let mut cs = CharSelect { sel, ..Default::default() };
+                cs.draw(&mut cx, &chars, None, &mut Vec::new());
+                r.2
+            };
+            let (character, delete) = (drawn(0), drawn(8));
+            let plate: Vec<_> = delete.iter().filter(|b| !character.contains(b)).copied().collect();
+            assert!(!plate.is_empty(), "the delete row draws its plate");
+            let lo = plate.iter().fold([i32::MAX; 2], |a, b| [a[0].min(b.1[0]), a[1].min(b.1[1])]);
+            let hi = plate.iter().fold([i32::MIN; 2], |a, b| [a[0].max(b.1[0] + b.2[0]), a[1].max(b.1[1] + b.2[1])]);
+            let [x0, y0, x1, y1] = VIEWPORT;
+            assert_eq!((lo, hi), ([x0, y0], [x1 + 1, y1 + 1]), "side {side}: the plate is the viewport");
         }
     }
 

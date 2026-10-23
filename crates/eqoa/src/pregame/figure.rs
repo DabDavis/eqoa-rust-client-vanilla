@@ -32,6 +32,22 @@ pub struct Figure {
     pub hpr: [f32; 3],
 }
 
+/// `CreateActor`'s sprite: a copy of the parsed one (`VICSprite::Copy`,
+/// every CSprite's instance type being 1). The copy keeps the plays
+/// `SetDefaults` started and the layers' entries, but not its timers: its
+/// `m_animTime` and `m_idleTime` are the constructor's 0, so its first
+/// `SetAction(0)` plays the special idle (15) at once, the game's fidget, and
+/// puts the next one 20 to 40 s on. The parsed sprite as it is would only
+/// breathe until something else was asked of it: an unarmed figure at
+/// character select stood still until its first flourish, five seconds in
+/// (F3 20261023-142741); an armed one swings at once (`ShowCharacter`).
+pub fn actor_sprite(lib: &Library, r: esf::Ref, anims: &mut AnimScene<Ee>, rand: &mut Rand) -> Option<CSprite<Ee>> {
+    let mut cs = load_csprite(lib, r, anims, &mut AnimCache::new(), rand)?;
+    cs.anim_time = 0;
+    cs.idle_time = 0;
+    Some(cs)
+}
+
 impl Figure {
     /// `CreateActor` with the model's sprite (or `HumanMale`'s), dressed in
     /// `look` (a helm on node 8 when its set has one), `items` (DictIDs, 0
@@ -42,7 +58,7 @@ impl Figure {
         let mut built = lib.build_model(r)?;
         let mut anims = AnimScene { time: now, ..Default::default() };
         let mut rand = Rand(1);
-        let sprite = load_csprite(lib, r, &mut anims, &mut AnimCache::new(), &mut rand);
+        let sprite = actor_sprite(lib, r, &mut anims, &mut rand);
         let mut attached = Vec::new();
         let mut helm_worn = false;
         if let Some(cs) = &sprite {
@@ -130,5 +146,49 @@ impl Figure {
     /// What to draw: the body and what it carries.
     pub fn models(&self) -> impl Iterator<Item = &GpuModel> {
         std::iter::once(&self.gpu).chain(self.attached.iter().map(|(_, m)| m))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The figures' sprite is `CreateActor`'s copy: its first `SetAction(0)`
+    /// (character select's every frame, `OnDrawSelf`) plays the special idle
+    /// on both layers at once, as the game's copy does. The control: the
+    /// parsed sprite as it is (`SetDefaults`' timers) keeps the plain idle,
+    /// barely moving until the flourish five seconds in. Needs `run/eqoa.iso`
+    /// (the pregame's CHARSEL files).
+    #[test]
+    fn a_figure_fidgets_from_the_start() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        if !path.exists() {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        }
+        let mut iso = iso::Iso::open(&path).unwrap();
+        let mut lib = Library::new();
+        for f in crate::pregame::client::FILES {
+            if let Some(c) = iso.read(f).ok().and_then(|b| esf::Container::open(b).ok()) {
+                lib.add(*f, c);
+            }
+        }
+        // a human, as an unarmed level-1 character shows at character select
+        let r = lib.lookup(vi::hash::hash_resource_id("HumanMale") as i32).expect("HumanMale in the CHARSEL files");
+        let now = 64_250;
+        let first = |cs: &mut CSprite<Ee>, anims: &mut AnimScene<Ee>, rand: &mut Rand| {
+            anims.time = now + 33;
+            cs.set_action(0, anims, rand);
+            [cs.cur[0].anim, cs.cur[1].anim]
+        };
+        let mut anims: AnimScene<Ee> = AnimScene { time: now, ..Default::default() };
+        let mut rand = Rand(1);
+        let mut cs = actor_sprite(&lib, r, &mut anims, &mut rand).expect("the sprite");
+        assert_eq!(first(&mut cs, &mut anims, &mut rand), [15, 15], "the copy's first SetAction(0) is the special idle");
+        // the control: the parsed sprite, its timers SetDefaults'
+        let mut anims: AnimScene<Ee> = AnimScene { time: now, ..Default::default() };
+        let mut rand = Rand(1);
+        let mut parsed = load_csprite(&lib, r, &mut anims, &mut AnimCache::new(), &mut rand).expect("the sprite");
+        assert_eq!(first(&mut parsed, &mut anims, &mut rand), [0, 0], "the parsed sprite only idles");
     }
 }

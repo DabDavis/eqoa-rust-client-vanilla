@@ -35,6 +35,25 @@ pub const HOUR: f32 = 8.0;
 /// The viewport the select and creation pages render into.
 pub const VIEWPORT: [i32; 4] = [358, 48, 620, 396];
 
+/// The pixels of a `size` target that the viewport `v` (inclusive frame
+/// pixels) takes, as `[x, y, w, h]`: exactly those a 2D quad laid over the
+/// same frame rectangle covers (its edges `render::ui::SAMPLE_BIAS` up and
+/// left, as `render::ui` draws every quad; a pixel covered when its centre
+/// is inside), so a piece of the 2D layer drawn over the viewport hides all
+/// of the 3D under it. Truncating the edges instead gave the 3D a column (and
+/// a row) the 2D did not cover in a window scaled by a fraction: character
+/// select's plate over the view showed a line of the arena at its left side
+/// (1062x780, F3 20261023-142644): the frame is drawn 4:3 at any window
+/// shape, so its pixels are almost never whole window pixels.
+pub fn viewport_pixels(size: (u32, u32), v: [i32; 4]) -> [u32; 4] {
+    let b = render::ui::SAMPLE_BIAS;
+    let lo = render::ui::window_from_frame(size, [v[0] as f32 - b, v[1] as f32 - b]);
+    let hi = render::ui::window_from_frame(size, [(v[2] + 1) as f32 - b, (v[3] + 1) as f32 - b]);
+    let px = |e: f32, n: u32| (e - 0.5).ceil().clamp(0.0, n as f32) as u32;
+    let (x, y) = (px(lo[0], size.0), px(lo[1], size.1));
+    [x, y, px(hi[0], size.0).saturating_sub(x), px(hi[1], size.1).saturating_sub(y)]
+}
+
 pub struct Stage {
     /// the arena's collision (the camera's) and its clock
     pub world: World<Ee>,
@@ -166,4 +185,47 @@ fn sky(lib: &Library, world: &mut World<Ee>, eye: &Eye<Ee>, g: &mut Gpu) -> Opti
     let textures = render::library_textures(&l);
     crate::sky::update(g.renderer, g.device, g.queue, &mut models, at, &frame, &textures);
     Some(models)
+}
+
+#[cfg(test)]
+mod viewport_tests {
+    use super::*;
+
+    /// The viewport takes the pixels a 2D quad over the same frame rectangle
+    /// covers, no more and no fewer, at whole and fractional scales alike:
+    /// each pixel's centre against the quad's edges as `render::ui` places
+    /// them (`(p - SAMPLE_BIAS) * scale` past the frame's corner). The
+    /// control: the truncated edges the client had leave the 3D a column the
+    /// quad does not cover at 1062x780 (Bird's window).
+    #[test]
+    fn the_viewport_is_what_a_quad_over_it_covers() {
+        let span = |size: (u32, u32), axis: usize| {
+            let b = render::ui::SAMPLE_BIAS;
+            let lo = render::ui::window_from_frame(size, [VIEWPORT[0] as f32 - b, VIEWPORT[1] as f32 - b])[axis];
+            let hi = render::ui::window_from_frame(size, [(VIEWPORT[2] + 1) as f32 - b, (VIEWPORT[3] + 1) as f32 - b])[axis];
+            (lo, hi)
+        };
+        let agrees = |size: (u32, u32), vp: [u32; 4]| {
+            (0..2).all(|axis| {
+                let (lo, hi) = span(size, axis);
+                let n = if axis == 0 { size.0 } else { size.1 };
+                (0..n).all(|c| {
+                    let quad = (c as f32 + 0.5) >= lo && (c as f32 + 0.5) < hi;
+                    let view = c >= vp[axis] && c < vp[axis] + vp[axis + 2];
+                    quad == view
+                })
+            })
+        };
+        for size in [(640, 448), (1280, 896), (1062, 780), (1280, 720), (960, 720), (1737, 1010), (2560, 1417), (1918, 1078)] {
+            assert!(agrees(size, viewport_pixels(size, VIEWPORT)), "{size:?}");
+        }
+        // the control: the edges truncated, unbiased
+        let truncated = |size: (u32, u32)| {
+            let a = render::ui::window_from_frame(size, [VIEWPORT[0] as f32, VIEWPORT[1] as f32]);
+            let b = render::ui::window_from_frame(size, [(VIEWPORT[2] + 1) as f32, (VIEWPORT[3] + 1) as f32]);
+            let (x, y) = (a[0] as u32, a[1] as u32);
+            [x, y, b[0] as u32 - x, b[1] as u32 - y]
+        };
+        assert!(!agrees((1062, 780), truncated((1062, 780))), "truncation leaves the 3D a line the quad misses");
+    }
 }
