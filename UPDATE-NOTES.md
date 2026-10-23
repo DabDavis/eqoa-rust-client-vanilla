@@ -5,6 +5,18 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-23 · Follow, guild chat, assist
+- Follow works: target someone in your group and choose Follow in the quick
+  chat's commands, or type `/follow`. You turn to them and run after them,
+  slow to a walk when you are close and stop beside them, a little faster than
+  a plain run so you keep up. Pushing forward or back, attacking, or them
+  leaving the group ends it; following again ends it too.
+- The chat mode's Guild sends what you type to your guild. It always said you
+  were not in a guild.
+- Assist Target targets what your target is fighting, and Assist Leader what
+  your group's leader has targeted (the server has to answer them:
+  eqoaclassic does from today).
+
 ## 2026-10-22 · Update notes on the release page
 - The release page lists what each build changed, newest first, so the notes of
   a build stay readable after the next one replaces it.

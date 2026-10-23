@@ -505,10 +505,9 @@ pub fn shot_with(
             }
             let mut client = play.as_ref().filter(|p| !p.is_dead()).map(|p| p.control_client()).unwrap_or_default();
             client.steer = look_free && mouse.steer(walker.cam.camera_mode);
-            if walker.frame_with(sticks, t, &client, game_frame)
-                && let Some(p) = play.as_mut()
-            {
-                p.toggle_autorun();
+            let changed = walker.frame_with(sticks, t, &client, game_frame);
+            if let Some(p) = play.as_mut() {
+                p.controls_changed(changed);
             }
             // `EQOA_TRACE_WALK=ms`: the body and the camera every that often
             if let Some(every) = trace_walk
@@ -3010,10 +3009,9 @@ impl ApplicationHandler for App {
                     let mut client = play.as_ref().filter(|p| !p.is_dead()).map(|p| p.control_client()).unwrap_or_default();
                     client.keys = game_keys;
                     client.steer = steer;
-                    if w.frame_with(sticks, now, &client, game_frame)
-                        && let Some(p) = play.as_mut()
-                    {
-                        p.toggle_autorun();
+                    let changed = w.frame_with(sticks, now, &client, game_frame);
+                    if let Some(p) = play.as_mut() {
+                        p.controls_changed(changed);
                     }
                     mark(perf, 1);
                     if let Some(p) = play {

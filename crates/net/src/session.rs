@@ -126,6 +126,9 @@ pub enum Event {
     Expansion(u32),
     /// 0x007E: the player's pet (`m_petId`); 0x007F: none.
     Pet(Option<u32>),
+    /// 0x007B (`Msg007B`): the answer to an assist (0x00CB, 0x007B), the
+    /// id to target, -1 for none.
+    Assist(u32),
     /// 0x003B: an item into the inventory (`AddInvItem`).
     InvAdd(Box<crate::dump::NetItem>),
     /// 0x003C (`Msg003C`): `n` taken from slot `slot`; `sound` with a merchant.
@@ -692,6 +695,7 @@ impl Session {
             0x0045 => ev.push(Event::ProfanityFilter(r.signed() != 0)),
             0x00D9 => ev.push(Event::PlayerP2C(r.u32() as i32)),
             0x007E => ev.push(Event::Pet(Some(r.u32()))),
+            0x007B => ev.push(Event::Assist(r.u32())),
             0x003B => ev.push(Event::InvAdd(Box::new(crate::dump::read_net_item(&mut r)))),
             0x003C => {
                 let (slot, sound) = (r.u8(), r.u8());

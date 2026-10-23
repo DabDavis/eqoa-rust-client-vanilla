@@ -1340,6 +1340,12 @@ mod tests {
         fn heading(&self) -> F<Ee> {
             self.cam.walk.committed.angles.x
         }
+        fn pitch(&self) -> F<Ee> {
+            self.cam.walk.committed.angles.y
+        }
+        fn orbit_angle(&self) -> F<Ee> {
+            self.cam.last.orbit.x
+        }
         fn camera_dir(&self) -> vi::vect::Vect3<Ee> {
             self.eye.direction
         }

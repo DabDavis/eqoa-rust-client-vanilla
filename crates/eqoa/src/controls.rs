@@ -14,6 +14,15 @@
 //! stops both (`Client::timed_out`, which the client leaves off: see
 //! `Play::control_client`).
 //!
+//! Follow (`m_p00078`, `ToggleFollow`: `/follow` and the quick command, on a
+//! targeted group member, `m_p0007C`) turns the player to the member (in
+//! mode 3 the camera orbits round to it, the body facing it) and runs at it,
+//! walks within 6 and stops within 3, or turns first while it is more than
+//! 60 degrees off; under liquid it pitches to the member's height. It ends
+//! with the attack, with the stick pushed past 0.7, and when the member is
+//! no longer in the group and the scene; it ends autorun, and while it is on
+//! the player runs 1.05 times as fast (`UpdateGame`, `Client::run_speed`).
+//!
 //! The keyboard's own axes are the game's (`Client::keys`, `m_keys[17..=24]`,
 //! the cursor block as `VIKeyboard::Read` codes it): the arrows walk and turn
 //! (in mode 3 strafe), Home and End orbit mode 3, Page Up and Page Down pitch
@@ -23,8 +32,7 @@
 //! client's own right stick on I/J/K/L).
 //!
 //! Not here: the modal look (mode 38, which holding L1 or R1 begins; the
-//! camera effect's blend into a scripted camera is not ported) and follow
-//! (`m_p00078`, `/follow`).
+//! camera effect's blend into a scripted camera is not ported).
 //!
 //! The client's own, not the game's: `Client::steer`, the mouse steering the
 //! body (`mouse.rs`: its right button in the follow orbit, either button in
@@ -33,6 +41,7 @@
 //! axes: forward, back and a sidestep, the body keeping the heading the mouse
 //! gave it, not turning to its motion), and no mode turns to the target. With
 //! it off (the pad, the keys, the touch screen) every call is the game's.
+//! While it steers, follow paces the player but does not turn it.
 
 // Written as the C writes it: its float literals (pi as 3.1415927), `a = a +
 // b`, and the nested tests.
@@ -76,12 +85,39 @@ pub struct Client {
     pub keys: [f32; 8],
     /// the client's own (the module's doc): the mouse steers the body
     pub steer: bool,
+    /// `m_p00078`: following the group member `m_p0007C`
+    pub follow: Follow,
+    /// `UpdateGame`'s `m_walkCam.m_runSpeed`, which `Walker::frame_with`
+    /// sets before `UpdateControls`: 1.05 times the speed while following
+    pub run_speed: f32,
 }
 
 impl Default for Client {
     fn default() -> Self {
-        Client { has_chat: false, inverted: false, auto_attack: false, swung: false, target: None, autorun: false, casting: false, move_ok: true, look_ok: true, rooted: false, timed_out: false, keys: [0.0; 8], steer: false }
+        Client { has_chat: false, inverted: false, auto_attack: false, swung: false, target: None, autorun: false, casting: false, move_ok: true, look_ok: true, rooted: false, timed_out: false, keys: [0.0; 8], steer: false, follow: Follow::Off, run_speed: vi::walk::RUN_SPEED }
     }
+}
+
+/// Following (`m_p00078`), and the member followed (`m_p0007C`) as
+/// `UpdateControls` finds it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Follow {
+    #[default]
+    Off,
+    /// The member is not in the group, or not in the scene with an actor,
+    /// or the player has none: the follow ends.
+    Lost,
+    /// The member's actor position and the player's.
+    At([f32; 3], [f32; 3]),
+}
+
+/// What `UpdateControls` changed of the client, for it to carry out.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Changed {
+    /// `ToggleP74`: autorun off, by the stick or by a follow
+    pub autorun: bool,
+    /// `m_p00078 = 0`: the follow ended
+    pub follow: bool,
 }
 
 /// What `UpdateControls` calls on `m_walkCam` (a `VIWalkCamera`, which is a
@@ -90,6 +126,10 @@ pub trait Walk {
     fn camera_mode(&self) -> i32;
     /// `m_committed.m_angles.x`
     fn heading(&self) -> Fe;
+    /// `m_committed.m_angles.y`
+    fn pitch(&self) -> Fe;
+    /// `m_last.m_orbit.x`: the orbit's angle, the camera's way round
+    fn orbit_angle(&self) -> Fe;
     /// `m_camera.m_dir`
     fn camera_dir(&self) -> Vect3<Ee>;
     fn under_liquid(&self) -> bool;
@@ -108,9 +148,9 @@ pub trait Walk {
 }
 
 /// `UpdateControls` up to `Process`, with the sticks `keys` (rx, ry, lx,
-/// ly). True when the stick cancelled autorun (`ToggleP74`, for the client
-/// to carry out).
-pub fn update_controls(w: &mut impl Walk, keys: [f32; 4], c: &Client) -> bool {
+/// ly). What it changed of the client (autorun, the follow) is the client's
+/// to carry out.
+pub fn update_controls(w: &mut impl Walk, keys: [f32; 4], c: &Client) -> Changed {
     let f = Fe::new;
     let k = keys.map(f);
     // `m_keys[17..=24]`: the keyboard's cursor block
@@ -164,14 +204,105 @@ pub fn update_controls(w: &mut impl Walk, keys: [f32; 4], c: &Client) -> bool {
             }
         }
     }
-    let walking = c.casting;
+    // Follow: ended by the attack and by the stick, else steered to the
+    // member while it is found (`Follow::At`).
+    let mut following = c.follow != Follow::Off && !c.auto_attack;
+    let (mut dpitch, mut dh, mut height, mut dist) = (Fe::ZERO, Fe::ZERO, Fe::ZERO, Fe::ZERO);
+    if following && c.move_ok && f(0.7) < fwd.abs() {
+        following = false;
+    }
+    if following {
+        following = false;
+        if let Follow::At(o, s) = c.follow {
+            following = true;
+            let mut d = Vect3::<Ee>::of(o[0], o[1], o[2]);
+            d -= Vect3::of(s[0], s[1], s[2]);
+            height = d.y;
+            d.y = dh;
+            let (hx, _, _) = d.get_hpr();
+            dist = d.magnitude();
+            dh = if mode == 3 { hx - (w.orbit_angle() + f(PI)).fmodf(f(TWO_PI)) } else { hx - w.heading() };
+            if f(PI) < dh {
+                dh = dh - f(TWO_PI);
+            } else if dh < f(-PI) {
+                dh = dh + f(TWO_PI);
+            }
+            let mut d = Vect3::<Ee>::of(o[0], o[1], o[2]);
+            d -= Vect3::of(s[0], s[1], s[2]);
+            let (_, p, _) = d.get_hpr();
+            dpitch = p - w.pitch();
+            // (`!c.steer`, as above: the mouse's heading wins)
+            if !c.steer {
+                face = Some(hx);
+                if mode == 3 {
+                    if f(3.0) < dist {
+                        if f(0.34906584) < dh {
+                            orbit = f(-1.0);
+                        } else if dh < f(-0.34906584) {
+                            orbit = Fe::ONE;
+                        } else if f(0.08726646) < dh {
+                            orbit = f(-0.125);
+                        } else if dh < f(-0.08726646) {
+                            orbit = f(0.125);
+                        }
+                        if c.inverted {
+                            orbit = -orbit;
+                        }
+                    }
+                } else if f(0.17453292) < dh {
+                    turn = Fe::ONE;
+                } else if dh < f(-0.17453292) {
+                    turn = f(-1.0);
+                } else if f(0.08726646) < dh {
+                    turn = f(0.25);
+                } else if dh < f(-0.08726646) {
+                    turn = f(-0.25);
+                }
+            }
+        }
+    }
+    let mut walking = c.casting;
     let mut autorun = c.autorun;
     let mut toggled = false;
     if autorun && c.move_ok && f(0.7) < fwd.abs() {
         autorun = false;
         toggled = true;
     }
-    if autorun {
+    if following && autorun {
+        autorun = false;
+        toggled = true;
+    }
+    if following {
+        if w.under_liquid() || w.at_liquid_surface() {
+            if mode != 3 {
+                if f(0.17453292) < dpitch {
+                    pitch = Fe::ONE;
+                } else if dpitch < f(-0.17453292) {
+                    pitch = f(-1.0);
+                } else if f(0.08726646) < dpitch {
+                    pitch = f(0.25);
+                } else if dpitch < f(-0.08726646) {
+                    pitch = f(-0.25);
+                }
+                // (the decomp's `1 < fabsf(height)` stops here, a store every
+                // path below overwrites)
+            } else if Fe::ONE < height {
+                pitch = f(-1.0);
+            } else if height < f(-1.0) {
+                pitch = Fe::ONE;
+            }
+        }
+        if f(1.0471976) < dh || dh < f(-1.0471976) {
+            fwd = Fe::ZERO;
+        } else if f(6.0) < dist {
+            fwd = Fe::ONE;
+        } else if dist < f(3.0) {
+            fwd = Fe::ZERO;
+        } else {
+            fwd = Fe::ONE;
+            walking = true;
+        }
+    } else if autorun {
         fwd = Fe::ONE;
     }
     if !c.move_ok || c.rooted {
@@ -238,7 +369,7 @@ pub fn update_controls(w: &mut impl Walk, keys: [f32; 4], c: &Client) -> bool {
         }
         _ => {}
     }
-    toggled
+    Changed { autorun: toggled, follow: c.follow != Follow::Off && !following }
 }
 
 #[cfg(test)]
@@ -249,13 +380,15 @@ mod tests {
     struct Log {
         mode: i32,
         heading: f32,
+        /// the orbit's angle: the camera's way round is it plus pi
+        orbit: f32,
         liquid: bool,
         calls: Vec<String>,
     }
 
     impl Log {
         fn new(mode: i32) -> Self {
-            Log { mode, heading: 0.0, liquid: false, calls: Vec::new() }
+            Log { mode, heading: 0.0, orbit: PI, liquid: false, calls: Vec::new() }
         }
     }
 
@@ -265,6 +398,12 @@ mod tests {
         }
         fn heading(&self) -> Fe {
             Fe::new(self.heading)
+        }
+        fn pitch(&self) -> Fe {
+            Fe::ZERO
+        }
+        fn orbit_angle(&self) -> Fe {
+            Fe::new(self.orbit)
         }
         fn camera_dir(&self) -> Vect3<Ee> {
             Vect3::of(0.0, 0.0, 1.0)
@@ -307,7 +446,7 @@ mod tests {
         }
     }
 
-    fn run(mode: i32, keys: [f32; 4], c: Client) -> (Vec<String>, bool) {
+    fn run(mode: i32, keys: [f32; 4], c: Client) -> (Vec<String>, Changed) {
         let mut w = Log::new(mode);
         let t = update_controls(&mut w, keys, &c);
         (w.calls, t)
@@ -360,15 +499,119 @@ mod tests {
     fn autorun_runs_forward_until_the_stick_passes_0_7() {
         let c = Client { autorun: true, ..Client::default() };
         // (-0 + 0 is +0: the keyboard terms the C adds make the idle turn +0)
-        assert_eq!(run(0, [0.0; 4], c), (vec!["move 1 0".into(), "turn 0".into(), "pitch 0".into()], false));
+        assert_eq!(run(0, [0.0; 4], c), (vec!["move 1 0".into(), "turn 0".into(), "pitch 0".into()], Changed::default()));
         // pulled back past 0.7: cancelled, and this frame the stick's own
         let (calls, t) = run(0, [0.0, 0.0, 0.0, 0.8], c);
-        assert!(t);
+        assert_eq!(t, Changed { autorun: true, follow: false });
         assert_eq!(calls[0], "move -0.8 0");
         // 0.7 itself does not
-        assert!(!run(0, [0.0, 0.0, 0.0, 0.7], c).1);
+        assert!(!run(0, [0.0, 0.0, 0.0, 0.7], c).1.autorun);
         // nor anything while movement is locked
-        assert!(!run(0, [0.0, 0.0, 0.0, 1.0], Client { move_ok: false, ..c }).1);
+        assert!(!run(0, [0.0, 0.0, 0.0, 1.0], Client { move_ok: false, ..c }).1.autorun);
+    }
+
+    // The player at (10, 0, 10); a member 10 along +x, heading pi/2.
+    const ME: [f32; 3] = [10.0, 0.0, 10.0];
+    fn member(dx: f32, dy: f32) -> Client {
+        Client { follow: Follow::At([10.0 + dx, dy, 10.0], ME), ..Client::default() }
+    }
+
+    /// Following in first person and the fixed follow camera: a turn to the
+    /// member, full past 10 degrees, a quarter past 5; a run to it past 6, a
+    /// walk from 3 to 6, a stop within 3, and none while it is more than 60
+    /// degrees off (the control: not following, the same frame is idle).
+    #[test]
+    fn follow_turns_to_the_member_and_runs_walks_or_stops_by_its_distance() {
+        assert_eq!(run(0, [0.0; 4], Client::default()).0, ["move 0 0", "turn 0", "pitch 0"]);
+        // facing 0, the member a quarter turn round: turn, no step
+        assert_eq!(run(0, [0.0; 4], member(10.0, 0.0)), (vec!["move 0 0".into(), "turn 1".into(), "pitch 0".into()], Changed::default()));
+        let facing = |heading: f32, c: Client| {
+            let mut w = Log::new(2);
+            w.heading = heading;
+            update_controls(&mut w, [0.0; 4], &c);
+            w.calls
+        };
+        assert_eq!(facing(1.5, member(10.0, 0.0)), ["move 1 0", "turn 0", "pitch 0"], "within 5 degrees: a run, no turn");
+        assert_eq!(facing(1.45, member(10.0, 0.0))[1], "turn 0.25");
+        assert_eq!(facing(1.7, member(10.0, 0.0))[1], "turn -0.25");
+        assert_eq!(facing(1.0, member(10.0, 0.0)), ["move 1 0", "turn 1", "pitch 0"], "33 degrees off: on, turning");
+        assert_eq!(facing(0.5, member(10.0, 0.0))[0], "move 0 0", "61 degrees off: it turns first");
+        assert_eq!(facing(1.5708, member(5.0, 0.0))[0], "walk 1 0");
+        assert_eq!(facing(1.5708, member(6.0, 0.0))[0], "walk 1 0", "6 itself walks");
+        assert_eq!(facing(1.5708, member(2.0, 0.0))[0], "move 0 0");
+        // the same distances without the follow: no step
+        assert_eq!(facing(1.5708, Client::default())[0], "move 0 0");
+    }
+
+    /// In the follow orbit the camera swings round to the member (a full
+    /// orbit past 20 degrees, an eighth past 5, the option leaving it as it
+    /// is) and the body heads for it; within 3 the camera is left alone.
+    #[test]
+    fn follow_in_the_follow_orbit_swings_the_camera_round_to_the_member() {
+        let orbit = |view: f32, c: Client| {
+            let mut w = Log::new(3);
+            w.orbit = view - PI;
+            update_controls(&mut w, [0.0; 4], &c);
+            w.calls
+        };
+        // the camera looking along pi/2, at the member
+        assert_eq!(orbit(1.5707964, member(10.0, 0.0)), ["vmove 1 0", "heading 1.571", "in -0", "right -0"]);
+        assert_eq!(orbit(1.0707964, member(10.0, 0.0))[3], "right 1");
+        assert_eq!(orbit(2.0707964, member(10.0, 0.0))[3], "right -1");
+        assert_eq!(orbit(1.3707964, member(10.0, 0.0))[3], "right 0.125");
+        assert_eq!(orbit(1.0707964, Client { inverted: true, ..member(10.0, 0.0) })[3], "right 1");
+        assert_eq!(orbit(1.0707964, member(2.5, 0.0)), ["vmove 0 0", "heading 1.571", "in -0", "right -0"]);
+        // the control: not following, nothing turns
+        assert_eq!(orbit(1.0707964, Client::default()), ["vmove 0 0", "in -0", "right -0"]);
+    }
+
+    /// The attack ends a follow, and the stick pushed past 0.7 (not with
+    /// movement locked); a member gone ends it; it ends autorun.
+    #[test]
+    fn what_ends_a_follow_and_what_a_follow_ends() {
+        let ended = Changed { autorun: false, follow: true };
+        let (calls, t) = run(0, [0.0; 4], Client { auto_attack: true, ..member(10.0, 0.0) });
+        assert_eq!((calls[0].as_str(), t), ("move 0 0", ended));
+        assert_eq!(run(0, [0.0, 0.0, 0.0, -0.8], member(10.0, 0.0)), (vec!["move 0.8 0".into(), "turn 0".into(), "pitch 0".into()], ended));
+        assert_eq!(run(0, [0.0, 0.0, 0.0, -0.7], member(10.0, 0.0)).1, Changed::default());
+        assert_eq!(run(0, [0.0, 0.0, 0.0, -1.0], Client { move_ok: false, ..member(10.0, 0.0) }).1, Changed::default());
+        assert_eq!(run(0, [0.0; 4], Client { follow: Follow::Lost, ..Client::default() }).1, ended);
+        assert_eq!(run(0, [0.0; 4], Client::default()).1, Changed::default());
+        // autorun off, the follow on: the member a quarter turn round stops it
+        assert_eq!(run(0, [0.0; 4], Client { autorun: true, ..member(10.0, 0.0) }), (vec!["move 0 0".into(), "turn 1".into(), "pitch 0".into()], Changed { autorun: true, follow: false }));
+    }
+
+    /// Under liquid a follow pitches to the member: by the angle up to it in
+    /// first person, by its height in the follow orbit; out of it, not.
+    #[test]
+    fn follow_under_liquid_pitches_to_the_member() {
+        let swim = |mode: i32, liquid: bool| {
+            let mut w = Log::new(mode);
+            w.heading = 1.5708;
+            w.orbit = 1.5707964 - PI;
+            w.liquid = liquid;
+            update_controls(&mut w, [0.0; 4], &member(10.0, 5.0));
+            w.calls
+        };
+        assert_eq!(swim(0, true), ["move 1 0", "turn 0", "pitch -1"]);
+        assert_eq!(swim(0, false), ["move 1 0", "turn 0", "pitch 0"]);
+        assert_eq!(swim(3, true), ["vmove 1 0", "heading 1.571", "swim 1", "right -0"]);
+        assert_eq!(swim(3, false), ["vmove 1 0", "heading 1.571", "in -0", "right -0"]);
+    }
+
+    /// The mouse steering: the follow sets the pace on the body's own axes,
+    /// and turns nothing.
+    #[test]
+    fn a_steered_follow_paces_and_does_not_turn() {
+        let steer = Client { steer: true, ..member(10.0, 0.0) };
+        let mut w = Log::new(3);
+        w.heading = 1.5708;
+        w.orbit = 1.0707964 - PI;
+        update_controls(&mut w, [0.0; 4], &steer);
+        assert_eq!(w.calls, ["move 1 0", "in -0", "right -0"]);
+        let mut w = Log::new(0);
+        update_controls(&mut w, [0.0; 4], &steer);
+        assert_eq!(w.calls, ["move 0 0", "turn 0", "pitch 0"], "a quarter turn off: stopped, unturned");
     }
 
     #[test]

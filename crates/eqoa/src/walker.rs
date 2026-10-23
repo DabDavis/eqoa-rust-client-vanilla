@@ -162,15 +162,24 @@ impl Walker {
     }
 
     /// One frame on the sticks `keys` (rx, ry, lx, ly) for the client
-    /// `c`: `UpdateControls`, then the clock moved to `now_ms` and
-    /// `Process`. True when the stick cancelled autorun. `game_frame`: one of
-    /// the game's frames (`frames.rs`). Everything here steps by the clock
-    /// but the camera shake (`VICameraEffect::Apply` takes the next of its
-    /// samples a call), which moves on only then: between them the eye is
-    /// shaken by the sample the last of the game's frames took. The camera's
-    /// `Process` goes through `reach` (the follow orbit's way back out).
-    pub fn frame_with(&mut self, keys: [f32; 4], now_ms: i64, c: &crate::controls::Client, game_frame: bool) -> bool {
-        let toggled = crate::controls::update_controls(self, keys, c);
+    /// `c`: `UpdateGame`'s run speed, `UpdateControls`, then the clock moved
+    /// to `now_ms` and `Process`. What `UpdateControls` changed of the client
+    /// comes back (autorun, the follow). `game_frame`: one of the game's
+    /// frames (`frames.rs`). Everything here steps by the clock but the
+    /// camera shake (`VICameraEffect::Apply` takes the next of its samples a
+    /// call), which moves on only then: between them the eye is shaken by
+    /// the sample the last of the game's frames took. The camera's `Process`
+    /// goes through `reach` (the follow orbit's way back out).
+    pub fn frame_with(&mut self, keys: [f32; 4], now_ms: i64, c: &crate::controls::Client, game_frame: bool) -> crate::controls::Changed {
+        // UpdateGame sets the run speed and calls InitIntermediate every
+        // frame; with the speed unchanged that changes nothing the next
+        // `Process` reads, so it is done when the speed moves.
+        let run = F::<Ee>::new(c.run_speed);
+        if self.cam.walk.run_speed.bits() != run.bits() {
+            self.cam.walk.run_speed = run;
+            self.cam.walk.init_intermediate();
+        }
+        let changed = crate::controls::update_controls(self, keys, c);
         let dt_s = (now_ms - self.scene.time).clamp(0, 100) as f32 / 1000.0;
         self.scene.time = now_ms;
         let next = self.cam.effect.sample;
@@ -183,7 +192,7 @@ impl Walker {
         } else {
             self.cam.effect.sample = next;
         }
-        toggled
+        changed
     }
 
 
@@ -226,6 +235,12 @@ impl crate::controls::Walk for Walker {
     }
     fn heading(&self) -> F<Ee> {
         self.cam.walk.committed.angles.x
+    }
+    fn pitch(&self) -> F<Ee> {
+        self.cam.walk.committed.angles.y
+    }
+    fn orbit_angle(&self) -> F<Ee> {
+        self.cam.last.orbit.x
     }
     fn camera_dir(&self) -> Vect3<Ee> {
         self.eye.direction

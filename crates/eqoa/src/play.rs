@@ -123,6 +123,9 @@ pub struct Play {
     pub swung: u32,
     /// `m_p00074`: autorun (`ToggleP74`: L3, or X on the PS2's keyboard).
     pub autorun: bool,
+    /// `m_p00078`: following (`ToggleFollow`), the group member `m_p0007C`.
+    following: bool,
+    follow_id: u32,
     /// `m_p2BB40` .. `m_p2BB48`: the player's own cast (`CastingCombat`),
     /// on the session's clock; the walk walks through it.
     cast_window: (u32, u32),
@@ -900,7 +903,7 @@ pub struct Gpu<'a> {
 
 impl Play {
     pub fn new(session: Session, player: Player, dump: Box<net::dump::MemoryDump>) -> Self {
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, cast_window: (0, 0), rooted: false, locks: (true, true), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack_due: 0, swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default() };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -984,8 +987,11 @@ impl Play {
                 Event::Teleport { world, pos, hpr, .. } => {
                     // Msg00B2: back to play, then Respawn. A dead player
                     // stays dead (EnterWorld leaves m_pC1B0): only the
-                    // dump (Msg000D) ends a death.
+                    // dump (Msg000D) ends a death. Respawn ends autorun and
+                    // the follow.
                     self.mode = 0;
+                    self.autorun = false;
+                    self.following = false;
                     if world as i64 != self.player.world {
                         match WORLD_FILES.get(world as usize) {
                             Some(f) => {
@@ -1191,6 +1197,7 @@ impl Play {
                         self.show_word_name(w, &name);
                     }
                 }
+                Event::Assist(id) => self.msg_007b(id),
                 Event::Pet(id) => {
                     self.pet_id = id.unwrap_or(u32::MAX);
                     if id.is_none() {
@@ -2044,6 +2051,20 @@ impl Play {
         true
     }
 
+    /// `Msg007B`, an assist's answer: -1 is word 838 ("There is no target
+    /// for assisting."), else `id` targeted and asked about (0x0010 with the
+    /// token), the attack and the target's details left as they are.
+    fn msg_007b(&mut self, id: u32) {
+        if id == u32::MAX {
+            self.show_word(838);
+            return;
+        }
+        self.target = id;
+        let mut w = net::stream::Writer::op(0x0010);
+        w.u32(0).u32(id);
+        self.session.send(&w.data);
+    }
+
     /// `id` targeted, as `CycleTarget` leaves a choice: the attack off, the
     /// target's details asked again, 0x0010 with the token.
     pub fn target_id(&mut self, id: u32) {
@@ -2399,8 +2420,9 @@ impl Play {
     }
 
     /// `Msg005E`: the player died. The death pose, its spells ended, the
-    /// cue, back to play with auto-attack off, every invitation refused (3),
-    /// and `ResetCamera`: the death camera from where the camera is.
+    /// cue, back to play with autorun, the follow and auto-attack off, every
+    /// invitation refused (3), and `ResetCamera`: the death camera from where
+    /// the camera is.
     fn msg_005e(&mut self, walker: &mut Walker) {
         if let Some(cs) = walker.sprite.as_mut() {
             cs.set_death(true, false, &walker.anims, &mut self.spell_rand, None);
@@ -2408,6 +2430,8 @@ impl Play {
         }
         self.mode = 0;
         self.cues.push(crate::sound::Cue::Named("death", 0.4));
+        self.autorun = false;
+        self.following = false;
         self.auto_attack = false;
         for i in std::mem::take(&mut self.group.invites) {
             self.session.send_msg(0x0624, i.id, 3);
@@ -2535,6 +2559,33 @@ impl Play {
         self.add_chat(text, [1.0; 4]);
     }
 
+    /// `ToggleFollow` (`/follow`, the quick command): on, the target when it
+    /// is another of the group's members, else word 1195 ("You must target a
+    /// group member to follow.") and off; on, off. `UpdateControls` steers it.
+    fn toggle_follow(&mut self) {
+        self.following = !self.following;
+        if self.following {
+            let target = self.target;
+            if Some(target) != self.self_id32() && self.group.members[..self.group.count()].iter().any(|m| m.id == target) {
+                self.follow_id = target;
+            } else {
+                self.show_word(1195);
+                self.following = false;
+            }
+        }
+    }
+
+    /// What `UpdateControls` changed (`Walker::frame_with`): autorun off
+    /// (`ToggleP74`, its line), the follow ended.
+    pub fn controls_changed(&mut self, c: crate::controls::Changed) {
+        if c.autorun {
+            self.toggle_autorun();
+        }
+        if c.follow {
+            self.following = false;
+        }
+    }
+
     /// `ClearTarget` (triangle in play): the target let go; nothing is sent.
     pub fn clear_target(&mut self) {
         self.target_info = None;
@@ -2570,7 +2621,24 @@ impl Play {
             None
         };
         let (a, b) = self.cast_window;
+        // the member followed, as UpdateControls finds it: still in the
+        // group and the scene (`FindEntity`), with an actor, as the player is
+        let follow = if !self.following {
+            crate::controls::Follow::Off
+        } else {
+            let id = self.follow_id;
+            let member = self.group.members[..self.group.count()].iter().any(|m| m.id == id) && self.entities.slots.iter().flatten().any(|e| e.id == id);
+            match (member && id != u32::MAX && Some(id) != me).then(|| self.actor_pos(id).zip(self.self_at.map(|s| s.0))).flatten() {
+                Some((member_at, self_at)) => crate::controls::Follow::At(member_at, self_at),
+                None => crate::controls::Follow::Lost,
+            }
+        };
         crate::controls::Client {
+            follow,
+            // UpdateGame: `m_speed`, 1.05 times it while following. The speed
+            // is the walk's own: the client applies none of the server's (the
+            // dump's, 0x00F8's).
+            run_speed: if self.following { (F::<Ee>::new(vi::walk::RUN_SPEED) * F::new(1.05)).0 } else { vi::walk::RUN_SPEED },
             has_chat: matches!(self.mode, 2 | 28 | 29 | 30 | 33),
             inverted: self.options.inverted != 0,
             auto_attack: self.auto_attack,
@@ -3727,7 +3795,16 @@ impl Play {
                 self.who_open = true;
                 self.mode = 35;
             }
-            0x0B03_0002 => self.show_word(570),
+            // m_p2EF24.CanChat: in a guild its channel (word 599), else
+            // word 570; any other answer "Guild error: n" (word 835)
+            0x0B03_0002 => match crate::guild::Cmds::can_member(&self.guild) {
+                0 => self.group_changed(4),
+                3 => self.show_word(570),
+                r => {
+                    let w = self.words.as_ref().map_or_else(String::new, |w| w.get(835, 0).to_string());
+                    self.add_chat(format!("{w}: {r}"), [1.0; 4]);
+                }
+            },
             0x0B06_0000 => self.request_trade(),
             0x0508_0000 => {
                 if target != u32::MAX {
@@ -3751,11 +3828,14 @@ impl Play {
                     self.show_word(570);
                 }
             }
+            // Assist Leader (123, 0x007B) and Assist Target (203, 0x00CB):
+            // the server answers with whom to target (Msg007B)
             0x0B09_0000 => self.session.send_op_int(123, target),
             0x0B0E_0000 => self.session.send_opcode(198),
             0x0B0E_0001 => self.session.send_opcode(222),
             0x0B0E_0003 => self.session.send_opcode(200),
             0x0B0E_0006 => self.session.send_op_int(203, target),
+            0x0B0E_0007 => self.toggle_follow(),
             0x0905_0000 | 0x0509_1004 | 0x0B0E_0002 => {}
             0x0509_1005 => {
                 let w = self.words.as_ref().map_or_else(String::new, |w| w.get(836, 0).to_string());
@@ -5197,5 +5277,108 @@ impl Play {
         let on_bar = self.abilities.values().filter(|a| a.valid != 0).count();
         let fx = self.spells.as_ref().map_or_else(String::new, |s| format!(", {}", s.describe()));
         format!("{n} entities, {} items, {} abilities ({on_bar} on a bar), {} packets sent{fx}, {}", self.dump.inventory.items.len(), self.abilities.len(), self.session.packets_sent, self.rings.describe())
+    }
+}
+
+#[cfg(test)]
+mod commands {
+    use super::*;
+    use crate::controls::Follow;
+
+    /// Play on a session nothing answers, the player 0x100, no words (a
+    /// word is said as "(word n)").
+    fn play() -> Play {
+        struct Nowhere;
+        impl net::session::Datagrams for Nowhere {
+            fn send_to(&mut self, _: &[u8], _: [u8; 4], _: u16) {}
+            fn recv_from(&mut self) -> Option<(Vec<u8>, [u8; 4], u16)> {
+                None
+            }
+        }
+        let mut s = Session::connect_with(Box::new(Nowhere), ([127, 0, 0, 1], 5000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        s.self_id = Some(0x100);
+        Play::new(s, Player::default(), Box::default())
+    }
+
+    fn last_line(p: &Play) -> &str {
+        p.chat.back().map_or("", |l| l.0.as_str())
+    }
+
+    fn grouped(p: &mut Play, ids: &[u32]) {
+        p.group.in_group = true;
+        p.group.members = ids.iter().map(|&id| crate::group::Member { id, ..Default::default() }).collect();
+    }
+
+    /// The chat mode's Guild (`|17`, the start menu's): the guild's channel
+    /// when in one (word 599), else word 570 and the channel as it was.
+    #[test]
+    fn guild_chat_is_the_guilds_channel_in_a_guild_only() {
+        let mut p = play();
+        p.do_action(0x0B03_0002, 0);
+        assert_eq!((p.channel, last_line(&p)), (0, "(word 570)"));
+        p.guild.in_guild = true;
+        p.do_action(0x0B03_0002, 0);
+        assert_eq!((p.channel, last_line(&p)), (4, "(word 599)"));
+        p.do_action(0x0B01_0000, 0);
+        assert_eq!((p.channel, last_line(&p)), (0, "(word 595)"), "Say takes it back");
+    }
+
+    /// `ToggleFollow`: a targeted member of the group is followed; the
+    /// player itself, someone outside the group or nothing is word 1195.
+    /// Again, off.
+    #[test]
+    fn follow_takes_a_targeted_group_member() {
+        let mut p = play();
+        grouped(&mut p, &[0x100, 0x200]);
+        for t in [u32::MAX, 0x100, 0x300] {
+            p.target = t;
+            p.chat.clear();
+            p.do_action(0x0B0E_0007, 0);
+            assert!(!p.following && last_line(&p) == "(word 1195)", "target {t:#x}");
+        }
+        p.target = 0x200;
+        p.chat.clear();
+        p.do_action(0x0B0E_0007, 0);
+        assert!(p.following && p.follow_id == 0x200 && p.chat.is_empty());
+        p.do_action(0x0B0E_0007, 0);
+        assert!(!p.following && p.chat.is_empty(), "again: off, nothing said");
+        // and `/follow` is the same command
+        p.chat_line("/follow");
+        assert!(p.following);
+    }
+
+    /// What `UpdateControls` is given: off; the member gone from the group
+    /// or not in the scene, lost; and while following the run is 1.05 times
+    /// the walk's own.
+    #[test]
+    fn the_follow_handed_to_the_controls() {
+        let mut p = play();
+        assert_eq!((p.control_client().follow, p.control_client().run_speed), (Follow::Off, vi::walk::RUN_SPEED));
+        grouped(&mut p, &[0x100, 0x200]);
+        p.target = 0x200;
+        p.do_action(0x0B0E_0007, 0);
+        let c = p.control_client();
+        // no entity 0x200 in the scene: lost, for UpdateControls to end it
+        assert_eq!(c.follow, Follow::Lost);
+        assert_eq!(c.run_speed, (F::<Ee>::new(vi::walk::RUN_SPEED) * F::new(1.05)).0);
+        assert!(c.run_speed > vi::walk::RUN_SPEED);
+        p.controls_changed(crate::controls::Changed { autorun: false, follow: true });
+        assert_eq!(p.control_client().follow, Follow::Off);
+        // a follow that ends autorun says so, as the stick's does
+        p.autorun = true;
+        p.controls_changed(crate::controls::Changed { autorun: true, follow: false });
+        assert!(!p.autorun && last_line(&p) == "(word 720): (word 552)");
+    }
+
+    /// `Msg007B`: the id targeted, the attack left on; -1 is word 838.
+    #[test]
+    fn an_assist_answer_targets_its_id() {
+        let mut p = play();
+        p.target = 0x200;
+        p.auto_attack = true;
+        p.msg_007b(0x300);
+        assert_eq!((p.target, p.auto_attack), (0x300, true));
+        p.msg_007b(u32::MAX);
+        assert_eq!((p.target, last_line(&p)), (0x300, "(word 838)"));
     }
 }

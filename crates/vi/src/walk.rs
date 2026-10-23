@@ -140,6 +140,8 @@ pub struct WalkControl<M: Model> {
 const PI: f32 = 3.14159274;
 const TWO_PI: f32 = 6.28318548;
 const PITCH_LIMIT: f32 = 1.5607964;
+/// `InitParms`' run speed.
+pub const RUN_SPEED: f32 = 8.833330;
 
 /// `VIWalkControl::Gravity` and `WGravity`.
 fn gravity<M: Model>() -> Vect3<M> {
@@ -284,7 +286,7 @@ impl<M: Model> WalkControl<M> {
         self.tick_alt_ms = 200;
         self.speed_threshold = f(0.5);
         self.walk_speed = f(3.0);
-        self.run_speed = f(8.833330);
+        self.run_speed = f(RUN_SPEED);
         self.parm14 = f(4.416665);
         self.turn_rate = f(1.5707964);
         self.pitch_rate = f(0.7853982);
