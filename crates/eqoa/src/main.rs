@@ -51,6 +51,7 @@ mod craftwnd;
 mod death;
 mod discs;
 mod editbox;
+mod fog;
 mod frames;
 mod group;
 mod guild;

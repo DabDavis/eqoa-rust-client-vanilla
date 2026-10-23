@@ -74,11 +74,20 @@ pub fn lit(
     let mut sky = None;
     if let Some((b, at, w)) = &blend {
         let at = vi::vect::Vect3::of(at.x, at.y, at.z);
-        let fog = tod.fog(hour, o, b, w.env_flags(&at), &sun);
-        v.fog = Some((fog.near.0, fog.far.0, Vec3::new(fog.color[0].0, fog.color[1].0, fog.color[2].0)));
+        let flags = w.env_flags(&at);
+        let fog = tod.fog(hour, o, b, flags, &sun);
+        let color = Vec3::new(fog.color[0].0, fog.color[1].0, fog.color[2].0);
+        // the distance fog through the Extended page's Fog; inside a liquid
+        // (env flags 1, 2, 4, 8) the game's own
+        v.fog = if flags & 0xF != 0 {
+            Some((fog.near.0, fog.far.0, color))
+        } else {
+            crate::fog::distances(crate::settings::fog(), fog.near.0, fog.far.0).map(|(n, f)| (n, f, color))
+        };
         let c = tod.sky(hour, o, b);
         v.clear = Vec3::new(c[0] as f32, c[1] as f32, c[2] as f32) / 255.0;
-        v.sky_view_proj = Some(proj * rot);
+        // the sky through a far plane of its own: the world's is the fog's
+        v.sky_view_proj = Some(crate::fog::with_far(proj, crate::fog::SKY_FAR) * rot);
         if let Some(wx) = weather {
             wx.sky_colour(c, vi::tod::lavastorm_weight(b));
             let a = &wx.atm;
@@ -951,8 +960,9 @@ pub fn shot_with(
                 [x, y, z] => Vec3::new(*x, *y, *z),
                 _ => Vec3::from(walker.cam.walk.phys.position.to_array()) + Vec3::Y,
             };
-            proj = glam::camera::rh::proj::directx::perspective(40f32.to_radians(), aspect, 0.1, 3000.0);
             let at = p + Vec3::new(*dx, *dy, *dz);
+            let far = crate::fog::far_plane(&walker.scene, at, crate::settings::fog());
+            proj = glam::camera::rh::proj::directx::perspective(40f32.to_radians(), aspect, 0.1, far);
             shot_eye = at;
             shot_dir = vi::vect::Vect3::of(p.x - at.x, p.y - at.y, p.z - at.z);
             v = glam::camera::rh::view::look_at_mat4(at, p, Vec3::Y);
