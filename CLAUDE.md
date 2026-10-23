@@ -148,6 +148,11 @@ current.
   in a page `web/drive.py --boot --keys/--type`. One login at a time per account, and a run that is killed holds its
   session about a minute: give each run's account time, or another account. `eqoa play <server> <account>` still goes
   straight into the world for scripts and playshots.
+- The patcher (README "the patcher"): SETUP's, ported (`patcher/`), run after the title's Play into the server's
+  own folder (`servers::folder(host)`: `<config>/servers/<host>/`, the card's files flat plus `patch.json`); what
+  reads a server's files reads them there (`servers::file`, `servers::words`), never another server's. Test it
+  against a patch port of one's own (go-eqoa-server's 7000, `EQOA_PATCH_PORT`) with `EQOA_CONFIG` under a scratch
+  directory; Sandstorm's port only read, and never its login.
 - The browser build (`web/`, README "In a browser"): `web/build.sh`, then `web/drive.py` (headless
   Chromium over the DevTools protocol, the disc image handed to the page's file input). Platform
   code goes behind `net::session::Datagrams`, `net::auth::Exchange`, `iso::Source`/`iso::Sparse`

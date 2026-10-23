@@ -19,7 +19,9 @@
 //!
 //! What the PS2 does here that a computer does not need is left out, each
 //! step where it would be: the memory card's checks (MCERR, `VIWndInitFromMc`),
-//! the network adaptor's configuration (`VIWndConnect`), DNAS and the patcher.
+//! the network adaptor's configuration (`VIWndConnect`) and DNAS. The patcher
+//! runs after the title's Play (`setup`, `patcher`), into the server's own
+//! folder (`servers`).
 //! The title's Network Setup, which on the console starts Sony's network
 //! utility (NTGUI2.ELF), is where the player enters the server's address
 //! (the client's own page, the user's choice).
