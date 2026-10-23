@@ -671,7 +671,7 @@ impl StartMenu {
             return;
         }
         r.anchor(Anchor::Frame);
-        vui.blit_rect(r, 32, [-1, -1], [642, 48], 0, 1.0);
+        band(vui, r);
         let fp = FrameParam { tl: (44, 0), top: (45, 0), tr: (46, 0), right: (52, 0), br: (50, 0), bottom: (49, 0), bl: (48, 0), left: (47, 0) };
         vui.blit_fill_frame(r, [-1, 48], [176, 265], &fp, 35, 0, 1.0, true);
         vui.blit_rect(r, 51, [451, 48], [199, 265], 0, 1.0);
@@ -690,6 +690,17 @@ impl StartMenu {
 
 /// The start menu's middle frame (`StartMenu::draw`): its top and height.
 pub const MIDDLE: [i32; 2] = [37, 294];
+
+/// The start menu's band (`OnDrawSelf`'s first piece): atlas entry 32 over
+/// the frame's top 48 lines, from x -1 to 641, behind its title. The spell
+/// book, whose own `OnDrawSelf` lays the start menu's panels and rails out
+/// again over a backdrop of that entry 332 lines tall (which the client
+/// leaves out, `ui::window_backdrop`), draws this band in its place (F3
+/// 20261023-075225, -075253, -075412): its tabs on it, as the menu's title
+/// is.
+pub fn band(vui: &Vui, r: &mut dyn Raster) {
+    vui.blit_rect(r, 32, [-1, -1], [642, 48], 0, 1.0);
+}
 
 /// The client's own, in a window wider than 4:3 (nothing on a 4:3 one): a
 /// full-screen window whose band, rails and side panels run off a TV's
