@@ -421,7 +421,7 @@ impl WndOptions {
         let last = if self.page == -1 {
             5
         } else {
-            let mut last = [2, 3, 3, 6];
+            let mut last = [2, 3, 3, 7];
             if FEATURES & 0x100 != 0 {
                 last[1] = 4;
             }
@@ -438,12 +438,12 @@ impl WndOptions {
     }
 
     /// `Decrement` (`d` -1) and `Increment` (1): the item's value; a volume
-    /// stops at its end with sound 9. Items 12 to 18 are the client's
-    /// Extended rows: Level of Detail and Screen Shake (18) turn over,
-    /// Brightness, Camera Distance and Camera Turn Speed (17) step as a
-    /// volume does (stopping at their ends with sound 9), Frame Rate goes
-    /// round 30, 60 and the display's and Controller Focus round its seven
-    /// as Battle Music goes round its tracks.
+    /// stops at its end with sound 9. Items 12 to 19 are the client's
+    /// Extended rows: Level of Detail, Screen Shake (18) and Capture
+    /// Controller (19) turn over, Brightness, Camera Distance and Camera Turn
+    /// Speed (17) step as a volume does (stopping at their ends with sound
+    /// 9), Frame Rate goes round 30, 60 and the display's and Controller
+    /// Focus round its seven as Battle Music goes round its tracks.
     fn change(&mut self, o: &mut GameOptions, d: i32, cues: &mut Vec<i32>, ups: &mut Vec<OptionsUp>) {
         let tracks = if FEATURES & 0x100 != 0 { 10 } else { 3 };
         let step = F::<Ee>::new(0.1);
@@ -484,7 +484,7 @@ impl WndOptions {
                 let at = all.iter().position(|&f| f == crate::settings::focus()).unwrap_or(0);
                 crate::settings::set_focus(all[(at + if d < 0 { all.len() - 1 } else { 1 }) % all.len()]);
             }
-            12..=15 | 17 | 18 => {
+            12..=15 | 17..=19 => {
                 let mut c = crate::settings::client();
                 // a slider's step, or sound 9 at its end
                 let mut slide = |v: &mut u8, lo: u8, hi: u8, by: u8| {
@@ -498,6 +498,7 @@ impl WndOptions {
                 match self.item {
                     12 => c.lod = !c.lod,
                     18 => c.screen_shake = !c.screen_shake,
+                    19 => c.capture = !c.capture,
                     13 => slide(&mut c.brightness, 0, BRIGHTNESS_STEPS, 1),
                     15 => slide(&mut c.camera_distance, CAMERA_MIN, CAMERA_MAX, CAMERA_STEP),
                     17 => {
@@ -520,7 +521,7 @@ impl WndOptions {
             }
             _ => {}
         }
-        if !matches!(self.item, 3 | 4 | 13 | 15 | 17) && (0..=18).contains(&self.item) {
+        if !matches!(self.item, 3 | 4 | 13 | 15 | 17) && (0..=19).contains(&self.item) {
             cues.push(11);
         }
         if d < 0 {
@@ -767,13 +768,15 @@ impl WndOptions {
     /// of Detail (the game's On and Off), Brightness (a slider as the volumes
     /// are, and each side of its knob for a pointer), Frame Rate, Camera
     /// Distance and Camera Turn Speed (sliders), Screen Shake, Controller
-    /// Focus (Off the game's word), and under them what this window reads
-    /// (`input::reads`). Seven rows, that line and the legend are more than
-    /// the game's pages hold under their empty top row: they start at the
-    /// top row, so the page is no taller than nine rows (`select`) and
-    /// clears the options window's title tab and the title's menu under it.
+    /// Focus (Off the game's word) and Capture Controller; under them, beside
+    /// the Back legend, what this window reads (`input::reads`). Eight rows
+    /// and the legend are more than the game's pages hold (seven and the
+    /// legend under an empty row): they start at the top row, with the
+    /// legend's row shared, so the page is no taller than nine rows
+    /// (`select`) and clears the options window's title tab and the title's
+    /// menu under it.
     fn draw_extended(&mut self, vui: &Vui, r: &mut dyn Raster) {
-        self.item = [12, 13, 14, 15, 17, 18, 16].get(self.row as usize).copied().unwrap_or(self.item);
+        self.item = [12, 13, 14, 15, 17, 18, 16, 19].get(self.row as usize).copied().unwrap_or(self.item);
         let c = crate::settings::client();
         let on_off = |on: bool| wide(vui.words.get(if on { 551 } else { 552 }, vui.language));
         let lod = on_off(c.lod);
@@ -786,7 +789,7 @@ impl WndOptions {
             Focus::Off => vui.words.get(552, vui.language).to_string(),
             f => crate::input::focus_name(f),
         };
-        let values = [Some(lod), None, Some(wide(rate)), None, None, Some(on_off(c.screen_shake)), Some(wide(&focus))];
+        let values = [Some(lod), None, Some(wide(rate)), None, None, Some(on_off(c.screen_shake)), Some(wide(&focus)), Some(on_off(c.capture))];
         self.draw_rows_from(vui, r, &EXTENDED_ROWS.map(wide), &values, 0);
         let width = self.window2.size[0];
         let knob = vui.entry(166).uv1[0];
@@ -798,18 +801,20 @@ impl WndOptions {
             let mid = at + (t * (140 - knob) as f32) as i32 + knob / 2;
             self.halves(rows_rect(&self.window2, vui, r, width - 180, k, 140, 1), at - 4, mid, at + 144, k);
         }
-        let rows = EXTENDED_ROWS.len() as i32;
-        self.window2.text_box(vui, r, &wide(&crate::input::reads()), 40, rows, width - 80, 1, UI_COLORS[0], 0);
-        self.back_legend(vui, r, rows + 1);
+        // the legend, and what this window reads at the row's right
+        let legend = EXTENDED_ROWS.len() as i32;
+        self.back_legend(vui, r, legend);
+        let after = 40 + self.window2.text_width(vui, r, &wide(&format!("|t {}", vui.words.get(750, vui.language)))) + 16;
+        self.window2.text_box(vui, r, &wide(&crate::input::reads()), after, legend, width - 40 - after, 1, UI_COLORS[0], 0x10 | 2);
     }
 }
 
 /// The client's words for its own pages (no WORDS.TXT entry): the menu's
-/// rows and the Extended page's seven. (WORDS.TXT's "CONTROLS", 1039, is in
+/// rows and the Extended page's eight. (WORDS.TXT's "CONTROLS", 1039, is in
 /// capitals and used by none of the game's modules.)
 const EXTENDED: &str = "Extended";
 const CONTROLS: &str = "Controls";
-const EXTENDED_ROWS: [&str; 7] = ["Level of Detail", "Brightness", "Frame Rate", "Camera Distance", "Camera Turn Speed", "Screen Shake", "Controller Focus"];
+const EXTENDED_ROWS: [&str; 8] = ["Level of Detail", "Brightness", "Frame Rate", "Camera Distance", "Camera Turn Speed", "Screen Shake", "Controller Focus", "Capture Controller"];
 
 /// WORDS.TXT's entries `ids`, wide.
 fn words(vui: &Vui, ids: &[i32]) -> Vec<Vec<u16>> {
@@ -1020,7 +1025,12 @@ mod tests {
         assert_eq!(settings::client().controller[0], Focus::Pad(1), "the first window's: this one, with nowhere to take a place");
         assert_eq!(cues.last(), Some(&11));
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (6, Some(&9)), "the last row");
+        assert_eq!(w.item, 19, "Capture Controller");
+        assert!(!settings::capture(), "off: every window on a pad reads it");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert!(settings::capture());
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (7, Some(&9)), "the last row");
         // Triangle: the menu, then closed with every setting put back
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!(w.page, -1);
@@ -1147,7 +1157,7 @@ mod tests {
         assert_eq!(w.page, 3);
         let width = w.window2.size[0];
         let left = w.window2.top_left()[0] as f32;
-        // its rows from the top one (`draw_extended`)
+        // its rows from the top one (eight and the legend: `draw_extended`)
         let y = |w: &WndOptions, k: i32| w.window2.row_center(&vui, &NullRaster, k)[1] as f32;
         let label = |w: &WndOptions, k: i32| mid(rows_rect(&w.window2, &vui, &NullRaster, 40, k, 100, 1));
         assert_eq!(w.point(label(&w, 2)), vec![key::DOWN, key::DOWN], "Frame Rate's label");
@@ -1168,9 +1178,10 @@ mod tests {
         let down = |n: usize, last: i32| std::iter::repeat_n(key::DOWN, n).chain([last]).collect::<Vec<_>>();
         assert_eq!(w.point([frame + 110.0, y(&w, 5)]), down(5, key::RIGHT), "Screen Shake's value");
         assert_eq!(w.point([frame + 20.0, y(&w, 6)]), down(6, key::LEFT), "Controller Focus's value");
-        assert_eq!(w.point(label(&w, 6)), down(6, key::DOWN)[..6].to_vec(), "Controller Focus's label");
-        assert!(w.point([frame + 110.0, y(&w, 7)]).is_empty(), "what the window reads: no value");
-        assert!(w.point([slider + 70.0, y(&w, 6) + 60.0]).is_empty(), "below the rows");
+        assert_eq!(w.point([frame + 110.0, y(&w, 7)]), down(7, key::RIGHT), "Capture Controller's value");
+        assert_eq!(w.point(label(&w, 7)), down(7, key::DOWN)[..7].to_vec(), "Capture Controller's label");
+        assert!(w.point([frame + 110.0, y(&w, 8)]).is_empty(), "the legend's row: no value");
+        assert!(w.point([slider + 70.0, y(&w, 7) + 60.0]).is_empty(), "below the rows");
     }
 
 }

@@ -14,7 +14,8 @@
 //! pages of the site. With no config directory (the test commands) a window
 //! is alone.
 //!
-//! The others are looked at twice a second. Natively a free place is taken
+//! The others are looked at twice a second, and with them the client's one
+//! setting they share, Capture Controller (`settings::look_shared`). Natively a free place is taken
 //! for a moment as it is looked at (a shared lock) and let go, so a window
 //! opening just then waits a moment on a place it finds held before it
 //! passes it by.
@@ -104,6 +105,9 @@ pub fn seat() -> Seat {
         if h.looked.is_none_or(|t| now.duration_since(t).as_millis() >= LOOK_MS) {
             h.others = h.place().map(Place::others).unwrap_or_default();
             h.looked = Some(now);
+            // Capture Controller, one setting for every window: another
+            // window's save of it reaches this one here
+            crate::settings::look_shared();
         }
         Seat { place: n, others: h.others.clone() }
     })

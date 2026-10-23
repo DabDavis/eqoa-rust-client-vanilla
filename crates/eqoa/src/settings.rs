@@ -124,7 +124,11 @@ pub fn save(o: &GameOptions) -> bool {
         card[HOME_SHARD..HOME_SHARD + HOME_SHARD_LEN].copy_from_slice(&b[HOME_SHARD..HOME_SHARD + HOME_SHARD_LEN]);
     }
     let game = store::write(GAME_FILE, &card);
-    let client = store::write(CLIENT_FILE, kept_client().to_text().as_bytes());
+    let kept = kept_client();
+    let client = store::write(CLIENT_FILE, kept.to_text().as_bytes());
+    if client.is_ok() {
+        FILE_CAPTURE.with(|f| f.set(Some(kept.capture)));
+    }
     let keys = store::write(KEYS_FILE, with_binds(|b| b.to_text()).as_bytes());
     for (what, r) in [("the options", &game), ("the client's options", &client), ("the keys and buttons", &keys)] {
         if let Err(e) = r {
@@ -383,6 +387,9 @@ pub struct ClientOptions {
     pub screen_shake: bool,
     /// Controller Focus, each window's by its place (`focus`)
     pub controller: [Focus; crate::multibox::PLACES],
+    /// Capture Controller, one setting for every window: a Pad that several
+    /// windows open share is read only by the one in front (`input::captured`)
+    pub capture: bool,
 }
 
 impl Default for ClientOptions {
@@ -395,15 +402,16 @@ impl Default for ClientOptions {
             camera_turn: TURN_GAME,
             screen_shake: true,
             controller: [Focus::Auto; crate::multibox::PLACES],
+            capture: false,
         }
     }
 }
 
 impl ClientOptions {
     /// `client.opt`: a line a setting, `name=value`; Camera Turn Speed only
-    /// when it is not the game's, Screen Shake only when off, and a window's
-    /// Controller Focus as `controller.<window>` (from 1), only when it is not
-    /// Auto.
+    /// when it is not the game's, Screen Shake only when off, a window's
+    /// Controller Focus as `controller.<window>` (from 1) only when it is not
+    /// Auto, and Capture Controller only when on.
     pub fn to_text(self) -> String {
         let mut s = format!("lod={}\nbrightness={}\ncamera_distance={}\n", if self.lod { "on" } else { "off" }, self.brightness, self.camera_distance);
         if let Some(r) = self.frame_rate {
@@ -417,6 +425,9 @@ impl ClientOptions {
         }
         for (k, f) in self.controller.iter().enumerate().filter(|(_, f)| **f != Focus::Auto) {
             s.push_str(&format!("controller.{}={}\n", k + 1, f.key()));
+        }
+        if self.capture {
+            s.push_str("capture_controller=on\n");
         }
         s
     }
@@ -448,6 +459,8 @@ impl ClientOptions {
                 }
                 ("screen_shake", "on") => c.screen_shake = true,
                 ("screen_shake", "off") => c.screen_shake = false,
+                ("capture_controller", "on") => c.capture = true,
+                ("capture_controller", "off") => c.capture = false,
                 (k, v) if k.starts_with("controller.") => {
                     let window = k["controller.".len()..].parse::<usize>().ok().filter(|w| (1..=crate::multibox::PLACES).contains(w));
                     if let (Some(w), Some(f)) = (window, Focus::from_key(v)) {
@@ -469,6 +482,8 @@ thread_local! {
     static PLATFORM_RATE: Cell<FrameRate> = const { Cell::new(FrameRate::Display) };
     /// When the next capped frame is due (`now_ms`'s clock).
     static FRAME_DUE: Cell<f64> = const { Cell::new(0.0) };
+    /// Capture Controller as `client.opt` last had it (`look_shared`).
+    static FILE_CAPTURE: Cell<Option<bool>> = const { Cell::new(None) };
 }
 
 /// The client's settings now: what was kept (`client.opt`), as the page
@@ -478,6 +493,7 @@ pub fn client() -> ClientOptions {
         c.get().unwrap_or_else(|| {
             let v = store::read(CLIENT_FILE).map_or_else(ClientOptions::default, |b| ClientOptions::from_text(&String::from_utf8_lossy(&b)));
             c.set(Some(v));
+            FILE_CAPTURE.with(|f| f.set(Some(v.capture)));
             v
         })
     })
@@ -509,6 +525,29 @@ pub fn camera_turn() -> u16 {
 /// Whether the camera shakes as the game shakes it (Screen Shake).
 pub fn screen_shake() -> bool {
     client().screen_shake
+}
+
+/// Capture Controller now: one setting for every window of the client.
+pub fn capture() -> bool {
+    client().capture
+}
+
+/// Capture Controller as another window saved it: `client.opt`'s, taken
+/// when it changed since this window last looked (`multibox::seat`'s look,
+/// twice a second), so a change saved in one window reaches the others
+/// while they run; this window's own change, not saved yet, stands until
+/// then. The other settings are each window's as it read them at its start.
+pub fn look_shared() {
+    let Some(b) = store::read(CLIENT_FILE) else { return };
+    let kept = ClientOptions::from_text(&String::from_utf8_lossy(&b)).capture;
+    let _ = client();
+    let last = FILE_CAPTURE.with(|f| f.replace(Some(kept)));
+    if last.is_some_and(|l| l != kept) {
+        let mut c = client();
+        c.capture = kept;
+        set_client(c);
+        crate::say(&format!("controllers: Capture Controller {} (saved in another window)", if kept { "on" } else { "off" }));
+    }
 }
 
 /// This window's Controller Focus: its place's (`multibox::place`).
@@ -571,7 +610,7 @@ pub fn describe() -> String {
         FrameRate::Display => "the display's",
     };
     format!(
-        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, frame rate {rate}{}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}; {}",
+        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, frame rate {rate}{}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}; {}",
         if c.lod { "on" } else { "off" },
         c.brightness,
         if c.frame_rate.is_none() { " (not chosen)" } else { "" },
@@ -579,6 +618,7 @@ pub fn describe() -> String {
         c.camera_turn,
         if c.screen_shake { "on" } else { "off" },
         focus().key(),
+        if c.capture { "on" } else { "off" },
         kept_where()
     )
 }
@@ -788,6 +828,12 @@ pub mod testing {
         super::BINDS.with(|c| *c.borrow_mut() = None);
         super::PLATFORM_RATE.with(|p| p.set(super::FrameRate::Display));
         super::FRAME_DUE.with(|d| d.set(0.0));
+        super::FILE_CAPTURE.with(|f| f.set(None));
+    }
+
+    /// Writes `name` in the store as another window's save would.
+    pub fn put(name: &str, b: &[u8]) {
+        super::store::FILES.with(|f| f.borrow_mut().insert(name.to_string(), b.to_vec()));
     }
 
     /// What the store holds under `name`.
@@ -918,15 +964,19 @@ mod tests {
             ClientOptions { camera_turn: TURN_MIN, ..Default::default() },
             ClientOptions { camera_turn: TURN_MAX, ..Default::default() },
             ClientOptions { controller: std::array::from_fn(|k| Focus::ALL[k % Focus::ALL.len()]), ..Default::default() },
-            ClientOptions { screen_shake: false, ..Default::default() },
+            ClientOptions { screen_shake: false, capture: true, ..Default::default() },
         ] {
             assert_eq!(ClientOptions::from_text(&c.to_text()), c);
         }
         assert_eq!(ClientOptions::default().to_text(), "lod=on\nbrightness=5\ncamera_distance=11\n", "no Frame Rate until one is chosen, no game's turn, no window's Auto");
         assert_eq!(ClientOptions { camera_turn: 250, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\ncamera_turn=250\n");
-        assert_eq!(ClientOptions { screen_shake: false, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nscreen_shake=off\n", "Screen Shake only off");
+        assert_eq!(
+            ClientOptions { screen_shake: false, capture: true, ..Default::default() }.to_text(),
+            "lod=on\nbrightness=5\ncamera_distance=11\nscreen_shake=off\ncapture_controller=on\n",
+            "Screen Shake only off, Capture Controller only on"
+        );
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, frame rate the display's (not chosen), camera distance 11, camera turn speed 100%, screen shake on, controller focus auto; kept in the page's storage");
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, frame rate the display's (not chosen), camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off; kept in the page's storage");
         testing::reset(true);
         assert!(describe().ends_with("refused: nothing is kept"));
         testing::reset(false);
@@ -939,7 +989,40 @@ mod tests {
         assert_eq!(ClientOptions::from_text("camera_turn=300").camera_turn, 300);
         let two = ClientOptions::from_text("controller.2=pad3\ncontroller.16=window");
         assert_eq!((two.controller[1], two.controller[15], two.controller[0]), (Focus::Pad(3), Focus::Window, Focus::Auto));
-        assert!(ClientOptions::from_text("screen_shake=no").screen_shake, "the default");
+        for bad in ["screen_shake=no", "capture_controller=1", "capture_controller=yes"] {
+            let c = ClientOptions::from_text(bad);
+            assert!(c.screen_shake && !c.capture, "{bad}: the defaults");
+        }
+    }
+
+    /// Capture Controller is one setting for every window: another window's
+    /// save reaches this one at its next look (`look_shared`), while its own
+    /// change not saved yet stands until the file changes; the control: the
+    /// other settings stay this window's as it read them.
+    #[test]
+    fn capture_controller_reaches_every_window() {
+        testing::reset(false);
+        assert!(!capture());
+        look_shared();
+        assert!(!capture(), "nothing kept: still off");
+        // another window saves it on, and a brightness of its own
+        testing::put(CLIENT_FILE, b"lod=on\nbrightness=9\ncamera_distance=11\ncapture_controller=on\n");
+        look_shared();
+        assert!(capture(), "taken at the next look");
+        assert_eq!(client().brightness, 5, "the control: this window's own brightness stays");
+        // this window turns it off, not saved: the file has not changed since
+        let mut c = client();
+        c.capture = false;
+        set_client(c);
+        look_shared();
+        assert!(!capture(), "its own change stands");
+        // saved here, then the other window's off: each reaches the other
+        assert!(save(&GameOptions::default()));
+        assert!(!String::from_utf8(testing::kept(CLIENT_FILE).unwrap()).unwrap().contains("capture_controller"));
+        testing::put(CLIENT_FILE, b"lod=on\nbrightness=9\ncamera_distance=11\ncapture_controller=on\n");
+        look_shared();
+        assert!(capture());
+        testing::reset(false);
     }
 
     /// Controller Focus is each window's: Save Changes writes this window's
