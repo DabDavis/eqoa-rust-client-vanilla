@@ -456,6 +456,9 @@ fn run(args: &[String]) -> Result<()> {
             // CLIENT and SUPPORT (the start menu, the HUD): the player's
             // images, else off the disc, on threads of their own meanwhile.
             modules::load(std::path::Path::new(&disc_path(None)));
+            // the server's patch as its folder holds it (the pregame's
+            // patcher fills it; `s2`)
+            s2::for_server(host);
             let (session, player, dump) = login(host, user, &pass)?;
             let (mut lib, src) = world_library(&player)?;
             let mut play = play::Play::new(session, player, dump);

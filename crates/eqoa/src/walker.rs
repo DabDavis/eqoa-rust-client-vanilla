@@ -297,6 +297,7 @@ pub const FRAME_ASPECT: f32 = 10.0 / 7.0;
 /// Until 2026-10-23 it was 45 degrees at the window's own shape, the world a
 /// quarter larger than the game draws it: the start menu's view of the
 /// character took its head off (F3 20261023-091325).
+#[cfg(test)]
 pub fn projection(aspect: f32) -> Mat4 {
     projection_to(aspect, 6000.0)
 }

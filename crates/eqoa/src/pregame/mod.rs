@@ -382,17 +382,24 @@ impl Pregame {
             Next::Setup => {
                 self.station.stop();
                 self.client.stop();
-                // back at the title: the disc's words until a server's patch
+                // back at the title: the disc's words and retail's rules
+                // until a server's patch
                 self.res.set_server_words(None);
+                crate::s2::set(crate::s2::Rules::retail());
                 self.enter(Stage::Setup, cx_now);
             }
             Next::Station => {
                 if self.stage == Stage::Client {
                     self.client.stop();
                 } else {
-                    // past the patch: the server's words, if its folder has them
+                    // past the patch: the server's words, if its folder has
+                    // them, and its S2's rules (`s2`)
                     let words = self.shared.server.as_deref().and_then(crate::servers::words);
                     self.res.set_server_words(words);
+                    match self.shared.server.as_deref() {
+                        Some(host) => crate::s2::for_server(host),
+                        None => crate::s2::set(crate::s2::Rules::retail()),
+                    }
                 }
                 self.enter(Stage::Station, cx_now);
             }

@@ -889,6 +889,16 @@ pub fn set(r: Rules) {
     }
 }
 
+/// The rules of the server at `host`: the S2 its patch put in its folder
+/// (`servers::folder`) when the game keeps one there, retail otherwise (a
+/// page, a test command without a config directory, a server that sends no
+/// S2). Called past the patch (the pregame, before STATION) and by `eqoa
+/// play`, before the world's files and CLIENT's tables are read.
+pub fn for_server(host: &str) {
+    let r = if crate::servers::keeps() { Rules::from_dir(&crate::servers::folder(host)) } else { Rules::retail() };
+    set(r);
+}
+
 /// A session begins (`Play::new`): `EQOA_S2_DIR` names a folder whose S2
 /// the session plays by (a test, or a folder of one's own); without it the
 /// rules stay as the patcher set them for the server (retail when none).
