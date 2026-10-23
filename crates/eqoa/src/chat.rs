@@ -283,7 +283,7 @@ impl WndChat {
         }
         self.window.init(vui, ui, [422, 390], 462, 6, 1);
         if self.mode != 0 {
-            vui.blit_ex_size(ui, 32, [200, 331], [442, 118], 0, 1.0, 0);
+            crate::ui::chat_strip(vui, ui, [200, 331], [442, 118]);
         }
         let it = if self.scroll == 1 { self.bottom } else { self.text.end() };
         self.lines = if self.scroll == 1 { 5 } else { self.count_lines() };
@@ -371,5 +371,24 @@ mod tests {
             down += 1;
         }
         assert_eq!(down, 995);
+    }
+
+    /// A window that fixes the chat box (the merchant, the bank, a trade)
+    /// shows the world under it: the strip the game lays under the fixed box
+    /// (atlas 32 at (200, 331), 442 by 118) is left out with the windows'
+    /// backdrop (`ui::chat_strip`; F3 20261023-080729). The control: the
+    /// game's own blit, made on the same recorder, is seen there.
+    #[test]
+    fn a_fixed_chat_box_lays_no_strip() {
+        use crate::pointer::testing::{Wide, vui};
+        let vui = vui();
+        let strip = (render::ui::Anchor::Middle, [200, 331], [442, 118]);
+        let mut c = WndChat::new();
+        c.mode = 1;
+        let mut r = Wide::new(0);
+        c.draw(&vui, &mut r, 0, 0.0);
+        assert!(!r.2.contains(&strip), "no strip under the fixed box");
+        vui.blit_ex_size(&mut r, 32, [200, 331], [442, 118], 0, 1.0, 0);
+        assert!(r.2.contains(&strip), "the control: the game's strip is recorded");
     }
 }

@@ -203,11 +203,8 @@ impl Hud {
         self.draw_pet(vui, ui, [20, y], s);
         let p = [-3, 331];
         if s.chat_open {
-            // the strip's left piece, stretched to the chat box's piece,
-            // which keeps to the right
-            ui.ui.anchor = Anchor::Span(p[0] + 2, p[0] + 2 + 203);
-            vui.blit_rect(ui, 32, [p[0] + 2, p[1]], [203, 125], 0, 1.0);
-            ui.ui.anchor = Anchor::Left;
+            // the strip's left piece, left out with the strip (`ui::chat_strip`)
+            crate::ui::chat_strip(vui, ui, [p[0] + 2, p[1]], [203, 125]);
         }
         self.draw_target(vui, ui, [20, 348], s);
         self.draw_report(vui, ui, [20, 421]);

@@ -1634,6 +1634,7 @@ impl Play {
                 _ => {}
             }
         }
+        self.drop_dead_target_info();
         if self.has_self() {
             self.auto_attack_tick(walker, now);
             self.self_visibility(walker);
@@ -5436,6 +5437,17 @@ impl Play {
         Some(self.entities.slots[k].as_ref()?.actor_pos)
     }
 
+    /// `VIClient::Process`: the target info goes (`m_targetInfoValid` 0)
+    /// while the target is in view with its +0x19 at 0, so a dead one's bar
+    /// shows no face beside it (`DrawTarget` draws it only with the info; F3
+    /// 20261023-075853) and its rings stop counting; it stays gone until a
+    /// 0x0010 sets it again.
+    fn drop_dead_target_info(&mut self) {
+        if self.target != u32::MAX && self.entities.slots.iter().flatten().any(|e| e.id == self.target && e.p19 == 0) {
+            self.target_info = None;
+        }
+    }
+
     /// `DrawTargetInfo`'s text: a player's name, guild, race, title or
     /// class and level (the guild and title with 0x0010's answer), a
     /// creature's name and level; `None` closes the window.
@@ -5729,6 +5741,30 @@ mod commands {
         let r = p.report([0.0; 3]);
         assert!(r.contains("world 1 (RATHE.ESF)"), "{r}");
         assert!(!r.contains("tunaria.esf"), "the login's path is not the world now");
+    }
+
+    /// A dead target's bar shows no face: `Process` drops the target info
+    /// while the target's +0x19 is 0, and it stays dropped until a 0x0010
+    /// (F3 20261023-075853). The control: a living target keeps it.
+    #[test]
+    fn a_dead_targets_info_goes() {
+        let mut p = play();
+        p.target = 0x13B875E;
+        p.target_info = Some(1);
+        p.entities.slots[4] = Some(net::entity::Entity { id: 0x13B875E, kind: 130, p19: 40, ..Default::default() });
+        p.drop_dead_target_info();
+        assert_eq!(p.target_info, Some(1), "the control: alive, the face stays");
+        p.entities.slots[4].as_mut().unwrap().p19 = 0;
+        p.drop_dead_target_info();
+        assert_eq!(p.target_info, None, "dead: no face");
+        p.entities.slots[4].as_mut().unwrap().p19 = 40;
+        p.drop_dead_target_info();
+        assert_eq!(p.target_info, None, "and not back before a 0x0010");
+        // another creature at 0 is not the target's death
+        p.target_info = Some(1);
+        p.entities.slots[5] = Some(net::entity::Entity { id: 0x42, kind: 130, p19: 0, ..Default::default() });
+        p.drop_dead_target_info();
+        assert_eq!(p.target_info, Some(1));
     }
 
     #[test]

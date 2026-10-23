@@ -667,6 +667,8 @@ mod native {
     pub(super) enum Field {
         Note,
         Name,
+        /// whether the picture goes with it (a problem's, when there is one)
+        Picture,
     }
 
     /// What the dialog is doing.
@@ -685,20 +687,25 @@ mod native {
         pub(super) field: Field,
         pub(super) status: Status,
         /// the picture, a PNG (a problem's)
-        shot: Option<Vec<u8>>,
+        pub(super) shot: Option<Vec<u8>>,
+        /// whether the picture goes with it: the player's to turn off (F3
+        /// 20261023-083108, Liav: "Toggle button for sending a screenshot")
+        pub(super) send_shot: bool,
         /// waiting for the frame's picture (shown once it came, or after a
         /// second without one)
         pub(super) shot_wanted: Option<Instant>,
         result: std::sync::Arc<Mutex<Option<Result<String, String>>>>,
         /// the buttons, as last drawn (frame pixels): what a click finds
-        buttons: Vec<([i32; 4], Button)>,
+        pub(super) buttons: Vec<([i32; 4], Button)>,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq)]
-    enum Button {
+    pub(super) enum Button {
         Send,
         Close,
         Delete,
+        /// the picture's row: a click turns it on or off
+        Picture,
     }
 
     static DIALOG: Mutex<Option<Dialog>> = Mutex::new(None);
@@ -727,6 +734,7 @@ mod native {
                 field: Field::Note,
                 status: Status::Editing,
                 shot: None,
+                send_shot: true,
                 shot_wanted: problem.then(Instant::now),
                 result: Default::default(),
                 buttons: Vec::new(),
@@ -752,10 +760,23 @@ mod native {
                 Key::Escape => Action::Close,
                 Key::Enter => Action::Send,
                 Key::Delete if matches!(self.kind, Kind::Crash(_)) => Action::Delete,
+                // the note, the name, then the picture's row when there is one
                 Key::Tab if self.kind == Kind::Problem => {
-                    self.field = if self.field == Field::Note { Field::Name } else { Field::Note };
+                    self.field = match self.field {
+                        Field::Note => Field::Name,
+                        Field::Name if self.shot.is_some() => Field::Picture,
+                        _ => Field::Note,
+                    };
                     Action::Stay
                 }
+                // on the picture's row Space turns it on or off; nothing is typed
+                Key::Text(t) if self.field == Field::Picture => {
+                    if t.contains(' ') {
+                        self.send_shot = !self.send_shot;
+                    }
+                    Action::Stay
+                }
+                Key::Backspace if self.field == Field::Picture => Action::Stay,
                 Key::Backspace => {
                     self.text().pop();
                     Action::Stay
@@ -777,8 +798,34 @@ mod native {
 
         fn text(&mut self) -> &mut String {
             match self.field {
-                Field::Note => &mut self.note,
+                Field::Note | Field::Picture => &mut self.note,
                 Field::Name => &mut self.name,
+            }
+        }
+
+        /// The picture that goes with a problem report: none when there is
+        /// none, or the player turned it off.
+        pub(super) fn shot_to_send(&self) -> Option<&[u8]> {
+            self.shot.as_deref().filter(|_| self.send_shot)
+        }
+
+        /// A click at frame point `p`, on the buttons as last drawn: what it
+        /// does (the picture's row turns the picture on or off at once).
+        pub(super) fn click_at(&mut self, p: [f32; 2]) -> Action {
+            let hit = self.buttons.iter().find(|(r, _)| p[0] >= r[0] as f32 && p[0] < r[2] as f32 && p[1] >= r[1] as f32 && p[1] < r[3] as f32).map(|b| b.1);
+            match (hit, &self.status) {
+                (_, Status::Sending) => Action::Stay,
+                (Some(Button::Close), _) => Action::Close,
+                (Some(Button::Send), Status::Sent(_)) => Action::Close,
+                (Some(Button::Send), _) => Action::Send,
+                (Some(Button::Delete), _) => Action::Delete,
+                (Some(Button::Picture), Status::Sent(_)) => Action::Stay,
+                (Some(Button::Picture), _) => {
+                    self.send_shot = !self.send_shot;
+                    self.field = Field::Picture;
+                    Action::Stay
+                }
+                (None, _) => Action::Stay,
             }
         }
 
@@ -790,7 +837,7 @@ mod native {
                     if let Some(d) = dir() {
                         let _ = std::fs::write(d.join("report-name.txt"), &name);
                     }
-                    ("report", problem_body(&note, &name, self.shot.as_deref()))
+                    ("report", problem_body(&note, &name, self.shot_to_send()))
                 }
                 Kind::Crash(f) => ("crash", crash_body(&std::fs::read_to_string(f).unwrap_or_default(), &note)),
             };
@@ -900,15 +947,7 @@ mod native {
     pub fn click(p: [f32; 2]) -> bool {
         let mut d = lock(&DIALOG);
         let Some(dl) = d.as_mut() else { return false };
-        let hit = dl.buttons.iter().find(|(r, _)| p[0] >= r[0] as f32 && p[0] < r[2] as f32 && p[1] >= r[1] as f32 && p[1] < r[3] as f32).map(|b| b.1);
-        let a = match (hit, &dl.status) {
-            (_, Status::Sending) => Action::Stay,
-            (Some(Button::Close), _) => Action::Close,
-            (Some(Button::Send), Status::Sent(_)) => Action::Close,
-            (Some(Button::Send), _) => Action::Send,
-            (Some(Button::Delete), _) => Action::Delete,
-            (None, _) => Action::Stay,
-        };
+        let a = dl.click_at(p);
         act(&mut d, a);
         true
     }
@@ -975,6 +1014,12 @@ mod native {
         if !dl.shown() {
             return;
         }
+        draw_dialog(dl, vui, r);
+    }
+
+    /// `draw`'s panel: its lines, and its buttons noted where they were
+    /// drawn for a click (`Dialog::click_at`).
+    pub(super) fn draw_dialog(dl: &mut Dialog, vui: &Vui, r: &mut dyn Raster) {
         let white = [1.0, 1.0, 1.0, 1.0];
         let dim = [0.72, 0.72, 0.72, 1.0];
         let gold = [1.0, 0.85, 0.45, 1.0];
@@ -1034,12 +1079,16 @@ mod native {
             lines.push((tx + 6, y + 4 + k as i32 * h, l.clone(), white));
         }
         y += note_box.1 + 8;
+        // the picture's row, a button: where it was drawn
+        let mut pic_y = None;
         if dl.kind == Kind::Problem {
             let n = format!("Your name on the board (Tab): {}{}", dl.name, caret(editing && dl.field == Field::Name));
             lines.push((tx, y, n, if dl.field == Field::Name { white } else { dim }));
             y += h + 2;
             if dl.shot.is_some() {
-                lines.push((tx, y, "A picture of the screen goes with it.".to_string(), dim));
+                let pic = format!("Send the picture of the screen: {} (Tab, Space or click)", if dl.send_shot { "Yes" } else { "No" });
+                lines.push((tx, y, pic, if dl.field == Field::Picture { white } else { dim }));
+                pic_y = Some(y);
                 y += h + 2;
             }
         }
@@ -1079,6 +1128,9 @@ mod native {
             vui.draw_string_ex(r, &wide(text), *x, top + ly, *c, false);
         }
         dl.buttons.clear();
+        if let Some(py) = pic_y {
+            dl.buttons.push(([tx, top + py, x1 - 16, top + py + h], Button::Picture));
+        }
         let mut bx = tx;
         for (label, b) in labels {
             let w = vui.string_width(r, &wide(&label)) + 24;
@@ -1166,6 +1218,45 @@ mod tests {
         assert_eq!(c.key(Key::Escape), Action::Stay, "nothing while it is sent");
         c.status = Status::Sent("x".into());
         assert_eq!((c.key(Key::Delete), c.key(Key::Text("a".into())), c.key(Key::Enter)), (Action::Stay, Action::Stay, Action::Close));
+    }
+
+    /// The picture can be left out (F3 20261023-083108): Tab goes from the
+    /// name to the picture's row when there is a picture, Space there turns
+    /// it off and on (typing nothing), and a click on the row as drawn does
+    /// the same; off, the report goes without it. The controls: the picture
+    /// goes by default, and with no picture there is no row (Tab goes back
+    /// to the note, nothing to click).
+    #[test]
+    fn the_picture_can_be_left_out() {
+        use crate::pointer::testing::{NullRaster, mid, vui};
+        use native::{Action, Button, Dialog, Field, Key, Kind, draw_dialog};
+        let vui = vui();
+        let mut d = Dialog::new(Kind::Problem);
+        d.shot_wanted = None;
+        d.shot = Some(vec![1, 2, 3]);
+        assert_eq!(d.shot_to_send(), Some(&[1u8, 2, 3][..]), "it goes by default");
+        let name = d.name.clone();
+        d.key(Key::Tab);
+        d.key(Key::Tab);
+        assert_eq!(d.field, Field::Picture);
+        assert_eq!(d.key(Key::Text(" ".into())), Action::Stay);
+        assert_eq!(d.shot_to_send(), None, "turned off");
+        assert_eq!(d.name, name, "nothing typed into the name");
+        d.key(Key::Text(" ".into()));
+        assert!(d.shot_to_send().is_some(), "and on again");
+        d.key(Key::Tab);
+        assert_eq!(d.field, Field::Note, "round to the note");
+        draw_dialog(&mut d, &vui, &mut NullRaster);
+        let row = d.buttons.iter().find(|b| b.1 == Button::Picture).map(|b| b.0).expect("the row is a button");
+        assert_eq!(d.click_at(mid(row)), Action::Stay);
+        assert_eq!(d.shot_to_send(), None, "clicked off");
+        let mut e = Dialog::new(Kind::Problem);
+        e.shot_wanted = None;
+        e.key(Key::Tab);
+        e.key(Key::Tab);
+        assert_eq!(e.field, Field::Note, "no picture: Tab goes from the name back to the note");
+        draw_dialog(&mut e, &vui, &mut NullRaster);
+        assert!(e.buttons.iter().all(|b| b.1 != Button::Picture), "no picture: no row");
     }
 
     /// A report too long for the server is cut, at a character, saying so.

@@ -270,6 +270,25 @@ async def tests(a, site, base, page):
           and "tester1" not in report and "s3cretpw" not in report)
     check("the log ring had them (control)", any("a line with tester1 and s3cretpw" in l for l in page.lines))
     await page.js("document.getElementById('rp-close').click()")
+    # the picture is the player's to leave out (F3 20261023-083108): its box
+    # unticked, the report goes with none; ticked (the default), with one. A
+    # stand-in client hands over a frame, as the game does when one is drawn.
+    await page.js("window._client = window.eqoaClient; window.eqoaClient = { wantShot() { setTimeout(() => window.eqoaFrameDrawn && window.eqoaFrameDrawn(), 30); } }; eqoaReport.running(true)")
+    shots = []
+    for keep in (False, True):
+        await page.js("document.getElementById('eqoa').focus()")
+        await page.key("F3", "F3", 114)
+        row = await page.until("!document.getElementById('report').hidden && !document.getElementById('rp-shot-row').hidden", 5)
+        n = len(site.posts)
+        await page.js(f"{{ const b = document.getElementById('rp-shot'); b.checked = {'true' if keep else 'false'}; b.dispatchEvent(new Event('change'));"
+                      " document.getElementById('rp-note').value = 'picture test'; document.getElementById('rp-send').click() }")
+        await page.until("document.getElementById('rp-done').textContent.startsWith('Sent as')", 10)
+        kind, req = site.posts[-1] if len(site.posts) > n else (None, {})
+        shots.append((bool(row), kind, req.get("note"), len(req.get("screenshot", ""))))
+        await page.js("document.getElementById('rp-close').click()")
+    await page.js("eqoaReport.running(false); window.eqoaClient = window._client")
+    check("a picture unticked is left out", shots[0][:3] == (True, "report", "picture test") and shots[0][3] == 0, str(shots))
+    check("ticked, the default, it goes (control)", shots[1][:3] == (True, "report", "picture test") and shots[1][3] > 0, str(shots))
     # the mark a running game keeps for a tab that dies is scrubbed as it is
     # kept: the next visit may not know what this one signed in with
     await page.js("console.log('kept tester1 and s3cretpw'); eqoaReport.running(true)")
