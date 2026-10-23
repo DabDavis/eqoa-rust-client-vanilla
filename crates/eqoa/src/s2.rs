@@ -791,9 +791,29 @@ impl Rules {
 
 static CURRENT: RwLock<Option<Arc<Rules>>> = RwLock::new(None);
 
+#[cfg(test)]
+thread_local! {
+    /// A test's own rules (`with_rules`), so tests running at once never
+    /// see each other's.
+    static TEST_RULES: std::cell::RefCell<Option<Arc<Rules>>> = const { std::cell::RefCell::new(None) };
+}
+
 /// The session's rules (retail until a server's are set).
 pub fn get() -> Arc<Rules> {
+    #[cfg(test)]
+    if let Some(r) = TEST_RULES.with(|t| t.borrow().clone()) {
+        return r;
+    }
     CURRENT.read().ok().and_then(|g| g.clone()).unwrap_or_else(|| Arc::new(Rules::retail()))
+}
+
+/// `f` run with `r` as this thread's rules (a test's).
+#[cfg(test)]
+pub fn with_rules<T>(r: Rules, f: impl FnOnce() -> T) -> T {
+    TEST_RULES.with(|t| *t.borrow_mut() = Some(Arc::new(r)));
+    let out = f();
+    TEST_RULES.with(|t| *t.borrow_mut() = None);
+    out
 }
 
 /// This session's rules: a server's folder once its patch is in (the

@@ -3473,6 +3473,10 @@ impl Play {
         if r.error {
             return;
         }
+        // a server's patch (`s2`, Sandstorm's S2: its control panel's
+        // colours): three more bytes, when there, are the number's colour
+        let rest = &r.data[r.pos..];
+        let rgb = (crate::s2::get().damage_rgb && rest.len() >= 3).then(|| [rest[0], rest[1], rest[2]]);
         let me = self.self_id32();
         // the player's own hit: after a swap the swing timer follows the
         // server's rounds (`attackclock`), whatever the damage numbers show
@@ -3484,11 +3488,11 @@ impl Play {
             return;
         }
         if Some(attacker) == me {
-            self.damage.add(defender, amount, 0);
+            self.damage.add_colored(defender, amount, 0, rgb);
         } else if camera_mode != 0 && self.mode != 38
             && let Some(me) = me
         {
-            self.damage.add(me, amount, 1);
+            self.damage.add_colored(me, amount, 1, rgb);
         }
     }
 
@@ -5711,6 +5715,35 @@ mod commands {
         let now = p.session.now();
         p.damage_indication(&hit(me), 0);
         assert_eq!(p.attack.due, now.wrapping_sub(crate::attackclock::PRESS_TO_FIRST_HIT).wrapping_add(4000), "the player's own");
+    }
+
+    /// A server's patch that colours damage (`s2`: Sandstorm's S2) has the
+    /// three bytes after 0x00DB's body colour the number, the player's own
+    /// hit and one taken alike; without it (the control) they are passed
+    /// over and the number is the game's white.
+    #[test]
+    fn a_patchs_damage_colour() {
+        let hit = |attacker: u32, defender: u32| {
+            let mut w = net::stream::Writer::default();
+            w.u32(attacker).signed(-30).u32(defender).bytes(&[255, 128, 0]);
+            w.data
+        };
+        let shown = |p: &mut Play, id: u32| {
+            p.damage.step(33, |e| (e == id).then_some(crate::damage::Target { pos: [0.0; 3], slot4: None }))
+        };
+        let colored = crate::s2::Rules { damage_rgb: true, ..crate::s2::Rules::retail() };
+        let (s, me) = crate::s2::with_rules(colored, || {
+            let mut p = play();
+            let me = p.self_id32().expect("the player's id");
+            p.damage_indication(&hit(me, 0x200), 0);
+            (shown(&mut p, 0x200), me)
+        });
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].color, [1.0, 128.0 / 255.0, 0.0, 1.0]);
+        let mut p = play();
+        p.damage_indication(&hit(me, 0x200), 0);
+        let s = shown(&mut p, 0x200);
+        assert_eq!((s.len(), s[0].color), (1, [1.0; 4]));
     }
 
     /// 0x1402 sub-op 3 (`VIClientPart4EC58::Recv03`): a rise in Class

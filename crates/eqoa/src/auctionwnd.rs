@@ -175,7 +175,9 @@ impl Default for SearchWnd {
             class: -1,
             race: -1,
             min_level: 1,
-            max_level: 50,
+            // the Auctions window's Max. Level (`li a1, 50`; a server's
+            // patch may change it: Sandstorm's S2 opens on 60)
+            max_level: crate::s2::get().auction_max_level,
             min_price: 0,
             max_price: 0x7FFF_FFFF,
             wear: -2,
@@ -1323,6 +1325,15 @@ mod tests {
         assert_eq!(g.w.point(at(5)), vec![key::CROSS]);
         assert!(g.w.point(at(4)).is_empty(), "the line between is no row");
         assert_eq!(g.w.cursor, 2);
+    }
+
+    /// The form opens on the Max. Level a server's patch hooks (Sandstorm's
+    /// S2: 60), retail's 50 without one (the control).
+    #[test]
+    fn the_form_opens_on_the_patchs_level() {
+        let patched = crate::s2::Rules { auction_max_level: 60, ..crate::s2::Rules::retail() };
+        assert_eq!(crate::s2::with_rules(patched, || Rig::new().w.max_level), 60);
+        assert_eq!(Rig::new().w.max_level, 50);
     }
 
     #[test]

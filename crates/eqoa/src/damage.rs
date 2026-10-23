@@ -33,6 +33,10 @@ struct Number {
     defender: u32,
     /// 0 when added; gone past 1 (1.1 a second).
     time: f32,
+    /// the colour a server's patch sends with it (Sandstorm's S2: three
+    /// bytes after 0x00DB's body), in place of the game's white, yellow or
+    /// green
+    rgb: Option<[u8; 3]>,
 }
 
 /// Where a number's entity is this frame (`GetActorPos`), and its slot 4
@@ -82,11 +86,17 @@ impl Damage {
     /// list; the side's bounce slot moves on (0, 1, 2). With none free,
     /// nothing.
     pub fn add(&mut self, defender: u32, amount: i32, z: i16) {
+        self.add_colored(defender, amount, z, None);
+    }
+
+    /// `AddDamage` with the colour a server's patch sent (`s2`: Sandstorm's
+    /// damage colours), the game's own without one.
+    pub fn add_colored(&mut self, defender: u32, amount: i32, z: i16, rgb: Option<[u8; 3]>) {
         if self.free.is_empty() {
             return;
         }
         let n = self.free.remove(0);
-        self.numbers[n] = Number { amount, offset: [0.0; 3], z, slot: self.slot[z as usize], defender, time: 0.0 };
+        self.numbers[n] = Number { amount, offset: [0.0; 3], z, slot: self.slot[z as usize], defender, time: 0.0, rgb };
         self.active.push(n);
         self.slot[z as usize] = (self.slot[z as usize] + 1) % 3;
     }
@@ -130,7 +140,9 @@ impl Damage {
             n.time += dt * 1.1;
             let mut at = Vec3::from(e.pos) + Vec3::from(n.offset);
             at.y += (n.time * 3.1415 * 0.7).sin() * BOUNCE[n.slot as usize];
-            let color = if n.amount > 0 {
+            let color = if let Some([r, g, b]) = n.rgb {
+                [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
+            } else if n.amount > 0 {
                 [0.0, 1.0, 0.0, 1.0]
             } else if n.z != 0 {
                 [0.8, 0.8, 0.1, 1.0]
@@ -324,6 +336,23 @@ mod tests {
         // the heal is its side's (z 1) first: bounce slot 0 as well
         let bounce1 = (s[1].time * 3.1415 * 0.7).sin() * 0.8;
         assert_eq!(s[1].at.y, 2.0 + bounce1);
+    }
+
+    /// A number a server's patch coloured (Sandstorm's S2) is drawn in that
+    /// colour, hit or heal, made or taken; one with none in the game's (the
+    /// control).
+    #[test]
+    fn a_patchs_colour_is_the_numbers() {
+        let mut d = Damage::default();
+        let at = |id: u32| move |e: u32| (e == id).then_some(Target { pos: [0.0; 3], slot4: None });
+        d.add_colored(5, -30, 0, Some([255, 128, 0]));
+        d.add_colored(5, 12, 1, Some([0, 0, 255]));
+        d.add(5, -30, 0);
+        let s = d.step(33, at(5));
+        assert_eq!(s.len(), 3);
+        assert_eq!(s[0].color, [1.0, 128.0 / 255.0, 0.0, 1.0]);
+        assert_eq!(s[1].color, [0.0, 0.0, 1.0, 1.0]);
+        assert_eq!(s[2].color, [1.0, 1.0, 1.0, 1.0]);
     }
 
     #[test]
