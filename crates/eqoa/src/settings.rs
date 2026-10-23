@@ -457,6 +457,10 @@ pub struct ClientOptions {
     /// Capture Controller, one setting for every window: a Pad that several
     /// windows open share is read only by the one in front (`input::captured`)
     pub capture: bool,
+    /// Sound in Background, one setting for every window: on, a window
+    /// behind others keeps its sound; off, a window not in front is heard
+    /// not at all (`audio::set_heard`), its game's sound running on
+    pub background_sound: bool,
 }
 
 impl Default for ClientOptions {
@@ -471,6 +475,7 @@ impl Default for ClientOptions {
             screen_shake: true,
             controller: [Focus::Auto; crate::multibox::PLACES],
             capture: false,
+            background_sound: true,
         }
     }
 }
@@ -479,7 +484,8 @@ impl ClientOptions {
     /// `client.opt`: a line a setting, `name=value`; Camera Turn Speed and
     /// Fog only when they are not the game's, Screen Shake only when off, a
     /// window's Controller Focus as `controller.<window>` (from 1) only when
-    /// it is not Auto, and Capture Controller only when on.
+    /// it is not Auto, Capture Controller only when on, and Sound in
+    /// Background only when off.
     pub fn to_text(self) -> String {
         let mut s = format!("lod={}\nbrightness={}\ncamera_distance={}\n", if self.lod { "on" } else { "off" }, self.brightness, self.camera_distance);
         if let Some(r) = self.frame_rate {
@@ -499,6 +505,9 @@ impl ClientOptions {
         }
         if self.capture {
             s.push_str("capture_controller=on\n");
+        }
+        if !self.background_sound {
+            s.push_str("background_sound=off\n");
         }
         s
     }
@@ -537,6 +546,8 @@ impl ClientOptions {
                 ("screen_shake", "off") => c.screen_shake = false,
                 ("capture_controller", "on") => c.capture = true,
                 ("capture_controller", "off") => c.capture = false,
+                ("background_sound", "on") => c.background_sound = true,
+                ("background_sound", "off") => c.background_sound = false,
                 (k, v) if k.starts_with("controller.") => {
                     let window = k["controller.".len()..].parse::<usize>().ok().filter(|w| (1..=crate::multibox::PLACES).contains(w));
                     if let (Some(w), Some(f)) = (window, Focus::from_key(v)) {
@@ -552,10 +563,10 @@ impl ClientOptions {
 
 impl ClientOptions {
     /// A later window's own file (`client-<n>.opt`): the Extended page's rows,
-    /// the lines the windows share (Controller Focus, Capture Controller) left
-    /// to client.opt.
+    /// the lines the windows share (Controller Focus, Capture Controller,
+    /// Sound in Background) left to client.opt.
     fn rows_text(self) -> String {
-        ClientOptions { controller: [Focus::Auto; crate::multibox::PLACES], capture: false, ..self }.to_text()
+        ClientOptions { controller: [Focus::Auto; crate::multibox::PLACES], capture: false, background_sound: true, ..self }.to_text()
     }
 }
 
@@ -571,7 +582,7 @@ fn read_client() -> ClientOptions {
     let shared = read_shared();
     let me = place();
     match store::read(&own_file("client", me)).filter(|_| me > 0) {
-        Some(b) => ClientOptions { controller: shared.controller, capture: shared.capture, ..ClientOptions::from_text(&String::from_utf8_lossy(&b)) },
+        Some(b) => ClientOptions { controller: shared.controller, capture: shared.capture, background_sound: shared.background_sound, ..ClientOptions::from_text(&String::from_utf8_lossy(&b)) },
         None => shared,
     }
 }
@@ -588,13 +599,14 @@ fn save_client() -> Result<(), String> {
     let mut shared = read_shared();
     shared.controller[me] = mine.controller[me];
     shared.capture = mine.capture;
+    shared.background_sound = mine.background_sound;
     if me == 0 {
         store::write(CLIENT_FILE, ClientOptions { controller: shared.controller, ..mine }.to_text().as_bytes())?;
     } else {
         store::write(&own_file("client", me), mine.rows_text().as_bytes())?;
         store::write(CLIENT_FILE, shared.to_text().as_bytes())?;
     }
-    FILE_CAPTURE.with(|f| f.set(Some(shared.capture)));
+    FILE_SHARED.with(|f| f.set(Some((shared.capture, shared.background_sound))));
     Ok(())
 }
 
@@ -608,8 +620,9 @@ thread_local! {
     static PLATFORM_RATE: Cell<FrameRate> = const { Cell::new(FrameRate::Display) };
     /// When the next capped frame is due (`now_ms`'s clock).
     static FRAME_DUE: Cell<f64> = const { Cell::new(0.0) };
-    /// Capture Controller as `client.opt` last had it (`look_shared`).
-    static FILE_CAPTURE: Cell<Option<bool>> = const { Cell::new(None) };
+    /// What the windows share as `client.opt` last had it (`look_shared`):
+    /// Capture Controller and Sound in Background.
+    static FILE_SHARED: Cell<Option<(bool, bool)>> = const { Cell::new(None) };
 }
 
 /// The client's settings now: what this window kept (`read_client`), as the
@@ -621,7 +634,7 @@ pub fn client() -> ClientOptions {
         _ => {
             let v = read_client();
             c.set(Some((me, v)));
-            FILE_CAPTURE.with(|f| f.set(Some(v.capture)));
+            FILE_SHARED.with(|f| f.set(Some((v.capture, v.background_sound))));
             v
         }
     })
@@ -666,21 +679,34 @@ pub fn capture() -> bool {
     client().capture
 }
 
-/// Capture Controller as another window saved it: `client.opt`'s, taken
-/// when it changed since this window last looked (`multibox::seat`'s look,
-/// twice a second), so a change saved in one window reaches the others
-/// while they run; this window's own change, not saved yet, stands until
-/// then. The other settings are each window's as it read them at its start.
+/// Sound in Background now: one setting for every window of the client.
+pub fn background_sound() -> bool {
+    client().background_sound
+}
+
+/// What the windows share as another window saved it (Capture Controller,
+/// Sound in Background): `client.opt`'s, each taken when it changed since
+/// this window last looked (`multibox::seat`'s look, twice a second), so a
+/// change saved in one window reaches the others while they run; this
+/// window's own change, not saved yet, stands until then. The other settings
+/// are each window's as it read them at its start.
 pub fn look_shared() {
     let Some(b) = store::read(CLIENT_FILE) else { return };
-    let kept = ClientOptions::from_text(&String::from_utf8_lossy(&b)).capture;
+    let file = ClientOptions::from_text(&String::from_utf8_lossy(&b));
+    let kept = (file.capture, file.background_sound);
     let _ = client();
-    let last = FILE_CAPTURE.with(|f| f.replace(Some(kept)));
-    if last.is_some_and(|l| l != kept) {
-        let mut c = client();
-        c.capture = kept;
+    let Some(last) = FILE_SHARED.with(|f| f.replace(Some(kept))) else { return };
+    let mut c = client();
+    if last.0 != kept.0 {
+        c.capture = kept.0;
+        crate::say(&format!("controllers: Capture Controller {} (saved in another window)", if kept.0 { "on" } else { "off" }));
+    }
+    if last.1 != kept.1 {
+        c.background_sound = kept.1;
+        crate::say(&format!("sound: Sound in Background {} (saved in another window)", if kept.1 { "on" } else { "off" }));
+    }
+    if last != kept {
         set_client(c);
-        crate::say(&format!("controllers: Capture Controller {} (saved in another window)", if kept { "on" } else { "off" }));
     }
 }
 
@@ -729,7 +755,7 @@ pub fn describe() -> String {
         FrameRate::Display => "the display's",
     };
     format!(
-        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}; {}",
+        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}; {}",
         if c.lod { "on" } else { "off" },
         c.brightness,
         c.fog,
@@ -741,6 +767,7 @@ pub fn describe() -> String {
         if c.screen_shake { "on" } else { "off" },
         focus().key(),
         if c.capture { "on" } else { "off" },
+        if c.background_sound { "on" } else { "off" },
         kept_where()
     )
 }
@@ -973,7 +1000,7 @@ pub mod testing {
         crate::multibox::testing::set_place(None);
         super::PLATFORM_RATE.with(|p| p.set(super::FrameRate::Display));
         super::FRAME_DUE.with(|d| d.set(0.0));
-        super::FILE_CAPTURE.with(|f| f.set(None));
+        super::FILE_SHARED.with(|f| f.set(None));
     }
 
     /// Writes `name` in the store as another window's save would.
@@ -1112,8 +1139,13 @@ mod tests {
             ClientOptions { screen_shake: false, capture: true, ..Default::default() },
             ClientOptions { fog: 0, ..Default::default() },
             ClientOptions { fog: crate::fog::STEPS, ..Default::default() },
+            ClientOptions { background_sound: false, ..Default::default() },
         ] {
             assert_eq!(ClientOptions::from_text(&c.to_text()), c);
+        }
+        assert_eq!(ClientOptions { background_sound: false, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nbackground_sound=off\n", "Sound in Background only when off");
+        for bad in ["background_sound=no", "background_sound=0"] {
+            assert!(ClientOptions::from_text(bad).background_sound, "{bad}: on, the default");
         }
         assert_eq!(ClientOptions { fog: 0, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nfog=0\n", "Fog only when not the game's");
         assert_eq!(ClientOptions::default().to_text(), "lod=on\nbrightness=5\ncamera_distance=11\n", "no Frame Rate until one is chosen, no game's turn, no window's Auto");
@@ -1124,7 +1156,7 @@ mod tests {
             "Screen Shake only off, Capture Controller only on"
         );
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off; kept in the page's storage");
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on; kept in the page's storage");
         testing::reset(true);
         assert!(describe().ends_with("refused: nothing is kept"));
         testing::reset(false);
@@ -1173,6 +1205,23 @@ mod tests {
         testing::put(CLIENT_FILE, b"lod=on\nbrightness=9\ncamera_distance=11\ncapture_controller=on\n");
         look_shared();
         assert!(capture());
+        testing::reset(false);
+    }
+
+    /// Sound in Background is one setting for every window, as Capture
+    /// Controller is: another window's save of it reaches this one at its
+    /// next look, and a later window's own file never carries it; the
+    /// control: this window's own brightness stays as it read it.
+    #[test]
+    fn sound_in_background_reaches_every_window() {
+        testing::reset(false);
+        assert!(background_sound(), "on until turned off");
+        look_shared();
+        testing::put(CLIENT_FILE, b"lod=on\nbrightness=9\ncamera_distance=11\nbackground_sound=off\n");
+        look_shared();
+        assert!(!background_sound(), "taken at the next look");
+        assert_eq!(client().brightness, 5, "the control: this window's own brightness stays");
+        assert!(!ClientOptions { background_sound: false, ..Default::default() }.rows_text().contains("background_sound"), "a window's own file: the shared line left to client.opt");
         testing::reset(false);
     }
 

@@ -692,7 +692,7 @@ impl Gamepads {
     }
 
     /// Whether this window is the one in front.
-    fn in_front(&self) -> bool {
+    pub fn in_front(&self) -> bool {
         #[cfg(target_arch = "wasm32")]
         return crate::web::has_focus();
         #[cfg(not(target_arch = "wasm32"))]

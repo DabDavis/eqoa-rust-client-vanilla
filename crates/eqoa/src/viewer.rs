@@ -3280,6 +3280,11 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                // Sound in Background (the Extended page): off, this window
+                // is heard only while it is the one in front (has the focus:
+                // a minimised window has not; one merely covered by another
+                // while it has it is still the player's)
+                crate::audio::set_heard(crate::settings::background_sound() || self.pads.in_front());
                 // A page on WebGL2 draws at most 30 frames a second
                 // (`web::frame_due`): an animation frame before the next is
                 // due is skipped whole, the game included, so its clocks see
