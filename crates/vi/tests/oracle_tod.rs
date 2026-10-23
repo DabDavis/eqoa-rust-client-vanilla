@@ -185,3 +185,70 @@ fn profiles_and_blend() {
     let (_, w1) = blends(&mut o, &g, &[at]);
     assert!(near > 0 || blend_mismatches(&one, &[at], &w1) == 1, "a changed region moved no blend");
 }
+
+/// Runs op 1500 with `g` and the points: the decomp's
+/// `CalcTimeOfDayClipPlanes` (near, far) on each point's blend and its
+/// `CalcFarPlane`, 12 bytes a point.
+fn clip_planes_of(o: &mut Oracle, g: &Grid<Ieee>, points: &[Vect3<Ieee>]) -> Vec<[u32; 3]> {
+    let mut p = Vec::new();
+    for v in [g.rows, g.cols, g.subdiv] {
+        p.extend(v.to_le_bytes());
+    }
+    for v in [g.cell_size.0, g.origin.x.0, g.origin.y.0, g.origin.z.0] {
+        p.extend(v.to_le_bytes());
+    }
+    for &r in &g.regions {
+        p.extend((r as i32).to_le_bytes());
+    }
+    p.extend((points.len() as i32).to_le_bytes());
+    for v in points {
+        for x in [v.x.0, v.y.0, v.z.0] {
+            p.extend(x.to_le_bytes());
+        }
+    }
+    let out = o.call(1500, &p);
+    assert_eq!(out.len(), points.len() * 12);
+    out.chunks(12).map(|c| [f32_at(c, 0).to_bits(), f32_at(c, 4).to_bits(), f32_at(c, 8).to_bits()]).collect()
+}
+
+/// `clip_planes` and `Grid::far_plane` (`CalcTimeOfDayClipPlanes`,
+/// `CalcFarPlane`: the fog's distances and the camera's far plane) against
+/// the decomp over TUNARIA's grid; `far_plane` with the profiles' near read
+/// for their far, and the blend's weights in the other order, fail it.
+#[test]
+fn clip_planes_and_far_plane() {
+    let Some(mut o) = Oracle::open() else { return };
+    let Some(g) = grid() else { return };
+    let (lo_x, lo_z) = (g.origin.x.0 - g.cell_size.0, g.origin.z.0 - g.cell_size.0);
+    let (span_x, span_z) = ((g.cols + 2) as f32 * g.cell_size.0, (g.rows + 2) as f32 * g.cell_size.0);
+    let mut r = Rng(0xf065);
+    let points: Vec<Vect3<Ieee>> = (0..3000).map(|_| Vect3::of(lo_x + r.unit() * span_x, r.range(-100.0, 400.0), lo_z + r.unit() * span_z)).collect();
+    let want = clip_planes_of(&mut o, &g, &points);
+    let got = |v: &Vect3<Ieee>| {
+        let (n, f) = vi::tod::clip_planes(&g.profile_blend(v));
+        [bits(n), bits(f), bits(g.far_plane(v))]
+    };
+    let bad = points.iter().zip(&want).filter(|(v, w)| got(v) != **w).count();
+    assert_eq!(bad, 0, "{bad} of {} points differ", points.len());
+    // the far plane is the clip planes' far, and the profiles do differ
+    // over the grid (a constant would pass a weaker check)
+    let fars: std::collections::BTreeSet<u32> = want.iter().map(|w| w[2]).collect();
+    assert!(fars.len() > 10, "{} distinct far planes", fars.len());
+    assert!(want.iter().all(|w| w[1] == w[2]));
+
+    // Negative controls: the near read for the far, and the blend's weights
+    // summed the other way round, each move far planes.
+    let near_for_far = points.iter().zip(&want).filter(|(v, w)| bits(vi::tod::clip_planes(&g.profile_blend(v)).0) != w[2]).count();
+    assert!(near_for_far > 1000, "{near_for_far}");
+    let reversed = |v: &Vect3<Ieee>| {
+        let b = g.profile_blend(v);
+        let mut far = F::<Ieee>::ZERO;
+        for k in (0..4).rev() {
+            let pr = PROFILES.get(b.index[k] as usize).unwrap_or(&PROFILES[0]);
+            far = if k == 3 { F::new(pr.far) * b.weight[3] } else { far + F::new(pr.far) * b.weight[k] };
+        }
+        bits(far)
+    };
+    let order = points.iter().zip(&want).filter(|(v, w)| reversed(v) != w[2]).count();
+    assert!(order > 0, "summing the other way round changed nothing");
+}
