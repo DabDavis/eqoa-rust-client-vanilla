@@ -48,6 +48,7 @@ mod camreach;
 mod camstyle;
 mod client_image;
 mod playersearch;
+mod searchwnd;
 mod s2;
 mod controls;
 mod craft;

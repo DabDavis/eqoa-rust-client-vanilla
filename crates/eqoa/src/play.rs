@@ -276,8 +276,12 @@ pub struct Play {
     who: crate::wholist::Who,
     who_wnd: crate::wholist::WhoList,
     who_open: bool,
-    /// the who window shows a server's player search (`playersearch`)
+    /// the who window shows a server's player search (`playersearch`), when
+    /// the patch's own window cannot be read
     search_mode: bool,
+    /// a server's player search in the patch's own window (`searchwnd`),
+    /// over play
+    search: crate::searchwnd::Search,
     who_keys: Vec<(i32, bool)>,
     /// Tradeskills (`VIClientPart3834C`) and their windows: the recipe book
     /// (mode 6) and the experiment (mode 37); the keys and what the part said
@@ -1049,7 +1053,7 @@ impl Play {
         crate::s2::begin_session();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0 };
+        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0 };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -1136,6 +1140,10 @@ impl Play {
             (None, None, false) => "waiting for SUPPORT",
         };
         let _ = writeln!(o, "start menu: {start}; HUD: {hud}");
+        if self.search.open || !self.search.list().is_empty() {
+            let [race, class, min, max] = self.search.filter();
+            let _ = writeln!(o, "player search: {}, race {race} class {class} levels {min}-{max}, {} found", if self.search.open { "open" } else { "closed" }, self.search.list().len());
+        }
         let _ = writeln!(o, "{}", self.map.describe());
         if let Some(w) = self.loading.wait {
             let _ = writeln!(o, "loading screen: up {} ms, for the zones round {:?}{}", self.session.now() as i64 - w.since, w.at, if w.entering { ", the world's file first" } else { "" });
@@ -1314,13 +1322,21 @@ impl Play {
                 }
                 Event::Opcode { op: 0x0E02, data } => self.who.recv(&data),
                 // a server's player search (`playersearch`, `s2`): 0x1501
-                // empties the list, a 0x1500 is a player found
-                Event::Opcode { op: 0x1501, .. } if self.search_mode => {
-                    self.who.list.clear();
-                    self.who.pending = false;
+                // empties the list, a 0x1500 is a player found. The patch's
+                // window keeps them whether it is up or not, as its handler
+                // does; the who window too while it shows the search
+                Event::Opcode { op: 0x1501, .. } if crate::s2::get().player_search => {
+                    self.search.clear();
+                    if self.search_mode {
+                        self.who.list.clear();
+                        self.who.pending = false;
+                    }
                 }
-                Event::Opcode { op: 0x1500, data } if self.search_mode => {
-                    if let Some(f) = crate::playersearch::Found::parse(&data) {
+                Event::Opcode { op: 0x1500, data } if crate::s2::get().player_search => {
+                    self.search.found(&data);
+                    if self.search_mode
+                        && let Some(f) = crate::playersearch::Found::parse(&data)
+                    {
                         self.who.list.push(f.row());
                         self.who.pending = false;
                     }
@@ -2355,7 +2371,8 @@ impl Play {
             self.press(&keys);
             return true;
         }
-        if self.mode == 0 {
+        // in play; a server's player search over it is a window
+        if self.mode == 0 && !self.search.open {
             if matches!(c, Click::Right(..)) {
                 return false;
             }
@@ -2415,7 +2432,7 @@ impl Play {
     /// waiting). False in play.
     pub fn window_wheel(&mut self, lines: f32) -> bool {
         use crate::pointer::key;
-        if self.mode == 0 || self.quick_dpad() {
+        if (self.mode == 0 && !self.search.open) || self.quick_dpad() {
             self.wheel = 0.0;
             return self.mode != 0;
         }
@@ -2436,6 +2453,9 @@ impl Play {
     fn window_point(&mut self, f: [f32; 2]) -> Vec<i32> {
         use crate::pointer::key;
         let one = |k: Option<i32>| k.into_iter().collect::<Vec<i32>>();
+        if self.search.open {
+            return self.search.point(f);
+        }
         if self.mode == 30 {
             return self.quick.point(f);
         }
@@ -2931,6 +2951,12 @@ impl Play {
     fn window_key(&mut self, key: i32, down: bool) -> bool {
         // the map, while it is up, over everything (`map.rs`)
         if self.map.key(key, down) {
+            return true;
+        }
+        // a server's player search, while it is up: every key (S2 puts its
+        // handler in `VIWndGame`'s and the HUD's menus' `OnKeyDown`)
+        if self.search.open {
+            self.search_key(key, down);
             return true;
         }
         if self.mode == 30 {
@@ -3869,7 +3895,7 @@ impl Play {
                 // the player search asks again (`playersearch`), the who list its own
                 crate::wholist::WhoUp::Refresh if self.search_mode => {
                     self.who.pending = true;
-                    self.session.send(&crate::playersearch::search_all());
+                    self.session.send(&crate::playersearch::search_levels(self.dump.player.level as i32));
                 }
                 crate::wholist::WhoUp::Refresh => {
                     let req = self.who.open();
@@ -3935,6 +3961,53 @@ impl Play {
             self.edit.title = self.chat_title();
         }
         self.edit.set_text(&crate::ui::wide(text));
+    }
+
+    /// Whether a server's player search is up (`searchwnd`): it has the
+    /// keys and the pointer.
+    pub fn search_open(&self) -> bool {
+        self.search.open
+    }
+
+    /// A key for a server's player search while it is up (S2's FD4B8,
+    /// which takes `OnKeyDown`s only): what it asks, done at once.
+    pub fn search_key(&mut self, key: i32, down: bool) {
+        use crate::searchwnd::Out;
+        if !down || !self.search.open {
+            return;
+        }
+        match self.search.key(key) {
+            Some(Out::Close) => self.close_search(),
+            Some(Out::Send(m)) => {
+                self.session.send(&m);
+                // `EQOA_SEARCH_FOUND=<n>`: a test's answer, at once, from a
+                // server that has none (0x1501, then n players)
+                if let Some(n) = std::env::var("EQOA_SEARCH_FOUND").ok().and_then(|v| v.parse::<usize>().ok()) {
+                    self.search.clear();
+                    for b in crate::searchwnd::test_players(n) {
+                        self.search.found(&b);
+                    }
+                }
+            }
+            // FAA40: the window closed, then `OnKeyDown(84)`'s chat line,
+            // its text the tell's
+            Some(Out::Tell(text)) => {
+                self.close_search();
+                self.chat_key(&String::from_utf16_lossy(&text), false);
+            }
+            Some(Out::Invite(id, name)) => {
+                self.invite_to_group(id, &name);
+                self.close_search();
+            }
+            None => {}
+        }
+    }
+
+    /// FD178: the search's window down and its list let go, the player and
+    /// the camera let go (its FD13C(1)); the HUD's menu is drawn again.
+    fn close_search(&mut self) {
+        self.search.close();
+        self.locks = (true, true);
     }
 
     /// The HUD is up (SUPPORT's atlas has come): its windows can be drawn.
@@ -4092,14 +4165,22 @@ impl Play {
                 self.mode = 35;
             }
             // a server's patch's Group menu (`s2`, Sandstorm's player
-            // search): Search (in the who window), Register, Unregister
+            // search): Search, in the patch's window (`searchwnd`) on the
+            // player's levels, or in the who window when the patch's window
+            // is not this shape; Register, Unregister
             0xFF00_0001 if crate::s2::get().player_search => {
-                self.who.close();
-                self.who.pending = true;
-                self.session.send(&crate::playersearch::search_all());
-                self.search_mode = true;
-                self.who_open = true;
-                self.mode = 35;
+                let level = self.dump.player.level as i32;
+                match crate::searchwnd::Art::current() {
+                    Some(art) => self.search.open(level, art),
+                    None => {
+                        self.who.close();
+                        self.who.pending = true;
+                        self.session.send(&crate::playersearch::search_levels(level));
+                        self.search_mode = true;
+                        self.who_open = true;
+                        self.mode = 35;
+                    }
+                }
             }
             0xFF00_0002 if crate::s2::get().player_search => self.session.send(&crate::playersearch::register()),
             0xFF00_0003 if crate::s2::get().player_search => self.session.send(&crate::playersearch::unregister()),
@@ -5372,6 +5453,15 @@ impl Play {
                 vui.blit_bar(&mut r, &text, [0.8, 0.8, 0.8, a], [320 - ((w + 50) >> 1), 229], 33, 34, w + 50, 3, a, 0, true);
             }
             hud.draw(vui, &mut r, &state);
+            // a server's player search (`searchwnd`), drawn where S2 draws
+            // it, in `VIWndGame::OnDrawSelf` before the windows it owns (the
+            // effects, the chat box); while it is up the player and the
+            // camera are held, every frame (its FD13C)
+            if self.search.open {
+                self.locks = (false, false);
+                r.ui.anchor = Anchor::Middle;
+                self.search.draw(vui, &mut r);
+            }
             r.ui.anchor = Anchor::Left;
             r.ui.vertical = Vertical::Top;
             if crate::influence::shown(self.mode) {
@@ -5486,8 +5576,9 @@ impl Play {
             }
             r.ui.vertical = Vertical::Top;
             // UpdateQuickBars, then the menu up (the HUD's, in play; L2's
-            // menus open over it without `UpdateMode`, so it stays up there)
-            if self.mode == 0 || self.mode == 30 {
+            // menus open over it without `UpdateMode`, so it stays up there;
+            // a server's player search hides them while it is up)
+            if (self.mode == 0 || self.mode == 30) && !self.search.open {
                 self.hud_menus.build(&self.abilities, &self.dump.inventory.items);
                 let abilities = &self.abilities;
                 let inventory = &self.dump.inventory.items;
@@ -5900,6 +5991,61 @@ mod commands {
         let mut p = play();
         p.do_action(0xFF00_0001, 0);
         assert_eq!((p.mode, p.search_mode, p.who_open), (0, false, false));
+    }
+
+    /// Sandstorm's live S2 (`searchwnd`): its Search opens the patch's own
+    /// window over play, on the player's own levels, with nothing asked
+    /// yet (the who window stays shut); while it is up it has the keys, its
+    /// Search asks with its filter, and △ closes it and lets the player
+    /// and the camera go. The control: a patch whose window is not that
+    /// shape (its search flag alone) shows the search in the who window,
+    /// asked for the player's levels too.
+    #[test]
+    fn the_live_patchs_search_window() {
+        struct Rec(std::rc::Rc<std::cell::RefCell<Vec<Vec<u8>>>>);
+        impl net::session::Datagrams for Rec {
+            fn send_to(&mut self, d: &[u8], _: [u8; 4], _: u16) {
+                self.0.borrow_mut().push(d.to_vec());
+            }
+            fn recv_from(&mut self) -> Option<(Vec<u8>, [u8; 4], u16)> {
+                None
+            }
+        }
+        let Some(patch) = crate::searchwnd::testing::live() else { return };
+        crate::s2::with_rules(crate::s2::Rules::from_patch(&patch), || {
+            let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 5000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+            s.self_id = Some(0x100);
+            let mut p = Play::new(s, Player::default(), Box::default());
+            p.dump.player.level = 60;
+            p.do_action(0xFF00_0001, 0);
+            assert!(p.search_open());
+            assert_eq!((p.mode, p.who_open, p.search_mode), (0, false, false));
+            let searches = |sent: &std::cell::RefCell<Vec<Vec<u8>>>| guaranteed(&sent.borrow()).into_iter().filter(|m| m.starts_with(&[0x02, 0x15])).collect::<Vec<_>>();
+            p.session.flush();
+            assert!(searches(&sent).is_empty(), "nothing asked on opening");
+            // down to Search, ✕
+            for k in [139, 139, 139, 139, 134] {
+                assert!(p.window_key(k, true), "the window has the key");
+                p.window_key(k, false);
+            }
+            p.session.flush();
+            assert_eq!(searches(&sent), vec![vec![0x02, 0x15, 0xFF, 0xFF, 45, 60]]);
+            // a frame drawn holds the player; △ lets go
+            p.locks = (false, false);
+            p.window_key(132, true);
+            assert!(!p.search_open());
+            assert_eq!(p.locks, (true, true));
+            assert!(!p.window_key(134, true), "closed: play has the keys");
+        });
+        let flag = crate::s2::Rules { player_search: true, ..crate::s2::Rules::retail() };
+        crate::s2::with_rules(flag, || {
+            let mut p = play();
+            p.dump.player.level = 60;
+            p.do_action(0xFF00_0001, 0);
+            assert!(!p.search_open());
+            assert_eq!((p.mode, p.search_mode), (35, true));
+        });
     }
 
     /// A server's patch that colours damage (`s2`: Sandstorm's S2) has the

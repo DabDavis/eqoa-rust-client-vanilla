@@ -5,11 +5,13 @@
 //! unlist this character in others' searches); Search is 0x1502 with four
 //! bytes, race, class, minimum and maximum level (0xFF any), and the server
 //! answers 0x1501 (no body: the list emptied) then a 0x1500 a player found.
-//! S2 shows them in a window of its own (a title, a filter row, sortable
-//! columns, a player's Location and Group lines, Tell and Invite); here the
-//! game's who window shows them (`wholist`: name, race, class and level,
-//! Tell and Invite by the player's id), the search asked for any race and
-//! class from level 1 to 60, as S2's window opens.
+//! S2 shows them in a window of its own (`searchwnd`: a title, the search's
+//! filter, sortable columns, a player's Location and Group lines, Tell and
+//! Invite). When that window's code is not the shape `searchwnd` reads (a
+//! build of S2 other than Sandstorm's live one), the game's who window shows
+//! them instead (`wholist`: name, race, class and level, Tell and Invite by
+//! the player's id), the search asked for any race and class over the
+//! player's own levels, as S2's window opens on them.
 
 use crate::wholist::WhoRow;
 use net::stream::Writer;
@@ -74,10 +76,11 @@ pub fn search(race: u8, class: u8, min_level: u8, max_level: u8) -> Vec<u8> {
     w.data
 }
 
-/// What the Search entry asks: any race and class, levels 1 to 60, as S2's
-/// window opens.
-pub fn search_all() -> Vec<u8> {
-    search(0xFF, 0xFF, 1, 60)
+/// What the Search entry asks in the who window: any race and class over
+/// the levels S2's window opens on for a player of `level`.
+pub fn search_levels(level: i32) -> Vec<u8> {
+    let (min, max) = crate::searchwnd::levels(level);
+    search(0xFF, 0xFF, min as u8, max as u8)
 }
 
 /// Register: this character in others' searches.
@@ -116,9 +119,12 @@ mod tests {
         assert_eq!(Found::parse(&[1, 2]), None);
     }
 
+    /// The control: the stand-in asked for every level (1 to 60).
     #[test]
     fn the_requests() {
-        assert_eq!(search_all(), vec![0x02, 0x15, 0xFF, 0xFF, 1, 60]);
+        assert_eq!(search_levels(60), vec![0x02, 0x15, 0xFF, 0xFF, 45, 60]);
+        assert_ne!(search_levels(60), search(0xFF, 0xFF, 1, 60));
+        assert_eq!(search_levels(1), vec![0x02, 0x15, 0xFF, 0xFF, 1, 4]);
         assert_eq!(register(), vec![0x03, 0x15]);
         assert_eq!(unregister(), vec![0x04, 0x15]);
     }
