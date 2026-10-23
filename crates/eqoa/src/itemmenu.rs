@@ -456,8 +456,11 @@ impl ItemMenu {
     }
 
     /// `Use(item, count)`: a worn (916), quick-slotted (917) or no-trade
-    /// (918) item asks first.
-    fn use_item(&mut self, item: i32, count: i32, inv: &ItemList, vui: &Vui, waiting: bool, now: i64, out: &mut Vec<ItemOut>) {
+    /// (918) item asks first, and here every other item too, with word 915
+    /// ("Destroy item?"): the game copies that one into the box's text and
+    /// never shows it, destroying an ordinary item at once. Asking for every
+    /// item is the client's own, the user's choice (F3 20261023-082704).
+    fn use_item(&mut self, item: i32, count: i32, inv: &ItemList, vui: &Vui, waiting: bool, now: i64) {
         let Some(it) = inv.items.get(item.max(0) as usize).filter(|_| item >= 0 && !waiting) else {
             self.show_menu(false, now);
             return;
@@ -465,24 +468,16 @@ impl ItemMenu {
         let w = |id: i32| vui.words.get(id, vui.language).to_string();
         let name = &it.item.name;
         let text = if it.equip_slot != -1 {
-            Some(w(916).replacen("%s", name, 1).replacen("%S", name, 1))
+            w(916).replacen("%s", name, 1).replacen("%S", name, 1)
         } else if it.quick_slot >= 0 {
-            Some(w(917).replacen("%s", name, 1).replacen("%S", name, 1))
+            w(917).replacen("%s", name, 1).replacen("%S", name, 1)
         } else if it.item.no_trade > 0 {
-            Some(w(918))
+            w(918)
         } else {
-            None
+            w(915)
         };
-        match text {
-            Some(t) => {
-                self.mbox.prompt(&wide(&t), 1, item, count, now);
-                self.focus = Focus::MBox;
-            }
-            None => {
-                out.push(ItemOut::UseItemOn(item, count));
-                self.show_menu(false, now);
-            }
-        }
+        self.mbox.prompt(&wide(&text), 1, item, count, now);
+        self.focus = Focus::MBox;
     }
 
     /// `Inspect(item)`: the tab's long description in the inspect window.
@@ -540,7 +535,7 @@ impl ItemMenu {
                 Some(QuantityUp::Value(v, id)) => {
                     self.quantity.visible = false;
                     if v > 0 {
-                        self.use_item(id, v, inv, vui, waiting, now, out);
+                        self.use_item(id, v, inv, vui, waiting, now);
                     } else {
                         self.show_menu(false, now);
                     }
@@ -649,7 +644,7 @@ impl ItemMenu {
                         self.quantity.open(vui, r, inv.items[id as usize].quantity as i32, id, -1);
                         self.focus = Focus::Quantity;
                     } else {
-                        self.use_item(id, 1, inv, vui, waiting, now, out);
+                        self.use_item(id, 1, inv, vui, waiting, now);
                     }
                 }
                 0x0207_0000 => {
@@ -826,16 +821,17 @@ mod tests {
         fn set_viewport(&mut self, _: [i32; 4]) {}
     }
 
-    /// Destroy asks as the game's `Use` asks (`VIWndItemMenu::Use`,
-    /// byte-exact): a worn item (word 916), a quick-slotted one (917) and a
-    /// NO TRADE one (918) put up the Yes/No box, starting on No, and only
-    /// Yes sends 0x003C; any other item goes at once, with no box (word 915,
-    /// "Destroy item?", is copied into the text and never shown). F3
-    /// 20261023-082704 asked for a box on every item; the game has none. The
-    /// cases are each other's controls: asking for every item, or for none,
-    /// fails one of them.
+    /// Destroy asks for every item, in the Yes/No box starting on No, and
+    /// only Yes sends 0x003C: a worn item with word 916, a quick-slotted one
+    /// with 917 and a NO TRADE one with 918, as the game's `Use` asks
+    /// (`VIWndItemMenu::Use`, byte-exact), and any other item with 915,
+    /// "Destroy item?", which the game copies and never shows: it destroys
+    /// an ordinary item at once. Asking for that one too is the client's own
+    /// (the user's choice, F3 20261023-082704). By keys and by the pointer:
+    /// a click on No keeps it, on Yes destroys it. The control: the game's
+    /// rule, an ordinary item destroyed with no box, fails it.
     #[test]
-    fn destroying_asks_as_the_game_asks() {
+    fn destroying_asks_for_every_item() {
         let mut lines = vec![String::new(); 918];
         lines[914] = "Destroy item?".into();
         lines[915] = "Destroy equipped item \"%S\"?".into();
@@ -870,27 +866,51 @@ mod tests {
         let press = |m: &mut ItemMenu, k: i32, out: &mut Vec<ItemOut>| {
             m.key(&vui, &mut crate::pointer::testing::NullRaster, k, true, &inv, &info, false, &mut Vec::new(), out);
         };
-        // a plain item: destroyed at once
-        let mut m = menu();
-        let mut out = Vec::new();
-        m.use_item(0, 1, &inv, &vui, false, vui.time, &mut out);
-        assert_eq!(out, vec![ItemOut::UseItemOn(0, 1)], "no box for a plain item");
-        assert!(m.focus != Focus::MBox);
-        for (k, text) in [(1, "Destroy equipped item \"Fine Sword\"?"), (2, "Destroy prepared item \"Healing Potion\"?"), (3, "Destroy this NO TRADE item?")] {
+        let cases = [(0, "Destroy item?"), (1, "Destroy equipped item \"Fine Sword\"?"), (2, "Destroy prepared item \"Healing Potion\"?"), (3, "Destroy this NO TRADE item?")];
+        for (k, text) in cases {
             let mut m = menu();
             let mut out = Vec::new();
-            m.use_item(k, 1, &inv, &vui, false, vui.time, &mut out);
-            assert!(out.is_empty() && m.focus == Focus::MBox, "item {k}: the box first");
+            m.use_item(k, 1, &inv, &vui, false, vui.time);
+            assert!(m.focus == Focus::MBox, "item {k}: the box first");
             assert_eq!(String::from_utf16_lossy(&m.mbox.text), text);
             // ✕ on No, where the box starts: nothing destroyed
             press(&mut m, 13, &mut out);
             assert!(out.is_empty() && m.focus != Focus::MBox, "item {k}: No keeps it");
             // again, left to Yes and ✕: destroyed
-            m.use_item(k, 1, &inv, &vui, false, vui.time, &mut out);
+            m.use_item(k, 1, &inv, &vui, false, vui.time);
             press(&mut m, 17, &mut out);
             press(&mut m, 13, &mut out);
             assert_eq!(out, vec![ItemOut::UseItemOn(k, 1)], "item {k}: Yes destroys it");
         }
+        // the pointer, on the ordinary item: the box drawn, its two buttons
+        // found where a click takes them (Yes left of No), No then Yes
+        let mut m = menu();
+        m.open(&vui, &crate::pointer::testing::NullRaster);
+        m.use_item(0, 1, &inv, &vui, false, vui.time);
+        m.draw(&vui, &mut crate::pointer::testing::NullRaster, &info, &mut Vec::new());
+        let mut row: Vec<[f32; 2]> = Vec::new();
+        for y in (0..448).step_by(2) {
+            for x in (0..640).step_by(2) {
+                if !m.point([x as f32, y as f32]).is_empty() {
+                    row.push([x as f32, y as f32]);
+                }
+            }
+        }
+        assert!(!row.is_empty(), "the box's buttons take a pointer");
+        let y = row[0][1];
+        let on_row: Vec<f32> = row.iter().filter(|p| p[1] == y).map(|p| p[0]).collect();
+        let (yes, no) = ([on_row[0], y], [*on_row.last().unwrap(), y]);
+        let mut out = Vec::new();
+        for k in m.point(no) {
+            press(&mut m, k, &mut out);
+        }
+        assert!(out.is_empty(), "a click on No keeps it");
+        m.use_item(0, 1, &inv, &vui, false, vui.time);
+        m.draw(&vui, &mut crate::pointer::testing::NullRaster, &info, &mut Vec::new());
+        for k in m.point(yes) {
+            press(&mut m, k, &mut out);
+        }
+        assert_eq!(out, vec![ItemOut::UseItemOn(0, 1)], "a click on Yes destroys it");
     }
 
     /// The inventory opened shows its grid from the first frame on: the
