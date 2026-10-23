@@ -10,12 +10,19 @@
 //! (state 0) to the licence (state 2), the licence to the intro movie and
 //! the title (state 3), and the title's Play to `RunPatcher`.
 //!
+//! Play runs the patcher (`RunPatcher`'s patch half, `patcher`, in its
+//! window, `patchwnd`) against the server Network Setup keeps, into that
+//! server's own folder (`servers`), then fades out to STATION; a patch server
+//! that does not answer plays the folder as it stands (a notice says so when
+//! it has a patch). Natively: a page cannot reach the patch port, and a run
+//! that keeps nothing (the test commands) patches nothing.
+//!
 //! Left out, each where it would be: the controller screen (no analog pad:
 //! the keyboard is a computer's), the language screen (feature flag 0x400,
 //! which SLUS does not set: it sets 0x300), the intro movie (`movies\eqoa.pss`:
 //! the user's "later"), the memory card's checks (MCERR), and Play's
-//! network steps: the card's network configurations (`VIWndConnect`), DNAS
-//! and the patcher (`RunPatcher`), of which the closing fade is kept. The
+//! network steps before the patch: the card's network configurations
+//! (`VIWndConnect`) and DNAS. The
 //! title's Network Setup is the client's own page (`netsetup`), and its
 //! Options window is the client's `options::WndOptions`, which is the same
 //! code as SETUP's (CLIENT's `viwndoptions.cpp` differs only where it
@@ -28,6 +35,7 @@ pub mod eula;
 pub mod fader;
 pub mod legal;
 pub mod netsetup;
+pub mod patchwnd;
 pub mod splash;
 pub mod splashfx;
 
@@ -38,8 +46,9 @@ use vi::ui::wide;
 
 /// What `VISetup::Init` reads after the base files (UI.CSF, ARIALUI.CSF):
 /// SETUP.CSF (the painting, the splash effects' atlases, the title's music),
-/// ADDART.CSF, and the licence (`VIWndEula::Init`).
-pub const FILES: &[&str] = &["DATA2/SETUP.CSF", "DATA2/ADDART.CSF", "DATA/EULA.TXT"];
+/// ADDART.CSF, and the licence (`VIWndEula::Init`); and the patch's manifest
+/// path (`RunPatcher`'s `data\psvrpath.dat`).
+pub const FILES: &[&str] = &["DATA2/SETUP.CSF", "DATA2/ADDART.CSF", "DATA/EULA.TXT", "DATA/PSVRPATH.DAT"];
 
 /// The client's words for Play with no server (the game's for a missing
 /// network configuration are 783 and 984).
@@ -63,6 +72,8 @@ pub enum Focus {
     NetSetup,
     /// the title's message box (Play with no server)
     Message,
+    /// the patch's window (`RunPatcher`)
+    Patcher,
 }
 
 pub struct Setup {
@@ -84,6 +95,13 @@ pub struct Setup {
     message: Message,
     net: netsetup::NetSetup,
     net_visible: bool,
+    /// the patch running or run (`RunPatcher`): its status, and the window
+    patch: Option<crate::patcher::Shared>,
+    pub patch_wnd: patchwnd::PatchWnd,
+    /// the patch's end has been read
+    patch_ended: bool,
+    /// how a patch starts (`link::patch`; a test's own)
+    patch_start: fn(&str, &str) -> Option<crate::patcher::Shared>,
     /// the keys since the last frame, for the window with the focus
     keys: Vec<(i32, bool)>,
     /// the Controls page's capture, for the next frame
@@ -133,6 +151,10 @@ impl Setup {
             message: Default::default(),
             net: Default::default(),
             net_visible: false,
+            patch: None,
+            patch_wnd: Default::default(),
+            patch_ended: false,
+            patch_start: crate::pregame::link::patch,
             keys: Vec::new(),
             captures: Vec::new(),
             sound: Vec::new(),
@@ -158,6 +180,8 @@ impl Setup {
         self.options_visible = false;
         self.message.visible = false;
         self.net_visible = false;
+        self.patch = None;
+        self.patch_ended = false;
         self.keys.clear();
         self.began = false;
         self.leaving = false;
@@ -177,6 +201,7 @@ impl Setup {
             Some(Focus::Options) => self.options_wnd.point(p),
             Some(Focus::NetSetup) => self.net.point(p),
             Some(Focus::Message) => self.message.point(p).into_iter().collect(),
+            Some(Focus::Patcher) => self.patch_wnd.point(p),
             None => Vec::new(),
         }
     }
@@ -280,6 +305,11 @@ impl Setup {
             Some(Focus::Message) if down && self.message.key(k, now, &mut cues).is_some() => {
                 self.focus = Some(Focus::Title);
             }
+            Some(Focus::Patcher) if down => match self.patch_wnd.key(cx.vui, cx.r, k, now, &mut cues) {
+                Some(patchwnd::Up::Play) => self.go_on(cx),
+                Some(patchwnd::Up::Restart | patchwnd::Up::Cancelled) => self.restart_connect(cx),
+                None => {}
+            },
             _ => {}
         }
         cx.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
@@ -379,6 +409,10 @@ impl Setup {
                 if self.net_visible {
                     self.net.draw(cx.vui, cx.r, cx.now, &mut cues);
                 }
+                if self.patch.is_some() {
+                    self.follow_patch(cx, &mut cues);
+                    self.patch_wnd.draw(cx.vui, cx.r, &mut cues);
+                }
             }
         }
         cx.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
@@ -404,7 +438,8 @@ impl Setup {
 
     /// `Process` after a window gave the focus up.
     fn moved_on(&mut self, cx: &mut Ctx) {
-        match self.state {
+        let state = self.state;
+        match state {
             0 => {
                 // the legal screen done: the licence
                 self.state = 2;
@@ -431,14 +466,85 @@ impl Setup {
                 self.start_music(cx);
             }
             // `m_splash.Selection()`: Play gives the focus up (Connect);
-            // `RunPatcher` would follow: its closing fade is kept. (Network
-            // Setup's fade out to Sony's utility is the client's page here.)
-            3 if self.splash.sel == 0 && !self.leaving => {
+            // `RunPatcher` follows, or (nothing to patch with) its closing
+            // fade. (Network Setup's fade out to Sony's utility is the
+            // client's page here.)
+            3 if self.splash.sel == 0 && !self.leaving && self.patch.is_none() && !self.run_patcher(cx) => {
                 self.fader.begin(1.0, 0.5);
                 self.leaving = true;
             }
             _ => {}
         }
+    }
+
+    /// `RunPatcher`: the patch started on its thread, its window with the
+    /// focus. False when there is none to run (no server, a page, a run
+    /// that keeps nothing).
+    fn run_patcher(&mut self, cx: &mut Ctx) -> bool {
+        let Some(host) = cx.shared.server.clone() else { return false };
+        let manifest = psvrpath(cx.res);
+        let Some(st) = (self.patch_start)(&host, &manifest) else { return false };
+        self.patch = Some(st);
+        self.patch_ended = false;
+        self.patch_wnd.open(cx.vui, cx.r);
+        self.focus = Some(Focus::Patcher);
+        true
+    }
+
+    /// The patch's status into its window each frame; at its end the notes
+    /// (opened by themselves when files changed), or, the patch server not
+    /// answering, the notice (a folder with a patch) or straight on (none).
+    fn follow_patch(&mut self, cx: &mut Ctx, cues: &mut Vec<i32>) {
+        let Some(st) = self.patch.as_ref() else { return };
+        if self.patch_ended {
+            return;
+        }
+        let s = st.lock().unwrap().clone();
+        self.patch_wnd.state = s.state;
+        self.patch_wnd.progress = s.progress;
+        if !s.done {
+            return;
+        }
+        self.patch_ended = true;
+        let host = cx.shared.server.clone().unwrap_or_default();
+        if s.unreachable {
+            match crate::servers::record(&host) {
+                Some(r) => {
+                    let text = format!("The update server did not answer. Playing with the files {host} sent on {} UTC.", crate::servers::stamp(r.when));
+                    self.patch_wnd.notice(cx.vui, cx.r, &text);
+                }
+                None => {
+                    crate::say(&format!("patcher: {host}'s patch server did not answer, and its folder has no patch: playing as the disc is"));
+                    self.go_on(cx);
+                }
+            }
+        } else if s.state == crate::patcher::state::DONE {
+            if !s.notes.is_empty() {
+                self.patch_wnd.append_message(&wide(&s.notes));
+            }
+            if s.changed {
+                self.patch_wnd.show_patch_message(cx.vui, cx.r, cues);
+            }
+        }
+    }
+
+    /// The patch window's Play (or the notice's OK): `RunPatcher`'s closing
+    /// fade, then STATION.
+    fn go_on(&mut self, cx: &mut Ctx) {
+        let _ = cx;
+        self.focus = None;
+        self.fader.begin(1.0, 0.5);
+        self.leaving = true;
+    }
+
+    /// `RestartConnect`: back to the title, the patch window put away (a
+    /// failed patch's Restart, which reboots a PS2; the cancel box's Yes).
+    fn restart_connect(&mut self, cx: &mut Ctx) {
+        self.patch = None;
+        self.patch_ended = false;
+        self.patch_wnd = Default::default();
+        self.focus = Some(Focus::Title);
+        self.focus_arrived(cx);
     }
 
     /// `OnMessage` 295 to the window the focus came to from outside it.
@@ -469,6 +575,19 @@ impl Setup {
             crate::editbox::set_pad_only(true);
             self.face_set = false;
         }
+    }
+}
+
+/// `data\psvrpath.dat`'s first line (up to a CR, an LF or a space; at most
+/// 255 bytes), the retail path when the disc's is not there.
+pub fn psvrpath(res: &Res) -> String {
+    match res.raw("DATA/PSVRPATH.DAT") {
+        Some(b) => {
+            let b = &b[..b.len().min(255)];
+            let end = b.iter().position(|&c| matches!(c, b'\r' | b'\n' | b' ' | 0)).unwrap_or(b.len());
+            String::from_utf8_lossy(&b[..end]).into_owned()
+        }
+        None => crate::patcher::MANIFEST.to_string(),
     }
 }
 
@@ -571,6 +690,76 @@ mod tests {
         run.press(key::TRIANGLE);
         assert_eq!(run.s.focus, Some(Focus::Title));
         run.press(17);
+        run.press(13);
+        assert!(matches!(run.frames(30).as_slice(), [Next::Station]));
+        crate::settings::testing::reset(false);
+    }
+
+    thread_local! {
+        static STATUS: std::cell::RefCell<Option<crate::patcher::Shared>> = const { std::cell::RefCell::new(None) };
+    }
+
+    /// The test's patch: the status the test holds.
+    fn started(_: &str, _: &str) -> Option<crate::patcher::Shared> {
+        STATUS.with(|s| s.borrow().clone())
+    }
+
+    fn set(st: &crate::patcher::Shared, f: impl FnOnce(&mut crate::patcher::Status)) {
+        f(&mut st.lock().unwrap());
+    }
+
+    /// Play runs the patch in its window: its status followed, the notes
+    /// opened by themselves when files changed, Done's Play then on to
+    /// STATION; a failure's Restart goes back to the title (the control: no
+    /// STATION), and a patch server that does not answer, with nothing kept,
+    /// goes straight on.
+    #[test]
+    fn play_runs_the_patch_in_its_window() {
+        use crate::patcher::state;
+        let st: crate::patcher::Shared = Default::default();
+        STATUS.with(|s| *s.borrow_mut() = Some(st.clone()));
+        let title = |run: &mut Run| {
+            run.s.patch_start = started;
+            run.s.state = 2;
+            run.s.focus = None;
+            run.frames(32);
+        };
+        let mut run = Run::new(Some("192.0.2.1"));
+        title(&mut run);
+        set(&st, |s| s.state = state::CHECKING);
+        run.press(13);
+        assert_eq!(run.s.focus, Some(Focus::Patcher), "Play: the patch's window");
+        run.frames(3);
+        assert_eq!(run.s.patch_wnd.state, state::CHECKING, "its status followed");
+        assert!(run.frames(30).is_empty(), "nothing goes on while it runs");
+        set(&st, |s| {
+            s.state = state::DONE;
+            s.progress = 1.0;
+            s.notes = "New this week.".into();
+            s.changed = true;
+            s.done = true;
+        });
+        run.frames(2);
+        assert_eq!(run.s.patch_wnd.notes.text, wide("New this week."), "the notes in");
+        run.press(key::TRIANGLE);
+        assert_eq!(run.s.patch_wnd.sel, 1, "they opened by themselves, Play behind them");
+        run.press(key::CROSS);
+        assert!(matches!(run.frames(30).as_slice(), [Next::Station]), "Play: the fade, then STATION");
+
+        // a failure: Restart is the title again
+        set(&st, |s| *s = crate::patcher::Status { state: state::FAILED, done: true, ..Default::default() });
+        let mut run = Run::new(Some("192.0.2.1"));
+        title(&mut run);
+        run.press(13);
+        run.frames(2);
+        run.press(key::CROSS);
+        assert_eq!(run.s.focus, Some(Focus::Title), "Restart: the title");
+        assert!(run.frames(30).is_empty(), "the control: no STATION");
+
+        // a patch server that never answered, nothing kept: straight on
+        set(&st, |s| *s = crate::patcher::Status { state: state::CONNECTING, done: true, unreachable: true, ..Default::default() });
+        let mut run = Run::new(Some("192.0.2.1"));
+        title(&mut run);
         run.press(13);
         assert!(matches!(run.frames(30).as_slice(), [Next::Station]));
         crate::settings::testing::reset(false);

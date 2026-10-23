@@ -575,6 +575,7 @@ dependencies = [
  "dnas",
  "ee",
  "esf",
+ "flate2",
  "gilrs",
  "glam",
  "iso",

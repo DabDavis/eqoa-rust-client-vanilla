@@ -27,7 +27,12 @@ pub struct Res {
     /// every path read
     read: HashSet<String>,
     pending: Vec<files::Pending>,
+    /// the game's words: the disc's, or the server's (`set_server_words`)
     pub words: Option<StringTable>,
+    /// the disc's WORDS.TXT, and the server's when its patch put one in its
+    /// folder (`servers::words`)
+    disc_words: Option<StringTable>,
+    server_words: Option<StringTable>,
     pub textures: Option<StringTable>,
     vui: Option<Vui>,
     /// library files read since the window last took them (`take_fresh`)
@@ -105,7 +110,8 @@ impl Res {
             }
         } else {
             if path.eq_ignore_ascii_case("DATA/WORDS.TXT") {
-                self.words = StringTable::parse(&bytes);
+                self.disc_words = StringTable::parse(&bytes);
+                self.words = self.server_words.clone().or_else(|| self.disc_words.clone());
             }
             if path.eq_ignore_ascii_case("DATA/TEXTURES.TXT") {
                 self.textures = StringTable::parse(&bytes);
@@ -155,6 +161,17 @@ impl Res {
         }
     }
 
+    /// The server's WORDS.TXT for its session (its patch's, out of its
+    /// folder), or with None the disc's again: what the windows and the
+    /// world read from here on. A server's words never outlive its session.
+    pub fn set_server_words(&mut self, bytes: Option<Vec<u8>>) {
+        self.server_words = bytes.and_then(|b| StringTable::parse(&b));
+        self.words = self.server_words.clone().or_else(|| self.disc_words.clone());
+        if let (Some(v), Some(w)) = (self.vui.as_mut(), self.words.as_ref()) {
+            v.words = w.clone();
+        }
+    }
+
     pub fn vui_ready(&self) -> bool {
         self.vui.is_some()
     }
@@ -189,5 +206,23 @@ mod tests {
         assert!(r.container("BROKEN.CSF").is_none());
         assert!(r.error.is_some());
         assert_eq!(name_of("DATA2/SETUP.CSF"), "SETUP.CSF");
+    }
+
+    /// A server's words stand for its session and give way to the disc's
+    /// again; the control: the disc's before and after.
+    #[test]
+    fn a_servers_words_last_its_session() {
+        let mut r = Res::new();
+        r.put("DATA/WORDS.TXT", b"disc one\ndisc two\n".to_vec());
+        assert_eq!(r.words.as_ref().unwrap().get(2, 0), "disc two");
+        r.set_server_words(Some(b"server one\nserver two\n".to_vec()));
+        assert_eq!(r.words.as_ref().unwrap().get(2, 0), "server two");
+        r.set_server_words(None);
+        assert_eq!(r.words.as_ref().unwrap().get(2, 0), "disc two");
+        // set before the disc's arrive (a world left, the files read again)
+        let mut r = Res::new();
+        r.set_server_words(Some(b"server one\nserver two\n".to_vec()));
+        r.put("DATA/WORDS.TXT", b"disc one\ndisc two\n".to_vec());
+        assert_eq!(r.words.as_ref().unwrap().get(2, 0), "server two");
     }
 }
