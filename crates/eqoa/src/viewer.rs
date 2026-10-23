@@ -2098,11 +2098,8 @@ impl App {
         match (split, host.pre.scene()) {
             (Some((s, n)), Some(scene)) => {
                 g.renderer.draw_ui(&g.device, &mut enc, &target, &g.depth, size, 0..s);
-                let [x0, y0, x1, y1] = scene.viewport;
-                let a = render::ui::window_from_frame(size, [x0 as f32, y0 as f32]);
-                let b = render::ui::window_from_frame(size, [(x1 + 1) as f32, (y1 + 1) as f32]);
-                let (x, y) = (a[0].clamp(0.0, size.0 as f32) as u32, a[1].clamp(0.0, size.1 as f32) as u32);
-                let (w, h) = ((b[0].clamp(0.0, size.0 as f32) as u32).saturating_sub(x), (b[1].clamp(0.0, size.1 as f32) as u32).saturating_sub(y));
+                // the pixels a 2D quad over the viewport covers: a plate over it hides all of it
+                let [x, y, w, h] = crate::pregame::stage::viewport_pixels(size, scene.viewport);
                 if w > 0 && h > 0 {
                     let draws: Vec<render::Draw> = scene.models.iter().map(|&m| render::Draw::Model(m)).collect();
                     g.renderer.draw_viewport(&g.queue, &mut enc, &target, &g.depth, &scene.view, &draws, [x, y, w, h]);
