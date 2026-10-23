@@ -59,3 +59,10 @@ there.
 
 This is a development build of master, replaced by the next one: only the
 newest build can be downloaded.
+
+The game updates itself: as it starts, it asks the release for a newer build,
+and when there is one it downloads it (the loading screen says so), checks it is
+the file the release names, puts it in its own place and starts it, before the
+title. It needs to be able to write to its own folder; if it cannot, or the
+download fails, it says so in its log and plays as it is. EQOA_NO_UPDATE=1
+leaves it as it is for a run.

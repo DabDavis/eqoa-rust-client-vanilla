@@ -5,6 +5,15 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-23 · The game updates itself
+- As it starts, the game looks for a newer build. When there is one it
+  downloads it (the loading screen shows how far it is), checks it, and starts
+  it in its place, before the title: every fix reaches you without another
+  download.
+- This is the last build you download by hand. The game needs to be able to
+  write to its own folder; if it cannot, it plays as it is.
+- `EQOA_NO_UPDATE=1` plays a build as it is.
+
 ## 2026-10-23 · Follow, guild chat, assist
 - Follow works: target someone in your group and choose Follow in the quick
   chat's commands, or type `/follow`. You turn to them and run after them,

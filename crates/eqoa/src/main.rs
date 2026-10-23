@@ -110,6 +110,7 @@ mod sound;
 mod spells;
 mod stream;
 mod ui;
+mod update;
 mod viewer;
 mod wndlist;
 mod walker;
@@ -479,6 +480,9 @@ fn run(args: &[String]) -> Result<()> {
 /// (`discs::settle`, in the window's event loop).
 fn boot(image: Option<&str>, server: Option<String>) -> Result<()> {
     settings::keep_in_user_dir();
+    // a newer build on the release, asked for while the boot's pictures show
+    #[cfg(not(target_arch = "wasm32"))]
+    update::start();
     if let Some(iso) = discs::boot_disc(image) {
         disc(None)?;
         // CLIENT and SUPPORT (the UI's atlas, the start menu), off the
@@ -486,6 +490,9 @@ fn boot(image: Option<&str>, server: Option<String>) -> Result<()> {
         modules::load(std::path::Path::new(&iso));
     }
     viewer::run_boot(server)?;
+    // the window closed for the release's build: it starts in this one's place
+    #[cfg(not(target_arch = "wasm32"))]
+    update::relaunch_if_requested();
     Ok(())
 }
 

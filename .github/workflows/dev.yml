@@ -42,6 +42,12 @@ jobs:
             runner: macos-14
     runs-on: ${{ matrix.runner }}
     name: build (${{ matrix.os }})
+    env:
+      # The updater follows this release from a build that carries the
+      # channel and its commit (crates/eqoa/src/update.rs); a build made
+      # anywhere else has neither and never updates itself.
+      EQOA_UPDATE_CHANNEL: dev
+      EQOA_BUILD_COMMIT: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v5
 
@@ -109,6 +115,10 @@ jobs:
       - name: Package
         shell: bash
         run: |
+          bin=target/release/eqoa
+          [ "${{ matrix.os }}" = windows ] && bin=target/release/eqoa.exe
+          # a program that does not carry its commit would not follow the release
+          grep -aq "$GITHUB_SHA" "$bin" || { echo "$bin does not carry $GITHUB_SHA: it would not update itself"; exit 1; }
           case "${{ matrix.os }}" in
             linux) name=eqoa-vanilla-linux-x86_64 ;;
             windows) name=eqoa-vanilla-windows-x86_64 ;;
@@ -168,6 +178,21 @@ jobs:
           cat notes.md
           ls -la dist
 
+      # The updater's manifest (crates/eqoa/src/update.rs): the commit, and a
+      # line a platform with its program, the SHA-256 and the size a download
+      # is held to.
+      - name: Write update.txt
+        run: |
+          {
+            echo "version dev-${GITHUB_SHA::7}"
+            echo "commit $GITHUB_SHA"
+            for b in linux-x86_64:eqoa-vanilla-linux-x86_64 windows-x86_64:eqoa-vanilla-windows-x86_64.exe macos:eqoa-vanilla-macos; do
+              f="dist/${b#*:}"
+              echo "build ${b%%:*} ${b#*:} $(sha256sum "$f" | cut -d' ' -f1) $(stat -c%s "$f")"
+            done
+          } > update.txt
+          cat update.txt
+
       # The tag is moved, not added to, so the release always describes the
       # tip of master and nothing else.
       - name: Publish
@@ -178,9 +203,13 @@ jobs:
             gh release create dev --prerelease --title "Dev build" --notes-file notes.md
           # an asset no longer built goes too
           for old in $(gh release view dev --json assets --jq '.assets[].name'); do
-            [ -e "dist/$old" ] || gh release delete-asset dev "$old" --yes
+            [ -e "dist/$old" ] || [ "$old" = update.txt ] || gh release delete-asset dev "$old" --yes
           done
           gh release upload dev --clobber dist/*
+          # the manifest after the programs it names: a game reading it
+          # finds them there (one that reads the old one meanwhile is refused
+          # the new program by its hash, and asks again at its next start)
+          gh release upload dev --clobber update.txt
           gh release edit dev --prerelease --title "Dev build" --notes-file notes.md
 
   # The run's own copies of the builds would be a second place to download

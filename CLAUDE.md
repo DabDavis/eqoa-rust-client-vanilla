@@ -1,22 +1,30 @@
 # eqoa-rust-client-vanilla
 
-The Rust client without mods, and the only public EQOA client repository: eqoa-rs (`../eqoa-rs`,
-github.com/DabDavis/eqoa-rs) less its ambient occlusion, its harvester and its bug and crash
-reports. eqoa-rs, eqoa-port and the retired Go client (eqoa-client-v1) are private since
-2026-10-22. README.md is the plan, the crate table and what "vanilla" keeps (README "Vanilla");
-keep it current.
+The Rust client without mods, the only public EQOA client repository and, since 2026-10-23, the
+main client (the user: "the vanilla client is our main client going forward"): eqoa-rs
+(`../eqoa-rs`, github.com/DabDavis/eqoa-rs) forked less its ambient occlusion and its harvester.
+eqoa-rs, eqoa-port and the retired Go client (eqoa-client-v1) are private since 2026-10-22.
+README.md is the plan, the crate table and what "vanilla" keeps (README "Vanilla"); keep it
+current.
 
 - Vanilla: nothing that changes the game's picture or play beyond what README "Vanilla" keeps
   (widescreen, the untethered frame rate, the mouse and the touch screen, the keyboard with WASD and
   the Controls page, 1,000 lines of chat, no green backdrop behind the start menu's windows, the
-  Extended page, the map). A new client-side addition is the user's call: ask first. A fix to the
-  game's logic, sound or network goes both ways with eqoa-rs by `git cherry-pick` (remote `eqoa-rs`,
-  `git@github.com:DabDavis/eqoa-rs.git`). Link no private repository from anything public here.
+  Extended page, the map, the updater). A new client-side addition is the user's call: ask first.
+  Fixes are made here and are not carried to eqoa-rs any more (the user, 2026-10-23: "vanilla
+  only"); its remote `eqoa-rs` stays for reading it. Link no private repository from anything
+  public here.
 - Commit as Winfro <164797966+DabDavis@users.noreply.github.com> (the repo-local config; never the
   global address). `.git/hooks/pre-commit` refuses private strings, binaries and files over 2 MB.
 - Releases are CI only (`.github/workflows/dev.yml`): every push to `master` builds Linux, Windows and
   macOS and replaces the one `dev` release (its tag moved to the commit, its assets replaced, the run's
   artifacts deleted), so no older build can be downloaded. No versioned releases, no other channel.
+- **A push to `master` reaches every player at their next start** (the user chose it, 2026-10-23): the
+  updater (`update.rs`) reads the release's `update.txt` (dev.yml writes it, uploaded after the programs)
+  and puts a build of another commit in place before the title. So master is always a build fit to play:
+  test before pushing, and never push a half-done change. Only a build that carries `EQOA_UPDATE_CHANNEL`
+  and `EQOA_BUILD_COMMIT` (CI's) updates itself; dev.yml refuses one without its commit. Test the
+  updater with `EQOA_UPDATE_URL=<base>` against a server of one's own, never by pushing.
 - **Update notes**: a push that changes the program adds a section on top of `UPDATE-NOTES.md`
   (`## <date> · <title>`, then bullets: what a player sees, in a player's words), in the same push.
   The release page shows them, newest first (`release/notes.sh`): the sections new since the last build

@@ -181,6 +181,8 @@ pub struct Pregame {
     /// Back from the world (`back`): CLIENT starts by `back_from_world`
     /// with the disconnect's reason (None: the logout), not by `start`.
     back: Option<Option<i32>>,
+    /// The release's build is in place (`update`): the window closes for it.
+    pub relaunch: bool,
 }
 
 impl Pregame {
@@ -201,6 +203,7 @@ impl Pregame {
             keyboard: VecDeque::new(),
             entered: None,
             back: None,
+            relaunch: false,
         };
         p.res.want(res::BASE);
         p
@@ -290,9 +293,16 @@ impl Pregame {
                 None => self.show_picture(boot::Step::Launcher, now),
                 Some(boot::Step::Launcher) if self.held(now) => self.show_picture(boot::Step::Util, now),
                 Some(boot::Step::Util) if self.held(now) && self.res.support_in() => self.show_picture(boot::Step::Support, now),
-                Some(boot::Step::Support) if self.held(now) && self.res.ready(res::BASE) => {
-                    self.show_picture(boot::Step::Setup, now);
-                    self.enter(Stage::Setup, now);
+                // and the updater (`update`), before the title: a build of
+                // the release's put in place closes the window for it
+                Some(boot::Step::Support) if self.held(now) && self.res.ready(res::BASE) && crate::update::settled() => {
+                    if crate::update::staged() {
+                        crate::update::request_relaunch();
+                        self.relaunch = true;
+                    } else {
+                        self.show_picture(boot::Step::Setup, now);
+                        self.enter(Stage::Setup, now);
+                    }
                 }
                 _ => {}
             }

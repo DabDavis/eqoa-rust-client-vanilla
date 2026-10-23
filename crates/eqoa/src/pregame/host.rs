@@ -209,6 +209,13 @@ impl Host {
                     let (w, h) = (super::boot::WIDTH as f32, super::boot::HEIGHT as f32);
                     ui.push(Quad { tex, blend: 0, pos: [[0.0, 0.0], [w, 0.0], [w, h], [0.0, h]], uv: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], color: [1.0; 4], clip: None });
                 }
+                // the update downloading (`update`): its line low on the picture
+                if let Some(line) = crate::update::line()
+                    && let Some(vui) = self.pre.res.vui()
+                {
+                    let mut r = assets.raster(ui);
+                    vui.draw_centered_string_ex(&mut r, &vi::ui::wide(&line), 320, 410, [1.0; 4], 0, true);
+                }
                 self.pre.update(now);
             } else {
                 if let Some(v) = self.pre.res.vui_mut() {
@@ -282,6 +289,10 @@ impl Host {
         }
         if let Some(done) = self.world_done() {
             return done;
+        }
+        // the release's build in place: the window closes, and it starts
+        if self.pre.relaunch {
+            return Done::Quit;
         }
         Done::Stay
     }

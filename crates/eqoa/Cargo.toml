@@ -29,6 +29,11 @@ gilrs = "0.11.2"
 # Windows' common dialog, a Mac's open panel, on Linux the XDG desktop portal
 # (libdbus, opened at run time) or else zenity. Nothing more is linked.
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
+# The updater (`update`) and the reports (`report`): HTTPS to the GitHub
+# release and to the report server (rustls on ring, Mozilla's roots built in),
+# and a download held to the SHA-256 its manifest names.
+ureq = { version = "3.4.2", default-features = false, features = ["rustls"] }
+sha2 = "0.10.9"
 
 # Windows' Xbox controllers through XInput (`xinput`), which answers a window
 # that is not in front, as Windows.Gaming.Input (gilrs's) does not; and the
