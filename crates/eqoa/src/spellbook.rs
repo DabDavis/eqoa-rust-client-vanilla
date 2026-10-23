@@ -28,7 +28,7 @@
 use crate::client_image::Menus;
 use crate::pointer::{Hits, MOVED, key};
 use crate::startmenu::KeyFlash;
-use crate::ui::Layout;
+use crate::ui::{Cut, Layout};
 use crate::wndlist::{ListUp, MiniMenu};
 use net::dump::Ability;
 use render::ui::Anchor;
@@ -564,19 +564,23 @@ impl SpellBook {
         crate::ui::window_backdrop(vui, r, 642);
         let fp = FrameParam { tl: (44, 0), top: (45, 0), tr: (46, 0), right: (52, 0), br: (50, 0), bottom: (49, 0), bl: (48, 0), left: (47, 0) };
         r.anchor(Anchor::Frame);
-        // the backdrop's top as the start menu's band, the tabs on it
-        crate::startmenu::band(vui, r);
-        vui.blit_fill_frame(r, [150, 50], [300, 177], &fp, 35, 0, 1.0, true);
-        vui.blit_fill_frame(r, [150, 227], [300, 88], &fp, 35, 0, 1.0, true);
-        let fp = FrameParam { tl: (36, 0), top: (37, 0), tr: (36, 1), right: (42, 1), br: (39, 1), bottom: (40, 0), bl: (39, 0), left: (42, 0) };
-        let studs = FrameParam { tl: (0, 0), top: (38, 0), tr: (0, 0), right: (43, 1), br: (0, 0), bottom: (41, 0), bl: (0, 0), left: (43, 0) };
-        vui.blit_rect(r, 51, [-1, 50], [140, 265], 0, 1.0);
-        vui.blit_rect(r, 51, [461, 50], [189, 265], 0, 1.0);
-        vui.blit_studded_horz(r, [-1, 39], 37, 38, 140, 1, 0, 1.0, 0);
-        vui.blit_studded_horz(r, [-1, 315], 40, 41, 140, 1, 0, 1.0, 0);
-        vui.blit_studded_horz(r, [461, 39], 37, 38, 190, 1, 0, 1.0, 0);
-        vui.blit_studded_horz(r, [461, 315], 40, 41, 190, 1, 0, 1.0, 0);
-        vui.blit_studded_frame(r, [139, 39], [322, 294], &fp, &studs, 2, 3, 0, 1.0, false);
+        {
+            // ended at the bottom rails' bar, as the start menu is
+            let r = &mut Cut::new(r, BOTTOM_RAIL + crate::startmenu::RAIL_BAR);
+            // the backdrop's top as the start menu's band, the tabs on it
+            crate::startmenu::band(vui, r);
+            vui.blit_fill_frame(r, [150, 50], [300, 177], &fp, 35, 0, 1.0, true);
+            vui.blit_fill_frame(r, [150, 227], [300, 88], &fp, 35, 0, 1.0, true);
+            let fp = FrameParam { tl: (36, 0), top: (37, 0), tr: (36, 1), right: (42, 1), br: (39, 1), bottom: (40, 0), bl: (39, 0), left: (42, 0) };
+            let studs = FrameParam { tl: (0, 0), top: (38, 0), tr: (0, 0), right: (43, 1), br: (0, 0), bottom: (41, 0), bl: (0, 0), left: (43, 0) };
+            vui.blit_rect(r, 51, [-1, 50], [140, 265], 0, 1.0);
+            vui.blit_rect(r, 51, [461, 50], [189, 265], 0, 1.0);
+            vui.blit_studded_horz(r, [-1, 39], 37, 38, 140, 1, 0, 1.0, 0);
+            vui.blit_studded_horz(r, [-1, BOTTOM_RAIL], 40, 41, 140, 1, 0, 1.0, 0);
+            vui.blit_studded_horz(r, [461, 39], 37, 38, 190, 1, 0, 1.0, 0);
+            vui.blit_studded_horz(r, [461, BOTTOM_RAIL], 40, 41, 190, 1, 0, 1.0, 0);
+            vui.blit_studded_frame(r, [139, 39], [322, 294], &fp, &studs, 2, 3, 0, 1.0, false);
+        }
         r.anchor(Anchor::Middle);
         if self.sel - self.top >= 6 {
             self.top = self.sel - 5;
@@ -653,7 +657,7 @@ impl SpellBook {
         // plates from x 4, the slots to 639): a TV's edge hides those ends;
         // from the screen's top, through the band, as the start menu's
         r.anchor(Anchor::Frame);
-        crate::startmenu::close_sides(vui, r, MIDDLE, true);
+        crate::startmenu::close_sides(vui, &mut Cut::new(r, BOTTOM_RAIL + crate::startmenu::RAIL_BAR), MIDDLE, true);
         r.anchor(Anchor::Middle);
         if self.x44 {
             if self.fade_dir == -1 {
@@ -791,6 +795,10 @@ impl SpellBook {
 /// The book's middle frame (`SpellBook::draw`): its top and height.
 const MIDDLE: [i32; 2] = [39, 294];
 
+/// The book's bottom rails' line (two below the start menu's, as its whole
+/// frame is): the middle frame's bottom edge and the side panels' rails.
+const BOTTOM_RAIL: i32 = 315;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -836,7 +844,7 @@ mod tests {
             assert_eq!(drawn.first(), Some(&(Frame, [-1, -1], [642, 48])), "the band");
         }
         let added: Vec<_> = wide.2.iter().filter(|b| !tv.2.contains(b)).copied().collect();
-        assert_eq!(added, posts::made(Frame, MIDDLE[0], true));
+        assert_eq!(added, posts::made_below(Frame, MIDDLE[0], true, BOTTOM_RAIL + crate::startmenu::RAIL_BAR));
         let rest: Vec<_> = wide.2.iter().filter(|b| !added.contains(b)).copied().collect();
         assert_eq!(rest, tv.2);
         // the pointer: the third row and the third tab at their places

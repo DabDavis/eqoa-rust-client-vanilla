@@ -47,6 +47,107 @@ pub trait Layout: Raster {
     fn beyond(&mut self, _id: u32, _mode: i32, _corners: [[f32; 2]; 4], _texels: [[f32; 2]; 4]) {}
 }
 
+/// A raster that lays nothing at or below frame line `below` (the client's
+/// own): each blit made through it loses the rows of its quad that would
+/// fall there, with the texels drawn on them (the texture's last rows, or
+/// its first under a vertical mirror), its place and its other rows as made;
+/// a fill is cut there too; the rest passes on as it is. A window's frame is
+/// drawn through one to end at its bottom rail's bar
+/// (`startmenu::RAIL_BAR`).
+pub struct Cut<'a> {
+    r: &'a mut dyn Layout,
+    below: i32,
+}
+
+impl<'a> Cut<'a> {
+    pub fn new(r: &'a mut dyn Layout, below: i32) -> Self {
+        Cut { r, below }
+    }
+
+    /// How many of the `h` rows from line `y` fall at or below the cut.
+    fn over(&self, y: i32, h: i32) -> i32 {
+        (y + h - self.below).clamp(0, h.max(0))
+    }
+
+    fn corners(&self, c: [[i32; 2]; 4]) -> [[i32; 2]; 4] {
+        c.map(|p| [p[0], p[1].min(self.below)])
+    }
+}
+
+impl Layout for Cut<'_> {
+    fn side(&self) -> i32 {
+        self.r.side()
+    }
+    fn anchor(&mut self, a: Anchor) {
+        self.r.anchor(a);
+    }
+    fn mark_split(&mut self) {
+        self.r.mark_split();
+    }
+    fn solid(&mut self, mode: i32, color: [f32; 4], corners: [[f32; 2]; 4]) {
+        self.r.solid(mode, color, corners);
+    }
+    fn textured(&mut self, id: u32, mode: i32, color: [f32; 4], corners: [[f32; 2]; 4], uv: [[f32; 2]; 4]) {
+        self.r.textured(id, mode, color, corners, uv);
+    }
+    fn fill_blended(&mut self, color: [f32; 4], corners: [[i32; 2]; 4]) {
+        let c = self.corners(corners);
+        self.r.fill_blended(color, c);
+    }
+    fn beyond(&mut self, id: u32, mode: i32, corners: [[f32; 2]; 4], texels: [[f32; 2]; 4]) {
+        self.r.beyond(id, mode, corners, texels);
+    }
+}
+
+impl Raster for Cut<'_> {
+    fn blit(&mut self, id: u32, flags: u32, at: [i32; 2], a: [i32; 2], b: [i32; 2], mode: i32, alpha: f32) {
+        let over = self.over(at[1], b[1]);
+        if over > 0 && over == b[1] {
+            return;
+        }
+        let a = if flags & 2 != 0 { [a[0], a[1] + over] } else { a };
+        self.r.blit(id, flags, at, a, [b[0], b[1] - over], mode, alpha);
+    }
+    fn stretch_blit(&mut self, id: u32, flags: u32, at: [i32; 2], size: [i32; 2], a: [i32; 2], b: [i32; 2], mode: i32, alpha: f32) {
+        let over = self.over(at[1], size[1]);
+        if over > 0 && over == size[1] {
+            return;
+        }
+        // the texel rows on the rows cut, in proportion
+        let t = if over == 0 { 0 } else { (b[1] as i64 * over as i64 / size[1] as i64) as i32 };
+        let a = if flags & 2 != 0 { [a[0], a[1] + t] } else { a };
+        self.r.stretch_blit(id, flags, at, [size[0], size[1] - over], a, [b[0], b[1] - t], mode, alpha);
+    }
+    fn fill_fan(&mut self, color: [f32; 4], corners: [[i32; 2]; 4]) {
+        let c = self.corners(corners);
+        self.r.fill_fan(color, c);
+    }
+    fn blit_full(&mut self, id: u32, flags: u32, at: [i32; 2], mode: i32, alpha: f32) {
+        self.r.blit_full(id, flags, at, mode, alpha);
+    }
+    fn draw_string(&mut self, at: [i32; 2], color: [f32; 4], s: &[u16]) {
+        self.r.draw_string(at, color, s);
+    }
+    fn draw_centered_string(&mut self, at: [i32; 2], color: [f32; 4], s: &[u16], mode: u32) {
+        self.r.draw_centered_string(at, color, s, mode);
+    }
+    fn string_width(&self, s: &[u16]) -> i32 {
+        self.r.string_width(s)
+    }
+    fn point_size(&self) -> i32 {
+        self.r.point_size()
+    }
+    fn viewport(&self) -> [i32; 4] {
+        self.r.viewport()
+    }
+    fn set_viewport(&mut self, v: [i32; 4]) {
+        self.r.set_viewport(v);
+    }
+    fn has(&self, id: u32) -> bool {
+        self.r.has(id)
+    }
+}
+
 /// What the layer holds for the UI: surfaces by DictID, and the font.
 #[derive(Default)]
 pub struct UiAssets {
@@ -303,6 +404,91 @@ mod tests {
         ui.viewport = Some([430, 25, 600, 50]);
         ui.begin((1920, 1080));
         assert_eq!(ui.viewport, None);
+    }
+
+    /// A call a raster was asked: (call, flags, at, size, texels from,
+    /// texels big), a fill's corners as (`fill`, 0, top-left, bottom-right,
+    /// ..).
+    type Call = (&'static str, u32, [i32; 2], [i32; 2], [i32; 2], [i32; 2]);
+
+    /// What a raster was asked, and the anchor it was left at.
+    #[derive(Default)]
+    struct Calls(Vec<Call>, Anchor);
+
+    impl Layout for Calls {
+        fn side(&self) -> i32 {
+            106
+        }
+        fn anchor(&mut self, a: Anchor) {
+            self.1 = a;
+        }
+    }
+
+    impl Raster for Calls {
+        fn blit(&mut self, _: u32, flags: u32, at: [i32; 2], a: [i32; 2], b: [i32; 2], _: i32, _: f32) {
+            self.0.push(("blit", flags, at, b, a, b));
+        }
+        fn stretch_blit(&mut self, _: u32, flags: u32, at: [i32; 2], size: [i32; 2], a: [i32; 2], b: [i32; 2], _: i32, _: f32) {
+            self.0.push(("stretch", flags, at, size, a, b));
+        }
+        fn fill_fan(&mut self, _: [f32; 4], c: [[i32; 2]; 4]) {
+            self.0.push(("fill", 0, c[0], c[2], [0, 0], [0, 0]));
+        }
+        fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+        fn draw_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16]) {}
+        fn draw_centered_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16], _: u32) {}
+        fn string_width(&self, _: &[u16]) -> i32 {
+            0
+        }
+        fn point_size(&self) -> i32 {
+            16
+        }
+        fn viewport(&self) -> [i32; 4] {
+            [0, 0, 639, 447]
+        }
+        fn set_viewport(&mut self, _: [i32; 4]) {}
+    }
+
+    /// The same calls on `r`: the bottom rail's bar on line 313 (atlas 40's
+    /// 18 rows from texel row 11), its corner mirrored both ways, a panel
+    /// above the cut, a piece wholly under it, a stretched one across it,
+    /// and a fill across it.
+    fn frame(r: &mut dyn Layout) {
+        r.anchor(Anchor::Frame);
+        r.blit(1, 0, [-1, 313], [0, 11], [177, 18], 0, 1.0);
+        r.blit(2, 3, [440, 313], [107, 293], [11, 18], 0, 1.0);
+        r.blit(3, 0, [-1, 48], [0, 0], [176, 265], 0, 1.0);
+        r.blit(4, 0, [16, 330], [0, 0], [64, 8], 0, 1.0);
+        r.stretch_blit(5, 0, [0, 319], [10, 12], [0, 0], [10, 24], 0, 1.0);
+        r.fill_fan([1.0; 4], [[0, 300], [10, 300], [10, 340], [0, 340]]);
+    }
+
+    /// A raster cut at a line loses, of each blit across it, the rows under
+    /// it with their texels (a texture's last rows, a vertically mirrored
+    /// one's first), keeps its place and the rest, drops a blit wholly under
+    /// it, cuts a stretched blit's texels in proportion and a fill at the
+    /// line, and passes the anchor on. The control: the same calls on the
+    /// raster itself reach line 331.
+    #[test]
+    fn a_cut_raster_draws_nothing_below_its_line() {
+        let mut cut = Calls::default();
+        frame(&mut Cut::new(&mut cut, 325));
+        assert_eq!(cut.1, Anchor::Frame, "the anchor passed on");
+        assert_eq!(
+            cut.0,
+            vec![
+                ("blit", 0, [-1, 313], [177, 12], [0, 11], [177, 12]),
+                ("blit", 3, [440, 313], [11, 12], [107, 299], [11, 12]),
+                ("blit", 0, [-1, 48], [176, 265], [0, 0], [176, 265]),
+                ("stretch", 0, [0, 319], [10, 6], [0, 0], [10, 12]),
+                ("fill", 0, [0, 300], [10, 325], [0, 0], [0, 0]),
+            ]
+        );
+        assert!(cut.0.iter().filter(|c| c.0 != "fill").all(|c| c.2[1] + c.3[1] <= 325), "nothing at or below line 325");
+        let mut whole = Calls::default();
+        frame(&mut whole);
+        assert!(whole.0.iter().any(|c| c.2[1] + c.3[1] == 331), "the control: uncut, the rail reaches 331");
+        assert_eq!(whole.0.len(), 6, "the control: the piece under the line drawn");
     }
 }
 

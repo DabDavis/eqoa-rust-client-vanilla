@@ -708,7 +708,9 @@ impl ItemMenu {
         }
         vui.blit_rect(r, 51, [-1, 48], [175, 265], 0, 1.0);
         r.anchor(Anchor::Frame);
-        crate::startmenu::close_sides(vui, r, crate::startmenu::MIDDLE, true);
+        // ended at the start menu's bottom rail's bar, as its frame is
+        let below = crate::startmenu::BOTTOM_RAIL + crate::startmenu::RAIL_BAR;
+        crate::startmenu::close_sides(vui, &mut crate::ui::Cut::new(r, below), crate::startmenu::MIDDLE, true);
         r.anchor(Anchor::Middle);
         let e = vui.entry(89);
         lift[1] = pos[1] - e.uv1[1] / 2;
@@ -977,7 +979,9 @@ mod tests {
             assert_eq!(m.point([110.0 + 240.0, 20.0]), vec![key::RIGHT, key::RIGHT]);
         }
         let ((_, tv), (_, wide)) = (menu(0), menu(106));
-        let want = posts::made(Anchor::Frame, crate::startmenu::MIDDLE[0], true);
+        // ended at the start menu's bottom rail's bar
+        let below = crate::startmenu::BOTTOM_RAIL + crate::startmenu::RAIL_BAR;
+        let want = posts::made_below(Anchor::Frame, crate::startmenu::MIDDLE[0], true, below);
         let panel = wide.2.iter().position(|b| b.1 == [-1, 48]).expect("the left panel");
         assert_eq!(wide.2[panel + 1..panel + 1 + want.len()], want[..], "the posts over the panel");
         let added: Vec<_> = wide.2.iter().filter(|b| !tv.2.contains(b)).copied().collect();

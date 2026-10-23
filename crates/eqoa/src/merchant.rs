@@ -39,6 +39,9 @@ use vi::ui::{FrameParam, Raster, UI_COLORS, Vui, Window, wide};
 /// span (`startmenu::close_sides`, the start menu's middle frame's own).
 const RAILS: [i32; 2] = [37, 331 - 37];
 
+/// The bottom rail's line (the start menu's, `startmenu::BOTTOM_RAIL`).
+const BOTTOM_RAIL: i32 = crate::startmenu::BOTTOM_RAIL;
+
 /// `VIClient`'s merchant: 0x00B7.
 #[derive(Clone, Debug, Default)]
 pub struct Shop {
@@ -570,13 +573,17 @@ impl Merchant {
             crate::ui::window_backdrop(vui, r, 642);
             let fp = FrameParam { tl: (44, 0), top: (45, 0), tr: (46, 0), right: (52, 0), br: (50, 0), bottom: (49, 0), bl: (48, 0), left: (47, 0) };
             r.anchor(Anchor::Frame);
-            vui.blit_rect(r, 51, [-1, 48], [156, 265], 0, 1.0);
-            vui.blit_fill_frame(r, [456, 48], [184, 202], &fp, 35, 0, 1.0, true);
-            vui.blit_fill_frame(r, [167, 48], [289, 202], &fp, 35, 0, 1.0, true);
-            vui.blit_fill_frame(r, [167, 250], [473, 65], &fp, 35, 0, 1.0, true);
-            vui.blit_studded_horz(r, [-1, 37], 37, 38, 642, 5, 0, 1.0, 0);
-            vui.blit_studded_horz(r, [-1, 313], 40, 41, 642, 5, 0, 1.0, 0);
-            crate::startmenu::close_sides(vui, r, RAILS, false);
+            {
+                // ended at the bottom rail's bar, as the start menu is
+                let r = &mut crate::ui::Cut::new(r, BOTTOM_RAIL + crate::startmenu::RAIL_BAR);
+                vui.blit_rect(r, 51, [-1, 48], [156, 265], 0, 1.0);
+                vui.blit_fill_frame(r, [456, 48], [184, 202], &fp, 35, 0, 1.0, true);
+                vui.blit_fill_frame(r, [167, 48], [289, 202], &fp, 35, 0, 1.0, true);
+                vui.blit_fill_frame(r, [167, 250], [473, 65], &fp, 35, 0, 1.0, true);
+                vui.blit_studded_horz(r, [-1, 37], 37, 38, 642, 5, 0, 1.0, 0);
+                vui.blit_studded_horz(r, [-1, BOTTOM_RAIL], 40, 41, 642, 5, 0, 1.0, 0);
+                crate::startmenu::close_sides(vui, r, RAILS, false);
+            }
             r.anchor(Anchor::Middle);
             self.fill(view);
             self.draw_info(vui, r);
@@ -667,7 +674,7 @@ mod tests {
         assert!(wide.2.contains(&(Frame, [-1, 37], [642, 0])), "the top rail, the picture's width");
         assert!(wide.2.contains(&(Frame, [-1, 313], [642, 0])), "the bottom rail");
         let added: Vec<_> = wide.2.iter().filter(|b| !tv.2.contains(b)).copied().collect();
-        assert_eq!(added, posts::made(Frame, RAILS[0], false));
+        assert_eq!(added, posts::made_below(Frame, RAILS[0], false, BOTTOM_RAIL + crate::startmenu::RAIL_BAR));
         let rest: Vec<_> = wide.2.iter().filter(|b| !added.contains(b)).copied().collect();
         assert_eq!(rest, tv.2);
         assert!(rest.iter().any(|b| b.0 == Middle), "the list and its text are drawn with the frame");

@@ -253,8 +253,7 @@ impl Walker {
     pub fn view(&self, aspect: f32) -> (Mat4, Mat4) {
         let eye = Vec3::from(self.eye.position.to_array());
         let dir = Vec3::from(self.eye.direction.to_array());
-        let proj = glam::camera::rh::proj::directx::perspective(45f32.to_radians(), aspect, 0.3, 6000.0);
-        (proj, glam::camera::rh::view::look_to_mat4(eye, dir.normalize_or(Vec3::Z), Vec3::Y))
+        (projection(aspect), glam::camera::rh::view::look_to_mat4(eye, dir.normalize_or(Vec3::Z), Vec3::Y))
     }
 
     /// Where the camera is.
@@ -279,6 +278,56 @@ impl Walker {
             self.cam.def_orbit_pitch.0,
             self.sprite.as_ref().map(|s| [s.cur[0].anim, s.cur[1].anim])
         )
+    }
+}
+
+/// `m_camera` in play (`VIClient`'s `Init`, viclient.cpp): 55 degrees of the
+/// picture's height (`VICamera::Init`'s field of view is vertical) and the
+/// frame's own shape across it, 640 by 448: 10/7.
+pub const FOV: f32 = 55.0;
+pub const FRAME_ASPECT: f32 = 10.0 / 7.0;
+
+/// The world's projection for a window `aspect` wide: the game's camera as a
+/// TV shows it, the frame's 10/7 across a 4:3 picture, carried on in step
+/// past a 4:3 picture's sides in a wider window (the height's view the
+/// game's, more of the world at the sides); near and far the client's.
+/// Until 2026-10-23 it was 45 degrees at the window's own shape, the world a
+/// quarter larger than the game draws it: the start menu's view of the
+/// character took its head off (F3 20261023-091325).
+pub fn projection(aspect: f32) -> Mat4 {
+    glam::camera::rh::proj::directx::perspective(FOV.to_radians(), FRAME_ASPECT * aspect * 0.75, 0.3, 6000.0)
+}
+
+#[cfg(test)]
+mod view_tests {
+    use super::*;
+
+    /// Where a point `tan` up and `tan` across (from the eye, looking down
+    /// -Z) lands on the screen, in normalised device coordinates.
+    fn ndc(proj: Mat4, across: f32, up: f32) -> (f32, f32) {
+        let p = proj * glam::Vec4::new(across, up, -1.0, 1.0);
+        (p.x / p.w, p.y / p.w)
+    }
+
+    /// The world is framed as the game frames it: in a 4:3 window the top of
+    /// `VICamera::Init`'s frustum (tan 27.5 degrees) is the picture's top and
+    /// its side (that times 10/7) the picture's side; in a 16:9 window the
+    /// height the same and the side a third further out. The control: the
+    /// 45 degrees it had put the game's top a quarter past the picture's.
+    #[test]
+    fn the_world_is_framed_as_the_games_camera_frames_it() {
+        let t = (FOV.to_radians() * 0.5).tan();
+        let tv = projection(4.0 / 3.0);
+        let (x, y) = ndc(tv, t * FRAME_ASPECT, t);
+        assert!((x - 1.0).abs() < 1e-5 && (y - 1.0).abs() < 1e-5, "4:3: ({x}, {y})");
+        let wide = projection(16.0 / 9.0);
+        let (x, y) = ndc(wide, t * FRAME_ASPECT * 4.0 / 3.0, t);
+        assert!((x - 1.0).abs() < 1e-5 && (y - 1.0).abs() < 1e-5, "16:9: ({x}, {y})");
+        let (_, y) = ndc(wide, 0.0, t * 0.5);
+        assert!((y - 0.5).abs() < 1e-5, "the height's view unchanged by the width");
+        let old = glam::camera::rh::proj::directx::perspective(45f32.to_radians(), 4.0 / 3.0, 0.3, 6000.0);
+        let (_, y) = ndc(old, 0.0, t);
+        assert!(y > 1.2, "the control: 45 degrees puts the game's top at {y}");
     }
 }
 

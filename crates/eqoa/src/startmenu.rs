@@ -13,7 +13,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use crate::client_image::Menus;
-use crate::ui::Layout;
+use crate::ui::{Cut, Layout};
 use render::ui::Anchor;
 use vi::ui::{FrameParam, Raster, TextScroll, Vui, Window, wide};
 
@@ -665,24 +665,28 @@ impl StartMenu {
     ///
     /// In a window wider than 4:3 it stays the 4:3 picture the game draws, in
     /// the middle (`Anchor::Frame`: the band too), its sides closed
-    /// (`close_sides`); the HUD stays at the window's sides beside it.
+    /// (`close_sides`); the HUD stays at the window's sides beside it. It
+    /// ends at its bottom rail's bar (`RAIL_BAR`).
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Layout, menus: &Menus, now: i64, st: &Stats, cues: &mut Vec<i32>) {
         if !self.visible {
             return;
         }
         r.anchor(Anchor::Frame);
-        band(vui, r);
-        let fp = FrameParam { tl: (44, 0), top: (45, 0), tr: (46, 0), right: (52, 0), br: (50, 0), bottom: (49, 0), bl: (48, 0), left: (47, 0) };
-        vui.blit_fill_frame(r, [-1, 48], [176, 265], &fp, 35, 0, 1.0, true);
-        vui.blit_rect(r, 51, [451, 48], [199, 265], 0, 1.0);
-        let fp = FrameParam { tl: (36, 0), top: (37, 0), tr: (36, 1), right: (42, 1), br: (39, 1), bottom: (40, 0), bl: (39, 0), left: (42, 0) };
-        let studs = FrameParam { tl: (0, 0), top: (38, 0), tr: (0, 0), right: (43, 1), br: (0, 0), bottom: (41, 0), bl: (0, 0), left: (43, 0) };
-        vui.blit_studded_horz(r, [-1, 37], 37, 38, 177, 1, 0, 1.0, 0);
-        vui.blit_studded_horz(r, [-1, 313], 40, 41, 177, 1, 0, 1.0, 0);
-        vui.blit_studded_horz(r, [451, 37], 37, 38, 200, 1, 0, 1.0, 0);
-        vui.blit_studded_horz(r, [451, 313], 40, 41, 200, 1, 0, 1.0, 0);
-        vui.blit_studded_frame(r, [176, 37], [275, 294], &fp, &studs, 2, 3, 0, 1.0, false);
-        close_sides(vui, r, MIDDLE, true);
+        {
+            let r = &mut Cut::new(r, BOTTOM_RAIL + RAIL_BAR);
+            band(vui, r);
+            let fp = FrameParam { tl: (44, 0), top: (45, 0), tr: (46, 0), right: (52, 0), br: (50, 0), bottom: (49, 0), bl: (48, 0), left: (47, 0) };
+            vui.blit_fill_frame(r, [-1, 48], [176, 265], &fp, 35, 0, 1.0, true);
+            vui.blit_rect(r, 51, [451, 48], [199, 265], 0, 1.0);
+            let fp = FrameParam { tl: (36, 0), top: (37, 0), tr: (36, 1), right: (42, 1), br: (39, 1), bottom: (40, 0), bl: (39, 0), left: (42, 0) };
+            let studs = FrameParam { tl: (0, 0), top: (38, 0), tr: (0, 0), right: (43, 1), br: (0, 0), bottom: (41, 0), bl: (0, 0), left: (43, 0) };
+            vui.blit_studded_horz(r, [-1, 37], 37, 38, 177, 1, 0, 1.0, 0);
+            vui.blit_studded_horz(r, [-1, BOTTOM_RAIL], 40, 41, 177, 1, 0, 1.0, 0);
+            vui.blit_studded_horz(r, [451, 37], 37, 38, 200, 1, 0, 1.0, 0);
+            vui.blit_studded_horz(r, [451, BOTTOM_RAIL], 40, 41, 200, 1, 0, 1.0, 0);
+            vui.blit_studded_frame(r, [176, 37], [275, 294], &fp, &studs, 2, 3, 0, 1.0, false);
+            close_sides(vui, r, MIDDLE, true);
+        }
         r.anchor(Anchor::Middle);
         self.main.draw(vui, r, menus, now, st, cues);
     }
@@ -690,6 +694,20 @@ impl StartMenu {
 
 /// The start menu's middle frame (`StartMenu::draw`): its top and height.
 pub const MIDDLE: [i32; 2] = [37, 294];
+
+/// The start menu's bottom rails' line: the middle frame's bottom edge and
+/// the side panels' rails (atlas 40, 18 rows, its studs 41 and corners 39).
+pub const BOTTOM_RAIL: i32 = 313;
+
+/// The bottom rail's bar: the first 12 of its 18 rows (its grey bar and
+/// the shadow under it). The last 6 fade from black to the backdrop's teal
+/// (lines 325-330 under the start menu's rails), the bottom of the
+/// full-screen backdrop on a TV; the client leaves them out with that
+/// backdrop (`ui::window_backdrop`), so a window drawn as the start menu is
+/// (the start menu, the windows over it, the spell book, the merchant) ends
+/// at its bar, the world under it (F3 20261023-084953, the user: "cut off
+/// the rest under the bottom horizontal frame, it will look better").
+pub const RAIL_BAR: i32 = 12;
 
 /// The start menu's band (`OnDrawSelf`'s first piece): atlas entry 32 over
 /// the frame's top 48 lines, from x -1 to 641, behind its title. The spell
@@ -772,6 +790,16 @@ pub(crate) mod posts {
     /// edge, then its right.
     pub fn made(anchor: Anchor, y: i32, band: bool) -> Vec<(Anchor, [i32; 2], [i32; 2])> {
         made_at(anchor, [y, 294], band, [true, true])
+    }
+
+    /// `made` drawn through a `ui::Cut` at line `below`: the bottom corner
+    /// ends there (a window ended at its bottom rail's bar, `RAIL_BAR`).
+    pub fn made_below(anchor: Anchor, y: i32, band: bool, below: i32) -> Vec<(Anchor, [i32; 2], [i32; 2])> {
+        let mut want = made(anchor, y, band);
+        for p in &mut want {
+            p.2[1] = p.2[1].min(below - p.1[1]);
+        }
+        want
     }
 
     /// `made` for a middle frame `middle` (its top and height), at the
@@ -907,15 +935,19 @@ mod tests {
 
     /// The start menu in a window `side` wider each side: open, drawn once.
     fn drawn(side: i32) -> (StartMenu, Menus, Wide) {
-        let vui = posts::vui();
+        drawn_with(&posts::vui(), side)
+    }
+
+    /// `drawn` with `vui`'s atlas.
+    fn drawn_with(vui: &Vui, side: i32) -> (StartMenu, Menus, Wide) {
         let mut menus = Menus::default();
         let m = menus.push(Menu { x00: -1, x04: -1, entries: (0..7).map(|i| crate::client_image::MenuEntry { word: 100 + i, ..Default::default() }).collect() });
         let loc = Location { world: 0, pos: [0.0; 3], cols: 1, rows: 1, cell: 1.0, origin: [0.0; 3], bounds: None };
         let mut sm = StartMenu::new(m);
         sm.visible = true;
         let mut r = Wide(side, Anchor::Middle, Vec::new());
-        sm.show_main(&vui, &r, true, 0, &loc);
-        sm.draw(&vui, &mut r, &menus, 16, &Stats::default(), &mut Vec::new());
+        sm.show_main(vui, &r, true, 0, &loc);
+        sm.draw(vui, &mut r, &menus, 16, &Stats::default(), &mut Vec::new());
         (sm, menus, r)
     }
 
@@ -940,10 +972,62 @@ mod tests {
             assert!(wide.2.iter().any(|b| b.0 == Middle && b.1 == at), "the menu at {at:?}");
         }
         let added: Vec<_> = wide.2.iter().filter(|b| !tv.2.contains(b)).copied().collect();
-        assert_eq!(added, posts::made(Frame, MIDDLE[0], true));
+        assert_eq!(added, posts::made_below(Frame, MIDDLE[0], true, BOTTOM_RAIL + RAIL_BAR));
         assert!(tv.2.iter().all(|b| !added.contains(b)), "no post on a 4:3 window");
         let rest: Vec<_> = wide.2.iter().filter(|b| !added.contains(b)).copied().collect();
         assert_eq!(rest, tv.2);
+    }
+
+    /// A `Vui` whose frame pieces are SUPPORT's sizes (id, size, row): the
+    /// band's, the panels', the rails' (the bottom one 18 rows), the middle
+    /// frame's and the posts'.
+    fn frame_vui() -> Vui {
+        let mut atlas = vec![vi::ui::UiTexEntry::default(); 252];
+        let pieces = [
+            (32, [64, 64], 5),
+            (35, [64, 64], 4),
+            (36, [11, 11], 1),
+            (37, [64, 11], 2),
+            (38, [15, 11], 1),
+            (39, [11, 18], 1),
+            (40, [64, 18], 2),
+            (41, [15, 18], 1),
+            (42, [11, 64], 3),
+            (43, [11, 15], 1),
+            (44, [20, 18], 1),
+            (45, [64, 18], 15),
+            (46, [20, 18], 1),
+            (47, [20, 64], 14),
+            (48, [20, 19], 1),
+            (49, [64, 19], 17),
+            (50, [20, 19], 1),
+            (51, [64, 64], 8),
+            (52, [20, 64], 16),
+        ];
+        for (id, size, row) in pieces {
+            atlas[id] = vi::ui::UiTexEntry { x00: id as i32, row, uv1: size, ..Default::default() };
+        }
+        Vui::new(Default::default(), Default::default(), atlas)
+    }
+
+    /// The start menu ends at its bottom rails' bar (F3 20261023-084953):
+    /// with SUPPORT's pieces nothing of its frame reaches below line 325,
+    /// 4:3 or wide, and the rails on line 313 are the bar's 12 rows. The
+    /// control: the bottom rail drawn as the game draws it reaches 331.
+    #[test]
+    fn the_start_menu_ends_at_its_bottom_rails_bar() {
+        let vui = frame_vui();
+        for side in [0, 106] {
+            let (_, _, r) = drawn_with(&vui, side);
+            let frame: Vec<_> = r.2.iter().filter(|b| b.0 == Anchor::Frame).collect();
+            assert!(frame.iter().all(|b| b.1[1] + b.2[1] <= BOTTOM_RAIL + RAIL_BAR), "nothing under the bar ({side})");
+            let rails: Vec<_> = frame.iter().filter(|b| b.1[1] == BOTTOM_RAIL).collect();
+            assert!(rails.len() >= 6, "the rails, the frame's edge and its corners on line 313");
+            assert!(rails.iter().all(|b| b.2[1] == RAIL_BAR), "each the bar's rows");
+        }
+        let mut whole = Wide(0, Anchor::Frame, Vec::new());
+        vui.blit_studded_horz(&mut whole, [-1, BOTTOM_RAIL], 40, 41, 177, 1, 0, 1.0, 0);
+        assert!(whole.2.iter().all(|b| b.1[1] + b.2[1] == 331), "the control: the rail's 18 rows reach 331");
     }
 
     /// A pointer meets the bars at their place in the picture, in a wide
