@@ -1859,7 +1859,7 @@ impl Play {
                 a.visible = shown;
             }
         }
-        self.spells_frame(walker, lib, game_ms, game_frame, sound);
+        self.spells_frame(walker, lib, game_ms, sound);
         // the player's own swing, on its walker's pose
         if let (Some(p), Some(cs)) = (self.self_puppet.as_mut(), walker.sprite.as_mut()) {
             let actor = Matrix44::transform(&Vect3::new(walker.cam.walk.phys.angles.x, F::ZERO, F::ZERO), F::ONE, &walker.cam.walk.phys.smooth_location());
@@ -1937,7 +1937,7 @@ impl Play {
     /// player as `SELF`), an entity gone told to them, this frame's casts
     /// played with their entities named as `CastingCombat` names them, then
     /// every playback run (`VISpellEffectSystem::Process`).
-    fn spells_frame(&mut self, walker: &mut Walker, lib: &Library, game_ms: i64, game_frame: bool, sound: Option<&mut crate::sound::Sound>) {
+    fn spells_frame(&mut self, walker: &mut Walker, lib: &Library, game_ms: i64, sound: Option<&mut crate::sound::Sound>) {
         use crate::spells::{Body, SELF, Spells};
         let spells = self.spells.get_or_insert_with(|| Spells::load(lib, game_ms));
         let me = self.session.self_id.map(|s| s as u32);
@@ -2020,7 +2020,7 @@ impl Play {
                 (c, a, t, ts)
             })
             .collect();
-        spells.frame(&mut bodies, &casts, if has_self { SELF } else { -1 }, Some(&mut walker.cam.effect), game_ms, &walker.eye, lib, game_frame, sound);
+        spells.frame(&mut bodies, &casts, if has_self { SELF } else { -1 }, Some(&mut walker.cam.effect), game_ms, &walker.eye, lib, sound);
         self.rumbles.append(&mut spells.rumbles);
     }
 

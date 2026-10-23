@@ -889,7 +889,7 @@ pub fn shot_with(
                     eprintln!("spell effect {n} ({effect:#010x}) cast");
                     casts.push((Cast { effect, time: 1500, caster: 0, target: 1, targets: Vec::new() }, SELF, 1, Vec::new()));
                 }
-                sp.frame(&mut bodies, &casts, SELF, Some(&mut walker.cam.effect), t, &walker.eye, lib, true, None);
+                sp.frame(&mut bodies, &casts, SELF, Some(&mut walker.cam.effect), t, &walker.eye, lib, None);
                 batches.append(&mut sp.batches);
                 renderer.strips = std::mem::take(&mut sp.strips);
             }

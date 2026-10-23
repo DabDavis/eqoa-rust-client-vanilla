@@ -5,6 +5,12 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-23 · Sounds no longer stack
+- Sounds no longer play several times on top of each other (spell casts, the
+  hits of a double or quad attack). The change that gave each hit of a quad
+  attack its own sound is taken back until it plays as on a PS2: for now only
+  a quad attack's first hit makes the sound, as before.
+
 ## 2026-10-23 · Server updates and patches, the game's camera and fog
 - Play checks your server for updates first, as on a PS2: the Update window
   shows the progress, the server's update messages open when something

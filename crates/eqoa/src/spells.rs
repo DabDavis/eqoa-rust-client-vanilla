@@ -62,10 +62,6 @@ pub fn hand_attack_types(c: &net::entity::Creature, holds_items: bool) -> [i32; 
 
 /// A sprite an effect names: its type (9 a sound, 4 an animated sprite),
 /// and a sound's radius, volume, wave, pan and attenuation (`VISoundSprite`).
-/// A sound also keeps what `UpdateSoundEmitters` keeps on it: the channel
-/// its sound plays on (`m_channel`) and the frame it was last heard
-/// (`m_flags`, 0x10000000 until then). One sprite serves every actor an
-/// effect makes of it, so they share these.
 #[derive(Clone)]
 struct Sprite {
     ty: i32,
@@ -74,8 +70,6 @@ struct Sprite {
     wave: Option<Ref>,
     pan: bool,
     attenuation: i32,
-    channel: i32,
-    heard: i32,
 }
 
 /// An actor an effect made.
@@ -126,11 +120,9 @@ pub struct Spells {
     next: i32,
     /// `VILightningFxInit`'s texture
     lightning: i32,
-    /// `UpdateSoundEmitters`' frame (`VIScene::m_p638`, counted once a
-    /// frame of the game's) and the sprites it heard last (`m_p5B8`); each
-    /// sound's wave on the device
-    emit_frame: i32,
-    emitted: Vec<i32>,
+    /// the sound sprites playing: sprite -> channel, and each sound's wave on
+    /// the device
+    playing: BTreeMap<i32, i32>,
     waves: HashMap<i32, i32>,
     /// this frame's drawing
     pub batches: Vec<Batch>,
@@ -144,9 +136,10 @@ pub struct Spells {
 }
 
 impl Spells {
-    /// No effects loaded yet.
-    fn empty(time: i64) -> Spells {
-        Spells {
+    /// Every 0xC200 record in the library (SPELLFX.CSF), with the particle
+    /// definitions and sprites its events name.
+    pub fn load(lib: &Library, time: i64) -> Spells {
+        let mut s = Spells {
             sys: SpellSystem::default(),
             ps: System::new(time, 2000),
             rand: Rand(1),
@@ -155,21 +148,14 @@ impl Spells {
             made: BTreeMap::new(),
             next: MADE,
             lightning: vi::hash::hash_resource_id("lightning.tga") as i32,
-            emit_frame: 0,
-            emitted: Vec::new(),
+            playing: BTreeMap::new(),
             waves: HashMap::new(),
             batches: Vec::new(),
             strips: Vec::new(),
             played: 0,
             bolts: 0,
             rumbles: Vec::new(),
-        }
-    }
-
-    /// Every 0xC200 record in the library (SPELLFX.CSF), with the particle
-    /// definitions and sprites its events name.
-    pub fn load(lib: &Library, time: i64) -> Spells {
-        let mut s = Spells::empty(time);
+        };
         let mut defs: HashMap<Ref, usize> = HashMap::new();
         let mut sprites: HashMap<Ref, usize> = HashMap::new();
         for f in 0..lib.files.len() {
@@ -224,11 +210,10 @@ impl Spells {
 
     /// One frame at scene time `time`: the casts played (each actor named,
     /// as `CastingCombat` names it), every playback run, its particles
-    /// rendered and its lightning drawn; then, on a frame of the game's
-    /// (`game_frame`, `frames.rs`), the sound sprites heard from the camera
-    /// at `eye`, as `VIScene::Render` hears them once a frame.
+    /// rendered and its lightning drawn; then the sound sprites heard from
+    /// the camera at `eye`.
     #[allow(clippy::too_many_arguments)]
-    pub fn frame(&mut self, bodies: &mut [Body], casts: &[(Cast, i32, i32, Vec<i32>)], player: i32, camera: Option<&mut CameraEffect<Ee>>, time: i64, eye: &Eye<Ee>, lib: &Library, game_frame: bool, sound: Option<&mut crate::sound::Sound>) {
+    pub fn frame(&mut self, bodies: &mut [Body], casts: &[(Cast, i32, i32, Vec<i32>)], player: i32, camera: Option<&mut CameraEffect<Ee>>, time: i64, eye: &Eye<Ee>, lib: &Library, sound: Option<&mut crate::sound::Sound>) {
         self.sys.player_actor = player;
         self.sys.camera = camera.is_some();
         // `SetVibrateCallback(Rumble, &m_console)`: the client always sets one
@@ -258,9 +243,7 @@ impl Spells {
             .collect();
         self.bolts += self.strips.len();
         if let Some(s) = sound {
-            let mut waves = std::mem::take(&mut self.waves);
-            self.hear(eye, game_frame, &mut Device { s, lib, waves: &mut waves });
-            self.waves = waves;
+            self.hear(s, lib, eye);
         }
     }
 
@@ -276,41 +259,50 @@ impl Spells {
         self.sys.stop_if_this_was_caster(actor, &mut sc, &mut self.ps);
     }
 
-    /// `VIScene::UpdateSoundEmitters`' second half, for the sound sprites
-    /// the effects made, once a frame of the game's: each emitter the camera
-    /// is in (`query_emitters`) in turn. A sprite not heard the frame before
-    /// (`m_flags`) starts its sound; the sound gets the volume its
-    /// attenuation makes of the distance and the pan of its side of the
-    /// camera, and the sprite notes the frame. Every actor made of a sprite
-    /// shares it, so when a second actor of one is heard beside the first
-    /// (a hit's sound while the last hit's is still made: each of a quad
-    /// attack's four), the first entry notes the frame and the second,
-    /// finding it noted already, starts the sound again: the new hit is
-    /// heard, and the game starts it anew every frame the two overlap. Then
-    /// the sprites heard last frame and not this one are stopped. Counted
-    /// in the game's frames (`game_frame`), as `VIScene::Render` counts it.
-    fn hear(&mut self, eye: &Eye<Ee>, game_frame: bool, v: &mut dyn Voices) {
-        if !game_frame {
-            return;
-        }
-        let found = query_emitters(&self.made, &self.sprites, eye);
-        let frame = self.emit_frame;
+    /// `UpdateSoundEmitters`' sound sprites, for the ones the effects made:
+    /// each one whose sphere the camera is in plays (started when it was not
+    /// heard last frame), at the volume its attenuation gives the distance
+    /// and the pan of its side of the camera; one no longer heard is stopped.
+    fn hear(&mut self, s: &mut crate::sound::Sound, lib: &Library, eye: &Eye<Ee>) {
         let cp = eye.position;
-        for e in &found {
-            let sp = &mut self.sprites[e.sprite as usize];
-            if sp.heard != frame.wrapping_sub(1) {
-                let Some(wave) = sp.wave else { continue };
-                sp.channel = v.play(e.sprite, wave);
-                if sp.channel <= 0 {
+        let mut heard: BTreeMap<i32, (Vect3<Ee>, F<Ee>)> = BTreeMap::new();
+        for m in self.made.values() {
+            let Some(sp) = self.sprites.get(m.sprite as usize) else { continue };
+            if sp.ty != 9 || sp.wave.is_none() {
+                continue;
+            }
+            let r = m.scale * sp.radius;
+            if cp.distance(&m.at) <= r {
+                heard.insert(m.sprite, (m.at, m.scale));
+            }
+        }
+        for (&k, &(at, scale)) in &heard {
+            let sp = self.sprites[k as usize].clone();
+            if !self.playing.contains_key(&k) {
+                let wave = match self.waves.get(&k) {
+                    Some(&w) => w,
+                    None => {
+                        let r = sp.wave.unwrap();
+                        let c = lib.file(r.file);
+                        let Some(w) = esf::sound::wave(c, r.node) else { continue };
+                        let i = s.dev.create_wave(w.channels, w.blocks, w.rate, w.volume, w.pan, w.looped, &w.adpcm);
+                        self.waves.insert(k, i);
+                        i
+                    }
+                };
+                let ch = s.dev.play(wave, 0, 0);
+                if ch <= 0 {
                     continue;
                 }
+                self.playing.insert(k, ch);
             }
-            let mut d = Vect3::new(cp.x - e.at.x, F::ZERO, cp.z - e.at.z);
+            let ch = self.playing[&k];
+            let mut d = Vect3::new(cp.x - at.x, F::ZERO, cp.z - at.z);
             let mut right = Vect3::new(eye.direction.z, F::ZERO, -eye.direction.x);
             d.normalize();
             right.normalize();
             let pan = d.x * right.x + d.z * right.z;
-            let mut t = cp.distance(&e.at) / (e.scale * sp.radius);
+            let mut t = cp.distance(&at) / (scale * sp.radius);
             match sp.attenuation {
                 1 => t = t * (t * (t * t)),
                 2 => {
@@ -320,99 +312,16 @@ impl Spells {
                 }
                 _ => {}
             }
-            v.set(sp.channel, ((F::ONE - t) * sp.volume).0, if sp.pan { pan.0 } else { 0.0 });
-            sp.heard = frame;
+            s.dev.set_volume(ch, ((F::ONE - t) * sp.volume).0);
+            s.dev.set_pan(ch, if sp.pan { pan.0 } else { 0.0 });
         }
-        for k in self.emitted.drain(..) {
-            if let Some(sp) = self.sprites.get(k as usize)
-                && sp.heard != frame
-            {
-                v.stop(sp.channel);
+        let gone: Vec<i32> = self.playing.keys().copied().filter(|k| !heard.contains_key(k)).collect();
+        for k in gone {
+            if let Some(ch) = self.playing.remove(&k) {
+                s.dev.stop(ch);
             }
         }
-        self.emitted.extend(found.iter().map(|e| e.sprite));
-        self.emit_frame = frame.wrapping_add(1);
     }
-}
-
-/// What `UpdateSoundEmitters` asks of the sound device: a sprite's sound
-/// started (its channel, 0 or less for none), a channel stopped, and a
-/// channel's volume and pan set.
-trait Voices {
-    fn play(&mut self, sprite: i32, wave: Ref) -> i32;
-    fn stop(&mut self, channel: i32);
-    fn set(&mut self, channel: i32, volume: f32, pan: f32);
-}
-
-/// The sound device as `Voices`: a sprite's wave made on it the first time
-/// the sprite is heard, then played.
-struct Device<'a> {
-    s: &'a mut crate::sound::Sound,
-    lib: &'a Library,
-    waves: &'a mut HashMap<i32, i32>,
-}
-
-impl Voices for Device<'_> {
-    fn play(&mut self, sprite: i32, r: Ref) -> i32 {
-        let wave = match self.waves.get(&sprite) {
-            Some(&w) => w,
-            None => {
-                let c = self.lib.file(r.file);
-                let Some(w) = esf::sound::wave(c, r.node) else { return -1 };
-                let i = self.s.dev.create_wave(w.channels, w.blocks, w.rate, w.volume, w.pan, w.looped, &w.adpcm);
-                self.waves.insert(sprite, i);
-                i
-            }
-        };
-        self.s.dev.play(wave, 0, 0)
-    }
-
-    fn stop(&mut self, channel: i32) {
-        self.s.dev.stop(channel);
-    }
-
-    fn set(&mut self, channel: i32, volume: f32, pan: f32) {
-        self.s.dev.set_volume(channel, volume);
-        self.s.dev.set_pan(channel, pan);
-    }
-}
-
-/// An emitter the query found: the sprite an actor shows, where the actor
-/// stands and its scale.
-struct Emitter {
-    sprite: i32,
-    at: Vect3<Ee>,
-    scale: F<Ee>,
-}
-
-/// `VIEmitterQuery`'s size for the sound sprites (`Init(32, 9)`).
-const EMITTERS: usize = 32;
-
-/// `QueryEmittersAtLocation` for the sound sprites (type 9), over the
-/// actors the effects made: each whose sphere holds the camera, keyed as
-/// `VISprite::QueryEmitters` keys it (its radius at the actor's scale over
-/// its distance from the camera), in the multimap's order (ascending, an
-/// equal key after the ones before it) and at most 32, the smallest dropped.
-fn query_emitters(made: &BTreeMap<i32, Made>, sprites: &[Sprite], eye: &Eye<Ee>) -> Vec<Emitter> {
-    use std::cmp::Ordering::{Equal, Greater, Less};
-    let cp = eye.position;
-    let mut found: Vec<(F<Ee>, Emitter)> = Vec::new();
-    for m in made.values() {
-        let Some(sp) = sprites.get(m.sprite as usize) else { continue };
-        if sp.ty != 9 || sp.wave.is_none() {
-            continue;
-        }
-        let r = m.scale * sp.radius;
-        let d = cp.distance(&m.at);
-        if d <= r {
-            found.push((r * (F::ONE / d), Emitter { sprite: m.sprite, at: m.at, scale: m.scale }));
-        }
-    }
-    // stable: an equal key stays after the ones inserted before it
-    found.sort_by(|a, b| if a.0 < b.0 { Less } else if b.0 < a.0 { Greater } else { Equal });
-    let full = found.len().saturating_sub(EMITTERS);
-    found.drain(..full);
-    found.into_iter().map(|(_, e)| e).collect()
 }
 
 /// A sprite an effect names, as `ParseSoundSpriteObj` reads a sound (radius
@@ -420,7 +329,7 @@ fn query_emitters(made: &BTreeMap<i32, Made>, sprites: &[Sprite], eye: &Eye<Ee>)
 /// else by its type.
 fn sprite(lib: &Library, r: Ref) -> Sprite {
     let c = lib.file(r.file);
-    let mut s = Sprite { ty: 0, radius: F::ONE, volume: F::ONE, wave: None, pan: true, attenuation: 0, channel: -1, heard: 0x1000_0000 };
+    let mut s = Sprite { ty: 0, radius: F::ONE, volume: F::ONE, wave: None, pan: true, attenuation: 0 };
     match c.node(r.node).ty {
         0xB100 => {
             s.ty = 9;
@@ -650,117 +559,5 @@ mod tests {
         // an item whose type the channel leaves 0 swings nothing, as in the game
         c.item_types = [0, 0];
         assert_eq!(attack_action(hand_attack_types(&c, true), 0, false), None);
-    }
-
-    /// A recording sound device: each play a new channel from 1.
-    #[derive(Default)]
-    struct Rec {
-        plays: Vec<(f64, i32)>,
-        stops: Vec<(f64, i32)>,
-        now: f64,
-    }
-
-    impl Voices for Rec {
-        fn play(&mut self, sprite: i32, _wave: Ref) -> i32 {
-            self.plays.push((self.now, sprite));
-            self.plays.len() as i32
-        }
-        fn stop(&mut self, channel: i32) {
-            self.stops.push((self.now, channel));
-        }
-        fn set(&mut self, _channel: i32, _volume: f32, _pan: f32) {}
-    }
-
-    /// A quad attack's four hit sounds as its target lists make them: a
-    /// sound actor of SPELLFX's hit sprite at each strike (0, 0.5, 1.2 and
-    /// 1.9 s, a bard's Attack4 on Sandstorm), each made for 759 ms (the
-    /// effect's CreateSound), so each overlaps the one before.
-    const STRIKES: [f64; 4] = [0.0, 500.0, 1200.0, 1900.0];
-    const LIFE: f64 = 759.0;
-
-    fn quad() -> Spells {
-        let mut s = Spells::empty(0);
-        s.sprites.push(Sprite { ty: 9, radius: F::new(10.0), volume: F::ONE, wave: Some(Ref { file: 0, node: 0 }), pan: true, attenuation: 0, channel: -1, heard: 0x1000_0000 });
-        s
-    }
-
-    /// The made actors alive at `t`: one a strike, all of the one sprite.
-    fn made_at(s: &mut Spells, t: f64) {
-        s.made.clear();
-        for (i, &at) in STRIKES.iter().enumerate() {
-            if at <= t && t < at + LIFE {
-                s.made.insert(MADE + i as i32, Made { sprite: 0, at: Vect3::new(F::new(2.0), F::ZERO, F::new(2.0)), hpr: Vect3::default(), scale: F::ONE });
-            }
-        }
-    }
-
-    fn eye() -> Eye<Ee> {
-        Eye { position: Vect3::default(), direction: Vect3::new(F::ZERO, F::ZERO, F::ONE) }
-    }
-
-    /// Drawn frames at `hz` for three seconds, the emitters heard on the
-    /// game's frames (`frames.rs`), or on every frame drawn (`every`).
-    fn run(hz: f64, every: bool) -> Rec {
-        let mut s = quad();
-        let mut rec = Rec::default();
-        let mut clock = crate::frames::Frames::default();
-        let mut k = 0.0;
-        while k * 1000.0 / hz < 3000.0 {
-            let t = k * 1000.0 / hz;
-            made_at(&mut s, t);
-            rec.now = t;
-            let game_frame = clock.due(t) || every;
-            s.hear(&eye(), game_frame, &mut rec);
-            k += 1.0;
-        }
-        rec
-    }
-
-    /// Each of the four strikes is heard: a play on the frame its sound
-    /// actor first is, as `UpdateSoundEmitters` hears a second actor of a
-    /// sprite already heard (and again every frame the two overlap: 8
-    /// frames, 2 and 2 at 30 Hz). The control: the sprites taken one
-    /// apiece, as the client heard them, start the first strike's only.
-    #[test]
-    fn each_strike_of_a_quad_is_heard() {
-        let rec = run(30.0, false);
-        let frame = 1000.0 / 30.0;
-        for at in STRIKES {
-            assert!(rec.plays.iter().any(|&(t, _)| at <= t && t < at + frame), "the strike at {at} ms played: {:?}", rec.plays);
-        }
-        assert_eq!(rec.plays.len(), 1 + 8 + 2 + 2, "{:?}", rec.plays);
-        // stopped once, the last sound's actor gone
-        assert_eq!(rec.stops.len(), 1);
-        assert!(rec.stops[0].0 >= STRIKES[3] + LIFE);
-        // the control: one voice a sprite while any actor of it is heard
-        let mut playing = false;
-        let mut old = Vec::new();
-        let mut k = 0.0;
-        while k * frame < 3000.0 {
-            let t = k * frame;
-            let heard = STRIKES.iter().any(|&at| at <= t && t < at + LIFE);
-            if heard && !playing {
-                old.push(t);
-            }
-            playing = heard;
-            k += 1.0;
-        }
-        assert_eq!(old, vec![0.0], "the control hears the first strike alone");
-    }
-
-    /// The emitters count the game's frames: at 165 Hz the strikes are
-    /// heard as at 30 (each one, and about as many restarts as there are
-    /// frames of the game's in the overlaps). The control: heard on every
-    /// frame drawn, the overlaps restart five times as often.
-    #[test]
-    fn the_emitters_count_the_games_frames() {
-        let at30 = run(30.0, false).plays.len();
-        let fast = run(165.0, false);
-        for at in STRIKES {
-            assert!(fast.plays.iter().any(|&(t, _)| at <= t && t < at + 1000.0 / 30.0 + 5.0), "the strike at {at} ms played at 165 Hz");
-        }
-        assert!(fast.plays.len().abs_diff(at30) <= 3, "{} plays at 165 Hz, {at30} at 30", fast.plays.len());
-        let every = run(165.0, true).plays.len();
-        assert!(every > 3 * at30, "the control: {every} plays a frame drawn, {at30} on the game's");
     }
 }
