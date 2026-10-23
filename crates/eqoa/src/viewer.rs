@@ -538,14 +538,21 @@ pub fn shot_with(
                     }
                 }
                 // `EQOA_TAB`: Tab two seconds in.
-                // `EQOA_TARGET=<name>`: that creature targeted two seconds in.
-                if t == at
-                    && let Ok(name) = std::env::var("EQOA_TARGET")
-                {
-                    let found = p.target_by_name(&name);
-                    eprintln!("target {name}: {found}");
-                    if !found {
-                        eprintln!("  in view: {}", p.entity_names().join(", "));
+                // `EQOA_TARGET=<name>[@ms][;<name>@ms...]`: that creature
+                // targeted then (two seconds in without a time).
+                if let Ok(spec) = std::env::var("EQOA_TARGET") {
+                    for part in spec.split(';') {
+                        let (name, ms) = match part.rsplit_once('@') {
+                            Some((n, ms)) if ms.parse::<i64>().is_ok() => (n, ms.parse::<i64>().unwrap() / 16 * 16),
+                            _ => (part, at),
+                        };
+                        if t == ms {
+                            let found = p.target_by_name(name);
+                            eprintln!("target {name}: {found}");
+                            if !found {
+                                eprintln!("  in view: {}", p.entity_names().join(", "));
+                            }
+                        }
                     }
                 }
                 // `EQOA_PET=<name>`: that creature made the pet then (as 0x007E).
@@ -726,14 +733,18 @@ pub fn shot_with(
                 if t == at + 96 && std::env::var_os("EQOA_INVITE").is_some() {
                     p.group_action(0x0701_0000);
                 }
-                // `EQOA_ACTION=<hex>@<ms>`: a start-menu entry's message then
-                // (`DoAction`; 0B060000 asks the target to trade).
-                if let Ok(spec) = std::env::var("EQOA_ACTION")
-                    && let Some((a, ms)) = spec.split_once('@')
-                    && let (Ok(a), Ok(ms)) = (u32::from_str_radix(a.trim_start_matches("0x"), 16), ms.parse::<i64>())
-                    && t == ms / 16 * 16
-                {
-                    p.do_action(a, 0);
+                // `EQOA_ACTION=<hex>@<ms>[;<hex>@<ms>...]`: a start-menu
+                // entry's message then (`DoAction`; 0B060000 asks the target
+                // to trade, 0B0E0006 is Assist Target).
+                if let Ok(spec) = std::env::var("EQOA_ACTION") {
+                    for part in spec.split(';') {
+                        if let Some((a, ms)) = part.split_once('@')
+                            && let (Ok(a), Ok(ms)) = (u32::from_str_radix(a.trim().trim_start_matches("0x"), 16), ms.trim().parse::<i64>())
+                            && t == ms / 16 * 16
+                        {
+                            p.do_action(a, 0);
+                        }
+                    }
                 }
                 // `EQOA_GROUP_ACTION=<hex>@<ms>`: a start-menu group action then.
                 if let Ok(spec) = std::env::var("EQOA_GROUP_ACTION")
