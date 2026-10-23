@@ -5,6 +5,25 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-23 · Sandstorm's player search, tall windows, a touch screen crash
+- On Sandstorm, the Group menu's Search opens Sandstorm's own search window.
+  It starts on levels around your own (45 to 60 at level 60), not every
+  level. Change the race, the class or the levels, then pick Search.
+- In the search window, pick a player to see where they are and their group.
+  ✕ sends them a tell and □ invites them. L1 and R1, or a click on a column's
+  heading, sort the list.
+- In a window taller than it is wide (two game windows side by side, for
+  example), the compass, gauges, buffs and quick menus stay at the top of the
+  window, and the target, the F3 button and the chat stay at its bottom.
+  Before, they drifted toward the middle.
+- In such a window you see the world as wide as on a PS2, with more of it
+  above and below, instead of zoomed in. The start menu shows your whole
+  character again.
+- With a touch screen, the game no longer stops when you come back into the
+  world after logging out, being disconnected or restarting for an update.
+- In the browser, the mouse look being refused for a moment (right after
+  Escape let go of it) no longer pops up as a problem with the page.
+
 ## 2026-10-23 · Outmatched, background sound, a Mac Settings item
 - Attacking something far beyond you gets the game's red "You are outmatched.
   Attacking again is not advised." and your attack stops, as on a PS2. Before,
