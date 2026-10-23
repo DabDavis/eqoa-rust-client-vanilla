@@ -5,6 +5,22 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-23 · Outmatched, background sound, a Mac Settings item
+- Attacking something far beyond you gets the game's red "You are outmatched.
+  Attacking again is not advised." and your attack stops, as on a PS2. Before,
+  nothing happened and the attack stayed on.
+- Options > Extended has Sound in Background: turn it Off and a game window
+  that isn't in front goes quiet. It's one setting for all your windows, and
+  the sound picks up again when you switch back.
+- On a Mac, Settings… (⌘,) in the app menu opens the game's Options.
+- With Delete Character highlighted on Character Selection, the dark panel
+  fills the character view's frame exactly, in any window size, with nothing
+  of the room showing at its side.
+- On Character Selection and character creation, a character without a weapon
+  moves from the start, with its first idle fidget as on a PS2, instead of
+  standing still for five seconds.
+- A problem report says what the game's sound is playing and at which volumes.
+
 ## 2026-10-23 · Sounds no longer stack
 - Sounds no longer play several times on top of each other (spell casts, the
   hits of a double or quad attack). The change that gave each hit of a quad
