@@ -826,6 +826,73 @@ mod tests {
         fn set_viewport(&mut self, _: [i32; 4]) {}
     }
 
+    /// Destroy asks as the game's `Use` asks (`VIWndItemMenu::Use`,
+    /// byte-exact): a worn item (word 916), a quick-slotted one (917) and a
+    /// NO TRADE one (918) put up the Yes/No box, starting on No, and only
+    /// Yes sends 0x003C; any other item goes at once, with no box (word 915,
+    /// "Destroy item?", is copied into the text and never shown). F3
+    /// 20261023-082704 asked for a box on every item; the game has none. The
+    /// cases are each other's controls: asking for every item, or for none,
+    /// fails one of them.
+    #[test]
+    fn destroying_asks_as_the_game_asks() {
+        let mut lines = vec![String::new(); 918];
+        lines[914] = "Destroy item?".into();
+        lines[915] = "Destroy equipped item \"%S\"?".into();
+        lines[916] = "Destroy prepared item \"%S\"?".into();
+        lines[917] = "Destroy this NO TRADE item?".into();
+        let words = vi::strtab::StringTable::parse(lines.join("\n").as_bytes()).unwrap();
+        let mut vui = Vui::new(words, Default::default(), Vec::new());
+        vui.time = 1_000;
+        let named = |name: &str, f: fn(&mut NetItem)| {
+            let mut x = it(-1, 2, 0, 1);
+            x.item.name = name.into();
+            f(&mut x);
+            x
+        };
+        let inv = ItemList {
+            p04: 0,
+            items: vec![
+                named("Rusty Dagger", |_| {}),
+                named("Fine Sword", |x| x.equip_slot = 2),
+                named("Healing Potion", |x| x.quick_slot = 0),
+                named("Quest Token", |x| x.item.no_trade = 1),
+            ],
+        };
+        let words = vui.words.clone();
+        let base = [0; 29];
+        let info = Info { words: &words, inv: &inv, hp: [0; 4], base: &base, class: 0, level: 1, attack_words: &[] };
+        let menu = || {
+            let mut m = ItemMenu::default();
+            m.set_built(build(&inv, [30, 30, 30, 40], &|_| -1, &|_| true));
+            m
+        };
+        let press = |m: &mut ItemMenu, k: i32, out: &mut Vec<ItemOut>| {
+            m.key(&vui, &mut crate::pointer::testing::NullRaster, k, true, &inv, &info, false, &mut Vec::new(), out);
+        };
+        // a plain item: destroyed at once
+        let mut m = menu();
+        let mut out = Vec::new();
+        m.use_item(0, 1, &inv, &vui, false, vui.time, &mut out);
+        assert_eq!(out, vec![ItemOut::UseItemOn(0, 1)], "no box for a plain item");
+        assert!(m.focus != Focus::MBox);
+        for (k, text) in [(1, "Destroy equipped item \"Fine Sword\"?"), (2, "Destroy prepared item \"Healing Potion\"?"), (3, "Destroy this NO TRADE item?")] {
+            let mut m = menu();
+            let mut out = Vec::new();
+            m.use_item(k, 1, &inv, &vui, false, vui.time, &mut out);
+            assert!(out.is_empty() && m.focus == Focus::MBox, "item {k}: the box first");
+            assert_eq!(String::from_utf16_lossy(&m.mbox.text), text);
+            // ✕ on No, where the box starts: nothing destroyed
+            press(&mut m, 13, &mut out);
+            assert!(out.is_empty() && m.focus != Focus::MBox, "item {k}: No keeps it");
+            // again, left to Yes and ✕: destroyed
+            m.use_item(k, 1, &inv, &vui, false, vui.time, &mut out);
+            press(&mut m, 17, &mut out);
+            press(&mut m, 13, &mut out);
+            assert_eq!(out, vec![ItemOut::UseItemOn(k, 1)], "item {k}: Yes destroys it");
+        }
+    }
+
     /// The inventory opened shows its grid from the first frame on: the
     /// tab's list is focused on the clock it is drawn with (`vui.time`, the
     /// HUD's), whatever clock the session keeps, so its six empty slots are
