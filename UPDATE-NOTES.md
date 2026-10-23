@@ -5,6 +5,32 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-23 · Auction lists, a restart notice, camera turn speed
+- The auction search's Class, Race, Equip Type and Att. Type open their lists
+  again: pick one with ✕ or a click and the search looks only for it. The
+  search's rows are the game's black on parchment, the selected one blue.
+- When a new version comes out while you're playing, the game tells you in its
+  own message box and asks whether to restart now. It works on any server,
+  Sandstorm included. Yes logs you out cleanly and starts the new version (sign
+  in again); No keeps you playing, and it asks again in half an hour. The box
+  starts on No and never comes up while you're typing, fighting or in a menu.
+- In a browser, "Later" on the new-version notice asks again after half an hour.
+- Options > Extended has a Camera Turn Speed slider: how fast the controller's
+  stick and the keys turn the view, from half to three times the game's speed.
+  The mouse is unchanged.
+- The window's title is "EQOA 1", "EQOA 2" and so on by window, with your
+  character's name once you're in the world, so several windows are easy to
+  tell apart.
+- Character Selection and character creation's race page have their left border
+  in a wide window, as they do on the right.
+- Spell effects no longer erase the names over people's heads. Names are drawn
+  where the game draws them, so a spell's glow shines over them as on a PS2.
+- Glowing weapons glow: the Sword of Virtue, the Nitefyre and Night's Point
+  blades, and the bright staves, wands and totems.
+- A creature that dies while walking falls down at once instead of walking on.
+- Problem reports include what each nearby character is wearing, as the server
+  sent it.
+
 ## 2026-10-23 · The merchant in 4:3 too
 - In a wide window a merchant's buy and sell window is the game's 4:3 picture
   too, in the middle with the world on either side, its sides closed off with
