@@ -5315,6 +5315,38 @@ impl Play {
         self.entities.slots.iter().flatten().find(|e| e.id == me)?.creature.as_ref().map(|c| c.p263 != 0)
     }
 
+    /// Every particle sprite in a creature's hand this frame (each held
+    /// item's `particles::item_emitters`) under its hand's node: the
+    /// creatures' as `frame` posed them, the player's own on its walker's
+    /// pose (`matrix`, the centre transform `place_self` takes). Each is
+    /// updated only while its item is drawn (`VICSprite::Raster` rasters what
+    /// a drawn sprite holds; an invisible creature's items are still drawn).
+    pub fn in_hand(&self, lib: &Library, walker: &Walker, matrix: [[f32; 4]; 4]) -> Vec<crate::particles::InHand> {
+        let mut out = Vec::new();
+        let mut add = |holder: i32, p: &Puppet, cs: &CSprite<Ee>, centre: &Matrix44<Ee>, shown: Option<bool>| {
+            for (hand, h) in p.held.iter().enumerate() {
+                let Some((item, node)) = *h else { continue };
+                let Some(n) = cs.h.nodes.get(node as usize) else { continue };
+                let drawn = shown.unwrap_or_else(|| p.attached.iter().any(|a| a.0 == node && a.1.visible));
+                let at = Matrix44::mul(&n.world, centre);
+                for (k, e) in crate::particles::item_emitters(lib, item).into_iter().enumerate() {
+                    out.push(crate::particles::InHand { key: (holder, hand, item, k), world: Matrix44::mul(&e.member, &at), def: e.def, flags: e.flags, drawn });
+                }
+            }
+        };
+        for (slot, p) in self.puppets.iter().enumerate() {
+            if let Some(p) = p
+                && let Some(cs) = &p.sprite
+            {
+                add(slot as i32, p, cs, &p.centre, None);
+            }
+        }
+        if let (Some(p), Some(cs)) = (&self.self_puppet, walker.sprite.as_ref()) {
+            add(crate::spells::SELF, p, cs, &glam_to_matrix(matrix), Some(self.self_shown));
+        }
+        out
+    }
+
     pub fn has_self(&self) -> bool {
         self.self_puppet.is_some()
     }
