@@ -46,8 +46,16 @@ const HELM: [u32; 9] = [0, 0x0C6F2FDA, 0x330D43A7, 0x079EAC92, 0x03B8E453, 0x5A5
 /// `GetHelm`: the helm sprite for an armour set (`SetArmorSlot` slot 5 hands
 /// it to `SetHelm`, which attaches a copy at node 8 coloured with the tint).
 pub fn helm(set: u8) -> Option<u32> {
-    let set = if set >= 9 { 0 } else { set as usize };
-    if set == 0 { None } else { Some(HELM[set]) }
+    helm_with(set, &Tables::retail())
+}
+
+/// `GetHelm` by a patch's tables: `SetArmorSlot`'s clamp, then the patch's
+/// remap (Sandstorm's set 9 wears set 4's helm), then `$Helm`, whose slots
+/// past 8 retail never fills.
+pub fn helm_with(set: u8, t: &Tables) -> Option<u32> {
+    let set = if set >= t.armor_limit { 0 } else { set };
+    let set = t.helm_remap.iter().find(|(from, _)| *from == set).map_or(set, |&(_, to)| to) as usize;
+    if set == 0 { None } else { HELM.get(set).copied() }
 }
 
 /// `Tints`, RGBA.
@@ -68,6 +76,47 @@ pub const TINTS: [[u8; 4]; 15] = [
     [150, 0, 60, 255],
     [240, 240, 0, 255],
 ];
+
+/// The customisation tables a look is dressed by: the retail disc's, or as a
+/// server's patch leaves them (`GetTintColor`'s table and `SetArmorSlot`'s
+/// clamps, `GetHelm`, `GetRobeTexture`; the eqoa crate's `s2`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Tables {
+    /// `GetTintColor`'s table
+    pub tints: Vec<[u8; 4]>,
+    /// `SetArmorSlot` keeps a tint below this, else 0 (retail 15)
+    pub tint_limit: usize,
+    /// `SetArmorSlot`: a set at or past it is 0 (retail 9)
+    pub armor_limit: u8,
+    /// `GetHelm`: a set that wears another set's helm
+    pub helm_remap: Vec<(u8, u8)>,
+    /// `GetRobeTexture`: robes 0 .. limit-1; one at or past it is robe 0
+    /// (retail 4)
+    pub robe_limit: u8,
+    /// a robe past retail's four: its (chest, legs) DictIDs, robe 0's where
+    /// one does not resolve
+    pub robe_art: Vec<(u8, [u32; 2])>,
+}
+
+impl Tables {
+    /// The retail disc's.
+    pub fn retail() -> Tables {
+        Tables { tints: TINTS.to_vec(), tint_limit: 15, armor_limit: 9, helm_remap: Vec::new(), robe_limit: 4, robe_art: Vec::new() }
+    }
+
+    /// A tint's colour as `SetArmorSlot` takes it: past the limit, tint 0.
+    pub fn tint(&self, i: u8) -> [u8; 4] {
+        let i = if (i as usize) < self.tint_limit { i as usize } else { 0 };
+        self.tints.get(i).or(self.tints.first()).copied().unwrap_or(TINTS[0])
+    }
+
+    /// A tint as `SetRobe` and `SetHelm` read it (`GetTintColor` with no
+    /// clamp of its own): 14 at most on retail's table, as the client has
+    /// always taken it; a patch's table to its end.
+    pub fn tint_at_most(&self, i: u8) -> [u8; 4] {
+        if self.tint_limit > 15 { self.tint(i) } else { self.tints.get((i as usize).min(14)).copied().unwrap_or(TINTS[0]) }
+    }
+}
 
 /// A look, as a creature update carries it (`ApplyLook`'s arguments).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -95,8 +144,13 @@ pub struct LayerChange {
 /// `ApplyLook` on a CSprite: `SetRobe`, `SetArmorSlot` for the five worn
 /// slots, `SetHair`, `SetFace`, in that order; later changes to a layer win.
 /// `has` tells whether a texture DictID resolves (`FindTyped`).
-#[allow(clippy::needless_range_loop)]
 pub fn apply_look<M: Model>(cs: &CSprite<M>, look: &Look, helm_worn: bool, has: impl Fn(u32) -> bool) -> Vec<LayerChange> {
+    apply_look_with(cs, look, helm_worn, has, &Tables::retail())
+}
+
+/// `ApplyLook` by a patch's tables (`Tables`): retail's give `apply_look`.
+#[allow(clippy::needless_range_loop)]
+pub fn apply_look_with<M: Model>(cs: &CSprite<M>, look: &Look, helm_worn: bool, has: impl Fn(u32) -> bool, t: &Tables) -> Vec<LayerChange> {
     let mut out = Vec::new();
     let slot = |i: usize| cs.text_slots[i];
     let found = |id: u32| if id != 0 && has(id) { Some(id) } else { None };
@@ -104,20 +158,25 @@ pub fn apply_look<M: Model>(cs: &CSprite<M>, look: &Look, helm_worn: bool, has: 
     let mut robed = [false; 5];
     // SetRobe
     if look.robe >= 0 {
-        let robe = if look.robe >= 4 { 0 } else { look.robe as usize };
+        let robe = if look.robe as u8 >= t.robe_limit { 0 } else { look.robe as usize };
+        // a patch robe: its art, robe 0's where a half does not resolve
+        let art = |half: usize| match robe {
+            0..=3 => found(ROBE[robe][half]),
+            _ => t.robe_art.iter().find(|(k, _)| *k as usize == robe).and_then(|(_, a)| found(a[half])).or_else(|| found(ROBE[0][half])),
+        };
         for i in 0..5 {
             let (entry, layer) = slot(i);
             if entry == -1 {
                 continue;
             }
             let tex = match i {
-                0 => found(ROBE[robe][0]),
-                3 => found(ROBE[robe][1]),
+                0 => art(0),
+                3 => art(1),
                 _ => None,
             };
-            if let Some(t) = tex {
+            if let Some(tex) = tex {
                 robed[i] = true;
-                out.push(LayerChange { entry, layer, texture: Some(t), color: Some(TINTS[(look.robe_tint as usize).min(14)]) });
+                out.push(LayerChange { entry, layer, texture: Some(tex), color: Some(t.tint_at_most(look.robe_tint)) });
             }
         }
     }
@@ -127,13 +186,12 @@ pub fn apply_look<M: Model>(cs: &CSprite<M>, look: &Look, helm_worn: bool, has: 
         if entry == -1 {
             continue;
         }
-        let set = if look.armor[i] >= 9 { 0 } else { look.armor[i] as usize };
-        let tint = if look.armor_tint[i] >= 15 { 0 } else { look.armor_tint[i] as usize };
-        let tex = if set == 0 { None } else { found(ARMOR[set][i]) };
+        let set = if look.armor[i] >= t.armor_limit { 0 } else { look.armor[i] as usize };
+        let tex = if set == 0 { None } else { ARMOR.get(set).and_then(|a| found(a[i])) };
         if (set != 0 && tex.is_none()) || robed[i] {
             continue;
         }
-        out.push(LayerChange { entry, layer, texture: tex, color: Some(TINTS[tint]) });
+        out.push(LayerChange { entry, layer, texture: tex, color: Some(t.tint(look.armor_tint[i])) });
     }
     // SetHair: every hair slot must exist.
     if (11..16).all(|i| slot(i).0 != -1) {
@@ -170,4 +228,75 @@ pub fn apply_look<M: Model>(cs: &CSprite<M>, look: &Look, helm_worn: bool, has: 
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fpu::{Ee, F};
+    use crate::hsprite::HSprite;
+
+    /// A sprite whose five worn slots are palette entries 10 to 14, layer 0.
+    fn sprite() -> CSprite<Ee> {
+        let mut cs = CSprite::new(HSprite::new(0), 1, 0, 0, F::new(1.0), true);
+        for i in 0..5 {
+            cs.text_slots[i] = (10 + i as i32, 0);
+        }
+        cs
+    }
+
+    /// Sandstorm's tables as its S2 leaves them: 30 tints (15 clear), sets
+    /// below 10, set 9 wearing set 4's helm, robes 4 and 5 out of its art.
+    fn sandstorm() -> Tables {
+        let mut tints = TINTS.to_vec();
+        tints.extend((15..30u8).map(|i| [i, i, i, if i == 15 { 0 } else { 255 }]));
+        Tables { tints, tint_limit: 30, armor_limit: 10, helm_remap: vec![(9, 4)], robe_limit: 6, robe_art: vec![(4, [0xDEAD_BEEF, 0xCAFE_BABE]), (5, [0xDEAD_BEFE, 0xCAFE_BAEB])] }
+    }
+
+    fn change(out: &[LayerChange], entry: i32) -> Option<LayerChange> {
+        out.iter().rev().find(|c| c.entry == entry).copied()
+    }
+
+    /// A patch's robes, tints, sets and helm, each against retail's reading
+    /// of the same look (the control: retail's tables give the old answers).
+    #[test]
+    fn a_patch_dresses_by_its_own_tables() {
+        let cs = sprite();
+        let all = |_: u32| true;
+        let (retail, ss) = (Tables::retail(), sandstorm());
+        // robe 4 in tint 20: retail draws robe 0 in tint 14, the patch its own robe and tint
+        let look = Look { robe: 4, robe_tint: 20, ..Default::default() };
+        let r = apply_look_with(&cs, &look, false, all, &retail);
+        assert_eq!(change(&r, 10).unwrap().texture, Some(ROBE[0][0]));
+        assert_eq!(change(&r, 10).unwrap().color, Some(TINTS[14]));
+        let s = apply_look_with(&cs, &look, false, all, &ss);
+        assert_eq!(change(&s, 10).unwrap().texture, Some(0xDEAD_BEEF));
+        assert_eq!(change(&s, 13).unwrap().texture, Some(0xCAFE_BABE));
+        assert_eq!(change(&s, 10).unwrap().color, Some(ss.tints[20]));
+        // its art not there: robe 0's, as GetRobeTexture's cave falls back
+        let s = apply_look_with(&cs, &look, false, |id| id != 0xDEAD_BEEF, &ss);
+        assert_eq!(change(&s, 10).unwrap().texture, Some(ROBE[0][0]));
+        assert_eq!(change(&s, 13).unwrap().texture, Some(0xCAFE_BABE));
+        // a robe past the patch's six is robe 0
+        let s = apply_look_with(&cs, &Look { robe: 6, ..look }, false, all, &ss);
+        assert_eq!(change(&s, 10).unwrap().texture, Some(ROBE[0][0]));
+        // armour tint 20: retail's clamp makes it 0, the patch keeps it
+        let look = Look { armor: [1; 6], armor_tint: [20; 6], ..Default::default() };
+        assert_eq!(change(&apply_look_with(&cs, &look, false, all, &retail), 11).unwrap().color, Some(TINTS[0]));
+        assert_eq!(change(&apply_look_with(&cs, &look, false, all, &ss), 11).unwrap().color, Some(ss.tints[20]));
+        // set 9: retail's clamp makes it none (the tint on the bare layer);
+        // the patch keeps it, and with no art of its own here leaves the slot
+        let look = Look { armor: [9; 6], ..Default::default() };
+        assert_eq!(change(&apply_look_with(&cs, &look, false, all, &retail), 11), Some(LayerChange { entry: 11, layer: 0, texture: None, color: Some(TINTS[0]) }));
+        assert_eq!(change(&apply_look_with(&cs, &look, false, all, &ss), 11), None);
+        // the helm: retail has none for set 9, the patch set 4's
+        assert_eq!(helm_with(9, &retail), None);
+        assert_eq!(helm_with(9, &ss), Some(HELM[4]));
+        assert_eq!(helm(4), helm_with(4, &ss));
+        // retail's tables are `apply_look`'s
+        let look = Look { armor: [3, 2, 1, 0, 5, 1], armor_tint: [1, 2, 3, 15, 16, 4], robe: -1, ..Default::default() };
+        assert_eq!(apply_look(&cs, &look, false, all), apply_look_with(&cs, &look, false, all, &retail));
+        assert_eq!(retail.tint_at_most(20), TINTS[14]);
+        assert_eq!(ss.tint_at_most(20), ss.tints[20]);
+    }
 }

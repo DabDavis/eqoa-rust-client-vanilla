@@ -56,11 +56,13 @@ impl Figure {
                     attached.push((node, g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
                 }
             }
+            // the server's patch's tables (`s2`), retail's without one
+            let t = crate::s2::get().cust();
             if cs.node_ids[8] >= 0
-                && let Some(h) = vi::cust::helm(look.armor[5])
+                && let Some(h) = vi::cust::helm_with(look.armor[5], &t)
                 && let Some(mut m) = lib.lookup(h as i32).and_then(|r| lib.build_model(r))
             {
-                let tint = vi::cust::TINTS[(look.armor_tint[5] as usize).min(14)];
+                let tint = t.tint_at_most(look.armor_tint[5]);
                 for b in &mut m.batches {
                     for l in &mut b.layers {
                         l.color = tint;
@@ -69,7 +71,7 @@ impl Figure {
                 helm_worn = true;
                 attached.push((cs.node_ids[8], g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
             }
-            for ch in vi::cust::apply_look(cs, &look, helm_worn, |id| lib.surface(id as i32).is_some()) {
+            for ch in vi::cust::apply_look_with(cs, &look, helm_worn, |id| lib.surface(id as i32).is_some(), &t) {
                 for b in built.batches.iter_mut().filter(|b| b.material == ch.entry) {
                     if let Some(l) = b.layers.get_mut(ch.layer as usize) {
                         if let Some(t) = ch.texture {

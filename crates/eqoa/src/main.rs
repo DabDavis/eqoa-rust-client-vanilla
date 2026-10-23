@@ -45,6 +45,7 @@ mod bank;
 mod camreach;
 mod camstyle;
 mod client_image;
+mod s2;
 mod controls;
 mod craft;
 mod craftwnd;
