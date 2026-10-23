@@ -23,8 +23,9 @@ current.
 - **A push to `master` reaches every player at their next start** (the user chose it, 2026-10-23): the
   updater (`update.rs`) reads the release's `update.txt` (dev.yml writes it, uploaded after the programs)
   and puts a build of another commit in place before the title; while the game runs it looks again (3 minutes
-  after the start, then every 10) and asks the player in the game's Yes/No box to restart into a newer one
-  (`update::Offer`). So master is always a build fit to play:
+  after the start, then every 10) and asks the player to restart into a newer one in a game window listing
+  what is new (`update::Offer`, `updatewnd.rs`: the release's `update-notes.md`, which dev.yml uploads before
+  update.txt, against the build's own UPDATE-NOTES.md). So master is always a build fit to play:
   test before pushing, and never push a half-done change. Only a build that carries `EQOA_UPDATE_CHANNEL`
   and `EQOA_BUILD_COMMIT` (CI's) updates itself; dev.yml refuses one without its commit. Test the
   updater with `EQOA_UPDATE_URL=<base>` against a server of one's own, never by pushing.
@@ -32,7 +33,9 @@ current.
   (`## <date> · <title>`, then bullets: what a player sees, in a player's words), in the same push.
   The release page shows them, newest first (`release/notes.sh`): the sections new since the last build
   marked as this build's, and a build with none lists its commits there instead ("not in the notes
-  yet"). An edit to the notes alone goes on the page through `.github/workflows/notes.yml`.
+  yet"). An edit to the notes alone goes on the page through `.github/workflows/notes.yml`. The
+  game shows them too: the update's question lists the release's sections its own copy lacks, and a
+  page's Reload notice the new build's (its `update-notes.md`): write them for players.
 - Windows: a program's main thread has the stack its header reserves (1 MB by default), and the game's
   first frame needs about that much, its frames holding their state by value: `crates/eqoa/build.rs`
   links 8 MB, as Linux and macOS give, and `dev.yml` refuses a build with less. Wine does not show an

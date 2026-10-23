@@ -490,7 +490,10 @@ $('iso').addEventListener('change', async () => {
 // the newest. A tab left open asks now and then: on an untouched gate
 // it reloads at once, nothing being lost; anywhere else it says so, and the
 // player reloads when it suits them: Later holds for half an hour (as the
-// native game's question, update.rs's LATER), or until a newer build.
+// native game's question, update.rs's LATER), or until a newer build. The
+// notice says what is new in it: the sections of the new build's update
+// notes (build.sh's update-notes.md) this page's own lack, as the game's
+// question does (update.rs's whats_new).
 
 const BUILD = (import.meta.url.match(/\/v\/([0-9a-f]+)\/main\.js(?:$|[?#])/) || [])[1] || null;
 window.eqoaBuild = BUILD;
@@ -499,6 +502,45 @@ let asked = 0;
 let later = null;      // the build the player said "Later" to, and until when
 // how long a Later holds (`?later=<ms>` for tests)
 const LATER_MS = Number(new URLSearchParams(location.search).get('later')) || 30 * 60 * 1000;
+
+// An UPDATE-NOTES.md's sections, newest first: `## ` a title, `- ` a bullet
+// and an indented line carrying it on, any other line a paragraph; markdown
+// emphasis and code marks out.
+function noteSections(md) {
+  const out = [];
+  let open = false;
+  const plain = (t) => t.replace(/\*\*/g, '').replace(/`/g, '');
+  for (const raw of md.split('\n')) {
+    const t = raw.trimEnd();
+    if (t.startsWith('## ')) {
+      out.push({ title: plain(t.slice(3).trim()), bullets: [] });
+      open = false;
+      continue;
+    }
+    const s = out[out.length - 1];
+    if (!s) continue;
+    if (!t.trim()) open = false;
+    else if (t.startsWith('- ')) { s.bullets.push(plain(t.slice(2).trim())); open = true; }
+    else if (open && t.startsWith(' ') && s.bullets.length) s.bullets[s.bullets.length - 1] += ' ' + plain(t.trim());
+    else { s.bullets.push(plain(t.trim())); open = true; }
+  }
+  return out;
+}
+
+// What is new in build `b` for this page: its notes' sections this build's
+// notes lack (at most five, newest first), as text; '' when there are none
+// or they could not be read.
+async function whatsNew(b) {
+  try {
+    const get = async (u) => { const r = await fetch(u); if (!r.ok) throw new Error(String(r.status)); return r.text(); };
+    const [theirs, mine] = await Promise.all([get(new URL(`../${b}/update-notes.md`, import.meta.url)), get(new URL('./update-notes.md', import.meta.url))]);
+    const had = new Set(noteSections(mine).map((s) => s.title));
+    const news = noteSections(theirs).filter((s) => !had.has(s.title)).slice(0, 5);
+    return news.map((s) => `${s.title}\n${s.bullets.map((x) => `• ${x}`).join('\n')}`).join('\n\n');
+  } catch {
+    return '';
+  }
+}
 
 async function checkUpdate(force) {
   if (!BUILD) return null; // not a built page (no v/<build>/): nothing to compare
@@ -529,9 +571,10 @@ async function checkUpdate(force) {
     return latest;
   }
   if (!later || later.build !== latest || Date.now() >= later.until) {
-    report.notice('update', '', started
+    const news = await whatsNew(latest);
+    report.notice('update', '', (started
       ? 'A new version of the client is out. Reloading leaves the game, and you sign in again.'
-      : 'A new version of the client is out.', [
+      : 'A new version of the client is out.') + (news ? `\n\nWhat's new:\n${news}` : ''), [
       ['Reload', () => { session.set('reloadedFor', latest); location.reload(); }, true],
       ['Later', () => { later = { build: latest, until: Date.now() + LATER_MS }; report.notice('update'); }],
     ]);

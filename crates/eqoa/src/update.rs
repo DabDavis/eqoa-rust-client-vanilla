@@ -77,9 +77,10 @@ pub const FIRST: Duration = Duration::from_secs(3 * 60);
 pub const EVERY: Duration = Duration::from_secs(10 * 60);
 pub const LATER: Duration = Duration::from_secs(30 * 60);
 
-/// How long the box stands unanswered before it counts as a No (ms; the
-/// game's box counts the last ten seconds down).
-pub const BOX_MS: i64 = 60_000;
+/// How long the question stands with nothing done in it before it counts
+/// as a Later (ms; each input puts it off, and the last ten seconds are
+/// counted down by its choices).
+pub const BOX_MS: i64 = 180_000;
 
 /// `FIRST`, `EVERY` and `LATER`, or a test's (`EQOA_UPDATE_EVERY`'s
 /// seconds, the last three times them).
@@ -209,67 +210,158 @@ pub fn ready() -> Option<String> {
     None
 }
 
-// ---- the question ----------------------------------------------------------
+// ---- what is new -------------------------------------------------------------
 
+/// The release's copy of the update notes, beside `update.txt`: dev.yml (and
+/// notes.yml, for an edit to the notes alone) uploads UPDATE-NOTES.md under
+/// this name before `update.txt`, so a game that reads the new manifest
+/// finds the notes that go with it.
+pub const NOTES_FILE: &str = "update-notes.md";
+
+/// This build's own update notes, as they were when it was built: the
+/// sections the release's have and these lack are what is new.
 #[cfg(not(target_arch = "wasm32"))]
-/// What the box first says: in the world, that the world is left.
-const ASK: &str = "A new version of the game is ready. Restart now to play it?";
-#[cfg(not(target_arch = "wasm32"))]
-const ASK_IN_WORLD: &str = "A new version of the game is ready. Restart now to play it? You leave the world and sign in again.";
+const OWN_NOTES: &str = include_str!("../../../UPDATE-NOTES.md");
+
+/// A section of the update notes: `## <date> · <title>` and its bullets (a
+/// bullet's wrapped lines joined), as plain text (`plain`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Section {
+    pub title: String,
+    pub bullets: Vec<String>,
+}
+
+/// What the question says is new in the build it offers.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum WhatsNew {
+    /// the release's sections this build's notes lack, newest first: one a
+    /// build the player did not have
+    Sections(Vec<Section>),
+    /// the release's notes read, and nothing in them this build lacks
+    Nothing,
+    /// the release's notes could not be read
+    #[default]
+    Unread,
+}
+
+/// Markdown made plain: `**` and backticks out.
+pub fn plain(s: &str) -> String {
+    s.replace("**", "").replace('`', "")
+}
+
+/// An UPDATE-NOTES.md's sections, newest first as the file has them: a
+/// `## ` heading starts one; `- ` starts a bullet and a line indented under
+/// it carries it on; any other line is a paragraph of its own; what comes
+/// before the first heading is the file's preface.
+pub fn sections(md: &str) -> Vec<Section> {
+    let mut out: Vec<Section> = Vec::new();
+    let mut open = false;
+    for line in md.lines() {
+        let t = line.trim_end();
+        if let Some(h) = t.strip_prefix("## ") {
+            out.push(Section { title: plain(h.trim()), bullets: Vec::new() });
+            open = false;
+            continue;
+        }
+        let Some(s) = out.last_mut() else { continue };
+        if t.trim().is_empty() {
+            open = false;
+        } else if let Some(b) = t.strip_prefix("- ") {
+            s.bullets.push(plain(b.trim()));
+            open = true;
+        } else if open && t.starts_with(' ') {
+            if let Some(last) = s.bullets.last_mut() {
+                last.push(' ');
+                last.push_str(&plain(t.trim()));
+            }
+        } else {
+            s.bullets.push(plain(t.trim()));
+            open = true;
+        }
+    }
+    out
+}
+
+/// The release's sections whose heading this build's notes do not have, in
+/// the release's order (newest first).
+pub fn whats_new(release: &str, own: &str) -> WhatsNew {
+    let had: std::collections::HashSet<String> = sections(own).into_iter().map(|s| s.title).collect();
+    let new: Vec<Section> = sections(release).into_iter().filter(|s| !had.contains(&s.title)).collect();
+    if new.is_empty() { WhatsNew::Nothing } else { WhatsNew::Sections(new) }
+}
+
+/// What is new in the program in place (`ready`), looked for with it.
+pub fn ready_notes() -> Option<WhatsNew> {
+    #[cfg(not(target_arch = "wasm32"))]
+    return native::notes();
+    #[cfg(target_arch = "wasm32")]
+    None
+}
+
+// ---- the question ----------------------------------------------------------
 
 /// The game's moment, as the question reads it each frame.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Moment {
-    /// nothing else on the screen, nothing being typed, no fight: the box
-    /// may come up
+    /// nothing else on the screen, nothing being typed, no fight, the
+    /// controls let go: the question may come up (once it has been so for
+    /// `QUIET_MS`)
     pub quiet: bool,
     /// nothing else on the screen and nothing being typed: it may stay up
     pub plain: bool,
     /// in the world
     pub world: bool,
-    /// the clock the box fades and times out on (ms)
+    /// the clock the window opens and times out on (ms)
     pub now: i64,
 }
 
+/// How long the moment stays quiet before the question comes up (ms): a
+/// player who has just let go of the controls may be about to take them up
+/// again.
+pub const QUIET_MS: i64 = 2_000;
+
 #[cfg(not(target_arch = "wasm32"))]
-/// The question once a newer program is in place (`ready`): the game's own
-/// Yes/No box (`dialog::MBox`, `VIWndMBox` at (80, 115), starting on No),
-/// up only when the moment is quiet, taking only its own keys.
+/// The question once a newer program is in place (`ready`), with what is
+/// new in it (`updatewnd::NotesWnd`, starting on Later): up only once the
+/// moment has been quiet `QUIET_MS`, taking only its own input.
 pub struct Offer {
-    mbox: crate::dialog::MBox,
+    wnd: crate::updatewnd::NotesWnd,
     shown: bool,
-    /// a No, or the box left `BOX_MS`: not up again before this (ms)
+    quiet_since: Option<i64>,
+    /// a Later, or the window left `BOX_MS`: not up again before this (ms)
     later: Option<i64>,
     later_ms: i64,
-    /// Yes: the program in place is to start
+    /// when the window, left alone, counts as a Later (each input puts it off)
+    timeout: i64,
+    /// Restart now: the program in place is to start
     restart: bool,
-    /// the box's sounds (`VIClient::PlaySound`'s), for the caller
-    cues: Vec<i32>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Offer {
     pub fn new(later: Duration) -> Offer {
-        Offer { mbox: Default::default(), shown: false, later: None, later_ms: later.as_millis() as i64, restart: false, cues: Vec::new() }
+        Offer { wnd: Default::default(), shown: false, quiet_since: None, later: None, later_ms: later.as_millis() as i64, timeout: 0, restart: false }
     }
 
-    /// A frame: up when a program is `ready`, the moment quiet and no No
-    /// stands; put away (and asked again when it can be) when a window of
-    /// the game's or an edit box came up meanwhile.
-    pub fn frame(&mut self, ready: bool, m: Moment) {
+    /// A frame: up when a program is `ready` (with `notes`, what is new in
+    /// it), the moment quiet for `QUIET_MS` and no Later standing; put away
+    /// (and asked again when it can be) when a window of the game's or an
+    /// edit box came up meanwhile.
+    pub fn frame(&mut self, ready: bool, notes: Option<&WhatsNew>, m: Moment) {
         if self.restart {
             return;
         }
+        self.quiet_since = if m.quiet { Some(self.quiet_since.unwrap_or(m.now)) } else { None };
         if self.shown {
             if !m.plain || !ready {
                 self.shown = false;
+                self.wnd.release();
             }
             return;
         }
-        if ready && m.quiet && self.later.is_none_or(|t| m.now >= t) {
-            let text = crate::ui::wide(if m.world { ASK_IN_WORLD } else { ASK });
-            self.mbox.prompt(&text, 1, 0, 0, m.now);
-            self.mbox.timeout = m.now + BOX_MS;
+        if ready && self.quiet_since.is_some_and(|t| m.now - t >= QUIET_MS) && self.later.is_none_or(|t| m.now >= t) {
+            self.wnd.open(notes.cloned().unwrap_or_default(), m.world);
+            self.timeout = m.now + BOX_MS;
             self.shown = true;
         }
     }
@@ -278,65 +370,98 @@ impl Offer {
         self.shown
     }
 
-    /// Yes was answered.
+    /// Restart now was answered.
     pub fn restart(&self) -> bool {
         self.restart
     }
 
-    /// Whether a key is one the box takes: the game's codes (`VIKeyboard`'s
-    /// 13 Enter, 27 Escape, 17 and 18 left and right; the pad's 134 ✕, 132
-    /// △, 136 and 137 the d-pad's left and right).
+    /// Whether a key is one the window takes, the game's code: `VIKeyboard`'s
+    /// 13 Enter, 27 Escape, 17 to 20 the cursor keys, 21 to 24 Page Up, Page
+    /// Down, End, Home; the pad's 134 ✕, 132 △ and 136 to 139 the d-pad.
     pub fn takes(key: i32) -> bool {
-        matches!(key, 13 | 27 | 17 | 18 | 134 | 132 | 136 | 137)
+        matches!(key, 13 | 27 | 17..=24 | 134 | 132 | 136..=139)
     }
 
-    /// A key pressed: true when the box took it (it is up, and the key is
+    /// A key pressed: true when the window took it (it is up, and the key is
     /// one of its own).
     pub fn key(&mut self, key: i32, now: i64) -> bool {
-        use crate::dialog::Key;
+        if !self.shown || !Self::takes(key) {
+            return false;
+        }
+        let a = self.wnd.key(key, now);
+        self.answer(a, now);
+        true
+    }
+
+    /// A press at frame point `p`: on a choice, that choice; on the list, a
+    /// drag begun. True when it was the window's.
+    pub fn click(&mut self, p: [f32; 2], now: i64) -> bool {
         if !self.shown {
             return false;
         }
-        let k = match key {
-            13 | 134 => Key::Enter,
-            27 | 132 => Key::Escape,
-            17 | 136 => Key::Left,
-            18 | 137 => Key::Right,
-            _ => return false,
-        };
-        let a = self.mbox.key(k, &mut self.cues);
-        self.answer(a, now);
-        true
+        match self.wnd.press(p) {
+            Some(a) => {
+                self.answer(a, now);
+                true
+            }
+            None => false,
+        }
     }
 
-    /// A click at frame point `p`: on a button, that button pressed; true
-    /// when it was one.
-    pub fn click(&mut self, p: [f32; 2], now: i64) -> bool {
-        if !self.shown || !self.mbox.point(p) {
+    /// The pointer moved while pressed: true while it drags the list.
+    pub fn drag(&mut self, p: [f32; 2], now: i64) -> bool {
+        let on = self.shown && self.wnd.drag_to(p);
+        if on {
+            self.timeout = now + BOX_MS;
+        }
+        on
+    }
+
+    /// The press let go: true when it was the list's drag.
+    pub fn release(&mut self) -> bool {
+        self.wnd.release()
+    }
+
+    /// The wheel's `lines` (up positive): the list's while the window is up.
+    pub fn wheel(&mut self, lines: f32, now: i64) -> bool {
+        if !self.shown {
             return false;
         }
-        let a = self.mbox.key(crate::dialog::Key::Enter, &mut self.cues);
-        self.answer(a, now);
+        if lines != 0.0 {
+            self.wnd.wheel(lines);
+            self.timeout = now + BOX_MS;
+        }
         true
     }
 
-    /// The box over the frame (the 2D layer's, frame pixels), and its time
-    /// running out (a No).
+    /// A stick's up and down (down positive) held `dt` seconds: the list's.
+    pub fn stick(&mut self, y: f32, dt: f32, now: i64) {
+        if self.shown && y != 0.0 {
+            self.wnd.stick(y, dt);
+            self.timeout = now + BOX_MS;
+        }
+    }
+
+    /// The window over the frame (the 2D layer's, frame pixels), and its time
+    /// running out (a Later).
     pub fn draw(&mut self, vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster, now: i64) {
         if !self.shown {
             return;
         }
-        let a = self.mbox.draw(vui, r, now);
-        self.answer(a, now);
+        self.wnd.draw(vui, r, self.timeout - now);
+        if now >= self.timeout {
+            self.answer(Some(crate::updatewnd::Answer::Later), now);
+        }
     }
 
-    fn answer(&mut self, a: Option<crate::dialog::BoxAnswer>, now: i64) {
+    fn answer(&mut self, a: Option<crate::updatewnd::Answer>, now: i64) {
+        self.timeout = now + BOX_MS;
         match a {
-            Some(crate::dialog::BoxAnswer::Yes(..)) => {
+            Some(crate::updatewnd::Answer::Restart) => {
                 self.shown = false;
                 self.restart = true;
             }
-            Some(crate::dialog::BoxAnswer::No(..)) => {
+            Some(crate::updatewnd::Answer::Later) => {
                 self.shown = false;
                 self.later = Some(now + self.later_ms);
             }
@@ -344,9 +469,9 @@ impl Offer {
         }
     }
 
-    /// The sounds the box asked for since the last call.
+    /// The sounds the window asked for since the last call.
     pub fn take_cues(&mut self) -> Vec<i32> {
-        std::mem::take(&mut self.cues)
+        self.wnd.take_cues()
     }
 }
 
@@ -362,18 +487,19 @@ fn with_offer<T>(f: impl FnOnce(&mut Offer) -> T) -> T {
 }
 
 /// Each frame there is a UI to draw on (the game's screens' or the HUD's):
-/// the box up or away by the moment.
+/// the window up or away by the moment.
 pub fn offer_frame(m: Moment) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let ready = ready().is_some();
-        with_offer(|o| o.frame(ready, m));
+        let notes = ready_notes();
+        with_offer(|o| o.frame(ready, notes.as_ref(), m));
     }
     #[cfg(target_arch = "wasm32")]
     let _ = m;
 }
 
-/// Whether the box is up (it takes its own keys).
+/// Whether the window is up (it takes its own input).
 pub fn offer_shown() -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     return OFFER.lock().ok().is_some_and(|o| o.as_ref().is_some_and(Offer::shown));
@@ -381,8 +507,9 @@ pub fn offer_shown() -> bool {
     false
 }
 
-/// A key pressed, the game's code (`Offer::takes`): the sounds to play
-/// when the box took it. A Yes makes the program in place the one to start.
+/// A key pressed, the game's code (`Offer::takes`): the sounds to play when
+/// the window took it. A Restart now makes the program in place the one to
+/// start.
 pub fn offer_key(key: i32, now: i64) -> Option<Vec<i32>> {
     #[cfg(not(target_arch = "wasm32"))]
     return answered(|o| o.key(key, now));
@@ -393,7 +520,7 @@ pub fn offer_key(key: i32, now: i64) -> Option<Vec<i32>> {
     }
 }
 
-/// A click at frame point `p`: the sounds to play when the box took it.
+/// A press at frame point `p`: the sounds to play when the window took it.
 pub fn offer_click(p: [f32; 2], now: i64) -> Option<Vec<i32>> {
     #[cfg(not(target_arch = "wasm32"))]
     return answered(|o| o.click(p, now));
@@ -404,7 +531,47 @@ pub fn offer_click(p: [f32; 2], now: i64) -> Option<Vec<i32>> {
     }
 }
 
-/// The box over the frame, when it is up.
+/// The pointer at `p` while pressed: true while it drags the window's list.
+pub fn offer_drag(p: [f32; 2], now: i64) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    return with_offer(|o| o.drag(p, now));
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (p, now);
+        false
+    }
+}
+
+/// The press let go: true when it was the window's drag.
+pub fn offer_release() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    return with_offer(Offer::release);
+    #[cfg(target_arch = "wasm32")]
+    false
+}
+
+/// The wheel's lines (up positive): true when the window took them (it is
+/// up).
+pub fn offer_wheel(lines: f32, now: i64) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    return with_offer(|o| o.wheel(lines, now));
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (lines, now);
+        false
+    }
+}
+
+/// A stick's up and down (down positive) held `dt` seconds, while the window
+/// is up.
+pub fn offer_stick(y: f32, dt: f32, now: i64) {
+    #[cfg(not(target_arch = "wasm32"))]
+    with_offer(|o| o.stick(y, dt, now));
+    #[cfg(target_arch = "wasm32")]
+    let _ = (y, dt, now);
+}
+
+/// The window over the frame, when it is up.
 pub fn offer_draw(vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster, now: i64) {
     #[cfg(not(target_arch = "wasm32"))]
     answered(|o| {
@@ -415,8 +582,9 @@ pub fn offer_draw(vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster, now: i64) {
     let _ = (vui, r, now);
 }
 
-/// `f` on the question, and a Yes it brought made good: the program in place
-/// to start (`native::accept`); the box's sounds when `f` took its input.
+/// `f` on the question, and a Restart now it brought made good: the program
+/// in place to start (`native::accept`); the window's sounds when `f` took
+/// its input.
 #[cfg(not(target_arch = "wasm32"))]
 fn answered(f: impl FnOnce(&mut Offer) -> bool) -> Option<Vec<i32>> {
     let (took, yes, cues) = with_offer(|o| {
@@ -434,8 +602,8 @@ fn answered(f: impl FnOnce(&mut Offer) -> bool) -> Option<Vec<i32>> {
     took.then_some(cues)
 }
 
-/// Yes was answered: the game logs out and the window closes, for the
-/// program in place to start (`relaunch_if_requested`).
+/// Restart now was answered: the game logs out and the window closes, for
+/// the program in place to start (`relaunch_if_requested`).
 pub fn restarting() -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     return OFFER.lock().ok().is_some_and(|o| o.as_ref().is_some_and(Offer::restart));
@@ -445,7 +613,7 @@ pub fn restarting() -> bool {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
-    use super::{Build, COMMIT, CHANNEL, Manifest, PLATFORM, State, WAIT};
+    use super::{Build, COMMIT, CHANNEL, Manifest, NOTES_FILE, OWN_NOTES, PLATFORM, State, WAIT, WhatsNew, whats_new};
     use sha2::{Digest, Sha256};
     use std::io::{Read, Write};
     use std::path::{Path, PathBuf};
@@ -463,8 +631,10 @@ mod native {
         exe: PathBuf,
         relaunch: bool,
         /// the release's version of a program in place other than this
-        /// running one, found while the game runs (`watch`)
+        /// running one, found while the game runs (`watch`), and what is new
+        /// in it
         ready: Option<String>,
+        notes: Option<WhatsNew>,
     }
 
     static UPDATER: Mutex<Option<Shared>> = Mutex::new(None);
@@ -501,7 +671,7 @@ mod native {
         let base = test.unwrap_or_else(|| RELEASE.to_string());
         let every = super::intervals(std::env::var("EQOA_UPDATE_EVERY").ok().as_deref());
         let state = if updated.is_some() { State::Done } else { State::Checking };
-        *UPDATER.lock().unwrap() = Some(Shared { state, since: Instant::now(), exe: exe.clone(), relaunch: false, ready: None });
+        *UPDATER.lock().unwrap() = Some(Shared { state, since: Instant::now(), exe: exe.clone(), relaunch: false, ready: None, notes: None });
         let spawned = std::thread::Builder::new().name("update".into()).spawn(move || {
             // this program's own bytes, before anything is put in its place
             let own = sha256_file(&exe).ok();
@@ -521,7 +691,7 @@ mod native {
                 if let State::Staged { version } = &state
                     && with(|_, waited| waited >= WAIT).unwrap_or(false)
                 {
-                    set_ready(version.clone());
+                    offer(&base, version.clone());
                 }
                 set(state);
             }
@@ -537,12 +707,60 @@ mod native {
         UPDATER.lock().ok()?.as_ref()?.ready.clone()
     }
 
-    fn set_ready(version: String) {
+    /// What is new in the program in place, looked for with it.
+    pub(super) fn notes() -> Option<WhatsNew> {
+        UPDATER.lock().ok()?.as_ref()?.notes.clone()
+    }
+
+    /// The program in place (`version`) offered, with what is new in it: the
+    /// release's notes, read beside update.txt, set against this build's own
+    /// (`whats_new`). A read that failed is tried again at the next look.
+    fn offer(base: &str, version: String) {
+        let (same, unread) = UPDATER
+            .lock()
+            .ok()
+            .and_then(|u| u.as_ref().map(|s| (s.ready.as_deref() == Some(version.as_str()), matches!(s.notes, None | Some(WhatsNew::Unread)))))
+            .unwrap_or((false, true));
+        if same && !unread {
+            return;
+        }
+        let notes = match fetch_notes(base) {
+            Ok(text) => whats_new(&text, OWN_NOTES),
+            Err(e) => {
+                if !same {
+                    crate::say(&format!("update: what is new in it: {e}"));
+                }
+                WhatsNew::Unread
+            }
+        };
+        if !same {
+            let what = match &notes {
+                WhatsNew::Sections(s) => format!("{} new section(s) of notes", s.len()),
+                WhatsNew::Nothing => "no notes new to this build".to_string(),
+                WhatsNew::Unread => "its notes not read".to_string(),
+            };
+            crate::say(&format!("update: {version} is in place: the game offers to restart into it ({what})"));
+        }
         if let Ok(mut u) = UPDATER.lock()
             && let Some(s) = u.as_mut()
         {
             s.ready = Some(version);
+            s.notes = Some(notes);
         }
+    }
+
+    /// The release's update notes (`NOTES_FILE`, beside update.txt).
+    pub(super) fn fetch_notes(base: &str) -> Result<String, String> {
+        let url = format!("{base}{NOTES_FILE}");
+        agent()
+            .get(&url)
+            .call()
+            .map_err(|e| format!("{url}: {e}"))?
+            .body_mut()
+            .with_config()
+            .limit(1024 * 1024)
+            .read_to_string()
+            .map_err(|e| format!("{url}: {e}"))
     }
 
     /// The player said Yes to the program in place: it is what
@@ -567,10 +785,7 @@ mod native {
         loop {
             match watch_once(base, exe, commit, platform, own) {
                 Ok(Some(version)) => {
-                    if ready().as_deref() != Some(version.as_str()) {
-                        crate::say(&format!("update: {version} is in place: the game offers to restart into it"));
-                    }
-                    set_ready(version);
+                    offer(base, version);
                     said.clear();
                 }
                 Ok(None) => said.clear(),
@@ -1041,109 +1256,189 @@ mod tests {
         Moment { quiet: true, plain: true, world: true, now }
     }
 
-    /// The question comes up only with a program ready and the moment
-    /// quiet; it starts on No, so Enter alone (or ✕) is a No, which keeps it
-    /// down until `LATER`; left then Enter is the Yes.
+    /// The moment quiet from `t`, and `QUIET_MS` later.
+    fn settle(o: &mut Offer, ready: bool, t: i64) {
+        o.frame(ready, None, quiet(t));
+        o.frame(ready, None, quiet(t + QUIET_MS));
+    }
+
+    /// The question comes up only with a program ready and the moment quiet
+    /// for `QUIET_MS`; it starts on Later, so Enter alone (or ✕) is a Later,
+    /// which keeps it down until `LATER`; left then Enter restarts.
     #[test]
-    fn the_question_starts_on_no_and_comes_back_later() {
+    fn the_question_starts_on_later_and_comes_back() {
         let later = 1000;
         let mut o = Offer::new(Duration::from_millis(later as u64));
-        o.frame(false, quiet(0));
+        settle(&mut o, false, 0);
         assert!(!o.shown(), "nothing ready");
-        o.frame(true, Moment { quiet: false, ..quiet(0) });
+        o.frame(true, None, Moment { quiet: false, ..quiet(0) });
+        o.frame(true, None, Moment { quiet: false, ..quiet(QUIET_MS) });
         assert!(!o.shown(), "not quiet");
-        assert!(!o.key(13, 0), "a key while it is down is not its");
-        o.frame(true, quiet(10));
+        let t = 10_000;
+        o.frame(true, None, quiet(t));
+        o.frame(true, None, quiet(t + QUIET_MS - 1));
+        assert!(!o.shown(), "quiet, not for long enough");
+        assert!(!o.key(13, t), "a key while it is down is not its");
+        let t = t + QUIET_MS;
+        o.frame(true, None, quiet(t));
         assert!(o.shown());
         // keys not its own go by
-        assert!(!o.key(119, 10) && !o.key(138, 10) && !o.key(32, 10) && o.shown());
-        // Enter on No
-        assert!(o.key(13, 20));
+        assert!(!o.key(119, t) && !o.key(32, t) && !o.key(144, t) && o.shown());
+        // Enter on Later
+        assert!(o.key(13, t));
         assert!(!o.shown() && !o.restart());
-        o.frame(true, quiet(20 + later - 1));
+        o.frame(true, None, quiet(t + later - 1));
         assert!(!o.shown(), "not again before LATER");
-        o.frame(true, quiet(20 + later));
+        o.frame(true, None, quiet(t + later));
         assert!(o.shown(), "again after it");
-        // the pad: the d-pad's left to Yes, ✕
-        assert!(o.key(136, 30) && o.shown());
-        assert!(o.key(134, 30));
+        // the pad: the d-pad's left to Restart now, ✕
+        assert!(o.key(136, t + later) && o.shown());
+        assert!(o.key(134, t + later));
         assert!(o.restart() && !o.shown());
-        o.frame(true, quiet(40));
-        assert!(!o.shown(), "answered Yes: no more questions");
-        // △ is a No too
+        o.frame(true, None, quiet(t + later + 10_000));
+        assert!(!o.shown(), "restarting: no more questions");
+        // △ is a Later too
         let mut o = Offer::new(Duration::from_millis(later as u64));
-        o.frame(true, quiet(0));
-        assert!(o.key(132, 5) && !o.shown() && !o.restart());
+        settle(&mut o, true, 0);
+        assert!(o.key(132, QUIET_MS) && !o.shown() && !o.restart());
     }
 
     /// A window or an edit box of the game's put up meanwhile puts the
-    /// question away, unanswered: it is back as soon as the moment is quiet
-    /// (where a No would keep it down).
+    /// question away, unanswered: it is back once the moment has been quiet
+    /// again (where a Later keeps it down).
     #[test]
     fn a_window_of_the_games_puts_it_away_unanswered() {
         let mut o = Offer::new(LATER);
-        o.frame(true, quiet(0));
+        settle(&mut o, true, 0);
         assert!(o.shown());
-        o.frame(true, Moment { quiet: false, plain: true, ..quiet(5) });
+        o.frame(true, None, Moment { quiet: false, plain: true, ..quiet(QUIET_MS + 5) });
         assert!(o.shown(), "a fight starting keeps it up");
-        o.frame(true, Moment { quiet: false, plain: false, ..quiet(10) });
+        o.frame(true, None, Moment { quiet: false, plain: false, ..quiet(QUIET_MS + 10) });
         assert!(!o.shown(), "a window up puts it away");
-        o.frame(true, quiet(20));
-        assert!(o.shown(), "back at once: it was not answered");
-        // the control: a No keeps it down
-        o.key(27, 30);
-        o.frame(true, quiet(40));
+        settle(&mut o, true, QUIET_MS + 20);
+        assert!(o.shown(), "back once quiet again: it was not answered");
+        // the control: a Later keeps it down
+        o.key(27, 2 * QUIET_MS + 30);
+        settle(&mut o, true, 2 * QUIET_MS + 40);
         assert!(!o.shown());
     }
 
-    /// Left standing it counts as a No (the game's box's timeout).
+    /// Left standing it counts as a Later; any input puts that off.
     #[test]
-    fn left_standing_it_is_a_no() {
+    fn left_standing_it_is_a_later() {
         use crate::pointer::testing::{NullRaster, vui};
         let (vui, mut r) = (vui(), NullRaster);
         let mut o = Offer::new(Duration::from_millis(500));
-        o.frame(true, quiet(0));
-        o.draw(&vui, &mut r, BOX_MS - 1);
+        settle(&mut o, true, 0);
+        let t = QUIET_MS;
+        o.draw(&vui, &mut r, t + BOX_MS - 1);
         assert!(o.shown(), "the control: not yet");
-        o.draw(&vui, &mut r, BOX_MS + 1);
+        assert!(o.key(139, t + BOX_MS - 1), "a scroll");
+        o.draw(&vui, &mut r, t + BOX_MS + 1);
+        assert!(o.shown(), "put off by it");
+        let t = t + 2 * BOX_MS;
+        o.draw(&vui, &mut r, t);
         assert!(!o.shown() && !o.restart());
-        o.frame(true, quiet(BOX_MS + 2));
-        assert!(!o.shown(), "a No's wait");
-        o.frame(true, quiet(BOX_MS + 502));
+        o.frame(true, None, quiet(t + 100));
+        assert!(!o.shown(), "a Later's wait");
+        o.frame(true, None, quiet(t + 600));
         assert!(o.shown());
     }
 
-    /// A click on a button presses it (a pointer, `pointer`): Yes's is the
-    /// Yes; anywhere else is not the box's.
+    /// A press on a choice takes it (a pointer, `pointer`): Restart now's
+    /// restarts, Later's is a Later; a press on the list is the window's (a
+    /// drag) and answers nothing; anywhere else is not the window's.
     #[test]
-    fn a_click_on_its_buttons() {
+    fn a_press_on_its_choices_and_its_list() {
         use crate::pointer::testing::{NullRaster, vui};
         let (vui, mut r) = (vui(), NullRaster);
         let mid = |b: [i32; 4]| [(b[0] + b[2]) as f32 / 2.0, (b[1] + b[3]) as f32 / 2.0];
         let mut o = Offer::new(LATER);
-        o.frame(true, quiet(0));
-        assert!(!o.click([320.0, 224.0], 0), "nothing drawn yet: nowhere to click");
-        o.draw(&vui, &mut r, 0);
-        let (yes, no) = (o.mbox.buttons()[0], o.mbox.buttons()[1]);
-        assert!(!o.click([2.0, 2.0], 0) && o.shown(), "the control: off the buttons");
-        assert!(o.click(mid(no), 0));
-        assert!(!o.shown() && !o.restart(), "No's button");
+        settle(&mut o, true, 0);
+        assert!(!o.click([320.0, 380.0], QUIET_MS), "nothing drawn yet: nowhere to press");
+        o.draw(&vui, &mut r, QUIET_MS);
+        assert!(!o.click([2.0, 2.0], QUIET_MS) && o.shown(), "the control: off the window");
+        let [restart, later] = o.wnd.choices();
+        assert!(o.click(mid(later), QUIET_MS));
+        assert!(!o.shown() && !o.restart(), "Later's choice");
         let mut o = Offer::new(LATER);
-        o.frame(true, quiet(0));
-        o.draw(&vui, &mut r, 0);
-        assert!(o.click(mid(yes), 0));
-        assert!(o.restart(), "Yes's button");
+        settle(&mut o, true, 0);
+        o.draw(&vui, &mut r, QUIET_MS);
+        assert!(o.click(mid(o.wnd.list_rect()), QUIET_MS) && o.shown() && !o.restart(), "the list: a drag, no answer");
+        assert!(o.release() && !o.release(), "the drag let go once");
+        assert!(o.click(mid(restart), QUIET_MS));
+        assert!(o.restart(), "Restart now's choice");
     }
 
-    /// The box's keys are the game's: Enter, Escape, left and right, and the
-    /// pad's ✕, △ and the d-pad's two.
+    /// The window's keys are the game's: Enter, Escape, the cursor keys,
+    /// Page Up and Down, Home and End; the pad's ✕, △ and the d-pad.
     #[test]
     fn the_question_takes_only_its_own_keys() {
-        for k in [13, 27, 17, 18, 134, 132, 136, 137] {
+        for k in [13, 27, 17, 18, 19, 20, 21, 22, 23, 24, 134, 132, 136, 137, 138, 139] {
             assert!(Offer::takes(k), "{k}");
         }
-        for k in [8, 9, 19, 20, 32, 97, 119, 133, 135, 138, 139, 144] {
+        for k in [8, 9, 32, 97, 119, 128, 131, 133, 135, 140, 144] {
             assert!(!Offer::takes(k), "{k}");
         }
+    }
+
+    /// The wheel and a stick are the window's while it is up, and nobody's
+    /// while it is down.
+    #[test]
+    fn the_wheel_and_a_stick_are_its_while_it_is_up() {
+        let mut o = Offer::new(LATER);
+        assert!(!o.wheel(1.0, 0), "down: not its");
+        settle(&mut o, true, 0);
+        assert!(o.wheel(-1.0, QUIET_MS), "up: its");
+        o.stick(1.0, 0.1, QUIET_MS);
+        assert!(o.shown());
+    }
+
+    const NOTES_V3: &str = "# Update notes\n\nWhat each build changed.\n\n## 2026-10-25 · Third\n- c1 **bold**\n  carried on `code`\n- c2\n\n## 2026-10-24 · Second\n- b1\n\n## 2026-10-23 · First\n- a1\n";
+    const NOTES_V1: &str = "# Update notes\n\n## 2026-10-23 · First\n- a1\n";
+
+    /// The sections as the file has them: the headings, the bullets with
+    /// their wrapped lines joined, the markdown out, the preface passed over.
+    #[test]
+    fn the_notes_read_as_sections() {
+        let s = sections(NOTES_V3);
+        assert_eq!(s.iter().map(|s| s.title.as_str()).collect::<Vec<_>>(), ["2026-10-25 · Third", "2026-10-24 · Second", "2026-10-23 · First"]);
+        assert_eq!(s[0].bullets, ["c1 bold carried on code", "c2"]);
+        assert_eq!(sections("a preface\n- and no heading"), Vec::<Section>::new(), "the control: no heading, no section");
+    }
+
+    /// What is new: the release's sections this build lacks, newest first,
+    /// several when builds were skipped; none of them new is Nothing.
+    #[test]
+    fn whats_new_is_what_this_build_lacks() {
+        let WhatsNew::Sections(s) = whats_new(NOTES_V3, NOTES_V1) else { panic!("sections") };
+        assert_eq!(s.iter().map(|s| s.title.as_str()).collect::<Vec<_>>(), ["2026-10-25 · Third", "2026-10-24 · Second"], "two builds skipped: both");
+        let v2 = "## 2026-10-24 · Second\n- b1\n\n## 2026-10-23 · First\n- a1\n";
+        let WhatsNew::Sections(s) = whats_new(NOTES_V3, v2) else { panic!("sections") };
+        assert_eq!(s.len(), 1, "one build behind: the newest alone");
+        assert_eq!(whats_new(NOTES_V1, NOTES_V1), WhatsNew::Nothing, "the control: nothing new");
+        assert_eq!(whats_new("", NOTES_V1), WhatsNew::Nothing, "an empty file: nothing");
+    }
+
+    /// This build's own notes (UPDATE-NOTES.md, built in) read as dated
+    /// sections, newest first, each with bullets and no markdown left.
+    #[test]
+    fn this_builds_own_notes_read() {
+        let s = sections(OWN_NOTES);
+        assert!(s.len() >= 5, "{}", s.len());
+        assert!(s.iter().all(|s| !s.bullets.is_empty() && s.title.starts_with("20")));
+        assert!(s.windows(2).all(|w| w[0].title[..10] >= w[1].title[..10]), "newest first");
+        assert!(s.iter().flat_map(|s| &s.bullets).all(|b| !b.contains("**") && !b.contains('`')));
+    }
+
+    /// The notes come from beside update.txt; a release without them is
+    /// an error (the question then says where they are).
+    #[test]
+    fn the_notes_come_from_beside_the_manifest() {
+        use super::native::fetch_notes;
+        let base = serve(vec![(NOTES_FILE, NOTES_V3.as_bytes().to_vec())]);
+        assert_eq!(fetch_notes(&base).as_deref(), Ok(NOTES_V3));
+        let none = serve(vec![]);
+        assert!(fetch_notes(&none).is_err(), "the control: none there");
     }
 }

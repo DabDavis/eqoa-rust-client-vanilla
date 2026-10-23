@@ -8,8 +8,9 @@ memory), then plays deploys against an open page by writing new builds and
 version.json under it:
 
   update    an untouched page reloads into a new build at once; one with a
-            disc picked is told, and Later holds for its while (`?later=`)
-            or until a newer build; Reload
+            disc picked is told, with what is new in it (the sections of its
+            update notes the page's lack), and Later holds for its while
+            (`?later=`) or until a newer build; Reload
             brings the newest; a reload that still brings the old page is a
             problem, not a second reload
   report    F3 opens the problem dialog; Send posts what reportd takes, the
@@ -47,13 +48,17 @@ class Site:
         self.posts = []
         self.keep = None
 
-    def deploy(self, build, page=True, version=True):
-        """A build named `build` (a copy of the first's files): its directory,
-        then the page naming it, then version.json, as deploy.sh goes."""
+    def deploy(self, build, page=True, version=True, notes=None):
+        """A build named `build` (a copy of the first's files, `notes` put on
+        top of its update notes): its directory, then the page naming it,
+        then version.json, as deploy.sh goes."""
         d = self.root / "v" / build
         if not d.exists():
             shutil.copytree(self.root / "v" / self.first, d)
             (d / "build.json").write_text(json.dumps({"build": build, "commit": "test"}))
+            if notes:
+                old = (d / "update-notes.md").read_text()
+                (d / "update-notes.md").write_text(old.replace("\n## ", f"\n{notes}\n## ", 1))
         if page:
             index = self.root / "index.html"
             index.write_text(self.page.replace(f"v/{self.first}/", f"v/{build}/"))
@@ -217,6 +222,8 @@ async def tests(a, site, base, page):
     await page.js("eqoaCheckUpdate()")
     shown = await page.until(f"{notices}.includes('update')", 5)
     check("a page with a disc picked is told, not reloaded", bool(shown) and await page.stayed() and await page.js("window.eqoaBuild") == "b" * 12)
+    told = "document.querySelector('#notices .notice[data-key=update] .text').textContent"
+    check("no notes new to it: no What's new (control)", "What's new" not in await page.js(told))
     await page.js("[...document.querySelectorAll('#notices .notice button')].find(b => b.textContent === 'Later').click()")
     await page.js("eqoaCheckUpdate()")
     check("Later holds for that build", "update" not in await page.js(notices))
@@ -224,9 +231,11 @@ async def tests(a, site, base, page):
     await page.js("eqoaCheckUpdate()")
     check("Later's while over, it is told again", bool(await page.until(f"{notices}.includes('update')", 5)))
     await page.js("[...document.querySelectorAll('#notices .notice button')].find(b => b.textContent === 'Later').click()")
-    site.deploy("d" * 12)
+    site.deploy("d" * 12, notes="## 2099-01-01 · A test section\n- A test bullet, **bold**\n  carried on\n")
     await page.js("eqoaCheckUpdate()")
     check("a newer build is told again after Later", bool(await page.until(f"{notices}.includes('update')", 5)))
+    text = await page.js(told)
+    check("the notice says what is new in it", "What's new:\n2099-01-01 · A test section\n• A test bullet, bold carried on" in text, repr(text[-160:]))
     await page.js("[...document.querySelectorAll('#notices .notice button')].find(b => b.textContent === 'Reload').click()")
     check("Reload brings the newest", await page.reloaded() == "d" * 12)
 

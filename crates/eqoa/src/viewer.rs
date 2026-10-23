@@ -1672,16 +1672,23 @@ impl App {
     }
 
     /// The pad's keys pressed for the update's question while it is up
-    /// (its own: ✕, △, the d-pad's left and right) taken by it; the rest,
-    /// and every release, go on.
+    /// (its own: ✕, △, the d-pad) taken by it, and a stick's up and down
+    /// its list's; the rest, and every release, go on.
     #[cfg(not(target_arch = "wasm32"))]
     fn offer_pad(&mut self, keys: Vec<(i32, bool)>) -> Vec<(i32, bool)> {
         if !crate::update::offer_shown() {
             return keys;
         }
         let now = self.clock.elapsed().as_millis() as i64;
+        let s = self.console.sticks();
+        crate::update::offer_stick(if s[3].abs() >= s[1].abs() { s[3] } else { s[1] }, self.frame_s, now);
         let mut rest = Vec::new();
         for (k, down) in keys {
+            // a stick leaving or coming back to rest (128-131) is the list's
+            // scrolling, not a key for what is behind
+            if (128..=131).contains(&k) {
+                continue;
+            }
             match down.then(|| crate::update::offer_key(k, now)).flatten() {
                 Some(cues) => self.ui_cues(cues),
                 None => rest.push((k, down)),
@@ -1690,7 +1697,8 @@ impl App {
         rest
     }
 
-    /// A click on the update's question's buttons: true when it took it.
+    /// A press on the update's question (a choice, or its list to drag):
+    /// true when it took it.
     #[cfg(not(target_arch = "wasm32"))]
     fn offer_click(&mut self) -> bool {
         let Some(g) = &self.gfx else { return false };
@@ -1698,6 +1706,15 @@ impl App {
         let Some(cues) = crate::update::offer_click(p, self.clock.elapsed().as_millis() as i64) else { return false };
         self.ui_cues(cues);
         true
+    }
+
+    /// The pointer moved: the update's question's list dragged, if a press
+    /// began a drag on it. True while it does.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn offer_drag(&mut self) -> bool {
+        let Some(g) = &self.gfx else { return false };
+        let p = render::ui::frame_from_window((g.config.width, g.config.height), [self.cursor.0 as f32, self.cursor.1 as f32]);
+        crate::update::offer_drag(p, self.clock.elapsed().as_millis() as i64)
     }
 
     /// The pad, once a frame: every source as libpad's one port
@@ -1764,7 +1781,9 @@ impl App {
         // the camera free
         let (tx, ty, pinch) = self.touch.take_look();
         let dead = self.play.as_ref().is_some_and(|p| p.is_dead());
-        let free = !dead && self.play.as_ref().is_none_or(|p| p.look_free());
+        // the update's question up (`update`) is a window too: no look
+        let offer = crate::update::offer_shown();
+        let free = !dead && !offer && self.play.as_ref().is_none_or(|p| p.look_free());
         let inverted = self.play.as_ref().is_some_and(|p| p.options.inverted != 0);
         let ((look, zoom), feel) = match self.walker.as_mut() {
             Some(w) if free => (self.mouse.look(w, inverted, self.frame_s), crate::mouse::look(w, tx, ty, pinch, inverted, self.frame_s)),
@@ -1790,7 +1809,8 @@ impl App {
         if free && self.mouse.running() {
             a[3] = -1.0;
         }
-        let pad = self.console.sticks();
+        // (and its list has the pad's sticks: the walk does not)
+        let pad = if offer { [0.0; 4] } else { self.console.sticks() };
         for (i, a) in a.iter_mut().enumerate() {
             let (m, t) = if i < 2 { (look[i], feel[i]) } else { (0.0, 0.0) };
             for v in [pad[i], m, t] {
@@ -1809,7 +1829,7 @@ impl App {
     /// ends itself on Escape.
     fn grab_pointer(&mut self, frame: bool) {
         let dead = self.play.as_ref().is_some_and(|p| p.is_dead());
-        let free = self.walker.is_some() && !dead && self.play.as_ref().is_none_or(|p| p.look_free()) && !report_open();
+        let free = self.walker.is_some() && !dead && self.play.as_ref().is_none_or(|p| p.look_free()) && !report_open() && !crate::update::offer_shown();
         let Some(g) = &self.gfx else { return };
         #[cfg(target_arch = "wasm32")]
         if frame && self.mouse.lock_seen(crate::web::pointer_locked(), Instant::now()) {
@@ -2363,6 +2383,16 @@ impl ApplicationHandler for App {
             }
             #[cfg(not(target_arch = "wasm32"))]
             WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } if crate::update::offer_shown() && self.offer_click() => {}
+            #[cfg(not(target_arch = "wasm32"))]
+            WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left, .. } if crate::update::offer_release() => {}
+            #[cfg(not(target_arch = "wasm32"))]
+            WindowEvent::MouseWheel { delta, .. } if crate::update::offer_shown() => {
+                let lines = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y,
+                    MouseScrollDelta::PixelDelta(p) => p.y as f32 / 40.0,
+                };
+                crate::update::offer_wheel(lines, self.clock.elapsed().as_millis() as i64);
+            }
             // Before the world: the pregame's keys, the game's codes
             // (`VIKeyboard::Read`'s), and its clicks.
             WindowEvent::KeyboardInput { event, .. } if self.host.is_some() => {
@@ -3160,6 +3190,11 @@ impl ApplicationHandler for App {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = (position.x, position.y);
+                // the update's question's list dragged (`update`)
+                #[cfg(not(target_arch = "wasm32"))]
+                if self.offer_drag() {
+                    return;
+                }
                 if let Some(p) = self.play.as_mut().filter(|p| p.map.open) {
                     p.map.mouse_moved([position.x as f32, position.y as f32]);
                 }
@@ -3495,7 +3530,8 @@ impl ApplicationHandler for App {
                         {
                             let now = self.clock.elapsed().as_millis() as i64;
                             let plain = p.plain() && !crate::report::is_open();
-                            let quiet = plain && p.quiet() && self.held.is_empty();
+                            let still = self.console.sticks().iter().all(|v| v.abs() < 0.05);
+                            let quiet = plain && p.quiet() && self.held.is_empty() && still;
                             crate::update::offer_frame(crate::update::Moment { quiet, plain, world: true, now });
                             if crate::update::restarting() {
                                 p.log_out();
