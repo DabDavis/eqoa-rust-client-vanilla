@@ -19,7 +19,10 @@
 //! In a window wider than 4:3 (the client's own, `ui::Layout`) it stays the
 //! 4:3 picture the game draws, as the start menu does: its side panels and
 //! rails run off a TV's sides, and there posts close them at the picture's
-//! edges (`startmenu::close_sides`).
+//! edges (`startmenu::close_sides`). Its top is the start menu's band
+//! (`startmenu::band`), where the game's own backdrop (atlas 32, which the
+//! client leaves out) shows round the tabs, and the posts run up through it
+//! from the screen's top, as the start menu's do (F3 20261023-075225).
 #![allow(clippy::too_many_arguments)]
 
 use crate::client_image::Menus;
@@ -561,6 +564,8 @@ impl SpellBook {
         crate::ui::window_backdrop(vui, r, 642);
         let fp = FrameParam { tl: (44, 0), top: (45, 0), tr: (46, 0), right: (52, 0), br: (50, 0), bottom: (49, 0), bl: (48, 0), left: (47, 0) };
         r.anchor(Anchor::Frame);
+        // the backdrop's top as the start menu's band, the tabs on it
+        crate::startmenu::band(vui, r);
         vui.blit_fill_frame(r, [150, 50], [300, 177], &fp, 35, 0, 1.0, true);
         vui.blit_fill_frame(r, [150, 227], [300, 88], &fp, 35, 0, 1.0, true);
         let fp = FrameParam { tl: (36, 0), top: (37, 0), tr: (36, 1), right: (42, 1), br: (39, 1), bottom: (40, 0), bl: (39, 0), left: (42, 0) };
@@ -645,9 +650,10 @@ impl SpellBook {
         p = [p[0] + 10, p[1] + 34];
         vui.draw_centered_string_ex(r, &wide(vui.words.get(161, vui.language)), p[0], p[1], white, 0, true);
         // over the rows and the slots, which reach the picture's edges (the
-        // plates from x 4, the slots to 639): a TV's edge hides those ends
+        // plates from x 4, the slots to 639): a TV's edge hides those ends;
+        // from the screen's top, through the band, as the start menu's
         r.anchor(Anchor::Frame);
-        crate::startmenu::close_sides(vui, r, MIDDLE, false);
+        crate::startmenu::close_sides(vui, r, MIDDLE, true);
         r.anchor(Anchor::Middle);
         if self.x44 {
             if self.fade_dir == -1 {
@@ -795,11 +801,14 @@ mod tests {
 
     /// In a window wider than 4:3 the book is the 4:3 picture the game draws,
     /// as the start menu is: every piece at the game's place, nothing at a
-    /// side, and its open edges closed, a post at each from the middle
-    /// frame's top corner down to the bottom rail. A 4:3 window draws no post
-    /// (the control); what else either draws is the same. A pointer meets the
-    /// rows, the tabs and the slots at their places in the picture; where a
-    /// wide window had them, out at its sides until 2026-10-23, is off them.
+    /// side, the start menu's band across its top (in a 4:3 window too), and
+    /// its open edges closed, a post at each from the screen's top through
+    /// the band down to the bottom rail, as the start menu's (until
+    /// 2026-10-23 from the middle frame's top corner, the world round the
+    /// tabs: F3 20261023-075253). A 4:3 window draws no post (the control);
+    /// what else either draws is the same. A pointer meets the rows, the tabs
+    /// and the slots at their places in the picture; where a wide window had
+    /// them, out at its sides until 2026-10-23, is off them.
     #[test]
     fn the_book_stays_four_by_three_closed_at_its_edges() {
         use crate::startmenu::posts;
@@ -822,8 +831,12 @@ mod tests {
             assert!(wide.2.iter().any(|b| b.0 == Frame && b.1 == at), "{at:?}");
         }
         assert!(wide.2.iter().any(|b| b.0 == Middle && b.1 == [4, 50]), "the first row");
+        // the start menu's band, the first piece, in either window
+        for drawn in [&tv.2, &wide.2] {
+            assert_eq!(drawn.first(), Some(&(Frame, [-1, -1], [642, 48])), "the band");
+        }
         let added: Vec<_> = wide.2.iter().filter(|b| !tv.2.contains(b)).copied().collect();
-        assert_eq!(added, posts::made(Frame, MIDDLE[0], false));
+        assert_eq!(added, posts::made(Frame, MIDDLE[0], true));
         let rest: Vec<_> = wide.2.iter().filter(|b| !added.contains(b)).copied().collect();
         assert_eq!(rest, tv.2);
         // the pointer: the third row and the third tab at their places
