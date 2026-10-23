@@ -5,6 +5,27 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-23 · What's new in the update question, every hit heard
+- When a new version is ready, the game's question shows what's new in it: the
+  update notes of every version since yours. Scroll them with the d-pad, a
+  stick, the arrow keys, the mouse wheel or by dragging the list. In a browser,
+  the new-version notice lists what's new too.
+- Every hit of a double or quad attack makes its sound, not just the first,
+  whoever is swinging.
+- Training points the server gives you, such as the rehabilitator's refund,
+  show at once with the game's "You have received more training points!", no
+  logging in again needed.
+- In Rathe, Odus and the other worlds, the start menu's Location names the
+  place you're in, not one in Tunaria.
+- The map's arrow for you is smaller, and it stays the same size whether you
+  zoom in or out.
+- Options > Extended has Screen Shake: turn it Off and spells never shake the
+  view.
+- Options > Extended has Capture Controller: turn it On and a controller that
+  several of your windows share (the same Pad in each) moves only the window in
+  front. Alt-Tab or click to switch windows; setting it in one window sets it
+  in all of them. What the window reads is now said beside Back.
+
 ## 2026-10-23 · Auction lists, a restart notice, camera turn speed
 - The auction search's Class, Race, Equip Type and Att. Type open their lists
   again: pick one with ✕ or a click and the search looks only for it. The
