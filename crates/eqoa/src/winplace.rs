@@ -16,7 +16,8 @@
 //! know or choose where its window is: there only the size and the states
 //! are kept. `EQOA_OFFSCREEN` runs keep and take nothing.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
