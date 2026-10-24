@@ -493,6 +493,13 @@ pub struct ClientOptions {
     /// Art: Frontiers' (the disc the game runs off), or the 2002 disc's
     /// (`era`, F9)
     pub art: esf::Era,
+    /// VSync, natively (F3 20261024-065802: tearing): on, a frame is shown
+    /// only at the display's refresh (`wgpu::PresentMode::Fifo`), so none
+    /// tears; off, at once (`Immediate` where the surface has it, else
+    /// `Mailbox`), and with Frame Rate the display's the loop keeps to the
+    /// display's refresh itself (`frame_wait`). A page's frames are the
+    /// browser's to pace: there it is always on.
+    pub vsync: bool,
 }
 
 /// The game's ability bars (with the expansion's second).
@@ -526,6 +533,7 @@ impl Default for ClientOptions {
             entity_slots: ENTITY_SLOTS_GAME,
             entity_view: ENTITY_VIEW_GAME,
             art: esf::Era::Frontiers,
+            vsync: true,
         }
     }
 }
@@ -536,7 +544,8 @@ impl ClientOptions {
     /// window's Controller Focus as `controller.<window>` (from 1) only when
     /// it is not Auto, Capture Controller only when on, Sound in Background
     /// only when off, Ability Bars, NPC/PC Display and NPC/PC View Distance
-    /// only when not the game's, and Art only when it is the 2002 disc's.
+    /// only when not the game's, Art only when it is the 2002 disc's, and
+    /// VSync only when off.
     pub fn to_text(self) -> String {
         let mut s = format!("lod={}\nbrightness={}\ncamera_distance={}\n", if self.lod { "on" } else { "off" }, self.brightness, self.camera_distance);
         if let Some(r) = self.frame_rate {
@@ -571,6 +580,9 @@ impl ClientOptions {
         }
         if self.art == esf::Era::Y2002 {
             s.push_str("art=2002\n");
+        }
+        if !self.vsync {
+            s.push_str("vsync=off\n");
         }
         s
     }
@@ -613,6 +625,8 @@ impl ClientOptions {
                 ("art", "frontiers") => c.art = esf::Era::Frontiers,
                 ("background_sound", "on") => c.background_sound = true,
                 ("background_sound", "off") => c.background_sound = false,
+                ("vsync", "on") => c.vsync = true,
+                ("vsync", "off") => c.vsync = false,
                 ("ability_bars", v) => {
                     if let Some(n) = v.parse::<u8>().ok().filter(|&n| (ABILITY_BARS_GAME as i32..=crate::hudmenu::MAX_BARS).contains(&(n as i32))) {
                         c.ability_bars = n;
@@ -700,6 +714,8 @@ thread_local! {
     static PLATFORM_RATE: Cell<FrameRate> = const { Cell::new(FrameRate::Display) };
     /// When the next capped frame is due (`now_ms`'s clock).
     static FRAME_DUE: Cell<f64> = const { Cell::new(0.0) };
+    /// The display's refresh, in ms (`set_display_refresh`).
+    static DISPLAY_GAP: Cell<f64> = const { Cell::new(1000.0 / 60.0) };
     /// What the windows share as `client.opt` last had it (`look_shared`):
     /// Capture Controller and Sound in Background.
     static FILE_SHARED: Cell<Option<(bool, bool)>> = const { Cell::new(None) };
@@ -752,6 +768,19 @@ pub fn fog() -> u8 {
 /// Whether the camera shakes as the game shakes it (Screen Shake).
 pub fn screen_shake() -> bool {
     client().screen_shake
+}
+
+/// VSync now: the player's natively, always on in a page (the browser
+/// paces its frames).
+pub fn vsync() -> bool {
+    cfg!(target_arch = "wasm32") || client().vsync
+}
+
+/// The display's refresh as the window's monitor reports it (mHz; 60 Hz when
+/// it reports none), the gap the loop keeps with VSync off and Frame Rate the
+/// display's.
+pub fn set_display_refresh(millihertz: Option<u32>) {
+    DISPLAY_GAP.with(|g| g.set(millihertz.filter(|&m| m >= 1000).map_or(1000.0 / 60.0, |m| 1_000_000.0 / m as f64)));
 }
 
 /// Capture Controller now: one setting for every window of the client.
@@ -867,13 +896,14 @@ pub fn describe() -> String {
         FrameRate::Display => "the display's",
     };
     format!(
-        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, art {}; {}",
+        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, art {}; {}",
         if c.lod { "on" } else { "off" },
         c.brightness,
         c.fog,
         crate::fog::STEPS,
         if c.fog == crate::fog::GAME { " (the game's)" } else if c.fog == 0 { " (off)" } else { "" },
         if c.frame_rate.is_none() { " (not chosen)" } else { "" },
+        if cfg!(target_arch = "wasm32") { "the browser's" } else if c.vsync { "on" } else { "off" },
         c.camera_distance,
         c.camera_turn,
         if c.screen_shake { "on" } else { "off" },
@@ -934,12 +964,22 @@ fn take(due: f64, now: f64, gap: f64) -> Option<f64> {
     Some(if now - due > gap { now + gap } else { due + gap })
 }
 
+/// The gap the frames keep, in ms (0: none): the Frame Rate's; with the
+/// display's and VSync off, the display's refresh, so that a loop no present
+/// paces never spins through thousands of frames a second.
+fn frame_gap() -> f64 {
+    match frame_rate().gap_ms() {
+        0.0 if !vsync() => DISPLAY_GAP.with(|g| g.get()),
+        g => g,
+    }
+}
+
 /// Whether this frame is drawn under the Frame Rate: always without a cap;
 /// with one, a frame before the next is due is skipped whole (a page skips
 /// the animation frame, the game's clocks then seeing longer frames rather
 /// than fewer ticks).
 pub fn frame_due() -> bool {
-    let gap = frame_rate().gap_ms();
+    let gap = frame_gap();
     if gap == 0.0 {
         return true;
     }
@@ -957,7 +997,7 @@ pub fn frame_due() -> bool {
 /// frame is due (`None`: it is due, or there is no cap), so a capped window
 /// waits instead of asking for frames it would skip.
 pub fn frame_wait() -> Option<std::time::Duration> {
-    let gap = frame_rate().gap_ms();
+    let gap = frame_gap();
     if gap == 0.0 {
         return None;
     }
@@ -1119,6 +1159,7 @@ pub mod testing {
         crate::multibox::testing::set_place(None);
         super::PLATFORM_RATE.with(|p| p.set(super::FrameRate::Display));
         super::FRAME_DUE.with(|d| d.set(0.0));
+        super::DISPLAY_GAP.with(|g| g.set(1000.0 / 60.0));
         super::FILE_SHARED.with(|f| f.set(None));
     }
 
@@ -1292,6 +1333,11 @@ mod tests {
             assert!(ClientOptions::from_text(bad).background_sound, "{bad}: on, the default");
         }
         assert_eq!(ClientOptions { fog: 0, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nfog=0\n", "Fog only when not the game's");
+        assert_eq!(ClientOptions { vsync: false, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nvsync=off\n", "VSync only when off");
+        assert!(!ClientOptions::from_text("vsync=off").vsync && ClientOptions::from_text("vsync=on").vsync);
+        for bad in ["vsync=no", "vsync=0", "vsync=adaptive"] {
+            assert!(ClientOptions::from_text(bad).vsync, "{bad}: on, the default");
+        }
         assert_eq!(ClientOptions::default().to_text(), "lod=on\nbrightness=5\ncamera_distance=11\n", "no Frame Rate until one is chosen, no game's turn, no window's Auto");
         assert_eq!(ClientOptions { camera_turn: 250, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\ncamera_turn=250\n");
         assert_eq!(
@@ -1300,7 +1346,7 @@ mod tests {
             "Screen Shake only off, Capture Controller only on"
         );
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, ability bars 2, npc/pc display 24, npc/pc view distance 100, art frontiers; kept in the page's storage");
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, ability bars 2, npc/pc display 24, npc/pc view distance 100, art frontiers; kept in the page's storage");
         testing::reset(true);
         assert!(describe().ends_with("refused: nothing is kept"));
         testing::reset(false);
@@ -1608,6 +1654,31 @@ mod tests {
         assert!(frame_wait().is_some());
         set_client(ClientOptions { frame_rate: Some(FrameRate::Display), ..client() });
         assert!(frame_due() && frame_due() && frame_wait().is_none(), "no cap: every frame");
+        testing::reset(false);
+    }
+
+    /// VSync off with Frame Rate the display's: the loop keeps to the
+    /// display's refresh (144 Hz here, 60 when the monitor reports none),
+    /// as no present paces it. The control: VSync on, no cap (the present
+    /// waits for the display); and a chosen 30 keeps its own gap either way.
+    #[test]
+    fn vsync_off_keeps_to_the_displays_refresh() {
+        testing::reset(false);
+        set_client(ClientOptions { frame_rate: Some(FrameRate::Display), ..client() });
+        assert_eq!(frame_gap(), 0.0, "the control: VSync on, the present paces it");
+        set_client(ClientOptions { vsync: false, ..client() });
+        set_display_refresh(Some(144_000));
+        assert!((frame_gap() - 1000.0 / 144.0).abs() < 1e-9, "144 Hz: {}", frame_gap());
+        assert!(frame_due(), "the first frame is due");
+        assert!(!frame_due(), "the next a refresh later");
+        assert!(frame_wait().is_some(), "the loop sleeps meanwhile");
+        set_display_refresh(None);
+        assert!((frame_gap() - 1000.0 / 60.0).abs() < 1e-9, "no refresh reported: 60");
+        set_client(ClientOptions { frame_rate: Some(FrameRate::Thirty), ..client() });
+        assert_eq!(frame_gap(), 33.0, "a chosen cap is its own");
+        set_client(ClientOptions { frame_rate: Some(FrameRate::Thirty), vsync: true, ..client() });
+        assert_eq!(frame_gap(), 33.0);
+        set_display_refresh(None);
         testing::reset(false);
     }
 

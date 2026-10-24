@@ -1347,6 +1347,24 @@ struct Gfx {
     models: Vec<GpuModel>,
     /// The window's title as last set (`title`).
     title: String,
+    /// The present modes the surface offers (none offscreen or in a page),
+    /// for VSync to pick from (`present_mode`).
+    present_modes: Vec<wgpu::PresentMode>,
+}
+
+/// The present mode for VSync (`settings::vsync`) out of what the surface
+/// offers: on, `Fifo` (a frame shown only at the display's refresh, so none
+/// tears; every surface has it); off, `Immediate` (shown at once, tearing
+/// allowed), else `Mailbox` (the newest frame at the next refresh), else
+/// `Fifo`.
+pub fn present_mode(offered: &[wgpu::PresentMode], vsync: bool) -> wgpu::PresentMode {
+    use wgpu::PresentMode::{Fifo, Immediate, Mailbox};
+    match () {
+        _ if vsync => Fifo,
+        _ if offered.contains(&Immediate) => Immediate,
+        _ if offered.contains(&Mailbox) => Mailbox,
+        _ => Fifo,
+    }
 }
 
 /// The window's title (F3 20261023-045744, Liav: several windows told
@@ -1363,6 +1381,24 @@ fn title(name: Option<&str>) -> String {
 }
 
 impl Gfx {
+    /// VSync on the surface as the Extended page has it now: the present mode
+    /// picked again and the surface configured when the row moved (a surface
+    /// a page or `EQOA_OFFSCREEN` made is left as it is).
+    fn apply_vsync(&mut self) {
+        let Some(surface) = &self.surface else { return };
+        if self.present_modes.is_empty() {
+            return;
+        }
+        let vsync = crate::settings::vsync();
+        let want = present_mode(&self.present_modes, vsync);
+        if self.config.present_mode != want {
+            self.config.present_mode = want;
+            surface.configure(&self.device, &self.config);
+            crate::settings::set_display_refresh(self.window.current_monitor().and_then(|m| m.refresh_rate_millihertz()));
+            eprintln!("present mode {want:?} (vsync {})", if vsync { "on" } else { "off" });
+        }
+    }
+
     /// Names the window `t` (`title`), only when that is new; in a page the
     /// tab too.
     fn set_title(&mut self, t: String) {
@@ -1574,6 +1610,9 @@ struct App {
     /// `EQOA_SAY=<line>@<ms>[;...]`: what a test's script says in the
     /// world's chat line then (ms on `clock`), as a playshot's does.
     say_script: Vec<(i64, String)>,
+    /// `EQOA_VSYNC_AT=<ms>;<ms>...`: when a test's script turns VSync over
+    /// (ms on `clock`), as the Extended page's row does.
+    vsync_script: Vec<i64>,
     /// While the window gives nothing to draw on, when its next frame is due
     /// (`HIDDEN_GAP`); `EQOA_COVERED=<from>-<to>;...`: when a test's script
     /// counts it as covered (ms on `clock`), as macOS does a window that
@@ -1677,6 +1716,7 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         say_script: std::env::var("EQOA_SAY")
             .map(|v| v.split(';').filter_map(|s| s.rsplit_once('@').and_then(|(l, t)| Some((t.trim().parse().ok()?, l.to_string())))).collect())
             .unwrap_or_default(),
+        vsync_script: std::env::var("EQOA_VSYNC_AT").map(|v| v.split(';').filter_map(|t| t.trim().parse().ok()).collect()).unwrap_or_default(),
         hidden_until: None,
         covered_script: std::env::var("EQOA_COVERED")
             .map(|v| v.split(';').filter_map(|t| t.split_once('-').and_then(|(a, b)| Some((a.trim().parse().ok()?, b.trim().parse().ok()?)))).collect())
@@ -2332,7 +2372,7 @@ impl App {
         }
         let depth = render::depth_view(&device, config.width, config.height);
         let offscreen = surface.is_none().then(|| offscreen_target(&device, &config));
-        self.gfx = Some(Gfx { window, surface, offscreen, in_flight: None, device, queue, config, depth, renderer, models: Vec::new(), title: "EQOA".into() });
+        self.gfx = Some(Gfx { window, surface, offscreen, in_flight: None, device, queue, config, depth, renderer, models: Vec::new(), title: "EQOA".into(), present_modes: Vec::new() });
         // before the world there is nothing to load: the pregame draws
         if self.host.is_some() {
             if let Some(g) = &self.gfx {
@@ -2631,12 +2671,22 @@ impl ApplicationHandler for App {
             let info = adapter.get_info();
             crate::report::set_gpu(format!("{} ({:?})", info.name, info.backend));
         }
-        // At the display's rate: the default is the driver's first present
-        // mode, Immediate on RADV, which drew 2,300-2,600 frames a second in
-        // STATION; the Frame Rate's caps still apply beneath it.
-        config.present_mode = wgpu::PresentMode::AutoVsync;
+        // VSync (the Extended page): on, Fifo, a frame shown only at the
+        // display's refresh; `AutoVsync` took FifoRelaxed where the surface
+        // has it, which shows a late frame at once and tore (F3
+        // 20261024-065802). The default is the driver's first mode,
+        // Immediate on RADV, which drew 2,300-2,600 frames a second in
+        // STATION: off, the loop keeps to the display's refresh itself
+        // (`settings::frame_gap`). The Frame Rate's caps apply beneath it.
+        let offered = surface.get_capabilities(&adapter).present_modes;
+        config.present_mode = present_mode(&offered, crate::settings::vsync());
+        crate::settings::set_display_refresh(window.current_monitor().and_then(|m| m.refresh_rate_millihertz()));
+        eprintln!("present mode {:?} (vsync {}; offered {offered:?})", config.present_mode, if crate::settings::vsync() { "on" } else { "off" });
         surface.configure(&device, &config);
         self.attach(window, Some(surface), config, device, queue);
+        if let Some(g) = self.gfx.as_mut() {
+            g.present_modes = offered;
+        }
     }
 
     /// The mouse's own motion: the look while it holds the pointer.
@@ -2706,6 +2756,12 @@ impl ApplicationHandler for App {
                 Some(shared) => self.back_to_pregame(shared),
                 None => el.exit(),
             },
+            // the window on another monitor: its refresh, for VSync off
+            WindowEvent::Moved(_) => {
+                if let Some(g) = &self.gfx {
+                    crate::settings::set_display_refresh(g.window.current_monitor().and_then(|m| m.refresh_rate_millihertz()));
+                }
+            }
             WindowEvent::Resized(s) if s.width > 0 && s.height > 0 => {
                 let Some(g) = &mut self.gfx else { return };
                 let Some(surface) = &g.surface else { return };
@@ -3720,6 +3776,15 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                // VSync (the Extended page) on the surface, as it moves
+                if self.vsync_script.first().is_some_and(|&t| t <= self.clock.elapsed().as_millis() as i64) {
+                    self.vsync_script.remove(0);
+                    let c = crate::settings::client();
+                    crate::settings::set_client(crate::settings::ClientOptions { vsync: !c.vsync, ..c });
+                }
+                if let Some(g) = self.gfx.as_mut() {
+                    g.apply_vsync();
+                }
                 // Sound in Background (the Extended page): off, this window
                 // is heard only while it is the one in front (has the focus:
                 // a minimised window has not; one merely covered by another
@@ -4172,6 +4237,23 @@ impl ApplicationHandler for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// VSync's present mode: on, Fifo whatever is offered; off, Immediate,
+    /// else Mailbox, else Fifo (every surface has it). The control: the
+    /// `AutoVsync` the client asked for before, which wgpu takes as
+    /// FifoRelaxed where offered (RADV, NVIDIA) and that tears a late frame.
+    #[test]
+    fn vsync_picks_the_present_mode() {
+        use wgpu::PresentMode::{Fifo, FifoRelaxed, Immediate, Mailbox};
+        let all = [Fifo, FifoRelaxed, Immediate, Mailbox];
+        assert_eq!(present_mode(&all, true), Fifo);
+        assert_eq!(present_mode(&[FifoRelaxed, Fifo], true), Fifo);
+        assert_eq!(present_mode(&all, false), Immediate);
+        assert_eq!(present_mode(&[Fifo, Mailbox], false), Mailbox, "no Immediate (a Mac's Metal can lack it)");
+        assert_eq!(present_mode(&[Fifo, FifoRelaxed], false), Fifo);
+        assert_eq!(present_mode(&[], false), Fifo);
+        assert_ne!(present_mode(&all, true), FifoRelaxed, "the control: AutoVsync's pick where FifoRelaxed is offered");
+    }
 
     /// The model viewer after F9: a listed model is the 2002 disc's record of
     /// its DictID (the human: 2,882 vertices there, 3,644 on Frontiers'); the
