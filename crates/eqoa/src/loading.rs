@@ -227,6 +227,14 @@ impl Screen {
         None
     }
 
+    /// The art swapped (F9, `era`): the gears made again out of the art now,
+    /// as they are next drawn.
+    pub fn art_changed(&mut self) {
+        self.gears = None;
+        self.models.clear();
+        self.looked = usize::MAX;
+    }
+
     /// The gears for this frame: uploaded once UI.CSF is in, posed at
     /// `now`. Only while it is up.
     pub fn frame(&mut self, lib: &esf::Library, renderer: &mut render::Renderer, device: &render::wgpu::Device, queue: &render::wgpu::Queue, now: i64) {

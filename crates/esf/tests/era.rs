@@ -105,6 +105,22 @@ fn a_stand_in_ranks_where_its_namesake_does() {
 }
 
 #[test]
+fn a_kept_id_is_frontiers_in_both_views() {
+    let mut lib = char_esf();
+    lib.keep_frontiers(&[A]);
+    let y = |id| lib.lookup_in(Era::Y2002, id).map(|r| r.file);
+    // A kept: Frontiers' record; the control, D, the 2002 file's still
+    assert_eq!((y(A), y(D)), (Some(0), Some(1)));
+    assert!(!lib.in_2002(A), "a kept id is not the 2002 disc's model");
+    // kept before the stand-in comes, the same
+    let mut lib = Library::new();
+    lib.add("CHAR.ESF", container(&[surface(A as u32, 1)]));
+    lib.keep_frontiers(&[A]);
+    lib.stand_in(0, container(&[surface(A as u32, 9)]));
+    assert_eq!(lib.lookup_in(Era::Y2002, A).map(|r| r.file), Some(0));
+}
+
+#[test]
 fn files_by_name_as_the_view_sees_them() {
     let lib = char_esf();
     assert_eq!(lib.file_named("char.esf"), Some(0));

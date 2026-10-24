@@ -148,6 +148,13 @@ impl Raster for Cut<'_> {
     }
 }
 
+/// Whether the layer takes surface `id` out of the library's file `f`
+/// (`UiAssets::add_surfaces_of`): any of a disc's own file, and of a 2002 file
+/// standing in for another only one the library's view answers with it.
+pub fn takes_surface(lib: &esf::Library, f: usize, id: i32) -> bool {
+    lib.stands_for(f).is_none() || lib.lookup(id).is_some_and(|r| r.file == f)
+}
+
 /// What the layer holds for the UI: surfaces by DictID, and the font.
 #[derive(Default)]
 pub struct UiAssets {
@@ -165,6 +172,26 @@ impl UiAssets {
     pub fn add_surfaces(&mut self, ui: &mut Ui, device: &wgpu::Device, queue: &wgpu::Queue, c: &esf::Container) {
         for s in &c.surfaces {
             if self.surfaces.contains_key(&(s.dict_id as u32)) {
+                continue;
+            }
+            if let Some(img) = s.decode(&c.data) {
+                let t = ui.add_texture(device, queue, img.width, img.height, &img.rgba);
+                self.surfaces.insert(s.dict_id as u32, t);
+            }
+        }
+    }
+
+    /// Every surface of the library's file `f` into the layer (`add_surfaces`),
+    /// but of a 2002 file standing in for another (`era`) only those the
+    /// library's view answers with that file: none its namesake has in the
+    /// same bytes, none it keeps Frontiers' (`era::kept`).
+    pub fn add_surfaces_of(&mut self, ui: &mut Ui, device: &wgpu::Device, queue: &wgpu::Queue, lib: &esf::Library, f: usize) {
+        let c = lib.file(f);
+        if lib.stands_for(f).is_none() {
+            return self.add_surfaces(ui, device, queue, c);
+        }
+        for s in &c.surfaces {
+            if self.surfaces.contains_key(&(s.dict_id as u32)) || !takes_surface(lib, f, s.dict_id) {
                 continue;
             }
             if let Some(img) = s.decode(&c.data) {
@@ -489,6 +516,38 @@ pub(crate) mod tests {
         frame(&mut whole);
         assert!(whole.0.iter().any(|c| c.2[1] + c.3[1] == 331), "the control: uncut, the rail reaches 331");
         assert_eq!(whole.0.len(), 6, "the control: the piece under the line drawn");
+    }
+
+    /// A 2002 file gives the layer only the surfaces the library's view
+    /// answers with it; the control: its namesake gives every one of its own.
+    #[test]
+    fn a_2002_file_gives_the_layer_only_what_its_view_takes() {
+        let surface = |id: u32, fill: u8| -> (u16, Vec<u8>) {
+            let mut b = id.to_le_bytes().to_vec();
+            b.extend([fill; 16]);
+            (0x1000, b)
+        };
+        let container = |records: &[(u16, Vec<u8>)]| {
+            let mut d = b"FJBO".to_vec();
+            d.resize(24, 0);
+            d[16..24].copy_from_slice(&24i64.to_le_bytes());
+            for (ty, body) in records {
+                d.extend_from_slice(&ty.to_le_bytes());
+                d.extend_from_slice(&0i16.to_le_bytes());
+                d.extend_from_slice(&(body.len() as i32).to_le_bytes());
+                d.extend_from_slice(&0u32.to_le_bytes());
+                d.extend_from_slice(body);
+            }
+            esf::Container::parse(d).unwrap()
+        };
+        let mut lib = esf::Library::new();
+        let ui = lib.add("UI.CSF", container(&[surface(1, 1), surface(2, 2), surface(3, 3)]));
+        let s = lib.stand_in(ui, container(&[surface(1, 9), surface(2, 2), surface(3, 8)]));
+        lib.keep_frontiers(&[3]);
+        lib.set_view(esf::Era::Y2002);
+        // 1 changed: the 2002 file's; 2 the same bytes and 3 kept: Frontiers'
+        assert_eq!([1, 2, 3].map(|id| takes_surface(&lib, s, id)), [true, false, false]);
+        assert_eq!([1, 2, 3].map(|id| takes_surface(&lib, ui, id)), [true; 3]);
     }
 }
 

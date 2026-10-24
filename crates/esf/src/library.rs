@@ -85,6 +85,9 @@ pub struct Library {
     /// The 2002 dictionary, kept once a stand-in is added (`stand_in`); until
     /// then the 2002 view answers as `dict`.
     dict_2002: Option<HashMap<i32, Entry2002>>,
+    /// DictIDs a stand-in does not take: Frontiers' record answers in both
+    /// views (`keep_frontiers`).
+    kept: std::collections::HashSet<i32>,
     /// The dictionary lookups answer from.
     view: Cell<Era>,
 }
@@ -153,6 +156,16 @@ impl Library {
     /// The 2002 file standing in for `file`, if one does.
     pub fn stand_in_of(&self, file: usize) -> Option<usize> {
         self.stands_for.iter().position(|&f| f == Some(file))
+    }
+
+    /// `ids` keep their Frontiers records in the 2002 view: no stand-in takes
+    /// them (art whose layout Frontiers' code reads, such as the HUD atlas's
+    /// sheet, whose rects SUPPORT's table names).
+    pub fn keep_frontiers(&mut self, ids: &[i32]) {
+        let new = ids.iter().fold(false, |n, &id| self.kept.insert(id) || n);
+        if new && self.dict_2002.is_some() {
+            self.reregister();
+        }
     }
 
     /// The file `file` stands in for, if it is a stand-in.
@@ -250,7 +263,7 @@ impl Library {
             let Some(d) = &self.dict_2002 else { return };
             let c = &self.files[file].1;
             for (&id, &node) in &c.dict {
-                if d.get(&id).is_some_and(|e| e.rank <= rank) {
+                if d.get(&id).is_some_and(|e| e.rank <= rank) || (stands_for.is_some() && self.kept.contains(&id)) {
                     continue;
                 }
                 let r = match stands_for.and_then(|f| self.files[f].1.dict.get(&id).map(|&n| (f, n))) {

@@ -1767,11 +1767,24 @@ impl App {
     }
 
     /// What is drawn made again in the art `era`, the library's view already
-    /// turned: the creatures as they are next applied (`Play::art_changed`),
-    /// the world (`swap_world_art`); a model viewer's scene at once.
+    /// turned: the creatures as they are next applied, with the HUD's art,
+    /// the rings and the spell effects (`Play::art_changed`), the sky, the
+    /// world (`swap_world_art`); a model viewer's scene at once.
     fn rebuild_art(&mut self, era: esf::Era) {
         if let Some(p) = self.play.as_mut() {
             p.art_changed(era);
+        }
+        // the sky's sprites uploaded again in their places, their textures
+        // the art's now (the weather re-points their layers by DictID)
+        if let (Some(at), Some(g)) = (self.sky_at, self.gfx.as_mut()) {
+            let mut fresh = Vec::new();
+            if crate::sky::upload(&mut g.renderer, &g.device, &g.queue, &self.lib, &mut fresh).is_some() {
+                for (k, m) in fresh.into_iter().enumerate() {
+                    if let Some(slot) = g.models.get_mut(at + k) {
+                        *slot = m;
+                    }
+                }
+            }
         }
         if self.walker.is_some() {
             self.swap_world_art(era);

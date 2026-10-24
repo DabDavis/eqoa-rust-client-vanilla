@@ -320,10 +320,21 @@ pub fn names_of(lib: &Library) -> Vec<String> {
         .collect()
 }
 
+/// Art the 2002 view keeps Frontiers': the HUD atlas's sheet (UI.CSF's
+/// "sheet1"), whose rects SUPPORT's table names. The 2002 sheet is the same
+/// art palette-quantised again (88% of its texels within 8 levels), laid out
+/// otherwise where Frontiers added art (the Alchemist's flask, the keyboard's
+/// help, the DNAS mark): Frontiers' table over it would cut the wrong art.
+pub fn kept() -> Vec<i32> {
+    vec![vi::ui::icon_id("sheet1") as i32]
+}
+
 /// Each of the 2002 disc's containers in place, standing in for the file of
 /// its name: one whose bytes are its namesake's is left out (ITEM.ESF, the
-/// arena, the fonts' Arial: the same on both discs). How many stand in.
+/// arena, the fonts' Arial: the same on both discs), and the art `kept`
+/// names stays Frontiers'. How many stand in.
 pub fn install(lib: &mut Library, art: Vec<(String, Container)>) -> usize {
+    lib.keep_frontiers(&kept());
     let mut n = 0;
     for (name, c) in art {
         let Some(f) = (0..lib.files.len()).find(|&f| lib.stands_for(f).is_none() && lib.files[f].0 == name) else { continue };
