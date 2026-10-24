@@ -10,7 +10,10 @@
 //! it. A SIF DMA is a copy into the IOP's memory.
 //!
 //! Without an audio device (or with `EQOA_AUDIO=0`) a thread runs the driver
-//! on the wall clock instead, so the game sees the same IOP either way.
+//! on the wall clock instead, so the game sees the same IOP either way. The
+//! device is watched (`Watch`): one gone (unplugged, a sleep, the system's
+//! audio restarted) puts the driver on the wall clock while another is
+//! looked for, and the first that plays takes it back where it is.
 //!
 //! The callback mixes in the device's blocks, 25-30 ms apart here (PulseAudio,
 //! measured; 50 now and then), while on the console the IOP and the SPU2 run
@@ -106,6 +109,13 @@ struct Shared {
     /// natively, the output's last callback: when it came, and the driver's
     /// clock at the end of what had been handed to the device then
     handed: Option<(Instant, u64)>,
+    /// natively, when the device last called back (`Watch`: a stream that
+    /// stops calling back is a stream gone)
+    called: Option<Instant>,
+    /// natively, no device takes the driver's frames: the wall clock's
+    /// thread mixes them and drops them (`wall_clock`), from when this began
+    /// and the driver's clock then; a device's first callback ends it
+    wall: Option<(Instant, u64)>,
 }
 
 /// How far `catch_up` mixes past what was last handed to the device (100
@@ -116,7 +126,14 @@ const CATCH_UP_MAX: u64 = 4800;
 
 impl Shared {
     fn new(disc: Box<dyn Disc>) -> Self {
-        Shared { drv: Driver::new(disc), status: [0; 128], pcm: Vec::new(), handed: None }
+        Shared { drv: Driver::new(disc), status: [0; 128], pcm: Vec::new(), handed: None, called: None, wall: None }
+    }
+
+    /// The driver onto the wall clock from `now`: no device takes its frames.
+    fn wall_from(&mut self, now: Instant) {
+        if self.wall.is_none() {
+            self.wall = Some((now, self.drv.now));
+        }
     }
 
     /// The driver mixed up to the output's present: what the device was last
@@ -147,10 +164,142 @@ impl Shared {
     }
 }
 
+/// Natively, while no device takes the driver's frames (`Shared::wall`):
+/// the driver run on the wall clock every 10 ms and its frames dropped, so
+/// the game's sound keeps its clock and comes back where it is. The thread
+/// ends with the `Audio`.
+fn wall_clock(s: Arc<Mutex<Shared>>) {
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_millis(10));
+            if Arc::strong_count(&s) == 1 {
+                return;
+            }
+            let mut g = s.lock().unwrap();
+            let Some((at, from)) = g.wall else { continue };
+            let due = from + (at.elapsed().as_secs_f64() * 48000.0) as u64;
+            let n = due.saturating_sub(g.drv.now);
+            g.pump(n);
+            g.pcm.clear();
+            g.handed = Some((Instant::now(), g.drv.now));
+        }
+    });
+}
+
+/// How long a stream may go without calling back before it counts as gone
+/// (a device's blocks come 25-50 ms apart).
+const STALL: Duration = Duration::from_secs(2);
+/// The waits between looks for an output while there is none: the first,
+/// doubled after each failure up to the last.
+const RETRY_FIRST: Duration = Duration::from_secs(1);
+const RETRY_MAX: Duration = Duration::from_secs(30);
+
+/// Natively, the output watched (`Audio::feed` once a frame): a device gone
+/// takes its stream with it, and the game never asked for another, so the
+/// sound was lost until a restart (F3 crash 20261024-001640's log, a PC put
+/// to sleep: "The requested device is no longer available"; headphones
+/// unplugged on Windows say the same). A stream counts as gone when its
+/// device says so (`StreamError::DeviceNotAvailable`: WASAPI, Core Audio) or
+/// when it has not called back in `STALL` (ALSA reports a lost device as a
+/// backend error, or its thread just stops). Then the driver goes onto the
+/// wall clock and an output is looked for, at once and then after
+/// `RETRY_FIRST`, waits doubling to `RETRY_MAX`; a stream that opens but
+/// never calls back counts as not found. A start with no output looks the
+/// same way. The log says when it stopped, the first failure, and when one
+/// plays again: never once a look.
+struct Watch {
+    /// set by the stream's error callback: its device is gone
+    lost: Arc<AtomicBool>,
+    /// when the stream playing was opened, none playing: None
+    opened: Option<Instant>,
+    /// when to look next, and how long to wait after that look fails
+    retry: (Instant, Duration),
+    /// a stream has played since the start (so one found is one back)
+    ever: bool,
+    /// the stream opened has called back (said once)
+    heard: bool,
+    /// the failures said this time, each once
+    said: Vec<String>,
+    /// the wall clock's thread made
+    walling: bool,
+}
+
+/// What the watch asks of the output this frame (`Watch::step`).
+#[derive(Debug, PartialEq)]
+enum Step {
+    Keep,
+    /// the stream playing is gone (why): dropped, the driver onto the wall
+    /// clock, an output looked for
+    Stopped(&'static str),
+    /// a stream opened has not called back: dropped, a look that failed
+    Silent,
+    /// look for an output now
+    Look,
+    /// a stream opened has called back: it plays (true: one played before)
+    Plays(bool),
+}
+
+impl Watch {
+    /// The output at the start: its stream opened at `now`, or none (the
+    /// first look after `RETRY_FIRST`).
+    fn new(now: Instant, playing: bool) -> Watch {
+        let retry = if playing { (now, RETRY_FIRST) } else { (now + RETRY_FIRST, RETRY_FIRST * 2) };
+        Watch { lost: Arc::new(AtomicBool::new(false)), opened: playing.then_some(now), retry, ever: playing, heard: playing, said: Vec::new(), walling: false }
+    }
+
+    /// This frame's step at `now`, the device's last callback `called`.
+    fn step(&mut self, now: Instant, called: Option<Instant>) -> Step {
+        let Some(opened) = self.opened else {
+            return if now >= self.retry.0 { Step::Look } else { Step::Keep };
+        };
+        // a callback of this stream's
+        let back = called.filter(|c| *c >= opened);
+        let gone = self.lost.swap(false, Ordering::Relaxed);
+        let quiet = now.saturating_duration_since(back.unwrap_or(opened)) >= STALL;
+        if gone || quiet {
+            self.opened = None;
+            if !self.heard {
+                return Step::Silent;
+            }
+            self.heard = false;
+            self.said.clear();
+            self.retry = (now, RETRY_FIRST);
+            return Step::Stopped(if gone { "its device is gone" } else { "it stopped asking for sound" });
+        }
+        if back.is_some() && !self.heard {
+            self.heard = true;
+            self.said.clear();
+            return Step::Plays(std::mem::replace(&mut self.ever, true));
+        }
+        Step::Keep
+    }
+
+    /// A stream opened at `now`, playing once it calls back.
+    fn open(&mut self, now: Instant) {
+        self.opened = Some(now);
+        self.heard = false;
+    }
+
+    /// A look that found nothing (`why`), at `now`: the next one after the
+    /// wait, which doubles; the line to say when this failure is new.
+    fn failed(&mut self, now: Instant, why: &str) -> Option<String> {
+        let wait = self.retry.1;
+        self.retry = (now + wait, (wait * 2).min(RETRY_MAX));
+        if self.said.iter().any(|s| s == why) {
+            return None;
+        }
+        self.said.push(why.to_string());
+        Some(format!("audio: no output yet ({why}): looked for again now and then"))
+    }
+}
+
 pub struct Audio {
     shared: Arc<Mutex<Shared>>,
     _stream: Option<cpal::Stream>,
     pub describe: String,
+    /// natively, the device output watched (`Watch`); none offline, in a
+    /// page, or with `EQOA_AUDIO=0`
+    watch: Option<Watch>,
     #[cfg(target_arch = "wasm32")]
     page: Option<Page>,
 }
@@ -225,39 +374,109 @@ impl Audio {
             shared,
             _stream: stream,
             describe,
+            watch: None,
             #[cfg(target_arch = "wasm32")]
             page: None,
         }
     }
 
-    /// The driver, playing on the default output device.
+    /// The driver, playing on the default output device, watched (`Watch`);
+    /// with none, on the wall clock while one is looked for, and with
+    /// `EQOA_AUDIO=0` on the wall clock for good.
     pub fn open(disc: Box<dyn Disc>) -> Audio {
         let shared = Arc::new(Mutex::new(Shared::new(disc)));
-        let off = std::env::var("EQOA_AUDIO").is_ok_and(|v| v == "0");
-        let stream = if off { Err("EQOA_AUDIO=0".to_string()) } else { Self::stream(shared.clone()) };
-        match stream {
-            Ok((stream, describe)) => Self::with_shared(shared, Some(stream), describe),
+        let now = Instant::now();
+        if std::env::var("EQOA_AUDIO").is_ok_and(|v| v == "0") {
+            shared.lock().unwrap().wall_from(now);
+            wall_clock(shared.clone());
+            return Self::with_shared(shared, None, "no audio output (EQOA_AUDIO=0): the driver runs on the wall clock".into());
+        }
+        let lost = Arc::new(AtomicBool::new(false));
+        let (stream, describe, mut watch) = match Self::stream(shared.clone(), lost.clone()) {
+            Ok((stream, describe)) => (Some(stream), describe, Watch::new(now, true)),
             Err(e) => {
-                let s = shared.clone();
-                std::thread::spawn(move || {
-                    // the wall clock's samples, thrown away
-                    let start = Instant::now();
-                    loop {
-                        std::thread::sleep(Duration::from_millis(10));
-                        let mut g = s.lock().unwrap();
-                        let due = (start.elapsed().as_secs_f64() * 48000.0) as u64;
-                        let n = due.saturating_sub(g.drv.now);
-                        g.pump(n);
-                        g.pcm.clear();
-                        g.handed = Some((Instant::now(), g.drv.now));
-                    }
-                });
-                Self::with_shared(shared, None, format!("no audio output ({e}): the driver runs on the wall clock"))
+                shared.lock().unwrap().wall_from(now);
+                wall_clock(shared.clone());
+                let mut w = Watch::new(now, false);
+                w.walling = true;
+                (None, format!("no audio output ({e}): the driver runs on the wall clock, and an output is looked for now and then"), w)
             }
+        };
+        watch.lost = lost;
+        let mut a = Self::with_shared(shared, stream, describe);
+        a.watch = Some(watch);
+        a
+    }
+
+    /// Natively, the output watched once a frame (`Watch`): a stream gone
+    /// dropped and the driver put on the wall clock, an output looked for
+    /// when one is due, and the log told when it stops, fails or plays.
+    fn watch_output(&mut self) {
+        let Some(w) = self.watch.as_mut() else { return };
+        let now = Instant::now();
+        let called = self.shared.lock().unwrap().called;
+        match w.step(now, called) {
+            Step::Keep => {}
+            Step::Plays(again) => {
+                crate::say(&format!("{}: {}", self.describe, if again { "the sound has its output again" } else { "an output found" }));
+            }
+            Step::Stopped(why) => {
+                self._stream = None;
+                self.shared.lock().unwrap().wall_from(now);
+                if !std::mem::replace(&mut w.walling, true) {
+                    wall_clock(self.shared.clone());
+                }
+                crate::say(&format!("audio: the output stopped ({why}): the game's sound goes on unheard while an output is looked for"));
+            }
+            Step::Silent => {
+                self._stream = None;
+                if let Some(line) = w.failed(now, "an output opened, but asked for no sound") {
+                    crate::say(&line);
+                }
+            }
+            Step::Look => match Self::stream(self.shared.clone(), w.lost.clone()) {
+                Ok((stream, describe)) => {
+                    self._stream = Some(stream);
+                    self.describe = describe;
+                    w.open(now);
+                }
+                Err(e) => {
+                    if let Some(line) = w.failed(now, &e) {
+                        crate::say(&line);
+                    }
+                }
+            },
         }
     }
 
-    fn stream(shared: Arc<Mutex<Shared>>) -> Result<(cpal::Stream, String), String> {
+    /// `EQOA_AUDIO_LOST_TEST=<ms>[,silent]`, natively: that long after the
+    /// output opened, its device taken as gone (as WASAPI and Core Audio say
+    /// it), or with `silent` the stream paused (as an ALSA device lost stops
+    /// calling back).
+    fn lost_test(&mut self) {
+        static DONE: AtomicBool = AtomicBool::new(false);
+        let (Some(w), Some(stream)) = (self.watch.as_ref(), self._stream.as_ref()) else { return };
+        let Ok(spec) = std::env::var("EQOA_AUDIO_LOST_TEST") else { return };
+        let (at, silent) = match spec.split_once(',') {
+            Some((at, how)) => (at, how == "silent"),
+            None => (spec.as_str(), false),
+        };
+        let Some(opened) = w.opened else { return };
+        let Ok(at) = at.parse::<u64>() else { return };
+        if opened.elapsed() < Duration::from_millis(at) || DONE.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        crate::say(&format!("audio: EQOA_AUDIO_LOST_TEST: the output {}", if silent { "paused" } else { "taken as gone" }));
+        if silent {
+            let _ = stream.pause();
+        } else {
+            w.lost.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// A stream on the default output device: SNDDRV mixed on its callback.
+    /// `lost` is set when the device says it is gone.
+    fn stream(shared: Arc<Mutex<Shared>>, lost: Arc<AtomicBool>) -> Result<(cpal::Stream, String), String> {
         let host = cpal::default_host();
         let device = host.default_output_device().ok_or("no output device")?;
         let name = device.name().unwrap_or_default();
@@ -276,10 +495,25 @@ impl Audio {
         // the output's gain (`set_heard`), faded over 10 ms of its frames
         let mut gain = 1.0f32;
         let fade = 1.0 / (rate as f32 * 0.01);
-        let err = |e| eprintln!("audio: {e}");
+        // the device gone (WASAPI, Core Audio): the watch looks for another
+        let err = move || {
+            let lost = lost.clone();
+            move |e: cpal::StreamError| {
+                if matches!(e, cpal::StreamError::DeviceNotAvailable) {
+                    lost.store(true, Ordering::Relaxed);
+                }
+                eprintln!("audio: {e}");
+            }
+        };
         let s = shared.clone();
         let mut fill = move |out: &mut dyn FnMut(usize, f32), frames: usize| {
             let mut g = s.lock().unwrap();
+            // the device takes the driver's frames from the wall clock
+            // (`wall_clock`): what that mixed was dropped
+            if g.wall.take().is_some() {
+                g.pcm.clear();
+            }
+            g.called = Some(Instant::now());
             // enough 48 kHz frames for this buffer, and one past it for the
             // interpolation
             let need = ((phase + frames as f64 * step).ceil() as usize + 2).saturating_sub(g.pcm.len() / 2);
@@ -310,7 +544,7 @@ impl Audio {
                     let n = d.len() / channels;
                     fill(&mut |k, v| d[k] = v, n)
                 },
-                err,
+                err(),
                 None,
             ),
             cpal::SampleFormat::I16 => device.build_output_stream(
@@ -319,7 +553,7 @@ impl Audio {
                     let n = d.len() / channels;
                     fill(&mut |k, v| d[k] = (v * 32767.0) as i16, n)
                 },
-                err,
+                err(),
                 None,
             ),
             f => return Err(format!("sample format {f:?}")),
@@ -347,8 +581,9 @@ impl Audio {
     }
 
     /// Once a frame (`Sound::frame`), and at each animation frame a capped
-    /// page skips (`Sound::feed`). Natively nothing: the device's callback
-    /// pulls. In a page: the music's disc reads started, then the driver
+    /// page skips (`Sound::feed`). Natively the output watched
+    /// (`watch_output`): the device's callback pulls. In a page: the music's
+    /// disc reads started, then the driver
     /// mixed up to the page's audio clock (`web::audio_clock`, 48 kHz frames
     /// played) plus the lead (`lead_for`), and the frames handed to the
     /// AudioWorklet (`web::audio_push`). With no output running it keeps to
@@ -356,6 +591,11 @@ impl Audio {
     /// than the lead (a stall, a hidden page) leaves the output dry for a
     /// moment: the driver is paused for it, so nothing is skipped.
     pub fn feed(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.lost_test();
+            self.watch_output();
+        }
         #[cfg(target_arch = "wasm32")]
         if let Some(p) = self.page.as_mut() {
             (p.fetch)();
@@ -597,5 +837,105 @@ mod tests {
         assert_eq!(lead_for([2000, 1000].into_iter()), 1500 + LEAD_MARGIN);
         assert_eq!(lead_for([0, 0, 0].into_iter()), LEAD_MIN);
         assert!(lead_for(steady.into_iter()) < 4800, "below the old 100 ms floor");
+    }
+
+    fn ms(t: Instant, n: u64) -> Instant {
+        t + Duration::from_millis(n)
+    }
+
+    /// A device that says it is gone takes its stream: dropped at once, an
+    /// output looked for in the same frame, and the one found said to be
+    /// back at its first callback, not before. The control: a stream that
+    /// calls back every 30 ms stays, for a minute of frames.
+    #[test]
+    fn a_device_gone_is_left_for_another() {
+        let t = Instant::now();
+        let mut w = Watch::new(t, true);
+        for n in 0..2000 {
+            assert_eq!(w.step(ms(t, 30 * n + 10), Some(ms(t, 30 * n))), Step::Keep, "playing at {n}");
+        }
+        let now = ms(t, 60_100);
+        w.lost.store(true, Ordering::Relaxed);
+        assert_eq!(w.step(now, Some(ms(t, 60_090))), Step::Stopped("its device is gone"));
+        assert_eq!(w.step(now, Some(ms(t, 60_090))), Step::Look, "looked for at once");
+        w.open(now);
+        assert_eq!(w.step(ms(now, 20), Some(ms(t, 60_090))), Step::Keep, "the old stream's callback is not this one's");
+        assert_eq!(w.step(ms(now, 40), Some(ms(now, 30))), Step::Plays(true), "back");
+        assert_eq!(w.step(ms(now, 70), Some(ms(now, 60))), Step::Keep, "said once");
+    }
+
+    /// A stream that stops calling back (ALSA's lost device) is gone after
+    /// `STALL`, not a frame sooner (the control); its device may not say so.
+    #[test]
+    fn a_stream_that_stops_calling_back_is_gone() {
+        let t = Instant::now();
+        let mut w = Watch::new(t, true);
+        let last = Some(ms(t, 500));
+        assert_eq!(w.step(ms(t, 2499), last), Step::Keep);
+        assert_eq!(w.step(ms(t, 2500), last), Step::Stopped("it stopped asking for sound"));
+        // nor is a fresh stream's silence before its first callback held
+        // against it sooner
+        let now = ms(t, 2500);
+        w.step(now, last);
+        w.open(now);
+        assert_eq!(w.step(ms(now, 1999), last), Step::Keep);
+        assert_eq!(w.step(ms(now, 2000), last), Step::Silent, "it never played: a look that failed, not a stop");
+    }
+
+    /// No output at the start: looked for after a second, then after waits
+    /// doubling to half a minute, each failure said once; a stream that opens
+    /// and never plays fails the same way; the one that plays is "found".
+    #[test]
+    fn looks_for_an_output_back_off() {
+        let t = Instant::now();
+        let mut w = Watch::new(t, false);
+        assert_eq!(w.step(ms(t, 999), None), Step::Keep);
+        let mut now = ms(t, 1000);
+        let mut waits = Vec::new();
+        for n in 0..8 {
+            assert_eq!(w.step(now, None), Step::Look);
+            let said = w.failed(now, "no output device");
+            assert_eq!(said.is_some(), n == 0, "said once ({n})");
+            let next = w.retry.0;
+            waits.push((next - now).as_secs());
+            assert_eq!(w.step(next - Duration::from_millis(1), None), Step::Keep, "not before its time");
+            now = next;
+        }
+        // the start's own failure was the first: a second, then these
+        assert_eq!(waits, [2, 4, 8, 16, 30, 30, 30, 30]);
+        // a new reason is said too
+        assert!(w.failed(now, "the device refused 48 kHz").is_some());
+        // a stream that opens but never calls back
+        let now = w.retry.0;
+        assert_eq!(w.step(now, None), Step::Look);
+        w.open(now);
+        assert_eq!(w.step(ms(now, 2000), None), Step::Silent);
+        assert!(w.failed(ms(now, 2000), "an output opened, but asked for no sound").is_some());
+        // then one that plays: found, never having played
+        let now = w.retry.0;
+        assert_eq!(w.step(now, None), Step::Look);
+        w.open(now);
+        assert_eq!(w.step(ms(now, 50), Some(ms(now, 40))), Step::Plays(false));
+        // and its loss looks again at once, the waits from the start
+        w.lost.store(true, Ordering::Relaxed);
+        assert_eq!(w.step(ms(now, 90), Some(ms(now, 80))), Step::Stopped("its device is gone"));
+        assert_eq!(w.retry, (ms(now, 90), RETRY_FIRST));
+    }
+
+    /// While no device takes the frames the driver keeps to the wall clock,
+    /// from where it was; the control: with the wall clock off it waits.
+    #[test]
+    fn with_no_output_the_driver_keeps_the_wall_clock() {
+        let a = Audio::offline(Box::new(snd::NoDisc));
+        let now = |a: &Audio| a.shared.lock().unwrap().drv.now;
+        a.render(480);
+        wall_clock(a.shared.clone());
+        std::thread::sleep(Duration::from_millis(60));
+        assert_eq!(now(&a), 480, "off: the driver waits");
+        a.shared.lock().unwrap().wall_from(Instant::now());
+        std::thread::sleep(Duration::from_millis(200));
+        let n = now(&a);
+        assert!((480 + 4800..480 + 14400).contains(&n), "about 200 ms of 48 kHz frames on the wall clock ({n})");
+        assert!(a.shared.lock().unwrap().pcm.is_empty(), "dropped, not kept");
     }
 }

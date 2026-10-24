@@ -5,6 +5,14 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-24 · The sound comes back by itself
+- If the sound device goes away while the game runs (headphones unplugged, the
+  computer put to sleep and woken, the system's sound restarted), the game now
+  finds the device that takes its place and the sound comes back by itself,
+  where the game is. Before, the sound stayed off until you restarted the game.
+- A game started with no sound device at all starts its sound once one is
+  plugged in.
+
 ## 2026-10-24 · The game starts again after the computer sleeps
 - If the computer sleeps while the game runs, the graphics card can lose
   everything the game showed on it (on Windows especially). The game used to
