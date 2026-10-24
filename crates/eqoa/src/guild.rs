@@ -189,11 +189,13 @@ fn cmd(sub: u8) -> Writer {
 }
 
 impl Cmds {
-    /// `CanInvite`: 3 not in one, 11 full (128), 5 a plain member.
+    /// `CanInvite`: 3 not in one, 11 full (128, or the server's patch's
+    /// cap: Sandstorm's S2 makes it 255, `s2::Rules::guild_cap`), 5 a plain
+    /// member.
     pub fn can_invite(g: &Guild, me: i32) -> i32 {
         if !g.in_guild {
             3
-        } else if g.count() >= 128 {
+        } else if g.count() >= crate::s2::get().guild_cap {
             11
         } else if g.rank(me) < 1 {
             5
@@ -1006,6 +1008,20 @@ mod tests {
         assert_eq!(Cmds::can_kick(&g, 2, 3), 5);
         assert_eq!(Cmds::can_invite(&g, 2), 5);
         assert_eq!(Cmds::can_invite(&g, 3), 0);
+        // full at 128, or at the server's patch's cap (Sandstorm's S2: 255)
+        let mut big = g.clone();
+        for id in 100..(100 + 124) {
+            big.members.insert(id, Member { id, name: String::new(), class: 0, race: 0, level: 1, rank: 0, online: false });
+        }
+        assert_eq!(big.count(), 128);
+        assert_eq!(Cmds::can_invite(&big, 3), 11, "the control: retail's guild is full");
+        let s2 = || crate::s2::Rules { guild_cap: 255, ..crate::s2::Rules::retail() };
+        assert_eq!(crate::s2::with_rules(s2(), || Cmds::can_invite(&big, 3)), 0);
+        for id in 1000..(1000 + 127) {
+            big.members.insert(id, Member { id, name: String::new(), class: 0, race: 0, level: 1, rank: 0, online: false });
+        }
+        assert_eq!(big.count(), 255);
+        assert_eq!(crate::s2::with_rules(s2(), || Cmds::can_invite(&big, 3)), 11, "full at 255");
         assert_eq!(Cmds::can_lead(&g, 4), 5);
         assert_eq!(Cmds::can_lead(&g, 1), 0);
         assert_eq!(Cmds::can_create(&g, 9999, true, true), 4);
