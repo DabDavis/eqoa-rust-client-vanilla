@@ -5,6 +5,16 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-24 · The weather after a port
+- After a teleport, a coach ride or coming back to life, the sky now turns
+  at once to the sky of where you arrive, as on a PlayStation 2, instead of
+  fading over half a minute. A change of weather the server sent meanwhile
+  waited behind that fade, so a character who travelled a lot could stay a
+  change or more behind one who stood still: two windows side by side could
+  show different weather.
+- A problem report (F3) now says what weather each window shows, so two
+  windows' reports can be compared.
+
 ## 2026-10-24 · Each window opens where you left it, and VSync
 - Each game window now opens as you last had it: its size, where it was on
   your desktop, its monitor, and maximized or full screen (F11). With several

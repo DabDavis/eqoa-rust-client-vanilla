@@ -488,7 +488,15 @@ model; ITEM.ESF, the arena, Arial and the sounds are the same on both discs.
   patches are drawn after the world at the far plane (the game draws them
   before it with Z off), which differs only behind a blended surface.
   `EQOA_WEATHER=t[,fade]` sets the weather in `shot`, `view` and `listen`;
-  the server sets it with 0x00C5 (fade) and 0x00C7 (instant).
+  the server sets it with 0x00C5 (fade) and 0x00C7 (instant), taken in the
+  messages' order with the sky set at once where a port or a dump left the
+  player (`play::Atmos`, `Weather::take`: `Respawn` and `Msg000D` end with
+  `SetSky(m_camera, 1)`; another world's waits until it is entered). Before,
+  only the first frame set the sky at once, and every port faded it over 30 s
+  with the weather held behind it (F3 20261024-090748: two windows sent the
+  same eight changes on Sandstorm, 80 ms apart, took them alike standing
+  still). A problem report gives the atmosphere's state (`Weather::describe`)
+  and each `play: weather` line the server's hour.
 - Baked lighting is drawn for placed actors (a lit actor draws its own copy with
   its colour buffers; LOD sprites draw level 0, which takes the first) and the
   static colour per instance, but not checked against the console yet. The personal light (the lantern, `vi::tod::PersonalLight`,
