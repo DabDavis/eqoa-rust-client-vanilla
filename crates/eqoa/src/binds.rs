@@ -20,9 +20,14 @@
 //! that button as the pad's would (`Alias::Button`). Text typed into an edit
 //! box is never remapped (the viewer does not ask).
 //!
-//! The controller: a permutation of the 16 buttons, the physical button on
-//! each of the game's `VIConsolePad` fields (`remap`, before `VIPad::Read`):
-//! a button moved onto a field another button drove swaps the two. The sticks
+//! The controller: the physical button on each of the game's `VIConsolePad`
+//! fields (`remap`, before `VIPad::Read`): a button moved onto a field another
+//! button drove swaps the two. A row the game has no button for (the client's
+//! keys: the map, F9's art, targets 1-6 and the rest) can be given one too
+//! (F3 20261024-145732 and -164553: the map on R3), which presses that row's
+//! key as the keyboard's would (`PadEdge`, `App::pad_rows`); the field it
+//! drove is left with none, unless the row had a button, which that field
+//! then takes. Every button is in one place, a field's or a row's. The sticks
 //! stay sticks.
 //!
 //! With nothing moved every key is itself and every button its own field
@@ -200,20 +205,34 @@ pub enum Alias {
     Button(u16),
 }
 
+/// A field whose button went to a row of the client's keys (`Binds::button`).
+pub const NO_BUTTON: u8 = 0xFF;
+
 /// The player's bindings.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Binds {
     /// each row's key where the player moved it (by `ROWS`' index; None: its
     /// default)
     keys: Vec<Option<String>>,
-    /// the physical button (a bit index) on each of the game's fields
+    /// the physical button (a bit index) on each of the game's fields, or
+    /// `NO_BUTTON`
     pad: [u8; 16],
+    /// the physical button on each row the game has no button for
+    /// (`takes_button`), by `ROWS`' index
+    rows: Vec<Option<u8>>,
 }
 
 impl Default for Binds {
     fn default() -> Self {
-        Binds { keys: vec![None; ROWS.len()], pad: std::array::from_fn(|i| i as u8) }
+        Binds { keys: vec![None; ROWS.len()], pad: std::array::from_fn(|i| i as u8), rows: vec![None; ROWS.len()] }
     }
+}
+
+/// Whether row `row` can be given a button of its own: a row of the
+/// client's keys, which no field of the game's pad has (the sticks' rows
+/// stay sticks, and a button's row is its field's).
+pub fn takes_button(row: usize) -> bool {
+    ROWS.get(row).is_some_and(|r| r.pad == Pad::None)
 }
 
 /// What moving a row or a field did besides.
@@ -225,6 +244,9 @@ pub enum Moved {
     Freed(Option<String>),
     /// moved, and the row or field that had it took the one it left
     Swapped(usize),
+    /// a button moved, and the row of the client's keys that had it (by
+    /// `ROWS`' index) took the one it left, or none
+    SwappedRow(usize),
 }
 
 impl Binds {
@@ -305,36 +327,88 @@ impl Binds {
         };
     }
 
-    /// The physical button (bit index) on field `field` (bit index).
+    /// The physical button (bit index) on field `field` (bit index), or
+    /// `NO_BUTTON`.
     pub fn button(&self, field: u8) -> u8 {
         self.pad[field as usize]
     }
 
-    /// The field physical button `phys` drives.
-    pub fn field_of(&self, phys: u8) -> u8 {
-        self.pad.iter().position(|&p| p == phys).unwrap_or(phys as usize) as u8
+    /// The field physical button `phys` drives, if a field's.
+    pub fn field_of(&self, phys: u8) -> Option<u8> {
+        self.pad.iter().position(|&p| p == phys).map(|f| f as u8)
     }
 
-    /// Puts physical button `phys` on field `field`; the field it drove
-    /// takes the button `field` had (a swap).
+    /// The physical button on row `row` of the client's keys, if it has one.
+    pub fn row_button(&self, row: usize) -> Option<u8> {
+        self.rows.get(row).copied().flatten()
+    }
+
+    /// The row of the client's keys physical button `phys` presses, if a
+    /// row's.
+    pub fn row_of_button(&self, phys: u8) -> Option<usize> {
+        self.rows.iter().position(|&b| b == Some(phys))
+    }
+
+    /// Puts physical button `phys` on field `field`; the field or the row it
+    /// was on takes the button `field` had (a swap; a row, none if `field`
+    /// had none).
     pub fn bind_button(&mut self, field: u8, phys: u8) -> Moved {
         let (field, phys) = (field as usize & 15, phys & 15);
         let had = self.pad[field];
         if had == phys {
             return Moved::Already;
         }
-        let other = self.field_of(phys) as usize;
         self.pad[field] = phys;
-        self.pad[other] = had;
-        Moved::Swapped(other)
+        if let Some(r) = self.row_of_button(phys) {
+            self.rows[r] = (had != NO_BUTTON).then_some(had);
+            return Moved::SwappedRow(r);
+        }
+        match self.pad.iter().enumerate().position(|(f, &p)| p == phys && f != field) {
+            Some(other) => {
+                self.pad[other] = had;
+                Moved::Swapped(other)
+            }
+            None => Moved::Freed((had != NO_BUTTON).then(|| BUTTONS[had as usize].0.to_string())),
+        }
+    }
+
+    /// Puts physical button `phys` on row `row` of the client's keys
+    /// (`takes_button`): the field it drove takes the button the row had,
+    /// or is left with none (`Swapped`, the field); a row it was on takes
+    /// it, or none (`SwappedRow`).
+    pub fn bind_row_button(&mut self, row: usize, phys: u8) -> Moved {
+        let phys = phys & 15;
+        if !takes_button(row) {
+            return Moved::Already;
+        }
+        let had = self.rows[row];
+        if had == Some(phys) {
+            return Moved::Already;
+        }
+        if let Some(f) = self.field_of(phys) {
+            self.pad[f as usize] = had.unwrap_or(NO_BUTTON);
+            self.rows[row] = Some(phys);
+            return Moved::Swapped(f as usize);
+        }
+        match self.row_of_button(phys) {
+            Some(r) => {
+                self.rows[r] = had;
+                self.rows[row] = Some(phys);
+                Moved::SwappedRow(r)
+            }
+            None => {
+                self.rows[row] = Some(phys);
+                Moved::Freed(had.map(|b| BUTTONS[b as usize].0.to_string()))
+            }
+        }
     }
 
     /// The controllers' buttons (`input::bit`, physical) as the game's
-    /// fields.
+    /// fields; a button on a row of the client's keys is none of them.
     pub fn remap(&self, buttons: u16) -> u16 {
         let mut out = 0;
         for (field, &phys) in self.pad.iter().enumerate() {
-            if buttons & (1 << phys) != 0 {
+            if phys != NO_BUTTON && buttons & (1 << phys) != 0 {
                 out |= 1 << field;
             }
         }
@@ -342,8 +416,12 @@ impl Binds {
     }
 
     /// `keys.opt`: a line for each row moved (`key.<row>=<key>`, an empty
-    /// key for none) and each field on another button
-    /// (`pad.<field>=<button>`).
+    /// key for none), each row of the client's keys given a button
+    /// (`button.<row>=<button>`), and each field on another button
+    /// (`pad.<field>=<button>`), in that order: read back from the defaults
+    /// line by line, the rows' buttons take theirs off the fields first, so
+    /// a field a row took one from is left with none without a line of its
+    /// own (and a file of a client before rows had buttons reads the same).
     pub fn to_text(&self) -> String {
         let mut s = String::new();
         for (r, k) in self.keys.iter().enumerate() {
@@ -351,8 +429,13 @@ impl Binds {
                 s.push_str(&format!("key.{}={k}\n", ROWS[r].id));
             }
         }
+        for (r, b) in self.rows.iter().enumerate() {
+            if let Some(b) = b {
+                s.push_str(&format!("button.{}={}\n", ROWS[r].id, BUTTONS[*b as usize].0));
+            }
+        }
         for (f, &p) in self.pad.iter().enumerate() {
-            if p as usize != f {
+            if p as usize != f && p != NO_BUTTON {
                 s.push_str(&format!("pad.{}={}\n", BUTTONS[f].0, BUTTONS[p as usize].0));
             }
         }
@@ -378,6 +461,10 @@ impl Binds {
                 && let (Some(f), Some(p)) = (button(f), button(v))
             {
                 b.bind_button(f, p);
+            } else if let Some(id) = k.strip_prefix("button.")
+                && let (Some(r), Some(p)) = (row_named(id), button(v))
+            {
+                b.bind_row_button(r, p);
             }
         }
         b
@@ -403,8 +490,15 @@ impl Binds {
                 parts.push(format!("{} on {}", ROWS[r].id, if k.is_empty() { "nothing" } else { k }));
             }
         }
+        for (r, b) in self.rows.iter().enumerate() {
+            if let Some(b) = b {
+                parts.push(format!("{} on button {}", ROWS[r].id, BUTTONS[*b as usize].0));
+            }
+        }
         for (f, &p) in self.pad.iter().enumerate() {
-            if p as usize != f {
+            if p == NO_BUTTON {
+                parts.push(format!("pad {} on nothing", BUTTONS[f].0));
+            } else if p as usize != f {
                 parts.push(format!("pad {} on {}", BUTTONS[f].0, BUTTONS[p as usize].0));
             }
         }
@@ -413,22 +507,37 @@ impl Binds {
 }
 
 /// The controllers' buttons from frame to frame through the bindings: the
-/// buttons they hold as the game's fields (`Binds::remap`), and while the
-/// Controls page waits for a button, the one newly pressed, which the game
-/// then does not see until it is let go (nor any other pressed with it).
-#[derive(Clone, Copy, Debug, Default)]
+/// buttons they hold as the game's fields (`Binds::remap`); a button on a row
+/// of the client's keys pressed and let go as that row's key, let go as the
+/// row it was pressed as; and while the Controls page waits for a button,
+/// the one newly pressed, which the game then does not see until it is let
+/// go (nor any other pressed with it).
+#[derive(Clone, Debug, Default)]
 pub struct PadEdge {
     /// last frame's buttons, as the controllers had them
     last: u16,
     /// the buttons a capture took, held still
     swallow: u16,
+    /// the buttons down as rows' keys: (button, row)
+    rows: Vec<(u8, usize)>,
+}
+
+/// A frame of the controllers' buttons (`PadEdge::frame`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PadFrame {
+    /// the game's fields held
+    pub fields: u16,
+    /// the button a capture took (its bit index)
+    pub took: Option<u8>,
+    /// rows of the client's keys (by `ROWS`' index) pressed (true) or let
+    /// go, in the buttons' order, the let-go first
+    pub rows: Vec<(usize, bool)>,
 }
 
 impl PadEdge {
     /// One frame: `raw` the controllers' buttons, `capturing` whether a
-    /// button is awaited. The game's fields, and the button a capture takes
-    /// (its bit index).
-    pub fn frame(&mut self, raw: u16, capturing: bool, b: &Binds) -> (u16, Option<u8>) {
+    /// button is awaited.
+    pub fn frame(&mut self, raw: u16, capturing: bool, b: &Binds) -> PadFrame {
         let fresh = raw & !self.last;
         self.last = raw;
         let mut took = None;
@@ -437,7 +546,23 @@ impl PadEdge {
             self.swallow |= fresh;
         }
         self.swallow &= raw;
-        (b.remap(raw & !self.swallow), took)
+        let mut rows = Vec::new();
+        self.rows.retain(|&(phys, row)| {
+            let held = raw & (1 << phys) != 0;
+            if !held {
+                rows.push((row, false));
+            }
+            held
+        });
+        for phys in 0..16u8 {
+            if fresh & !self.swallow & (1 << phys) != 0
+                && let Some(row) = b.row_of_button(phys)
+            {
+                self.rows.push((phys, row));
+                rows.push((row, true));
+            }
+        }
+        PadFrame { fields: b.remap(raw & !self.swallow), took, rows }
     }
 }
 
@@ -495,6 +620,14 @@ impl KeyEdge {
     /// Every key let go (the window lost the keys).
     pub fn clear(&mut self) {
         self.pressed.clear();
+    }
+
+    /// Every key still down let go: what each was pressed as, to be let go
+    /// of as that (a key a capture took, nothing), in the keys' order.
+    pub fn let_go(&mut self) -> Vec<Sent> {
+        let mut down: Vec<(String, Option<Sent>)> = self.pressed.drain().collect();
+        down.sort_by(|a, b| a.0.cmp(&b.0));
+        down.into_iter().filter_map(|(_, s)| s).collect()
     }
 }
 
@@ -795,19 +928,158 @@ mod tests {
         let mut b = Binds::default();
         b.bind_button(bit_index(bit::CROSS).unwrap(), bit_index(bit::CIRCLE).unwrap());
         let mut e = PadEdge::default();
-        assert_eq!(e.frame(bit::CIRCLE, false, &b), (bit::CROSS, None), "remapped");
-        assert_eq!(e.frame(0, false, &b), (0, None));
+        let frame = |e: &mut PadEdge, raw, capturing| {
+            let f = e.frame(raw, capturing, &b);
+            assert!(f.rows.is_empty(), "no row has a button");
+            (f.fields, f.took)
+        };
+        assert_eq!(frame(&mut e, bit::CIRCLE, false), (bit::CROSS, None), "remapped");
+        assert_eq!(frame(&mut e, 0, false), (0, None));
         // held from before: not taken
-        e.frame(bit::R1, false, &b);
-        assert_eq!(e.frame(bit::R1, true, &b), (bit::R1, None));
+        frame(&mut e, bit::R1, false);
+        assert_eq!(frame(&mut e, bit::R1, true), (bit::R1, None));
         // pressed while awaited: the capture's
-        assert_eq!(e.frame(bit::R1 | bit::SQUARE, true, &b), (bit::R1, Some(15)));
-        assert_eq!(e.frame(bit::R1 | bit::SQUARE, false, &b), (bit::R1, None), "held: still not the game's");
-        assert_eq!(e.frame(bit::R1, false, &b), (bit::R1, None));
-        assert_eq!(e.frame(bit::R1 | bit::SQUARE, false, &b), (bit::R1 | bit::SQUARE, None), "pressed again: the game's");
+        assert_eq!(frame(&mut e, bit::R1 | bit::SQUARE, true), (bit::R1, Some(15)));
+        assert_eq!(frame(&mut e, bit::R1 | bit::SQUARE, false), (bit::R1, None), "held: still not the game's");
+        assert_eq!(frame(&mut e, bit::R1, false), (bit::R1, None));
+        assert_eq!(frame(&mut e, bit::R1 | bit::SQUARE, false), (bit::R1 | bit::SQUARE, None), "pressed again: the game's");
         // the control
         let mut f = PadEdge::default();
-        assert_eq!(f.frame(bit::SQUARE, false, &b), (bit::SQUARE, None));
+        assert_eq!(frame(&mut f, bit::SQUARE, false), (bit::SQUARE, None));
+    }
+
+    /// F3 20261024-145732: the map on R3. A button put on a row of the
+    /// client's keys leaves the field it drove with none; one the row had
+    /// goes to that field; a button taken from another such row leaves it
+    /// the one this row had, or none; a field given a row's button gives the
+    /// row its own. The rows the game has a button or a stick for take none.
+    /// The control: the same moves on fields alone keep every field a button.
+    #[test]
+    fn a_button_on_a_row_of_the_clients_keys() {
+        let (r3, l3, cross) = (bit_index(bit::R3).unwrap(), bit_index(bit::L3).unwrap(), bit_index(bit::CROSS).unwrap());
+        let (map, art, chat) = (row_named("map").unwrap(), row_named("art").unwrap(), row_named("chat").unwrap());
+        let mut b = Binds::default();
+        assert_eq!(b.bind_row_button(map, r3), Moved::Swapped(r3 as usize));
+        assert_eq!((b.row_button(map), b.button(r3), b.field_of(r3), b.row_of_button(r3)), (Some(r3), NO_BUTTON, None, Some(map)));
+        assert_eq!(b.remap(bit::R3), 0, "R3 is the map's: no field of the game's");
+        assert_eq!(b.remap(bit::CROSS | bit::R3), bit::CROSS);
+        assert_eq!(ROWS[chat].pad, Pad::Button(bit::R3), "the chat line's field is the one left with none");
+        // the map moved to L3: R3 goes back to the field L3 leaves (a swap)
+        assert_eq!(b.bind_row_button(map, l3), Moved::Swapped(l3 as usize));
+        assert_eq!((b.button(l3), b.row_button(map)), (r3, Some(l3)));
+        assert_eq!(b.remap(bit::R3), bit::L3, "the physical R3 is autorun's now");
+        // the art takes L3 off the map, which had none to give
+        assert_eq!(b.bind_row_button(art, l3), Moved::SwappedRow(map));
+        assert_eq!((b.row_button(art), b.row_button(map)), (Some(l3), None));
+        // the field takes its button back off the row: the row gets the
+        // field's (R3), as a swap
+        assert_eq!(b.bind_button(l3, l3), Moved::SwappedRow(art));
+        assert_eq!((b.button(l3), b.row_button(art)), (l3, Some(r3)));
+        // ✕ onto R3, the art's: the art takes ✕'s own
+        assert_eq!(b.bind_button(cross, r3), Moved::SwappedRow(art));
+        assert_eq!((b.button(cross), b.row_button(art), b.remap(bit::CROSS)), (r3, Some(cross), 0));
+        // onto itself, and rows that take none
+        assert_eq!(b.bind_row_button(art, cross), Moved::Already);
+        for id in ["attack", "walk_forward", "clear_target"] {
+            assert_eq!(b.bind_row_button(row_named(id).unwrap(), l3), Moved::Already, "{id}");
+        }
+        assert!(ROWS.iter().enumerate().filter(|(r, _)| takes_button(*r)).all(|(_, r)| r.pad == Pad::None && !r.keys.is_empty()));
+        everything_once(&b);
+        // the control: fields alone stay a permutation, none left without
+        let mut c = Binds::default();
+        c.bind_button(cross, r3);
+        c.bind_button(l3, cross);
+        assert!((0..16).all(|f| c.button(f) != NO_BUTTON));
+        everything_once(&c);
+    }
+
+    /// Every physical button in exactly one place, a field's or a row's.
+    fn everything_once(b: &Binds) {
+        let mut seen: Vec<u8> = (0..16).map(|f| b.button(f)).filter(|&p| p != NO_BUTTON).collect();
+        seen.extend((0..ROWS.len()).filter_map(|r| b.row_button(r)));
+        seen.sort_unstable();
+        assert_eq!(seen, (0..16).collect::<Vec<u8>>(), "{b:?}");
+    }
+
+    /// Any sequence of moves keeps every button in one place, and keys.opt
+    /// reads back the layout it was written from, every step of the way. The
+    /// control: a keys.opt without its `button.` lines reads back another.
+    #[test]
+    fn any_moves_keep_one_place_each_and_round_trip() {
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = |n: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % n as u64) as usize
+        };
+        let rows: Vec<usize> = (0..ROWS.len()).filter(|&r| takes_button(r)).collect();
+        let mut b = Binds::default();
+        let mut lossy = 0;
+        for _ in 0..3000 {
+            let phys = next(16) as u8;
+            if next(2) == 0 {
+                b.bind_button(next(16) as u8, phys);
+            } else {
+                b.bind_row_button(rows[next(rows.len())], phys);
+            }
+            everything_once(&b);
+            let t = b.to_text();
+            assert_eq!(Binds::from_text(&t), b, "{t}");
+            let without: String = t.lines().filter(|l| !l.starts_with("button.")).map(|l| format!("{l}\n")).collect();
+            lossy += (Binds::from_text(&without) != b) as usize;
+        }
+        assert!(lossy > 1000, "the control: {lossy}");
+    }
+
+    /// A button on a row presses the row's key and lets it go as the row it
+    /// was pressed as, though the row moved meanwhile; one a capture takes
+    /// presses nothing. The control: the same presses with nothing moved
+    /// are the game's fields, no row's.
+    #[test]
+    fn a_rows_button_presses_its_key() {
+        let (r3, l3) = (bit_index(bit::R3).unwrap(), bit_index(bit::L3).unwrap());
+        let (map, art) = (row_named("map").unwrap(), row_named("art").unwrap());
+        let mut b = Binds::default();
+        b.bind_row_button(map, r3);
+        let mut e = PadEdge::default();
+        let f = e.frame(bit::R3 | bit::CROSS, false, &b);
+        assert_eq!((f.fields, f.took, f.rows), (bit::CROSS, None, vec![(map, true)]));
+        assert_eq!(e.frame(bit::R3, false, &b).rows, vec![], "held: once");
+        // moved while held (the map to L3, the art onto R3): let go as the map
+        b.bind_row_button(map, l3);
+        b.bind_row_button(art, r3);
+        assert_eq!(e.frame(0, false, &b).rows, vec![(map, false)]);
+        assert_eq!(e.frame(bit::R3 | bit::L3, false, &b).rows, vec![(map, true), (art, true)], "in the buttons' order");
+        assert_eq!(e.frame(0, false, &b).rows, vec![(map, false), (art, false)]);
+        // a capture's press is the capture's
+        let f = e.frame(bit::R3, true, &b);
+        assert_eq!((f.took, f.rows), (Some(r3), vec![]));
+        assert_eq!(e.frame(0, false, &b).rows, vec![], "nothing to let go");
+        // the control
+        let mut c = PadEdge::default();
+        let f = c.frame(bit::R3 | bit::L3, false, &Binds::default());
+        assert_eq!((f.fields, f.rows), (bit::R3 | bit::L3, vec![]));
+    }
+
+    /// keys.opt from a client before rows had buttons reads as it did; a
+    /// row's button is written and read back, the field it took from with
+    /// none and no line of its own; a button for a row the game has a
+    /// button for, or a name not a button's, is left out.
+    #[test]
+    fn keys_opt_keeps_the_rows_buttons() {
+        let old = Binds::from_text("key.use=q\npad.circle=cross\npad.cross=circle\n");
+        let mut want = Binds::default();
+        want.bind_key(row_named("use").unwrap(), "q");
+        want.bind_button(bit_index(bit::CROSS).unwrap(), bit_index(bit::CIRCLE).unwrap());
+        assert_eq!(old, want);
+        assert_eq!(old.to_text(), "key.talk=e\nkey.use=q\npad.circle=cross\npad.cross=circle\n", "written as before");
+        let mut b = Binds::default();
+        b.bind_row_button(row_named("map").unwrap(), bit_index(bit::R3).unwrap());
+        assert_eq!(b.to_text(), "button.map=r3\n");
+        assert_eq!(Binds::from_text("button.map=r3\n"), b);
+        assert_eq!(b.describe(), "map on button r3, pad r3 on nothing");
+        assert!(Binds::from_text("button.attack=r3\nbutton.map=nope\nbutton.nope=r3\n").is_default());
     }
 
     /// The keyboard's edge: a moved key is its row's default key at the
@@ -847,6 +1119,31 @@ mod tests {
             assert_eq!(c.key(k, true, false, false, &Binds::default()), key(k));
             assert_eq!(c.key(k, false, false, false, &Binds::default()), key(k));
         }
+    }
+
+    /// The window losing the keys (`App::let_go_keys`): every key still down
+    /// lets go as what it was pressed as (Tab as itself, a moved key as its
+    /// row's, a key on △'s row as △), once; a key already let go, and one a
+    /// capture took, are not. The control: `clear` alone forgets them, and
+    /// nothing is let go of.
+    #[test]
+    fn keys_still_down_let_go_as_pressed() {
+        let mut b = Binds::default();
+        b.bind_key(row_named("walk_forward").unwrap(), "up");
+        b.bind_key(row_named("clear_target").unwrap(), "b");
+        let mut e = KeyEdge::default();
+        for k in ["tab", "up", "b", "space"] {
+            e.key(k, true, false, false, &b);
+        }
+        e.key("space", false, false, false, &b);
+        e.hold_back("f2");
+        assert_eq!(e.let_go(), vec![Sent::Button(bit::TRIANGLE), Sent::Key("tab".into()), Sent::Key("w".into())]);
+        assert_eq!(e.let_go(), vec![], "once");
+        assert_eq!(e.key("tab", false, false, false, &b), Some(Sent::Key("tab".into())), "a late release is the key's own");
+        let mut c = KeyEdge::default();
+        c.key("tab", true, false, false, &b);
+        c.clear();
+        assert_eq!(c.let_go(), vec![], "the control");
     }
 
     /// keys.opt: what was moved, read back the same; nothing moved is

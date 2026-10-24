@@ -441,11 +441,15 @@ pub fn shot_with(
                 // the script stands for a controller: the player's own
                 // buttons (`binds`), and a capture's, as the window's
                 let capturing = play.as_ref().is_some_and(|p| p.capturing().is_some());
-                let (fields, took) = crate::settings::with_binds(|b| pad_edge.frame(report.buttons, capturing, b));
-                report.buttons = fields;
-                if let (Some(i), Some(p)) = (took, play.as_mut()) {
+                let f = crate::settings::with_binds(|b| pad_edge.frame(report.buttons, capturing, b));
+                report.buttons = f.fields;
+                if let (Some(i), Some(p)) = (f.took, play.as_mut()) {
                     eprintln!("pad: button {} taken by the Controls page", crate::binds::BUTTONS[i as usize].0);
                     p.capture_button(i);
+                }
+                // a button on a row of the client's keys: a window's (`App::pad_rows`)
+                for (row, down) in f.rows {
+                    eprintln!("pad: {}'s button {} (a window's key; not in a playshot)", crate::binds::ROWS[row].id, if down { "down" } else { "up" });
                 }
                 report.merge(&touch.report());
                 let keys = console.poll(report, true, false, dead);
@@ -1266,12 +1270,43 @@ fn is_art_key(k: &Key) -> bool {
     }
 }
 
+/// A test script's times (`EQOA_COVERED`, `EQOA_UNFOCUS`):
+/// `<from>-<to>;...` in ms on the window's clock.
+fn ranges_from_env(var: &str) -> Vec<(i64, i64)> {
+    std::env::var(var)
+        .map(|v| v.split(';').filter_map(|t| t.split_once('-').and_then(|(a, b)| Some((a.trim().parse().ok()?, b.trim().parse().ok()?)))).collect())
+        .unwrap_or_default()
+}
+
 fn touch_first() -> bool {
     #[cfg(target_arch = "wasm32")]
     if crate::web::touch_first() {
         return true;
     }
     std::env::var("EQOA_TOUCH").is_ok_and(|v| v == "1")
+}
+
+/// A key as the keyboard's dispatch takes it (`App::keyboard`): what it reads
+/// of winit's `KeyEvent`, so the client can send it a key of its own, which
+/// winit gives no way to make.
+#[derive(Clone, Debug, PartialEq)]
+struct KeyIn {
+    logical_key: Key,
+    state: ElementState,
+    repeat: bool,
+    text: Option<winit::keyboard::SmolStr>,
+}
+
+impl KeyIn {
+    fn of(e: &KeyEvent) -> KeyIn {
+        KeyIn { logical_key: e.logical_key.clone(), state: e.state, repeat: e.repeat, text: e.text.clone() }
+    }
+
+    /// The key `binds::name_of` names `name`, pressed or let go by the client
+    /// itself: no repeat, no text.
+    fn named(name: &str, down: bool) -> KeyIn {
+        KeyIn { logical_key: crate::binds::key_of(name), state: if down { ElementState::Pressed } else { ElementState::Released }, repeat: false, text: None }
+    }
 }
 
 /// A key's name in the held set (`App::held`): the cursor block's and
@@ -1580,6 +1615,14 @@ struct App {
     /// The window's size and place on the desktop, kept between runs
     /// (`winplace`).
     winplace: crate::winplace::Keeper,
+    /// The pregame's keys down (the game's codes), let go of when the window
+    /// loses the keys (`let_go_keys`).
+    host_keys: Vec<i32>,
+    /// `EQOA_UNFOCUS=<from>-<to>;...`: when a test's script takes the focus
+    /// away as Wayland does, with no release for a key down (ms on `clock`);
+    /// whether it has it now.
+    unfocus_script: Vec<(i64, i64)>,
+    unfocused: bool,
     /// The art last applied (`apply_era`), against which the art in effect
     /// is seen to move (`poll_era`).
     art_drawn: esf::Era,
@@ -1675,9 +1718,10 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         era_loading: None,
         art_script: std::env::var("EQOA_ART_AT").map(|v| v.split(';').filter_map(|t| t.trim().parse().ok()).collect()).unwrap_or_default(),
         hidden_until: None,
-        covered_script: std::env::var("EQOA_COVERED")
-            .map(|v| v.split(';').filter_map(|t| t.split_once('-').and_then(|(a, b)| Some((a.trim().parse().ok()?, b.trim().parse().ok()?)))).collect())
-            .unwrap_or_default(),
+        covered_script: ranges_from_env("EQOA_COVERED"),
+        host_keys: Vec::new(),
+        unfocus_script: ranges_from_env("EQOA_UNFOCUS"),
+        unfocused: false,
         art_drawn,
         art_chosen: crate::settings::art(),
         winplace: Default::default(),
@@ -2061,10 +2105,67 @@ impl App {
         crate::update::offer_drag(p, self.clock.elapsed().as_millis() as i64)
     }
 
+    /// The window lost the keys: a release that may never come is made here.
+    /// Controller Focus's Window reads the controllers only in front.
+    fn focus_lost(&mut self, el: &ActiveEventLoop) {
+        self.pads.focused = false;
+        self.let_go_keys(el);
+        self.mouse.release_all();
+        self.grab_pointer(false);
+        if let Some(p) = self.play.as_mut() {
+            p.map.let_go();
+        }
+    }
+
+    /// Every key the keyboard has down let go, as its release would be: a
+    /// window that has lost the keys is sent no release (Wayland sends none
+    /// at all; X11 and Windows one for a key still down as it goes, and
+    /// none while a dialog of the client's has them). So a hold would hold
+    /// on for good (F3 20261024-085139: the aim, Tab held as the window
+    /// went, still up when it came back): the aim or its wait (Tab, `), the
+    /// chat box's history (C), the target's window (Q), the attack (Space), a
+    /// walk or a turn, a key moved onto a button's row, and the pregame's.
+    fn let_go_keys(&mut self, el: &ActiveEventLoop) {
+        use crate::binds::Sent;
+        let aspect = self.gfx.as_ref().map_or(4.0 / 3.0, |g| g.config.width as f32 / g.config.height as f32);
+        for sent in self.keys_edge.let_go() {
+            match sent {
+                Sent::Key(to) => self.keyboard(el, KeyIn::named(&to, false)),
+                Sent::Button(b) => {
+                    if let (Some(p), Some(w), Some(k)) = (self.play.as_mut(), self.walker.as_mut(), crate::binds::pad_key(b)) {
+                        p.set_key(k, false, w, aspect);
+                    }
+                }
+            }
+        }
+        for k in std::mem::take(&mut self.host_keys) {
+            if let Some(h) = self.host.as_mut() {
+                h.key(k, false);
+            }
+        }
+        self.held.clear();
+    }
+
+    /// `EQOA_UNFOCUS`: the focus taken away and given back by a test's script
+    /// at its times, the way Wayland takes it (no release sent).
+    fn unfocus_script(&mut self, el: &ActiveEventLoop) {
+        let now = self.clock.elapsed().as_millis() as i64;
+        let away = self.unfocus_script.iter().any(|&(a, b)| (a..b).contains(&now));
+        if away != self.unfocused {
+            self.unfocused = away;
+            crate::say(&format!("focus: {} (EQOA_UNFOCUS)", if away { "lost" } else { "back" }));
+            if away {
+                self.focus_lost(el);
+            } else {
+                self.pads.focused = true;
+            }
+        }
+    }
+
     /// The pad, once a frame: every source as libpad's one port
     /// (`VIPad::Read`), its mode to the client (`UpdateControls`' opening),
     /// and `PadKeys`' keys to the window that has them (`SetKey`).
-    fn poll_pad(&mut self) {
+    fn poll_pad(&mut self, el: &ActiveEventLoop) {
         let (mut report, mut connected, motors) = self.pads.poll();
         // a controller in use: the touch screen's pad goes
         if report.buttons != 0 || report.sticks.iter().any(|v| v.abs() > 0.5) {
@@ -2080,9 +2181,9 @@ impl App {
         // the game sees nothing of it. The touch screen's pad draws the
         // game's glyphs, and stays as it is.
         let capturing = self.play.as_ref().is_some_and(|p| p.capturing().is_some());
-        let (fields, took) = crate::settings::with_binds(|b| self.pad_edge.frame(report.buttons, capturing, b));
-        report.buttons = fields;
-        if let (Some(i), Some(p)) = (took, self.play.as_mut()) {
+        let f = crate::settings::with_binds(|b| self.pad_edge.frame(report.buttons, capturing, b));
+        report.buttons = f.fields;
+        if let (Some(i), Some(p)) = (f.took, self.play.as_mut()) {
             p.capture_button(i);
         }
         if self.touch.used {
@@ -2105,6 +2206,23 @@ impl App {
             for (k, down) in keys {
                 p.set_key(k, down, w, aspect);
             }
+        }
+        self.pad_rows(el, &f.rows);
+    }
+
+    /// A controller's buttons on rows of the client's keys (`binds`, the map
+    /// on R3): each row's key, pressed and let go as the keyboard's is, to
+    /// the dispatch below the player's keys (`keyboard`), as a controller's.
+    fn pad_rows(&mut self, el: &ActiveEventLoop, rows: &[(usize, bool)]) {
+        for &(row, down) in rows {
+            let Some(&key) = crate::binds::ROWS.get(row).and_then(|r| r.keys.first()) else { continue };
+            if crate::input::trace() {
+                crate::say(&format!("[pad] {}'s button {}: {key}", crate::binds::ROWS[row].id, if down { "down" } else { "up" }));
+            }
+            if let Some(p) = self.play.as_mut() {
+                p.keyboard = false;
+            }
+            self.keyboard(el, KeyIn::named(key, down));
         }
     }
 
@@ -2354,10 +2472,15 @@ impl App {
         }
         // the player's own buttons, and a capture's for the title's Controls page
         let capturing = self.host.as_ref().is_some_and(|h| h.pre.setup.capturing().is_some());
-        let (fields, took) = crate::settings::with_binds(|b| self.pad_edge.frame(report.buttons, capturing, b));
-        report.buttons = fields;
-        if let (Some(i), Some(h)) = (took, self.host.as_mut()) {
+        let f = crate::settings::with_binds(|b| self.pad_edge.frame(report.buttons, capturing, b));
+        report.buttons = f.fields;
+        if let (Some(i), Some(h)) = (f.took, self.host.as_mut()) {
             h.pre.setup.capture_button(i);
+        }
+        // a button on F9's row: the art swapped, as F9 does before the world
+        // (the other rows of the client's keys are play's)
+        if f.rows.iter().any(|&(row, down)| down && crate::binds::ROWS[row].id == "art") {
+            self.toggle_era();
         }
         if self.touch.used {
             report.merge(&self.touch.report());
@@ -2541,6 +2664,733 @@ impl App {
         }
         self.load();
     }
+
+    /// The keyboard's dispatch below the player's own keys (`binds`): a key as
+    /// the window's event gives it, or one the client sends itself (a
+    /// release the system never sent, `let_go_keys`; a controller's button on
+    /// a key's row, `pad_rows`), to the window that has the keys, else to
+    /// play.
+    fn keyboard(&mut self, el: &ActiveEventLoop, event: KeyIn) {
+        // a key let go is let go of, whichever window takes the
+        // event: an arrow held to walk and let go over the start
+        // menu would walk on after it
+        if event.state == ElementState::Released
+            && let Some(n) = held_name(&event.logical_key)
+        {
+            self.held.remove(&n);
+        }
+        // F9 (`era`): the art swapped, whatever window is up
+        if event.state == ElementState::Pressed && !event.repeat && event.logical_key == Key::Named(NamedKey::F9) {
+            self.toggle_era();
+            return;
+        }
+        // The map (`map.rs`), while it is up, takes every key.
+        if let Some(p) = self.play.as_mut().filter(|p| p.map.open) {
+            let name = match &event.logical_key {
+                Key::Named(NamedKey::Escape) => Some("escape".to_string()),
+                Key::Named(NamedKey::Backspace) => Some("backspace".to_string()),
+                Key::Named(NamedKey::Enter) => Some("enter".to_string()),
+                Key::Named(NamedKey::Space) => Some("space".to_string()),
+                k => held_name(k),
+            };
+            if let Some(n) = name {
+                p.map.keyboard_key(&n, event.state == ElementState::Pressed, event.repeat);
+            }
+            return;
+        }
+        // The edit box (mode 2) takes the keyboard: characters type,
+        // Backspace, Escape (cancel), Enter (done), the arrows move the
+        // caret (with the soft keyboard showing, its cursor; Insert
+        // presses its key).
+        if let Some(p) = self.play.as_mut()
+            && p.mode == 2
+        {
+            let down = event.state == ElementState::Pressed;
+            let soft = !p.edit_pad_only();
+            let named = match &event.logical_key {
+                Key::Named(NamedKey::Backspace) => Some(8),
+                Key::Named(NamedKey::Escape) => Some(27),
+                Key::Named(NamedKey::Enter) => Some(13),
+                Key::Named(NamedKey::ArrowLeft) => Some(if soft { 136 } else { 17 }),
+                Key::Named(NamedKey::ArrowRight) => Some(if soft { 137 } else { 18 }),
+                Key::Named(NamedKey::ArrowUp) => Some(if soft { 138 } else { 19 }),
+                Key::Named(NamedKey::ArrowDown) => Some(if soft { 139 } else { 20 }),
+                Key::Named(NamedKey::Insert) => Some(134),
+                _ => None,
+            };
+            if let Some(k) = named {
+                p.edit_key(k, down);
+            } else if down && let Some(t) = &event.text {
+                for c in t.chars().filter(|c| c.is_ascii() && !c.is_ascii_control()) {
+                    p.edit_key(c as i32, true);
+                }
+            }
+            return;
+        }
+        // The quick-chat menus (mode 30): the arrows are the game's
+        // cursor keys (17-20), its directions, held to edit (a key's
+        // repeat would start the hold again, so it is dropped); Enter
+        // (13) is the chat line over a menu and X in the editor, as
+        // is E; Escape or Backspace (27) and Z (122) close a menu or
+        // back out of the editor. The editor's edit box takes the
+        // keyboard as the edit box does.
+        if let Some(p) = self.play.as_mut()
+            && p.typing.is_none()
+            && p.mode == 30
+        {
+            let down = event.state == ElementState::Pressed;
+            if p.quick_typing() {
+                let soft = !p.edit_pad_only();
+                let named = match &event.logical_key {
+                    Key::Named(NamedKey::Backspace) => Some(8),
+                    Key::Named(NamedKey::Escape) => Some(27),
+                    Key::Named(NamedKey::Enter) => Some(13),
+                    Key::Named(NamedKey::ArrowLeft) => Some(if soft { 136 } else { 17 }),
+                    Key::Named(NamedKey::ArrowRight) => Some(if soft { 137 } else { 18 }),
+                    Key::Named(NamedKey::ArrowUp) => Some(if soft { 138 } else { 19 }),
+                    Key::Named(NamedKey::ArrowDown) => Some(if soft { 139 } else { 20 }),
+                    Key::Named(NamedKey::Insert) => Some(134),
+                    _ => None,
+                };
+                if let Some(k) = named {
+                    p.quick_key(k, down);
+                } else if down && let Some(t) = &event.text {
+                    for c in t.chars().filter(|c| c.is_ascii() && !c.is_ascii_control()) {
+                        p.quick_key(c as i32, true);
+                    }
+                }
+                return;
+            }
+            let k = match &event.logical_key {
+                Key::Named(NamedKey::ArrowUp) => Some(19),
+                Key::Named(NamedKey::ArrowLeft) => Some(17),
+                Key::Named(NamedKey::ArrowRight) => Some(18),
+                Key::Named(NamedKey::ArrowDown) => Some(20),
+                Key::Named(NamedKey::Enter) => Some(13),
+                Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(134),
+                Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(27),
+                Key::Character(c) if c.eq_ignore_ascii_case("z") => Some(122),
+                _ => None,
+            };
+            if let Some(k) = k {
+                if !(down && event.repeat) {
+                    p.quick_key(k, down);
+                }
+                return;
+            }
+        }
+        // A server's player search (`searchwnd`), while it is up: the
+        // arrows, Enter or E (X: Search, a tell), Escape or Backspace
+        // (it closes), Q (square: an invite), ` and Tab (L1 and R1:
+        // the column sorted by). Every other key goes to it too, for
+        // nothing, as S2 takes `VIWndGame`'s keys.
+        if let Some(p) = self.play.as_mut()
+            && p.typing.is_none()
+            && p.search_open()
+        {
+            use crate::startmenu::keys as K;
+            let down = event.state == ElementState::Pressed;
+            let k = match &event.logical_key {
+                Key::Named(NamedKey::ArrowUp) => Some(K::UP),
+                Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
+                Key::Named(NamedKey::ArrowLeft) => Some(K::LEFT),
+                Key::Named(NamedKey::ArrowRight) => Some(K::RIGHT),
+                Key::Named(NamedKey::Enter) => Some(K::CROSS),
+                Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
+                Key::Character(c) if c.eq_ignore_ascii_case("q") => Some(133),
+                Key::Character(c) if c.as_str() == "`" || c.as_str() == "~" => Some(140),
+                Key::Named(NamedKey::Tab) => Some(142),
+                Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
+                _ => None,
+            };
+            if let Some(k) = k
+                && !(down && event.repeat)
+            {
+                p.search_key(k, down);
+            }
+            return;
+        }
+        // The bank (mode 11): the arrows, Enter or E (X), Escape
+        // (triangle); the auction form's editor takes the keyboard.
+        if let Some(p) = self.play.as_mut()
+            && p.typing.is_none()
+            && p.bank_owns()
+        {
+            let down = event.state == ElementState::Pressed;
+            if p.bank_typing() {
+                let named = match &event.logical_key {
+                    Key::Named(NamedKey::Backspace) => Some(8),
+                    Key::Named(NamedKey::Escape) => Some(27),
+                    Key::Named(NamedKey::Enter) => Some(13),
+                    Key::Named(NamedKey::ArrowLeft) => Some(17),
+                    Key::Named(NamedKey::ArrowRight) => Some(18),
+                    _ => None,
+                };
+                if let Some(k) = named {
+                    p.bank_key(k, down);
+                } else if down && let Some(t) = &event.text {
+                    for c in t.chars().filter(|c| c.is_ascii() && !c.is_ascii_control()) {
+                        p.bank_key(c as i32, true);
+                    }
+                }
+                return;
+            }
+            use crate::startmenu::keys as K;
+            let k = match &event.logical_key {
+                Key::Named(NamedKey::ArrowUp) => Some(K::UP),
+                Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
+                Key::Named(NamedKey::ArrowLeft) => Some(K::LEFT),
+                Key::Named(NamedKey::ArrowRight) => Some(K::RIGHT),
+                Key::Named(NamedKey::Enter) => Some(K::CROSS),
+                Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
+                Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
+                _ => None,
+            };
+            if let Some(k) = k
+                && !(down && event.repeat)
+            {
+                p.bank_key(k, down);
+            }
+            return;
+        }
+        // The corpse, merchant and trade windows (modes 1, 10, 15,
+        // 16): the arrows, Enter or E (X), Escape (triangle), Q
+        // (accept a trade), Space (the trade's chat line, which then
+        // takes the keyboard as the edit box does).
+        if let Some(p) = self.play.as_mut()
+            && p.typing.is_none()
+            && p.npcw_owns()
+        {
+            let down = event.state == ElementState::Pressed;
+            if p.npcw_typing() {
+                let named = match &event.logical_key {
+                    Key::Named(NamedKey::Backspace) => Some(8),
+                    Key::Named(NamedKey::Escape) => Some(27),
+                    Key::Named(NamedKey::Enter) => Some(13),
+                    Key::Named(NamedKey::ArrowLeft) => Some(17),
+                    Key::Named(NamedKey::ArrowRight) => Some(18),
+                    _ => None,
+                };
+                if let Some(k) = named {
+                    p.npcw_key(k, down);
+                } else if down && let Some(t) = &event.text {
+                    for c in t.chars().filter(|c| c.is_ascii() && !c.is_ascii_control()) {
+                        p.npcw_key(c as i32, true);
+                    }
+                }
+                return;
+            }
+            use crate::startmenu::keys as K;
+            let k = match &event.logical_key {
+                Key::Named(NamedKey::ArrowUp) => Some(K::UP),
+                Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
+                Key::Named(NamedKey::ArrowLeft) => Some(K::LEFT),
+                Key::Named(NamedKey::ArrowRight) => Some(K::RIGHT),
+                Key::Named(NamedKey::Enter) => Some(K::CROSS),
+                Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
+                Key::Character(c) if c.eq_ignore_ascii_case("q") => Some(113),
+                Key::Named(NamedKey::Space) => Some(32),
+                Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
+                _ => None,
+            };
+            if let Some(k) = k
+                && !(down && event.repeat)
+            {
+                p.npcw_key(k, down);
+            }
+            return;
+        }
+        // The blacksmith and the customer-service windows (modes 19,
+        // 31, 32): the arrows, Enter or E (X), Escape (triangle), Q
+        // (square: the inbox again); while the text's editor is up
+        // it takes the keyboard (Enter a newline, Tab done).
+        if let Some(p) = self.play.as_mut()
+            && p.typing.is_none()
+            && p.support_owns()
+        {
+            let down = event.state == ElementState::Pressed;
+            if p.support_typing() {
+                let named = match &event.logical_key {
+                    Key::Named(NamedKey::Backspace) => Some(8),
+                    Key::Named(NamedKey::Escape) => Some(27),
+                    Key::Named(NamedKey::Enter) => Some(13),
+                    Key::Named(NamedKey::Tab) => Some(143),
+                    Key::Named(NamedKey::ArrowLeft) => Some(17),
+                    Key::Named(NamedKey::ArrowRight) => Some(18),
+                    Key::Named(NamedKey::ArrowUp) => Some(19),
+                    Key::Named(NamedKey::ArrowDown) => Some(20),
+                    _ => None,
+                };
+                if let Some(k) = named {
+                    p.support_key(k, down);
+                } else if down && let Some(t) = &event.text {
+                    for c in t.chars().filter(|c| c.is_ascii() && !c.is_ascii_control()) {
+                        p.support_key(c as i32, true);
+                    }
+                }
+                return;
+            }
+            use crate::startmenu::keys as K;
+            let k = match &event.logical_key {
+                Key::Named(NamedKey::ArrowUp) => Some(K::UP),
+                Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
+                Key::Named(NamedKey::ArrowLeft) => Some(K::LEFT),
+                Key::Named(NamedKey::ArrowRight) => Some(K::RIGHT),
+                Key::Named(NamedKey::Enter) => Some(K::CROSS),
+                Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
+                Key::Character(c) if c.eq_ignore_ascii_case("q") => Some(133),
+                Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
+                _ => None,
+            };
+            if let Some(k) = k
+                && !(down && event.repeat)
+            {
+                p.support_key(k, down);
+            }
+            return;
+        }
+        // The mail and tell windows (modes 23, 24, 28, 29, and the buddy
+        // list's compose): the arrows, Enter or E (X), Escape
+        // (triangle), Q (square: the inbox again); while a field's
+        // editor is up it takes the keyboard (Enter a newline in the
+        // body, Tab done).
+        if let Some(p) = self.play.as_mut()
+            && p.typing.is_none()
+            && p.mail_owns()
+        {
+            let down = event.state == ElementState::Pressed;
+            if p.mail_typing() {
+                let named = match &event.logical_key {
+                    Key::Named(NamedKey::Backspace) => Some(8),
+                    Key::Named(NamedKey::Escape) => Some(27),
+                    Key::Named(NamedKey::Enter) => Some(13),
+                    Key::Named(NamedKey::Tab) => Some(143),
+                    Key::Named(NamedKey::ArrowLeft) => Some(17),
+                    Key::Named(NamedKey::ArrowRight) => Some(18),
+                    Key::Named(NamedKey::ArrowUp) => Some(19),
+                    Key::Named(NamedKey::ArrowDown) => Some(20),
+                    _ => None,
+                };
+                if let Some(k) = named {
+                    p.mail_key(k, down);
+                } else if down && let Some(t) = &event.text {
+                    for c in t.chars().filter(|c| c.is_ascii() && !c.is_ascii_control()) {
+                        p.mail_key(c as i32, true);
+                    }
+                }
+                return;
+            }
+            use crate::startmenu::keys as K;
+            let k = match &event.logical_key {
+                Key::Named(NamedKey::ArrowUp) => Some(K::UP),
+                Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
+                Key::Named(NamedKey::ArrowLeft) => Some(K::LEFT),
+                Key::Named(NamedKey::ArrowRight) => Some(K::RIGHT),
+                Key::Named(NamedKey::Enter) => Some(K::CROSS),
+                Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
+                Key::Character(c) if c.eq_ignore_ascii_case("q") => Some(133),
+                Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
+                _ => None,
+            };
+            if let Some(k) = k
+                && !(down && event.repeat)
+            {
+                p.mail_key(k, down);
+            }
+            return;
+        }
+        // The start menu (mode 13) takes the arrows, Enter or E (X) and
+        // Escape (back), down and up (its auto-repeat); Escape in play
+        // opens it (`OnKeyDown` 27).
+        if let Some(p) = self.play.as_mut()
+            && p.typing.is_none()
+            && p.start.is_some()
+        {
+            use crate::startmenu::keys as K;
+            let down = event.state == ElementState::Pressed;
+            if p.mode == 13 {
+                let k = match &event.logical_key {
+                    Key::Named(NamedKey::ArrowUp) => Some(K::UP),
+                    Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
+                    Key::Named(NamedKey::ArrowLeft) => Some(K::LEFT),
+                    Key::Named(NamedKey::ArrowRight) => Some(K::RIGHT),
+                    Key::Named(NamedKey::Enter) => Some(K::CROSS),
+                    Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
+                    Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
+                    _ => None,
+                };
+                if let Some(k) = k
+                    && !(down && event.repeat)
+                {
+                    p.start_key(k, down);
+                }
+                return;
+            }
+            // the spell book (mode 5): its arrows include the tabs
+            if p.mode == 5 {
+                let k = match &event.logical_key {
+                    Key::Named(NamedKey::ArrowUp) => Some(K::UP),
+                    Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
+                    Key::Named(NamedKey::ArrowLeft) => Some(136),
+                    Key::Named(NamedKey::ArrowRight) => Some(137),
+                    Key::Named(NamedKey::Enter) => Some(K::CROSS),
+                    Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
+                    Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
+                    _ => None,
+                };
+                if let Some(k) = k
+                    && !(down && event.repeat)
+                {
+                    p.book_key(k, down);
+                }
+                return;
+            }
+            // the who list (mode 35): Q asks again, C (the windows'
+            // ○) sorts by the next column
+            if p.mode == 35 {
+                let k = match &event.logical_key {
+                    Key::Named(NamedKey::ArrowUp) => Some(K::UP),
+                    Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
+                    Key::Named(NamedKey::Enter) => Some(K::CROSS),
+                    Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
+                    Key::Character(c) if c.eq_ignore_ascii_case("q") => Some(113),
+                    Key::Character(c) if c.eq_ignore_ascii_case("c") => Some(135),
+                    Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
+                    _ => None,
+                };
+                if let Some(k) = k
+                    && !(down && event.repeat)
+                {
+                    p.who_key(k, down);
+                }
+                return;
+            }
+            // the character windows (the quest journal, the trainer,
+            // class mastery, factions): the arrows, Enter or E, Escape
+            if p.char_window() {
+                let k = match &event.logical_key {
+                    Key::Named(NamedKey::ArrowUp) => Some(K::UP),
+                    Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
+                    Key::Named(NamedKey::ArrowLeft) => Some(136),
+                    Key::Named(NamedKey::ArrowRight) => Some(137),
+                    Key::Named(NamedKey::Enter) => Some(K::CROSS),
+                    Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
+                    Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
+                    // square (Class Mastery's points) and R1 (its other list)
+                    Key::Character(c) if c.eq_ignore_ascii_case("q") => Some(133),
+                    // circle (the factions' next page)
+                    Key::Character(c) if c.eq_ignore_ascii_case("c") => Some(135),
+                    Key::Named(NamedKey::Tab) => Some(142),
+                    _ => None,
+                };
+                if let Some(k) = k
+                    && !(down && event.repeat)
+                {
+                    p.char_key(k, down);
+                }
+                return;
+            }
+            // the options, buddy and ignore lists and the guild's
+            // roster (modes 34, 17/18, 26, 20/21): arrows, Enter or
+            // E, Escape; C (the windows' ○) the roster's sort
+            if p.panel_up() {
+                let k = match &event.logical_key {
+                    Key::Named(NamedKey::ArrowUp) => Some(K::UP),
+                    Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
+                    Key::Named(NamedKey::ArrowLeft) => Some(K::LEFT),
+                    Key::Named(NamedKey::ArrowRight) => Some(K::RIGHT),
+                    Key::Named(NamedKey::Enter) => Some(K::CROSS),
+                    Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
+                    Key::Character(c) if c.eq_ignore_ascii_case("c") => Some(135),
+                    Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
+                    _ => None,
+                };
+                if let Some(k) = k
+                    && !(down && event.repeat)
+                {
+                    p.panel_key(k, down);
+                }
+                return;
+            }
+            if p.mode == 0 && down && event.logical_key == Key::Named(NamedKey::Escape) {
+                p.open_start_menu(true);
+                return;
+            }
+        }
+        // The game's keys (`VIWndGame::OnKeyDown`): Enter opens the
+        // edit box R3 opens, `/` one begun with it, R one to `/reply`,
+        // T one to `/tell` (`Play::chat_key`). Before the HUD is up
+        // (no SUPPORT yet) a plain line stands in: keys type into it,
+        // Enter sends it (`ChatLine`) and Escape drops it.
+        if let Some(p) = self.play.as_mut()
+            && event.state == ElementState::Pressed
+        {
+            let open = |p: &mut crate::play::Play, held: &mut HashSet<String>, s: &str| {
+                held.clear();
+                if p.hud_ready() {
+                    p.chat_key(s, s.is_empty() || s == "/");
+                } else {
+                    p.typing = Some(s.to_string());
+                }
+            };
+            // The manual camera: the chat line's keys end it first
+            // (`ResetView`, `OnKeyDown` 13, 47, 82, 84), then open it
+            if p.mode == 38 && p.typing.is_none() {
+                let chat = match &event.logical_key {
+                    Key::Named(NamedKey::Enter) => true,
+                    Key::Character(c) => c.as_str() == "/" || c.eq_ignore_ascii_case("t") || (c.eq_ignore_ascii_case("r") && !p.reply_name.is_empty()),
+                    _ => false,
+                };
+                if chat && let Some(w) = self.walker.as_mut() {
+                    p.reset_view(w);
+                }
+            }
+            // A dialog up takes the arrows, Enter and Escape.
+            if p.typing.is_none() && p.mode != 0 {
+                use crate::dialog::Key as D;
+                let k = match &event.logical_key {
+                    Key::Named(NamedKey::ArrowUp) => Some(D::Up),
+                    Key::Named(NamedKey::ArrowDown) => Some(D::Down),
+                    Key::Named(NamedKey::Enter) => Some(D::Enter),
+                    Key::Named(NamedKey::Escape) => Some(D::Escape),
+                    Key::Named(NamedKey::ArrowLeft) => Some(D::Left),
+                    Key::Named(NamedKey::ArrowRight) => Some(D::Right),
+                    _ => None,
+                };
+                if let Some(k) = k
+                    && p.dialog_key(k)
+                {
+                    return;
+                }
+            }
+            match (&mut p.typing, &event.logical_key) {
+                (None, Key::Named(NamedKey::Enter)) => {
+                    open(p, &mut self.held, "");
+                    return;
+                }
+                // Q: InteractWithTarget.
+                (None, Key::Character(c)) if p.mode == 0 && c.eq_ignore_ascii_case("q") => {
+                    p.interact_with_target();
+                    return;
+                }
+                // ` and ~ (96, 126): L1's cycle, the player, the
+                // group, the pet (`CycleTarget(1)`), and held, the
+                // manual camera (`Play::target_key`); a key's repeat
+                // is nothing (the PS2's keyboard has none, so a key
+                // held is one press)
+                (None, Key::Character(c)) if p.mode == 0 && (c.as_str() == "`" || c.as_str() == "~") => {
+                    if !event.repeat
+                        && let (Some(w), Some(g)) = (self.walker.as_ref(), self.gfx.as_ref())
+                    {
+                        let (proj, v) = w.view(g.config.width as f32 / g.config.height as f32);
+                        let dir = Vec3::from(w.eye.direction.to_array());
+                        p.target_key(true, w.eye_position(), dir, proj * v);
+                    }
+                    return;
+                }
+                // Z (90, 122): the quick-chat menus, as L2.
+                (None, Key::Character(c)) if p.mode == 0 && c.eq_ignore_ascii_case("z") => {
+                    p.open_quick_chat();
+                    return;
+                }
+                // F1: the Options window's Controls page (the client's
+                // own; F1 makes no code in the game's keyboard table).
+                (None, Key::Named(NamedKey::F1)) if p.mode == 0 && !event.repeat => {
+                    p.open_controls();
+                    return;
+                }
+                // M: the map (the client's own; free in the game's
+                // keyboard table, `map.rs`; dead, it closes again).
+                (None, Key::Character(c)) if p.mode == 0 && c.eq_ignore_ascii_case("m") && !event.repeat => {
+                    p.map.show();
+                    return;
+                }
+                // X (88, 120): autorun (`ToggleP74`), as L3.
+                (None, Key::Character(c)) if p.mode == 0 && c.eq_ignore_ascii_case("x") => {
+                    p.toggle_autorun();
+                    return;
+                }
+                // 1 to 6: `SelectTarget`, the player, the group's
+                // others, the pet.
+                // (`OnKeyDown` takes them in the manual camera too)
+                (None, Key::Character(c)) if (p.mode == 0 || p.mode == 38) && matches!(c.as_str(), "1" | "2" | "3" | "4" | "5" | "6") => {
+                    p.select_target(c.as_bytes()[0] as i32 - 48);
+                    return;
+                }
+                // P: InitCameraStyle (first person and back), in
+                // play only (`OnKeyDown` 80 asks for mode 0).
+                (None, Key::Character(c)) if p.mode == 0 && c.eq_ignore_ascii_case("p") => {
+                    if let Some(w) = self.walker.as_mut() {
+                        p.camera_style_key(w);
+                    }
+                    return;
+                }
+                (None, Key::Character(c)) if c.as_str() == "/" => {
+                    open(p, &mut self.held, "/");
+                    return;
+                }
+                (None, Key::Character(c)) if c.eq_ignore_ascii_case("r") && !p.reply_name.is_empty() => {
+                    open(p, &mut self.held, "/reply ");
+                    return;
+                }
+                (None, Key::Character(c)) if c.eq_ignore_ascii_case("t") => {
+                    open(p, &mut self.held, "/tell ");
+                    return;
+                }
+                (Some(t), Key::Named(NamedKey::Enter)) => {
+                    let line = std::mem::take(t);
+                    p.typing = None;
+                    if !line.is_empty() {
+                        p.chat_line(&line);
+                    }
+                    return;
+                }
+                (Some(_), Key::Named(NamedKey::Escape)) => {
+                    p.typing = None;
+                    return;
+                }
+                (Some(t), Key::Named(NamedKey::Backspace)) => {
+                    t.pop();
+                    return;
+                }
+                (Some(t), _) => {
+                    if let Some(s) = &event.text {
+                        t.push_str(s);
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
+        if self.play.as_ref().is_some_and(|p| p.typing.is_some()) {
+            return;
+        }
+        // C (67, 99) held: the chat box's history, as R2 holds it
+        // (mode 33), its up and down the arrows (19, 20); let go,
+        // play again (`OnKeyDown`/`OnKeyUp` 67, `VIWndChat`).
+        if let Some(p) = self.play.as_mut()
+            && (p.mode == 0 || p.mode == 33)
+        {
+            let down = event.state == ElementState::Pressed;
+            let k = match &event.logical_key {
+                Key::Character(c) if c.eq_ignore_ascii_case("c") => Some(99),
+                Key::Named(NamedKey::ArrowUp) if p.mode == 33 => Some(19),
+                Key::Named(NamedKey::ArrowDown) if p.mode == 33 => Some(20),
+                _ => None,
+            };
+            if let Some(k) = k
+                && !(down && event.repeat)
+            {
+                p.chat_history_key(k, down);
+                return;
+            }
+        }
+        // Q released: the target's info window closes (`OnKeyUp` 81).
+        if let (Some(p), Key::Character(c)) = (self.play.as_mut(), &event.logical_key)
+            && c.eq_ignore_ascii_case("q")
+            && event.state == ElementState::Released
+        {
+            p.info_up = false;
+            return;
+        }
+        // Space: attack, held (`ToggleAutoAttack` / `MaybeStopAutoAttack`).
+        if let (Some(p), Key::Named(NamedKey::Space)) = (self.play.as_mut(), &event.logical_key) {
+            if event.state == ElementState::Pressed && !event.repeat && p.mode == 0 {
+                p.attack_press();
+            } else if event.state == ElementState::Released {
+                p.attack_release();
+            }
+            return;
+        }
+        // The HUD's quick menus in play on the arrows, the d-pad
+        // (`VIWndHUDMenu`: up and down the selection, left and right
+        // the menu), and E uses it (as circle). The game's keyboard
+        // has them on W/S and A/D and walks on the arrows; here WASD
+        // walks (`controls`), the user's choice.
+        if let Some(p) = self.play.as_mut()
+            && (p.mode == 0 || p.mode == 38)
+        {
+            use crate::hudmenu::Key as H;
+            let k = match &event.logical_key {
+                Key::Named(NamedKey::ArrowUp) => Some(H::Up),
+                Key::Named(NamedKey::ArrowDown) => Some(H::Down),
+                Key::Named(NamedKey::ArrowLeft) => Some(H::Left),
+                Key::Named(NamedKey::ArrowRight) => Some(H::Right),
+                Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(H::Use),
+                _ => None,
+            };
+            if let Some(k) = k {
+                if event.state == ElementState::Pressed {
+                    p.hud_key(k);
+                }
+                return;
+            }
+        }
+        // F5-F8: the start menu's group page (not ported yet): invite
+        // the target, remove it, disband, leave.
+        if event.state == ElementState::Pressed
+            && let Some(p) = self.play.as_mut()
+            && p.mode == 0
+        {
+            let action = match &event.logical_key {
+                Key::Named(NamedKey::F5) => Some(0x0701_0000),
+                Key::Named(NamedKey::F6) => Some(0x0704_0000),
+                Key::Named(NamedKey::F7) => Some(0x0705_0000),
+                Key::Named(NamedKey::F8) => Some(0x0706_0000),
+                _ => None,
+            };
+            if let Some(a) = action {
+                p.group_action(a);
+                return;
+            }
+        }
+        // Tab: the next target (`CycleTarget`), and held, the manual
+        // camera (`Play::target_key`; its repeat is nothing, as `).
+        if event.state == ElementState::Pressed
+            && event.logical_key == Key::Named(NamedKey::Tab)
+            && let (Some(p), Some(w), Some(g)) = (self.play.as_mut(), self.walker.as_ref(), self.gfx.as_ref())
+            && p.mode == 0
+        {
+            if !event.repeat {
+                let (proj, v) = w.view(g.config.width as f32 / g.config.height as f32);
+                let dir = Vec3::from(w.eye.direction.to_array());
+                p.target_key(false, w.eye_position(), dir, proj * v);
+            }
+            return;
+        }
+        // Tab, ` or ~ let go (`OnKeyUp` 9, 96, 126): the manual camera
+        // ended, or the hold given up
+        if event.state == ElementState::Released
+            && (event.logical_key == Key::Named(NamedKey::Tab) || matches!(&event.logical_key, Key::Character(c) if c.as_str() == "`" || c.as_str() == "~"))
+            && let (Some(p), Some(w)) = (self.play.as_mut(), self.walker.as_mut())
+        {
+            p.target_key_up(w);
+            return;
+        }
+        let name = held_name(&event.logical_key);
+        if event.state == ElementState::Pressed {
+            match event.logical_key {
+                // the model viewer's and a walk's way out; in the game a key
+                // nothing above took is nothing (Escape while the aim or the
+                // chat box's history is up closed the game)
+                Key::Named(NamedKey::Escape) if self.play.is_none() => el.exit(),
+                Key::Named(NamedKey::ArrowRight) if self.walker.is_none() => self.step(1),
+                Key::Named(NamedKey::ArrowLeft) if self.walker.is_none() => self.step(-1),
+                _ => {}
+            }
+            if let Some(n) = name {
+                if self.held.is_empty() {
+                    self.last = Instant::now();
+                }
+                self.held.insert(n);
+            }
+        } else if let Some(n) = name {
+            self.held.remove(&n);
+        }
+        if let Some(g) = &self.gfx {
+            g.window.request_redraw();
+        }
+    }
 }
 
 impl ApplicationHandler for App {
@@ -2715,6 +3565,10 @@ impl ApplicationHandler for App {
                 Some(shared) => self.back_to_pregame(shared),
                 None => el.exit(),
             },
+            // A key already down as the window comes to the front (winit's
+            // synthetic press, on X11 and Windows; Alt+Tab's Tab among them):
+            // nothing until it is pressed here. Its release comes as any.
+            WindowEvent::KeyboardInput { event, is_synthetic: true, .. } if event.state == ElementState::Pressed => {}
             WindowEvent::Resized(s) if s.width > 0 && s.height > 0 => {
                 let Some(g) = &mut self.gfx else { return };
                 let Some(surface) = &g.surface else { return };
@@ -2768,9 +3622,9 @@ impl ApplicationHandler for App {
                         }
                     } else if !event.repeat && (self.host.as_ref().is_some_and(|h| h.ui_parts().is_some()) || self.play.as_ref().is_some_and(|p| p.ui_parts().is_some())) {
                         crate::report::open();
-                        // what was held is let go: the game would not see it go
-                        self.held.clear();
-                        self.keys_edge.clear();
+                        // what was held is let go: the dialog takes the
+                        // releases, so the game would not see them go
+                        self.let_go_keys(el);
                         self.grab_pointer(false);
                     }
                 }
@@ -2836,6 +3690,10 @@ impl ApplicationHandler for App {
                     if !event.repeat || typing {
                         self.host.as_mut().unwrap().key(k, down);
                     }
+                    self.host_keys.retain(|&h| h != k);
+                    if down {
+                        self.host_keys.push(k);
+                    }
                 }
             }
             WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } if self.host.is_some() => {
@@ -2885,13 +3743,8 @@ impl ApplicationHandler for App {
                         let typing = self.play.as_mut().is_some_and(|p| p.keyboard_typing());
                         let down = event.state == ElementState::Pressed;
                         match crate::settings::with_binds(|b| self.keys_edge.key(&name, down, event.repeat, typing, b)) {
-                            Some(Sent::Key(to)) if to == name => event,
-                            Some(Sent::Key(to)) => {
-                                let mut e = event.clone();
-                                e.logical_key = crate::binds::key_of(&to);
-                                e.text = None;
-                                e
-                            }
+                            Some(Sent::Key(to)) if to == name => KeyIn::of(&event),
+                            Some(Sent::Key(to)) => KeyIn { logical_key: crate::binds::key_of(&to), text: None, ..KeyIn::of(&event) },
                             Some(Sent::Button(b)) => {
                                 let aspect = self.gfx.as_ref().map_or(4.0 / 3.0, |g| g.config.width as f32 / g.config.height as f32);
                                 if !event.repeat
@@ -2905,724 +3758,9 @@ impl ApplicationHandler for App {
                             None => return,
                         }
                     }
-                    None => event,
+                    None => KeyIn::of(&event),
                 };
-                // a key let go is let go of, whichever window takes the
-                // event: an arrow held to walk and let go over the start
-                // menu would walk on after it
-                if event.state == ElementState::Released
-                    && let Some(n) = held_name(&event.logical_key)
-                {
-                    self.held.remove(&n);
-                }
-                // F9 (`era`): the art swapped, whatever window is up
-                if event.state == ElementState::Pressed && !event.repeat && event.logical_key == Key::Named(NamedKey::F9) {
-                    self.toggle_era();
-                    return;
-                }
-                // The map (`map.rs`), while it is up, takes every key.
-                if let Some(p) = self.play.as_mut().filter(|p| p.map.open) {
-                    let name = match &event.logical_key {
-                        Key::Named(NamedKey::Escape) => Some("escape".to_string()),
-                        Key::Named(NamedKey::Backspace) => Some("backspace".to_string()),
-                        Key::Named(NamedKey::Enter) => Some("enter".to_string()),
-                        Key::Named(NamedKey::Space) => Some("space".to_string()),
-                        k => held_name(k),
-                    };
-                    if let Some(n) = name {
-                        p.map.keyboard_key(&n, event.state == ElementState::Pressed, event.repeat);
-                    }
-                    return;
-                }
-                // The edit box (mode 2) takes the keyboard: characters type,
-                // Backspace, Escape (cancel), Enter (done), the arrows move the
-                // caret (with the soft keyboard showing, its cursor; Insert
-                // presses its key).
-                if let Some(p) = self.play.as_mut()
-                    && p.mode == 2
-                {
-                    let down = event.state == ElementState::Pressed;
-                    let soft = !p.edit_pad_only();
-                    let named = match &event.logical_key {
-                        Key::Named(NamedKey::Backspace) => Some(8),
-                        Key::Named(NamedKey::Escape) => Some(27),
-                        Key::Named(NamedKey::Enter) => Some(13),
-                        Key::Named(NamedKey::ArrowLeft) => Some(if soft { 136 } else { 17 }),
-                        Key::Named(NamedKey::ArrowRight) => Some(if soft { 137 } else { 18 }),
-                        Key::Named(NamedKey::ArrowUp) => Some(if soft { 138 } else { 19 }),
-                        Key::Named(NamedKey::ArrowDown) => Some(if soft { 139 } else { 20 }),
-                        Key::Named(NamedKey::Insert) => Some(134),
-                        _ => None,
-                    };
-                    if let Some(k) = named {
-                        p.edit_key(k, down);
-                    } else if down && let Some(t) = &event.text {
-                        for c in t.chars().filter(|c| c.is_ascii() && !c.is_ascii_control()) {
-                            p.edit_key(c as i32, true);
-                        }
-                    }
-                    return;
-                }
-                // The quick-chat menus (mode 30): the arrows are the game's
-                // cursor keys (17-20), its directions, held to edit (a key's
-                // repeat would start the hold again, so it is dropped); Enter
-                // (13) is the chat line over a menu and X in the editor, as
-                // is E; Escape or Backspace (27) and Z (122) close a menu or
-                // back out of the editor. The editor's edit box takes the
-                // keyboard as the edit box does.
-                if let Some(p) = self.play.as_mut()
-                    && p.typing.is_none()
-                    && p.mode == 30
-                {
-                    let down = event.state == ElementState::Pressed;
-                    if p.quick_typing() {
-                        let soft = !p.edit_pad_only();
-                        let named = match &event.logical_key {
-                            Key::Named(NamedKey::Backspace) => Some(8),
-                            Key::Named(NamedKey::Escape) => Some(27),
-                            Key::Named(NamedKey::Enter) => Some(13),
-                            Key::Named(NamedKey::ArrowLeft) => Some(if soft { 136 } else { 17 }),
-                            Key::Named(NamedKey::ArrowRight) => Some(if soft { 137 } else { 18 }),
-                            Key::Named(NamedKey::ArrowUp) => Some(if soft { 138 } else { 19 }),
-                            Key::Named(NamedKey::ArrowDown) => Some(if soft { 139 } else { 20 }),
-                            Key::Named(NamedKey::Insert) => Some(134),
-                            _ => None,
-                        };
-                        if let Some(k) = named {
-                            p.quick_key(k, down);
-                        } else if down && let Some(t) = &event.text {
-                            for c in t.chars().filter(|c| c.is_ascii() && !c.is_ascii_control()) {
-                                p.quick_key(c as i32, true);
-                            }
-                        }
-                        return;
-                    }
-                    let k = match &event.logical_key {
-                        Key::Named(NamedKey::ArrowUp) => Some(19),
-                        Key::Named(NamedKey::ArrowLeft) => Some(17),
-                        Key::Named(NamedKey::ArrowRight) => Some(18),
-                        Key::Named(NamedKey::ArrowDown) => Some(20),
-                        Key::Named(NamedKey::Enter) => Some(13),
-                        Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(134),
-                        Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(27),
-                        Key::Character(c) if c.eq_ignore_ascii_case("z") => Some(122),
-                        _ => None,
-                    };
-                    if let Some(k) = k {
-                        if !(down && event.repeat) {
-                            p.quick_key(k, down);
-                        }
-                        return;
-                    }
-                }
-                // A server's player search (`searchwnd`), while it is up: the
-                // arrows, Enter or E (X: Search, a tell), Escape or Backspace
-                // (it closes), Q (square: an invite), ` and Tab (L1 and R1:
-                // the column sorted by). Every other key goes to it too, for
-                // nothing, as S2 takes `VIWndGame`'s keys.
-                if let Some(p) = self.play.as_mut()
-                    && p.typing.is_none()
-                    && p.search_open()
-                {
-                    use crate::startmenu::keys as K;
-                    let down = event.state == ElementState::Pressed;
-                    let k = match &event.logical_key {
-                        Key::Named(NamedKey::ArrowUp) => Some(K::UP),
-                        Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
-                        Key::Named(NamedKey::ArrowLeft) => Some(K::LEFT),
-                        Key::Named(NamedKey::ArrowRight) => Some(K::RIGHT),
-                        Key::Named(NamedKey::Enter) => Some(K::CROSS),
-                        Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
-                        Key::Character(c) if c.eq_ignore_ascii_case("q") => Some(133),
-                        Key::Character(c) if c.as_str() == "`" || c.as_str() == "~" => Some(140),
-                        Key::Named(NamedKey::Tab) => Some(142),
-                        Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
-                        _ => None,
-                    };
-                    if let Some(k) = k
-                        && !(down && event.repeat)
-                    {
-                        p.search_key(k, down);
-                    }
-                    return;
-                }
-                // The bank (mode 11): the arrows, Enter or E (X), Escape
-                // (triangle); the auction form's editor takes the keyboard.
-                if let Some(p) = self.play.as_mut()
-                    && p.typing.is_none()
-                    && p.bank_owns()
-                {
-                    let down = event.state == ElementState::Pressed;
-                    if p.bank_typing() {
-                        let named = match &event.logical_key {
-                            Key::Named(NamedKey::Backspace) => Some(8),
-                            Key::Named(NamedKey::Escape) => Some(27),
-                            Key::Named(NamedKey::Enter) => Some(13),
-                            Key::Named(NamedKey::ArrowLeft) => Some(17),
-                            Key::Named(NamedKey::ArrowRight) => Some(18),
-                            _ => None,
-                        };
-                        if let Some(k) = named {
-                            p.bank_key(k, down);
-                        } else if down && let Some(t) = &event.text {
-                            for c in t.chars().filter(|c| c.is_ascii() && !c.is_ascii_control()) {
-                                p.bank_key(c as i32, true);
-                            }
-                        }
-                        return;
-                    }
-                    use crate::startmenu::keys as K;
-                    let k = match &event.logical_key {
-                        Key::Named(NamedKey::ArrowUp) => Some(K::UP),
-                        Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
-                        Key::Named(NamedKey::ArrowLeft) => Some(K::LEFT),
-                        Key::Named(NamedKey::ArrowRight) => Some(K::RIGHT),
-                        Key::Named(NamedKey::Enter) => Some(K::CROSS),
-                        Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
-                        Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
-                        _ => None,
-                    };
-                    if let Some(k) = k
-                        && !(down && event.repeat)
-                    {
-                        p.bank_key(k, down);
-                    }
-                    return;
-                }
-                // The corpse, merchant and trade windows (modes 1, 10, 15,
-                // 16): the arrows, Enter or E (X), Escape (triangle), Q
-                // (accept a trade), Space (the trade's chat line, which then
-                // takes the keyboard as the edit box does).
-                if let Some(p) = self.play.as_mut()
-                    && p.typing.is_none()
-                    && p.npcw_owns()
-                {
-                    let down = event.state == ElementState::Pressed;
-                    if p.npcw_typing() {
-                        let named = match &event.logical_key {
-                            Key::Named(NamedKey::Backspace) => Some(8),
-                            Key::Named(NamedKey::Escape) => Some(27),
-                            Key::Named(NamedKey::Enter) => Some(13),
-                            Key::Named(NamedKey::ArrowLeft) => Some(17),
-                            Key::Named(NamedKey::ArrowRight) => Some(18),
-                            _ => None,
-                        };
-                        if let Some(k) = named {
-                            p.npcw_key(k, down);
-                        } else if down && let Some(t) = &event.text {
-                            for c in t.chars().filter(|c| c.is_ascii() && !c.is_ascii_control()) {
-                                p.npcw_key(c as i32, true);
-                            }
-                        }
-                        return;
-                    }
-                    use crate::startmenu::keys as K;
-                    let k = match &event.logical_key {
-                        Key::Named(NamedKey::ArrowUp) => Some(K::UP),
-                        Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
-                        Key::Named(NamedKey::ArrowLeft) => Some(K::LEFT),
-                        Key::Named(NamedKey::ArrowRight) => Some(K::RIGHT),
-                        Key::Named(NamedKey::Enter) => Some(K::CROSS),
-                        Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
-                        Key::Character(c) if c.eq_ignore_ascii_case("q") => Some(113),
-                        Key::Named(NamedKey::Space) => Some(32),
-                        Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
-                        _ => None,
-                    };
-                    if let Some(k) = k
-                        && !(down && event.repeat)
-                    {
-                        p.npcw_key(k, down);
-                    }
-                    return;
-                }
-                // The blacksmith and the customer-service windows (modes 19,
-                // 31, 32): the arrows, Enter or E (X), Escape (triangle), Q
-                // (square: the inbox again); while the text's editor is up
-                // it takes the keyboard (Enter a newline, Tab done).
-                if let Some(p) = self.play.as_mut()
-                    && p.typing.is_none()
-                    && p.support_owns()
-                {
-                    let down = event.state == ElementState::Pressed;
-                    if p.support_typing() {
-                        let named = match &event.logical_key {
-                            Key::Named(NamedKey::Backspace) => Some(8),
-                            Key::Named(NamedKey::Escape) => Some(27),
-                            Key::Named(NamedKey::Enter) => Some(13),
-                            Key::Named(NamedKey::Tab) => Some(143),
-                            Key::Named(NamedKey::ArrowLeft) => Some(17),
-                            Key::Named(NamedKey::ArrowRight) => Some(18),
-                            Key::Named(NamedKey::ArrowUp) => Some(19),
-                            Key::Named(NamedKey::ArrowDown) => Some(20),
-                            _ => None,
-                        };
-                        if let Some(k) = named {
-                            p.support_key(k, down);
-                        } else if down && let Some(t) = &event.text {
-                            for c in t.chars().filter(|c| c.is_ascii() && !c.is_ascii_control()) {
-                                p.support_key(c as i32, true);
-                            }
-                        }
-                        return;
-                    }
-                    use crate::startmenu::keys as K;
-                    let k = match &event.logical_key {
-                        Key::Named(NamedKey::ArrowUp) => Some(K::UP),
-                        Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
-                        Key::Named(NamedKey::ArrowLeft) => Some(K::LEFT),
-                        Key::Named(NamedKey::ArrowRight) => Some(K::RIGHT),
-                        Key::Named(NamedKey::Enter) => Some(K::CROSS),
-                        Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
-                        Key::Character(c) if c.eq_ignore_ascii_case("q") => Some(133),
-                        Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
-                        _ => None,
-                    };
-                    if let Some(k) = k
-                        && !(down && event.repeat)
-                    {
-                        p.support_key(k, down);
-                    }
-                    return;
-                }
-                // The mail and tell windows (modes 23, 24, 28, 29, and the buddy
-                // list's compose): the arrows, Enter or E (X), Escape
-                // (triangle), Q (square: the inbox again); while a field's
-                // editor is up it takes the keyboard (Enter a newline in the
-                // body, Tab done).
-                if let Some(p) = self.play.as_mut()
-                    && p.typing.is_none()
-                    && p.mail_owns()
-                {
-                    let down = event.state == ElementState::Pressed;
-                    if p.mail_typing() {
-                        let named = match &event.logical_key {
-                            Key::Named(NamedKey::Backspace) => Some(8),
-                            Key::Named(NamedKey::Escape) => Some(27),
-                            Key::Named(NamedKey::Enter) => Some(13),
-                            Key::Named(NamedKey::Tab) => Some(143),
-                            Key::Named(NamedKey::ArrowLeft) => Some(17),
-                            Key::Named(NamedKey::ArrowRight) => Some(18),
-                            Key::Named(NamedKey::ArrowUp) => Some(19),
-                            Key::Named(NamedKey::ArrowDown) => Some(20),
-                            _ => None,
-                        };
-                        if let Some(k) = named {
-                            p.mail_key(k, down);
-                        } else if down && let Some(t) = &event.text {
-                            for c in t.chars().filter(|c| c.is_ascii() && !c.is_ascii_control()) {
-                                p.mail_key(c as i32, true);
-                            }
-                        }
-                        return;
-                    }
-                    use crate::startmenu::keys as K;
-                    let k = match &event.logical_key {
-                        Key::Named(NamedKey::ArrowUp) => Some(K::UP),
-                        Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
-                        Key::Named(NamedKey::ArrowLeft) => Some(K::LEFT),
-                        Key::Named(NamedKey::ArrowRight) => Some(K::RIGHT),
-                        Key::Named(NamedKey::Enter) => Some(K::CROSS),
-                        Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
-                        Key::Character(c) if c.eq_ignore_ascii_case("q") => Some(133),
-                        Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
-                        _ => None,
-                    };
-                    if let Some(k) = k
-                        && !(down && event.repeat)
-                    {
-                        p.mail_key(k, down);
-                    }
-                    return;
-                }
-                // The start menu (mode 13) takes the arrows, Enter or E (X) and
-                // Escape (back), down and up (its auto-repeat); Escape in play
-                // opens it (`OnKeyDown` 27).
-                if let Some(p) = self.play.as_mut()
-                    && p.typing.is_none()
-                    && p.start.is_some()
-                {
-                    use crate::startmenu::keys as K;
-                    let down = event.state == ElementState::Pressed;
-                    if p.mode == 13 {
-                        let k = match &event.logical_key {
-                            Key::Named(NamedKey::ArrowUp) => Some(K::UP),
-                            Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
-                            Key::Named(NamedKey::ArrowLeft) => Some(K::LEFT),
-                            Key::Named(NamedKey::ArrowRight) => Some(K::RIGHT),
-                            Key::Named(NamedKey::Enter) => Some(K::CROSS),
-                            Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
-                            Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
-                            _ => None,
-                        };
-                        if let Some(k) = k
-                            && !(down && event.repeat)
-                        {
-                            p.start_key(k, down);
-                        }
-                        return;
-                    }
-                    // the spell book (mode 5): its arrows include the tabs
-                    if p.mode == 5 {
-                        let k = match &event.logical_key {
-                            Key::Named(NamedKey::ArrowUp) => Some(K::UP),
-                            Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
-                            Key::Named(NamedKey::ArrowLeft) => Some(136),
-                            Key::Named(NamedKey::ArrowRight) => Some(137),
-                            Key::Named(NamedKey::Enter) => Some(K::CROSS),
-                            Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
-                            Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
-                            _ => None,
-                        };
-                        if let Some(k) = k
-                            && !(down && event.repeat)
-                        {
-                            p.book_key(k, down);
-                        }
-                        return;
-                    }
-                    // the who list (mode 35): Q asks again, C (the windows'
-                    // ○) sorts by the next column
-                    if p.mode == 35 {
-                        let k = match &event.logical_key {
-                            Key::Named(NamedKey::ArrowUp) => Some(K::UP),
-                            Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
-                            Key::Named(NamedKey::Enter) => Some(K::CROSS),
-                            Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
-                            Key::Character(c) if c.eq_ignore_ascii_case("q") => Some(113),
-                            Key::Character(c) if c.eq_ignore_ascii_case("c") => Some(135),
-                            Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
-                            _ => None,
-                        };
-                        if let Some(k) = k
-                            && !(down && event.repeat)
-                        {
-                            p.who_key(k, down);
-                        }
-                        return;
-                    }
-                    // the character windows (the quest journal, the trainer,
-                    // class mastery, factions): the arrows, Enter or E, Escape
-                    if p.char_window() {
-                        let k = match &event.logical_key {
-                            Key::Named(NamedKey::ArrowUp) => Some(K::UP),
-                            Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
-                            Key::Named(NamedKey::ArrowLeft) => Some(136),
-                            Key::Named(NamedKey::ArrowRight) => Some(137),
-                            Key::Named(NamedKey::Enter) => Some(K::CROSS),
-                            Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
-                            Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
-                            // square (Class Mastery's points) and R1 (its other list)
-                            Key::Character(c) if c.eq_ignore_ascii_case("q") => Some(133),
-                            // circle (the factions' next page)
-                            Key::Character(c) if c.eq_ignore_ascii_case("c") => Some(135),
-                            Key::Named(NamedKey::Tab) => Some(142),
-                            _ => None,
-                        };
-                        if let Some(k) = k
-                            && !(down && event.repeat)
-                        {
-                            p.char_key(k, down);
-                        }
-                        return;
-                    }
-                    // the options, buddy and ignore lists and the guild's
-                    // roster (modes 34, 17/18, 26, 20/21): arrows, Enter or
-                    // E, Escape; C (the windows' ○) the roster's sort
-                    if p.panel_up() {
-                        let k = match &event.logical_key {
-                            Key::Named(NamedKey::ArrowUp) => Some(K::UP),
-                            Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
-                            Key::Named(NamedKey::ArrowLeft) => Some(K::LEFT),
-                            Key::Named(NamedKey::ArrowRight) => Some(K::RIGHT),
-                            Key::Named(NamedKey::Enter) => Some(K::CROSS),
-                            Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
-                            Key::Character(c) if c.eq_ignore_ascii_case("c") => Some(135),
-                            Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
-                            _ => None,
-                        };
-                        if let Some(k) = k
-                            && !(down && event.repeat)
-                        {
-                            p.panel_key(k, down);
-                        }
-                        return;
-                    }
-                    if p.mode == 0 && down && event.logical_key == Key::Named(NamedKey::Escape) {
-                        p.open_start_menu(true);
-                        return;
-                    }
-                }
-                // The game's keys (`VIWndGame::OnKeyDown`): Enter opens the
-                // edit box R3 opens, `/` one begun with it, R one to `/reply`,
-                // T one to `/tell` (`Play::chat_key`). Before the HUD is up
-                // (no SUPPORT yet) a plain line stands in: keys type into it,
-                // Enter sends it (`ChatLine`) and Escape drops it.
-                if let Some(p) = self.play.as_mut()
-                    && event.state == ElementState::Pressed
-                {
-                    let open = |p: &mut crate::play::Play, held: &mut HashSet<String>, s: &str| {
-                        held.clear();
-                        if p.hud_ready() {
-                            p.chat_key(s, s.is_empty() || s == "/");
-                        } else {
-                            p.typing = Some(s.to_string());
-                        }
-                    };
-                    // The manual camera: the chat line's keys end it first
-                    // (`ResetView`, `OnKeyDown` 13, 47, 82, 84), then open it
-                    if p.mode == 38 && p.typing.is_none() {
-                        let chat = match &event.logical_key {
-                            Key::Named(NamedKey::Enter) => true,
-                            Key::Character(c) => c.as_str() == "/" || c.eq_ignore_ascii_case("t") || (c.eq_ignore_ascii_case("r") && !p.reply_name.is_empty()),
-                            _ => false,
-                        };
-                        if chat && let Some(w) = self.walker.as_mut() {
-                            p.reset_view(w);
-                        }
-                    }
-                    // A dialog up takes the arrows, Enter and Escape.
-                    if p.typing.is_none() && p.mode != 0 {
-                        use crate::dialog::Key as D;
-                        let k = match &event.logical_key {
-                            Key::Named(NamedKey::ArrowUp) => Some(D::Up),
-                            Key::Named(NamedKey::ArrowDown) => Some(D::Down),
-                            Key::Named(NamedKey::Enter) => Some(D::Enter),
-                            Key::Named(NamedKey::Escape) => Some(D::Escape),
-                            Key::Named(NamedKey::ArrowLeft) => Some(D::Left),
-                            Key::Named(NamedKey::ArrowRight) => Some(D::Right),
-                            _ => None,
-                        };
-                        if let Some(k) = k
-                            && p.dialog_key(k)
-                        {
-                            return;
-                        }
-                    }
-                    match (&mut p.typing, &event.logical_key) {
-                        (None, Key::Named(NamedKey::Enter)) => {
-                            open(p, &mut self.held, "");
-                            return;
-                        }
-                        // Q: InteractWithTarget.
-                        (None, Key::Character(c)) if p.mode == 0 && c.eq_ignore_ascii_case("q") => {
-                            p.interact_with_target();
-                            return;
-                        }
-                        // ` and ~ (96, 126): L1's cycle, the player, the
-                        // group, the pet (`CycleTarget(1)`), and held, the
-                        // manual camera (`Play::target_key`); a key's repeat
-                        // is nothing (the PS2's keyboard has none, so a key
-                        // held is one press)
-                        (None, Key::Character(c)) if p.mode == 0 && (c.as_str() == "`" || c.as_str() == "~") => {
-                            if !event.repeat
-                                && let (Some(w), Some(g)) = (self.walker.as_ref(), self.gfx.as_ref())
-                            {
-                                let (proj, v) = w.view(g.config.width as f32 / g.config.height as f32);
-                                let dir = Vec3::from(w.eye.direction.to_array());
-                                p.target_key(true, w.eye_position(), dir, proj * v);
-                            }
-                            return;
-                        }
-                        // Z (90, 122): the quick-chat menus, as L2.
-                        (None, Key::Character(c)) if p.mode == 0 && c.eq_ignore_ascii_case("z") => {
-                            p.open_quick_chat();
-                            return;
-                        }
-                        // F1: the Options window's Controls page (the client's
-                        // own; F1 makes no code in the game's keyboard table).
-                        (None, Key::Named(NamedKey::F1)) if p.mode == 0 && !event.repeat => {
-                            p.open_controls();
-                            return;
-                        }
-                        // M: the map (the client's own; free in the game's
-                        // keyboard table, `map.rs`; dead, it closes again).
-                        (None, Key::Character(c)) if p.mode == 0 && c.eq_ignore_ascii_case("m") && !event.repeat => {
-                            p.map.show();
-                            return;
-                        }
-                        // X (88, 120): autorun (`ToggleP74`), as L3.
-                        (None, Key::Character(c)) if p.mode == 0 && c.eq_ignore_ascii_case("x") => {
-                            p.toggle_autorun();
-                            return;
-                        }
-                        // 1 to 6: `SelectTarget`, the player, the group's
-                        // others, the pet.
-                        // (`OnKeyDown` takes them in the manual camera too)
-                        (None, Key::Character(c)) if (p.mode == 0 || p.mode == 38) && matches!(c.as_str(), "1" | "2" | "3" | "4" | "5" | "6") => {
-                            p.select_target(c.as_bytes()[0] as i32 - 48);
-                            return;
-                        }
-                        // P: InitCameraStyle (first person and back), in
-                        // play only (`OnKeyDown` 80 asks for mode 0).
-                        (None, Key::Character(c)) if p.mode == 0 && c.eq_ignore_ascii_case("p") => {
-                            if let Some(w) = self.walker.as_mut() {
-                                p.camera_style_key(w);
-                            }
-                            return;
-                        }
-                        (None, Key::Character(c)) if c.as_str() == "/" => {
-                            open(p, &mut self.held, "/");
-                            return;
-                        }
-                        (None, Key::Character(c)) if c.eq_ignore_ascii_case("r") && !p.reply_name.is_empty() => {
-                            open(p, &mut self.held, "/reply ");
-                            return;
-                        }
-                        (None, Key::Character(c)) if c.eq_ignore_ascii_case("t") => {
-                            open(p, &mut self.held, "/tell ");
-                            return;
-                        }
-                        (Some(t), Key::Named(NamedKey::Enter)) => {
-                            let line = std::mem::take(t);
-                            p.typing = None;
-                            if !line.is_empty() {
-                                p.chat_line(&line);
-                            }
-                            return;
-                        }
-                        (Some(_), Key::Named(NamedKey::Escape)) => {
-                            p.typing = None;
-                            return;
-                        }
-                        (Some(t), Key::Named(NamedKey::Backspace)) => {
-                            t.pop();
-                            return;
-                        }
-                        (Some(t), _) => {
-                            if let Some(s) = &event.text {
-                                t.push_str(s);
-                            }
-                            return;
-                        }
-                        _ => {}
-                    }
-                }
-                if self.play.as_ref().is_some_and(|p| p.typing.is_some()) {
-                    return;
-                }
-                // C (67, 99) held: the chat box's history, as R2 holds it
-                // (mode 33), its up and down the arrows (19, 20); let go,
-                // play again (`OnKeyDown`/`OnKeyUp` 67, `VIWndChat`).
-                if let Some(p) = self.play.as_mut()
-                    && (p.mode == 0 || p.mode == 33)
-                {
-                    let down = event.state == ElementState::Pressed;
-                    let k = match &event.logical_key {
-                        Key::Character(c) if c.eq_ignore_ascii_case("c") => Some(99),
-                        Key::Named(NamedKey::ArrowUp) if p.mode == 33 => Some(19),
-                        Key::Named(NamedKey::ArrowDown) if p.mode == 33 => Some(20),
-                        _ => None,
-                    };
-                    if let Some(k) = k
-                        && !(down && event.repeat)
-                    {
-                        p.chat_history_key(k, down);
-                        return;
-                    }
-                }
-                // Q released: the target's info window closes (`OnKeyUp` 81).
-                if let (Some(p), Key::Character(c)) = (self.play.as_mut(), &event.logical_key)
-                    && c.eq_ignore_ascii_case("q")
-                    && event.state == ElementState::Released
-                {
-                    p.info_up = false;
-                    return;
-                }
-                // Space: attack, held (`ToggleAutoAttack` / `MaybeStopAutoAttack`).
-                if let (Some(p), Key::Named(NamedKey::Space)) = (self.play.as_mut(), &event.logical_key) {
-                    if event.state == ElementState::Pressed && !event.repeat && p.mode == 0 {
-                        p.attack_press();
-                    } else if event.state == ElementState::Released {
-                        p.attack_release();
-                    }
-                    return;
-                }
-                // The HUD's quick menus in play on the arrows, the d-pad
-                // (`VIWndHUDMenu`: up and down the selection, left and right
-                // the menu), and E uses it (as circle). The game's keyboard
-                // has them on W/S and A/D and walks on the arrows; here WASD
-                // walks (`controls`), the user's choice.
-                if let Some(p) = self.play.as_mut()
-                    && (p.mode == 0 || p.mode == 38)
-                {
-                    use crate::hudmenu::Key as H;
-                    let k = match &event.logical_key {
-                        Key::Named(NamedKey::ArrowUp) => Some(H::Up),
-                        Key::Named(NamedKey::ArrowDown) => Some(H::Down),
-                        Key::Named(NamedKey::ArrowLeft) => Some(H::Left),
-                        Key::Named(NamedKey::ArrowRight) => Some(H::Right),
-                        Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(H::Use),
-                        _ => None,
-                    };
-                    if let Some(k) = k {
-                        if event.state == ElementState::Pressed {
-                            p.hud_key(k);
-                        }
-                        return;
-                    }
-                }
-                // F5-F8: the start menu's group page (not ported yet): invite
-                // the target, remove it, disband, leave.
-                if event.state == ElementState::Pressed
-                    && let Some(p) = self.play.as_mut()
-                    && p.mode == 0
-                {
-                    let action = match &event.logical_key {
-                        Key::Named(NamedKey::F5) => Some(0x0701_0000),
-                        Key::Named(NamedKey::F6) => Some(0x0704_0000),
-                        Key::Named(NamedKey::F7) => Some(0x0705_0000),
-                        Key::Named(NamedKey::F8) => Some(0x0706_0000),
-                        _ => None,
-                    };
-                    if let Some(a) = action {
-                        p.group_action(a);
-                        return;
-                    }
-                }
-                // Tab: the next target (`CycleTarget`), and held, the manual
-                // camera (`Play::target_key`; its repeat is nothing, as `).
-                if event.state == ElementState::Pressed
-                    && event.logical_key == Key::Named(NamedKey::Tab)
-                    && let (Some(p), Some(w), Some(g)) = (self.play.as_mut(), self.walker.as_ref(), self.gfx.as_ref())
-                    && p.mode == 0
-                {
-                    if !event.repeat {
-                        let (proj, v) = w.view(g.config.width as f32 / g.config.height as f32);
-                        let dir = Vec3::from(w.eye.direction.to_array());
-                        p.target_key(false, w.eye_position(), dir, proj * v);
-                    }
-                    return;
-                }
-                // Tab, ` or ~ let go (`OnKeyUp` 9, 96, 126): the manual camera
-                // ended, or the hold given up
-                if event.state == ElementState::Released
-                    && (event.logical_key == Key::Named(NamedKey::Tab) || matches!(&event.logical_key, Key::Character(c) if c.as_str() == "`" || c.as_str() == "~"))
-                    && let (Some(p), Some(w)) = (self.play.as_mut(), self.walker.as_mut())
-                {
-                    p.target_key_up(w);
-                    return;
-                }
-                let name = held_name(&event.logical_key);
-                if event.state == ElementState::Pressed {
-                    match event.logical_key {
-                        Key::Named(NamedKey::Escape) => el.exit(),
-                        Key::Named(NamedKey::ArrowRight) if self.walker.is_none() => self.step(1),
-                        Key::Named(NamedKey::ArrowLeft) if self.walker.is_none() => self.step(-1),
-                        _ => {}
-                    }
-                    if let Some(n) = name {
-                        if self.held.is_empty() {
-                            self.last = Instant::now();
-                        }
-                        self.held.insert(n);
-                    }
-                } else if let Some(n) = name {
-                    self.held.remove(&n);
-                }
-                if let Some(g) = &self.gfx {
-                    g.window.request_redraw();
-                }
+                self.keyboard(el, event);
             }
             // Walking, the mouse is `mouse.rs`'s: a drag looks round, the
             // wheel zooms, a click targets and a double or right click talks.
@@ -3632,16 +3770,7 @@ impl ApplicationHandler for App {
             // which window is in front: Controller Focus's Window reads the
             // controllers only there
             WindowEvent::Focused(true) => self.pads.focused = true,
-            WindowEvent::Focused(false) => {
-                self.pads.focused = false;
-                self.mouse.release_all();
-                self.held.clear();
-                self.keys_edge.clear();
-                self.grab_pointer(false);
-                if let Some(p) = self.play.as_mut() {
-                    p.map.let_go();
-                }
-            }
+            WindowEvent::Focused(false) => self.focus_lost(el),
             WindowEvent::CursorLeft { .. } => {
                 self.mouse.release_all();
                 self.grab_pointer(false);
@@ -3729,6 +3858,9 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                if !self.unfocus_script.is_empty() {
+                    self.unfocus_script(el);
+                }
                 // Sound in Background (the Extended page): off, this window
                 // is heard only while it is the one in front (has the focus:
                 // a minimised window has not; one merely covered by another
@@ -3847,7 +3979,7 @@ impl ApplicationHandler for App {
                 {
                     p.add_from(&w.scene, first);
                 }
-                self.poll_pad();
+                self.poll_pad(el);
                 for c in self.touch.take_clicks() {
                     self.click(c, true);
                 }
