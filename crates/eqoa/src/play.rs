@@ -2760,6 +2760,7 @@ impl Play {
         hpr.y = vi::fpu::clamp(hpr.y, F::new(-1.5607964), F::new(1.5607964));
         let time = if cam.camera_mode != 0 { F::new(0.2) } else { F::ZERO };
         cam.effect.begin_manual(pos, hpr, time);
+        eprintln!("play: the manual camera (L1 or R1 held)");
         self.manual_on = true;
         self.mode = 38;
         self.attack_release();
@@ -2781,6 +2782,7 @@ impl Play {
         if !self.self_entity() {
             return;
         }
+        eprintln!("play: the manual camera ended");
         self.manual_on = false;
         let pi = F::<Ee>::new(std::f32::consts::PI);
         if cam.camera_mode != 3 {

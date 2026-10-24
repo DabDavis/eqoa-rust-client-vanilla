@@ -496,6 +496,14 @@ impl KeyEdge {
     pub fn clear(&mut self) {
         self.pressed.clear();
     }
+
+    /// Every key still down let go: what each was pressed as, to be let go
+    /// of as that (a key a capture took, nothing), in the keys' order.
+    pub fn let_go(&mut self) -> Vec<Sent> {
+        let mut down: Vec<(String, Option<Sent>)> = self.pressed.drain().collect();
+        down.sort_by(|a, b| a.0.cmp(&b.0));
+        down.into_iter().filter_map(|(_, s)| s).collect()
+    }
 }
 
 /// Whether a name read back can be a key's (`name_of`'s, or a character).
@@ -847,6 +855,31 @@ mod tests {
             assert_eq!(c.key(k, true, false, false, &Binds::default()), key(k));
             assert_eq!(c.key(k, false, false, false, &Binds::default()), key(k));
         }
+    }
+
+    /// The window losing the keys (`App::let_go_keys`): every key still down
+    /// lets go as what it was pressed as (Tab as itself, a moved key as its
+    /// row's, a key on △'s row as △), once; a key already let go, and one a
+    /// capture took, are not. The control: `clear` alone forgets them, and
+    /// nothing is let go of.
+    #[test]
+    fn keys_still_down_let_go_as_pressed() {
+        let mut b = Binds::default();
+        b.bind_key(row_named("walk_forward").unwrap(), "up");
+        b.bind_key(row_named("clear_target").unwrap(), "b");
+        let mut e = KeyEdge::default();
+        for k in ["tab", "up", "b", "space"] {
+            e.key(k, true, false, false, &b);
+        }
+        e.key("space", false, false, false, &b);
+        e.hold_back("f2");
+        assert_eq!(e.let_go(), vec![Sent::Button(bit::TRIANGLE), Sent::Key("tab".into()), Sent::Key("w".into())]);
+        assert_eq!(e.let_go(), vec![], "once");
+        assert_eq!(e.key("tab", false, false, false, &b), Some(Sent::Key("tab".into())), "a late release is the key's own");
+        let mut c = KeyEdge::default();
+        c.key("tab", true, false, false, &b);
+        c.clear();
+        assert_eq!(c.let_go(), vec![], "the control");
     }
 
     /// keys.opt: what was moved, read back the same; nothing moved is
