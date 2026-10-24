@@ -653,7 +653,7 @@ mod native {
         let log = tail(LOG_LINES);
         let report = fit(
             &clean_now(&format!(
-                "EQOA native client problem report\nversion: {}\nchannel: {}\nname: {}\nnote: {}\n\n--- trace ---\neqoa native client trace {}\nplatform: {}\n\n[client]\n{}\n\n[log] last {} lines\n{}\n",
+                "EQOA native client problem report\nversion: {}\nchannel: {}\nname: {}\nnote: {}\n\n--- trace ---\neqoa native client trace {}\nplatform: {}\n\n[client]\n{}\n\n[controllers]\n{}\n\n[log] last {} lines\n{}\n",
                 version(),
                 channel(),
                 if name.is_empty() { "-" } else { name },
@@ -661,6 +661,7 @@ mod native {
                 stamp(SystemTime::now()),
                 platform(),
                 state.trim_end(),
+                controllers(),
                 log.len(),
                 log.join("\n")
             )),
@@ -676,6 +677,13 @@ mod native {
             json_string(channel()),
             json_string(&shot.map(base64).unwrap_or_default())
         )
+    }
+
+    /// The controllers connected and who reads them (`input`): the log says
+    /// what a window reads only as it changes, long gone by a report.
+    fn controllers() -> String {
+        let l = crate::input::describe_controllers();
+        if l.is_empty() { "not read yet".into() } else { l.join("\n") }
     }
 
     fn crash_body(text: &str, note: &str) -> String {

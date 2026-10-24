@@ -417,6 +417,24 @@ enum Source {
     Page(u32),
 }
 
+impl Source {
+    /// How a controller is read, as a report says it.
+    fn how(&self) -> &'static str {
+        match self {
+            #[cfg(windows)]
+            Source::Gilrs(_) => "Windows.Gaming.Input: only by the window in front",
+            #[cfg(target_os = "macos")]
+            Source::Gilrs(_) => "IOKit",
+            #[cfg(all(not(windows), not(target_os = "macos"), not(target_arch = "wasm32")))]
+            Source::Gilrs(_) => "evdev",
+            #[cfg(windows)]
+            Source::XInput(_) => "XInput: in front or behind",
+            #[cfg(target_arch = "wasm32")]
+            Source::Page(_) => "the Gamepad API",
+        }
+    }
+}
+
 /// What a window reads of the connected controllers (`pick`).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Pick {
@@ -655,6 +673,17 @@ impl Gamepads {
                 *r.borrow_mut() = says;
             }
         });
+        let listed = list_controllers(
+            &describe(&pick, &pads, &seat, focus, capture && shares_pad(focus, &seat)),
+            &pads.iter().map(|c| (c.name.as_str(), c.label.as_str(), c.source.how(), c.rumbles)).collect::<Vec<_>>(),
+            &pick,
+            &seat,
+        );
+        if let Ok(mut l) = LISTED.lock()
+            && *l != listed
+        {
+            *l = listed;
+        }
         if self.picked.as_ref() != Some(&pick) {
             crate::say(&describe(&pick, &pads, &seat, focus, capture && shares_pad(focus, &seat)));
             // a controller this window no longer reads is not its to shake
@@ -881,6 +910,45 @@ impl Gamepads {
     }
 }
 
+/// The controllers as this window last polled them (`describe_controllers`).
+static LISTED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// The connected controllers as a report lists them (`report`): first what
+/// this window reads (its Controller Focus and the windows open), then a
+/// line each, in their order: its number, what it calls itself, how it is
+/// read and its name there, whether it rumbles, and which window reads it
+/// now. As this window last polled them; empty before it did.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub fn describe_controllers() -> Vec<String> {
+    LISTED.lock().map(|l| l.clone()).unwrap_or_default()
+}
+
+/// `describe_controllers`' lines: `window` what this window reads
+/// (`describe`), each pad as (name, label, how it is read, rumbles).
+fn list_controllers(window: &str, pads: &[(&str, &str, &str, bool)], pick: &Pick, seat: &Seat) -> Vec<String> {
+    let mut out = vec![window.to_string()];
+    if pads.is_empty() {
+        out.push("none connected".into());
+    }
+    let me = if seat.alone() { "this window".to_string() } else { format!("this window ({})", seat.place + 1) };
+    for (k, &(name, label, how, rumbles)) in pads.iter().enumerate() {
+        let mut by = Vec::new();
+        if match pick {
+            Pick::All => true,
+            Pick::One(n) => n == name,
+            Pick::Idle | Pick::Nothing => false,
+        } {
+            by.push(me.clone());
+        }
+        let mut others: Vec<usize> = seat.others.iter().filter(|o| o.pad.as_deref() == Some(name)).map(|o| o.place + 1).collect();
+        others.sort_unstable();
+        by.extend(others.into_iter().map(|w| format!("window {w}")));
+        let by = if by.is_empty() { "no window".to_string() } else { by.join(", ") };
+        out.push(format!("controller {}: {label} ({how}; {name}){}, read by {by}", k + 1, if rumbles { ", rumbles" } else { "" }));
+    }
+    out
+}
+
 thread_local! {
     /// What this window reads, in a few words (`reads`).
     static READS: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
@@ -1091,6 +1159,30 @@ mod tests {
 
     fn one(n: &str) -> Pick {
         Pick::One(n.to_string())
+    }
+
+    /// A report's controllers (`describe_controllers`, F3 20261024-165502
+    /// said only that two controllers did not drive two windows): what this
+    /// window reads, then each controller, how it is read and which windows
+    /// read it; one no window reads says so, as does none connected.
+    #[test]
+    fn a_report_lists_the_controllers_and_who_reads_them() {
+        let pads = [("xinput0", "Xbox controller 1", "XInput: in front or behind", true), ("pad3", "DualSense Wireless Controller", "Windows.Gaming.Input: only by the window in front", false)];
+        let two = seat(0, &[(1, Some("xinput0"), Focus::Pad(1))]);
+        let l = list_controllers("controllers: window 1 of 2, Auto: none", &pads, &Pick::Nothing, &two);
+        assert_eq!(
+            l,
+            vec![
+                "controllers: window 1 of 2, Auto: none".to_string(),
+                "controller 1: Xbox controller 1 (XInput: in front or behind; xinput0), rumbles, read by window 2".to_string(),
+                "controller 2: DualSense Wireless Controller (Windows.Gaming.Input: only by the window in front; pad3), read by no window".to_string(),
+            ]
+        );
+        let alone = list_controllers("controllers: Auto: every one", &pads, &Pick::All, &Seat::default());
+        assert!(alone[1].ends_with("read by this window") && alone[2].ends_with("read by this window"), "{alone:?}");
+        let mine = list_controllers("x", &pads, &one("pad3"), &two);
+        assert!(mine[1].ends_with("read by window 2") && mine[2].ends_with("read by this window (1)"), "{mine:?}");
+        assert_eq!(list_controllers("x", &[], &Pick::Nothing, &Seat::default())[1], "none connected");
     }
 
     /// Off, Window and a Pad, each as it says; Auto alone reads every one,
