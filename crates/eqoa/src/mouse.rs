@@ -22,7 +22,11 @@
 //!   looks up as the mouse goes up, the camera lower, from 45 degrees under
 //!   the head, where the ground pulls it in as anything the game's camera
 //!   meets does, to 75 overhead; in mode 3 it is the default pitch the
-//!   camera's own snaps go back to).
+//!   camera's own snaps go back to). Below the game's own 15 degrees
+//!   (`camreach::GAME_PITCH`) the ground behind meets the camera on any
+//!   slope, and where the game would then swing it round to a clear side
+//!   (which turns a run, since the stick and autorun go the way the camera
+//!   looks) it comes in to its closest instead, as when steered.
 //! - the right button steers (`look_held`, `Mouse::steer`): in the follow
 //!   orbit (3) the body and the camera behind it turn together, the tilt as
 //!   the left button's, and the walk is on the body's own axes
@@ -537,6 +541,21 @@ impl Mouse {
     }
 }
 
+/// An angle snap the game began (`MoveCamera`'s `FindOrbitAngle` found a
+/// clear angle: flag 1) ends where it is, and the camera comes in to its
+/// closest instead, as when `FindOrbitAngle` finds none (flag 2): the
+/// client's own, where swinging round would turn the player with it (the
+/// right button's steer, and a tilt under the game's pitch:
+/// `camreach::Reach::process`).
+pub fn come_in_instead(cam: &mut WalkCamera<Ee>) {
+    if cam.cur.flags & 1 != 0 {
+        cam.cur.snap_angle = cam.cur.orbit.x;
+        cam.cur.flags |= 2;
+        cam.last.snap_angle = cam.cur.snap_angle;
+        cam.last.flags = cam.cur.flags;
+    }
+}
+
 /// The mouse's look this frame, (dx, dy) pixels of its motion with `held`
 /// (left, right) down, on `cam` (the module's doc): the follow orbit
 /// steered by the right button (`steering`: the last frame steered too, so
@@ -555,15 +574,8 @@ pub fn look_held(cam: &mut WalkCamera<Ee>, held: [bool; 2], dx: f32, dy: f32, in
             set_heading(cam, from + along(dx));
             let behind = cam.walk.phys.angles.x + F::new(PI);
             cam.set_orbit_angle(behind);
-            // an angle snap would swing the camera off the body: it ends
-            // where it is, and the camera comes in to its closest instead
-            // (as when `FindOrbitAngle` finds no clear angle)
-            if cam.cur.flags & 1 != 0 {
-                cam.cur.snap_angle = cam.cur.orbit.x;
-                cam.cur.flags |= 2;
-                cam.last.snap_angle = cam.cur.snap_angle;
-                cam.last.flags = cam.cur.flags;
-            }
+            // an angle snap would swing the camera off the body
+            come_in_instead(cam);
             if dy != 0.0 {
                 tilt(cam, up(dy));
             }

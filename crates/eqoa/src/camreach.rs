@@ -24,6 +24,25 @@
 //! grows from nothing, 30 a second, to at most 12 a second, and slows over
 //! the last 2: 3.5 to 11 in about 1.3 seconds. Pulled in again on its way,
 //! the pull is the game's.
+//!
+//! The mouse's tilt (`mouse::tilt`) can lower the orbit's default pitch under
+//! the game's 15 degrees (`GAME_PITCH`, `SetCameraStyle(3)`'s), even level
+//! with the head. Blocked at its closest collision distance and with no
+//! steep slope underfoot for the alternate pitch, the game's camera swings
+//! round to the first clear of eight angles (`FindOrbitAngle`), and since the
+//! follow orbit moves the player the way the camera looks (`UpdateControls`:
+//! `ViewRelativeMove` along `m_camera.m_dir`), a run turns with it, up to a
+//! half turn. At the game's pitch a slope behind, however steep, only brings
+//! the camera in (to 3.5; past 26 degrees the alternate pitch takes it up), so
+//! on a PS2 it takes a wall or broken ground; tilted level with the head, a
+//! slope of 18 to 25 degrees behind a run downhill swung it 45 to 90 degrees
+//! (F3 20261024-100428), and tilted lower, gentler ones did (from 8 degrees,
+//! the camera 11 degrees under the head). Under the game's pitch the swing is
+//! not begun: the camera comes in to its closest instead
+//! (`mouse::come_in_instead`, as the right button's steer does), and the
+//! way back out above brings it out again once the slope is behind. A frame
+//! longer than the camera's 32 ms tick can let a swing move before it is
+//! stopped: under a degree at 30 frames a second.
 
 use vi::camera::{Eye, WalkCamera};
 use vi::coll::CollSphere;
@@ -41,6 +60,10 @@ const THERE: f32 = 0.05;
 
 /// The distance spring moving faster than this (a second): a zoom under way.
 const MOVING: f32 = 0.001;
+
+/// The follow orbit's default pitch as the game sets it
+/// (`SetCameraStyle(3)`: `SetDefOrbitPitchAngle(0.2617994)`, 15 degrees).
+pub const GAME_PITCH: f32 = 0.261_799_4;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Reach {
@@ -81,6 +104,10 @@ impl Reach {
         }
         let (d0, f0, spring) = (cam.cur.dist, cam.cur.flags, zooming(cam));
         let eye = cam.process(scene);
+        // tilted under the game's pitch, no swing round (the module's doc)
+        if cam.camera_mode == 3 && cam.def_orbit_pitch < F::new(GAME_PITCH) {
+            crate::mouse::come_in_instead(cam);
+        }
         // the stick's zoom (the spring) is a choice; a pull (flags 2, 4) is not
         if mode == 3 && cam.camera_mode == 3 && spring && (f0 | cam.cur.flags) & 6 == 0 && cam.cur.dist != d0 {
             self.chosen = Some(cam.cur.dist);
@@ -170,6 +197,62 @@ pub mod testing {
             r.hit_time = F::new(t);
             r.hit_idx = 0;
             r.hit_normal = n;
+            true
+        }
+        fn collide_env(&mut self, _: &mut EnvRay<Ee>) -> bool {
+            false
+        }
+        fn env_flags(&self, _: &Vect3<Ee>) -> u32 {
+            0
+        }
+    }
+
+    /// Ground and walls as planes, each through `at` with its unit normal
+    /// `n` pointing to the open side: a sphere's sweep stops at the first it
+    /// comes within its radius of. The clock is `t` (ms).
+    pub struct Planes {
+        pub t: i64,
+        pub planes: Vec<([f32; 3], [f32; 3])>,
+    }
+
+    impl Planes {
+        /// Ground through `at` rising `slope` (a tangent) along the
+        /// horizontal unit `way`, and nothing else.
+        pub fn slope(at: [f32; 3], way: [f32; 2], slope: f32) -> Planes {
+            let len = (1.0 + slope * slope).sqrt();
+            Planes { t: 0, planes: vec![(at, [-slope * way[0] / len, 1.0 / len, -slope * way[1] / len])] }
+        }
+
+        /// Flat ground through `at`, and a wall `away` from it along the
+        /// horizontal unit `way`, facing back.
+        pub fn wall(at: [f32; 3], way: [f32; 2], away: f32) -> Planes {
+            let w = [at[0] + way[0] * away, at[1], at[2] + way[1] * away];
+            Planes { t: 0, planes: vec![(at, [0.0, 1.0, 0.0]), (w, [-way[0], 0.0, -way[1]])] }
+        }
+    }
+
+    impl Scene<Ee> for Planes {
+        fn time(&self) -> i64 {
+            self.t
+        }
+        fn collide_sphere(&mut self, s: &mut CollSphere<Ee>, _: &mut Filter) -> bool {
+            let r = &mut s.ray;
+            let rad = s.radius.0;
+            let d = |p: &Vect3<Ee>, (at, n): &([f32; 3], [f32; 3])| (p.x.0 - at[0]) * n[0] + (p.y.0 - at[1]) * n[1] + (p.z.0 - at[2]) * n[2] - rad;
+            let mut hit: Option<(f32, [f32; 3])> = None;
+            for pl in &self.planes {
+                let (a, b) = (d(&r.start, pl), d(&r.end, pl));
+                if a >= 0.0 && b < 0.0 {
+                    let t = a / (a - b);
+                    if hit.is_none_or(|h| t < h.0) {
+                        hit = Some((t, pl.1));
+                    }
+                }
+            }
+            let Some((t, n)) = hit else { return false };
+            r.hit_time = F::new(t);
+            r.hit_idx = 0;
+            r.hit_normal = Vect3::of(n[0], n[1], n[2]);
             true
         }
         fn collide_env(&mut self, _: &mut EnvRay<Ee>) -> bool {
@@ -315,5 +398,100 @@ mod tests {
         crate::camstyle::set_style(&mut cam, 3, None, &mut room);
         frames(&mut cam, Some(&mut reach), &mut room, 200, 16);
         assert_eq!((reach.chosen(&cam).0, cam.cur.dist.0), (3.38, 3.38));
+    }
+
+    /// The follow orbit at 11 behind a body facing `h0` at `at` on `sc`, its
+    /// default pitch `pitch` (the mouse's tilt), then `near` put in the
+    /// scene's place (an obstacle moved in once the style has chosen its
+    /// angle behind); `ms` frames for 4 seconds, through the reach (ours)
+    /// or the game's `Process` alone (the control). The most the orbit
+    /// turned off where it began, and the distance at the end.
+    fn swing(sc: &mut super::testing::Planes, near: Option<super::testing::Planes>, at: [f32; 3], h0: f32, pitch: f32, ours: bool, ms: i64) -> (f32, f32) {
+        let mut cam = WalkCamera::<Ee>::default();
+        cam.init(Vect3::of(at[0], at[1], at[2]), Vect3::of(h0, 0.0, 0.0), sc);
+        crate::camstyle::set_style(&mut cam, 3, None, sc);
+        cam.set_orbit_distance(F::new(11.0));
+        cam.set_def_orbit_pitch_angle(F::new(pitch));
+        if let Some(n) = near {
+            sc.planes = n.planes;
+        }
+        let mut reach = Reach::default();
+        let start = cam.cur.orbit.x.0;
+        let mut most = 0.0f32;
+        for _ in 0..4000 / ms {
+            sc.t += ms;
+            if ours {
+                reach.process(&mut cam, sc, ms as f32 / 1000.0);
+            } else {
+                cam.process(sc);
+            }
+            let d = (cam.cur.orbit.x.0 - start).rem_euclid(std::f32::consts::TAU);
+            most = most.max(d.min(std::f32::consts::TAU - d));
+        }
+        (most, cam.cur.dist.0)
+    }
+
+    /// Turned by no more than the rounding of the orbit's re-derivation
+    /// from where the camera is (`Process`, mode 3), a frame at a time.
+    const STILL: f32 = 1e-4;
+
+    /// The body's way back (behind it, where the camera is) at `h0`.
+    fn behind(h0: f32) -> [f32; 2] {
+        [-h0.sin(), -h0.cos()]
+    }
+
+    /// F3 20261024-100428: the camera tilted level with the head (its
+    /// default pitch -0.0094, the report's), a 22-degree slope rising behind
+    /// a run downhill. The game's camera swings a quarter turn round (the
+    /// control: `Process` alone), and the run would turn with it; ours stays
+    /// behind and comes in to its closest. Lower still (-0.2), a 10-degree
+    /// slope did it.
+    #[test]
+    fn tilted_under_the_games_pitch_a_slope_brings_the_camera_in_not_round() {
+        let (at, h0) = ([100.0, 0.0, 100.0], 0.5);
+        for (slope, pitch) in [(22.0f32, -0.0094), (10.0, -0.2)] {
+            let mut sc = super::testing::Planes::slope(at, behind(h0), slope.to_radians().tan());
+            let (game, _) = swing(&mut sc, None, at, h0, pitch, false, 16);
+            assert!(game > 0.7, "the control: the game's swings round ({game} at {slope} degrees)");
+            let mut sc = super::testing::Planes::slope(at, behind(h0), slope.to_radians().tan());
+            let (ours, dist) = swing(&mut sc, None, at, h0, pitch, true, 16);
+            assert!(ours < STILL && dist == 1.5, "{slope} degrees, pitch {pitch}: {ours}, {dist}");
+        }
+    }
+
+    /// At the game's own pitch a slope behind, however steep, only brings
+    /// the camera in (to 3.5; past 26 degrees the alternate pitch takes it
+    /// up), so a PS2's never swings on one; a wall close behind swings it a
+    /// quarter turn, the game's and ours alike: the guard leaves the game's
+    /// pitch to the game.
+    #[test]
+    fn at_the_games_pitch_the_swing_is_the_games() {
+        let (at, h0) = ([100.0, 0.0, 100.0], 0.5);
+        for slope in [10.0f32, 22.0, 25.0, 30.0] {
+            let mut sc = super::testing::Planes::slope(at, behind(h0), slope.to_radians().tan());
+            let (turned, _) = swing(&mut sc, None, at, h0, GAME_PITCH, false, 16);
+            assert!(turned < STILL, "{slope} degrees: {turned}");
+        }
+        let wall = |away| super::testing::Planes::wall(at, behind(h0), away);
+        for ours in [false, true] {
+            let (turned, _) = swing(&mut wall(100.0), Some(wall(2.5)), at, h0, GAME_PITCH, ours, 16);
+            assert!((turned - std::f32::consts::FRAC_PI_2).abs() < 1e-4, "ours {ours}: {turned}");
+        }
+        // the control: the same wall with the camera tilted under it comes in
+        let (turned, dist) = swing(&mut wall(100.0), Some(wall(2.5)), at, h0, 0.1, true, 16);
+        assert!(turned < STILL && dist == 1.5, "{turned}, {dist}");
+    }
+
+    /// At 30 frames a second a frame can hold two of the camera's 32 ms
+    /// ticks, and a swing begun in the first moves in the second before the
+    /// guard stops it: under a degree; at 165 none.
+    #[test]
+    fn the_guard_holds_at_30_and_165_frames_a_second() {
+        let (at, h0) = ([100.0, 0.0, 100.0], 0.5);
+        for (ms, most) in [(6i64, STILL), (33, 0.0175)] {
+            let mut sc = super::testing::Planes::slope(at, behind(h0), 22f32.to_radians().tan());
+            let (turned, dist) = swing(&mut sc, None, at, h0, -0.2, true, ms);
+            assert!(turned < most && dist == 1.5, "{ms} ms: {turned}, {dist}");
+        }
     }
 }
