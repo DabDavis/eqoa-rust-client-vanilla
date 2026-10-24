@@ -4116,7 +4116,7 @@ mod tests {
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let frontiers = root.join("run/eqoa.iso");
         let y2002 = std::env::var_os("EQOA_2002_ISO").map(std::path::PathBuf::from).or_else(|| {
-            std::fs::read_dir(root.join("../decomp-builds/discs/eqoa-usa")).ok()?.flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("iso")))
+            std::fs::read_dir(root.join("../decomp-builds/discs/eqoa-usa")).ok()?.flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x.to_ascii_lowercase() == "iso"))
         });
         let (true, Some(y2002)) = (frontiers.exists(), y2002) else {
             eprintln!("SKIP: no Frontiers disc or no 2002 disc (set EQOA_2002_ISO)");
