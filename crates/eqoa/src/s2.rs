@@ -434,6 +434,9 @@ mod at {
     /// slti v0, v0, 2: `VIWndAuction::CanSell`'s last test, in the delay
     /// slot of its `jr ra` (`m_maxStack < 2`)
     pub const CLIENT_CAN_SELL_STACK: u32 = 0x5A2A0;
+    /// slti v0, v0, 128: `VIClientPart2EF24::CanInvite`'s guild cap
+    /// (`Count() >= 128` is full)
+    pub const CLIENT_GUILD_CAP: u32 = 0x39D60;
 }
 
 /// `VIWndAuction::CanSell`'s last test, on the item's `m_maxStack` (the
@@ -524,6 +527,8 @@ pub struct Features {
     pub auction_max_level: Option<i32>,
     /// `CanSell`'s stack test
     pub sell_stack: Option<StackTest>,
+    /// `CanInvite`'s guild cap
+    pub guild_cap: Option<i32>,
     /// an armour set past retail's: its five slots' DictIDs, and the
     /// CHAR.ESF records (by file offset) registered under them
     pub armor_art: Vec<(u8, [u32; 5], [u32; 5])>,
@@ -558,6 +563,12 @@ impl Features {
             f.auction_max_level = Some(w as u16 as i16 as i32);
         }
         f.sell_stack = img.word(CLIENT_BASE + at::CLIENT_CAN_SELL_STACK).and_then(StackTest::of);
+        // slti or sltiu v0, v0, N: a guild is full at N
+        if let Some(w) = img.word(CLIENT_BASE + at::CLIENT_GUILD_CAP)
+            && (w >> 16 == 0x2842 || w >> 16 == 0x2C42)
+        {
+            f.guild_cap = Some(w as u16 as i16 as i32);
+        }
         f.read_worlds(img);
         f.read_set9(img);
         f
@@ -752,6 +763,9 @@ pub struct Rules {
     /// `CanSell`'s stack test: retail auctions no stack, Sandstorm's S2
     /// any item (`auction::can_sell`)
     pub sell_stack: StackTest,
+    /// `CanInvite`: a guild of this many is full (retail 128, Sandstorm's
+    /// S2 255; `guild::Cmds::can_invite`)
+    pub guild_cap: i32,
     /// the world table; `None` is CLIENT's own six
     pub worlds: Option<Vec<World>>,
     /// CLIENT's data as the patch leaves it (`client_image` reads its
@@ -788,6 +802,7 @@ impl Rules {
             commands_to_server: false,
             auction_max_level: 50,
             sell_stack: StackTest::Below(2),
+            guild_cap: 128,
             worlds: None,
             image: None,
             dir: None,
@@ -844,6 +859,9 @@ impl Rules {
         if let Some(t) = f.sell_stack {
             r.sell_stack = t;
         }
+        if let Some(n) = f.guild_cap.filter(|&n| n > 0) {
+            r.guild_cap = n;
+        }
         if !f.worlds.is_empty() {
             r.worlds = Some(f.worlds.clone());
         }
@@ -874,7 +892,7 @@ impl Rules {
         let tints = self.tints.as_ref().map_or(15, |t| self.tint_count_of(t.len()));
         let worlds = self.worlds.as_ref().map_or(6, Vec::len);
         format!(
-            "{} (tints {tints}, sets below {}, robes {}, worlds {worlds}, art {}, search {}, damage colours {}, commands to the server {}, auction level {}, stacks auctioned {})",
+            "{} (tints {tints}, sets below {}, robes {}, worlds {worlds}, art {}, search {}, damage colours {}, commands to the server {}, auction level {}, stacks auctioned {}, guilds of {})",
             self.source,
             self.armor_set_limit,
             self.robe_limit,
@@ -883,7 +901,8 @@ impl Rules {
             self.damage_rgb,
             self.commands_to_server,
             self.auction_max_level,
-            self.sell_stack.passes(2)
+            self.sell_stack.passes(2),
+            self.guild_cap
         )
     }
 
@@ -1051,6 +1070,8 @@ mod tests {
         assert_eq!(r.auction_max_level, 60);
         // record 3: CanSell's slti v0, v0, 2 made addi v0, v0, 1
         assert_eq!(r.sell_stack, StackTest::Plus(1));
+        // record 4: CanInvite's slti v0, v0, 128 made sltiu v0, v0, 255
+        assert_eq!(r.guild_cap, 255);
         let names: Vec<String> = r.worlds.as_ref().expect("its world table").iter().map(World::esf_name).collect();
         assert_eq!(names, ["TUNARIA.ESF", "RATHE.ESF", "ODUS.ESF", "LAVASTM.ESF", "PLANESKY.ESF", "SECRETS.ESF", "UNDERFOOT.ESF", "SECRETS.ESF"]);
         let w0 = &r.worlds.as_ref().unwrap()[0];
@@ -1065,11 +1086,11 @@ mod tests {
     fn the_other_builds() {
         if let Some(r) = rules("july") {
             assert_eq!((r.auction_max_level, r.armor_set_limit, r.tints.as_ref().map(Vec::len), r.worlds.as_ref().map(Vec::len)), (50, 10, Some(30), Some(8)));
-            assert_eq!(r.sell_stack, StackTest::Plus(1));
+            assert_eq!((r.sell_stack, r.guild_cap), (StackTest::Plus(1), 255));
         }
         if let Some(r) = rules("ours") {
             assert_eq!((r.armor_set_limit, r.robe_limit, r.player_search), (11, 6, true));
-            assert_eq!(r.sell_stack, StackTest::Plus(1));
+            assert_eq!((r.sell_stack, r.guild_cap), (StackTest::Plus(1), 255));
         }
     }
 
@@ -1219,7 +1240,7 @@ mod tests {
             assert_eq!(r.source, "retail");
             assert!(r.image.is_none() && r.worlds.is_none() && r.tints.is_none());
             assert!(!r.player_search && !r.damage_rgb);
-            assert_eq!((r.armor_set_limit, r.robe_limit, r.auction_max_level, r.sell_stack), (9, 4, 50, StackTest::Below(2)));
+            assert_eq!((r.armor_set_limit, r.robe_limit, r.auction_max_level, r.sell_stack, r.guild_cap), (9, 4, 50, StackTest::Below(2), 128));
             assert_eq!(r.cust(), vi::cust::Tables::retail());
             assert_eq!(r.world_file(5).as_deref(), Some("SECRETS.ESF"));
             assert_eq!(r.world_file(6), None);
@@ -1237,6 +1258,13 @@ mod tests {
         p.extend(tail(&[]));
         std::fs::write(dir.join("S2"), &p).unwrap();
         assert_eq!(Rules::from_dir(&dir).sell_stack, StackTest::Plus(1));
+        // CanInvite's cap, slti or sltiu; another instruction there is retail's
+        for (w, cap) in [(0x2C42_00FFu32, 255), (0x2842_00C8, 200), (0x2843_00FF, 128)] {
+            let mut p = rec(at::CLIENT_GUILD_CAP, &w.to_le_bytes());
+            p.extend(tail(&[]));
+            std::fs::write(dir.join("S2"), &p).unwrap();
+            assert_eq!(Rules::from_dir(&dir).guild_cap, cap, "{w:08X}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
