@@ -431,6 +431,45 @@ mod at {
     pub const CLIENT_WORLD_LO: u32 = 0x11018;
     /// li a1, 50: the Auctions window's Max. Level
     pub const CLIENT_AUCTION_LEVEL: u32 = 0x5CFE4;
+    /// slti v0, v0, 2: `VIWndAuction::CanSell`'s last test, in the delay
+    /// slot of its `jr ra` (`m_maxStack < 2`)
+    pub const CLIENT_CAN_SELL_STACK: u32 = 0x5A2A0;
+}
+
+/// `VIWndAuction::CanSell`'s last test, on the item's `m_maxStack` (the
+/// instruction S2 rewrites in its return's delay slot).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StackTest {
+    /// `slti v0, v0, N`: a stack of fewer than N may be auctioned (retail 2:
+    /// no stack at all)
+    Below(i32),
+    /// `addi v0, v0, K`: the test is `m_maxStack + K`, true unless it is 0
+    /// (Sandstorm's 1: any item but one whose `m_maxStack` is -1)
+    Plus(i32),
+}
+
+impl StackTest {
+    /// Whether an item whose `m_maxStack` is `max_stack` passes (the game
+    /// reads it as a 32-bit word).
+    pub fn passes(self, max_stack: i64) -> bool {
+        let m = max_stack as i32;
+        match self {
+            StackTest::Below(n) => m < n,
+            StackTest::Plus(k) => m.wrapping_add(k) != 0,
+        }
+    }
+
+    /// The test an instruction at the site makes, if it is one of the two
+    /// shapes (`v0` in, `v0` out).
+    fn of(word: u32) -> Option<StackTest> {
+        let imm = word as u16 as i16 as i32;
+        match word >> 16 {
+            0x2842 => Some(StackTest::Below(imm)),
+            // addi, and addiu (the same sum without the overflow trap)
+            0x2042 | 0x2442 => Some(StackTest::Plus(imm)),
+            _ => None,
+        }
+    }
 }
 
 /// One entry of a world table (`gWorldInfo`'s shape, 32 bytes): what CLIENT
@@ -483,6 +522,8 @@ pub struct Features {
     pub worlds: Vec<World>,
     /// the Auctions window opens on this Max. Level
     pub auction_max_level: Option<i32>,
+    /// `CanSell`'s stack test
+    pub sell_stack: Option<StackTest>,
     /// an armour set past retail's: its five slots' DictIDs, and the
     /// CHAR.ESF records (by file offset) registered under them
     pub armor_art: Vec<(u8, [u32; 5], [u32; 5])>,
@@ -516,6 +557,7 @@ impl Features {
         {
             f.auction_max_level = Some(w as u16 as i16 as i32);
         }
+        f.sell_stack = img.word(CLIENT_BASE + at::CLIENT_CAN_SELL_STACK).and_then(StackTest::of);
         f.read_worlds(img);
         f.read_set9(img);
         f
@@ -707,6 +749,9 @@ pub struct Rules {
     pub commands_to_server: bool,
     /// the Auctions window opens on this Max. Level (retail 50)
     pub auction_max_level: i32,
+    /// `CanSell`'s stack test: retail auctions no stack, Sandstorm's S2
+    /// any item (`auction::can_sell`)
+    pub sell_stack: StackTest,
     /// the world table; `None` is CLIENT's own six
     pub worlds: Option<Vec<World>>,
     /// CLIENT's data as the patch leaves it (`client_image` reads its
@@ -742,6 +787,7 @@ impl Rules {
             damage_rgb: false,
             commands_to_server: false,
             auction_max_level: 50,
+            sell_stack: StackTest::Below(2),
             worlds: None,
             image: None,
             dir: None,
@@ -795,6 +841,9 @@ impl Rules {
         if let Some(n) = f.auction_max_level.filter(|&n| n > 0) {
             r.auction_max_level = n;
         }
+        if let Some(t) = f.sell_stack {
+            r.sell_stack = t;
+        }
         if !f.worlds.is_empty() {
             r.worlds = Some(f.worlds.clone());
         }
@@ -825,8 +874,16 @@ impl Rules {
         let tints = self.tints.as_ref().map_or(15, |t| self.tint_count_of(t.len()));
         let worlds = self.worlds.as_ref().map_or(6, Vec::len);
         format!(
-            "{} (tints {tints}, sets below {}, robes {}, worlds {worlds}, art {}, search {}, damage colours {}, commands to the server {}, auction level {})",
-            self.source, self.armor_set_limit, self.robe_limit, self.art_file, self.player_search, self.damage_rgb, self.commands_to_server, self.auction_max_level
+            "{} (tints {tints}, sets below {}, robes {}, worlds {worlds}, art {}, search {}, damage colours {}, commands to the server {}, auction level {}, stacks auctioned {})",
+            self.source,
+            self.armor_set_limit,
+            self.robe_limit,
+            self.art_file,
+            self.player_search,
+            self.damage_rgb,
+            self.commands_to_server,
+            self.auction_max_level,
+            self.sell_stack.passes(2)
         )
     }
 
@@ -992,6 +1049,8 @@ mod tests {
         assert_eq!(r.art_file, "ss-art.csf");
         assert!(r.player_search && r.damage_rgb && r.commands_to_server);
         assert_eq!(r.auction_max_level, 60);
+        // record 3: CanSell's slti v0, v0, 2 made addi v0, v0, 1
+        assert_eq!(r.sell_stack, StackTest::Plus(1));
         let names: Vec<String> = r.worlds.as_ref().expect("its world table").iter().map(World::esf_name).collect();
         assert_eq!(names, ["TUNARIA.ESF", "RATHE.ESF", "ODUS.ESF", "LAVASTM.ESF", "PLANESKY.ESF", "SECRETS.ESF", "UNDERFOOT.ESF", "SECRETS.ESF"]);
         let w0 = &r.worlds.as_ref().unwrap()[0];
@@ -1006,9 +1065,32 @@ mod tests {
     fn the_other_builds() {
         if let Some(r) = rules("july") {
             assert_eq!((r.auction_max_level, r.armor_set_limit, r.tints.as_ref().map(Vec::len), r.worlds.as_ref().map(Vec::len)), (50, 10, Some(30), Some(8)));
+            assert_eq!(r.sell_stack, StackTest::Plus(1));
         }
         if let Some(r) = rules("ours") {
             assert_eq!((r.armor_set_limit, r.robe_limit, r.player_search), (11, 6, true));
+            assert_eq!(r.sell_stack, StackTest::Plus(1));
+        }
+    }
+
+    /// CanSell's stack test as each instruction makes it: retail's slti
+    /// refuses any stack, S2's addi passes everything but a max stack of
+    /// -1; another instruction at the site is no test this reader knows.
+    #[test]
+    fn the_stack_test_of_each_instruction() {
+        let retail = StackTest::of(0x2842_0002).unwrap();
+        assert_eq!(retail, StackTest::Below(2));
+        assert!(retail.passes(0) && retail.passes(1));
+        assert!(!retail.passes(2) && !retail.passes(20) && !retail.passes(100));
+        let s2 = StackTest::of(0x2042_0001).unwrap();
+        assert_eq!(s2, StackTest::Plus(1));
+        assert!(s2.passes(1) && s2.passes(20) && s2.passes(100) && s2.passes(0));
+        assert!(!s2.passes(-1), "the one item S2's sum leaves at 0");
+        assert_eq!(StackTest::of(0x2442_0001), Some(StackTest::Plus(1)), "addiu");
+        // the game's word is 32 bits
+        assert!(retail.passes(1 << 32 | 1) && !retail.passes(1 << 32 | 2));
+        for w in [0x0000_0000, 0x2843_0002, 0x2862_0002, 0x3442_0001] {
+            assert_eq!(StackTest::of(w), None, "{w:08X}");
         }
     }
 
@@ -1137,7 +1219,7 @@ mod tests {
             assert_eq!(r.source, "retail");
             assert!(r.image.is_none() && r.worlds.is_none() && r.tints.is_none());
             assert!(!r.player_search && !r.damage_rgb);
-            assert_eq!((r.armor_set_limit, r.robe_limit, r.auction_max_level), (9, 4, 50));
+            assert_eq!((r.armor_set_limit, r.robe_limit, r.auction_max_level, r.sell_stack), (9, 4, 50, StackTest::Below(2)));
             assert_eq!(r.cust(), vi::cust::Tables::retail());
             assert_eq!(r.world_file(5).as_deref(), Some("SECRETS.ESF"));
             assert_eq!(r.world_file(6), None);
@@ -1149,6 +1231,12 @@ mod tests {
         let r = Rules::from_dir(&dir);
         assert_eq!((r.source.as_str(), r.auction_max_level), ("S2", 60));
         assert_ne!(r.auction_max_level, retail.auction_max_level);
+        assert_eq!(r.sell_stack, StackTest::Below(2), "no record at CanSell: retail's test");
+        // and one that rewrites CanSell's test
+        let mut p = rec(at::CLIENT_CAN_SELL_STACK, &0x2042_0001u32.to_le_bytes());
+        p.extend(tail(&[]));
+        std::fs::write(dir.join("S2"), &p).unwrap();
+        assert_eq!(Rules::from_dir(&dir).sell_stack, StackTest::Plus(1));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

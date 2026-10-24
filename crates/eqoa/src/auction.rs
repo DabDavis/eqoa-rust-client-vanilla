@@ -361,9 +361,17 @@ impl Auction {
     }
 }
 
-/// `VIWndAuction::CanSell`: tradeable, not lore, rentable, not a stack.
+/// `VIWndAuction::CanSell`: tradeable, not lore, rentable, and its stack
+/// test as the server's patch leaves it (`s2::StackTest`): retail's, not a
+/// stack; Sandstorm's S2 lets a stack go too (its record 3 rewrites the
+/// test, so on its PS2s crafting materials and gems sell).
 pub fn can_sell(it: &NetItem) -> bool {
-    it.item.no_trade == 0 && it.item.lore == 0 && it.item.rent != 0 && it.item.max_stack < 2
+    can_sell_by(it, crate::s2::get().sell_stack)
+}
+
+/// `can_sell` under a given stack test.
+pub fn can_sell_by(it: &NetItem, stack: crate::s2::StackTest) -> bool {
+    it.item.no_trade == 0 && it.item.lore == 0 && it.item.rent != 0 && stack.passes(it.item.max_stack)
 }
 
 /// `atoi`: blanks, a sign, the digits.
@@ -650,10 +658,11 @@ impl SellWnd {
         for i in 0..80 {
             self.bank.set_item(i, 0, -1, -1, -1, 0);
         }
+        let stack = crate::s2::get().sell_stack;
         for (i, it) in bank.items.iter().take(80).enumerate() {
             let mut flags = if it.quantity >= 2 { 5 } else { 1 };
             let mut color = -1;
-            if !can_sell(it) {
+            if !can_sell_by(it, stack) {
                 color = 140;
                 flags |= 8;
             }
@@ -891,6 +900,48 @@ mod tests {
     /// The bank's rows take a click, a second asks for the form; with the
     /// form up its rows take them (not the item's, which the keys skip, nor
     /// the list behind it), a second click editing the row.
+    /// A stack (a gem, a crafting material: max stack 20) is refused under
+    /// retail's CanSell and sold under Sandstorm's S2, which rewrites the
+    /// test; the form opens for it, or says 1727 and plays sound 9. The
+    /// other tests stand under both: lore, no trade and no rent stay
+    /// refused.
+    #[test]
+    fn a_stack_sells_where_the_patch_lets_it() {
+        use crate::pointer::testing::{NullRaster, vui};
+        use crate::s2::{Rules, StackTest, with_rules};
+        let (vui, r) = (vui(), NullRaster);
+        let mut gem = NetItem { quantity: 5, equip_slot: -1, quick_slot: -1, ..Default::default() };
+        (gem.item.rent, gem.item.value, gem.item.max_stack) = (1, 300, 20);
+        let mut sword = gem.clone();
+        (sword.quantity, sword.item.max_stack) = (1, 1);
+        let mut bank = ItemList::default();
+        bank.items.extend([gem.clone(), sword.clone()]);
+        let sandstorm = || Rules { sell_stack: StackTest::Plus(1), ..Rules::retail() };
+        // the control: retail's rules refuse the gem
+        assert!(!can_sell(&gem) && can_sell(&sword));
+        assert!(with_rules(sandstorm(), || can_sell(&gem) && can_sell(&sword)));
+        for (name, edit) in [("lore", 0), ("no trade", 1), ("no rent", 2)] {
+            let mut it = gem.clone();
+            match edit {
+                0 => it.item.lore = 1,
+                1 => it.item.no_trade = 1,
+                _ => it.item.rent = 0,
+            }
+            assert!(!with_rules(sandstorm(), || can_sell(&it)), "{name}");
+        }
+        let select = |rules: Rules| {
+            with_rules(rules, || {
+                let (mut cues, mut out) = (Vec::new(), Vec::new());
+                let mut s = SellWnd::default();
+                s.focus(&vui, &r);
+                s.key(&vui, &r, &bank, 134, true, 0, &mut cues, &mut out);
+                (s.selling, s.price, cues, out)
+            })
+        };
+        assert_eq!(select(Rules::retail()), (false, 0, vec![9], vec![SellOut::CannotSell]));
+        assert_eq!(select(sandstorm()), (true, 300, vec![13], vec![]));
+    }
+
     #[test]
     fn a_pointer_on_the_sell_form() {
         use crate::pointer::testing::{NullRaster, mid, vui};
