@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-24 · Players, NPCs and signposts are solid
+- You no longer walk through other players, NPCs or signposts: you stop at
+  them, or slide round them when you are not heading straight at them, as on a
+  PS2. Corpses still let you through, and so do players on your ignore list.
+
 ## 2026-10-24 · The model viewer turns at once
 - In View offline, F9's 2002 model now shows as soon as the disc is read,
   not only at the next key pressed.

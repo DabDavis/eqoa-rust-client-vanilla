@@ -108,7 +108,7 @@ impl Walker {
         let y = match spawn.placing {
             Placing::Ground => ground(&mut scene, x, z).unwrap_or(0.0),
             Placing::AsGiven => y,
-            Placing::Respawn => arrival_floor(&mut scene, spawn.pos).unwrap_or(y),
+            Placing::Respawn => arrival_floor(&mut scene, spawn.pos, -1).unwrap_or(y),
         };
         let mut cam = WalkCamera::<Ee>::default();
         let pos = Vect3::of(x, y, z);
@@ -131,7 +131,7 @@ impl Walker {
     /// when the zone there is loaded, else at the height given), facing
     /// `heading`, the camera set behind.
     pub fn relocate(&mut self, pos: [f32; 3], heading: f32) {
-        let y = arrival_floor(&mut self.scene, pos).unwrap_or(pos[1]);
+        let y = arrival_floor(&mut self.scene, pos, self.cam.walk.parm64).unwrap_or(pos[1]);
         self.place([pos[0], y, pos[2]], heading);
     }
 
@@ -453,18 +453,19 @@ impl crate::controls::Walk for Walker {
 /// one.
 /// `VIClient::Respawn`'s floor for a move (CLIENT 0x00BD5628, 0x00B2's
 /// teleport and a dump in play): a 0.1 sphere cast from 3 above the server's
-/// place to 3 below (`VISceneFilter`), the place put 0.2 under where it hits.
+/// place to 3 below (`VISceneFilter` on the player's own actor, `actor`: the
+/// other creatures are in it), the place put 0.2 under where it hits.
 /// Its second cast, "20 above the first hit", collides the same sphere
 /// again, so the first hit stands. The topmost floor within 20 (the client's
 /// rule until 2026-10-21) put a teleport on a stall's roof over the place.
 /// Nothing within 3 (the zones not read yet, on a far move) is None here,
 /// and the caller keeps the server's height; the game would go to the cast's
 /// end, 3.2 under it, safe only because its zones are always in.
-pub fn arrival_floor(w: &mut World<Ee>, pos: [f32; 3]) -> Option<f32> {
+pub fn arrival_floor(w: &mut World<Ee>, pos: [f32; 3], actor: i32) -> Option<f32> {
     let y = F::<Ee>::new(pos[1]);
     let mut s = CollSphere::<Ee>::default();
     s.init(Vect3::new(F::new(pos[0]), y + F::new(3.0), F::new(pos[2])), Vect3::new(F::new(pos[0]), y - F::new(3.0), F::new(pos[2])), F::new(0.1));
-    let mut f = Filter::new(FilterKind::Scene, -1);
+    let mut f = Filter::new(FilterKind::Scene, actor);
     w.collide_sphere(&mut s, &mut f).then(|| (s.hit_point().y - F::new(0.2)).0)
 }
 
@@ -587,14 +588,95 @@ mod tests {
     fn a_move_lands_on_the_floor_under_it_not_a_roof_over_it() {
         let (x, y, z) = (25476.0f32, 54.398438f32, 15707.797f32);
         let Some(mut world) = tunaria_round(x, z) else { return };
-        let floor = arrival_floor(&mut world, [x, y, z]).expect("a floor within 3");
+        let floor = arrival_floor(&mut world, [x, y, z], -1).expect("a floor within 3");
         assert!((floor - y).abs() < 0.5, "the stall's floor: {floor}");
         let top = ground(&mut world, x, z).unwrap();
         assert!(top > y + 10.0 && (top - y).abs() < 20.0, "the control: the old rule took the roof at {top}");
         let (px, pz) = (25275.115f32, 15766.627f32);
-        let open = arrival_floor(&mut world, [px, 54.125996, pz]).unwrap();
+        let open = arrival_floor(&mut world, [px, 54.125996, pz], -1).unwrap();
         assert!((open - ground(&mut world, px, pz).unwrap()).abs() < 0.2, "open ground: {open}");
-        assert_eq!(arrival_floor(&mut world, [px, 104.0, pz]), None, "nothing within 3");
+        assert_eq!(arrival_floor(&mut world, [px, 104.0, pz], -1), None, "nothing within 3");
+    }
+
+    /// The library with TUNARIA's zones round (x, z) and CHAR.ESF (the
+    /// characters) in it, and TUNARIA's place in it; None without the disc.
+    fn tunaria_and_chars(x: f32, z: f32) -> Option<(esf::Library, usize)> {
+        let iso = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        if !iso.exists() {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return None;
+        }
+        let mut lib = esf::Library::new();
+        let w = lib.add("TUNARIA.ESF", crate::stream::open_file(&iso, "TUNARIA.ESF").unwrap());
+        lib.add("CHAR.ESF", crate::stream::open_file(&iso, "CHAR.ESF").unwrap());
+        let mut src = crate::stream::FileZones::open(&iso, "TUNARIA.ESF").unwrap();
+        crate::stream::fill(&mut lib, w, x, z, &mut src);
+        Some((lib, w))
+    }
+
+    /// The player runs at a creature in its way and stops at its capsule (the
+    /// walk's `VISceneFilter` passes over only the player's own actor), or
+    /// slides round it when it is not dead ahead, never nearer its axis than
+    /// the capsule grown by the walk's sphere (0.5 + 0.6): on open ground in
+    /// Freeport, a signpost (an NPC, CHAR.ESF 0x6A82352C) 4 ahead. The
+    /// controls: the same run with no signpost goes on past where it stood;
+    /// the player's own actor at its feet, moved with it as `UpdateGame`
+    /// moves it, changes nothing of its run.
+    #[test]
+    fn the_player_stops_at_a_creature_in_its_way() {
+        let (x, z) = (25275.115f32, 15766.627f32);
+        let Some((lib, file)) = tunaria_and_chars(x, z) else { return };
+        let sprite_of = |w: &mut World<Ee>, id: i32| w.find_sprite(&lib, lib.lookup(id).unwrap()).unwrap();
+        // 1.5 s forward; (its place each frame, the place it began)
+        let run = |post: Option<(f32, f32)>, own: bool| {
+            let mut w = Walker::arrive(World::load(&lib, file).unwrap(), Spawn::ground(x, z, 0.0));
+            let p0 = w.cam.walk.phys.position;
+            if let Some((px, pz)) = post {
+                let y = ground(&mut w.scene, px, pz).unwrap();
+                let s = sprite_of(&mut w.scene, 0x6A82352C);
+                w.scene.create_actor(Vect3::of(px, y, pz), Vect3::default(), F::ONE, s);
+            }
+            let me = own.then(|| {
+                let s = sprite_of(&mut w.scene, 0x70D898C6);
+                let a = w.scene.create_actor(w.cam.walk.committed.smooth_location(), Vect3::default(), F::ONE, s);
+                w.cam.walk.parm64 = a as i32;
+                a
+            });
+            let t0 = w.scene.time;
+            let mut at = Vec::new();
+            for i in 1..=45 {
+                w.frame(Controls { fwd: 1.0, ..Default::default() }, t0 + i * 33);
+                if let Some(a) = me {
+                    let c = &w.cam.walk.committed;
+                    w.scene.set_actor_transform(a, Vect3::new(c.angles.x, F::ZERO, F::ZERO), F::ONE, c.smooth_location());
+                }
+                at.push(w.cam.walk.phys.position.to_array());
+            }
+            (at, p0.to_array())
+        };
+        let (free, p0) = run(None, false);
+        let end = free[free.len() - 1];
+        let (dx, dz) = (end[0] - p0[0], end[2] - p0[2]);
+        let len = (dx * dx + dz * dz).sqrt();
+        let (ux, uz) = (dx / len, dz / len);
+        assert!(len > 8.0, "the control runs on: {len}");
+        let ahead = |p: [f32; 3]| (p[0] - p0[0]) * ux + (p[2] - p0[2]) * uz;
+        for side in [0.0f32, 0.6] {
+            let post = (p0[0] + ux * 4.0 - uz * side, p0[2] + uz * 4.0 + ux * side);
+            let (blocked, _) = run(Some(post), false);
+            let near = blocked.iter().map(|p| ((p[0] - post.0).powi(2) + (p[2] - post.1).powi(2)).sqrt()).fold(f32::MAX, f32::min);
+            let got = ahead(blocked[blocked.len() - 1]);
+            eprintln!("a post {side} off the line: nearest {near:.3} to its axis, {got:.2} ahead of 4 (free: {:.2})", ahead(end));
+            assert!(near > 1.05, "{side} off: within the capsule, {near}");
+            if side == 0.0 {
+                assert!(got < 4.0 - 1.0, "dead ahead: stopped before it, at {got}");
+            } else {
+                assert!(got > 4.0 + 1.1, "{side} off: slid round it, at {got}");
+            }
+            assert!(ahead(end) > 4.0 + 1.1, "the control passes where it stood");
+        }
+        let (mine, _) = run(None, true);
+        assert_eq!(mine, free, "the player's own actor changes nothing of its run");
     }
 
     /// A login stands where the dump puts it, as `Msg000D`'s `SetLocation`

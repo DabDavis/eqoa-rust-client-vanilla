@@ -787,6 +787,13 @@ impl<M: Model> Cylinder<M> {
 }
 
 impl<M: Model> Capsule<M> {
+    /// `VICSprite::SetDefaults`' `m_capsule` (which `Copy` hands on and
+    /// nothing changes): every character collides as it, in its actor's
+    /// space, from the feet 2 up and 0.5 round.
+    pub fn csprite() -> Self {
+        Capsule { base: Vect3::default(), dir: Vect3::of(0.0, 1.0, 0.0), length: f(2.0), radius: f(0.5) }
+    }
+
     /// `VICapsule::PointInSolid`: the cylinder, or past an end within its
     /// sphere.
     pub fn point_in_solid(&self, p: &Vect3<M>) -> bool {

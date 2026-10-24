@@ -72,6 +72,28 @@ struct Puppet {
     era: esf::Era,
 }
 
+/// An entity's actor in the walker's collision world (`VIEntity::m_actor`):
+/// whose it is, the actor, and the model (in its art) its sprite was made
+/// from.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct EntityActor {
+    id: u32,
+    actor: usize,
+    model: u32,
+    era: esf::Era,
+}
+
+/// What an entity's actor is to be this frame (`place_actor`).
+struct ActorAt {
+    id: u32,
+    model: u32,
+    era: esf::Era,
+    at: Vect3<Ee>,
+    hpr: Vect3<Ee>,
+    scale: F<Ee>,
+    dead: bool,
+}
+
 /// `VICSprite::NameColors`.
 const NAME_COLORS: [[f32; 4]; 3] = [[212.0 / 255.0, 192.0 / 255.0, 111.0 / 255.0, 1.0], [100.0 / 255.0, 175.0 / 255.0, 220.0 / 255.0, 1.0], [90.0 / 255.0, 1.0, 80.0 / 255.0, 1.0]];
 
@@ -113,6 +135,14 @@ pub struct Play {
     /// Each creature's `m_walk`, made with it (`CreateEntity`: `Init` at the
     /// origin), keyed by the entity's id.
     walks: Vec<Option<(u32, WalkControl<Ee>)>>,
+    /// Each entity's actor in the walker's collision world (`m_actor`), by
+    /// slot (`place_actors`), and the player's own (`place_self_actor`): what
+    /// a walk stops at. The scene they are in (`World::serial`), and the
+    /// ignore list changed since the last frame (`Msg1003Done`).
+    actors: Vec<Option<EntityActor>>,
+    self_actor: Option<EntityActor>,
+    actors_in: u64,
+    refresh_collision: bool,
     /// The player's model as the server last named it on its channel.
     pub self_model: Option<u32>,
     /// The player dressed as its own channel says (look, items, helm),
@@ -971,6 +1001,160 @@ fn v3(a: [f32; 3]) -> Vect3<Ee> {
     Vect3::of(a[0], a[1], a[2])
 }
 
+/// The scale an entity's actor has: the channel's, as it is drawn (1 for
+/// none).
+fn actor_scale(s: f32) -> F<Ee> {
+    F::new(if s > 0.0 { s } else { 1.0 })
+}
+
+/// One entity's actor kept as `want` says: let go when its entity went or
+/// another took the slot (`ReleaseActor`), made with its model's sprite
+/// (`CreateActor`), its sprite made again when the model or its art changed
+/// (`SetActorSprite`), placed (`SetActorTransform`, when it moved: the rooms
+/// it is in are those it was in), its copy dead or alive as its sprite. The
+/// actor kept, and whether it was made now.
+fn place_actor(w: &mut vi::world::World<Ee>, lib: &Library, had: Option<EntityActor>, want: Option<ActorAt>) -> (Option<EntityActor>, bool) {
+    let had = match (had, &want) {
+        (Some(a), Some(n)) if a.id == n.id => Some(a),
+        (Some(a), _) => {
+            w.release_actor(a.actor);
+            None
+        }
+        (None, _) => None,
+    };
+    let Some(n) = want else { return (None, false) };
+    let sprite = |w: &mut vi::world::World<Ee>| lib.with_view(n.era, || lib.lookup(n.model as i32)).and_then(|r| w.find_sprite(lib, r));
+    let (a, made) = match had {
+        None => {
+            let Some(s) = sprite(w) else { return (None, false) };
+            (EntityActor { id: n.id, actor: w.create_actor(n.at, n.hpr, n.scale, s), model: n.model, era: n.era }, true)
+        }
+        Some(mut a) => {
+            if a.model != n.model || a.era != n.era {
+                let Some(s) = sprite(w) else {
+                    w.release_actor(a.actor);
+                    return (None, false);
+                };
+                w.set_actor_sprite(a.actor, s);
+                (a.model, a.era) = (n.model, n.era);
+            }
+            let now = &w.actors[a.actor];
+            if now.location.to_array() != n.at.to_array() || now.hpr.to_array() != n.hpr.to_array() || now.scale.bits() != n.scale.bits() {
+                w.set_actor_transform(a.actor, n.hpr, n.scale, n.at);
+            }
+            (a, false)
+        }
+    };
+    w.set_actor_dead(a.actor, n.dead);
+    (Some(a), made)
+}
+
+#[cfg(test)]
+mod entity_actors {
+    use super::*;
+    use vi::coll::CollSphere;
+    use vi::scene::{Filter, FilterKind};
+    use vi::world::World;
+
+    const SIGNPOST: u32 = 0x6A82352C;
+    const HUMAN: u32 = 0x70D898C6;
+
+    /// TUNARIA's zones round Freeport's open ground and CHAR.ESF, and the
+    /// collision world made of them; None without the disc.
+    fn freeport(x: f32, z: f32) -> Option<(Library, World<Ee>)> {
+        let iso = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        if !iso.exists() {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return None;
+        }
+        let mut lib = Library::new();
+        let w = lib.add("TUNARIA.ESF", crate::stream::open_file(&iso, "TUNARIA.ESF").unwrap());
+        lib.add("CHAR.ESF", crate::stream::open_file(&iso, "CHAR.ESF").unwrap());
+        let mut src = crate::stream::FileZones::open(&iso, "TUNARIA.ESF").unwrap();
+        crate::stream::fill(&mut lib, w, x, z, &mut src);
+        let world = World::load(&lib, w)?;
+        Some((lib, world))
+    }
+
+    /// What a walk's sweep across (x, z) at body height meets: the actor, or
+    /// -2 for nothing.
+    fn meets(w: &mut World<Ee>, x: f32, z: f32) -> i32 {
+        let y = crate::walker::ground(w, x, z).unwrap();
+        let mut s = CollSphere::<Ee>::default();
+        s.init(Vect3::of(x - 4.0, y + 1.2, z), Vect3::of(x + 4.0, y + 1.2, z), F::new(0.6));
+        let mut f = Filter::new(FilterKind::Scene, -1);
+        if w.collide_sphere(&mut s, &mut f) { f.hit_actor } else { -2 }
+    }
+
+    /// `place_actor` over an entity's time in a slot: made with its first
+    /// frame, kept (the same actor) as it moves, its sprite made again when
+    /// its model changes, nothing while its sprite is dead, let go for another
+    /// entity in the slot (made in its place) and when the slot empties; a
+    /// model not on the disc makes none. Each step is read back off the
+    /// collision world: what a walk's sweep where the entity stands meets.
+    /// The control: open ground, before and after.
+    #[test]
+    fn an_entity_has_an_actor_while_it_is_drawn() {
+        let (x, z) = (25275.115f32, 15766.627f32);
+        let Some((lib, mut w)) = freeport(x, z) else { return };
+        let (x2, z2) = (x - 8.0, z);
+        assert_eq!((meets(&mut w, x, z), meets(&mut w, x2, z2)), (-2, -2), "the control: open ground");
+        let at = |w: &mut World<Ee>, x: f32, z: f32| Vect3::of(x, crate::walker::ground(w, x, z).unwrap(), z);
+        let want = |w: &mut World<Ee>, id: u32, model: u32, (x, z): (f32, f32), dead: bool| {
+            let p = at(w, x, z);
+            Some(ActorAt { id, model, era: lib.view(), at: p, hpr: Vect3::default(), scale: F::ONE, dead })
+        };
+
+        let n = want(&mut w, 7, SIGNPOST, (x, z), false);
+        let (a, made) = place_actor(&mut w, &lib, None, n);
+        let a = a.expect("made");
+        assert!(made && a.id == 7 && a.model == SIGNPOST);
+        assert_eq!(meets(&mut w, x, z), a.actor as i32);
+        let n = want(&mut w, 7, SIGNPOST, (x, z), false);
+        let (b, made) = place_actor(&mut w, &lib, Some(a), n);
+        assert_eq!((b.map(|b| b.actor), made), (Some(a.actor), false), "kept");
+
+        // moved: the same actor where it is now
+        let n = want(&mut w, 7, SIGNPOST, (x2, z2), false);
+        let (b, _) = place_actor(&mut w, &lib, b, n);
+        assert_eq!(b.map(|b| b.actor), Some(a.actor));
+        assert_eq!((meets(&mut w, x, z), meets(&mut w, x2, z2)), (-2, a.actor as i32), "moved");
+
+        // another model: its sprite made again
+        let human = w.find_sprite(&lib, lib.lookup(HUMAN as i32).unwrap()).unwrap();
+        let n = want(&mut w, 7, HUMAN, (x2, z2), false);
+        let (b, _) = place_actor(&mut w, &lib, b, n);
+        assert_eq!(b.map(|b| b.model), Some(HUMAN));
+        assert_eq!(w.actors[a.actor].sprite, Some(human));
+        assert_eq!(meets(&mut w, x2, z2), a.actor as i32);
+
+        // dead, then alive (a dump)
+        let n = want(&mut w, 7, HUMAN, (x2, z2), true);
+        let (b, _) = place_actor(&mut w, &lib, b, n);
+        assert_eq!(meets(&mut w, x2, z2), -2, "a corpse");
+        let n = want(&mut w, 7, HUMAN, (x2, z2), false);
+        let (b, _) = place_actor(&mut w, &lib, b, n);
+        assert_eq!(meets(&mut w, x2, z2), a.actor as i32);
+
+        // another entity in the slot: the first let go, the second made
+        let n = want(&mut w, 8, SIGNPOST, (x, z), false);
+        let (c, made) = place_actor(&mut w, &lib, b, n);
+        let c = c.unwrap();
+        assert!(made && c.id == 8);
+        assert_eq!((meets(&mut w, x, z), meets(&mut w, x2, z2)), (c.actor as i32, -2), "the first gone");
+
+        // the slot empty: let go
+        assert_eq!(place_actor(&mut w, &lib, Some(c), None).0.map(|c| c.id), None);
+        assert_eq!((meets(&mut w, x, z), meets(&mut w, x2, z2)), (-2, -2), "the control: open ground again");
+
+        // a model the disc does not have: no actor
+        let count = w.actors.len();
+        let n = want(&mut w, 9, 0x1234_5678, (x, z), false);
+        assert_eq!(place_actor(&mut w, &lib, None, n), (None, false));
+        assert_eq!(w.actors.len(), count);
+    }
+}
+
 /// What `TargetCentre` reads of a creature with an actor: its id, where it is
 /// measured (a character's slot 4, else its place), its +0x18 bit 0 (the
 /// selectable flag) and whether it is of a player's side (`m_p256` 3).
@@ -1199,7 +1383,7 @@ impl Play {
         crate::s2::begin_session();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: 0, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), slot_asked: None, walks: (0..MAX_SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0 };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: 0, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), slot_asked: None, walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0 };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -1316,6 +1500,7 @@ impl Play {
         // the loading screen's gears, turning by the clock (`SetTime(now)`)
         self.loading.frame(lib, g.renderer, g.device, g.queue, now as i64);
         let mut new_model = None;
+        self.actors_scene(walker);
         for e in self.session.pump() {
             match e {
                 Event::TargetInfo { disposition, b, title, guild, .. } => {
@@ -1544,6 +1729,11 @@ impl Play {
                 Event::Opcode { op: 0x007D, data } => self.quests.recv_remove(&data),
                 Event::Opcode { op: op @ 0x1003..=0x1006, data } => {
                     self.ignore.recv(op, &data);
+                    // Msg1003Done (not for a rename): every creature's
+                    // collision refreshed against the list
+                    if op != 0x1006 {
+                        self.refresh_collision = true;
+                    }
                 }
                 Event::Opcode { op: op @ (0x03D5 | 0x03D6), data } => {
                     self.buddies.recv(op, &data);
@@ -1706,6 +1896,7 @@ impl Play {
                     let skel = self.puppets[slot].as_ref().and_then(|p| p.sprite.as_ref()).map_or(0, |s| s.skel_type);
                     let scene = &mut walker.scene;
                     let walk = &mut self.walks[slot];
+                    let had = self.actors[slot];
                     self.entities.channel(slot, &data, self_id, now, UPDATE_RATE, |e| {
                         if walk.as_ref().map(|w| w.0) != Some(e.id) {
                             let mut w = WalkControl::<Ee>::default();
@@ -1729,6 +1920,7 @@ impl Play {
                                 flags: c.walk_flags,
                                 ..Default::default()
                             };
+                            w.parm64 = had.filter(|a| a.id == e.id).map_or(-1, |a| a.actor as i32);
                             w.set_update_physics(&p, scene);
                         }
                         if e.creature.as_ref().is_some_and(|c| c.p255 == 0) {
@@ -1897,9 +2089,13 @@ impl Play {
             }
         }
         let self_id = self.session.self_id;
+        // UpdateGame: the player's own actor where its walk has taken it,
+        // before the other creatures walk
+        self.place_self_actor(walker, lib);
         // UpdateCreatures / VICreatureEntity::Walk: a creature with its own
-        // walk physics (a player, +0x255) is stepped by it; any other is
-        // carried along its velocity since it was last moved (ExtrapolateMove).
+        // walk physics (a player, +0x255) is stepped by it (it stops at the
+        // other actors, its own passed over); any other is carried along its
+        // velocity since it was last moved (ExtrapolateMove).
         let me = self.self_id32();
         for (slot, e) in self.entities.slots.iter_mut().enumerate() {
             let Some(e) = e else { continue };
@@ -1910,6 +2106,7 @@ impl Play {
             if c.p255 != 0
                 && let Some((_, w)) = self.walks[slot].as_mut()
             {
+                w.parm64 = self.actors[slot].filter(|a| a.id == e.id).map_or(-1, |a| a.actor as i32);
                 w.process(1, &mut walker.scene);
                 e.pos = w.committed.position.to_array();
                 e.hpr = [w.committed.angles.x.0, 0.0, 0.0];
@@ -2046,6 +2243,8 @@ impl Play {
                 a.visible = shown;
             }
         }
+        // Extrapolate: each actor where the entity is drawn
+        self.place_actors(walker, lib);
         self.spells_frame(walker, lib, game_ms, sound);
         self.draw_projectiles(walker, lib, &mut g);
         // the player's own swing, on its walker's pose
@@ -2120,6 +2319,75 @@ impl Play {
         }
         self.manual_frame(walker, game_frame);
         new_model
+    }
+
+    /// The actors made in an earlier scene are nothing in this one (a world
+    /// change, or F9's art, made the walker's world again): forgotten, to be
+    /// made again in it.
+    fn actors_scene(&mut self, walker: &Walker) {
+        if walker.scene.serial != self.actors_in {
+            self.actors_in = walker.scene.serial;
+            self.actors.fill(None);
+            self.self_actor = None;
+        }
+    }
+
+    /// `UpdateGame`'s `self->SetPos`/`SetHpr`: the player's own actor (its
+    /// model's sprite) at the walk's committed smooth location and heading,
+    /// its copy dead with the player's sprite. Its walk and camera pass over
+    /// it (`UpdateControls`: `m_walkCam.m_parm64`), as every other walk does
+    /// over its own; the other players' walks stop at it.
+    fn place_self_actor(&mut self, walker: &mut Walker, lib: &Library) {
+        self.actors_scene(walker);
+        let me = self.self_id32();
+        let c = &walker.cam.walk.committed;
+        let (at, hpr) = (c.smooth_location(), Vect3::new(c.angles.x, F::ZERO, F::ZERO));
+        let dead = walker.sprite.as_ref().is_some_and(|cs| cs.dead);
+        let want = self.entities.slots.iter().flatten().find(|e| Some(e.id) == me && e.model != 0).map(|e| ActorAt {
+            id: e.id,
+            model: e.model,
+            era: lib.view_for(e.model as i32),
+            at,
+            hpr,
+            scale: actor_scale(e.scale),
+            dead,
+        });
+        self.self_actor = place_actor(&mut walker.scene, lib, self.self_actor, want).0;
+        walker.cam.walk.parm64 = self.self_actor.map_or(-1, |a| a.actor as i32);
+    }
+
+    /// `VIClient::Extrapolate`'s `SetActorPos`/`SetActorHpr` (with
+    /// `VIEntity::CreateActor`/`ReleaseActor`) for every entity but the
+    /// player: each one drawn has an actor of its model's sprite at its
+    /// actor's place, turn (a creature with its own walk kept level) and
+    /// scale, its copy dead with its sprite; a creature's is a capsule the
+    /// player's walk stops at. `RefreshCollision`: a creature new, or every
+    /// one after the ignore list changed, collideable unless the list names
+    /// it.
+    fn place_actors(&mut self, walker: &mut Walker, lib: &Library) {
+        self.actors_scene(walker);
+        let me = self.self_id32();
+        let refresh = std::mem::take(&mut self.refresh_collision);
+        for slot in 0..MAX_SLOTS {
+            let e = self.entities.slots[slot].as_ref().filter(|e| Some(e.id) != me);
+            let want = match (e, self.puppets[slot].as_ref()) {
+                (Some(e), Some(p)) => {
+                    let level = e.creature.as_ref().is_some_and(|c| c.p255 != 0);
+                    let hpr = if level { [e.actor_hpr[0], 0.0, 0.0] } else { e.actor_hpr };
+                    let dead = p.sprite.as_ref().is_some_and(|cs| cs.dead);
+                    Some(ActorAt { id: e.id, model: p.model, era: p.era, at: v3(e.actor_pos), hpr: v3(hpr), scale: actor_scale(e.scale), dead })
+                }
+                _ => None,
+            };
+            let (a, made) = place_actor(&mut walker.scene, lib, self.actors[slot], want);
+            self.actors[slot] = a;
+            if let (Some(a), Some(c)) = (a, e.and_then(|e| e.creature.as_ref()))
+                && (made || refresh)
+            {
+                let ignored = self.ignore.list.iter().any(|r| r.name == c.name);
+                walker.scene.set_actor_collideable(a.actor, !ignored);
+            }
+        }
     }
 
     /// `VIScene`'s spell effects, a frame: the creatures as their actors (the

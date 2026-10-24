@@ -5,13 +5,15 @@
 //! `Replace*Proxy*` pair and `UpdateActor`), and the three walks over them:
 //! the swept-sphere collide, the environment ray, and actor insertion.
 //!
-//! Not yet: `VIHSprite` and `VICSprite` collide as nothing here (the first
-//! needs the pose evaluator, the second is a capsule); the ray collide.
+//! The actors made in play (`CreateActor`, `SetActorTransform`,
+//! `ReleaseActor`: every entity's, the player's own among them) go into the
+//! rooms they reach and out again as they move, and a `VICSprite` collides as
+//! its capsule, so a walk stops at a creature as it does at a wall.
 
 use crate::character::{AnimCache, load_hsprite};
 use crate::coll::{CollRay, CollSphere, EnvRay};
 use crate::hsprite::{AnimScene, HSprite};
-use crate::collide::{Collide, CollBuffer, cull_ray_sphere, cull_sphere};
+use crate::collide::{Capsule, Collide, CollBuffer, cull_ray_sphere, cull_sphere};
 use crate::fpu::{F, Model, clamp, f};
 use crate::geom::{BBox, Matrix44, Plane, Sphere};
 use crate::pick::{self, Color32F, PickBuffer, PickSegment};
@@ -40,6 +42,12 @@ pub struct Room {
     pub stamp24: i32,
     /// The actors that occupy it, in insertion order (`m_p68` list).
     pub actors: Vec<usize>,
+    /// The actors made in play that occupy it (`World::create_actor`). The
+    /// game keeps them on the same list, but `UpdateActor` takes an actor out
+    /// of every room and adds it at the end of each room it reaches, and they
+    /// are updated every frame, so they always come after the zone's own, as
+    /// they are walked here.
+    pub moving: Vec<usize>,
     /// The zone's own actor placements, as parsed (`m_a3C`).
     pub placements: Vec<usize>,
 }
@@ -76,8 +84,11 @@ pub enum SpriteKind {
     /// header's flags (`m_unk430`: 0 the emitter is placed and aimed in the
     /// world, else it sits at the origin of the sprite's own space).
     Particle { def: Option<Ref>, flags: i32 },
-    /// Collides as nothing (flora, sounds, lights, emitters; and for now
-    /// CSprites, whose collision is a capsule).
+    /// `VICSprite` (0x2700), a character, a player's or an NPC's (a signpost
+    /// is one): collides as its capsule ([`Capsule::csprite`]) in its actor's
+    /// space, as nothing while its actor's copy is dead, never with a ray.
+    C,
+    /// Collides as nothing (flora, sounds, lights, emitters).
     None,
 }
 
@@ -110,6 +121,10 @@ pub struct Actor<M: Model> {
     pub color: Color32F<M>,
     /// `m_p6C`: its static lighting (`World::lightings`), if any.
     pub lighting: Option<usize>,
+    /// `m_dead` of its own copy of a CSprite (`CreateActor` copies a sprite
+    /// whose `GetInstType` is 1, so each creature dies alone), with which
+    /// `VICSprite::Collide` answers nothing.
+    pub dead: bool,
 }
 
 pub struct World<M: Model> {
@@ -153,7 +168,19 @@ pub struct World<M: Model> {
     actor_order: Vec<u64>,
     /// The rooms an insertion added to, while a zone loads: (zone, room).
     touched: Vec<(usize, usize)>,
+    /// The actors made in play (`create_actor`) and the rooms each is in now,
+    /// as (zone, room) (`m_p98`'s occupancy list), which `RemoveActor` walks;
+    /// a zone's own actors are placed once and never taken out.
+    moving: HashMap<usize, Vec<(usize, usize)>>,
+    /// Released actors' places (`VIPool::Erase`), the next `create_actor`'s.
+    free: Vec<usize>,
+    /// Which of the scenes made (`World::load`) this is: an actor made in one
+    /// is nothing in the next (a world change, F9's art).
+    pub serial: u64,
 }
+
+/// The scenes made so far, for [`World::serial`].
+static SCENES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// `VIScene::Init`'s streaming radii (`m_p2A48[1]`, `[0]`): a zone loads
 /// when its bounds come within the inner one and is let go past the outer.
@@ -314,6 +341,9 @@ impl<M: Model> World<M> {
             loaded: vec![false; n],
             actor_order: Vec::new(),
             touched: Vec::new(),
+            moving: HashMap::new(),
+            free: Vec::new(),
+            serial: SCENES.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         };
         for zi in 0..n {
             w.zones.push(lib.zone(file, zi).map_or_else(Zone::default, |(zf, z)| Self::zone_base(lib.file(zf), z)));
@@ -527,6 +557,7 @@ impl<M: Model> World<M> {
                             Color32F { r: b(0), g: b(1), b: b(2), a: b(3) }
                         },
                         lighting: None,
+                        dead: false,
                     });
                     if let Some(r) = self.zones[zi].rooms.get_mut(room) {
                         r.placements.push(id);
@@ -554,6 +585,7 @@ impl<M: Model> World<M> {
                     stamp80: 0,
                     color: Color32F { r: b(0), g: b(1), b: b(2), a: b(3) },
                     lighting: None,
+                    dead: false,
                 });
                 self.zones[zi].rooms[room].placements.push(id);
             }
@@ -654,7 +686,8 @@ impl<M: Model> World<M> {
                 }
                 (SpriteKind::Lod(levels), header_bbox(0x2A10, 4), 0)
             }
-            0x2700 => (SpriteKind::None, header_bbox(0x2710, 4), 5),
+            // ParseCSpriteObj: the header's box (its sphere the box's)
+            0x2700 => (SpriteKind::C, header_bbox(0x2710, 4), 5),
             // ParseSoundSpriteObj: radius and volume (1 and 1 before version
             // 1); the box and sphere are the radius about the origin
             0xB100 => {
@@ -737,8 +770,9 @@ impl<M: Model> World<M> {
         Some(self.buffers.len() - 1)
     }
 
-    /// `VIScene::UpdateActor`: the transform, the bound, and insertion into
-    /// every room the world and zone trees put it in.
+    /// `VIScene::UpdateActor`: the transform, the bound, out of the rooms it
+    /// was in (`RemoveActor`), and into every room the world and zone trees
+    /// put it in.
     fn update_actor(&mut self, i: usize) {
         let Some(s) = self.actors[i].sprite else { return };
         let a = &mut self.actors[i];
@@ -748,6 +782,7 @@ impl<M: Model> World<M> {
         a.bound.r = sp.bsphere.r * a.scale;
         let corners = sp.bbox.corners(&a.object_to_world);
         let bound = a.bound;
+        self.remove_actor(i);
         let stamp = self.state;
         if self.nodes.is_empty() {
             self.insert_world(LEAF, i, &bound, &corners, stamp);
@@ -787,8 +822,16 @@ impl<M: Model> World<M> {
                 let Some(r) = self.zones[z].rooms.get_mut(room as usize) else { return };
                 if r.stamp20 != stamp {
                     r.stamp20 = stamp;
-                    r.actors.push(actor);
-                    self.touched.push((z, room as usize));
+                    match self.moving.get_mut(&actor) {
+                        Some(rooms) => {
+                            r.moving.push(actor);
+                            rooms.push((z, room as usize));
+                        }
+                        None => {
+                            r.actors.push(actor);
+                            self.touched.push((z, room as usize));
+                        }
+                    }
                 }
                 return;
             }
@@ -801,6 +844,100 @@ impl<M: Model> World<M> {
         }
         if back {
             self.insert_zone(z, n.back, actor, b, corners, stamp);
+        }
+    }
+
+    /// `VIDictionary::Find` for an entity's model: the scene sprite record `r`
+    /// is (a CSprite, for every creature on the disc), made once.
+    pub fn find_sprite(&mut self, lib: &Library, r: Ref) -> Option<usize> {
+        self.sprite(lib, r, &[])
+    }
+
+    /// `VIScene::CreateActor`: an actor of `sprite` at `at`, turned by `hpr`
+    /// and scaled by `scale`, in every room it reaches (`UpdateActor`), its
+    /// copy of a CSprite alive; its index, until `release_actor`.
+    pub fn create_actor(&mut self, at: Vect3<M>, hpr: Vect3<M>, scale: F<M>, sprite: usize) -> usize {
+        let actor = Actor {
+            location: at,
+            hpr,
+            scale,
+            sprite_id: 0,
+            sprite: Some(sprite),
+            object_to_world: Matrix44::identity(),
+            bound: Sphere::default(),
+            flags: 0,
+            stamp80: 0,
+            color: Color32F { a: F::ONE, ..Default::default() },
+            lighting: None,
+            dead: false,
+        };
+        let i = match self.free.pop() {
+            Some(i) => {
+                self.actors[i] = actor;
+                i
+            }
+            None => {
+                self.actors.push(actor);
+                self.actor_order.push(u64::MAX);
+                self.actors.len() - 1
+            }
+        };
+        self.moving.insert(i, Vec::new());
+        self.update_actor(i);
+        i
+    }
+
+    /// `VIScene::SetActorTransform` on an actor made in play: `hpr`, `scale`
+    /// and `at`, then `UpdateActor`.
+    pub fn set_actor_transform(&mut self, i: usize, hpr: Vect3<M>, scale: F<M>, at: Vect3<M>) {
+        let a = &mut self.actors[i];
+        a.location = at;
+        a.hpr = hpr;
+        a.scale = scale;
+        self.update_actor(i);
+    }
+
+    /// `VIScene::SetActorSprite` on an actor made in play: another sprite (of
+    /// a CSprite a new copy, alive), then `UpdateActor`.
+    pub fn set_actor_sprite(&mut self, i: usize, sprite: usize) {
+        self.actors[i].sprite = Some(sprite);
+        self.actors[i].dead = false;
+        self.update_actor(i);
+    }
+
+    /// `VIScene::SetActorCollideable`: `m_p40`'s 0x10, which every collide
+    /// passes over.
+    pub fn set_actor_collideable(&mut self, i: usize, on: bool) {
+        if on {
+            self.actors[i].flags &= !0x10;
+        } else {
+            self.actors[i].flags |= 0x10;
+        }
+    }
+
+    /// `VICSprite::SetDeath` on actor `i`'s own copy, as its collision sees
+    /// it (`m_dead`).
+    pub fn set_actor_dead(&mut self, i: usize, dead: bool) {
+        self.actors[i].dead = dead;
+    }
+
+    /// `VIScene::ReleaseActor` on an actor made in play: out of every room,
+    /// and its place the next `create_actor`'s.
+    pub fn release_actor(&mut self, i: usize) {
+        if self.moving.contains_key(&i) {
+            self.remove_actor(i);
+            self.moving.remove(&i);
+            self.actors[i].sprite = None;
+            self.free.push(i);
+        }
+    }
+
+    /// `VIScene::RemoveActor`: an actor made in play out of every room it is
+    /// in (the zones' own are never taken out).
+    fn remove_actor(&mut self, i: usize) {
+        let Some(rooms) = self.moving.get_mut(&i) else { return };
+        for (z, r) in std::mem::take(rooms) {
+            self.zones[z].rooms[r].moving.retain(|&a| a != i);
         }
     }
 
@@ -1027,6 +1164,12 @@ impl<M: Model> World<M> {
                 hit = true;
             }
         }
+        for k in 0..self.zones[z].rooms[room].moving.len() {
+            let a = self.zones[z].rooms[room].moving[k];
+            if self.collide_actor(a, s, f) {
+                hit = true;
+            }
+        }
         hit
     }
 
@@ -1047,7 +1190,7 @@ impl<M: Model> World<M> {
             }
             let m = self.actors[i].object_to_world;
             self.collide.set_world(&m);
-            hit = self.collide_sprite(sprite, s);
+            hit = self.collide_actor_sprite(i, sprite, s);
             if hit {
                 f.hit_actor = i as i32;
                 f.hit_sprite = sprite as i32;
@@ -1066,7 +1209,7 @@ impl<M: Model> World<M> {
             }
             let m = self.actors[i].object_to_world;
             self.collide.set_world(&m);
-            hit = self.collide_sprite(sprite, s);
+            hit = self.collide_actor_sprite(i, sprite, s);
             if hit {
                 f.hit_actor = i as i32;
                 f.hit_sprite = sprite as i32;
@@ -1075,6 +1218,15 @@ impl<M: Model> World<M> {
             self.actors[i].stamp80 = self.stamp;
         }
         hit
+    }
+
+    /// The actor's sprite's own `Collide` under its transform: a CSprite is
+    /// the actor's own copy, which collides as nothing while it is dead.
+    fn collide_actor_sprite<S: Swept<M>>(&mut self, i: usize, sprite: usize, s: &mut S) -> bool {
+        if self.actors[i].dead && matches!(self.sprites[sprite].kind, SpriteKind::C) {
+            return false;
+        }
+        self.collide_sprite(sprite, s)
     }
 
     /// `FilterActor`: the filter's own actor, or (the walk filters) a CSprite.
@@ -1108,6 +1260,8 @@ impl<M: Model> World<M> {
                 false
             }
             SpriteKind::Lod(levels) => levels.first().is_some_and(|&(l, _)| self.collide_sprite(l, s)),
+            // VICSprite::Collide: `m_capsule` (its death is the actor's copy's)
+            SpriteKind::C => s.collide_capsule(&mut self.collide, &Capsule::csprite()),
             // VIHSprite::Collide: the pose for now, the centre transform on the
             // collider's world, and each node attachment under its node.
             SpriteKind::H(i) => {
@@ -1150,14 +1304,15 @@ impl<M: Model> World<M> {
                     self.collide.set_world(&Matrix44::identity());
                     hit |= self.collide_sprite(sprite, s);
                 }
-                for k in 0..self.zones[z].rooms[room].actors.len() {
-                    let a = self.zones[z].rooms[room].actors[k];
-                    if !seen.insert(a) {
+                let room = &self.zones[z].rooms[room];
+                let actors: Vec<usize> = room.actors.iter().chain(&room.moving).copied().collect();
+                for a in actors {
+                    if !seen.insert(a) || self.actors[a].flags & 0x14 != 0 {
                         continue;
                     }
                     let (Some(sprite), m) = (self.actors[a].sprite, self.actors[a].object_to_world) else { continue };
                     self.collide.set_world(&m);
-                    hit |= self.collide_sprite(sprite, s);
+                    hit |= self.collide_actor_sprite(a, sprite, s);
                 }
             }
         }
@@ -1346,6 +1501,10 @@ pub trait Swept<M: Model> {
     fn cull(&self, b: &Sphere<M>) -> bool;
     /// `CollideObj` under the collider's world.
     fn collide_obj(&mut self, c: &mut Collide<M>, buf: &CollBuffer<M>) -> bool;
+    /// `VICSprite::Collide`'s capsule under the collider's world: a sphere's
+    /// `CollideObj(VICollSphere &, VICapsule &)`; a ray's is nothing
+    /// (`Collide(VICollRay &, ...)` answers 0).
+    fn collide_capsule(&mut self, c: &mut Collide<M>, cap: &Capsule<M>) -> bool;
 }
 
 impl<M: Model> Swept<M> for CollSphere<M> {
@@ -1365,6 +1524,9 @@ impl<M: Model> Swept<M> for CollSphere<M> {
     fn collide_obj(&mut self, c: &mut Collide<M>, buf: &CollBuffer<M>) -> bool {
         c.collide_obj(self, buf)
     }
+    fn collide_capsule(&mut self, c: &mut Collide<M>, cap: &Capsule<M>) -> bool {
+        c.collide_capsule_obj(self, cap)
+    }
 }
 
 impl<M: Model> Swept<M> for CollRay<M> {
@@ -1383,6 +1545,9 @@ impl<M: Model> Swept<M> for CollRay<M> {
     }
     fn collide_obj(&mut self, c: &mut Collide<M>, buf: &CollBuffer<M>) -> bool {
         c.collide_ray_obj(self, buf)
+    }
+    fn collide_capsule(&mut self, _: &mut Collide<M>, _: &Capsule<M>) -> bool {
+        false
     }
 }
 
