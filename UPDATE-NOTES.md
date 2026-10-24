@@ -5,6 +5,23 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-24 · More NPCs and players in view, and farther
+- Options > Extended has two new rows. NPC/PC Display, a slider from 24 (the
+  game's) up to 204, is how many NPCs and players, you among them, the game
+  keeps in view at once: the game always showed only the nearest 24, so in a
+  crowded town the rest were missing. NPC/PC View Distance, a slider from 100
+  (the game's) up to 1000, is how far away they are drawn: the game stops
+  drawing a player race's body (most townsfolk) 100 away.
+- Who is in view is the server's choice, so NPC/PC Display works only on a
+  server that offers more: eqoaclassic does, up to 204 within 1000. Sandstorm
+  and eqoa.live keep the game's 24. The view distance draws whatever the
+  server sends that far on any server. In the world, with either row chosen,
+  the line at the bottom of the page says what this server gives you.
+- Both raise what there is to draw: on a slower computer, or in a browser,
+  lower numbers keep the game smoother. Characters farther away than the game
+  would draw them move their arms and legs a little less often, which you
+  will not see at that distance.
+
 ## 2026-10-24 · The sound comes back by itself
 - If the sound device goes away while the game runs (headphones unplugged, the
   computer put to sleep and woken, the system's sound restarted), the game now
