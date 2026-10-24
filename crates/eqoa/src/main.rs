@@ -155,6 +155,10 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("eqoa: {e}");
+            // the line into the log, and the log closed after it: a run that
+            // ends on an error (no disc image chosen) is not offered as a
+            // crash at the next start
+            report::clean_exit();
             ExitCode::FAILURE
         }
     }
