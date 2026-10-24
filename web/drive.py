@@ -38,6 +38,10 @@ held), 'rdrag X0 Y0 X1 Y1 [MS]' (the right), 'press X Y [left|right]' and
 navigator.getGamepads (the standard layout's indices: 0 A, 1 B, 2 X, 3 Y,
 4 LB, 5 RB, 6 LT, 7 RT, 8 Back, 9 Start, 10 L3, 11 R3, 12-15 the d-pad):
 'tap N [MS]', 'press N', 'release N', 'axes LX LY RX RY'.
+--iso-2002 PATH puts the 2002 disc (EverQuest Online Adventures (USA),
+SLUS-20470) into the page's second input with the first, for the art on F9;
+--ask-2002 PATH answers the picker F9's ask opens in the game (the file
+chooser intercepted) with it.
 Needs the `websockets` package.
 """
 import argparse, asyncio, base64, functools, http.server, json, os, shutil, socketserver, subprocess, sys, threading, time, urllib.request
@@ -141,6 +145,11 @@ async def drive(a, base, ws_url):
                 elif m.get("method") == "Log.entryAdded":
                     e = m["params"]["entry"]
                     out(f"log {e.get('level')}: {e.get('text')}" + (f" ({e['url']})" if e.get("url") else ""))
+                elif m.get("method") == "Page.fileChooserOpened" and a.ask_2002:
+                    # F9's ask for the 2002 disc: answered with --ask-2002
+                    node = m["params"]["backendNodeId"]
+                    asyncio.ensure_future(call("DOM.setFileInputFiles", backendNodeId=node, files=[str(Path(a.ask_2002).resolve())]))
+                    out(f"file chooser: {a.ask_2002}")
 
         t0 = time.monotonic()
         rt = asyncio.ensure_future(reader())
@@ -173,6 +182,16 @@ async def drive(a, base, ws_url):
         doc = await call("DOM.getDocument")
         node = await call("DOM.querySelector", nodeId=doc["root"]["nodeId"], selector="#iso")
         await call("DOM.setFileInputFiles", nodeId=node["nodeId"], files=[str(Path(a.iso).resolve())])
+        if a.iso_2002:
+            node = await call("DOM.querySelector", nodeId=doc["root"]["nodeId"], selector="#iso2002")
+            await call("DOM.setFileInputFiles", nodeId=node["nodeId"], files=[str(Path(a.iso_2002).resolve())])
+            for _ in range(100):
+                if await js("document.getElementById('iso2002-what').textContent"):
+                    break
+                await asyncio.sleep(0.1)
+            out("2002 disc: " + str(await js("document.getElementById('iso2002-what').textContent")))
+        if a.ask_2002:
+            await call("Page.setInterceptFileChooserDialog", enabled=True)
 
         def setv(k, v):
             return js(f"document.getElementById({json.dumps(k)}).value = {json.dumps(v)}")
@@ -382,6 +401,8 @@ async def drive(a, base, ws_url):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--iso", required=True)
+    ap.add_argument("--iso-2002", help="the 2002 disc, put into the page's second input with the first")
+    ap.add_argument("--ask-2002", help="the 2002 disc, given to the picker F9's ask opens")
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--view", help="the viewer's file and arguments")
     g.add_argument("--boot", action="store_true", help="Start: the game from its boot")

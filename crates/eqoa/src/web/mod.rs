@@ -267,6 +267,101 @@ pub async fn disc_id(file: web_sys::File) -> Result<JsValue, JsValue> {
     Ok(js_sys::Array::of2(&ok.into(), &line.into()).into())
 }
 
+thread_local! {
+    /// The 2002 disc the page was handed for its art (`disc_2002`, `era`).
+    static DISC_2002: RefCell<Option<WebDisc>> = const { RefCell::new(None) };
+}
+
+/// The 2002 disc in hand, a reader of its own.
+pub(crate) fn disc_2002_copy() -> Option<WebDisc> {
+    DISC_2002.with(|c| c.borrow().as_ref().map(WebDisc::copy))
+}
+
+/// The 2002 disc for its art (`era`, F9), the page's second image: `file`
+/// judged by era's rules (`era::judge_listing`, as an image natively) and,
+/// when it is the USA disc of 2002, held: `[ok, line]`. A disc refused lets
+/// go of the one held before, so what the page names is what is read; no
+/// file (the input emptied) lets go too.
+#[wasm_bindgen]
+pub async fn disc_2002(file: Option<web_sys::File>) -> JsValue {
+    let verdict = match file {
+        None => Err(String::new()),
+        Some(f) => match WebDisc::open(f).await {
+            Ok(d) => {
+                let boot = d.boot().await;
+                crate::era::judge_listing(boot.as_deref(), |p| d.find(p).is_some()).map(|_| d)
+            }
+            Err(e) => Err(format!("{e}: the 2002 art is on EverQuest Online Adventures (USA), SLUS-20470.")),
+        },
+    };
+    let (ok, line) = match verdict {
+        Ok(d) => {
+            DISC_2002.with(|c| *c.borrow_mut() = Some(d));
+            (true, crate::era::TAKEN_LINE.to_string())
+        }
+        Err(e) => {
+            DISC_2002.with(|c| *c.borrow_mut() = None);
+            (false, e)
+        }
+    };
+    crate::era::set_page_disc(ok);
+    if !line.is_empty() {
+        log(&format!("art: {line}"));
+    }
+    js_sys::Array::of2(&ok.into(), &line.into()).into()
+}
+
+/// The files `names` names off the 2002 disc, each found by its last part,
+/// wherever that disc keeps it, and read whole; one it lacks is left out
+/// (`era::Files`).
+async fn read_2002(d: &WebDisc, names: &[String]) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let mut out = Vec::new();
+    for n in names {
+        let bare = crate::pregame::res::name_of(n);
+        if d.find(bare).is_none() {
+            continue;
+        }
+        out.push((n.clone(), d.read(bare).await?));
+    }
+    Ok(out)
+}
+
+/// What the 2002 art needs of a page (`era`): its reader, one for the files
+/// the world's art reads (`era::load`) and the pregame's (`era::read`),
+/// finishing on later frames; and F9's ask for the disc with none in hand,
+/// the page's (`window.eqoaAsk2002`, main.js), the press going on once one
+/// is handed over (`era::take_asked`).
+fn hooks_2002() {
+    crate::era::set_reader(Box::new(|names| {
+        let slot: crate::era::Slot = Default::default();
+        let out = slot.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let t = web_time::Instant::now();
+            let r = match disc_2002_copy() {
+                Some(d) => read_2002(&d, &names).await,
+                None => Err("no 2002 disc image (F9 asks for it)".to_string()),
+            };
+            if let Ok(files) = &r {
+                let mb = files.iter().map(|f| f.1.len()).sum::<usize>() as f64 / 1048576.0;
+                log(&format!("art: {} of the 2002 disc's files read ({mb:.1} MB) in {} ms", files.len(), t.elapsed().as_millis()));
+            }
+            *out.borrow_mut() = Some(r);
+        });
+        slot
+    }));
+    crate::era::set_asker(Box::new(|| {
+        crate::era::note_asked();
+        call_page("eqoaAsk2002", &JsValue::NULL);
+    }));
+}
+
+/// A test server's port from the page's address, as natively its
+/// environment variable (`pregame::port`): `?auth_port=29735` for
+/// `EQOA_AUTH_PORT`, `?game_port=`, `?patch_port=`, `?news_port=`.
+pub fn page_port(var: &str) -> Option<u16> {
+    page_value(&var.trim_start_matches("EQOA_").to_ascii_lowercase())?.parse().ok()
+}
+
 /// Once a second, the frame rate and the wasm heap on the status line,
 /// after `what`.
 fn rate(what: &'static str) {
@@ -399,6 +494,7 @@ pub async fn view(file: web_sys::File, args: String) -> Result<(), JsValue> {
     let r: Result<(), String> = async {
         let mut disc = WebDisc::open(file).await?;
         crate::stream::set_source_factory(disc.zone_sources());
+        hooks_2002();
         let name = a.first().ok_or("which file?")?;
         let mut lib = Library::new();
         let main = add(&mut lib, &mut disc, name).await?;
@@ -562,6 +658,8 @@ pub async fn boot(file: web_sys::File, opts: JsValue) -> Result<(), JsValue> {
         let disc = WebDisc::open(file).await?;
         crate::stream::set_source_factory(disc.zone_sources());
         crate::stream::set_world_opener(disc.world_opener());
+        // the 2002 disc's art (`era`, F9): its reader and its ask
+        hooks_2002();
         let (frontiers, which) = crate::discs::describe(disc.boot().await.as_deref());
         if !frontiers {
             problem("disc", &which);
@@ -640,12 +738,40 @@ fn world_loader(disc: &WebDisc) -> crate::pregame::host::WorldLoader {
             let r = async {
                 let world = player.world_path.rsplit(['\\', '/']).next().unwrap_or("tunaria.esf").to_uppercase();
                 let mut lib = Library::new();
-                let main = add(&mut lib, &mut d, &world).await?;
                 let [x, _, z] = player.pos;
-                let n = d.fill(&mut lib, main, x, z).await?;
+                // the world off the disc of the art drawn when that disc has
+                // it (`era::world_era`: Tunaria off the 2002 disc), as natively
+                let off_2002 = (crate::era::world_era(&world) == esf::Era::Y2002).then(disc_2002_copy).flatten();
+                let (main, n) = match off_2002 {
+                    Some(mut d2) => {
+                        status(&format!("reading {world} (the 2002 disc's)"));
+                        let main = lib.add_from(&world, d2.container(&world).await?, esf::Era::Y2002);
+                        (main, d2.fill(&mut lib, main, x, z).await?)
+                    }
+                    None => {
+                        let main = add(&mut lib, &mut d, &world).await?;
+                        (main, d.fill(&mut lib, main, x, z).await?)
+                    }
+                };
                 log(&format!("{n} zones read round the spawn"));
                 for name in SHARED.iter().copied().chain(["CHAR.ESF", "ITEM.ESF", "ARIAL.CSF", "UI.CSF", "ARIALUI.CSF", "ITEMICON.ESF", "SPELLFX.CSF", "FX.CSF", "ADDART.CSF"]) {
                     add(&mut lib, &mut d, name).await?;
+                }
+                // the 2002 disc's art while it is the art drawn (`era`, F9):
+                // its files in place of their namesakes, read with the world's
+                if crate::era::current() == esf::Era::Y2002
+                    && let Some(d2) = disc_2002_copy()
+                {
+                    status("reading the 2002 disc's art");
+                    let names = crate::era::names_of(&lib);
+                    let art: Vec<(String, esf::Container)> = read_2002(&d2, &names)
+                        .await?
+                        .into_iter()
+                        .map(|(n, b)| esf::Container::open(b).map(|c| (n.clone(), c)).map_err(|e| format!("{n}: {e}")))
+                        .collect::<Result<_, _>>()?;
+                    let k = crate::era::install(&mut lib, art);
+                    lib.set_view(esf::Era::Y2002);
+                    log(&format!("art: {k} of the 2002 disc's files stand in for Frontiers'"));
                 }
                 let index = vi::world::World::<vi::fpu::Ee>::zone_at(lib.file(main), x, z).ok_or("no zone at the player's position")?;
                 let character = lib.lookup(viewer::HUMAN).ok_or("no human model")?;

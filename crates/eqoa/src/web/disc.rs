@@ -163,7 +163,11 @@ impl WebDisc {
         let (file, len, entries) = (self.file.clone(), self.len, self.entries.clone());
         Box::new(move |name, x, z| {
             let out: crate::stream::Arrival = Default::default();
-            let mut d = WebDisc { file: file.clone(), len, entries: entries.clone(), sparse: Sparse::new(len) };
+            // off the disc of the art drawn when that disc has the world
+            // (`era::world_era`: Tunaria off the 2002 disc), and saying so
+            let d2 = (crate::era::world_era(name) == esf::Era::Y2002).then(super::disc_2002_copy).flatten();
+            let era = if d2.is_some() { esf::Era::Y2002 } else { esf::Era::Frontiers };
+            let mut d = d2.unwrap_or_else(|| WebDisc { file: file.clone(), len, entries: entries.clone(), sparse: Sparse::new(len) });
             let (o, name) = (out.clone(), name.to_string());
             wasm_bindgen_futures::spawn_local(async move {
                 let t = web_time::Instant::now();
@@ -176,8 +180,8 @@ impl WebDisc {
                     for (zi, off, n) in crate::stream::fill_set(&lib, f, x, z) {
                         zones.push((zi, d.read_at(base + off, n).await?));
                     }
-                    super::log(&format!("{name} opened, {} zones read round the arrival ({} ms)", zones.len(), t.elapsed().as_millis()));
-                    Ok::<_, String>(crate::stream::Opened { container: std::mem::replace(&mut lib.files[f].1, esf::Container::empty()), zones, era: esf::Era::Frontiers })
+                    super::log(&format!("{name} opened ({era:?}), {} zones read round the arrival ({} ms)", zones.len(), t.elapsed().as_millis()));
+                    Ok::<_, String>(crate::stream::Opened { container: std::mem::replace(&mut lib.files[f].1, esf::Container::empty()), zones, era })
                 }
                 .await;
                 *o.borrow_mut() = Some(r);
@@ -190,7 +194,15 @@ impl WebDisc {
     /// read as slices of this image.
     pub fn zone_sources(&self) -> crate::stream::Factory {
         let d = WebDisc { file: self.file.clone(), len: self.len, entries: self.entries.clone(), sparse: Sparse::new(0) };
-        Box::new(move |lib, f| d.zone_source(&lib.files[f].0).map(|z| Box::new(z) as Box<dyn crate::stream::ZoneSource>))
+        Box::new(move |lib, f| {
+            // the world's own disc's: Tunaria off the 2002 disc (`era`)
+            let name = &lib.files[f].0;
+            let z = match lib.era_of(f) {
+                esf::Era::Y2002 => super::disc_2002_copy().and_then(|d2| d2.zone_source(name)),
+                esf::Era::Frontiers => d.zone_source(name),
+            };
+            z.map(|z| Box::new(z) as Box<dyn crate::stream::ZoneSource>)
+        })
     }
 
     /// Where a deferred world's zones come from (`stream::set_source_factory`).

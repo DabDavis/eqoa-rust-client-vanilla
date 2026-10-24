@@ -5,7 +5,7 @@
 // override the defaults: ?relay=ws://127.0.0.1:8790&server=203.0.113.10 for a
 // local server. Reports, notices and what goes wrong are report.js's
 // (window.eqoaReport).
-import init, { boot, view, client_state, want_shot, crash_test, disc_id } from './eqoa.js';
+import init, { boot, view, client_state, want_shot, crash_test, disc_id, disc_2002 } from './eqoa.js';
 
 const $ = (id) => document.getElementById(id);
 // the client's own graphics line ("graphics: <adapter> (<backend>)"), for reports
@@ -502,6 +502,55 @@ $('iso').addEventListener('change', async () => {
   }
 });
 
+// ---- the 2002 disc: EverQuest Online Adventures (USA), SLUS-20470, whose
+// art F9 swaps in (crates/eqoa/src/era.rs). Optional, judged by the client's
+// rules as it is picked (web::disc_2002) and held by the client; picked on
+// the gate, or when F9 asks for it in the game. A disc refused is let go of,
+// so the line says what is read.
+
+let disc2002Line = '';
+$('iso2002').addEventListener('change', async () => {
+  const file = $('iso2002').files[0] || null;
+  const line = $('iso2002-what');
+  line.textContent = '';
+  line.className = 'note';
+  disc2002Line = '';
+  try {
+    await ready;
+    const [ok, text] = await disc_2002(file);
+    if (file) {
+      line.className = 'note ' + (ok ? 'ok' : 'warn');
+      line.textContent = text;
+      disc2002Line = `${text} (${file.size} bytes)`;
+    }
+    // in the game the gate is hidden: a refusal is a notice; a disc taken
+    // clears F9's ask, and the swap it was pressed for goes on
+    if (report && started) {
+      if (ok || !file) report.notice('disc2002');
+      else report.notice('disc2002', 'bad', text, [['Choose another', () => $('iso2002').click(), true], ['Close', () => report.notice('disc2002')]]);
+    }
+  } catch (e) {
+    line.className = 'note warn';
+    line.textContent = String(e && e.message ? e.message : e);
+    disc2002Line = `${line.textContent} (${file ? file.size : 0} bytes)`;
+  }
+  if (started) $('eqoa').focus();
+});
+
+// F9 with no 2002 disc in hand (web::hooks_2002, era::ask): the picker opened
+// at once, in the key's own user activation, and a notice whose button opens
+// it again (a browser that would not open it from a key, a player who
+// closed it).
+window.eqoaAsk2002 = () => {
+  try { $('iso2002').click(); } catch { /* the notice's button does */ }
+  if (report) {
+    report.notice('disc2002', '', 'The 2002 art comes off your own EverQuest Online Adventures (USA) disc image, SLUS-20470: pick it, and F9 swaps the art.', [
+      ['Choose the disc', () => $('iso2002').click(), true],
+      ['Not now', () => report.notice('disc2002')],
+    ]);
+  }
+};
+
 // ---- updates: this page is one build (web/build.sh puts each in
 // v/<build>/, kept as it is for good), and version.json beside the page names
 // the newest. A tab left open asks now and then: on an untouched gate
@@ -575,7 +624,7 @@ async function checkUpdate(force) {
     report.notice('update');
     return latest;
   }
-  const untouched = !started && !$('iso').files.length;
+  const untouched = !started && !$('iso').files.length && !$('iso2002').files.length;
   if (session.get('reloadedFor') === latest) {
     // reloaded for it once already and still this build: something between
     // here and the server keeps the old page
@@ -616,6 +665,7 @@ if (report) {
     `update: ${!BUILD ? 'not a built page' : !latest ? 'not asked yet' : latest === BUILD ? 'this is the newest' : `the server has ${latest}`}`,
     `graphics: ${$('gfx-state').textContent}${clientGraphics ? `; the client's: ${clientGraphics}` : ''}`,
     `disc: ${discLine || ($('iso').files.length ? 'picked, not identified' : 'none picked')}`,
+    `2002 disc: ${disc2002Line || ($('iso2002').files.length ? 'picked, not identified' : 'none picked')}`,
     `panel: ${$('gate').hidden ? 'none (the game)' : 'gate'}, status: ${$('status').textContent}`,
     `relay ${$('relay').value || '-'}, server ${$('server').value || '(this host)'}`,
     `sound: ${JSON.stringify(window.eqoaAudio.stats())}`,

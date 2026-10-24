@@ -21,6 +21,10 @@ version.json under it:
             not
   missing   a page whose build is gone says so in its status line
   disc      the disc is named when picked (with a second image in --other-iso)
+  2002      the 2002 disc (--iso-2002) is taken in the second input, the
+            Frontiers disc there refused; F9's ask opens its picker inside
+            the key's activation (not without one) and puts up its notice,
+            whose button opens it again and takes the disc picked
 
 Each check has its negative control. Needs the `websockets` package.
 
@@ -131,12 +135,16 @@ class Page:
 
     def __init__(self, ws):
         self.ws, self.seq, self.pending, self.lines = ws, 0, {}, []
+        # file choosers the page opened (Page.setInterceptFileChooserDialog)
+        self.choosers = []
 
     async def reader(self):
         async for raw in self.ws:
             m = json.loads(raw)
             if "id" in m and m["id"] in self.pending:
                 self.pending.pop(m["id"]).set_result(m.get("result", m.get("error")))
+            elif m.get("method") == "Page.fileChooserOpened":
+                self.choosers.append(m["params"])
             elif m.get("method") == "Runtime.consoleAPICalled":
                 self.lines.append(" ".join(str(x.get("value", x.get("description", ""))) for x in m["params"]["args"]))
             elif m.get("method") == "Runtime.exceptionThrown":
@@ -187,10 +195,15 @@ class Page:
         for kind in ("keyDown", "keyUp"):
             await self.call("Input.dispatchKeyEvent", type=kind, key=k, code=code, windowsVirtualKeyCode=vk)
 
-    async def pick(self, iso):
+    async def pick(self, iso, selector="#iso"):
         doc = await self.call("DOM.getDocument")
-        node = await self.call("DOM.querySelector", nodeId=doc["root"]["nodeId"], selector="#iso")
+        node = await self.call("DOM.querySelector", nodeId=doc["root"]["nodeId"], selector=selector)
         await self.call("DOM.setFileInputFiles", nodeId=node["nodeId"], files=[str(Path(iso).resolve())])
+
+    async def gesture(self, expr):
+        """`expr` evaluated as from the user's own gesture (its activation)."""
+        r = await self.call("Runtime.evaluate", expression=expr, userGesture=True, awaitPromise=True, returnByValue=True)
+        return (r or {}).get("result", {}).get("value")
 
 
 async def tests(a, site, base, page):
@@ -358,6 +371,47 @@ async def tests(a, site, base, page):
         line = await page.until("document.getElementById('iso-what').className.includes('warn') && document.getElementById('iso-what').textContent", 10)
         check("another disc is named, and what it lacks", bool(line) and "Frontiers" in line, str(line))
 
+    # ---- 2002: the second disc, judged by the client's rules (era.rs)
+    if a.iso_2002:
+        await page.open(base + q)
+        what = "document.getElementById('iso2002-what')"
+        await page.pick(a.iso_2002, "#iso2002")
+        line = await page.until(f"{what}.className.includes('ok') && {what}.textContent", 15)
+        check("the 2002 disc is taken in the second input", bool(line) and "SLUS-20470" in line and "F9" in line, str(line))
+        await page.pick(a.iso, "#iso2002")
+        line = await page.until(f"{what}.className.includes('warn') && {what}.textContent", 15)
+        check("the Frontiers disc there is refused with the client's line (control)", bool(line) and "Frontiers disc the game runs off" in line, str(line))
+        # F9's ask (web::hooks_2002 calls window.eqoaAsk2002): the picker opens
+        # in a key's activation, not from a script without one; its notice
+        # either way
+        await page.call("Page.setInterceptFileChooserDialog", enabled=True)
+        n = len(page.choosers)
+        await page.js("eqoaAsk2002()")
+        await asyncio.sleep(0.5)
+        quiet = len(page.choosers) == n
+        shown = await page.until(f"{notices}.includes('disc2002')", 5)
+        check("without an activation the picker does not open, the notice does (control)", quiet and bool(shown), f"choosers {len(page.choosers) - n}")
+        await page.gesture("eqoaAsk2002()")
+        for _ in range(20):
+            if len(page.choosers) > n:
+                break
+            await asyncio.sleep(0.1)
+        check("in an activation the ask opens the picker", len(page.choosers) > n, f"choosers {len(page.choosers) - n}")
+        # the notice's button opens it again, and what is picked there is taken
+        m = len(page.choosers)
+        await page.gesture("[...document.querySelectorAll('#notices .notice[data-key=disc2002] button')].find(b => b.textContent === 'Choose the disc').click()")
+        for _ in range(20):
+            if len(page.choosers) > m:
+                break
+            await asyncio.sleep(0.1)
+        if len(page.choosers) > m:
+            await page.call("DOM.setFileInputFiles", backendNodeId=page.choosers[-1]["backendNodeId"], files=[str(Path(a.iso_2002).resolve())])
+        line = await page.until(f"{what}.className.includes('ok') && {what}.textContent", 15)
+        check("the notice's button opens it again and takes the disc", len(page.choosers) > m and bool(line) and "SLUS-20470" in line, str(line))
+        await page.call("Page.setInterceptFileChooserDialog", enabled=False)
+        facts = await page.js("eqoaReport.facts().join('\\n')") or ""
+        check("a report names the 2002 disc", "2002 disc: EverQuest Online Adventures (USA), SLUS-20470" in facts, facts[-200:])
+
     errors = [l for l in page.lines if l.startswith("EXCEPTION") and "crash_test" not in l and "unreachable" not in l and "a test rejection" not in l]
     check("no exception in the page beyond the crash test's", not errors, "; ".join(errors[:3]))
     return failed
@@ -419,6 +473,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--iso", default=str(HERE.parent / "run" / "eqoa.iso"))
     ap.add_argument("--other-iso", help="a disc image other than Frontiers, for the disc check's other half")
+    ap.add_argument("--iso-2002", help="the EverQuest Online Adventures (USA) disc image, for the 2002 checks")
     ap.add_argument("--serve", action="store_true", help="only serve the site and the stand-in report server")
     ap.add_argument("--keep", help="a directory for what the stand-in report server is sent, a JSON file each")
     ap.add_argument("--http-port", type=int, default=0)

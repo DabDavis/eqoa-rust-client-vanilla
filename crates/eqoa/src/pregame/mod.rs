@@ -104,6 +104,11 @@ pub fn port(var: &str, default: u16) -> u16 {
     if let Some(p) = std::env::var(var).ok().and_then(|p| p.parse().ok()) {
         return p;
     }
+    // a page: `?auth_port=`, `?game_port=`... (`web::page_port`)
+    #[cfg(target_arch = "wasm32")]
+    if let Some(p) = crate::web::page_port(var) {
+        return p;
+    }
     let _ = var;
     default
 }

@@ -37,7 +37,7 @@
   [hidden] { display: none !important; }
   #status { position: fixed; left: 12px; bottom: 10px; color: var(--dim); font-size: 12px; pointer-events: none; text-shadow: 0 1px 2px #000; }
   body.playing #status { left: auto; right: 12px; text-align: right; }
-  #iso-what:empty { display: none; }
+  #iso-what:empty, #iso2002-what:empty { display: none; }
   .note.ok { color: var(--good); }
   .note.warn { color: var(--accent); }
   .link { flex: 0 0 auto; padding: 4px 0; background: none; border: none; color: var(--dim); font: 500 13px system-ui, sans-serif; text-decoration: underline; cursor: pointer; }
@@ -73,6 +73,9 @@
     <label for="iso">Disc image (SLUS-20744, .iso)</label>
     <input id="iso" type="file" accept=".iso,.bin,.img" required>
     <div class="note" id="iso-what"></div>
+    <label for="iso2002">The 2002 disc, for its art on F9 (optional: EverQuest Online Adventures (USA), SLUS-20470, .iso)</label>
+    <input id="iso2002" type="file" accept=".iso,.bin,.img">
+    <div class="note" id="iso2002-what"></div>
     <details>
       <summary>Server and viewer</summary>
       <label for="relay">Relay</label>
