@@ -31,7 +31,9 @@
 //! Distance (a slider and its number: how far they are drawn, the game's 100
 //! to 1000 in fifties, `lod::view_dist`, and looked for on a server that
 //! offers it; both told the server by `Play::agree_entity_view`, and in the
-//! world the legend says what this server gives while either is chosen),
+//! world the legend says what this server gives while either is chosen) and
+//! Art (Frontiers' or the 2002 disc's, `era`, as F9 swaps it: drawn as it
+//! moves, the 2002 disc asked for the first time),
 //! laid out and driven as the game's rows are, eight at a time (the page
 //! scrolls five rows). They change as they are moved, Triangle on the menu
 //! puts them back, and Save Changes keeps them with the game's
@@ -238,7 +240,7 @@ pub struct WndOptions {
     page: i32,
     /// `m_row`: the page's row
     row: i32,
-    /// the Extended page's first row shown: it holds thirteen, eight at a time
+    /// the Extended page's first row shown: it holds fourteen, eight at a time
     ext_top: i32,
     /// In the world, what this server gives (`Play::agree_entity_view` sets
     /// it), the legend's while NPC/PC Display or View Distance is chosen;
@@ -506,7 +508,7 @@ impl WndOptions {
                 let at = all.iter().position(|&f| f == crate::settings::focus()).unwrap_or(0);
                 crate::settings::set_focus(all[(at + if d < 0 { all.len() - 1 } else { 1 }) % all.len()]);
             }
-            12..=15 | 17..=24 => {
+            12..=15 | 17..=25 => {
                 let mut c = crate::settings::client();
                 // a slider's step, or sound 9 at its end
                 let mut slide = |v: &mut u8, lo: u8, hi: u8, by: u8| {
@@ -522,6 +524,9 @@ impl WndOptions {
                     18 => c.screen_shake = !c.screen_shake,
                     19 => c.capture = !c.capture,
                     21 => c.background_sound = !c.background_sound,
+                    // Art (`era`): drawn as it moves, the window's (`viewer`
+                    // turns the library's view when the setting does)
+                    25 => c.art = crate::era::other(c.art),
                     22 => {
                         let (lo, n) = (crate::settings::ABILITY_BARS_GAME, crate::hudmenu::MAX_BARS as u8 - crate::settings::ABILITY_BARS_GAME + 1);
                         c.ability_bars = lo + (c.ability_bars.saturating_sub(lo).min(n - 1) + if d < 0 { n - 1 } else { 1 }) % n;
@@ -572,7 +577,7 @@ impl WndOptions {
             }
             _ => {}
         }
-        if !matches!(self.item, 3 | 4 | 13 | 15 | 17 | 20 | 23 | 24) && (0..=24).contains(&self.item) {
+        if !matches!(self.item, 3 | 4 | 13 | 15 | 17 | 20 | 23 | 24) && (0..=25).contains(&self.item) {
             cues.push(11);
         }
         if d < 0 {
@@ -836,7 +841,7 @@ impl WndOptions {
     /// menu under it; eight rows show at a time, the selected one among them,
     /// with a scroll bar down the right as the Controls page has.
     fn draw_extended(&mut self, vui: &Vui, r: &mut dyn Raster) {
-        self.item = [12, 13, 20, 14, 15, 17, 18, 16, 19, 21, 22, 23, 24].get(self.row as usize).copied().unwrap_or(self.item);
+        self.item = [12, 13, 20, 14, 15, 17, 18, 16, 19, 21, 22, 23, 24, 25].get(self.row as usize).copied().unwrap_or(self.item);
         let n = EXTENDED_ROWS.len() as i32;
         if self.row < self.ext_top {
             self.ext_top = self.row;
@@ -857,7 +862,11 @@ impl WndOptions {
             Focus::Off => vui.words.get(552, vui.language).to_string(),
             f => crate::input::focus_name(f),
         };
-        let values = [Some(lod), None, None, Some(wide(rate)), None, None, Some(on_off(c.screen_shake)), Some(wide(&focus)), Some(on_off(c.capture)), Some(on_off(c.background_sound)), Some(wide(&c.ability_bars.to_string())), None, None];
+        let art = match c.art {
+            esf::Era::Frontiers => "Frontiers",
+            esf::Era::Y2002 => "2002",
+        };
+        let values = [Some(lod), None, None, Some(wide(rate)), None, None, Some(on_off(c.screen_shake)), Some(wide(&focus)), Some(on_off(c.capture)), Some(on_off(c.background_sound)), Some(wide(&c.ability_bars.to_string())), None, None, Some(wide(art))];
         let shown = top as usize..(top + EXTENDED_SHOWN).min(n) as usize;
         let labels: Vec<Vec<u16>> = EXTENDED_ROWS[shown.clone()].iter().map(|l| wide(l)).collect();
         self.draw_rows_from(vui, r, &labels, &values[shown], 0, top);
@@ -905,11 +914,11 @@ impl WndOptions {
 }
 
 /// The client's words for its own pages (no WORDS.TXT entry): the menu's
-/// rows and the Extended page's thirteen. (WORDS.TXT's "CONTROLS", 1039, is in
+/// rows and the Extended page's fourteen. (WORDS.TXT's "CONTROLS", 1039, is in
 /// capitals and used by none of the game's modules.)
 const EXTENDED: &str = "Extended";
 const CONTROLS: &str = "Controls";
-const EXTENDED_ROWS: [&str; 13] = ["Level of Detail", "Brightness", "Fog", "Frame Rate", "Camera Distance", "Camera Turn Speed", "Screen Shake", "Controller Focus", "Capture Controller", "Sound in Background", "Ability Bars", "NPC/PC Display", "NPC/PC View Distance"];
+const EXTENDED_ROWS: [&str; 14] = ["Level of Detail", "Brightness", "Fog", "Frame Rate", "Camera Distance", "Camera Turn Speed", "Screen Shake", "Controller Focus", "Capture Controller", "Sound in Background", "Ability Bars", "NPC/PC Display", "NPC/PC View Distance", "Art"];
 /// The Extended page's rows shown at a time: as many as nine rows' height
 /// holds with the legend's.
 const EXTENDED_SHOWN: i32 = 8;
@@ -1211,7 +1220,16 @@ mod tests {
         }
         assert_eq!((settings::entity_view(), cues.last()), (1000, Some(&9)), "1000, then its end");
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (12, Some(&9)), "the last row");
+        assert_eq!(w.item, 25, "Art");
+        assert_eq!(w.ext_top, 6, "scrolled a sixth row");
+        assert_eq!(settings::art(), esf::Era::Frontiers, "Frontiers', the disc the game runs off");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::art(), cues.last()), (esf::Era::Y2002, Some(&11)), "the 2002 disc's");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert_eq!(settings::art(), esf::Era::Frontiers, "and back: two values");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (13, Some(&9)), "the last row");
         // Triangle: the menu, then closed with every setting put back
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!(w.page, -1);

@@ -1528,6 +1528,9 @@ struct App {
     era_loading: Option<crate::era::Loading>,
     /// `EQOA_ART_AT`: when a test's script presses F9 (ms on `clock`).
     art_script: Vec<i64>,
+    /// The art last applied (`apply_era`), against which the setting's
+    /// moves are seen (`poll_era`).
+    art_drawn: esf::Era,
 }
 
 pub fn run(lib: Library, source: Source) -> Result<(), Error> {
@@ -1560,6 +1563,9 @@ pub fn run_with_gfx(lib: Library, source: Source, play: Option<crate::play::Play
 fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pending: Option<PendingGfx>, host: Option<crate::pregame::host::Host>) -> Result<(), Error> {
     let event_loop = EventLoop::new()?;
     let display = event_loop.owned_display_handle();
+    // what the library shows: a run begun in the other art turns it at the
+    // first frame (`poll_era`)
+    let art_drawn = lib.view();
     #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     let mut app = App {
         lib,
@@ -1612,6 +1618,7 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         failed: None,
         era_loading: None,
         art_script: std::env::var("EQOA_ART_AT").map(|v| v.split(';').filter_map(|t| t.trim().parse().ok()).collect()).unwrap_or_default(),
+        art_drawn,
     };
     #[cfg(target_arch = "wasm32")]
     {
@@ -1712,6 +1719,7 @@ impl App {
         self.keys_edge.clear();
         crate::era::set(want);
         crate::say(&format!("art: {}", crate::era::line(want)));
+        self.art_drawn = want;
         self.apply_era();
     }
 
@@ -1724,12 +1732,12 @@ impl App {
         let want = crate::era::current();
         if let Some(h) = self.host.as_mut() {
             h.art_changed(want);
-        }
-        if self.host.is_some() {
             return;
         }
-        if want == esf::Era::Y2002 && !self.lib.has_2002() && crate::era::available() {
-            if self.era_loading.is_none() {
+        // the 2002 view with none of the 2002 disc's files in yet: read
+        // first (with no disc at hand, nothing changes)
+        if want == esf::Era::Y2002 && !self.lib.has_2002() {
+            if crate::era::available() && self.era_loading.is_none() {
                 self.era_loading = Some(crate::era::load(crate::era::names_of(&self.lib)));
             }
             return;
@@ -1749,6 +1757,21 @@ impl App {
         if self.art_script.first().is_some_and(|&t| t <= now) {
             self.art_script.remove(0);
             self.toggle_era();
+        }
+        // the Extended page's Art as it moves (Triangle puts it back): the
+        // 2002 disc asked for the first time, the row back on Frontiers'
+        // without one
+        let want = crate::era::current();
+        if want != self.art_drawn {
+            self.art_drawn = want;
+            if want == esf::Era::Y2002 && !crate::era::available() && !crate::era::ask() {
+                let mut c = crate::settings::client();
+                c.art = esf::Era::Frontiers;
+                crate::settings::set_client(c);
+                self.art_drawn = esf::Era::Frontiers;
+            } else {
+                self.apply_era();
+            }
         }
         let Some(r) = self.era_loading.as_mut().and_then(|l| l.poll()) else { return };
         self.era_loading = None;
@@ -2326,6 +2349,8 @@ impl App {
             g.window.request_redraw();
         }
         self.lib = Library::new();
+        // the pregame's own art, applied at the next frame (`poll_era`)
+        self.art_drawn = self.lib.view();
         self.source = Source::Models { list: Vec::new(), index: 0 };
         self.grab_pointer(false);
         let now = self.clock.elapsed().as_millis() as i64;
@@ -2352,6 +2377,9 @@ impl App {
         self.booted = self.host.take().map(|h| h.pre.shared);
         self.host = None;
         self.lib = lib;
+        // the art it was read in (`world_library`): turned at the next frame
+        // if the window's is other (`poll_era`)
+        self.art_drawn = self.lib.view();
         self.source = src;
         self.play = Some(play);
         if let Some(g) = &mut self.gfx {
