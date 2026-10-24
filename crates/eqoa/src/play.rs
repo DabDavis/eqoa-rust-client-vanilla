@@ -19,7 +19,7 @@ mod support;
 
 use crate::walker::{Placing, Spawn, Walker};
 use esf::Library;
-use net::entity::{Entities, SLOTS};
+use net::entity::{Entities, MAX_SLOTS, RETAIL_SLOTS};
 use net::session::{Event, Player, Session};
 use render::ui::{Anchor, Vertical};
 use render::{GpuModel, Renderer, wgpu};
@@ -81,6 +81,9 @@ pub struct Play {
     /// The MemoryDump's whole content (inventory, abilities, ...).
     pub dump: Box<net::dump::MemoryDump>,
     pub entities: Entities,
+    /// The entity slots and view distance last told the server
+    /// (`agree_entity_view`).
+    view_sent: Option<(usize, u16)>,
     last_send: u32,
     puppets: Vec<Option<Puppet>>,
     /// The sounds the client asked for this frame (`PlaySound`, `PlayCue`).
@@ -399,7 +402,16 @@ pub struct Play {
     /// The walk's walk speed as `SetSpeed` leaves it: 3, or 0 with a run
     /// speed of 0 (InitParms' 3 until then).
     walk_speed: f32,
+    /// Frames drawn, for the far characters' turns at a pose (`FAR_POSE_EVERY`).
+    drawn: u32,
 }
+
+/// Past the game's own distance (drawn only for NPC/PC View Distance) a
+/// character's pose is taken one frame drawn in this many, each in its slot's
+/// turn, and its place every frame: there it is a few pixels tall, and with
+/// two hundred in view their poses, on the EE's floats, were most of a frame
+/// (measured: 16 of 25 ms).
+const FAR_POSE_EVERY: u32 = 4;
 
 /// `gWorldInfo`'s paths on the Frontiers disc, by world index (CLIENT's
 /// table names six; a server's S2 can add more, which are not read here).
@@ -1059,7 +1071,7 @@ impl Play {
         crate::s2::begin_session();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), last_send: 0, puppets: (0..SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), slot_asked: None, walks: (0..SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0 };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: 0, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), slot_asked: None, walks: (0..MAX_SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0 };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -1154,7 +1166,7 @@ impl Play {
         if let Some(w) = self.loading.wait {
             let _ = writeln!(o, "loading screen: up {} ms, for the zones round {:?}{}", self.session.now() as i64 - w.since, w.at, if w.entering { ", the world's file first" } else { "" });
         }
-        let _ = writeln!(o, "entities: {} of {SLOTS}", self.entities.slots.iter().flatten().count());
+        let _ = writeln!(o, "entities: {} of {}, drawn to {} (the server's most {:?})", self.entities.slots.iter().flatten().count(), self.entities.limit, crate::settings::entity_view(), self.session.entity_view_offer);
         for e in self.entities.slots.iter().flatten() {
             let name = e.creature.as_ref().map_or("", |c| c.name.as_str());
             let _ = writeln!(o, "  {:#x} kind {} model {:#x} {name:?} at {:?}", e.id, e.kind, e.model, e.pos);
@@ -1171,6 +1183,7 @@ impl Play {
     /// steps on.
     pub fn frame(&mut self, walker: &mut Walker, lib: &Library, mut g: Gpu, game_ms: i64, game_frame: bool, mut sound: Option<&mut crate::sound::Sound>) -> Option<u32> {
         self.take_modules(sound.as_deref_mut());
+        self.drawn = self.drawn.wrapping_add(1);
         let now = self.session.now();
         // the loading screen's gears, turning by the clock (`SetTime(now)`)
         self.loading.frame(lib, g.renderer, g.device, g.queue, now as i64);
@@ -1560,12 +1573,12 @@ impl Play {
                     self.dump.player.p30 = self.stats.p30;
                 }
                 Event::State { channel: 0x43, data } => net::dump::read_effects(&mut self.effects, &data),
-                Event::State { channel, data } if (channel as usize) < SLOTS => {
+                Event::State { channel, data } if let Some(slot) = net::entity::slot_of_channel(channel) => {
                     let self_id = self.session.self_id;
-                    let skel = self.puppets[channel as usize].as_ref().and_then(|p| p.sprite.as_ref()).map_or(0, |s| s.skel_type);
+                    let skel = self.puppets[slot].as_ref().and_then(|p| p.sprite.as_ref()).map_or(0, |s| s.skel_type);
                     let scene = &mut walker.scene;
-                    let walk = &mut self.walks[channel as usize];
-                    self.entities.channel(channel as usize, &data, self_id, now, UPDATE_RATE, |e| {
+                    let walk = &mut self.walks[slot];
+                    self.entities.channel(slot, &data, self_id, now, UPDATE_RATE, |e| {
                         if walk.as_ref().map(|w| w.0) != Some(e.id) {
                             let mut w = WalkControl::<Ee>::default();
                             w.init(Vect3::default(), Vect3::default(), scene);
@@ -1696,6 +1709,7 @@ impl Play {
                 _ => {}
             }
         }
+        self.agree_entity_view();
         self.drop_dead_target_info();
         if self.has_self() {
             self.auto_attack_tick(walker, now);
@@ -1829,6 +1843,17 @@ impl Play {
                 f(if e.scale > 0.0 { e.scale } else { 1.0 }),
                 &Vect3::new(f(e.actor_pos[0]), f(e.actor_pos[1]), f(e.actor_pos[2])),
             );
+            // As the game rasters it: past its off distance not at all
+            // (`VIScene::RasterActor`, at the actor's place), and of an LOD
+            // body the one level its distance picks (`VILODSprite::Raster`),
+            // from no farther than the game's camera could be (`lod::eye`);
+            // out to NPC/PC View Distance where that is farther (`lod`), and
+            // there posed in its turn (`FAR_POSE_EVERY`), past it not at all.
+            let at = Vect3::new(f(e.actor_pos[0]), f(e.actor_pos[1]), f(e.actor_pos[2]));
+            let eye = crate::lod::eye(&walker.cam, &walker.eye.position);
+            let shown = crate::lod::within(&at, &eye, crate::lod::view_dist(&p.gpu.lod_dists));
+            let near = crate::lod::within(&at, &eye, crate::lod::off_dist(&p.gpu.lod_dists));
+            let pose = p.first || near || (shown && self.drawn.wrapping_add(slot as u32).is_multiple_of(FAR_POSE_EVERY));
             let (matrix, palette) = match p.sprite.as_mut() {
                 Some(cs) => {
                     p.anims.time = game_ms;
@@ -1854,14 +1879,17 @@ impl Play {
                     }
                     // VICSprite::Process: the sounds its triggers fired
                     if let Some(s) = sound.as_deref_mut() {
-                        let at = Vect3::new(f(e.actor_pos[0]), f(e.actor_pos[1]), f(e.actor_pos[2]));
                         cs.process_sounds(&walker.eye.position, &walker.eye.direction, &at, Some(&mut s.sink()));
                     }
-                    cs.h.process(0, &p.anims);
+                    if pose {
+                        cs.h.process(0, &p.anims);
+                    }
                     p.first = false;
                     let m = cs.h.calc_trans_about_center(&actor, &p.anims);
                     crate::trails::process(&mut self.trails, &mut p.trail, cs, &p.weapons, &m, game_ms);
-                    cs.h.set_blend_matrices();
+                    if pose {
+                        cs.h.set_blend_matrices();
+                    }
                     for (node, gpu) in &p.attached {
                         if let Some(n) = cs.h.nodes.get(*node as usize) {
                             g.renderer.set_instances(g.queue, gpu, &[Matrix44::mul(&n.world, &m).to_cols()]);
@@ -1873,7 +1901,7 @@ impl Play {
                         a.to_array()
                     });
                     p.slot4_at = slot_point(cs, 4, &m);
-                    (m.to_cols(), cs.h.blend.iter().map(|m| m.to_cols()).collect::<Vec<_>>())
+                    (m.to_cols(), if pose { cs.h.blend.iter().map(|m| m.to_cols()).collect::<Vec<_>>() } else { Vec::new() })
                 }
                 None => (actor.to_cols(), Vec::new()),
             };
@@ -1883,13 +1911,6 @@ impl Play {
             if !palette.is_empty() {
                 g.renderer.set_palette(g.queue, &p.gpu, &palette);
             }
-            // As the game rasters it: past its off distance not at all
-            // (`VIScene::RasterActor`, at the actor's place), and of an LOD
-            // body the one level its distance picks (`VILODSprite::Raster`),
-            // from no farther than the game's camera could be (`lod::eye`).
-            let at = Vect3::new(f(e.actor_pos[0]), f(e.actor_pos[1]), f(e.actor_pos[2]));
-            let eye = crate::lod::eye(&walker.cam, &walker.eye.position);
-            let shown = crate::lod::within(&at, &eye, crate::lod::off_dist(&p.gpu.lod_dists));
             crate::lod::place(&mut p.gpu, &p.centre, &eye);
             p.gpu.visible = shown && skins_shown(e.creature.as_ref());
             p.shown = shown;
@@ -2034,7 +2055,7 @@ impl Play {
             spells.stop_caster(a, &mut bodies, game_ms);
         }
         // NotifyActorWasDestroyed: a slot's entity gone or replaced
-        for slot in 0..SLOTS {
+        for slot in 0..MAX_SLOTS {
             let now = self.entities.slots[slot].as_ref().map(|e| e.id).filter(|&id| Some(id) != me);
             if self.spell_ids[slot].is_some() && self.spell_ids[slot] != now {
                 spells.actor_gone(slot as i32, &mut bodies, game_ms);
@@ -5660,6 +5681,32 @@ impl Play {
         Some(self.entities.slots[k].as_ref()?.actor_pos)
     }
 
+    /// NPC/PC Display and View Distance against the server's offer
+    /// (`net::session::OP_ENTITY_VIEW`): the slots read are the player's
+    /// number within the server's most, the game's 24 from a server that
+    /// offered none (Sandstorm, eqoa.live), and a server that offered is told
+    /// both whenever either changes (it fills that many from that far from
+    /// its next pass; what was past a lowered number is dropped here at once,
+    /// and its puppets with it). The view distance draws farther on any
+    /// server (`lod::view_dist`); only one that offered sends from farther.
+    fn agree_entity_view(&mut self) {
+        let offer = self.session.entity_view_offer;
+        let n = offer.map_or(RETAIL_SLOTS, |(most, _)| crate::settings::entity_slots().min(most as usize)).clamp(RETAIL_SLOTS, MAX_SLOTS);
+        let view = crate::settings::entity_view();
+        if n != self.entities.limit {
+            eprintln!("play: {n} entity slots (NPC/PC Display {}, the server's most {offer:?})", crate::settings::entity_slots());
+            self.entities.set_limit(n);
+        }
+        if offer.is_some() && self.view_sent != Some((n, view)) {
+            self.session.send_entity_view(n as u32, view as u32);
+            self.view_sent = Some((n, view));
+        }
+        self.options_wnd.server_note = Some(match offer {
+            Some((slots, view)) => format!("This server: {slots} within {view}"),
+            None => format!("This server: {RETAIL_SLOTS} (the game's)"),
+        });
+    }
+
     /// `VIClient::Process`: the target info goes (`m_targetInfoValid` 0)
     /// while the target is in view with its +0x19 at 0, so a dead one's bar
     /// shows no face beside it (`DrawTarget` draws it only with the info; F3
@@ -5795,9 +5842,11 @@ impl Play {
             }
         }
         let n = self.entities.slots.iter().flatten().count();
+        // the characters within their distance this frame (NPC/PC View Distance's)
+        let drawn = self.puppets.iter().flatten().filter(|p| p.shown).count();
         let on_bar = self.abilities.values().filter(|a| a.valid != 0).count();
         let fx = self.spells.as_ref().map_or_else(String::new, |s| format!(", {}", s.describe()));
-        format!("{n} entities, {} items, {} abilities ({on_bar} on a bar), {} packets sent{fx}, {}", self.dump.inventory.items.len(), self.abilities.len(), self.session.packets_sent, self.rings.describe())
+        format!("{n} entities ({drawn} drawn), {} items, {} abilities ({on_bar} on a bar), {} packets sent{fx}, {}", self.dump.inventory.items.len(), self.abilities.len(), self.session.packets_sent, self.rings.describe())
     }
 }
 
@@ -5937,6 +5986,64 @@ mod commands {
             }
         }
         out
+    }
+
+    /// NPC/PC Display and View Distance against the server: one that offered
+    /// nothing (the control: Sandstorm's, eqoa.live's) is told nothing and the
+    /// game's 24 are read; an offer is answered once with the player's numbers
+    /// (the slots within it), again when either changes; a lowered number
+    /// drops what was past it.
+    #[test]
+    fn npc_pc_display_agrees_with_the_server() {
+        struct Rec(std::rc::Rc<std::cell::RefCell<Vec<Vec<u8>>>>);
+        impl net::session::Datagrams for Rec {
+            fn send_to(&mut self, d: &[u8], _: [u8; 4], _: u16) {
+                self.0.borrow_mut().push(d.to_vec());
+            }
+            fn recv_from(&mut self) -> Option<(Vec<u8>, [u8; 4], u16)> {
+                None
+            }
+        }
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 5000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        s.self_id = Some(0x100);
+        let mut p = Play::new(s, Player::default(), Box::default());
+        let asked = |p: &mut Play| -> Vec<Vec<u8>> {
+            p.session.flush();
+            let out = guaranteed(&sent.borrow()).into_iter().filter(|m| m.starts_with(&[0x00, 0x7E])).collect();
+            sent.borrow_mut().clear();
+            out
+        };
+        asked(&mut p);
+        crate::settings::set_client(crate::settings::ClientOptions { entity_slots: 128, ..Default::default() });
+
+        p.agree_entity_view();
+        assert!(asked(&mut p).is_empty(), "the control: no offer, nothing sent");
+        assert_eq!(p.entities.limit, 24);
+        assert_eq!(p.options_wnd.server_note.as_deref(), Some("This server: 24 (the game's)"));
+
+        p.session.entity_view_offer = Some((204, 1000));
+        p.agree_entity_view();
+        assert_eq!(asked(&mut p), [vec![0x00, 0x7E, 128, 0, 0, 0, 100, 0, 0, 0]], "128 within the game's 100");
+        assert_eq!(p.entities.limit, 128);
+        assert_eq!(p.options_wnd.server_note.as_deref(), Some("This server: 204 within 1000"));
+        p.agree_entity_view();
+        assert!(asked(&mut p).is_empty(), "told once");
+        crate::settings::set_client(crate::settings::ClientOptions { entity_slots: 128, entity_view: 600, ..Default::default() });
+        p.agree_entity_view();
+        assert_eq!(asked(&mut p), [vec![0x00, 0x7E, 128, 0, 0, 0, 0x58, 0x02, 0, 0]], "the distance changed: told again");
+
+        p.entities.slots[100] = Some(net::entity::Entity { id: 0x4242, kind: 130, ..Default::default() });
+        p.entities.slots[50] = Some(net::entity::Entity { id: 0x4343, kind: 130, ..Default::default() });
+        crate::settings::set_client(crate::settings::ClientOptions { entity_slots: 64, entity_view: 600, ..Default::default() });
+        p.agree_entity_view();
+        assert_eq!(asked(&mut p), [vec![0x00, 0x7E, 64, 0, 0, 0, 0x58, 0x02, 0, 0]]);
+        assert!(p.entities.slots[100].is_none() && p.entities.slots[50].is_some(), "past 64 dropped, within kept");
+
+        p.session.entity_view_offer = Some((40, 500));
+        p.agree_entity_view();
+        assert_eq!(asked(&mut p), [vec![0x00, 0x7E, 40, 0, 0, 0, 0x58, 0x02, 0, 0]], "the server's most slots; the distance is the server's to cap");
+        assert_eq!(p.entities.limit, 40);
     }
 
     /// Case 0x077A, the server's OutMatched: word 1196 ("You are

@@ -465,10 +465,31 @@ pub struct ClientOptions {
     /// game's two (`ABILITY_BARS_GAME`) or up to `hudmenu::MAX_BARS`, five
     /// slots each (`hudmenu`)
     pub ability_bars: u8,
+    /// NPC/PC Display: how many NPCs and players (the player's own among
+    /// them) the client keeps in view, the game's 24 (`ENTITY_SLOTS_GAME`)
+    /// up to `ENTITY_SLOTS_MAX`, on a server that offers more (`net::entity`)
+    pub entity_slots: u8,
+    /// NPC/PC View Distance: how far NPCs and players are drawn, the game's
+    /// 100 (`ENTITY_VIEW_GAME`: a player race's body to 100, any other to
+    /// its own off distance) up to `ENTITY_VIEW_MAX`, each at least as far as
+    /// the game draws it (`lod::view_dist`); a server that offers more looks
+    /// for them that far
+    pub entity_view: u16,
 }
 
 /// The game's ability bars (with the expansion's second).
 pub const ABILITY_BARS_GAME: u8 = 2;
+/// The game's entity slots (CLIENT's `m_entities[24]`), the most a state
+/// channel can carry, and NPC/PC Display's step.
+pub const ENTITY_SLOTS_GAME: u8 = net::entity::RETAIL_SLOTS as u8;
+pub const ENTITY_SLOTS_MAX: u8 = net::entity::MAX_SLOTS as u8;
+pub const ENTITY_SLOTS_STEP: u8 = 8;
+/// The game's character draw distance (a player race's LOD body's last
+/// level), the farthest NPC/PC View Distance goes (the client reads the
+/// world's zones to 1050 round the player), and its step.
+pub const ENTITY_VIEW_GAME: u16 = 100;
+pub const ENTITY_VIEW_MAX: u16 = 1000;
+pub const ENTITY_VIEW_STEP: u16 = 50;
 
 impl Default for ClientOptions {
     fn default() -> Self {
@@ -484,6 +505,8 @@ impl Default for ClientOptions {
             capture: false,
             background_sound: true,
             ability_bars: ABILITY_BARS_GAME,
+            entity_slots: ENTITY_SLOTS_GAME,
+            entity_view: ENTITY_VIEW_GAME,
         }
     }
 }
@@ -493,7 +516,8 @@ impl ClientOptions {
     /// Fog only when they are not the game's, Screen Shake only when off, a
     /// window's Controller Focus as `controller.<window>` (from 1) only when
     /// it is not Auto, Capture Controller only when on, Sound in Background
-    /// only when off, and Ability Bars only when not the game's.
+    /// only when off, and Ability Bars, NPC/PC Display and NPC/PC View
+    /// Distance only when not the game's.
     pub fn to_text(self) -> String {
         let mut s = format!("lod={}\nbrightness={}\ncamera_distance={}\n", if self.lod { "on" } else { "off" }, self.brightness, self.camera_distance);
         if let Some(r) = self.frame_rate {
@@ -519,6 +543,12 @@ impl ClientOptions {
         }
         if self.ability_bars != ABILITY_BARS_GAME {
             s.push_str(&format!("ability_bars={}\n", self.ability_bars));
+        }
+        if self.entity_slots != ENTITY_SLOTS_GAME {
+            s.push_str(&format!("entity_slots={}\n", self.entity_slots));
+        }
+        if self.entity_view != ENTITY_VIEW_GAME {
+            s.push_str(&format!("entity_view={}\n", self.entity_view));
         }
         s
     }
@@ -562,6 +592,16 @@ impl ClientOptions {
                 ("ability_bars", v) => {
                     if let Some(n) = v.parse::<u8>().ok().filter(|&n| (ABILITY_BARS_GAME as i32..=crate::hudmenu::MAX_BARS).contains(&(n as i32))) {
                         c.ability_bars = n;
+                    }
+                }
+                ("entity_slots", v) => {
+                    if let Some(n) = v.parse::<u8>().ok().filter(|n| (ENTITY_SLOTS_GAME..=ENTITY_SLOTS_MAX).contains(n)) {
+                        c.entity_slots = n;
+                    }
+                }
+                ("entity_view", v) => {
+                    if let Some(d) = v.parse::<u16>().ok().filter(|d| (ENTITY_VIEW_GAME..=ENTITY_VIEW_MAX).contains(d)) {
+                        c.entity_view = d;
                     }
                 }
                 (k, v) if k.starts_with("controller.") => {
@@ -706,6 +746,18 @@ pub fn ability_bars() -> u8 {
     client().ability_bars
 }
 
+/// NPC/PC Display now: how many entity slots to keep where the server offers
+/// more than the game's (`Play::agree_entity_view`).
+pub fn entity_slots() -> usize {
+    client().entity_slots as usize
+}
+
+/// NPC/PC View Distance now: how far NPCs and players are drawn (`lod`), and
+/// looked for where the server offers more (`Play::agree_entity_view`).
+pub fn entity_view() -> u16 {
+    client().entity_view
+}
+
 /// What the windows share as another window saved it (Capture Controller,
 /// Sound in Background): `client.opt`'s, each taken when it changed since
 /// this window last looked (`multibox::seat`'s look, twice a second), so a
@@ -777,7 +829,7 @@ pub fn describe() -> String {
         FrameRate::Display => "the display's",
     };
     format!(
-        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, ability bars {}; {}",
+        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, ability bars {}, npc/pc display {}, npc/pc view distance {}; {}",
         if c.lod { "on" } else { "off" },
         c.brightness,
         c.fog,
@@ -791,6 +843,8 @@ pub fn describe() -> String {
         if c.capture { "on" } else { "off" },
         if c.background_sound { "on" } else { "off" },
         c.ability_bars,
+        c.entity_slots,
+        c.entity_view,
         kept_where()
     )
 }
@@ -1165,8 +1219,21 @@ mod tests {
             ClientOptions { background_sound: false, ..Default::default() },
             ClientOptions { ability_bars: 3, ..Default::default() },
             ClientOptions { ability_bars: 4, ..Default::default() },
+            ClientOptions { entity_slots: 128, ..Default::default() },
+            ClientOptions { entity_slots: ENTITY_SLOTS_MAX, ..Default::default() },
+            ClientOptions { entity_view: 450, ..Default::default() },
+            ClientOptions { entity_view: ENTITY_VIEW_MAX, ..Default::default() },
         ] {
             assert_eq!(ClientOptions::from_text(&c.to_text()), c);
+        }
+        assert_eq!(ClientOptions { entity_slots: 128, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nentity_slots=128\n", "NPC/PC Display only when not the game's");
+        assert_eq!(ClientOptions::from_text("entity_slots=100").entity_slots, 100, "any number in range");
+        for bad in ["entity_slots=23", "entity_slots=205", "entity_slots=999", "entity_slots=lots"] {
+            assert_eq!(ClientOptions::from_text(bad).entity_slots, ENTITY_SLOTS_GAME, "{bad}: the game's 24");
+        }
+        assert_eq!(ClientOptions { entity_view: 600, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nentity_view=600\n", "NPC/PC View Distance only when not the game's");
+        for bad in ["entity_view=99", "entity_view=1001", "entity_view=far"] {
+            assert_eq!(ClientOptions::from_text(bad).entity_view, ENTITY_VIEW_GAME, "{bad}: the game's 100");
         }
         assert_eq!(ClientOptions { ability_bars: 4, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nability_bars=4\n", "Ability Bars only when not the game's");
         for bad in ["ability_bars=1", "ability_bars=5", "ability_bars=three"] {
@@ -1185,7 +1252,7 @@ mod tests {
             "Screen Shake only off, Capture Controller only on"
         );
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, ability bars 2; kept in the page's storage");
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, ability bars 2, npc/pc display 24, npc/pc view distance 100; kept in the page's storage");
         testing::reset(true);
         assert!(describe().ends_with("refused: nothing is kept"));
         testing::reset(false);

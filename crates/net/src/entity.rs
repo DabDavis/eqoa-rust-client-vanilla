@@ -3,12 +3,43 @@
 //! decomp `modules/client/src/{viclient,vientity,vicreatureentity}.cpp`),
 //! and `VIClient::Extrapolate`'s blend from where an entity was drawn to
 //! where its newest update puts it.
+//!
+//! CLIENT keeps 24 entity slots, the state channels 0x00-0x17
+//! (`m_entities[24]`; `ProcessStateChannel` hands only `type < 24` to
+//! `ChannelEntity`). The client keeps up to [`MAX_SLOTS`] on a server that
+//! offers them (go-eqoa-server's 0x7E00, `session::OP_ENTITY_VIEW`): slot n travels on
+//! [`channel_of_slot`]`(n)`, slots 24-63 on 0x18-0x3F and 64-203 on
+//! 0x6C-0xF7, every DRDP state channel CLIENT reads as nothing else (0x40 is
+//! the group, 0x42 the stats, 0x43 the effects, 0x44-0x6B `Channel44`'s
+//! records). How many it reads is [`Entities::limit`].
 
 use crate::stream::Reader;
 
-pub const SLOTS: usize = 24;
+/// CLIENT's entity slots, channels 0x00-0x17.
+pub const RETAIL_SLOTS: usize = 24;
+/// Every slot a state channel can carry: 0x00-0x3F and 0x6C-0xF7.
+pub const MAX_SLOTS: usize = 0x40 + (0xF8 - 0x6C);
 pub const TYPE_ENTITY: u8 = 129;
 pub const TYPE_CREATURE: u8 = 130;
+
+/// The entity slot state channel `ch` carries: 0x00-0x3F are slots 0-63,
+/// 0x6C-0xF7 slots 64-203; none for the others.
+pub fn slot_of_channel(ch: u8) -> Option<usize> {
+    match ch {
+        0x00..=0x3F => Some(ch as usize),
+        0x6C..=0xF7 => Some(ch as usize - 0x6C + 0x40),
+        _ => None,
+    }
+}
+
+/// The state channel entity slot `slot` travels on.
+pub fn channel_of_slot(slot: usize) -> Option<u8> {
+    match slot {
+        0..0x40 => Some(slot as u8),
+        0x40..MAX_SLOTS => Some((slot - 0x40 + 0x6C) as u8),
+        _ => None,
+    }
+}
 
 /// `VICreatureEntity`'s part of the update.
 #[derive(Clone, Debug, Default)]
@@ -191,23 +222,40 @@ fn pad6(b: &[u8]) -> [u8; 6] {
     o
 }
 
-/// The 24 slots.
-#[derive(Default)]
+/// The slots: [`MAX_SLOTS`] of them, the first `limit` read.
 pub struct Entities {
-    pub slots: [Option<Entity>; SLOTS],
+    pub slots: Vec<Option<Entity>>,
+    /// How many slots are read: CLIENT's 24, or as many as a server that
+    /// offers more and the player's NPC/PC Display have agreed.
+    pub limit: usize,
+}
+
+impl Default for Entities {
+    fn default() -> Self {
+        Entities { slots: vec![None; MAX_SLOTS], limit: RETAIL_SLOTS }
+    }
 }
 
 impl Entities {
+    /// Reads the first `n` slots (within CLIENT's 24 and [`MAX_SLOTS`]);
+    /// what was on the others is gone (the server is told, and empties them).
+    pub fn set_limit(&mut self, n: usize) {
+        self.limit = n.clamp(RETAIL_SLOTS, MAX_SLOTS);
+        for s in &mut self.slots[self.limit..] {
+            *s = None;
+        }
+    }
+
     /// `VIClient::ChannelEntity` for slot `ch` at time `now`. Nothing is read
-    /// before the player's own id is known; a message under 5 bytes empties
-    /// the slot; a different id or type, or flag 0, replaces it (flag 0 then
-    /// leaves it empty). Types other than 129/130 crash the PS2; they are
-    /// dropped here.
+    /// before the player's own id is known, nor for a slot past `limit`; a
+    /// message under 5 bytes empties the slot; a different id or type, or flag
+    /// 0, replaces it (flag 0 then leaves it empty). Types other than 129/130
+    /// crash the PS2; they are dropped here.
     /// `sync` runs after the read, as `VICreatureEntity::Sync` does inside
     /// `ReadUpdate` (the ground snap), before the blend is measured.
     pub fn channel(&mut self, ch: usize, data: &[u8], self_id: Option<u64>, now: u32, rate: u32, mut sync: impl FnMut(&mut Entity)) {
         let Some(self_id) = self_id else { return };
-        if ch >= SLOTS {
+        if ch >= self.limit {
             return;
         }
         if data.len() < 5 {
@@ -258,5 +306,74 @@ impl Entities {
                 e.extrapolate(now, rate);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every slot has a channel of its own, CLIENT's 24 their own 0x00-0x17,
+    /// and no slot is a channel CLIENT reads as something else (0x40-0x6B) or
+    /// a DRDP transport (0xF8 and up).
+    #[test]
+    fn slots_and_channels() {
+        assert_eq!(MAX_SLOTS, 204);
+        let mut seen = [None; 256];
+        for slot in 0..MAX_SLOTS {
+            let ch = channel_of_slot(slot).unwrap();
+            if slot < RETAIL_SLOTS {
+                assert_eq!(ch as usize, slot, "CLIENT's slot {slot}");
+            }
+            assert!(!(0x40..0x6C).contains(&ch) && ch < 0xF8, "slot {slot} on {ch:#x}");
+            assert_eq!(seen[ch as usize].replace(slot), None, "two slots on {ch:#x}");
+            assert_eq!(slot_of_channel(ch), Some(slot));
+        }
+        for ch in 0..=255u8 {
+            assert_eq!(slot_of_channel(ch).is_some(), seen[ch as usize].is_some(), "{ch:#x}");
+        }
+        for ch in [0x40, 0x42, 0x43, 0x44, 0x6B, 0xF8, 0xFB] {
+            assert_eq!(slot_of_channel(ch), None, "{ch:#x} carries no slot");
+        }
+        assert_eq!(channel_of_slot(MAX_SLOTS), None);
+    }
+
+    fn creature(id: u32) -> Vec<u8> {
+        let mut v = vec![0u8; 162];
+        v[0] = 1;
+        v[1..5].copy_from_slice(&id.to_le_bytes());
+        v[5] = TYPE_CREATURE;
+        v
+    }
+
+    /// A slot past the limit is not read (CLIENT's `type < 24` until a server
+    /// offers more); the limit raised, it is; lowered again, what was past it
+    /// is gone and what is within it stays.
+    #[test]
+    fn the_limit() {
+        let mut e = Entities::default();
+        let read = |e: &mut Entities, slot: usize| e.channel(slot, &creature(1000 + slot as u32), Some(7), 0, 100, |_| {});
+        assert_eq!(e.limit, RETAIL_SLOTS);
+        read(&mut e, 23);
+        read(&mut e, 24);
+        read(&mut e, 100);
+        assert!(e.slots[23].is_some());
+        assert!(e.slots[24].is_none() && e.slots[100].is_none(), "past CLIENT's 24 before any offer");
+
+        e.set_limit(128);
+        read(&mut e, 24);
+        read(&mut e, 100);
+        read(&mut e, 128);
+        assert_eq!(e.slots[100].as_ref().map(|e| e.id), Some(1100));
+        assert!(e.slots[24].is_some() && e.slots[128].is_none(), "slot 128 is past a limit of 128");
+
+        e.set_limit(64);
+        assert!(e.slots[23].is_some() && e.slots[24].is_some(), "within the limit: kept");
+        assert!(e.slots[100].is_none(), "past the limit: gone");
+        e.set_limit(0);
+        assert_eq!(e.limit, RETAIL_SLOTS, "never fewer than CLIENT's");
+        assert!(e.slots[24].is_none());
+        e.set_limit(1000);
+        assert_eq!(e.limit, MAX_SLOTS);
     }
 }

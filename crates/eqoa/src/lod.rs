@@ -16,7 +16,10 @@
 //! the camera, lost its muscle: F3 20261021-001920), and characters are
 //! drawn as far round the player, at the same levels, as the console drew
 //! them at its farthest. The options' Level of Detail off draws every LOD
-//! body's near level out to its off distance (`chosen`).
+//! body's near level out to its off distance (`chosen`). The options' NPC/PC
+//! View Distance draws every character at least that far (`view_dist`), an
+//! LOD body past its last level at that level (the game's 100 changes
+//! nothing: no character's off distance is nearer).
 
 use vi::camera::WalkCamera;
 use vi::fpu::{Ee, F};
@@ -44,6 +47,12 @@ pub fn off_dist(dists: &[f32]) -> f32 {
     dists.last().copied().unwrap_or(OFF_DIST)
 }
 
+/// The distance a character is drawn to: its off distance (`off_dist`), or
+/// the options' NPC/PC View Distance where that is farther.
+pub fn view_dist(dists: &[f32]) -> f32 {
+    off_dist(dists).max(crate::settings::entity_view() as f32)
+}
+
 /// `VIScene::RasterActor`: whether an actor at `at` is drawn from a camera at
 /// `eye`, its sprite's off distance being `off`.
 pub fn within(at: &Vect3<Ee>, eye: &Vect3<Ee>, off: f32) -> bool {
@@ -54,18 +63,23 @@ pub fn within(at: &Vect3<Ee>, eye: &Vect3<Ee>, off: f32) -> bool {
 
 /// A character's body as the camera at `eye` sees it this frame: the level
 /// of its LOD body (if it has one) for its centre transform `centre`, under
-/// the options' Level of Detail. Whether it is drawn at all is `within`'s,
-/// at the actor's place.
+/// the options' Level of Detail and NPC/PC View Distance. Whether it is
+/// drawn at all is `within`'s, at the actor's place (to `view_dist`).
 pub fn place(body: &mut render::GpuModel, centre: &Matrix44<Ee>, eye: &Vect3<Ee>) {
-    body.level = chosen(&body.lod_dists, &from_eye(centre, eye), crate::settings::client().lod);
+    body.level = chosen(&body.lod_dists, &from_eye(centre, eye), crate::settings::client().lod, view_dist(&body.lod_dists));
 }
 
 /// The level drawn of a body whose levels reach `dists`, `d` from the
-/// camera: `VILODSprite::Raster`'s with Level of Detail on (`lod`); off,
-/// the near one at any distance (past the off distance `within` hides it).
+/// camera: `VILODSprite::Raster`'s with Level of Detail on (`lod`), and past
+/// the last level, nearer than `view`, the last (the client's: the game's
+/// draws nothing there, and `view` at its off distance changes nothing);
+/// off, the near one at any distance (past the distance `within` hides it).
 /// A body with no levels has none either way.
-pub fn chosen(dists: &[f32], d: &Vect3<Ee>, lod: bool) -> Option<u8> {
-    if lod { level(dists, d) } else { (!dists.is_empty()).then_some(0) }
+pub fn chosen(dists: &[f32], d: &Vect3<Ee>, lod: bool, view: f32) -> Option<u8> {
+    if !lod {
+        return (!dists.is_empty()).then_some(0);
+    }
+    level(dists, d).or_else(|| (!dists.is_empty() && within(d, &Vect3::default(), view)).then(|| dists.len() as u8 - 1))
 }
 
 /// The game's zoom-out ceiling for the follow orbit (`SetCameraStyle(3)`
@@ -141,11 +155,37 @@ mod tests {
     #[test]
     fn level_of_detail_off_keeps_the_near_level() {
         for x in [0.0, 10.001, 50.0, 100.0, 150.0] {
-            assert_eq!(chosen(&BODY, &at(x), false), Some(0), "{x}");
+            assert_eq!(chosen(&BODY, &at(x), false, 100.0), Some(0), "{x}");
         }
-        assert_eq!(chosen(&BODY, &at(50.0), true), Some(1));
-        assert_eq!(chosen(&BODY, &at(150.0), true), None);
-        assert_eq!(chosen(&[], &at(5.0), false), None, "no levels, none");
+        assert_eq!(chosen(&BODY, &at(50.0), true, 100.0), Some(1));
+        assert_eq!(chosen(&BODY, &at(150.0), true, 100.0), None);
+        assert_eq!(chosen(&[], &at(5.0), false, 100.0), None, "no levels, none");
+    }
+
+    /// NPC/PC View Distance: at the game's 100 a body's levels and off
+    /// distance are the game's (the control: none past 100, a sprite with no
+    /// LOD body still to 500); farther, the far level out to it and nothing
+    /// past it, and a sprite with no LOD body to whichever is farther.
+    #[test]
+    fn the_view_distance_draws_farther() {
+        crate::settings::testing::reset(false);
+        let set = |d: u16| crate::settings::set_client(crate::settings::ClientOptions { entity_view: d, ..Default::default() });
+        set(100);
+        assert_eq!((view_dist(&BODY), view_dist(&[])), (100.0, OFF_DIST), "the game's");
+        assert_eq!(chosen(&BODY, &at(100.01), true, view_dist(&BODY)), None);
+        set(600);
+        assert_eq!((view_dist(&BODY), view_dist(&[])), (600.0, 600.0));
+        assert_eq!(chosen(&BODY, &at(50.0), true, 600.0), Some(1), "within the levels, the game's");
+        assert_eq!(chosen(&BODY, &at(5.0), true, 600.0), Some(0));
+        assert_eq!(chosen(&BODY, &at(450.0), true, 600.0), Some(1), "past them, the far level");
+        assert_eq!(chosen(&BODY, &at(600.0), true, 600.0), None, "at the distance is out, as `within`");
+        assert_eq!(chosen(&[], &at(450.0), true, 600.0), None, "no levels, none");
+        set(300);
+        assert_eq!(view_dist(&[]), OFF_DIST, "no nearer than the game's 500");
+        let eye = Vect3::of(25000.0, 60.0, 16000.0);
+        assert!(within(&Vect3::of(25299.0, 60.0, 16000.0), &eye, view_dist(&BODY)));
+        assert!(!within(&Vect3::of(25301.0, 60.0, 16000.0), &eye, view_dist(&BODY)));
+        crate::settings::testing::reset(false);
     }
 
     /// The follow orbit pulled out past the game's 8.0: the levels are

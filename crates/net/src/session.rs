@@ -46,6 +46,14 @@ impl Datagrams for Udp {
 pub const VERSION: u32 = 18;
 /// The expansion flags a retail Frontiers disc sends.
 pub const EXPANSION_FLAGS: u32 = 3;
+/// go-eqoa-server's own, no retail message: what a client keeps in view, how
+/// many entity slots (`entity`) and how far, two u32s after the opcode, both
+/// ways. The server offers the most it fills and the farthest it looks once
+/// the player is in the world; the client answers with its NPC/PC Display and
+/// NPC/PC View Distance, and again whenever they change. CLIENT has no case
+/// for it (its dispatcher has no default), so a PS2 ignores the offer, and
+/// nothing is sent to a server that made none.
+pub const OP_ENTITY_VIEW: u16 = 0x7E00;
 
 #[derive(Clone, Debug)]
 pub struct Shard {
@@ -258,6 +266,10 @@ pub struct Session {
     pub self_id: Option<u64>,
     /// 0x07D1's mask (`VIClient+0x50304`), as the server last sent it.
     pub expansion: u32,
+    /// The most entity slots and the farthest view distance the server
+    /// offered on this connection ([`OP_ENTITY_VIEW`]); none from one that
+    /// never does (every retail server, Sandstorm's too).
+    pub entity_view_offer: Option<(u32, u32)>,
     user: String,
     token: [u8; 32],
     start: Instant,
@@ -315,6 +327,7 @@ impl Session {
             state: State::Login,
             self_id: None,
             expansion: 0,
+            entity_view_offer: None,
             user: user.to_string(),
             token,
             start: Instant::now(),
@@ -396,6 +409,15 @@ impl Session {
     }
 
     /// `SendOpcodeByte(op, v)`.
+    /// [`OP_ENTITY_VIEW`] to the server: how many entity slots this client
+    /// keeps and how far it draws them (a server that offered them fills that
+    /// many from that far).
+    pub fn send_entity_view(&mut self, slots: u32, view: u32) {
+        let mut w = Writer::op(OP_ENTITY_VIEW);
+        w.u32(slots).u32(view);
+        self.send(&w.data);
+    }
+
     pub fn send_op_byte(&mut self, op: u16, v: u8) {
         if op == 0x000E {
             self.chat_mode = v;
@@ -569,6 +591,7 @@ impl Session {
                 }
                 self.conn = m.connection;
                 self.self_id = None;
+                self.entity_view_offer = None;
                 ev.push(Event::Promoted);
             }
             drdp::TYPE_DISCONNECT => {
@@ -598,6 +621,13 @@ impl Session {
             0x07D1 => {
                 self.expansion = r.u32();
                 ev.push(Event::Expansion(self.expansion));
+            }
+            OP_ENTITY_VIEW => {
+                let slots = r.u32();
+                let view = r.u32();
+                if !r.error {
+                    self.entity_view_offer = Some((slots, view));
+                }
             }
             0x0013 => {
                 // SetTime: each clock moved to the server's reading at the
@@ -1253,6 +1283,31 @@ mod tests {
             }
         }
         out
+    }
+
+    // go-eqoa-server's 0x7E00 offer is kept for the connection, and gone
+    // with it (a new one starts with none); a short one is not taken. The
+    // answer is the opcode and two u32s. The control: no offer before one came.
+    #[test]
+    fn entity_view_offer_and_answer() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        assert_eq!(s.entity_view_offer, None, "no offer before one came");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x00, 0x7E, 204, 0, 0, 0]);
+        assert_eq!(s.entity_view_offer, None, "a short offer");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x00, 0x7E, 204, 0, 0, 0, 0xE8, 0x03, 0, 0]);
+        assert!(ev.is_empty(), "{ev:?}");
+        assert_eq!(s.entity_view_offer, Some((204, 1000)));
+
+        s.flush();
+        sent.borrow_mut().clear();
+        s.send_entity_view(128, 600);
+        s.flush();
+        let m: Vec<_> = sent.borrow().iter().flat_map(|d| messages(d)).collect();
+        assert_eq!(m, [(251, vec![0x00, 0x7E, 128, 0, 0, 0, 0x58, 0x02, 0, 0])]);
+
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert_eq!(s.entity_view_offer, None, "a new connection, no offer yet");
     }
 
     // Msg000D's world entry is ONE datagram, as every PS2 capture's is: 0x0014,
