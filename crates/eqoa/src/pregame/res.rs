@@ -173,19 +173,18 @@ impl Res {
         }
     }
 
-    /// The 2002 containers whose namesakes are in, stood in for them; one the
-    /// same bytes as its namesake is let go (nothing changes).
+    /// The 2002 containers whose namesakes are in, stood in for them as the
+    /// world's are (`era::install`: one the same bytes as its namesake is let
+    /// go, the art `era::kept` names stays Frontiers').
     fn stand_in_waiting(&mut self) {
         let waiting = std::mem::take(&mut self.waiting_2002);
         for (name, c) in waiting {
-            let at = (0..self.lib.files.len()).find(|&f| self.lib.stands_for(f).is_none() && self.lib.files[f].0 == name);
-            match at {
-                Some(f) if self.lib.file(f).data == c.data => {}
-                Some(f) => {
-                    self.lib.stand_in(f, c);
+            if (0..self.lib.files.len()).any(|f| self.lib.stands_for(f).is_none() && self.lib.files[f].0 == name) {
+                if crate::era::install(&mut self.lib, vec![(name, c)]) > 0 {
                     self.relayer = true;
                 }
-                None => self.waiting_2002.push((name, c)),
+            } else {
+                self.waiting_2002.push((name, c));
             }
         }
     }

@@ -135,7 +135,8 @@ impl Host {
         for i in files {
             let (name, c) = &self.pre.res.lib.files[i];
             if UI_FILES.iter().any(|f| f.eq_ignore_ascii_case(name)) {
-                assets.add_surfaces(ui, device, queue, c);
+                // a 2002 file gives the surfaces the view answers with it
+                assets.add_surfaces_of(ui, device, queue, &self.pre.res.lib, i);
             }
             if assets.font.is_none() {
                 let id = vi::ui::font_id() as i32;
