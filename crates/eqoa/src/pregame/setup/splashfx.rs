@@ -1,7 +1,11 @@
 //! `VISplashFx` (SETUP `visplashfx.cpp`): the title's animated overlays,
 //! drawn over the painting by the title window. The original game's: a bird
 //! that flies past now and then, one perched and flapping, and a flock
-//! crossing the sky along one of three paths. Frontiers' (expansion flag 2,
+//! crossing the sky along one of three paths (so the code names them; their
+//! atlas, `Bird_Animation.tga`, the same on both discs, holds the 2002
+//! painting's own: the "flying bird" is lightning striking over the castle,
+//! the perched one the treehouse door's flickering light; drawn in the 2002
+//! disc's art, `flags`). Frontiers' (expansion flag 2,
 //! which this disc sets) replaces all three with the island layer: twinkles
 //! on the water, a sail and its reflection, the camp fire and the ship
 //! (splashAnims1/2), three stars, the floating island bobbing, a glow in
