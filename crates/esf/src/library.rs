@@ -92,6 +92,14 @@ pub struct Library {
     /// the namesake's node (`same_as_namesake`, worked out once per pair, not
     /// at every registration: a world change registers every id again).
     same: HashMap<usize, HashMap<i32, NodeId>>,
+    /// A world off one disc -> the same world off the other, opened with its
+    /// zones on the disc and never filled (`set_twin`): where the zones'
+    /// additions are read from (`add_zone_extras`).
+    twins: HashMap<usize, usize>,
+    /// (world file, zone index) -> what another disc's zone of the same name
+    /// adds to it: the file holding the records, and the actors placing them
+    /// (`add_zone_extras`).
+    extras: HashMap<(usize, usize), (usize, Vec<crate::zone::Actor>)>,
     /// The dictionary lookups answer from.
     view: Cell<Era>,
 }
@@ -340,7 +348,69 @@ impl Library {
                 self.files[f].1 = Container::empty();
             }
         }
+        // the old world's twin and its zones' additions go with it
+        let gone: Vec<(usize, usize)> = self.extras.keys().filter(|k| k.0 == i).copied().collect();
+        for k in gone {
+            if let Some((f, _)) = self.extras.remove(&k) {
+                self.files[f].1 = Container::empty();
+            }
+        }
+        if let Some(t) = self.twins.remove(&i) {
+            self.files[t].1 = Container::empty();
+        }
         self.reregister();
+    }
+
+    /// `c` as the twin of the world in file `world`: the same world off the
+    /// other disc, its zones left there, read only for what they add to
+    /// `world`'s (`add_zone_extras`); None lets the twin go. A twin registers
+    /// nothing (a world's own records are its zones'), and is replaced in its
+    /// place, so file indices stay put. Returns its file.
+    pub fn set_twin(&mut self, world: usize, c: Option<Container>, era: Era) -> Option<usize> {
+        let Some(c) = c else {
+            if let Some(t) = self.twins.remove(&world) {
+                self.files[t].1 = Container::empty();
+            }
+            return None;
+        };
+        if let Some(&t) = self.twins.get(&world) {
+            self.files[t].1 = c;
+            self.eras[t] = era;
+            return Some(t);
+        }
+        let name = self.files[world].0.clone();
+        let t = self.push(name, c, (self.files.len(), 0), era, None);
+        self.twins.insert(world, t);
+        Some(t)
+    }
+
+    /// The twin of the world in file `world` (`set_twin`).
+    pub fn twin_of(&self, world: usize) -> Option<usize> {
+        self.twins.get(&world).copied()
+    }
+
+    /// Adds what zone `zi` of the world in file `world` gets from its twin's
+    /// zone of the same index: the records `c` holds (registered as if at the
+    /// zone's place, after its own) and the actors placing them, which the
+    /// collision world puts in the zone's rooms with its own
+    /// (`vi::world::World::add_zone`). Their disc is the twin's. Once.
+    pub fn add_zone_extras(&mut self, world: usize, zi: usize, c: Container, actors: Vec<crate::zone::Actor>) -> Option<usize> {
+        if let Some(&(f, _)) = self.extras.get(&(world, zi)) {
+            return Some(f);
+        }
+        let (off, _) = self.zone_range(world, zi)?;
+        let era = self.twin_of(world).map_or(Era::Frontiers, |t| self.era_of(t));
+        let name = format!("{}#{zi}+", self.files[world].0);
+        let file = self.push(name, c, (world, off), era, None);
+        self.extras.insert((world, zi), (file, actors));
+        self.register(file);
+        Some(file)
+    }
+
+    /// What zone `zi` of the world in file `world` was given by its twin's
+    /// (`add_zone_extras`): the records' file and the actors.
+    pub fn zone_extras(&self, world: usize, zi: usize) -> Option<(usize, &[crate::zone::Actor])> {
+        self.extras.get(&(world, zi)).map(|(f, a)| (*f, a.as_slice()))
     }
 
     /// Registers `r` under `id` too, unless something already has `id` (the

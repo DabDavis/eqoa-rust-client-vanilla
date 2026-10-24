@@ -598,6 +598,7 @@ pub fn world_library(player: &net::session::Player) -> Result<(esf::Library, vie
     let [x, _, z] = player.pos;
     let index = vi::world::World::<vi::fpu::Ee>::zone_at(lib.file(main_file), x, z).ok_or("no zone at the player's position")?;
     // the player's zone off the disc; the walker reads the rest round it
+    add_twin(&mut lib, main_file, &file);
     stream::load_zone_now(&mut lib, main_file, index)?;
     let character = lib.lookup(viewer::HUMAN).ok_or("no human model")?;
     drop(src);
@@ -691,6 +692,24 @@ fn login(host: &str, user: &str, pass: &str) -> Result<(net::session::Session, n
 /// game keeps resident through the session.
 const SHARED: &[&str] = &["CHARCUST.CSF", "CHARFACE.CSF", sky::FILE];
 
+/// The twin of the world in file `main` (`esf::Library::set_twin`), when the
+/// disc it came off wants one (`stream::wants_twin`): the 2002 disc's Tunaria
+/// gets Frontiers', for its zones' effect volumes and streamed audio. Added
+/// after the library's other files, so no index moves.
+fn add_twin(lib: &mut esf::Library, main: usize, file: &str) {
+    let era = lib.era_of(main);
+    if !stream::wants_twin(era) {
+        return;
+    }
+    match stream::open_file(std::path::Path::new(&disc_path(None)), file) {
+        Ok(t) => {
+            lib.set_twin(main, Some(t), era::other(era));
+            say(&format!("art: {file} off the 2002 disc, with Frontiers' effect volumes and streamed audio"));
+        }
+        Err(e) => say(&format!("art: no Frontiers {file} beside the 2002 disc's ({e}): no effect volumes or streamed audio")),
+    }
+}
+
 /// The library and what to show: `[model]` or `zone <n>`.
 fn source(file: &str, rest: &[String]) -> Result<(esf::Library, viewer::Source)> {
     let mut iso = disc(None)?;
@@ -717,6 +736,7 @@ fn source(file: &str, rest: &[String]) -> Result<(esf::Library, viewer::Source)>
             lib.add("CHAR.ESF", esf::Container::open(iso.read("CHAR.ESF")?)?);
             let index: usize = n.parse()?;
             lib.file(main).zones().get(index).ok_or("no such zone")?;
+            add_twin(&mut lib, main, file);
             stream::load_zone_now(&mut lib, main, index)?;
             let character = lib.lookup(viewer::HUMAN).ok_or("no human model")?;
             Ok((lib, viewer::Source::Walk { file: main, index, character, spawn: None }))
@@ -724,6 +744,7 @@ fn source(file: &str, rest: &[String]) -> Result<(esf::Library, viewer::Source)>
         [z, n] if z == "zone" => {
             let index: usize = n.parse()?;
             lib.file(main).zones().get(index).ok_or("no such zone")?;
+            add_twin(&mut lib, main, file);
             stream::load_zone_now(&mut lib, main, index)?;
             let (file, zone) = lib.zone(main, index).ok_or("no such zone")?;
             Ok((lib, viewer::Source::Zone { file, zone, index }))

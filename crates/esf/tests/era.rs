@@ -202,3 +202,61 @@ fn the_2002_disc_stands_in_for_char_esf() {
     assert!(lib.file(char).dict.keys().filter(|id| !ids.contains_key(id)).all(|&id| lib.view_for(id) == Era::Frontiers));
     assert_eq!(lib.view_for(human), Era::Y2002);
 }
+
+/// A record: type, version 0, its children packed at the start of its body.
+fn rec(ty: u16, children: &[Vec<u8>], tail: &[u8]) -> Vec<u8> {
+    let mut body: Vec<u8> = children.concat();
+    body.extend_from_slice(tail);
+    let mut d = ty.to_le_bytes().to_vec();
+    d.extend_from_slice(&0i16.to_le_bytes());
+    d.extend_from_slice(&(body.len() as i32).to_le_bytes());
+    d.extend_from_slice(&(children.len() as u32).to_le_bytes());
+    d.extend_from_slice(&body);
+    d
+}
+
+fn words(w: &[u32]) -> Vec<u8> {
+    w.iter().flat_map(|x| x.to_le_bytes()).collect()
+}
+
+/// An actor record (0x6000) placing `sprite` at x.
+fn actor(sprite: u32, x: f32) -> Vec<u8> {
+    let mut b = words(&[sprite]);
+    for v in [x, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0] {
+        b.extend_from_slice(&v.to_le_bytes());
+    }
+    b.extend_from_slice(&[255, 255, 255, 255]);
+    rec(0x6000, &[], &b)
+}
+
+/// A zone's additions (`Container::additions`): the actors placing records of
+/// the kinds asked for and those records whole, with what they name; the
+/// control, the zone's other actors and records left out.
+#[test]
+fn a_zone_gives_only_the_additions_asked_for() {
+    let (stream, volume, prop, art) = (0x5E, 0x70, 0x9A, 0xA7);
+    let header = |id: u32| rec(0xC310, &[], &words(&[id, 0, 0, 0, 0, 0, 0]));
+    let resources = rec(
+        0x3100,
+        &[
+            rec(0x2E00, &[], &[words(&[stream, 0, 0, 0, 0, 0, 0]), vec![3, 0], b"amb".to_vec(), words(&[1, 5])].concat()),
+            rec(0xC300, &[header(volume)], &words(&[art])),
+            rec(0x2000, &[rec(0x2001, &[], &words(&[prop]))], &[]),
+            rec(0x1000, &[], &words(&[art, 0, 0, 0, 0])),
+        ],
+        &[],
+    );
+    let room = rec(0x3270, &[rec(0x3280, &[], &words(&[2])), rec(0x6040, &[actor(stream, 1.0), actor(prop, 2.0), actor(volume, 3.0)], &[])], &[]);
+    let zone = rec(0x3000, &[resources, rec(0x3290, &[room], &[])], &[]);
+    let c = Container::parse_records(zone);
+    let z = c.roots[0];
+    // the volume names the surface `art` in its tail (as its parameters would)
+    let needs = |c: &Container, n: usize| if c.node(n).ty == 0xC300 { vec![art as i32] } else { Vec::new() };
+    let (extra, actors) = c.additions(z, &[0xC300, 0x2E00], needs).unwrap();
+    assert_eq!(actors.iter().map(|a| (a.sprite as u32, a.room, a.pos[0])).collect::<Vec<_>>(), [(stream, 2, 1.0), (volume, 2, 3.0)]);
+    for id in [stream, volume, art] {
+        assert!(extra.lookup(id as i32).is_some(), "{id:#x} comes with them");
+    }
+    assert!(extra.lookup(prop as i32).is_none(), "the control: the prop stays the zone's own");
+    assert!(c.additions(z, &[0x2B00], |_, _| Vec::new()).is_none(), "none placed: none");
+}

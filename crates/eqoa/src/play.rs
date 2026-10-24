@@ -5823,7 +5823,9 @@ impl Play {
             let hud = self.hud.as_ref();
             if let Some(assets) = hud.map(|h| &h.1).or(self.ui_assets.as_ref()) {
                 let mut r = assets.raster(ui);
-                crate::loading::draw_2d(hud.map(|h| &h.0), &mut r, net::session::EXPANSION_FLAGS & 2 != 0);
+                // the Frontiers layout, its logo too; the original game's in
+                // the 2002 art (`era`)
+                crate::loading::draw_2d(hud.map(|h| &h.0), &mut r, net::session::EXPANSION_FLAGS & 2 != 0 && self.ui_art != Some(esf::Era::Y2002));
             }
             ui.end();
             return;

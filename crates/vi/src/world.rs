@@ -320,7 +320,7 @@ impl<M: Model> World<M> {
         }
         for zi in 0..n {
             if let Some((zf, z)) = lib.zone(file, zi) {
-                w.load_zone(lib, zf, zi, z);
+                w.load_zone(lib, file, zf, zi, z);
                 w.loaded[zi] = true;
             }
         }
@@ -345,7 +345,7 @@ impl<M: Model> World<M> {
         self.zones[zi] = Self::zone_base(lib.file(zf), z);
         self.touched.clear();
         let before = self.actors.len();
-        self.load_zone(lib, zf, zi, z);
+        self.load_zone(lib, file, zf, zi, z);
         self.loaded[zi] = true;
         // the actors loaded before it, into its rooms (`UpdateActor` walks
         // every zone; here only this one's leaves can be new to them)
@@ -491,7 +491,11 @@ impl<M: Model> World<M> {
 
     /// The zone's actors (`ParseZoneActors`), then `ReplaceProxyRooms` and
     /// `ReplaceStaticProxyActors`, which resolve the DictIDs and insert.
-    fn load_zone(&mut self, lib: &Library, file: usize, zi: usize, z: NodeId) {
+    /// `file` holds the zone's records; `world` is its world's file, whose
+    /// zone may have been given more by its twin (`Library::zone_extras`: the
+    /// 2002 art's Tunaria keeps Frontiers' effect volumes and streamed
+    /// audio), placed after the zone's own in each room.
+    fn load_zone(&mut self, lib: &Library, world: usize, file: usize, zi: usize, z: NodeId) {
         let c = lib.file(file);
         if let Some(acts) = c.child(z, 0x3290) {
             for &ra in &c.node(acts).children {
@@ -528,6 +532,30 @@ impl<M: Model> World<M> {
                         r.placements.push(id);
                     }
                 }
+            }
+        }
+        if let Some((_, extra)) = lib.zone_extras(world, zi) {
+            for a in extra {
+                let Some(room) = usize::try_from(a.room).ok().filter(|&r| r < self.zones[zi].rooms.len()) else { continue };
+                let id = self.actors.len();
+                self.actor_order.push(u64::MAX);
+                let k = F::new(1.0 / 255.0);
+                let b = |i: usize| F::from_int(a.color[i] as i32) * k;
+                let v = |p: [f32; 3]| Vect3::new(F::new(p[0]), F::new(p[1]), F::new(p[2]));
+                self.actors.push(Actor {
+                    location: v(a.pos),
+                    hpr: v(a.rot),
+                    scale: F::new(a.scale),
+                    sprite_id: a.sprite as u32,
+                    sprite: None,
+                    object_to_world: Matrix44::identity(),
+                    bound: Sphere::default(),
+                    flags: 12,
+                    stamp80: 0,
+                    color: Color32F { r: b(0), g: b(1), b: b(2), a: b(3) },
+                    lighting: None,
+                });
+                self.zones[zi].rooms[room].placements.push(id);
             }
         }
         // ParseZoneStaticLightings: per room (0x3290: 0x32A0 the room, 0x6030

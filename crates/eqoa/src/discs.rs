@@ -67,6 +67,13 @@ pub fn taken() -> Option<String> {
     TAKEN.get().cloned()
 }
 
+/// A test's disc, as a boot would have taken it (`crate::disc_path`): the
+/// checkout's own, whatever directory the test runs in.
+#[cfg(test)]
+pub fn take_for_tests(path: &std::path::Path) {
+    let _ = TAKEN.set(path.to_string_lossy().into_owned());
+}
+
 /// Where a boot's disc comes from, before any dialog.
 #[derive(Debug, PartialEq)]
 pub enum Start {

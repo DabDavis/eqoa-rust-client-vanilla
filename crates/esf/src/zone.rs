@@ -126,6 +126,42 @@ impl Container {
         out
     }
 
+    /// What zone `zone` places of the record types `kinds`: its actors whose
+    /// sprite is one, and those records whole with the records each `needs`
+    /// (DictIDs it names, found in the zone), as a container of their own;
+    /// None when it places none. What one disc's zone adds over another's of
+    /// the same name: the 2002 art keeps Frontiers' effect volumes and
+    /// streamed audio over the 2002 disc's Tunaria (`Library::add_zone_extras`).
+    pub fn additions(&self, zone: NodeId, kinds: &[u16], needs: impl Fn(&Container, NodeId) -> Vec<i32>) -> Option<(Container, Vec<Actor>)> {
+        let placed = |a: &Actor| self.lookup(a.sprite).filter(|&n| kinds.contains(&self.node(n).ty));
+        let actors: Vec<Actor> = self.actors(zone).into_iter().filter(|a| placed(a).is_some()).collect();
+        if actors.is_empty() {
+            return None;
+        }
+        let mut want: Vec<NodeId> = actors.iter().filter_map(placed).collect();
+        let named: Vec<NodeId> = want.iter().flat_map(|&n| needs(self, n)).filter_map(|id| self.lookup(id)).collect();
+        want.extend(named);
+        want.sort_unstable();
+        want.dedup();
+        // a record inside another one taken comes with it
+        let inside = |m: NodeId| {
+            let mut p = self.node(m).parent;
+            while let Some(q) = p {
+                if want.binary_search(&q).is_ok() {
+                    return true;
+                }
+                p = self.node(q).parent;
+            }
+            false
+        };
+        let mut data = Vec::new();
+        for &n in want.iter().filter(|&&n| !inside(n)) {
+            let node = self.node(n);
+            data.extend_from_slice(&self.data[node.body - 12..node.body + node.size]);
+        }
+        Some((Container::parse_records(data), actors))
+    }
+
     pub fn actors(&self, zone: NodeId) -> Vec<Actor> {
         let d = &self.data;
         let mut out = Vec::new();

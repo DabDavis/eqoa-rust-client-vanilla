@@ -259,7 +259,9 @@ fn upload(renderer: &mut Renderer, device: &wgpu::Device, queue: &wgpu::Queue, l
 /// streamer for it at the arrival.
 fn change_world(lib: &mut Library, file: &str, at: Spawn) -> Result<(Walker, Streamer), Error> {
     let o = stream::open_world(file, at.pos[0], at.pos[2]).borrow_mut().take().ok_or("the world is not read yet")??;
-    lib.replace_from(0, file, o.container, o.era);
+    for (zi, b) in stream::put_world(lib, 0, file, o) {
+        stream::install(lib, 0, zi, b)?;
+    }
     let index = vi::world::World::<vi::fpu::Ee>::zone_at(lib.file(0), at.pos[0], at.pos[2]).ok_or("no zone at the arrival")?;
     stream::load_zone_now(lib, 0, index)?;
     let character = lib.lookup(HUMAN).ok_or("no human model")?;
@@ -941,6 +943,9 @@ pub fn shot_with(
         }
         eprintln!("{}", parts.describe());
         eprintln!("{}", weather.describe());
+        if let Some(fx) = &fx {
+            eprintln!("{}", fx.describe());
+        }
         if let Some((sp, _, _)) = &trial {
             eprintln!("{}", sp.describe());
         }
@@ -1700,8 +1705,7 @@ impl App {
     /// (`stream::open_world`): the file replaces the world's, the zones read
     /// round the arrival go in, and `load` begins the walk again there.
     fn enter_world(&mut self, file: &str, o: stream::Opened, at: Spawn) -> Result<(), Error> {
-        let stream::Opened { container: c, zones, era } = o;
-        self.lib.replace_from(0, file, c, era);
+        let zones = stream::put_world(&mut self.lib, 0, file, o);
         for (zi, b) in zones {
             stream::install(&mut self.lib, 0, zi, b)?;
         }

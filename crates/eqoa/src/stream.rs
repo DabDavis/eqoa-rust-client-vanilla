@@ -37,6 +37,101 @@ pub trait ZoneSource {
     fn request(&mut self, zi: usize, off: u64, len: usize);
     /// A zone whose read has finished, each once.
     fn poll(&mut self) -> Option<(usize, std::io::Result<Vec<u8>>)>;
+    /// The twin world's zone `zi`, read with it, once (`Twinned`): what
+    /// [`install_with`] takes the zone's additions from.
+    fn twin_zone(&mut self, _zi: usize) -> Option<Vec<u8>> {
+        None
+    }
+}
+
+/// A world's zones read with its twin's (`esf::Library::set_twin`: the 2002
+/// disc's Tunaria with Frontiers'), zone for zone: a zone is handed on once
+/// both reads are in (a twin's that fails, or a zone the twin lacks, does not
+/// hold it back), the twin's kept for [`ZoneSource::twin_zone`].
+pub struct Twinned {
+    main: Box<dyn ZoneSource>,
+    twin: Box<dyn ZoneSource>,
+    /// each of the twin's zones: where its record is in the twin's file
+    ranges: Vec<Option<(u64, usize)>>,
+    /// reads in: the zone's, and the twin's (`None`: none coming)
+    got: std::collections::HashMap<usize, (Option<std::io::Result<Vec<u8>>>, Option<Option<Vec<u8>>>)>,
+    twins: std::collections::HashMap<usize, Vec<u8>>,
+}
+
+impl Twinned {
+    pub fn new(main: Box<dyn ZoneSource>, twin: Box<dyn ZoneSource>, ranges: Vec<Option<(u64, usize)>>) -> Self {
+        Twinned { main, twin, ranges, got: Default::default(), twins: Default::default() }
+    }
+}
+
+impl ZoneSource for Twinned {
+    fn request(&mut self, zi: usize, off: u64, len: usize) {
+        self.main.request(zi, off, len);
+        let twin = match self.ranges.get(zi).copied().flatten() {
+            Some((o, n)) => {
+                self.twin.request(zi, o, n);
+                None
+            }
+            None => Some(None),
+        };
+        self.got.insert(zi, (None, twin));
+    }
+
+    fn poll(&mut self) -> Option<(usize, std::io::Result<Vec<u8>>)> {
+        while let Some((zi, r)) = self.main.poll() {
+            self.got.entry(zi).or_insert((None, Some(None))).0 = Some(r);
+        }
+        while let Some((zi, r)) = self.twin.poll() {
+            if let Err(e) = &r {
+                eprintln!("zone {zi}'s twin: {e}");
+            }
+            self.got.entry(zi).or_insert((None, None)).1 = Some(r.ok());
+        }
+        let zi = *self.got.iter().find(|(_, (m, t))| m.is_some() && t.is_some())?.0;
+        let (m, t) = self.got.remove(&zi)?;
+        if let Some(Some(b)) = t {
+            self.twins.insert(zi, b);
+        }
+        Some((zi, m?))
+    }
+
+    fn twin_zone(&mut self, zi: usize) -> Option<Vec<u8>> {
+        self.twins.remove(&zi)
+    }
+}
+
+/// What a world's twin adds to its zones (`esf::Library::set_twin`): the
+/// placements of the record types the 2002 disc's Tunaria has none of,
+/// Frontiers' effect volumes (fog, dust, leaves, shafts, flocks: `fx`) and
+/// streamed audio (the zones' ambient music and sound,
+/// `vi::world::SpriteKind::Stream`).
+pub const TWIN_ADDS: &[u16] = &[crate::fx::RECORD, 0x2E00];
+
+/// The records a placed addition names besides its own: an effect volume's
+/// surface and flock sprite (another volume of the zone may hold them).
+fn addition_needs(c: &Container, n: esf::NodeId) -> Vec<i32> {
+    crate::fx::Record::read(c, n).and_then(|r| r.params).map_or_else(Vec::new, |p| vec![p.surface, p.sprite])
+}
+
+/// Zone `zi` of the twin of the world in file `world`, its record's bytes:
+/// what it adds (`TWIN_ADDS`) put in the library for the zone
+/// (`esf::Library::add_zone_extras`), before the collision world takes the
+/// zone. Nothing when it adds nothing.
+pub fn add_twin_zone(lib: &mut Library, world: usize, zi: usize, bytes: Vec<u8>) {
+    let c = Container::parse_records(bytes);
+    let Some(&zone) = c.roots.first() else { return };
+    if let Some((extra, actors)) = c.additions(zone, TWIN_ADDS, addition_needs) {
+        lib.add_zone_extras(world, zi, extra, actors);
+    }
+}
+
+/// [`install`], then what the zone's twin adds (`ZoneSource::twin_zone`).
+pub fn install_with(lib: &mut Library, file: usize, zi: usize, bytes: Vec<u8>, src: &mut dyn ZoneSource) -> Result<(), String> {
+    install(lib, file, zi, bytes)?;
+    if let Some(t) = src.twin_zone(zi) {
+        add_twin_zone(lib, file, zi, t);
+    }
+    Ok(())
 }
 
 /// The native source: the world file's extent in the disc image, read at once.
@@ -79,8 +174,19 @@ pub fn set_source_factory(f: Factory) {
     FACTORY.with(|c| *c.borrow_mut() = Some(f));
 }
 
-/// The source for the world in file `file`, if it was opened deferred.
+/// The source for the world in file `file`, if it was opened deferred; with
+/// a twin (`esf::Library::set_twin`), its zones read with the twin's
+/// (`Twinned`).
 pub fn source_for(lib: &Library, file: usize) -> Option<Box<dyn ZoneSource>> {
+    let main = own_source(lib, file)?;
+    let Some(t) = lib.twin_of(file) else { return Some(main) };
+    let Some(twin) = own_source(lib, t) else { return Some(main) };
+    let ranges = (0..lib.zone_count(t)).map(|zi| lib.zone_range(t, zi)).collect();
+    Some(Box::new(Twinned::new(main, twin, ranges)))
+}
+
+/// `source_for` without the twin.
+fn own_source(lib: &Library, file: usize) -> Option<Box<dyn ZoneSource>> {
     if !lib.is_deferred(file) {
         return None;
     }
@@ -103,6 +209,19 @@ pub struct Opened {
     pub container: Container,
     pub zones: Vec<(usize, Vec<u8>)>,
     pub era: esf::Era,
+    /// The same world off the other disc, its zones left there, for what
+    /// they add (`esf::Library::set_twin`): Frontiers' Tunaria under the
+    /// 2002 disc's. Its era is the other one.
+    pub twin: Option<Container>,
+    /// The twin's zones of the same indices as `zones`, read with them (a
+    /// page's; natively none: they come with the zones' own reads).
+    pub twin_zones: Vec<(usize, Vec<u8>)>,
+}
+
+/// The twin a world off the disc of `era` is given (`Opened::twin`): the 2002
+/// disc's Tunaria gets Frontiers', for its effect volumes and streamed audio.
+pub fn wants_twin(era: esf::Era) -> bool {
+    era == esf::Era::Y2002
 }
 
 /// A world change's reads: here at once natively, a frame or more later in a
@@ -137,7 +256,8 @@ pub fn open_world(name: &str, x: f32, z: f32) -> Arrival {
     let image = crate::era::image_of(era).unwrap_or_else(|| crate::disc_path(None));
     #[cfg(target_arch = "wasm32")]
     let image = crate::disc_path(None);
-    let r = open_file(std::path::Path::new(&image), name).map(|container| Opened { container, zones: Vec::new(), era }).map_err(|e| e.to_string());
+    let twin = wants_twin(era).then(|| open_file(std::path::Path::new(&crate::disc_path(None)), name).ok()).flatten();
+    let r = open_file(std::path::Path::new(&image), name).map(|container| Opened { container, zones: Vec::new(), era, twin, twin_zones: Vec::new() }).map_err(|e| e.to_string());
     std::rc::Rc::new(RefCell::new(Some(r)))
 }
 
@@ -234,7 +354,7 @@ pub fn fill(lib: &mut Library, file: usize, x: f32, z: f32, src: &mut dyn ZoneSo
         src.request(zi, off, len);
     }
     while let Some((zi, r)) = src.poll() {
-        match r.map_err(|e| e.to_string()).and_then(|b| install(lib, file, zi, b)) {
+        match r.map_err(|e| e.to_string()).and_then(|b| install_with(lib, file, zi, b, src)) {
             Ok(()) => {}
             Err(e) => eprintln!("zone {zi}: {e}"),
         }
@@ -252,10 +372,23 @@ pub fn load_zone_now(lib: &mut Library, file: usize, zi: usize) -> Result<(), St
     let mut src = source_for(lib, file).ok_or("no source for the world's zones")?;
     src.request(zi, off, len);
     match src.poll() {
-        Some((_, Ok(b))) => install(lib, file, zi, b),
+        Some((_, Ok(b))) => install_with(lib, file, zi, b, src.as_mut()),
         Some((_, Err(e))) => Err(format!("zone {zi}: {e}")),
         None => Err(format!("zone {zi}: not read yet")),
     }
+}
+
+/// `o`'s world in place of the one in file `file`: the file, its twin and
+/// what the twin's zones read with it add (`add_twin_zone`). The zones read
+/// with it, for the caller to install.
+pub fn put_world(lib: &mut Library, file: usize, name: &str, o: Opened) -> Vec<(usize, Vec<u8>)> {
+    let Opened { container, zones, era, twin, twin_zones } = o;
+    lib.replace_from(file, name, container, era);
+    lib.set_twin(file, twin, crate::era::other(era));
+    for (zi, b) in twin_zones {
+        add_twin_zone(lib, file, zi, b);
+    }
+    zones
 }
 
 /// A world put in place of the one in file `file` under a walk at `at` (F9's
@@ -264,8 +397,7 @@ pub fn load_zone_now(lib: &mut Library, file: usize, zi: usize) -> Result<(), St
 /// read through its own source (`fill`), and the collision world made of
 /// them. With the source and the zones still coming, for its streamer.
 pub fn reopen(lib: &mut Library, file: usize, name: &str, o: Opened, at: Vec3) -> Result<(World<Ee>, Option<Box<dyn ZoneSource>>, Vec<usize>), String> {
-    let Opened { container, zones, era } = o;
-    lib.replace_from(file, name, container, era);
+    let zones = put_world(lib, file, name, o);
     for (zi, b) in zones {
         install(lib, file, zi, b)?;
     }
@@ -344,7 +476,7 @@ impl Streamer {
         let first = world.actors.len();
         while let Some((zi, r)) = src.poll() {
             self.requested.remove(&zi);
-            match r.map_err(|e| e.to_string()).and_then(|b| install(lib, self.file, zi, b)) {
+            match r.map_err(|e| e.to_string()).and_then(|b| install_with(lib, self.file, zi, b, src.as_mut())) {
                 Ok(()) => {
                     world.add_zone(lib, self.file, zi);
                 }
@@ -479,7 +611,7 @@ mod tests {
                 w.frame(Default::default(), k * 33);
             }
             let before = w.cam.walk.phys.position;
-            let o = Opened { container: open_file(&y2002, "TUNARIA.ESF").unwrap(), zones: Vec::new(), era: esf::Era::Y2002 };
+            let o = Opened { container: open_file(&y2002, "TUNARIA.ESF").unwrap(), zones: Vec::new(), era: esf::Era::Y2002, twin: None, twin_zones: Vec::new() };
             let at = Vec3::from(before.to_array());
             let world = if zones {
                 let (world, source, pending) = reopen(&mut lib, f, "TUNARIA.ESF", o, at).unwrap();
@@ -505,5 +637,70 @@ mod tests {
         let (before, after, n) = walked(false);
         assert_eq!(n, 0);
         assert!(after.y.0 < before.y.0 - 0.1, "the control falls: {:?} to {:?}", before.to_array(), after.to_array());
+    }
+
+    /// The 2002 disc's Tunaria with Frontiers' as its twin: the zones round
+    /// the Freeport spawn place every effect volume and streamed-audio region
+    /// Frontiers' own zones do, at the same places; the control, the 2002
+    /// Tunaria with no twin, places none.
+    #[test]
+    fn the_2002_tunaria_keeps_frontiers_volumes_and_streams() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let frontiers = root.join("run/eqoa.iso");
+        let y2002 = std::env::var_os("EQOA_2002_ISO").map(std::path::PathBuf::from).or_else(|| {
+            std::fs::read_dir(root.join("../decomp-builds/discs/eqoa-usa")).ok()?.flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("iso")))
+        });
+        let (true, Some(y2002)) = (frontiers.exists(), y2002) else {
+            eprintln!("SKIP: no Frontiers disc or no 2002 disc (set EQOA_2002_ISO)");
+            return;
+        };
+        crate::settings::set_disc_2002(y2002.to_str().unwrap()).unwrap();
+        crate::discs::take_for_tests(&frontiers);
+        let (x, z) = (25393.7f32, 15749.5f32);
+        // each volume's and stream's place, sorted
+        let placed = |lib: &Library, w: &World<Ee>| {
+            let mut out: Vec<(u16, [u32; 3])> = w
+                .actors
+                .iter()
+                .filter_map(|a| {
+                    let r = w.sprite_refs[a.sprite?];
+                    let ty = lib.file(r.file).node(r.node).ty;
+                    TWIN_ADDS.contains(&ty).then(|| (ty, [a.location.x.0.to_bits(), a.location.y.0.to_bits(), a.location.z.0.to_bits()]))
+                })
+                .collect();
+            out.sort_unstable();
+            out
+        };
+        let world = |era: esf::Era, twin: bool| {
+            let image = if era == esf::Era::Y2002 { &y2002 } else { &frontiers };
+            let mut lib = Library::new();
+            let f = lib.add_from("TUNARIA.ESF", open_file(image, "TUNARIA.ESF").unwrap(), era);
+            if twin {
+                lib.set_twin(f, Some(open_file(&frontiers, "TUNARIA.ESF").unwrap()), esf::Era::Frontiers);
+            }
+            let mut src = source_for(&lib, f).unwrap();
+            let pending = fill(&mut lib, f, x, z, src.as_mut());
+            assert!(pending.is_empty(), "read at once");
+            let w = World::load(&lib, f).unwrap();
+            (placed(&lib, &w), w.loaded.iter().filter(|&&l| l).count())
+        };
+        let (theirs, n) = world(esf::Era::Frontiers, false);
+        let (ours, m) = world(esf::Era::Y2002, true);
+        eprintln!("{} volumes and streams in Frontiers' {n} zones, {} in the 2002 disc's {m} with the twin", theirs.len(), ours.len());
+        assert!(!theirs.is_empty() && theirs.iter().any(|p| p.0 == 0x2E00) && theirs.iter().any(|p| p.0 == crate::fx::RECORD));
+        assert_eq!(n, m);
+        assert_eq!(ours, theirs, "every one, at its place");
+        let (none, _) = world(esf::Era::Y2002, false);
+        assert!(none.is_empty(), "the control: the 2002 disc's own zones place none");
+        // F9 under a walk (`reopen`): the same, the twin put with the world
+        let mut lib = Library::new();
+        let f = lib.add("TUNARIA.ESF", open_file(&frontiers, "TUNARIA.ESF").unwrap());
+        let o = Opened { container: open_file(&y2002, "TUNARIA.ESF").unwrap(), zones: Vec::new(), era: esf::Era::Y2002, twin: Some(open_file(&frontiers, "TUNARIA.ESF").unwrap()), twin_zones: Vec::new() };
+        let (w, _, _) = reopen(&mut lib, f, "TUNARIA.ESF", o, Vec3::new(x, 54.0, z)).unwrap();
+        assert_eq!(placed(&lib, &w), theirs, "swapped in, every one at its place");
+        // and back: Frontiers' own, the twin gone
+        let o = Opened { container: open_file(&frontiers, "TUNARIA.ESF").unwrap(), zones: Vec::new(), era: esf::Era::Frontiers, twin: None, twin_zones: Vec::new() };
+        let (w, _, _) = reopen(&mut lib, f, "TUNARIA.ESF", o, Vec3::new(x, 54.0, z)).unwrap();
+        assert_eq!((placed(&lib, &w), lib.twin_of(f)), (theirs, None));
     }
 }

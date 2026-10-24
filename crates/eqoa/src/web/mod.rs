@@ -759,9 +759,11 @@ fn world_loader(disc: &WebDisc) -> crate::pregame::host::WorldLoader {
                         false => log(&format!("art: the 2002 disc's {world} places no zone at the spawn: Frontiers' world instead")),
                     }
                 }
+                let mut twin_zones = Vec::new();
                 let (main, n) = match off_2002 {
                     Some((d2, c)) => {
                         let main = lib.add_from(&world, c, esf::Era::Y2002);
+                        twin_zones = crate::stream::fill_set(&lib, main, x, z).iter().map(|w| w.0).collect();
                         (main, d2.fill(&mut lib, main, x, z).await?)
                     }
                     None => {
@@ -788,6 +790,13 @@ fn world_loader(disc: &WebDisc) -> crate::pregame::host::WorldLoader {
                     let k = crate::era::install(&mut lib, art);
                     lib.set_view(esf::Era::Y2002);
                     log(&format!("art: {k} of the 2002 disc's files stand in for Frontiers'"));
+                }
+                // the 2002 disc's Tunaria with Frontiers' as its twin, for its
+                // effect volumes and streamed audio, after the other files as
+                // natively (`main.rs`'s `add_twin`)
+                if crate::stream::wants_twin(lib.era_of(main)) {
+                    status(&format!("reading {world}'s effect volumes and streamed audio (Frontiers')"));
+                    d.twin(&mut lib, main, &twin_zones).await?;
                 }
                 let index = vi::world::World::<vi::fpu::Ee>::zone_at(lib.file(main), x, z).ok_or("no zone at the player's position")?;
                 let character = lib.lookup(viewer::HUMAN).ok_or("no human model")?;
