@@ -5,6 +5,19 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-24 · Hold R1 to aim
+- Holding R1 or L1 (Tab or ` on the keyboard) for a moment now does what it
+  does on a PlayStation 2: the view moves into your character's eyes, a
+  crosshair appears in the middle of the screen, and whoever is nearest the
+  crosshair becomes your target. A quick press still just picks the next
+  target, as before.
+- While you hold it, the right stick looks around (I J K L on the keyboard,
+  or drag with the mouse or a finger), and your character turns to follow
+  your look. You stand still meanwhile, as on the console, but the quick
+  menu's up, down and use still work: aim at someone and cast at them.
+- Let go and the camera goes back to its usual place, with your character
+  facing where you looked. Opening the chat line ends it too.
+
 ## 2026-10-24 · More NPCs and players in view, and farther
 - Options > Extended has two new rows. NPC/PC Display, a slider from 24 (the
   game's) up to 204, is how many NPCs and players, you among them, the game
