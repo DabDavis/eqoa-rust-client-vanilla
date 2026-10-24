@@ -82,7 +82,12 @@ pub fn window_from_frame(size: (u32, u32), p: [f32; 2]) -> [f32; 2] {
 /// texel past it: an atlas's black line round a sprite (the title's sail
 /// sailing right showed one at its stern), or the other side of a surface
 /// through the repeat. A hair up and left, each pixel takes the texel its
-/// frame pixel's centre would; at 640x448 nothing moves.
+/// frame pixel's centre would; at 640x448 nothing moves. That moves the
+/// edge, not the case: at other sizes a pixel's centre falls on the moved
+/// edge (1918x1078: frame x 363 less the hair, the start menu's title plate's
+/// mirrored right cap), where a mirrored quad takes the uv of its far end,
+/// the texel past it. So a quad also keeps to its own texels (`ui.wgsl`,
+/// `Vertex::rect`).
 pub const SAMPLE_BIAS: f32 = 1.0 / 32.0;
 
 /// The whole frame pixels a `size` target shows beyond each side of the
@@ -332,6 +337,9 @@ struct Vertex {
     pos: [f32; 2],
     uv: [f32; 2],
     color: [f32; 4],
+    /// The quad's texture rectangle (its corners' least and greatest uv):
+    /// what the fragment keeps to (`ui.wgsl`).
+    rect: [f32; 4],
 }
 
 /// One quad: its corners in screen pixels and texture coordinates, in fan
@@ -465,7 +473,7 @@ impl Ui {
                         buffers: &[Some(wgpu::VertexBufferLayout {
                             array_stride: std::mem::size_of::<Vertex>() as u64,
                             step_mode: wgpu::VertexStepMode::Vertex,
-                            attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4],
+                            attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32x4],
                         })],
                     },
                     primitive: Default::default(),
@@ -704,10 +712,12 @@ impl Ui {
         let (ox, oy, sx, sy) = frame(size);
         let mut v = Vec::with_capacity(quads.len() * 6);
         for q in quads {
+            let rect = q.uv.iter().fold([f32::MAX, f32::MAX, f32::MIN, f32::MIN], |r, t| [r[0].min(t[0]), r[1].min(t[1]), r[2].max(t[0]), r[3].max(t[1])]);
             let p = |i: usize| Vertex {
                 pos: [(ox + (q.pos[i][0] - SAMPLE_BIAS) * sx) / tw * 2.0 - 1.0, 1.0 - (oy + (q.pos[i][1] - SAMPLE_BIAS) * sy) / th * 2.0],
                 uv: q.uv[i],
                 color: q.color,
+                rect,
             };
             v.extend([p(0), p(1), p(2), p(0), p(2), p(3)]);
         }

@@ -9,7 +9,8 @@
 //! The script covers every atlas id (and three out of range) through the
 //! blitters, tiling across row-1 and stretched entries, bars, frames, words,
 //! window open/close animation in all three sets, `TextBox` with each
-//! placement flag, ellipsis, asterisks and skips, `DrawTextInternal`'s
+//! placement flag, its frame (4, alone on an empty box too), ellipsis,
+//! asterisks and skips, `DrawTextInternal`'s
 //! inline icons (the pulsing ones at a fixed clock), and 700 frames of both
 //! scroll styles (long enough to pause at both ends). A recorder with a
 //! planted bug must disagree.
@@ -402,12 +403,19 @@ fn script() -> Vec<Call> {
     v.push(call(20, &[3, 422, 300, 462, 6, 1], &[], ""));
     v.push(call(21, &[3, 1], &[], ""));
     let long = "The quick brown fox jumps over the lazy dog, and then a verylongwordthatcannotbreakanywhereatall keeps going\nand a second paragraph after a newline, which wraps too";
-    for f in [0u32, 2, 8, 0x10, 0x80, 0x0100_0000, 0x0200_0002, 0xFFFF_FFFF, 1, 9] {
+    // 4 frames the rows first (DrawFrame, with its own 0x20 and 0x40): the
+    // callers' 4 (the spell book's slots), 5 (a trade's money), 6 (the CS
+    // and mail forms), and the frame flags beside the placement ones.
+    for f in [0u32, 2, 8, 0x10, 0x80, 0x0100_0000, 0x0200_0002, 0xFFFF_FFFF, 1, 9, 4, 5, 6, 0xC, 0x14, 0x24, 0x44, 0x64, 0x0100_0006] {
         for (w, rows) in [(417, 1), (417, 3), (200, 2), (120, 6), (40, 2)] {
             v.push(call(24, &[3, 25, 1, w, rows, f as i32], &[0.0, 0.0, 0.0, 1.0], long));
         }
     }
     v.push(call(24, &[3, 25, 0, 417, 1, 0], &[1.0, 1.0, 1.0, 1.0], "short"));
+    // The spell book's ten slot plates: empty boxes, each a frame alone.
+    for row in 0..10 {
+        v.push(call(24, &[3, 20, row, 150, 1, 4], &[0.0, 0.0, 0.0, 1.0], ""));
+    }
     // Text and CountLines: the dialog box's two.
     for w in [360, 200, 90] {
         v.push(call(29, &[3, w], &[], long));

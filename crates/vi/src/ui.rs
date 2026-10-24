@@ -783,10 +783,15 @@ impl Window {
     /// the last space, else the last character that fit) over at most
     /// `rows` rows from `row`; `f` places each row (8 centred, 0x10 right),
     /// 2 ends a cut-off last row in "...", 0x80 shows asterisks, and the
-    /// top byte skips that many rows. The frame of `f & 4` is not ported.
+    /// top byte skips that many rows. 4 draws the frame round the rows
+    /// first (`DrawFrame`, which reads 0x20 and 0x40 of the same flags),
+    /// text or none: the spell book's ten slot plates are empty boxes.
     /// The rows drawn.
     pub fn text_box(&self, vui: &Vui, ui: &mut dyn Raster, s: &[u16], x: i32, row: i32, w: i32, rows: i32, c: [f32; 4], f: u32) -> i32 {
         let all = f == 0xFFFF_FFFF;
+        if !all && f & 4 != 0 {
+            self.draw_frame(vui, ui, x, row, w, rows, f);
+        }
         let pos = [self.top_left()[0] + x, self.row_center(vui, ui, row)[1] - 4];
         let size_x = w;
         let copy = |from: usize, n: usize| -> Vec<u16> {
