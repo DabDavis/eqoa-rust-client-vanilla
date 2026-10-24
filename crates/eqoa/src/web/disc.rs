@@ -243,8 +243,6 @@ impl WebDisc {
         Some(WebZones { file: self.file.clone(), base: e.lba as u64 * iso::SECTOR, done: Default::default() })
     }
 
-    /// `stream::fill`, awaited (`VIScene::StreamFillCache`): every zone a walk
-    /// at (x, z) needs before it starts, read and installed.
     /// The twin of the 2002 disc's world in file `file`, off this image,
     /// Frontiers' (`esf::Library::set_twin`), and what its zones `zones` add
     /// (`stream::add_twin_zone`): Frontiers' effect volumes and streamed
@@ -262,6 +260,8 @@ impl WebDisc {
         Ok(())
     }
 
+    /// `stream::fill`, awaited (`VIScene::StreamFillCache`): every zone a walk
+    /// at (x, z) needs before it starts, read and installed.
     pub async fn fill(&self, lib: &mut esf::Library, file: usize, x: f32, z: f32) -> Result<usize, String> {
         let name = lib.files[file].0.clone();
         let e = self.find(&name).ok_or_else(|| format!("{name}: not on the disc"))?.clone();
