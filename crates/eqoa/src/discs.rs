@@ -128,7 +128,7 @@ pub fn judge(path: &str, cnf: Result<Option<Vec<u8>>, String>) -> Verdict {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{boot_disc, settle, unsettled};
+pub use native::{boot_disc, pick_2002, settle, unsettled};
 
 /// A page's disc is the image the page hands over (`web`): none to find.
 #[cfg(target_arch = "wasm32")]
@@ -276,6 +276,47 @@ mod native {
             d = d.set_directory(dir);
         }
         d.pick_file()
+    }
+
+    /// The 2002 disc for F9's art (`era`), in the desktop's file dialog,
+    /// judged (`era::judge_image`) until it is the USA disc of 2002: its path,
+    /// or why there is none (cancelled, no dialog, no screen).
+    pub fn pick_2002() -> Result<String, String> {
+        const CHOOSE_2002: &str = "Choose your EverQuest Online Adventures (USA) disc image (SLUS-20470), for its 2002 art";
+        let offscreen = std::env::var("EQOA_OFFSCREEN").ok().and_then(|v| v.split_once('x').map(|(w, h)| w.parse::<u32>().is_ok() && h.parse::<u32>().is_ok()));
+        if offscreen == Some(true) {
+            return Err("no 2002 disc image, and no screen to ask on (EQOA_OFFSCREEN): set EQOA_2002_ISO".into());
+        }
+        let mut note: Option<String> = None;
+        loop {
+            let title = match &note {
+                Some(n) => format!("{n} {CHOOSE_2002}"),
+                None => CHOOSE_2002.to_string(),
+            };
+            let mut d = rfd::FileDialog::new().set_title(&title);
+            if !cfg!(target_os = "macos") {
+                d = d.add_filter("PlayStation 2 disc image", &["iso", "ISO", "bin", "BIN", "img", "IMG"]).add_filter("All files", &["*"]);
+            }
+            if let Some(dir) = crate::settings::disc_2002().or_else(crate::settings::disc).and_then(|k| Path::new(&k).parent().map(Path::to_path_buf)).filter(|d| d.is_dir()) {
+                d = d.set_directory(dir);
+            }
+            let path = d.pick_file().ok_or("no 2002 disc image was chosen")?;
+            let path = std::path::absolute(&path).unwrap_or(path);
+            let Some(text) = path.to_str().map(str::to_string) else {
+                let line = format!("The client cannot open {} (its name is not Unicode): rename it or move it.", path.display());
+                tell(&line);
+                note = Some(line);
+                continue;
+            };
+            let verdict = iso::Iso::open(&text).map_err(|e| format!("{text}: {}", reason(&e))).and_then(|mut i| crate::era::judge_image(&mut i));
+            match verdict {
+                Ok(()) => return Ok(text),
+                Err(line) => {
+                    tell(&line);
+                    note = Some(line);
+                }
+            }
+        }
     }
 
     /// Why a pick was refused: said, and shown in a box the player closes

@@ -125,6 +125,7 @@ pub const ROWS: &[Row] = &[
     row("group_remove", "Group: {516}", &["f6"], Pad::None, "Takes the target out of the group."),
     row("group_disband", "Group: {529}", &["f7"], Pad::None, ""),
     row("group_leave", "{994}", &["f8"], Pad::None, ""),
+    row("art", "Art: Frontiers' or 2002's", &["f9"], Pad::None, "Everything drawn swaps between Frontiers' art and the 2002 disc's (EverQuest Online Adventures, USA, SLUS-20470), at once; the first time, it asks for that disc."),
     row("controls", "Controls", &["f1"], Pad::None, "This page, from play."),
 ];
 
@@ -682,6 +683,7 @@ mod tests {
             "F6" => NamedKey::F6,
             "F7" => NamedKey::F7,
             "F8" => NamedKey::F8,
+            "F9" => NamedKey::F9,
             "F11" => NamedKey::F11,
             other => panic!("the dispatch matches NamedKey::{other}: give it a name here and a row"),
         }

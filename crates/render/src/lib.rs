@@ -258,8 +258,26 @@ pub enum Draw<'a> {
     Group(&'a GpuGroup),
 }
 
-/// A texture source: the decoded image a DictID names, if any.
-pub type Textures<'a> = dyn Fn(i32) -> Option<esf::Image> + 'a;
+/// A texture source: the decoded image a DictID names, if any, and what the
+/// renderer's cache keys it by.
+pub trait TextureSource {
+    fn image(&self, id: i32) -> Option<esf::Image>;
+    /// What tells this source's image for `id` apart from another image a
+    /// source names by the same id: equal keys are one texture. A plain
+    /// function's is the id.
+    fn key(&self, id: i32) -> u64 {
+        id as u32 as u64
+    }
+}
+
+impl<F: Fn(i32) -> Option<esf::Image>> TextureSource for F {
+    fn image(&self, id: i32) -> Option<esf::Image> {
+        self(id)
+    }
+}
+
+/// What every upload takes its textures from.
+pub type Textures<'a> = dyn TextureSource + 'a;
 
 pub struct Renderer {
     /// Indexed by blend mode: 0 opaque, 1 add, 2 subtract, 3 alpha, 4 multiply.
@@ -275,8 +293,9 @@ pub struct Renderer {
     /// repeat, clamp, mirror.
     samplers: [wgpu::Sampler; 3],
     white: wgpu::TextureView,
-    /// DictID -> uploaded texture (`None`: the id resolved to nothing).
-    textures: std::collections::HashMap<i32, Option<wgpu::TextureView>>,
+    /// A source's key for a DictID (`TextureSource::key`) -> uploaded texture
+    /// (`None`: the id resolved to nothing).
+    textures: std::collections::HashMap<u64, Option<wgpu::TextureView>>,
     /// DictIDs a batch asked for that no loaded file holds.
     pub missing_textures: std::collections::BTreeSet<i32>,
     start: web_time::Instant,
@@ -301,8 +320,8 @@ pub struct Renderer {
     pub strips: Vec<billboard::Strips>,
     /// The last `draw`'s models and draw calls (`EQOA_PERF`).
     pub drawn: std::cell::Cell<(u32, u32)>,
-    /// Groups' materials by texture, sampler and uniform bytes.
-    materials: std::collections::HashMap<(i32, usize, [u32; 16]), wgpu::BindGroup>,
+    /// Groups' materials by texture (its key), sampler and uniform bytes.
+    materials: std::collections::HashMap<(u64, usize, [u32; 16]), wgpu::BindGroup>,
     /// The palette every group's models draw with: theirs is never set.
     identity_palette: wgpu::BindGroup,
     /// The options' Brightness over the scene (`curve`): none until set.
@@ -549,9 +568,9 @@ impl Renderer {
         }
         let missing = &mut self.missing_textures;
         self.textures
-            .entry(id)
+            .entry(src.key(id))
             .or_insert_with(|| {
-                let img = src(id);
+                let img = src.image(id);
                 if img.is_none() {
                     missing.insert(id);
                 }
@@ -1008,7 +1027,7 @@ impl Renderer {
     fn material(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, l: &esf::Layer, textures: &Textures) -> Material {
         let view = self.texture(device, queue, l.texture, textures);
         let (blend, base, si) = layer_state(l, view.is_some());
-        let key = (l.texture, si, bytemuck::cast(base));
+        let key = (textures.key(l.texture), si, bytemuck::cast(base));
         if let Some(bg) = self.materials.get(&key) {
             return Material { blend, bg: bg.clone() };
         }
@@ -1351,10 +1370,23 @@ pub fn capture_with_sky(
 /// One instance, untransformed.
 pub const IDENTITY: [[f32; 4]; 4] = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
 
-/// Textures out of a library: the surface a DictID names, wherever it was
-/// registered, decoded.
-pub fn library_textures(lib: &esf::Library) -> impl Fn(i32) -> Option<esf::Image> + '_ {
-    move |id| lib.surface(id).and_then(|(c, s)| s.decode(&c.data))
+/// Textures out of a library: the surface a DictID names in the library's
+/// view, wherever it was registered, decoded; keyed by the id and the disc
+/// its record came off (`esf::Library::texture_key`), so a 2002 texture and
+/// its Frontiers namesake are two textures, and an unchanged one is one.
+pub struct LibraryTextures<'a>(pub &'a esf::Library);
+
+impl TextureSource for LibraryTextures<'_> {
+    fn image(&self, id: i32) -> Option<esf::Image> {
+        self.0.surface(id).and_then(|(c, s)| s.decode(&c.data))
+    }
+    fn key(&self, id: i32) -> u64 {
+        self.0.texture_key(id)
+    }
+}
+
+pub fn library_textures(lib: &esf::Library) -> LibraryTextures<'_> {
+    LibraryTextures(lib)
 }
 
 #[cfg(test)]

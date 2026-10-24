@@ -140,6 +140,10 @@ impl Host {
         }
     }
 
+    /// The art swapped before the world (F9, `era`). Not yet: the pregame's
+    /// screens stay Frontiers'.
+    pub fn art_changed(&mut self, _era: esf::Era) {}
+
     /// A key the window took (the game's code).
     pub fn key(&mut self, key: i32, down: bool) {
         self.pre.key(key, down);

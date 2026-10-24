@@ -1245,6 +1245,18 @@ fn pregame_key(event: &KeyEvent) -> Option<i32> {
 
 /// Whether the touch screen's pad shows from the start: in a page on a
 /// touch-first device (`window.eqoaTouchFirst`), or with `EQOA_TOUCH=1`.
+/// Whether a key pressed before the world is the art's (`era`): F9, or the
+/// key its row was moved onto on the Controls page (`binds`); F9 moved off
+/// is not.
+fn is_art_key(k: &Key) -> bool {
+    let Some(name) = crate::binds::name_of(k) else { return false };
+    match crate::settings::with_binds(|b| b.alias(&name)) {
+        crate::binds::Alias::Same => name == "f9",
+        crate::binds::Alias::To(to) => to == "f9",
+        _ => false,
+    }
+}
+
 fn touch_first() -> bool {
     #[cfg(target_arch = "wasm32")]
     if crate::web::touch_first() {
@@ -1511,6 +1523,9 @@ struct App {
     /// Why the loop ended before a window opened (natively: no disc image
     /// was picked), for `run_app` to return.
     failed: Option<String>,
+    /// The 2002 disc's files being read for its art (`era`, F9), put in the
+    /// library and drawn when they come.
+    era_loading: Option<crate::era::Loading>,
 }
 
 pub fn run(lib: Library, source: Source) -> Result<(), Error> {
@@ -1593,6 +1608,7 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         booted: None,
         shots: crate::pregame::host::shot_script(),
         failed: None,
+        era_loading: None,
     };
     #[cfg(target_arch = "wasm32")]
     {
@@ -1677,6 +1693,82 @@ impl App {
         self.load();
         Ok(())
     }
+
+    /// F9 (`era`): the art swapped between Frontiers' and the 2002 disc's,
+    /// wherever the window is, and the choice kept. With no 2002 disc at hand
+    /// it is asked for first (natively the file dialog, in a page the
+    /// page's), and nothing changes without one.
+    fn toggle_era(&mut self) {
+        let want = crate::era::other(crate::era::current());
+        if want == esf::Era::Y2002 && !crate::era::available() && !crate::era::ask() {
+            return;
+        }
+        // what was held is let go: a dialog may have taken the release
+        self.held.clear();
+        self.keys_edge.clear();
+        crate::era::set(want);
+        crate::say(&format!("art: {}", crate::era::line(want)));
+        self.apply_era();
+    }
+
+    /// The art `era::current` names, drawn: in the world (or a model
+    /// viewer) the library's view turned and what is drawn made again in it,
+    /// the 2002 disc's files read first when the library has none of them
+    /// yet (`poll_era` comes back here once they are in); before the world,
+    /// the pregame's (`Host::art_changed`).
+    fn apply_era(&mut self) {
+        let want = crate::era::current();
+        if let Some(h) = self.host.as_mut() {
+            h.art_changed(want);
+        }
+        if self.host.is_some() {
+            return;
+        }
+        if want == esf::Era::Y2002 && !self.lib.has_2002() && crate::era::available() {
+            if self.era_loading.is_none() {
+                self.era_loading = Some(crate::era::load(crate::era::names_of(&self.lib)));
+            }
+            return;
+        }
+        if self.lib.view() == want {
+            return;
+        }
+        self.lib.set_view(want);
+        self.rebuild_art(want);
+    }
+
+    /// The 2002 disc's files, once read: stood in for their namesakes, then
+    /// the art applied.
+    fn poll_era(&mut self) {
+        let Some(r) = self.era_loading.as_mut().and_then(|l| l.poll()) else { return };
+        self.era_loading = None;
+        match r {
+            Ok(art) => {
+                let n = crate::era::install(&mut self.lib, art);
+                crate::say(&format!("art: {n} of the 2002 disc's files stand in for Frontiers'"));
+                self.apply_era();
+            }
+            Err(e) => crate::say(&format!("art: the 2002 disc could not be read: {e}")),
+        }
+    }
+
+    /// What is drawn made again in the art `era`, the library's view already
+    /// turned: the creatures as they are next applied (`Play::art_changed`),
+    /// the world (`swap_world_art`); a model viewer's scene at once.
+    fn rebuild_art(&mut self, era: esf::Era) {
+        if let Some(p) = self.play.as_mut() {
+            p.art_changed(era);
+        }
+        if self.walker.is_some() {
+            self.swap_world_art(era);
+        } else {
+            self.load();
+        }
+    }
+
+    /// The world itself in the art `era`: Tunaria off the disc of that art
+    /// (the walk kept where it is). Not yet: the world stays Frontiers'.
+    fn swap_world_art(&mut self, _era: esf::Era) {}
 
     fn step(&mut self, by: isize) {
         if let Source::Models { list, index, .. } = &mut self.source {
@@ -2499,6 +2591,11 @@ impl ApplicationHandler for App {
             // (`VIKeyboard::Read`'s), and its clicks.
             WindowEvent::KeyboardInput { event, .. } if self.host.is_some() => {
                 self.touch.hide();
+                // F9 (`era`), as the Controls page has it: the art swapped
+                if event.state == ElementState::Pressed && !event.repeat && is_art_key(&event.logical_key) && self.host.as_ref().is_some_and(|h| h.pre.setup.capturing().is_none()) {
+                    self.toggle_era();
+                    return;
+                }
                 // the title's Options' Controls page waiting for a key: it is
                 // the page's, as play's is
                 let host = self.host.as_mut().unwrap();
@@ -2596,6 +2693,11 @@ impl ApplicationHandler for App {
                     && let Some(n) = held_name(&event.logical_key)
                 {
                     self.held.remove(&n);
+                }
+                // F9 (`era`): the art swapped, whatever window is up
+                if event.state == ElementState::Pressed && !event.repeat && event.logical_key == Key::Named(NamedKey::F9) {
+                    self.toggle_era();
+                    return;
                 }
                 // The map (`map.rs`), while it is up, takes every key.
                 if let Some(p) = self.play.as_mut().filter(|p| p.map.open) {
@@ -3447,6 +3549,8 @@ impl ApplicationHandler for App {
                     return;
                 }
                 FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                // the 2002 disc's files, read since (`era`)
+                self.poll_era();
                 let frame_start = Instant::now();
                 // one of the game's frames, 30 a second whatever the
                 // display's rate: what the game counts in frames (the HUD and
@@ -3548,16 +3652,21 @@ impl ApplicationHandler for App {
                     if let Some(p) = play {
                         let gpu = crate::play::Gpu { renderer: &mut g.renderer, device: &g.device, queue: &g.queue };
                         // The server named the player's model: dress the walker in it.
-                        if let Some(model) = p.frame(w, lib, gpu, now, game_frame, sound.as_mut())
-                            && let Some(r) = lib.lookup(model as i32)
-                            && let Some(m) = lib.build_model(r)
-                        {
-                            w.set_character(lib, r);
-                            let textures = render::library_textures(lib);
-                            let (mat, _) = w.pose();
-                            if body_at < g.models.len() {
-                                g.models[body_at] = g.renderer.upload(&g.device, &g.queue, &m, &[mat], &textures);
-                            }
+                        // Built in its model's art (`era`): the 2002 disc's
+                        // whole while it is drawn and has that model.
+                        if let Some(model) = p.frame(w, lib, gpu, now, game_frame, sound.as_mut()) {
+                            lib.with_view(lib.view_for(model as i32), || {
+                                if let Some(r) = lib.lookup(model as i32)
+                                    && let Some(m) = lib.build_model(r)
+                                {
+                                    w.set_character(lib, r);
+                                    let textures = render::library_textures(lib);
+                                    let (mat, _) = w.pose();
+                                    if body_at < g.models.len() {
+                                        g.models[body_at] = g.renderer.upload(&g.device, &g.queue, &m, &[mat], &textures);
+                                    }
+                                }
+                            });
                         }
                         for (x, instant) in p.weather.drain(..) {
                             if let Some(wx) = weather.as_mut() {

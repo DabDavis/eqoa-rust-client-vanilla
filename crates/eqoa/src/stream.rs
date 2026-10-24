@@ -87,8 +87,13 @@ pub fn source_for(lib: &Library, file: usize) -> Option<Box<dyn ZoneSource>> {
     if let Some(s) = FACTORY.with(|c| c.borrow().as_ref().map(|f| f(lib, file))) {
         return s;
     }
+    // off the disc the world came off (`era`: Tunaria off the 2002 disc)
     let name = lib.files[file].0.clone();
-    FileZones::open(std::path::Path::new(&crate::disc_path(None)), &name).map(|z| Box::new(z) as Box<dyn ZoneSource>)
+    #[cfg(not(target_arch = "wasm32"))]
+    let image = crate::era::image_of(lib.era_of(file))?;
+    #[cfg(target_arch = "wasm32")]
+    let image = crate::disc_path(None);
+    FileZones::open(std::path::Path::new(&image), &name).map(|z| Box::new(z) as Box<dyn ZoneSource>)
 }
 
 /// A world file opened for a world change, with the zones the walk needs

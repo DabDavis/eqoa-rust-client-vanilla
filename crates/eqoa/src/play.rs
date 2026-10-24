@@ -67,6 +67,9 @@ struct Puppet {
     /// Rastered this frame: within its off distance (`VIScene::RasterActor`),
     /// invisible or not, which is when its own emitters run.
     shown: bool,
+    /// The art it was built in (`esf::Library::view_for` its model): a model
+    /// the 2002 disc has is built whole as that disc has it, F9 rebuilds it.
+    era: esf::Era,
 }
 
 /// `VICSprite::NameColors`.
@@ -656,7 +659,14 @@ fn held_items(cs: &CSprite<Ee>, c: &net::entity::Creature) -> Held {
 
 /// A creature's model as `Apply` dresses it: the look on its text slots, the
 /// items and helm on their nodes.
+/// Built in the art its model is drawn in (`esf::Library::view_for`): the
+/// 2002 disc's, whole, for a model that disc has while its art is drawn.
 fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64) -> Option<Puppet> {
+    let era = lib.view_for(e.model as i32);
+    lib.with_view(era, || build_puppet_in(lib, g, e, look, slot, game_ms, era))
+}
+
+fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, era: esf::Era) -> Option<Puppet> {
     let textures = render::library_textures(lib);
     lib.lookup(e.model as i32).and_then(|r| {
                     let mut model = lib.build_model(r)?;
@@ -675,7 +685,7 @@ fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Optio
                         dress(&mut model, &vi::cust::apply_look_with(cs, look, helm_worn, |id| lib.surface(id as i32).is_some(), &crate::s2::get().cust()));
                     }
                     let gpu = g.renderer.upload(g.device, g.queue, &model, &[render::IDENTITY], &textures);
-                    Some(Puppet { model: e.model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false })
+                    Some(Puppet { model: e.model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era })
                 })
 }
 
@@ -762,6 +772,8 @@ fn redo(was: (u32, Option<vi::cust::Look>, Held), now: (u32, Option<vi::cust::Lo
 /// anew.
 fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64) -> Option<Option<Puppet>> {
     let r = p.as_ref().map_or(Redo::Build, |p| redo((p.model, p.look, p.held), (e.model, look, held_by(p.sprite.as_ref(), e.creature.as_ref()))));
+    // the art swapped (F9) since it was built: made anew in the art now
+    let r = if p.as_ref().is_some_and(|p| p.era != lib.view_for(e.model as i32)) { Redo::Build } else { r };
     match r {
         Redo::Keep => None,
         Redo::Build => Some(std::mem::replace(p, build_puppet(lib, g, e, look, slot, game_ms))),
@@ -771,7 +783,7 @@ fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::En
             {
                 p.held = held_items(cs, c);
                 p.projectile = crate::spells::hand_projectiles(c, cs.holds_items);
-                (p.attached, p.weapons, _) = attach(lib, g, cs, c, p.held);
+                (p.attached, p.weapons, _) = lib.with_view(p.era, || attach(lib, g, cs, c, p.held));
             }
             None
         }
@@ -3022,6 +3034,16 @@ impl Play {
             }
             _ => self.session.say(text, target),
         }
+    }
+
+    /// The art swapped (F9, `era`): each creature is made anew in it as it is
+    /// next applied (`Puppet::era`), the player's own body with them (its
+    /// model told the window again), the hands' projectiles are built again,
+    /// and the chat says which art is drawn.
+    pub fn art_changed(&mut self, era: esf::Era) {
+        self.self_model = None;
+        self.projectiles.clear();
+        self.add_chat(crate::era::line(era).to_string(), [1.0; 4]);
     }
 
     /// `VIWndGame::AddText`: a line for the chat box (queued with its time

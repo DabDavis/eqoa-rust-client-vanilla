@@ -36,6 +36,7 @@
 #![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
 
 mod audio;
+mod era;
 #[cfg(target_os = "macos")]
 mod macos;
 mod chat;
@@ -579,6 +580,19 @@ pub fn world_library(player: &net::session::Player) -> Result<(esf::Library, vie
                 lib.add(path.file_name().map_or_else(String::new, |n| n.to_string_lossy().to_uppercase()), c);
             }
             Err(e) => eprintln!("s2: {}: {e}", path.display()),
+        }
+    }
+    // the 2002 disc's art while it is the art drawn (`era`, F9): its files in
+    // place of their namesakes, read with the world's
+    #[cfg(not(target_arch = "wasm32"))]
+    if era::current() == esf::Era::Y2002 && era::available() {
+        match era::read_now(&era::names_of(&lib)) {
+            Ok(art) => {
+                let n = era::install(&mut lib, art);
+                lib.set_view(esf::Era::Y2002);
+                say(&format!("art: {n} of the 2002 disc's files stand in for Frontiers'"));
+            }
+            Err(e) => say(&format!("art: the 2002 disc could not be read: {e}")),
         }
     }
     let [x, _, z] = player.pos;

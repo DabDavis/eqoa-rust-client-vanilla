@@ -283,6 +283,21 @@ pub fn set_disc(path: &str) -> Result<(), String> {
     store::write(DISC_FILE, format!("{path}\n").as_bytes())
 }
 
+// ---- the client's own: the 2002 disc (natively), for F9's art (`era`) ------------
+
+const DISC_2002_FILE: &str = "disc2002.opt";
+
+/// The 2002 disc image the player picked for its art (`disc2002.opt`: its
+/// path alone, on a line of its own), if one was (`era`).
+pub fn disc_2002() -> Option<String> {
+    store::read(DISC_2002_FILE).map(|b| String::from_utf8_lossy(&b).trim_end_matches(['\r', '\n']).to_string()).filter(|s| !s.is_empty())
+}
+
+/// Keeps `path` as the 2002 disc image.
+pub fn set_disc_2002(path: &str) -> Result<(), String> {
+    store::write(DISC_2002_FILE, format!("{path}\n").as_bytes())
+}
+
 // ---- the client's own: the Controls page ----------------------------------------
 
 thread_local! {
@@ -475,6 +490,9 @@ pub struct ClientOptions {
     /// the game draws it (`lod::view_dist`); a server that offers more looks
     /// for them that far
     pub entity_view: u16,
+    /// Art: Frontiers' (the disc the game runs off), or the 2002 disc's
+    /// (`era`, F9)
+    pub art: esf::Era,
 }
 
 /// The game's ability bars (with the expansion's second).
@@ -507,6 +525,7 @@ impl Default for ClientOptions {
             ability_bars: ABILITY_BARS_GAME,
             entity_slots: ENTITY_SLOTS_GAME,
             entity_view: ENTITY_VIEW_GAME,
+            art: esf::Era::Frontiers,
         }
     }
 }
@@ -516,8 +535,8 @@ impl ClientOptions {
     /// Fog only when they are not the game's, Screen Shake only when off, a
     /// window's Controller Focus as `controller.<window>` (from 1) only when
     /// it is not Auto, Capture Controller only when on, Sound in Background
-    /// only when off, and Ability Bars, NPC/PC Display and NPC/PC View
-    /// Distance only when not the game's.
+    /// only when off, Ability Bars, NPC/PC Display and NPC/PC View Distance
+    /// only when not the game's, and Art only when it is the 2002 disc's.
     pub fn to_text(self) -> String {
         let mut s = format!("lod={}\nbrightness={}\ncamera_distance={}\n", if self.lod { "on" } else { "off" }, self.brightness, self.camera_distance);
         if let Some(r) = self.frame_rate {
@@ -549,6 +568,9 @@ impl ClientOptions {
         }
         if self.entity_view != ENTITY_VIEW_GAME {
             s.push_str(&format!("entity_view={}\n", self.entity_view));
+        }
+        if self.art == esf::Era::Y2002 {
+            s.push_str("art=2002\n");
         }
         s
     }
@@ -587,6 +609,8 @@ impl ClientOptions {
                 ("screen_shake", "off") => c.screen_shake = false,
                 ("capture_controller", "on") => c.capture = true,
                 ("capture_controller", "off") => c.capture = false,
+                ("art", "2002") => c.art = esf::Era::Y2002,
+                ("art", "frontiers") => c.art = esf::Era::Frontiers,
                 ("background_sound", "on") => c.background_sound = true,
                 ("background_sound", "off") => c.background_sound = false,
                 ("ability_bars", v) => {
@@ -784,6 +808,20 @@ pub fn look_shared() {
     }
 }
 
+/// Art now: Frontiers' or the 2002 disc's (`era`).
+pub fn art() -> esf::Era {
+    client().art
+}
+
+/// Changes it and keeps it at once (F9 is a key, not a page's row that Save
+/// Changes keeps): this window's client options written as they stand.
+pub fn set_art(art: esf::Era) -> Result<(), String> {
+    let mut c = client();
+    c.art = art;
+    set_client(c);
+    save_client()
+}
+
 /// This window's Controller Focus: its place's (`multibox::place`).
 pub fn focus() -> Focus {
     client().controller[place()]
@@ -829,7 +867,7 @@ pub fn describe() -> String {
         FrameRate::Display => "the display's",
     };
     format!(
-        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, ability bars {}, npc/pc display {}, npc/pc view distance {}; {}",
+        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, art {}; {}",
         if c.lod { "on" } else { "off" },
         c.brightness,
         c.fog,
@@ -845,6 +883,10 @@ pub fn describe() -> String {
         c.ability_bars,
         c.entity_slots,
         c.entity_view,
+        match c.art {
+            esf::Era::Frontiers => "frontiers",
+            esf::Era::Y2002 => "2002",
+        },
         kept_where()
     )
 }
@@ -1223,6 +1265,7 @@ mod tests {
             ClientOptions { entity_slots: ENTITY_SLOTS_MAX, ..Default::default() },
             ClientOptions { entity_view: 450, ..Default::default() },
             ClientOptions { entity_view: ENTITY_VIEW_MAX, ..Default::default() },
+            ClientOptions { art: esf::Era::Y2002, ..Default::default() },
         ] {
             assert_eq!(ClientOptions::from_text(&c.to_text()), c);
         }
@@ -1234,6 +1277,11 @@ mod tests {
         assert_eq!(ClientOptions { entity_view: 600, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nentity_view=600\n", "NPC/PC View Distance only when not the game's");
         for bad in ["entity_view=99", "entity_view=1001", "entity_view=far"] {
             assert_eq!(ClientOptions::from_text(bad).entity_view, ENTITY_VIEW_GAME, "{bad}: the game's 100");
+        }
+        assert_eq!(ClientOptions { art: esf::Era::Y2002, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nart=2002\n", "Art only when it is the 2002 disc's");
+        assert_eq!(ClientOptions::from_text("art=frontiers").art, esf::Era::Frontiers);
+        for bad in ["art=1999", "art=2003", "art="] {
+            assert_eq!(ClientOptions::from_text(bad).art, esf::Era::Frontiers, "{bad}: Frontiers', the default");
         }
         assert_eq!(ClientOptions { ability_bars: 4, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nability_bars=4\n", "Ability Bars only when not the game's");
         for bad in ["ability_bars=1", "ability_bars=5", "ability_bars=three"] {
@@ -1252,7 +1300,7 @@ mod tests {
             "Screen Shake only off, Capture Controller only on"
         );
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, ability bars 2, npc/pc display 24, npc/pc view distance 100; kept in the page's storage");
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, ability bars 2, npc/pc display 24, npc/pc view distance 100, art frontiers; kept in the page's storage");
         testing::reset(true);
         assert!(describe().ends_with("refused: nothing is kept"));
         testing::reset(false);

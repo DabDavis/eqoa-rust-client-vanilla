@@ -25,7 +25,7 @@ mod surface;
 pub mod font;
 pub mod sound;
 pub mod zone;
-pub use library::{Library, Ref};
+pub use library::{Era, Library, Ref};
 pub use mesh::{Batch, Layer, Model, ModelRef, PrimBuffer, VertexList};
 pub use surface::{Image, Surface};
 
