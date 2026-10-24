@@ -130,6 +130,7 @@ mod viewer;
 mod wndlist;
 mod walker;
 mod weather;
+mod winplace;
 // Windows' Xbox controllers, read in the background (its mapping checked
 // natively by its tests)
 #[cfg(any(windows, test))]

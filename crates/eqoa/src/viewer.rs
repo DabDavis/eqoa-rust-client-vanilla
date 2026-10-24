@@ -1577,6 +1577,9 @@ struct App {
     /// cannot be seen.
     hidden_until: Option<Instant>,
     covered_script: Vec<(i64, i64)>,
+    /// The window's size and place on the desktop, kept between runs
+    /// (`winplace`).
+    winplace: crate::winplace::Keeper,
     /// The art last applied (`apply_era`), against which the art in effect
     /// is seen to move (`poll_era`).
     art_drawn: esf::Era,
@@ -1677,6 +1680,7 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
             .unwrap_or_default(),
         art_drawn,
         art_chosen: crate::settings::art(),
+        winplace: Default::default(),
     };
     #[cfg(target_arch = "wasm32")]
     {
@@ -2573,7 +2577,8 @@ impl ApplicationHandler for App {
             self.attach(window, Some(p.surface), p.config, p.device, p.queue);
             return;
         }
-        let window = Arc::new(el.create_window(Window::default_attributes().with_title("EQOA")).expect("window"));
+        // where the player last had it (`winplace`)
+        let window = Arc::new(el.create_window(self.winplace.attributes(el, Window::default_attributes().with_title("EQOA"))).expect("window"));
         // `EQOA_OFFSCREEN=WxH`: drawn on the adapter the environment names
         // into a texture of that size, never presented. A GPU with no display
         // to present on (an X server without DRI3) measures as it plays.
@@ -2633,6 +2638,12 @@ impl ApplicationHandler for App {
         self.attach(window, Some(surface), config, device, queue);
     }
 
+    /// The loop ends (the window closed, a Quit, the update's restart): the
+    /// window's place written if it changed (`winplace`).
+    fn exiting(&mut self, _: &ActiveEventLoop) {
+        self.winplace.flush(true);
+    }
+
     /// The mouse's own motion: the look while it holds the pointer.
     fn device_event(&mut self, _: &ActiveEventLoop, _: winit::event::DeviceId, event: winit::event::DeviceEvent) {
         if let winit::event::DeviceEvent::MouseMotion { delta } = event {
@@ -2641,6 +2652,7 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, _el: &ActiveEventLoop) {
+        self.winplace.flush(false);
         // a model viewer draws on input alone, but not while the 2002 disc's
         // files are coming (`poll_era` takes them on a frame) or a test's F9
         // is due
@@ -2671,6 +2683,9 @@ impl ApplicationHandler for App {
     }
 
     fn window_event(&mut self, el: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+        if let Some(g) = &self.gfx {
+            self.winplace.event(&g.window, &event);
+        }
         // the graphics device lost: nothing drawn or uploaded on it again,
         // the window closes and the game starts again (`gpulost`; its test
         // loses it here, between two events), logged out first as the
