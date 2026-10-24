@@ -897,9 +897,6 @@ mod tests {
         assert_eq!(q.data.len(), 1 + 4 + 4 + 4 + 4 + 1 + 1 + 1 + 5 + 1 + 1 + 1);
     }
 
-    /// The bank's rows take a click, a second asks for the form; with the
-    /// form up its rows take them (not the item's, which the keys skip, nor
-    /// the list behind it), a second click editing the row.
     /// A stack (a gem, a crafting material: max stack 20) is refused under
     /// retail's CanSell and sold under Sandstorm's S2, which rewrites the
     /// test; the form opens for it, or says 1727 and plays sound 9. The
@@ -942,6 +939,9 @@ mod tests {
         assert_eq!(select(sandstorm()), (true, 300, vec![13], vec![]));
     }
 
+    /// The bank's rows take a click, a second asks for the form; with the
+    /// form up its rows take them (not the item's, which the keys skip, nor
+    /// the list behind it), a second click editing the row.
     #[test]
     fn a_pointer_on_the_sell_form() {
         use crate::pointer::testing::{NullRaster, mid, vui};
