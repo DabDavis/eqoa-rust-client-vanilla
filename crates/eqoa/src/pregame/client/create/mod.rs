@@ -409,6 +409,15 @@ impl Create {
         }
     }
 
+    /// The art swapped (F9): the page's model made again in it where it
+    /// stands (not released: a page that makes its model anew starts its
+    /// race's music again).
+    pub fn remake(&mut self, lib: &esf::Library, g: &mut crate::play::Gpu, now: i64) {
+        if let Some(f) = self.env.figure.as_mut() {
+            f.remake(lib, g, now);
+        }
+    }
+
     /// The page's 3D: its model in its race's set, through the stage's view,
     /// with the personal light the page set.
     pub fn scene<'a>(&'a self, stage: &'a Stage) -> Option<Scene<'a>> {

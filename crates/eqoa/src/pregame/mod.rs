@@ -207,6 +207,8 @@ impl Pregame {
             back: None,
             relaunch: false,
         };
+        // the art chosen (`era`, F9): the 2002 disc's copies read with the files
+        p.res.set_art(crate::era::current());
         p.res.want(res::BASE);
         p
     }
@@ -406,6 +408,14 @@ impl Pregame {
             Next::Client => self.enter(Stage::Client, cx_now),
             Next::World(e) => self.entered = Some(e),
         }
+    }
+
+    /// The art swapped (F9, `era`), its files in: what the stages keep made of
+    /// them is made again in it (the title's effects, character select's and
+    /// creation's figures and stage). The 2D layer is the window's (`host`).
+    pub fn art_changed(&mut self, era: esf::Era) {
+        self.setup.art_changed(era);
+        self.client.art_changed();
     }
 
     /// CLIENT's files are being read (`LoadWorld`, "PreGame Load"): CLIENT's

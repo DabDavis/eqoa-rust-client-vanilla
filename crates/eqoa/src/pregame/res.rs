@@ -8,6 +8,7 @@
 //! read since it last looked are in `fresh`, for their surfaces to go up.
 
 use super::files;
+use esf::Era;
 use std::collections::{HashMap, HashSet};
 use vi::strtab::StringTable;
 use vi::ui::Vui;
@@ -39,6 +40,25 @@ pub struct Res {
     fresh: Vec<usize>,
     /// why a file could not be read (the last)
     pub error: Option<String>,
+    /// The art drawn (`era`, F9): Frontiers', or the 2002 disc's, whose
+    /// copies of the art files are read beside the disc's (`set_art`).
+    art: Era,
+    /// The 2002 disc's copies: each path asked of it, each answered (read,
+    /// not on that disc, or its read failed), the reads under way, its
+    /// containers waiting for their namesake, its other files (the loading
+    /// pictures) by the path they stand for.
+    asked_2002: HashSet<String>,
+    read_2002: HashSet<String>,
+    pending_2002: Vec<(Vec<String>, crate::era::Reading)>,
+    waiting_2002: Vec<(String, esf::Container)>,
+    raw_2002: HashMap<String, Vec<u8>>,
+    /// The 2D layer is to be made again, every surface put up in the view's
+    /// order (`take_relayer`): the art changed, or a 2002 file stood in for
+    /// one whose surfaces are up already.
+    relayer: bool,
+    /// The art changed: what is drawn is made again in it once its files are
+    /// in (`take_art_change`).
+    art_due: bool,
 }
 
 /// A file's name in the library: its disc path's last part (`SETUP.CSF`).
@@ -51,22 +71,123 @@ fn is_container(path: &str) -> bool {
     p.ends_with(".CSF") || p.ends_with(".ESF")
 }
 
+/// Whether a file is art the 2002 disc has its own copy of (`era`): a
+/// container, or a loading picture. The words, the texture names, the
+/// licence and STATION's pages stay the disc's the game runs off.
+pub fn is_art(path: &str) -> bool {
+    is_container(path) || path.to_ascii_uppercase().ends_with(".16")
+}
+
 impl Res {
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Asks for the files not asked for yet.
+    /// Asks for the files not asked for yet (in the 2002 art, the 2002
+    /// disc's copies of the art among them too).
     pub fn want(&mut self, paths: &[&str]) {
         let new: Vec<&str> = paths.iter().copied().filter(|p| self.asked.insert(p.to_string())).collect();
         if !new.is_empty() {
             self.pending.push(files::read(&new));
+            if self.art == Era::Y2002 {
+                self.want_2002(&new);
+            }
         }
     }
 
-    /// Whether every one of `paths` has been read.
+    /// Whether every one of `paths` has been read: in the 2002 art, with the
+    /// 2002 disc's copies of the art among them answered.
     pub fn ready(&self, paths: &[&str]) -> bool {
-        paths.iter().all(|p| self.read.contains(*p))
+        paths.iter().all(|p| self.read.contains(*p)) && (!self.reads_2002() || paths.iter().filter(|p| is_art(p)).all(|p| self.read_2002.contains(*p)))
+    }
+
+    /// Whether the 2002 disc's copies are read: in its art, with a 2002 disc
+    /// at hand (none: its art is Frontiers', there is nothing to stand in).
+    fn reads_2002(&self) -> bool {
+        self.art == Era::Y2002 && crate::era::available()
+    }
+
+    /// The 2002 disc's copies of the art among `paths`, those not asked of
+    /// it yet.
+    fn want_2002(&mut self, paths: &[&str]) {
+        if !self.reads_2002() {
+            return;
+        }
+        let new: Vec<String> = paths.iter().copied().filter(|p| is_art(p) && self.asked_2002.insert(p.to_string())).map(str::to_string).collect();
+        if !new.is_empty() {
+            self.pending_2002.push((new.clone(), crate::era::read(new)));
+        }
+    }
+
+    /// The art drawn now.
+    pub fn art(&self) -> Era {
+        self.art
+    }
+
+    /// Draws in `era` from now on: the library's view turned, and in the
+    /// 2002 art the 2002 disc's copies asked of every art file asked for so
+    /// far (and of every one asked later). What is drawn is made again once
+    /// they are in (`take_art_change`), the 2D layer at once and again as
+    /// they come (`take_relayer`).
+    pub fn set_art(&mut self, era: Era) {
+        if era == self.art {
+            return;
+        }
+        self.art = era;
+        self.lib.set_view(era);
+        if era == Era::Y2002 {
+            let all: Vec<String> = self.asked.iter().cloned().collect();
+            self.want_2002(&all.iter().map(String::as_str).collect::<Vec<_>>());
+        }
+        self.art_due = true;
+        self.relayer = true;
+    }
+
+    /// The art to make what is drawn again in, once: when it changed and its
+    /// 2002 files (if any are being read) are all in.
+    pub fn take_art_change(&mut self) -> Option<Era> {
+        (self.art_due && self.pending_2002.is_empty()).then(|| {
+            self.art_due = false;
+            self.art
+        })
+    }
+
+    /// Whether the 2D layer is to be made again, once.
+    pub fn take_relayer(&mut self) -> bool {
+        std::mem::take(&mut self.relayer)
+    }
+
+    /// A file off the 2002 disc, by the path it stands for: a container
+    /// waits for its namesake (`stand_in_waiting`), anything else is kept.
+    fn put_2002(&mut self, path: &str, bytes: Vec<u8>) {
+        if is_container(path) {
+            match esf::Container::open(bytes) {
+                Ok(c) => {
+                    self.waiting_2002.push((name_of(path).to_ascii_uppercase(), c));
+                    self.stand_in_waiting();
+                }
+                Err(e) => crate::say(&format!("pregame: the 2002 disc's {path}: {e}")),
+            }
+        } else {
+            self.raw_2002.insert(path.to_string(), bytes);
+        }
+    }
+
+    /// The 2002 containers whose namesakes are in, stood in for them; one the
+    /// same bytes as its namesake is let go (nothing changes).
+    fn stand_in_waiting(&mut self) {
+        let waiting = std::mem::take(&mut self.waiting_2002);
+        for (name, c) in waiting {
+            let at = (0..self.lib.files.len()).find(|&f| self.lib.stands_for(f).is_none() && self.lib.files[f].0 == name);
+            match at {
+                Some(f) if self.lib.file(f).data == c.data => {}
+                Some(f) => {
+                    self.lib.stand_in(f, c);
+                    self.relayer = true;
+                }
+                None => self.waiting_2002.push((name, c)),
+            }
+        }
     }
 
     /// The files read since the last frame, put where they go.
@@ -92,6 +213,27 @@ impl Res {
                 }
             }
         }
+        // the 2002 disc's copies, as they come: each path answered, read or
+        // not (one its disc lacks, or a read that failed, is Frontiers')
+        let mut done = Vec::new();
+        self.pending_2002.retain_mut(|(names, r)| match r.poll() {
+            Some(f) => {
+                done.push((std::mem::take(names), f));
+                false
+            }
+            None => true,
+        });
+        for (names, files) in done {
+            match files {
+                Ok(list) => {
+                    for (path, bytes) in list {
+                        self.put_2002(&path, bytes);
+                    }
+                }
+                Err(e) => crate::say(&format!("pregame: the 2002 disc: {e}")),
+            }
+            self.read_2002.extend(names);
+        }
         self.make_vui();
     }
 
@@ -102,6 +244,8 @@ impl Res {
                 Ok(c) => {
                     let i = self.lib.add(name_of(path).to_ascii_uppercase(), c);
                     self.fresh.push(i);
+                    // its 2002 copy, if that came first
+                    self.stand_in_waiting();
                 }
                 Err(e) => {
                     crate::say(&format!("pregame: {path}: {e}"));
@@ -126,9 +270,10 @@ impl Res {
         self.raw.get(path).map(Vec::as_slice)
     }
 
-    /// A container, by its name (`SETUP.CSF`).
+    /// A container, by its name (`SETUP.CSF`), as the art drawn has it (in
+    /// the 2002 art, the 2002 disc's copy where it stands in).
     pub fn container(&self, name: &str) -> Option<&esf::Container> {
-        self.lib.files.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, c)| c)
+        self.lib.file_named(name).map(|f| self.lib.file(f))
     }
 
     /// The library files read since the last call: their surfaces go up.
@@ -184,9 +329,19 @@ impl Res {
         self.vui.as_mut()
     }
 
-    /// A loading picture's RGBA, once its file is read.
+    /// A loading picture's RGBA, once its file is read: in the 2002 art the
+    /// 2002 disc's, once it is in (Frontiers' where that disc has none).
     pub fn picture(&self, n: i32) -> Option<Vec<u8>> {
-        self.raw(&super::boot::path(n)).and_then(super::boot::decode)
+        let path = super::boot::path(n);
+        if self.reads_2002() {
+            if !self.read_2002.contains(&path) {
+                return None;
+            }
+            if let Some(b) = self.raw_2002.get(&path) {
+                return super::boot::decode(b);
+            }
+        }
+        self.raw(&path).and_then(super::boot::decode)
     }
 }
 

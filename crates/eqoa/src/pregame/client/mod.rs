@@ -254,6 +254,9 @@ pub struct Client {
     server: Option<String>,
     login: Option<Login>,
     entered: Option<Box<Entered>>,
+    /// The art swapped (F9): the stage and the figures to be made again in
+    /// it, at the next frame with the GPU.
+    remake: bool,
 }
 
 impl Default for Client {
@@ -283,6 +286,7 @@ impl Default for Client {
             server: None,
             login: None,
             entered: None,
+            remake: false,
         }
     }
 }
@@ -357,6 +361,13 @@ impl Client {
             }
             Some(reason) => self.disconnect(reason, false, &mut music),
         }
+    }
+
+    /// The art swapped (F9, `era`), its files in: the stage, character
+    /// select's figure (and customise's) and creation's made again in it at
+    /// the next frame.
+    pub fn art_changed(&mut self) {
+        self.remake = true;
     }
 
     /// The stage left (Back to STATION, or the title): the connection goes.
@@ -476,6 +487,17 @@ impl Client {
             && let Some(img) = crate::modules::get(crate::modules::Module::Client).and_then(|i| crate::client_image::ClientImage::from_bytes(i.to_vec()))
         {
             self.race_cams = Some(crate::camstyle::race_cameras(&img));
+        }
+        // the art swapped: what is made of its files made again in it
+        if self.remake
+            && let Some(g) = cx.gpu.as_mut()
+        {
+            self.remake = false;
+            if let Some(st) = self.stage.as_mut() {
+                st.remake(&cx.res.lib, g);
+            }
+            self.select.remake(&cx.res.lib, g, cx.now);
+            self.create.remake(&cx.res.lib, g, cx.now);
         }
         // the stage, once ARENA.CSF and the GPU are here (`LoadWorld`'s
         // walk camera limits set as it sets them)

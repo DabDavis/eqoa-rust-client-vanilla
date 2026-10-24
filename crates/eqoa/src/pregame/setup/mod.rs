@@ -145,7 +145,7 @@ impl Setup {
             legal: Default::default(),
             eula: Default::default(),
             splash: Default::default(),
-            fx: splashfx::SplashFx::new(net::session::EXPANSION_FLAGS),
+            fx: splashfx::SplashFx::new(splashfx::flags(crate::era::current())),
             fader: Default::default(),
             options: GameOptions::default(),
             options_wnd: Default::default(),
@@ -188,6 +188,13 @@ impl Setup {
         self.keys.clear();
         self.began = false;
         self.leaving = false;
+    }
+
+    /// The art swapped (F9, `era`): the title's effects as that disc's
+    /// SETUP draws them (`splashfx::flags`): the 2002 disc's painting with
+    /// the original game's birds, Frontiers' with its island layer.
+    pub fn art_changed(&mut self, era: esf::Era) {
+        self.fx = splashfx::SplashFx::new(splashfx::flags(era));
     }
 
     /// A key the game reads, for the window with the focus at the next frame.

@@ -75,6 +75,13 @@ impl Cust {
         self.focused = true;
     }
 
+    /// The art swapped (F9): the figure made again in it where it stands.
+    pub fn remake(&mut self, lib: &esf::Library, g: &mut crate::play::Gpu, now: i64) {
+        if let Some(f) = self.figure.as_mut() {
+            f.remake(lib, g, now);
+        }
+    }
+
     /// `Release`: the model let go.
     pub fn release(&mut self) {
         self.figure = None;

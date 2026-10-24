@@ -62,6 +62,17 @@ fn id(name: &str) -> u32 {
     vi::hash::hash_resource_id(name)
 }
 
+/// The expansion flags the title's effects are drawn by in the art `era`:
+/// the disc's (`net::session::EXPANSION_FLAGS`, Frontiers' island layer), or
+/// in the 2002 disc's art the original game's (its SETUP.CSF has the birds'
+/// atlas and none of the island's: the painting they were drawn over).
+pub fn flags(era: esf::Era) -> u32 {
+    match era {
+        esf::Era::Frontiers => net::session::EXPANSION_FLAGS,
+        esf::Era::Y2002 => net::session::EXPANSION_FLAGS & !2,
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct SplashFx {
     /// `VIGetExpansionFlags()`: bit 2 is Frontiers' island layer

@@ -27,6 +27,8 @@ pub struct Figure {
     pub gpu: GpuModel,
     /// items (and the helm) on their nodes
     pub attached: Vec<(i32, GpuModel)>,
+    /// the items asked for (DictIDs, 0 none), in the item slots 0..3
+    pub items: [u32; 3],
     /// the actor's place and heading, pitch and roll (`CreateActor(at, hpr, 1.0)`)
     pub at: [f32; 3],
     pub hpr: [f32; 3],
@@ -51,8 +53,24 @@ pub fn actor_sprite(lib: &Library, r: esf::Ref, anims: &mut AnimScene<Ee>, rand:
 impl Figure {
     /// `CreateActor` with the model's sprite (or `HumanMale`'s), dressed in
     /// `look` (a helm on node 8 when its set has one), `items` (DictIDs, 0
-    /// none) in the item slots 0..3. None when neither model is there.
+    /// none) in the item slots 0..3. None when neither model is there. Built
+    /// whole in the art its model is drawn in (`esf::Library::view_for`):
+    /// the 2002 disc's while its art is drawn and that disc has the model.
     pub fn new(lib: &Library, g: &mut Gpu, model: u32, look: vi::cust::Look, items: [u32; 3], at: [f32; 3], hpr: [f32; 3], now: i64) -> Option<Figure> {
+        lib.with_view(lib.view_for(model as i32), || Figure::new_in_view(lib, g, model, look, items, at, hpr, now))
+    }
+
+    /// Made again as it stands, in the art drawn now (F9): its model, look and
+    /// items at its place; its animation starts over (the 2002 disc's bodies
+    /// are other skeletons).
+    pub fn remake(&mut self, lib: &Library, g: &mut Gpu, now: i64) {
+        if let Some(f) = Figure::new(lib, g, self.model, self.look, self.items, self.at, self.hpr, now) {
+            *self = f;
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_in_view(lib: &Library, g: &mut Gpu, model: u32, look: vi::cust::Look, items: [u32; 3], at: [f32; 3], hpr: [f32; 3], now: i64) -> Option<Figure> {
         let r = lib.lookup(model as i32).or_else(|| lib.lookup(vi::hash::hash_resource_id("HumanMale") as i32))?;
         let textures = render::library_textures(lib);
         let mut built = lib.build_model(r)?;
@@ -101,7 +119,7 @@ impl Figure {
             }
         }
         let gpu = g.renderer.upload(g.device, g.queue, &built, &[render::IDENTITY], &textures);
-        Some(Figure { model, look, sprite, anims, rand, gpu, attached, at, hpr })
+        Some(Figure { model, look, sprite, anims, rand, gpu, attached, items, at, hpr })
     }
 
     /// `VICSprite::SetAction(id)` (23 the select screen's flourish, 0 back

@@ -70,25 +70,23 @@ impl Stage {
     /// The arena out of the pregame's library (ARENA.CSF, read with
     /// CLIENT's files). None when it is not there.
     pub fn new(lib: &Library, g: &mut Gpu) -> Option<Stage> {
-        let f = lib.files.iter().position(|(n, _)| n.eq_ignore_ascii_case("ARENA.CSF"))?;
-        let zone = *lib.file(f).zones().first()?;
-        let s = crate::scene::zone(lib, f, zone, 0);
-        let textures = render::library_textures(lib);
-        let models = s
-            .parts
-            .iter()
-            .zip(&s.statics)
-            .map(|((m, mats), st)| {
-                let gm = g.renderer.upload(g.device, g.queue, m, mats, &textures);
-                g.renderer.set_static_lights(g.queue, &gm, st);
-                gm
-            })
-            .collect();
+        let f = lib.file_named("ARENA.CSF")?;
+        let models = arena(lib, f, g)?;
         let mut world = World::<Ee>::load(lib, f)?;
         let mut cam = WalkCamera::<Ee>::default();
         let eye = cam.init(Vect3::of(0.0, 0.0, 0.0), Vect3::of(0.0, 0.0, 0.0), &mut world);
         let sky = sky(lib, &mut world, &eye, g).unwrap_or_default();
         Some(Stage { world, cam, eye, models, sky })
+    }
+
+    /// The arena and the sky uploaded again in the art drawn now (F9: the
+    /// 2002 disc's sky), the camera and the collision kept where they are.
+    pub fn remake(&mut self, lib: &Library, g: &mut Gpu) {
+        if let Some(models) = lib.file_named("ARENA.CSF").and_then(|f| arena(lib, f, g)) {
+            self.models = models;
+        }
+        let eye = self.eye;
+        self.sky = sky(lib, &mut self.world, &eye, g).unwrap_or_default();
     }
 
     /// `m_walkCam->Init(at, hpr, camera, scene)` and `SetCameraMode(1)`:
@@ -154,13 +152,32 @@ impl Stage {
     }
 }
 
+/// The arena's zone (file `f`) on the GPU, with its baked lighting.
+fn arena(lib: &Library, f: usize, g: &mut Gpu) -> Option<Vec<GpuModel>> {
+    let zone = *lib.file(f).zones().first()?;
+    let s = crate::scene::zone(lib, f, zone, 0);
+    let textures = render::library_textures(lib);
+    Some(
+        s.parts
+            .iter()
+            .zip(&s.statics)
+            .map(|((m, mats), st)| {
+                let gm = g.renderer.upload(g.device, g.queue, m, mats, &textures);
+                g.renderer.set_static_lights(g.queue, &gm, st);
+                gm
+            })
+            .collect(),
+    )
+}
+
 /// The scene's sky at 8:00 (`VIScene::SetSky`, the atmosphere's `SetSky`,
 /// `Update` and `SetupTimeOfDaySky` once): SKY.CSF's sprites on the GPU with
 /// their palettes and placements as `sky::update` sets them in play. SKY.CSF
 /// and FX.CSF are CLIENT's pregame files; their bytes are parsed again into
 /// a library of the sky's own (the atmosphere takes one to own).
 fn sky(lib: &Library, world: &mut World<Ee>, eye: &Eye<Ee>, g: &mut Gpu) -> Option<Vec<GpuModel>> {
-    let parse = |name: &str| lib.files.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).and_then(|(_, c)| esf::Container::parse(c.data.clone()).ok());
+    // in the art drawn: the 2002 disc's copies where they stand in
+    let parse = |name: &str| lib.file_named(name).and_then(|f| esf::Container::parse(lib.file(f).data.clone()).ok());
     let mut l = Library::new();
     l.add(crate::sky::FILE, parse("SKY.CSF")?);
     if let Some(fx) = parse("FX.CSF") {
