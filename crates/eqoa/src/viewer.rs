@@ -355,7 +355,8 @@ pub fn shot_with(
         // `EQOA_SPELL=n`: SPELLFX's n-th effect, cast by the character at a
         // stand-in 6 ahead of it at EQOA_AT (offline, no server).
         let mut trial = std::env::var("EQOA_SPELL").ok().and_then(|v| v.parse::<usize>().ok()).filter(|_| play.is_none()).map(|n| {
-            for f in ["SPELLFX.CSF", "FX.CSF"] {
+            // and ITEM.ESF, where the hands' projectiles are
+            for f in ["SPELLFX.CSF", "FX.CSF", "ITEM.ESF"] {
                 if lib.files.iter().all(|(name, _)| name != f)
                     && let Ok(b) = crate::disc(None).and_then(|mut d| Ok(d.read(f)?))
                     && let Ok(c) = esf::Container::open(b)
@@ -364,6 +365,15 @@ pub fn shot_with(
                 }
             }
             (crate::spells::Spells::load(lib, 0), n, vi::csprite::Rand(1))
+        });
+        // `EQOA_RANGED=7` (a bow), `9` (a crossbow) or `10:<DictID>` (that
+        // item thrown): the trial's caster holds it in its second hand and
+        // nothing in its first, as a bow is worn, so a ranged swing's
+        // projectile flies (`spells::hand_projectiles`)
+        let ranged: Option<(i32, u32)> = std::env::var("EQOA_RANGED").ok().and_then(|v| {
+            let (ty, id) = v.split_once(':').unwrap_or((&v, "0"));
+            let id = id.strip_prefix("0x").map_or_else(|| id.parse().ok(), |h| u32::from_str_radix(h, 16).ok())?;
+            Some((ty.parse().ok()?, id))
         });
         let mut weather = crate::weather::Weather::new(lib, 0);
         // `EQOA_AT=ms`: when the target (and then Q, attack) steps happen.
@@ -885,7 +895,8 @@ pub fn shot_with(
                     }
                     None => (None, actor),
                 };
-                let mut bodies = vec![Body { actor: SELF, sprite, transform: actor, centre, attack: [0, 0] }, Body { actor: 1, sprite: None, transform: target, centre: target, attack: [0, 0] }];
+                let (attack, projectile) = ranged.map_or(([0, 0], [None; 2]), |(ty, id)| ([11, ty], [None, Some(crate::spells::second_model(ty, id))]));
+                let mut bodies = vec![Body { actor: SELF, sprite, transform: actor, centre, attack, projectile }, Body { actor: 1, sprite: None, transform: target, centre: target, attack: [0, 0], projectile: [None; 2] }];
                 let mut casts = Vec::new();
                 if t == at && let Some(effect) = sp.nth(*n) {
                     eprintln!("spell effect {n} ({effect:#010x}) cast");
@@ -951,6 +962,14 @@ pub fn shot_with(
             g.visible = false;
         }
         gpu.push(g);
+        // the trial's projectiles where the last frame left them
+        if let Some((sp, _, _)) = &trial {
+            for (id, m) in &sp.flying {
+                if let Some(model) = lib.lookup(*id as i32).and_then(|r| lib.build_model(r)) {
+                    gpu.push(renderer.upload(&device, &queue, &model, &[m.to_cols()], &textures));
+                }
+            }
+        }
         let at = Vec3::from(walker.cam.walk.phys.position.to_array());
         streamer.update(at, &mut walker.scene, lib, stream::Gpu { renderer: &mut renderer, device: &device, queue: &queue }, None);
         streamer.animate(&mut walker.scene, &renderer, &queue);

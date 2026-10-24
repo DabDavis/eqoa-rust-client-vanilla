@@ -47,6 +47,9 @@ struct Puppet {
     attached: Vec<(i32, GpuModel)>,
     /// The items in hand as they were attached (`held_items`).
     held: Held,
+    /// The two hands' projectiles as they were attached
+    /// (`spells::hand_projectiles`).
+    projectile: [Option<u32>; 2],
     /// The name plate's anchor this frame: 0.6 above the name node (3).
     name_at: Option<[f32; 3]>,
     /// Slot 4's place this frame (`CalcSlotWorldTransform(4)`), which a
@@ -375,6 +378,10 @@ pub struct Play {
     /// frame; the casts heard this frame; each slot's entity as the effects
     /// last saw it; the player's own clock for its actions.
     pub spells: Option<crate::spells::Spells>,
+    /// The projectiles in flight as drawn (`draw_projectiles`): per DictID
+    /// its model and a GPU model for each one flying at once, kept for the
+    /// next.
+    projectiles: std::collections::BTreeMap<u32, (Option<esf::Model>, Vec<GpuModel>)>,
     casts: Vec<crate::spells::Cast>,
     spell_ids: Vec<Option<u32>>,
     spell_rand: Rand,
@@ -661,13 +668,14 @@ fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Optio
                         (Some(cs), Some(c)) => attach(lib, g, cs, c, held),
                         _ => (Vec::new(), [None; 3], false),
                     };
+                    let projectile = projectiles_of(sprite.as_ref(), e.creature.as_ref());
                     // ApplyLook: the look's textures and tints on the layers the
                     // sprite's text slots name.
                     if let (Some(cs), Some(look)) = (&sprite, &look) {
                         dress(&mut model, &vi::cust::apply_look_with(cs, look, helm_worn, |id| lib.surface(id as i32).is_some(), &crate::s2::get().cust()));
                     }
                     let gpu = g.renderer.upload(g.device, g.queue, &model, &[render::IDENTITY], &textures);
-                    Some(Puppet { model: e.model, look, sprite, anims, rand, gpu, attached, held, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false })
+                    Some(Puppet { model: e.model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false })
                 })
 }
 
@@ -680,6 +688,13 @@ type Weapons = [Option<(i32, crate::trails::Points)>; 3];
 /// `held_items` of a puppet's sprite: none without a sprite or a creature.
 fn held_by(sprite: Option<&CSprite<Ee>>, c: Option<&net::entity::Creature>) -> Held {
     sprite.zip(c).map_or([None; 3], |(cs, c)| held_items(cs, c))
+}
+
+/// The hands' projectiles `Apply` leaves a puppet's sprite
+/// (`spells::hand_projectiles`): none without a sprite or a creature (no
+/// `AttachItem` then).
+fn projectiles_of(sprite: Option<&CSprite<Ee>>, c: Option<&net::entity::Creature>) -> [Option<u32>; 2] {
+    sprite.zip(c).map_or([None; 2], |(cs, c)| crate::spells::hand_projectiles(c, cs.holds_items))
 }
 
 /// What `Apply` attaches to a creature's sprite: the items in hand (`held`,
@@ -755,6 +770,7 @@ fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::En
                 && let (Some(cs), Some(c)) = (&p.sprite, &e.creature)
             {
                 p.held = held_items(cs, c);
+                p.projectile = crate::spells::hand_projectiles(c, cs.holds_items);
                 (p.attached, p.weapons, _) = attach(lib, g, cs, c, p.held);
             }
             None
@@ -1143,7 +1159,7 @@ impl Play {
         crate::s2::begin_session();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: 0, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), slot_asked: None, walks: (0..MAX_SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0 };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: 0, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), slot_asked: None, walks: (0..MAX_SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0 };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -1991,6 +2007,7 @@ impl Play {
             }
         }
         self.spells_frame(walker, lib, game_ms, sound);
+        self.draw_projectiles(walker, lib, &mut g);
         // the player's own swing, on its walker's pose
         if let (Some(p), Some(cs)) = (self.self_puppet.as_mut(), walker.sprite.as_mut()) {
             let actor = Matrix44::transform(&Vect3::new(walker.cam.walk.phys.angles.x, F::ZERO, F::ZERO), F::ONE, &walker.cam.walk.phys.smooth_location());
@@ -2085,10 +2102,10 @@ impl Play {
             let Some(e) = e.as_ref().filter(|e| Some(e.id) != me) else { continue };
             let attack = hands(e, p);
             match p {
-                Some(p) => bodies.push(Body { actor: slot as i32, sprite: p.sprite.as_mut().map(|cs| (cs, &p.anims, &mut p.rand)), transform: p.actor_m, centre: p.centre, attack }),
+                Some(p) => bodies.push(Body { actor: slot as i32, sprite: p.sprite.as_mut().map(|cs| (cs, &p.anims, &mut p.rand)), transform: p.actor_m, centre: p.centre, attack, projectile: p.projectile }),
                 None => {
                     let m = Matrix44::transform(&v3(e.hpr), F::ONE, &v3(e.pos));
-                    bodies.push(Body { actor: slot as i32, sprite: None, transform: m, centre: m, attack });
+                    bodies.push(Body { actor: slot as i32, sprite: None, transform: m, centre: m, attack, projectile: [None; 2] });
                 }
             }
         }
@@ -2121,7 +2138,11 @@ impl Play {
                 }
                 None => (None, actor),
             };
-            bodies.push(Body { actor: SELF, sprite, transform: actor, centre, attack });
+            // its projectiles as its own channel's items were attached (the
+            // projectile is the item's model or a fixed one, which the dump
+            // does not carry)
+            let projectile = self.self_puppet.as_ref().map_or([None; 2], |p| p.projectile);
+            bodies.push(Body { actor: SELF, sprite, transform: actor, centre, attack, projectile });
         }
         // a death ends the spells its actor was casting
         for a in std::mem::take(&mut self.dead_casters) {
@@ -2154,6 +2175,38 @@ impl Play {
             .collect();
         spells.frame(&mut bodies, &casts, if has_self { SELF } else { -1 }, Some(&mut walker.cam.effect), game_ms, &walker.eye, lib, sound);
         self.rumbles.append(&mut spells.rumbles);
+    }
+
+    /// The projectiles in flight (`Spells::flying`), each drawn as
+    /// `VIScene::RasterActor` draws an actor: within its sprite's off distance
+    /// (a GroupSprite reads none: `VISprite`'s 500), at the actor's transform.
+    /// One GPU model for each flying at once, kept for the next (as the
+    /// boids', `fx.rs`); those not flying are not drawn.
+    fn draw_projectiles(&mut self, walker: &Walker, lib: &Library, g: &mut Gpu) {
+        let flying = self.spells.as_ref().map_or(&[][..], |s| &s.flying[..]);
+        let eye = crate::lod::eye(&walker.cam, &walker.eye.position);
+        let textures = render::library_textures(lib);
+        let mut used: std::collections::BTreeMap<u32, usize> = Default::default();
+        for (id, m) in flying {
+            if !crate::lod::within(&m.m[3].xyz(), &eye, crate::lod::OFF_DIST) {
+                continue;
+            }
+            let (model, pool) = self.projectiles.entry(*id).or_insert_with(|| (lib.lookup(*id as i32).and_then(|r| lib.build_model(r)), Vec::new()));
+            let Some(model) = model.as_ref() else { continue };
+            let n = used.entry(*id).or_default();
+            if *n == pool.len() {
+                pool.push(g.renderer.upload(g.device, g.queue, model, &[m.to_cols()], &textures));
+            }
+            let gpu = &mut pool[*n];
+            g.renderer.set_instances(g.queue, gpu, &[m.to_cols()]);
+            gpu.visible = true;
+            *n += 1;
+        }
+        for (id, (_, pool)) in &mut self.projectiles {
+            for gpu in pool.iter_mut().skip(used.get(id).copied().unwrap_or(0)) {
+                gpu.visible = false;
+            }
+        }
     }
 
     /// `UpdateGame`'s `TrackTarget`: the selection rings round the target
@@ -6162,7 +6215,8 @@ impl Play {
 
     pub fn models(&self) -> impl Iterator<Item = &GpuModel> {
         let me = self.self_puppet.as_ref().filter(|_| self.self_shown);
-        self.puppets.iter().flatten().chain(me).flat_map(|p| std::iter::once(&p.gpu).chain(p.attached.iter().map(|a| &a.1)))
+        let flying = self.projectiles.values().flat_map(|(_, pool)| pool);
+        self.puppets.iter().flatten().chain(me).flat_map(|p| std::iter::once(&p.gpu).chain(p.attached.iter().map(|a| &a.1))).chain(flying)
     }
 
     pub fn describe(&self) -> String {

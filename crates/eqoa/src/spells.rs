@@ -7,11 +7,13 @@
 //! half hears a sound sprite.
 //!
 //! The actors: an entity's slot is its actor, the player is [`SELF`], and an
-//! actor an effect makes is numbered from [`MADE`]. Not here: the weapon
-//! trail (`SetWeaponTrail` is taken and dropped), a hand's projectile sprite
-//! (no item carries one yet, so no arrow flies), the animated sprites an
-//! effect can create (three events on the disc; tracked, not drawn), the fade
-//! (no event on the disc uses it). The vibrate events of the player's own
+//! actor an effect makes is numbered from [`MADE`]. A ranged attack's arrow,
+//! bolt or thrown weapon is its hand's projectile (`hand_projectiles`), which
+//! the effect's projectile event flies as an actor of its own, drawn where it
+//! is each frame (`Spells::flying`). Not here: the weapon trail
+//! (`SetWeaponTrail` is taken and dropped), the animated sprites an effect
+//! can create (three events on the disc; tracked, not drawn), the fade (no
+//! event on the disc uses it). The vibrate events of the player's own
 //! effects go to the pad (`rumbles`: `VIClient`'s `Rumble`, which the client
 //! always hands the effect system). The effects run on a particle system of
 //! their own, not the world's.
@@ -35,14 +37,15 @@ pub const MADE: i32 = 2000;
 
 /// A creature as an effect sees it: its sprite (a CSprite, or none), the
 /// clock it animates on, its transform, the centre transform it was last
-/// drawn with (`CalcTransAboutCenter`), and the attack types of the items
-/// in its two hands.
+/// drawn with (`CalcTransAboutCenter`), and the attack types and projectiles
+/// of the items in its two hands (`hand_projectiles`).
 pub struct Body<'a> {
     pub actor: i32,
     pub sprite: Option<(&'a mut CSprite<Ee>, &'a AnimScene<Ee>, &'a mut Rand)>,
     pub transform: Matrix44<Ee>,
     pub centre: Matrix44<Ee>,
     pub attack: [i32; 2],
+    pub projectile: [Option<u32>; 2],
 }
 
 /// The attack types a creature's sprite holds for its two hands
@@ -60,8 +63,57 @@ pub fn hand_attack_types(c: &net::entity::Creature, holds_items: bool) -> [i32; 
     })
 }
 
+/// `SecondModel`: the projectile `VICreatureEntity::ApplyItems` gives the
+/// second hand's item by its attack type (a bow's arrow, a crossbow's bolt,
+/// a thrown weapon itself), 0 for none.
+pub fn second_model(ty: i32, model: u32) -> u32 {
+    match ty {
+        7 => 0x845F_ECDD,
+        9 => 0x08F5_4A95,
+        10 => model,
+        _ => 0,
+    }
+}
+
+/// The projectiles a creature's sprite keeps for its two hands
+/// (`VICSprite::m_items[0..2].m_projectile`), as the hands' items are
+/// attached: `ApplyItems` hands each item a second model, the second hand's
+/// `second_model` and the first hand's 0, and `AttachItem` keeps it for a
+/// hand that holds an item on a sprite that holds items (else -1, `None`
+/// here). A second model of 0 is the scene's null sprite
+/// (`VIClientPart06D00::LoadRes`), which is not -1: a projectile event
+/// shoots the first hand's projectile before the second's, so a creature
+/// with anything in its first hand shoots the null sprite and nothing is
+/// seen to fly.
+pub fn hand_projectiles(c: &net::entity::Creature, holds_items: bool) -> [Option<u32>; 2] {
+    std::array::from_fn(|i| {
+        let model = if c.items_over[i] != 0 { c.items_over[i] } else { c.items[i] };
+        (model != 0 && holds_items).then(|| if i == 1 { second_model(c.item_types[1] as i32, model) } else { 0 })
+    })
+}
+
+/// `VISpriteType`, by the record that makes the sprite
+/// (`VIESFParse::ParseObject`'s dispatch).
+fn kind(ty: u16) -> i32 {
+    match ty {
+        0x2D00 => 2,
+        0x2200 => 4,
+        0x2700 => 5,
+        0x2A00 => 7,
+        0x2B00 => 8,
+        0xB100 => 9,
+        0xC100 => 10,
+        0x2C00 => 11,
+        0x2E00 => 12,
+        0x2F00 => 13,
+        0xC300 => 14,
+        _ => 1,
+    }
+}
+
 /// A sprite an effect names: its type (9 a sound, 4 an animated sprite),
-/// and a sound's radius, volume, wave, pan and attenuation (`VISoundSprite`).
+/// and a sound's radius, volume, wave, pan and attenuation (`VISoundSprite`);
+/// or a hand's projectile, its model's DictID (`model`).
 #[derive(Clone)]
 struct Sprite {
     ty: i32,
@@ -70,6 +122,7 @@ struct Sprite {
     wave: Option<Ref>,
     pan: bool,
     attenuation: i32,
+    model: Option<u32>,
 }
 
 /// An actor an effect made.
@@ -116,6 +169,11 @@ pub struct Spells {
     rand: Rand,
     by_dict: HashMap<u32, usize>,
     sprites: Vec<Sprite>,
+    /// `VIScene`'s null sprite (`Init`: `CreateSprite(VISpriteTypePoint, 1)`),
+    /// which draws nothing
+    null: i32,
+    /// the hands' projectiles found: DictID -> sprite (-1 for none on the disc)
+    models: HashMap<u32, i32>,
     made: BTreeMap<i32, Made>,
     next: i32,
     /// `VILightningFxInit`'s texture
@@ -127,6 +185,9 @@ pub struct Spells {
     /// this frame's drawing
     pub batches: Vec<Batch>,
     pub strips: Vec<Strips>,
+    /// the actors made of a model (the projectiles in flight): its DictID and
+    /// the actor's transform, in actor order
+    pub flying: Vec<(u32, Matrix44<Ee>)>,
     pub played: usize,
     /// bolts drawn, all frames
     pub bolts: usize,
@@ -145,6 +206,8 @@ impl Spells {
             rand: Rand(1),
             by_dict: HashMap::new(),
             sprites: Vec::new(),
+            null: -1,
+            models: HashMap::new(),
             made: BTreeMap::new(),
             next: MADE,
             lightning: vi::hash::hash_resource_id("lightning.tga") as i32,
@@ -152,6 +215,7 @@ impl Spells {
             waves: HashMap::new(),
             batches: Vec::new(),
             strips: Vec::new(),
+            flying: Vec::new(),
             played: 0,
             bolts: 0,
             rumbles: Vec::new(),
@@ -191,11 +255,30 @@ impl Spells {
                 }
             }
         }
+        s.sprites.push(Sprite { ty: 2, ..Sprite::new() });
+        s.null = (s.sprites.len() - 1) as i32;
         s
     }
 
+    /// A hand's projectile as `LoadRes` finds it in the dictionary: its
+    /// record a sprite of the record's type, or none (-1: the disc has no
+    /// `"!Item"`, the stand-in it would fall back to).
+    fn find_projectile(&mut self, lib: &Library, id: u32) {
+        if self.models.contains_key(&id) {
+            return;
+        }
+        let k = match lib.lookup(id as i32) {
+            Some(r) => {
+                self.sprites.push(Sprite { ty: kind(lib.file(r.file).node(r.node).ty), model: Some(id), ..Sprite::new() });
+                (self.sprites.len() - 1) as i32
+            }
+            None => -1,
+        };
+        self.models.insert(id, k);
+    }
+
     pub fn describe(&self) -> String {
-        format!("{} spell effects, {} played, {} particles, {} bolt frames drawn", self.sys.effects.len(), self.played, self.sys.particle_count(&self.ps), self.bolts)
+        format!("{} spell effects, {} played, {} particles, {} bolt frames drawn, {} projectiles in flight", self.sys.effects.len(), self.played, self.sys.particle_count(&self.ps), self.bolts, self.flying.len())
     }
 
     /// An effect's DictID by its place in the files, for trying one out.
@@ -218,7 +301,10 @@ impl Spells {
         self.sys.camera = camera.is_some();
         // `SetVibrateCallback(Rumble, &m_console)`: the client always sets one
         self.sys.vibrate = true;
-        let mut sc = Scene { bodies, made: &mut self.made, next: &mut self.next, sprites: &mut self.sprites, time, camera, rumbles: &mut self.rumbles };
+        for id in bodies.iter().flat_map(|b| b.projectile).flatten().filter(|&id| id != 0) {
+            self.find_projectile(lib, id);
+        }
+        let mut sc = Scene { bodies, made: &mut self.made, next: &mut self.next, sprites: &mut self.sprites, null: self.null, models: &self.models, time, camera, rumbles: &mut self.rumbles };
         for (c, caster, target, targets) in casts {
             let Some(&i) = self.by_dict.get(&c.effect) else { continue };
             if self.sys.play(i, c.time, *caster, *target, targets, &mut sc) != -1 {
@@ -226,6 +312,8 @@ impl Spells {
             }
         }
         self.sys.process(&mut sc, &mut self.ps, &mut self.rand);
+        // `RasterActor` draws an actor as its sprite at its transform
+        self.flying = self.made.values().filter_map(|m| Some((self.sprites.get(m.sprite as usize)?.model?, Matrix44::transform(&m.hpr, m.scale, &m.at)))).collect();
         self.batches = crate::particles::render(&mut self.ps, time);
         self.strips = self
             .sys
@@ -249,13 +337,13 @@ impl Spells {
 
     /// An entity went: `NotifyActorWasDestroyed`.
     pub fn actor_gone(&mut self, actor: i32, bodies: &mut [Body], time: i64) {
-        let mut sc = Scene { bodies, made: &mut self.made, next: &mut self.next, sprites: &mut self.sprites, time, camera: None, rumbles: &mut self.rumbles };
+        let mut sc = Scene { bodies, made: &mut self.made, next: &mut self.next, sprites: &mut self.sprites, null: self.null, models: &self.models, time, camera: None, rumbles: &mut self.rumbles };
         self.sys.notify_actor_destroyed(actor, &mut sc);
     }
 
     /// `StopIfThisWasCaster(actor)`: a death ends the spells it was casting.
     pub fn stop_caster(&mut self, actor: i32, bodies: &mut [Body], time: i64) {
-        let mut sc = Scene { bodies, made: &mut self.made, next: &mut self.next, sprites: &mut self.sprites, time, camera: None, rumbles: &mut self.rumbles };
+        let mut sc = Scene { bodies, made: &mut self.made, next: &mut self.next, sprites: &mut self.sprites, null: self.null, models: &self.models, time, camera: None, rumbles: &mut self.rumbles };
         self.sys.stop_if_this_was_caster(actor, &mut sc, &mut self.ps);
     }
 
@@ -324,12 +412,18 @@ impl Spells {
     }
 }
 
+impl Sprite {
+    fn new() -> Sprite {
+        Sprite { ty: 0, radius: F::ONE, volume: F::ONE, wave: None, pan: true, attenuation: 0, model: None }
+    }
+}
+
 /// A sprite an effect names, as `ParseSoundSpriteObj` reads a sound (radius
 /// and volume, 1 and 1 before version 1; the wave its child) and anything
 /// else by its type.
 fn sprite(lib: &Library, r: Ref) -> Sprite {
     let c = lib.file(r.file);
-    let mut s = Sprite { ty: 0, radius: F::ONE, volume: F::ONE, wave: None, pan: true, attenuation: 0 };
+    let mut s = Sprite::new();
     match c.node(r.node).ty {
         0xB100 => {
             s.ty = 9;
@@ -342,8 +436,7 @@ fn sprite(lib: &Library, r: Ref) -> Sprite {
             }
             s.wave = c.node(r.node).children.iter().copied().find(|&k| c.node(k).ty == esf::sound::WAVE).map(|node| Ref { file: r.file, node });
         }
-        0x2200 => s.ty = 4,
-        _ => s.ty = 1,
+        ty => s.ty = kind(ty),
     }
     s
 }
@@ -354,6 +447,8 @@ struct Scene<'a, 'b, 'c> {
     made: &'a mut BTreeMap<i32, Made>,
     next: &'a mut i32,
     sprites: &'a mut Vec<Sprite>,
+    null: i32,
+    models: &'a HashMap<u32, i32>,
     time: i64,
     camera: Option<&'c mut CameraEffect<Ee>>,
     rumbles: &'a mut Vec<(u8, u8, i32)>,
@@ -445,8 +540,12 @@ impl SpellScene<Ee> for Scene<'_, '_, '_> {
         self.body(actor).and_then(|b| b.sprite.as_ref()).is_none_or(|(cs, _, _)| cs.is_action_complete(action))
     }
 
-    fn item_projectile(&self, _actor: i32, _slot: usize) -> i32 {
-        -1
+    fn item_projectile(&self, actor: i32, slot: usize) -> i32 {
+        match self.body(actor).and_then(|b| b.projectile.get(slot).copied().flatten()) {
+            None => -1,
+            Some(0) => self.null,
+            Some(id) => self.models.get(&id).copied().unwrap_or(-1),
+        }
     }
 
     fn create_actor(&mut self, at: Vect3<Ee>, hpr: Vect3<Ee>, scale: F<Ee>, sprite: i32) -> i32 {
@@ -559,5 +658,138 @@ mod tests {
         // an item whose type the channel leaves 0 swings nothing, as in the game
         c.item_types = [0, 0];
         assert_eq!(attack_action(hand_attack_types(&c, true), 0, false), None);
+    }
+
+    /// `SecondModel`: a bow shoots the arrow, a crossbow the bolt, a thrown
+    /// weapon itself, anything else nothing. The controls: no projectile at
+    /// all (the client before), and the bow's and the crossbow's swapped.
+    #[test]
+    fn a_ranged_weapon_shoots_its_own_ammunition() {
+        let check = |f: &dyn Fn(i32, u32) -> u32| {
+            f(7, 0x1234) == 0x845F_ECDD && f(9, 0x1234) == 0x08F5_4A95 && f(10, 0x1234) == 0x1234 && [0, 1, 2, 3, 4, 5, 6, 8, 11].iter().all(|&t| f(t, 0x1234) == 0)
+        };
+        assert!(check(&second_model));
+        assert!(!check(&|_, _| 0), "the control must fail");
+        let swapped = |t: i32, m: u32| second_model(match t {
+            7 => 9,
+            9 => 7,
+            t => t,
+        }, m);
+        assert!(!check(&swapped), "the control must fail");
+    }
+
+    /// What `ApplyItems` and `AttachItem` leave each hand: a bow in the
+    /// second hand its arrow and the first hand none; a weapon in the first
+    /// hand the null sprite (a second model of 0, which is not -1), shot
+    /// before the second hand's arrow; the override's model counting as the
+    /// item's; nothing on a sprite that holds no items. The controls: every
+    /// hand its own second model (a thrown weapon in the first hand would
+    /// fly), and a second model of 0 taken as none (the arrow would fly past
+    /// a weapon in the first hand).
+    #[test]
+    fn only_the_second_hand_shoots() {
+        let bare = net::entity::Creature::default();
+        assert_eq!(hand_projectiles(&bare, true), [None, None]);
+        let mut bow = net::entity::Creature { item_types: [0, 7], ..Default::default() };
+        bow.items[1] = 0xDEBA_8F46;
+        assert_eq!(hand_projectiles(&bow, true), [None, Some(0x845F_ECDD)]);
+        assert_eq!(hand_projectiles(&bow, false), [None, None], "a form holds no items");
+        let mut armed = bow.clone();
+        armed.items[0] = 0xF4DD_991A;
+        armed.item_types[0] = 5;
+        assert_eq!(hand_projectiles(&armed, true), [Some(0), Some(0x845F_ECDD)]);
+        let mut thrown = net::entity::Creature { item_types: [10, 10], ..Default::default() };
+        thrown.items = [0x1111, 0x2222, 0];
+        thrown.items_over[1] = 0xB0A9_CBD2;
+        assert_eq!(hand_projectiles(&thrown, true), [Some(0), Some(0xB0A9_CBD2)]);
+        let mut melee = net::entity::Creature { item_types: [0, 5], ..Default::default() };
+        melee.items[1] = 0xF4DD_991A;
+        assert_eq!(hand_projectiles(&melee, true), [None, Some(0)]);
+        // the controls
+        let own = |c: &net::entity::Creature| -> [Option<u32>; 2] {
+            std::array::from_fn(|i| {
+                let model = if c.items_over[i] != 0 { c.items_over[i] } else { c.items[i] };
+                (model != 0).then(|| second_model(c.item_types[i] as i32, model))
+            })
+        };
+        assert_ne!(own(&thrown), hand_projectiles(&thrown, true), "the control must fail");
+        let zero_none = |c: &net::entity::Creature| hand_projectiles(c, true).map(|p| p.filter(|&id| id != 0));
+        assert_ne!(zero_none(&armed), hand_projectiles(&armed, true), "the control must fail");
+    }
+
+    /// Range1, the swing a bow makes, cast by a human whose second hand holds
+    /// a bow at a creature ten off, to the side of its heading (SKIPs without
+    /// the disc): once the shot's wait is over, its projectile event makes
+    /// the arrow (ITEM.ESF's GroupSprite 0x845FECDD) an actor of its own and
+    /// flies it to the target from the next frame (made at 8000 under the
+    /// origin, `NewPlayTargetProjectile`'s place for it), nearer each frame,
+    /// pointing at it, and lets it go there; `flying` is what is drawn. The
+    /// controls: a weapon in the first hand, whose projectile (the null
+    /// sprite) is shot first, so nothing drawn flies; and no projectile at
+    /// all, as before.
+    #[test]
+    fn a_bows_arrow_flies_to_its_target() {
+        let iso_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut disc) = iso::Iso::open(&iso_path) else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let mut lib = Library::new();
+        for f in ["CHAR.ESF", "ITEM.ESF", "SPELLFX.CSF"] {
+            lib.add(f, esf::Container::open(disc.read(f).unwrap()).unwrap());
+        }
+        let range1 = vi::hash::hash_resource_id("Range1");
+        let target_at = Vect3::<Ee>::of(6.0, 0.0, 8.0);
+        let fly = |projectile: [Option<u32>; 2]| -> Vec<Vec<(u32, Matrix44<Ee>)>> {
+            let mut sp = Spells::load(&lib, 0);
+            let mut anims = AnimScene::<Ee>::default();
+            let mut rand = Rand(1);
+            let human = lib.lookup(0x70D8_98C6u32 as i32).expect("the human's CSprite");
+            let mut cs = vi::character::load_csprite(&lib, human, &mut anims, &mut vi::character::AnimCache::new(), &mut rand).expect("a CSprite");
+            let actor = Matrix44::<Ee>::identity();
+            let target = Matrix44::transform(&Vect3::default(), F::ONE, &target_at);
+            let mut frames = Vec::new();
+            for t in (0..4000i64).step_by(33) {
+                anims.time = t;
+                cs.h.process(0, &anims);
+                let centre = cs.h.calc_trans_about_center(&actor, &anims);
+                let mut bodies = vec![
+                    Body { actor: SELF, sprite: Some((&mut cs, &anims, &mut rand)), transform: actor, centre, attack: [11, 7], projectile },
+                    Body { actor: 1, sprite: None, transform: target, centre: target, attack: [11, 11], projectile: [None; 2] },
+                ];
+                let casts = if t == 0 { vec![(Cast { effect: range1, time: 0, caster: 0, target: 1, targets: Vec::new() }, SELF, 1, Vec::new())] } else { Vec::new() };
+                sp.frame(&mut bodies, &casts, SELF, None, t, &Eye::default(), &lib, None);
+                frames.push(sp.flying.clone());
+            }
+            frames
+        };
+        let bow = fly([None, Some(0x845F_ECDD)]);
+        let up: Vec<usize> = (0..bow.len()).filter(|&i| !bow[i].is_empty()).collect();
+        assert!(up.len() > 3, "the arrow flies: {up:?}");
+        assert!(up.windows(2).all(|w| w[1] == w[0] + 1), "one flight: {up:?}");
+        let d: Vec<f32> = up
+            .iter()
+            .map(|&i| {
+                assert_eq!(bow[i].len(), 1);
+                let (id, m) = bow[i][0];
+                assert_eq!(id, 0x845F_ECDD);
+                let at = m.m[3].xyz();
+                let mut ahead = m.m[2].xyz();
+                let mut to = Vect3::new(target_at.x - at.x, target_at.y - at.y, target_at.z - at.z);
+                ahead.normalize();
+                to.normalize();
+                let cos = ahead.x * to.x + ahead.y * to.y + ahead.z * to.z;
+                let made = at.y.0 == -8000.0;
+                assert!(made == (i == up[0]), "frame {i}: made at {at:?}");
+                assert!(made || at.distance(&target_at).0 < 3.0 || cos.0 > 0.95, "frame {i}: the arrow points {ahead:?}, the target is {to:?}");
+                at.distance(&target_at).0
+            })
+            .collect();
+        assert!(d.windows(2).all(|w| w[1] < w[0]), "nearer each frame: {d:?}");
+        assert!(d[1] > 8.0 && *d.last().unwrap() < 4.0, "from the bow to the target: {d:?}");
+        assert!(bow.last().unwrap().is_empty(), "let go at the target");
+        // the controls
+        assert!(fly([Some(0), Some(0x845F_ECDD)]).iter().all(Vec::is_empty), "the control must fail");
+        assert!(fly([None, None]).iter().all(Vec::is_empty), "the control must fail");
     }
 }
