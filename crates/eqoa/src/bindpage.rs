@@ -5,9 +5,12 @@
 //! (what the key and the button are in a window), and a line that answers
 //! the windows' legends for the keyboard: which key is ✕, △, □, ○, R1 and
 //! R3 there. ✕ on a row's key or button waits for the key or the button to
-//! put there (Escape, or the button on △, gives up); Defaults puts every one
-//! back. The changes apply at once; Save Changes keeps them (`keys.opt`) and
-//! Triangle on the menu puts them back, as the window does with the rest.
+//! put there (Escape, or the button on △, gives up); a row of the client's
+//! keys (the map, the targets, F9's art...) takes a button too, which then
+//! does what its key does and leaves the game's use it had (F3 20261024-145732:
+//! the map on R3). Defaults puts every one back. The changes apply at once;
+//! Save Changes keeps them (`keys.opt`) and Triangle on the menu puts them
+//! back, as the window does with the rest.
 //!
 //! A pointer: a row's words select it, a cell its column too, and the
 //! selection already there is ✕; while a key is awaited any click gives up.
@@ -69,12 +72,12 @@ impl ControlsPage {
     }
 
     /// Whether entry `row`'s column `col` can be moved: a key (△'s row,
-    /// which the game gives none, can be given one), or a button (the
-    /// sticks stay sticks).
+    /// which the game gives none, can be given one), or a button (a row of
+    /// the client's keys can be given one; the sticks stay sticks).
     fn bindable(row: i32, col: i32) -> bool {
         let Some(r) = ROWS.get(row as usize) else { return false };
         let button = matches!(r.pad, Pad::Button(_));
-        if col == 0 { !r.keys.is_empty() || button } else { button }
+        if col == 0 { !r.keys.is_empty() || button } else { !matches!(r.pad, Pad::Stick(..)) }
     }
 
     /// The window's rows this page wants for a font `h` high: what fits the
@@ -153,12 +156,7 @@ impl ControlsPage {
             cues.push(8);
             return;
         }
-        let r = &ROWS[self.row as usize];
-        self.note = Some(match (self.col, r.pad) {
-            (1, Pad::Stick(..)) => "The sticks stay sticks.".into(),
-            (1, _) => "A key of the keyboard's own: no button.".into(),
-            _ => "The game has no key for this: its button only.".into(),
-        });
+        self.note = Some(if self.col == 1 { "The sticks stay sticks.".into() } else { "The game has no key for this: its button only.".into() });
         cues.push(9);
     }
 
@@ -198,12 +196,14 @@ impl ControlsPage {
 
     /// A controller's button pressed while a capture waits (its bit index,
     /// as the controller has it, before any remap): the button on △ gives
-    /// up; while a button is awaited any other goes on the row's field,
-    /// swapping with the field it drove.
+    /// up; while a button is awaited any other goes on the row: on its
+    /// field, swapping with the field it drove (or the row of the client's
+    /// keys it was on); on a row of the client's keys, the field it drove
+    /// taking the button the row had, or none.
     pub fn capture_button(&mut self, vui: &Vui, phys: u8, cues: &mut Vec<i32>) {
         let Some(c) = self.capture else { return };
         let mut b = crate::settings::binds();
-        if b.field_of(phys) == binds::bit_index(crate::input::bit::TRIANGLE).unwrap_or(12) {
+        if b.field_of(phys) == binds::bit_index(crate::input::bit::TRIANGLE) {
             self.capture = None;
             cues.push(8);
             return;
@@ -212,17 +212,28 @@ impl ControlsPage {
             return;
         }
         let row = self.row as usize;
-        let Pad::Button(field) = ROWS[row].pad else { return };
-        let Some(field) = binds::bit_index(field) else { return };
-        let moved = b.bind_button(field, phys);
+        let moved = match ROWS[row].pad {
+            Pad::Button(f) => match binds::bit_index(f) {
+                Some(field) => b.bind_button(field, phys),
+                None => return,
+            },
+            Pad::None => b.bind_row_button(row, phys),
+            Pad::Stick(..) => return,
+        };
         crate::settings::set_binds(b.clone());
         self.capture = None;
         let me = format!("{}: {}.", label(vui, row), binds::glyph(phys));
+        // the other row, by what it has now: a button, or none
+        let other = |or: usize, now: Option<u8>| match now {
+            Some(g) => format!("{me} {}: {}.", label(vui, or), binds::glyph(g)),
+            None => format!("{me} {} has no button now.", label(vui, or)),
+        };
         self.note = Some(match moved {
             Moved::Swapped(o) => match ROWS.iter().position(|r| r.pad == Pad::Button(1 << o)) {
-                Some(or) => format!("{me} {}: {}.", label(vui, or), binds::glyph(b.button(o as u8))),
+                Some(or) => other(or, Some(b.button(o as u8)).filter(|&g| g != binds::NO_BUTTON)),
                 None => me,
             },
+            Moved::SwappedRow(r) => other(r, b.row_button(r)),
             _ => me,
         });
         cues.push(13);
@@ -302,9 +313,10 @@ impl ControlsPage {
             let pt = if waiting(Column::Pad) {
                 "Press".to_string()
             } else {
+                let glyph = |g: Option<u8>| g.map_or_else(|| "-".to_string(), |g| binds::glyph(g).to_string());
                 match row.pad {
-                    Pad::None => "-".to_string(),
-                    Pad::Button(f) => binds::glyph(b.button(binds::bit_index(f).unwrap_or(0))).to_string(),
+                    Pad::None => glyph(b.row_button(entry as usize)),
+                    Pad::Button(f) => glyph(Some(b.button(binds::bit_index(f).unwrap_or(0))).filter(|&g| g != binds::NO_BUTTON)),
                     Pad::Stick(right, d) => format!("{} stick {}", if right { "R" } else { "L" }, arrow(d)),
                 }
             };
@@ -337,7 +349,13 @@ impl ControlsPage {
         } else if let Some(n) = &self.note {
             n.clone()
         } else if let Some(row) = ROWS.get(self.row as usize) {
-            expand(vui, row.help)
+            // a row of the client's keys, its button's cell: what a button
+            // there does
+            if self.col == 1 && row.pad == Pad::None {
+                "A controller's button put here does what this key does, and no longer what it did in the game.".to_string()
+            } else {
+                expand(vui, row.help)
+            }
         } else {
             "Puts every key and button back as the game began.".into()
         };
@@ -526,6 +544,43 @@ mod tests {
         page.row = ROWS.len() as i32;
         page.key(key::CROSS, true, 0, &mut cues);
         assert!(settings::binds().is_default());
+        testing::reset(false);
+    }
+
+    /// F3 20261024-145732 (the map on R3): a row of the client's keys takes
+    /// a button in its controller's cell; the field it came from is said to
+    /// have none; moved on to another button, the field that button drove
+    /// takes R3 back; a field given the row's button gives the row its own,
+    /// here none.
+    /// The control: a stick's row still takes none.
+    #[test]
+    fn a_row_of_the_clients_keys_takes_a_button() {
+        testing::reset(false);
+        let vui = vui();
+        let mut cues = Vec::new();
+        let (map, chat) = (binds::row_named("map").unwrap(), binds::row_named("chat").unwrap());
+        let bit = |b: u16| binds::bit_index(b).unwrap();
+        let mut page = ControlsPage { row: map as i32, col: 1, ..Default::default() };
+        page.key(key::CROSS, true, 0, &mut cues);
+        assert_eq!(page.capture, Some(Column::Pad));
+        page.capture_button(&vui, bit(crate::input::bit::R3), &mut cues);
+        let b = settings::binds();
+        assert_eq!((b.row_button(map), b.button(bit(crate::input::bit::R3))), (Some(bit(crate::input::bit::R3)), binds::NO_BUTTON));
+        assert_eq!(page.note.as_deref(), Some("(null): |(. (null) has no button now."));
+        page.key(key::CROSS, true, 0, &mut cues);
+        page.capture_button(&vui, bit(crate::input::bit::L3), &mut cues);
+        assert_eq!(page.note.as_deref(), Some("(null): |9. Autorun: |(."));
+        // the chat line's own cell takes L3 off the map, and had no button to
+        // give it: R3 is Autorun's now
+        page.row = chat as i32;
+        page.key(key::CROSS, true, 0, &mut cues);
+        page.capture_button(&vui, bit(crate::input::bit::L3), &mut cues);
+        assert_eq!(page.note.as_deref(), Some("(null): |9. (null) has no button now."));
+        assert_eq!(settings::binds().row_button(map), None);
+        // the control
+        page.row = binds::row_named("walk_forward").unwrap() as i32;
+        page.key(key::CROSS, true, 0, &mut cues);
+        assert_eq!((page.capture, page.note.as_deref()), (None, Some("The sticks stay sticks.")));
         testing::reset(false);
     }
 

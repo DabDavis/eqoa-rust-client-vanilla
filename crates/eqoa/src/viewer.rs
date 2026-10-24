@@ -441,11 +441,15 @@ pub fn shot_with(
                 // the script stands for a controller: the player's own
                 // buttons (`binds`), and a capture's, as the window's
                 let capturing = play.as_ref().is_some_and(|p| p.capturing().is_some());
-                let (fields, took) = crate::settings::with_binds(|b| pad_edge.frame(report.buttons, capturing, b));
-                report.buttons = fields;
-                if let (Some(i), Some(p)) = (took, play.as_mut()) {
+                let f = crate::settings::with_binds(|b| pad_edge.frame(report.buttons, capturing, b));
+                report.buttons = f.fields;
+                if let (Some(i), Some(p)) = (f.took, play.as_mut()) {
                     eprintln!("pad: button {} taken by the Controls page", crate::binds::BUTTONS[i as usize].0);
                     p.capture_button(i);
+                }
+                // a button on a row of the client's keys: a window's (`App::pad_rows`)
+                for (row, down) in f.rows {
+                    eprintln!("pad: {}'s button {} (a window's key; not in a playshot)", crate::binds::ROWS[row].id, if down { "down" } else { "up" });
                 }
                 report.merge(&touch.report());
                 let keys = console.poll(report, true, false, dead);
@@ -2157,7 +2161,7 @@ impl App {
     /// The pad, once a frame: every source as libpad's one port
     /// (`VIPad::Read`), its mode to the client (`UpdateControls`' opening),
     /// and `PadKeys`' keys to the window that has them (`SetKey`).
-    fn poll_pad(&mut self) {
+    fn poll_pad(&mut self, el: &ActiveEventLoop) {
         let (mut report, mut connected, motors) = self.pads.poll();
         // a controller in use: the touch screen's pad goes
         if report.buttons != 0 || report.sticks.iter().any(|v| v.abs() > 0.5) {
@@ -2173,9 +2177,9 @@ impl App {
         // the game sees nothing of it. The touch screen's pad draws the
         // game's glyphs, and stays as it is.
         let capturing = self.play.as_ref().is_some_and(|p| p.capturing().is_some());
-        let (fields, took) = crate::settings::with_binds(|b| self.pad_edge.frame(report.buttons, capturing, b));
-        report.buttons = fields;
-        if let (Some(i), Some(p)) = (took, self.play.as_mut()) {
+        let f = crate::settings::with_binds(|b| self.pad_edge.frame(report.buttons, capturing, b));
+        report.buttons = f.fields;
+        if let (Some(i), Some(p)) = (f.took, self.play.as_mut()) {
             p.capture_button(i);
         }
         if self.touch.used {
@@ -2198,6 +2202,23 @@ impl App {
             for (k, down) in keys {
                 p.set_key(k, down, w, aspect);
             }
+        }
+        self.pad_rows(el, &f.rows);
+    }
+
+    /// A controller's buttons on rows of the client's keys (`binds`, the map
+    /// on R3): each row's key, pressed and let go as the keyboard's is, to
+    /// the dispatch below the player's keys (`keyboard`), as a controller's.
+    fn pad_rows(&mut self, el: &ActiveEventLoop, rows: &[(usize, bool)]) {
+        for &(row, down) in rows {
+            let Some(&key) = crate::binds::ROWS.get(row).and_then(|r| r.keys.first()) else { continue };
+            if crate::input::trace() {
+                crate::say(&format!("[pad] {}'s button {}: {key}", crate::binds::ROWS[row].id, if down { "down" } else { "up" }));
+            }
+            if let Some(p) = self.play.as_mut() {
+                p.keyboard = false;
+            }
+            self.keyboard(el, KeyIn::named(key, down));
         }
     }
 
@@ -2447,10 +2468,15 @@ impl App {
         }
         // the player's own buttons, and a capture's for the title's Controls page
         let capturing = self.host.as_ref().is_some_and(|h| h.pre.setup.capturing().is_some());
-        let (fields, took) = crate::settings::with_binds(|b| self.pad_edge.frame(report.buttons, capturing, b));
-        report.buttons = fields;
-        if let (Some(i), Some(h)) = (took, self.host.as_mut()) {
+        let f = crate::settings::with_binds(|b| self.pad_edge.frame(report.buttons, capturing, b));
+        report.buttons = f.fields;
+        if let (Some(i), Some(h)) = (f.took, self.host.as_mut()) {
             h.pre.setup.capture_button(i);
+        }
+        // a button on F9's row: the art swapped, as F9 does before the world
+        // (the other rows of the client's keys are play's)
+        if f.rows.iter().any(|&(row, down)| down && crate::binds::ROWS[row].id == "art") {
+            self.toggle_era();
         }
         if self.touch.used {
             report.merge(&self.touch.report());
@@ -3935,7 +3961,7 @@ impl ApplicationHandler for App {
                 {
                     p.add_from(&w.scene, first);
                 }
-                self.poll_pad();
+                self.poll_pad(el);
                 for c in self.touch.take_clicks() {
                     self.click(c, true);
                 }
