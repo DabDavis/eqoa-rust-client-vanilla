@@ -3366,7 +3366,10 @@ impl App {
         let name = held_name(&event.logical_key);
         if event.state == ElementState::Pressed {
             match event.logical_key {
-                Key::Named(NamedKey::Escape) => el.exit(),
+                // the model viewer's and a walk's way out; in the game a key
+                // nothing above took is nothing (Escape while the aim or the
+                // chat box's history is up closed the game)
+                Key::Named(NamedKey::Escape) if self.play.is_none() => el.exit(),
                 Key::Named(NamedKey::ArrowRight) if self.walker.is_none() => self.step(1),
                 Key::Named(NamedKey::ArrowLeft) if self.walker.is_none() => self.step(-1),
                 _ => {}
