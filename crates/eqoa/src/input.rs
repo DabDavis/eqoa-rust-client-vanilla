@@ -390,7 +390,8 @@ pub fn trace() -> bool {
 
 /// A connected controller as a window reads it: its name among the client's
 /// windows (`multibox`: natively a Linux device node, `xinput<i>` for one of
-/// Windows' Xbox controllers, else `pad<k>` by gilrs's slot; in a page
+/// Windows' Xbox controllers, `hid-<ids>-<hash>` for one of its PlayStation
+/// controllers (`hidpad::name`), else `pad<k>` by gilrs's slot; in a page
 /// `pad<k>` by the Gamepad API's index), what it holds, whether it rumbles,
 /// and what it calls itself.
 #[derive(Clone, Debug, PartialEq)]
@@ -413,6 +414,10 @@ enum Source {
     Gilrs(gilrs::GamepadId),
     #[cfg(windows)]
     XInput(u32),
+    /// a PlayStation controller read over HID (`hidpad`), by its place among
+    /// them; its motors are gilrs's reading of it, if gilrs has one
+    #[cfg(windows)]
+    Hid(u32, Option<gilrs::GamepadId>),
     #[cfg(target_arch = "wasm32")]
     Page(u32),
 }
@@ -429,6 +434,8 @@ impl Source {
             Source::Gilrs(_) => "evdev",
             #[cfg(windows)]
             Source::XInput(_) => "XInput: in front or behind",
+            #[cfg(windows)]
+            Source::Hid(..) => "HID: in front or behind",
             #[cfg(target_arch = "wasm32")]
             Source::Page(_) => "the Gamepad API",
         }
@@ -534,10 +541,11 @@ fn shares_pad(focus: Focus, seat: &Seat) -> bool {
 const WAIT_MS: u128 = 15_000;
 
 /// The controllers: natively through gilrs (SDL's layout) and, on Windows,
-/// the Xbox controllers through XInput (`xinput`: every window reads them,
-/// in front or not); in a page straight from the Gamepad API (`padmap`:
-/// every button and axis, and the layout each browser gives). The ones this
-/// window reads (`pick`) as one report.
+/// the Xbox controllers through XInput (`xinput`) and the PlayStation ones
+/// over HID (`hidpad`), which every window reads, in front or not; in a page
+/// straight from the Gamepad API (`padmap`: every button and axis, and the
+/// layout each browser gives). The ones this window reads (`pick`) as one
+/// report.
 pub struct Gamepads {
     #[cfg(not(target_arch = "wasm32"))]
     gilrs: Option<gilrs::Gilrs>,
@@ -545,6 +553,8 @@ pub struct Gamepads {
     effect: Option<gilrs::ff::Effect>,
     #[cfg(windows)]
     xinput: Option<crate::xinput::XInput>,
+    #[cfg(windows)]
+    hid: Option<crate::hidpad::Hid>,
     /// each pad's reading, by its index and id (in a page)
     #[cfg(target_arch = "wasm32")]
     web: Vec<(u32, String, crate::padmap::PadMap)>,
@@ -609,6 +619,8 @@ impl Gamepads {
             effect: None,
             #[cfg(windows)]
             xinput: (!none).then(crate::xinput::XInput::default),
+            #[cfg(windows)]
+            hid: (!none).then(crate::hidpad::Hid::start),
             #[cfg(target_arch = "wasm32")]
             web: Vec::new(),
             #[cfg(target_arch = "wasm32")]
@@ -729,9 +741,10 @@ impl Gamepads {
     }
 
     /// Every connected controller, in their order: on Windows the Xbox ones
-    /// by user index, then gilrs's (on Linux by device node, the order the
-    /// system made them in; elsewhere by gilrs's slot), each through the
-    /// host's dead zone.
+    /// by user index, then the PlayStation ones read over HID (by their
+    /// interfaces' order, the same in every window), then gilrs's; on Linux
+    /// gilrs's by device node, the order the system made them in; elsewhere
+    /// by gilrs's slot; each through the host's dead zone.
     #[cfg(not(target_arch = "wasm32"))]
     fn read(&mut self) -> Vec<Controller> {
         let mut out = Vec::new();
@@ -753,46 +766,81 @@ impl Gamepads {
                 out.push(Controller { name, report, raw, rumbles: true, label: format!("Xbox controller {}", i + 1), source: Source::XInput(i), order: (0, i as u64) });
             }
         }
-        let Some(g) = self.gilrs.as_mut() else { return out };
-        while let Some(ev) = g.next_event() {
-            if self.trace {
-                crate::say(&format!("[gilrs] {:?}", ev.event));
+        // the PlayStation controllers read over HID, each with its USB ids:
+        // gilrs's reading of the same one is passed over, its motors kept
+        #[cfg(windows)]
+        let mut hid: Vec<(Controller, (u16, u16))> = Vec::new();
+        #[cfg(windows)]
+        if let Some(h) = self.hid.as_mut() {
+            for (k, f) in h.read().into_iter().enumerate() {
+                let mut report = f.pad.report();
+                let raw = report.sticks;
+                report.rest(self.dead_zone);
+                if !self.seen.contains(&f.name) {
+                    crate::say(&format!("gamepad: a {}{}, read over HID ({})", f.model.label(), if f.bluetooth { " on Bluetooth" } else { "" }, f.name));
+                    self.seen.push(f.name.clone());
+                }
+                let c = Controller { name: f.name, report, raw, rumbles: false, label: f.model.label().to_string(), source: Source::Hid(k as u32, None), order: (1, k as u64) };
+                hid.push((c, f.ids));
             }
         }
-        for (id, pad) in g.gamepads() {
-            if !pad.is_connected() {
-                continue;
+        if let Some(g) = self.gilrs.as_mut() {
+            while let Some(ev) = g.next_event() {
+                if self.trace {
+                    crate::say(&format!("[gilrs] {:?}", ev.event));
+                }
             }
-            // a Windows.Gaming.Input Gamepad (gilrs gives it no uuid) with an
-            // XInput pad's USB ids (any, where XInput does not say them) is
-            // that pad, XInput's; another (a DualShock 4) is gilrs's
-            #[cfg(windows)]
-            if pad.uuid() == [0; 16]
-                && let Some(k) = xinput_ids.iter().position(|x| x.is_none() || *x == pad.vendor_id().zip(pad.product_id()))
-            {
-                xinput_ids.remove(k);
-                continue;
+            for (id, pad) in g.gamepads() {
+                if !pad.is_connected() {
+                    continue;
+                }
+                // a controller with the USB ids of one read over HID is that
+                // one: read there, its motors through Windows.Gaming.Input as
+                // before (in front only)
+                #[cfg(windows)]
+                if let Some((c, _)) = hid.iter_mut().find(|(c, ids)| matches!(c.source, Source::Hid(_, None)) && Some(*ids) == pad.vendor_id().zip(pad.product_id())) {
+                    if let Source::Hid(k, _) = c.source {
+                        c.source = Source::Hid(k, Some(id));
+                    }
+                    c.rumbles = pad.is_ff_supported();
+                    continue;
+                }
+                // a Windows.Gaming.Input Gamepad (gilrs gives it no uuid) with an
+                // XInput pad's USB ids (any, where XInput does not say them) is
+                // that pad, XInput's; another is gilrs's
+                #[cfg(windows)]
+                if pad.uuid() == [0; 16]
+                    && let Some(k) = xinput_ids.iter().position(|x| x.is_none() || *x == pad.vendor_id().zip(pad.product_id()))
+                {
+                    xinput_ids.remove(k);
+                    continue;
+                }
+                let label = pad.name().to_string();
+                if !self.seen.contains(&label) {
+                    crate::say(&format!("gamepad: {label}{}", if pad.is_ff_supported() { " (rumble)" } else { "" }));
+                    self.seen.push(label.clone());
+                }
+                let slot = usize::from(id) as u64;
+                #[cfg(target_os = "linux")]
+                let (name, order) = {
+                    use gilrs::LinuxGamepadExt;
+                    let path = pad.devpath().to_string_lossy().into_owned();
+                    let n = path.rsplit(|c: char| !c.is_ascii_digit()).next().and_then(|d| d.parse::<u64>().ok());
+                    (path, n.map_or((2, slot), |n| (1, n)))
+                };
+                // after XInput's and the HID ones
+                #[cfg(windows)]
+                let (name, order) = (format!("pad{slot}"), (2, slot));
+                #[cfg(not(any(target_os = "linux", windows)))]
+                let (name, order) = (format!("pad{slot}"), (1, slot));
+                let mut report = report_of(&pad);
+                let raw = report.sticks;
+                report.rest(self.dead_zone);
+                out.push(Controller { name, report, raw, rumbles: pad.is_ff_supported(), label, source: Source::Gilrs(id), order });
             }
-            let label = pad.name().to_string();
-            if !self.seen.contains(&label) {
-                crate::say(&format!("gamepad: {label}{}", if pad.is_ff_supported() { " (rumble)" } else { "" }));
-                self.seen.push(label.clone());
-            }
-            let slot = usize::from(id) as u64;
-            #[cfg(target_os = "linux")]
-            let (name, order) = {
-                use gilrs::LinuxGamepadExt;
-                let path = pad.devpath().to_string_lossy().into_owned();
-                let n = path.rsplit(|c: char| !c.is_ascii_digit()).next().and_then(|d| d.parse::<u64>().ok());
-                (path, n.map_or((2, slot), |n| (1, n)))
-            };
-            #[cfg(not(target_os = "linux"))]
-            let (name, order) = (format!("pad{slot}"), (1, slot));
-            let mut report = report_of(&pad);
-            let raw = report.sticks;
-            report.rest(self.dead_zone);
-            out.push(Controller { name, report, raw, rumbles: pad.is_ff_supported(), label, source: Source::Gilrs(id), order });
         }
+        #[cfg(windows)]
+        out.extend(hid.into_iter().map(|(c, _)| c));
         out.sort_by_key(|c| c.order);
         out
     }
@@ -872,8 +920,19 @@ impl Gamepads {
             if act == [0, 0] || ms == 0 {
                 return;
             }
-            #[allow(irrefutable_let_patterns)]
-            let ids: Vec<gilrs::GamepadId> = self.rumble_to.iter().filter_map(|s| if let Source::Gilrs(id) = s { Some(*id) } else { None }).collect();
+            // gilrs's own controllers, and the ones read over HID that gilrs
+            // has too (their motors are Windows.Gaming.Input's)
+            let ids: Vec<gilrs::GamepadId> = self
+                .rumble_to
+                .iter()
+                .filter_map(|s| match s {
+                    Source::Gilrs(id) => Some(*id),
+                    #[cfg(windows)]
+                    Source::Hid(_, id) => *id,
+                    #[cfg(windows)]
+                    Source::XInput(_) => None,
+                })
+                .collect();
             if ids.is_empty() {
                 return;
             }

@@ -134,6 +134,10 @@ mod weather;
 // natively by its tests)
 #[cfg(any(windows, test))]
 mod xinput;
+// Windows' PlayStation controllers, read over HID in the background (its
+// reports checked natively by its tests)
+#[cfg(any(windows, test))]
+mod hidpad;
 
 #[cfg(target_arch = "wasm32")]
 mod web;
