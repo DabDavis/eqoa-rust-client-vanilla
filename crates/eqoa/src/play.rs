@@ -129,9 +129,9 @@ pub struct Play {
     /// (Sandstorm, measured 2026-10-23: slots 10 and 13 dropped, slot 3
     /// answered) never answers it, and the player is told (`slot_unanswered`).
     slot_asked: Option<(i64, i64, i64)>,
-    /// The weather the server set this frame (0x00C5, 0x00C7): the byte, and
-    /// whether it is instant.
-    pub weather: Vec<(u8, bool)>,
+    /// What the server's messages asked of the atmosphere this frame, in
+    /// their order (`Atmos`), for `weather::Weather::take`.
+    pub weather: Vec<Atmos>,
     /// Each creature's `m_walk`, made with it (`CreateEntity`: `Init` at the
     /// origin), keyed by the entity's id.
     walks: Vec<Option<(u32, WalkControl<Ee>)>>,
@@ -483,6 +483,18 @@ fn far_pose_every(far: u32) -> u32 {
 
 /// `gWorldInfo`'s paths on the Frontiers disc, by world index (CLIENT's
 /// table names six; a server's S2 can add more, which are not read here).
+/// What a message asks of the atmosphere, in the order the messages came: a
+/// weather byte (0x00C5 faded, 0x00C7 at once), or the sky set at once for
+/// where the player now stands, as `Respawn` (0x00B2) and `Msg000D` end with
+/// `SetSky(m_camera, 1)`. A sky that only fades in after a port held every
+/// weather change behind its 30 s (`VIAtmosphere::SetWeather` waits on a
+/// change under way), and Sandstorm sends the weather just before each port.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Atmos {
+    Weather(u8, bool),
+    SkyNow,
+}
+
 pub const WORLD_FILES: [&str; 6] = ["TUNARIA.ESF", "RATHE.ESF", "ODUS.ESF", "LAVASTM.ESF", "PLANESKY.ESF", "SECRETS.ESF"];
 
 impl Play {
@@ -1978,8 +1990,10 @@ impl Play {
                     }
                     }
                 Event::Weather { weather, instant } => {
-                    eprintln!("play: weather {weather}{}", if instant { " (instant)" } else { "" });
-                    self.weather.push((weather, instant));
+                    // stamped with the server's hour, which every window shares
+                    let hour = self.session.time_of_day().map_or(String::new(), |h| format!(" at hour {:.4}", h.0));
+                    eprintln!("play: weather {weather}{}{hour}", if instant { " (instant)" } else { "" });
+                    self.weather.push(Atmos::Weather(weather, instant));
                 }
                 Event::WorldEntry { self_id, player, dump } => {
                     eprintln!("play: world entry again as {self_id:#x} at {:?}", player.pos);
@@ -2029,6 +2043,8 @@ impl Play {
                     self.pet_name.clear();
                     // Msg000D's PlayCue
                     self.cues.push(crate::sound::Cue::Named("respawn", 0.4));
+                    // and its SetSky(m_camera, 1): the sky where it stands, at once
+                    self.weather.push(Atmos::SkyNow);
                 }
                 _ => {}
             }
@@ -2958,8 +2974,17 @@ impl Play {
             // EnterWorld: StreamFillCache there under the loading screen
             self.loading.begin(pos, hpr[0], false, true, now);
         }
+        // Respawn ends with SetSky(m_camera, 1): the sky where it stands, at
+        // once (another world's once it is entered: `world_pending`)
+        self.weather.push(Atmos::SkyNow);
         self.npcw_respawn();
         self.bank_reset();
+    }
+
+    /// Whether another world is still to be entered (its file read): the
+    /// atmosphere's orders from its move on wait for it (`Weather::take`).
+    pub fn world_pending(&self) -> bool {
+        self.world_change.is_some() || self.loading.wait.is_some_and(|w| w.entering)
     }
 
     /// The loading screen while it is up: its view and the gears, which the

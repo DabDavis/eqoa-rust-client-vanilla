@@ -176,6 +176,34 @@ impl Weather {
         self.atm.set_weather(atmosphere::weather_from_wire(w), instant);
     }
 
+    /// `VIScene::SetSky(cam, 1)`: the sky of the profiles where `eye` stands,
+    /// at once, as `Respawn` and `Msg000D` set it.
+    pub fn sky_now(&mut self, world: &World<Ee>, eye: &vi::camera::Eye<Ee>) {
+        if let Some(g) = &world.grid {
+            self.atm.set_sky(&g.profile_blend(&eye.position), true);
+            self.first = false;
+        }
+    }
+
+    /// The atmosphere's orders as the messages gave them (`Play::weather`),
+    /// taken in their order: each weather byte, and each sky set at once
+    /// where the player now stands. While another world is still to be
+    /// entered (`pending`) a sky's order waits, and every order after it, for
+    /// that world, as the console sets it only once `EnterWorld` has read it.
+    pub fn take(&mut self, ops: &mut Vec<crate::play::Atmos>, world: &World<Ee>, eye: &vi::camera::Eye<Ee>, pending: bool) {
+        use crate::play::Atmos;
+        let mut done = 0;
+        for &op in ops.iter() {
+            match op {
+                Atmos::Weather(w, instant) => self.set_weather(w, instant),
+                Atmos::SkyNow if pending => break,
+                Atmos::SkyNow => self.sky_now(world, eye),
+            }
+            done += 1;
+        }
+        ops.drain(..done);
+    }
+
     pub fn describe(&self) -> String {
         let a = &self.atm;
         format!(
@@ -294,4 +322,79 @@ fn camera(eye: &vi::camera::Eye<Ee>) -> Camera<Ee> {
     let p = eye.position;
     let at = (p.x * d.x + p.y * d.y + p.z * d.z) + F::new(0.3);
     Camera { position: p, dir: d, view: Matrix44::identity(), near: Plane { n, d: at } }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::play::Atmos;
+    use vi::camera::Eye;
+
+    /// The library with the sky (and FX.CSF, so `new` reads nothing off a
+    /// disc of its own) and Tunaria round Freeport's shore, and that world;
+    /// None without `run/eqoa.iso`.
+    fn sky_and_world() -> Option<(Library, World<Ee>)> {
+        let iso = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        if !iso.exists() {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return None;
+        }
+        let mut lib = Library::new();
+        let w = lib.add("TUNARIA.ESF", crate::stream::open_file(&iso, "TUNARIA.ESF").unwrap());
+        let mut disc = iso::Iso::open(&iso).unwrap();
+        for f in ["DATA2/SKY.CSF", "DATA2/FX.CSF"] {
+            lib.add(f, esf::Container::open(disc.read(f).unwrap()).unwrap());
+        }
+        let mut src = crate::stream::FileZones::open(&iso, "TUNARIA.ESF").unwrap();
+        crate::stream::fill(&mut lib, w, 25275.0, 15766.0, &mut src);
+        let world = World::load(&lib, w)?;
+        Some((lib, world))
+    }
+
+    fn eye() -> Eye<Ee> {
+        Eye { position: Vect3::of(25275.0, 60.0, 15766.0), direction: Vect3::of(0.0, 0.0, 1.0) }
+    }
+
+    /// A port's sky (`Respawn`'s `SetSky(m_camera, 1)`) changes at once:
+    /// the change under way is done at the next step, so the weather the
+    /// server sends next fades in from there. The control: the sky the frame
+    /// sets (fade 0), which is all a port had: a change faded over 30 s,
+    /// behind which that weather waits.
+    #[test]
+    fn a_ports_sky_is_set_at_once_and_the_weather_after_it_is_not_held() {
+        let Some((mut lib, world)) = sky_and_world() else { return };
+        let mut now = Weather::new(&mut lib, 0);
+        let mut faded = Weather::new(&mut lib, 0);
+        assert!(now.atm.initialised, "the sky's sprites are in");
+        // a sky none of the profiles here has, shown and last seen, as after
+        // a port from afar
+        for w in [&mut now, &mut faded] {
+            w.atm.p60c = 9;
+            w.atm.seen_sky = 9;
+        }
+        now.take(&mut vec![Atmos::SkyNow, Atmos::Weather(2, false)], &world, &eye(), false);
+        assert_eq!(now.atm.p608, F::ONE, "the sky at once");
+        assert_eq!(now.atm.p604, 2, "the weather after it is the next change");
+        let b = world.grid.as_ref().unwrap().profile_blend(&eye().position);
+        faded.atm.set_sky(&b, false);
+        faded.set_weather(2, false);
+        assert!(faded.atm.p608 > F::ZERO && faded.atm.p608 < F::ONE, "the control: the sky fades");
+        assert_eq!((faded.atm.p604, faded.atm.p600), (2, 0), "the control: the weather waits behind it");
+    }
+
+    /// The orders go in the messages' order; while another world is still
+    /// to be entered a sky's order, and every order after it, waits for it.
+    /// The control: with no world to wait for, all of them are taken.
+    #[test]
+    fn the_orders_after_a_ports_sky_wait_for_its_world() {
+        let Some((mut lib, world)) = sky_and_world() else { return };
+        let mut w = Weather::new(&mut lib, 0);
+        let mut ops = vec![Atmos::Weather(1, true), Atmos::SkyNow, Atmos::Weather(0, false)];
+        w.take(&mut ops, &world, &eye(), true);
+        assert_eq!(ops, [Atmos::SkyNow, Atmos::Weather(0, false)], "the sky and what follows it wait");
+        assert_eq!((w.atm.p600, w.atm.p608), (1, F::ONE), "the weather before it is taken, at once");
+        w.take(&mut ops, &world, &eye(), false);
+        assert!(ops.is_empty(), "the control: the world entered, all are taken");
+        assert_eq!(w.atm.p604, 0, "the last weather is the next change");
+    }
 }

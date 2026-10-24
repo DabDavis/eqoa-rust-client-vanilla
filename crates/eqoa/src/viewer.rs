@@ -843,9 +843,9 @@ pub fn shot_with(
                 }
                 // the HUD, once SUPPORT's atlas has come
                 p.attach_ui(&mut renderer, &device, &queue, render::TARGET_FORMAT, lib);
-                for (w, instant) in p.weather.drain(..) {
-                    weather.set_weather(w, instant);
-                }
+                // the atmosphere's orders in the messages' order
+                let pending = p.world_pending();
+                weather.take(&mut p.weather, &walker.scene, &walker.eye, pending);
                 // The HUD steps each of the game's frames (its glows, the
                 // name's scroll).
                 if let Some(u) = renderer.ui.as_mut() {
@@ -2469,6 +2469,11 @@ impl App {
         }
         // the hour the lights and the effect volumes take, and the volumes
         let _ = writeln!(o, "hour {:.2}{}; {}", game_hour(self.play.as_ref(), self.clock), if self.play.as_ref().is_some_and(|p| p.session.clock_b.ready) { " (the server's)" } else { "" }, self.fx.as_ref().map_or("effect volumes off".into(), |f| f.describe()));
+        // the atmosphere as it is (two windows' reports compared: the same
+        // weather sent should be the same weather shown)
+        if let Some(w) = &self.weather {
+            let _ = writeln!(o, "{}", w.describe());
+        }
         if let (Some(p), Some(w)) = (&self.play, &self.walker) {
             o.push_str(&p.report(w.cam.walk.phys.position.to_array()));
         }
@@ -4117,10 +4122,11 @@ impl ApplicationHandler for App {
                                 }
                             });
                         }
-                        for (x, instant) in p.weather.drain(..) {
-                            if let Some(wx) = weather.as_mut() {
-                                wx.set_weather(x, instant);
-                            }
+                        // the atmosphere's orders in the messages' order (a
+                        // port's sky at once, as Respawn sets it)
+                        if let Some(wx) = weather.as_mut() {
+                            let pending = p.world_pending();
+                            wx.take(&mut p.weather, &w.scene, &w.eye, pending);
                         }
                         // the HUD, once SUPPORT's atlas has come
                         p.attach_ui(&mut g.renderer, &g.device, &g.queue, g.config.format, lib);
