@@ -2601,7 +2601,11 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, _el: &ActiveEventLoop) {
-        if (!self.held.is_empty() || self.walker.is_some() || self.host.is_some())
+        // a model viewer draws on input alone, but not while the 2002 disc's
+        // files are coming (`poll_era` takes them on a frame) or a test's F9
+        // is due
+        let art = self.era_loading.is_some() || !self.art_script.is_empty();
+        if (!self.held.is_empty() || self.walker.is_some() || self.host.is_some() || art)
             && let Some(g) = &self.gfx
         {
             // the options' Frame Rate natively: under a cap the loop sleeps

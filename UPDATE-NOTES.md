@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-24 · The model viewer turns at once
+- In View offline, F9's 2002 model now shows as soon as the disc is read,
+  not only at the next key pressed.
+
 ## 2026-10-24 · The model viewer follows F9
 - In the page's View offline (and `eqoa view`), F9 now turns the model shown to
   the 2002 disc's and back; before, it read the disc but kept showing
