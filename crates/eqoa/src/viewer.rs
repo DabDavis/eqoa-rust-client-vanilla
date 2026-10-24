@@ -258,8 +258,8 @@ fn upload(renderer: &mut Renderer, device: &wgpu::Device, queue: &wgpu::Queue, l
 /// A world change in a playshot: the world file replaced, and a walker and
 /// streamer for it at the arrival.
 fn change_world(lib: &mut Library, file: &str, at: Spawn) -> Result<(Walker, Streamer), Error> {
-    let c = stream::open_file(std::path::Path::new(&crate::disc_path(None)), file)?;
-    lib.replace(0, file, c);
+    let o = stream::open_world(file, at.pos[0], at.pos[2]).borrow_mut().take().ok_or("the world is not read yet")??;
+    lib.replace_from(0, file, o.container, o.era);
     let index = vi::world::World::<vi::fpu::Ee>::zone_at(lib.file(0), at.pos[0], at.pos[2]).ok_or("no zone at the arrival")?;
     stream::load_zone_now(lib, 0, index)?;
     let character = lib.lookup(HUMAN).ok_or("no human model")?;
@@ -1526,6 +1526,8 @@ struct App {
     /// The 2002 disc's files being read for its art (`era`, F9), put in the
     /// library and drawn when they come.
     era_loading: Option<crate::era::Loading>,
+    /// `EQOA_ART_AT`: when a test's script presses F9 (ms on `clock`).
+    art_script: Vec<i64>,
 }
 
 pub fn run(lib: Library, source: Source) -> Result<(), Error> {
@@ -1609,6 +1611,7 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         shots: crate::pregame::host::shot_script(),
         failed: None,
         era_loading: None,
+        art_script: std::env::var("EQOA_ART_AT").map(|v| v.split(';').filter_map(|t| t.trim().parse().ok()).collect()).unwrap_or_default(),
     };
     #[cfg(target_arch = "wasm32")]
     {
@@ -1681,8 +1684,9 @@ impl App {
     /// A world change in the window, once its reads are in
     /// (`stream::open_world`): the file replaces the world's, the zones read
     /// round the arrival go in, and `load` begins the walk again there.
-    fn enter_world(&mut self, file: &str, c: esf::Container, zones: Vec<(usize, Vec<u8>)>, at: Spawn) -> Result<(), Error> {
-        self.lib.replace(0, file, c);
+    fn enter_world(&mut self, file: &str, o: stream::Opened, at: Spawn) -> Result<(), Error> {
+        let stream::Opened { container: c, zones, era } = o;
+        self.lib.replace_from(0, file, c, era);
         for (zi, b) in zones {
             stream::install(&mut self.lib, 0, zi, b)?;
         }
@@ -1738,8 +1742,14 @@ impl App {
     }
 
     /// The 2002 disc's files, once read: stood in for their namesakes, then
-    /// the art applied.
+    /// the art applied. `EQOA_ART_AT=<ms>;<ms>...` (a test's script) presses
+    /// F9 at those times on the client's clock.
     fn poll_era(&mut self) {
+        let now = self.clock.elapsed().as_millis() as i64;
+        if self.art_script.first().is_some_and(|&t| t <= now) {
+            self.art_script.remove(0);
+            self.toggle_era();
+        }
         let Some(r) = self.era_loading.as_mut().and_then(|l| l.poll()) else { return };
         self.era_loading = None;
         match r {
@@ -3585,7 +3595,7 @@ impl ApplicationHandler for App {
                 }
                 if let Some(r) = self.entering.as_ref().and_then(|e| e.2.borrow_mut().take()) {
                     let (file, at, _) = self.entering.take().unwrap();
-                    match r.map_err(Error::from).and_then(|(c, zones)| self.enter_world(&file, c, zones, at)) {
+                    match r.map_err(Error::from).and_then(|o| self.enter_world(&file, o, at)) {
                         Ok(()) => crate::say(&format!("entered {file} at {:?}", at.pos)),
                         Err(e) => {
                             crate::say(&format!("world change to {file}: {e}"));

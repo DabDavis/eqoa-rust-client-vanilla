@@ -154,7 +154,6 @@ pub fn has_world(name: &str) -> bool {
     WORLDS_2002.iter().any(|w| w.eq_ignore_ascii_case(n))
 }
 
-#[allow(dead_code)]
 /// The disc the world `name` is read off now: the 2002 disc's while its art
 /// is drawn and it has that world (Tunaria), else Frontiers'.
 pub fn world_era(name: &str) -> Era {
@@ -171,15 +170,16 @@ pub fn image_of(era: Era) -> Option<String> {
     }
 }
 
-/// The 2002 disc's containers, each the library's name it stands in for and
-/// the container; or why the disc could not be read.
-pub type Art = Result<Vec<(String, Container)>, String>;
+/// Files off the 2002 disc, each by the name it was asked for (any path: it
+/// is found by its last part, wherever that disc keeps it, and one the disc
+/// lacks is left out) and its bytes; or why the disc could not be read.
+pub type Files = Result<Vec<(String, Vec<u8>)>, String>;
 
 /// A page's read of them: filled on a later frame.
-pub type Slot = Rc<RefCell<Option<Art>>>;
+pub type Slot = Rc<RefCell<Option<Files>>>;
 
-/// A page's reader: starts reading the files the names name (each by its
-/// last part, wherever the 2002 disc keeps it) and fills the slot it returns.
+/// A page's reader: starts reading the files `names` names (as `Files`) and
+/// fills the slot it returns.
 pub type Reader = Box<dyn Fn(Vec<String>) -> Slot>;
 
 /// Makes `r` the way the 2002 disc's files are read (a page's).
@@ -188,37 +188,106 @@ pub fn set_reader(r: Reader) {
     READER.with(|c| *c.borrow_mut() = Some(r));
 }
 
-/// The 2002 disc's containers being read (`load`).
-pub enum Loading {
+/// Files off the 2002 disc being read (`read`).
+pub enum Reading {
     Slot(Slot),
     #[cfg(not(target_arch = "wasm32"))]
-    Thread(std::sync::mpsc::Receiver<Art>),
+    Thread(std::sync::mpsc::Receiver<Files>),
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-    Done(Option<Art>),
+    Done(Option<Files>),
+}
+
+impl Reading {
+    /// The files, once, when they have been read.
+    pub fn poll(&mut self) -> Option<Files> {
+        match self {
+            Reading::Slot(s) => s.borrow_mut().take(),
+            #[cfg(not(target_arch = "wasm32"))]
+            Reading::Thread(rx) => match rx.try_recv() {
+                Ok(a) => Some(a),
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Err("the reading thread stopped".into())),
+            },
+            Reading::Done(a) => a.take(),
+        }
+    }
+}
+
+/// Starts reading the files `names` names off the 2002 disc (as `Files`):
+/// natively on a thread, in a page through its reader.
+pub fn read(names: Vec<String>) -> Reading {
+    if let Some(s) = READER.with(|c| c.borrow().as_ref().map(|f| f(names.clone()))) {
+        return Reading::Slot(s);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(read_files_now(&names));
+        });
+        Reading::Thread(rx)
+    }
+    #[cfg(target_arch = "wasm32")]
+    Reading::Done(Some(Err("no reader for the 2002 disc".into())))
+}
+
+/// The files `names` names read off the 2002 disc now (natively), the disc
+/// judged first.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_files_now(names: &[String]) -> Files {
+    let path = disc().ok_or("no 2002 disc image (F9 asks for it)")?;
+    let mut d = iso::Iso::open(&path).map_err(|e| format!("{path}: {e}"))?;
+    judge_image(&mut d)?;
+    let mut out = Vec::new();
+    for name in names {
+        let bare = crate::pregame::res::name_of(name);
+        if d.find(bare).is_none() {
+            continue;
+        }
+        out.push((name.clone(), d.read(bare).map_err(|e| format!("{bare}: {e}"))?));
+    }
+    Ok(out)
+}
+
+/// The 2002 disc's containers, each the library's name it stands in for and
+/// the container; or why the disc could not be read.
+pub type Art = Result<Vec<(String, Container)>, String>;
+
+/// Files opened as containers.
+fn open_all(files: Vec<(String, Vec<u8>)>) -> Art {
+    files.into_iter().map(|(n, b)| Container::open(b).map(|c| (n.clone(), c)).map_err(|e| format!("{}: {e}", crate::pregame::res::name_of(&n)))).collect()
+}
+
+/// The 2002 disc's containers being read (`load`).
+pub enum Loading {
+    /// a page's: opened as they come, on the game's thread
+    Files(Reading),
+    /// natively: read and opened on a thread
+    #[cfg(not(target_arch = "wasm32"))]
+    Thread(std::sync::mpsc::Receiver<Art>),
 }
 
 impl Loading {
     /// The containers, once, when they have been read.
     pub fn poll(&mut self) -> Option<Art> {
         match self {
-            Loading::Slot(s) => s.borrow_mut().take(),
+            Loading::Files(r) => r.poll().map(|f| f.and_then(open_all)),
             #[cfg(not(target_arch = "wasm32"))]
             Loading::Thread(rx) => match rx.try_recv() {
                 Ok(a) => Some(a),
                 Err(std::sync::mpsc::TryRecvError::Empty) => None,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Err("the reading thread stopped".into())),
             },
-            Loading::Done(a) => a.take(),
         }
     }
 }
 
 /// Starts reading the 2002 disc's copies of the files `names` names (the
-/// library's names, `names_of`): natively on a thread, in a page through its
-/// reader.
+/// library's names, `names_of`), as containers: natively read and opened on
+/// a thread, in a page read through its reader and opened as they come.
 pub fn load(names: Vec<String>) -> Loading {
-    if let Some(s) = READER.with(|c| c.borrow().as_ref().map(|f| f(names.clone()))) {
-        return Loading::Slot(s);
+    if READER.with(|c| c.borrow().is_some()) {
+        return Loading::Files(read(names));
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -229,7 +298,7 @@ pub fn load(names: Vec<String>) -> Loading {
         Loading::Thread(rx)
     }
     #[cfg(target_arch = "wasm32")]
-    Loading::Done(Some(Err("no reader for the 2002 disc".into())))
+    Loading::Files(Reading::Done(Some(Err("no reader for the 2002 disc".into()))))
 }
 
 /// The 2002 disc's copies of `names` read and opened now (natively: a world's
@@ -237,19 +306,7 @@ pub fn load(names: Vec<String>) -> Loading {
 /// have is left out.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_now(names: &[String]) -> Art {
-    let path = disc().ok_or("no 2002 disc image (F9 asks for it)")?;
-    let mut d = iso::Iso::open(&path).map_err(|e| format!("{path}: {e}"))?;
-    judge_image(&mut d)?;
-    let mut out = Vec::new();
-    for name in names {
-        let bare = crate::pregame::res::name_of(name);
-        if d.find(bare).is_none() {
-            continue;
-        }
-        let bytes = d.read(bare).map_err(|e| format!("{bare}: {e}"))?;
-        out.push((name.clone(), Container::open(bytes).map_err(|e| format!("{bare}: {e}"))?));
-    }
-    Ok(out)
+    read_files_now(names).and_then(open_all)
 }
 
 /// The files of `lib` the 2002 disc may have a copy of: every container but

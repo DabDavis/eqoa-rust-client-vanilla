@@ -98,8 +98,16 @@ pub fn source_for(lib: &Library, file: usize) -> Option<Box<dyn ZoneSource>> {
 
 /// A world file opened for a world change, with the zones the walk needs
 /// first at the arrival read (each zone's index and its record's bytes, for
-/// [`install`]): here at once natively, a frame or more later in a page.
-pub type Arrival = std::rc::Rc<RefCell<Option<Result<(Container, Vec<(usize, Vec<u8>)>), String>>>>;
+/// [`install`]), and the disc it came off (`era::world_era`).
+pub struct Opened {
+    pub container: Container,
+    pub zones: Vec<(usize, Vec<u8>)>,
+    pub era: esf::Era,
+}
+
+/// A world change's reads: here at once natively, a frame or more later in a
+/// page.
+pub type Arrival = std::rc::Rc<RefCell<Option<Result<Opened, String>>>>;
 
 /// How a page opens a world for a world change: the file's name and the
 /// arrival's x and z.
@@ -116,14 +124,20 @@ pub fn set_world_opener(f: Opener) {
 }
 
 /// Begins a world change's reads (`VIClient::EnterWorld`'s `LoadWorld`): the
-/// world file `name` and, in a page, the zones round the arrival at (x, z)
-/// ([`fill_set`]). Natively it is all here at once, the arrival's zone read
-/// with the walk ([`load_zone_now`]).
+/// world file `name`, off the disc of the art drawn when that disc has it
+/// (`era::world_era`: Tunaria off the 2002 disc), and, in a page, the zones
+/// round the arrival at (x, z) ([`fill_set`]). Natively it is all here at
+/// once, the arrival's zone read with the walk ([`load_zone_now`]).
 pub fn open_world(name: &str, x: f32, z: f32) -> Arrival {
     if let Some(a) = OPENER.with(|c| c.borrow().as_ref().map(|f| f(name, x, z))) {
         return a;
     }
-    let r = open_file(std::path::Path::new(&crate::disc_path(None)), name).map(|c| (c, Vec::new())).map_err(|e| e.to_string());
+    let era = crate::era::world_era(name);
+    #[cfg(not(target_arch = "wasm32"))]
+    let image = crate::era::image_of(era).unwrap_or_else(|| crate::disc_path(None));
+    #[cfg(target_arch = "wasm32")]
+    let image = crate::disc_path(None);
+    let r = open_file(std::path::Path::new(&image), name).map(|container| Opened { container, zones: Vec::new(), era }).map_err(|e| e.to_string());
     std::rc::Rc::new(RefCell::new(Some(r)))
 }
 

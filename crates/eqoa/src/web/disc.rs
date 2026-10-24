@@ -177,7 +177,7 @@ impl WebDisc {
                         zones.push((zi, d.read_at(base + off, n).await?));
                     }
                     super::log(&format!("{name} opened, {} zones read round the arrival ({} ms)", zones.len(), t.elapsed().as_millis()));
-                    Ok::<_, String>((std::mem::replace(&mut lib.files[f].1, esf::Container::empty()), zones))
+                    Ok::<_, String>(crate::stream::Opened { container: std::mem::replace(&mut lib.files[f].1, esf::Container::empty()), zones, era: esf::Era::Frontiers })
                 }
                 .await;
                 *o.borrow_mut() = Some(r);
