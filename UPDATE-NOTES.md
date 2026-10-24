@@ -5,6 +5,15 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-24 · The game starts again after the computer sleeps
+- If the computer sleeps while the game runs, the graphics card can lose
+  everything the game showed on it (on Windows especially). The game used to
+  stop with a crash when it next drew something. Now its window closes and
+  the game starts again by itself, at its start screens, so you can log back
+  in. The same happens if a graphics driver resets.
+- If that happens again within half a minute of a start, the game stops
+  instead of starting over and over, and offers a crash report the next time.
+
 ## 2026-10-24 · More ability bars; crash reports say when the game stopped
 - Options > Extended has a new row, Ability Bars: 2 (the game's), 3 or 4. With
   3 or 4, the HUD has a third and a fourth ability bar, five abilities each,

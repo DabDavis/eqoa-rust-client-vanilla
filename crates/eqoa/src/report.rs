@@ -135,7 +135,7 @@ pub fn fit(text: &str, max: usize) -> String {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{Key, clean_exit, click, draw, is_open, is_report_key, key, key_of, restore_stderr, set_gpu, set_shot, start, wants_shot};
+pub use native::{Key, clean_exit, click, crash, draw, is_open, is_report_key, key, key_of, restore_stderr, set_gpu, set_shot, start, wants_shot};
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
@@ -268,8 +268,25 @@ mod native {
         // pipe): the pipe's reader is a thread the program does not wait for
         // as a panic ends it, and the terminal would miss the message
         std::panic::set_hook(Box::new(move |info| {
-            let bt = std::backtrace::Backtrace::force_capture();
             let thread = std::thread::current().name().unwrap_or("unnamed").to_string();
+            // after the graphics device was lost (an upload in the frame that
+            // lost it): the game starts again in this one's place, its log
+            // closed so the next start offers no crash (`gpulost`)
+            if crate::gpulost::lost() && crate::gpulost::settled() {
+                if let Ok(mut l) = LOG.try_lock() {
+                    push_line(&mut l, &format!("graphics: thread '{thread}' {info}"));
+                    push_line(&mut l, "graphics: the device was lost: the game starts again");
+                    push_line(&mut l, CLOSED);
+                    if let Some(f) = l.file.as_mut() {
+                        let _ = f.flush();
+                    }
+                    if let Some(orig) = l.orig.take() {
+                        restore(orig);
+                    }
+                }
+                crate::gpulost::relaunch();
+            }
+            let bt = std::backtrace::Backtrace::force_capture();
             write_crash(&format!("A panic on the {thread} thread: {info}\n\nbacktrace:\n{bt}"), None, SystemTime::now());
             let text = format!("thread '{thread}' {info}");
             if let Ok(mut l) = LOG.try_lock() {
@@ -378,6 +395,17 @@ mod native {
     /// pipe's end closed: its reader reads what is left and stops.
     pub fn restore_stderr() {
         let Some(orig) = lock(&LOG).orig.take() else { return };
+        restore(orig);
+    }
+
+    #[cfg(unix)]
+    type Orig = i32;
+    #[cfg(windows)]
+    type Orig = (usize, usize);
+    #[cfg(not(any(unix, windows)))]
+    type Orig = ();
+
+    fn restore(orig: Orig) {
         #[cfg(unix)]
         // SAFETY: the copy of the old stderr `tee` kept; fd 2 was the pipe's
         // only end to write to
@@ -393,6 +421,12 @@ mod native {
         }
         #[cfg(not(any(unix, windows)))]
         let _ = orig;
+    }
+
+    /// A crash report for the next start that no panic wrote: `detail`, with
+    /// the state and the log as they are now.
+    pub fn crash(detail: &str) {
+        write_crash(detail, None, SystemTime::now());
     }
 
     /// The run closes: stderr to where it went, what the pipe holds read

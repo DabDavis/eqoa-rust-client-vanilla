@@ -118,6 +118,8 @@ mod touch;
 mod sound;
 mod spells;
 mod stream;
+#[cfg(not(target_arch = "wasm32"))]
+mod gpulost;
 mod report;
 mod ui;
 mod update;
@@ -504,9 +506,13 @@ fn run(args: &[String]) -> Result<()> {
 /// (`discs::settle`, in the window's event loop).
 fn boot(image: Option<&str>, server: Option<String>) -> Result<()> {
     settings::keep_in_user_dir();
-    // the log a report carries, and the crash reports (`report`)
+    // the log a report carries, and the crash reports (`report`); the
+    // program as it starts, for a start again after a lost graphics device
     #[cfg(not(target_arch = "wasm32"))]
-    report::start();
+    {
+        report::start();
+        gpulost::begin();
+    }
     // a newer build on the release, asked for while the boot's pictures show
     #[cfg(not(target_arch = "wasm32"))]
     update::start();
@@ -518,11 +524,18 @@ fn boot(image: Option<&str>, server: Option<String>) -> Result<()> {
     }
     viewer::run_boot(server)?;
     // the run closed (its log says so); the window closed for the release's
-    // build: it starts in this one's place
+    // build, or for a graphics device lost: the game starts in this one's
+    // place (a device lost again soon after a start: a crash report instead)
     #[cfg(not(target_arch = "wasm32"))]
     {
+        if gpulost::lost() && !gpulost::settled() {
+            report::crash(&format!("The graphics device was lost ({}) within 30 s of the game's start: the game did not start again, as it would only lose it again.", gpulost::why()));
+        }
         report::clean_exit();
         update::relaunch_if_requested();
+        if gpulost::lost() && gpulost::settled() {
+            gpulost::relaunch();
+        }
     }
     Ok(())
 }

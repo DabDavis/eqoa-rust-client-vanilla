@@ -2002,6 +2002,10 @@ impl App {
         // in front or not as it opens: a window opened behind another (the
         // system can refuse a program the front) has no `Focused` to say so
         self.pads.focused = window.has_focus();
+        // a device lost closes the window for a start again (`gpulost`; a
+        // page's is `web::start`'s)
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::gpulost::watch(&device);
         let mut renderer = Renderer::new(&device, &queue, config.format);
         if let Some(f) = arial(&self.lib) {
             renderer.set_font(&device, &queue, &f);
@@ -2341,6 +2345,23 @@ impl ApplicationHandler for App {
     }
 
     fn window_event(&mut self, el: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+        // the graphics device lost: nothing drawn or uploaded on it again,
+        // the window closes and the game starts again (`gpulost`; its test
+        // loses it here, between two events), logged out first as the
+        // update's restart is (a login still held would refuse the next)
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some(g) = &self.gfx {
+                crate::gpulost::test(&g.device, self.clock.elapsed().as_millis() as i64);
+            }
+            if crate::gpulost::lost() {
+                if let Some(p) = self.play.as_mut() {
+                    p.log_out();
+                }
+                el.exit();
+                return;
+            }
+        }
         match event {
             WindowEvent::CloseRequested => el.exit(),
             // Quit, answered yes in the start menu (`m_p2EC28`), or the
