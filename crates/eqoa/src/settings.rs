@@ -461,7 +461,14 @@ pub struct ClientOptions {
     /// behind others keeps its sound; off, a window not in front is heard
     /// not at all (`audio::set_heard`), its game's sound running on
     pub background_sound: bool,
+    /// Ability Bars: the HUD's ability bars and the spell book's slots, the
+    /// game's two (`ABILITY_BARS_GAME`) or up to `hudmenu::MAX_BARS`, five
+    /// slots each (`hudmenu`)
+    pub ability_bars: u8,
 }
+
+/// The game's ability bars (with the expansion's second).
+pub const ABILITY_BARS_GAME: u8 = 2;
 
 impl Default for ClientOptions {
     fn default() -> Self {
@@ -476,6 +483,7 @@ impl Default for ClientOptions {
             controller: [Focus::Auto; crate::multibox::PLACES],
             capture: false,
             background_sound: true,
+            ability_bars: ABILITY_BARS_GAME,
         }
     }
 }
@@ -484,8 +492,8 @@ impl ClientOptions {
     /// `client.opt`: a line a setting, `name=value`; Camera Turn Speed and
     /// Fog only when they are not the game's, Screen Shake only when off, a
     /// window's Controller Focus as `controller.<window>` (from 1) only when
-    /// it is not Auto, Capture Controller only when on, and Sound in
-    /// Background only when off.
+    /// it is not Auto, Capture Controller only when on, Sound in Background
+    /// only when off, and Ability Bars only when not the game's.
     pub fn to_text(self) -> String {
         let mut s = format!("lod={}\nbrightness={}\ncamera_distance={}\n", if self.lod { "on" } else { "off" }, self.brightness, self.camera_distance);
         if let Some(r) = self.frame_rate {
@@ -508,6 +516,9 @@ impl ClientOptions {
         }
         if !self.background_sound {
             s.push_str("background_sound=off\n");
+        }
+        if self.ability_bars != ABILITY_BARS_GAME {
+            s.push_str(&format!("ability_bars={}\n", self.ability_bars));
         }
         s
     }
@@ -548,6 +559,11 @@ impl ClientOptions {
                 ("capture_controller", "off") => c.capture = false,
                 ("background_sound", "on") => c.background_sound = true,
                 ("background_sound", "off") => c.background_sound = false,
+                ("ability_bars", v) => {
+                    if let Some(n) = v.parse::<u8>().ok().filter(|&n| (ABILITY_BARS_GAME as i32..=crate::hudmenu::MAX_BARS).contains(&(n as i32))) {
+                        c.ability_bars = n;
+                    }
+                }
                 (k, v) if k.starts_with("controller.") => {
                     let window = k["controller.".len()..].parse::<usize>().ok().filter(|w| (1..=crate::multibox::PLACES).contains(w));
                     if let (Some(w), Some(f)) = (window, Focus::from_key(v)) {
@@ -684,6 +700,12 @@ pub fn background_sound() -> bool {
     client().background_sound
 }
 
+/// Ability Bars now: how many the HUD and the spell book show, with the
+/// expansion's second bar (`Play::ability_bars`).
+pub fn ability_bars() -> u8 {
+    client().ability_bars
+}
+
 /// What the windows share as another window saved it (Capture Controller,
 /// Sound in Background): `client.opt`'s, each taken when it changed since
 /// this window last looked (`multibox::seat`'s look, twice a second), so a
@@ -755,7 +777,7 @@ pub fn describe() -> String {
         FrameRate::Display => "the display's",
     };
     format!(
-        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}; {}",
+        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, ability bars {}; {}",
         if c.lod { "on" } else { "off" },
         c.brightness,
         c.fog,
@@ -768,6 +790,7 @@ pub fn describe() -> String {
         focus().key(),
         if c.capture { "on" } else { "off" },
         if c.background_sound { "on" } else { "off" },
+        c.ability_bars,
         kept_where()
     )
 }
@@ -1140,8 +1163,14 @@ mod tests {
             ClientOptions { fog: 0, ..Default::default() },
             ClientOptions { fog: crate::fog::STEPS, ..Default::default() },
             ClientOptions { background_sound: false, ..Default::default() },
+            ClientOptions { ability_bars: 3, ..Default::default() },
+            ClientOptions { ability_bars: 4, ..Default::default() },
         ] {
             assert_eq!(ClientOptions::from_text(&c.to_text()), c);
+        }
+        assert_eq!(ClientOptions { ability_bars: 4, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nability_bars=4\n", "Ability Bars only when not the game's");
+        for bad in ["ability_bars=1", "ability_bars=5", "ability_bars=three"] {
+            assert_eq!(ClientOptions::from_text(bad).ability_bars, ABILITY_BARS_GAME, "{bad}: the game's two");
         }
         assert_eq!(ClientOptions { background_sound: false, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nbackground_sound=off\n", "Sound in Background only when off");
         for bad in ["background_sound=no", "background_sound=0"] {
@@ -1156,7 +1185,7 @@ mod tests {
             "Screen Shake only off, Capture Controller only on"
         );
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on; kept in the page's storage");
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, ability bars 2; kept in the page's storage");
         testing::reset(true);
         assert!(describe().ends_with("refused: nothing is kept"));
         testing::reset(false);

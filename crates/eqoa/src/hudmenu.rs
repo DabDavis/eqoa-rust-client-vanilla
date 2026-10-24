@@ -7,6 +7,15 @@
 //! slots 5-9; menu 2 the inventory's four quick slots. One is up at a time,
 //! a carousel with the selection at its head; using an entry sends what its
 //! message says: 0x8060000 an ability (`Send0032`), 0x2030000 an item.
+//!
+//! The client's own beyond them (the Extended page's Ability Bars, with the
+//! second bar there): menus 3 and 4, bars 3 and 4, the abilities on slots
+//! 10-14 and 15-19, built and drawn as menu 1 is and reached round the
+//! carousel after it, the items' menu still last. The game sends a slot as
+//! it is (0x0033 puts an ability on one, 0x0032 uses what is on one) and
+//! CLIENT shows only 0-9 and 252-255, so what is on 10-19 is the server's
+//! to keep: a server that keeps any slot (go-eqoa-server does) needs no
+//! change for them.
 
 use crate::ui::Vui;
 use net::dump::{Ability, NetItem};
@@ -38,6 +47,32 @@ pub struct MenuDef {
 
 /// The slot icons of the stacked menu (`sSlotIcons`).
 const SLOT_ICONS: [i32; 4] = [5, 5, 3, 2];
+
+/// The menus: the game's three (bars 1 and 2, the items) and the client's
+/// bars 3 and 4.
+pub const MENUS: usize = 5;
+/// The items' menu, the one drawn as a stack.
+const ITEMS: usize = 2;
+/// Round the carousel: the bars in order, then the items.
+const ORDER: [usize; MENUS] = [0, 1, 3, 4, 2];
+/// The most bars the client shows (the Extended page's Ability Bars).
+pub const MAX_BARS: i32 = 4;
+
+/// The first slot of the bar menu `k` shows, five from it: menu 1's 5 and
+/// bar `k`'s `(k - 1) * 5` past it (menu 0 is built as the game builds it).
+fn first_slot(k: usize) -> i64 {
+    if k == 1 { 5 } else { (k as i64 - 1) * 5 }
+}
+
+/// Whether menu `k` is in the carousel with `bars` bars: the first bar and
+/// the items always, the second with it, the client's with as many.
+fn shown(k: usize, bars: i32) -> bool {
+    match k {
+        0 | ITEMS => true,
+        1 => bars >= 2,
+        _ => bars >= k as i32,
+    }
+}
 
 /// A key for the menus, as `VIWndHUDMenu::OnKeyDown` and `VIWndGame`'s
 /// pad keys take them.
@@ -101,9 +136,9 @@ impl HudMenu {
         self.text.init(vui, r, [self.pos[0] + 81, self.pos[1] + 10], 158, 0, 1);
         self.text.window.open(true);
         self.text.on = (self.alpha > 0.35) as i32;
-        match self.index {
-            0 | 1 => self.draw_list(vui, r, menu, name),
-            _ => self.draw_stack(vui, r, menu, name),
+        match self.index as usize {
+            ITEMS => self.draw_stack(vui, r, menu, name),
+            _ => self.draw_list(vui, r, menu, name),
         }
     }
 
@@ -174,31 +209,34 @@ impl HudMenu {
     }
 }
 
-/// The three menus and which is up (`m_hudSel`).
+/// The menus and which is up (`m_hudSel`): the game's three, then the
+/// client's two bars.
 pub struct HudMenus {
     pub sel: i32,
-    pub menus: [HudMenu; 3],
-    pub defs: [MenuDef; 3],
+    pub menus: [HudMenu; MENUS],
+    pub defs: [MenuDef; MENUS],
 }
 
 impl Default for HudMenus {
     fn default() -> Self {
         HudMenus {
             sel: 0,
-            menus: [HudMenu::new(0), HudMenu::new(1), HudMenu::new(2)],
-            defs: [
-                MenuDef { count: 5, entries: vec![Entry::default(); 9] },
-                MenuDef { count: 5, entries: vec![Entry::default(); 5] },
-                MenuDef { count: 4, entries: vec![Entry::default(); 4] },
-            ],
+            menus: std::array::from_fn(|k| HudMenu::new(k as i32)),
+            defs: std::array::from_fn(|k| match k {
+                0 => MenuDef { count: 5, entries: vec![Entry::default(); 9] },
+                ITEMS => MenuDef { count: 4, entries: vec![Entry::default(); 4] },
+                _ => MenuDef { count: 5, entries: vec![Entry::default(); 5] },
+            }),
         }
     }
 }
 
 impl HudMenus {
-    /// `UpdateQuickBars`' three HUD menus, from the ability list (in its
-    /// map's order: by id) and the inventory.
-    pub fn build(&mut self, abilities: &BTreeMap<i64, Ability>, inventory: &[NetItem]) {
+    /// `UpdateQuickBars`' three HUD menus, and the client's bars as menu 1
+    /// is built, from the ability list (in its map's order: by id) and the
+    /// inventory; with `bars` bars shown, a bar no longer shown (the Extended
+    /// page's Ability Bars turned down) is not left up.
+    pub fn build(&mut self, abilities: &BTreeMap<i64, Ability>, inventory: &[NetItem], bars: i32) {
         // BuildAbilityMenu0
         let m0 = &mut self.defs[0];
         for e in &mut m0.entries {
@@ -234,19 +272,22 @@ impl HudMenus {
         }
         let n1 = n1.clamp(0, 5);
         m0.count = if n2 > 0 { (n2 + 5).min(9) } else { n1.max(5) } as i32;
-        // BuildAbilityMenu1
-        let m1 = &mut self.defs[1];
-        for e in &mut m1.entries {
-            *e = Entry::default();
-        }
-        let mut n = 0;
-        for a in abilities.values() {
-            if a.valid != 0 && (5..10).contains(&a.slot) {
-                n += 1;
-                m1.entries[(a.slot - 5) as usize] = item(a);
+        // BuildAbilityMenu1, and bars 3 and 4 as it
+        for k in [1, 3, 4] {
+            let first = first_slot(k);
+            let m = &mut self.defs[k];
+            for e in &mut m.entries {
+                *e = Entry::default();
             }
+            let mut n = 0;
+            for a in abilities.values() {
+                if a.valid != 0 && (first..first + 5).contains(&a.slot) {
+                    n += 1;
+                    m.entries[(a.slot - first) as usize] = item(a);
+                }
+            }
+            m.count = n.clamp(0, 5).max(5);
         }
-        m1.count = n.clamp(0, 5).max(5);
         // BuildQuickMenu
         let m2 = &mut self.defs[2];
         for e in &mut m2.entries {
@@ -259,11 +300,19 @@ impl HudMenus {
                 m2.entries[q as usize] = Entry { icon2: -1, x08: -1, msg: 0x2030000, id: k as i64 };
             }
         }
+        if !shown(self.up(), bars) {
+            self.sel = 0;
+        }
+    }
+
+    /// The menu up.
+    fn up(&self) -> usize {
+        self.sel.clamp(0, MENUS as i32 - 1) as usize
     }
 
     /// The menu up, drawn.
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, now: i64, name: &dyn Fn(u32, i64) -> Vec<u16>) {
-        let k = self.sel.clamp(0, 2) as usize;
+        let k = self.up();
         let def = self.defs[k].clone();
         self.menus[k].draw(vui, r, &def, now, name);
     }
@@ -274,7 +323,7 @@ impl HudMenus {
     /// entry of the menu up, that entry selected and the key that uses it;
     /// on the title bar, the next menu (as the d-pad's right).
     pub fn point(&mut self, p: [f32; 2]) -> Option<Key> {
-        let k = self.sel.clamp(0, 2) as usize;
+        let k = self.up();
         let count = self.defs[k].count;
         let m = &mut self.menus[k];
         let at = m.pos;
@@ -284,7 +333,7 @@ impl HudMenus {
         }
         // the carousel from the selection down: a list's rows 31 apart from
         // (+163, -4), the stack's slots 32 apart from (+169, +3)
-        let (x0, y0, w, step) = if k < 2 { (at[0] + 163, at[1] - 4, 36, 31) } else { (at[0] + 169, at[1] + 3, 28, 32) };
+        let (x0, y0, w, step) = if k != ITEMS { (at[0] + 163, at[1] - 4, 36, 31) } else { (at[0] + 169, at[1] + 3, 28, 32) };
         let row = (y - y0).div_euclid(step);
         if count <= 0 || !(x0..x0 + w).contains(&x) || !(0..count).contains(&row) {
             return None;
@@ -294,10 +343,11 @@ impl HudMenus {
     }
 
     /// A key in play: the menu up takes up, down and use (lit for 20 s);
-    /// left and right switch menus, menu 1 only with the expansion's second
-    /// bar (`second`). Returns what was used: (message, id).
-    pub fn key(&mut self, key: Key, now: i64, second: bool, cues: &mut Vec<crate::sound::Cue>) -> Option<(u32, i64)> {
-        let k = self.sel.clamp(0, 2) as usize;
+    /// left and right switch menus round the carousel, with `bars` bars:
+    /// menu 1 only with the expansion's second bar (2 and up), the client's
+    /// bars 3 and 4 after it. Returns what was used: (message, id).
+    pub fn key(&mut self, key: Key, now: i64, bars: i32, cues: &mut Vec<crate::sound::Cue>) -> Option<(u32, i64)> {
+        let k = self.up();
         let def = self.defs[k].clone();
         let m = &mut self.menus[k];
         let mut used = None;
@@ -315,28 +365,14 @@ impl HudMenus {
         m.lit = 1;
         m.time = now + 20000;
         match key {
-            // VIWndGame::Interact
+            // VIWndGame::Interact: the next menu round
             Key::Right => {
-                self.sel = match self.sel {
-                    0 => {
-                        if second {
-                            1
-                        } else {
-                            2
-                        }
-                    }
-                    1 => 2,
-                    _ => 0,
-                };
+                self.sel = self.round(1, bars) as i32;
                 self.relight(now);
             }
-            // VIWndGame::Attack
+            // VIWndGame::Attack: the one before
             Key::Left => {
-                self.sel = match self.sel {
-                    0 => 2,
-                    1 => 0,
-                    _ => second as i32,
-                };
+                self.sel = self.round(-1, bars) as i32;
                 self.relight(now);
             }
             _ => {}
@@ -344,10 +380,20 @@ impl HudMenus {
         used
     }
 
+    /// The menu `d` (1, -1) round the carousel from the one up, past those
+    /// not shown with `bars` bars: the game's 0, 1, 2 with two, 0 and 2
+    /// with one (`Interact`'s and `Attack`'s switches), the client's bars
+    /// between 1 and the items with more.
+    fn round(&self, d: i32, bars: i32) -> usize {
+        let n = ORDER.len() as i32;
+        let at = ORDER.iter().position(|&k| k == self.up()).unwrap_or(0) as i32;
+        (1..n).map(|i| ORDER[(at + d * i).rem_euclid(n) as usize]).find(|&k| shown(k, bars)).unwrap_or(0)
+    }
+
     /// The focus passing from one HUD menu to another relights it
     /// (`VIWndHUDMenu::OnMessage` 295).
     fn relight(&mut self, now: i64) {
-        let m = &mut self.menus[self.sel.clamp(0, 2) as usize];
+        let m = &mut self.menus[self.up()];
         m.lit = 1;
         m.alpha = 0.3;
         m.time = now + 20000;
@@ -376,5 +422,71 @@ mod tests {
         // an empty menu takes nothing but its title
         h.defs[0].count = 0;
         assert_eq!(h.point([(at[0] + 180) as f32, (at[1] + 11) as f32]), None);
+    }
+
+    /// The carousel (`VIWndGame::Interact` right, `Attack` left): with one
+    /// or two bars the game's switches as CLIENT has them (right: 0 to 1, or
+    /// 2 without the second bar, 1 to 2, 2 to 0; left: 0 to 2, 1 to 0, 2 to
+    /// 1, or 0 without), and with three or four bars the client's between
+    /// bar 2 and the items, each only with as many bars.
+    #[test]
+    fn the_carousel_is_the_games_and_goes_on_through_more_bars() {
+        let go = |sel: i32, key: Key, bars: i32| {
+            let mut h = HudMenus { sel, ..Default::default() };
+            h.key(key, 0, bars, &mut Vec::new());
+            h.sel
+        };
+        for second in [false, true] {
+            let bars = 1 + second as i32;
+            assert_eq!(go(0, Key::Right, bars), if second { 1 } else { 2 });
+            assert_eq!(go(1, Key::Right, bars), 2);
+            assert_eq!(go(2, Key::Right, bars), 0);
+            assert_eq!(go(0, Key::Left, bars), 2);
+            assert_eq!(go(1, Key::Left, bars), 0);
+            assert_eq!(go(2, Key::Left, bars), second as i32);
+        }
+        let walk = |bars: i32, key: Key| {
+            let mut h = HudMenus::default();
+            (0..6)
+                .map(|_| {
+                    h.key(key, 0, bars, &mut Vec::new());
+                    h.sel
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(walk(2, Key::Right), [1, 2, 0, 1, 2, 0], "the game's two bars");
+        assert_eq!(walk(3, Key::Right), [1, 3, 2, 0, 1, 3]);
+        assert_eq!(walk(4, Key::Right), [1, 3, 4, 2, 0, 1]);
+        assert_eq!(walk(4, Key::Left), [2, 4, 3, 1, 0, 2]);
+    }
+
+    /// The bars' menus from the abilities' slots: bar 1 its 0-4 and the
+    /// 252-255 ones after them, bar 2 its 5-9 and the client's bars 3 and 4
+    /// their 10-14 and 15-19, each entry at its slot's place, using sending
+    /// the ability; the game's menus take nothing from 10-19, as CLIENT's do
+    /// not (the control). A bar up when Ability Bars is turned down goes
+    /// back to the first.
+    #[test]
+    fn each_bar_holds_its_own_five_slots() {
+        let list: BTreeMap<i64, Ability> = [(1, 0), (2, 4), (3, 7), (4, 10), (5, 14), (6, 16), (7, 252), (8, 19)]
+            .into_iter()
+            .map(|(id, slot)| (id, Ability { id, slot, valid: 1, icon_front: 100 + id, ..Default::default() }))
+            .collect();
+        let mut h = HudMenus::default();
+        h.build(&list, &[], 4);
+        let ids = |k: usize| h.defs[k].entries.iter().map(|e| if e.icon2 == -1 { 0 } else { e.id }).collect::<Vec<_>>();
+        assert_eq!(ids(0), [1, 0, 0, 0, 2, 7, 0, 0, 0], "slots 0-4, then 252-255");
+        assert_eq!(ids(1), [0, 0, 3, 0, 0]);
+        assert_eq!(ids(3), [4, 0, 0, 0, 5]);
+        assert_eq!(ids(4), [0, 6, 0, 0, 8]);
+        assert_eq!(h.defs[3].count, 5);
+        h.sel = 4;
+        h.menus[4].sel = 4;
+        assert_eq!(h.key(Key::Use, 0, 4, &mut Vec::new()), Some((0x8060000, 8)), "slot 19's ability used");
+        h.build(&list, &[], 3);
+        assert_eq!(h.sel, 0, "bar 4 gone: the first bar up");
+        h.sel = 3;
+        h.build(&list, &[], 3);
+        assert_eq!(h.sel, 3, "bar 3 stays with three");
     }
 }
