@@ -71,6 +71,12 @@ impl<M: Model> Quat<M> {
             w: a.w * wa + b.w * wb,
         }
     }
+
+    /// `ConvertTo(VIVect3 &hpr) const`: the long way round, through a
+    /// matrix (`Rotate`, then `ConvertToEulerZXY`).
+    pub fn to_hpr(&self) -> Vect3<M> {
+        Matrix44::rotate(self).euler_zxy()
+    }
 }
 
 fn comp<M: Model>(v: &Vect4<M>, k: usize) -> F<M> {
@@ -109,6 +115,39 @@ impl<M: Model> Matrix44<M> {
             yz - wx,
             F::ONE - (xx + yy),
         ]
+    }
+
+    /// `Rotate(const VIQuat &)`: any quaternion's rotation (scaled by two
+    /// over its norm, where `quat_basis` takes it as a unit one), the last
+    /// row the identity's.
+    pub fn rotate(q: &Quat<M>) -> Self {
+        let s = f::<M>(2.0) / (((q.w * q.w + q.x * q.x) + q.y * q.y) + q.z * q.z);
+        let (xs, ys, zs) = (q.x * s, q.y * s, q.z * s);
+        let (wx, wy, wz) = (q.w * xs, q.w * ys, q.w * zs);
+        let (xx, xy, xz) = (q.x * xs, q.x * ys, q.x * zs);
+        let (yy, yz, zz) = (q.y * ys, q.y * zs, q.z * zs);
+        let (o, z) = (F::ONE, F::ZERO);
+        Matrix44 {
+            m: [
+                Vect4::new(o - (yy + zz), xy + wz, xz - wy, z),
+                Vect4::new(xy - wz, o - (xx + zz), yz + wx, z),
+                Vect4::new(xz + wy, yz - wx, o - (xx + yy), z),
+                Vect4::new(z, z, z, o),
+            ],
+        }
+    }
+
+    /// `ConvertToEulerZXY(VIVect3 &) const`: (heading, pitch, roll); with
+    /// no heading to read (the third row straight up or down) the heading is
+    /// 0 and the roll is taken off the first two rows.
+    pub fn euler_zxy(&self) -> Vect3<M> {
+        let m = &self.m;
+        let cy = (m[2].z * m[2].z + m[2].x * m[2].x).sqrt();
+        if cy > F::ZERO {
+            Vect3::new(m[2].x.atan2f(m[2].z), (-m[2].y).atan2f(cy), m[0].y.atan2f(m[1].y))
+        } else {
+            Vect3::new(F::ZERO, (-m[2].y).atan2f(cy), (-m[1].x).atan2f(m[0].x))
+        }
     }
 
     /// `Transform(const VIQuat &, float, const VIVect3 &)`.

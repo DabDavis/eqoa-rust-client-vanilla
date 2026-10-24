@@ -319,9 +319,10 @@ impl Rings {
     /// `UpdateGame`'s part: `TrackTarget` for `aim` (None resets), the
     /// rings' triangles to draw over the scene through `view_proj`. `me` is
     /// the player's id; `info_valid` is `m_targetInfoValid`; `cam_inside` is
-    /// `m_p00088` (the follow camera inside the player's head this frame).
+    /// `m_p00088` (the follow camera inside the player's head this frame);
+    /// `modal` is `IsModal` (the manual camera, mode 38).
     #[allow(clippy::too_many_arguments)]
-    pub fn frame(&mut self, lib: &esf::Library, walker: &Walker, aim: Option<Aim>, me: Option<u32>, info_valid: bool, cam_inside: bool, view_proj: glam::Mat4, step: bool) -> Vec<Tri> {
+    pub fn frame(&mut self, lib: &esf::Library, walker: &Walker, aim: Option<Aim>, me: Option<u32>, info_valid: bool, cam_inside: bool, modal: bool, view_proj: glam::Mat4, step: bool) -> Vec<Tri> {
         let now = walker.scene.time;
         // the particle system's delta, a frame of the game's at a time
         let dt = if step { self.delta.step(now) } else { F::ZERO };
@@ -337,9 +338,8 @@ impl Rings {
             track.reset();
             return Vec::new();
         };
-        // TrackTarget's first test (IsModal() is the manual camera, not
-        // ported: never)
-        let hide_self = (walker.cam.camera_mode == 0 || cam_inside) && Some(aim.id) == me;
+        // TrackTarget's first test
+        let hide_self = (modal || walker.cam.camera_mode == 0 || cam_inside) && Some(aim.id) == me;
         let at = aim.slot4.unwrap_or(aim.pos);
         let look = Look::new(walker.eye.position, walker.eye.direction);
         let con = if info_valid { Some(self.con.unwrap_or(2)) } else { None };

@@ -366,14 +366,9 @@ pub fn attack_action(attack: [i32; 2], slot: i32, alt: bool) -> Option<i32> {
     Some(id)
 }
 
-/// `VIMatrix44::ConvertToEulerZXY`
+/// `VIMatrix44::ConvertToEulerZXY` (`Matrix44::euler_zxy`).
 pub fn to_euler_zxy<M: Model>(m: &Matrix44<M>) -> Vect3<M> {
-    let cy = (m.m[2].z * m.m[2].z + m.m[2].x * m.m[2].x).sqrt();
-    if cy > F::ZERO {
-        Vect3::new(m.m[2].x.atan2f(m.m[2].z), (-m.m[2].y).atan2f(cy), m.m[0].y.atan2f(m.m[1].y))
-    } else {
-        Vect3::new(F::ZERO, (-m.m[2].y).atan2f(cy), (-m.m[1].x).atan2f(m.m[0].x))
-    }
+    m.euler_zxy()
 }
 
 /// The two-draw signed unit random the projectile jitter uses.

@@ -218,9 +218,10 @@ impl Walker {
     /// comes back (autorun, the follow). `game_frame`: one of the game's
     /// frames (`frames.rs`). Everything here steps by the clock but the
     /// camera shake (`VICameraEffect::Apply` takes the next of its samples a
-    /// call), which moves on only then: between them the eye is shaken by
-    /// the sample the last of the game's frames took. The camera's `Process`
-    /// goes through `reach` (the follow orbit's way back out).
+    /// call) and the manual camera's look (`UpdateControls`, a step a frame),
+    /// which move on only then: between them the eye is shaken by the sample
+    /// the last of the game's frames took. The camera's `Process` goes
+    /// through `reach` (the follow orbit's way back out).
     pub fn frame_with(&mut self, keys: [f32; 4], now_ms: i64, c: &crate::controls::Client, game_frame: bool) -> crate::controls::Changed {
         // UpdateGame sets the run speed and calls InitIntermediate every
         // frame (SetSpeed the walk speed, when one comes); with the speeds
@@ -232,7 +233,8 @@ impl Walker {
             self.cam.walk.walk_speed = walk;
             self.cam.walk.init_intermediate();
         }
-        let changed = crate::controls::update_controls(self, keys, c);
+        let c = crate::controls::Client { step: game_frame, ..*c };
+        let changed = crate::controls::update_controls(self, keys, &c);
         let dt_s = (now_ms - self.scene.time).clamp(0, 100) as f32 / 1000.0;
         self.scene.time = now_ms;
         let next = self.cam.effect.sample;
@@ -435,6 +437,15 @@ impl crate::controls::Walk for Walker {
     }
     fn orbit_right(&mut self, t: F<Ee>) {
         self.cam.orbit_right(t);
+    }
+    fn manual_terp(&self) -> F<Ee> {
+        self.cam.effect.manual_terp
+    }
+    fn manual_hpr(&self) -> Vect3<Ee> {
+        self.cam.effect.manual_hpr
+    }
+    fn set_manual_hpr(&mut self, v: Vect3<Ee>) {
+        self.cam.effect.manual_hpr = v;
     }
 }
 

@@ -31,8 +31,16 @@
 //! because WASD walks there, a pad's left stick (`walker::Controls`, with the
 //! client's own right stick on I/J/K/L).
 //!
-//! Not here: the modal look (mode 38, which holding L1 or R1 begins; the
-//! camera effect's blend into a scripted camera is not ported).
+//! The manual camera (mode 38, `IsModal`: L1 or R1 held, `Play`'s
+//! `begin_manual_camera`), once its blend is all the way in (`ManualTerp`
+//! 1): the right stick looks, its heading and pitch the effect's
+//! (`SetManualHpr`), 0.05 a frame of the game's at full tilt (`Client::step`:
+//! a step counted in frames, `frames.rs`), the pitch the other way round
+//! under Camera Pitch Axis whatever the camera, held short of straight up or
+//! down; the body turns to the look once it is about 18 degrees off (every
+//! frame drawn, as `SetTargetHeading` is a turn's push for the frame), but in
+//! the orbit camera. Movement and the rest of the camera are locked meanwhile
+//! (`UpdateMode` leaves `SetP06DC0(0, 0)`: `Client::move_ok`, `look_ok`).
 //!
 //! The client's own, not the game's: `Client::steer`, the mouse steering the
 //! body (`mouse.rs`: its right button in the follow orbit, either button in
@@ -92,11 +100,16 @@ pub struct Client {
     pub run_speed: f32,
     /// `m_walkCam.m_walkSpeed` as `SetSpeed` last set it
     pub walk_speed: f32,
+    /// `IsModal`: the manual camera (mode 38)
+    pub modal: bool,
+    /// One of the game's frames (`frames.rs`): what this counts in frames
+    /// (the manual look's step) moves only then. `Walker::frame_with` sets it.
+    pub step: bool,
 }
 
 impl Default for Client {
     fn default() -> Self {
-        Client { has_chat: false, inverted: false, auto_attack: false, swung: false, target: None, autorun: false, casting: false, move_ok: true, look_ok: true, rooted: false, timed_out: false, keys: [0.0; 8], steer: false, follow: Follow::Off, run_speed: vi::walk::RUN_SPEED, walk_speed: 3.0 }
+        Client { has_chat: false, inverted: false, auto_attack: false, swung: false, target: None, autorun: false, casting: false, move_ok: true, look_ok: true, rooted: false, timed_out: false, keys: [0.0; 8], steer: false, follow: Follow::Off, run_speed: vi::walk::RUN_SPEED, walk_speed: 3.0, modal: false, step: true }
     }
 }
 
@@ -147,6 +160,12 @@ pub trait Walk {
     fn set_target_heading(&mut self, h: Fe);
     fn orbit_in(&mut self, t: Fe);
     fn orbit_right(&mut self, t: Fe);
+    /// `m_walkCam.m_effect.ManualTerp()`
+    fn manual_terp(&self) -> Fe;
+    /// `m_walkCam.m_effect.ManualHpr()`
+    fn manual_hpr(&self) -> Vect3<Ee>;
+    /// `m_walkCam.m_effect.SetManualHpr`
+    fn set_manual_hpr(&mut self, v: Vect3<Ee>);
 }
 
 /// `UpdateControls` up to `Process`, with the sticks `keys` (rx, ry, lx,
@@ -172,6 +191,29 @@ pub fn update_controls(w: &mut impl Walk, keys: [f32; 4], c: &Client) -> Changed
     let mode = w.camera_mode();
     if c.inverted && (mode == 2 || mode == 0) {
         pitch = -pitch;
+    }
+    // the manual camera all the way in: the right stick looks, and the body
+    // turns to the look (the module's doc)
+    if c.modal && w.manual_terp() == Fe::ONE {
+        let mut look = w.manual_hpr();
+        if c.step {
+            look.x = look.x + k[0] * f(-0.05);
+            let dp = k[1] * f(0.05);
+            look.y = look.y + if c.inverted { -dp } else { dp };
+            look.y = vi::fpu::clamp(look.y, f(-1.5607964), f(1.5607964));
+            if look.x < Fe::ZERO {
+                look.x = look.x + f(TWO_PI);
+            } else if f(TWO_PI) <= look.x {
+                look.x = look.x - f(TWO_PI);
+            }
+            w.set_manual_hpr(look);
+        }
+        if mode != 3 {
+            let a = w.heading();
+            if look.x.sinf() * a.sinf() + look.x.cosf() * a.cosf() < f(0.95) {
+                w.set_target_heading(look.x);
+            }
+        }
     }
     match mode {
         0 | 2 => turn = if c.has_chat { -k[0] } else { -k[0] + kb(17) - kb(18) },
@@ -386,11 +428,14 @@ mod tests {
         orbit: f32,
         liquid: bool,
         calls: Vec<String>,
+        /// the camera effect's `ManualTerp` and `ManualHpr`
+        terp: f32,
+        look: Vect3<Ee>,
     }
 
     impl Log {
         fn new(mode: i32) -> Self {
-            Log { mode, heading: 0.0, orbit: PI, liquid: false, calls: Vec::new() }
+            Log { mode, heading: 0.0, orbit: PI, liquid: false, calls: Vec::new(), terp: 0.0, look: Vect3::default() }
         }
     }
 
@@ -445,6 +490,15 @@ mod tests {
         }
         fn orbit_right(&mut self, t: Fe) {
             self.calls.push(format!("right {}", t.0));
+        }
+        fn manual_terp(&self) -> Fe {
+            Fe::new(self.terp)
+        }
+        fn manual_hpr(&self) -> Vect3<Ee> {
+            self.look
+        }
+        fn set_manual_hpr(&mut self, v: Vect3<Ee>) {
+            self.look = v;
         }
     }
 
@@ -700,5 +754,82 @@ mod tests {
         let c = Client { has_chat: true, ..Client::default() };
         assert_eq!(run(0, STICKS, c).0, ["move 1 -0.75", "turn -0.5", "pitch 0.25"]);
         assert_eq!(run(3, STICKS, c).0, ["vmove 1 -0.75", "in -0.25", "right 0.5"]);
+    }
+
+    /// The manual camera all the way in, a step: the look's heading turns by
+    /// rx * -0.05 and its pitch by ry * 0.05 (the other way round under the
+    /// Camera Pitch Axis option, in every camera, where the plain pitch turns
+    /// round in 0 and 2 only); the body is turned to the look once it is
+    /// about 18 degrees off it, but not in the orbit camera. The controls:
+    /// not modal, or the blend not all the way in, the look stays.
+    #[test]
+    fn the_manual_camera_looks_on_the_right_stick() {
+        let modal = Client { modal: true, move_ok: false, look_ok: false, ..Client::default() };
+        let look = |mode: i32, keys: [f32; 4], c: Client, terp: f32, from: [f32; 3], heading: f32| {
+            let mut w = Log::new(mode);
+            w.terp = terp;
+            w.look = Vect3::of(from[0], from[1], from[2]);
+            w.heading = heading;
+            update_controls(&mut w, keys, &c);
+            (w.look.to_array(), w.calls)
+        };
+        let (l, calls) = look(0, [0.5, 0.25, 0.0, 0.0], modal, 1.0, [1.0, 0.1, 0.0], 1.0);
+        assert_eq!(l, [(Fe::new(1.0) + Fe::new(0.5) * Fe::new(-0.05)).0, (Fe::new(0.1) + Fe::new(0.25) * Fe::new(0.05)).0, 0.0]);
+        // 0.025 off the body: no turn; the locks hold the rest
+        assert_eq!(calls, ["move 0 0", "turn 0", "pitch 0"]);
+        // under the option the pitch turns round in the orbit camera too
+        let inv = Client { inverted: true, ..modal };
+        assert_eq!(look(3, [0.0, 1.0, 0.0, 0.0], inv, 1.0, [1.0, 0.1, 0.0], 1.0).0[1], (Fe::new(0.1) + -(Fe::new(1.0) * Fe::new(0.05))).0);
+        assert_eq!(look(3, [0.0, 1.0, 0.0, 0.0], modal, 1.0, [1.0, 0.1, 0.0], 1.0).0[1], (Fe::new(0.1) + Fe::new(1.0) * Fe::new(0.05)).0);
+        // held short of straight down and up, and the heading kept in [0, 2pi)
+        assert_eq!(look(0, [0.0, 1.0, 0.0, 0.0], modal, 1.0, [1.0, 1.55, 0.0], 1.0).0[1], 1.5607964);
+        assert_eq!(look(0, [0.0, -1.0, 0.0, 0.0], modal, 1.0, [1.0, -1.55, 0.0], 1.0).0[1], -1.5607964);
+        let wrapped = look(0, [1.0, 0.0, 0.0, 0.0], modal, 1.0, [0.01, 0.0, 0.0], 0.01).0[0];
+        assert!(wrapped > 6.2 && wrapped < TWO_PI, "{wrapped}");
+        // 20 degrees off the body: turned to it, every frame (not a step's)
+        let off = 1.0 + 20f32.to_radians();
+        let (_, calls) = look(0, [0.0; 4], Client { step: false, ..modal }, 1.0, [off, 0.0, 0.0], 1.0);
+        assert_eq!(calls[0], format!("heading {off:.3}"));
+        let (_, calls) = look(2, [0.0; 4], modal, 1.0, [off, 0.0, 0.0], 1.0);
+        assert_eq!(calls[0], format!("heading {off:.3}"));
+        // the orbit camera's body stays
+        assert!(!look(3, [0.0; 4], modal, 1.0, [off, 0.0, 0.0], 1.0).1.iter().any(|c| c.starts_with("heading")));
+        // 15 degrees off: not yet
+        assert!(!look(0, [0.0; 4], modal, 1.0, [1.0 + 15f32.to_radians(), 0.0, 0.0], 1.0).1.iter().any(|c| c.starts_with("heading")));
+        // the controls: no manual camera, its blend under way, no step
+        assert_eq!(look(0, [0.5, 0.25, 0.0, 0.0], Client::default(), 1.0, [1.0, 0.1, 0.0], 1.0).0, [1.0, 0.1, 0.0]);
+        assert_eq!(look(0, [0.5, 0.25, 0.0, 0.0], modal, 0.5, [1.0, 0.1, 0.0], 1.0).0, [1.0, 0.1, 0.0]);
+        assert_eq!(look(0, [0.5, 0.25, 0.0, 0.0], Client { step: false, ..modal }, 1.0, [1.0, 0.1, 0.0], 1.0).0, [1.0, 0.1, 0.0]);
+    }
+
+    /// The look steps a frame of the game's: a second of the right stick
+    /// held turns it the same 1.5 radians drawn at 30 and at 165 frames a
+    /// second (`frames.rs`'s clock gives `step`). The control: stepped every
+    /// frame drawn, 165 Hz turns it more than five times as far.
+    #[test]
+    fn the_manual_look_turns_as_far_at_30_and_165_hz() {
+        let turned = |hz: f64, every_frame: bool| {
+            let mut w = Log::new(0);
+            w.terp = 1.0;
+            w.look = Vect3::of(3.0, 0.0, 0.0);
+            w.heading = 3.0;
+            let mut clock = crate::frames::Frames::default();
+            let mut total = 0.0;
+            for i in 0..hz as usize {
+                let step = clock.due(i as f64 * 1000.0 / hz) || every_frame;
+                let c = Client { modal: true, move_ok: false, look_ok: false, step, ..Client::default() };
+                let before = w.look.x.0;
+                update_controls(&mut w, [1.0, 0.0, 0.0, 0.0], &c);
+                // through the wrap at 0
+                let d = before - w.look.x.0;
+                total += if d < -PI { d + TWO_PI } else { d };
+            }
+            total
+        };
+        for hz in [30.0, 165.0] {
+            let t = turned(hz, false);
+            assert!((t - 1.5).abs() < 0.051, "{hz} Hz: turned {t}");
+        }
+        assert!(turned(165.0, true) > 5.0 * 1.5, "the control: every frame drawn");
     }
 }

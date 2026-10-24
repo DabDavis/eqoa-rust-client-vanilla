@@ -29,6 +29,7 @@ use vi::fpu::{Ee, F};
 use vi::geom::Matrix44;
 use vi::hsprite::AnimScene;
 use vi::vect::Vect3;
+use vi::camera::WalkCamera;
 use vi::walk::{WalkControl, WalkPhysics};
 
 /// `gEntityUpdateRate`.
@@ -146,8 +147,20 @@ pub struct Play {
     rooted: bool,
     /// `m_p06DC0` and `m_p06DC4`: movement and the camera allowed
     /// (`ApplyRaceCamera` takes both away while the start menu frames the
-    /// character, `ApplyDefaultCamera` gives them back).
+    /// character, `ApplyDefaultCamera` gives them back; the manual camera's
+    /// `UpdateMode` 38 too, `Refresh` gives them back).
     locks: (bool, bool),
+    /// `VIWndGame`'s `m_p03C` and `m_p040`: L1 or R1 pressed in play, and
+    /// when (the session's clock); still held 300 ms on with nothing else
+    /// up, the manual camera begins (`manual_frame`).
+    aim_hold: bool,
+    aim_at: u32,
+    /// The manual camera begun and not ended by `ResetView` (the client's:
+    /// `manual_frame` ends what a window's `SetMode` left behind).
+    manual_on: bool,
+    /// `DrawReticle`'s static `s_reticleAlpha`: 1 as the target changes,
+    /// then 0.05 less a frame of the game's, down to 0.5.
+    reticle_alpha: F<Ee>,
     /// `m_p50318`: the pad's mode last frame (1 a DualShock read).
     pad_mode: i32,
     /// `CycleTarget`'s static `lastGroup`.
@@ -440,10 +453,9 @@ impl Play {
     /// (`m_player.m_p40`, `ReadSigned` into an int); when they change,
     /// `QuestStage(byte, change)`: sound 7 with the byte, word 625 ("You
     /// have received more training points!") in a dialog (`b` 0), and the
-    /// trainer refreshed (`VIWndGame::Msg001D`). Its `ResetView`, while
-    /// `IsModal` (the manual camera, mode 38), has nothing to undo here: the
-    /// manual camera is not ported.
-    fn msg_0036(&mut self, data: &[u8]) {
+    /// trainer refreshed (`VIWndGame::Msg001D`); before the dialog, the
+    /// manual camera (mode 38) ended (`ResetView`).
+    fn msg_0036<S: vi::scene::Scene<Ee>>(&mut self, data: &[u8], cam: &mut WalkCamera<Ee>, scene: &mut S) {
         let mut r = net::stream::Reader::new(data);
         let flag = r.u8();
         let points = r.signed() as i32 as i64;
@@ -456,6 +468,9 @@ impl Play {
             eprintln!("play: training points {old} -> {points} (0x0036)");
             if flag != 0 {
                 self.cues.push(crate::sound::Cue::Ui(7));
+            }
+            if self.mode == 38 {
+                self.reset_view_on(cam, scene);
             }
             let text = self.words.as_ref().map_or_else(|| "(word 625)".to_string(), |w| w.get(625, 0).to_string());
             self.show_dialog_b(&vi::ui::wide(&text), false);
@@ -900,13 +915,62 @@ fn v3(a: [f32; 3]) -> Vect3<Ee> {
     Vect3::of(a[0], a[1], a[2])
 }
 
+/// What `TargetCentre` reads of a creature with an actor: its id, where it is
+/// measured (a character's slot 4, else its place), its +0x18 bit 0 (the
+/// selectable flag) and whether it is of a player's side (`m_p256` 3).
+#[derive(Clone, Copy, Debug)]
+struct Seen {
+    id: u32,
+    at: [f32; 3],
+    selectable: bool,
+    side: bool,
+}
+
+/// `TargetCentre`'s choice: of the creatures `seen`, not the player `me`,
+/// not the pet, none of a player's side, the selectable ones in view
+/// (`view_proj`'s frustum: `m_frustum.Cull(pos, 0)`) the one whose place lies
+/// nearest the middle of the picture through `game` (x and y after the
+/// divide), the first of equals; none when there is none.
+fn centre_choice(seen: &[Seen], me: Option<u32>, pet: u32, game: glam::Mat4, view_proj: glam::Mat4) -> Option<u32> {
+    let (mut best, mut best_d) = (None, 999999.0f32);
+    for s in seen {
+        if Some(s.id) == me || s.id == pet || s.side || !s.selectable {
+            continue;
+        }
+        let pos = glam::Vec3::from(s.at).extend(1.0);
+        let h = view_proj * pos;
+        if !(h.w > 0.0 && (h.x / h.w).abs() <= 1.0 && (h.y / h.w).abs() <= 1.0 && h.z / h.w >= 0.0 && h.z / h.w <= 1.0) {
+            continue;
+        }
+        let g = game * pos;
+        let inv = 1.0 / g.w;
+        let (x, y) = (g.x * inv, g.y * inv);
+        let d = (x * x + y * y).sqrt();
+        if d < best_d {
+            best_d = d;
+            best = Some(s.id);
+        }
+    }
+    best
+}
+
+/// `DrawReticle`'s alpha: on a new target (`flash`) full, else what it was;
+/// the next frame's 0.05 less, down to 0.5. (drawn, next)
+fn reticle_step(alpha: F<Ee>, flash: bool) -> (F<Ee>, F<Ee>) {
+    let a = if flash { F::ONE } else { alpha };
+    let next = a - F::new(0.05);
+    (a, if next < F::new(0.5) { F::new(0.5) } else { next })
+}
+
 /// `UpdateGame`'s `SetActorVisibility` for the player's own actor, from
 /// whether it was shown, the camera mode, whether the player is dead, the
 /// distance from the camera to the head and the creature's npc flags:
 /// whether it is shown now, and `m_p00088` (the follow camera is inside the
 /// head).
-fn own_actor_shown(was: bool, mode: i32, dead: bool, head_to_camera: F<Ee>, npc_flags: u16) -> (bool, bool) {
+fn own_actor_shown(was: bool, mode: i32, dead: bool, head_to_camera: F<Ee>, npc_flags: u16, manual_in: bool) -> (bool, bool) {
     let (shown, inside) = match mode {
+        // first person, or the manual camera all the way in
+        _ if manual_in => (was && dead, false),
         0 => (was && dead, false),
         2 if head_to_camera < F::new(0.8) => (false, true),
         _ => (true, false),
@@ -939,10 +1003,18 @@ mod own_actor {
             ((true, 3, false, far, 0x1FF), (true, false)),
         ];
         for ((was, mode, dead, d, flags), want) in cases {
-            assert_eq!(own_actor_shown(was, mode, dead, d, flags), want, "{:?}", (was, mode, dead, d, flags));
+            assert_eq!(own_actor_shown(was, mode, dead, d, flags, false), want, "{:?}", (was, mode, dead, d, flags));
         }
         let always = |_: bool, _: i32, _: bool, _: F<Ee>, _: u16| (true, false);
         assert!(cases.iter().any(|&((w, m, de, d, f), want)| always(w, m, de, d, f) != want), "the control must fail");
+        // the manual camera all the way in hides it as first person does,
+        // whatever the camera (a dead player's keeps what it had); the
+        // control: the same cases without it show it
+        for mode in [1, 2, 3] {
+            assert_eq!(own_actor_shown(true, mode, false, far, 0, true), (false, false), "mode {mode}");
+            assert_eq!(own_actor_shown(true, mode, true, far, 0, true), (true, false), "mode {mode}, dead");
+            assert_eq!(own_actor_shown(true, mode, false, far, 0, false), (true, false), "mode {mode}: the control");
+        }
     }
 }
 
@@ -1071,7 +1143,7 @@ impl Play {
         crate::s2::begin_session();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: 0, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), slot_asked: None, walks: (0..MAX_SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0 };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: 0, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), slot_asked: None, walks: (0..MAX_SLOTS).map(|_| None).collect(), self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0 };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -1400,7 +1472,7 @@ impl Play {
                 }
                 Event::Opcode { op: 0x07E2, data } => self.factions.recv(&data),
                 // the training points as they now are (a level's, a refund's)
-                Event::Opcode { op: 0x0036, data } => self.msg_0036(&data),
+                Event::Opcode { op: 0x0036, data } => self.msg_0036(&data, &mut walker.cam, &mut walker.scene),
                 Event::Opcode { op: 0x001C, data } => self.msg_001c(&data),
                 // OutMatched: the fight refused, said in red, auto-attack off
                 Event::Opcode { op: 0x077A, .. } => self.msg_077a(),
@@ -1989,6 +2061,7 @@ impl Play {
                 self.death_eye = None;
             }
         }
+        self.manual_frame(walker, game_frame);
         new_model
     }
 
@@ -2111,7 +2184,7 @@ impl Play {
         // UpdateGame: the target info stops counting while the target's
         // +0x19 is 0
         let valid = self.target_info.is_some() && !self.entities.slots.iter().flatten().any(|e| Some(e.id) == target && e.p19 == 0);
-        let tris = self.rings.frame(lib, walker, aim, me, valid, self.cam_inside, view_proj, step);
+        let tris = self.rings.frame(lib, walker, aim, me, valid, self.cam_inside, self.mode == 38, view_proj, step);
         r.set_overlay(device, queue, view_proj, &tris, &render::library_textures(lib));
     }
 
@@ -2242,6 +2315,213 @@ impl Play {
         w.u32(0).u32(self.target);
         self.session.send(&w.data);
         self.last_group = group;
+    }
+
+    /// `VIWndGame::OnKeyDown`'s L1 and R1 in play (` and Tab on the
+    /// keyboard): the cycle (`CycleTarget`), and the hold begun (`m_p03C`,
+    /// `m_p040`): still held 300 ms on, the manual camera (`manual_frame`).
+    pub fn target_key(&mut self, group: bool, eye: glam::Vec3, dir: glam::Vec3, view_proj: glam::Mat4) {
+        self.cycle_target(group, eye, dir, view_proj);
+        self.aim_hold = true;
+        self.aim_at = self.session.now();
+    }
+
+    /// `VIWndGame::OnKeyUp`'s L1 and R1: the manual camera ended
+    /// (`ResetView`), or in play the hold given up.
+    pub fn target_key_up(&mut self, walker: &mut Walker) {
+        self.target_key_up_on(&mut walker.cam, &mut walker.scene);
+    }
+
+    fn target_key_up_on<S: vi::scene::Scene<Ee>>(&mut self, cam: &mut WalkCamera<Ee>, scene: &mut S) {
+        if self.mode == 38 {
+            self.reset_view_on(cam, scene);
+        } else if self.mode == 0 {
+            self.aim_hold = false;
+        }
+    }
+
+    /// The manual camera is up (mode 38, `IsModal`).
+    pub fn aiming(&self) -> bool {
+        self.mode == 38
+    }
+
+    /// A window is up: neither play nor the manual camera, which keeps play's
+    /// HUD (and the touch screen's whole pad).
+    pub fn window_up(&self) -> bool {
+        self.mode != 0 && self.mode != 38
+    }
+
+    /// `FindEntity(m_selfId)`: the player's own entity is in.
+    fn self_entity(&self) -> bool {
+        let me = self.self_id32();
+        me.is_some() && self.entities.slots.iter().flatten().any(|e| Some(e.id) == me)
+    }
+
+    /// The player's eye as the manual camera holds it: the actor's place
+    /// (`GetActorPos`: where the walker drew it), the race camera's `m_p34`
+    /// above it.
+    fn manual_eye(&self) -> Option<Vect3<Ee>> {
+        let (at, _) = self.self_at.filter(|_| self.self_entity())?;
+        let mut pos = v3(at);
+        pos.y += F::new(self.race_camera().map_or(1.68, |r| r.p34));
+        Some(pos)
+    }
+
+    /// `VIClient::BeginManualCamera` (L1 or R1 held): the eye held at the
+    /// player's own (`manual_eye`), looking the walk's way in first person
+    /// and the fixed follow, the view's (`dir`, the camera's) in the orbit
+    /// camera, read back as euler angles off its basis under world up; the
+    /// pitch short of straight up or down; blended in over 0.2 s, at once
+    /// from first person; nothing in the free orbit (mode 1). Then
+    /// `ManualCameraBegun`: mode 38, and `UpdateMode` (the attack as the Auto
+    /// Attack option keeps it, movement and the camera locked).
+    fn begin_manual_camera(&mut self, cam: &mut WalkCamera<Ee>, dir: Vect3<Ee>) {
+        let Some(pos) = self.manual_eye() else { return };
+        let mut hpr = match cam.camera_mode {
+            0 | 2 => cam.walk.committed.angles,
+            3 => {
+                // `m_camera.m_dir`: unit, as VICamera::CalcAxes keeps it
+                let mut dir = dir;
+                dir.normalize();
+                let mut up = Vect3::of(0.0, 1.0, 0.0);
+                let mut right = Vect3::cross(&up, &dir);
+                up = Vect3::cross(&dir, &right);
+                right.normalize();
+                up.normalize();
+                let mut m = Matrix44::<Ee>::identity();
+                (m.m[0].x, m.m[0].y, m.m[0].z) = (right.x, right.y, right.z);
+                (m.m[1].x, m.m[1].y, m.m[1].z) = (up.x, up.y, up.z);
+                (m.m[2].x, m.m[2].y, m.m[2].z) = (dir.x, dir.y, dir.z);
+                m.euler_zxy()
+            }
+            _ => return,
+        };
+        hpr.y = vi::fpu::clamp(hpr.y, F::new(-1.5607964), F::new(1.5607964));
+        let time = if cam.camera_mode != 0 { F::new(0.2) } else { F::ZERO };
+        cam.effect.begin_manual(pos, hpr, time);
+        self.manual_on = true;
+        self.mode = 38;
+        self.attack_release();
+        self.locks = (false, false);
+    }
+
+    /// `VIClient::ResetView` (L1 or R1 let go; the chat line opened over the
+    /// manual camera; a quest stage's dialog): out of the manual camera. Out
+    /// of the orbit camera the walk is set where it stands facing the look's
+    /// heading (the player turned to where it looked), and the follow
+    /// camera put behind it; the orbit camera is put behind the look. Blended
+    /// back out over 0.2 s, at once in first person; then `VIWndGame::Refresh`:
+    /// play again (`UpdateMode` 0: movement and the camera free).
+    pub fn reset_view(&mut self, walker: &mut Walker) {
+        self.reset_view_on(&mut walker.cam, &mut walker.scene);
+    }
+
+    fn reset_view_on<S: vi::scene::Scene<Ee>>(&mut self, cam: &mut WalkCamera<Ee>, scene: &mut S) {
+        if !self.self_entity() {
+            return;
+        }
+        self.manual_on = false;
+        let pi = F::<Ee>::new(std::f32::consts::PI);
+        if cam.camera_mode != 3 {
+            let mut p = cam.walk.committed;
+            p.angles.x = cam.effect.manual_hpr.x;
+            // (and the entity's SetHpr: the walker is the player's entity)
+            cam.walk.set_location(p.position, p.angles, scene);
+            if cam.camera_mode != 0 {
+                let a = cam.walk.committed.angles.x + pi;
+                cam.choose_orbit_angle(a, scene);
+                cam.effect.end_manual(F::new(0.2));
+            } else {
+                cam.effect.end_manual(F::ZERO);
+            }
+        } else {
+            let a = cam.effect.manual_hpr.x + pi;
+            cam.choose_orbit_angle(a, scene);
+            cam.effect.end_manual(F::new(0.2));
+        }
+        self.mode = 0;
+        self.attack_release();
+        self.locks = (true, true);
+    }
+
+    /// `UpdateGame`'s manual camera, a frame drawn: the eye kept at the
+    /// player's own as the body moves (`SetManualXyz`); and a frame of the
+    /// game's, `VIWndGame::OnDrawSelf`'s hold: L1 or R1 held 300 ms on in play
+    /// begins it, and any window up (the map and the search too) gives the
+    /// hold up. The client's own: a manual camera that a window's `SetMode`
+    /// took mode 38 from (a teleport, a respawn) ends at once, where the PS2
+    /// holds the eye where it was until the next look; and one whose walker
+    /// was built again under it (a world change) leaves mode 38.
+    fn manual_frame(&mut self, walker: &mut Walker, game_frame: bool) {
+        let dir = walker.eye.direction;
+        self.manual_frame_on(&mut walker.cam, dir, game_frame);
+    }
+
+    fn manual_frame_on(&mut self, cam: &mut WalkCamera<Ee>, dir: Vect3<Ee>, game_frame: bool) {
+        if self.mode == 38 {
+            if let Some(pos) = self.manual_eye() {
+                cam.effect.manual_xyz = pos;
+            }
+            if cam.effect.manual_terp == F::ZERO && cam.effect.manual_terp_rate == F::ZERO {
+                self.manual_on = false;
+                self.mode = 0;
+                self.locks = (true, true);
+            }
+        } else if self.manual_on {
+            cam.effect.end_manual(F::ZERO);
+            self.manual_on = false;
+        }
+        if game_frame {
+            let now = self.session.now();
+            let busy = self.mode != 0 || self.map.open || self.search.open || self.typing.is_some();
+            if self.aim_hold && now.wrapping_sub(self.aim_at) as i32 > 300 && !busy {
+                self.begin_manual_camera(cam, dir);
+                self.aim_hold = false;
+            }
+            if self.mode != 0 || busy {
+                self.aim_at = now;
+                self.aim_hold = false;
+            }
+        }
+    }
+
+    /// `VIClient::TargetCentre` (the manual camera all the way in, a frame of
+    /// the game's), measured through the game's camera (`walker.view(4/3)`:
+    /// the frame's 10/7 across a 4:3 picture, as the console measures) and in
+    /// view as drawn (`view_proj`: a wider window's sides count). True when
+    /// the target changed (`DrawReticle(1)`).
+    fn target_centre(&mut self, walker: &Walker, view_proj: glam::Mat4) -> bool {
+        let (proj, view) = walker.view(4.0 / 3.0);
+        let seen: Vec<Seen> = self
+            .entities
+            .slots
+            .iter()
+            .zip(&self.puppets)
+            .filter_map(|(e, p)| {
+                let (e, p) = (e.as_ref()?, p.as_ref()?);
+                let at = p.sprite.as_ref().and(p.slot4_at).unwrap_or(e.actor_pos);
+                Some(Seen { id: e.id, at, selectable: e.p18 & 1 != 0, side: e.creature.as_ref().is_some_and(|c| c.p256 == 3) })
+            })
+            .collect();
+        let choice = centre_choice(&seen, self.self_id32(), self.pet_id, proj * view, view_proj);
+        self.centre_target(choice)
+    }
+
+    /// `TargetCentre`'s choice made the target: a change stops the attack,
+    /// drops the target's info and asks the server (0x0010, the token 0),
+    /// even for none. True when it changed.
+    fn centre_target(&mut self, choice: Option<u32>) -> bool {
+        let old = self.target;
+        self.target = choice.unwrap_or(u32::MAX);
+        if old == self.target {
+            return false;
+        }
+        self.auto_attack = false;
+        self.target_info = None;
+        let mut w = net::stream::Writer::op(0x0010);
+        w.u32(0).u32(self.target);
+        self.session.send(&w.data);
+        true
     }
 
     /// A world change for the viewer to carry out (`EnterWorld` -> `LoadWorld`).
@@ -2462,9 +2742,9 @@ impl Play {
     /// waiting). False in play.
     pub fn window_wheel(&mut self, lines: f32) -> bool {
         use crate::pointer::key;
-        if (self.mode == 0 && !self.search.open) || self.quick_dpad() {
+        if ((self.mode == 0 || self.mode == 38) && !self.search.open) || self.quick_dpad() {
             self.wheel = 0.0;
-            return self.mode != 0;
+            return self.mode != 0 && self.mode != 38;
         }
         self.wheel += lines;
         while self.wheel.abs() >= 1.0 {
@@ -2853,15 +3133,17 @@ impl Play {
     /// `ResetCamera` having left first person); in the follow camera (2)
     /// hidden while the camera is within 0.8 of the head, `m_targetHeight`
     /// above where the actor last stood (`m_p00088`); shown otherwise; and
-    /// hidden whatever the camera while its creature carries npc flag 0x200.
-    /// The manual camera (mode 38) that also hides it is not ported.
+    /// hidden whatever the camera while its creature carries npc flag 0x200;
+    /// and hidden, as first person hides it, while the manual camera (mode
+    /// 38) is all the way in (`ManualTerp` 1).
     fn self_visibility(&mut self, walker: &Walker) {
         let mut d = self.self_at.map_or_else(|| walker.cam.walk.phys.smooth_location(), |(at, _)| v3(at));
         d.y += walker.cam.target_height;
         d -= walker.eye.position;
         let me = self.self_id32();
         let flags = self.entities.slots.iter().flatten().find(|e| Some(e.id) == me).and_then(|e| e.creature.as_ref()).map_or(0, |c| c.npc_flags);
-        (self.self_shown, self.cam_inside) = own_actor_shown(self.self_shown, walker.cam.camera_mode, self.death.is_some(), d.magnitude(), flags);
+        let manual_in = self.mode == 38 && walker.cam.effect.manual_terp == F::ONE;
+        (self.self_shown, self.cam_inside) = own_actor_shown(self.self_shown, walker.cam.camera_mode, self.death.is_some(), d.magnitude(), flags, manual_in);
     }
 
     /// `ToggleP74`: autorun on or off, and the line saying so ("%S: %S",
@@ -2971,6 +3253,10 @@ impl Play {
             keys: [0.0; 8],
             // the mouse steering the body: the viewer's (`Mouse::steer`)
             steer: false,
+            // `IsModal`: the manual camera
+            modal: self.mode == 38,
+            // a frame of the game's: the walker's (`frame_with`)
+            step: true,
         }
     }
 
@@ -3034,7 +3320,8 @@ impl Play {
             self.chat_scroll_key(key, down);
             return true;
         }
-        if self.mode == 0 {
+        // play, and the manual camera (the game window's own keys)
+        if self.mode == 0 || self.mode == 38 {
             return false;
         }
         let k = match key {
@@ -3102,6 +3389,29 @@ impl Play {
             match key {
                 134 => self.attack_release(),
                 133 => self.info_up = false,
+                // L1, R1: the manual camera ended, or the hold given up
+                140 | 142 => self.target_key_up(walker),
+                _ => {}
+            }
+            return;
+        }
+        // The manual camera (mode 38): the HUD's quick menu has the keys, as
+        // in play (`UpdateMode`), its up, down and use; left and right light
+        // it and switch nothing (`Interact` and `Attack` are play's alone);
+        // R3 ends it and opens the chat line. Every other key of the game
+        // window's is play's (mode 0) and does nothing here.
+        if self.mode == 38 {
+            match key {
+                136 => self.hud_key(H::Left),
+                137 => self.hud_key(H::Right),
+                138 => self.hud_key(H::Up),
+                139 => self.hud_key(H::Down),
+                135 => self.hud_key(H::Use),
+                147 => {
+                    self.reset_view(walker);
+                    self.open_edit(0xB0F0000, 128, -1, false);
+                    self.edit.title = self.chat_title();
+                }
                 _ => {}
             }
             return;
@@ -3115,7 +3425,7 @@ impl Play {
             140 | 142 => {
                 let (proj, v) = walker.view(aspect);
                 let dir = glam::Vec3::from(walker.eye.direction.to_array());
-                self.cycle_target(key == 140, walker.eye_position(), dir, proj * v);
+                self.target_key(key == 140, walker.eye_position(), dir, proj * v);
             }
             136 => self.hud_key(H::Left),
             137 => self.hud_key(H::Right),
@@ -4683,13 +4993,15 @@ impl Play {
     /// A pad key for the HUD's quick menus in play (`VIWndHUDMenu::OnKeyDown`
     /// and `VIWndGame`'s left and right): using an ability sends 0x0032.
     pub fn hud_key(&mut self, key: crate::hudmenu::Key) {
-        if self.mode != 0 {
+        // in play, and in the manual camera (`UpdateMode` 38 gives the menu
+        // the keys as 0 does), where left and right switch nothing
+        if self.mode != 0 && self.mode != 38 {
             return;
         }
         let now = self.session.now() as i64;
         let bars = self.ability_bars();
         let mut cues = Vec::new();
-        let used = self.hud_menus.key(key, now, bars, &mut cues);
+        let used = self.hud_menus.key(key, now, bars, self.mode == 0, &mut cues);
         self.cues.extend(cues);
         if let Some((msg, id)) = used {
             match msg {
@@ -5372,7 +5684,7 @@ impl Play {
                 glyphs.push((b.glyph, (tex, uv, [e.uv1[0] as f32, e.uv1[1] as f32])));
             }
         }
-        touch.draw(ui, size, self.mode != 0, &|id| glyphs.iter().find(|g| g.0 == id).map(|g| g.1));
+        touch.draw(ui, size, self.window_up(), &|id| glyphs.iter().find(|g| g.0 == id).map(|g| g.1));
     }
 
     /// The HUD on a frame drawn: on one of the game's (`step`, `frames.rs`)
@@ -5408,6 +5720,9 @@ impl Play {
             ui.end();
             return;
         }
+        // UpdateGame's manual camera all the way in: `TargetCentre`, its
+        // crosshair drawn below (`DrawReticle`)
+        let reticle = (self.mode == 38 && walker.cam.effect.manual_terp == F::ONE).then(|| self.target_centre(walker, view_proj));
         // VIWndEdit::OnDrawSelf's `sPadOnly`: a keyboard in use and the
         // options' Soft Keyboard on show the compact face
         crate::editbox::set_pad_only(self.keyboard && self.options.compact != 0);
@@ -5499,6 +5814,21 @@ impl Play {
             // quick menus and the breath gauge up with the top; the target's
             // bar, the report's button and the chat box down with the bottom;
             // the target's details, the boxes and the menus in the middle.
+            // DrawReticle, before the HUD: ADDART.CSF's AT_Reticle.tga in the
+            // middle of the frame (blend 3, no dither), at full on a new
+            // target, then 0.05 less a frame of the game's down to half (the
+            // damage numbers, placed again every frame drawn, go under it
+            // here; the PS2 draws them after it)
+            if let Some(flash) = reticle {
+                use vi::ui::Raster;
+                let id = vi::ui::icon_id("AT_Reticle");
+                if r.has(id) {
+                    let (a, next) = reticle_step(self.reticle_alpha, flash);
+                    r.ui.anchor = Anchor::Middle;
+                    r.blit_full(id, 4, [320 - 16, 224 - 16], 3, a.0);
+                    self.reticle_alpha = next;
+                }
+            }
             // UpdateGame, before the HUD: while dead, "You have died." on a
             // bar in the middle, coming up over its first two seconds
             if let Some(d) = self.death.as_ref() {
@@ -5636,7 +5966,7 @@ impl Play {
             // UpdateQuickBars, then the menu up (the HUD's, in play; L2's
             // menus open over it without `UpdateMode`, so it stays up there;
             // a server's player search hides them while it is up)
-            if (self.mode == 0 || self.mode == 30) && !self.search.open {
+            if (self.mode == 0 || self.mode == 30 || self.mode == 38) && !self.search.open {
                 let bars = self.ability_bars();
                 self.hud_menus.build(&self.abilities, &self.dump.inventory.items, bars);
                 let abilities = &self.abilities;
@@ -5886,6 +6216,262 @@ mod commands {
 
     /// 0x0036 (case 0x0036, `QuestStage`): the training points as the server
     /// now has them, a refund's as a level's. A change sets them, says word
+    /// The player (0x100) in, drawn at (10, 0, 10), and a walk camera on the
+    /// test room there facing 0.5, in camera mode `mode`.
+    fn aim_rig(mode: i32) -> (Play, WalkCamera<Ee>, crate::camreach::testing::Room) {
+        let mut p = play();
+        p.entities.slots[0] = Some(net::entity::Entity { id: 0x100, kind: 130, ..Default::default() });
+        p.self_at = Some(([10.0, 0.0, 10.0], None));
+        let mut room = crate::camreach::testing::Room { t: 0, wall: f32::INFINITY };
+        let mut cam = WalkCamera::<Ee>::default();
+        cam.init(Vect3::of(10.0, 0.0, 10.0), Vect3::of(0.5, 0.0, 0.0), &mut room);
+        cam.set_camera_mode(mode);
+        (p, cam, room)
+    }
+
+    /// `VIWndGame::OnDrawSelf`'s hold: L1 or R1 pressed in play and still
+    /// held more than 300 ms on (a frame of the game's) begins the manual
+    /// camera (`BeginManualCamera`): mode 38, movement and the camera locked,
+    /// the eye at the player's (the race camera's 1.68 without CLIENT's
+    /// table), looking the walk's way in first person and the fixed follow,
+    /// at once from first person and over 0.2 s otherwise; the orbit camera
+    /// looks along the view, read back off its basis (here straight down
+    /// +z, heading 0, and a view 30 degrees down: pitch 30). The controls:
+    /// 200 ms is not yet, a frame not the game's waits, a window up gives the
+    /// hold up, the free orbit (mode 1) and no player begin nothing.
+    #[test]
+    fn a_hold_of_300_ms_begins_the_manual_camera() {
+        let along_z = Vect3::of(0.0, 0.0, 1.0);
+        for mode in [0, 2] {
+            let (mut p, mut cam, _) = aim_rig(mode);
+            p.aim_hold = true;
+            p.aim_at = p.session.now().wrapping_sub(200);
+            p.manual_frame_on(&mut cam, along_z, true);
+            assert_eq!((p.mode, p.aim_hold), (0, true), "mode {mode}: 200 ms, not yet");
+            p.aim_at = p.session.now().wrapping_sub(301);
+            p.manual_frame_on(&mut cam, along_z, false);
+            assert_eq!(p.mode, 0, "mode {mode}: not a frame of the game's");
+            p.manual_frame_on(&mut cam, along_z, true);
+            assert_eq!((p.mode, p.locks, p.aim_hold), (38, (false, false), false), "mode {mode}");
+            let e = cam.effect;
+            assert_eq!(e.manual_xyz.to_array(), [10.0, 1.68, 10.0]);
+            assert_eq!(e.manual_hpr.x.0, 0.5, "mode {mode}: the walk's heading");
+            let (terp, rate) = if mode == 0 { (1.0, 0.0) } else { (0.0, (F::<Ee>::ONE / F::new(0.2)).0) };
+            assert_eq!((e.manual_terp.0, e.manual_terp_rate.0), (terp, rate), "mode {mode}");
+        }
+        // the orbit camera: the view's way, its pitch read off the basis
+        let (mut p, mut cam, _) = aim_rig(3);
+        p.aim_hold = true;
+        p.aim_at = p.session.now().wrapping_sub(301);
+        let down = Vect3::of(0.0, -(30f32.to_radians().sin()), 30f32.to_radians().cos());
+        p.manual_frame_on(&mut cam, down, true);
+        assert_eq!(p.mode, 38);
+        let h = cam.effect.manual_hpr;
+        assert!(h.x.0.abs() < 1e-6 && (h.y.0 - 30f32.to_radians()).abs() < 1e-5, "{h:?}");
+        // the pitch held short of straight down
+        let (mut p, mut cam, _) = aim_rig(3);
+        p.aim_hold = true;
+        p.aim_at = p.session.now().wrapping_sub(301);
+        p.manual_frame_on(&mut cam, Vect3::of(0.0, -1.0, 1e-4), true);
+        assert_eq!(cam.effect.manual_hpr.y.0, 1.5607964);
+        // a window up: the hold given up
+        let (mut p, mut cam, _) = aim_rig(0);
+        p.aim_hold = true;
+        p.aim_at = p.session.now().wrapping_sub(400);
+        p.mode = 12;
+        p.manual_frame_on(&mut cam, along_z, true);
+        assert_eq!((p.mode, p.aim_hold), (12, false));
+        // the free orbit, and no player: nothing
+        let (mut p, mut cam, _) = aim_rig(1);
+        p.aim_hold = true;
+        p.aim_at = p.session.now().wrapping_sub(400);
+        p.manual_frame_on(&mut cam, along_z, true);
+        assert_eq!((p.mode, p.aim_hold, cam.effect.manual_terp.0), (0, false, 0.0));
+        let (mut p, mut cam, _) = aim_rig(0);
+        p.entities.slots[0] = None;
+        p.aim_hold = true;
+        p.aim_at = p.session.now().wrapping_sub(400);
+        p.manual_frame_on(&mut cam, along_z, true);
+        assert_eq!(p.mode, 0);
+    }
+
+    /// `ResetView`, L1 or R1 let go: out of the orbit camera the walk faces
+    /// the look's heading and the follow camera is put behind it, blended out
+    /// over 0.2 s (first person at once); the orbit camera is put behind the
+    /// look and its body keeps its heading; play again with movement and the
+    /// camera free. Let go in play, the hold is given up. The control:
+    /// without the player nothing changes.
+    #[test]
+    fn letting_go_ends_the_manual_camera_facing_the_look() {
+        let along_z = Vect3::of(0.0, 0.0, 1.0);
+        let begun = |mode: i32| {
+            let (mut p, mut cam, room) = aim_rig(mode);
+            p.aim_hold = true;
+            p.aim_at = p.session.now().wrapping_sub(301);
+            p.manual_frame_on(&mut cam, along_z, true);
+            assert_eq!(p.mode, 38, "mode {mode}");
+            cam.effect.manual_terp = F::ONE;
+            cam.effect.manual_terp_rate = F::ZERO;
+            cam.effect.manual_hpr.x = F::new(1.25);
+            (p, cam, room)
+        };
+        for mode in [0, 2, 3] {
+            let (mut p, mut cam, mut room) = begun(mode);
+            p.target_key_up_on(&mut cam, &mut room);
+            assert_eq!((p.mode, p.locks, p.manual_on), (0, (true, true), false), "mode {mode}");
+            let heading = cam.walk.committed.angles.x.0;
+            assert_eq!(heading, if mode == 3 { 0.5 } else { 1.25 }, "mode {mode}: the body's heading");
+            let rate = cam.effect.manual_terp_rate.0;
+            if mode == 0 {
+                assert_eq!((cam.effect.manual_terp.0, rate), (0.0, 0.0), "first person: at once");
+            } else {
+                assert_eq!((cam.effect.manual_terp.0, rate), (1.0, (F::<Ee>::new(-1.0) / F::new(0.2)).0), "mode {mode}: blended out");
+                // the camera behind: the body's heading in 2, the look's in 3
+                let behind = (F::<Ee>::new(if mode == 3 { 1.25 } else { heading }) + F::new(std::f32::consts::PI)).fmodf(F::new(std::f32::consts::TAU));
+                assert!((cam.cur.orbit.x.0 - behind.0).abs() < 1e-5, "mode {mode}: orbit {} behind {}", cam.cur.orbit.x.0, behind.0);
+            }
+        }
+        // let go in play: the hold given up
+        let (mut p, mut cam, mut room) = aim_rig(0);
+        p.aim_hold = true;
+        p.target_key_up_on(&mut cam, &mut room);
+        assert_eq!((p.mode, p.aim_hold), (0, false));
+        // the control: no player
+        let (mut p, mut cam, mut room) = begun(0);
+        p.entities.slots[0] = None;
+        p.target_key_up_on(&mut cam, &mut room);
+        assert_eq!((p.mode, cam.walk.committed.angles.x.0), (38, 0.5));
+    }
+
+    /// The manual camera a frame drawn: the eye follows the player's place
+    /// (`SetManualXyz`); a window's `SetMode` taking mode 38 from it ends it
+    /// at once (the client's), but a blend out after `ResetView` goes on
+    /// (the control); a camera built again under it leaves mode 38.
+    #[test]
+    fn the_manual_eye_follows_the_player_and_is_never_left_behind() {
+        let along_z = Vect3::of(0.0, 0.0, 1.0);
+        let (mut p, mut cam, mut room) = aim_rig(2);
+        p.aim_hold = true;
+        p.aim_at = p.session.now().wrapping_sub(301);
+        p.manual_frame_on(&mut cam, along_z, true);
+        p.self_at = Some(([12.0, 1.0, 9.0], None));
+        p.manual_frame_on(&mut cam, along_z, false);
+        assert_eq!(cam.effect.manual_xyz.to_array(), [12.0, (F::<Ee>::new(1.0) + F::new(1.68)).0, 9.0]);
+        // a window's SetMode
+        cam.effect.manual_terp = F::ONE;
+        cam.effect.manual_terp_rate = F::ZERO;
+        p.mode = 0;
+        p.manual_frame_on(&mut cam, along_z, false);
+        assert_eq!((cam.effect.manual_terp.0, p.manual_on), (0.0, false), "ended at once");
+        // the control: ResetView's blend out goes on
+        let (mut p, mut cam, _) = aim_rig(2);
+        p.aim_hold = true;
+        p.aim_at = p.session.now().wrapping_sub(301);
+        p.manual_frame_on(&mut cam, along_z, true);
+        cam.effect.manual_terp = F::ONE;
+        p.reset_view_on(&mut cam, &mut room);
+        p.manual_frame_on(&mut cam, along_z, false);
+        assert_eq!((cam.effect.manual_terp.0, cam.effect.manual_terp_rate.0), (1.0, (F::<Ee>::new(-1.0) / F::new(0.2)).0), "still blending out");
+        // a camera built again (a world change): mode 38 left
+        let (mut p, mut cam, _) = aim_rig(2);
+        p.aim_hold = true;
+        p.aim_at = p.session.now().wrapping_sub(301);
+        p.manual_frame_on(&mut cam, along_z, true);
+        cam.effect = Default::default();
+        p.manual_frame_on(&mut cam, along_z, false);
+        assert_eq!((p.mode, p.locks), (0, (true, true)));
+    }
+
+    /// `TargetCentre`'s choice, from a camera at the origin looking along +z
+    /// (the game's 55 degrees and 10/7; a 16:9 window drawn Hor+): the
+    /// selectable creature in view nearest the picture's middle, measured in
+    /// the game's picture: B, 0.3 up at 10, beats A, 0.5 to the side (in the
+    /// 4:3 picture's units, 0.058 against 0.067); the player, the pet, one of
+    /// a player's side, one not selectable and one behind the camera never;
+    /// one at the wide window's edge only when nothing else is in view, and
+    /// none at all is none. The controls: measured through the 16:9 view as
+    /// drawn, A would be nearer.
+    #[test]
+    fn the_target_is_the_creature_nearest_the_middle() {
+        let view = glam::camera::rh::view::look_to_mat4(glam::Vec3::ZERO, glam::Vec3::Z, glam::Vec3::Y);
+        let game = crate::walker::projection_to(4.0 / 3.0, 6000.0) * view;
+        let drawn = crate::walker::projection_to(16.0 / 9.0, 6000.0) * view;
+        let seen = |id: u32, at: [f32; 3]| Seen { id, at, selectable: true, side: false };
+        let a = seen(1, [0.5, 0.0, 10.0]);
+        let b = seen(2, [0.0, 0.3, 10.0]);
+        let others = [
+            seen(0x100, [0.0, 0.0, 10.0]),
+            seen(7, [0.0, 0.0, 10.0]),
+            Seen { side: true, ..seen(3, [0.0, 0.0, 10.0]) },
+            Seen { selectable: false, ..seen(4, [0.0, 0.0, 10.0]) },
+            seen(5, [0.0, 0.0, -10.0]),
+        ];
+        let mut all = vec![a, b];
+        all.extend(others);
+        assert_eq!(centre_choice(&all, Some(0x100), 7, game, drawn), Some(2));
+        // the wide window's edge: past the 4:3 picture's side, in the 16:9 one
+        let edge = seen(6, [8.5, 0.0, 10.0]);
+        assert_eq!(centre_choice(&[edge, a], Some(0x100), 7, game, drawn), Some(1));
+        assert_eq!(centre_choice(&[edge], Some(0x100), 7, game, drawn), Some(6));
+        assert_eq!(centre_choice(&others, Some(0x100), 7, game, drawn), None);
+        // the control: measured as drawn
+        assert_eq!(centre_choice(&[a, b], Some(0x100), 7, drawn, drawn), Some(1));
+    }
+
+    /// The choice made the target: a change stops the attack and drops the
+    /// target's info (and asks the server, 0x0010), none too; the same
+    /// again changes nothing.
+    #[test]
+    fn a_new_centre_target_stops_the_attack() {
+        let mut p = play();
+        p.target = 5;
+        p.auto_attack = true;
+        p.target_info = Some(3);
+        assert!(!p.centre_target(Some(5)), "the same: nothing");
+        assert_eq!((p.auto_attack, p.target_info), (true, Some(3)));
+        assert!(p.centre_target(Some(6)));
+        assert_eq!((p.target, p.auto_attack, p.target_info), (6, false, None));
+        assert!(p.centre_target(None), "none is a change too");
+        assert_eq!(p.target, u32::MAX);
+    }
+
+    /// `DrawReticle`'s alpha, a frame of the game's: full on a new target,
+    /// then 0.05 less a frame (the EE's arithmetic), never under half; ten
+    /// frames from full to half, at 30 and at 165 frames a second drawn (it
+    /// steps with the HUD, `frames.rs`). The control: stepped every frame
+    /// drawn, 165 Hz reaches half in a sixth of the time.
+    #[test]
+    fn the_crosshair_flashes_and_fades_to_half_a_frame_of_the_games() {
+        let (a, next) = reticle_step(F::new(0.5), true);
+        assert_eq!((a.0, next.0), (1.0, (F::<Ee>::ONE - F::new(0.05)).0));
+        assert_eq!(reticle_step(F::new(0.5), false), (F::new(0.5), F::new(0.5)), "held at half");
+        let mut alpha = F::<Ee>::ONE;
+        let mut steps = 0;
+        while alpha > F::new(0.5) {
+            alpha = reticle_step(alpha, false).1;
+            steps += 1;
+        }
+        assert_eq!(steps, 10);
+        let half_at = |hz: f64, every_frame: bool| {
+            let mut clock = crate::frames::Frames::default();
+            let mut alpha = F::<Ee>::ONE;
+            for i in 0..hz as usize * 2 {
+                let t = i as f64 * 1000.0 / hz;
+                if (clock.due(t) || every_frame) && alpha > F::new(0.5) {
+                    alpha = reticle_step(alpha, false).1;
+                    if alpha == F::new(0.5) {
+                        return t;
+                    }
+                }
+            }
+            f64::INFINITY
+        };
+        for hz in [30.0, 165.0] {
+            assert!((half_at(hz, false) - 300.0).abs() < 40.0, "{hz} Hz: {}", half_at(hz, false));
+        }
+        assert!(half_at(165.0, true) < 70.0, "the control");
+    }
+
     /// 625 in a dialog opened without sound 15 (`b` 0), plays sound 7 when the
     /// byte asks, and refreshes the trainer; queued behind an open window, the
     /// dialog waits its turn. The controls: the same points again change
@@ -5901,8 +6487,9 @@ mod commands {
         let sevens = |p: &Play| p.cues.iter().filter(|c| matches!(c, crate::sound::Cue::Ui(7))).count();
         let fifteens = |p: &Play| p.cues.iter().filter(|c| matches!(c, crate::sound::Cue::Ui(15))).count();
         let mut p = play();
+        let (mut cam, mut room) = (WalkCamera::<Ee>::default(), crate::camreach::testing::Room { t: 0, wall: f32::INFINITY });
         p.dump.player.p40 = 3;
-        p.msg_0036(&msg(1, 10));
+        p.msg_0036(&msg(1, 10), &mut cam, &mut room);
         assert_eq!(p.dump.player.p40, 10, "the refund's points");
         assert_eq!((sevens(&p), fifteens(&p)), (1, 0), "sound 7 for the byte, no sound 15 (b 0)");
         assert_eq!(p.mode, 9, "word 625 in the dialog, in play at once");
@@ -5910,20 +6497,20 @@ mod commands {
         // the same points again: QuestStage only on a change
         p.mode = 0;
         p.cues.clear();
-        p.msg_0036(&msg(1, 10));
+        p.msg_0036(&msg(1, 10), &mut cam, &mut room);
         assert_eq!((p.dump.player.p40, sevens(&p), p.mode, p.trainer_refresh), (10, 0, 0, false));
         // a byte of 0: the dialog, no sound 7; behind the trainer it waits
         p.mode = 12;
-        p.msg_0036(&msg(0, 4));
+        p.msg_0036(&msg(0, 4), &mut cam, &mut room);
         assert_eq!((p.dump.player.p40, sevens(&p), p.mode), (4, 0, 12));
         let want = vi::ui::expand(&vi::ui::wide("(word 625)"), 218, true, &vi::ui::ExpandContext::default());
         assert_eq!(p.dialogs.back(), Some(&want), "queued");
         // cut short: nothing read
-        p.msg_0036(&[1]);
+        p.msg_0036(&[1], &mut cam, &mut room);
         assert_eq!(p.dump.player.p40, 4);
         // go-eqoa-server's buildTrainingPoints(true, 25) after its opcode:
         // the byte 1, then zigzag 25
-        p.msg_0036(&[0x01, 50]);
+        p.msg_0036(&[0x01, 50], &mut cam, &mut room);
         assert_eq!(p.dump.player.p40, 25);
     }
 

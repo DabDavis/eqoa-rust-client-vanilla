@@ -346,7 +346,9 @@ impl HudMenus {
     /// left and right switch menus round the carousel, with `bars` bars:
     /// menu 1 only with the expansion's second bar (2 and up), the client's
     /// bars 3 and 4 after it. Returns what was used: (message, id).
-    pub fn key(&mut self, key: Key, now: i64, bars: i32, cues: &mut Vec<crate::sound::Cue>) -> Option<(u32, i64)> {
+    /// `switch`: left and right go round the menus (`VIWndGame::Interact`
+    /// and `Attack`, play's alone); without it they only light the menu up.
+    pub fn key(&mut self, key: Key, now: i64, bars: i32, switch: bool, cues: &mut Vec<crate::sound::Cue>) -> Option<(u32, i64)> {
         let k = self.up();
         let def = self.defs[k].clone();
         let m = &mut self.menus[k];
@@ -365,6 +367,7 @@ impl HudMenus {
         m.lit = 1;
         m.time = now + 20000;
         match key {
+            _ if !switch => {}
             // VIWndGame::Interact: the next menu round
             Key::Right => {
                 self.sel = self.round(1, bars) as i32;
@@ -433,7 +436,7 @@ mod tests {
     fn the_carousel_is_the_games_and_goes_on_through_more_bars() {
         let go = |sel: i32, key: Key, bars: i32| {
             let mut h = HudMenus { sel, ..Default::default() };
-            h.key(key, 0, bars, &mut Vec::new());
+            h.key(key, 0, bars, true, &mut Vec::new());
             h.sel
         };
         for second in [false, true] {
@@ -449,7 +452,7 @@ mod tests {
             let mut h = HudMenus::default();
             (0..6)
                 .map(|_| {
-                    h.key(key, 0, bars, &mut Vec::new());
+                    h.key(key, 0, bars, true, &mut Vec::new());
                     h.sel
                 })
                 .collect::<Vec<_>>()
@@ -458,6 +461,23 @@ mod tests {
         assert_eq!(walk(3, Key::Right), [1, 3, 2, 0, 1, 3]);
         assert_eq!(walk(4, Key::Right), [1, 3, 4, 2, 0, 1]);
         assert_eq!(walk(4, Key::Left), [2, 4, 3, 1, 0, 2]);
+    }
+
+    /// The manual camera (mode 38) gives the menu the keys as play does, but
+    /// `VIWndGame::Interact` and `Attack` are play's: left and right light
+    /// the menu up and switch nothing. The control: with the switch, they go
+    /// round.
+    #[test]
+    fn left_and_right_only_light_the_menu_without_the_switch() {
+        for key in [Key::Left, Key::Right] {
+            let mut h = HudMenus { sel: 1, ..Default::default() };
+            h.menus[1].lit = 0;
+            h.key(key, 5, 2, false, &mut Vec::new());
+            assert_eq!((h.sel, h.menus[1].lit, h.menus[1].time), (1, 1, 20005), "{key:?}: lit, not switched");
+            let mut h = HudMenus { sel: 1, ..Default::default() };
+            h.key(key, 5, 2, true, &mut Vec::new());
+            assert_ne!(h.sel, 1, "{key:?}: the control");
+        }
     }
 
     /// The bars' menus from the abilities' slots: bar 1 its 0-4 and the
@@ -482,7 +502,7 @@ mod tests {
         assert_eq!(h.defs[3].count, 5);
         h.sel = 4;
         h.menus[4].sel = 4;
-        assert_eq!(h.key(Key::Use, 0, 4, &mut Vec::new()), Some((0x8060000, 8)), "slot 19's ability used");
+        assert_eq!(h.key(Key::Use, 0, 4, true, &mut Vec::new()), Some((0x8060000, 8)), "slot 19's ability used");
         h.build(&list, &[], 3);
         assert_eq!(h.sel, 0, "bar 4 gone: the first bar up");
         h.sel = 3;

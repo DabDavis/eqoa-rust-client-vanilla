@@ -501,6 +501,14 @@ impl Mouse {
         std::mem::take(&mut self.steps)
     }
 
+    /// This frame's drag, the wheel let go of (the manual camera's look,
+    /// `aim`).
+    pub fn take_look(&mut self) -> (f64, f64) {
+        let look = std::mem::take(&mut self.look);
+        self.discard();
+        look
+    }
+
     /// This frame's drag and wheel let go of (a window up, the camera held).
     pub fn discard(&mut self) {
         self.look = (0.0, 0.0);
@@ -588,6 +596,28 @@ pub fn look_held(cam: &mut WalkCamera<Ee>, held: [bool; 2], dx: f32, dy: f32, in
         _ => {}
     }
     stick
+}
+
+/// The manual camera's look by the mouse's or a finger's drag of (dx, dy)
+/// pixels, the client's (as first person turns and pitches the body by
+/// them, an angle a pixel): its heading and pitch, kept as `UpdateControls`
+/// keeps the right stick's (the heading in [0, 2pi), the pitch short of
+/// straight up or down, turned round under the Camera Pitch Axis option),
+/// once its blend is all the way in. The body follows the look as the
+/// stick's (`UpdateControls`).
+pub fn aim(cam: &mut WalkCamera<Ee>, dx: f32, dy: f32, inverted: bool) {
+    let e = &mut cam.effect;
+    if e.manual_terp != F::ONE || (dx == 0.0 && dy == 0.0) {
+        return;
+    }
+    let mut look = e.manual_hpr;
+    look.x = (look.x + F::new(-dx * LOOK_PER_PIXEL)).fmodf(F::new(TWO_PI));
+    if look.x < F::ZERO {
+        look.x += F::new(TWO_PI);
+    }
+    let up = F::new(dy * LOOK_PER_PIXEL * if inverted { -1.0 } else { 1.0 });
+    look.y = vi::fpu::clamp(look.y + up, F::new(-1.5607964), F::new(1.5607964));
+    e.manual_hpr = look;
 }
 
 /// The wheel's `lines` notches (in positive) on the orbit's distance: in
@@ -1399,6 +1429,15 @@ mod tests {
         }
         fn orbit_right(&mut self, t: F<Ee>) {
             self.cam.orbit_right(t);
+        }
+        fn manual_terp(&self) -> F<Ee> {
+            self.cam.effect.manual_terp
+        }
+        fn manual_hpr(&self) -> vi::vect::Vect3<Ee> {
+            self.cam.effect.manual_hpr
+        }
+        fn set_manual_hpr(&mut self, v: vi::vect::Vect3<Ee>) {
+            self.cam.effect.manual_hpr = v;
         }
     }
 

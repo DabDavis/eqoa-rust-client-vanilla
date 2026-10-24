@@ -403,7 +403,7 @@ pub fn shot_with(
             {
                 p.map.show();
             }
-            touch.window = play.as_ref().is_some_and(|p| p.mode != 0 || p.map.open);
+            touch.window = play.as_ref().is_some_and(|p| p.window_up() || p.map.open);
             touch.dpad = play.as_mut().is_some_and(|p| p.quick_dpad());
             for (_, id, phase, at) in touch_script.iter().filter(|e| e.0 == t) {
                 touch.touch(*id, *phase, *at, Instant::now(), (w, h));
@@ -1822,9 +1822,18 @@ impl App {
         // the update's question up (`update`) is a window too: no look
         let offer = crate::update::offer_shown();
         let free = !dead && !offer && self.play.as_ref().is_none_or(|p| p.look_free());
+        let aim = !dead && !offer && self.play.as_ref().is_some_and(|p| p.aiming());
         let inverted = self.play.as_ref().is_some_and(|p| p.options.inverted != 0);
         let ((look, zoom), feel) = match self.walker.as_mut() {
             Some(w) if free => (self.mouse.look(w, inverted, self.frame_s), crate::mouse::look(w, tx, ty, pinch, inverted, self.frame_s)),
+            // the manual camera (L1 or R1 held): the mouse's and a finger's
+            // drags look with it (the client's, `mouse::aim`); the wheel is
+            // nothing
+            Some(w) if aim => {
+                let (dx, dy) = self.mouse.take_look();
+                crate::mouse::aim(&mut w.cam, dx as f32 + tx, dy as f32 + ty, inverted);
+                (([0.0; 2], crate::mouse::Zoom::None), [0.0; 2])
+            }
             _ => {
                 // a window up: the wheel and a finger's drag are its up and down
                 let size = self.gfx.as_ref().map_or((640, 448), |g| (g.config.width, g.config.height));
@@ -1867,7 +1876,7 @@ impl App {
     /// ends itself on Escape.
     fn grab_pointer(&mut self, frame: bool) {
         let dead = self.play.as_ref().is_some_and(|p| p.is_dead());
-        let free = self.walker.is_some() && !dead && self.play.as_ref().is_none_or(|p| p.look_free()) && !report_open() && !crate::update::offer_shown();
+        let free = self.walker.is_some() && !dead && self.play.as_ref().is_none_or(|p| p.look_free() || p.aiming()) && !report_open() && !crate::update::offer_shown();
         let Some(g) = &self.gfx else { return };
         #[cfg(target_arch = "wasm32")]
         if frame && self.mouse.lock_seen(crate::web::pointer_locked(), Instant::now()) {
@@ -3018,6 +3027,18 @@ impl ApplicationHandler for App {
                             p.typing = Some(s.to_string());
                         }
                     };
+                    // The manual camera: the chat line's keys end it first
+                    // (`ResetView`, `OnKeyDown` 13, 47, 82, 84), then open it
+                    if p.mode == 38 && p.typing.is_none() {
+                        let chat = match &event.logical_key {
+                            Key::Named(NamedKey::Enter) => true,
+                            Key::Character(c) => c.as_str() == "/" || c.eq_ignore_ascii_case("t") || (c.eq_ignore_ascii_case("r") && !p.reply_name.is_empty()),
+                            _ => false,
+                        };
+                        if chat && let Some(w) = self.walker.as_mut() {
+                            p.reset_view(w);
+                        }
+                    }
                     // A dialog up takes the arrows, Enter and Escape.
                     if p.typing.is_none() && p.mode != 0 {
                         use crate::dialog::Key as D;
@@ -3047,12 +3068,17 @@ impl ApplicationHandler for App {
                             return;
                         }
                         // ` and ~ (96, 126): L1's cycle, the player, the
-                        // group, the pet (`CycleTarget(1)`).
+                        // group, the pet (`CycleTarget(1)`), and held, the
+                        // manual camera (`Play::target_key`); a key's repeat
+                        // is nothing (the PS2's keyboard has none, so a key
+                        // held is one press)
                         (None, Key::Character(c)) if p.mode == 0 && (c.as_str() == "`" || c.as_str() == "~") => {
-                            if let (Some(w), Some(g)) = (self.walker.as_ref(), self.gfx.as_ref()) {
+                            if !event.repeat
+                                && let (Some(w), Some(g)) = (self.walker.as_ref(), self.gfx.as_ref())
+                            {
                                 let (proj, v) = w.view(g.config.width as f32 / g.config.height as f32);
                                 let dir = Vec3::from(w.eye.direction.to_array());
-                                p.cycle_target(true, w.eye_position(), dir, proj * v);
+                                p.target_key(true, w.eye_position(), dir, proj * v);
                             }
                             return;
                         }
@@ -3080,12 +3106,14 @@ impl ApplicationHandler for App {
                         }
                         // 1 to 6: `SelectTarget`, the player, the group's
                         // others, the pet.
-                        (None, Key::Character(c)) if p.mode == 0 && matches!(c.as_str(), "1" | "2" | "3" | "4" | "5" | "6") => {
+                        // (`OnKeyDown` takes them in the manual camera too)
+                        (None, Key::Character(c)) if (p.mode == 0 || p.mode == 38) && matches!(c.as_str(), "1" | "2" | "3" | "4" | "5" | "6") => {
                             p.select_target(c.as_bytes()[0] as i32 - 48);
                             return;
                         }
-                        // P: InitCameraStyle (first person and back).
-                        (None, Key::Character(c)) if c.eq_ignore_ascii_case("p") => {
+                        // P: InitCameraStyle (first person and back), in
+                        // play only (`OnKeyDown` 80 asks for mode 0).
+                        (None, Key::Character(c)) if p.mode == 0 && c.eq_ignore_ascii_case("p") => {
                             if let Some(w) = self.walker.as_mut() {
                                 p.camera_style_key(w);
                             }
@@ -3174,7 +3202,7 @@ impl ApplicationHandler for App {
                 // has them on W/S and A/D and walks on the arrows; here WASD
                 // walks (`controls`), the user's choice.
                 if let Some(p) = self.play.as_mut()
-                    && p.mode == 0
+                    && (p.mode == 0 || p.mode == 38)
                 {
                     use crate::hudmenu::Key as H;
                     let k = match &event.logical_key {
@@ -3210,15 +3238,27 @@ impl ApplicationHandler for App {
                         return;
                     }
                 }
-                // Tab: the next target (`CycleTarget`).
+                // Tab: the next target (`CycleTarget`), and held, the manual
+                // camera (`Play::target_key`; its repeat is nothing, as `).
                 if event.state == ElementState::Pressed
                     && event.logical_key == Key::Named(NamedKey::Tab)
                     && let (Some(p), Some(w), Some(g)) = (self.play.as_mut(), self.walker.as_ref(), self.gfx.as_ref())
                     && p.mode == 0
                 {
-                    let (proj, v) = w.view(g.config.width as f32 / g.config.height as f32);
-                    let dir = Vec3::from(w.eye.direction.to_array());
-                    p.cycle_target(false, w.eye_position(), dir, proj * v);
+                    if !event.repeat {
+                        let (proj, v) = w.view(g.config.width as f32 / g.config.height as f32);
+                        let dir = Vec3::from(w.eye.direction.to_array());
+                        p.target_key(false, w.eye_position(), dir, proj * v);
+                    }
+                    return;
+                }
+                // Tab, ` or ~ let go (`OnKeyUp` 9, 96, 126): the manual camera
+                // ended, or the hold given up
+                if event.state == ElementState::Released
+                    && (event.logical_key == Key::Named(NamedKey::Tab) || matches!(&event.logical_key, Key::Character(c) if c.as_str() == "`" || c.as_str() == "~"))
+                    && let (Some(p), Some(w)) = (self.play.as_mut(), self.walker.as_mut())
+                {
+                    p.target_key_up(w);
                     return;
                 }
                 let name = held_name(&event.logical_key);
@@ -3446,7 +3486,7 @@ impl ApplicationHandler for App {
                 for c in self.touch.take_clicks() {
                     self.click(c, true);
                 }
-                self.touch.window = self.play.as_ref().is_some_and(|p| p.mode != 0 || p.map.open);
+                self.touch.window = self.play.as_ref().is_some_and(|p| p.window_up() || p.map.open);
                 self.touch.dpad = self.play.as_mut().is_some_and(|p| p.quick_dpad());
                 mark(&mut self.perf, 0);
                 self.grab_pointer(true);

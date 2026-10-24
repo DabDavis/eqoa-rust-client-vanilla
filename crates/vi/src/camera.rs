@@ -6,6 +6,8 @@
 
 use crate::coll::CollSphere;
 use crate::fpu::{F, Model, clamp, f};
+use crate::geom::Matrix44;
+use crate::quat::Quat;
 use crate::scene::{Filter, FilterKind, Scene};
 use crate::vect::Vect3;
 use crate::walk::WalkControl;
@@ -85,6 +87,32 @@ impl<M: Model> CameraEffect<M> {
         self.amplitude_rate = (amp - from) / time;
     }
 
+    /// `BeginManual(xyz, hpr, time)`: the eye held at `xyz` looking along
+    /// `hpr` (heading, pitch), blended in over `time` seconds (at once for
+    /// 0).
+    pub fn begin_manual(&mut self, xyz: Vect3<M>, hpr: Vect3<M>, time: F<M>) {
+        self.manual_xyz = xyz;
+        self.manual_hpr = hpr;
+        if time == F::ZERO {
+            self.manual_terp = F::ONE;
+            self.manual_terp_rate = F::ZERO;
+        } else {
+            self.manual_terp = F::ZERO;
+            self.manual_terp_rate = F::ONE / time;
+        }
+    }
+
+    /// `EndManual(time)`: blended back out over `time` seconds (at once for
+    /// 0).
+    pub fn end_manual(&mut self, time: F<M>) {
+        if time == F::ZERO {
+            self.manual_terp = F::ZERO;
+            self.manual_terp_rate = F::ZERO;
+        } else {
+            self.manual_terp_rate = f::<M>(-1.0) / time;
+        }
+    }
+
     pub fn update(&mut self, dt: F<M>) {
         if self.manual_terp_rate != F::ZERO {
             self.manual_terp += self.manual_terp_rate * dt;
@@ -112,18 +140,49 @@ impl<M: Model> CameraEffect<M> {
         }
     }
 
-    /// Bend the eye point and direction. NOT YET: the blend into a manual
-    /// camera (0 < terp < 1), which slerps quaternions; it leaves the eye as
-    /// is for now. A fully-in manual camera and the shake are ported.
+    /// Bend the eye point and direction: the manual camera (the eye where
+    /// `BeginManual` put it, looking along its heading and pitch) once its
+    /// blend has begun, and the shake. Blending (0 < terp < 1) the eye's
+    /// orientation is the slerp from the walk camera's (its direction under
+    /// world up, as `ConvertToEulerZXY` reads a basis) to the manual one's,
+    /// and its place the lerp between the two, both by a cosine ease of the
+    /// blend (`cos(terp * pi/2 + pi) + 1`: slow at the start, quick at the
+    /// end).
     pub fn apply(&mut self, pos: &mut Vect3<M>, dir: &mut Vect3<M>) {
-        // `!(t < 1)`, not `t >= 1`: it is the `else` of the guest's `t < 1`.
-        #[allow(clippy::neg_cmp_op_on_partial_ord)]
-        if F::ZERO < self.manual_terp && !(self.manual_terp < F::ONE) {
-            *pos = self.manual_xyz;
-            let h = self.manual_hpr;
-            dir.x = h.x.sinf() * h.y.cosf();
-            dir.y = -h.y.sinf();
-            dir.z = h.x.cosf() * h.y.cosf();
+        if F::ZERO < self.manual_terp {
+            let (xyz, hpr);
+            if self.manual_terp < F::ONE {
+                let k = (self.manual_terp * f(PI) * f(0.5) + f(PI)).cosf() + F::ONE;
+                let mut m = Matrix44::<M>::identity();
+                let fwd = Vect3::new(dir.x, dir.y, dir.z);
+                let mut up = Vect3::new(F::ZERO, F::ONE, F::ZERO);
+                let mut right = Vect3::cross(&up, &fwd);
+                up = Vect3::cross(&fwd, &right);
+                right.normalize();
+                up.normalize();
+                m.m[0].x = right.x;
+                m.m[0].y = right.y;
+                m.m[0].z = right.z;
+                m.m[1].x = up.x;
+                m.m[1].y = up.y;
+                m.m[1].z = up.z;
+                m.m[2].x = fwd.x;
+                m.m[2].y = fwd.y;
+                m.m[2].z = fwd.z;
+                let from = Quat::from_hpr(&m.euler_zxy());
+                let to = Quat::from_hpr(&self.manual_hpr);
+                hpr = Quat::slerp(&from, &to, k).to_hpr();
+                let x = &self.manual_xyz;
+                let dd = Vect3::new((x.x - pos.x) * k, (x.y - pos.y) * k, (x.z - pos.z) * k);
+                xyz = Vect3::new(pos.x + dd.x, pos.y + dd.y, pos.z + dd.z);
+            } else {
+                xyz = self.manual_xyz;
+                hpr = self.manual_hpr;
+            }
+            *pos = xyz;
+            dir.x = hpr.x.sinf() * hpr.y.cosf();
+            dir.y = -hpr.y.sinf();
+            dir.z = hpr.x.cosf() * hpr.y.cosf();
         }
         if self.speed != 0 {
             dir.normalize();

@@ -314,6 +314,146 @@ fn walk_camera_matches() {
     }
 }
 
+type E = vi::camera::CameraEffect<Ieee>;
+
+/// A camera effect: a manual camera off, blending in or out, or all the way
+/// in, at a place and a heading and pitch as `BeginManualCamera` gives one
+/// (now and then a roll), half the time with a shake running.
+fn effect(r: &mut Rng) -> E {
+    let mut e = E::default();
+    if r.next().is_multiple_of(2) {
+        e.speed = 1 + (r.next() % 3) as i32;
+        e.sample = (r.next() % 6) as i32;
+        e.amplitude = F::new(r.range(0.0, 3.0));
+        e.amplitude_end = F::new(r.range(0.0, 3.0));
+        e.amplitude_rate = F::new([0.0, r.range(-4.0, 4.0)][(r.next() % 2) as usize]);
+    }
+    e.manual_xyz = Vect3::of(r.range(-2000.0, 26000.0), r.range(-50.0, 300.0), r.range(-2000.0, 32000.0));
+    let roll = if r.next().is_multiple_of(4) { r.range(-0.3, 0.3) } else { 0.0 };
+    e.manual_hpr = Vect3::of(r.range(-7.0, 7.0), r.range(-1.5607964, 1.5607964), roll);
+    e.manual_terp = F::new(match r.next() % 8 {
+        0 => 0.0,
+        1 => 1.0,
+        2 => 1.0e-7,
+        3 => 0.99999994,
+        4 => r.range(-0.2, 0.0),
+        _ => r.unit(),
+    });
+    e.manual_terp_rate = F::new([0.0, 5.0, -5.0, r.range(-20.0, 20.0)][(r.next() % 4) as usize]);
+    e
+}
+
+/// The eye and direction `VIWalkCamera::SetCamera` hands `Apply`: near the
+/// manual place, looking along a unit direction (first person, the fixed
+/// follow) or at the body from the orbit (any length); now and then straight
+/// up or down, and the test's regimes (zeros, signed zeros, large).
+fn eye(r: &mut Rng, e: &E) -> (Vect3<Ieee>, Vect3<Ieee>) {
+    let m = e.manual_xyz;
+    let pos = Vect3::of(m.x.0 + r.range(-20.0, 20.0), m.y.0 + r.range(-5.0, 15.0), m.z.0 + r.range(-20.0, 20.0));
+    let dir = match r.next() % 5 {
+        0 => {
+            let mut d = Vect3::of(r.range(-1.0, 1.0), r.range(-1.0, 1.0), r.range(-1.0, 1.0));
+            d.normalize();
+            d
+        }
+        1 => Vect3::of(r.range(-25.0, 25.0), r.range(-12.0, 2.0), r.range(-25.0, 25.0)),
+        2 => Vect3::of(0.0, [1.0, -1.0, 3.5][(r.next() % 3) as usize], 0.0),
+        _ => r.vec(),
+    };
+    (pos, dir)
+}
+
+/// The blend as it would be with the ease left out (k = terp): the planted
+/// bug the comparison must see. The rest is `apply`'s, step for step.
+fn apply_linear(e: &E, pos: &mut Vect3<Ieee>, dir: &mut Vect3<Ieee>) {
+    use vi::geom::Matrix44;
+    use vi::quat::Quat;
+    let k = e.manual_terp;
+    let mut m = Matrix44::<Ieee>::identity();
+    let fwd = *dir;
+    let mut up = Vect3::of(0.0, 1.0, 0.0);
+    let mut right = Vect3::cross(&up, &fwd);
+    up = Vect3::cross(&fwd, &right);
+    right.normalize();
+    up.normalize();
+    (m.m[0].x, m.m[0].y, m.m[0].z) = (right.x, right.y, right.z);
+    (m.m[1].x, m.m[1].y, m.m[1].z) = (up.x, up.y, up.z);
+    (m.m[2].x, m.m[2].y, m.m[2].z) = (fwd.x, fwd.y, fwd.z);
+    let hpr = Quat::slerp(&Quat::from_hpr(&m.euler_zxy()), &Quat::from_hpr(&e.manual_hpr), k).to_hpr();
+    let x = e.manual_xyz;
+    *pos = Vect3::new(pos.x + (x.x - pos.x) * k, pos.y + (x.y - pos.y) * k, pos.z + (x.z - pos.z) * k);
+    dir.x = hpr.x.sinf() * hpr.y.cosf();
+    dir.y = -hpr.y.sinf();
+    dir.z = hpr.x.cosf() * hpr.y.cosf();
+}
+
+/// `VICameraEffect`'s manual camera (BeginManual, EndManual, Update, and
+/// Apply with its blend: the ease, the basis under world up read as euler
+/// angles, the quaternion slerp and `VIQuat::ConvertTo`'s way back through a
+/// matrix, the place's lerp), bit for bit on the object and the eye. The
+/// control: the blend without its ease differs from the oracle's in nearly
+/// every blended case.
+#[test]
+fn camera_effect_matches() {
+    let Some(mut o) = Oracle::open() else { return };
+    let mut r = Rng(0x03A1_1EC7);
+    let (mut blended, mut linear_differs) = (0, 0);
+    for i in 0..20_000 {
+        let before = effect(&mut r);
+        let (pos, dir) = eye(&mut r, &before);
+        // Apply
+        let (mut p, mut d) = (pos, dir);
+        let mut ours = before;
+        ours.apply(&mut p, &mut d);
+        let args = [pos.x.0, pos.y.0, pos.z.0, dir.x.0, dir.y.0, dir.z.0];
+        let (_, theirs, outs) = o.run(250, &before, &args);
+        if let Some((off, x, y)) = first_diff(&ours, &theirs) {
+            panic!("Apply case {i}: +0x{off:02X} ours {x:08X} theirs {y:08X} ({before:?}, {args:?})");
+        }
+        let ob: Vec<u32> = [p.x, p.y, p.z, d.x, d.y, d.z].iter().map(|v| v.0.to_bits()).collect();
+        let tb: Vec<u32> = outs.iter().map(|v| v.to_bits()).collect();
+        assert_eq!(ob, tb, "Apply case {i}: the eye ({before:?}, {args:?})");
+        let t = before.manual_terp.0;
+        if t > 0.0 && t < 1.0 && before.speed == 0 {
+            blended += 1;
+            let (mut lp, mut ld) = (pos, dir);
+            apply_linear(&before, &mut lp, &mut ld);
+            let lb: Vec<u32> = [lp.x, lp.y, lp.z, ld.x, ld.y, ld.z].iter().map(|v| v.0.to_bits()).collect();
+            if lb != tb {
+                linear_differs += 1;
+            }
+        }
+        // BeginManual
+        let time = [0.0, 0.2, r.range(0.01, 1.0)][(r.next() % 3) as usize];
+        let (xyz, hpr) = (r.vec(), r.vec());
+        let mut ours = before;
+        ours.begin_manual(xyz, hpr, F::new(time));
+        let (_, theirs, _) = o.run(251, &before, &[xyz.x.0, xyz.y.0, xyz.z.0, hpr.x.0, hpr.y.0, hpr.z.0, time]);
+        if let Some((off, x, y)) = first_diff(&ours, &theirs) {
+            panic!("BeginManual case {i}: +0x{off:02X} ours {x:08X} theirs {y:08X} (time {time})");
+        }
+        // EndManual
+        let time = [0.0, 0.2, r.range(0.01, 1.0)][(r.next() % 3) as usize];
+        let mut ours = before;
+        ours.end_manual(F::new(time));
+        let (_, theirs, _) = o.run(252, &before, &[time]);
+        if let Some((off, x, y)) = first_diff(&ours, &theirs) {
+            panic!("EndManual case {i}: +0x{off:02X} ours {x:08X} theirs {y:08X} (time {time})");
+        }
+        // Update
+        let dt = [0.0, 0.016, 0.033, r.range(0.0, 0.2)][(r.next() % 4) as usize];
+        let mut ours = before;
+        ours.update(F::new(dt));
+        let (_, theirs, _) = o.run(253, &before, &[dt]);
+        if let Some((off, x, y)) = first_diff(&ours, &theirs) {
+            panic!("Update case {i}: +0x{off:02X} ours {x:08X} theirs {y:08X} (dt {dt})");
+        }
+    }
+    eprintln!("camera effect: {blended} blended cases, the ease-less blend differs in {linear_differs}");
+    assert!(blended > 3000, "blended cases: {blended}");
+    assert!(linear_differs * 100 >= blended * 95, "the control: the blend without its ease differs in {linear_differs} of {blended}");
+}
+
 #[test]
 fn coll_sphere_matches() {
     let Some(mut o) = Oracle::open() else { return };
