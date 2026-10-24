@@ -5,6 +5,65 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-24 · Each window opens where you left it, and VSync
+- Each game window now opens as you last had it: its size, where it was on
+  your desktop, its monitor, and maximized or full screen (F11). With several
+  windows open, each keeps its own. A window closed while minimized opens as
+  it was before.
+- No more screen tearing: the game now waits for your display's refresh
+  before it shows a frame. Options > Extended > VSync (its last row) turns
+  that off for the least delay, tearing allowed, still no faster than your
+  display.
+
+## 2026-10-24 · Controllers: the map on a button, PlayStation pads behind other windows
+- Options > Controls: a controller's button can now be put on any of the
+  keyboard's own rows: the map, its zoom, targets 1 to 6, the group keys, F9's
+  art and the rest. That button then does what the key does (R3 on the map:
+  R3 opens and closes the map) instead of what it did in the game, and the
+  page says which row lost it. Defaults puts it all back.
+- On Windows a DualShock 4 or a DualSense now works in a game window that is
+  not in front, as an Xbox controller already did: with two windows open,
+  each can have its own controller, PlayStation or Xbox. Over USB, Bluetooth
+  or the DualShock 4's wireless adapter. Before, Windows gave a PlayStation
+  controller only to the window in front. On Linux and on a Mac every window
+  already read every controller.
+- A problem report (F3) now lists the controllers connected, how each is read
+  and which game window reads it.
+
+## 2026-10-24 · Sandstorm: stacks at auction, guilds of 255
+- On Sandstorm, gems, crafting materials and anything else that stacks can
+  now be put up for auction from the bank, as Sandstorm's own patch lets a
+  PlayStation 2 do. The original game refuses anything that stacks.
+- On Sandstorm a guild can invite members until it has 255, as its patch
+  allows; the original game stops at 128.
+
+## 2026-10-24 · Fixes from your reports
+- Holding Tab (or `) to aim and switching to another window no longer leaves
+  the aim stuck when you come back: whatever you held as the window lost the
+  keyboard is let go. The same for C's chat history, Q's target window and
+  Space's attack.
+- Pressing Escape while aiming, or while holding C for the chat history, no
+  longer closes the game.
+- The spell book's right column has its ten plates again, one behind each
+  memorized ability's name, as on a PlayStation 2; the tell, mail and
+  help-request forms show the boxes their fields are typed into, and a trade
+  the boxes of its tunar.
+- No more dark line in the start menu's title plate (beside "Group", among
+  others) at some window sizes.
+- The sky no longer jumps while it changes (rain coming or going, or another
+  region's sky): the new sky fades in with the same drift as the old one.
+- With NPC/PC View Distance raised, creatures and players far off in the fog
+  move as smoothly as the ones near you.
+- With the camera tilted down to your head's height or lower (the mouse's
+  tilt), a slope or a wall behind you no longer swings the camera round, and
+  your run with it: the camera comes in close behind you instead.
+- A long teleport within the same world no longer leaves you under the
+  ground when the place it sends you to is a little below the floor.
+- Changing form back and forth (Mouse Form, Remove Illusion, any illusion)
+  no longer takes a little more memory each time.
+- A game that ended because no disc image was chosen is no longer offered as
+  a crash at the next start.
+
 ## 2026-10-24 · A window you cannot see no longer fills the memory
 - A game window that cannot be seen (behind another window, on another
   full-screen space, minimized) now keeps playing at the game's own 30 frames a

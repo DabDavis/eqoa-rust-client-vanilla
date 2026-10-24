@@ -141,8 +141,9 @@ current.
   row in `binds::ROWS` (a test reads `viewer.rs` for them).
   Multiboxing: each window reads the controllers its Controller Focus picks (`input::pick`, the
   Extended page; per window by its place, `multibox.rs`: lock files in the config directory's
-  `windows/`, Web Locks in a page). Windows' Xbox pads are read through XInput (`xinput.rs`), which
-  answers a window behind another; gilrs's Windows.Gaming.Input answers only the one in front.
+  `windows/`, Web Locks in a page). Windows' Xbox pads are read through XInput (`xinput.rs`) and its
+  DualShock 4s and DualSenses over HID (`hidpad.rs`, read only, their motors gilrs's), both of which
+  answer a window behind another; gilrs's Windows.Gaming.Input answers only the one in front.
   Test several windows natively with uinput pads (python-evdev, `/dev/uinput` is the user's) and a
   shared `EQOA_CONFIG`; Windows on GitHub's runners with ViGEmBus pads.
 - A pointer on the windows (`pointer.rs`, `Play::point`): every button glyph is its button (the
