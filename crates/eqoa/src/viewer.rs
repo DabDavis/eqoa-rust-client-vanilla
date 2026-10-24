@@ -129,9 +129,13 @@ pub const HUMAN: i32 = 0x70D898C6;
 impl Source {
     pub fn scene(&self, lib: &Library) -> Scene {
         match self {
+            // the model as the library's view has it now (`era`: F9 turns a
+            // listed model to the 2002 disc's record of its DictID), built
+            // whole in that view
             Source::Models { list, index, .. } => {
                 let (id, r) = list[*index];
-                scene::model(id, lib.build_model(r).unwrap_or_default())
+                let m = lib.with_view(lib.view_for(id), || lib.build_model(lib.lookup(id).unwrap_or(r)));
+                scene::model(id, m.unwrap_or_default())
             }
             Source::Zone { file, zone, index } => scene::zone(lib, *file, *zone, *index),
             // Only for the spawn point: a walk's zones are streamed. (A world
@@ -4097,5 +4101,36 @@ impl ApplicationHandler for App {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The model viewer after F9: a listed model is the 2002 disc's record of
+    /// its DictID (the human: 2,882 vertices there, 3,644 on Frontiers'); the
+    /// control, Frontiers' view, Frontiers' record.
+    #[test]
+    fn a_listed_model_follows_the_art() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let frontiers = root.join("run/eqoa.iso");
+        let y2002 = std::env::var_os("EQOA_2002_ISO").map(std::path::PathBuf::from).or_else(|| {
+            std::fs::read_dir(root.join("../decomp-builds/discs/eqoa-usa")).ok()?.flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("iso")))
+        });
+        let (true, Some(y2002)) = (frontiers.exists(), y2002) else {
+            eprintln!("SKIP: no Frontiers disc or no 2002 disc (set EQOA_2002_ISO)");
+            return;
+        };
+        let mut lib = Library::new();
+        let f = lib.add("CHAR.ESF", esf::Container::open(iso::Iso::open(&frontiers).unwrap().read("CHAR.ESF").unwrap()).unwrap());
+        let list = crate::scene::list_models(&lib, f);
+        lib.stand_in(f, esf::Container::open(iso::Iso::open(&y2002).unwrap().read("CHAR.ESF").unwrap()).unwrap());
+        let index = list.iter().position(|(id, _)| *id == HUMAN).unwrap();
+        let src = Source::Models { list, index };
+        let verts = |lib: &Library| src.scene(lib).parts.iter().map(|(m, _)| m.pos.len()).sum::<usize>();
+        assert_eq!(verts(&lib), 3644, "Frontiers' human");
+        lib.set_view(esf::Era::Y2002);
+        assert_eq!(verts(&lib), 2882, "the 2002 disc's human");
     }
 }

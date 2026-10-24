@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-24 · The model viewer follows F9
+- In the page's View offline (and `eqoa view`), F9 now turns the model shown to
+  the 2002 disc's and back; before, it read the disc but kept showing
+  Frontiers' model.
+
 ## 2026-10-24 · The 2002 art: F9
 - If you have the original EverQuest Online Adventures disc of 2002 (the USA
   one, SLUS-20470) as an image beside your Frontiers one, press F9 and the game
