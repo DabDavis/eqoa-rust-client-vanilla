@@ -161,7 +161,10 @@ impl Walker {
 
     /// Loads the character as a VICSprite from `r` (a 0x2700 record).
     pub fn set_character(&mut self, lib: &esf::Library, r: esf::Ref) {
-        self.anims.time = self.scene.time;
+        // the clips and ref maps the character before brought go with it:
+        // each load adds its own, and a form taken and dropped grew the
+        // table without end (a human's 80 clips each time)
+        self.anims = AnimScene { time: self.scene.time, ..Default::default() };
         let mut cache = AnimCache::new();
         self.sprite = load_csprite(lib, r, &mut self.anims, &mut cache, &mut self.rand);
         match &self.sprite {
@@ -612,6 +615,26 @@ mod tests {
         let mut src = crate::stream::FileZones::open(&iso, "TUNARIA.ESF").unwrap();
         crate::stream::fill(&mut lib, w, x, z, &mut src);
         Some((lib, w))
+    }
+
+    /// The character loaded again (a form taken and dropped, the art
+    /// turned) brings only its own clips: the table is what one load makes,
+    /// and the sprite still poses. The control: a load that kept the clips
+    /// and ref maps before beside its own doubled them each time.
+    #[test]
+    fn a_character_loaded_again_keeps_one_set_of_clips() {
+        let (x, z) = (25275.115f32, 15766.627f32);
+        let Some((lib, file)) = tunaria_and_chars(x, z) else { return };
+        let mut w = Walker::arrive(World::load(&lib, file).unwrap(), Spawn::ground(x, z, 0.0));
+        let human = lib.lookup(0x70D898C6).unwrap();
+        w.set_character(&lib, human);
+        let once = (w.anims.anims.len(), w.anims.ref_maps.len());
+        assert!(once.0 > 0 && once.1 > 0, "a human has clips: {once:?}");
+        for _ in 0..3 {
+            w.set_character(&lib, human);
+        }
+        assert_eq!((w.anims.anims.len(), w.anims.ref_maps.len()), once);
+        assert!(!w.pose().1.is_empty(), "it poses");
     }
 
     /// The player runs at a creature in its way and stops at its capsule (the
