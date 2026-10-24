@@ -51,6 +51,15 @@ or a browser (each described where it lives below):
   front.
 - **The map** (M), drawn from the player's own disc for every world, on any
   server.
+- **The 2002 art** (F9, or the Extended page's Art): the game drawn as
+  EverQuest Online Adventures looked before Frontiers, out of the player's own
+  USA disc of 2002 (SLUS-20470) beside the Frontiers one: every race's body,
+  face, hair, armour, helms and robes, the creatures that disc has, Tunaria's
+  lighting, props and textures (with Frontiers' fog, dust, leaves, flocks and
+  ambient sound kept), the windows' blue stone, the item icons, the spell
+  effects, the loading pictures, the title, Station's pages and character
+  select. Swapped at once, both ways, and kept. Only the art: the game, its
+  words and its rules are Frontiers'.
 - **Sorted lists**: the Who list and the guild's roster by name, or by any
   column with ○ (C on the keyboard) or a click on its heading (the game keeps
   the server's order).
@@ -107,6 +116,16 @@ signed: the first time, macOS refuses one that came through a browser; allow it
 in System Settings, Privacy & Security ("Open Anyway"), or run `xattr -d
 com.apple.quarantine eqoa`. Windows' SmartScreen may ask the first time ("More
 info", "Run anyway").
+
+**The 2002 art.** With your own *EverQuest Online Adventures* (USA) disc image
+of 2002 (SLUS-20470) beside the *Frontiers* one, **F9** (or Options > Extended >
+Art) draws the game as it looked then, anywhere from the loading screens to the
+world; F9 again goes back. The first time it asks for that image in the file
+dialog and keeps its place (`disc2002.opt`), and the choice is kept too
+(`EQOA_2002_ISO=/path/to/image.iso` names one for a run). The European discs of
+2003 already carry nearly all of Frontiers' art and the 2002 betas lay their
+files out apart, so only the USA disc is taken. What only Frontiers has (its new
+creatures and worlds, its new icons) stays as Frontiers draws it.
 
 **A downloaded build updates itself.** As it starts (`eqoa`, `eqoa boot`, `eqoa
 <image>`), a thread reads the release's `update.txt`, which the release's build
@@ -334,6 +353,62 @@ unresolved GroupSprite members) and registered version-0/1 PrimBuffers. A scene
 loads its own file first, then CHARCUST.CSF and CHARFACE.CSF; the game's real
 order per stage is not yet measured.
 
+### The 2002 art
+
+`era.rs`, `esf::Library`'s 2002 view, `render::TextureSource` keys; measured file
+by file in `../claude-notes/era-2002-art-20261024.md`. The two discs name their art
+alike (a DictID is the hash of the art's name), so a file off the 2002 disc **stands
+in** for its Frontiers namesake (`Library::stand_in`): it registers in a second
+dictionary just ahead of it, and lookups answer from that one while the library's
+view is 2002's (`set_view`, `with_view`). What the 2002 disc lacks (Frontiers' new
+creatures and worlds, its new icons) is still found in Frontiers' files. A 2002
+record byte for byte its namesake's is registered as that record (worked out once
+per pair, `same_as_namesake`), so what did not change stays one texture and one
+model; ITEM.ESF, the arena, Arial and the sounds are the same on both discs.
+
+- **A model is built whole in one view** (`Library::view_for`): one the 2002 disc
+  has, out of the 2002 dictionary; one only Frontiers has, out of Frontiers'
+  records alone (8 of Frontiers' 171 new creatures name an animation or a texture
+  whose 2002 namesake differs). A creature remembers the view it was built in and
+  is made again when the art turns; so are the player's body, the HUD's layer,
+  the rings, the gears, the spell effects and the sky.
+- **Textures are cached by record**: the renderer keys a texture by its DictID and
+  whether its record is off the 2002 disc (`Library::texture_key`).
+- **The HUD atlas stays Frontiers'** (`era::kept`): SUPPORT's table cuts its rects
+  out of UI.CSF's `sheet1`, and the 2002 sheet is laid out otherwise where
+  Frontiers added art; the windows' tiles, the icons and the font come over
+  (`UiAssets::add_surfaces_of` takes a 2002 file's surfaces only where the view
+  answers with it).
+- **Tunaria comes off the 2002 disc** (`era::world_era`; the other worlds are
+  Frontiers' always): the same ground, its own baked lighting, a few props
+  otherwise. Its zone list is an older format (record 0x8210 version 1, each
+  zone's entry followed by its name). F9 swaps it under the walk
+  (`viewer::swap_world_art`, `stream::reopen`): the zones round the player read
+  off the other disc and drawn, the collision world, particles, effect volumes,
+  the sound's world and the map's chrome made again, the walk where it was
+  (150-260 ms natively).
+- **With Frontiers' additions**: the 2002 disc's zones place no effect volumes
+  (fog, dust, leaves, shafts, flocks) and no streamed audio; Frontiers' Tunaria is
+  kept as its twin (`Library::set_twin`, its zones left on the disc), each zone is
+  read with its twin's (`stream::Twinned`), and what the twin's zone places of
+  those two kinds, with the records they name, goes into the 2002 zone's rooms
+  after its own (`Container::additions`, `Library::add_zone_extras`; the rooms
+  match on both discs). Round the Freeport spawn: Frontiers' 102 placements, each
+  at its place.
+- **Before the world**, the pregame reads each art file's 2002 copy beside the
+  disc's (`era::read`) and waits for both: the loading pictures (2002's in
+  DATA2), the title's painting with the original game's effects layer, Station's
+  and the server list's blue stone, character select and creation with 2002
+  figures, CLIENT's loading screen in the original layout. F9 there makes again
+  what each stage built (`Host::art_changed`, `Figure::remake`). The title plays
+  the 2002 disc's theme in its art.
+- **The disc**: judged by its SYSTEM.CNF and its DATA2 (`era::judge`), natively
+  picked in the file dialog the first time F9 or the Art row asks, kept in
+  `disc2002.opt`; in a page, the form's second input. The choice is `client.opt`'s
+  `art=2002`; it is in effect only with the disc at hand (`era::current`).
+- Tests: `EQOA_2002_ISO=<image>`, and `EQOA_ART_AT=<ms>;<ms>` presses F9 in a
+  scripted run.
+
 ### Not yet
 
 - Above the login: the windows past the HUD, chat box, dialogs and start menu
@@ -459,6 +534,23 @@ Tunaria with four zones in 260-400 ms, and back to 60 fps a second later. The
 game's clock runs on through it, as VITimer does (the viewer used to restart it,
 which put the creatures' animations before their start and panicked on a frame
 of -1).
+
+**The 2002 art in a page.** The form has a second, optional input for the 2002 disc
+(EverQuest Online Adventures (USA), SLUS-20470), judged as it is picked by the
+client's own rules (`web::disc_2002` over `era::judge_listing`) and read a slice at a
+time like the first; like the first it is picked each visit. F9 with none asks for
+it: the hidden input's picker inside the key's own activation, and a notice with
+**Choose the disc** for a browser that opens no picker from a key; the swap goes on
+once it is in. Its files come through one reader (`era::set_reader`, raw, by last
+part: the world's stand-ins and the pregame's copies alike); the world loader and
+the world opener take Tunaria off it with Frontiers' as its twin, and the zone
+sources pick the image by the file's disc (`Library::era_of`). Swapping in Freeport:
+its files, 112 MB, read in about 300 ms, the heap from 277 to 387 MB, a second at
+about 46 fps (the containers open on the game's thread), then 60.
+`?auth_port=`, `?game_port=`, `?patch_port=` and `?news_port=` point a page at a test
+server's ports; `web/drive.py --iso-2002 <image>` puts the 2002 disc in the second
+input, `--ask-2002 <image>` answers F9's picker with it, `--start-when line:<text>`
+counts the script from a log line.
 
 The start menu reads CLIENT's data and the HUD SUPPORT's, which the disc holds only
 encrypted. The page unpacks both off the player's disc with `dnas`, each in a Web

@@ -10,8 +10,8 @@ current.
 - Vanilla: nothing that changes the game's picture or play beyond what README "Vanilla" keeps
   (widescreen, the untethered frame rate, the mouse and the touch screen, the keyboard with WASD and
   the Controls page, 1,000 lines of chat, no green backdrop behind the start menu's windows, the
-  Extended page, the map, the updater, the problem and crash reports). A new client-side addition
-  is the user's call: ask first.
+  Extended page, the map, the updater, the problem and crash reports, the 2002 disc's art on F9). A
+  new client-side addition is the user's call: ask first.
   Fixes are made here and are not carried to eqoa-rs any more (the user, 2026-10-23: "vanilla
   only"); its remote `eqoa-rs` stays for reading it. Link no private repository from anything
   public here.
@@ -54,6 +54,16 @@ current.
   the pick by SYSTEM.CNF as the page does, and keeps it. `EQOA_OFFSCREEN` never shows a dialog. Test the Linux
   dialogs on :99 with a private bus (`dbus-run-session`, xdg-desktop-portal-gtk) or none (zenity): the session
   bus's portal draws on the user's own screen.
+- The 2002 art (`era.rs`, README "The 2002 art"; the user, 2026-10-24: "texture/model swapping of the eqoa
+  2002 era", on F9, "same with loading screens, title screen", and Tunaria keeping Frontiers' "ambient
+  sounds and the fog/dust/leaf/flock effects"): a file off the player's USA disc of 2002 stands in for its
+  namesake in the library's 2002 view (`esf::Library::stand_in`). Build a model in its own view
+  (`lib.with_view(lib.view_for(id), ..)`); what walks the files by name for their surfaces walks
+  `lib.in_view()` and takes a 2002 file's through `UiAssets::add_surfaces_of`; anything made out of the
+  library is made again when the art turns (`Play::art_changed`, `viewer::rebuild_art`,
+  `Host::art_changed`). UI.CSF's atlas sheet stays Frontiers' (`era::kept`). Nothing off the 2002 disc is
+  committed; tests take it from `$EQOA_2002_ISO` (default `../decomp-builds/discs/eqoa-usa/*.iso`) and
+  skip without. `EQOA_ART_AT=<ms>;<ms>` presses F9 in a scripted run.
 - A server's patch (`s2.rs`, README "the server's patch"): what a server's patcher puts in its folder (its S2, its art file,
   WORDS.TXT) is read as Sandstorm's SS stub applies S2 on a PS2, feature by feature at the addresses S2 hooks; no S2, or one the
   stub refuses, is retail. Never commit an S2 or anything read out of one (Sandstorm's code); tests take them from

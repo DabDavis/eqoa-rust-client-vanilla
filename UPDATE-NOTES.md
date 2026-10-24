@@ -5,6 +5,28 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-24 · The 2002 art: F9
+- If you have the original EverQuest Online Adventures disc of 2002 (the USA
+  one, SLUS-20470) as an image beside your Frontiers one, press F9 and the game
+  is drawn as it looked before Frontiers: every race's body, face and hair, the
+  armour, helms and robes, the creatures that game had, the windows' blue
+  stone, the item icons, the spell effects and the sky. F9 again brings
+  Frontiers back, at once, wherever you are.
+- It works before the world too: the loading pictures, the legal screen, the
+  title's painting and its music, Station's pages, the server list, character
+  select and creation.
+- Tunaria comes from that disc as well, with its own lighting and props, and
+  keeps Frontiers' fog, dust, falling leaves, birds and ambient sounds.
+  Frontiers' other worlds, and the creatures and icons Frontiers added, stay as
+  they are.
+- The first press asks for the disc image and remembers it, and the game
+  remembers which art you chose. Options > Extended > Art does the same as F9,
+  for a controller, and F9 can be moved on the Controls page.
+- Only the pictures change: the game, its words and its rules are Frontiers',
+  on any server.
+- In the browser: pick the 2002 disc as the page's second image, or press F9 in
+  the game and pick it then.
+
 ## 2026-10-24 · Arrows fly
 - A shot with a bow or a crossbow now shows its arrow or bolt flying from the
   hand to the target in a slight arc, as on a PlayStation 2, and a thrown
