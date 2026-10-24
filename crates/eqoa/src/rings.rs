@@ -316,6 +316,14 @@ pub struct Rings {
 }
 
 impl Rings {
+    /// The art swapped (F9, `era`): the rings made again out of the art now,
+    /// as they are next drawn.
+    pub fn art_changed(&mut self) {
+        self.sprite = None;
+        self.track = None;
+        self.looked = usize::MAX;
+    }
+
     /// `UpdateGame`'s part: `TrackTarget` for `aim` (None resets), the
     /// rings' triangles to draw over the scene through `view_proj`. `me` is
     /// the player's id; `info_valid` is `m_targetInfoValid`; `cam_inside` is

@@ -198,7 +198,9 @@ pub struct Spells {
 
 impl Spells {
     /// Every 0xC200 record in the library (SPELLFX.CSF), with the particle
-    /// definitions and sprites its events name.
+    /// definitions and sprites its events name, in the order the library's
+    /// view registers its files (the 2002 disc's SPELLFX.CSF ahead of
+    /// Frontiers' while its art is drawn, `era`).
     pub fn load(lib: &Library, time: i64) -> Spells {
         let mut s = Spells {
             sys: SpellSystem::default(),
@@ -222,7 +224,7 @@ impl Spells {
         };
         let mut defs: HashMap<Ref, usize> = HashMap::new();
         let mut sprites: HashMap<Ref, usize> = HashMap::new();
-        for f in 0..lib.files.len() {
+        for f in lib.in_view() {
             let c = lib.file(f);
             for n in (0..c.nodes.len()).filter(|&n| c.nodes[n].ty == 0xC200) {
                 let (ps, list) = (&mut s.ps, &mut s.sprites);
