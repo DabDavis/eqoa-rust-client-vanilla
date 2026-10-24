@@ -41,7 +41,10 @@ navigator.getGamepads (the standard layout's indices: 0 A, 1 B, 2 X, 3 Y,
 --iso-2002 PATH puts the 2002 disc (EverQuest Online Adventures (USA),
 SLUS-20470) into the page's second input with the first, for the art on F9;
 --ask-2002 PATH answers the picker F9's ask opens in the game (the file
-chooser intercepted) with it.
+chooser intercepted) with it. --start-when EXPR counts every event's seconds
+from when EXPR first holds in the page, or with line:TEXT from the first
+console line with TEXT ('line:the HUD is in': SUPPORT's unpack, which the
+title waits on and which varies with the machine's load).
 Needs the `websockets` package.
 """
 import argparse, asyncio, base64, functools, http.server, json, os, shutil, socketserver, subprocess, sys, threading, time, urllib.request
@@ -202,6 +205,22 @@ async def drive(a, base, ws_url):
         else:
             await js("document.getElementById('go').click()")
         t_click = time.monotonic()
+        if a.start_when:
+            # the events' clock starts when EXPR holds (a stage the client
+            # notes it is in, past the boot's own variable wait)
+            while time.monotonic() < t_click + a.timeout:
+                if a.start_when.startswith("line:"):
+                    if any(a.start_when[5:] in l for l in lines):
+                        break
+                else:
+                    try:
+                        if await js(a.start_when):
+                            break
+                    except Exception:
+                        pass
+                await asyncio.sleep(0.25)
+            out(f"start-when held after {time.monotonic() - t_click:.1f} s")
+            t_click = time.monotonic()
 
         async def shoot(path):
             r = await call("Page.captureScreenshot", format="png")
@@ -419,6 +438,7 @@ if __name__ == "__main__":
     ap.add_argument("--touch", action="append", default=[], help="SECONDS=STEPS: touches on the canvas")
     ap.add_argument("--gamepad", action="append", default=[], help="SECONDS=STEPS: a gamepad, through navigator.getGamepads")
     ap.add_argument("--mouse", action="append", default=[], help="SECONDS=STEPS: the mouse over the canvas")
+    ap.add_argument("--start-when", help="a page expression, or line:TEXT for a console line: the events' seconds count from when it first holds ('line:the HUD is in')")
     ap.add_argument("--final-shot")
     ap.add_argument("--until")
     ap.add_argument("--timeout", type=float, default=60)

@@ -1750,9 +1750,11 @@ impl App {
             self.art_script.remove(0);
             self.toggle_era();
         }
-        // a page's 2002 disc, handed over after F9 asked for it: that F9 goes on
+        // a page's 2002 disc, handed over after F9 asked for it: the 2002 art
+        // that F9 was pressed for
         if crate::era::take_asked() {
-            self.toggle_era();
+            crate::era::set(esf::Era::Y2002);
+            self.apply_era();
         }
         let Some(r) = self.era_loading.as_mut().and_then(|l| l.poll()) else { return };
         self.era_loading = None;

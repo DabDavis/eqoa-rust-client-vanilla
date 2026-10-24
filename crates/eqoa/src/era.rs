@@ -38,10 +38,21 @@ const USA_2002_MARK: &str = "DATA2/CHARCUST.CSF";
 /// The worlds the 2002 disc has: Tunaria alone (Frontiers added the others).
 const WORLDS_2002: &[&str] = &["TUNARIA.ESF"];
 
-/// The art in effect: Frontiers' or the 2002 disc's, as the player last chose
-/// it (`settings::art`).
+/// The art in effect: the 2002 disc's when the player last chose it
+/// (`settings::art`) and a 2002 disc is at hand, else Frontiers'. A choice
+/// kept from a visit before with no disc picked yet (a page's) draws
+/// Frontiers', and F9 asks for the disc rather than turning to an art that
+/// was not drawn.
 pub fn current() -> Era {
-    crate::settings::art()
+    in_effect(crate::settings::art(), available())
+}
+
+/// The art in effect for the choice `art`, a disc at hand or not.
+fn in_effect(art: Era, have: bool) -> Era {
+    match art {
+        Era::Y2002 if have => Era::Y2002,
+        _ => Era::Frontiers,
+    }
 }
 
 /// Chooses the art and keeps the choice (`settings::set_art`).
@@ -392,6 +403,15 @@ mod page_tests {
         // the control: nothing found under DATA2
         assert!(judge_listing(Some(USA_2002), |_| false).unwrap_err().contains("beta"));
         assert!(judge_listing(Some(crate::discs::FRONTIERS), |_| true).unwrap_err().contains("Frontiers disc"));
+    }
+
+    /// The 2002 art is in effect only with a disc at hand; Frontiers' is
+    /// whatever is at hand.
+    #[test]
+    fn the_2002_art_needs_its_disc() {
+        assert_eq!(in_effect(Era::Y2002, true), Era::Y2002);
+        assert_eq!(in_effect(Era::Y2002, false), Era::Frontiers, "the control: chosen, no disc");
+        assert_eq!(in_effect(Era::Frontiers, true), Era::Frontiers);
     }
 
     /// F9's ask goes on once, and only once a disc is in hand.
