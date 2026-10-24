@@ -1802,6 +1802,10 @@ impl App {
     /// the 2002 disc does not have stays as it is; a swap back before the
     /// reads came is no swap.
     fn swap_world_art(&mut self, _era: esf::Era) {
+        // a world change under way: its world is looked at once it is entered
+        if self.entering.is_some() {
+            return;
+        }
         let (Source::Walk { file, .. }, Some(w)) = (&self.source, self.walker.as_ref()) else { return };
         let name = self.lib.files[*file].0.clone();
         let want = crate::era::world_era(&name);
@@ -3682,7 +3686,12 @@ impl ApplicationHandler for App {
                 if let Some(r) = self.entering.as_ref().and_then(|e| e.2.borrow_mut().take()) {
                     let (file, at, _) = self.entering.take().unwrap();
                     match r.map_err(Error::from).and_then(|o| self.enter_world(&file, o, at)) {
-                        Ok(()) => crate::say(&format!("entered {file} at {:?}", at.pos)),
+                        Ok(()) => {
+                            crate::say(&format!("entered {file} at {:?}", at.pos));
+                            // the art swapped while its reads were under way:
+                            // the world off the disc of the art now
+                            self.swap_world_art(crate::era::current());
+                        }
                         Err(e) => {
                             crate::say(&format!("world change to {file}: {e}"));
                             #[cfg(target_arch = "wasm32")]
