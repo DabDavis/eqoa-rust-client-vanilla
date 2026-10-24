@@ -1388,7 +1388,7 @@ impl Play {
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
         let now = p.session.now() as i64;
-        p.loading.begin(p.player.pos, p.player.hpr[0], false, now);
+        p.loading.begin(p.player.pos, p.player.hpr[0], false, false, now);
         // the options kept (`settings`; `VIWndInitFromMC`'s Load), and the
         // two sound classes' volumes set from them as it sets them
         p.options = crate::settings::game_options();
@@ -1519,43 +1519,7 @@ impl Play {
                 Event::Dialog { text, .. } => self.show_dialog(&text),
                 Event::DialogBox { id, text, options } => self.dialog_box(id, &text, &options),
                 Event::Opcode { op: 0x005E, .. } => self.msg_005e(walker),
-                Event::Teleport { world, pos, hpr, .. } => {
-                    // Msg00B2: back to play, then Respawn. A dead player
-                    // stays dead (EnterWorld leaves m_pC1B0): only the
-                    // dump (Msg000D) ends a death. Respawn ends autorun and
-                    // the follow.
-                    self.mode = 0;
-                    self.autorun = false;
-                    self.following = false;
-                    if world as i64 != self.player.world {
-                        // the world table: the disc's six, or the server's
-                        // patch's (`s2`: Sandstorm's eight)
-                        match crate::s2::get().world_file(world as i64) {
-                            Some(f) => {
-                                eprintln!("play: teleport to world {world} ({f}) at {pos:?}");
-                                // Respawn's casts at the arrival
-                                self.world_change = Some((f.to_string(), Spawn { pos, heading: hpr[0], placing: Placing::Respawn }));
-                                self.loading.begin(pos, hpr[0], true, now as i64);
-                                // black until the new world is entered (`world_entered`),
-                                // the old one not shown while it loads
-                                self.fade.set(1.0, 0.0);
-                                self.player.world = world as i64;
-                                self.player.pos = pos;
-                                // the walker is built again there (`world_entered`)
-                                self.cam_carry = Some((walker.cam.camera_mode, Some(crate::camstyle::save(&walker.cam))));
-                            }
-                            None => eprintln!("play: teleport to world {world}, which the disc's world table does not have"),
-                        }
-                    } else {
-                        eprintln!("play: teleport to {pos:?}");
-                        walker.relocate(pos, hpr[0]);
-                        self.player.pos = pos;
-                        // EnterWorld: StreamFillCache there under the loading screen
-                        self.loading.begin(pos, hpr[0], false, now as i64);
-                    }
-                    self.npcw_respawn();
-                    self.bank_reset();
-                }
+                Event::Teleport { world, pos, hpr, .. } => self.teleport(walker, world, pos, hpr, now as i64),
                 // 0x00F8: `m_speed`, then SetSpeed (a speed buff, a snare)
                 Event::Speed(v) => self.set_speed(v),
                 Event::LevelExp { level, exp } => {
@@ -2011,7 +1975,7 @@ impl Play {
                         self.cam_carry = self.cam_entered.then_some((self.cam_saved.mode, None));
                     }
                     if here || elsewhere {
-                        self.loading.begin(arrival, heading, elsewhere, now as i64);
+                        self.loading.begin(arrival, heading, elsewhere, false, now as i64);
                     }
                     if self.cam_entered {
                         let rc = self.race_camera();
@@ -2911,6 +2875,46 @@ impl Play {
         }
     }
 
+    /// Msg00B2: back to play, then Respawn at `pos` in `world`. A dead
+    /// player stays dead (EnterWorld leaves m_pC1B0): only the dump
+    /// (Msg000D) ends a death. Respawn ends autorun and the follow. Its floor
+    /// is cast where the server put it (`Walker::relocate`, a new world's
+    /// walk's `Placing::Respawn`), and again once the zones there are in
+    /// (`loading_step`), as `EnterWorld` streams them before the cast.
+    pub fn teleport(&mut self, walker: &mut Walker, world: u8, pos: [f32; 3], hpr: [f32; 3], now: i64) {
+        self.mode = 0;
+        self.autorun = false;
+        self.following = false;
+        if world as i64 != self.player.world {
+            // the world table: the disc's six, or the server's patch's
+            // (`s2`: Sandstorm's eight)
+            match crate::s2::get().world_file(world as i64) {
+                Some(f) => {
+                    eprintln!("play: teleport to world {world} ({f}) at {pos:?}");
+                    // Respawn's casts at the arrival
+                    self.world_change = Some((f.to_string(), Spawn { pos, heading: hpr[0], placing: Placing::Respawn }));
+                    self.loading.begin(pos, hpr[0], true, true, now);
+                    // black until the new world is entered (`world_entered`),
+                    // the old one not shown while it loads
+                    self.fade.set(1.0, 0.0);
+                    self.player.world = world as i64;
+                    self.player.pos = pos;
+                    // the walker is built again there (`world_entered`)
+                    self.cam_carry = Some((walker.cam.camera_mode, Some(crate::camstyle::save(&walker.cam))));
+                }
+                None => eprintln!("play: teleport to world {world}, which the disc's world table does not have"),
+            }
+        } else {
+            eprintln!("play: teleport to {pos:?}");
+            walker.relocate(pos, hpr[0]);
+            self.player.pos = pos;
+            // EnterWorld: StreamFillCache there under the loading screen
+            self.loading.begin(pos, hpr[0], false, true, now);
+        }
+        self.npcw_respawn();
+        self.bank_reset();
+    }
+
     /// The loading screen while it is up: its view and the gears, which the
     /// frame draws in place of the scene (`loading.rs`).
     pub fn loading_scene(&self, size: (u32, u32)) -> Option<(render::View, Vec<&GpuModel>)> {
@@ -2930,11 +2934,18 @@ impl Play {
     /// A frame under the loading screen: once the zones round the arrival
     /// are in and drawn (`settled`), or at the cap, the screen down; until
     /// then the walk held where the move put it (the game's frame stops in
-    /// `StreamFillCache`), to go on from there on the ground that came.
+    /// `StreamFillCache`), to go on from there on the ground that came. A
+    /// 0x00B2 move's floor is cast again as it comes down (`Respawn` casts
+    /// once `EnterWorld` has the zones in; a far move's first cast here met
+    /// nothing and kept the server's height, which a little under a floor fell
+    /// through it).
     pub fn loading_step(&mut self, walker: &mut Walker, settled: bool) {
         let now = self.session.now() as i64;
         if let Some(w) = self.loading.end(settled, now) {
             crate::say(&format!("loading screen down: the zones round {:?} in after {} ms{}", w.at.map(|v| v.round()), now - w.since, if settled { "" } else { " (the cap)" }));
+            if w.respawn {
+                walker.relocate(w.at, w.heading);
+            }
             return;
         }
         let p = walker.cam.walk.phys.position;
@@ -6593,6 +6604,52 @@ mod commands {
 
     fn last_line(p: &Play) -> &str {
         p.chat.back().map_or("", |l| l.0.as_str())
+    }
+
+    /// A far 0x00B2 move in the same world (Freeport's open ground to the
+    /// Highpass road, 3,600 away, 2 under the ground there): its zones are
+    /// not in when it lands, so its floor cast meets nothing and the server's
+    /// height stands (the control: where the client left it, under the
+    /// ground, to fall through it); once they are in and the screen comes
+    /// down the floor is cast again and it stands on the ground, as the game
+    /// casts after `EnterWorld` has streamed them. A dump's arrival (`Msg000D`'s
+    /// `SetLocation`) stays as given.
+    #[test]
+    fn a_far_teleport_lands_on_the_floor_once_its_zones_are_in() {
+        let iso = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        if !iso.exists() {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        }
+        let (a, b) = ((25275.115f32, 15766.627f32), (23533.45f32, 18890.77f32));
+        let mut lib = Library::new();
+        let w = lib.add("TUNARIA.ESF", crate::stream::open_file(&iso, "TUNARIA.ESF").unwrap());
+        let mut src = crate::stream::FileZones::open(&iso, "TUNARIA.ESF").unwrap();
+        crate::stream::fill(&mut lib, w, a.0, a.1, &mut src);
+        let at_a = || Walker::arrive(vi::world::World::load(&lib, w).unwrap(), Spawn::ground(a.0, a.1, 0.0));
+        let mut walker = at_a();
+        let mut also = at_a();
+        crate::stream::fill(&mut lib, w, b.0, b.1, &mut src);
+        let with_b = || vi::world::World::load(&lib, w).unwrap();
+        let floor = crate::walker::ground(&mut with_b(), b.0, b.1).unwrap();
+        let pos = [b.0, floor - 2.0, b.1];
+        let mut p = play();
+        p.teleport(&mut walker, 0, pos, [0.5, 0.0, 0.0], 0);
+        assert!(p.loading());
+        assert_eq!(walker.cam.walk.phys.position.y.0, floor - 2.0, "the control: no floor met, the server's height");
+        // the zones round the arrival come in (the streamer's), and the screen comes down
+        walker.scene = with_b();
+        p.loading_step(&mut walker, true);
+        assert!(!p.loading());
+        let y = walker.cam.walk.phys.position.y.0;
+        assert!((y - floor).abs() < 0.3, "on the ground at {floor}: {y}");
+        // a dump's arrival there: as given
+        let mut d = play();
+        d.loading.begin(pos, 0.5, false, false, 0);
+        also.place(pos, 0.5);
+        also.scene = with_b();
+        d.loading_step(&mut also, true);
+        assert_eq!(also.cam.walk.phys.position.y.0, floor - 2.0, "a dump's SetLocation as it is");
     }
 
     fn grouped(p: &mut Play, ids: &[u32]) {

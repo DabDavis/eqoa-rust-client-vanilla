@@ -24,7 +24,10 @@
 //! Here it is up from a teleport, a world change or world entry until the
 //! zones round the arrival are in and drawn (`stream::Streamer::settled`),
 //! the walker held at the arrival and put down there once they are, as
-//! `StreamFillCache` then `SetLocation` do. Loads here are fast where the
+//! `StreamFillCache` then `SetLocation` do. A move of 0x00B2's (`Respawn`)
+//! has its floor cast again then (`Wait::respawn`): the game casts after
+//! `EnterWorld` streamed the zones in, where a far move here casts before
+//! they come and finds nothing. Loads here are fast where the
 //! PS2's took seconds: natively a frame or two, in a page as long as its
 //! reads. In a window wider than 4:3 the 2D half keeps to the middle and the
 //! gears to the right side's corner, and in one narrower than 4:3 to the
@@ -153,6 +156,10 @@ pub struct Wait {
     pub at: [f32; 3],
     pub heading: f32,
     pub entering: bool,
+    /// the move is 0x00B2's (`Respawn`): its floor is cast again once the
+    /// zones are in (`Play::loading_step`); a dump's (`Msg000D`'s
+    /// `SetLocation`) and world entry's stand as given
+    pub respawn: bool,
     /// the session's clock when it went up
     pub since: i64,
     /// where the walk is held meanwhile: where it was put (the move's
@@ -177,10 +184,11 @@ pub struct Screen {
 
 impl Screen {
     /// Up, waiting for the zones round `at` (and, `entering`, for another
-    /// world's file first). A move while it is up waits for the new place.
-    pub fn begin(&mut self, at: [f32; 3], heading: f32, entering: bool, now: i64) {
+    /// world's file first), the move `Respawn`'s when `respawn`. A move
+    /// while it is up waits for the new place.
+    pub fn begin(&mut self, at: [f32; 3], heading: f32, entering: bool, respawn: bool, now: i64) {
         let since = self.wait.map_or(now, |w| w.since);
-        self.wait = Some(Wait { at, heading, entering: entering || self.wait.is_some_and(|w| w.entering), since, held: None });
+        self.wait = Some(Wait { at, heading, entering: entering || self.wait.is_some_and(|w| w.entering), respawn, since, held: None });
         #[cfg(target_arch = "wasm32")]
         let hold = crate::web::page_value("loadinghold");
         #[cfg(not(target_arch = "wasm32"))]
@@ -404,22 +412,22 @@ mod tests {
     fn the_screen_waits_for_the_arrival() {
         let mut s = Screen::default();
         assert!(!s.up() && s.end(true, 0).is_none());
-        s.begin([1.0, 2.0, 3.0], 0.5, false, 1000);
+        s.begin([1.0, 2.0, 3.0], 0.5, false, true, 1000);
         assert_eq!(s.waits_at(), Some([1.0, 2.0, 3.0]));
         assert_eq!(s.end(false, 1500), None, "the zones not in");
-        assert_eq!(s.end(true, 1600).map(|w| (w.at, w.heading)), Some(([1.0, 2.0, 3.0], 0.5)));
+        assert_eq!(s.end(true, 1600).map(|w| (w.at, w.heading, w.respawn)), Some(([1.0, 2.0, 3.0], 0.5, true)), "a teleport's: its floor cast again");
         assert!(!s.up());
         // a world change: nothing ends it until the world is entered
-        s.begin([5.0, 0.0, 5.0], 0.0, true, 2000);
+        s.begin([5.0, 0.0, 5.0], 0.0, true, true, 2000);
         assert_eq!(s.waits_at(), None);
         assert_eq!(s.end(true, 2100), None);
-        s.begin([6.0, 0.0, 6.0], 1.0, false, 2200);
+        s.begin([6.0, 0.0, 6.0], 1.0, false, false, 2200);
         assert_eq!(s.wait.map(|w| (w.since, w.entering)), Some((2000, true)), "a second move keeps the first's start and its world change");
         s.entered();
         assert_eq!(s.waits_at(), Some([6.0, 0.0, 6.0]));
-        assert!(s.end(true, 2300).is_some());
+        assert_eq!(s.end(true, 2300).map(|w| w.respawn), Some(false), "the second move's own: a dump's, as given");
         // the cap
-        s.begin([0.0; 3], 0.0, true, 10_000);
+        s.begin([0.0; 3], 0.0, true, false, 10_000);
         assert_eq!(s.end(false, 10_000 + CAP_MS - 1), None);
         assert!(s.end(false, 10_000 + CAP_MS).is_some());
     }
@@ -431,14 +439,14 @@ mod tests {
     fn the_walk_is_held_where_the_move_put_it() {
         let mut s = Screen::default();
         assert_eq!(s.hold_at([1.0; 3], 0.0), None, "nothing up");
-        s.begin([5.0, 54.0, 5.0], 1.0, false, 0);
+        s.begin([5.0, 54.0, 5.0], 1.0, false, true, 0);
         assert_eq!(s.hold_at([5.0, 54.0, 5.0], 1.0), Some(([5.0, 54.0, 5.0], 1.0)));
         assert_eq!(s.hold_at([5.0, 40.0, 7.0], 0.5), Some(([5.0, 54.0, 5.0], 1.0)), "drifted: back");
         // another move: its own place
-        s.begin([9.0, 54.0, 9.0], 2.0, false, 10);
+        s.begin([9.0, 54.0, 9.0], 2.0, false, true, 10);
         assert_eq!(s.hold_at([9.0, 60.0, 9.0], 2.0), Some(([9.0, 60.0, 9.0], 2.0)));
         // a world change: the old world's walk is not held; the new one is
-        s.begin([1.0, 2.0, 3.0], 0.0, true, 20);
+        s.begin([1.0, 2.0, 3.0], 0.0, true, true, 20);
         assert_eq!(s.hold_at([9.0, 60.0, 9.0], 2.0), None);
         s.entered();
         assert_eq!(s.hold_at([1.0, 9.0, 3.0], 0.0), Some(([1.0, 9.0, 3.0], 0.0)));
