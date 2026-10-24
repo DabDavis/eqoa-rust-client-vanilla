@@ -414,9 +414,11 @@ mod device {
         listed: Arc<Mutex<Vec<Listed>>>,
         stop: Arc<AtomicBool>,
         devices: Vec<Device>,
-        /// each one that could not be opened or failed a read, and when: it
-        /// is tried again 2 s on (and stays gilrs's meanwhile)
-        failed: HashMap<String, Instant>,
+        /// each one that could not be opened or failed a read, when, and
+        /// whether the open was refused: it is tried again 2 s on (a refused
+        /// one stays gilrs's meanwhile; a failed read is most likely one
+        /// unplugged)
+        failed: HashMap<String, (Instant, bool)>,
         /// the ones whose refusal was said (once each)
         said: Vec<String>,
     }
@@ -445,7 +447,7 @@ mod device {
             let listed = self.listed.lock().map(|l| l.clone()).unwrap_or_default();
             self.devices.retain(|d| listed.iter().any(|l| l.path == d.listed.path));
             let now = Instant::now();
-            self.failed.retain(|p, t| listed.iter().any(|l| l.path == *p) && now.duration_since(*t) < Duration::from_secs(2));
+            self.failed.retain(|p, (t, _)| listed.iter().any(|l| l.path == *p) && now.duration_since(*t) < Duration::from_secs(2));
             for l in &listed {
                 if self.devices.iter().any(|d| d.listed.path == l.path) || self.failed.contains_key(&l.path) {
                     continue;
@@ -459,7 +461,7 @@ mod device {
                             crate::say(&format!("gamepad: a {} could not be opened over HID (error {e}: another program may hold it alone); Windows.Gaming.Input reads it, in front only", l.model.label()));
                             self.said.push(l.path.clone());
                         }
-                        self.failed.insert(l.path.clone(), now);
+                        self.failed.insert(l.path.clone(), (now, true));
                     }
                 }
             }
@@ -469,7 +471,7 @@ mod device {
                     k += 1;
                 } else {
                     let d = self.devices.remove(k);
-                    self.failed.insert(d.listed.path.clone(), now);
+                    self.failed.insert(d.listed.path.clone(), (now, false));
                 }
             }
             self.devices.sort_by(|a, b| a.listed.path.cmp(&b.listed.path));
@@ -482,10 +484,10 @@ mod device {
     }
 
     impl Hid {
-        /// Whether a controller with these USB ids could not be opened (or
-        /// failed a read) lately: gilrs's reading of it stays gilrs's.
+        /// Whether a controller with these USB ids could not be opened
+        /// lately: gilrs's reading of it stays gilrs's.
         pub fn refused(&self, ids: (u16, u16)) -> bool {
-            self.listed.lock().is_ok_and(|l| l.iter().any(|x| x.ids == ids && self.failed.contains_key(&x.path)))
+            self.listed.lock().is_ok_and(|l| l.iter().any(|x| x.ids == ids && self.failed.get(&x.path).is_some_and(|f| f.1)))
         }
     }
 
