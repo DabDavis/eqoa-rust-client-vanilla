@@ -270,7 +270,7 @@ mod native {
         std::panic::set_hook(Box::new(move |info| {
             let bt = std::backtrace::Backtrace::force_capture();
             let thread = std::thread::current().name().unwrap_or("unnamed").to_string();
-            write_crash(&format!("A panic on the {thread} thread: {info}\n\nbacktrace:\n{bt}"), None);
+            write_crash(&format!("A panic on the {thread} thread: {info}\n\nbacktrace:\n{bt}"), None, SystemTime::now());
             let text = format!("thread '{thread}' {info}");
             if let Ok(mut l) = LOG.try_lock() {
                 for line in text.lines() {
@@ -503,7 +503,7 @@ mod native {
 
     // ---- crashes ------------------------------------------------------------
 
-    fn stamp(t: SystemTime) -> String {
+    pub(super) fn stamp(t: SystemTime) -> String {
         let s = t.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
         let (days, secs) = (s / 86400, s % 86400);
         // the civil date of a day count (Howard Hinnant's)
@@ -525,9 +525,10 @@ mod native {
 
     /// A crash report on disk now (`crashes/crash-<run>.txt`): `detail`,
     /// the state last noted, the log's last lines; scrubbed. `log` stands
-    /// in for this run's log (a run before's). Locks are only tried: a
-    /// panic may come while one is held.
-    fn write_crash(detail: &str, log: Option<(&str, &[String], &str)>) {
+    /// in for this run's log (a run before's). `at` is when the game
+    /// stopped (its `when:`). Locks are only tried: a panic may come while
+    /// one is held.
+    fn write_crash(detail: &str, log: Option<(&str, &[String], &str)>, at: SystemTime) {
         let Some(d) = crashes() else { return };
         let _ = std::fs::create_dir_all(&d);
         let run = RUN.try_lock().map(|r| r.clone()).unwrap_or_default();
@@ -543,7 +544,7 @@ mod native {
             "EQOA native client crash report\nversion: {} ({})\nwhen: {}\nplatform: {}\n\n--- crash ---\n{}\n\n[client, as last noted]\n{}\n\n[log] last {} lines\n{}\n",
             version(),
             channel(),
-            stamp(SystemTime::now()),
+            stamp(at),
             platform(),
             detail.trim_end(),
             if state.trim().is_empty() { "-" } else { state.trim_end() },
@@ -569,7 +570,9 @@ mod native {
         }
         let state = std::fs::read_to_string(dir.join(own("state", "txt"))).unwrap_or_default();
         let tail: Vec<String> = lines[lines.len().saturating_sub(LOG_LINES)..].iter().map(|l| l.chars().take(LOG_LINE_MAX).collect()).collect();
-        write_crash(&format!("The run of {run} ended without closing: killed, or stopped by a fault no panic caught (its log's last line is the last it wrote)."), Some((run, &tail, &state)));
+        // it stopped about when its log was last written, not now
+        let at = std::fs::metadata(prev).and_then(|m| m.modified()).unwrap_or_else(|_| SystemTime::now());
+        write_crash(&format!("The run of {run} ended without closing: killed, or stopped by a fault no panic caught (its log's last line is the last it wrote)."), Some((run, &tail, &state)), at);
     }
 
     /// The crash reports waiting, oldest first.
@@ -697,6 +700,26 @@ mod native {
         result: std::sync::Arc<Mutex<Option<Result<String, String>>>>,
         /// the buttons, as last drawn (frame pixels): what a click finds
         pub(super) buttons: Vec<([i32; 4], Button)>,
+        /// a crash report's own header: when the game stopped, in which
+        /// version (read once, as the dialog opens)
+        pub(super) stopped: Stopped,
+    }
+
+    /// What a crash report waiting says of itself: when the game stopped
+    /// (its `when:`) and the version it was (its `version:`), when it says.
+    #[derive(Clone, Debug, Default, PartialEq)]
+    pub(super) struct Stopped {
+        pub(super) at: Option<SystemTime>,
+        pub(super) version: Option<String>,
+    }
+
+    pub(super) fn stopped(f: &Path) -> Stopped {
+        let text = std::fs::read_to_string(f).unwrap_or_default();
+        let field = |k: &str| text.lines().take(8).find_map(|l| l.strip_prefix(k)).map(str::trim);
+        Stopped {
+            at: field("when: ").and_then(parse_stamp),
+            version: field("version: ").and_then(|v| v.split_whitespace().next()).map(str::to_string),
+        }
     }
 
     #[derive(Clone, Copy, Debug, PartialEq)]
@@ -727,8 +750,13 @@ mod native {
     impl Dialog {
         pub(super) fn new(kind: Kind) -> Dialog {
             let problem = kind == Kind::Problem;
+            let stopped = match &kind {
+                Kind::Crash(f) => stopped(f),
+                Kind::Problem => Stopped::default(),
+            };
             Dialog {
                 kind,
+                stopped,
                 note: String::new(),
                 name: if problem { name_kept() } else { String::new() },
                 field: Field::Note,
@@ -1049,23 +1077,26 @@ mod native {
         let (title, intro, label, fine) = match &dl.kind {
             Kind::Problem => (
                 "Report a problem".to_string(),
-                "What went wrong, and what were you doing?",
+                "What went wrong, and what were you doing?".to_string(),
                 "What happened",
                 "The note and the picture go on the public board (eqoaclassic.com/eqoa/reports/board), the rest to the developer only. Your account and password are never sent.",
             ),
-            Kind::Crash(f) => (
-                format!("The game stopped last time ({})", when(f)),
-                "It wrote a crash report: sending it helps it get fixed.",
-                "What you were doing (optional)",
-                "It goes to the developer and is not shown anywhere. Your account and password are never sent.",
-            ),
+            Kind::Crash(_) => {
+                let (title, intro) = crash_words(&dl.stopped, &version(), SystemTime::now());
+                (
+                    title,
+                    intro,
+                    "What you were doing (optional)",
+                    "It goes to the developer and is not shown anywhere. Your account and password are never sent.",
+                )
+            }
         };
         // what goes where, top to bottom: (x, y, text, colour)
         let mut lines: Vec<(i32, i32, String, [f32; 4])> = Vec::new();
         let mut y = 0;
         lines.push((tx, y, title, gold));
         y += h + 6;
-        for l in wrap(r, intro, tw) {
+        for l in wrap(r, &intro, tw) {
             lines.push((tx, y, l, dim));
             y += h;
         }
@@ -1151,15 +1182,57 @@ mod native {
         (START.get_or_init(Instant::now).elapsed().as_millis() / 500).is_multiple_of(2)
     }
 
-    /// A crash report's time, off its name (`crash-20261023-010203.txt`).
-    fn when(f: &Path) -> String {
-        let s = f.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-        let s = s.trim_start_matches("crash-");
-        if s.len() >= 13 && s.is_char_boundary(13) {
-            format!("{}-{}-{} {}:{} UTC", &s[0..4], &s[4..6], &s[6..8], &s[9..11], &s[11..13])
-        } else {
-            s.to_string()
+    /// `stamp`'s time again, off its text (`20261023-010203`, UTC).
+    pub(super) fn parse_stamp(s: &str) -> Option<SystemTime> {
+        let b = s.as_bytes();
+        if b.len() != 15 || b[8] != b'-' || !b[..8].iter().chain(&b[9..]).all(u8::is_ascii_digit) {
+            return None;
         }
+        let n = |r: std::ops::Range<usize>| s[r].parse::<i64>().unwrap_or(0);
+        let (y, m, d) = (n(0..4), n(4..6), n(6..8));
+        if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+            return None;
+        }
+        // the day count of a civil date (Howard Hinnant's), `stamp`'s the other way
+        let y = if m <= 2 { y - 1 } else { y };
+        let era = y.div_euclid(400);
+        let yoe = y - era * 400;
+        let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        let days = era * 146097 + doe - 719468;
+        let secs = days * 86400 + n(9..11) * 3600 + n(11..13) * 60 + n(13..15);
+        Some(UNIX_EPOCH + Duration::from_secs(u64::try_from(secs).ok()?))
+    }
+
+    /// How long before `now` the time `at` was, in a player's words.
+    pub(super) fn ago(at: SystemTime, now: SystemTime) -> String {
+        let s = now.duration_since(at).map_or(0, |d| d.as_secs());
+        let n = |k: u64, one: &str, many: &str| if k == 1 { one.to_string() } else { format!("{k} {many}") };
+        match s {
+            0..60 => "less than a minute ago".to_string(),
+            60..3600 => format!("{} ago", n(s / 60, "a minute", "minutes")),
+            3600..172800 => format!("{} ago", n(s / 3600, "an hour", "hours")),
+            _ => format!("{} days ago", s / 86400),
+        }
+    }
+
+    /// A crash report's title and first words: when the game stopped, and
+    /// that it was another version when it was not `this` one. A report
+    /// waits until it is sent or deleted, so the one offered after an
+    /// update's restart is from before it (F3 crash 20261023-225944, sent
+    /// with "no crash, just notified about update": the title said "last
+    /// time" and gave the hour its run had started, in UTC).
+    pub(super) fn crash_words(s: &Stopped, this: &str, now: SystemTime) -> (String, String) {
+        let title = match s.at {
+            Some(at) => format!("The game stopped {}", ago(at, now)),
+            None => "The game stopped earlier".to_string(),
+        };
+        let then = "It wrote a crash report then: sending it helps it get fixed.";
+        let intro = match &s.version {
+            Some(v) if v != this => format!("That was in an earlier version of the game ({v}). {then}"),
+            _ => then.to_string(),
+        };
+        (title, intro)
     }
 }
 
@@ -1257,6 +1330,90 @@ mod tests {
         assert_eq!(e.field, Field::Note, "no picture: Tab goes from the name back to the note");
         draw_dialog(&mut e, &vui, &mut NullRaster);
         assert!(e.buttons.iter().all(|b| b.1 != Button::Picture), "no picture: no row");
+    }
+
+    /// The strings a raster was asked to draw.
+    #[derive(Default)]
+    struct Words(Vec<String>);
+
+    impl vi::ui::Raster for Words {
+        fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn stretch_blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+        fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+        fn draw_string(&mut self, _: [i32; 2], _: [f32; 4], s: &[u16]) {
+            self.0.push(String::from_utf16_lossy(s));
+        }
+        fn draw_centered_string(&mut self, _: [i32; 2], _: [f32; 4], s: &[u16], _: u32) {
+            self.0.push(String::from_utf16_lossy(s));
+        }
+        fn string_width(&self, s: &[u16]) -> i32 {
+            s.len() as i32 * 8
+        }
+        fn point_size(&self) -> i32 {
+            16
+        }
+        fn viewport(&self) -> [i32; 4] {
+            [0, 0, 640, 448]
+        }
+        fn set_viewport(&mut self, _: [i32; 4]) {}
+    }
+
+    /// A crash report waiting says how long ago the game stopped (its
+    /// `when:`, `stamp`'s text read back) and, when it was another version,
+    /// that it was an earlier one (F3 crash 20261023-225944: offered after
+    /// an update's restart, it said "last time" with the hour its run had
+    /// started, and its player wrote "no crash, just notified about
+    /// update"). The controls: this version's own report names no version,
+    /// a report with no header says no time, and a malformed stamp is none.
+    #[test]
+    fn a_crash_says_when_it_stopped_and_in_which_version() {
+        use crate::pointer::testing::vui;
+        use native::{Dialog, Kind, Stopped, ago, crash_words, draw_dialog, parse_stamp, stamp};
+        use std::time::{Duration, UNIX_EPOCH};
+        let at = |s: u64| UNIX_EPOCH + Duration::from_secs(s);
+        // to text and back: a leap day, the end of February in a century's
+        // year that is no leap year, the first second
+        assert_eq!(stamp(at(951_782_400)), "20000229-000000");
+        for s in [0, 951_782_400, 1_792_755_679, 4_107_542_399, 4_107_542_400] {
+            assert_eq!(parse_stamp(&stamp(at(s))), Some(at(s)), "{}", stamp(at(s)));
+        }
+        assert_eq!(parse_stamp("20261023-114119"), Some(at(1_792_755_679)));
+        for bad in ["20261023-1141", "2026102x-114119", "20261323-114119", "20261023 114119", ""] {
+            assert_eq!(parse_stamp(bad), None, "{bad:?}");
+        }
+        let now = at(1_800_000_000);
+        let before = |s: u64| now - Duration::from_secs(s);
+        assert_eq!(ago(before(30), now), "less than a minute ago");
+        assert_eq!(ago(before(60), now), "a minute ago");
+        assert_eq!(ago(before(150), now), "2 minutes ago");
+        assert_eq!(ago(before(3600), now), "an hour ago");
+        assert_eq!(ago(before(11 * 3600 + 18 * 60), now), "11 hours ago");
+        assert_eq!(ago(before(3 * 86400), now), "3 days ago");
+        assert_eq!(ago(now + Duration::from_secs(5), now), "less than a minute ago", "a clock put back");
+        // the report as it waited: written at 11:41 by e768e44, offered at
+        // 22:59 by 3ff30da
+        let dir = std::env::temp_dir().join(format!("eqoa-crash-words-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("crash-20261023-093148.txt");
+        std::fs::write(&f, "EQOA native client crash report\nversion: dev-e768e44 (dev)\nwhen: 20261023-114119\nplatform: Windows x86_64\n\n--- crash ---\nA panic\n").unwrap();
+        let mut d = Dialog::new(Kind::Crash(f));
+        assert_eq!(d.stopped, Stopped { at: Some(at(1_792_755_679)), version: Some("dev-e768e44".into()) });
+        let offered = at(1_792_755_679 + 11 * 3600 + 18 * 60 + 25);
+        let (title, intro) = crash_words(&d.stopped, "dev-3ff30da", offered);
+        assert_eq!(title, "The game stopped 11 hours ago");
+        assert_eq!(intro, "That was in an earlier version of the game (dev-e768e44). It wrote a crash report then: sending it helps it get fixed.");
+        assert_eq!(crash_words(&d.stopped, "dev-e768e44", offered).1, "It wrote a crash report then: sending it helps it get fixed.", "the control: this version's own");
+        // drawn: the dialog asks the clock, so its age is today's
+        let mut w = Words::default();
+        d.shot_wanted = None;
+        draw_dialog(&mut d, &vui(), &mut w);
+        assert!(w.0.iter().any(|l| l.starts_with("The game stopped ") && l.ends_with(" ago")), "{:?}", w.0);
+        assert!(w.0.iter().all(|l| !l.contains("last time")), "{:?}", w.0);
+        let none = Dialog::new(Kind::Crash(dir.join("crash-missing.txt")));
+        assert_eq!(none.stopped, Stopped::default());
+        assert_eq!(crash_words(&none.stopped, "dev-3ff30da", offered), ("The game stopped earlier".to_string(), "It wrote a crash report then: sending it helps it get fixed.".to_string()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A report too long for the server is cut, at a character, saying so.
