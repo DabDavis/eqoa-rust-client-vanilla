@@ -38,10 +38,21 @@ const USA_2002_MARK: &str = "DATA2/CHARCUST.CSF";
 /// The worlds the 2002 disc has: Tunaria alone (Frontiers added the others).
 const WORLDS_2002: &[&str] = &["TUNARIA.ESF"];
 
-/// The art in effect: Frontiers' or the 2002 disc's, as the player last chose
-/// it (`settings::art`).
+/// The art in effect: the 2002 disc's when the player last chose it
+/// (`settings::art`) and a 2002 disc is at hand, else Frontiers'. A choice
+/// kept from a visit before with no disc picked yet (a page's) draws
+/// Frontiers', and F9 asks for the disc rather than turning to an art that
+/// was not drawn.
 pub fn current() -> Era {
-    crate::settings::art()
+    in_effect(crate::settings::art(), available())
+}
+
+/// The art in effect for the choice `art`, a disc at hand or not.
+fn in_effect(art: Era, have: bool) -> Era {
+    match art {
+        Era::Y2002 if have => Era::Y2002,
+        _ => Era::Frontiers,
+    }
 }
 
 /// Chooses the art and keeps the choice (`settings::set_art`).
@@ -345,6 +356,84 @@ pub fn install(lib: &mut Library, art: Vec<(String, Container)>) -> usize {
         n += 1;
     }
     n
+}
+
+// ---- a page's 2002 disc (`web`): judged by its listing, and F9's ask ------------
+
+/// `judge` over a disc's listing: its program, and whether `find` finds the
+/// USA disc's mark. A page judges the file it is handed this way, as
+/// `judge_image` judges an image natively.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn judge_listing(boot: Option<&str>, find: impl Fn(&str) -> bool) -> Result<(), String> {
+    judge(boot, find(USA_2002_MARK))
+}
+
+/// The line a page shows for the 2002 disc it took.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub const TAKEN_LINE: &str = "EverQuest Online Adventures (USA), SLUS-20470: its 2002 art is on F9.";
+
+thread_local! {
+    /// F9 asked a page for its 2002 disc (`note_asked`): the swap it was
+    /// pressed for goes on once one is in hand (`take_asked`).
+    static ASKED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A page asked the player for the 2002 disc, for F9.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn note_asked() {
+    ASKED.with(|c| c.set(true));
+}
+
+/// Whether F9 asked for the 2002 disc and one is in hand now: true once, for
+/// the window to press F9 again (the press that asked goes on).
+pub fn take_asked() -> bool {
+    take_asked_if(available())
+}
+
+/// `take_asked`, with whether a disc is in hand.
+fn take_asked_if(have: bool) -> bool {
+    ASKED.with(|c| {
+        let go = c.get() && have;
+        if go {
+            c.set(false);
+        }
+        go
+    })
+}
+
+#[cfg(test)]
+mod page_tests {
+    use super::*;
+
+    /// A page's file is judged by its listing as an image is: the USA disc
+    /// by its program and its DATA2; the same program without them is the
+    /// beta, Frontiers is refused.
+    #[test]
+    fn a_listing_is_judged_as_an_image_is() {
+        assert_eq!(judge_listing(Some(USA_2002), |p| p.eq_ignore_ascii_case("DATA2/CHARCUST.CSF")), Ok(()));
+        // the control: nothing found under DATA2
+        assert!(judge_listing(Some(USA_2002), |_| false).unwrap_err().contains("beta"));
+        assert!(judge_listing(Some(crate::discs::FRONTIERS), |_| true).unwrap_err().contains("Frontiers disc"));
+    }
+
+    /// The 2002 art is in effect only with a disc at hand; Frontiers' is
+    /// whatever is at hand.
+    #[test]
+    fn the_2002_art_needs_its_disc() {
+        assert_eq!(in_effect(Era::Y2002, true), Era::Y2002);
+        assert_eq!(in_effect(Era::Y2002, false), Era::Frontiers, "the control: chosen, no disc");
+        assert_eq!(in_effect(Era::Frontiers, true), Era::Frontiers);
+    }
+
+    /// F9's ask goes on once, and only once a disc is in hand.
+    #[test]
+    fn an_ask_goes_on_once_the_disc_comes() {
+        assert!(!take_asked_if(true), "nothing asked: nothing goes on");
+        note_asked();
+        assert!(!take_asked_if(false), "asked, no disc yet: it waits");
+        assert!(take_asked_if(true), "the disc came: it goes on");
+        assert!(!take_asked_if(true), "once");
+    }
 }
 
 #[cfg(test)]

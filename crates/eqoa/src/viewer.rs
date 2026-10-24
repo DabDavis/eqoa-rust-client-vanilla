@@ -1531,9 +1531,12 @@ struct App {
     era_loading: Option<crate::era::Loading>,
     /// `EQOA_ART_AT`: when a test's script presses F9 (ms on `clock`).
     art_script: Vec<i64>,
-    /// The art last applied (`apply_era`), against which the setting's
-    /// moves are seen (`poll_era`).
+    /// The art last applied (`apply_era`), against which the art in effect
+    /// is seen to move (`poll_era`).
     art_drawn: esf::Era,
+    /// The art as last chosen (`settings::art`), against which the Extended
+    /// page's row is seen to move.
+    art_chosen: esf::Era,
 }
 
 pub fn run(lib: Library, source: Source) -> Result<(), Error> {
@@ -1623,6 +1626,7 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         era_loading: None,
         art_script: std::env::var("EQOA_ART_AT").map(|v| v.split(';').filter_map(|t| t.trim().parse().ok()).collect()).unwrap_or_default(),
         art_drawn,
+        art_chosen: crate::settings::art(),
     };
     #[cfg(target_arch = "wasm32")]
     {
@@ -1723,7 +1727,8 @@ impl App {
         self.keys_edge.clear();
         crate::era::set(want);
         crate::say(&format!("art: {}", crate::era::line(want)));
-        self.art_drawn = want;
+        self.art_chosen = crate::settings::art();
+        self.art_drawn = crate::era::current();
         self.apply_era();
     }
 
@@ -1762,20 +1767,30 @@ impl App {
             self.art_script.remove(0);
             self.toggle_era();
         }
+        // a page's 2002 disc, handed over after F9 asked for it: the 2002 art
+        // that F9 was pressed for
+        if crate::era::take_asked() {
+            crate::era::set(esf::Era::Y2002);
+            self.art_chosen = esf::Era::Y2002;
+        }
         // the Extended page's Art as it moves (Triangle puts it back): the
         // 2002 disc asked for the first time, the row back on Frontiers'
-        // without one
-        let want = crate::era::current();
-        if want != self.art_drawn {
-            self.art_drawn = want;
-            if want == esf::Era::Y2002 && !crate::era::available() && !crate::era::ask() {
+        // while there is none (a page's comes later, `take_asked`)
+        let chosen = crate::settings::art();
+        if chosen != self.art_chosen {
+            self.art_chosen = chosen;
+            if chosen == esf::Era::Y2002 && !crate::era::available() && !crate::era::ask() {
                 let mut c = crate::settings::client();
                 c.art = esf::Era::Frontiers;
                 crate::settings::set_client(c);
-                self.art_drawn = esf::Era::Frontiers;
-            } else {
-                self.apply_era();
+                self.art_chosen = esf::Era::Frontiers;
             }
+        }
+        // the art in effect (`era::current`), drawn
+        let want = crate::era::current();
+        if want != self.art_drawn {
+            self.art_drawn = want;
+            self.apply_era();
         }
         let Some(r) = self.era_loading.as_mut().and_then(|l| l.poll()) else { return };
         self.era_loading = None;

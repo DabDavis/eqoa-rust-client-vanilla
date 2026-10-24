@@ -711,9 +711,8 @@ impl Client {
                     self.phase = 2;
                     self.select.connecting();
                     self.state = 20;
-                    // `EQOA_GAME_PORT`: a test server's list names the default port
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let ep = if std::env::var_os("EQOA_GAME_PORT").is_some() { (ep & !0xFFFF_0000) | (super::port("EQOA_GAME_PORT", super::GAME_PORT) as u64) << 16 } else { ep };
+                    // `EQOA_GAME_PORT` (a page's `?game_port=`): a test server's list names the default port
+                    let ep = if super::port_given("EQOA_GAME_PORT") { (ep & !0xFFFF_0000) | (super::port("EQOA_GAME_PORT", super::GAME_PORT) as u64) << 16 } else { ep };
                     if let Some(s) = self.session.as_mut() {
                         s.connect_shard(ep);
                     }

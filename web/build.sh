@@ -17,7 +17,7 @@ cargo build --release --target wasm32-unknown-unknown -p eqoa
 rm -rf web/dist
 STAGE=web/dist/stage
 mkdir -p "$STAGE"
-wasm-bindgen --target web --no-typescript --out-dir "$STAGE" --out-name eqoa target/wasm32-unknown-unknown/release/eqoa.wasm
+wasm-bindgen --target web --no-typescript --out-dir "$STAGE" --out-name eqoa "${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/release/eqoa.wasm"
 OPT="$(command -v wasm-opt || true)"
 [ -z "$OPT" ] && [ -x "$HOME/emsdk/upstream/bin/wasm-opt" ] && OPT="$HOME/emsdk/upstream/bin/wasm-opt"
 if [ -n "$OPT" ]; then
