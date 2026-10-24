@@ -457,16 +457,29 @@ pub struct Play {
     /// The walk's walk speed as `SetSpeed` leaves it: 3, or 0 with a run
     /// speed of 0 (InitParms' 3 until then).
     walk_speed: f32,
-    /// Frames drawn, for the far characters' turns at a pose (`FAR_POSE_EVERY`).
+    /// Frames drawn, for the far characters' turns at a pose
+    /// (`far_pose_every`), and how many were far the last frame.
     drawn: u32,
+    far_last: u32,
 }
 
 /// Past the game's own distance (drawn only for NPC/PC View Distance) a
-/// character's pose is taken one frame drawn in this many, each in its slot's
-/// turn, and its place every frame: there it is a few pixels tall, and with
-/// two hundred in view their poses, on the EE's floats, were most of a frame
-/// (measured: 16 of 25 ms).
-const FAR_POSE_EVERY: u32 = 4;
+/// character is posed every frame while no more than this many are there;
+/// with more, each takes its turn (its slot's) one frame drawn in as many as
+/// keeps the poses to about this many a frame, and its place every frame:
+/// there it is a few pixels tall, and with two hundred in view their poses,
+/// on the EE's floats, were most of a frame (measured: 16 of 25 ms). Posed
+/// one frame in four however few they were, a character walking there
+/// stepped at a quarter of the frame rate (F3 20261024-065253: Desert
+/// Madmen, a human's LOD body, at 110 in the dawn fog).
+const FAR_POSE_BUDGET: u32 = 50;
+
+/// How many frames drawn a far character waits between poses with `far` of
+/// them in view: every frame up to `FAR_POSE_BUDGET`, then about that many
+/// poses a frame.
+fn far_pose_every(far: u32) -> u32 {
+    far.div_ceil(FAR_POSE_BUDGET).max(1)
+}
 
 /// `gWorldInfo`'s paths on the Frontiers disc, by world index (CLIENT's
 /// table names six; a server's S2 can add more, which are not read here).
@@ -1301,6 +1314,33 @@ mod creature_sprite {
 }
 
 #[cfg(test)]
+mod far_poses {
+    use super::*;
+
+    /// How many far characters `frame` poses on each of `frames` frames
+    /// drawn with `far` of them in view, each in its slot's turn, through
+    /// the turns `every` gives.
+    fn posed(far: u32, frames: u32, every: impl Fn(u32) -> u32) -> Vec<u32> {
+        (0..frames).map(|d| (0..far).filter(|&slot| d.wrapping_add(slot).is_multiple_of(every(far))).count() as u32).collect()
+    }
+
+    /// A few far characters are posed every frame, as near ones are; a
+    /// crowd takes turns, about `FAR_POSE_BUDGET` a frame. The control: one
+    /// frame in four however few (the client's before) poses a quarter of
+    /// Sandstorm's 24.
+    #[test]
+    fn far_characters_are_posed_every_frame_unless_a_crowd() {
+        for few in [1, 3, 24, FAR_POSE_BUDGET] {
+            assert!(posed(few, 8, far_pose_every).iter().all(|&n| n == few), "{few} far: every one, every frame");
+        }
+        assert!(posed(200, 8, far_pose_every).iter().all(|&n| n == 50), "200 far: fifty a frame");
+        assert!(posed(204, 10, far_pose_every).iter().all(|&n| (40..=41).contains(&n)), "204 far: about forty a frame");
+        assert_eq!(far_pose_every(0), 1);
+        assert!(posed(24, 8, |_| 4).iter().all(|&n| n == 6), "the control: a quarter of 24");
+    }
+}
+
+#[cfg(test)]
 mod held {
     use super::*;
 
@@ -1383,7 +1423,7 @@ impl Play {
         crate::s2::begin_session();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: 0, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), slot_asked: None, walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0 };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: 0, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), slot_asked: None, walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0 };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -2128,6 +2168,9 @@ impl Play {
             self.session.send_state(0x40, &msg);
         }
         let me = self.self_id32();
+        // the far characters' turns, by how many were far the last frame
+        let every = far_pose_every(self.far_last);
+        let mut far = 0;
         for (slot, entity) in self.entities.slots.iter().enumerate() {
             let want = entity.as_ref().filter(|e| Some(e.id) != me && e.model != 0);
             if let Some(e) = entity
@@ -2173,12 +2216,13 @@ impl Play {
             // body the one level its distance picks (`VILODSprite::Raster`),
             // from no farther than the game's camera could be (`lod::eye`);
             // out to NPC/PC View Distance where that is farther (`lod`), and
-            // there posed in its turn (`FAR_POSE_EVERY`), past it not at all.
+            // there posed in its turn (`far_pose_every`), past it not at all.
             let at = Vect3::new(f(e.actor_pos[0]), f(e.actor_pos[1]), f(e.actor_pos[2]));
             let eye = crate::lod::eye(&walker.cam, &walker.eye.position);
             let shown = crate::lod::within(&at, &eye, crate::lod::view_dist(&p.gpu.lod_dists));
             let near = crate::lod::within(&at, &eye, crate::lod::off_dist(&p.gpu.lod_dists));
-            let pose = p.first || near || (shown && self.drawn.wrapping_add(slot as u32).is_multiple_of(FAR_POSE_EVERY));
+            far += (shown && !near) as u32;
+            let pose = p.first || near || (shown && self.drawn.wrapping_add(slot as u32).is_multiple_of(every));
             let (matrix, palette) = match p.sprite.as_mut() {
                 Some(cs) => {
                     p.anims.time = game_ms;
@@ -2243,6 +2287,7 @@ impl Play {
                 a.visible = shown;
             }
         }
+        self.far_last = far;
         // Extrapolate: each actor where the entity is drawn
         self.place_actors(walker, lib);
         self.spells_frame(walker, lib, game_ms, sound);
