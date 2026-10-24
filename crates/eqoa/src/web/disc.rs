@@ -166,13 +166,30 @@ impl WebDisc {
             // off the disc of the art drawn when that disc has the world
             // (`era::world_era`: Tunaria off the 2002 disc), and saying so
             let d2 = (crate::era::world_era(name) == esf::Era::Y2002).then(super::disc_2002_copy).flatten();
-            let era = if d2.is_some() { esf::Era::Y2002 } else { esf::Era::Frontiers };
-            let mut d = d2.unwrap_or_else(|| WebDisc { file: file.clone(), len, entries: entries.clone(), sparse: Sparse::new(len) });
+            let frontiers = WebDisc { file: file.clone(), len, entries: entries.clone(), sparse: Sparse::new(len) };
             let (o, name) = (out.clone(), name.to_string());
             wasm_bindgen_futures::spawn_local(async move {
                 let t = web_time::Instant::now();
                 let r = async {
-                    let c = d.container(&name).await?;
+                    // the 2002 disc's world where it places the arrival
+                    // (`super::places`), else Frontiers'
+                    let mut off_2002 = None;
+                    if let Some(mut d2) = d2 {
+                        let c = d2.container(&name).await?;
+                        match super::places(&c, x, z) {
+                            true => off_2002 = Some((d2, c)),
+                            false => super::log(&format!("art: the 2002 disc's {name} places no zone at the arrival: Frontiers' world instead")),
+                        }
+                    }
+                    let era = if off_2002.is_some() { esf::Era::Y2002 } else { esf::Era::Frontiers };
+                    let (d, c) = match off_2002 {
+                        Some(both) => both,
+                        None => {
+                            let mut f = frontiers;
+                            let c = f.container(&name).await?;
+                            (f, c)
+                        }
+                    };
                     let mut lib = esf::Library::new();
                     let f = lib.add(&name, c);
                     let base = d.find(&name).ok_or("the world left the disc")?.lba as u64 * iso::SECTOR;

@@ -113,6 +113,15 @@ pub fn port(var: &str, default: u16) -> u16 {
     default
 }
 
+/// Whether a test server's port was given for `var` (`port`): natively its
+/// environment variable, in a page its `?` value.
+pub fn port_given(var: &str) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    return std::env::var_os(var).is_some();
+    #[cfg(target_arch = "wasm32")]
+    return crate::web::page_port(var).is_some();
+}
+
 pub const AUTH_PORT: u16 = 9735;
 pub const GAME_PORT: u16 = 10070;
 

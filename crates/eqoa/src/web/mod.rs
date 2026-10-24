@@ -311,6 +311,13 @@ pub async fn disc_2002(file: Option<web_sys::File>) -> JsValue {
     js_sys::Array::of2(&ok.into(), &line.into()).into()
 }
 
+/// Whether a world file opened deferred has a zone at (x, z): the 2002
+/// disc's Tunaria is taken only where it does (the world's base read as
+/// Frontiers' is), else Frontiers' world, so a page always enters a world.
+pub(crate) fn places(c: &esf::Container, x: f32, z: f32) -> bool {
+    vi::world::World::<vi::fpu::Ee>::zone_at(c, x, z).is_some()
+}
+
 /// The files `names` names off the 2002 disc, each found by its last part,
 /// wherever that disc keeps it, and read whole; one it lacks is left out
 /// (`era::Files`).
@@ -741,11 +748,20 @@ fn world_loader(disc: &WebDisc) -> crate::pregame::host::WorldLoader {
                 let [x, _, z] = player.pos;
                 // the world off the disc of the art drawn when that disc has
                 // it (`era::world_era`: Tunaria off the 2002 disc), as natively
-                let off_2002 = (crate::era::world_era(&world) == esf::Era::Y2002).then(disc_2002_copy).flatten();
+                let mut off_2002 = None;
+                if crate::era::world_era(&world) == esf::Era::Y2002
+                    && let Some(mut d2) = disc_2002_copy()
+                {
+                    status(&format!("reading {world} (the 2002 disc's)"));
+                    let c = d2.container(&world).await?;
+                    match places(&c, x, z) {
+                        true => off_2002 = Some((d2, c)),
+                        false => log(&format!("art: the 2002 disc's {world} places no zone at the spawn: Frontiers' world instead")),
+                    }
+                }
                 let (main, n) = match off_2002 {
-                    Some(mut d2) => {
-                        status(&format!("reading {world} (the 2002 disc's)"));
-                        let main = lib.add_from(&world, d2.container(&world).await?, esf::Era::Y2002);
+                    Some((d2, c)) => {
+                        let main = lib.add_from(&world, c, esf::Era::Y2002);
                         (main, d2.fill(&mut lib, main, x, z).await?)
                     }
                     None => {
