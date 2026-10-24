@@ -67,6 +67,7 @@ mod bgm;
 mod bindpage;
 mod binds;
 mod blacksmith;
+mod gear;
 mod gram;
 mod hud;
 mod damage;

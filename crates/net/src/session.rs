@@ -151,6 +151,11 @@ pub enum Event {
     InvUnequip(u8),
     /// 0x000A (`Msg000A`): item `slot` onto quick slot `pos`.
     QuickSlot { slot: u8, pos: u8 },
+    /// 0x0021 (SOE's live client, not the disc: its dispatcher's case at
+    /// 0x012CADEC): weapon set `slot`, its name (kept to 15 characters, a
+    /// 32-byte buffer) and its main and off hands' items by `VIItem::m_id`
+    /// (-1 none).
+    GearSet { slot: u8, name: String, main: u32, off: u32 },
     /// 0x0060 (`Msg0060`): the item with inventory id `id` at `hp`.
     ItemHp { id: u32, hp: i32 },
     /// 0x0772 (`Msg0772`): the group's roster, ids and names.
@@ -762,6 +767,11 @@ impl Session {
             0x003F => ev.push(Event::InvEquip { i: r.u8(), slot: r.u8() }),
             0x0040 => ev.push(Event::InvUnequip(r.u8())),
             0x000A => ev.push(Event::QuickSlot { slot: r.u8(), pos: r.u8() }),
+            0x0021 => {
+                let slot = r.u8();
+                let name = r.wide(16);
+                ev.push(Event::GearSet { slot, name, main: r.u32(), off: r.u32() });
+            }
             0x0060 => {
                 let id = r.u32();
                 ev.push(Event::ItemHp { id, hp: r.signed() as i32 });

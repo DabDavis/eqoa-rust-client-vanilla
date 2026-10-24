@@ -5,7 +5,12 @@
 //! `BuildEquipMenu`): the tabs Usable, Equipment, Charged and Misc (words
 //! 437, 438, 1473, 439), each item's sub-menu (use or equip, inspect, quick
 //! slot, move, destroy), the description of the selected item beside the
-//! list, and the quick-slot mode.
+//! list, and the quick-slot mode. With SOE's final live client's layout
+//! (`gear`: a server that keeps weapon sets) the quick slots are its own
+//! (potions on 0-1, gems on 2-3) and Prepare on a weapon makes a weapon set:
+//! its weapon-set mode, the sets' column and their name editor
+//! (`VIWndEdit`), read off that build
+//! (`../claude-notes/live-toolbars-gear-sets-20261024.md`).
 //!
 //! What it asks of the client comes back as `ItemOut`, which `play` sends.
 //! A pointer (`pointer`) takes the tabs, the rows and their popups, the
@@ -15,6 +20,7 @@
 
 use crate::client_image::{Menu, MenuEntry, Menus};
 use crate::dialog::{BoxAnswer, Key as BoxKey, MBox};
+use crate::editbox::{EditBox, EditUp};
 use crate::infotext::{self, Info};
 use crate::inventory;
 use crate::pointer::{Hits, key};
@@ -26,11 +32,13 @@ use net::dump::ItemList;
 use render::ui::Anchor;
 use vi::ui::{Raster, Vui, Window, wide};
 
-/// `sSlotIcons`: the icon on each quick slot.
+/// `sSlotIcons`: the icon on each quick slot; the live client's (0x013FCED0)
+/// a gem's on 3 too.
 const SLOT_ICONS: [i32; 4] = [5, 5, 3, 2];
+const SLOT_ICONS_LIVE: [i32; 4] = [5, 5, 3, 3];
 
 /// What the item menu asks of the client.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ItemOut {
     /// `UseItem(i, b)`: 0x003E (62), use or equip
     UseItem(i32, u8),
@@ -40,6 +48,8 @@ pub enum ItemOut {
     Swap(i32, i32),
     /// `RequestQuickSlot(i, pos)`: 0x000A
     QuickSlot(i32, i32),
+    /// The live client's `RequestGearSet(set, name)` (0x012C33E8): 0x0021
+    GearSet(i32, String),
     /// 260 to the start menu: back to its main menu
     Back,
 }
@@ -229,6 +239,10 @@ enum Focus {
     Menu,
     /// the quick-slot mode, the item menu itself
     Slots,
+    /// the live client's weapon-set mode, the item menu itself
+    Gear,
+    /// the live client's set name editor (`m_edit`)
+    Edit,
     Inspect,
     Quantity,
     MBox,
@@ -239,7 +253,8 @@ pub struct ItemMenu {
     /// A usable, B equipment, C charged, D misc (by `m_menu`)
     menus: [WndMenu; 4],
     tab: i32,
-    /// the tab shown, -1 in the quick-slot mode, -2 none
+    /// the tab shown, -1 in the quick-slot mode, -2 in the weapon-set mode
+    /// (the live client's; the disc's none was -2), -3 none
     menu: i32,
     item: i32,
     slot: i32,
@@ -256,9 +271,13 @@ pub struct ItemMenu {
     pub visible: bool,
     /// the four inventory menus as this frame built them (`set_built`)
     built: (Menus, [usize; 4]),
-    /// the tabs and the quick slots, where they were drawn
+    /// the tabs and the quick slots (or the sets), where they were drawn
     tab_hits: Hits,
     slot_hits: Hits,
+    /// the live client's weapon sets this frame (`set_gear`)
+    gear: crate::gear::View,
+    /// the set name editor (`m_edit`, the live `Init`'s `VIWndEdit`)
+    edit: EditBox,
 }
 
 impl Default for ItemMenu {
@@ -268,7 +287,7 @@ impl Default for ItemMenu {
         ItemMenu {
             menus: std::array::from_fn(|_| WndMenu::new([32, 48], 1)),
             tab: 0,
-            menu: -2,
+            menu: -3,
             item: -1,
             slot: 0,
             alpha: 1.0,
@@ -285,6 +304,13 @@ impl Default for ItemMenu {
             built: (Menus::default(), [0; 4]),
             tab_hits: Hits::default(),
             slot_hits: Hits::default(),
+            gear: crate::gear::View::default(),
+            edit: {
+                // the live Init: centred on (320, 310) as it is made
+                let mut e = EditBox::default();
+                e.set_center([320, 310]);
+                e
+            },
         }
     }
 }
@@ -302,11 +328,12 @@ impl ItemMenu {
             Focus::Inspect => Vec::new(),
             Focus::Quantity => self.quantity.point(p),
             Focus::MBox => self.mbox.point(p).then_some(key::CROSS).into_iter().collect(),
-            Focus::Slots => match self.slot_hits.at(p) {
+            Focus::Slots | Focus::Gear => match self.slot_hits.at(p) {
                 Some(i) if i == self.slot => vec![key::CROSS],
                 Some(i) => crate::pointer::steps(self.slot, i, key::UP, key::DOWN),
                 None => Vec::new(),
             },
+            Focus::Edit => self.edit.point(p).flatten().into_iter().collect(),
             Focus::Menu if self.menu >= 0 => {
                 let m = &mut self.menus[self.menu as usize];
                 match self.tab_hits.at(p) {
@@ -324,6 +351,17 @@ impl ItemMenu {
             Focus::Menu => Vec::new(),
         }
     }
+    /// The live client's weapon sets this frame (`gear::Gear::view`): with
+    /// them on, the quick slots and Prepare are the live client's.
+    pub fn set_gear(&mut self, v: crate::gear::View) {
+        self.gear = v;
+    }
+
+    /// The set name editor has the keys: the keyboard types into it.
+    pub fn typing(&self) -> bool {
+        self.visible && self.focus == Focus::Edit
+    }
+
     /// The frame's four menus (`SetMenuA`..`D` point the tabs at them).
     pub fn set_built(&mut self, built: (Menus, [usize; 4])) {
         for (m, &k) in self.menus.iter_mut().zip(&built.1) {
@@ -394,7 +432,8 @@ impl ItemMenu {
     }
 
     /// `ChangeSlot`: slots 0-1 for a type-2 item; type 7 and the third
-    /// slot's items stay put.
+    /// slot's items stay put. The live client's (0x013745E0): a type-7 item
+    /// over 2-3, any other over 0-1.
     fn change_slot(&mut self, d: i32, inv: &ItemList, now: i64, cues: &mut Vec<i32>) {
         let p4c = inv.items.get(self.item.max(0) as usize).map_or(0, |it| it.item.p4c);
         if self.slot + d < 0 {
@@ -403,6 +442,13 @@ impl ItemMenu {
         } else if self.slot + d >= 4 {
             cues.push(9);
             self.slot = 3;
+        } else if self.gear.on {
+            if (p4c == 7) == (self.slot + d >= 2) {
+                cues.push(11);
+                self.slot += d;
+            } else {
+                cues.push(9);
+            }
         } else if self.slot == 3 || p4c == 7 {
             cues.push(9);
         } else if self.slot + d < 2 {
@@ -422,17 +468,59 @@ impl ItemMenu {
         self.slot_name = inventory::find_by_quick_slot(inv, self.slot as i64).map_or_else(String::new, |i| inv.items[i].item.name.clone());
     }
 
+    /// The live client's `ChangeGearSlot` (0x013746F8): the set chosen, 0-3.
+    fn change_gear_slot(&mut self, d: i32, now: i64, cues: &mut Vec<i32>) {
+        let n = self.slot + d;
+        if n < 0 {
+            cues.push(9);
+            self.slot = 0;
+        } else if n >= crate::gear::SETS as i32 {
+            cues.push(9);
+            self.slot = crate::gear::SETS as i32 - 1;
+        } else {
+            cues.push(11);
+            self.slot = n;
+        }
+        self.update_gear_name();
+        self.fade_in = 1;
+        self.alpha = 1.0;
+        self.time = now;
+    }
+
+    /// The live client's `UpdateGearName` (0x01374810): the set's name.
+    fn update_gear_name(&mut self) {
+        self.slot_name = self.gear.names.get(self.slot.max(0) as usize).cloned().unwrap_or_default();
+    }
+
     /// `AssignSlot`: tab A's items go to slot 0 (type 2) or 2 (type 7), tab
-    /// B's to 3; the quick-slot mode starts.
-    fn assign_slot(&mut self, tab: usize, item: i32, inv: &ItemList) -> bool {
+    /// B's to 3; the quick-slot mode starts. With the live client's sets
+    /// (its `AssignSlot`, 0x01373EF0) a weapon of tab B makes a set instead:
+    /// worn first when it is not (`UseItem(i, 0)`), and the weapon-set mode
+    /// starts on the first empty set, else the first. (The live one updates
+    /// the quick slots' name before it sets the slot, and so names the last
+    /// slot's item until the cursor moves: here the disc's order.)
+    fn assign_slot(&mut self, tab: usize, item: i32, inv: &ItemList, out: &mut Vec<ItemOut>) -> bool {
         self.item = item;
-        let p4c = inv.items.get(item.max(0) as usize).map_or(0, |it| it.item.p4c);
+        let it = inv.items.get(item.max(0) as usize).filter(|_| item >= 0);
+        let p4c = it.map_or(0, |it| it.item.p4c);
         match tab {
             0 => match p4c {
                 2 => self.slot = 0,
                 7 => self.slot = 2,
                 _ => return false,
             },
+            1 if self.gear.on => {
+                let Some(it) = it.filter(|it| crate::gear::preparable(it.item.wear_slot)) else { return false };
+                if it.equip_slot == -1 {
+                    out.push(ItemOut::UseItem(item, 0));
+                }
+                self.slot = (0..crate::gear::SETS).find(|&k| self.gear.empty[k]).unwrap_or(0) as i32;
+                self.menus[tab].list.set_x64(false);
+                self.menu = -2;
+                self.update_gear_name();
+                self.focus = Focus::Gear;
+                return true;
+            }
             1 => self.slot = 3,
             _ => return false,
         }
@@ -586,6 +674,49 @@ impl ItemMenu {
                     _ => {}
                 }
             }
+            // the live client's OnKeyDown in the weapon-set mode: X opens the
+            // name editor on the set's name (SetRows(1), SetMaxLength(16),
+            // its title word 160)
+            Focus::Gear => {
+                if !down {
+                    return;
+                }
+                match key {
+                    27 | 132 => {
+                        cues.push(8);
+                        self.back_to_menu(now);
+                    }
+                    13 | 134 => {
+                        cues.push(13);
+                        let name = wide(&self.gear.names.get(self.slot.max(0) as usize).cloned().unwrap_or_default());
+                        self.edit.set_rows(1);
+                        self.edit.set_max_length(crate::gear::NAME_MAX);
+                        self.edit.set_text(&name);
+                        self.edit.title = wide(&crate::gear::word(&vui.words, 160, vui.language));
+                        self.edit.focus(now);
+                        self.focus = Focus::Edit;
+                    }
+                    19 | 138 => self.change_gear_slot(-1, now, cues),
+                    20 | 139 => self.change_gear_slot(1, now, cues),
+                    _ => {}
+                }
+            }
+            // the name editor: done is the live OnMessage 259, RequestGearSet
+            // with its text, cancelled 260; either goes back to the menu
+            Focus::Edit => {
+                if !down {
+                    self.edit.key_up(key);
+                    return;
+                }
+                match self.edit.key(vui, &*r, key, now, cues) {
+                    EditUp::Done(_) => {
+                        out.push(ItemOut::GearSet(self.slot, String::from_utf16_lossy(&self.edit.text)));
+                        self.back_to_menu(now);
+                    }
+                    EditUp::Cancel => self.back_to_menu(now),
+                    EditUp::None => {}
+                }
+            }
             Focus::Menu => {
                 let Some(tab) = (self.menu >= 0).then_some(self.menu as usize) else { return };
                 // left and right fall through the menu to here (OnKeyDown)
@@ -648,7 +779,7 @@ impl ItemMenu {
                     }
                 }
                 0x0207_0000 => {
-                    if (tab == 0 || tab == 1) && !self.assign_slot(tab, id, inv) {
+                    if (tab == 0 || tab == 1) && !self.assign_slot(tab, id, inv, out) {
                         sound = 10;
                     }
                 }
@@ -716,13 +847,15 @@ impl ItemMenu {
         lift[1] = pos[1] - e.uv1[1] / 2;
         vui.blit_ex(r, e.x00, lift, 0, 1.0, 0);
         let width = self.window.size[0];
-        if self.menu != -1 {
-            let desc = wide(&self.desc);
-            self.window.text_box(vui, r, &desc, 20, 0, width - 40, 15, white, 3);
-        } else {
-            self.draw_slots(vui, r);
+        match self.menu {
+            -1 => self.draw_slots(vui, r),
+            -2 => self.draw_gear_slots(vui, r),
+            _ => {
+                let desc = wide(&self.desc);
+                self.window.text_box(vui, r, &desc, 20, 0, width - 40, 15, white, 3);
+            }
         }
-        if self.menu == -1 {
+        if self.menu == -1 || self.menu == -2 {
             if self.fade_in == -1 {
                 self.alpha = (self.alpha - dt * 2.0).max(0.0);
                 if self.alpha == 0.0 {
@@ -749,6 +882,9 @@ impl ItemMenu {
         if self.focus == Focus::MBox {
             self.mbox.draw(vui, r, now);
         }
+        if self.focus == Focus::Edit {
+            self.edit.draw(vui, r, now, cues);
+        }
     }
 
     /// `DrawSlots`: the slot column, the cursor pulsing on the slot, the
@@ -766,12 +902,50 @@ impl ItemMenu {
         }
         vui.blit_ex_size(r, 158, base, [top.uv1[0], 3], 0, 1.0, 2);
         self.slot_hits.clear();
-        for (i, &icon) in SLOT_ICONS.iter().enumerate() {
+        let icons = if self.gear.on { SLOT_ICONS_LIVE } else { SLOT_ICONS };
+        for (i, &icon) in icons.iter().enumerate() {
             self.slot_hits.push([pos[0] - 6, pos[1] - 4, pos[0] + 28, pos[1] + 28], i as i32);
             if i as i32 == self.slot {
                 vui.blit_ex(r, 86, [pos[0] - 25, pos[1] + 2], 3, self.alpha, 1);
             }
             vui.blit(r, icon, pos);
+            pos[1] += 32;
+        }
+        let width = self.window.size[0];
+        let name = wide(&self.slot_name);
+        self.window.text_box(vui, r, &name, 20, 11, width - 40, 2, [1.0; 4], 11);
+    }
+
+    /// The live client's `DrawGearSlots` (0x01372FB0): the quick slots'
+    /// column a row taller, the cursor pulsing on the set, each of the sets'
+    /// menu's five entries (the sets, bare hands) its badge then its icon,
+    /// whole (`VIUI::Blit(id, at)`), and the set's name.
+    fn draw_gear_slots(&mut self, vui: &Vui, r: &mut dyn Raster) {
+        let mut base = [522, 60];
+        let mut pos = [base[0] + 6, base[1] + 8];
+        let (top, mid) = (vui.entry(158), vui.entry(121));
+        vui.blit_ex(r, top.x00, base, 0, 1.0, 0);
+        base[1] += top.uv1[1];
+        for k in 0..5 {
+            let h = if k == 4 { mid.uv1[1] - 4 } else { mid.uv1[1] };
+            vui.blit_ex_size(r, mid.x00, base, [34, h], 0, 1.0, 0);
+            base[1] += h;
+        }
+        vui.blit_ex_size(r, 158, base, [top.uv1[0], 3], 0, 1.0, 2);
+        self.slot_hits.clear();
+        for i in 0..crate::gear::ENTRIES {
+            // only a set is chosen; bare hands is shown
+            if i < crate::gear::SETS {
+                self.slot_hits.push([pos[0] - 6, pos[1] - 4, pos[0] + 28, pos[1] + 28], i as i32);
+            }
+            if i as i32 == self.slot {
+                vui.blit_ex(r, 86, [pos[0] - 25, pos[1] + 2], 3, self.alpha, 1);
+            }
+            for id in [self.gear.badges[i], self.gear.icons[i]] {
+                if id != -1 {
+                    vui.blit_id(r, id as u32, pos, 0, 1.0, 0);
+                }
+            }
             pos[1] += 32;
         }
         let width = self.window.size[0];
@@ -1011,4 +1185,201 @@ mod tests {
         assert_eq!(menus.list[t[0]].entries[0].icon, 100);
         assert_eq!(menus.list[t[0]].entries[0].number, 3);
     }
+
+    /// Words 159 and 160 as the disc has them ("UNUSED"), the rest empty.
+    fn gear_vui() -> Vui {
+        let mut lines = vec![String::new(); 160];
+        lines[158] = "UNUSED".into();
+        lines[159] = "UNUSED".into();
+        let words = vi::strtab::StringTable::parse(lines.join("\n").as_bytes()).unwrap();
+        let mut vui = Vui::new(words, Default::default(), Vec::new());
+        vui.time = 1_000;
+        vui
+    }
+
+    fn gear_view(empty: [bool; 4]) -> crate::gear::View {
+        crate::gear::View {
+            on: true,
+            names: ["Dirk".into(), String::new(), "Pick".into(), String::new(), "bare hands".into()],
+            icons: [11, -1, 12, -1, 15],
+            badges: [21, -1, -1, -1, -1],
+            empty,
+        }
+    }
+
+    /// SOE's live layout (its `AssignSlot`, `OnKeyDown` and `OnMessage`):
+    /// Prepare on a weapon not worn puts it on first (`UseItem(i, 0)`) and
+    /// starts the weapon-set mode on the first empty set; up and down pick
+    /// 0-3 with sound 9 at the ends; X opens the name editor on the set's
+    /// name, titled "NAME CONFIGURATION" where the disc's word 160 is
+    /// "UNUSED"; Enter sends the set its name (`RequestGearSet`, 0x0021) and
+    /// the menu is back; Escape sends nothing. A weapon already worn is not
+    /// put on again, and an item Prepare makes no set of is refused. The
+    /// control: without the sets, Prepare on a weapon is the disc's slot 3.
+    #[test]
+    fn prepare_on_a_weapon_makes_a_weapon_set() {
+        let vui = gear_vui();
+        let mut worn = it(14, 0, 0, 1);
+        worn.equip_slot = 14;
+        let inv = ItemList { p04: 0, items: vec![it(12, 0, 0, 1), worn, it(5, 0, 0, 1)] };
+        let words = vui.words.clone();
+        let base = [0; 29];
+        let info = Info { words: &words, inv: &inv, hp: [0; 4], base: &base, class: 0, level: 1, attack_words: &[] };
+        let mut r = crate::pointer::testing::NullRaster;
+        let menu = |gear: Option<crate::gear::View>| {
+            let mut m = ItemMenu::default();
+            m.set_built(build(&inv, [30, 30, 30, 40], &|_| -1, &|_| true));
+            if let Some(g) = gear {
+                m.set_gear(g);
+            }
+            m
+        };
+        let (mut cues, mut out) = (Vec::new(), Vec::new());
+        // the control: the disc's, slot 3 and the quick-slot mode
+        let mut m = menu(None);
+        m.action(1, 0x0207_0000, 0, &inv, &info, &vui, &mut r, false, &mut cues, &mut out);
+        assert!(out.is_empty() && m.focus == Focus::Slots && (m.menu, m.slot) == (-1, 3), "the disc's Prepare");
+        // the live layout
+        let mut m = menu(Some(gear_view([false, true, false, true])));
+        m.action(1, 0x0207_0000, 0, &inv, &info, &vui, &mut r, false, &mut cues, &mut out);
+        assert_eq!(out, vec![ItemOut::UseItem(0, 0)], "the sword not worn: put on first");
+        assert!(m.focus == Focus::Gear && (m.menu, m.slot) == (-2, 1), "the first empty set, 1");
+        let mut press = |m: &mut ItemMenu, k: i32, cues: &mut Vec<i32>, out: &mut Vec<ItemOut>| {
+            m.key(&vui, &mut r, k, true, &inv, &info, false, cues, out);
+        };
+        cues.clear();
+        out.clear();
+        press(&mut m, 19, &mut cues, &mut out);
+        press(&mut m, 19, &mut cues, &mut out);
+        assert_eq!((m.slot, cues.as_slice()), (0, &[11, 9][..]), "up to 0, then its end");
+        assert_eq!(m.slot_name, "Dirk", "the set's name shown");
+        for _ in 0..4 {
+            press(&mut m, 20, &mut cues, &mut out);
+        }
+        assert_eq!((m.slot, cues.last()), (3, Some(&9)), "down to 3, never bare hands");
+        press(&mut m, 19, &mut cues, &mut out);
+        assert_eq!(m.slot, 2);
+        press(&mut m, 13, &mut cues, &mut out);
+        assert!(m.focus == Focus::Edit && m.typing() == m.visible, "the name editor");
+        assert_eq!(String::from_utf16_lossy(&m.edit.text), "Pick", "on the set's name");
+        assert_eq!(String::from_utf16_lossy(&m.edit.title), "NAME CONFIGURATION");
+        // Escape: nothing sent, back to the menu
+        press(&mut m, 27, &mut cues, &mut out);
+        assert!(out.is_empty() && m.focus == Focus::Menu, "cancelled");
+        // again, the name typed over: Enter sends it
+        m.action(1, 0x0207_0000, 1, &inv, &info, &vui, &mut crate::pointer::testing::NullRaster, false, &mut cues, &mut out);
+        assert!(out.is_empty(), "the worn dirk: nothing put on");
+        press(&mut m, 13, &mut cues, &mut out);
+        for _ in 0..4 {
+            press(&mut m, 8, &mut cues, &mut out);
+        }
+        for c in "Tank".chars() {
+            press(&mut m, c as i32, &mut cues, &mut out);
+        }
+        press(&mut m, 13, &mut cues, &mut out);
+        assert_eq!(out, vec![ItemOut::GearSet(1, "Tank".into())], "set 1, the first empty, named");
+        assert!(m.focus == Focus::Menu && m.menu >= 0, "back to the menu");
+        // a tunic: no set, refused
+        out.clear();
+        cues.clear();
+        m.action(1, 0x0207_0000, 2, &inv, &info, &vui, &mut crate::pointer::testing::NullRaster, false, &mut cues, &mut out);
+        assert!(out.is_empty() && m.focus == Focus::Menu && cues == [10], "refused with sound 10");
+    }
+
+    /// The live quick slots (its `ChangeSlot`): a gem moves over 2-3 and
+    /// anything else over 0-1. The control: the disc's keeps a gem on 2.
+    #[test]
+    fn the_live_quick_slots_take_gems_on_2_and_3() {
+        let vui = gear_vui();
+        let inv = ItemList { p04: 0, items: vec![it(-1, 7, 0, 1), it(-1, 2, 0, 1)] };
+        let words = vui.words.clone();
+        let base = [0; 29];
+        let info = Info { words: &words, inv: &inv, hp: [0; 4], base: &base, class: 0, level: 1, attack_words: &[] };
+        let mut r = crate::pointer::testing::NullRaster;
+        for live in [false, true] {
+            let mut m = ItemMenu::default();
+            m.set_built(build(&inv, [30, 30, 30, 40], &|_| -1, &|_| true));
+            if live {
+                m.set_gear(gear_view([true; 4]));
+            }
+            let (mut cues, mut out) = (Vec::new(), Vec::new());
+            m.action(0, 0x0207_0000, 0, &inv, &info, &vui, &mut r, false, &mut cues, &mut out);
+            assert_eq!(m.slot, 2, "a gem starts on 2");
+            cues.clear();
+            m.key(&vui, &mut r, 20, true, &inv, &info, false, &mut cues, &mut out);
+            m.key(&vui, &mut r, 19, true, &inv, &info, false, &mut cues, &mut out);
+            m.key(&vui, &mut r, 19, true, &inv, &info, false, &mut cues, &mut out);
+            if live {
+                assert_eq!((m.slot, cues.as_slice()), (2, &[11, 11, 9][..]), "live: down to 3, back to 2, not below");
+            } else {
+                assert_eq!((m.slot, cues.as_slice()), (2, &[9, 9, 9][..]), "the disc's: a gem stays on 2");
+            }
+            m.key(&vui, &mut r, 13, true, &inv, &info, false, &mut cues, &mut out);
+            assert_eq!(out, vec![ItemOut::QuickSlot(0, 2)]);
+            // a potion: 0-1 in both
+            out.clear();
+            cues.clear();
+            m.action(0, 0x0207_0000, 1, &inv, &info, &vui, &mut r, false, &mut cues, &mut out);
+            m.key(&vui, &mut r, 20, true, &inv, &info, false, &mut cues, &mut out);
+            m.key(&vui, &mut r, 20, true, &inv, &info, false, &mut cues, &mut out);
+            assert_eq!((m.slot, &cues[1..]), (1, &[11, 9][..]), "live {live}: a potion to 1, not 2");
+        }
+    }
+
+    /// Records where whole surfaces are blitted (the sets' badges and icons).
+    #[derive(Default)]
+    struct Whole(Vec<(u32, [i32; 2])>);
+
+    impl Layout for Whole {}
+
+    impl Raster for Whole {
+        fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn stretch_blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+        fn blit_full(&mut self, id: u32, _: u32, at: [i32; 2], _: i32, _: f32) {
+            self.0.push((id, at));
+        }
+        fn draw_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16]) {}
+        fn draw_centered_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16], _: u32) {}
+        fn string_width(&self, s: &[u16]) -> i32 {
+            s.len() as i32 * 8
+        }
+        fn point_size(&self) -> i32 {
+            16
+        }
+        fn viewport(&self) -> [i32; 4] {
+            [0, 0, 640, 448]
+        }
+        fn set_viewport(&mut self, _: [i32; 4]) {}
+    }
+
+    /// The weapon-set mode's column (`DrawGearSlots`): each of the five
+    /// entries' badge, then its icon, whole, at (528, 68) and 32 apart, bare
+    /// hands last; a pointer on a set's row steps to it and on the chosen
+    /// one presses X, and the bare hands row takes none.
+    #[test]
+    fn the_sets_column_is_drawn_and_pointed_at() {
+        let vui = gear_vui();
+        let mut worn = it(14, 0, 0, 1);
+        worn.equip_slot = 14;
+        let inv = ItemList { p04: 0, items: vec![worn] };
+        let words = vui.words.clone();
+        let base = [0; 29];
+        let info = Info { words: &words, inv: &inv, hp: [0; 4], base: &base, class: 0, level: 1, attack_words: &[] };
+        let mut m = ItemMenu::default();
+        m.set_built(build(&inv, [30, 30, 30, 40], &|_| -1, &|_| true));
+        m.set_gear(gear_view([false; 4]));
+        m.open(&vui, &crate::pointer::testing::NullRaster);
+        let (mut cues, mut out) = (Vec::new(), Vec::new());
+        m.action(1, 0x0207_0000, 0, &inv, &info, &vui, &mut crate::pointer::testing::NullRaster, false, &mut cues, &mut out);
+        assert_eq!((m.menu, m.slot), (-2, 0), "every set prepared: the first");
+        let mut r = Whole::default();
+        m.draw(&vui, &mut r, &info, &mut cues);
+        assert_eq!(r.0, vec![(21, [528, 68]), (11, [528, 68]), (12, [528, 132]), (15, [528, 196])], "set 0's badge then icon, set 2's icon, bare hands' icon");
+        let row = |k: i32| [540.0, (68 + 32 * k + 10) as f32];
+        assert_eq!(m.point(row(2)), vec![key::DOWN, key::DOWN]);
+        assert_eq!(m.point(row(0)), vec![key::CROSS]);
+        assert!(m.point(row(4)).is_empty(), "bare hands is not a set to name");
+    }
+
 }

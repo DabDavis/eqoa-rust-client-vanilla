@@ -5,6 +5,26 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-24 · SOE's final toolbars: weapon sets, two potions and two gems
+- On a server that keeps weapon sets (eqoaclassic does), the HUD's menus are
+  the ones the live game had at its end. Pressing right on the d-pad goes
+  from your two ability bars to the items, then to a new fourth menu: four
+  weapon sets of your own and "bare hands". Press X on a set to take its
+  weapons up in one go; bare hands puts away everything in your hands.
+- Making a set: in Items, pick a weapon on the Equipment tab (a sword, an
+  axe, a bow, a staff, a fishing pole or a tool) and choose Prepare. If you
+  are not holding it, you take it up first. Pick one of the four sets with up
+  and down, press X and type a name (up to 15 letters). A set remembers both
+  your hands as they are at that moment, so hold what you want in your off
+  hand (a second weapon or a shield) before you prepare it.
+- The item quick slots are the live game's too: two potions and two gems
+  (stones, wands, costumes and other items you use), where the disc had one
+  gem and a weapon.
+- On other servers the menus stay as the disc has them.
+- Options > Extended no longer has Ability Bars: the extra third and fourth
+  ability bars are gone for now, and the spell book offers the game's ten
+  slots again.
+
 ## 2026-10-24 · The weather after a port
 - After a teleport, a coach ride or coming back to life, the sky now turns
   at once to the sky of where you arrive, as on a PlayStation 2, instead of

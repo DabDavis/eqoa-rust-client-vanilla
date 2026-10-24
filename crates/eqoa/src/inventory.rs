@@ -192,15 +192,18 @@ pub fn take_off(l: &mut ItemList, slot: i64) -> Option<i32> {
 
 /// `Msg000A`: item `slot` onto quick slot `pos` (0-1 a type-2 item, 2 a
 /// type-7, 3 what `FitsSlot3` takes), taking it off whatever had it. (The
-/// game's `pos == 255` clear can never pass after `pos < 4`.)
-pub fn quick_slot(l: &mut ItemList, slot: usize, pos: u8) {
+/// game's `pos == 255` clear can never pass after `pos < 4`.) With SOE's live
+/// layout (`live`, `gear`) a type-7 item goes on 3 as on 2 and nothing else
+/// does (its `Msg000A`, 0x012D3550).
+pub fn quick_slot(l: &mut ItemList, slot: usize, pos: u8, live: bool) {
     if pos >= 4 {
         return;
     }
     let pos = pos as i64;
     let prev = l.items.iter().position(|it| it.quick_slot == pos);
     let Some(it) = l.items.get(slot) else { return };
-    if (it.item.p4c == 2 && pos < 2) || (it.item.p4c == 7 && pos == 2) || (fits_slot3(it) && pos == 3) {
+    let fits = if live { (it.item.p4c == 2 && pos < 2) || (it.item.p4c == 7 && (2..4).contains(&pos)) } else { (it.item.p4c == 2 && pos < 2) || (it.item.p4c == 7 && pos == 2) || (fits_slot3(it) && pos == 3) };
+    if fits {
         if let Some(p) = prev {
             l.items[p].quick_slot = -1;
         }
@@ -272,14 +275,32 @@ mod tests {
     #[test]
     fn quick_slots_by_type() {
         let mut l = ItemList { p04: 0, items: vec![item(1, -1, 2, 1, 0), item(2, -1, 7, 1, 1), item(3, 14, 0, 1, 2)] };
-        quick_slot(&mut l, 0, 1);
-        quick_slot(&mut l, 1, 1);
+        quick_slot(&mut l, 0, 1, false);
+        quick_slot(&mut l, 1, 1, false);
         assert_eq!((l.items[0].quick_slot, l.items[1].quick_slot), (1, -1), "type 7 only on 2");
-        quick_slot(&mut l, 1, 2);
-        quick_slot(&mut l, 2, 3);
+        quick_slot(&mut l, 1, 2, false);
+        quick_slot(&mut l, 2, 3, false);
         assert_eq!((l.items[1].quick_slot, l.items[2].quick_slot), (2, 3));
-        quick_slot(&mut l, 0, 3);
+        quick_slot(&mut l, 0, 3, false);
         assert_eq!(l.items[0].quick_slot, 1, "a type-2 item does not fit 3");
         assert_eq!(find_by_quick_slot(&l, 3), Some(2));
+    }
+
+    /// SOE's live layout (`gear`): a gem (type 7) on 3 as on 2, which takes
+    /// the weapon the disc's rule put there off it; a weapon fits none and a
+    /// potion still only 0-1 (the controls).
+    #[test]
+    fn the_live_layout_takes_gems_on_3() {
+        let mut l = ItemList { p04: 0, items: vec![item(1, -1, 2, 1, 0), item(2, -1, 7, 1, 1), item(3, 14, 0, 1, 2)] };
+        quick_slot(&mut l, 2, 3, false);
+        assert_eq!(l.items[2].quick_slot, 3, "the disc's: a weapon on 3");
+        quick_slot(&mut l, 1, 3, true);
+        assert_eq!((l.items[1].quick_slot, l.items[2].quick_slot), (3, -1), "a gem on 3, the weapon off it");
+        quick_slot(&mut l, 2, 3, true);
+        assert_eq!(l.items[2].quick_slot, -1, "no weapon on 3 in the live layout");
+        quick_slot(&mut l, 0, 2, true);
+        assert_eq!(l.items[0].quick_slot, -1, "a potion not on 2");
+        quick_slot(&mut l, 0, 1, true);
+        assert_eq!(l.items[0].quick_slot, 1);
     }
 }

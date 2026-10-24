@@ -121,14 +121,12 @@ pub struct Play {
     /// (`m_p2BB60`) that 0x0032 echoes.
     pub abilities: std::collections::BTreeMap<i64, net::dump::Ability>,
     ability_token: u32,
-    /// The HUD's three quick menus.
+    /// The HUD's quick menus.
     pub hud_menus: crate::hudmenu::HudMenus,
-    /// A 0x0033 for a slot past the game's ten (the Extended page's Ability
-    /// Bars) waiting for its 0x00B4: (display index, slot, the session's
-    /// clock when it was sent, in ms). A server that keeps only the game's slots
-    /// (Sandstorm, measured 2026-10-23: slots 10 and 13 dropped, slot 3
-    /// answered) never answers it, and the player is told (`slot_unanswered`).
-    slot_asked: Option<(i64, i64, i64)>,
+    /// The live client's weapon sets, kept by a server that sends them
+    /// (0x0021; `gear`): with them the HUD and the item menu are SOE's final
+    /// layout.
+    pub gear: crate::gear::Gear,
     /// What the server's messages asked of the atmosphere this frame, in
     /// their order (`Atmos`), for `weather::Weather::take`.
     pub weather: Vec<Atmos>,
@@ -1435,7 +1433,7 @@ impl Play {
         crate::s2::begin_session();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: 0, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), slot_asked: None, walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0 };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: 0, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0 };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -1660,7 +1658,11 @@ impl Play {
                         self.cues.push(crate::sound::Cue::Ui(c));
                     }
                 }
-                Event::QuickSlot { slot, pos } => crate::inventory::quick_slot(&mut self.dump.inventory, slot as usize, pos),
+                Event::QuickSlot { slot, pos } => crate::inventory::quick_slot(&mut self.dump.inventory, slot as usize, pos, self.gear.on),
+                Event::GearSet { slot, name, main, off } => {
+                    eprintln!("play: weapon set {slot} {name:?}: items {} and {} (0x0021)", main as i32, off as i32);
+                    self.gear.set(slot, name, main, off);
+                }
                 Event::ItemHp { id, hp } => {
                     // Msg0060: the hit points and sound 1
                     if let Some(k) = crate::inventory::find(&self.dump.inventory, id) {
@@ -1800,9 +1802,6 @@ impl Play {
                 }
                 Event::AbilitySlot { token, index, slot } => {
                     self.ability_token = token;
-                    if self.slot_asked.is_some_and(|(i, _, _)| i == index as i64) {
-                        self.slot_asked = None;
-                    }
                     self.ability_slot(index as i64, slot as i64);
                 }
                 Event::AbilityMoveSlot { token, from, to } => {
@@ -4116,6 +4115,15 @@ impl Play {
                         self.session.send_msg(10, slot, pos as u8);
                     }
                 }
+                // the live client's RequestGearSet: 0x0021, sets 0-3
+                ItemOut::GearSet(set, name) => {
+                    if (0..crate::gear::SETS as i32).contains(&set) {
+                        eprintln!("play: weapon set {set} prepared as {name:?} (0x0021)");
+                        let mut w = net::stream::Writer::op(0x0021);
+                        w.u8(set as u8).wide(&name);
+                        self.session.send(&w.data);
+                    }
+                }
                 ItemOut::Back => {}
             }
         }
@@ -4152,6 +4160,7 @@ impl Play {
             &|k| crate::inventory::item_icon(&inv.items[k], flags) as i32,
             &|k| crate::inventory::can_use(&inv.items[k], pl.class, pl.race, pl.level),
         ));
+        self.items.set_gear(self.gear.view(inv, &vui.words, vui.language));
         let info = crate::infotext::Info {
             words: &vui.words,
             inv,
@@ -4219,9 +4228,6 @@ impl Play {
                 Out::Send0033(index, slot) => {
                     let name = self.abilities.values().find(|a| a.display_index == index).map_or_else(String::new, |a| a.name.clone());
                     eprintln!("play: memorize {name:?} (display index {index}) onto slot {slot}");
-                    if slot >= 10 {
-                        self.slot_asked = Some((index, slot, self.session.now() as i64));
-                    }
                     let mut w = net::stream::Writer::op(0x0033);
                     w.u32(self.ability_token).u8(index as u8).u8(slot as u8);
                     self.session.send(&w.data);
@@ -5284,6 +5290,12 @@ impl Play {
         self.mode == 30 && self.quick.typing()
     }
 
+    /// The start menu's item menu has a weapon set's name editor up (the
+    /// live client's): the keyboard types into it.
+    pub fn items_typing(&self) -> bool {
+        self.mode == 13 && self.items.typing()
+    }
+
     /// A quick-chat menu (not its editor) has the keys: the touch screen's
     /// pad keeps its d-pad, to hold a direction.
     pub fn quick_dpad(&mut self) -> bool {
@@ -5450,11 +5462,21 @@ impl Play {
         self.session.send(&w.data);
     }
 
-    /// The ability bars the HUD and the spell book show: one, or with the
-    /// expansion mask's bit 1 the game's two, or as many as the Extended
-    /// page's Ability Bars asks (their slots the server's to keep).
-    pub fn ability_bars(&self) -> i32 {
-        if (self.session.expansion >> 1) & 1 != 0 { (crate::settings::ability_bars() as i32).clamp(2, crate::hudmenu::MAX_BARS) } else { 1 }
+    /// What the HUD's carousel holds: the second ability bar (the expansion
+    /// mask's bit 1) and the weapon sets (a server that keeps them).
+    pub fn hud_bars(&self) -> crate::hudmenu::Bars {
+        crate::hudmenu::Bars { second: (self.session.expansion >> 1) & 1 != 0, gear: self.gear.on }
+    }
+
+    /// The live client's `UseGearSet` (0x012C3418): 0x0022 with the set
+    /// (4 bare hands).
+    fn use_gear_set(&mut self, set: i64) {
+        if (0..=crate::gear::BARE_HANDS).contains(&set) {
+            eprintln!("play: weapon set {set} taken up (0x0022)");
+            let mut w = net::stream::Writer::op(0x0022);
+            w.u8(set as u8);
+            self.session.send(&w.data);
+        }
     }
 
     /// A pad key for the HUD's quick menus in play (`VIWndHUDMenu::OnKeyDown`
@@ -5466,7 +5488,7 @@ impl Play {
             return;
         }
         let now = self.session.now() as i64;
-        let bars = self.ability_bars();
+        let bars = self.hud_bars();
         let mut cues = Vec::new();
         let used = self.hud_menus.key(key, now, bars, self.mode == 0, &mut cues);
         self.cues.extend(cues);
@@ -5474,22 +5496,10 @@ impl Play {
             match msg {
                 0x8060000 => self.send_0032(id),
                 0x2030000 => self.use_item(id as i32, 1),
+                crate::gear::MSG => self.use_gear_set(id),
                 _ => {}
             }
         }
-    }
-
-    /// A memorize past the game's ten slots that the server left unanswered
-    /// for three seconds (`slot_asked`): said in red, the client's words, as
-    /// the server did not keep it.
-    fn slot_unanswered(&mut self) {
-        let Some((_, slot, at)) = self.slot_asked else { return };
-        if (self.session.now() as i64) - at < 3000 {
-            return;
-        }
-        self.slot_asked = None;
-        eprintln!("play: no 0x00B4 for slot {slot}: the server keeps the game's ten slots only");
-        self.add_chat(format!("This server did not keep the ability on bar {}: it keeps abilities on the game's two bars only.", slot / 5 + 1), [1.0, 0.25, 0.25, 1.0]);
     }
 
     /// A line the client writes itself: word `id`, in red as the game's
@@ -6365,21 +6375,19 @@ impl Play {
             // the spell book: opened, its keys, drawn; what it asks for
             let now_ms = now as i64;
             let expansion = self.session.expansion;
-            let bars = self.ability_bars();
             if std::mem::take(&mut self.book_open) {
                 self.book.open(vui, &r, expansion, now_ms);
             }
             let mut book_out = Vec::new();
             for (k, down) in std::mem::take(&mut self.book_keys) {
                 if self.mode == 5 {
-                    book_out.extend(self.book.key(&self.abilities, bars, k, down, now_ms));
+                    book_out.extend(self.book.key(&self.abilities, expansion, k, down, now_ms));
                 }
             }
             if self.mode == 5 {
-                book_out.extend(self.book.draw(vui, &mut r, &self.abilities, self.dump.player.class as i32, bars, now_ms));
+                book_out.extend(self.book.draw(vui, &mut r, &self.abilities, self.dump.player.class as i32, expansion, now_ms));
             }
             self.book_actions(book_out);
-            self.slot_unanswered();
             if let Some(s) = self.start.as_mut() {
                 let mut cues = Vec::new();
                 s.menu.draw(vui, &mut r, &s.menus, now as i64, &start_stats, &mut cues);
@@ -6435,14 +6443,16 @@ impl Play {
             // menus open over it without `UpdateMode`, so it stays up there;
             // a server's player search hides them while it is up)
             if (self.mode == 0 || self.mode == 30 || self.mode == 38) && !self.search.open {
-                let bars = self.ability_bars();
-                self.hud_menus.build(&self.abilities, &self.dump.inventory.items, bars);
+                let bars = self.hud_bars();
+                self.hud_menus.build(&self.abilities, &self.dump.inventory, &self.gear, bars);
                 let abilities = &self.abilities;
                 let inventory = &self.dump.inventory.items;
+                let gear = &self.gear;
                 let name = |msg: u32, id: i64| -> Vec<u16> {
                     match msg {
                         0x08060000 => abilities.get(&id).map(|a| crate::ui::wide(&a.name)).unwrap_or_default(),
                         0x02030000 => inventory.get(id as usize).map(|it| crate::ui::wide(&it.item.name)).unwrap_or_default(),
+                        crate::gear::MSG => crate::ui::wide(&gear.name(id, &vui.words, vui.language)),
                         _ => Vec::new(),
                     }
                 };

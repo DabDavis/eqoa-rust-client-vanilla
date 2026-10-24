@@ -3,9 +3,7 @@
 //! ten levels, six rows of the abilities shown on the tab (by display
 //! index), the selected one's stats and description, a popup per ability
 //! (Memorize, Arrange, Unmemorize All, Exit) and the hot-bar slots it is
-//! put on (five, ten with the expansion's bit 1, and five more a bar of the
-//! client's with the Extended page's Ability Bars: slots 10-19, the list's
-//! ten rows showing them ten at a time, `draw_slots10`).
+//! put on (five, ten with the expansion's bit 1).
 //!
 //! What it asks of the server: `Send0033` (an ability's display index onto
 //! a slot; the answer is 0x00B4), `Send003A` (Arrange: one display index
@@ -312,9 +310,8 @@ impl SpellBook {
         self.desc = wide(&a.desc);
     }
 
-    /// A key, down or up (the game's codes): the popup's while it is up;
-    /// a slot is chosen of `bars` bars' (`slot_by`).
-    pub fn key(&mut self, abilities: &BTreeMap<i64, Ability>, bars: i32, key: i32, down: bool, now: i64) -> Vec<Out> {
+    /// A key, down or up (the game's codes): the popup's while it is up.
+    pub fn key(&mut self, abilities: &BTreeMap<i64, Ability>, expansion: u32, key: i32, down: bool, now: i64) -> Vec<Out> {
         let mut out = Vec::new();
         if self.popup.visible {
             self.popup_key(abilities, key, down, now, &mut out);
@@ -346,12 +343,12 @@ impl SpellBook {
             18 | 137 if self.mode == 0 => self.tab_by(1, now, &mut out),
             19 | 138 => match self.mode {
                 0 | 1 => self.flash.press(138),
-                2 => self.slot_by(-1, bars, now, &mut out),
+                2 => self.slot_by(-1, expansion, now, &mut out),
                 _ => {}
             },
             20 | 139 => match self.mode {
                 0 | 1 => self.flash.press(139),
-                2 => self.slot_by(1, bars, now, &mut out),
+                2 => self.slot_by(1, expansion, now, &mut out),
                 _ => {}
             },
             13 | 134 => match self.mode {
@@ -518,10 +515,9 @@ impl SpellBook {
         self.reset_fade(now);
     }
 
-    /// `Slot`: the slot chosen, five or ten (the expansion's bit 1), or five
-    /// a bar of the client's more.
-    fn slot_by(&mut self, d: i32, bars: i32, now: i64, out: &mut Vec<Out>) {
-        let count = 5 * bars.max(1);
+    /// `Slot`: the slot chosen, five or ten.
+    fn slot_by(&mut self, d: i32, expansion: u32, now: i64, out: &mut Vec<Out>) {
+        let count = if expansion & 2 != 0 { 10 } else { 5 };
         if self.slot + d >= count {
             out.push(Out::Sound(9));
             self.slot = count - 1;
@@ -550,9 +546,8 @@ impl SpellBook {
         self.reset_fade(now);
     }
 
-    /// `OnDrawSelf`, then the popup over it: the slots of `bars` bars (one,
-    /// the game's two with the expansion's bit 1, or the client's more).
-    pub fn draw(&mut self, vui: &Vui, r: &mut dyn Layout, abilities: &BTreeMap<i64, Ability>, class: i32, bars: i32, now: i64) -> Vec<Out> {
+    /// `OnDrawSelf`, then the popup over it.
+    pub fn draw(&mut self, vui: &Vui, r: &mut dyn Layout, abilities: &BTreeMap<i64, Ability>, class: i32, expansion: u32, now: i64) -> Vec<Out> {
         let mut out = Vec::new();
         if !self.visible {
             return out;
@@ -595,8 +590,8 @@ impl SpellBook {
         let n = self.rows.len() as i32;
         let t = if n >= 7 { self.top as f32 / (n - 6) as f32 } else { 0.0 };
         self.window.draw_vscroll(vui, r, [137, 47], 270, t);
-        if bars >= 2 {
-            self.draw_slots10(vui, r, abilities, bars);
+        if expansion & 2 != 0 {
+            self.draw_slots10(vui, r, abilities);
         } else {
             self.draw_slots(vui, r, abilities);
         }
@@ -774,50 +769,26 @@ impl SpellBook {
     }
 
     /// `DrawSlots10`: ten rows in a window, the names on theirs, the
-    /// pointer at the chosen one. With the client's bars 3 and 4 (`bars`,
-    /// the Extended page's Ability Bars) there are more slots than its rows:
-    /// ten show at a time, bars 1 and 2 then bars 3 and 4 (`slot_page`), a
-    /// row only for a slot there is, and a scroll bar beside them says which.
-    fn draw_slots10(&mut self, vui: &Vui, r: &mut dyn Raster, abilities: &BTreeMap<i64, Ability>, bars: i32) {
+    /// pointer at the chosen one.
+    fn draw_slots10(&mut self, vui: &Vui, r: &mut dyn Raster, abilities: &BTreeMap<i64, Ability>) {
         self.window.init(vui, r, [545, 155], 190, 10, 1);
         self.window.open(true);
         let w = self.window.size[0] - 40;
-        let count = 5 * bars;
-        let first = self.slot_page(abilities, count) * 10;
-        for i in 0..(count - first).min(10) {
+        for i in 0..10 {
             self.window.text_box(vui, r, &[], 20, i, w, 1, [0.0, 0.0, 0.0, 1.0], 4);
-            self.hits.push(crate::pointer::rows_rect(&self.window, vui, r, 20, i, w, 1), SLOT + first + i);
+            self.hits.push(crate::pointer::rows_rect(&self.window, vui, r, 20, i, w, 1), SLOT + i);
         }
         for &(id, slot, _) in &self.slots.clone() {
             let name = abilities.get(&id).map_or_else(Vec::new, |a| wide(&a.name));
-            if (first as i64..(first + 10).min(count) as i64).contains(&slot) {
+            if slot < 10 {
                 let lit = self.mode == 2 && slot == self.slot as i64;
                 let c = if lit { [1.0, 1.0, 0.0, 1.0] } else { [1.0; 4] };
-                self.window.text_box(vui, r, &name, 20, slot as i32 - first, w, 1, c, 11);
+                self.window.text_box(vui, r, &name, 20, slot as i32, w, 1, c, 11);
             }
         }
         if self.mode == 2 {
-            self.window.tick_r(vui, r, 32, self.slot - first, true);
+            self.window.tick_r(vui, r, 32, self.slot, true);
         }
-        if count > 10 {
-            let (top, bottom) = (self.window.row_center(vui, r, 0)[1], self.window.row_center(vui, r, 9)[1]);
-            let h = vui.font_height(r);
-            let pages = (count + 9) / 10;
-            self.window.draw_vscroll(vui, r, [self.window.top_left()[0] + 6, top - h / 2], bottom - top + h, first as f32 / (10 * (pages - 1)) as f32);
-        }
-    }
-
-    /// Which ten slots `draw_slots10` shows, by the first's tens: the chosen
-    /// slot's while one is chosen, else the selected ability's where it is
-    /// memorized, else the first ten.
-    fn slot_page(&self, abilities: &BTreeMap<i64, Ability>, count: i32) -> i32 {
-        let slot = if self.mode == 2 {
-            self.slot as i64
-        } else {
-            let row = (self.sel >= 0).then(|| self.rows.get(self.sel as usize)).flatten();
-            row.and_then(|r| abilities.get(&r.id)).filter(|a| a.valid != 0).map_or(0, |a| a.slot)
-        };
-        if (0..count as i64).contains(&slot) { (slot / 10) as i32 } else { 0 }
     }
 }
 
@@ -856,7 +827,7 @@ mod tests {
             let mut r = crate::pointer::testing::Wide::new(side);
             b.open(&vui, &r, 0, 0);
             b.mode = mode;
-            b.draw(&vui, &mut r, &map, 0, 1, 0);
+            b.draw(&vui, &mut r, &map, 0, 0, 0);
             (b, r)
         };
         let (_, tv) = drawn(0, 0);
@@ -915,21 +886,21 @@ mod tests {
     #[test]
     fn memorize_sends_0033_with_index_and_slot() {
         let (mut b, map) = book(&[ability(1, 7, 1, false, -1), ability(2, 9, 2, true, 0)]);
-        b.key(&map, 2, 134, true, 0);
+        b.key(&map, 0xFFFF_FFFF, 134, true, 0);
         assert!(b.popup.visible);
-        b.key(&map, 2, 134, true, 0);
+        b.key(&map, 0xFFFF_FFFF, 134, true, 0);
         assert_eq!(b.mode, 2, "Memorize: Equip");
         for _ in 0..12 {
-            b.key(&map, 2, 139, true, 0);
+            b.key(&map, 0xFFFF_FFFF, 139, true, 0);
         }
         assert_eq!(b.slot, 9, "ten slots with the expansion, clamped");
-        let out = b.key(&map, 2, 134, true, 0);
+        let out = b.key(&map, 0xFFFF_FFFF, 134, true, 0);
         assert_eq!(out, vec![Out::Send0033(7, 9)]);
         assert_eq!(b.mode, 0);
         // the memorized one
         b.sel = 1;
-        b.key(&map, 1, 134, true, 0);
-        let out = b.key(&map, 1, 134, true, 0);
+        b.key(&map, 0, 134, true, 0);
+        let out = b.key(&map, 0, 134, true, 0);
         assert_eq!(out, vec![Out::Word(912)]);
         assert_ne!(b.mode, 2);
     }
@@ -939,20 +910,20 @@ mod tests {
     #[test]
     fn arrange_sends_003a() {
         let (mut b, map) = book(&[ability(1, 3, 1, false, -1), ability(2, 4, 1, false, -1), ability(3, 8, 1, false, -1)]);
-        b.key(&map, 1, 134, true, 0);
-        b.key(&map, 1, 139, true, 0); // the popup down to Arrange
+        b.key(&map, 0, 134, true, 0);
+        b.key(&map, 0, 139, true, 0); // the popup down to Arrange
         // the auto-repeat's first pulse, without drawing
         if b.popup.list.flash.pulse(139) {
             b.popup.list.scroll(1, 0, &mut Vec::new());
         }
-        b.key(&map, 1, 134, true, 0);
+        b.key(&map, 0, 134, true, 0);
         assert_eq!(b.mode, 1);
         b.sel = 2;
-        let out = b.key(&map, 1, 134, true, 0);
+        let out = b.key(&map, 0, 134, true, 0);
         assert_eq!(out, vec![Out::Sound(13), Out::Send003A(3, 8)]);
         b.mode = 1;
         b.held_at = 2;
-        let out = b.key(&map, 1, 134, true, 0);
+        let out = b.key(&map, 0, 134, true, 0);
         assert_eq!(out, vec![Out::Sound(13)], "placed on itself: nothing sent");
     }
 
@@ -966,7 +937,7 @@ mod tests {
         let (vui, mut r) = (vui(), NullRaster);
         let (mut b, map) = book(&[ability(1, 3, 1, false, -1), ability(2, 4, 1, false, -1), ability(3, 8, 1, false, -1)]);
         b.open(&vui, &r, 0, 0);
-        b.draw(&vui, &mut r, &map, 0, 1, 0);
+        b.draw(&vui, &mut r, &map, 0, 0, 0);
         let row = |k: i32| [40.0, (50 + 44 * k + 20) as f32];
         assert_eq!(b.point(row(2)), vec![MOVED]);
         assert_eq!(b.sel, 2);
@@ -977,10 +948,10 @@ mod tests {
         assert_eq!(b.point([37.0 + 73.0 * 2.0 + 30.0, 20.0]), vec![key::RIGHT, key::RIGHT]);
         assert!(b.point([20.0, 20.0]).is_empty(), "the tab shown");
         // ✕: the popup, grown, then its rows
-        b.key(&map, 1, 134, true, 0);
+        b.key(&map, 0, 134, true, 0);
         assert!(b.popup.visible);
         for t in [100, 200, 300, 400, 500] {
-            b.draw(&vui, &mut r, &map, 0, 1, t);
+            b.draw(&vui, &mut r, &map, 0, 0, t);
         }
         let at = b.popup.list.pos;
         assert_eq!(b.point([(at[0] + 40) as f32, (at[1] + 20 + 19) as f32]), vec![key::CROSS]);
@@ -990,7 +961,7 @@ mod tests {
         // choosing a slot: the slots take the clicks, the rows and the tabs none
         b.popup.visible = false;
         b.mode = 2;
-        b.draw(&vui, &mut r, &map, 0, 1, 600);
+        b.draw(&vui, &mut r, &map, 0, 0, 600);
         assert!(b.point(row(1)).is_empty());
         assert!(b.point([37.0 + 73.0 + 30.0, 20.0]).is_empty());
         let slot = |j: i32| [500.0, (60 + 39 * j + 10) as f32];
@@ -1015,51 +986,8 @@ mod tests {
     fn escape_backs_out() {
         let (mut b, map) = book(&[ability(1, 3, 1, false, -1)]);
         b.mode = 2;
-        assert_eq!(b.key(&map, 1, 27, true, 0), vec![Out::Sound(8)]);
+        assert_eq!(b.key(&map, 0, 27, true, 0), vec![Out::Sound(8)]);
         assert_eq!(b.mode, 0);
-        assert_eq!(b.key(&map, 1, 27, true, 0), vec![Out::Sound(8), Out::Close]);
-    }
-
-    /// The client's bars (the Extended page's Ability Bars): Memorize offers
-    /// five slots a bar, twenty with four (clamped at 19), and X sends
-    /// 0x0033 with the slot as for any; the ten rows show the chosen slot's
-    /// ten, a click there that slot, and with three bars the second ten is
-    /// five rows; in the list the ten shown are the selected ability's, where
-    /// it is memorized, else the first (the control). Two bars stop at slot
-    /// 9 (`memorize_sends_0033_with_index_and_slot`).
-    #[test]
-    fn more_bars_offer_more_slots_ten_at_a_time() {
-        use crate::pointer::testing::{NullRaster, mid, vui};
-        let (vui, mut r) = (vui(), NullRaster);
-        let (mut b, map) = book(&[ability(1, 7, 1, false, -1), ability(2, 9, 2, true, 12)]);
-        b.open(&vui, &r, 0, 0);
-        b.key(&map, 4, 134, true, 0);
-        b.key(&map, 4, 134, true, 0);
-        assert_eq!(b.mode, 2, "Memorize: Equip");
-        for _ in 0..25 {
-            b.key(&map, 4, 139, true, 0);
-        }
-        assert_eq!(b.slot, 19, "twenty slots with four bars, clamped");
-        let mut slots = Window::default();
-        slots.init(&vui, &NullRaster, [545, 155], 190, 10, 1);
-        let row = |i: i32| mid(crate::pointer::rows_rect(&slots, &vui, &NullRaster, 20, i, 150, 1));
-        b.draw(&vui, &mut r, &map, 0, 4, 100);
-        assert_eq!(b.point(row(3)), vec![MOVED]);
-        assert_eq!(b.slot, 13, "the second ten's fourth row");
-        assert_eq!(b.key(&map, 4, 134, true, 0), vec![Out::Send0033(7, 13)]);
-        b.mode = 2;
-        b.slot = 12;
-        b.draw(&vui, &mut r, &map, 0, 3, 200);
-        assert_eq!(b.point(row(4)), vec![MOVED]);
-        assert_eq!(b.slot, 14);
-        assert!(b.point(row(5)).is_empty(), "no slot 15 with three bars");
-        // the list: the selected ability's ten, else the first
-        b.mode = 0;
-        b.sel = 1;
-        b.draw(&vui, &mut r, &map, 0, 4, 300);
-        assert_eq!(b.hits.at(row(2)), Some(SLOT + 12), "ability 2 is on slot 12");
-        b.sel = 0;
-        b.draw(&vui, &mut r, &map, 0, 4, 400);
-        assert_eq!(b.hits.at(row(2)), Some(SLOT + 2), "ability 1 is on none");
+        assert_eq!(b.key(&map, 0, 27, true, 0), vec![Out::Sound(8), Out::Close]);
     }
 }

@@ -3059,6 +3059,26 @@ impl App {
         {
             use crate::startmenu::keys as K;
             let down = event.state == ElementState::Pressed;
+            // the item menu's weapon set name editor (the live client's
+            // `VIWndEdit`) takes the keyboard as an edit box does
+            if p.items_typing() {
+                let named = match &event.logical_key {
+                    Key::Named(NamedKey::Backspace) => Some(8),
+                    Key::Named(NamedKey::Escape) => Some(27),
+                    Key::Named(NamedKey::Enter) => Some(13),
+                    Key::Named(NamedKey::ArrowLeft) => Some(17),
+                    Key::Named(NamedKey::ArrowRight) => Some(18),
+                    _ => None,
+                };
+                if let Some(k) = named {
+                    p.start_key(k, down);
+                } else if down && let Some(t) = &event.text {
+                    for c in t.chars().filter(|c| c.is_ascii() && !c.is_ascii_control()) {
+                        p.start_key(c as i32, true);
+                    }
+                }
+                return;
+            }
             if p.mode == 13 {
                 let k = match &event.logical_key {
                     Key::Named(NamedKey::ArrowUp) => Some(K::UP),
