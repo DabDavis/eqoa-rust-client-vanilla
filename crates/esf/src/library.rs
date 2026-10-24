@@ -88,6 +88,10 @@ pub struct Library {
     /// DictIDs a stand-in does not take: Frontiers' record answers in both
     /// views (`keep_frontiers`).
     kept: std::collections::HashSet<i32>,
+    /// For each stand-in, the records that are its namesake's bytes: DictID ->
+    /// the namesake's node (`same_as_namesake`, worked out once per pair, not
+    /// at every registration: a world change registers every id again).
+    same: HashMap<usize, HashMap<i32, NodeId>>,
     /// The dictionary lookups answer from.
     view: Cell<Era>,
 }
@@ -134,12 +138,14 @@ impl Library {
     pub fn stand_in(&mut self, file: usize, c: Container) -> usize {
         if let Some(s) = self.stand_in_of(file) {
             self.files[s].1 = c;
+            self.same_as_namesake(s);
             self.reregister();
             return s;
         }
         let name = self.files[file].0.clone();
         let rank = self.rank[file];
         let s = self.push(name, c, rank, Era::Y2002, Some(file));
+        self.same_as_namesake(s);
         if self.dict_2002.is_none() {
             // the 2002 dictionary begins: every file so far, this one with them
             self.dict_2002 = Some(HashMap::new());
@@ -151,6 +157,14 @@ impl Library {
             self.register_2002(s);
         }
         s
+    }
+
+    /// The records of stand-in `s` that are its namesake's bytes, kept.
+    fn same_as_namesake(&mut self, s: usize) {
+        let Some(f) = self.stands_for[s] else { return };
+        let (a, b) = (&self.files[f].1, &self.files[s].1);
+        let same = b.dict.iter().filter_map(|(&id, &m)| a.dict.get(&id).filter(|&&n| same_record(a, n, b, m)).map(|&n| (id, n))).collect();
+        self.same.insert(s, same);
     }
 
     /// The 2002 file standing in for `file`, if one does.
@@ -266,8 +280,8 @@ impl Library {
                 if d.get(&id).is_some_and(|e| e.rank <= rank) || (stands_for.is_some() && self.kept.contains(&id)) {
                     continue;
                 }
-                let r = match stands_for.and_then(|f| self.files[f].1.dict.get(&id).map(|&n| (f, n))) {
-                    Some((f, n)) if same_record(&self.files[f].1, n, c, node) => Ref { file: f, node: n },
+                let r = match (stands_for, self.same.get(&file).and_then(|m| m.get(&id))) {
+                    (Some(f), Some(&n)) => Ref { file: f, node: n },
                     _ => Ref { file, node },
                 };
                 new.push((id, Entry2002 { r, rank, by: file }));
@@ -317,6 +331,9 @@ impl Library {
     pub fn replace_from(&mut self, i: usize, name: impl Into<String>, c: Container, era: Era) {
         self.files[i] = (name.into(), c);
         self.eras[i] = era;
+        if let Some(s) = self.stand_in_of(i) {
+            self.same_as_namesake(s);
+        }
         let gone: Vec<(usize, usize)> = self.zone_files.keys().filter(|k| k.0 == i).copied().collect();
         for k in gone {
             if let Some(f) = self.zone_files.remove(&k) {
