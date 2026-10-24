@@ -5,6 +5,23 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-24 · More ability bars; crash reports say when the game stopped
+- Options > Extended has a new row, Ability Bars: 2 (the game's), 3 or 4. With
+  3 or 4, the HUD has a third and a fourth ability bar, five abilities each,
+  after the second bar when you switch bars (left and right, or a click on the
+  bar's title). The spell book's Memorize offers their slots too: its list of
+  slots shows ten at a time, and moving past the tenth shows the next ten.
+- The server keeps which ability is on which slot, so the extra bars work
+  only on a server that keeps them: eqoaclassic does, Sandstorm keeps only
+  the game's two bars. If the server does not take an ability onto bar 3 or
+  4, the chat says so in red.
+- When the game offers a crash report as it starts, it now says how long ago
+  the game stopped ("The game stopped 11 hours ago"), and says so when that
+  was in an earlier version. Before, it said "last time" and showed the hour,
+  in UTC, that the stopped game had been started.
+- A crash report waits until you send it or delete it (Not now keeps it), so
+  one offered right after you restart for an update can be from hours before.
+
 ## 2026-10-23 · The Who list as Sandstorm sorts it
 - On Sandstorm, the Who list sorts the way Sandstorm's patch does. L1 and R1
   (or left and right) change the column, and arrows mark the column it is
