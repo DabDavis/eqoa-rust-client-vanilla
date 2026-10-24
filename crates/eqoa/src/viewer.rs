@@ -1571,6 +1571,9 @@ struct App {
     era_loading: Option<crate::era::Loading>,
     /// `EQOA_ART_AT`: when a test's script presses F9 (ms on `clock`).
     art_script: Vec<i64>,
+    /// `EQOA_SAY=<line>@<ms>[;...]`: what a test's script says in the
+    /// world's chat line then (ms on `clock`), as a playshot's does.
+    say_script: Vec<(i64, String)>,
     /// While the window gives nothing to draw on, when its next frame is due
     /// (`HIDDEN_GAP`); `EQOA_COVERED=<from>-<to>;...`: when a test's script
     /// counts it as covered (ms on `clock`), as macOS does a window that
@@ -1671,6 +1674,9 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         failed: None,
         era_loading: None,
         art_script: std::env::var("EQOA_ART_AT").map(|v| v.split(';').filter_map(|t| t.trim().parse().ok()).collect()).unwrap_or_default(),
+        say_script: std::env::var("EQOA_SAY")
+            .map(|v| v.split(';').filter_map(|s| s.rsplit_once('@').and_then(|(l, t)| Some((t.trim().parse().ok()?, l.to_string())))).collect())
+            .unwrap_or_default(),
         hidden_until: None,
         covered_script: std::env::var("EQOA_COVERED")
             .map(|v| v.split(';').filter_map(|t| t.split_once('-').and_then(|(a, b)| Some((a.trim().parse().ok()?, b.trim().parse().ok()?)))).collect())
@@ -3865,6 +3871,7 @@ impl ApplicationHandler for App {
                 let perf = &mut self.perf;
                 let console = &mut self.console;
                 let pads = &mut self.pads;
+                let say_script = &mut self.say_script;
                 let walk_view = self.walker.as_mut().map(|w| {
                     // UpdateControls, on the sticks and the keyboard's axes,
                     // as the client stands
@@ -3877,6 +3884,9 @@ impl ApplicationHandler for App {
                     }
                     mark(perf, 1);
                     if let Some(p) = play {
+                        while say_script.first().is_some_and(|s| s.0 <= now) {
+                            p.chat_line(&say_script.remove(0).1);
+                        }
                         let gpu = crate::play::Gpu { renderer: &mut g.renderer, device: &g.device, queue: &g.queue };
                         // The server named the player's model: dress the walker in it.
                         // Built in its model's art (`era`): the 2002 disc's
