@@ -402,12 +402,12 @@ impl Map {
         assets.add_white(&mut ui, cx.device, cx.queue);
         // the files as the library's view has them (`esf::Library::in_view`:
         // the 2002 disc's UI.CSF ahead of Frontiers', whose surfaces it lacks
-        // still go up after it)
+        // still go up after it, and the atlas's sheet Frontiers' in both,
+        // `UiAssets::add_surfaces_of`)
         let files = cx.lib.in_view();
         for &i in &files {
-            let (name, c) = &cx.lib.files[i];
-            if name.eq_ignore_ascii_case("UI.CSF") {
-                assets.add_surfaces(&mut ui, cx.device, cx.queue, c);
+            if cx.lib.files[i].0.eq_ignore_ascii_case("UI.CSF") {
+                assets.add_surfaces_of(&mut ui, cx.device, cx.queue, cx.lib, i);
             }
         }
         let id = vi::ui::font_id() as i32;

@@ -1823,19 +1823,10 @@ impl App {
     fn take_world_art(&mut self, name: &str, o: stream::Opened) -> Result<(), Error> {
         let t = Instant::now();
         let Source::Walk { file, .. } = self.source else { return Err("not walking".into()) };
-        let stream::Opened { container, zones, era } = o;
-        self.lib.replace_from(file, name, container, era);
-        for (zi, b) in zones {
-            stream::install(&mut self.lib, file, zi, b)?;
-        }
+        let era = o.era;
         let w = self.walker.as_mut().ok_or("not walking")?;
         let at = Vec3::from(w.cam.walk.phys.position.to_array());
-        let mut source = stream::source_for(&self.lib, file);
-        let mut pending = Vec::new();
-        if let Some(src) = source.as_mut() {
-            pending = stream::fill(&mut self.lib, file, at.x, at.z, src.as_mut());
-        }
-        let mut world = vi::world::World::load(&self.lib, file).ok_or("no world in the file")?;
+        let (mut world, source, pending) = stream::reopen(&mut self.lib, file, name, o, at)?;
         world.time = w.scene.time;
         w.scene = world;
         let mut streamer = Streamer::new(file, source, pending);
