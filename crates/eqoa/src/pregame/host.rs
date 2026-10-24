@@ -105,8 +105,16 @@ impl Host {
     }
 
     /// The layer and its surfaces: made the first time, then the files read
-    /// since the last frame put up.
+    /// since the last frame put up. Made again whole when the art says so
+    /// (`Res::take_relayer`: the art swapped, or a 2002 file stood in for one
+    /// already up), every file put up in the order the art's view registers
+    /// them, a 2002 file ahead of its namesake (the first surface of a
+    /// DictID is the one drawn); the loading pictures and the gears with it.
     fn layer(&mut self, renderer: &mut Renderer, device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) {
+        if self.pre.res.take_relayer() {
+            self.assets = None;
+            self.gears = None;
+        }
         if renderer.ui.is_none() || self.assets.is_none() {
             let mut ui = Ui::new(device, format, render::DEPTH_FORMAT);
             let mut assets = UiAssets::default();
@@ -115,21 +123,20 @@ impl Host {
             self.assets = Some(assets);
             self.pictures.clear();
             // every file already read goes up again
-            let n = self.pre.res.lib.files.len();
-            self.upload(renderer, device, queue, 0..n);
+            let all = self.pre.res.lib.in_view();
+            self.upload(renderer, device, queue, all);
         }
         let fresh = self.pre.res.take_fresh();
-        for i in fresh {
-            self.upload(renderer, device, queue, i..i + 1);
-        }
+        self.upload(renderer, device, queue, fresh);
     }
 
-    fn upload(&mut self, renderer: &mut Renderer, device: &wgpu::Device, queue: &wgpu::Queue, files: std::ops::Range<usize>) {
+    fn upload(&mut self, renderer: &mut Renderer, device: &wgpu::Device, queue: &wgpu::Queue, files: Vec<usize>) {
         let (Some(ui), Some(assets)) = (renderer.ui.as_mut(), self.assets.as_mut()) else { return };
         for i in files {
             let (name, c) = &self.pre.res.lib.files[i];
             if UI_FILES.iter().any(|f| f.eq_ignore_ascii_case(name)) {
-                assets.add_surfaces(ui, device, queue, c);
+                // a 2002 file gives the surfaces the view answers with it
+                assets.add_surfaces_of(ui, device, queue, &self.pre.res.lib, i);
             }
             if assets.font.is_none() {
                 let id = vi::ui::font_id() as i32;
@@ -140,9 +147,16 @@ impl Host {
         }
     }
 
-    /// The art swapped before the world (F9, `era`). Not yet: the pregame's
-    /// screens stay Frontiers'.
-    pub fn art_changed(&mut self, _era: esf::Era) {}
+    /// The art to draw before the world (F9, the Extended page's Art, and the
+    /// window's every start of the pregame: `era::current`): the pregame's
+    /// files drawn in it from now on, the 2002 disc's read first when it is
+    /// that art (`Res::set_art`; from a cold start the screens wait for them,
+    /// as for the disc's own); the 2D layer made again at once and as they
+    /// come, and what the stages keep made of them once they are in
+    /// (`Pregame::art_changed`, from `frame`). The art drawn already: nothing.
+    pub fn art_changed(&mut self, era: esf::Era) {
+        self.pre.res.set_art(era);
+    }
 
     /// A key the window took (the game's code).
     pub fn key(&mut self, key: i32, down: bool) {
@@ -193,6 +207,11 @@ impl Host {
             self.pre.key(k, down);
         }
         self.layer(renderer, device, queue, format);
+        // the art swapped, its files in: the stages make again what they
+        // keep made of them (the title's effects, the figures, the stage)
+        if let Some(era) = self.pre.res.take_art_change() {
+            self.pre.art_changed(era);
+        }
         let mut cues = Vec::new();
         let mut music = Vec::new();
         if let Some(w) = self.world.as_mut() {
@@ -233,8 +252,10 @@ impl Host {
                 }
                 let mut r = assets.raster(ui);
                 if self.world.is_some() || self.pre.client_loading() {
-                    // `LoadingProgress`'s 2D half (the gears are drawn by the window)
-                    crate::loading::draw_2d(self.pre.res.vui(), &mut r, true);
+                    // `LoadingProgress`'s 2D half (the gears are drawn by the
+                    // window): Frontiers' layout, the original game's in the
+                    // 2002 art (`VIGetExpansionFlags() & 2` as that disc's)
+                    crate::loading::draw_2d(self.pre.res.vui(), &mut r, self.pre.res.art() != esf::Era::Y2002);
                     self.pre.update(now);
                 } else {
                     let gpu = crate::play::Gpu { renderer: &mut *renderer, device, queue };

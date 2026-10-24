@@ -190,6 +190,13 @@ impl Setup {
         self.leaving = false;
     }
 
+    /// The art swapped (F9, `era`): the title's effects as that disc's
+    /// SETUP draws them (`splashfx::flags`): the 2002 disc's painting with
+    /// the original game's birds, Frontiers' with its island layer.
+    pub fn art_changed(&mut self, era: esf::Era) {
+        self.fx = splashfx::SplashFx::new(splashfx::flags(era));
+    }
+
     /// A key the game reads, for the window with the focus at the next frame.
     pub fn key(&mut self, key: i32, down: bool) {
         self.keys.push((key, down));

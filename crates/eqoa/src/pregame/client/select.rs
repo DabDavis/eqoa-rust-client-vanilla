@@ -185,6 +185,15 @@ impl CharSelect {
         self.child = None;
     }
 
+    /// The art swapped (F9): the character shown, and customise's, made again
+    /// in it where they stand.
+    pub fn remake(&mut self, lib: &esf::Library, g: &mut crate::play::Gpu, now: i64) {
+        if let Some(f) = self.figure.as_mut() {
+            f.remake(lib, g, now);
+        }
+        self.cust.remake(lib, g, now);
+    }
+
     /// The focus going to another window (not the box or customise): the
     /// character let go.
     pub fn lost_focus(&mut self) {

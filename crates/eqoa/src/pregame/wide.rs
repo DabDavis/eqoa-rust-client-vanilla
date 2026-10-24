@@ -35,8 +35,10 @@ pub const SETUP: Picture = Picture { stone: 76, painting: [99, 337] };
 /// 54, 72 and 74, 377 and 379, 399 and 401.
 pub const STATION: Picture = Picture { stone: 52, painting: [75, 377] };
 
-/// The columns in from a half's outer edge that its side is made of.
-pub const STRIP: i32 = 160;
+/// The columns in from a half's outer edge that its side is made of: the
+/// widest that keeps every logo out on both discs' pictures (the 2002 title's
+/// has its ® at 163-172 of its right half, so at most 146 in from there).
+pub const STRIP: i32 = 146;
 
 /// Which side of the frame a half is.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -212,8 +214,8 @@ mod tests {
     }
 
     /// At 21:9 (202 a side) the side is two strips: the first `STRIP`
-    /// columns mirrored, then back the way they came (161 at the strip's
-    /// meeting, 117 at the window's edge), so nothing past column 161 of the
+    /// columns mirrored, then back the way they came (147 at the strip's
+    /// meeting, 89 at the window's edge), so nothing past column 147 of the
     /// half is read; the right side the same from column 319. The control:
     /// one strip at 16:9.
     #[test]
@@ -222,12 +224,12 @@ mod tests {
         half(&mut r, id("splash00.tga"), [0, 0], 0);
         let mut c = cols(&r.1);
         c.dedup();
-        assert_eq!(c, vec![([1.0, -159.0], [1.0, 161.0]), ([-159.0, -203.0], [161.0, 117.0])]);
+        assert_eq!(c, vec![([1.0, -145.0], [1.0, 147.0]), ([-145.0, -203.0], [147.0, 89.0])]);
         let mut r = Rec(202, Vec::new());
         half(&mut r, id("splash10.tga"), [320, 0], 0);
         let mut c = cols(&r.1);
         c.dedup();
-        assert_eq!(c, vec![([639.0, 799.0], [319.0, 159.0]), ([799.0, 843.0], [159.0, 203.0])]);
+        assert_eq!(c, vec![([639.0, 785.0], [319.0, 173.0]), ([785.0, 843.0], [173.0, 231.0])]);
         let mut one = Rec(106, Vec::new());
         half(&mut one, id("splash00.tga"), [0, 0], 0);
         let mut c = cols(&one.1);
@@ -236,19 +238,35 @@ mod tests {
     }
 
     /// The cuts are the disc's pictures (`run/eqoa.iso`, skipped without
-    /// it): over the columns a side reads (1-160 of a left half, 159-318 of a
+    /// it): over the columns a side reads (1-146 of a left half, 173-318 of a
     /// right one) the rows above `stone` hold no bar's orange and row `stone`
     /// is the bar's; in the 16 outer columns the last gold row above the
     /// middle is the row before the painting and the first below is its end.
     /// The control: the row after the stone is orange, so a cut one row lower
     /// tiles the bar's edge into the stone (the lines seen at 77).
+    ///
+    /// The 2002 disc's pictures (its own painting and stone, `era`) are cut on
+    /// the same rows (`$EQOA_2002_ISO`, else the USA disc under
+    /// `../decomp-builds/discs/eqoa-usa/`; skipped without it).
     #[test]
     fn the_cuts_are_the_pictures() {
         let iso = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
-        let Ok(mut d) = iso::Iso::open(&iso) else {
+        let Ok(d) = iso::Iso::open(&iso) else {
             eprintln!("SKIP: no disc at {}", iso.display());
             return;
         };
+        the_cuts_are(d);
+        let y2002 = std::env::var_os("EQOA_2002_ISO").map(std::path::PathBuf::from).or_else(|| {
+            let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../decomp-builds/discs/eqoa-usa");
+            std::fs::read_dir(dir).ok()?.flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("iso")))
+        });
+        match y2002.and_then(|p| iso::Iso::open(p).ok()) {
+            Some(d) => the_cuts_are(d),
+            None => eprintln!("SKIP: no 2002 disc (set EQOA_2002_ISO)"),
+        }
+    }
+
+    fn the_cuts_are(mut d: iso::Iso) {
         let ui = |n: &str| format!(r"P:\studio\eqps2\Game_Assets\UI\{n}");
         for (file, name, half, want) in [
             ("DATA2/SETUP.CSF", "splash00.tga".to_string(), Half::Left, SETUP),

@@ -1,7 +1,11 @@
 //! `VISplashFx` (SETUP `visplashfx.cpp`): the title's animated overlays,
 //! drawn over the painting by the title window. The original game's: a bird
 //! that flies past now and then, one perched and flapping, and a flock
-//! crossing the sky along one of three paths. Frontiers' (expansion flag 2,
+//! crossing the sky along one of three paths (so the code names them; their
+//! atlas, `Bird_Animation.tga`, the same on both discs, holds the 2002
+//! painting's own: the "flying bird" is lightning striking over the castle,
+//! the perched one the treehouse door's flickering light; drawn in the 2002
+//! disc's art, `flags`). Frontiers' (expansion flag 2,
 //! which this disc sets) replaces all three with the island layer: twinkles
 //! on the water, a sail and its reflection, the camp fire and the ship
 //! (splashAnims1/2), three stars, the floating island bobbing, a glow in
@@ -60,6 +64,17 @@ const COMETS: [[i32; 2]; 7] = [[182, 248], [45, 267], [77, 264], [204, 237], [0,
 /// The surfaces, by their names' DictIDs (`VIHashResourceID`).
 fn id(name: &str) -> u32 {
     vi::hash::hash_resource_id(name)
+}
+
+/// The expansion flags the title's effects are drawn by in the art `era`:
+/// the disc's (`net::session::EXPANSION_FLAGS`, Frontiers' island layer), or
+/// in the 2002 disc's art the original game's (its SETUP.CSF has the birds'
+/// atlas and none of the island's: the painting they were drawn over).
+pub fn flags(era: esf::Era) -> u32 {
+    match era {
+        esf::Era::Frontiers => net::session::EXPANSION_FLAGS,
+        esf::Era::Y2002 => net::session::EXPANSION_FLAGS & !2,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -447,6 +462,26 @@ mod tests {
         o.reset(0);
         o.render(&mut r, 33, true);
         assert_eq!((o.glow, o.wave, o.sail), (0, 0, 316), "flag 2 off: the birds, not the island");
+    }
+
+    /// The 2002 disc's art draws the original game's layer, Frontiers' the
+    /// island's (`flags`): the island's counters run only with Frontiers'.
+    /// The control is Frontiers' own flags.
+    #[test]
+    fn the_2002_art_draws_the_original_layer() {
+        assert_eq!(flags(esf::Era::Frontiers), net::session::EXPANSION_FLAGS);
+        assert_eq!(flags(esf::Era::Y2002) & 2, 0);
+        let mut r = NullRaster;
+        let mut run = |era| {
+            let mut fx = SplashFx::new(flags(era));
+            fx.reset(0);
+            for k in 1..=40 {
+                fx.render(&mut r, k * 33, true);
+            }
+            (fx.glow, fx.wave)
+        };
+        assert_eq!(run(esf::Era::Y2002), (0, 0), "the 2002 painting has no island");
+        assert_ne!(run(esf::Era::Frontiers), (0, 0), "the control: Frontiers' island layer runs");
     }
 
     /// The glow's layers: one up at a time, each over 30 frames.
