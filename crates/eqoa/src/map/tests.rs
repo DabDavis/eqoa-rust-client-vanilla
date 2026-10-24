@@ -11,7 +11,7 @@ fn tunaria() -> Vec<[f32; 4]> {
 /// Freeport (25,300, 15,200).
 fn up(size: (u32, u32)) -> Map {
     let mut m = Map {
-        world: Some(World { name: "TUNARIA.ESF".into(), index: 0, builder: Builder::new(WORLD_FILE, &tunaria(), None, None), overview: None, tiles: BTreeMap::new(), made: Instant::now(), view: None }),
+        world: Some(World { name: "TUNARIA.ESF".into(), era: esf::Era::Frontiers, index: 0, builder: Builder::new(WORLD_FILE, &tunaria(), None, None), overview: None, tiles: BTreeMap::new(), made: Instant::now(), view: None }),
         size,
         ..Default::default()
     };

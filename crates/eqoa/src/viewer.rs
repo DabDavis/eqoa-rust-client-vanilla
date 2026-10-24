@@ -1473,6 +1473,9 @@ struct App {
     /// A world change under way: the world's file, the arrival, and its
     /// reads (`stream::open_world`), entered once they are in.
     entering: Option<(String, Spawn, crate::stream::Arrival)>,
+    /// The world off the other art's disc (F9, `swap_world_art`): its file
+    /// and its reads, put in place of the world drawn once they are in.
+    swapping: Option<(String, crate::stream::Arrival)>,
     clock: Instant,
     gfx: Option<Gfx>,
     /// Made before the loop (a browser's), taken when it resumes.
@@ -1585,6 +1588,7 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         body_at: 0,
         sky_at: None,
         entering: None,
+        swapping: None,
         clock: Instant::now(),
         gfx: None,
         pending,
@@ -1776,9 +1780,75 @@ impl App {
         }
     }
 
-    /// The world itself in the art `era`: Tunaria off the disc of that art
-    /// (the walk kept where it is). Not yet: the world stays Frontiers'.
-    fn swap_world_art(&mut self, _era: esf::Era) {}
+    /// The world itself in the art now: the world file off the disc of the
+    /// art drawn when that disc has it (`era::world_era`: Tunaria off the
+    /// 2002 disc, its own ground, lighting, props and textures, and no effect
+    /// volumes), read round the walk (`stream::open_world`: at once natively,
+    /// a frame or more later in a page) and put in place of the world drawn
+    /// once it is in (`take_world_art`), the old one drawn meanwhile. A world
+    /// the 2002 disc does not have stays as it is; a swap back before the
+    /// reads came is no swap.
+    fn swap_world_art(&mut self, _era: esf::Era) {
+        let (Source::Walk { file, .. }, Some(w)) = (&self.source, self.walker.as_ref()) else { return };
+        let name = self.lib.files[*file].0.clone();
+        let want = crate::era::world_era(&name);
+        if self.lib.era_of(*file) == want {
+            self.swapping = None;
+            return;
+        }
+        let p = w.cam.walk.phys.position;
+        self.swapping = Some((name.clone(), stream::open_world(&name, p.x.0, p.z.0)));
+    }
+
+    /// The world off the other art's disc in place (`swap_world_art`), the walk
+    /// going on where it is (its place, heading, motion and camera are the
+    /// walk control's, which keeps nothing of the world but what it collides
+    /// with each frame): the library's world file, the zones round the walk
+    /// read off that disc, the collision world made again from them, then the
+    /// streamer and its zones on the GPU at once, the world's particles, the
+    /// effect volumes and the sound's world.
+    fn take_world_art(&mut self, name: &str, o: stream::Opened) -> Result<(), Error> {
+        let t = Instant::now();
+        let Source::Walk { file, .. } = self.source else { return Err("not walking".into()) };
+        let stream::Opened { container, zones, era } = o;
+        self.lib.replace_from(file, name, container, era);
+        for (zi, b) in zones {
+            stream::install(&mut self.lib, file, zi, b)?;
+        }
+        let w = self.walker.as_mut().ok_or("not walking")?;
+        let at = Vec3::from(w.cam.walk.phys.position.to_array());
+        let mut source = stream::source_for(&self.lib, file);
+        let mut pending = Vec::new();
+        if let Some(src) = source.as_mut() {
+            pending = stream::fill(&mut self.lib, file, at.x, at.z, src.as_mut());
+        }
+        let mut world = vi::world::World::load(&self.lib, file).ok_or("no world in the file")?;
+        world.time = w.scene.time;
+        w.scene = world;
+        let mut streamer = Streamer::new(file, source, pending);
+        if let Some(g) = &mut self.gfx {
+            let gpu = stream::Gpu { renderer: &mut g.renderer, device: &g.device, queue: &g.queue };
+            streamer.update(at, &mut w.scene, &self.lib, gpu, None);
+        }
+        self.streamer = Some(streamer);
+        let now = self.clock.elapsed().as_millis() as i64;
+        self.particles = Some(crate::particles::Particles::new(&w.scene, now));
+        self.fx = crate::fx::enabled().then(crate::fx::Fx::new);
+        if let Some(s) = self.sound.as_mut() {
+            s.world_changed();
+        }
+        crate::say(&format!(
+            "art: {name} off the {} disc at {:?} in {:.2?} ({} zones in)",
+            match era {
+                esf::Era::Y2002 => "2002",
+                esf::Era::Frontiers => "Frontiers",
+            },
+            at.to_array(),
+            t.elapsed(),
+            w.scene.loaded.iter().filter(|&&l| l).count()
+        ));
+        Ok(())
+    }
 
     fn step(&mut self, by: isize) {
         if let Source::Models { list, index, .. } = &mut self.source {
@@ -2294,6 +2364,7 @@ impl App {
         self.batches.clear();
         self.sky_batches.clear();
         self.entering = None;
+        self.swapping = None;
         self.sky_at = None;
         if let Some(s) = self.sound.as_mut() {
             s.world_changed();
@@ -3592,6 +3663,17 @@ impl ApplicationHandler for App {
                 if let Some((file, at)) = self.play.as_mut().and_then(|p| p.take_world_change()) {
                     let reads = stream::open_world(&file, at.pos[0], at.pos[2]);
                     self.entering = Some((file, at, reads));
+                    // the world being left is not swapped any more
+                    self.swapping = None;
+                }
+                // F9's world (`swap_world_art`), once its reads are in
+                if let Some(r) = self.swapping.as_ref().and_then(|s| s.1.borrow_mut().take()) {
+                    let (file, _) = self.swapping.take().unwrap();
+                    if let Err(e) = r.map_err(Error::from).and_then(|o| self.take_world_art(&file, o)) {
+                        crate::say(&format!("art: {file} could not be swapped: {e}"));
+                        #[cfg(target_arch = "wasm32")]
+                        crate::web::problem("world", &format!("The world could not be swapped for the other art's: {e}"));
+                    }
                 }
                 if let Some(r) = self.entering.as_ref().and_then(|e| e.2.borrow_mut().take()) {
                     let (file, at, _) = self.entering.take().unwrap();
