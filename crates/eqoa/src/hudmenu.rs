@@ -13,6 +13,15 @@
 //! own `DrawGear` 0x0136A888), round the carousel after the items; its item
 //! menu shows only potions and gems (`SetQuickMenuItem` 0x01359E60) and its
 //! slots' icons are a gem's on 3 too (`sSlotIcons` 0x013FBA30, {5, 5, 3, 3}).
+//!
+//! The client's own beyond them (the Extended page's Ability Bars, with the
+//! second bar there): menus 4 and 5, bars 3 and 4, the abilities on slots
+//! 10-14 and 15-19, built and drawn as menu 1 is and reached round the
+//! carousel after it, the items and the sets still after them. The game
+//! sends a slot as it is (0x0033 puts an ability on one, 0x0032 uses what is
+//! on one) and CLIENT shows only 0-9 and 252-255, so what is on 10-19 is the
+//! server's to keep: a server that keeps any slot (go-eqoa-server does)
+//! needs no change for them.
 
 use crate::gear::Gear;
 use crate::ui::Vui;
@@ -48,29 +57,49 @@ pub struct MenuDef {
 pub const SLOT_ICONS: [i32; 4] = [5, 5, 3, 2];
 pub const SLOT_ICONS_LIVE: [i32; 4] = [5, 5, 3, 3];
 
-/// The menus: bars 1 and 2, the items, and the live client's weapon sets.
-pub const MENUS: usize = 4;
+/// The menus: the game's three (bars 1 and 2, the items), the live client's
+/// weapon sets, and the client's bars 3 and 4.
+pub const MENUS: usize = 6;
 /// The items' menu, the one drawn as a stack.
 const ITEMS: usize = 2;
 /// The weapon sets' menu (`m_hud[3]`).
 const GEAR: usize = 3;
+/// Round the carousel: the bars in order, then the items, then the sets.
+const ORDER: [usize; MENUS] = [0, 1, 4, 5, 2, 3];
+/// The most bars the client shows (the Extended page's Ability Bars).
+pub const MAX_BARS: i32 = 4;
 
-/// What the carousel holds besides the first bar and the items: the second
-/// bar (the expansion mask's bit 1) and the weapon sets (a server that keeps
-/// them, `gear::Gear::on`).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// The first slot of the bar menu `k` shows, five from it: menu 1's 5, and
+/// the client's bars 3 and 4 (menus 4 and 5) 10 and 15 (menu 0 is built as
+/// the game builds it).
+fn first_slot(k: usize) -> i64 {
+    if k == 1 { 5 } else { (k as i64 - 2) * 5 }
+}
+
+/// What the carousel holds besides the first bar and the items: the ability
+/// bars (one; the game's two with the expansion mask's bit 1; up to
+/// `MAX_BARS` with the Extended page's Ability Bars) and the weapon sets (a
+/// server that keeps them, `gear::Gear::on`).
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Bars {
-    pub second: bool,
+    pub abilities: i32,
     pub gear: bool,
 }
 
+impl Default for Bars {
+    fn default() -> Self {
+        Bars { abilities: 1, gear: false }
+    }
+}
+
 /// Whether menu `k` is in the carousel: the first bar and the items always,
-/// the second bar and the sets with theirs.
+/// the other bars with as many, the sets with theirs.
 fn shown(k: usize, bars: Bars) -> bool {
     match k {
         0 | ITEMS => true,
-        1 => bars.second,
-        _ => bars.gear,
+        1 => bars.abilities >= 2,
+        GEAR => bars.gear,
+        _ => bars.abilities >= k as i32 - 1,
     }
 }
 
@@ -126,8 +155,9 @@ impl HudMenu {
     }
 
     /// `OnDrawSelf`: the light fades in fast while a key keeps it lit (20 s)
-    /// and out slowly to 0.3, then the list (menus 0 and 1), the stack (2,
-    /// its slot icons the live client's with `live`) or the sets (3).
+    /// and out slowly to 0.3, then the list (the bars: menus 0, 1, 4 and 5),
+    /// the stack (2, its slot icons the live client's with `live`) or the
+    /// sets (3).
     fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, menu: &MenuDef, now: i64, name: &dyn Fn(u32, i64) -> Vec<u16>, live: bool) {
         if self.time < now {
             self.lit = -1;
@@ -276,9 +306,11 @@ impl Default for HudMenus {
 }
 
 impl HudMenus {
-    /// `UpdateQuickBars`' HUD menus from the ability list (in its map's
-    /// order: by id), the inventory and the weapon sets; a menu no longer in
-    /// the carousel is not left up.
+    /// `UpdateQuickBars`' HUD menus, and the client's bars as menu 1 is
+    /// built, from the ability list (in its map's order: by id), the
+    /// inventory and the weapon sets; a menu no longer in the carousel (the
+    /// Extended page's Ability Bars turned down, a server without sets) is
+    /// not left up.
     pub fn build(&mut self, abilities: &BTreeMap<i64, Ability>, inventory: &ItemList, gear: &Gear, bars: Bars) {
         self.live = bars.gear;
         // BuildAbilityMenu0
@@ -316,19 +348,22 @@ impl HudMenus {
         }
         let n1 = n1.clamp(0, 5);
         m0.count = if n2 > 0 { (n2 + 5).min(9) } else { n1.max(5) } as i32;
-        // BuildAbilityMenu1
-        let m1 = &mut self.defs[1];
-        for e in &mut m1.entries {
-            *e = Entry::default();
-        }
-        let mut n = 0;
-        for a in abilities.values() {
-            if a.valid != 0 && (5..10).contains(&a.slot) {
-                n += 1;
-                m1.entries[(a.slot - 5) as usize] = item(a);
+        // BuildAbilityMenu1, and bars 3 and 4 as it
+        for k in [1, 4, 5] {
+            let first = first_slot(k);
+            let m = &mut self.defs[k];
+            for e in &mut m.entries {
+                *e = Entry::default();
             }
+            let mut n = 0;
+            for a in abilities.values() {
+                if a.valid != 0 && (first..first + 5).contains(&a.slot) {
+                    n += 1;
+                    m.entries[(a.slot - first) as usize] = item(a);
+                }
+            }
+            m.count = n.clamp(0, 5).max(5);
         }
-        m1.count = n.clamp(0, 5).max(5);
         // BuildQuickMenu; the live client's SetQuickMenuItem takes only a
         // potion or a gem (type 2 or 7)
         let m2 = &mut self.defs[2];
@@ -386,9 +421,10 @@ impl HudMenus {
         if (at[0]..at[0] + 162).contains(&x) && (at[1]..at[1] + 28).contains(&y) {
             return Some(Key::Right);
         }
-        // the carousel from the selection down: a list's rows 31 apart from
-        // (+163, -4), the stack's slots and the sets 32 apart from (+169, +3)
-        let (x0, y0, w, step) = if k < ITEMS { (at[0] + 163, at[1] - 4, 36, 31) } else { (at[0] + 169, at[1] + 3, 28, 32) };
+        // the carousel from the selection down: a list's (a bar's) rows 31
+        // apart from (+163, -4), the stack's slots and the sets 32 apart from
+        // (+169, +3)
+        let (x0, y0, w, step) = if matches!(k, ITEMS | GEAR) { (at[0] + 169, at[1] + 3, 28, 32) } else { (at[0] + 163, at[1] - 4, 36, 31) };
         let row = (y - y0).div_euclid(step);
         if count <= 0 || !(x0..x0 + w).contains(&x) || !(0..count).contains(&row) {
             return None;
@@ -399,7 +435,8 @@ impl HudMenus {
 
     /// A key in play: the menu up takes up, down and use (lit for 20 s);
     /// left and right switch menus round the carousel (menu 1 only with the
-    /// second bar, menu 3 only with the sets). Returns what was used:
+    /// second bar, menus 4 and 5 with bars 3 and 4, menu 3 only with the
+    /// sets). Returns what was used:
     /// (message, id). `switch`: left and right go round the menus
     /// (`VIWndGame::Interact` and `Attack`, play's alone); without it they
     /// only light the menu up.
@@ -440,13 +477,14 @@ impl HudMenus {
 
     /// The menu `d` (1, -1) round the carousel from the one up, past those
     /// not shown: the disc's 0, 1, 2 with the second bar, 0 and 2 without
-    /// (`Interact`'s and `Attack`'s switches), and the live client's sets
-    /// after the items (its `Interact` 0x0135E680: 0, 1 or 2, 2, 3, 0; its
-    /// `Attack` the other way round).
+    /// (`Interact`'s and `Attack`'s switches), the live client's sets after
+    /// the items (its `Interact` 0x0135E680: 0, 1 or 2, 2, 3, 0; its `Attack`
+    /// the other way round), and the client's bars 3 and 4 between bar 2 and
+    /// the items.
     fn round(&self, d: i32, bars: Bars) -> usize {
-        let n = MENUS as i32;
-        let at = self.up() as i32;
-        (1..n).map(|i| (at + d * i).rem_euclid(n) as usize).find(|&k| shown(k, bars)).unwrap_or(0)
+        let n = ORDER.len() as i32;
+        let at = ORDER.iter().position(|&k| k == self.up()).unwrap_or(0) as i32;
+        (1..n).map(|i| ORDER[(at + d * i).rem_euclid(n) as usize]).find(|&k| shown(k, bars)).unwrap_or(0)
     }
 
     /// The focus passing from one HUD menu to another relights it
@@ -465,8 +503,8 @@ mod tests {
     use crate::gear::{BARE_HANDS, MSG};
     use net::dump::{Item, NetItem};
 
-    const DISC: Bars = Bars { second: true, gear: false };
-    const LIVE: Bars = Bars { second: true, gear: true };
+    const DISC: Bars = Bars { abilities: 2, gear: false };
+    const LIVE: Bars = Bars { abilities: 2, gear: true };
 
     /// A pointer on the quick menu up: the title bar is the next menu, a
     /// row of the carousel (counted from the selection) is selected and
@@ -491,29 +529,37 @@ mod tests {
         h.menus[3].sel = 0;
         assert_eq!(h.point([(at[0] + 180) as f32, (at[1] + 3 + 4 * 32 + 10) as f32]), Some(Key::Use));
         assert_eq!(h.menus[3].sel, 4, "the fifth row: bare hands");
+        // the client's bar 3 (menu 4) has a list's rows, past the items' and
+        // the sets' place in the array: its first row starts above the
+        // stack's first slot
+        h.sel = 4;
+        assert_eq!(h.point([(at[0] + 180) as f32, (at[1] + 1) as f32]), Some(Key::Use), "bar 3's first row");
+        h.sel = 3;
+        assert_eq!(h.point([(at[0] + 180) as f32, (at[1] + 1) as f32]), None, "the sets' first slot starts lower (control)");
     }
 
     /// The carousel (`VIWndGame::Interact` right, `Attack` left): without
     /// the sets the disc's switches as CLIENT has them (right: 0 to 1, or 2
     /// without the second bar, 1 to 2, 2 to 0; left: 0 to 2, 1 to 0, 2 to
-    /// 1, or 0 without), and with them the live client's (right 0, 1 or 2,
-    /// 2, 3, 0; left 0, 3, 2, 1 or 0).
+    /// 1, or 0 without), with them the live client's (right 0, 1 or 2, 2, 3,
+    /// 0; left 0, 3, 2, 1 or 0), and with three or four bars the client's
+    /// between bar 2 and the items, each only with as many bars.
     #[test]
-    fn the_carousel_is_the_discs_and_the_live_clients() {
+    fn the_carousel_is_the_discs_the_live_clients_and_goes_through_more_bars() {
         let go = |sel: i32, key: Key, bars: Bars| {
             let mut h = HudMenus { sel, ..Default::default() };
             h.key(key, 0, bars, true, &mut Vec::new());
             h.sel
         };
         for second in [false, true] {
-            let bars = Bars { second, gear: false };
+            let bars = Bars { abilities: 1 + second as i32, gear: false };
             assert_eq!(go(0, Key::Right, bars), if second { 1 } else { 2 });
             assert_eq!(go(1, Key::Right, bars), 2);
             assert_eq!(go(2, Key::Right, bars), 0);
             assert_eq!(go(0, Key::Left, bars), 2);
             assert_eq!(go(1, Key::Left, bars), 0);
             assert_eq!(go(2, Key::Left, bars), second as i32);
-            let bars = Bars { second, gear: true };
+            let bars = Bars { abilities: 1 + second as i32, gear: true };
             assert_eq!(go(0, Key::Right, bars), if second { 1 } else { 2 }, "live Interact: 0");
             assert_eq!(go(1, Key::Right, bars), 2, "live Interact: 1");
             assert_eq!(go(2, Key::Right, bars), 3, "live Interact: 2, on to the sets");
@@ -525,16 +571,23 @@ mod tests {
         }
         let walk = |bars: Bars, key: Key| {
             let mut h = HudMenus::default();
-            (0..5)
+            (0..6)
                 .map(|_| {
                     h.key(key, 0, bars, true, &mut Vec::new());
                     h.sel
                 })
                 .collect::<Vec<_>>()
         };
-        assert_eq!(walk(DISC, Key::Right), [1, 2, 0, 1, 2], "the disc's two bars");
-        assert_eq!(walk(LIVE, Key::Right), [1, 2, 3, 0, 1]);
-        assert_eq!(walk(LIVE, Key::Left), [3, 2, 1, 0, 3]);
+        assert_eq!(walk(DISC, Key::Right), [1, 2, 0, 1, 2, 0], "the disc's two bars");
+        assert_eq!(walk(LIVE, Key::Right), [1, 2, 3, 0, 1, 2]);
+        assert_eq!(walk(LIVE, Key::Left), [3, 2, 1, 0, 3, 2]);
+        let bars = |abilities, gear| Bars { abilities, gear };
+        assert_eq!(walk(bars(3, false), Key::Right), [1, 4, 2, 0, 1, 4], "bar 3 after bar 2");
+        assert_eq!(walk(bars(4, false), Key::Right), [1, 4, 5, 2, 0, 1], "bars 3 and 4, then the items");
+        assert_eq!(walk(bars(4, false), Key::Left), [2, 5, 4, 1, 0, 2]);
+        assert_eq!(walk(bars(4, true), Key::Right), [1, 4, 5, 2, 3, 0], "the sets after the items still");
+        assert_eq!(walk(bars(4, true), Key::Left), [3, 2, 5, 4, 1, 0]);
+        assert_eq!(walk(bars(3, true), Key::Right), [1, 4, 2, 3, 0, 1]);
     }
 
     /// The manual camera (mode 38) gives the menu the keys as play does, but
@@ -559,25 +612,42 @@ mod tests {
     }
 
     /// The bars' menus from the abilities' slots: bar 1 its 0-4 and the
-    /// 252-255 ones after them, bar 2 its 5-9, each entry at its slot's
-    /// place, using sending the ability; nothing shows what is on 10-19, as
-    /// CLIENT shows nothing there (the Extended page's Ability Bars, taken
-    /// out 2026-10-24).
+    /// 252-255 ones after them, bar 2 its 5-9, and the client's bars 3 and 4
+    /// their 10-14 and 15-19, each entry at its slot's place, using sending
+    /// the ability; the game's menus take nothing from 10-19, as CLIENT's do
+    /// not (the control). A bar up when Ability Bars is turned down goes
+    /// back to the first; the sets' menu keeps its own place beside them.
     #[test]
     fn each_bar_holds_its_own_five_slots() {
         let list: BTreeMap<i64, Ability> = [(1, 0), (2, 4), (3, 7), (4, 10), (5, 14), (6, 16), (7, 252), (8, 19)]
             .into_iter()
             .map(|(id, slot)| (id, Ability { id, slot, valid: 1, icon_front: 100 + id, ..Default::default() }))
             .collect();
+        let none = ItemList::default();
+        let four = Bars { abilities: 4, gear: true };
+        let three = Bars { abilities: 3, gear: true };
         let mut h = HudMenus::default();
-        h.build(&list, &ItemList::default(), &Gear::default(), DISC);
+        h.build(&list, &none, &Gear::default(), four);
         let ids = |h: &HudMenus, k: usize| h.defs[k].entries.iter().map(|e| if e.icon2 == -1 { 0 } else { e.id }).collect::<Vec<_>>();
         assert_eq!(ids(&h, 0), [1, 0, 0, 0, 2, 7, 0, 0, 0], "slots 0-4, then 252-255");
         assert_eq!(ids(&h, 1), [0, 0, 3, 0, 0]);
+        assert_eq!(ids(&h, 4), [4, 0, 0, 0, 5], "bar 3: slots 10-14");
+        assert_eq!(ids(&h, 5), [0, 6, 0, 0, 8], "bar 4: slots 15-19");
+        assert_eq!(h.defs[4].count, 5);
+        assert_eq!((h.defs[3].entries[4].msg, h.defs[3].entries[4].id), (MSG, BARE_HANDS), "the sets' menu where it was");
         h.sel = 1;
         h.menus[1].sel = 2;
-        assert_eq!(h.key(Key::Use, 0, DISC, true, &mut Vec::new()), Some((0x8060000, 3)), "slot 7's ability used");
-        h.build(&list, &ItemList::default(), &Gear::default(), Bars::default());
+        assert_eq!(h.key(Key::Use, 0, four, true, &mut Vec::new()), Some((0x8060000, 3)), "slot 7's ability used");
+        h.sel = 5;
+        h.menus[5].sel = 4;
+        assert_eq!(h.key(Key::Use, 0, four, true, &mut Vec::new()), Some((0x8060000, 8)), "slot 19's ability used");
+        h.build(&list, &none, &Gear::default(), three);
+        assert_eq!(h.sel, 0, "bar 4 gone: the first bar up");
+        h.sel = 4;
+        h.build(&list, &none, &Gear::default(), three);
+        assert_eq!(h.sel, 4, "bar 3 stays with three");
+        h.sel = 1;
+        h.build(&list, &none, &Gear::default(), Bars::default());
         assert_eq!(h.sel, 0, "bar 2 gone: the first bar up");
     }
 

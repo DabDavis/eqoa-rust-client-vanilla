@@ -5,6 +5,18 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-24 · The extra ability bars are back
+- Options > Extended has Ability Bars again: 2 (the game's), 3 or 4. With 3
+  or 4, the HUD has a third and a fourth ability bar, five abilities each,
+  after the second bar when you switch bars, and the spell book's Memorize
+  offers their slots too (ten at a time; moving past the tenth shows the
+  next ten).
+- They go with the weapon sets: on eqoaclassic, pressing right goes through
+  your ability bars, then the items, then the weapon sets.
+- The server keeps which ability is on which slot: eqoaclassic keeps the
+  extra bars, Sandstorm keeps only the game's two. If the server does not
+  take an ability onto bar 3 or 4, the chat says so in red.
+
 ## 2026-10-24 · SOE's final toolbars: weapon sets, two potions and two gems
 - On a server that keeps weapon sets (eqoaclassic does), the HUD's menus are
   the ones the live game had at its end. Pressing right on the d-pad goes

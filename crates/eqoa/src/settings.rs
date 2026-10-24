@@ -476,6 +476,10 @@ pub struct ClientOptions {
     /// behind others keeps its sound; off, a window not in front is heard
     /// not at all (`audio::set_heard`), its game's sound running on
     pub background_sound: bool,
+    /// Ability Bars: the HUD's ability bars and the spell book's slots, the
+    /// game's two (`ABILITY_BARS_GAME`) or up to `hudmenu::MAX_BARS`, five
+    /// slots each (`hudmenu`)
+    pub ability_bars: u8,
     /// NPC/PC Display: how many NPCs and players (the player's own among
     /// them) the client keeps in view, the game's 24 (`ENTITY_SLOTS_GAME`)
     /// up to `ENTITY_SLOTS_MAX`, on a server that offers more (`net::entity`)
@@ -498,6 +502,8 @@ pub struct ClientOptions {
     pub vsync: bool,
 }
 
+/// The game's ability bars (with the expansion's second).
+pub const ABILITY_BARS_GAME: u8 = 2;
 /// The game's entity slots (CLIENT's `m_entities[24]`), the most a state
 /// channel can carry, and NPC/PC Display's step.
 pub const ENTITY_SLOTS_GAME: u8 = net::entity::RETAIL_SLOTS as u8;
@@ -523,6 +529,7 @@ impl Default for ClientOptions {
             controller: [Focus::Auto; crate::multibox::PLACES],
             capture: false,
             background_sound: true,
+            ability_bars: ABILITY_BARS_GAME,
             entity_slots: ENTITY_SLOTS_GAME,
             entity_view: ENTITY_VIEW_GAME,
             art: esf::Era::Frontiers,
@@ -536,7 +543,7 @@ impl ClientOptions {
     /// Fog only when they are not the game's, Screen Shake only when off, a
     /// window's Controller Focus as `controller.<window>` (from 1) only when
     /// it is not Auto, Capture Controller only when on, Sound in Background
-    /// only when off, NPC/PC Display and NPC/PC View Distance
+    /// only when off, Ability Bars, NPC/PC Display and NPC/PC View Distance
     /// only when not the game's, Art only when it is the 2002 disc's, and
     /// VSync only when off.
     pub fn to_text(self) -> String {
@@ -561,6 +568,9 @@ impl ClientOptions {
         }
         if !self.background_sound {
             s.push_str("background_sound=off\n");
+        }
+        if self.ability_bars != ABILITY_BARS_GAME {
+            s.push_str(&format!("ability_bars={}\n", self.ability_bars));
         }
         if self.entity_slots != ENTITY_SLOTS_GAME {
             s.push_str(&format!("entity_slots={}\n", self.entity_slots));
@@ -617,6 +627,11 @@ impl ClientOptions {
                 ("background_sound", "off") => c.background_sound = false,
                 ("vsync", "on") => c.vsync = true,
                 ("vsync", "off") => c.vsync = false,
+                ("ability_bars", v) => {
+                    if let Some(n) = v.parse::<u8>().ok().filter(|&n| (ABILITY_BARS_GAME as i32..=crate::hudmenu::MAX_BARS).contains(&(n as i32))) {
+                        c.ability_bars = n;
+                    }
+                }
                 ("entity_slots", v) => {
                     if let Some(n) = v.parse::<u8>().ok().filter(|n| (ENTITY_SLOTS_GAME..=ENTITY_SLOTS_MAX).contains(n)) {
                         c.entity_slots = n;
@@ -778,6 +793,12 @@ pub fn background_sound() -> bool {
     client().background_sound
 }
 
+/// Ability Bars now: how many the HUD and the spell book show, with the
+/// expansion's second bar (`Play::ability_bars`).
+pub fn ability_bars() -> u8 {
+    client().ability_bars
+}
+
 /// NPC/PC Display now: how many entity slots to keep where the server offers
 /// more than the game's (`Play::agree_entity_view`).
 pub fn entity_slots() -> usize {
@@ -875,7 +896,7 @@ pub fn describe() -> String {
         FrameRate::Display => "the display's",
     };
     format!(
-        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, npc/pc display {}, npc/pc view distance {}, art {}; {}",
+        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, art {}; {}",
         if c.lod { "on" } else { "off" },
         c.brightness,
         c.fog,
@@ -889,6 +910,7 @@ pub fn describe() -> String {
         focus().key(),
         if c.capture { "on" } else { "off" },
         if c.background_sound { "on" } else { "off" },
+        c.ability_bars,
         c.entity_slots,
         c.entity_view,
         match c.art {
@@ -1278,6 +1300,8 @@ mod tests {
             ClientOptions { fog: 0, ..Default::default() },
             ClientOptions { fog: crate::fog::STEPS, ..Default::default() },
             ClientOptions { background_sound: false, ..Default::default() },
+            ClientOptions { ability_bars: 3, ..Default::default() },
+            ClientOptions { ability_bars: 4, ..Default::default() },
             ClientOptions { entity_slots: 128, ..Default::default() },
             ClientOptions { entity_slots: ENTITY_SLOTS_MAX, ..Default::default() },
             ClientOptions { entity_view: 450, ..Default::default() },
@@ -1300,9 +1324,10 @@ mod tests {
         for bad in ["art=1999", "art=2003", "art="] {
             assert_eq!(ClientOptions::from_text(bad).art, esf::Era::Frontiers, "{bad}: Frontiers', the default");
         }
-        // Ability Bars was a setting from 2026-10-23 to 10-24: a client.opt
-        // that kept one reads as the default
-        assert_eq!(ClientOptions::from_text("ability_bars=4"), ClientOptions::default(), "the old Ability Bars line is nothing now");
+        assert_eq!(ClientOptions { ability_bars: 4, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nability_bars=4\n", "Ability Bars only when not the game's");
+        for bad in ["ability_bars=1", "ability_bars=5", "ability_bars=three"] {
+            assert_eq!(ClientOptions::from_text(bad).ability_bars, ABILITY_BARS_GAME, "{bad}: the game's two");
+        }
         assert_eq!(ClientOptions { background_sound: false, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nbackground_sound=off\n", "Sound in Background only when off");
         for bad in ["background_sound=no", "background_sound=0"] {
             assert!(ClientOptions::from_text(bad).background_sound, "{bad}: on, the default");
@@ -1321,7 +1346,7 @@ mod tests {
             "Screen Shake only off, Capture Controller only on"
         );
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, npc/pc display 24, npc/pc view distance 100, art frontiers; kept in the page's storage");
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, ability bars 2, npc/pc display 24, npc/pc view distance 100, art frontiers; kept in the page's storage");
         testing::reset(true);
         assert!(describe().ends_with("refused: nothing is kept"));
         testing::reset(false);

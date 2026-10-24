@@ -24,7 +24,8 @@
 //! `input::pick`, kept for each window of the client open, `multibox`; what
 //! it reads now is said beside Back), Capture Controller and Sound in
 //! Background (one setting for every window: off, a window not in front is
-//! not heard, `audio::set_heard`), NPC/PC
+//! not heard, `audio::set_heard`), Ability Bars (the game's 2, or 3 or 4:
+//! the HUD's quick menus and the spell book's slots, `hudmenu`), NPC/PC
 //! Display (a slider and its number: the NPCs and players kept in view, the
 //! game's 24 to 204 in eights, on a server that offers more) and NPC/PC View
 //! Distance (a slider and its number: how far they are drawn, the game's 100
@@ -465,8 +466,8 @@ impl WndOptions {
     /// (19) and Sound in Background (21) turn over, Brightness, Fog (20), Camera Distance and
     /// Camera Turn Speed (17) step as a volume does (stopping at their ends
     /// with sound 9), Frame Rate goes round 30, 60 and the display's,
-    /// Controller Focus round its seven as Battle Music goes round its tracks
-    /// (22 was Ability Bars, taken out 2026-10-24); NPC/PC Display (23) steps by
+    /// Controller Focus round its seven and Ability Bars (22) round 2, 3 and
+    /// 4 as Battle Music goes round its tracks; NPC/PC Display (23) steps by
     /// eights from the game's 24 as a slider does, 200 to 204 its last, and
     /// NPC/PC View Distance (24) by fifties from the game's 100 to 1000; Art
     /// (25) and VSync (26) turn over, VSync natively only (a page's stays on
@@ -532,6 +533,10 @@ impl WndOptions {
                     25 => c.art = crate::era::other(c.art),
                     26 if cfg!(target_arch = "wasm32") => cues.push(9),
                     26 => c.vsync = !c.vsync,
+                    22 => {
+                        let (lo, n) = (crate::settings::ABILITY_BARS_GAME, crate::hudmenu::MAX_BARS as u8 - crate::settings::ABILITY_BARS_GAME + 1);
+                        c.ability_bars = lo + (c.ability_bars.saturating_sub(lo).min(n - 1) + if d < 0 { n - 1 } else { 1 }) % n;
+                    }
                     13 => slide(&mut c.brightness, 0, BRIGHTNESS_STEPS, 1),
                     23 => {
                         // on to the next of 24, 32 .. 200, 204 (a number
@@ -832,7 +837,7 @@ impl WndOptions {
     /// volumes are, and each side of a knob for a pointer), Frame Rate,
     /// Camera Distance and Camera Turn Speed (sliders), Screen Shake,
     /// Controller Focus (Off the game's word), Capture Controller, Sound in
-    /// Background, NPC/PC Display and NPC/PC View
+    /// Background, Ability Bars (how many), NPC/PC Display and NPC/PC View
     /// Distance (sliders, each number before it), Art and VSync (natively;
     /// a page's shows On, the browser pacing it); under them, beside the Back
     /// legend, what this window reads (`input::reads`), or with one of the
@@ -844,7 +849,7 @@ impl WndOptions {
     /// menu under it; eight rows show at a time, the selected one among them,
     /// with a scroll bar down the right as the Controls page has.
     fn draw_extended(&mut self, vui: &Vui, r: &mut dyn Raster) {
-        self.item = [12, 13, 20, 14, 15, 17, 18, 16, 19, 21, 23, 24, 25, 26].get(self.row as usize).copied().unwrap_or(self.item);
+        self.item = [12, 13, 20, 14, 15, 17, 18, 16, 19, 21, 22, 23, 24, 25, 26].get(self.row as usize).copied().unwrap_or(self.item);
         let n = EXTENDED_ROWS.len() as i32;
         if self.row < self.ext_top {
             self.ext_top = self.row;
@@ -880,6 +885,7 @@ impl WndOptions {
             Some(wide(&focus)),
             Some(on_off(c.capture)),
             Some(on_off(c.background_sound)),
+            Some(wide(&c.ability_bars.to_string())),
             None,
             None,
             Some(wide(art)),
@@ -896,7 +902,7 @@ impl WndOptions {
         let turn = (c.camera_turn - TURN_MIN) as f32 / (TURN_MAX - TURN_MIN) as f32;
         let slots = (c.entity_slots - ENTITY_SLOTS_GAME) as f32 / (ENTITY_SLOTS_MAX - ENTITY_SLOTS_GAME) as f32;
         let view = (c.entity_view - ENTITY_VIEW_GAME) as f32 / (ENTITY_VIEW_MAX - ENTITY_VIEW_GAME) as f32;
-        for (k, t) in [(1, c.brightness as f32 / BRIGHTNESS_STEPS as f32), (2, fog), (4, camera), (5, turn), (10, slots), (11, view)] {
+        for (k, t) in [(1, c.brightness as f32 / BRIGHTNESS_STEPS as f32), (2, fog), (4, camera), (5, turn), (11, slots), (12, view)] {
             if !(top..top + EXTENDED_SHOWN).contains(&k) {
                 continue;
             }
@@ -907,7 +913,7 @@ impl WndOptions {
         // NPC/PC Display's and View Distance's numbers, before their sliders'
         // left arrows
         let end = width - 180 - (vui.entry(128).uv1[0] + 3) - 6;
-        for (k, n) in [(10, c.entity_slots as u16), (11, c.entity_view)] {
+        for (k, n) in [(11, c.entity_slots as u16), (12, c.entity_view)] {
             if (top..top + EXTENDED_SHOWN).contains(&k) {
                 self.window2.text_box(vui, r, &wide(&n.to_string()), 40, k - top, end - 40, 1, UI_COLORS[(self.row == k) as usize], 0x10);
             }
@@ -924,7 +930,7 @@ impl WndOptions {
         self.back_legend(vui, r, legend);
         let after = 40 + self.window2.text_width(vui, r, &wide(&format!("|t {}", vui.words.get(750, vui.language)))) + 16;
         let note = match &self.server_note {
-            Some(n) if matches!(self.row, 10 | 11) => n.clone(),
+            Some(n) if matches!(self.row, 11 | 12) => n.clone(),
             _ => crate::input::reads(),
         };
         self.window2.text_box(vui, r, &wide(&note), after, legend, width - 40 - after, 1, UI_COLORS[0], 0x10 | 2);
@@ -932,11 +938,11 @@ impl WndOptions {
 }
 
 /// The client's words for its own pages (no WORDS.TXT entry): the menu's
-/// rows and the Extended page's fourteen. (WORDS.TXT's "CONTROLS", 1039, is in
+/// rows and the Extended page's fifteen. (WORDS.TXT's "CONTROLS", 1039, is in
 /// capitals and used by none of the game's modules.)
 const EXTENDED: &str = "Extended";
 const CONTROLS: &str = "Controls";
-const EXTENDED_ROWS: [&str; 14] = ["Level of Detail", "Brightness", "Fog", "Frame Rate", "Camera Distance", "Camera Turn Speed", "Screen Shake", "Controller Focus", "Capture Controller", "Sound in Background", "NPC/PC Display", "NPC/PC View Distance", "Art", "VSync"];
+const EXTENDED_ROWS: [&str; 15] = ["Level of Detail", "Brightness", "Fog", "Frame Rate", "Camera Distance", "Camera Turn Speed", "Screen Shake", "Controller Focus", "Capture Controller", "Sound in Background", "Ability Bars", "NPC/PC Display", "NPC/PC View Distance", "Art", "VSync"];
 /// The Extended page's rows shown at a time: as many as nine rows' height
 /// holds with the legend's.
 const EXTENDED_SHOWN: i32 = 8;
@@ -944,8 +950,8 @@ const EXTENDED_SHOWN: i32 = 8;
 /// A page's pointer notes (`point`): a menu row below `LABEL`, a row's label
 /// at `LABEL` + its row, its value's left half `HIT_ROWS` past that and its
 /// right half twice past; a page has fewer rows than `HIT_ROWS` (until
-/// 2026-10-23 ten, which the Extended page's eleventh row outgrew: its notes
-/// read as the first row's).
+/// 2026-10-23 ten, which the Extended page's eleventh row, Ability Bars,
+/// outgrew: its notes read as the first row's).
 const HIT_ROWS: i32 = 100;
 const LABEL: i32 = HIT_ROWS;
 
@@ -1190,8 +1196,19 @@ mod tests {
         assert!(!settings::background_sound());
         assert_eq!(cues.last(), Some(&11));
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!(w.item, 23, "NPC/PC Display");
+        assert_eq!(w.item, 22, "Ability Bars");
         assert_eq!(w.ext_top, 3, "scrolled a third row");
+        assert_eq!(settings::ability_bars(), 2, "the game's two");
+        for want in [3, 4, 2] {
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
+            assert_eq!(settings::ability_bars(), want, "round 2, 3 and 4");
+        }
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert_eq!(settings::ability_bars(), 4, "and the other way");
+        assert_eq!(cues.last(), Some(&11));
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.item, 23, "NPC/PC Display");
+        assert_eq!(w.ext_top, 4, "scrolled a fourth row");
         assert_eq!(settings::entity_slots(), 24, "the game's 24");
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert_eq!((settings::entity_slots(), cues.last()), (24, Some(&9)), "no fewer than the game's");
@@ -1214,7 +1231,7 @@ mod tests {
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!(w.item, 24, "NPC/PC View Distance");
-        assert_eq!(w.ext_top, 4, "scrolled a fourth row");
+        assert_eq!(w.ext_top, 5, "scrolled a fifth row");
         assert_eq!(settings::entity_view(), 100, "the game's 100");
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert_eq!((settings::entity_view(), cues.last()), (100, Some(&9)), "no nearer than the game's");
@@ -1228,7 +1245,7 @@ mod tests {
         assert_eq!((settings::entity_view(), cues.last()), (1000, Some(&9)), "1000, then its end");
         press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!(w.item, 25, "Art");
-        assert_eq!(w.ext_top, 5, "scrolled a fifth row");
+        assert_eq!(w.ext_top, 6, "scrolled a sixth row");
         assert_eq!(settings::art(), esf::Era::Frontiers, "Frontiers', the disc the game runs off");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         assert_eq!((settings::art(), cues.last()), (esf::Era::Y2002, Some(&11)), "the 2002 disc's");
@@ -1237,7 +1254,7 @@ mod tests {
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!(w.item, 26, "VSync");
-        assert_eq!(w.ext_top, 6, "scrolled a sixth row");
+        assert_eq!(w.ext_top, 7, "scrolled a seventh row");
         assert!(settings::vsync(), "on: a frame only at the display's refresh");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         assert_eq!((settings::vsync(), cues.last()), (false, Some(&11)), "off");
@@ -1245,7 +1262,7 @@ mod tests {
         assert!(settings::vsync(), "and back: two values");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (13, Some(&9)), "the last row");
+        assert_eq!((w.row, cues.last()), (14, Some(&9)), "the last row");
         // Triangle: the menu, then closed with every setting put back
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!(w.page, -1);
@@ -1416,11 +1433,17 @@ mod tests {
         assert_eq!((w.row, w.ext_top, w.item), (9, 2, 21), "Sound in Background, two rows scrolled");
         assert_eq!(w.point([frame + 110.0, y(&w, 7)]), vec![key::RIGHT], "its value, turned over");
         assert_eq!(w.point([frame + 20.0, y(&w, 6)]), vec![key::UP, key::LEFT], "Capture Controller's a row up");
-        // the last row, NPC/PC Display: three rows scrolled, a slider whose
+        // Ability Bars: three rows scrolled
+        w.key(&vui, &mut r, &mut o, key::DOWN, 0, &mut cues, &mut ups);
+        w.draw(&vui, &mut r, &o, &mut ups);
+        assert_eq!((w.row, w.ext_top, w.item), (10, 3, 22), "Ability Bars, three rows scrolled");
+        assert_eq!(w.point([frame + 110.0, y(&w, 7)]), vec![key::RIGHT], "its value, stepped on");
+        assert_eq!(w.point([frame + 20.0, y(&w, 6)]), vec![key::UP, key::LEFT], "Sound in Background's a row up");
+        // the last row, NPC/PC Display: four rows scrolled, a slider whose
         // knob is at its left end (the game's 24), then at 128 near its middle
         w.key(&vui, &mut r, &mut o, key::DOWN, 0, &mut cues, &mut ups);
         w.draw(&vui, &mut r, &o, &mut ups);
-        assert_eq!((w.row, w.ext_top, w.item), (10, 3, 23), "NPC/PC Display, three rows scrolled");
+        assert_eq!((w.row, w.ext_top, w.item), (11, 4, 23), "NPC/PC Display, four rows scrolled");
         assert_eq!(w.point([slider + 30.0, y(&w, 7)]), vec![key::RIGHT]);
         assert_eq!(w.point([slider - 2.0, y(&w, 7)]), vec![key::LEFT], "left of the knob at the bar's end");
         crate::settings::set_client(ClientOptions { entity_slots: 128, ..crate::settings::client() });
@@ -1428,11 +1451,11 @@ mod tests {
         assert_eq!(w.point([slider + 30.0, y(&w, 7)]), vec![key::LEFT], "left of the knob at 128");
         assert_eq!(w.point([slider + 110.0, y(&w, 7)]), vec![key::RIGHT], "right of it");
         assert_eq!(w.point(label(&w, 7)), vec![key::RIGHT], "its label, selected: stepped on");
-        // the last row, NPC/PC View Distance: four rows scrolled, its knob at
+        // the last row, NPC/PC View Distance: five rows scrolled, its knob at
         // the left end (the game's 100), then at 1000 at the right end
         w.key(&vui, &mut r, &mut o, key::DOWN, 0, &mut cues, &mut ups);
         w.draw(&vui, &mut r, &o, &mut ups);
-        assert_eq!((w.row, w.ext_top, w.item), (11, 4, 24), "NPC/PC View Distance, four rows scrolled");
+        assert_eq!((w.row, w.ext_top, w.item), (12, 5, 24), "NPC/PC View Distance, five rows scrolled");
         assert_eq!(w.point([slider + 30.0, y(&w, 7)]), vec![key::RIGHT]);
         assert_eq!(w.point([slider - 2.0, y(&w, 7)]), vec![key::LEFT]);
         assert_eq!(w.point([slider + 30.0, y(&w, 6)]), vec![key::UP, key::LEFT], "NPC/PC Display's a row up, left of its knob");
