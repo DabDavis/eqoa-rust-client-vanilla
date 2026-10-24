@@ -460,6 +460,26 @@ mod tests {
         assert_eq!((o.glow, o.wave, o.sail), (0, 0, 316), "flag 2 off: the birds, not the island");
     }
 
+    /// The 2002 disc's art draws the original game's layer, Frontiers' the
+    /// island's (`flags`): the island's counters run only with Frontiers'.
+    /// The control is Frontiers' own flags.
+    #[test]
+    fn the_2002_art_draws_the_original_layer() {
+        assert_eq!(flags(esf::Era::Frontiers), net::session::EXPANSION_FLAGS);
+        assert_eq!(flags(esf::Era::Y2002) & 2, 0);
+        let mut r = NullRaster;
+        let mut run = |era| {
+            let mut fx = SplashFx::new(flags(era));
+            fx.reset(0);
+            for k in 1..=40 {
+                fx.render(&mut r, k * 33, true);
+            }
+            (fx.glow, fx.wave)
+        };
+        assert_eq!(run(esf::Era::Y2002), (0, 0), "the 2002 painting has no island");
+        assert_ne!(run(esf::Era::Frontiers), (0, 0), "the control: Frontiers' island layer runs");
+    }
+
     /// The glow's layers: one up at a time, each over 30 frames.
     #[test]
     fn the_glow_comes_up_one_layer_at_a_time() {

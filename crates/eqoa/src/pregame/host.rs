@@ -147,11 +147,13 @@ impl Host {
         }
     }
 
-    /// The art swapped before the world (F9, `era`): the pregame's files
-    /// drawn in it from now on, the 2002 disc's read first when it is that
-    /// art (`Res::set_art`); the 2D layer made again at once and as they
+    /// The art to draw before the world (F9, the Extended page's Art, and the
+    /// window's every start of the pregame: `era::current`): the pregame's
+    /// files drawn in it from now on, the 2002 disc's read first when it is
+    /// that art (`Res::set_art`; from a cold start the screens wait for them,
+    /// as for the disc's own); the 2D layer made again at once and as they
     /// come, and what the stages keep made of them once they are in
-    /// (`Pregame::art_changed`, from `frame`).
+    /// (`Pregame::art_changed`, from `frame`). The art drawn already: nothing.
     pub fn art_changed(&mut self, era: esf::Era) {
         self.pre.res.set_art(era);
     }

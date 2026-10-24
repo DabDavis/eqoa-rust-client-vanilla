@@ -145,7 +145,7 @@ impl Setup {
             legal: Default::default(),
             eula: Default::default(),
             splash: Default::default(),
-            fx: splashfx::SplashFx::new(splashfx::flags(crate::era::current())),
+            fx: splashfx::SplashFx::new(net::session::EXPANSION_FLAGS),
             fader: Default::default(),
             options: GameOptions::default(),
             options_wnd: Default::default(),

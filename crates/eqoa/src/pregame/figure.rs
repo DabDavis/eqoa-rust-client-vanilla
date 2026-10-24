@@ -209,4 +209,60 @@ mod tests {
         let mut parsed = load_csprite(&lib, r, &mut anims, &mut AnimCache::new(), &mut rand).expect("the sprite");
         assert_eq!(first(&mut parsed, &mut anims, &mut rand), [0, 0], "the parsed sprite only idles");
     }
+
+    /// A figure is its model as the art drawn has it (`era`): with the 2002
+    /// disc's CHARSEL files standing in, the human of 2002 (another
+    /// skeleton), made again as Frontiers' when the art goes back, its look
+    /// and items kept. The control is the Frontiers view's own figure. Needs
+    /// both discs (`run/eqoa.iso`, `$EQOA_2002_ISO` or the USA disc under
+    /// `../decomp-builds`) and a graphics adapter.
+    #[test]
+    fn a_figure_is_its_model_in_the_art_drawn() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let y2002 = std::env::var_os("EQOA_2002_ISO").map(std::path::PathBuf::from).or_else(|| {
+            std::fs::read_dir(root.join("../decomp-builds/discs/eqoa-usa")).ok()?.flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("iso")))
+        });
+        let (Ok(mut f), Some(Ok(mut y))) = (iso::Iso::open(root.join("run/eqoa.iso")), y2002.map(iso::Iso::open)) else {
+            eprintln!("SKIP: no Frontiers or no 2002 disc");
+            return;
+        };
+        let _gpu = crate::GPU_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let instance = render::wgpu::Instance::new(render::wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&render::wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("SKIP: no graphics adapter");
+            return;
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let mut renderer = render::Renderer::new(&device, &queue, render::TARGET_FORMAT);
+        let mut lib = Library::new();
+        let mut art = Vec::new();
+        for path in crate::pregame::client::FILES {
+            let name = crate::pregame::res::name_of(path).to_ascii_uppercase();
+            if let Some(c) = f.read(path).ok().and_then(|b| esf::Container::open(b).ok()) {
+                lib.add(name.clone(), c);
+            }
+            if let Some(c) = y.read(crate::pregame::res::name_of(path)).ok().and_then(|b| esf::Container::open(b).ok()) {
+                art.push((name, c));
+            }
+        }
+        assert!(crate::era::install(&mut lib, art) >= 4, "the CHARSEL files are other art");
+        let human = vi::hash::hash_resource_id("HumanMale");
+        let look = vi::cust::Look { hair: [1, 2, 3], face: 1, robe: -1, ..Default::default() };
+        let nodes = |fig: &Figure| fig.sprite.as_ref().map_or(0, |cs| cs.h.nodes.len());
+        let mut g = Gpu { renderer: &mut renderer, device: &device, queue: &queue };
+        let frontiers = Figure::new(&lib, &mut g, human, look, [0; 3], [1.0, 2.0, 3.0], [0.5, 0.0, 0.0], 0).unwrap();
+        lib.set_view(esf::Era::Y2002);
+        let mut fig = Figure::new(&lib, &mut g, human, look, [0; 3], [1.0, 2.0, 3.0], [0.5, 0.0, 0.0], 0).unwrap();
+        assert_ne!(nodes(&fig), nodes(&frontiers), "the 2002 human is another skeleton");
+        let y_nodes = nodes(&fig);
+        // the art back to Frontiers': made again as Frontiers' where it stood
+        lib.set_view(esf::Era::Frontiers);
+        fig.remake(&lib, &mut g, 100);
+        assert_eq!(nodes(&fig), nodes(&frontiers));
+        assert_eq!((fig.model, fig.look, fig.at, fig.hpr, fig.items), (human, look, [1.0, 2.0, 3.0], [0.5, 0.0, 0.0], [0; 3]));
+        lib.set_view(esf::Era::Y2002);
+        fig.remake(&lib, &mut g, 200);
+        assert_eq!(nodes(&fig), y_nodes);
+        eprintln!("HumanMale: Frontiers {} nodes, 2002 {y_nodes}", nodes(&frontiers));
+    }
 }

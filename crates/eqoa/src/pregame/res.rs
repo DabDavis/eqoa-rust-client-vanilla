@@ -362,6 +362,115 @@ mod tests {
         assert_eq!(name_of("DATA2/SETUP.CSF"), "SETUP.CSF");
     }
 
+    /// A container of surfaces (`(id, fill)`), as a CSF's bytes would open.
+    fn objf(surfaces: &[(u32, u8)]) -> Vec<u8> {
+        let mut d = b"FJBO".to_vec();
+        d.resize(24, 0);
+        d[16..24].copy_from_slice(&24i64.to_le_bytes());
+        for &(id, fill) in surfaces {
+            let mut body = id.to_le_bytes().to_vec();
+            body.extend([fill; 16]);
+            d.extend_from_slice(&0x1000u16.to_le_bytes());
+            d.extend_from_slice(&0i16.to_le_bytes());
+            d.extend_from_slice(&(body.len() as i32).to_le_bytes());
+            d.extend_from_slice(&0u32.to_le_bytes());
+            d.extend_from_slice(&body);
+        }
+        d
+    }
+
+    /// The reads asked of the 2002 disc (`era::set_reader`), each answered
+    /// when the test says.
+    type Asked = std::rc::Rc<std::cell::RefCell<Vec<(Vec<String>, crate::era::Slot)>>>;
+
+    fn reader_2002() -> Asked {
+        crate::era::set_page_disc(true);
+        let asked: Asked = Default::default();
+        let a = asked.clone();
+        crate::era::set_reader(Box::new(move |names| {
+            let slot: crate::era::Slot = Default::default();
+            a.borrow_mut().push((names, slot.clone()));
+            slot
+        }));
+        // the disc's own files come as the test puts them
+        super::files::set_reader(Box::new(|_| Default::default()));
+        asked
+    }
+
+    /// In the 2002 art each art file's 2002 copy is asked for (not the words,
+    /// not STATION's pages), the screens wait for it, a container stands in
+    /// for its namesake (one that came first waits for it), one of the same
+    /// bytes does not, a loading picture is the 2002 disc's once it is in and
+    /// Frontiers' where that disc has none; the art's change is due once the
+    /// reads are in, the layer made again as stand-ins come. The control:
+    /// back in Frontiers' art nothing waits and the pictures are Frontiers'.
+    #[test]
+    fn the_2002_copies_stand_in_and_the_pictures_wait() {
+        let asked = reader_2002();
+        let mut r = Res::new();
+        let ui = "DATA2/UI.CSF";
+        let pic = super::super::boot::path(1);
+        let err3 = "DATA3/ERROR3.16";
+        r.want(&[ui, "DATA/WORDS.TXT", &pic, err3]);
+        assert!(asked.borrow().is_empty(), "Frontiers' art asks the 2002 disc for nothing");
+        let frontiers_pic = vec![0x1fu8; super::super::boot::WIDTH * super::super::boot::HEIGHT * 2];
+        r.put(ui, objf(&[(1, 1), (2, 2)]));
+        r.put("DATA/WORDS.TXT", b"one\n".to_vec());
+        r.put(&pic, frontiers_pic.clone());
+        r.put(err3, frontiers_pic.clone());
+        assert!(r.ready(&[ui, &pic]));
+        r.take_relayer();
+        // the 2002 art: the art files asked of the 2002 disc, the words not
+        r.set_art(Era::Y2002);
+        let names: Vec<String> = asked.borrow().iter().flat_map(|a| a.0.clone()).collect();
+        let mut want: Vec<String> = [ui, pic.as_str(), err3].map(String::from).to_vec();
+        want.sort();
+        let mut got = names.clone();
+        got.sort();
+        assert_eq!(got, want);
+        assert!(!r.ready(&[ui]) && r.ready(&["DATA/WORDS.TXT"]), "the screens wait for the 2002 copies");
+        assert!(r.picture(1).is_none(), "no Frontiers picture while the 2002 one comes");
+        assert!(r.take_art_change().is_none(), "the art changes once its files are in");
+        // a file asked later is asked of both discs
+        r.want(&["DATA2/SETUP.CSF"]);
+        assert_eq!(asked.borrow().last().unwrap().0, vec!["DATA2/SETUP.CSF".to_string()]);
+        // the answers: UI.CSF other art, the picture, no ERROR3 on that disc;
+        // SETUP.CSF's copy before its namesake, the same bytes
+        let y_pic = vec![0u8; super::super::boot::WIDTH * super::super::boot::HEIGHT * 2];
+        for (names, slot) in asked.borrow().iter() {
+            let files: Vec<(String, Vec<u8>)> = names
+                .iter()
+                .filter_map(|n| match n.as_str() {
+                    "DATA2/UI.CSF" => Some((n.clone(), objf(&[(1, 9), (3, 3)]))),
+                    "DATA2/SETUP.CSF" => Some((n.clone(), objf(&[(7, 7)]))),
+                    n if n.ends_with("LOADING1.16") => Some((n.to_string(), y_pic.clone())),
+                    _ => None,
+                })
+                .collect();
+            *slot.borrow_mut() = Some(Ok(files));
+        }
+        r.poll();
+        assert!(r.ready(&[ui, &pic, err3]));
+        assert!(r.take_relayer(), "a stand-in came for a file already up");
+        let f = r.lib.file_named("UI.CSF").unwrap();
+        assert_eq!(r.lib.stands_for(f), Some(0), "UI.CSF is the 2002 disc's in its art");
+        assert_eq!(r.lib.in_view(), vec![f, 0]);
+        assert_eq!(r.picture(1).unwrap()[..4], [0, 0, 0, 255], "the 2002 disc's picture");
+        assert_eq!(r.raw(err3).map(|b| b.len()), Some(frontiers_pic.len()));
+        assert!(r.ready(&[err3]), "a file the 2002 disc lacks is answered: Frontiers'");
+        assert_eq!(r.take_art_change(), Some(Era::Y2002));
+        assert_eq!(r.take_art_change(), None, "once");
+        // SETUP.CSF's copy came first and waits; its namesake the same bytes
+        r.put("DATA2/SETUP.CSF", objf(&[(7, 7)]));
+        assert_eq!(r.lib.stand_in_of(r.lib.files.iter().position(|(n, _)| n == "SETUP.CSF").unwrap()), None, "the same bytes stand in for nothing");
+        // the control: Frontiers' art again
+        r.set_art(Era::Frontiers);
+        assert_eq!(r.lib.file_named("UI.CSF"), Some(0));
+        assert_eq!(r.picture(1).unwrap()[..4], [248, 192, 56, 255], "Frontiers' picture");
+        assert_eq!(r.take_art_change(), Some(Era::Frontiers));
+        crate::era::set_page_disc(false);
+    }
+
     /// A server's words stand for its session and give way to the disc's
     /// again; the control: the disc's before and after.
     #[test]

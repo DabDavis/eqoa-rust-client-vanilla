@@ -207,8 +207,6 @@ impl Pregame {
             back: None,
             relaunch: false,
         };
-        // the art chosen (`era`, F9): the 2002 disc's copies read with the files
-        p.res.set_art(crate::era::current());
         p.res.want(res::BASE);
         p
     }
