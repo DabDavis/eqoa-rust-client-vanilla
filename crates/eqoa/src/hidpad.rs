@@ -417,6 +417,8 @@ mod device {
         /// each one that could not be opened or failed a read, and when: it
         /// is tried again 2 s on (and stays gilrs's meanwhile)
         failed: HashMap<String, Instant>,
+        /// the ones whose refusal was said (once each)
+        said: Vec<String>,
     }
 
     impl Hid {
@@ -431,7 +433,7 @@ mod device {
             if let Err(e) = std::thread::Builder::new().name("hid pads".into()).spawn(move || look(known, &l, &s)) {
                 crate::say(&format!("gamepad: no HID controllers: {e}"));
             }
-            Hid { listed, stop, devices: Vec::new(), failed: HashMap::new() }
+            Hid { listed, stop, devices: Vec::new(), failed: HashMap::new(), said: Vec::new() }
         }
 
         /// The controllers present and open, in their interfaces' order
@@ -451,6 +453,12 @@ mod device {
                 match Device::open(l) {
                     Some(d) => self.devices.push(d),
                     None => {
+                        if !self.said.contains(&l.path) {
+                            // SAFETY: the error CreateFileW just left
+                            let e = unsafe { GetLastError() };
+                            crate::say(&format!("gamepad: a {} could not be opened over HID (error {e}: another program may hold it alone); Windows.Gaming.Input reads it, in front only", l.model.label()));
+                            self.said.push(l.path.clone());
+                        }
                         self.failed.insert(l.path.clone(), now);
                     }
                 }
