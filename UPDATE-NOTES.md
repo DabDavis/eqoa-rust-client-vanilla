@@ -5,6 +5,14 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-24 · Arrows fly
+- A shot with a bow or a crossbow now shows its arrow or bolt flying from the
+  hand to the target in a slight arc, as on a PlayStation 2, and a thrown
+  weapon flies itself. Before, nothing left the hand.
+- Your own shots show it, and so do other players' and creatures' when the
+  server shows you their shots. As on the console, nothing is seen to fly
+  when the archer also holds something in the main hand.
+
 ## 2026-10-24 · Hold R1 to aim
 - Holding R1 or L1 (Tab or ` on the keyboard) for a moment now does what it
   does on a PlayStation 2: the view moves into your character's eyes, a
