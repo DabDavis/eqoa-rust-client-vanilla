@@ -540,6 +540,20 @@ fn shares_pad(focus: Focus, seat: &Seat) -> bool {
 /// another (`pick`): a wireless one waking takes a few seconds.
 const WAIT_MS: u128 = 15_000;
 
+/// How long gilrs's reading of a PlayStation controller is passed over while
+/// HID has not read it (Windows: `hidpad` looks once a second).
+#[cfg(any(windows, test))]
+const HID_GRACE_MS: u128 = 2_000;
+
+/// Whether gilrs's reading of a PlayStation controller that HID does not read
+/// is passed over (Windows), `ms` after gilrs first had it: for a moment, in
+/// case HID is about to (`HID_GRACE_MS`), but not when HID could not open it
+/// (`hidpad::Hid::refused`): then it is gilrs's.
+#[cfg(any(windows, test))]
+fn wait_for_hid(refused: bool, ms: u128) -> bool {
+    !refused && ms < HID_GRACE_MS
+}
+
 /// The controllers: natively through gilrs (SDL's layout) and, on Windows,
 /// the Xbox controllers through XInput (`xinput`) and the PlayStation ones
 /// over HID (`hidpad`), which every window reads, in front or not; in a page
@@ -555,6 +569,10 @@ pub struct Gamepads {
     xinput: Option<crate::xinput::XInput>,
     #[cfg(windows)]
     hid: Option<crate::hidpad::Hid>,
+    /// gilrs's PlayStation controllers not (yet) read over HID, each since
+    /// when gilrs has it (`read`)
+    #[cfg(windows)]
+    unmatched: std::collections::HashMap<gilrs::GamepadId, web_time::Instant>,
     /// each pad's reading, by its index and id (in a page)
     #[cfg(target_arch = "wasm32")]
     web: Vec<(u32, String, crate::padmap::PadMap)>,
@@ -621,6 +639,8 @@ impl Gamepads {
             xinput: (!none).then(crate::xinput::XInput::default),
             #[cfg(windows)]
             hid: (!none).then(crate::hidpad::Hid::start),
+            #[cfg(windows)]
+            unmatched: std::collections::HashMap::new(),
             #[cfg(target_arch = "wasm32")]
             web: Vec::new(),
             #[cfg(target_arch = "wasm32")]
@@ -805,6 +825,21 @@ impl Gamepads {
                     c.rumbles = pad.is_ff_supported();
                     continue;
                 }
+                // a PlayStation controller HID has not read yet (the interfaces
+                // are looked through once a second: one just plugged in) is
+                // passed over a moment, so no window takes gilrs's reading of
+                // it, a name that would go; gilrs keeps one HID cannot open,
+                // or does not find
+                #[cfg(windows)]
+                if let Some(h) = self.hid.as_ref()
+                    && let Some(ids) = pad.vendor_id().zip(pad.product_id())
+                    && crate::hidpad::Model::of(ids.0, ids.1).is_some()
+                {
+                    let since = *self.unmatched.entry(id).or_insert_with(web_time::Instant::now);
+                    if wait_for_hid(h.refused(ids), since.elapsed().as_millis()) {
+                        continue;
+                    }
+                }
                 // a Windows.Gaming.Input Gamepad (gilrs gives it no uuid) with an
                 // XInput pad's USB ids (any, where XInput does not say them) is
                 // that pad, XInput's; another is gilrs's
@@ -840,7 +875,13 @@ impl Gamepads {
             }
         }
         #[cfg(windows)]
-        out.extend(hid.into_iter().map(|(c, _)| c));
+        {
+            let gone: Vec<gilrs::GamepadId> = self.unmatched.keys().copied().filter(|id| self.gilrs.as_ref().is_none_or(|g| g.connected_gamepad(*id).is_none())).collect();
+            for id in gone {
+                self.unmatched.remove(&id);
+            }
+            out.extend(hid.into_iter().map(|(c, _)| c));
+        }
         out.sort_by_key(|c| c.order);
         out
     }
@@ -1223,6 +1264,17 @@ mod tests {
     /// said only that two controllers did not drive two windows): what this
     /// window reads, then each controller, how it is read and which windows
     /// read it; one no window reads says so, as does none connected.
+    /// gilrs's reading of a PlayStation controller HID has not read is passed
+    /// over for a moment, then kept; one HID could not open is kept at once.
+    /// The control: past the moment it is not passed over.
+    #[test]
+    fn a_playstation_pad_waits_a_moment_for_hid() {
+        assert!(wait_for_hid(false, 0));
+        assert!(wait_for_hid(false, HID_GRACE_MS - 1));
+        assert!(!wait_for_hid(false, HID_GRACE_MS), "the control: after the moment, gilrs's");
+        assert!(!wait_for_hid(true, 0), "refused: gilrs's at once");
+    }
+
     #[test]
     fn a_report_lists_the_controllers_and_who_reads_them() {
         let pads = [("xinput0", "Xbox controller 1", "XInput: in front or behind", true), ("pad3", "DualSense Wireless Controller", "Windows.Gaming.Input: only by the window in front", false)];

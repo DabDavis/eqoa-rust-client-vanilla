@@ -289,34 +289,42 @@ mod device {
         ok.then_some((a.VendorID, a.ProductID))
     }
 
-    /// The controllers present, once a second until `stop`: each interface's
-    /// USB ids asked once while it stays (a failed ask again after 5 s).
-    fn look(listed: &Mutex<Vec<Listed>>, stop: &AtomicBool) {
-        let mut known: HashMap<String, (Option<(u16, u16)>, Instant)> = HashMap::new();
+    /// Each HID interface's USB ids, asked once while it stays (a failed ask
+    /// again after 5 s).
+    type Known = HashMap<String, (Option<(u16, u16)>, Instant)>;
+
+    /// The controllers present now, in their interfaces' order.
+    fn look_once(known: &mut Known) -> Vec<Listed> {
+        let now = interfaces();
+        known.retain(|p, _| now.contains(p));
+        let mut found = Vec::new();
+        for p in now {
+            let stale = known.get(&p).is_none_or(|(ids, at)| ids.is_none() && at.elapsed() >= Duration::from_secs(5));
+            if stale {
+                known.insert(p.clone(), (ids(&p), Instant::now()));
+            }
+            if let Some((Some(ids), _)) = known.get(&p)
+                && let Some(model) = Model::of(ids.0, ids.1)
+            {
+                found.push(Listed { path: p, ids: *ids, model });
+            }
+        }
+        found.sort_by(|a, b| a.path.cmp(&b.path));
+        found
+    }
+
+    /// The controllers present, once a second until `stop`.
+    fn look(mut known: Known, listed: &Mutex<Vec<Listed>>, stop: &AtomicBool) {
         while !stop.load(Ordering::Relaxed) {
-            let now = interfaces();
-            known.retain(|p, _| now.contains(p));
-            let mut found = Vec::new();
-            for p in now {
-                let stale = known.get(&p).is_none_or(|(ids, at)| ids.is_none() && at.elapsed() >= Duration::from_secs(5));
-                if stale {
-                    known.insert(p.clone(), (ids(&p), Instant::now()));
-                }
-                if let Some((Some(ids), _)) = known.get(&p)
-                    && let Some(model) = Model::of(ids.0, ids.1)
-                {
-                    found.push(Listed { path: p, ids: *ids, model });
-                }
-            }
-            found.sort_by(|a, b| a.path.cmp(&b.path));
-            if let Ok(mut l) = listed.lock() {
-                *l = found;
-            }
             for _ in 0..10 {
                 if stop.load(Ordering::Relaxed) {
                     return;
                 }
                 std::thread::sleep(Duration::from_millis(100));
+            }
+            let found = look_once(&mut known);
+            if let Ok(mut l) = listed.lock() {
+                *l = found;
             }
         }
     }
@@ -412,12 +420,15 @@ mod device {
     }
 
     impl Hid {
-        /// Looks for controllers from now on (its thread).
+        /// The controllers present now (so the first frame reads them, and
+        /// gilrs's reading of one is passed over from the start), then looked
+        /// for from now on (its thread).
         pub fn start() -> Hid {
-            let listed = Arc::new(Mutex::new(Vec::new()));
+            let mut known = Known::new();
+            let listed = Arc::new(Mutex::new(look_once(&mut known)));
             let stop = Arc::new(AtomicBool::new(false));
             let (l, s) = (listed.clone(), stop.clone());
-            if let Err(e) = std::thread::Builder::new().name("hid pads".into()).spawn(move || look(&l, &s)) {
+            if let Err(e) = std::thread::Builder::new().name("hid pads".into()).spawn(move || look(known, &l, &s)) {
                 crate::say(&format!("gamepad: no HID controllers: {e}"));
             }
             Hid { listed, stop, devices: Vec::new(), failed: HashMap::new() }
@@ -459,6 +470,14 @@ mod device {
                 .filter(|d| d.listed.ids.1 != super::DS4_ADAPTER || d.valid.is_some_and(|t| now.duration_since(t) < Duration::from_secs(1)))
                 .map(|d| Found { name: name(&d.listed.path, d.listed.ids), model: d.listed.model, ids: d.listed.ids, pad: d.pad, bluetooth: bluetooth(&d.listed.path) })
                 .collect()
+        }
+    }
+
+    impl Hid {
+        /// Whether a controller with these USB ids could not be opened (or
+        /// failed a read) lately: gilrs's reading of it stays gilrs's.
+        pub fn refused(&self, ids: (u16, u16)) -> bool {
+            self.listed.lock().is_ok_and(|l| l.iter().any(|x| x.ids == ids && self.failed.contains_key(&x.path)))
         }
     }
 
