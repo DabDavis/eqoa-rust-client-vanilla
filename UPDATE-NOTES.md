@@ -5,6 +5,13 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-24 · A window you cannot see no longer fills the memory
+- A game window that cannot be seen (behind another window, on another
+  full-screen space, minimized) now keeps playing at the game's own 30 frames a
+  second, using almost no processor, and no longer takes more memory every
+  frame. On a Mac, two windows one behind the other could fill the memory until
+  the computer froze.
+
 ## 2026-10-24 · Players, NPCs and signposts are solid
 - You no longer walk through other players, NPCs or signposts: you stop at
   them, or slide round them when you are not heading straight at them, as on a

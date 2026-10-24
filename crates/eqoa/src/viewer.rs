@@ -1373,7 +1373,38 @@ impl Gfx {
             self.title = t;
         }
     }
+
+    /// The window's texture to draw this frame on (`Ok(None)`: frames are
+    /// drawn offscreen), or `Err` when it gives none: covered (on macOS wgpu
+    /// answers `Occluded` at once while no part of the window can be seen, a
+    /// full-screen window behind another; `covered`, a test's script's),
+    /// timed out, or its surface outdated or lost, which is configured again.
+    /// The frame's uploads are submitted all the same: wgpu keeps every
+    /// queued write until a submission takes it, and a window left behind
+    /// another grew by each frame's until the machine ran out of memory (F3
+    /// 20261024-093648: two windows on a Mac).
+    fn acquire(&self, covered: bool) -> Result<Option<wgpu::SurfaceTexture>, ()> {
+        let stale = match (&self.surface, covered) {
+            (_, true) => None,
+            (None, false) => return Ok(None),
+            (Some(surface), false) => match surface.get_current_texture() {
+                wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => return Ok(Some(f)),
+                wgpu::CurrentSurfaceTexture::Occluded => None,
+                _ => Some(surface),
+            },
+        };
+        self.queue.submit(std::iter::empty());
+        if let Some(surface) = stale {
+            surface.configure(&self.device, &self.config);
+        }
+        Err(())
+    }
 }
+
+/// While a window gives nothing to draw on (`Gfx::acquire`), its frames come
+/// at the game's own 30 a second, the game going on, not as fast as they can
+/// be skipped.
+const HIDDEN_GAP: std::time::Duration = std::time::Duration::from_millis(33);
 
 /// `EQOA_PERF=1` (in a page, `?perf`): each frame's CPU time by phase,
 /// summed over five seconds and printed; `EQOA_QUIT=<s>` ends the run after
@@ -1540,6 +1571,12 @@ struct App {
     era_loading: Option<crate::era::Loading>,
     /// `EQOA_ART_AT`: when a test's script presses F9 (ms on `clock`).
     art_script: Vec<i64>,
+    /// While the window gives nothing to draw on, when its next frame is due
+    /// (`HIDDEN_GAP`); `EQOA_COVERED=<from>-<to>;...`: when a test's script
+    /// counts it as covered (ms on `clock`), as macOS does a window that
+    /// cannot be seen.
+    hidden_until: Option<Instant>,
+    covered_script: Vec<(i64, i64)>,
     /// The art last applied (`apply_era`), against which the art in effect
     /// is seen to move (`poll_era`).
     art_drawn: esf::Era,
@@ -1634,6 +1671,10 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         failed: None,
         era_loading: None,
         art_script: std::env::var("EQOA_ART_AT").map(|v| v.split(';').filter_map(|t| t.trim().parse().ok()).collect()).unwrap_or_default(),
+        hidden_until: None,
+        covered_script: std::env::var("EQOA_COVERED")
+            .map(|v| v.split(';').filter_map(|t| t.split_once('-').and_then(|(a, b)| Some((a.trim().parse().ok()?, b.trim().parse().ok()?)))).collect())
+            .unwrap_or_default(),
         art_drawn,
         art_chosen: crate::settings::art(),
     };
@@ -2357,16 +2398,15 @@ impl App {
             crate::report::draw(vui, &mut r);
         }
         g.set_title(title(None));
-        let frame = match &g.surface {
-            Some(surface) => match surface.get_current_texture() {
-                wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => Some(f),
-                _ => {
-                    surface.configure(&g.device, &g.config);
-                    return;
-                }
-            },
-            None => None,
+        let covered = self.covered_script.iter().any(|&(a, b)| (a..b).contains(&now));
+        let frame = match g.acquire(covered) {
+            Ok(f) => f,
+            Err(()) => {
+                self.hidden_until = Some(Instant::now() + HIDDEN_GAP);
+                return;
+            }
         };
+        self.hidden_until = None;
         let target = match (&frame, &g.offscreen) {
             (Some(f), _) => f.texture.create_view(&Default::default()),
             (None, Some(t)) => t.create_view(&Default::default()),
@@ -2616,6 +2656,12 @@ impl ApplicationHandler for App {
                 use winit::event_loop::ControlFlow;
                 if let Some(d) = crate::settings::frame_wait() {
                     _el.set_control_flow(ControlFlow::WaitUntil(Instant::now() + d));
+                    return;
+                }
+                // a window giving nothing to draw on: its next frame at
+                // `HIDDEN_GAP`, not at once
+                if let Some(at) = self.hidden_until.filter(|&at| at > Instant::now()) {
+                    _el.set_control_flow(ControlFlow::WaitUntil(at));
                     return;
                 }
                 _el.set_control_flow(ControlFlow::Wait);
@@ -3708,6 +3754,11 @@ impl ApplicationHandler for App {
                 if !crate::settings::frame_due() {
                     return;
                 }
+                // and while the window gives nothing to draw on, at
+                // `HIDDEN_GAP` (`about_to_wait` sleeps until then)
+                if self.hidden_until.is_some_and(|at| Instant::now() < at) {
+                    return;
+                }
                 FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 // the 2002 disc's files, read since (`era`)
                 self.poll_era();
@@ -3966,16 +4017,16 @@ impl ApplicationHandler for App {
                     mark(perf, 14);
                     lights
                 });
-                let frame = match &g.surface {
-                    Some(surface) => match surface.get_current_texture() {
-                        wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => Some(f),
-                        _ => {
-                            surface.configure(&g.device, &g.config);
-                            return;
-                        }
-                    },
-                    None => None,
+                let ms = self.clock.elapsed().as_millis() as i64;
+                let covered = self.covered_script.iter().any(|&(a, b)| (a..b).contains(&ms));
+                let frame = match g.acquire(covered) {
+                    Ok(f) => f,
+                    Err(()) => {
+                        self.hidden_until = Some(Instant::now() + HIDDEN_GAP);
+                        return;
+                    }
                 };
+                self.hidden_until = None;
                 mark(&mut self.perf, 9);
                 let view = match walk_view {
                     Some((v, sky)) => {
