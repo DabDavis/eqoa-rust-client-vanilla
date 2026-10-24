@@ -258,6 +258,26 @@ pub fn load_zone_now(lib: &mut Library, file: usize, zi: usize) -> Result<(), St
     }
 }
 
+/// A world put in place of the one in file `file` under a walk at `at` (F9's
+/// world, the viewer's `take_world_art`): the library's file replaced with
+/// `o`'s off its disc, the zones its reads brought put in, those round `at`
+/// read through its own source (`fill`), and the collision world made of
+/// them. With the source and the zones still coming, for its streamer.
+pub fn reopen(lib: &mut Library, file: usize, name: &str, o: Opened, at: Vec3) -> Result<(World<Ee>, Option<Box<dyn ZoneSource>>, Vec<usize>), String> {
+    let Opened { container, zones, era } = o;
+    lib.replace_from(file, name, container, era);
+    for (zi, b) in zones {
+        install(lib, file, zi, b)?;
+    }
+    let mut source = source_for(lib, file);
+    let mut pending = Vec::new();
+    if let Some(src) = source.as_mut() {
+        pending = fill(lib, file, at.x, at.z, src.as_mut());
+    }
+    let world = World::load(lib, file).ok_or("no world in the file")?;
+    Ok((world, source, pending))
+}
+
 struct Loaded {
     /// the zone's parts, then its animated props' models (from `props_at`),
     /// uploaded and drawn as one group
@@ -430,5 +450,60 @@ mod tests {
         let p = Vect3::<Ee>::of(at.x, at.y, at.z);
         let whole = |inst: &dyn Fn(usize) -> bool| zones.iter().enumerate().all(|(k, b)| b.distance_squared(&p).0 >= STREAM_INNER * STREAM_INNER || inst(k));
         assert!(whole(&not(3)));
+    }
+
+    /// F9's world (`reopen`): Tunaria off the 2002 disc put under a walk
+    /// stood at the Freeport spawn on Frontiers', the walk control kept. It
+    /// stands on through a second of frames at the same place, its zones
+    /// read off the 2002 disc; the control, the same world with no zone read
+    /// round the walk, gives it nothing to stand on and it falls.
+    #[test]
+    fn a_world_swapped_under_the_walk_keeps_it_standing() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let frontiers = root.join("run/eqoa.iso");
+        let y2002 = std::env::var_os("EQOA_2002_ISO").map(std::path::PathBuf::from).or_else(|| {
+            std::fs::read_dir(root.join("../decomp-builds/discs/eqoa-usa")).ok()?.flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("iso")))
+        });
+        let (true, Some(y2002)) = (frontiers.exists(), y2002) else {
+            eprintln!("SKIP: no Frontiers disc or no 2002 disc (set EQOA_2002_ISO)");
+            return;
+        };
+        crate::settings::set_disc_2002(y2002.to_str().unwrap()).unwrap();
+        let (x, z) = (25393.7f32, 15749.5f32);
+        let walked = |zones: bool| {
+            let mut lib = Library::new();
+            let f = lib.add("TUNARIA.ESF", open_file(&frontiers, "TUNARIA.ESF").unwrap());
+            fill(&mut lib, f, x, z, &mut FileZones::open(&frontiers, "TUNARIA.ESF").unwrap());
+            let mut w = crate::walker::Walker::arrive(World::load(&lib, f).unwrap(), crate::walker::Spawn::ground(x, z, 0.0));
+            for k in 1..=10 {
+                w.frame(Default::default(), k * 33);
+            }
+            let before = w.cam.walk.phys.position;
+            let o = Opened { container: open_file(&y2002, "TUNARIA.ESF").unwrap(), zones: Vec::new(), era: esf::Era::Y2002 };
+            let at = Vec3::from(before.to_array());
+            let world = if zones {
+                let (world, source, pending) = reopen(&mut lib, f, "TUNARIA.ESF", o, at).unwrap();
+                assert!(source.is_some() && pending.is_empty(), "read off the 2002 disc at once");
+                world
+            } else {
+                lib.replace_from(f, "TUNARIA.ESF", o.container, o.era);
+                World::load(&lib, f).unwrap()
+            };
+            assert_eq!(lib.era_of(f), esf::Era::Y2002);
+            let time = w.scene.time;
+            w.scene = world;
+            w.scene.time = time;
+            for k in 11..=40 {
+                w.frame(Default::default(), k * 33);
+            }
+            (before, w.cam.walk.phys.position, w.scene.loaded.iter().filter(|&&l| l).count())
+        };
+        let (before, after, n) = walked(true);
+        eprintln!("before {:?}, after {:?}, {n} zones in off the 2002 disc", before.to_array(), after.to_array());
+        assert!(n >= 4, "the zones round the walk: {n}");
+        assert_eq!(before.to_array(), after.to_array(), "stood at the same place");
+        let (before, after, n) = walked(false);
+        assert_eq!(n, 0);
+        assert!(after.y.0 < before.y.0 - 0.1, "the control falls: {:?} to {:?}", before.to_array(), after.to_array());
     }
 }

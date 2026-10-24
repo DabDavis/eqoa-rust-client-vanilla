@@ -402,17 +402,28 @@ impl<M: Model> World<M> {
     }
 
     /// `ParseWorldZoneProxies`: 56 bytes a zone (two 8-byte offsets, a
-    /// size, a centre, the bounds), plus a name in version 1.
+    /// size, a centre, the bounds); a version 1 table (the 2002 disc's
+    /// Tunaria) follows each with the zone's name, which the game reads into
+    /// a stack buffer and throws away (`ReadString`: a 16-bit length, then
+    /// the bytes).
     pub fn proxies(c: &Container, base: NodeId) -> Vec<BBox<M>> {
         let Some(p) = c.child(base, 0x8210) else { return Vec::new() };
         let d = c.body(p);
-        if c.node(p).version == 1 {
-            return Vec::new();
+        let named = c.node(p).version == 1;
+        let mut out = Vec::new();
+        let mut at = 4;
+        for _ in 0..rd_i(d, 0).max(0) {
+            if at + 56 > d.len() {
+                break;
+            }
+            out.push(BBox { min: v3(d, at + 32), max: v3(d, at + 44) });
+            at += 56;
+            if named {
+                let Some(len) = d.get(at..at + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize) else { break };
+                at += 2 + len;
+            }
         }
-        (0..rd_i(d, 0).max(0) as usize)
-            .filter(|k| 4 + k * 56 + 56 <= d.len())
-            .map(|k| BBox { min: v3(d, 4 + k * 56 + 32), max: v3(d, 4 + k * 56 + 44) })
-            .collect()
+        out
     }
 
     /// The zone whose proxy bounds hold (x, z), out of the world base record

@@ -696,8 +696,15 @@ fn source(file: &str, rest: &[String]) -> Result<(esf::Library, viewer::Source)>
     let mut iso = disc(None)?;
     let mut lib = esf::Library::new();
     let t = std::time::Instant::now();
-    // a world with its zones left on the disc (stream::open_file)
-    let main = lib.add(file, stream::open_file(std::path::Path::new(&disc_path(None)), file)?);
+    // a world with its zones left on the disc (stream::open_file), off the
+    // disc of the art drawn when that disc has it (`era`: Tunaria off the
+    // 2002 disc)
+    let era = era::world_era(file);
+    #[cfg(not(target_arch = "wasm32"))]
+    let image = era::image_of(era).unwrap_or_else(|| disc_path(None));
+    #[cfg(target_arch = "wasm32")]
+    let image = disc_path(None);
+    let main = lib.add_from(file, stream::open_file(std::path::Path::new(&image), file)?, era);
     for s in SHARED {
         if !s.eq_ignore_ascii_case(file) {
             lib.add(*s, esf::Container::open(iso.read(s)?)?);

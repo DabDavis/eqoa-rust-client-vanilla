@@ -115,8 +115,10 @@ pub struct Context<'a> {
 
 /// A world's map.
 struct World {
-    /// its file's name, and its `gWorldInfo` index
+    /// its file's name, the disc it came off (`era`: Tunaria off the 2002
+    /// disc is another map), and its `gWorldInfo` index
     name: String,
+    era: esf::Era,
     index: i32,
     builder: Builder,
     /// the overview texture
@@ -129,12 +131,14 @@ struct World {
 }
 
 /// The GPU's part: the pictures' layer and the chrome's (ArialUI, UI.CSF's
-/// art for the pad's glyphs).
+/// art for the pad's glyphs), the chrome in the art of the library's view it
+/// was made in (`era`, F9).
 struct Layers {
     map: MapLayer,
     white: usize,
     ui: Ui,
     assets: crate::ui::UiAssets,
+    view: esf::Era,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -331,10 +335,22 @@ impl Map {
     pub fn frame(&mut self, cx: &Context) {
         self.frame += 1;
         self.size = cx.size;
-        self.layers(cx);
         let name = cx.lib.files.get(WORLD_FILE).map(|f| f.0.clone()).unwrap_or_default();
-        if self.world.as_ref().is_none_or(|w| w.name != name) {
+        let era = cx.lib.era_of(WORLD_FILE);
+        let r = renew(self.layers.as_ref().map(|l| l.view), cx.lib.view(), self.world.as_ref().map(|w| (w.name.as_str(), w.era)), &name, era);
+        let looking = self.view;
+        if r.layers {
+            // their textures go with them, the world's pictures among them
+            self.layers = None;
+            self.world = None;
+        }
+        self.layers(cx);
+        if r.world {
             self.new_world(cx, name);
+            if r.keep_view && let Some(w) = self.world.as_mut() {
+                self.view = looking;
+                w.view = looking;
+            }
         }
         let Some(w) = self.world.as_mut() else { return };
         // the build: harder while the map is up, behind the game a while after the world was entered
@@ -379,17 +395,22 @@ impl Map {
         let mut ui = Ui::new(cx.device, cx.format, render::DEPTH_FORMAT);
         let mut assets = crate::ui::UiAssets::default();
         assets.add_white(&mut ui, cx.device, cx.queue);
-        for (name, c) in &cx.lib.files {
-            if name.eq_ignore_ascii_case("UI.CSF") {
-                assets.add_surfaces(&mut ui, cx.device, cx.queue, c);
+        // the files as the library's view has them (`esf::Library::in_view`:
+        // the 2002 disc's UI.CSF ahead of Frontiers', whose surfaces it lacks
+        // still go up after it, and the atlas's sheet Frontiers' in both,
+        // `UiAssets::add_surfaces_of`)
+        let files = cx.lib.in_view();
+        for &i in &files {
+            if cx.lib.files[i].0.eq_ignore_ascii_case("UI.CSF") {
+                assets.add_surfaces_of(&mut ui, cx.device, cx.queue, cx.lib, i);
             }
         }
         let id = vi::ui::font_id() as i32;
-        let font = cx.lib.files.iter().find_map(|(_, c)| (0..c.nodes.len()).filter(|&i| c.nodes[i].ty == 0x7000).find_map(|i| esf::font::read(c, i).filter(|f| f.id == id)));
+        let font = files.iter().map(|&i| &cx.lib.files[i].1).find_map(|c| (0..c.nodes.len()).filter(|&i| c.nodes[i].ty == 0x7000).find_map(|i| esf::font::read(c, i).filter(|f| f.id == id)));
         if let Some(f) = font {
             assets.font = Some(ui.add_font(cx.device, cx.queue, &f));
         }
-        self.layers = Some(Layers { map, white, ui, assets });
+        self.layers = Some(Layers { map, white, ui, assets, view: cx.lib.view() });
     }
 
     /// The world played in changed (or the first): its map begun, its
@@ -424,7 +445,7 @@ impl Map {
         // its `gWorldInfo` index by its file (the player's world number
         // changes with a teleport before the library has the new file)
         let index = crate::play::WORLD_FILES.iter().position(|f| f.eq_ignore_ascii_case(&name)).map_or(cx.world, |i| i as i32);
-        self.world = Some(World { name, index, builder, overview, tiles: BTreeMap::new(), made: Instant::now(), view: None });
+        self.world = Some(World { name, era: cx.lib.era_of(WORLD_FILE), index, builder, overview, tiles: BTreeMap::new(), made: Instant::now(), view: None });
     }
 
     /// The build's overview cells into the overview; its tiles onto the GPU
@@ -755,6 +776,31 @@ fn title_case(s: &str) -> String {
 
 /// Where the map reads zones it draws: natively the disc on a thread of its
 /// own, in a page the page's reads (`stream::source_for`).
+/// What a frame makes again of the map (`Map::frame`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Renew {
+    /// the layers: the art swapped (F9, `era`) since they were made, so the
+    /// chrome (UI.CSF's art, ArialUI) is made in the library's view now; the
+    /// world's pictures were on them and go with them
+    layers: bool,
+    /// the world's map begun: a world first, another file, the same file off
+    /// the other disc (Tunaria off the 2002 disc is another map, its own
+    /// cache), or its pictures gone with the layers
+    world: bool,
+    /// where the map was looking kept: the same world's file (the same ground)
+    keep_view: bool,
+}
+
+/// `Renew` for a frame: the layers' view (`None`: not made yet), the
+/// library's view, the world mapped (its file and disc), and the world in
+/// the library now.
+fn renew(layers: Option<esf::Era>, view: esf::Era, mapped: Option<(&str, esf::Era)>, name: &str, era: esf::Era) -> Renew {
+    let swapped = layers.is_some_and(|l| l != view);
+    let world = swapped || mapped.is_none_or(|(n, e)| n != name || e != era);
+    let keep_view = world && mapped.is_some_and(|(n, _)| n == name);
+    Renew { layers: swapped, world, keep_view }
+}
+
 fn source(lib: &esf::Library) -> Option<Box<dyn crate::stream::ZoneSource>> {
     if !lib.is_deferred(WORLD_FILE) {
         return None;
@@ -765,8 +811,10 @@ fn source(lib: &esf::Library) -> Option<Box<dyn crate::stream::ZoneSource>> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        // off the disc the world came off (`era`: Tunaria off the 2002 disc)
         let name = lib.files[WORLD_FILE].0.clone();
-        let z = crate::stream::FileZones::open(std::path::Path::new(&crate::disc_path(None)), &name)?;
+        let image = crate::era::image_of(lib.era_of(WORLD_FILE))?;
+        let z = crate::stream::FileZones::open(std::path::Path::new(&image), &name)?;
         Some(Box::new(build::ThreadZones::new(Box::new(z))))
     }
 }

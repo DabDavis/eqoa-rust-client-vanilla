@@ -11,7 +11,7 @@ fn tunaria() -> Vec<[f32; 4]> {
 /// Freeport (25,300, 15,200).
 fn up(size: (u32, u32)) -> Map {
     let mut m = Map {
-        world: Some(World { name: "TUNARIA.ESF".into(), index: 0, builder: Builder::new(WORLD_FILE, &tunaria(), None, None), overview: None, tiles: BTreeMap::new(), made: Instant::now(), view: None }),
+        world: Some(World { name: "TUNARIA.ESF".into(), era: esf::Era::Frontiers, index: 0, builder: Builder::new(WORLD_FILE, &tunaria(), None, None), overview: None, tiles: BTreeMap::new(), made: Instant::now(), view: None }),
         size,
         ..Default::default()
     };
@@ -280,4 +280,32 @@ fn the_build_takes_a_share_of_a_fast_frame() {
     assert!((2.0..2.2).contains(&fast), "{fast}");
     assert!(ms(budget(PLAY_BUDGET, 1.0 / 165.0)) < 0.8);
     assert!(ms(OPEN_BUDGET.0) >= 1000.0 / 165.0 * 0.99, "the control: the most alone is the whole frame");
+}
+
+/// What a frame makes again: nothing while the art and the world stay; the
+/// chrome and the world's pictures when the art swaps (F9), the view kept;
+/// the world's map alone, its view kept, when the same world comes off the
+/// other disc (Tunaria off the 2002 disc); a new world's map, its own view,
+/// for another world. The control: the old rule, by the world's name
+/// alone, missed the other disc's Tunaria.
+#[test]
+fn the_map_is_made_again_when_the_art_or_the_worlds_disc_changes() {
+    use esf::Era::{Frontiers as F, Y2002 as Y};
+    let none = Renew { layers: false, world: false, keep_view: false };
+    assert_eq!(renew(Some(F), F, Some(("TUNARIA.ESF", F)), "TUNARIA.ESF", F), none);
+    assert_eq!(renew(Some(Y), Y, Some(("TUNARIA.ESF", Y)), "TUNARIA.ESF", Y), none);
+    // the art swapped: the chrome again, the world's pictures with it, where it looked kept
+    assert_eq!(renew(Some(F), Y, Some(("TUNARIA.ESF", F)), "TUNARIA.ESF", F), Renew { layers: true, world: true, keep_view: true });
+    // in a world the 2002 disc lacks, the same
+    assert_eq!(renew(Some(F), Y, Some(("ODUS.ESF", F)), "ODUS.ESF", F), Renew { layers: true, world: true, keep_view: true });
+    // the world off the other disc a frame later (a page's reads)
+    assert_eq!(renew(Some(Y), Y, Some(("TUNARIA.ESF", F)), "TUNARIA.ESF", Y), Renew { layers: false, world: true, keep_view: true });
+    // another world: its own map, its own view
+    assert_eq!(renew(Some(Y), Y, Some(("TUNARIA.ESF", Y)), "ODUS.ESF", F), Renew { layers: false, world: true, keep_view: false });
+    // the first frame
+    assert_eq!(renew(None, F, None, "TUNARIA.ESF", F), Renew { layers: false, world: true, keep_view: false });
+    // the control: by name alone the other disc's Tunaria is no new map
+    let by_name = |mapped: Option<(&str, esf::Era)>, name: &str| mapped.is_none_or(|(n, _)| n != name);
+    assert!(!by_name(Some(("TUNARIA.ESF", F)), "TUNARIA.ESF"));
+    assert!(renew(Some(Y), Y, Some(("TUNARIA.ESF", F)), "TUNARIA.ESF", Y).world);
 }
