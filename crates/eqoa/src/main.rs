@@ -723,7 +723,16 @@ fn source(file: &str, rest: &[String]) -> Result<(esf::Library, viewer::Source)>
     let image = era::image_of(era).unwrap_or_else(|| disc_path(None));
     #[cfg(target_arch = "wasm32")]
     let image = disc_path(None);
-    let main = lib.add_from(file, stream::open_file(std::path::Path::new(&image), file)?, era);
+    // the 2002 disc's world that does not open is Frontiers' (the game plays on)
+    let (era, world) = match stream::open_file(std::path::Path::new(&image), file) {
+        Ok(c) => (era, c),
+        Err(e) if era == esf::Era::Y2002 => {
+            say(&format!("art: the 2002 disc's {file} did not open ({e}): Frontiers' world"));
+            (esf::Era::Frontiers, stream::open_file(std::path::Path::new(&disc_path(None)), file)?)
+        }
+        Err(e) => return Err(e),
+    };
+    let main = lib.add_from(file, world, era);
     for s in SHARED {
         if !s.eq_ignore_ascii_case(file) {
             lib.add(*s, esf::Container::open(iso.read(s)?)?);

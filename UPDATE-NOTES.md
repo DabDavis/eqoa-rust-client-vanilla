@@ -19,9 +19,12 @@ is put on the page by `.github/workflows/notes.yml`.
   keeps Frontiers' fog, dust, falling leaves, birds and ambient sounds.
   Frontiers' other worlds, and the creatures and icons Frontiers added, stay as
   they are.
-- The first press asks for the disc image and remembers it, and the game
-  remembers which art you chose. Options > Extended > Art does the same as F9,
-  for a controller, and F9 can be moved on the Controls page.
+- The first time, press F9 at the title or at character select: it asks for
+  the disc image and remembers it, and the game remembers which art you chose.
+  Options > Extended > Art does the same as F9, for a controller, and F9 can
+  be moved on the Controls page.
+- Without that disc nothing changes and the game plays as before. F9 in the
+  world then only says, in the chat, where to choose the disc.
 - Only the pictures change: the game, its words and its rules are Frontiers',
   on any server.
 - In the browser: pick the 2002 disc as the page's second image, or press F9 in

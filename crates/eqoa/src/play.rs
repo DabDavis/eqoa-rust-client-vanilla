@@ -3080,6 +3080,13 @@ impl Play {
         self.add_chat(crate::era::line(era).to_string(), [1.0; 4]);
     }
 
+    /// F9 or the Extended page's Art with no 2002 disc image at hand, in the
+    /// world: where to choose it (natively a file dialog is not opened in the
+    /// world, `viewer`'s `ask_disc`).
+    pub fn no_2002_disc(&mut self) {
+        self.add_chat("The 2002 art needs your EverQuest Online Adventures (USA) disc image: choose it with F9 at the title or at character select.".to_string(), [1.0; 4]);
+    }
+
     /// `VIWndGame::AddText`: a line for the chat box (queued with its time
     /// until the box, which measures with the font, takes it), and for the
     /// plain log shown when there is no HUD.

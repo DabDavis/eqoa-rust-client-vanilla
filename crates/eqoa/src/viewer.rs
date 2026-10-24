@@ -1723,7 +1723,7 @@ impl App {
     /// page's), and nothing changes without one.
     fn toggle_era(&mut self) {
         let want = crate::era::other(crate::era::current());
-        if want == esf::Era::Y2002 && !crate::era::available() && !crate::era::ask() {
+        if want == esf::Era::Y2002 && !crate::era::available() && !self.ask_disc() {
             return;
         }
         // what was held is let go: a dialog may have taken the release
@@ -1734,6 +1734,22 @@ impl App {
         self.art_chosen = crate::settings::art();
         self.art_drawn = crate::era::current();
         self.apply_era();
+    }
+
+    /// The 2002 art asked for with no 2002 disc at hand: the disc asked for
+    /// (`era::ask`), whether one is at hand after. Natively not in the world:
+    /// the desktop's file dialog holds the window's loop while it is open, the
+    /// session's with it, and a server lets a silent session go within
+    /// seconds (go-eqoa-server's in-game timeout is 10 s); the chat says where
+    /// to choose it instead, the title or character select, and nothing
+    /// changes. A page's ask holds nothing.
+    fn ask_disc(&mut self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(p) = self.play.as_mut() {
+            p.no_2002_disc();
+            return false;
+        }
+        crate::era::ask()
     }
 
     /// The art `era::current` names, drawn: in the world (or a model
@@ -1783,7 +1799,7 @@ impl App {
         let chosen = crate::settings::art();
         if chosen != self.art_chosen {
             self.art_chosen = chosen;
-            if chosen == esf::Era::Y2002 && !crate::era::available() && !crate::era::ask() {
+            if chosen == esf::Era::Y2002 && !crate::era::available() && !self.ask_disc() {
                 let mut c = crate::settings::client();
                 c.art = esf::Era::Frontiers;
                 crate::settings::set_client(c);

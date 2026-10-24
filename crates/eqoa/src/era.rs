@@ -114,7 +114,9 @@ thread_local! {
 /// picked.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn disc() -> Option<String> {
-    std::env::var("EQOA_2002_ISO").ok().filter(|s| !s.is_empty()).or_else(crate::settings::disc_2002)
+    // one that is not there any more (moved, its drive gone) is none: the
+    // game plays on in Frontiers' art, and F9 asks again
+    std::env::var("EQOA_2002_ISO").ok().filter(|s| !s.is_empty()).or_else(crate::settings::disc_2002).filter(|p| std::path::Path::new(p).is_file())
 }
 
 /// Whether a 2002 disc is at hand: natively one named or picked (judged when

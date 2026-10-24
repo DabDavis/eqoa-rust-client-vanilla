@@ -120,9 +120,13 @@ info", "Run anyway").
 **The 2002 art.** With your own *EverQuest Online Adventures* (USA) disc image
 of 2002 (SLUS-20470) beside the *Frontiers* one, **F9** (or Options > Extended >
 Art) draws the game as it looked then, anywhere from the loading screens to the
-world; F9 again goes back. The first time it asks for that image in the file
-dialog and keeps its place (`disc2002.opt`), and the choice is kept too
-(`EQOA_2002_ISO=/path/to/image.iso` names one for a run). The European discs of
+world; F9 again goes back. The first time, F9 at the title or at character
+select asks for that image in the file dialog and keeps its place
+(`disc2002.opt`), and the choice is kept too (`EQOA_2002_ISO=/path/to/image.iso`
+names one for a run). In the world it says so in the chat instead: the dialog
+holds the window while it is open, and a server lets a silent session go within
+seconds. Without the disc nothing changes: a kept image that is gone counts as
+none, and one that does not open leaves Frontiers' world. The European discs of
 2003 already carry nearly all of Frontiers' art and the 2002 betas lay their
 files out apart, so only the USA disc is taken. What only Frontiers has (its new
 creatures and worlds, its new icons) stays as Frontiers draws it.
@@ -403,9 +407,13 @@ model; ITEM.ESF, the arena, Arial and the sounds are the same on both discs.
   what each stage built (`Host::art_changed`, `Figure::remake`). The title plays
   the 2002 disc's theme in its art.
 - **The disc**: judged by its SYSTEM.CNF and its DATA2 (`era::judge`), natively
-  picked in the file dialog the first time F9 or the Art row asks, kept in
-  `disc2002.opt`; in a page, the form's second input. The choice is `client.opt`'s
-  `art=2002`; it is in effect only with the disc at hand (`era::current`).
+  picked in the file dialog the first time F9 or the Art row asks before the world
+  (in the world the chat says where: a modal dialog holds the session's loop,
+  `viewer::ask_disc`), kept in `disc2002.opt`; in a page, the form's second input,
+  whose picker holds nothing. The choice is `client.opt`'s `art=2002`; it is in
+  effect only with the disc at hand (`era::current`; a kept path that is gone is
+  none), and a 2002 world that does not open is Frontiers' (`stream::open_world`,
+  world entry).
 - Tests: `EQOA_2002_ISO=<image>`, and `EQOA_ART_AT=<ms>;<ms>` presses F9 in a
   scripted run.
 

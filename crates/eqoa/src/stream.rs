@@ -256,8 +256,17 @@ pub fn open_world(name: &str, x: f32, z: f32) -> Arrival {
     let image = crate::era::image_of(era).unwrap_or_else(|| crate::disc_path(None));
     #[cfg(target_arch = "wasm32")]
     let image = crate::disc_path(None);
-    let twin = wants_twin(era).then(|| open_file(std::path::Path::new(&crate::disc_path(None)), name).ok()).flatten();
-    let r = open_file(std::path::Path::new(&image), name).map(|container| Opened { container, zones: Vec::new(), era, twin, twin_zones: Vec::new() }).map_err(|e| e.to_string());
+    let frontiers = std::path::PathBuf::from(crate::disc_path(None));
+    // the 2002 disc's world that does not open is Frontiers' (the game plays on)
+    let (era, opened) = match open_file(std::path::Path::new(&image), name) {
+        Err(e) if era == esf::Era::Y2002 => {
+            crate::say(&format!("art: the 2002 disc's {name} did not open ({e}): Frontiers' world"));
+            (esf::Era::Frontiers, open_file(&frontiers, name))
+        }
+        r => (era, r),
+    };
+    let twin = wants_twin(era).then(|| open_file(&frontiers, name).ok()).flatten();
+    let r = opened.map(|container| Opened { container, zones: Vec::new(), era, twin, twin_zones: Vec::new() }).map_err(|e| e.to_string());
     std::rc::Rc::new(RefCell::new(Some(r)))
 }
 
@@ -702,5 +711,34 @@ mod tests {
         let o = Opened { container: open_file(&frontiers, "TUNARIA.ESF").unwrap(), zones: Vec::new(), era: esf::Era::Frontiers, twin: None, twin_zones: Vec::new() };
         let (w, _, _) = reopen(&mut lib, f, "TUNARIA.ESF", o, Vec3::new(x, 54.0, z)).unwrap();
         assert_eq!((placed(&lib, &w), lib.twin_of(f)), (theirs, None));
+    }
+
+    /// A 2002 disc kept but gone (moved, its drive unplugged) is none: the
+    /// art in effect is Frontiers' and so is the world; one that is there but
+    /// does not open as a disc gives Frontiers' world too. The controls: a
+    /// disc that is there is at hand, and the art chosen stays 2002's.
+    #[test]
+    fn a_2002_disc_gone_plays_frontiers() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let frontiers = root.join("run/eqoa.iso");
+        if !frontiers.exists() || std::env::var_os("EQOA_2002_ISO").is_some() {
+            eprintln!("SKIP: no Frontiers disc, or EQOA_2002_ISO names a disc");
+            return;
+        }
+        crate::discs::take_for_tests(&frontiers);
+        crate::settings::set_art(esf::Era::Y2002).unwrap();
+        crate::settings::set_disc_2002("/nowhere/EverQuest - Online Adventures (USA).iso").unwrap();
+        assert_eq!(crate::era::disc(), None, "a kept image that is not there");
+        assert!(!crate::era::available());
+        assert_eq!((crate::settings::art(), crate::era::current()), (esf::Era::Y2002, esf::Era::Frontiers));
+        assert_eq!(crate::era::world_era("TUNARIA.ESF"), esf::Era::Frontiers);
+        // there, but not a disc image: chosen and at hand, its world Frontiers'
+        let not_a_disc = root.join("Cargo.toml");
+        crate::settings::set_disc_2002(not_a_disc.to_str().unwrap()).unwrap();
+        assert!(crate::era::available(), "the control: a file that is there is at hand");
+        assert_eq!(crate::era::world_era("TUNARIA.ESF"), esf::Era::Y2002);
+        let o = open_world("TUNARIA.ESF", 25393.7, 15749.5).borrow_mut().take().unwrap().unwrap();
+        assert_eq!((o.era, o.twin.is_some()), (esf::Era::Frontiers, false), "Frontiers' world, no twin");
+        assert_eq!(o.container.zones().len(), 175);
     }
 }
