@@ -219,7 +219,10 @@ mod device {
         SetupDiGetDeviceInterfaceDetailW,
     };
     use windows_sys::Win32::Devices::HumanInterfaceDevice::{HIDD_ATTRIBUTES, HidD_GetAttributes, HidD_GetHidGuid};
-    use windows_sys::Win32::Foundation::{CloseHandle, ERROR_IO_INCOMPLETE, ERROR_IO_PENDING, GENERIC_READ, GetLastError, HANDLE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, ERROR_DEV_NOT_EXIST, ERROR_DEVICE_NOT_CONNECTED, ERROR_FILE_NOT_FOUND, ERROR_IO_INCOMPLETE, ERROR_IO_PENDING, ERROR_NO_SUCH_DEVICE, ERROR_PATH_NOT_FOUND, GENERIC_READ, GetLastError, HANDLE,
+        INVALID_HANDLE_VALUE,
+    };
     use windows_sys::Win32::Storage::FileSystem::{CreateFileW, FILE_FLAG_OVERLAPPED, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, ReadFile};
     use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
 
@@ -455,13 +458,15 @@ mod device {
                 match Device::open(l) {
                     Some(d) => self.devices.push(d),
                     None => {
-                        if !self.said.contains(&l.path) {
-                            // SAFETY: the error CreateFileW just left
-                            let e = unsafe { GetLastError() };
+                        // SAFETY: the error CreateFileW just left
+                        let e = unsafe { GetLastError() };
+                        // gone since the last look (unplugged): not refused
+                        let gone = matches!(e, ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND | ERROR_DEV_NOT_EXIST | ERROR_NO_SUCH_DEVICE | ERROR_DEVICE_NOT_CONNECTED);
+                        if !gone && !self.said.contains(&l.path) {
                             crate::say(&format!("gamepad: a {} could not be opened over HID (error {e}: another program may hold it alone); Windows.Gaming.Input reads it, in front only", l.model.label()));
                             self.said.push(l.path.clone());
                         }
-                        self.failed.insert(l.path.clone(), (now, true));
+                        self.failed.insert(l.path.clone(), (now, !gone));
                     }
                 }
             }
