@@ -335,24 +335,19 @@ impl Map {
     pub fn frame(&mut self, cx: &Context) {
         self.frame += 1;
         self.size = cx.size;
-        // the art swapped (F9, `era`): the chrome made again in the library's
-        // view, and the world's pictures begun again with it (they were on the
-        // old layers), where the map was looking kept
-        let swapped = self.layers.as_ref().is_some_and(|l| l.view != cx.lib.view());
+        let name = cx.lib.files.get(WORLD_FILE).map(|f| f.0.clone()).unwrap_or_default();
+        let era = cx.lib.era_of(WORLD_FILE);
+        let r = renew(self.layers.as_ref().map(|l| l.view), cx.lib.view(), self.world.as_ref().map(|w| (w.name.as_str(), w.era)), &name, era);
         let looking = self.view;
-        if swapped {
+        if r.layers {
+            // their textures go with them, the world's pictures among them
             self.layers = None;
             self.world = None;
         }
         self.layers(cx);
-        let name = cx.lib.files.get(WORLD_FILE).map(|f| f.0.clone()).unwrap_or_default();
-        let era = cx.lib.era_of(WORLD_FILE);
-        if self.world.as_ref().is_none_or(|w| w.name != name || w.era != era) {
-            // the same world off the other disc (or its chrome made again):
-            // the same ground, so the same view
-            let same = self.world.as_ref().map_or(swapped, |w| w.name == name);
+        if r.world {
             self.new_world(cx, name);
-            if same && let Some(w) = self.world.as_mut() {
+            if r.keep_view && let Some(w) = self.world.as_mut() {
                 self.view = looking;
                 w.view = looking;
             }
@@ -781,6 +776,31 @@ fn title_case(s: &str) -> String {
 
 /// Where the map reads zones it draws: natively the disc on a thread of its
 /// own, in a page the page's reads (`stream::source_for`).
+/// What a frame makes again of the map (`Map::frame`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Renew {
+    /// the layers: the art swapped (F9, `era`) since they were made, so the
+    /// chrome (UI.CSF's art, ArialUI) is made in the library's view now; the
+    /// world's pictures were on them and go with them
+    layers: bool,
+    /// the world's map begun: a world first, another file, the same file off
+    /// the other disc (Tunaria off the 2002 disc is another map, its own
+    /// cache), or its pictures gone with the layers
+    world: bool,
+    /// where the map was looking kept: the same world's file (the same ground)
+    keep_view: bool,
+}
+
+/// `Renew` for a frame: the layers' view (`None`: not made yet), the
+/// library's view, the world mapped (its file and disc), and the world in
+/// the library now.
+fn renew(layers: Option<esf::Era>, view: esf::Era, mapped: Option<(&str, esf::Era)>, name: &str, era: esf::Era) -> Renew {
+    let swapped = layers.is_some_and(|l| l != view);
+    let world = swapped || mapped.is_none_or(|(n, e)| n != name || e != era);
+    let keep_view = world && mapped.is_some_and(|(n, _)| n == name);
+    Renew { layers: swapped, world, keep_view }
+}
+
 fn source(lib: &esf::Library) -> Option<Box<dyn crate::stream::ZoneSource>> {
     if !lib.is_deferred(WORLD_FILE) {
         return None;
