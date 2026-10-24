@@ -137,7 +137,12 @@ impl Weather {
         let has360 = lib.lookup(id("EQOA_Skydome_360")).is_some();
         if let Some(ms) = &models {
             for (k, m) in ms.iter().enumerate() {
-                let pal = m.batches.iter().map(|b| Material::new(&b.layers.iter().map(|l| atmosphere::Layer { texture: l.texture, blend: l.blend, color: l.color }).collect::<Vec<_>>())).collect();
+                // each layer its own UV mapping (`Layer::uv`) as made
+                let pal = m
+                    .batches
+                    .iter()
+                    .map(|b| Material::new(&b.layers.iter().enumerate().map(|(j, l)| atmosphere::Layer { texture: l.texture, blend: l.blend, color: l.color, uv: j as i32 }).collect::<Vec<_>>()))
+                    .collect();
                 atm.pals.insert(k as i32, pal);
             }
         }

@@ -85,7 +85,8 @@ pub fn update(r: &mut Renderer, device: &wgpu::Device, queue: &wgpu::Queue, gpu:
         g.passes_used = first.n;
         for (b, m) in (0..g.batch_count()).map(|b| (b, pal.get(b).unwrap_or(first))) {
             for (j, l) in m.used().iter().enumerate() {
-                r.set_layer(device, queue, g, b, j, l.texture, l.blend.clamp(0, 4) as usize, l.color.map(|c| c as f32 / 255.0), textures);
+                let uv = usize::try_from(l.uv).ok();
+                r.set_layer(device, queue, g, b, j, l.texture, l.blend.clamp(0, 4) as usize, l.color.map(|c| c as f32 / 255.0), uv, textures);
             }
         }
     }

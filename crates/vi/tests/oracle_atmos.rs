@@ -89,17 +89,20 @@ impl Sound for Log {
 }
 
 fn layer(texture: i32, blend: i32, color: [u8; 4]) -> Layer {
-    Layer { texture, blend, color }
+    Layer { texture, blend, color, uv: -1 }
 }
 
-/// The five sky sprites' palettes: sun, corona, moon, sky, sky360.
+/// The five sky sprites' palettes: sun, corona, moon, sky, sky360. Each
+/// layer has its own UV mapping (`uv`, its index), as the oracle tags each
+/// layer's UV rate with its index + 1.
 fn palettes() -> Vec<Vec<Vec<Layer>>> {
+    let own = |e: Vec<Layer>| e.into_iter().enumerate().map(|(j, l)| Layer { uv: j as i32, ..l }).collect::<Vec<_>>();
     vec![
-        vec![vec![layer(20, 1, [255, 240, 200, 255])]],
-        vec![vec![layer(21, 1, [255, 255, 255, 255])]],
-        vec![vec![layer(22, 1, [200, 200, 255, 255])], vec![layer(23, 2, [180, 180, 255, 255])]],
-        vec![vec![layer(30, 0, [200, 210, 220, 255]), layer(31, 3, [255, 255, 255, 64])]],
-        vec![vec![layer(32, 0, [128, 128, 128, 255]), layer(33, 3, [255, 255, 255, 64])]],
+        vec![own(vec![layer(20, 1, [255, 240, 200, 255])])],
+        vec![own(vec![layer(21, 1, [255, 255, 255, 255])])],
+        vec![own(vec![layer(22, 1, [200, 200, 255, 255])]), own(vec![layer(23, 2, [180, 180, 255, 255])])],
+        vec![own(vec![layer(30, 0, [200, 210, 220, 255]), layer(31, 3, [255, 255, 255, 64])])],
+        vec![own(vec![layer(32, 0, [128, 128, 128, 255]), layer(33, 3, [255, 255, 255, 64])])],
     ]
 }
 
@@ -221,6 +224,8 @@ fn ours(a: &Atmosphere<M>, lit: Option<F<M>>, r: &Raster<M>, snd: &Log) -> Vec<(
                 i32s(&mut v, l.texture);
                 i32s(&mut v, l.blend);
                 v.extend(l.color);
+                // the UV mapping's tag: the made layer's index + 1
+                f32s(&mut v, F::new((l.uv + 1) as f32));
             }
         }
         out.push((format!("sprite {s}'s palette"), std::mem::take(&mut v)));
