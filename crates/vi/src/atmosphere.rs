@@ -108,12 +108,19 @@ pub fn weather_from_wire(w: u8) -> i32 {
 }
 
 /// One layer of a sky sprite's material, as the atmosphere reads and writes
-/// it (`VIMaterial`'s texture, blend mode and colour).
+/// it (`VIMaterial`'s texture, blend mode and colour), and whose UV mapping
+/// it has (`uv`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Layer {
     pub texture: i32,
     pub blend: i32,
     pub color: [u8; 4],
+    /// The layer of the material as made whose UV transform, wrap, scroll
+    /// rate and scroll offset this one has: `CopyLayer` copies them with the
+    /// rest, so while a change of sky fades the dome's base mapping is in two
+    /// layers and its clouds' in the third. -1 for a layer `SetNumLayers`
+    /// made (an identity transform, no offset).
+    pub uv: i32,
 }
 
 /// A material's layers: four slots, `n` in use. Shrinking keeps what the
@@ -128,8 +135,8 @@ pub struct Material {
 }
 
 impl Material {
-    pub const BLANK: Layer = Layer { texture: -1, blend: 0, color: [255; 4] };
-    pub const UNSET: Layer = Layer { texture: 0, blend: 0, color: [0; 4] };
+    pub const BLANK: Layer = Layer { texture: -1, blend: 0, color: [255; 4], uv: -1 };
+    pub const UNSET: Layer = Layer { texture: 0, blend: 0, color: [0; 4], uv: -1 };
 
     pub fn new(layers: &[Layer]) -> Self {
         let mut m = Material { layers: [Self::UNSET; 4], n: layers.len().min(4) };

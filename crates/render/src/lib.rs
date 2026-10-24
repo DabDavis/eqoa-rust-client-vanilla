@@ -96,7 +96,18 @@ struct Pass {
     /// the DictID bound, and the sampler (0 repeat, 1 clamp, 2 mirror)
     texture: i32,
     sampler: usize,
+    /// The UV mapping the pass was made with (`uv0`, `uv1` and the sampler),
+    /// which another pass of the batch can be given (`set_layer`).
+    made: UvMapping,
 }
+
+/// A layer's UV mapping: the transform and scroll (`LayerUniform::uv0`,
+/// `uv1`) and its wrap's sampler.
+type UvMapping = ([f32; 4], [f32; 4], usize);
+
+/// A layer `VIMaterial::SetNumLayers` made: an identity transform, no scroll,
+/// wrapping.
+const FRESH_UV: UvMapping = ([1.0, 0.0, 0.0, 1.0], [0.0; 4], 0);
 
 /// One model on the GPU, drawn once per instance (a model matrix each).
 pub struct GpuModel {
@@ -633,7 +644,7 @@ impl Renderer {
                         wgpu::BindGroupEntry { binding: 2, resource: uniform.as_entire_binding() },
                     ],
                 });
-                passes.push(Pass { blend, bg, uniform, base, texture: l.texture, sampler: si });
+                passes.push(Pass { blend, bg, uniform, base, texture: l.texture, sampler: si, made: (base.uv0, base.uv1, si) });
             }
             let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("indices"),
@@ -685,9 +696,18 @@ impl Renderer {
     /// sky's materials: its texture (rebound when it changes), blend mode and
     /// colour (0..1, alpha included).
     #[allow(clippy::too_many_arguments)]
-    pub fn set_layer(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, m: &mut GpuModel, batch: usize, pass: usize, texture: i32, blend: usize, rgba: [f32; 4], textures: &Textures) {
-        let Some(p) = m.batches.get(batch).and_then(|b| b.2.get(pass)) else { return };
-        let rebind = p.texture != texture;
+    /// A layer pass as a material has it this frame: its texture, blend mode
+    /// and colour (`rgba`), and its UV mapping, the one pass `uv` of the
+    /// batch was made with (`VIMaterial::CopyLayer` carries a layer's
+    /// transform, wrap and scroll with it), or with `None` a fresh layer's
+    /// (`SetNumLayers`: identity, no scroll). The scroll's phase is the
+    /// mapping's own, rate × time, as a copied offset keeps it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_layer(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, m: &mut GpuModel, batch: usize, pass: usize, texture: i32, blend: usize, rgba: [f32; 4], uv: Option<usize>, textures: &Textures) {
+        let Some(ps) = m.batches.get(batch).map(|b| &b.2) else { return };
+        let Some(p) = ps.get(pass) else { return };
+        let (uv0, uv1, si) = uv.and_then(|u| ps.get(u)).map_or(FRESH_UV, |src| src.made);
+        let rebind = p.texture != texture || p.sampler != si;
         let view = if rebind { self.texture(device, queue, texture, textures) } else { None };
         let Some(p) = m.batches.get_mut(batch).and_then(|b| b.2.get_mut(pass)) else { return };
         if rebind {
@@ -696,16 +716,18 @@ impl Renderer {
                 layout: &self.material_layout,
                 entries: &[
                     wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view.as_ref().unwrap_or(&self.white)) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.samplers[p.sampler]) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.samplers[si]) },
                     wgpu::BindGroupEntry { binding: 2, resource: p.uniform.as_entire_binding() },
                 ],
             });
             p.texture = texture;
+            p.sampler = si;
             p.base.flags[0] = view.is_some() as i32 as f32;
         }
         p.blend = blend.min(4);
         p.base.flags[1] = (p.blend != 0) as i32 as f32;
         p.base.tint = rgba;
+        (p.base.uv0, p.base.uv1) = (uv0, uv1);
         queue.write_buffer(&p.uniform, 0, bytemuck::bytes_of(&p.base));
     }
 
