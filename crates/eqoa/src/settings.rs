@@ -580,6 +580,12 @@ pub struct ClientOptions {
     /// dust, falling leaves, light shafts, the flocks of birds: `fx`), as the
     /// game draws them; off, none.
     pub environment: bool,
+    /// Loading Screens: Longer, a long trip (Return Home, a coach, a port of
+    /// 200 or more, another world) keeps the loading screen up at least a
+    /// second, as a PS2's disc read would (`loading::FAR_HOLD_MS`); Instant,
+    /// it comes down as soon as the place is in (the user, 2026-10-25: "so
+    /// if players want the instant or the longer loading screens").
+    pub loading_longer: bool,
     /// Text: how the game's font is drawn scaled to the window, wherever it
     /// is drawn (`render::ui::TextFilter`): Sharp, crisp, or Smooth, the
     /// PS2's own filtering (F3 20261024-200725: "smooth out the text as per
@@ -655,6 +661,7 @@ impl Default for ClientOptions {
             mipmaps: true,
             flora: true,
             environment: true,
+            loading_longer: true,
             output: None,
         }
     }
@@ -738,6 +745,10 @@ impl ClientOptions {
         if !self.environment {
             s.push_str("environment=off\n");
         }
+        // Loading Screens only when Instant
+        if !self.loading_longer {
+            s.push_str("loading=instant\n");
+        }
         if let Some(d) = self.output {
             s.push_str(&format!("output={}\n", d.as_str()));
         }
@@ -800,6 +811,8 @@ impl ClientOptions {
                 ("flora", "off") => c.flora = false,
                 ("environment", "on") => c.environment = true,
                 ("environment", "off") => c.environment = false,
+                ("loading", "longer") => c.loading_longer = true,
+                ("loading", "instant") => c.loading_longer = false,
                 ("output", v) if !v.is_empty() => c.output = Some(DeviceName::new(v)),
                 ("ability_bars", v) => {
                     if let Some(n) = v.parse::<u8>().ok().filter(|&n| (ABILITY_BARS_GAME as i32..=crate::hudmenu::MAX_BARS).contains(&(n as i32))) {
@@ -1068,6 +1081,12 @@ pub fn update_notices() -> bool {
     client().update_notices
 }
 
+/// Whether a long trip keeps the loading screen up a while (Loading
+/// Screens: Longer), or it comes down at once (Instant).
+pub fn loading_longer() -> bool {
+    client().loading_longer
+}
+
 /// This window's Controller Focus: its place's (`multibox::place`).
 pub fn focus() -> Focus {
     client().controller[place()]
@@ -1113,7 +1132,7 @@ pub fn describe() -> String {
         FrameRate::Display => "the display's",
     };
     format!(
-        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, output device {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, overlapping names {}, art {}, update notices {}, shouts {}, target of target {}, text {}, mipmaps {}, flora {}, environment {}; {}",
+        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, output device {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, overlapping names {}, art {}, update notices {}, shouts {}, target of target {}, text {}, mipmaps {}, flora {}, environment {}, loading screens {}; {}",
         if c.lod { "on" } else { "off" },
         c.brightness,
         c.fog,
@@ -1147,6 +1166,7 @@ pub fn describe() -> String {
         if c.mipmaps { "on" } else { "off" },
         if c.flora { "on" } else { "off" },
         if c.environment { "on" } else { "off" },
+        if c.loading_longer { "longer" } else { "instant" },
         kept_where()
     )
 }
@@ -1613,6 +1633,11 @@ mod tests {
         for bad in ["overlapping_names=on", "overlapping_names=1", "overlapping_names=all"] {
             assert!(!ClientOptions::from_text(bad).overlapping_names, "{bad}: Hide, the default");
         }
+        assert_eq!(ClientOptions { loading_longer: false, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nloading=instant\n", "Loading Screens only when Instant");
+        assert!(!ClientOptions::from_text("loading=instant").loading_longer && ClientOptions::from_text("loading=longer").loading_longer);
+        for bad in ["loading=off", "loading=0", "loading=fast"] {
+            assert!(ClientOptions::from_text(bad).loading_longer, "{bad}: Longer, the default");
+        }
         assert_eq!(ClientOptions::default().to_text(), "lod=on\nbrightness=5\ncamera_distance=11\n", "no Frame Rate until one is chosen, no game's turn, no window's Auto");
         assert_eq!(ClientOptions { camera_turn: 250, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\ncamera_turn=250\n");
         assert_eq!(
@@ -1621,7 +1646,7 @@ mod tests {
             "Screen Shake only off, Capture Controller only on"
         );
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, overlapping names hide, art frontiers, update notices on, shouts heard, target of target off, text sharp, mipmaps on, flora on, environment on; kept in the page's storage");
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, overlapping names hide, art frontiers, update notices on, shouts heard, target of target off, text sharp, mipmaps on, flora on, environment on, loading screens longer; kept in the page's storage");
         testing::reset(true);
         assert!(describe().ends_with("refused: nothing is kept"));
         testing::reset(false);

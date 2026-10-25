@@ -38,9 +38,12 @@
 //!   Update Notices (one setting for
 //!   every window: off, the game never asks to restart into a newer build,
 //!   which starts the next time the game does; `update::asks`, and a page's
-//!   Reload notice, `web/main.js`) and Text (Sharp or Smooth: the game's font
+//!   Reload notice, `web/main.js`), Text (Sharp or Smooth: the game's font
 //!   scaled to the window with even strokes, or filtered as the PS2 filters
-//!   it, `render::ui::TextFilter`; on Video until Display took its place);
+//!   it, `render::ui::TextFilter`; on Video until Display took its place)
+//!   and Loading Screens (Longer: a long trip's loading screen up at least a
+//!   second, as a PS2's disc read keeps it; Instant: down as soon as the
+//!   place is in, `loading::Screen::hold_far`);
 //! - Controller: Controller Focus (which controllers this window reads:
 //!   Auto, Window, Pad 1 to 4 or Off, `input::pick`, kept for each window of
 //!   the client open, `multibox`; what it reads now is said beside Back) and
@@ -531,7 +534,8 @@ impl WndOptions {
     /// sound 9: the browser paces it); Name Distance (27) by tens from the
     /// game's 22 to 200 (`step_name_distance`); Text (30) goes between Sharp and
     /// Smooth; Target of Target (31), Update Notices (29), Overlapping
-    /// Names (34, Hide and Show) and Mipmaps (35) turn over;
+    /// Names (34, Hide and Show), Mipmaps (35) and Loading Screens (38,
+    /// Longer and Instant) turn over;
     /// Output Device (32) goes round the system default and the devices
     /// listed (`step_output`); Display (33) turns the window over (`display`). A
     /// slider (`slider_at`) makes its own
@@ -606,6 +610,8 @@ impl WndOptions {
                     34 => c.overlapping_names = !c.overlapping_names,
                     // Text: every font drawn from the next frame (`viewer`)
                     30 => c.text = c.text.other(),
+                    // Loading Screens: the next long trip's (`loading`)
+                    38 => c.loading_longer = !c.loading_longer,
                     // Mipmaps: every texture's levels from the next frame
                     // (`viewer`, `render::set_mipmaps`)
                     35 => c.mipmaps = !c.mipmaps,
@@ -1039,7 +1045,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 25] = [
+const EXTENDED_ITEMS: [(i32, &str); 26] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1065,6 +1071,7 @@ const EXTENDED_ITEMS: [(i32, &str); 25] = [
     (35, "Mipmaps"),
     (36, "Flora"),
     (37, "Environment"),
+    (38, "Loading Screens"),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1093,7 +1100,7 @@ struct Category {
 const CATEGORIES: [Category; 7] = [
     Category { name: "Video", items: VIDEO, note: Note::None },
     Category { name: "World", items: &[20, 35, 36, 37, 25], note: Note::None },
-    Category { name: "UI", items: &[22, 31, 29, 30], note: Note::None },
+    Category { name: "UI", items: &[22, 31, 29, 30, 38], note: Note::None },
     Category { name: "Controller", items: &[16, 19], note: Note::Reads },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
     Category { name: "Characters", items: &[12, 23, 24, 27, 34], note: Note::Server },
@@ -1175,6 +1182,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         35 => on_off(c.mipmaps),
         36 => on_off(c.flora),
         37 => on_off(c.environment),
+        38 => wide(if c.loading_longer { "Longer" } else { "Instant" }),
         30 => wide(match c.text {
             render::ui::TextFilter::Sharp => "Sharp",
             render::ui::TextFilter::Smooth => "Smooth",
@@ -1535,7 +1543,14 @@ mod tests {
         assert_eq!(settings::client().text, render::ui::TextFilter::Sharp, "and back: two values");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (3, Some(&9)), "UI's last row");
+        assert_eq!(w.item, 38, "Loading Screens");
+        assert!(settings::loading_longer(), "Longer, the default: a long trip's screen held");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::loading_longer(), cues.last()), (false, Some(&11)), "Instant");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(settings::loading_longer(), "and back: two values");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (4, Some(&9)), "UI's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         // Controller: Controller Focus, Capture Controller
         press(&mut w, &mut o, key::DOWN, &mut cues);

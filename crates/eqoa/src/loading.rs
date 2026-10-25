@@ -49,7 +49,8 @@ pub const CAP_MS: i64 = 60_000;
 /// them in about a millisecond and the screen went by unseen, the world
 /// jumping from one place to the other (F3 20261025-171303, Return Home:
 /// "even a flash will do so its not so jarring"; the user's choice,
-/// 2026-10-25). The client's, not the game's; a short hop is as before.
+/// 2026-10-25), unless the player chose Instant (`Screen::hold_far`). The
+/// client's, not the game's; a short hop is as before.
 pub const FAR_MOVE: f32 = 200.0;
 pub const FAR_HOLD_MS: i64 = 1000;
 
@@ -219,10 +220,18 @@ impl Screen {
         self.wait.is_some()
     }
 
-    /// The screen up at least `ms` from when it went up (`FAR_HOLD_MS` for a
-    /// far move); a longer hold already asked for stands.
+    /// The screen up at least `ms` from when it went up; a longer hold
+    /// already asked for stands.
     pub fn hold_at_least(&mut self, ms: i64) {
         self.hold = self.hold.max(ms);
+    }
+
+    /// A far move's hold (`FAR_HOLD_MS`), unless the player chose Instant
+    /// (Extended > UI > Loading Screens, `settings::loading_longer`).
+    pub fn hold_far(&mut self) {
+        if crate::settings::loading_longer() {
+            self.hold_at_least(FAR_HOLD_MS);
+        }
     }
 
     /// The world it waits for is entered: the zones are what it waits on now,

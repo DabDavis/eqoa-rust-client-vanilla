@@ -2376,7 +2376,7 @@ impl Play {
                     if here || elsewhere {
                         self.loading.begin(arrival, heading, elsewhere, false, now as i64);
                         if far {
-                            self.loading.hold_at_least(crate::loading::FAR_HOLD_MS);
+                            self.loading.hold_far();
                         }
                     }
                     if self.cam_entered {
@@ -3441,7 +3441,7 @@ impl Play {
                     // Respawn's casts at the arrival
                     self.world_change = Some((f.to_string(), Spawn { pos, heading: hpr[0], placing: Placing::Respawn }));
                     self.loading.begin(pos, hpr[0], true, true, now);
-                    self.loading.hold_at_least(crate::loading::FAR_HOLD_MS);
+                    self.loading.hold_far();
                     // black until the new world is entered (`world_entered`),
                     // the old one not shown while it loads
                     self.fade.set(1.0, 0.0);
@@ -3464,7 +3464,7 @@ impl Play {
             // EnterWorld: StreamFillCache there under the loading screen
             self.loading.begin(pos, hpr[0], false, true, now);
             if far {
-                self.loading.hold_at_least(crate::loading::FAR_HOLD_MS);
+                self.loading.hold_far();
             }
             true
         };
@@ -7417,6 +7417,20 @@ mod commands {
         hop.teleport(&mut w3, 0, near, [0.5, 0.0, 0.0], now);
         hop.loading_step(&mut w3, true);
         assert!(!hop.loading(), "the control: a 50-unit hop comes down at once");
+        // Instant (Extended > UI > Loading Screens): the far port's screen
+        // comes down as its zones are in
+        let mut c = crate::settings::client();
+        c.loading_longer = false;
+        crate::settings::set_client(c);
+        let mut quick = play();
+        let mut w4 = Walker::arrive(with_b(), Spawn::ground(a.0, a.1, 0.0));
+        quick.loading_step(&mut w4, true);
+        let now = quick.session.now() as i64;
+        quick.teleport(&mut w4, 0, pos, [0.5, 0.0, 0.0], now);
+        quick.loading_step(&mut w4, true);
+        assert!(!quick.loading(), "Instant: a far port's screen down at once");
+        c.loading_longer = true;
+        crate::settings::set_client(c);
         // a dump's arrival there: as given
         let mut d = play();
         d.loading.begin(pos, 0.5, false, false, 0);
