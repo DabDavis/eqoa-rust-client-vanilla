@@ -905,13 +905,14 @@ mod device {
             let mut seq = 0u8;
             let mut last = Motors::OFF;
             let mut until: Option<Instant> = None;
-            let mut failed = false;
+            let (mut failed, mut said) = (false, false);
             let mut send = |m: Motors, seq: &mut u8| {
                 let report = rumble_report(l.model, l.bluetooth, m, *seq, v2);
                 *seq = seq.wrapping_add(1);
                 match write(h, &report, out_len) {
-                    Ok(()) if !failed && m != Motors::OFF && *seq == 1 => {
+                    Ok(()) if !said && m != Motors::OFF => {
                         crate::say(&format!("gamepad: the {who} rumbles over HID (report {:#04x}, {} bytes, written as {})", report[0], report.len(), out_len.max(report.len())));
+                        said = true;
                     }
                     Ok(()) => {}
                     Err(e) if !failed => {

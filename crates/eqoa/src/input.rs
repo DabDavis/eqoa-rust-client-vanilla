@@ -198,6 +198,15 @@ impl Report {
     }
 }
 
+/// Whether gilrs drives motors (its force feedback). Not on Windows: there an
+/// Xbox controller's are XInput's (`xinput`) and a PlayStation one's are set
+/// over HID (`hidpad`), and gilrs's force feedback tells every controller it
+/// has as a Windows.Gaming.Input gamepad its motors every 50 ms, at rest when
+/// it plays nothing: a DualShock 4 was told "motors off" (and its light off)
+/// twenty times a second, which stopped what HID had just set going (a
+/// virtual DualShock 4 on GitHub's Windows machines read the reports back).
+pub const GILRS_FF: bool = cfg!(not(windows));
+
 /// libpad on the host: port 0, slot 0 answers from the merged report;
 /// the motors set last are kept for the platform to play.
 #[derive(Default)]
@@ -311,6 +320,14 @@ impl Console {
         }
         let left = |end: i64| if end != 0 { end - now } else { 0 };
         Some((self.lib.act, left(self.pad.lf_end).max(left(self.pad.hf_end))))
+    }
+
+    /// `VIPad`'s clock set to `now` before the frame's `Rumble`s: the game
+    /// times a vibration from the last `Process`, the frame before, and a
+    /// frame that came later than a vibration lasts (the world loading, a
+    /// hitch; a PS2's frames never do) ended it before it began.
+    pub fn now(&mut self, now: i64) {
+        self.pad.time = now;
     }
 
     /// `Rumble` (CLIENT): motor 0 the small one for `ms`, 1 the large one at
@@ -499,6 +516,7 @@ pub fn check_motors(wait_ms: i64) -> Result<(), String> {
         let (report, connected, motors) = pads.poll();
         seen |= connected;
         console.poll(report, connected, motors, false);
+        console.now(now);
         match step {
             0 if console.pad.active() => {
                 crate::say("rumble: the large motor at 200 for 600 ms");
@@ -787,7 +805,7 @@ impl Gamepads {
         let gilrs = if none {
             None
         } else {
-            match gilrs::GilrsBuilder::new().with_force_feedback(true).build() {
+            match gilrs::GilrsBuilder::new().with_force_feedback(GILRS_FF).build() {
                 Ok(g) => Some(g),
                 Err(e) => {
                     crate::say(&format!("no gamepads: {e}"));
@@ -1067,7 +1085,7 @@ impl Gamepads {
                 #[cfg(target_os = "macos")]
                 let rumbles = pad.is_ff_supported() || pad.vendor_id().zip(pad.product_id()).is_some_and(|(v, p)| crate::hidpad::Model::of(v, p).is_some());
                 #[cfg(not(target_os = "macos"))]
-                let rumbles = pad.is_ff_supported();
+                let rumbles = GILRS_FF && pad.is_ff_supported();
                 out.push(Controller { name, report, between, raw, rumbles, label, source: Source::Gilrs(id), order, notes: Vec::new() });
             }
             // what the ones passed over pressed (read through XInput or HID
@@ -1192,7 +1210,7 @@ impl Gamepads {
                     }
                 }
             }
-            if act == [0, 0] || ms == 0 {
+            if act == [0, 0] || ms == 0 || !GILRS_FF {
                 return;
             }
             // gilrs's own controllers
@@ -1568,6 +1586,31 @@ mod tests {
         let mut d = Console::new();
         d.poll(r, true, false, false);
         assert!(d.poll(r, true, false, true).is_empty());
+    }
+
+    #[test]
+    fn a_frame_late_does_not_swallow_a_vibration() {
+        let r = Report::default();
+        let ready = || {
+            let mut c = Console::new();
+            for _ in 0..3 {
+                c.poll(r, true, true, false);
+            }
+            assert_eq!(c.process(1000), None, "the last Process, a frame before");
+            c
+        };
+        // the control: the game's own way, the vibration timed from the last
+        // Process; a frame 500 ms later and a 140 ms vibration is over before
+        // it is played (the pad told "off" at once)
+        let mut c = ready();
+        c.rumble(1, 220, 140, true);
+        assert_eq!(c.process(1500), Some(([0, 0], 0)), "swallowed");
+        // timed from this frame, it runs its 140 ms
+        let mut c = ready();
+        c.now(1500);
+        c.rumble(1, 220, 140, true);
+        assert_eq!(c.process(1500), Some(([0, 220], 140)));
+        assert_eq!(c.process(1641), Some(([0, 0], 0)), "and ends on time");
     }
 
     #[test]

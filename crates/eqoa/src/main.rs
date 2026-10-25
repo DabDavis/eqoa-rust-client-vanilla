@@ -410,6 +410,7 @@ fn run(args: &[String]) -> Result<()> {
             let file = args.get(1).ok_or("usage: eqoa volumes <world.esf>")?;
             volumes(file)?;
         }
+        #[cfg(not(target_arch = "wasm32"))]
         Some("rumble") => input::check_motors(10_000)?,
         Some("view") | Some("shot") => {
             let shot = args[0] == "shot";
