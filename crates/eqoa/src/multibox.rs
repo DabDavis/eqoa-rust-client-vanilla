@@ -47,6 +47,9 @@ pub struct Other {
     pub pad: Option<String>,
     /// its Controller Focus
     pub focus: Focus,
+    /// when it came to the front (ms since 1970), while it has the focus;
+    /// none behind it, or from a build that does not say
+    pub front: Option<u64>,
 }
 
 /// This window among the others.
@@ -63,6 +66,26 @@ impl Seat {
     pub fn alone(&self) -> bool {
         self.others.is_empty()
     }
+
+    /// The other window in front, if one came to the front after this one
+    /// did (`mine`: when this one came, none while it does not have the
+    /// focus): of two windows that both say they have the focus, the one
+    /// that came last is in front. A window is told when it has the focus
+    /// and when it has lost it, but a system can leave the second out
+    /// (Steam's game mode on a Steam Deck switching between two windows:
+    /// "swapping between focuses will end up having both in focus"), and the
+    /// window behind went on taking the controller with the one in front.
+    /// The same time is told apart by the place (the later one is in front).
+    pub fn front_other(&self, mine: Option<u64>) -> Option<&Other> {
+        let key = |o: &Other| (o.front, o.place);
+        self.others.iter().filter(|o| o.front.is_some() && mine.is_none_or(|m| key(o) > (Some(m), self.place))).max_by_key(|o| key(o))
+    }
+}
+
+/// Now, as a window says when it came to the front (ms since 1970: the
+/// windows' one clock).
+pub fn now_ms() -> u64 {
+    web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
 struct Here {
@@ -73,8 +96,9 @@ struct Here {
     left: Option<usize>,
     others: Vec<Other>,
     looked: Option<web_time::Instant>,
-    /// what this window said it reads, and whether saying it last failed
-    said: Option<(Option<String>, Focus)>,
+    /// what this window said it reads, its Controller Focus and since when
+    /// it is in front, and whether saying it last failed
+    said: Option<(Option<String>, Focus, Option<u64>)>,
     failed: bool,
 }
 
@@ -183,17 +207,18 @@ pub fn seat() -> Seat {
     seat
 }
 
-/// Says which controller this window reads (none: `None`) and its
-/// Controller Focus, for the others to see: when it changes, and again each
-/// frame until it is said (the first failure is logged).
-pub fn say(pad: Option<&str>, focus: Focus) {
+/// Says which controller this window reads (none: `None`), its Controller
+/// Focus and since when it has had the focus (`front`, none behind), for
+/// the others to see: when it changes, and again each frame until it is said
+/// (the first failure is logged).
+pub fn say(pad: Option<&str>, focus: Focus, front: Option<u64>) {
     let mut h = here();
-    let now = (pad.map(str::to_string), focus);
+    let now = (pad.map(str::to_string), focus, front);
     if h.said.as_ref() == Some(&now) {
         return;
     }
     let Some(p) = h.place() else { return };
-    match p.say(pad, focus) {
+    match p.say(pad, focus, front) {
         Ok(()) => {
             h.said = Some(now);
             h.failed = false;
@@ -208,16 +233,18 @@ pub fn say(pad: Option<&str>, focus: Focus) {
 
 /// A `.pad` file's text, and back: the controller's name on the first line
 /// (empty when it reads none), its Controller Focus as `client.opt` spells it
-/// on the second.
-fn pad_text(pad: Option<&str>, focus: Focus) -> String {
-    format!("{}\n{}\n", pad.unwrap_or(""), focus.key())
+/// on the second, and on the third since when the window has had the focus
+/// (ms since 1970; empty behind, and absent from an older build's).
+fn pad_text(pad: Option<&str>, focus: Focus, front: Option<u64>) -> String {
+    format!("{}\n{}\n{}\n", pad.unwrap_or(""), focus.key(), front.map_or(String::new(), |t| t.to_string()))
 }
 
 fn read_pad_text(place: usize, s: &str) -> Other {
     let mut lines = s.lines();
     let pad = lines.next().map(str::trim).filter(|p| !p.is_empty()).map(str::to_string);
     let focus = lines.next().and_then(Focus::from_key).unwrap_or_default();
-    Other { place, pad, focus }
+    let front = lines.next().and_then(|t| t.trim().parse().ok());
+    Other { place, pad, focus, front }
 }
 
 // ---- natively: lock files in the config directory -------------------------------
@@ -244,7 +271,7 @@ impl Place {
                     Ok(()) => {
                         let place = Place { dir: dir.to_path_buf(), n, _lock: f };
                         // what the place's last window said is not this one's
-                        place.say(None, Focus::Auto).map_err(std::io::Error::other)?;
+                        place.say(None, Focus::Auto, None).map_err(std::io::Error::other)?;
                         return Ok(Some(place));
                     }
                     Err(TryLockError::WouldBlock) if wait => std::thread::sleep(std::time::Duration::from_millis(30)),
@@ -286,10 +313,10 @@ impl Place {
 
     /// Says what this window reads: written beside and moved over, so a
     /// window looking never reads half of it.
-    pub fn say(&self, pad: Option<&str>, focus: Focus) -> Result<(), String> {
+    pub fn say(&self, pad: Option<&str>, focus: Focus, front: Option<u64>) -> Result<(), String> {
         let path = Self::pad_path(&self.dir, self.n);
         let tmp = path.with_extension("pad.new");
-        std::fs::write(&tmp, pad_text(pad, focus)).and_then(|()| std::fs::rename(&tmp, &path)).map_err(|e| format!("{}: {e}", path.display()))
+        std::fs::write(&tmp, pad_text(pad, focus, front)).and_then(|()| std::fs::rename(&tmp, &path)).map_err(|e| format!("{}: {e}", path.display()))
     }
 }
 
@@ -341,9 +368,9 @@ impl Place {
             .collect()
     }
 
-    fn say(&self, pad: Option<&str>, focus: Focus) -> Result<(), String> {
+    fn say(&self, pad: Option<&str>, focus: Focus, front: Option<u64>) -> Result<(), String> {
         let s = web_sys::window().and_then(|w| w.local_storage().ok().flatten()).ok_or("no localStorage")?;
-        s.set_item(&Self::key(self.n), &pad_text(pad, focus)).map_err(|e| format!("{e:?}"))
+        s.set_item(&Self::key(self.n), &pad_text(pad, focus, front)).map_err(|e| format!("{e:?}"))
     }
 }
 
@@ -357,7 +384,7 @@ fn take_place() -> Option<Option<Place>> {
             crate::say(&format!("multibox: this is window {}", n + 1));
             let place = Place { n };
             // what the place's last page said is not this one's
-            let _ = place.say(None, Focus::Auto);
+            let _ = place.say(None, Focus::Auto, None);
             Some(Some(place))
         }
         _ => Some(None),
@@ -402,19 +429,19 @@ mod tests {
         let c = Place::take(&d.0).unwrap().unwrap();
         assert_eq!((a.n, b.n, c.n), (0, 1, 2), "first come, first place");
         assert_eq!(a.others().iter().map(|o| o.place).collect::<Vec<_>>(), vec![1, 2]);
-        b.say(Some("/dev/input/event19"), Focus::Auto).unwrap();
-        c.say(Some("xinput1"), Focus::Pad(2)).unwrap();
+        b.say(Some("/dev/input/event19"), Focus::Auto, None).unwrap();
+        c.say(Some("xinput1"), Focus::Pad(2), Some(1_792_970_000_123)).unwrap();
         let seen = a.others();
-        assert_eq!(seen[0], Other { place: 1, pad: Some("/dev/input/event19".into()), focus: Focus::Auto });
-        assert_eq!(seen[1], Other { place: 2, pad: Some("xinput1".into()), focus: Focus::Pad(2) });
+        assert_eq!(seen[0], Other { place: 1, pad: Some("/dev/input/event19".into()), focus: Focus::Auto, front: None });
+        assert_eq!(seen[1], Other { place: 2, pad: Some("xinput1".into()), focus: Focus::Pad(2), front: Some(1_792_970_000_123) });
         // the second window closes: its place is free, and the next taken
         drop(b);
         assert_eq!(a.others().iter().map(|o| o.place).collect::<Vec<_>>(), vec![2], "the control: a dropped lock is no window");
         let d2 = Place::take(&d.0).unwrap().unwrap();
         assert_eq!(d2.n, 1, "the place the closed window left");
-        assert_eq!(a.others()[0], Other { place: 1, pad: None, focus: Focus::Auto }, "a new window says it reads nothing yet, whatever was there");
-        c.say(None, Focus::Off).unwrap();
-        assert_eq!(a.others()[1], Other { place: 2, pad: None, focus: Focus::Off });
+        assert_eq!(a.others()[0], Other { place: 1, pad: None, focus: Focus::Auto, front: None }, "a new window says it reads nothing yet, whatever was there");
+        c.say(None, Focus::Off, None).unwrap();
+        assert_eq!(a.others()[1], Other { place: 2, pad: None, focus: Focus::Off, front: None }, "behind again: no time");
         // looking takes nothing: the places are as they were
         assert_eq!(d2.others().iter().map(|o| o.place).collect::<Vec<_>>(), vec![0, 2]);
     }
@@ -479,8 +506,33 @@ mod tests {
         let s = Seat { place: 2, others: vec![Other { place: 0, ..Default::default() }] };
         assert!(!s.alone());
         assert!(Seat::default().alone());
-        assert_eq!(read_pad_text(3, &pad_text(Some("pad1"), Focus::Pad(1))), Other { place: 3, pad: Some("pad1".into()), focus: Focus::Pad(1) });
-        assert_eq!(read_pad_text(3, &pad_text(None, Focus::Window)), Other { place: 3, pad: None, focus: Focus::Window });
-        assert_eq!(read_pad_text(3, ""), Other { place: 3, pad: None, focus: Focus::Auto });
+        assert_eq!(read_pad_text(3, &pad_text(Some("pad1"), Focus::Pad(1), None)), Other { place: 3, pad: Some("pad1".into()), focus: Focus::Pad(1), front: None });
+        assert_eq!(read_pad_text(3, &pad_text(None, Focus::Window, Some(42))), Other { place: 3, pad: None, focus: Focus::Window, front: Some(42) });
+        assert_eq!(read_pad_text(3, ""), Other { place: 3, pad: None, focus: Focus::Auto, front: None });
+        // an older build's file: two lines, no time (it never says it is in
+        // front, as before)
+        assert_eq!(read_pad_text(3, "xinput0\nwindow\n"), Other { place: 3, pad: Some("xinput0".into()), focus: Focus::Window, front: None });
+    }
+
+    /// Of the windows that say they have the focus, the one that came to the
+    /// front last is in front: one that came before it is not, though it says
+    /// it has the focus still (a focus lost without a word), and a window
+    /// with the focus and nothing newer is. Ties go to the later place. The
+    /// control: with no time said (behind, or an older build), no other
+    /// window is in front.
+    #[test]
+    fn the_window_that_came_to_the_front_last_is_in_front() {
+        let other = |place, front| Other { place, front, ..Default::default() };
+        let s = Seat { place: 0, others: vec![other(1, Some(2_000)), other(2, Some(1_500))] };
+        assert_eq!(s.front_other(Some(1_000)).map(|o| o.place), Some(1), "two came after this one: the last of them");
+        assert_eq!(s.front_other(None).map(|o| o.place), Some(1), "behind: whichever came last");
+        assert_eq!(s.front_other(Some(3_000)), None, "this one came last: in front");
+        let tie = Seat { place: 1, others: vec![other(0, Some(2_000))] };
+        assert_eq!(tie.front_other(Some(2_000)), None, "a tie: the later place (this one) is in front");
+        let tie = Seat { place: 0, others: vec![other(1, Some(2_000))] };
+        assert_eq!(tie.front_other(Some(2_000)).map(|o| o.place), Some(1), "a tie: the later place is in front");
+        let quiet = Seat { place: 0, others: vec![other(1, None), other(2, None)] };
+        assert_eq!(quiet.front_other(Some(1_000)), None, "the control: none says it has the focus");
+        assert_eq!(quiet.front_other(None), None);
     }
 }

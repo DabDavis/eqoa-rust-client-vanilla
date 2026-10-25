@@ -548,7 +548,13 @@ pub enum Pick {
 /// that has none takes the controller as far down the order as it is down the
 /// windows open (the first window the first controller, the second the next),
 /// or else the first nobody reads. A Pad is the controller at that place in
-/// the order, whatever else reads it.
+/// the order, whatever else reads it. But an Auto window reads none (at
+/// rest) while a window on Window is in front, which reads them all: two
+/// windows set apart (one Window, one Auto) both took the one controller
+/// while the Window one was in front, as the Steam Deck player's "both in
+/// focus" may have been. `in_front` is this window's as `Gamepads::poll`
+/// works it out: then no other window is in front, else the one that came
+/// last (`Seat::front_other`).
 pub fn pick(focus: Focus, in_front: bool, names: &[&str], seat: &Seat, bound: Option<&str>) -> Pick {
     match focus {
         Focus::Off => Pick::Nothing,
@@ -557,6 +563,13 @@ pub fn pick(focus: Focus, in_front: bool, names: &[&str], seat: &Seat, bound: Op
         Focus::Window => Pick::Idle,
         Focus::Pad(n) => usize::from(n).checked_sub(1).and_then(|k| names.get(k)).map_or(Pick::Nothing, |n| Pick::One(n.to_string())),
         Focus::Auto if seat.alone() => Pick::All,
+        Focus::Auto if !in_front && seat.front_other(None).is_some_and(|o| o.focus == Focus::Window) => {
+            if names.is_empty() {
+                Pick::Nothing
+            } else {
+                Pick::Idle
+            }
+        }
         Focus::Auto => {
             let mut taken: Vec<&str> = seat.others.iter().filter(|o| matches!(o.focus, Focus::Pad(_))).filter_map(|o| o.pad.as_deref()).collect();
             // the Auto windows in place order, this one among them, with
@@ -593,6 +606,15 @@ pub fn pick(focus: Focus, in_front: bool, names: &[&str], seat: &Seat, bound: Op
     }
 }
 
+/// Whether a window is the one in front: `own` whether its system says it
+/// has the focus, `since` since when (as it told the other windows), `seat`
+/// the others as they told theirs. Another window that came to the front
+/// after it is in front instead: a window is told when it loses the focus,
+/// but a system can leave that out, and two windows both said they had it.
+pub fn ahead(own: bool, since: Option<u64>, seat: &Seat) -> bool {
+    own && seat.front_other(since).is_none()
+}
+
 /// Capture Controller (the Extended page, one setting for every window of
 /// the client): on, a Pad that another window open also has as its
 /// Controller Focus is read only by the window in front; a window behind
@@ -607,9 +629,11 @@ pub fn captured(p: Pick, focus: Focus, in_front: bool, seat: &Seat, capture: boo
 }
 
 /// Whether this window's Controller Focus is a Pad another window open has
-/// as its own (a controller shared by several windows).
+/// as its own (a controller shared by several windows), or another window is
+/// on Window (which reads every controller while it is in front: a Pad
+/// window beside it took the controller with it there).
 fn shares_pad(focus: Focus, seat: &Seat) -> bool {
-    matches!(focus, Focus::Pad(_)) && seat.others.iter().any(|o| o.focus == focus)
+    matches!(focus, Focus::Pad(_)) && seat.others.iter().any(|o| o.focus == focus || o.focus == Focus::Window)
 }
 
 /// How long a window waits for its controller to come back before it takes
@@ -663,9 +687,15 @@ pub struct Gamepads {
     last: Report,
     /// [`dead_zone`]
     pub dead_zone: f32,
-    /// natively, whether this window is the one in front (as it opened,
-    /// then the window's `Focused`); a page asks its document
+    /// natively, whether this window has the focus (as it opened, then the
+    /// window's `Focused`); a page asks its document
     pub focused: bool,
+    /// since when it has had the focus (`multibox::now_ms`), as the other
+    /// windows are told; none without it
+    front: Option<u64>,
+    /// a press it had the focus for and read no controller said, since it
+    /// last came to the front (`poll`)
+    unread_said: bool,
     /// the controller this window reads by Auto among other windows, or
     /// waits for, gone since when
     bound: Option<String>,
@@ -735,6 +765,8 @@ impl Gamepads {
             last: Report::default(),
             dead_zone: dead_zone(),
             focused: true,
+            front: None,
+            unread_said: false,
             bound: None,
             gone: None,
             picked: None,
@@ -769,12 +801,38 @@ impl Gamepads {
             _ => self.gone = None,
         }
         let capture = crate::settings::capture();
-        let pick = captured(pick(focus, self.in_front(), &names, &seat, self.bound.as_deref()), focus, self.in_front(), &seat, capture);
+        // since when this window has had the focus, for the other windows; in
+        // front unless another came to the front after it did
+        // (`Seat::front_other`: a focus lost without a word)
+        let own = self.has_focus();
+        if own != self.front.is_some() {
+            self.front = own.then(crate::multibox::now_ms);
+        }
+        let front = ahead(own, self.front, &seat);
+        let pick = captured(pick(focus, front, &names, &seat, self.bound.as_deref()), focus, front, &seat, capture);
         // Windows gave a window its controllers only while it was in front
         // (Windows.Gaming.Input), so a window alone keeps that there: XInput,
         // which reads them behind, is for a window among others
         #[cfg(windows)]
-        let pick = if pick == Pick::All && focus == Focus::Auto && !self.in_front() { Pick::Idle } else { pick };
+        let pick = if pick == Pick::All && focus == Focus::Auto && !front { Pick::Idle } else { pick };
+        // a controller pressed while this window has the focus and reads
+        // none, said once a time it comes to the front: the presses a
+        // player saw "ignored" (a second box, 2026-10-25) held back by these
+        // rules, and why; a press that never came from the controller says
+        // nothing here (the arrival line's first press is late instead)
+        if !own {
+            self.unread_said = false;
+        } else if !self.unread_said && matches!(pick, Pick::Idle | Pick::Nothing) {
+            let pressed = pads.iter().fold(0, |b, c| b | c.report.buttons | c.between);
+            if pressed != 0 {
+                let why = match seat.front_other(self.front) {
+                    Some(o) => format!("window {} came to the front after this one", o.place + 1),
+                    None => describe(&pick, &pads, &seat, focus, capture && shares_pad(focus, &seat)).replacen("controllers: ", "", 1),
+                };
+                crate::say(&format!("controllers: the controller's {} pressed while this window has the focus, not read: {why}", bit::name(pressed)));
+                self.unread_said = true;
+            }
+        }
         let one = match &pick {
             Pick::One(n) => Some(n.clone()),
             _ => None,
@@ -783,8 +841,9 @@ impl Gamepads {
         if focus != Focus::Auto || seat.alone() || !waiting {
             self.bound = one.clone().filter(|_| focus == Focus::Auto);
         }
-        // what it reads (by Auto, or waits for), for the other windows
-        crate::multibox::say(if focus == Focus::Auto { self.bound.as_deref() } else { one.as_deref() }, focus);
+        // what it reads (by Auto, or waits for), and since when it has had
+        // the focus, for the other windows
+        crate::multibox::say(if focus == Focus::Auto { self.bound.as_deref() } else { one.as_deref() }, focus, self.front);
         let says = reads_text(&pick, &names, &seat, capture && shares_pad(focus, &seat));
         READS.with(|r| {
             if *r.borrow() != says {
@@ -847,8 +906,15 @@ impl Gamepads {
         (out, any, motors)
     }
 
-    /// Whether this window is the one in front.
+    /// Whether this window is the one in front: it has the focus, and no
+    /// other window of the client came to the front after it did
+    /// (`multibox::Seat::front_other`).
     pub fn in_front(&self) -> bool {
+        ahead(self.has_focus(), self.front, &crate::multibox::seat())
+    }
+
+    /// Whether this window has the focus, as its system says.
+    fn has_focus(&self) -> bool {
         #[cfg(target_arch = "wasm32")]
         return crate::web::has_focus();
         #[cfg(not(target_arch = "wasm32"))]
@@ -1194,7 +1260,10 @@ fn reads_text(pick: &Pick, names: &[&str], seat: &Seat, captured: bool) -> Strin
             Some(k) => format!("{who} controller {}", k + 1),
             None => format!("{who} none"),
         },
-        Pick::Idle => format!("{who} none, not in front"),
+        Pick::Idle => match seat.front_other(None) {
+            Some(o) => format!("{who} none, window {} in front", o.place + 1),
+            None => format!("{who} none, not in front"),
+        },
         Pick::Nothing => format!("{who} none"),
     }
 }
@@ -1211,6 +1280,10 @@ fn describe(pick: &Pick, pads: &[Controller], seat: &Seat, focus: Focus, capture
             None => n.clone(),
         },
         Pick::Idle if captured => "none while this window is not in front (Capture Controller)".to_string(),
+        Pick::Idle if focus == Focus::Auto && !seat.alone() => match seat.front_other(None) {
+            Some(o) => format!("none while window {} (Window) is in front", o.place + 1),
+            None => "none while a window on Window is in front".to_string(),
+        },
         Pick::Idle => "none while this window is not in front".to_string(),
         Pick::Nothing if focus == Focus::Off => "none (Controller Focus Off)".to_string(),
         Pick::Nothing => "none".to_string(),
@@ -1472,7 +1545,13 @@ mod tests {
     }
 
     fn seat(place: usize, others: &[(usize, Option<&str>, Focus)]) -> Seat {
-        let others = others.iter().map(|&(place, pad, focus)| crate::multibox::Other { place, pad: pad.map(str::to_string), focus }).collect();
+        let others = others.iter().map(|&(place, pad, focus)| crate::multibox::Other { place, pad: pad.map(str::to_string), focus, front: None }).collect();
+        Seat { place, others }
+    }
+
+    /// A seat whose other windows say since when they have had the focus.
+    fn seat_at(place: usize, others: &[(usize, Option<&str>, Focus, Option<u64>)]) -> Seat {
+        let others = others.iter().map(|&(place, pad, focus, front)| crate::multibox::Other { place, pad: pad.map(str::to_string), focus, front }).collect();
         Seat { place, others }
     }
 
@@ -1632,6 +1711,12 @@ mod tests {
         assert_eq!(read(Focus::Window, false, &shared, true), Pick::Idle);
         assert_eq!(read(Focus::Window, true, &shared, true), Pick::All);
         assert_eq!(read(Focus::Off, true, &shared, true), Pick::Nothing);
+        // beside a window on Window (it reads every controller in front),
+        // captured, a Pad is read only in front too; not captured, as ever
+        let beside_window = seat(0, &[(1, None, Focus::Window)]);
+        assert_eq!(read(Focus::Pad(1), false, &beside_window, true), Pick::Idle, "beside a Window one, captured: behind, at rest");
+        assert_eq!(read(Focus::Pad(1), true, &beside_window, true), one("p1"), "in front: its pad");
+        assert_eq!(read(Focus::Pad(1), false, &beside_window, false), one("p1"), "the control: not captured, read behind");
         // a shared pad not connected stays unplugged, not at rest
         let three = seat(0, &[(1, None, Focus::Pad(3))]);
         assert_eq!(read(Focus::Pad(3), false, &three, true), Pick::Nothing);
@@ -1640,6 +1725,69 @@ mod tests {
         assert_eq!(reads_text(&Pick::Idle, &pads, &shared, true), "Window 1: none, not in front");
         assert_eq!(reads_text(&one("p1"), &pads, &shared, false), "Window 1: controller 1");
         assert_eq!(reads_text(&Pick::All, &pads, &Seat::default(), false), "Reads every controller");
+    }
+
+    /// Two windows both told they have the focus (the first was never told
+    /// it lost it, Steam's game mode on a Steam Deck: "swapping between
+    /// focuses will end up having both in focus"): the one that came to the
+    /// front last reads, the other rests, on Window and on a captured Pad
+    /// alike; back again, the first reads. The control: windows that do not
+    /// say since when (an older build) both read, as before.
+    #[test]
+    fn of_two_windows_told_they_have_the_focus_the_later_reads() {
+        let pads = ["p1"];
+        let win = Focus::Window;
+        // window 1 came at 1,000 and was not told it lost the focus; window 2 came at 2,000
+        let one_sees = seat_at(0, &[(1, None, win, Some(2_000))]);
+        let two_sees = seat_at(1, &[(0, None, win, Some(1_000))]);
+        assert!(!ahead(true, Some(1_000), &one_sees), "window 1: another came after it");
+        assert!(ahead(true, Some(2_000), &two_sees), "window 2: the last to come");
+        assert_eq!(pick(win, ahead(true, Some(1_000), &one_sees), &pads, &one_sees, None), Pick::Idle, "window 1 rests");
+        assert_eq!(pick(win, ahead(true, Some(2_000), &two_sees), &pads, &two_sees, None), Pick::All, "window 2 reads");
+        // back to window 1, told it has the focus again (at 3,000)
+        let one_back = seat_at(0, &[(1, None, win, Some(2_000))]);
+        let two_back = seat_at(1, &[(0, None, win, Some(3_000))]);
+        assert!(ahead(true, Some(3_000), &one_back));
+        assert!(!ahead(true, Some(2_000), &two_back));
+        // a captured Pad: the same
+        let pad = Focus::Pad(1);
+        let one_pad = seat_at(0, &[(1, Some("p1"), pad, Some(2_000))]);
+        let front = ahead(true, Some(1_000), &one_pad);
+        assert_eq!(captured(pick(pad, front, &pads, &one_pad, None), pad, front, &one_pad, true), Pick::Idle, "the captured pad: window 1 rests");
+        // told it lost the focus, a window says no time: the other is in front
+        assert!(ahead(true, Some(2_000), &seat_at(1, &[(0, None, win, None)])));
+        assert!(!ahead(false, None, &seat_at(1, &[(0, None, win, None)])), "without the focus, never");
+        // the words: which window is in front
+        assert_eq!(reads_text(&Pick::Idle, &pads, &one_sees, false), "Window 1: none, window 2 in front");
+        // the control: no time said, both read
+        let old = seat(0, &[(1, None, win)]);
+        assert!(ahead(true, Some(1_000), &old), "the control: an older build's window says no time");
+        assert_eq!(pick(win, ahead(true, Some(1_000), &old), &pads, &old, None), Pick::All);
+    }
+
+    /// One window on Window, another on Auto (Controller Focus is each
+    /// window's own): the Auto one rests while the Window one is in front,
+    /// which reads every controller, and reads its own again once that one is
+    /// not; a window on Auto among Auto ones keeps what it reads. The
+    /// control: before, it read the controller the Window one read in front.
+    #[test]
+    fn an_auto_window_rests_while_a_window_on_window_is_in_front() {
+        let pads = ["p1"];
+        let (auto, win) = (Focus::Auto, Focus::Window);
+        let window_front = seat_at(1, &[(0, None, win, Some(5_000))]);
+        assert_eq!(pick(auto, false, &pads, &window_front, None), Pick::Idle, "the Window one in front: at rest");
+        assert_eq!(pick(auto, false, &[], &window_front, None), Pick::Nothing, "none connected: unplugged");
+        assert_eq!(pick(auto, true, &pads, &window_front, None), one("p1"), "itself in front: its own");
+        let window_behind = seat_at(1, &[(0, None, win, None)]);
+        assert_eq!(pick(auto, false, &pads, &window_behind, None), one("p1"), "the Window one behind: its own, as ever");
+        let auto_front = seat_at(1, &[(0, Some("p1"), auto, Some(5_000))]);
+        assert_eq!(pick(auto, false, &["p1", "p2"], &auto_front, None), one("p2"), "an Auto one in front: each its own");
+        // the words
+        assert_eq!(describe(&Pick::Idle, &[], &window_front, auto, false), "controllers: window 2 of 2, Auto: none while window 1 (Window) is in front");
+        assert_eq!(reads_text(&Pick::Idle, &pads, &window_front, false), "Window 2: none, window 1 in front");
+        // the control: the rule this replaces (no time: the Window one taken
+        // as behind) read the controller with it
+        assert_eq!(pick(auto, false, &pads, &seat(1, &[(0, None, win)]), None), one("p1"));
     }
 
     #[test]
