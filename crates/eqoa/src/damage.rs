@@ -48,13 +48,27 @@ pub struct Target {
     pub slot4: Option<[f32; 3]>,
 }
 
-/// A number this frame: where it floats, and what `Draw` is handed.
+/// A number this frame: where it floats, and what `Draw` is handed; its
+/// creature, and that creature's point it floats from (`Target::pos`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Shown {
     pub at: Vec3,
     pub amount: i32,
     pub color: [f32; 4],
     pub time: f32,
+    pub defender: u32,
+    pub from: Vec3,
+}
+
+/// A number laid out on a frame of the game's: its creature, where it
+/// floats from that creature's point (`rel`: slot 4's offset and the
+/// bounce), where that was then (`at`, for a creature gone since), and its
+/// digits' quads about the point.
+struct Laid {
+    defender: u32,
+    rel: Vec3,
+    at: Vec3,
+    quads: Vec<Quad>,
 }
 
 pub struct Damage {
@@ -69,9 +83,10 @@ pub struct Damage {
     /// `VIClient` hands `Process`.
     last: Option<i64>,
     history: [f32; 8],
-    /// The numbers `frame` laid out: where each floats, and its digits'
-    /// quads about that point (shaken, faded and grown as `Draw` drew them).
-    laid: Vec<(Vec3, Vec<Quad>)>,
+    /// The numbers `frame` laid out: each one's creature and where it floats
+    /// from it, and its digits' quads about that point (shaken, faded and
+    /// grown as `Draw` drew them).
+    laid: Vec<Laid>,
 }
 
 impl Default for Damage {
@@ -150,7 +165,7 @@ impl Damage {
             } else {
                 [1.0, 1.0, 1.0, 1.0]
             };
-            out.push(Shown { at, amount: n.amount, color, time: n.time });
+            out.push(Shown { at, amount: n.amount, color, time: n.time, defender: n.defender, from: Vec3::from(e.pos) });
             k += 1;
         }
         out
@@ -176,7 +191,7 @@ impl Damage {
     /// on, and those in the frustum laid out as `Draw` draws them (its
     /// `rand()`s are the game's, a frame each). Where they go on the screen
     /// is `place`'s, every frame drawn, so a number keeps to its creature
-    /// while the view moves between the game's frames.
+    /// while the view and the creature move between the game's frames.
     pub fn frame(&mut self, tex: Option<usize>, now_ms: i64, view_proj: Mat4, find: impl Fn(u32) -> Option<Target>) {
         let shown = self.step(now_ms, find);
         self.laid.clear();
@@ -187,15 +202,21 @@ impl Damage {
             }
             let mut quads = Vec::new();
             self.draw(&mut quads, tex, [0.0, 0.0], s.amount, s.color, s.time);
-            self.laid.push((s.at, quads));
+            self.laid.push(Laid { defender: s.defender, rel: s.at - s.from, at: s.at, quads });
         }
     }
 
     /// The laid-out numbers through this frame's view, into the HUD's frame:
-    /// the quads to draw under the HUD.
-    pub fn place(&self, view_proj: Mat4, size: (u32, u32)) -> Vec<Quad> {
+    /// the quads to draw under the HUD. Each floats from its creature where
+    /// `find` says it is drawn this frame (the game moves both on its own
+    /// frames; a display's rate moves the creature between them, and a
+    /// number kept at the game's frame's point lagged its runner and jumped
+    /// after it), else from where it was laid out.
+    pub fn place(&self, view_proj: Mat4, size: (u32, u32), find: impl Fn(u32) -> Option<[f32; 3]>) -> Vec<Quad> {
         let mut out = Vec::new();
-        for (at, quads) in &self.laid {
+        for l in &self.laid {
+            let at = find(l.defender).map_or(l.at, |p| Vec3::from(p) + l.rel);
+            let quads = &l.quads;
             let h = view_proj * at.extend(1.0);
             if !in_frustum(h) {
                 continue;
@@ -398,7 +419,7 @@ mod tests {
         let proj = glam::camera::rh::proj::directx::perspective(45f32.to_radians(), 4.0 / 3.0, 0.3, 6000.0);
         let vp = proj * view;
         let mut d = Damage::default();
-        let show = |z: f32, x: f32| Shown { at: Vec3::new(x, 0.0, z), amount: -5, color: [1.0; 4], time: 0.7 };
+        let show = |z: f32, x: f32| Shown { at: Vec3::new(x, 0.0, z), amount: -5, color: [1.0; 4], time: 0.7, defender: 0, from: Vec3::ZERO };
         // ahead, behind, past the far plane, off to the side
         let q = d.quads(&[show(-10.0, 0.0), show(10.0, 0.0), show(-901.0, 0.0), show(-10.0, 50.0)], vp, (640, 480), 0);
         assert_eq!(q.len(), 1);
@@ -426,7 +447,7 @@ mod tests {
             let shown = a.step(t, find);
             drawn = a.quads(&shown, vp, (640, 448), 7);
             b.frame(Some(7), t, vp, find);
-            placed = b.place(vp, (640, 448));
+            placed = b.place(vp, (640, 448), |id| find(id).map(|t| t.pos));
         }
         assert_eq!(drawn.len(), 2, "two digits");
         for (d, p) in drawn.iter().zip(&placed) {
@@ -439,11 +460,46 @@ mod tests {
         // the view turned a little before the next of the game's frames: the
         // digits move with the point they float over
         let turned = proj * glam::camera::rh::view::look_to_mat4(Vec3::ZERO, Vec3::new(0.05, 0.0, -1.0), Vec3::Y);
-        let moved = b.place(turned, (640, 448));
+        let moved = b.place(turned, (640, 448), |id| find(id).map(|t| t.pos));
         let dx = moved[0].pos[0][0] - placed[0].pos[0][0];
         assert!(dx < -5.0, "the view turned right, the number moves left ({dx})");
         for (m, p) in moved.iter().zip(&placed) {
             assert!((m.pos[2][0] - m.pos[0][0] - (p.pos[2][0] - p.pos[0][0])).abs() < 1e-3, "the same digit, moved whole");
         }
+    }
+
+    /// A creature that runs on between two of the game's frames (a display
+    /// faster than 30 Hz) takes its number with it: laid out where it was
+    /// and placed where it is drawn now, the number is where one laid out
+    /// there would be, digits, bounce and shake alike (F3 20261024-201347,
+    /// "pop-up numbers very jittery when moving"). The control: placed from
+    /// where it was laid (a creature not found, as every number was placed
+    /// before), it stays behind its runner.
+    #[test]
+    fn a_number_keeps_to_its_creature_between_the_games_frames() {
+        let proj = glam::camera::rh::proj::directx::perspective(45f32.to_radians(), 4.0 / 3.0, 0.3, 6000.0);
+        let vp = proj * glam::camera::rh::view::look_to_mat4(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y);
+        let at = |x: f32| move |id: u32| (id == 3).then_some(Target { pos: [x, 0.0, -12.0], slot4: Some([x, 2.0, -12.0]) });
+        let (mut was, mut now) = (Damage::default(), Damage::default());
+        was.add(3, -42, 0);
+        now.add(3, -42, 0);
+        for t in [1000, 1033] {
+            was.frame(Some(7), t, vp, at(1.0));
+            now.frame(Some(7), t, vp, at(1.5));
+        }
+        let here = |x: f32| move |id: u32| at(x)(id).map(|t| t.pos);
+        let ran = was.place(vp, (640, 448), here(1.5));
+        let there = now.place(vp, (640, 448), here(1.5));
+        assert_eq!(ran.len(), 2);
+        for (a, b) in ran.iter().zip(&there) {
+            for k in 0..4 {
+                assert!((a.pos[k][0] - b.pos[k][0]).abs() < 1e-3 && (a.pos[k][1] - b.pos[k][1]).abs() < 1e-3, "{:?} {:?}", a.pos, b.pos);
+            }
+        }
+        // the control: from where it was laid, half a unit behind
+        let left = was.place(vp, (640, 448), |_| None);
+        let dx = there[0].pos[0][0] - left[0].pos[0][0];
+        assert!(dx > 5.0, "left behind by {dx} pixels");
+        assert_eq!(left.iter().map(|q| q.pos).collect::<Vec<_>>(), was.place(vp, (640, 448), here(1.0)).iter().map(|q| q.pos).collect::<Vec<_>>());
     }
 }

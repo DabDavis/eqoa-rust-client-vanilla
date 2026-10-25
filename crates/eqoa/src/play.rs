@@ -6528,7 +6528,7 @@ impl Play {
             ui.again();
         }
         if !self.loading.up() {
-            let under = self.damage.place(view_proj, size);
+            let under = self.damage.place(view_proj, size, |id| self.drawn_at(id));
             ui.quads.splice(0..0, under);
         }
     }
@@ -6835,6 +6835,16 @@ impl Play {
         self.start_actions(actions);
         self.quick_outs(quick_outs);
         self.pump_keys();
+    }
+
+    /// Where the creature `id` is drawn this frame, which its damage numbers
+    /// float from (`damage::place`): the player's walk (`self_at`), another's
+    /// actor (`actor_pos`), as `Process`'s `GetActorPos` takes them.
+    fn drawn_at(&self, id: u32) -> Option<[f32; 3]> {
+        if Some(id) == self.self_id32() {
+            return self.self_at.map(|s| s.0);
+        }
+        self.actor_pos(id)
     }
 
     /// An entity's actor position, while it is drawn.
