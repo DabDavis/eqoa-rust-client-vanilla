@@ -45,6 +45,10 @@ pub struct Text {
     /// particles, the lightning, the trails and the weather
     /// (`Renderer::draw_plates`).
     pub plates: Vec<Label>,
+    /// The plates' size against the game's (1: the PS2's 448 lines to the
+    /// target's height, as every label), one for all of them: the zoom's
+    /// (the client's `lod::plate_scale`).
+    pub plate_scale: f32,
 }
 
 impl Text {
@@ -153,7 +157,7 @@ impl Text {
             multiview_mask: None,
             cache: None,
         });
-        Text { pipeline, bg, glyphs, height: font.height, labels: Vec::new(), plates: Vec::new() }
+        Text { pipeline, bg, glyphs, height: font.height, labels: Vec::new(), plates: Vec::new(), plate_scale: 1.0 }
     }
 
     /// `GetStringWidth`, in PS2 pixels.
@@ -165,10 +169,11 @@ impl Text {
         self.height
     }
 
-    /// `labels`' quads for a target `size` (pixels).
-    fn vertices(&self, labels: &[Label], size: (u32, u32)) -> Vec<Vertex> {
+    /// `labels`' quads for a target `size` (pixels), at `scale` of the
+    /// game's size.
+    fn vertices(&self, labels: &[Label], size: (u32, u32), scale: f32) -> Vec<Vertex> {
         let (tw, th) = (size.0 as f32, size.1 as f32);
-        let k = th / SCREEN_H;
+        let k = th / SCREEN_H * scale;
         let mut out = Vec::new();
         for l in labels {
             // The centre in target pixels, then the string's left edge.
@@ -197,16 +202,16 @@ impl Text {
 
     /// Draws the labels into `pass`.
     pub fn draw<'a>(&'a self, device: &wgpu::Device, pass: &mut wgpu::RenderPass<'a>, size: (u32, u32)) {
-        self.draw_list(device, pass, &self.labels, size);
+        self.draw_list(device, pass, &self.labels, size, 1.0);
     }
 
-    /// Draws the name plates into `pass`.
+    /// Draws the name plates into `pass`, at `plate_scale`.
     pub fn draw_plates<'a>(&'a self, device: &wgpu::Device, pass: &mut wgpu::RenderPass<'a>, size: (u32, u32)) {
-        self.draw_list(device, pass, &self.plates, size);
+        self.draw_list(device, pass, &self.plates, size, self.plate_scale);
     }
 
-    fn draw_list<'a>(&'a self, device: &wgpu::Device, pass: &mut wgpu::RenderPass<'a>, labels: &[Label], size: (u32, u32)) {
-        let v = self.vertices(labels, size);
+    fn draw_list<'a>(&'a self, device: &wgpu::Device, pass: &mut wgpu::RenderPass<'a>, labels: &[Label], size: (u32, u32), scale: f32) {
+        let v = self.vertices(labels, size, scale);
         if v.is_empty() {
             return;
         }

@@ -957,16 +957,66 @@ pub fn chat_labels(play: &Play, text: &render::text::Text, size: (u32, u32)) -> 
     out
 }
 
-/// `VINameSprite::Raster` and `RasterDeferred` for a frame seen from `eye`
-/// through `view_proj`: plates within 22 of the eye (the squared view-space
-/// length plus w² under 22²), at most 24, nearest first, each dropped if its
-/// rect on the PS2's 640x448 screen meets one already kept (`VIRect::
-/// Intersects`, inclusive).
-pub fn labels(plates: &[Plate], eye: glam::Vec3, view_proj: glam::Mat4, text: &render::text::Text) -> Vec<render::text::Label> {
+/// `VINameSprite::Raster`'s plates kept, at most this many: its 24, one for
+/// each of the game's entity slots.
+pub const NAME_PLATES_GAME: usize = 24;
+
+/// How this frame's name plates are kept and sized (`labels`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlateView {
+    /// where a plate's distance is measured from: no farther than the
+    /// game's camera could be (`lod::eye`), so zooming out keeps the names
+    /// the console showed round the player
+    pub eye: glam::Vec3,
+    /// how far from it a plate is kept: `VINameSprite::Raster`'s 22, or the
+    /// options' Name Distance
+    pub distance: f32,
+    /// every plate's size against the game's (`lod::plate_scale`)
+    pub scale: f32,
+    /// at most this many: the game's 24, or as many as NPC/PC Display keeps
+    /// in view
+    pub most: usize,
+}
+
+impl PlateView {
+    /// The game's, from `eye`: within 22, at its size, at most 24.
+    #[cfg(test)]
+    pub fn game(eye: glam::Vec3) -> PlateView {
+        PlateView { eye, distance: crate::settings::NAME_DISTANCE_GAME as f32, scale: 1.0, most: NAME_PLATES_GAME }
+    }
+
+    /// This frame's for the walker's camera `cam` at `eye` in a window
+    /// `size`: from `lod::eye`, to Name Distance, at the zoom's size
+    /// (`lod::plate_scale`), at most the entity slots NPC/PC Display keeps.
+    pub fn of(cam: &vi::camera::WalkCamera<Ee>, eye: &Vect3<Ee>, size: (u32, u32)) -> PlateView {
+        let k = size.1 as f32 / render::text::SCREEN_H;
+        PlateView {
+            eye: glam::Vec3::from(crate::lod::eye(cam, eye).to_array()),
+            distance: crate::settings::name_distance(),
+            scale: crate::lod::plate_scale(cam, eye, k),
+            most: crate::settings::entity_slots().max(NAME_PLATES_GAME),
+        }
+    }
+}
+
+/// `VINameSprite::Raster` and `RasterDeferred` for a frame seen through
+/// `view_proj`, kept as `view` says: plates within its distance of its eye
+/// (the squared view-space length plus w² under the distance squared: the
+/// game's 22, from the game's camera), at most its `most`, nearest first,
+/// each dropped if its rect on the PS2's 640x448 screen (at the view's
+/// scale) meets one already kept (`VIRect::Intersects`, inclusive).
+pub fn labels(plates: &[Plate], view: &PlateView, view_proj: glam::Mat4, text: &render::text::Text) -> Vec<render::text::Label> {
+    labels_by(plates, view, view_proj, |s| text.width(s), text.height())
+}
+
+/// `labels` with the font's measures: a string's `width` and the `height`,
+/// in the PS2's pixels.
+fn labels_by(plates: &[Plate], view: &PlateView, view_proj: glam::Mat4, width: impl Fn(&str) -> u32, height: u32) -> Vec<render::text::Label> {
     let mut queued = Vec::new();
+    let reach = view.distance * view.distance;
     for p in plates {
         let at = glam::Vec3::from(p.at);
-        if 22.0 * 22.0 <= (at - eye).length_squared() + 1.0 || queued.len() >= 24 {
+        if reach <= (at - view.eye).length_squared() + 1.0 || queued.len() >= view.most {
             continue;
         }
         let clip = view_proj * at.extend(1.0);
@@ -975,8 +1025,8 @@ pub fn labels(plates: &[Plate], eye: glam::Vec3, view_proj: glam::Mat4, text: &r
         }
         let ndc = clip.truncate() / clip.w;
         let (qx, qy) = ((ndc.x * 320.0 + 320.0) as i32, (-ndc.y * 224.0 + 224.0) as i32);
-        let w = text.width(&p.name) as i32;
-        let h = text.height() as i32;
+        let w = (width(&p.name) as f32 * view.scale).round() as i32;
+        let h = (height as f32 * view.scale).round() as i32;
         let min = (qx - (w >> 1), qy - (h >> 1));
         queued.push((clip.w, min, (min.0 + w, min.1 + h), ndc, p));
     }
@@ -1245,6 +1295,96 @@ fn own_actor_shown(was: bool, mode: i32, dead: bool, head_to_camera: F<Ee>, npc_
         _ => (true, false),
     };
     (shown && npc_flags & 0x200 == 0, inside)
+}
+
+#[cfg(test)]
+mod name_plates {
+    use super::*;
+    use glam::{Mat4, Vec3};
+
+    /// One-glyph-wide names, the font's 7 pixels a character, 12 tall.
+    fn width(s: &str) -> u32 {
+        s.chars().count() as u32 * 7
+    }
+
+    /// A plate at `at` (the view is the identity, so its x and y are where
+    /// it is on the screen, -1 to 1).
+    fn plate(at: [f32; 3], name: &str) -> Plate {
+        Plate { at, color: [1.0; 4], name: name.into() }
+    }
+
+    fn names(view: &PlateView, plates: &[Plate]) -> Vec<String> {
+        labels_by(plates, view, Mat4::IDENTITY, width, 12).into_iter().map(|l| l.text).collect()
+    }
+
+    /// Zoomed out to 50 the plates round the player stay, measured from the
+    /// eye drawn in to the game's 8 (`PlateView::of` takes `lod::eye`'s):
+    /// one 18 past it is kept. The control: from the camera itself, 60 off,
+    /// none is.
+    #[test]
+    fn zoomed_out_the_names_round_the_player_stay() {
+        let near = Vec3::new(0.0, 0.0, -8.0);
+        let camera = Vec3::new(0.0, 0.0, -50.0);
+        let p = [plate([0.0, 0.0, 10.0], "Ab")];
+        assert_eq!(names(&PlateView::game(near), &p), ["Ab"]);
+        assert!(names(&PlateView::game(camera), &p).is_empty(), "the control must fail");
+    }
+
+    /// The walker's view of them (`PlateView::of`): in the follow orbit 50
+    /// back, from the eye drawn in to 8, to Name Distance, at the floor's
+    /// size in a 1080-line window, as many as NPC/PC Display keeps (the
+    /// game's 24 at least); at the game's camera, the game's. The control:
+    /// the camera itself is 50 off.
+    #[test]
+    fn the_walkers_view_of_the_plates() {
+        crate::settings::testing::reset(false);
+        let mut cam = vi::camera::WalkCamera::<Ee> { camera_mode: 3, target_height: F::new(1.68), ..Default::default() };
+        cam.walk.phys.position = Vect3::of(1000.0, 50.0, 2000.0);
+        let back = |d: f32| Vect3::of(1000.0, 51.68, 2000.0 - d);
+        let v = PlateView::of(&cam, &back(50.0), (1920, 1080));
+        assert!((v.eye - Vec3::new(1000.0, 51.68, 1992.0)).length() < 1e-3, "{:?}", v.eye);
+        assert_eq!((v.distance, v.most), (22.0, NAME_PLATES_GAME));
+        assert!((v.scale - crate::lod::PLATE_FLOOR).abs() < 1e-3);
+        assert_eq!(PlateView::of(&cam, &back(8.0), (1920, 1080)), PlateView::game(Vec3::new(1000.0, 51.68, 1992.0)), "the game's camera: the game's");
+        crate::settings::set_client(crate::settings::ClientOptions { name_distance: 90, entity_slots: 64, ..Default::default() });
+        let v = PlateView::of(&cam, &back(50.0), (1920, 1080));
+        assert_eq!((v.distance, v.most), (90.0, 64));
+        assert!((v.eye - Vec3::new(1000.0, 51.68, 1950.0)).length() > 40.0, "the control: the camera itself");
+        crate::settings::testing::reset(false);
+    }
+
+    /// Name Distance keeps plates the game's 22 does not: one 30 off at 40,
+    /// none at the game's (the control), and one past the distance at
+    /// neither.
+    #[test]
+    fn name_distance_keeps_farther_plates() {
+        let eye = Vec3::ZERO;
+        let p = [plate([0.0, 0.0, 30.0], "Ab"), plate([0.5, 0.5, 45.0], "Cd")];
+        assert_eq!(names(&PlateView { distance: 40.0, ..PlateView::game(eye) }, &p), ["Ab"]);
+        assert!(names(&PlateView::game(eye), &p).is_empty(), "the control: the game's 22");
+    }
+
+    /// The zoom's size sizes the rects that may not meet: two names 9.6
+    /// pixels apart, 14 wide, meet at the game's size (the farther dropped)
+    /// and not at half of it, where both are kept. The control is the game's
+    /// size.
+    #[test]
+    fn smaller_names_crowd_less() {
+        let eye = Vec3::ZERO;
+        let p = [plate([0.0, 0.0, 10.0], "Ab"), plate([0.03, 0.0, 12.0], "Cd")];
+        assert_eq!(names(&PlateView { scale: 0.5, ..PlateView::game(eye) }, &p), ["Ab", "Cd"]);
+        assert_eq!(names(&PlateView::game(eye), &p), ["Ab"], "the control: the game's size");
+    }
+
+    /// At most the view's `most`: thirty names apart on the screen, all kept
+    /// when NPC/PC Display keeps 64 in view, the first 24 at the game's.
+    #[test]
+    fn as_many_names_as_entities_in_view() {
+        let eye = Vec3::ZERO;
+        let p: Vec<Plate> = (0..30).map(|i| plate([-0.9 + (i % 6) as f32 * 0.35, -0.8 + (i / 6) as f32 * 0.4, 10.0], "A")).collect();
+        assert_eq!(names(&PlateView { most: 64, ..PlateView::game(eye) }, &p).len(), 30);
+        assert_eq!(names(&PlateView::game(eye), &p).len(), NAME_PLATES_GAME, "the control: the game's 24");
+    }
 }
 
 #[cfg(test)]
@@ -2596,7 +2736,9 @@ impl Play {
         for (slot, e) in self.entities.slots.iter().enumerate() {
             let (Some(e), Some(Some(p))) = (e, self.puppets.get(slot)) else { continue };
             let (Some(c), Some(at)) = (&e.creature, p.name_at) else { continue };
-            if c.name.is_empty() {
+            // a character not drawn (past its distance, `VIScene::
+            // RasterActor`) rasters no name either
+            if c.name.is_empty() || !p.shown {
                 continue;
             }
             let color = if c.p256 < 2 { 0 } else if c.p299 & 1 != 0 { 2 } else { 1 };

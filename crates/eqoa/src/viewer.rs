@@ -991,9 +991,10 @@ pub fn shot_with(
         let (mut proj, mut v) = walker.view(aspect);
         let mut shot_eye = walker.eye_position();
         let mut shot_dir = walker.eye.direction;
-        // where the levels go by (`lod::eye`): the walker's camera, or the
-        // offset's below
+        // where the levels and the name plates go by (`lod::eye`): the
+        // walker's camera, or the offset's below
         let mut shot_lod_eye = crate::lod::eye(&walker.cam, &walker.eye.position);
+        let mut shot_override = false;
         // `EQOA_SHOT_EYE=dx,dy,dz`: look at the character from that offset
         // instead of through the game's camera (for checking poses).
         let eye: Vec<f32> = std::env::var("EQOA_SHOT_EYE")
@@ -1015,6 +1016,7 @@ pub fn shot_with(
             proj = glam::camera::rh::proj::directx::perspective(40f32.to_radians(), aspect, 0.1, far);
             shot_eye = at;
             shot_lod_eye = vi::vect::Vect3::of(at.x, at.y, at.z);
+            shot_override = true;
             shot_dir = vi::vect::Vect3::of(p.x - at.x, p.y - at.y, p.z - at.z);
             v = glam::camera::rh::view::look_at_mat4(at, p, Vec3::Y);
         }
@@ -1054,7 +1056,14 @@ pub fn shot_with(
             }
             let plates = p.plates();
             if let Some(t) = renderer.text.as_mut() {
-                t.plates = crate::play::labels(&plates, shot_eye, view.view_proj, t);
+                // the walker's camera's (`PlateView::of`), or from the offset's
+                // eye at the game's size
+                let mut pv = crate::play::PlateView::of(&walker.cam, &walker.eye.position, (w, h));
+                if shot_override {
+                    (pv.eye, pv.scale) = (shot_eye, 1.0);
+                }
+                t.plates = crate::play::labels(&plates, &pv, view.view_proj, t);
+                t.plate_scale = pv.scale;
                 t.labels = crate::play::chat_labels(p, t, (w, h));
             }
         }
@@ -4328,7 +4337,9 @@ impl ApplicationHandler for App {
                     p.map_frame(w, &self.lib, &g.device, &g.queue, g.config.format, (g.config.width, g.config.height), self.frame_s, self.console.sticks());
                     let plates = p.plates();
                     if let Some(t) = g.renderer.text.as_mut() {
-                        t.plates = crate::play::labels(&plates, w.eye_position(), view.view_proj, t);
+                        let pv = crate::play::PlateView::of(&w.cam, &w.eye.position, (g.config.width, g.config.height));
+                        t.plates = crate::play::labels(&plates, &pv, view.view_proj, t);
+                        t.plate_scale = pv.scale;
                         t.labels = crate::play::chat_labels(p, t, (g.config.width, g.config.height));
                     }
                 }

@@ -490,6 +490,11 @@ pub struct ClientOptions {
     /// the game draws it (`lod::view_dist`); a server that offers more looks
     /// for them that far
     pub entity_view: u16,
+    /// Name Distance: how far from where the game's camera could be
+    /// (`lod::eye`) a character's name plate is drawn, the game's 22
+    /// (`NAME_DISTANCE_GAME`: `VINameSprite::Raster`) up to
+    /// `NAME_DISTANCE_MAX` (`play::labels`)
+    pub name_distance: u8,
     /// Art: Frontiers' (the disc the game runs off), or the 2002 disc's
     /// (`era`, F9)
     pub art: esf::Era,
@@ -515,6 +520,27 @@ pub const ENTITY_SLOTS_STEP: u8 = 8;
 pub const ENTITY_VIEW_GAME: u16 = 100;
 pub const ENTITY_VIEW_MAX: u16 = 1000;
 pub const ENTITY_VIEW_STEP: u16 = 50;
+/// The game's name plate distance (`VINameSprite::Raster`: a plate within 22
+/// of the camera), the farthest Name Distance goes (twice the game's
+/// character draw distance: past it a name is a few pixels at any zoom), and
+/// its step past the game's (30, 40 .. 200).
+pub const NAME_DISTANCE_GAME: u8 = 22;
+pub const NAME_DISTANCE_MAX: u8 = 200;
+pub const NAME_DISTANCE_STEP: u8 = 10;
+
+/// Name Distance moved a step from `v`: right (`d` > 0) on to the next ten
+/// past it (the game's 22 to 30), left to the ten before it, or the game's
+/// 22 from 30 (a number between them, one client.opt held, to the one past
+/// it); None at either end.
+pub fn step_name_distance(v: u8, d: i32) -> Option<u8> {
+    let (lo, hi, by) = (NAME_DISTANCE_GAME as i32, NAME_DISTANCE_MAX as i32, NAME_DISTANCE_STEP as i32);
+    let v = v as i32;
+    if (d < 0 && v <= lo) || (d > 0 && v >= hi) || d == 0 {
+        return None;
+    }
+    let to = if d > 0 { (v / by + 1) * by } else { (v - 1).div_euclid(by) * by };
+    Some(to.clamp(lo, hi) as u8)
+}
 
 impl Default for ClientOptions {
     fn default() -> Self {
@@ -532,6 +558,7 @@ impl Default for ClientOptions {
             ability_bars: ABILITY_BARS_GAME,
             entity_slots: ENTITY_SLOTS_GAME,
             entity_view: ENTITY_VIEW_GAME,
+            name_distance: NAME_DISTANCE_GAME,
             art: esf::Era::Frontiers,
             vsync: true,
         }
@@ -543,9 +570,9 @@ impl ClientOptions {
     /// Fog only when they are not the game's, Screen Shake only when off, a
     /// window's Controller Focus as `controller.<window>` (from 1) only when
     /// it is not Auto, Capture Controller only when on, Sound in Background
-    /// only when off, Ability Bars, NPC/PC Display and NPC/PC View Distance
-    /// only when not the game's, Art only when it is the 2002 disc's, and
-    /// VSync only when off.
+    /// only when off, Ability Bars, NPC/PC Display, NPC/PC View Distance and
+    /// Name Distance only when not the game's, Art only when it is the 2002
+    /// disc's, and VSync only when off.
     pub fn to_text(self) -> String {
         let mut s = format!("lod={}\nbrightness={}\ncamera_distance={}\n", if self.lod { "on" } else { "off" }, self.brightness, self.camera_distance);
         if let Some(r) = self.frame_rate {
@@ -577,6 +604,9 @@ impl ClientOptions {
         }
         if self.entity_view != ENTITY_VIEW_GAME {
             s.push_str(&format!("entity_view={}\n", self.entity_view));
+        }
+        if self.name_distance != NAME_DISTANCE_GAME {
+            s.push_str(&format!("name_distance={}\n", self.name_distance));
         }
         if self.art == esf::Era::Y2002 {
             s.push_str("art=2002\n");
@@ -640,6 +670,11 @@ impl ClientOptions {
                 ("entity_view", v) => {
                     if let Some(d) = v.parse::<u16>().ok().filter(|d| (ENTITY_VIEW_GAME..=ENTITY_VIEW_MAX).contains(d)) {
                         c.entity_view = d;
+                    }
+                }
+                ("name_distance", v) => {
+                    if let Some(d) = v.parse::<u8>().ok().filter(|d| (NAME_DISTANCE_GAME..=NAME_DISTANCE_MAX).contains(d)) {
+                        c.name_distance = d;
                     }
                 }
                 (k, v) if k.starts_with("controller.") => {
@@ -811,6 +846,12 @@ pub fn entity_view() -> u16 {
     client().entity_view
 }
 
+/// Name Distance now: how far from where the game's camera could be a name
+/// plate is drawn (`play::PlateView`).
+pub fn name_distance() -> f32 {
+    client().name_distance as f32
+}
+
 /// What the windows share as another window saved it (Capture Controller,
 /// Sound in Background): `client.opt`'s, each taken when it changed since
 /// this window last looked (`multibox::seat`'s look, twice a second), so a
@@ -896,7 +937,7 @@ pub fn describe() -> String {
         FrameRate::Display => "the display's",
     };
     format!(
-        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, art {}; {}",
+        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, art {}; {}",
         if c.lod { "on" } else { "off" },
         c.brightness,
         c.fog,
@@ -913,6 +954,7 @@ pub fn describe() -> String {
         c.ability_bars,
         c.entity_slots,
         c.entity_view,
+        c.name_distance,
         match c.art {
             esf::Era::Frontiers => "frontiers",
             esf::Era::Y2002 => "2002",
@@ -1319,6 +1361,12 @@ mod tests {
         for bad in ["entity_view=99", "entity_view=1001", "entity_view=far"] {
             assert_eq!(ClientOptions::from_text(bad).entity_view, ENTITY_VIEW_GAME, "{bad}: the game's 100");
         }
+        assert_eq!(ClientOptions { name_distance: 60, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nname_distance=60\n", "Name Distance only when not the game's");
+        assert_eq!(ClientOptions::from_text("name_distance=60").name_distance, 60, "read back");
+        assert_eq!(ClientOptions::from_text("name_distance=25").name_distance, 25, "a number between the tens, kept");
+        for bad in ["name_distance=21", "name_distance=201", "name_distance=far"] {
+            assert_eq!(ClientOptions::from_text(bad).name_distance, NAME_DISTANCE_GAME, "{bad}: the game's 22");
+        }
         assert_eq!(ClientOptions { art: esf::Era::Y2002, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nart=2002\n", "Art only when it is the 2002 disc's");
         assert_eq!(ClientOptions::from_text("art=frontiers").art, esf::Era::Frontiers);
         for bad in ["art=1999", "art=2003", "art="] {
@@ -1346,7 +1394,7 @@ mod tests {
             "Screen Shake only off, Capture Controller only on"
         );
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, ability bars 2, npc/pc display 24, npc/pc view distance 100, art frontiers; kept in the page's storage");
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, art frontiers; kept in the page's storage");
         testing::reset(true);
         assert!(describe().ends_with("refused: nothing is kept"));
         testing::reset(false);
@@ -1786,5 +1834,30 @@ mod tests {
         assert!(set_disc("/x.iso").is_err(), "the control: a refusing store");
         assert_eq!(disc(), None);
         testing::reset(false);
+    }
+
+    /// Name Distance's steps: from the game's 22 on to 30, then by tens to
+    /// 200, and back to 22 from 30; a number between the tens (one
+    /// client.opt held) to the ten past it either way; none past either end.
+    /// The control: tens counted from the game's 22 (32, 42 ..) miss 30.
+    #[test]
+    fn name_distance_steps() {
+        let walk = |mut v: u8, d: i32| {
+            let mut seen = vec![v];
+            while let Some(n) = step_name_distance(v, d) {
+                v = n;
+                seen.push(v);
+            }
+            seen
+        };
+        let up = walk(NAME_DISTANCE_GAME, 1);
+        assert_eq!(up.len(), 19, "22, then 30 to 200: {up:?}");
+        assert_eq!((up[1], up[2], up[18]), (30, 40, 200));
+        assert_eq!(walk(NAME_DISTANCE_MAX, -1), up.iter().rev().copied().collect::<Vec<_>>(), "and back down");
+        assert_eq!((step_name_distance(25, 1), step_name_distance(25, -1)), (Some(30), Some(22)));
+        assert_eq!((step_name_distance(195, 1), step_name_distance(195, -1)), (Some(200), Some(190)));
+        assert_eq!((step_name_distance(22, -1), step_name_distance(200, 1)), (None, None), "its ends");
+        let from_22 = |v: u8| v + NAME_DISTANCE_STEP;
+        assert_ne!(from_22(NAME_DISTANCE_GAME), up[1], "the control must fail");
     }
 }

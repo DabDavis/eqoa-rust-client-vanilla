@@ -28,6 +28,11 @@
 //! options' NPC/PC View Distance draws every character at least that far
 //! (`view_dist`), an LOD body past its last level at that level (the game's
 //! 100 changes nothing: no character's off distance is nearer).
+//!
+//! The name plates go by the same eye: `VINameSprite::Raster`'s 22 (or the
+//! options' Name Distance) is measured from it, so zooming out keeps the
+//! names the console showed round the player, and one size for every plate
+//! comes from the zoom (`plate_scale`).
 
 use vi::camera::WalkCamera;
 use vi::fpu::{Ee, F};
@@ -144,6 +149,33 @@ pub fn anim_level(h: &HSprite<Ee>, actor: &Matrix44<Ee>, eye: &Vect3<Ee>, lod: b
     rel.m[3].y -= eye.y;
     rel.m[3].z -= eye.z;
     h.calc_lod_level_index(&rel)
+}
+
+/// The least a name plate is drawn at against the game's size
+/// (`plate_scale`), at the farthest zoom.
+pub const PLATE_FLOOR: f32 = 0.5;
+
+/// Every name plate's size this frame against the game's (`VINameSprite`
+/// laid out on the frame's 448 lines, the HUD's scale), from the zoom (F3
+/// pass 11, the user's choice: one size for every name, as the map's dart
+/// keeps one): the game's while the follow orbit's camera is no farther from
+/// its pivot than the game's ceiling (`orbit_distance`), smaller as it pulls
+/// back past it, in proportion, to `PLATE_FLOOR` at Camera Distance's
+/// farthest; in the other camera modes (whose ceilings are the game's) the
+/// game's. `k` is the window's lines to the frame's 448: a plate is never
+/// smaller than the font's own texels one to a window pixel, under which the
+/// nearest texel drops strokes (at 448 lines or fewer, the game's size at
+/// every zoom).
+pub fn plate_scale(cam: &WalkCamera<Ee>, eye: &Vect3<Ee>, k: f32) -> f32 {
+    orbit_distance(cam, eye).map_or(1.0, |d| plate_scale_at(d.0, k))
+}
+
+/// `plate_scale` for a camera `d` from the orbit's pivot.
+pub fn plate_scale_at(d: f32, k: f32) -> f32 {
+    let floor = PLATE_FLOOR.max(1.0 / k.max(f32::MIN_POSITIVE)).min(1.0);
+    let far = crate::settings::CAMERA_MAX as f32;
+    let t = ((d - GAME_CEILING) / (far - GAME_CEILING)).clamp(0.0, 1.0);
+    1.0 - (1.0 - floor) * t
 }
 
 /// The model-view translation `VILODSprite::Raster` reads, for a body whose
@@ -303,6 +335,32 @@ mod tests {
         }
         assert_eq!(anim_level(&h, &actor, &back(25.0), true), 1, "the control: from the camera at 25");
         assert_eq!(anim_level(&h, &actor, &back(50.0), true), 2, "the control: from the camera at 50");
+    }
+
+    /// One plate size from the zoom (`plate_scale_at`): the game's within the
+    /// game's ceiling, then smaller in proportion to the floor at Camera
+    /// Distance's 50, never under the font's texels one to a pixel (a
+    /// 448-line window keeps the game's size, a 720-line one goes no lower
+    /// than 448/720); the other camera modes keep the game's. The control:
+    /// a plate sized as the camera's distance (8/d) would be under the
+    /// floor at 50.
+    #[test]
+    fn one_plate_size_from_the_zoom() {
+        let k = 1080.0 / 448.0;
+        assert_eq!((plate_scale_at(2.0, k), plate_scale_at(GAME_CEILING, k)), (1.0, 1.0), "the game's camera");
+        assert!((plate_scale_at(50.0, k) - PLATE_FLOOR).abs() < 1e-6, "the floor at the farthest");
+        assert!((plate_scale_at(29.0, k) - 0.75).abs() < 1e-6, "halfway, halfway down");
+        let all: Vec<f32> = (8..=50).map(|d| plate_scale_at(d as f32, k)).collect();
+        assert!(all.windows(2).all(|w| w[1] < w[0]), "smaller all the way out: {all:?}");
+        assert_eq!(plate_scale_at(50.0, 1.0), 1.0, "448 lines: the game's at any zoom");
+        assert!((plate_scale_at(50.0, 720.0 / 448.0) - 448.0 / 720.0).abs() < 1e-6, "720 lines: one texel a pixel");
+        let mut cam = WalkCamera::<Ee> { camera_mode: 3, target_height: F::new(1.68), ..Default::default() };
+        cam.walk.phys.position = Vect3::of(1000.0, 50.0, 2000.0);
+        let far = Vect3::of(1000.0, 51.68, 1950.0);
+        assert!((plate_scale(&cam, &far, k) - PLATE_FLOOR).abs() < 1e-3, "the orbit at 50");
+        cam.camera_mode = 2;
+        assert_eq!(plate_scale(&cam, &far, k), 1.0, "mode 2: the game's");
+        assert!(GAME_CEILING / 50.0 < plate_scale_at(50.0, k), "the control must fail");
     }
 
     #[test]

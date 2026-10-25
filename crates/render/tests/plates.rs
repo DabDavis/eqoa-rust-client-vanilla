@@ -100,3 +100,28 @@ fn the_plates_go_under_the_particles_and_the_screens_text_over_them() {
     // the control: with the particle gone, the plate is its own colour
     close(pixel(&g, &mut r, size, (224, 224), &[]), [0.0, 0.0, 255.0], "plate alone");
 }
+
+/// The plates at `plate_scale` (the zoom's size, one for all of them), the
+/// screen's text at its own: an 8-wide glyph at 896 lines (two pixels a PS2
+/// pixel) is 16 pixels wide at the game's size and 8 at half, so a pixel 6
+/// right of its middle is the glyph's at 1 and the clear's at 0.5, one 2
+/// right the glyph's at both. The control: the screen's label beside it
+/// keeps its size at 0.5.
+#[test]
+fn the_plates_take_the_zooms_size_and_the_screens_text_its_own() {
+    let Some(g) = gpu() else { return };
+    let mut r = Renderer::new(&g.device, &g.queue, render::TARGET_FORMAT);
+    let font = esf::font::Font { id: 1, height: 8, glyphs: vec![esf::font::Glyph { code: b'A' as u16, width: 8, rgba: vec![255; 8 * 8 * 4] }] };
+    r.set_font(&g.device, &g.queue, &font);
+    let (size, mid, left) = (896, 448, 224);
+    let blue = [0.0, 0.0, 255.0];
+    let clear = [CLEAR.x * 255.0, CLEAR.y * 255.0, CLEAR.z * 255.0];
+    let t = r.text.as_mut().unwrap();
+    t.plates = vec![Label { at: [0.0, 0.0, 0.5], color: [0.0, 0.0, 1.0, 1.0], text: "A".into() }];
+    t.labels = vec![Label { at: [-0.5, 0.0, 0.0], color: [0.0, 0.0, 1.0, 1.0], text: "A".into() }];
+    close(pixel(&g, &mut r, size, (mid + 6, mid), &[]), blue, "the game's size: 16 wide");
+    r.text.as_mut().unwrap().plate_scale = 0.5;
+    close(pixel(&g, &mut r, size, (mid + 6, mid), &[]), clear, "half: 8 wide");
+    close(pixel(&g, &mut r, size, (mid + 2, mid), &[]), blue, "half: still drawn");
+    close(pixel(&g, &mut r, size, (left + 6, mid), &[]), blue, "the control: the screen's label at its own size");
+}
