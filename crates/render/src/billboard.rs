@@ -145,6 +145,7 @@ impl Billboards {
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
         Billboards { shader, frame_layout, tex_layout, layout, pipelines: Default::default(), sampler }
@@ -328,7 +329,7 @@ impl Renderer {
         let mut groups = Vec::new();
         for (key, _, _, tex) in &draws {
             let blend = key.0;
-            let u = FrameU { view: view.to_cols_array_2d(), proj: proj.to_cols_array_2d(), flags: [if blend == 0 { 1.0 } else { 0.5 }, (blend == 0) as i32 as f32, far as i32 as f32, 0.0] };
+            let u = FrameU { view: view.to_cols_array_2d(), proj: proj.to_cols_array_2d(), flags: [if blend == 0 { 1.0 } else { 0.5 }, (blend == 0) as i32 as f32, far as i32 as f32, crate::effects_lod_k()] };
             let ub = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("billboard frame"), contents: bytemuck::bytes_of(&u), usage: wgpu::BufferUsages::UNIFORM });
             let fbg = device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &bb.frame_layout, entries: &[wgpu::BindGroupEntry { binding: 0, resource: ub.as_entire_binding() }] });
             let tbg = device.create_bind_group(&wgpu::BindGroupDescriptor {

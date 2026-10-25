@@ -113,6 +113,7 @@ impl Fans {
             address_mode_v: wgpu::AddressMode::Repeat,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
         let frame_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -237,7 +238,12 @@ impl Renderer {
             sun: view.sun.extend(0.0).to_array(),
             ambient: view.ambient.extend(0.0).to_array(),
             fog_color: view.fog.map_or([0.0; 4], |(_, _, c)| c.extend(1.0).to_array()),
-            fog: view.fog.map_or([0.0, 1.0, 0.0, 0.0], |(n, fa, _)| [n, fa.max(n + 1e-3), 0.0, 0.0]),
+            // z: the GS's K for a fan's material (made in code: the default
+            // bias), or the base level's with the mip levels off
+            fog: {
+                let [n, fa] = view.fog.map_or([0.0, 1.0], |(n, fa, _)| [n, fa.max(n + 1e-3)]);
+                [n, fa, crate::effects_lod_k(), 0.0]
+            },
             point: view.point.map_or([0.0; 4], |(p, r, _)| (p - view.eye).extend(r).to_array()),
             point_color: view.point.map_or([0.0; 4], |(_, _, c)| c.extend(1.0).to_array()),
         };

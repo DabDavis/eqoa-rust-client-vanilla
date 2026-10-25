@@ -39,6 +39,9 @@ struct Vert {
     clip: [f32; 4],
     uv: [f32; 2],
     color: [f32; 4],
+    /// the GS's K for the ring's material (made in code: the default bias;
+    /// `effects_lod_k`)
+    k: f32,
 }
 
 pub(crate) struct Overlay {
@@ -84,7 +87,7 @@ impl Overlay {
                         buffers: &[Some(wgpu::VertexBufferLayout {
                             array_stride: std::mem::size_of::<Vert>() as u64,
                             step_mode: wgpu::VertexStepMode::Vertex,
-                            attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x2, 2 => Float32x4],
+                            attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x2, 2 => Float32x4, 3 => Float32],
                         })],
                     },
                     // a camera-facing quad's winding depends on the mirror in
@@ -158,7 +161,8 @@ impl Renderer {
                 _ => 0,
             };
             let at = verts.len() as u32;
-            verts.extend(t.corners.iter().map(|c| Vert { clip: clip_of(view_proj, c.pos), uv: c.uv, color: c.color }));
+            let k = crate::effects_lod_k();
+            verts.extend(t.corners.iter().map(|c| Vert { clip: clip_of(view_proj, c.pos), uv: c.uv, color: c.color, k }));
             match runs.last_mut() {
                 Some(r) if r.0 == blend && r.1 == t.texture && r.2 == si => r.3.end = at + 3,
                 _ => runs.push((blend, t.texture, si, at..at + 3)),

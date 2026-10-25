@@ -9,7 +9,7 @@ struct Frame {
     proj: mat4x4<f32>,
     // x: the alpha scale (1 unblended, 0.5 blended: a × 128 or × 64), y: 1
     // to alpha-test at 128 (an unblended layer's TEST), z: 1 for the sky's
-    // (at the far plane)
+    // (at the far plane), w: the GS's K (levels: `effects_lod_k`)
     flags: vec4<f32>,
 };
 
@@ -28,6 +28,8 @@ struct VsOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
+    // the depth before the camera, the texel's level (1/Q: shader.wgsl's)
+    @location(2) depth: f32,
 };
 
 @vertex
@@ -40,12 +42,13 @@ fn vs_main(i: VsIn) -> VsOut {
     }
     o.uv = i.uv;
     o.color = i.color;
+    o.depth = o.pos.w;
     return o;
 }
 
 @fragment
 fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
-    let t = textureSample(tex, samp, i.uv);
+    let t = textureSampleLevel(tex, samp, i.uv, log2(max(i.depth, 1e-6)) + frame.flags.w);
     let a = t.a * i.color.a * frame.flags.x;
     if (frame.flags.y > 0.5 && a < 0.5) {
         discard;

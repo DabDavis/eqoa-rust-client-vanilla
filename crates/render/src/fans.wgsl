@@ -20,7 +20,7 @@ struct Frame {
     sun: vec4<f32>,
     ambient: vec4<f32>,
     fog_color: vec4<f32>,  // w: on
-    fog: vec4<f32>,        // near, far
+    fog: vec4<f32>,        // near, far, the GS's K (levels: `effects_lod_k`)
     point: vec4<f32>,      // the point light relative to the eye, range (0: none)
     point_color: vec4<f32>,
 };
@@ -45,6 +45,8 @@ struct VsOut {
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
     @location(2) fog: f32,
+    // the depth before the camera, the texel's level (1/Q: shader.wgsl's)
+    @location(3) depth: f32,
 };
 
 @vertex
@@ -73,6 +75,7 @@ fn vs_main(@builtin(vertex_index) vi: u32, q: Quad) -> VsOut {
     var o: VsOut;
     o.clip = frame.view_proj * vec4<f32>(p, 1.0);
     o.fog = clamp((frame.fog.y - o.clip.w) / (frame.fog.y - frame.fog.x), 0.0, 1.0);
+    o.depth = o.clip.w;
     o.uv = uv;
     let n = q.normal;
     let sun = frame.sun.rgb * max(-dot(n, frame.sun_dir.xyz), 0.0);
@@ -90,7 +93,7 @@ fn vs_main(@builtin(vertex_index) vi: u32, q: Quad) -> VsOut {
 
 @fragment
 fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
-    let t = textureSample(tex, samp, i.uv);
+    let t = textureSampleLevel(tex, samp, i.uv, log2(max(i.depth, 1e-6)) + frame.fog.z);
     var rgb = t.rgb * i.color.rgb;
     if (frame.fog_color.w > 0.5) {
         rgb = mix(frame.fog_color.rgb, rgb, i.fog);

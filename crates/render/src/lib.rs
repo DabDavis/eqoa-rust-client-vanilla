@@ -42,6 +42,46 @@ pub const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// Palette size: enough for every character skeleton (40 nodes on a human).
 pub const MAX_BONES: usize = 64;
 
+/// The GS's level of a texel (`VIEESurfCache::Set`'s TEX1: LCM 0, L 0,
+/// MMIN 5, MXL the levels kept less one): LOD = log2(1/|Q|) + K, where 1/Q
+/// is the vertex's w, its depth before the camera in world units
+/// (`VIRaster::Frustum`'s projection puts z in w, and clip-to-screen keeps
+/// it), blended between the two levels round it; at 0 or under, the base
+/// magnified. K is `(char)(int)(lodBias * -127.0f)` in sixteenths of a
+/// level: the game's default bias 0.8 is -101/16, the base out to about 80
+/// units, and a bias past 1.008 wraps round to a positive K, as the char
+/// does. (The products of the disc's biases are nowhere near a whole number,
+/// so the host's multiply truncates as the EE's does.)
+pub fn gs_lod_k(lod_bias: f32) -> f32 {
+    ((lod_bias * -127.0) as i32 as i8) as f32 / 16.0
+}
+
+/// The bias a layer the game makes in code starts with (`VIMaterial`'s
+/// layers: `m_lodBias = 0.8f`): the effect volumes', particles', strips'
+/// and the selection rings' materials.
+pub const DEFAULT_LOD_BIAS: f32 = 0.8;
+
+/// A K that keeps every texel on the base level (the options' Mipmaps off).
+pub const BASE_LEVEL_K: f32 = -16.0;
+
+/// Whether the textures' mip levels are sampled (Options > Extended > Video
+/// > Mipmaps; on, the game's).
+static MIPMAPS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+pub fn set_mipmaps(on: bool) {
+    MIPMAPS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn mipmaps() -> bool {
+    MIPMAPS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// K for a pass the game makes in code (`DEFAULT_LOD_BIAS`), or the base
+/// level's with the mip levels off.
+pub fn effects_lod_k() -> f32 {
+    if mipmaps() { gs_lod_k(DEFAULT_LOD_BIAS) } else { BASE_LEVEL_K }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Vertex {
@@ -60,7 +100,8 @@ struct FrameUniform {
     /// `View::view_proj` with the camera moved to the origin: the shader
     /// projects positions relative to `eye`.
     view_proj: [[f32; 4]; 4],
-    /// The camera (w unused).
+    /// The camera, and w = 1 when the textures' mip levels are sampled
+    /// (`mipmaps`).
     eye: [f32; 4],
     sun_dir: [f32; 4],
     /// rgb, and w = the time in seconds (for UV scrolling).
@@ -273,6 +314,12 @@ pub enum Draw<'a> {
 /// renderer's cache keys it by.
 pub trait TextureSource {
     fn image(&self, id: i32) -> Option<esf::Image>;
+    /// The image's mip levels, the base first (`esf::Surface::decode_levels`:
+    /// those the game keeps, which the GS samples); the base alone for a
+    /// source that has no others.
+    fn levels(&self, id: i32) -> Vec<esf::Image> {
+        self.image(id).into_iter().collect()
+    }
     /// What tells this source's image for `id` apart from another image a
     /// source names by the same id: equal keys are one texture. A plain
     /// function's is the id.
@@ -519,12 +566,15 @@ impl Renderer {
             layout: &frame_layout,
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: sky_frame_buf.as_entire_binding() }],
         });
+        // TEX1's filters (`VIEESurfCache::Set`): MMAG linear, MMIN 5
+        // (LINEAR_MIPMAP_LINEAR), the level the shader's (`gs_lod_k`)
         let sampler = |mode| {
             device.create_sampler(&wgpu::SamplerDescriptor {
                 address_mode_u: mode,
                 address_mode_v: mode,
                 mag_filter: wgpu::FilterMode::Linear,
                 min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::MipmapFilterMode::Linear,
                 ..Default::default()
             })
         };
@@ -581,11 +631,12 @@ impl Renderer {
         self.textures
             .entry(src.key(id))
             .or_insert_with(|| {
-                let img = src.image(id);
-                if img.is_none() {
+                let levels = src.levels(id);
+                if levels.is_empty() {
                     missing.insert(id);
+                    return None;
                 }
-                img.map(|i| upload_rgba(device, queue, i.width, i.height, &i.rgba))
+                Some(upload_levels(device, queue, &levels))
             })
             .clone()
     }
@@ -887,7 +938,7 @@ impl Renderer {
         let rel = (view.view_proj.as_dmat4() * glam::DMat4::from_translation(view.eye.as_dvec3())).as_mat4();
         let uniform = FrameUniform {
             view_proj: rel.to_cols_array_2d(),
-            eye: view.eye.extend(0.0).to_array(),
+            eye: view.eye.extend(mipmaps() as i32 as f32).to_array(),
             sun_dir: view.sun_dir.normalize().extend(0.0).to_array(),
             sun: view.sun.extend(self.scroll_time.unwrap_or_else(|| self.start.elapsed().as_secs_f32())).to_array(),
             ambient: view.ambient.extend(0.0).to_array(),
@@ -911,7 +962,7 @@ impl Renderer {
         queue.write_buffer(&self.frame_buf, 0, bytemuck::bytes_of(&uniform));
         if let Some(vp) = view.sky_view_proj {
             // the sky's view has no translation: its eye is the origin
-            let sky = FrameUniform { view_proj: vp.to_cols_array_2d(), eye: [0.0; 4], ..uniform };
+            let sky = FrameUniform { view_proj: vp.to_cols_array_2d(), eye: [0.0, 0.0, 0.0, uniform.eye[3]], ..uniform };
             queue.write_buffer(&self.sky_frame_buf, 0, bytemuck::bytes_of(&sky));
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1246,7 +1297,7 @@ fn layer_state(l: &esf::Layer, textured: bool) -> (usize, LayerUniform, usize) {
     let tint = l.color.map(|c| c as f32 / 255.0);
     let base = LayerUniform {
         tint,
-        flags: [textured as i32 as f32, (blend != 0) as i32 as f32, 0.0, 0.0],
+        flags: [textured as i32 as f32, (blend != 0) as i32 as f32, gs_lod_k(l.lod_bias), 0.0],
         uv0: [k[0], k[1], k[2], k[3]],
         uv1: [k[4], k[5], l.uv_rate[0], l.uv_rate[1]],
     };
@@ -1265,6 +1316,31 @@ fn uniform_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGrou
         ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
         count: None,
     }
+}
+
+/// A texture of `levels` (the base first, each half the one before), as
+/// the surface cache puts a surface's levels in the GS's memory.
+fn upload_levels(device: &wgpu::Device, queue: &wgpu::Queue, levels: &[esf::Image]) -> wgpu::TextureView {
+    let base = &levels[0];
+    let tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("surface"),
+        size: wgpu::Extent3d { width: base.width, height: base.height, depth_or_array_layers: 1 },
+        mip_level_count: levels.len() as u32,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: TEXTURE_FORMAT,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    for (k, l) in levels.iter().enumerate() {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: k as u32, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            &l.rgba,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(l.width * 4), rows_per_image: Some(l.height) },
+            wgpu::Extent3d { width: l.width, height: l.height, depth_or_array_layers: 1 },
+        );
+    }
+    tex.create_view(&Default::default())
 }
 
 fn upload_rgba(device: &wgpu::Device, queue: &wgpu::Queue, w: u32, h: u32, rgba: &[u8]) -> wgpu::TextureView {
@@ -1401,6 +1477,9 @@ pub struct LibraryTextures<'a>(pub &'a esf::Library);
 impl TextureSource for LibraryTextures<'_> {
     fn image(&self, id: i32) -> Option<esf::Image> {
         self.0.surface(id).and_then(|(c, s)| s.decode(&c.data))
+    }
+    fn levels(&self, id: i32) -> Vec<esf::Image> {
+        self.0.surface(id).map(|(c, s)| s.decode_levels(&c.data)).unwrap_or_default()
     }
     fn key(&self, id: i32) -> u64 {
         self.0.texture_key(id)

@@ -20,11 +20,12 @@
 //!   kept with the window's place, and Triangle leaves it), Brightness (a
 //!   slider, `settings::curve`), Fog (a slider: the
 //!   game's distance fog and far plane in the middle, off at the left,
-//!   thicker to the right, `fog`), Frame Rate (30, 60 or the display's,
-//!   `settings::frame_due`), VSync (natively: a frame shown only at the
-//!   display's refresh, or at once; `settings::vsync`, the surface's present
-//!   mode in `viewer`) and Art (Frontiers' or the 2002 disc's, `era`, as F9
-//!   swaps it: drawn as it moves, the 2002 disc asked for the first time);
+//!   thicker to the right, `fog`), Mipmaps (On, the game's: the textures'
+//!   mip levels sampled by depth as the GS samples them, `render::gs_lod_k`;
+//!   Off: the base level alone, `render::set_mipmaps`), Frame Rate (30, 60
+//!   or the display's, `settings::frame_due`) and VSync (natively: a frame
+//!   shown only at the display's refresh, or at once; `settings::vsync`, the
+//!   surface's present mode in `viewer`);
 //! - UI: Ability Bars (the game's 2, or 3 or 4: the HUD's quick menus and
 //!   the spell book's slots, `hudmenu`), Target of Target (Off by default:
 //!   the target's bar shows whom the target targets, `Play::target_of_target`),
@@ -54,7 +55,10 @@
 //!   the game's camera could be a name plate is drawn, the game's 22, then
 //!   30 to 200 in tens, `play::PlateView`) and Overlapping Names (Hide, the
 //!   game's: a name whose plate meets a nearer one's is not drawn; Show,
-//!   every one, the nearest over the rest: `play::labels`);
+//!   every one, the nearest over the rest: `play::labels`) and Art
+//!   (Frontiers' or the 2002 disc's, `era`, as F9 swaps it: drawn as it
+//!   moves, the 2002 disc asked for the first time; on Video until Mipmaps
+//!   took its place);
 //! - Sound: Sound in Background (one setting for every window: off, a window
 //!   not in front is not heard, `audio::set_heard`) and natively Output
 //!   Device (Default, the system's, followed when it changes, or a device
@@ -523,8 +527,8 @@ impl WndOptions {
     /// VSync (26) turn over, VSync natively only (a page's stays on with
     /// sound 9: the browser paces it); Name Distance (27) by tens from the
     /// game's 22 to 200 (`step_name_distance`); Text (30) goes between Sharp and
-    /// Smooth; Target of Target (31), Update Notices (29) and Overlapping
-    /// Names (34, Hide and Show) turn over;
+    /// Smooth; Target of Target (31), Update Notices (29), Overlapping
+    /// Names (34, Hide and Show) and Mipmaps (35) turn over;
     /// Output Device (32) goes round the system default and the devices
     /// listed (`step_output`); Display (33) turns the window over (`display`). A
     /// slider (`slider_at`) makes its own
@@ -599,6 +603,9 @@ impl WndOptions {
                     34 => c.overlapping_names = !c.overlapping_names,
                     // Text: every font drawn from the next frame (`viewer`)
                     30 => c.text = c.text.other(),
+                    // Mipmaps: every texture's levels from the next frame
+                    // (`viewer`, `render::set_mipmaps`)
+                    35 => c.mipmaps = !c.mipmaps,
                     // Output Device: the sound opened there from the next
                     // frame (`audio::retarget`)
                     32 => step_output(&mut c, &crate::audio::outputs().listed.map(|l| l.1).unwrap_or_default(), d),
@@ -1023,7 +1030,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 22] = [
+const EXTENDED_ITEMS: [(i32, &str); 23] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1046,6 +1053,7 @@ const EXTENDED_ITEMS: [(i32, &str); 22] = [
     (32, "Output Device"),
     (33, "Display"),
     (34, "Overlapping Names"),
+    (35, "Mipmaps"),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1076,16 +1084,17 @@ const CATEGORIES: [Category; 6] = [
     Category { name: "UI", items: &[22, 31, 29, 30], note: Note::None },
     Category { name: "Controller", items: &[16, 19], note: Note::Reads },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
-    Category { name: "Characters", items: &[12, 23, 24, 27, 34], note: Note::Server },
+    Category { name: "Characters", items: &[12, 23, 24, 27, 34, 25], note: Note::Server },
     Category { name: "Sound", items: SOUND, note: Note::Output },
 ];
 
 /// Video's rows: natively Display first (F3 20261024-201507: full screen was
-/// F11's alone); a page's full screen is the browser's.
+/// F11's alone); a page's full screen is the browser's. Mipmaps after Fog
+/// (the user's, 2026-10-25), Art on Characters to make room.
 #[cfg(not(target_arch = "wasm32"))]
-const VIDEO: &[i32] = &[33, 13, 20, 14, 26, 25];
+const VIDEO: &[i32] = &[33, 13, 20, 35, 14, 26];
 #[cfg(target_arch = "wasm32")]
-const VIDEO: &[i32] = &[13, 20, 14, 26, 25];
+const VIDEO: &[i32] = &[13, 20, 35, 14, 26];
 
 /// Sound's rows: natively Output Device after Sound in Background; a page
 /// plays where the browser does.
@@ -1151,6 +1160,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         29 => on_off(c.update_notices),
         31 => on_off(c.target_of_target),
         34 => wide(if c.overlapping_names { "Show" } else { "Hide" }),
+        35 => on_off(c.mipmaps),
         30 => wide(match c.text {
             render::ui::TextFilter::Sharp => "Sharp",
             render::ui::TextFilter::Smooth => "Smooth",
@@ -1382,7 +1392,7 @@ mod tests {
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(cues.is_empty(), "left and right are nothing on the categories: {cues:?}");
         assert_eq!(settings::client(), settings::ClientOptions::default());
-        // Video: Display, Brightness, Fog, Frame Rate, VSync, Art
+        // Video: Display, Brightness, Fog, Mipmaps, Frame Rate, VSync
         press(&mut w, &mut o, key::CROSS, &mut cues);
         assert_eq!((w.page, w.cat, w.row, w.item), (3, Some(0), 0, 33), "Video, on Display");
         assert_eq!(cues.last(), Some(&8));
@@ -1421,6 +1431,13 @@ mod tests {
         }
         assert_eq!(settings::fog(), crate::fog::GAME);
         press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.item, 35, "Mipmaps");
+        assert!(settings::client().mipmaps, "on: the game's");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::client().mipmaps, cues.last()), (false, Some(&11)), "off");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(settings::client().mipmaps, "and back: two values");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!(w.item, 14, "Frame Rate");
         assert_eq!(settings::frame_rate(), FrameRate::Display, "the platform's");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
@@ -1435,14 +1452,6 @@ mod tests {
         assert_eq!((settings::vsync(), cues.last()), (false, Some(&11)), "off");
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(settings::vsync(), "and back: two values");
-        press(&mut w, &mut o, key::RIGHT, &mut cues);
-        press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!(w.item, 25, "Art");
-        assert_eq!(settings::art(), esf::Era::Frontiers, "Frontiers', the disc the game runs off");
-        press(&mut w, &mut o, key::RIGHT, &mut cues);
-        assert_eq!((settings::art(), cues.last()), (esf::Era::Y2002, Some(&11)), "the 2002 disc's");
-        press(&mut w, &mut o, key::LEFT, &mut cues);
-        assert_eq!(settings::art(), esf::Era::Frontiers, "and back: two values");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!((w.row, cues.last()), (5, Some(&9)), "Video's last row");
@@ -1603,7 +1612,14 @@ mod tests {
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(!settings::overlapping_names(), "and back: two values");
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (4, Some(&9)), "Characters' last row");
+        assert_eq!(w.item, 25, "Art, on Characters since Mipmaps took its place on Video");
+        assert_eq!(settings::art(), esf::Era::Frontiers, "Frontiers', the disc the game runs off");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::art(), cues.last()), (esf::Era::Y2002, Some(&11)), "the 2002 disc's");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert_eq!(settings::art(), esf::Era::Frontiers, "and back: two values");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (5, Some(&9)), "Characters' last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         // Sound: Sound in Background
         press(&mut w, &mut o, key::DOWN, &mut cues);

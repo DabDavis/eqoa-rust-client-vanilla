@@ -21,10 +21,16 @@
 //
 // Positions are taken relative to the eye before they are projected (see
 // vs_main): `view_proj` is the frame's with the camera at the origin.
+//
+// A texel comes from the texture's mip levels as the GS takes it (TEX1:
+// trilinear, LCM 0): at level log2(w) + K, w the depth before the camera
+// (the strip programs' 1/Q, interpolated as the GS does: per pixel) and K
+// the layer's (`gs_lod_k`), the base magnified at 0 or under; with the
+// options' Mipmaps off (`eye.w` 0), the base always.
 
 struct Frame {
     view_proj: mat4x4<f32>,
-    eye: vec4<f32>,      // the camera, in the world
+    eye: vec4<f32>,      // the camera, in the world; w: 1 mip levels on
     sun_dir: vec4<f32>,
     sun: vec4<f32>,      // w: time in seconds
     ambient: vec4<f32>,
@@ -37,7 +43,7 @@ struct Frame {
 
 struct Layer {
     tint: vec4<f32>,
-    flags: vec4<f32>,    // x: textured, y: blended
+    flags: vec4<f32>,    // x: textured, y: blended, z: the GS's K (levels)
     uv0: vec4<f32>,      // m0, m1, m3, m4
     uv1: vec4<f32>,      // m6, m7, scroll rate u, v
 };
@@ -74,6 +80,8 @@ struct VsOut {
     @location(1) light: vec3<f32>,
     // 1 none, 0 all fog.
     @location(3) fog: f32,
+    // w: the depth before the camera, the level's (1/Q)
+    @location(4) depth: f32,
 };
 
 @vertex
@@ -108,6 +116,7 @@ fn vs_main(v: VsIn) -> VsOut {
     let rel = v.m0.xyz * pos.x + v.m1.xyz * pos.y + v.m2.xyz * pos.z + (v.m3.xyz - frame.eye.xyz);
     o.clip = frame.view_proj * vec4<f32>(rel, 1.0);
     o.fog = clamp((frame.fog.y - o.clip.w) / (frame.fog.y - frame.fog.x), 0.0, 1.0);
+    o.depth = o.clip.w;
     // The layer's UV transform, and its scroll (VIMaterial::Process: the
     // offset grows at the rate and drops its whole part past ±1).
     let s = layer.uv1.zw * frame.sun.w;
@@ -135,7 +144,11 @@ fn vs_main(v: VsIn) -> VsOut {
 fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
     var texel = vec4<f32>(1.0);
     if (layer.flags.x > 0.5) {
-        texel = textureSample(tex, samp, i.uv);
+        var lod = -16.0;
+        if (frame.eye.w > 0.5) {
+            lod = log2(max(i.depth, 1e-6)) + layer.flags.z;
+        }
+        texel = textureSampleLevel(tex, samp, i.uv, lod);
     }
     let alpha = texel.a * layer.tint.a;
     if (layer.flags.y < 0.5 && alpha < 0.5) {

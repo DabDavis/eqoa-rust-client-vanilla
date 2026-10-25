@@ -5,6 +5,15 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-25 · Textures in the distance as the PlayStation 2 draws them
+- Ground, walls, trees and everything else far off now use their textures' smaller
+  versions, blended by distance, as the PlayStation 2 draws them: the shimmering
+  ripples on distant sand and the crawling edges of far-off palm leaves are gone.
+  Up close nothing changes.
+- Options > Extended > Video > Mipmaps turns this off, if you like the sharper look;
+  it is on by default. Art (Frontiers' or the 2002 disc's) moved to the Characters
+  page to make room.
+
 ## 2026-10-25 · A window holds you in place, and the left mouse button steers on the move
 - When an NPC talks to you, or any window is up (a question, a corpse, a merchant,
   the bank, the trainer, the spell book...), you stand still and the camera stays

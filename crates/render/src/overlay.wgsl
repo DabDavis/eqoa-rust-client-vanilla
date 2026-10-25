@@ -12,13 +12,22 @@ struct VsIn {
     @location(0) clip: vec4<f32>,
     @location(1) uv: vec2<f32>,
     @location(2) color: vec4<f32>,
+    // the GS's K (levels: `effects_lod_k`)
+    @location(3) k: f32,
 };
 
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
+    // the depth before the camera, the texel's level (1/Q: shader.wgsl's)
+    @location(2) depth: f32,
+    @location(3) k: f32,
 };
+
+fn texel(i: VsOut) -> vec4<f32> {
+    return textureSampleLevel(tex, samp, i.uv, log2(max(i.depth, 1e-6)) + i.k);
+}
 
 @vertex
 fn vs_main(v: VsIn) -> VsOut {
@@ -26,17 +35,19 @@ fn vs_main(v: VsIn) -> VsOut {
     o.clip = v.clip;
     o.uv = v.uv;
     o.color = v.color;
+    o.depth = v.clip.w;
+    o.k = v.k;
     return o;
 }
 
 @fragment
 fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
-    return textureSample(tex, samp, i.uv) * i.color;
+    return texel(i) * i.color;
 }
 
 @fragment
 fn fs_tested(i: VsOut) -> @location(0) vec4<f32> {
-    let c = textureSample(tex, samp, i.uv) * i.color;
+    let c = texel(i) * i.color;
     if (c.a < 0.5) {
         discard;
     }

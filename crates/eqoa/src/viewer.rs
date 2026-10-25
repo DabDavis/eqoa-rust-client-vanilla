@@ -1121,6 +1121,7 @@ pub fn shot_with(
     // the options' Brightness and Text (kept only under `$EQOA_CONFIG` for a shot)
     renderer.curve.set(crate::settings::curve(crate::settings::client().brightness));
     render::ui::set_text_filter(crate::settings::client().text);
+    render::set_mipmaps(crate::settings::client().mipmaps);
     let mut rgba = render::capture_with_sky(&device, &queue, &mut renderer, w, h, loading.as_ref().map_or(&view, |l| &l.0), &refs, particles, sky);
     // the map up covers the frame: the picture is the map's
     if let Some(p) = play.as_ref().filter(|p| p.map.open) {
@@ -2654,6 +2655,7 @@ impl App {
         let mut enc = g.device.create_command_encoder(&Default::default());
         // the options' Text, every font drawn this frame
         render::ui::set_text_filter(crate::settings::client().text);
+        render::set_mipmaps(crate::settings::client().mipmaps);
         // the frame cleared black (`SetClearColor(0, 0, 0, 1)`), with CLIENT's
         // loading screen's gears in its corner while it is up
         let gears: Vec<render::Draw> = host.gears().into_iter().map(render::Draw::Model).collect();
@@ -4482,6 +4484,7 @@ impl ApplicationHandler for App {
                 // and its Text, every font drawn this frame
                 g.renderer.curve.set(crate::settings::curve(crate::settings::client().brightness));
                 render::ui::set_text_filter(crate::settings::client().text);
+                render::set_mipmaps(crate::settings::client().mipmaps);
                 let scene = g.renderer.curve.scene_target(&g.device, (g.config.width, g.config.height));
                 let st = scene.as_ref().unwrap_or(&target);
                 g.renderer.draw(&g.queue, &mut enc, st, &g.depth, loading.as_ref().map_or(&view, |l| &l.0), &refs);
