@@ -190,7 +190,8 @@ pub enum Event {
     /// 0x0034: a dialog with answers (raw; `Msg0034` expands them).
     DialogBox { id: u32, text: Vec<u16>, options: Vec<Vec<u16>> },
     /// 0x00B2 (`Msg00B2`, the respawn/teleport): the world, where, the
-    /// heading, pitch and roll, and the token 0x0049 answers with.
+    /// heading, pitch and roll, and the token 0x0049 answers with
+    /// ([`Session::answer_teleport`], once the move is done).
     Teleport { world: u8, pos: [f32; 3], hpr: [f32; 3], token: u32 },
     /// 0x0020: the player's level and experience.
     LevelExp { level: i64, exp: i64 },
@@ -295,6 +296,11 @@ pub struct Session {
     /// the local timer (`timer`); the time of day is clock B's
     pub clock_a: SyncTime,
     pub clock_b: SyncTime,
+    /// While some, every message the game hands the connection, in order,
+    /// by its DRDP type (251 guaranteed, under 248 its state channel): a
+    /// test's view of what was sent and when, before the transport's own
+    /// flow decides when it leaves. None in play.
+    pub record: Option<Vec<(u8, Vec<u8>)>>,
 }
 
 fn ipv4(a: &SocketAddr) -> [u8; 4] {
@@ -343,6 +349,7 @@ impl Session {
             held: Vec::new(),
             clock_a: SyncTime::default(),
             clock_b: SyncTime::default(),
+            record: None,
         };
         let dst = address_to_endpoint(server.0, server.1, PORT_LEADER);
         let sys = s.drdp.system_endpoint;
@@ -374,6 +381,9 @@ impl Session {
     /// `SendRaw`: a guaranteed message on the current connection.
     pub fn send(&mut self, data: &[u8]) {
         if let Some(c) = self.conn {
+            if let Some(r) = self.record.as_mut() {
+                r.push((drdp::TYPE_GUARANTEED, data.to_vec()));
+            }
             self.drdp.connection_send(c, data, drdp::TYPE_GUARANTEED);
         }
     }
@@ -381,6 +391,9 @@ impl Session {
     /// A state channel update (0x40 is the player's own state).
     pub fn send_state(&mut self, channel: u8, data: &[u8]) {
         if let Some(c) = self.conn {
+            if let Some(r) = self.record.as_mut() {
+                r.push((channel, data.to_vec()));
+            }
             self.drdp.connection_send(c, data, channel);
         }
     }
@@ -397,6 +410,16 @@ impl Session {
     pub fn send_msg(&mut self, op: u16, v: u32, b: u8) {
         let mut w = Writer::op(op);
         w.u32(v).u8(b);
+        self.send(&w.data);
+    }
+
+    /// `Msg00B2`'s `SendOpSigned(73, token)`: a move of the server's is done
+    /// (`Respawn` has stood the player at the arrival). The PS2's frame stops
+    /// in `Respawn` while it loads, so this goes in the same packet as its
+    /// first 0x40 from there; Sandstorm resumes the state channels on it.
+    pub fn answer_teleport(&mut self, token: u32) {
+        let mut w = Writer::op(0x0049);
+        w.signed(token as i32 as i64);
         self.send(&w.data);
     }
 
@@ -738,10 +761,8 @@ impl Session {
                 let pos = [r.f32(), r.f32(), r.f32()];
                 let hpr = [r.f32(), r.f32(), r.f32()];
                 let token = r.u32();
-                // SendOpSigned(73, token): answered whatever happens.
-                let mut w = Writer::op(0x0049);
-                w.signed(token as i32 as i64);
-                self.send(&w.data);
+                // SendOpSigned(73, token) comes after Respawn is done, so it
+                // is the game's to send (`answer_teleport`)
                 ev.push(Event::Teleport { world, pos, hpr, token });
             }
             0x0020 => {
@@ -1093,6 +1114,28 @@ mod tests {
         let mut ev = Vec::new();
         s.route(drdp::Message { ty, data, connection: s.conn, ..Default::default() }, &mut ev);
         ev
+    }
+
+    // 0x00B2 is the game's to answer, after its Respawn (`Play::msg_00b2`):
+    // the session hands the move on with its token and sends nothing (it
+    // answered at once until 2026-10-25, which with a world still loading
+    // is not a PS2's order); `answer_teleport` is 0x0049 and the token,
+    // zigzag. Control: the record does see a send.
+    #[test]
+    fn a_move_is_handed_on_unanswered() {
+        let mut s = session();
+        s.record = Some(Vec::new());
+        let mut w = Writer::op(0x00B2);
+        w.u8(2);
+        for v in [1.0f32, 2.0, 3.0, 0.5, 0.0, 0.0] {
+            w.u32(v.to_bits());
+        }
+        w.u32(7);
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, w.data);
+        assert!(matches!(ev[..], [Event::Teleport { world: 2, token: 7, .. }]), "{ev:?}");
+        assert_eq!(s.record.as_deref(), Some(&[][..]), "nothing sent on receipt");
+        s.answer_teleport(7);
+        assert_eq!(s.record.unwrap(), [(drdp::TYPE_GUARANTEED, vec![0x49, 0x00, 14])]);
     }
 
     // 0x07A4, what go-eqoa-server sends a session whose character logged in

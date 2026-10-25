@@ -277,6 +277,10 @@ pub struct Play {
     /// A move into another world, for the viewer to load: the world file,
     /// and where and how the walk begins there.
     world_change: Option<(String, Spawn)>,
+    /// 0x00B2's tokens not answered yet, oldest first: the move's `Respawn`
+    /// is not done (another world or the zones round the arrival still to
+    /// come), and no 0x40 goes out meanwhile (`arrived`).
+    arrival: Vec<u32>,
     /// The group and the invitations.
     pub group: crate::group::Group,
     /// `VIWndMBox` (mode 14).
@@ -1585,7 +1589,7 @@ impl Play {
         crate::hideui::show();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: 0, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0 };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: 0, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0 };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -1721,7 +1725,7 @@ impl Play {
                 Event::Dialog { text, .. } => self.show_dialog(&text),
                 Event::DialogBox { id, text, options } => self.dialog_box(id, &text, &options),
                 Event::Opcode { op: 0x005E, .. } => self.msg_005e(walker),
-                Event::Teleport { world, pos, hpr, .. } => self.teleport(walker, world, pos, hpr, now as i64),
+                Event::Teleport { world, pos, hpr, token } => self.msg_00b2(walker, world, pos, hpr, token, now as i64),
                 // 0x00F8: `m_speed`, then SetSpeed (a speed buff, a snare)
                 Event::Speed(v) => self.set_speed(v),
                 Event::LevelExp { level, exp } => {
@@ -2293,12 +2297,7 @@ impl Play {
             e.extrapolated = game_ms;
         }
         self.entities.extrapolate(self_id, now, UPDATE_RATE);
-        // SendPosition, at the update rate.
-        if self_id.is_some() && now.wrapping_sub(self.last_send) >= UPDATE_RATE {
-            self.last_send = now;
-            let msg = vi::selfstate::encode(self.player.world as u8, &walker.cam.walk.committed, self.auto_attack as u8, self.target);
-            self.session.send_state(0x40, &msg);
-        }
+        self.position_due(&walker.cam.walk.committed, now);
         let me = self.self_id32();
         // the far characters' turns, by how many were far the last frame
         let every = far_pose_every(self.far_last);
@@ -3141,17 +3140,72 @@ impl Play {
         }
     }
 
-    /// Msg00B2: back to play, then Respawn at `pos` in `world`. A dead
-    /// player stays dead (EnterWorld leaves m_pC1B0): only the dump
+    /// `Msg00B2`: a move of the server's (a port, a coach, Return Home):
+    /// `Respawn` there, then `SendOpSigned(73, token)`. The PS2 does both in
+    /// one go, its frame stopped in `Respawn`'s `EnterWorld` until the world
+    /// and the zones round the arrival are in, so the answer and its first
+    /// 0x40 from the arrival leave together (Sandstorm's captures,
+    /// `claude-notes/world-change-state-resync.md`); here the move is done
+    /// when the loading screen comes down (`loading_step`), and the token
+    /// waits for it (`arrival`). With no self (`m_selfId` -1) nothing
+    /// moves, and a move into a world the table lacks cannot be made: both
+    /// are answered at once, as the PS2 answers whatever happens.
+    fn msg_00b2(&mut self, walker: &mut Walker, world: u8, pos: [f32; 3], hpr: [f32; 3], token: u32, now: i64) {
+        if self.session.self_id.is_some() && self.teleport(walker, world, pos, hpr, now) {
+            self.arrival.push(token);
+        } else {
+            self.session.answer_teleport(token);
+        }
+    }
+
+    /// `Respawn` done (the loading screen down): each move's token answered,
+    /// oldest first, then the 0x40 from where the player now stands, in the
+    /// same packet as on a PS2.
+    fn arrived(&mut self, walker: &Walker) {
+        if self.arrival.is_empty() {
+            return;
+        }
+        for token in std::mem::take(&mut self.arrival) {
+            self.session.answer_teleport(token);
+        }
+        let now = self.session.now();
+        self.send_position(&walker.cam.walk.committed, now);
+    }
+
+    /// `SendPosition`, at the update rate (`m_p07578`, 100 ms), and none
+    /// while a move of the server's is not done (`arrival`): the PS2's
+    /// frame stops in `Respawn` until it stands at the arrival, where this
+    /// client went on walking the world it was leaving, and sent the new
+    /// world's number with the old world's place (Sandstorm answered that
+    /// with 0x07D2, "This character has been modified by a customer service
+    /// representative").
+    fn position_due(&mut self, walk: &vi::walk::WalkPhysics<Ee>, now: u32) {
+        if self.session.self_id.is_some() && self.arrival.is_empty() && now.wrapping_sub(self.last_send) >= UPDATE_RATE {
+            self.send_position(walk, now);
+        }
+    }
+
+    /// `SendPosition`'s 0x40: the committed walk state, the attack held and
+    /// the target.
+    fn send_position(&mut self, walk: &vi::walk::WalkPhysics<Ee>, now: u32) {
+        self.last_send = now;
+        let msg = vi::selfstate::encode(self.player.world as u8, walk, self.auto_attack as u8, self.target);
+        self.session.send_state(0x40, &msg);
+    }
+
+    /// Msg00B2's `Respawn`: back to play, then Respawn at `pos` in `world`. A
+    /// dead player stays dead (EnterWorld leaves m_pC1B0): only the dump
     /// (Msg000D) ends a death. Respawn ends autorun and the follow. Its floor
     /// is cast where the server put it (`Walker::relocate`, a new world's
     /// walk's `Placing::Respawn`), and again once the zones there are in
     /// (`loading_step`), as `EnterWorld` streams them before the cast.
-    pub fn teleport(&mut self, walker: &mut Walker, world: u8, pos: [f32; 3], hpr: [f32; 3], now: i64) {
+    /// Whether the move is under way (the loading screen up until it is
+    /// done): not into a world the table lacks.
+    pub fn teleport(&mut self, walker: &mut Walker, world: u8, pos: [f32; 3], hpr: [f32; 3], now: i64) -> bool {
         self.mode = 0;
         self.autorun = false;
         self.following = false;
-        if world as i64 != self.player.world {
+        let moving = if world as i64 != self.player.world {
             // the world table: the disc's six, or the server's patch's
             // (`s2`: Sandstorm's eight)
             match crate::s2::get().world_file(world as i64) {
@@ -3167,8 +3221,12 @@ impl Play {
                     self.player.pos = pos;
                     // the walker is built again there (`world_entered`)
                     self.cam_carry = Some((walker.cam.camera_mode, Some(crate::camstyle::save(&walker.cam))));
+                    true
                 }
-                None => eprintln!("play: teleport to world {world}, which the disc's world table does not have"),
+                None => {
+                    eprintln!("play: teleport to world {world}, which the disc's world table does not have");
+                    false
+                }
             }
         } else {
             eprintln!("play: teleport to {pos:?}");
@@ -3176,12 +3234,14 @@ impl Play {
             self.player.pos = pos;
             // EnterWorld: StreamFillCache there under the loading screen
             self.loading.begin(pos, hpr[0], false, true, now);
-        }
+            true
+        };
         // Respawn ends with SetSky(m_camera, 1): the sky where it stands, at
         // once (another world's once it is entered: `world_pending`)
         self.weather.push(Atmos::SkyNow);
         self.npcw_respawn();
         self.bank_reset();
+        moving
     }
 
     /// Whether another world is still to be entered (its file read): the
@@ -3221,6 +3281,8 @@ impl Play {
             if w.respawn {
                 walker.relocate(w.at, w.heading);
             }
+            // a move of the server's done: its answer, and the 0x40 from here
+            self.arrived(walker);
             return;
         }
         let p = walker.cam.walk.phys.position;
@@ -7015,6 +7077,122 @@ mod commands {
         also.scene = with_b();
         d.loading_step(&mut also, true);
         assert_eq!(also.cam.walk.phys.position.y.0, floor - 2.0, "a dump's SetLocation as it is");
+    }
+
+    /// `Msg00B2` answers its token once `Respawn` is done, and no 0x40 goes
+    /// out until then: within a world (a far port) and across worlds
+    /// (Tunaria's Freeport to Odus), the answer is handed on with the first
+    /// 0x40 from the arrival and nothing between them, so the two leave in
+    /// one packet, as Sandstorm's captures show a PS2 sending them. Sent at
+    /// once on the 0x00B2, with the old world's place sent as the new
+    /// world's meanwhile, is what Sandstorm kicked with 0x07D2. Answered at
+    /// once: a world the table lacks (no move), and no self. Controls: the
+    /// 0x40 goes out every update before the move and after it, so the
+    /// silence between is the move's; the 0x40 at the arrival is the walk's
+    /// own state there.
+    #[test]
+    fn a_move_is_answered_with_its_first_position_from_the_arrival() {
+        let iso = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        if !iso.exists() {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        }
+        crate::s2::with_rules(crate::s2::Rules::retail(), || {
+            let mut p = play();
+            p.session.record = Some(Vec::new());
+            let sent = |p: &mut Play| std::mem::take(p.session.record.as_mut().unwrap());
+            let answer = |token: i64| {
+                let mut w = net::stream::Writer::op(0x0049);
+                w.signed(token);
+                (drdp::TYPE_GUARANTEED, w.data)
+            };
+            let positions = |d: &[(u8, Vec<u8>)]| d.iter().filter(|m| m.0 == 0x40).count();
+            let answers = |d: &[(u8, Vec<u8>)]| d.iter().filter(|m| m.0 == drdp::TYPE_GUARANTEED && m.1.starts_with(&[0x49, 0x00])).cloned().collect::<Vec<_>>();
+
+            let (a, b) = ((25275.115f32, 15766.627f32), (23533.45f32, 18890.77f32));
+            let mut lib = Library::new();
+            let w = lib.add("TUNARIA.ESF", crate::stream::open_file(&iso, "TUNARIA.ESF").unwrap());
+            let mut src = crate::stream::FileZones::open(&iso, "TUNARIA.ESF").unwrap();
+            crate::stream::fill(&mut lib, w, a.0, a.1, &mut src);
+            crate::stream::fill(&mut lib, w, b.0, b.1, &mut src);
+            let tunaria = || vi::world::World::load(&lib, w).unwrap();
+            let mut walker = Walker::arrive(tunaria(), Spawn::ground(a.0, a.1, 0.0));
+            let mut now = 1000u32;
+            let mut tick = |p: &mut Play, walker: &Walker, n: u32| {
+                for _ in 0..n {
+                    now += UPDATE_RATE;
+                    p.position_due(&walker.cam.walk.committed, now);
+                }
+            };
+
+            // the control: in play, a 0x40 every update
+            tick(&mut p, &walker, 3);
+            assert_eq!(sent(&mut p).iter().map(|m| m.0).collect::<Vec<_>>(), [0x40; 3], "the control: a position every update in play");
+
+            // a far port within the world: nothing until the screen comes down
+            let floor = crate::walker::ground(&mut tunaria(), b.0, b.1).unwrap();
+            p.msg_00b2(&mut walker, 0, [b.0, floor + 1.0, b.1], [0.5, 0.0, 0.0], 7, 0);
+            assert!(p.loading());
+            tick(&mut p, &walker, 5);
+            assert_eq!(sent(&mut p), [], "no answer and no 0x40 before the arrival");
+            p.loading_step(&mut walker, true);
+            assert!(!p.loading());
+            let at = vi::selfstate::encode(0, &walker.cam.walk.committed, 0, p.target);
+            assert_eq!(sent(&mut p), [answer(7), (0x40, at)], "the answer, then the 0x40 from the arrival");
+            let pos = walker.cam.walk.committed.position;
+            assert!((pos.x.0 - b.0).abs() < 0.01 && (pos.z.0 - b.1).abs() < 0.01 && (pos.y.0 - floor).abs() < 0.3, "{pos:?} on the floor at {floor}");
+            // then in play again
+            tick(&mut p, &walker, 2);
+            assert_eq!(positions(&sent(&mut p)), 2, "positions again after the arrival");
+
+            // into Odus (world 2): the old world's walk goes on meanwhile,
+            // and none of it is sent; the answer and the 0x40 come from the
+            // new world's walk at the arrival
+            let odus = [7338.18f32, 54.21, 11124.25];
+            p.msg_00b2(&mut walker, 2, odus, [1.0, 0.0, 0.0], 0x1234, 0);
+            assert!(p.world_pending());
+            let (file, spawn) = p.take_world_change().expect("a world change");
+            assert_eq!(file, "ODUS.ESF");
+            tick(&mut p, &walker, 5);
+            assert_eq!(sent(&mut p), [], "nothing while Odus is read");
+            // the viewer's world entry: a walk begun there (Tunaria's
+            // geometry stands in for Odus's: the messages are the test)
+            let mut there = Walker::arrive(tunaria(), spawn);
+            p.world_entered(&mut there);
+            tick(&mut p, &there, 2);
+            assert_eq!(sent(&mut p), [], "nothing until the zones round the arrival are in");
+            p.loading_step(&mut there, true);
+            let at = vi::selfstate::encode(2, &there.cam.walk.committed, 0, p.target);
+            assert_eq!(sent(&mut p), [answer(0x1234), (0x40, at)], "world 2, from the arrival");
+            let pos = there.cam.walk.committed.position;
+            assert!((pos.x.0 - odus[0]).abs() < 0.01 && (pos.z.0 - odus[2]).abs() < 0.01);
+
+            // two moves before the first is done: both answered, in order
+            p.msg_00b2(&mut there, 2, [odus[0] + 50.0, odus[1], odus[2]], [0.0; 3], 1, 0);
+            p.msg_00b2(&mut there, 2, [odus[0] + 90.0, odus[1], odus[2]], [0.0; 3], 2, 0);
+            tick(&mut p, &there, 2);
+            assert_eq!(sent(&mut p), []);
+            p.loading_step(&mut there, true);
+            let d = sent(&mut p);
+            assert_eq!(answers(&d), [answer(1), answer(2)]);
+            assert_eq!(d.last().map(|m| m.0), Some(0x40));
+            assert!((there.cam.walk.committed.position.x.0 - (odus[0] + 90.0)).abs() < 0.01, "at the second's arrival");
+
+            // a world the table lacks: no move, answered at once, play goes on
+            p.msg_00b2(&mut there, 9, odus, [0.0; 3], 3, 0);
+            assert!(!p.loading());
+            assert_eq!(sent(&mut p), [answer(3)]);
+            tick(&mut p, &there, 1);
+            assert_eq!(positions(&sent(&mut p)), 1);
+
+            // no self (`m_selfId` -1): nothing moves, answered at once
+            p.session.self_id = None;
+            let before = there.cam.walk.committed.position;
+            p.msg_00b2(&mut there, 2, [odus[0] + 300.0, odus[1], odus[2]], [0.0; 3], 4, 0);
+            assert!(!p.loading());
+            assert_eq!(there.cam.walk.committed.position, before);
+            assert_eq!(sent(&mut p), [answer(4)]);
+        });
     }
 
     fn grouped(p: &mut Play, ids: &[u32]) {
