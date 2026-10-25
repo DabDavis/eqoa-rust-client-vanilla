@@ -960,6 +960,13 @@ fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::En
     }
 }
 
+/// A creature's puppet goes or is made anew: its continuous sound stopped
+/// and its sounds let go, as `VICSprite::Release` does (`Sound::let_go`).
+fn let_go(s: &mut crate::sound::Sound, p: &Option<Puppet>) {
+    let Some(cs) = p.as_ref().and_then(|p| p.sprite.as_ref()) else { return };
+    s.let_go(&cs.sounds(), cs.snd.channel);
+}
+
 /// `ApplyLook`'s `SetVisible`: a creature whose `Flag1` is up (state byte
 /// 154's bit 1, an invisible one: Sandstorm sets it on the caster's own
 /// channel) has its skins hidden (`VIClientPart06D00::Apply`'s
@@ -2516,7 +2523,7 @@ impl Play {
             let sounds_of = |p: &Option<Puppet>| p.as_ref().and_then(|p| p.sprite.as_ref()).map(|cs| cs.sounds()).unwrap_or_default();
             let Some(e) = want else {
                 if let Some(s) = sound.as_deref_mut() {
-                    s.release_sounds(&sounds_of(&self.puppets[slot]));
+                    let_go(s, &self.puppets[slot]);
                 }
                 self.puppets[slot] = None;
                 continue;
@@ -2526,7 +2533,7 @@ impl Play {
                 && let Some(s) = sound.as_deref_mut()
             {
                 s.share_sounds(lib, &sounds_of(&self.puppets[slot]));
-                s.release_sounds(&sounds_of(&old));
+                let_go(s, &old);
             }
             let Some(p) = self.puppets[slot].as_mut() else { continue };
             let f = F::<Ee>::new;
@@ -7160,6 +7167,17 @@ impl Play {
     /// shows no face beside it (`DrawTarget` draws it only with the info; F3
     /// 20261023-075853) and its rings stop counting; it stays gone until a
     /// 0x0010 sets it again.
+    /// The session ends (a logout, a lost connection): every creature's
+    /// puppet goes, its loop stopped and its sounds let go (`let_go`), as
+    /// the scene releases its sprites. Dropped without it, the device kept
+    /// their waves and played their loops on into the game's screens.
+    pub fn let_go_sounds(&mut self, s: &mut crate::sound::Sound) {
+        for p in &mut self.puppets {
+            let_go(s, p);
+            *p = None;
+        }
+    }
+
     fn drop_dead_target_info(&mut self) {
         if self.target != u32::MAX && self.entities.slots.iter().flatten().any(|e| e.id == self.target && e.p19 == 0) {
             self.target_info = None;

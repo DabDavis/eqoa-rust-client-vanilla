@@ -466,6 +466,11 @@ impl Spu2 {
         self.core[(core & 1) as usize].endx
     }
 
+    /// The sound RAM as it stands (what the tests read back).
+    pub fn ram(&self) -> &[u8] {
+        &self.ram
+    }
+
     pub fn write(&mut self, byteaddr: u32, src: &[u8]) {
         let addr = byteaddr as usize & (RAM - 1);
         let size = src.len().min(RAM - addr);

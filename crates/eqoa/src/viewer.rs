@@ -2750,6 +2750,10 @@ impl App {
             None => "logged out: back to the server list".to_string(),
             Some(r) => format!("disconnected (reason {r}): back to the game's screens"),
         });
+        // the creatures' sounds go with them, their loops stopped
+        if let (Some(p), Some(s)) = (self.play.as_mut(), self.sound.as_mut()) {
+            p.let_go_sounds(s);
+        }
         self.play = None;
         self.walker = None;
         self.streamer = None;
