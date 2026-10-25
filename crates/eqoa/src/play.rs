@@ -1100,6 +1100,25 @@ fn slot_point(cs: &CSprite<Ee>, slot: usize, m: &Matrix44<Ee>) -> Option<[f32; 3
     Some(Matrix44::mul(&n.world, m).mul_point(&Vect3::of(0.0, 0.0, 0.0)).to_array())
 }
 
+/// How a creature moves as its channel last said and as it is drawn now (a
+/// problem report's entity lines): its locomotion state (what it plays,
+/// `SetLocomotion`, when the server does not mark it walking, byte 141:
+/// Sandstorm never does), its velocity (what `ExtrapolateMove` carries it
+/// along between updates), how long ago its last update came, and how far
+/// from that place `Extrapolate`'s glide still draws it. A player pushing
+/// against a wall or another character keeps a running velocity while it
+/// stands (`VIWalkControl::Move` clears it only off the floor), so every
+/// watcher carries it on and pulls it back at each update: a slide this line
+/// tells from a late update.
+fn move_line(e: &net::entity::Entity, c: &net::entity::Creature, now: u32) -> String {
+    let ago = now.wrapping_sub(e.stamp.wrapping_sub(2 * UPDATE_RATE)) as i32;
+    let off = (0..3).map(|i| (e.actor_pos[i] - e.pos[i]).powi(2)).sum::<f32>().sqrt();
+    format!(
+        "move: state {} walking {}, velocity [{:.2}, {:.2}, {:.2}], updated {ago} ms ago, drawn {off:.2} from it",
+        c.state, c.p255, c.velocity[0], c.velocity[1], c.velocity[2]
+    )
+}
+
 fn look_of(c: &net::entity::Creature) -> vi::cust::Look {
     vi::cust::Look { armor: c.armor, armor_tint: c.armor_tint, hair: c.hair, face: c.face, robe: c.robe as i8, robe_tint: c.robe_tint }
 }
@@ -1546,6 +1565,15 @@ enum CreatureLoco {
     State,
 }
 
+/// `EQOA_WATCH=<name>`: a line a frame on the creature of that name (where
+/// it is, where it is drawn, its state, its walk's, its animation), and,
+/// when it is the player's own, one for each 0x40 sent (where, how fast,
+/// its locomotion): how another player looks on the move, from both ends.
+fn watching(name: &str) -> bool {
+    static WATCH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    WATCH.get_or_init(|| std::env::var("EQOA_WATCH").ok()).as_deref().is_some_and(|w| w.eq_ignore_ascii_case(name))
+}
+
 /// `UpdateCreatures`' order: state 14 is death first, walking (`m_p255`)
 /// or not; then a walking creature follows its walk control, and any other
 /// takes its state as its locomotion.
@@ -1785,11 +1813,13 @@ impl Play {
             let _ = writeln!(o, "loading screen: up {} ms, for the zones round {:?}{}", self.session.now() as i64 - w.since, w.at, if w.entering { ", the world's file first" } else { "" });
         }
         let _ = writeln!(o, "entities: {} of {}, drawn to {} (the server's most {:?})", self.entities.slots.iter().flatten().count(), self.entities.limit, crate::settings::entity_view(), self.session.entity_view_offer);
+        let now = self.session.now();
         for e in self.entities.slots.iter().flatten() {
             let name = e.creature.as_ref().map_or("", |c| c.name.as_str());
             let _ = writeln!(o, "  {:#x} kind {} model {:#x} {name:?} at {:?}", e.id, e.kind, e.model, e.pos);
             if let Some(c) = &e.creature {
                 let _ = writeln!(o, "    {}", look_line(c));
+                let _ = writeln!(o, "    {}", move_line(e, c, now));
             }
         }
         o
@@ -2476,6 +2506,23 @@ impl Play {
                                 w.update_sprite(cs, &p.anims, &mut p.rand);
                             }
                             _ => cs.set_locomotion(c.state as i32, &p.anims, &mut p.rand),
+                        }
+                        if watching(&c.name) {
+                            let w = self.walks[slot].as_ref().map(|(_, w)| w);
+                            eprintln!(
+                                "[watch] {game_ms} {} pos {:.2?} drawn {:.2?} state {} p255 {} walk {:?} vel {:.2?} anim {:?} stamp {} pose {} frame {}",
+                                c.name,
+                                e.pos,
+                                e.actor_pos,
+                                c.state,
+                                c.p255,
+                                w.map(|w| (w.committed.loco_state, w.phys.flags)),
+                                c.velocity,
+                                [cs.cur[0].anim, cs.cur[1].anim],
+                                e.stamp,
+                                pose,
+                                if cs.cur[0].play >= 0 { cs.h.plays.get(cs.cur[0].play).frame_a } else { -1 }
+                            );
                         }
                     }
                     // VICSprite::Process: the sounds its triggers fired
@@ -3303,6 +3350,9 @@ impl Play {
     /// the target.
     fn send_position(&mut self, walk: &vi::walk::WalkPhysics<Ee>, now: u32) {
         self.last_send = now;
+        if watching(&self.player.name) {
+            eprintln!("[sent] {now} pos {:.2?} vel {:.2?} loco {} flags {:#x} mode {}", walk.position.to_array(), walk.velocity.to_array(), walk.loco_state, walk.flags, self.mode);
+        }
         let msg = vi::selfstate::encode(self.player.world as u8, walk, self.auto_attack as u8, self.target);
         self.session.send_state(0x40, &msg);
     }
@@ -8295,8 +8345,25 @@ mod commands {
             lines.get(at + 1).copied(),
             Some("    look: robe 255 tint 0, armor [0, 0, 0, 0, 2, 0] tints [255, 255, 255, 255, 255, 255], hair [2, 3, 1], face 3; items [0xbf7e7dcb, 0x0, 0x0] over [0x0, 0x0, 0x0] types [1, 0]")
         );
+        assert!(lines.get(at + 2).is_some_and(|l| l.starts_with("    move: state 0 walking 0, velocity [0.00, 0.00, 0.00], updated ")), "then how it moves: {:?}", lines.get(at + 2));
         let plain = lines.iter().position(|l| l.starts_with("  0x42 kind 129")).expect("the plain entity's line");
-        assert!(!lines.get(plain + 1).is_some_and(|l| l.contains("look:")), "an entity with no creature part has no look line");
+        assert!(!lines.get(plain + 1).is_some_and(|l| l.contains("look:") || l.contains("move:")), "an entity with no creature part has no look or move line");
+    }
+
+    /// A report's move line: the state and velocity the channel last sent,
+    /// the time since that update (its stamp is the update's time plus the
+    /// glide's two update periods) and how far the glide still draws it from
+    /// where it is. A player shoved against a wall: standing (state 0) with
+    /// a running velocity, drawn 1.5 past where it stands.
+    #[test]
+    fn a_report_says_how_each_creature_moves() {
+        let c = net::entity::Creature { state: 0, velocity: [8.0, 0.0, -3.0], ..Default::default() };
+        let mut e = net::entity::Entity { id: 7, kind: 130, pos: [10.0, 0.0, 20.0], actor_pos: [11.2, 0.0, 20.9], ..Default::default() };
+        e.stamp = 5_000 + 2 * UPDATE_RATE;
+        assert_eq!(move_line(&e, &c, 5_350), "move: state 0 walking 0, velocity [8.00, 0.00, -3.00], updated 350 ms ago, drawn 1.50 from it");
+        // the clock wraps as the session's does
+        e.stamp = 50u32.wrapping_sub(100).wrapping_add(2 * UPDATE_RATE);
+        assert!(move_line(&e, &c, 50).contains("updated 100 ms ago"), "{}", move_line(&e, &c, 50));
     }
 
     /// The chat mode's Guild (`|17`, the start menu's): the guild's channel
