@@ -5,6 +5,28 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-25 · Clean sound in long fights, loading screens on long trips, and Klik'Anon
+- Sounds no longer turn crunchy or garbled after a lot of fighting and spells. A
+  sound let go while it was still loading could leave the next one made in its place
+  playing the wrong noise until you restarted the game, on a PlayStation 2 too.
+- A creature's own looping sound now stops when it leaves or changes.
+- Return Home, coaches and other long trips now show the game's loading screen for
+  about a second instead of jumping you to the new place in a blink. Options >
+  Extended > UI > Loading Screens: Longer, the default, or Instant to have it gone
+  as soon as the place is in.
+- Klik'Anon is spelled as players know it, in the place names and on the gnomes'
+  page.
+- If the game closes itself while starting on your graphics card, the next start
+  tries the card's other way of drawing (DirectX 12 on Windows, OpenGL on Linux) and
+  keeps it once it works. Each step of the start is in the log, so a report says
+  where it stopped.
+- In a browser, the game keeps playing while its tab is hidden behind another one,
+  so you stay logged in. Before, it stopped the moment the tab was hidden and the
+  server let you go after about 8 minutes. A tab the browser puts to sleep (a laptop
+  asleep) still stops.
+- Problem reports now say how many sounds the game holds and how much of its sound
+  memory they use.
+
 ## 2026-10-25 · Turning with the mouse keeps you running
 - Turning around with the mouse while you run now keeps you running the new way at
   once. Before, a quick half turn made your character skid to a stop, stand, walk
