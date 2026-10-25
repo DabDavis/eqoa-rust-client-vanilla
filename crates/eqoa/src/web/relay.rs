@@ -35,13 +35,43 @@ struct Socket {
     _on_close: Closure<dyn FnMut(web_sys::Event)>,
 }
 
+/// The game's `/udp` socket as a report tells it (`describe`): when it
+/// opened, when the last datagram came in, and how it closed. Nothing else
+/// says the link went quiet: the game only times out (F3 20261025-211736,
+/// typed commands that never left a link dead for 37 s).
+#[derive(Default)]
+struct Game {
+    opened: Option<web_time::Instant>,
+    last_in: Option<web_time::Instant>,
+    /// when, the close code, and whether it closed cleanly
+    closed: Option<(web_time::Instant, u16, bool)>,
+    ws: Option<WebSocket>,
+}
+
+thread_local! {
+    static GAME: RefCell<Game> = RefCell::new(Game::default());
+}
+
+/// Seconds since `t`.
+fn ago(t: web_time::Instant) -> f64 {
+    t.elapsed().as_secs_f64()
+}
+
 impl Socket {
     fn open(url: &str) -> Result<Socket, String> {
+        Self::open_as(url, false)
+    }
+
+    /// The socket; `game` the game's datagrams, kept for `describe`.
+    fn open_as(url: &str, game: bool) -> Result<Socket, String> {
         let ws = WebSocket::new(url).map_err(|e| format!("{url}: {e:?}"))?;
         ws.set_binary_type(BinaryType::Arraybuffer);
         let inbox = Rc::new(RefCell::new(VecDeque::new()));
         let q = inbox.clone();
         let on_message = Closure::<dyn FnMut(MessageEvent)>::new(move |e: MessageEvent| {
+            if game {
+                GAME.with(|g| g.borrow_mut().last_in = Some(web_time::Instant::now()));
+            }
             let d = e.data();
             if let Some(t) = d.as_string() {
                 q.borrow_mut().push_back(Msg::Text(t));
@@ -51,8 +81,16 @@ impl Socket {
         });
         ws.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
         let q = inbox.clone();
-        let on_close = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| q.borrow_mut().push_back(Msg::Closed));
+        let on_close = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+            if game {
+                closed(e.dyn_ref::<web_sys::CloseEvent>());
+            }
+            q.borrow_mut().push_back(Msg::Closed)
+        });
         ws.set_onclose(Some(on_close.as_ref().unchecked_ref()));
+        if game {
+            GAME.with(|g| *g.borrow_mut() = Game { opened: Some(web_time::Instant::now()), ws: Some(ws.clone()), ..Game::default() });
+        }
         Ok(Socket { ws, inbox, _on_message: on_message, _on_close: on_close })
     }
 
@@ -98,6 +136,48 @@ impl Drop for Socket {
     }
 }
 
+/// The game's socket closed under it (one let go by the game itself closes
+/// with its handlers gone, `Drop`): kept for `describe`, and said, since the
+/// game takes it only as a link gone quiet until it times out.
+fn closed(e: Option<&web_sys::CloseEvent>) {
+    let (code, clean, reason) = e.map_or((0, false, String::new()), |e| (e.code(), e.was_clean(), e.reason()));
+    let line = GAME.with(|g| {
+        let mut g = g.borrow_mut();
+        g.closed = Some((web_time::Instant::now(), code, clean));
+        format!(
+            "relay: the game's connection closed after {:.1} s (code {code}{}{}), the last datagram in {}: nothing more reaches the server",
+            g.opened.map_or(0.0, ago),
+            if clean { "" } else { ", not cleanly" },
+            if reason.is_empty() { String::new() } else { format!(", \"{reason}\"") },
+            g.last_in.map_or("none".to_string(), |t| format!("{:.1} s before", ago(t))),
+        )
+    });
+    crate::say(&line);
+}
+
+/// The game's socket for a report: how long it has been open, the last
+/// datagram in, the bytes the page has handed it that the browser has not
+/// sent (a link that stopped carrying anything shows them growing), and its
+/// close.
+pub fn describe() -> String {
+    GAME.with(|g| {
+        let g = g.borrow();
+        let Some(opened) = g.opened else { return "relay: the game's socket not opened".to_string() };
+        let mut s = format!("relay: the game's socket open {:.1} s", ago(opened));
+        match g.last_in {
+            Some(t) => s += &format!(", the last datagram in {:.1} s ago", ago(t)),
+            None => s += ", no datagram in yet",
+        }
+        if let Some(ws) = &g.ws {
+            s += &format!(", {} bytes waiting to go out", ws.buffered_amount());
+        }
+        if let Some((t, code, clean)) = g.closed {
+            s += &format!(", closed {:.1} s ago (code {code}{})", ago(t), if clean { "" } else { ", not cleanly" });
+        }
+        s
+    })
+}
+
 pub fn parse_ip(s: &str) -> Option<[u8; 4]> {
     let v: Vec<u8> = s.split('.').map(|p| p.parse().ok()).collect::<Option<_>>()?;
     v.try_into().ok()
@@ -111,7 +191,7 @@ pub struct RelayUdp {
 impl RelayUdp {
     /// Opens the socket; returns it and the address the server will see.
     pub async fn open(relay: &str) -> Result<(RelayUdp, ([u8; 4], u16)), String> {
-        let sock = Socket::open(&format!("{relay}/udp"))?;
+        let sock = Socket::open_as(&format!("{relay}/udp"), true)?;
         let local = sock.ready().await?;
         Ok((RelayUdp { sock }, local))
     }

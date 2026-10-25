@@ -29,7 +29,7 @@
 mod bgm;
 mod disc;
 pub mod pad;
-mod relay;
+pub mod relay;
 
 use crate::{sky, viewer};
 use disc::WebDisc;
