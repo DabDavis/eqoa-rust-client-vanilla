@@ -161,11 +161,20 @@ fn crc_ok(report: &[u8]) -> bool {
 
 /// What an input report holds, as SDL's drivers read it (`IsPacketValid`
 /// and `UpdateDevice`): `data` as a read returns it, the report ID first
-/// (Windows returns the collection's longest input report, the rest zeros).
-/// None for a report that holds no state: another report, the adapter with
-/// no controller (byte 31's 0x04), a Bluetooth report without its HID data
-/// or, a DualSense's, failing its CRC.
-pub fn parse(model: Model, data: &[u8]) -> Option<PsPad> {
+/// (Windows returns the collection's longest input report, the rest zeros),
+/// from a controller on Bluetooth or not (`bluetooth`). None for a report
+/// that holds no state: another report, the adapter with no controller (byte
+/// 31's 0x04), a Bluetooth report without its HID data or, a DualSense's,
+/// failing its CRC.
+///
+/// A DualSense's report 0x01 is its full state over USB and its reduced one
+/// over Bluetooth, told apart by the link as Linux's `hid-playstation` tells
+/// them apart by the bus: SDL's rule, the read's length (10, or 78 as
+/// Windows pads it), took two DualSenses on Bluetooth for full ones on a
+/// Windows machine (F3 20261024-204603: the d-pad held up, triangle read as
+/// L2, the shoulders at random: the reduced report's bytes in the full one's
+/// places), so the length decides only off Bluetooth.
+pub fn parse(model: Model, bluetooth: bool, data: &[u8]) -> Option<PsPad> {
     let n = data.len();
     match (model, *data.first()?) {
         // USB, and Bluetooth's reduced report
@@ -173,12 +182,41 @@ pub fn parse(model: Model, data: &[u8]) -> Option<PsPad> {
         // Bluetooth's full reports: two bytes more, the first saying the
         // HID data is there
         (Model::DualShock4, 0x11..=0x19) if n >= 78 && data[1] & 0x80 != 0 => ds4_state(&data[3..]),
-        // Bluetooth's reduced report (10 bytes, 78 as Windows reads it)
-        (Model::DualSense | Model::DualSenseEdge, 0x01) if n == 10 || n == 78 => ds5_simple(&data[1..]),
+        // Bluetooth's reduced report, at any length a read pads it to (and
+        // SDL's 10 or 78 where the link is not known to be Bluetooth)
+        (Model::DualSense | Model::DualSenseEdge, 0x01) if bluetooth || n == 10 || n == 78 => ds5_simple(&data[1..]),
         (Model::DualSense | Model::DualSenseEdge, 0x01) => ds5_state(&data[1..]),
         // Bluetooth's full report: a byte more, and a CRC
         (Model::DualSense | Model::DualSenseEdge, 0x31) if n >= 78 && crc_ok(&data[..78]) => ds5_state(&data[2..]),
         _ => None,
+    }
+}
+
+/// A report as a controller first sent it, for the log and a problem
+/// report: its ID, the length the read returned, and its first bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FirstReport {
+    pub id: u8,
+    pub len: usize,
+    pub head: Vec<u8>,
+    /// whether it held a state (`parse`)
+    pub state: bool,
+}
+
+/// How many of a report's bytes `FirstReport` keeps: the ID and the state's
+/// first eleven (a DualSense's reduced report is ten in all).
+const HEAD: usize = 12;
+
+impl FirstReport {
+    pub fn of(data: &[u8], state: bool) -> Option<FirstReport> {
+        Some(FirstReport { id: *data.first()?, len: data.len(), head: data[..data.len().min(HEAD)].to_vec(), state })
+    }
+
+    /// As the log and a problem report say it: `report 0x01, 78 bytes: 01 80
+    /// 7f ..` (and "no state" for one `parse` read nothing in).
+    pub fn describe(&self) -> String {
+        let bytes: Vec<String> = self.head.iter().map(|b| format!("{b:02x}")).collect();
+        format!("report {:#04x}, {} bytes{}: {}", self.id, self.len, if self.state { "" } else { " (no state)" }, bytes.join(" "))
     }
 }
 
@@ -209,7 +247,7 @@ pub use device::Hid;
 /// with an overlapped read drained every frame, the last one kept.
 #[cfg(windows)]
 mod device {
-    use super::{Model, PsPad, bluetooth, name, parse};
+    use super::{FirstReport, Model, PsPad, bluetooth, name, parse};
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
@@ -221,17 +259,19 @@ mod device {
     use windows_sys::Win32::Devices::HumanInterfaceDevice::{HIDD_ATTRIBUTES, HidD_GetAttributes, HidD_GetHidGuid};
     use windows_sys::Win32::Foundation::{
         CloseHandle, ERROR_DEV_NOT_EXIST, ERROR_DEVICE_NOT_CONNECTED, ERROR_FILE_NOT_FOUND, ERROR_IO_INCOMPLETE, ERROR_IO_PENDING, ERROR_NO_SUCH_DEVICE, ERROR_PATH_NOT_FOUND, GENERIC_READ, GetLastError, HANDLE,
-        INVALID_HANDLE_VALUE,
+        INVALID_HANDLE_VALUE, WAIT_TIMEOUT,
     };
     use windows_sys::Win32::Storage::FileSystem::{CreateFileW, FILE_FLAG_OVERLAPPED, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, ReadFile};
-    use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
+    use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, GetOverlappedResultEx, OVERLAPPED};
 
-    /// A Sony controller's HID interface present now.
+    /// A Sony controller's HID interface present now, and whether it is a
+    /// Bluetooth one (`bluetooth`: its reports are read by it, `parse`).
     #[derive(Clone, Debug, PartialEq)]
     struct Listed {
         path: String,
         ids: (u16, u16),
         model: Model,
+        bluetooth: bool,
     }
 
     /// Every HID interface present, by its path.
@@ -309,7 +349,8 @@ mod device {
             if let Some((Some(ids), _)) = known.get(&p)
                 && let Some(model) = Model::of(ids.0, ids.1)
             {
-                found.push(Listed { path: p, ids: *ids, model });
+                let bluetooth = bluetooth(&p);
+                found.push(Listed { path: p, ids: *ids, model, bluetooth });
             }
         }
         found.sort_by(|a, b| a.path.cmp(&b.path));
@@ -348,12 +389,15 @@ mod device {
         pad: PsPad,
         /// when a report last held its state
         valid: Option<Instant>,
+        /// the first report of each ID it sent (`FirstReport`), each said
+        /// once in the log
+        first: Vec<FirstReport>,
     }
 
     impl Device {
         fn open(l: &Listed) -> Option<Device> {
             let handle = open(&l.path, GENERIC_READ, FILE_FLAG_OVERLAPPED)?;
-            Some(Device { listed: l.clone(), handle, read: Box::new(Pending { ov: OVERLAPPED::default(), buf: [0; 1024], busy: false }), pad: PsPad::default(), valid: None })
+            Some(Device { listed: l.clone(), handle, read: Box::new(Pending { ov: OVERLAPPED::default(), buf: [0; 1024], busy: false }), pad: PsPad::default(), valid: None, first: Vec::new() })
         }
 
         /// Every report waiting read, the last state kept; false when the
@@ -364,6 +408,9 @@ mod device {
                 let r = &mut *self.read;
                 if !r.busy {
                     r.ov = OVERLAPPED::default();
+                    // as hidapi does: what the driver does not write of a
+                    // read is zero, not the last report's
+                    r.buf.fill(0);
                     // SAFETY: the buffer and OVERLAPPED are boxed and outlive
                     // the read (`Drop` cancels a pending one and waits)
                     let ok = unsafe { ReadFile(self.handle, r.buf.as_mut_ptr(), r.buf.len() as u32, std::ptr::null_mut(), &mut r.ov) };
@@ -378,9 +425,17 @@ mod device {
                     return unsafe { GetLastError() } == ERROR_IO_INCOMPLETE;
                 }
                 r.busy = false;
-                if let Some(p) = parse(self.listed.model, &r.buf[..(n as usize).min(r.buf.len())]) {
+                let data = &r.buf[..(n as usize).min(r.buf.len())];
+                let state = parse(self.listed.model, self.listed.bluetooth, data);
+                if let Some(p) = state {
                     self.pad = p;
                     self.valid = Some(Instant::now());
+                }
+                if let Some(f) = FirstReport::of(data, state.is_some())
+                    && !self.first.iter().any(|g| g.id == f.id)
+                {
+                    crate::say(&format!("gamepad: {} {}{}: {}", self.listed.model.label(), name(&self.listed.path, self.listed.ids), if self.listed.bluetooth { " on Bluetooth" } else { "" }, f.describe()));
+                    self.first.push(f);
                 }
             }
             true
@@ -389,13 +444,17 @@ mod device {
 
     impl Drop for Device {
         fn drop(&mut self) {
-            // SAFETY: a pending read cancelled and waited for before its box
-            // goes; then the handle closed
+            // SAFETY: a pending read cancelled and waited for (half a second
+            // at most) before its box goes; one the driver has not let go of
+            // by then keeps its box for good, as the program ends without
+            // waiting on it; then the handle closed
             unsafe {
                 if self.read.busy {
                     CancelIoEx(self.handle, &self.read.ov);
                     let mut n = 0u32;
-                    GetOverlappedResult(self.handle, &self.read.ov, &mut n, 1);
+                    if GetOverlappedResultEx(self.handle, &self.read.ov, &mut n, 500, 0) == 0 && GetLastError() == WAIT_TIMEOUT {
+                        std::mem::forget(std::mem::replace(&mut self.read, Box::new(Pending { ov: OVERLAPPED::default(), buf: [0; 1024], busy: false })));
+                    }
                 }
                 CloseHandle(self.handle);
             }
@@ -403,13 +462,15 @@ mod device {
     }
 
     /// A controller read over HID: its name among the client's windows,
-    /// model, USB ids, state, and whether it is on Bluetooth.
+    /// model, USB ids, state, whether it is on Bluetooth, and the first
+    /// report of each ID it sent (for a problem report).
     pub struct Found {
         pub name: String,
         pub model: Model,
         pub ids: (u16, u16),
         pub pad: PsPad,
         pub bluetooth: bool,
+        pub reports: Vec<FirstReport>,
     }
 
     /// The PlayStation controllers present, read over HID.
@@ -483,7 +544,7 @@ mod device {
             self.devices
                 .iter()
                 .filter(|d| d.listed.ids.1 != super::DS4_ADAPTER || d.valid.is_some_and(|t| now.duration_since(t) < Duration::from_secs(1)))
-                .map(|d| Found { name: name(&d.listed.path, d.listed.ids), model: d.listed.model, ids: d.listed.ids, pad: d.pad, bluetooth: bluetooth(&d.listed.path) })
+                .map(|d| Found { name: name(&d.listed.path, d.listed.ids), model: d.listed.model, ids: d.listed.ids, pad: d.pad, bluetooth: d.listed.bluetooth, reports: d.first.clone() })
                 .collect()
         }
     }
@@ -526,27 +587,27 @@ mod tests {
         // hat up-right; L1 and Options; PS; L2 most of the way, R2 a little
         let p = [0, 255, 128, 128, 0x20 | 1, 0x01 | 0x20, 0x01, 200, 40];
         let want = PsPad { sticks: [0, 255, 128, 128], triggers: [200, 40], buttons: [0x21, 0x21, 0x01] };
-        assert_eq!(parse(Model::DualShock4, &ds4_usb(p)), Some(want));
+        assert_eq!(parse(Model::DualShock4, false, &ds4_usb(p)), Some(want));
         // Bluetooth's reduced report, as Windows reads it (the longest
         // report's size) and as hidapi elsewhere would (10 bytes)
         let mut small = ds4_usb(p);
         small.truncate(10);
-        assert_eq!(parse(Model::DualShock4, &small), Some(want));
+        assert_eq!(parse(Model::DualShock4, true, &small), Some(want));
         let mut bt = vec![0u8; 547];
         bt[0] = 0x11;
         bt[1] = 0xC0;
         bt[3..12].copy_from_slice(&p);
-        assert_eq!(parse(Model::DualShock4, &bt), Some(want));
+        assert_eq!(parse(Model::DualShock4, true, &bt), Some(want));
         // the controls
         let mut adapter = ds4_usb(p);
         adapter[31] |= 0x04;
-        assert_eq!(parse(Model::DualShock4, &adapter), None, "the adapter with no controller");
+        assert_eq!(parse(Model::DualShock4, false, &adapter), None, "the adapter with no controller");
         bt[1] = 0x00;
-        assert_eq!(parse(Model::DualShock4, &bt), None, "no HID data");
+        assert_eq!(parse(Model::DualShock4, true, &bt), None, "no HID data");
         let mut other = ds4_usb(p);
         other[0] = 0x05;
-        assert_eq!(parse(Model::DualShock4, &other), None, "another report");
-        assert_eq!(parse(Model::DualShock4, &[]), None);
+        assert_eq!(parse(Model::DualShock4, false, &other), None, "another report");
+        assert_eq!(parse(Model::DualShock4, false, &[]), None);
     }
 
     /// A fight stick's trigger button with no travel reads as all the way
@@ -554,7 +615,7 @@ mod tests {
     /// clear leaves no travel.
     #[test]
     fn a_trigger_button_with_no_travel_is_all_the_way() {
-        let r = |b1: u8, l2: u8| parse(Model::DualShock4, &ds4_usb([128, 128, 128, 128, 8, b1, 0, l2, 0])).unwrap().triggers;
+        let r = |b1: u8, l2: u8| parse(Model::DualShock4, false, &ds4_usb([128, 128, 128, 128, 8, b1, 0, l2, 0])).unwrap().triggers;
         assert_eq!(r(0x04, 0), [255, 0]);
         assert_eq!(r(0x08, 0), [0, 255]);
         assert_eq!(r(0x04, 30), [30, 0], "travel there: its own");
@@ -579,30 +640,85 @@ mod tests {
     }
 
     /// The DualSense's three reports: USB's full one (64 bytes), Bluetooth's
-    /// reduced one (the DualShock 4's order, 10 or 78 bytes) and its full one
-    /// (a byte further on, with a CRC). The controls: the same bytes read in
-    /// the other layout differ, and a Bluetooth report whose CRC fails is
-    /// nothing.
+    /// reduced one (the DualShock 4's order) and its full one (a byte further
+    /// on, with a CRC). The controls: the same bytes read in the other layout
+    /// differ, and a Bluetooth report whose CRC fails is nothing.
     #[test]
     fn a_dualsense_reads_its_three_reports() {
         // sticks, triggers, counter, buttons: square, hat left; R1, Create; mute
         let full = [10, 20, 30, 40, 250, 0, 7, 0x10 | 6, 0x02 | 0x10, 0x04];
         let want = PsPad { sticks: [10, 20, 30, 40], triggers: [250, 0], buttons: [0x16, 0x12, 0x04] };
         for m in [Model::DualSense, Model::DualSenseEdge] {
-            assert_eq!(parse(m, &ds5(0x01, 64, 1, &full)), Some(want), "{m:?} USB");
+            assert_eq!(parse(m, false, &ds5(0x01, 64, 1, &full)), Some(want), "{m:?} USB");
             let mut bt = ds5(0x31, 78, 2, &full);
             seal(&mut bt);
-            assert_eq!(parse(m, &bt), Some(want), "{m:?} Bluetooth");
+            assert_eq!(parse(m, true, &bt), Some(want), "{m:?} Bluetooth");
             bt[40] ^= 1;
-            assert_eq!(parse(m, &bt), None, "{m:?}: a CRC that fails");
+            assert_eq!(parse(m, true, &bt), None, "{m:?}: a CRC that fails");
         }
-        // the reduced report: sticks, buttons, triggers
+        // the reduced report: sticks, buttons, triggers; off Bluetooth by
+        // SDL's lengths (10, 78) only
         let simple = [10, 20, 30, 40, 0x16, 0x12, 0x04, 250, 0];
         for n in [10, 78] {
-            assert_eq!(parse(Model::DualSense, &ds5(0x01, n, 1, &simple)), Some(want), "{n} bytes");
+            assert_eq!(parse(Model::DualSense, false, &ds5(0x01, n, 1, &simple)), Some(want), "{n} bytes");
         }
         // the control: the full report's bytes at 78 are read as reduced
-        assert_ne!(parse(Model::DualSense, &ds5(0x01, 78, 1, &full)), Some(want));
+        assert_ne!(parse(Model::DualSense, false, &ds5(0x01, 78, 1, &full)), Some(want));
+    }
+
+    /// On Bluetooth a DualSense's report 0x01 is its reduced one at whatever
+    /// length a read pads it to: 10 (hidapi off Windows), 78 (Windows, as
+    /// SDL has it), 128 (SDL's buffer) or 547 (a Bluetooth descriptor's
+    /// longest, as the DualShock 4's): triangle is triangle and the d-pad at
+    /// rest. The control is F3 20261024-204603 itself: by its length alone
+    /// (SDL's rule, before) the padded report is read in the full layout,
+    /// and the pad holds the d-pad up whatever is pressed and reads triangle
+    /// as L2.
+    #[test]
+    fn a_dualsense_on_bluetooth_reads_its_reduced_report_at_any_length() {
+        // at rest but for triangle: sticks in the middle, the hat at rest
+        let simple = [128, 128, 128, 128, 0x80 | 8, 0, 0, 0, 0];
+        let want = PsPad { sticks: [128; 4], triggers: [0, 0], buttons: [0x88, 0, 0] };
+        for n in [10, 78, 128, 547] {
+            let r = ds5(0x01, n, 1, &simple);
+            assert_eq!(parse(Model::DualSense, true, &r), Some(want), "{n} bytes");
+            assert_eq!(parse(Model::DualSense, true, &r).unwrap().report().buttons, bit::TRIANGLE, "{n} bytes: triangle alone");
+        }
+        // the control: the report's own symptoms, read by its length
+        for n in [128, 547] {
+            let got = parse(Model::DualSense, false, &ds5(0x01, n, 1, &simple)).unwrap().report().buttons;
+            assert_eq!(got, bit::UP | bit::L2, "{n} bytes by length: the d-pad up held, triangle as L2");
+        }
+    }
+
+    /// A genuine report off a DualSense on USB (the one plugged in here,
+    /// read through hidraw), at rest: the sticks near the middle, the hat at
+    /// rest, nothing pressed, its motion sensors and timestamps after. The
+    /// control: the same bytes read as Bluetooth's reduced report hold the
+    /// d-pad up (the L2 trigger's 0 in the hat's place).
+    #[test]
+    fn a_real_dualsense_report_at_rest() {
+        let hex = "01827e7f7e00002a0800000087324c44fdff08000300eeff371fee05d4388a7a0f963fe62f9a82413ffb09090000000000df498a7a290c00dfdf0140c9482d15";
+        let r: Vec<u8> = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect();
+        assert_eq!(r.len(), 64);
+        let p = parse(Model::DualSense, false, &r).unwrap();
+        assert_eq!(p, PsPad { sticks: [0x82, 0x7e, 0x7f, 0x7e], triggers: [0, 0], buttons: [0x08, 0x00, 0x00] });
+        assert_eq!(p.report().buttons, 0, "nothing pressed");
+        assert!(p.report().sticks.iter().all(|s| s.abs() < 0.03), "{:?}", p.report().sticks);
+        assert_eq!(parse(Model::DualSense, true, &r).unwrap().report().buttons & bit::UP, bit::UP, "the control: as Bluetooth's");
+    }
+
+    /// The first report of each ID as the log and a problem report say it:
+    /// its ID, its length, its first twelve bytes, and "no state" where it
+    /// held none. The control: a report of no bytes is none.
+    #[test]
+    fn a_first_report_says_what_came() {
+        let r = ds5(0x01, 78, 1, &[128, 127, 129, 128, 8, 0, 0, 0, 0]);
+        let f = FirstReport::of(&r, true).unwrap();
+        assert_eq!(f.describe(), "report 0x01, 78 bytes: 01 80 7f 81 80 08 00 00 00 00 00 00");
+        let short = FirstReport::of(&[0x31, 0x40], false).unwrap();
+        assert_eq!(short.describe(), "report 0x31, 2 bytes (no state): 31 40");
+        assert_eq!(FirstReport::of(&[], false), None, "the control");
     }
 
     /// The report the game gets: every button where libpad has it, the hat's

@@ -405,6 +405,9 @@ pub struct Controller {
     source: Source,
     /// its place in the controllers' order: the first controller first
     order: (u8, u64),
+    /// what a problem report says of it beyond its line: a controller read
+    /// over HID, the first report of each ID it sent (`hidpad::FirstReport`)
+    notes: Vec<String>,
 }
 
 /// Where a controller is read, and its motors driven.
@@ -707,7 +710,7 @@ impl Gamepads {
         });
         let listed = list_controllers(
             &describe(&pick, &pads, &seat, focus, capture && shares_pad(focus, &seat)),
-            &pads.iter().map(|c| (c.name.as_str(), c.label.as_str(), c.source.how(), c.rumbles)).collect::<Vec<_>>(),
+            &pads.iter().map(|c| (c.name.as_str(), c.label.as_str(), c.source.how(), c.rumbles, c.notes.as_slice())).collect::<Vec<_>>(),
             &pick,
             &seat,
         );
@@ -783,7 +786,7 @@ impl Gamepads {
                     crate::say(&format!("gamepad: an Xbox controller, XInput's player {} (rumble)", i + 1));
                     self.seen.push(name.clone());
                 }
-                out.push(Controller { name, report, raw, rumbles: true, label: format!("Xbox controller {}", i + 1), source: Source::XInput(i), order: (0, i as u64) });
+                out.push(Controller { name, report, raw, rumbles: true, label: format!("Xbox controller {}", i + 1), source: Source::XInput(i), order: (0, i as u64), notes: Vec::new() });
             }
         }
         // the PlayStation controllers read over HID, each with its USB ids:
@@ -800,7 +803,8 @@ impl Gamepads {
                     crate::say(&format!("gamepad: a {}{}, read over HID ({})", f.model.label(), if f.bluetooth { " on Bluetooth" } else { "" }, f.name));
                     self.seen.push(f.name.clone());
                 }
-                let c = Controller { name: f.name, report, raw, rumbles: false, label: f.model.label().to_string(), source: Source::Hid(k as u32, None), order: (1, k as u64) };
+                let notes = f.reports.iter().map(|r| format!("{}{}", if f.bluetooth { "on Bluetooth, " } else { "" }, r.describe())).collect();
+                let c = Controller { name: f.name, report, raw, rumbles: false, label: f.model.label().to_string(), source: Source::Hid(k as u32, None), order: (1, k as u64), notes };
                 hid.push((c, f.ids));
             }
         }
@@ -871,7 +875,7 @@ impl Gamepads {
                 let mut report = report_of(&pad);
                 let raw = report.sticks;
                 report.rest(self.dead_zone);
-                out.push(Controller { name, report, raw, rumbles: pad.is_ff_supported(), label, source: Source::Gilrs(id), order });
+                out.push(Controller { name, report, raw, rumbles: pad.is_ff_supported(), label, source: Source::Gilrs(id), order, notes: Vec::new() });
             }
         }
         #[cfg(windows)]
@@ -925,7 +929,7 @@ impl Gamepads {
             described.push(d);
             let raw = r.sticks;
             r.rest(self.dead_zone);
-            out.push(Controller { name: format!("pad{}", p.index), report: r, raw, rumbles, label: p.id.clone(), source: Source::Page(p.index), order: (1, p.index as u64) });
+            out.push(Controller { name: format!("pad{}", p.index), report: r, raw, rumbles, label: p.id.clone(), source: Source::Page(p.index), order: (1, p.index as u64), notes: Vec::new() });
         }
         self.traced = traced;
         self.described = described;
@@ -1024,14 +1028,21 @@ pub fn describe_controllers() -> Vec<String> {
 }
 
 /// `describe_controllers`' lines: `window` what this window reads
-/// (`describe`), each pad as (name, label, how it is read, rumbles).
-fn list_controllers(window: &str, pads: &[(&str, &str, &str, bool)], pick: &Pick, seat: &Seat) -> Vec<String> {
+/// (`describe`), the other windows open with what each says it reads (a
+/// window's place held by no window the player sees shows here), each pad as
+/// (name, label, how it is read, rumbles, notes), its notes on lines of
+/// their own after it.
+fn list_controllers(window: &str, pads: &[(&str, &str, &str, bool, &[String])], pick: &Pick, seat: &Seat) -> Vec<String> {
     let mut out = vec![window.to_string()];
+    if !seat.alone() {
+        let others: Vec<String> = seat.others.iter().map(|o| format!("window {} ({}, reads {})", o.place + 1, focus_name(o.focus), o.pad.as_deref().unwrap_or("none"))).collect();
+        out.push(format!("other windows: {}", others.join(", ")));
+    }
     if pads.is_empty() {
         out.push("none connected".into());
     }
     let me = if seat.alone() { "this window".to_string() } else { format!("this window ({})", seat.place + 1) };
-    for (k, &(name, label, how, rumbles)) in pads.iter().enumerate() {
+    for (k, &(name, label, how, rumbles, notes)) in pads.iter().enumerate() {
         let mut by = Vec::new();
         if match pick {
             Pick::All => true,
@@ -1045,6 +1056,7 @@ fn list_controllers(window: &str, pads: &[(&str, &str, &str, bool)], pick: &Pick
         by.extend(others.into_iter().map(|w| format!("window {w}")));
         let by = if by.is_empty() { "no window".to_string() } else { by.join(", ") };
         out.push(format!("controller {}: {label} ({how}; {name}){}, read by {by}", k + 1, if rumbles { ", rumbles" } else { "" }));
+        out.extend(notes.iter().map(|n| format!("controller {} sent: {n}", k + 1)));
     }
     out
 }
@@ -1278,21 +1290,32 @@ mod tests {
 
     #[test]
     fn a_report_lists_the_controllers_and_who_reads_them() {
-        let pads = [("xinput0", "Xbox controller 1", "XInput: in front or behind", true), ("pad3", "DualSense Wireless Controller", "Windows.Gaming.Input: only by the window in front", false)];
+        let sent = ["on Bluetooth, report 0x01, 78 bytes: 01 80 7f 81 80 08 00 00 00 00 00 00".to_string()];
+        let pads = [
+            ("xinput0", "Xbox controller 1", "XInput: in front or behind", true, &[][..]),
+            ("pad3", "DualSense Wireless Controller", "Windows.Gaming.Input: only by the window in front", false, &[][..]),
+            ("hid-054c-0ce6-c5d9d8d5", "DualSense", "HID: in front or behind", false, &sent[..]),
+        ];
         let two = seat(0, &[(1, Some("xinput0"), Focus::Pad(1))]);
         let l = list_controllers("controllers: window 1 of 2, Auto: none", &pads, &Pick::Nothing, &two);
         assert_eq!(
             l,
             vec![
                 "controllers: window 1 of 2, Auto: none".to_string(),
+                "other windows: window 2 (Pad 1, reads xinput0)".to_string(),
                 "controller 1: Xbox controller 1 (XInput: in front or behind; xinput0), rumbles, read by window 2".to_string(),
                 "controller 2: DualSense Wireless Controller (Windows.Gaming.Input: only by the window in front; pad3), read by no window".to_string(),
+                "controller 3: DualSense (HID: in front or behind; hid-054c-0ce6-c5d9d8d5), read by no window".to_string(),
+                "controller 3 sent: on Bluetooth, report 0x01, 78 bytes: 01 80 7f 81 80 08 00 00 00 00 00 00".to_string(),
             ]
         );
         let alone = list_controllers("controllers: Auto: every one", &pads, &Pick::All, &Seat::default());
         assert!(alone[1].ends_with("read by this window") && alone[2].ends_with("read by this window"), "{alone:?}");
+        assert!(!alone.iter().any(|l| l.starts_with("other windows")), "alone: no other windows' line");
         let mine = list_controllers("x", &pads, &one("pad3"), &two);
-        assert!(mine[1].ends_with("read by window 2") && mine[2].ends_with("read by this window (1)"), "{mine:?}");
+        assert!(mine[2].ends_with("read by window 2") && mine[3].ends_with("read by this window (1)"), "{mine:?}");
+        let three = seat(1, &[(0, Some("xinput0"), Focus::Auto), (2, None, Focus::Auto)]);
+        assert_eq!(list_controllers("x", &[], &Pick::Nothing, &three)[1], "other windows: window 1 (Auto, reads xinput0), window 3 (Auto, reads none)");
         assert_eq!(list_controllers("x", &[], &Pick::Nothing, &Seat::default())[1], "none connected");
     }
 

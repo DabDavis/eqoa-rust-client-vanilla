@@ -19,9 +19,18 @@
 //! for a moment as it is looked at (a shared lock) and let go, so a window
 //! opening just then waits a moment on a place it finds held before it
 //! passes it by.
+//!
+//! A place is the program's, whichever of its threads asks first: the
+//! world's files are read on a thread of their own, and the settings it reads
+//! there (`settings::client`, the art) ask for this window's place. While the
+//! place was each thread's, that thread took a second one (F3 20261024-204603
+//! and -203920: "multibox: this is window 3" logged at the world's entry by
+//! a window that was window 1 of 2) and read that place's options for the
+//! world, and while it read, the other windows saw one more window, which
+//! took a controller in their sums.
 
 use crate::settings::Focus;
-use std::cell::RefCell;
+use std::sync::{Mutex, MutexGuard};
 
 /// The places: a window past the sixteenth is alone.
 pub const PLACES: usize = 16;
@@ -56,10 +65,12 @@ impl Seat {
     }
 }
 
-#[derive(Default)]
 struct Here {
     /// the place taken: unasked, then one or none for good
     taken: Option<Option<Place>>,
+    /// the place's number once it was let go (`leave`): no longer held for
+    /// the other windows, still this window's for what it writes as it ends
+    left: Option<usize>,
     others: Vec<Other>,
     looked: Option<web_time::Instant>,
     /// what this window said it reads, and whether saying it last failed
@@ -67,18 +78,41 @@ struct Here {
     failed: bool,
 }
 
-thread_local! {
-    static HERE: RefCell<Here> = RefCell::new(Here::default());
+/// The program's place among the client's windows: one for all its threads.
+static HERE: Mutex<Here> = Mutex::new(Here::new());
+
+/// `HERE`, held (a thread that panicked holding it left nothing half done
+/// that matters: the place is a file or a Web Lock).
+fn here() -> MutexGuard<'static, Here> {
+    HERE.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 impl Here {
+    const fn new() -> Here {
+        Here { taken: None, left: None, others: Vec::new(), looked: None, said: None, failed: false }
+    }
+
     /// The place, taken the first time it is asked for (in a page, once
     /// main.js has one).
     fn place(&mut self) -> Option<&Place> {
+        self.place_by(take_place)
+    }
+
+    /// The place, taken by `take` the first time it is asked for.
+    fn place_by(&mut self, take: impl FnOnce() -> Option<Option<Place>>) -> Option<&Place> {
         if self.taken.is_none() {
-            self.taken = take_place();
+            self.taken = take();
         }
         self.taken.as_ref()?.as_ref()
+    }
+
+    /// The place let go (`leave`), its number kept.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn leave(&mut self) {
+        if let Some(Some(p)) = &self.taken {
+            self.left = self.left.or(Some(p.n));
+        }
+        self.taken = Some(None);
     }
 }
 
@@ -90,7 +124,11 @@ pub fn place() -> usize {
     if let Some(n) = testing::PLACE.with(|p| p.get()) {
         return n;
     }
-    HERE.with(|h| h.borrow_mut().place().map_or(0, |p| p.n))
+    let mut h = here();
+    if let Some(n) = h.left {
+        return n;
+    }
+    h.place().map_or(0, |p| p.n)
 }
 
 #[cfg(test)]
@@ -105,27 +143,37 @@ pub mod testing {
     }
 }
 
-/// This window's place let go (natively its lock closed), as the window
-/// closes for the updater to start the release's build in its place: that
-/// one takes the same place, though this program has not ended yet.
+/// This window's place let go (natively its lock closed) as its window
+/// closes (`viewer`'s `exiting`), whatever the program does after: the
+/// updater's build or the game started again takes the same place though
+/// this program has not ended yet, and one that never ends (its teardown
+/// stuck in a driver) holds no place and no controller from the windows
+/// open after it (a window stopped while it held its place kept the next
+/// window from its controller: the next took the next place and the spare
+/// controller, none where there was none). Its number stays this
+/// program's (`place`), for the files it writes as it ends.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn leave() {
-    HERE.with(|h| h.borrow_mut().taken = Some(None));
+    here().leave();
 }
 
 /// This window and the others open now, as last looked at.
 pub fn seat() -> Seat {
-    let (seat, looked) = HERE.with(|h| {
-        let mut h = h.borrow_mut();
-        let Some(n) = h.place().map(|p| p.n) else { return (Seat::default(), false) };
-        let now = web_time::Instant::now();
-        let look = h.looked.is_none_or(|t| now.duration_since(t).as_millis() >= LOOK_MS);
-        if look {
-            h.others = h.place().map(Place::others).unwrap_or_default();
-            h.looked = Some(now);
+    let (seat, looked) = {
+        let mut h = here();
+        match h.place().map(|p| p.n) {
+            None => (Seat::default(), false),
+            Some(n) => {
+                let now = web_time::Instant::now();
+                let look = h.looked.is_none_or(|t| now.duration_since(t).as_millis() >= LOOK_MS);
+                if look {
+                    h.others = h.place().map(Place::others).unwrap_or_default();
+                    h.looked = Some(now);
+                }
+                (Seat { place: n, others: h.others.clone() }, look)
+            }
         }
-        (Seat { place: n, others: h.others.clone() }, look)
-    });
+    };
     // Capture Controller, one setting for every window: another window's
     // save of it reaches this one here, outside the borrow (the settings ask
     // this window's place, `settings::client`)
@@ -139,25 +187,23 @@ pub fn seat() -> Seat {
 /// Controller Focus, for the others to see: when it changes, and again each
 /// frame until it is said (the first failure is logged).
 pub fn say(pad: Option<&str>, focus: Focus) {
-    HERE.with(|h| {
-        let mut h = h.borrow_mut();
-        let now = (pad.map(str::to_string), focus);
-        if h.said.as_ref() == Some(&now) {
-            return;
+    let mut h = here();
+    let now = (pad.map(str::to_string), focus);
+    if h.said.as_ref() == Some(&now) {
+        return;
+    }
+    let Some(p) = h.place() else { return };
+    match p.say(pad, focus) {
+        Ok(()) => {
+            h.said = Some(now);
+            h.failed = false;
         }
-        let Some(p) = h.place() else { return };
-        match p.say(pad, focus) {
-            Ok(()) => {
-                h.said = Some(now);
-                h.failed = false;
-            }
-            Err(e) if !h.failed => {
-                crate::say(&format!("multibox: {e}"));
-                h.failed = true;
-            }
-            Err(_) => {}
+        Err(e) if !h.failed => {
+            crate::say(&format!("multibox: {e}"));
+            h.failed = true;
         }
-    })
+        Err(_) => {}
+    }
 }
 
 /// A `.pad` file's text, and back: the controller's name on the first line
@@ -371,6 +417,51 @@ mod tests {
         assert_eq!(a.others()[1], Other { place: 2, pad: None, focus: Focus::Off });
         // looking takes nothing: the places are as they were
         assert_eq!(d2.others().iter().map(|o| o.place).collect::<Vec<_>>(), vec![0, 2]);
+    }
+
+    /// One place for the program, whichever thread asks: two threads asking
+    /// one `Here` (as they ask `HERE`) get the same place, and another window
+    /// the next. The control: a `Here` each, as each thread had while the
+    /// place was a thread's, takes a second place for the same program (the
+    /// world's reading thread was one window more: F3 20261024-204603's
+    /// "this is window 3").
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_program_has_one_place_whichever_thread_asks() {
+        let d = Dir::new("threads");
+        let take = || Some(Place::take(&d.0).unwrap());
+        let shared = Mutex::new(Here::new());
+        let a = shared.lock().unwrap().place_by(take).map(|p| p.n);
+        let b = std::thread::scope(|s| s.spawn(|| shared.lock().unwrap().place_by(take).map(|p| p.n)).join().unwrap());
+        assert_eq!((a, b), (Some(0), Some(0)), "one place, whichever thread");
+        let other = Place::take(&d.0).unwrap().unwrap();
+        assert_eq!(other.n, 1, "another window: the next place");
+        assert_eq!(shared.lock().unwrap().place().map(|p| p.others().len()), Some(1), "and one other window seen");
+        // the control: a Here of its own, as a thread's was
+        let mut own = Here::new();
+        assert_eq!(own.place_by(take).map(|p| p.n), Some(2), "a second place for the same program");
+    }
+
+    /// A window let go of (`leave`): its place is the next window's at once,
+    /// and its number stays its own. The control: a window that has not let
+    /// go still holds its place.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_window_that_closes_lets_go_of_its_place_at_once() {
+        let d = Dir::new("leave");
+        let first = Place::take(&d.0).unwrap().unwrap();
+        let mut closing = Here::new();
+        assert_eq!(closing.place_by(|| Some(Place::take(&d.0).unwrap())).map(|p| p.n), Some(1));
+        let third = Place::take(&d.0).unwrap().unwrap();
+        assert_eq!(third.n, 2, "the control: held, the next window passes it by");
+        closing.leave();
+        assert_eq!(closing.left, Some(1), "its number kept");
+        assert!(closing.place().is_none(), "held no more");
+        let next = Place::take(&d.0).unwrap().unwrap();
+        assert_eq!(next.n, 1, "the next window takes it");
+        assert_eq!(first.others().iter().map(|o| o.place).collect::<Vec<_>>(), vec![1, 2], "window 1 sees the new window 2 and window 3");
+        closing.leave();
+        assert_eq!(closing.left, Some(1), "let go twice: the first number");
     }
 
     /// Every place taken: none for the next window (it reads as if alone).

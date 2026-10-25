@@ -3570,9 +3570,14 @@ impl ApplicationHandler for App {
     }
 
     /// The loop ends (the window closed, a Quit, the update's restart): the
-    /// window's place written if it changed (`winplace`).
+    /// window's place written if it changed (`winplace`), then its place
+    /// among the client's windows let go (`multibox::leave`), before the
+    /// teardown of the graphics, the sound and the controllers, so a
+    /// program stuck in that holds no other window's controller.
     fn exiting(&mut self, _: &ActiveEventLoop) {
         self.winplace.flush(true);
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::multibox::leave();
     }
 
     /// The mouse's own motion: the look while it holds the pointer.
