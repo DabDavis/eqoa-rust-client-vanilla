@@ -481,6 +481,51 @@ pub fn rumble_test(caster: u32) -> Option<crate::spells::Cast> {
     Some(crate::spells::Cast { effect, time: 0, caster, target: caster, targets: Vec::new() })
 }
 
+/// `eqoa rumble`: the controllers this window would read rumble as the game
+/// rumbles them, the options' Vibration aside: each read a frame at a time
+/// until `VIPad`'s handshake finds their motors (at most `wait_ms`), then the
+/// large motor at 200 for 600 ms, a rest, the small one for 600 ms, each
+/// through `Rumble`, `VIPad::Process` and the controller's own way
+/// (`Gamepads::rumble`), said as it goes. An error when no controller came or
+/// none that came can rumble.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn check_motors(wait_ms: i64) -> Result<(), String> {
+    let mut pads = Gamepads::new();
+    let mut console = Console::new();
+    let start = std::time::Instant::now();
+    let (mut step, mut at, mut seen) = (0, 0i64, false);
+    loop {
+        let now = start.elapsed().as_millis() as i64;
+        let (report, connected, motors) = pads.poll();
+        seen |= connected;
+        console.poll(report, connected, motors, false);
+        match step {
+            0 if console.pad.active() => {
+                crate::say("rumble: the large motor at 200 for 600 ms");
+                console.rumble(1, 200, 600, true);
+                (step, at) = (1, now);
+            }
+            0 if now >= wait_ms => {
+                return Err(if seen { "rumble: the controllers read cannot rumble here".into() } else { "rumble: no controller".into() });
+            }
+            1 if now - at >= 900 => {
+                crate::say("rumble: the small motor for 600 ms");
+                console.rumble(0, 0, 600, true);
+                (step, at) = (2, now);
+            }
+            2 if now - at >= 900 => break,
+            _ => {}
+        }
+        if let Some((act, ms)) = console.process(now) {
+            crate::say(&format!("rumble: motors small {} large {}, for {ms} ms", act[0], act[1]));
+            pads.rumble(act, ms);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(16));
+    }
+    crate::say("rumble: done");
+    Ok(())
+}
+
 /// `EQOA_PAD_TRACE=1` (in a page `?padtrace`): each pad key as the game
 /// gets it, and gilrs's events and the controllers' report as they change.
 pub fn trace() -> bool {

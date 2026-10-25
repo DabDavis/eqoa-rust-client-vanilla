@@ -16,6 +16,8 @@
 //! eqoa shot <file> [model | zone <n>] <out.png> [camera]   one view, offscreen
 //! eqoa listen <world> <x> <z> <seconds> <out.wav> [hour] [walk]   the world's sound there, offline
 //! eqoa mapshot <world> <out.png> [x z [heading [scale [secs]]]]   the map (M) built as in play, drawn
+//! eqoa rumble                   each controller the game would read rumbles a moment, as the game
+//!                               rumbles one (the large motor, then the small)
 //!                               (walk: the human walks forward, its footsteps with it;
 //!                                cues: the respawn cue at 1 s and the level-up sound at 2 s;
 //!                                fight: in combat from 2 s to 8 s, the battle music)
@@ -408,6 +410,7 @@ fn run(args: &[String]) -> Result<()> {
             let file = args.get(1).ok_or("usage: eqoa volumes <world.esf>")?;
             volumes(file)?;
         }
+        Some("rumble") => input::check_motors(10_000)?,
         Some("view") | Some("shot") => {
             let shot = args[0] == "shot";
             let usage = "usage: eqoa view <file> [model] | eqoa view <world> zone <n> | eqoa shot <same> <out.png> [camera...]";
