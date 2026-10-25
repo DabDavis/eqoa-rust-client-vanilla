@@ -253,7 +253,7 @@ impl Res {
             }
         } else {
             if path.eq_ignore_ascii_case("DATA/WORDS.TXT") {
-                self.disc_words = StringTable::parse(&bytes);
+                self.disc_words = crate::spelling::words(&bytes);
                 self.words = self.server_words.clone().or_else(|| self.disc_words.clone());
             }
             if path.eq_ignore_ascii_case("DATA/TEXTURES.TXT") {
@@ -309,7 +309,7 @@ impl Res {
     /// folder), or with None the disc's again: what the windows and the
     /// world read from here on. A server's words never outlive its session.
     pub fn set_server_words(&mut self, bytes: Option<Vec<u8>>) {
-        self.server_words = bytes.and_then(|b| StringTable::parse(&b));
+        self.server_words = bytes.and_then(|b| crate::spelling::words(&b));
         self.words = self.server_words.clone().or_else(|| self.disc_words.clone());
         if let (Some(v), Some(w)) = (self.vui.as_mut(), self.words.as_ref()) {
             v.words = w.clone();

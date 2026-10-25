@@ -1273,7 +1273,7 @@ impl Rules {
     /// no copy there.
     pub fn words(&self) -> Option<vi::strtab::StringTable> {
         let bytes = std::fs::read(self.folder_file("WORDS.TXT")?).ok()?;
-        vi::strtab::StringTable::parse(&bytes)
+        crate::spelling::words(&bytes)
     }
 
     /// A file in the server's folder, its name in any case ("UNDERFOOT.ESF"

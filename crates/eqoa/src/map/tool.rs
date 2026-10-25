@@ -35,7 +35,7 @@ pub fn shot(s: &Shot, out: &str) -> Result<(), Box<dyn std::error::Error>> {
     for f in ["UI.CSF", "ARIALUI.CSF"] {
         lib.add(f, esf::Container::open(disc.read(f)?)?);
     }
-    let words = disc.read("WORDS.TXT").ok().and_then(|b| vi::strtab::StringTable::parse(&b));
+    let words = disc.read("WORDS.TXT").ok().and_then(|b| crate::spelling::words(&b));
     let world = crate::play::WORLD_FILES.iter().position(|f| f.eq_ignore_ascii_case(&s.world)).unwrap_or(0) as i32;
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))?;

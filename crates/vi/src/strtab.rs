@@ -83,6 +83,16 @@ impl StringTable {
         }
         "(null)"
     }
+
+    /// Every cell's `from` made `to` (the client's own spelling fixes, not
+    /// the game's: `eqoa`'s `spelling`).
+    pub fn replace(&mut self, from: &str, to: &str) {
+        for s in self.cells.iter_mut().flatten() {
+            if s.contains(from) {
+                *s = s.replace(from, to);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
