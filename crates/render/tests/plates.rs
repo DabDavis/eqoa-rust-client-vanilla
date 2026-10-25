@@ -100,3 +100,75 @@ fn the_plates_go_under_the_particles_and_the_screens_text_over_them() {
     // the control: with the particle gone, the plate is its own colour
     close(pixel(&g, &mut r, size, (224, 224), &[]), [0.0, 0.0, 255.0], "plate alone");
 }
+
+/// The plates at `plate_scale` (the zoom's size, one for all of them), the
+/// screen's text at its own: an 8-wide glyph at 896 lines (two pixels a PS2
+/// pixel) is 16 pixels wide at the game's size and 8 at half, so a pixel 6
+/// right of its middle is the glyph's at 1 and the clear's at 0.5, one 2
+/// right the glyph's at both. The control: the screen's label beside it
+/// keeps its size at 0.5.
+#[test]
+fn the_plates_take_the_zooms_size_and_the_screens_text_its_own() {
+    let Some(g) = gpu() else { return };
+    let mut r = Renderer::new(&g.device, &g.queue, render::TARGET_FORMAT);
+    let font = esf::font::Font { id: 1, height: 8, glyphs: vec![esf::font::Glyph { code: b'A' as u16, width: 8, rgba: vec![255; 8 * 8 * 4] }] };
+    r.set_font(&g.device, &g.queue, &font);
+    let (size, mid, left) = (896, 448, 224);
+    let blue = [0.0, 0.0, 255.0];
+    let clear = [CLEAR.x * 255.0, CLEAR.y * 255.0, CLEAR.z * 255.0];
+    let t = r.text.as_mut().unwrap();
+    t.plates = vec![Label { at: [0.0, 0.0, 0.5], color: [0.0, 0.0, 1.0, 1.0], text: "A".into() }];
+    t.labels = vec![Label { at: [-0.5, 0.0, 0.0], color: [0.0, 0.0, 1.0, 1.0], text: "A".into() }];
+    close(pixel(&g, &mut r, size, (mid + 6, mid), &[]), blue, "the game's size: 16 wide");
+    r.text.as_mut().unwrap().plate_scale = 0.5;
+    close(pixel(&g, &mut r, size, (mid + 6, mid), &[]), clear, "half: 8 wide");
+    close(pixel(&g, &mut r, size, (mid + 2, mid), &[]), blue, "half: still drawn");
+    close(pixel(&g, &mut r, size, (left + 6, mid), &[]), blue, "the control: the screen's label at its own size");
+}
+
+/// A plate's glyph is drawn a texel wider all round, onto its clear ring
+/// (`Text::vertices`, `ui::pack`): under Sharp at 1080 lines (2.41 pixels a
+/// texel) a glyph of one-texel columns, white and clear by turns, lights
+/// every white column by its width, the two at its edges too. Its left edge
+/// is put at three quarters of a pixel and so its right at 0.45: a pixel's
+/// middle then falls past each edge inside the mix there, which a quad drawn
+/// only to the glyph's edges (the ring taken out, planted) leaves unlit, a
+/// quarter and nearly half a pixel's light less. The control: Smooth, which
+/// mixes texels across their whole width, lights the columns otherwise.
+#[test]
+fn a_plates_edge_columns_keep_their_width() {
+    let Some(g) = gpu() else { return };
+    let mut r = Renderer::new(&g.device, &g.queue, render::TARGET_FORMAT);
+    // 9 wide and 8 tall: white at even x, five columns; clear at odd
+    let mut rgba = vec![0u8; 9 * 8 * 4];
+    for y in 0..8 {
+        for x in (0..9).step_by(2) {
+            rgba[(y * 9 + x) * 4..][..4].copy_from_slice(&[255; 4]);
+        }
+    }
+    let font = esf::font::Font { id: 1, height: 8, glyphs: vec![esf::font::Glyph { code: b'A' as u16, width: 9, rgba }] };
+    r.set_font(&g.device, &g.queue, &font);
+    let (w, h) = (1920u32, 1080u32);
+    let k = h as f32 / render::text::SCREEN_H;
+    // centred, the string ten PS2 pixels wide starts 5 of them left of the
+    // middle; moved so that edge is at x.75
+    let centred = w as f32 / 2.0 - 5.0 * k;
+    let left = centred.floor() + 0.75;
+    let at = (left - centred) * 2.0 / w as f32;
+    r.text.as_mut().unwrap().plates = vec![Label { at: [at, 0.0, 0.5], color: [1.0; 4], text: "A".into() }];
+    let view = View { clear: Vec3::ZERO, ..View::daylight(Mat4::IDENTITY) };
+    let mut columns = |filter| {
+        render::ui::set_text_filter(filter);
+        let px = render::capture(&g.device, &g.queue, &mut r, w, h, &view, &[], None);
+        let row: Vec<u8> = ((left - 3.0) as u32..=(left + 9.0 * k + 3.0) as u32).map(|x| px[(((h / 2) * w + x) * 4) as usize]).collect();
+        row.split(|&v| v == 0).filter(|r| !r.is_empty()).map(|r| r.iter().map(|&v| v as f32 / 255.0).sum::<f32>()).collect::<Vec<f32>>()
+    };
+    let sharp = columns(render::ui::TextFilter::Sharp);
+    assert_eq!(sharp.len(), 5, "five white columns ({sharp:?})");
+    for (i, c) in sharp.iter().enumerate() {
+        assert!((c - k).abs() < 0.06, "column {i}: {c} pixels' light, want {k} ({sharp:?})");
+    }
+    let smooth = columns(render::ui::TextFilter::Smooth);
+    assert_ne!(smooth, sharp, "the control: Smooth mixes across whole texels");
+    render::ui::set_text_filter(render::ui::TextFilter::Sharp);
+}

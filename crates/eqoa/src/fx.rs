@@ -353,10 +353,14 @@ pub struct Fx {
     pub runs: Vec<Run>,
     /// the flocks' models, by their CSprite
     models: HashMap<Ref, Option<esf::Model>>,
-    /// the camera this frame was rastered from, and the eye its fans are
-    /// placed relative to (the view's)
+    /// where this frame's flocks' levels were measured from (`lod_eye`, else
+    /// the camera), and the eye its fans are placed relative to (the view's)
     eye: Vect3<Ee>,
     fans_eye: Vec3,
+    /// where the flocks' levels are measured from, as the characters' are:
+    /// no farther than the game's camera could be (`lod::eye`), set by the
+    /// caller before each frame; None, the camera itself
+    pub lod_eye: Option<Vect3<Ee>>,
     /// where the zones were last streamed for, and how many the world had in
     streamed: Option<(Vec3, usize)>,
     /// the raster's immediate-mode output, kept for its room
@@ -387,6 +391,7 @@ impl Fx {
             models: HashMap::new(),
             eye: Vect3::default(),
             fans_eye: Vec3::ZERO,
+            lod_eye: None,
             streamed: None,
             draw: Draw::default(),
             stats: Stats::default(),
@@ -529,17 +534,17 @@ impl Fx {
             }
         }
         // VIHSprite::Raster for each boid drawn: its level for its
-        // distance, the pose, the centre transform and the skin palette
+        // distance (`lod::anim_level`, from where the levels go by; every
+        // node with Level of Detail off), the pose, the centre transform and
+        // the skin palette
         let anims = &self.anims;
+        let lod_eye = self.lod_eye.unwrap_or(cam.position);
+        let lod_on = crate::settings::client().lod;
         for s in self.sprites.slots.iter_mut().flatten() {
             let Sprite::Boid(b) = s else { continue };
             b.pose = match (b.drawn, b.cs.as_mut()) {
                 (Some(m), Some(cs)) => {
-                    let mut rel = m;
-                    rel.m[3].x -= cam.position.x;
-                    rel.m[3].y -= cam.position.y;
-                    rel.m[3].z -= cam.position.z;
-                    let lod = cs.h.calc_lod_level_index(&rel);
+                    let lod = crate::lod::anim_level(&cs.h, &m, &lod_eye, lod_on);
                     cs.h.process(lod, anims);
                     let centre = cs.h.calc_trans_about_center(&m, anims);
                     cs.h.set_blend_matrices();
@@ -551,7 +556,7 @@ impl Fx {
         }
         self.runs = runs;
         self.stats = stats;
-        self.eye = cam.position;
+        self.eye = lod_eye;
         self.fans_eye = eye;
     }
 

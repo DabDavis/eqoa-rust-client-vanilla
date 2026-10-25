@@ -47,7 +47,9 @@
 //!   100 to 1000 in fifties, `lod::view_dist`, and looked for on a server
 //!   that offers it; both told the server by `Play::agree_entity_view`, and
 //!   in the world the legend says what this server gives while either is
-//!   chosen);
+//!   chosen) and Name Distance (a slider and its number: how far from where
+//!   the game's camera could be a name plate is drawn, the game's 22, then
+//!   30 to 200 in tens, `play::PlateView`);
 //! - Sound: Sound in Background (one setting for every window: off, a window
 //!   not in front is not heard, `audio::set_heard`).
 //! Triangle goes back a step: a page to the categories, the categories to
@@ -69,7 +71,7 @@
 
 use crate::bindpage::ControlsPage;
 use crate::pointer::{Hits, key, rows_rect};
-use crate::settings::{BRIGHTNESS_STEPS, CAMERA_MAX, CAMERA_MIN, CAMERA_STEP, ClientOptions, ENTITY_SLOTS_GAME, ENTITY_SLOTS_MAX, ENTITY_SLOTS_STEP, ENTITY_VIEW_GAME, ENTITY_VIEW_MAX, ENTITY_VIEW_STEP, Focus, FrameRate, TURN_MAX, TURN_MIN, TURN_STEP};
+use crate::settings::{BRIGHTNESS_STEPS, CAMERA_MAX, CAMERA_MIN, CAMERA_STEP, ClientOptions, ENTITY_SLOTS_GAME, ENTITY_SLOTS_MAX, ENTITY_SLOTS_STEP, ENTITY_VIEW_GAME, ENTITY_VIEW_MAX, ENTITY_VIEW_STEP, Focus, FrameRate, NAME_DISTANCE_GAME, NAME_DISTANCE_MAX, TURN_MAX, TURN_MIN, TURN_STEP};
 use vi::fpu::{Ee, F};
 use vi::ui::{Raster, UI_COLORS, Vui, Window, wide};
 
@@ -511,7 +513,8 @@ impl WndOptions {
     /// the game's 24 as a slider does, 200 to 204 its last, and NPC/PC View
     /// Distance (24) by fifties from the game's 100 to 1000; Art (25) and
     /// VSync (26) turn over, VSync natively only (a page's stays on with
-    /// sound 9: the browser paces it); Text (30) goes between Sharp and
+    /// sound 9: the browser paces it); Name Distance (27) by tens from the
+    /// game's 22 to 200 (`step_name_distance`); Text (30) goes between Sharp and
     /// Smooth; Target of Target (31) and Update Notices (29) turn over. A
     /// slider (`slider_at`) makes its own
     /// sound, as a volume does; every other row sound 11.
@@ -612,6 +615,7 @@ impl WndOptions {
                             cues.push(9);
                         }
                     }
+                    27 => step_name_distance(&mut c, d, cues),
                     24 => {
                         let v = &mut c.entity_view;
                         if (d < 0 && *v > ENTITY_VIEW_GAME) || (d > 0 && *v < ENTITY_VIEW_MAX) {
@@ -990,7 +994,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 18] = [
+const EXTENDED_ITEMS: [(i32, &str); 19] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1006,6 +1010,7 @@ const EXTENDED_ITEMS: [(i32, &str); 18] = [
     (24, "NPC/PC View Distance"),
     (25, "Art"),
     (26, "VSync"),
+    (27, "Name Distance"),
     (29, "Update Notices"),
     (30, "Text"),
     (31, "Target of Target"),
@@ -1037,7 +1042,7 @@ const CATEGORIES: [Category; 6] = [
     Category { name: "UI", items: &[22, 31, 29], note: Note::None },
     Category { name: "Controller", items: &[16, 19], note: Note::Reads },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
-    Category { name: "Characters", items: &[12, 23, 24], note: Note::Server },
+    Category { name: "Characters", items: &[12, 23, 24, 27], note: Note::Server },
     Category { name: "Sound", items: &[21], note: Note::None },
 ];
 
@@ -1117,8 +1122,27 @@ fn slider_at(item: i32) -> Option<(f32, Option<u16>)> {
         17 => (at(c.camera_turn as f32, TURN_MIN as f32, TURN_MAX as f32), None),
         23 => (at(c.entity_slots as f32, ENTITY_SLOTS_GAME as f32, ENTITY_SLOTS_MAX as f32), Some(c.entity_slots as u16)),
         24 => (at(c.entity_view as f32, ENTITY_VIEW_GAME as f32, ENTITY_VIEW_MAX as f32), Some(c.entity_view)),
+        27 => name_distance_slider(&c),
         _ => return None,
     })
+}
+
+/// Name Distance (item 27): its slider's knob, the game's 22 at the left
+/// and 200 at the right, and the number before it.
+fn name_distance_slider(c: &ClientOptions) -> (f32, Option<u16>) {
+    ((c.name_distance - NAME_DISTANCE_GAME) as f32 / (NAME_DISTANCE_MAX - NAME_DISTANCE_GAME) as f32, Some(c.name_distance as u16))
+}
+
+/// Name Distance (item 27) moved a step: on by tens from the game's 22 to
+/// 200 (`settings::step_name_distance`), sound 11, or sound 9 at either end.
+fn step_name_distance(c: &mut ClientOptions, d: i32, cues: &mut Vec<i32>) {
+    match crate::settings::step_name_distance(c.name_distance, d) {
+        Some(v) => {
+            c.name_distance = v;
+            cues.push(11);
+        }
+        None => cues.push(9),
+    }
 }
 
 /// A page's pointer notes (`point`): a menu row below `LABEL`, a row's label
@@ -1476,6 +1500,21 @@ mod tests {
             press(&mut w, &mut o, key::RIGHT, &mut cues);
         }
         assert_eq!((settings::entity_view(), cues.last()), (1000, Some(&9)), "1000, then its end");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.item, 27, "Name Distance");
+        assert_eq!(settings::client().name_distance, 22, "the game's 22");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert_eq!((settings::client().name_distance, cues.last()), (22, Some(&9)), "no nearer than the game's");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::client().name_distance, cues.last()), (30, Some(&11)), "on to 30");
+        for _ in 0..17 {
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
+        }
+        assert_eq!(settings::client().name_distance, 200, "30 to 200 in 17 steps of 10");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::client().name_distance, cues.last()), (200, Some(&9)), "its end");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (3, Some(&9)), "Characters' last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         // Sound: Sound in Background
         press(&mut w, &mut o, key::DOWN, &mut cues);
@@ -1768,6 +1807,13 @@ mod tests {
         crate::settings::set_client(ClientOptions { entity_view: 1000, ..crate::settings::client() });
         w.draw(&vui, &mut r, &o, &mut ups);
         assert_eq!(w.point([slider + 110.0, y(&w, 2)]), down(2, key::LEFT), "left of the knob at 1000");
+        // Name Distance: its knob at the left end (the game's 22), then at
+        // 200 at the right end
+        assert_eq!(w.point([slider + 30.0, y(&w, 3)]), down(3, key::RIGHT));
+        assert_eq!(w.point([slider - 2.0, y(&w, 3)]), down(3, key::LEFT), "left of the knob at the bar's end");
+        crate::settings::set_client(ClientOptions { name_distance: 200, ..crate::settings::client() });
+        w.draw(&vui, &mut r, &o, &mut ups);
+        assert_eq!(w.point([slider + 110.0, y(&w, 3)]), down(3, key::LEFT), "left of the knob at 200");
         // Controller: Controller Focus's halves
         w.key(&vui, &mut r, &mut o, key::TRIANGLE, 0, &mut cues, &mut ups);
         w.cat_sel = 2;
