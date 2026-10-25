@@ -171,11 +171,11 @@ fn member_gauges(s: &HudState) -> Vec<Gauge> {
         .collect()
 }
 
-/// Mana Bars on the target's bar, under its health (`DrawTarget`'s at 25
-/// below the bar, the report's button 13 under that), and Target of
-/// Target's health and power stacked right of its bar (under it is the chat
-/// box): each where there is one to show, the target of target's only with
-/// its bar.
+/// Mana Bars on the target's bar, under its health (`DrawTarget`'s, 25
+/// below the bar) and above the report's button, and Target of Target's
+/// health and power stacked right of its bar (under it is the chat box):
+/// each where there is one to show, the target of target's only with its
+/// bar.
 fn target_gauges(s: &HudState) -> Vec<Gauge> {
     let mut out = Vec::new();
     if s.target_name.is_none() {
