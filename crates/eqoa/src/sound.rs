@@ -183,12 +183,17 @@ impl Sound {
         &self.audio
     }
 
-    /// What plays, in a line: the BGM request and track, the XM slots.
+    /// What plays, in a line: the BGM request and track, the XM slots, and
+    /// what the device holds: its sounds of the 128, the SPU RAM they take of
+    /// the pool (the BGM ring's 256 KB among them), and the sounds it could
+    /// not make since the start (no slot, no memory).
     pub fn describe(&self) -> String {
         let st = self.audio.status();
         let t = &self.track;
+        let (free, largest) = self.dev.spu_free();
+        let pool = snd::device::SPU_POOL;
         format!(
-            "battle {}, region music {} (bgm {} {:?}), ambient track {:08x}/{:08x} (states {}/{}; terrain profile {}, music {}, played as effects), voices {:06x} {:06x}; volumes: effects {:.2}, music {:.2}",
+            "battle {}, region music {} (bgm {} {:?}), ambient track {:08x}/{:08x} (states {}/{}; terrain profile {}, music {}, played as effects), voices {:06x} {:06x}; volumes: effects {:.2}, music {:.2}; sounds {} of 128, sound RAM {} of {} KB (largest free {} KB), failed creates {} (no slot {}, no memory {})",
             self.battle.1,
             self.stream_best,
             if st[6] != 0 { "streaming" } else { "off" },
@@ -202,7 +207,14 @@ impl Sound {
             st[4],
             st[5],
             self.dev.sound_class_volume(0),
-            self.dev.sound_class_volume(1)
+            self.dev.sound_class_volume(1),
+            self.dev.sounds_held(),
+            (pool - free) / 1024,
+            pool / 1024,
+            largest / 1024,
+            self.dev.failed_creates[0] + self.dev.failed_creates[1],
+            self.dev.failed_creates[0],
+            self.dev.failed_creates[1]
         )
     }
 
@@ -425,6 +437,18 @@ impl Sound {
                 self.chars.insert(id, (i, 1));
             }
         }
+    }
+
+    /// A creature's sprite goes (it left, or is made anew for another model
+    /// or look): `VICSprite::Release`'s sound half. Its continuous sound
+    /// (`snd.channel`, a loop) is stopped, then its share of each sound let
+    /// go. Releasing alone leaves the loop playing for as long as another
+    /// creature shares its wave, and on after a logout.
+    pub fn let_go(&mut self, ids: &[u32], cont_channel: i32) {
+        if cont_channel != -1 {
+            self.dev.stop(cont_channel);
+        }
+        self.release_sounds(ids);
     }
 
     /// The creature went: its share of each sound with it.
@@ -826,6 +850,54 @@ mod tests {
         let (line, no_music) = ambience_at(&path, "LAVASTM.ESF", 5239.9, 4431.2, 6.49, 1.0, 0.0);
         assert!(line.contains("volumes: effects 1.00, music 0.00"), "{line}");
         assert_eq!(no_music, full, "Music Volume 0: the ambience as it was");
+    }
+
+    /// A creature's continuous sound (a loop) stops when its sprite goes,
+    /// as `VICSprite::Release` stops `m_snd.m_channel` before it releases,
+    /// even while another creature of its model still shares the wave. The
+    /// control only releases, as the client did: the loop plays on.
+    #[test]
+    fn a_creatures_loop_stops_when_it_goes() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        if !path.exists() {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        }
+        let mut iso = iso::Iso::open(&path).unwrap();
+        let ch = esf::Container::open(iso.read("DATA/CHAR.ESF").unwrap()).unwrap();
+        // the continuous sound twelve of CHAR.ESF's models loop
+        let id = 0x1db6_ca44u32;
+        let w = esf::sound::wave(&ch, ch.lookup(id as i32).unwrap()).unwrap();
+        assert_eq!(w.looped, 1, "a loop");
+        let mut lib = esf::Library::new();
+        lib.add("CHAR.ESF", ch);
+        for stop in [false, true] {
+            let audio = Audio::offline(Box::new(crate::audio::IsoDisc(iso::Iso::open(&path).unwrap())));
+            let mut s = Sound::with(&mut |p| iso.read(p).ok(), audio).unwrap();
+            // two creatures of the model come; the first one's loop plays
+            s.share_sounds(&lib, &[id]);
+            s.share_sounds(&lib, &[id]);
+            s.dev.flush(&mut s.link);
+            let h = vi::csprite::SoundSink::play(&mut s.sink(), id);
+            assert!(h >= 0, "the loop starts: {h}");
+            for _ in 0..30 {
+                s.frame_alone();
+                s.audio.render(1600);
+            }
+            assert!(s.dev.is_playing(h), "the loop plays");
+            // the first creature goes
+            if stop {
+                s.let_go(&[id], h);
+            } else {
+                s.release_sounds(&[id]);
+            }
+            for _ in 0..30 {
+                s.frame_alone();
+                s.audio.render(1600);
+            }
+            assert_eq!(s.dev.is_playing(h), !stop, "stopped with its creature: {stop}");
+            assert!(s.chars.contains_key(&id), "the other creature still shares the wave");
+        }
     }
 
     /// The title's music plays: SETUP.CSF's `splash_screen` is uploaded
