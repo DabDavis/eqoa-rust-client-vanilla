@@ -5,6 +5,26 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-25 · Back into Sanctuary at login, the camera at a wall, and quick presses
+- Logging in where you logged out in another world takes you back there: a vampire
+  who logged out in Sanctuary came back to an empty hillside in Tunaria. The game
+  now loads the world the server names, as a PlayStation 2 does.
+- When a wall, a tree or a hill comes between you and the camera, the camera now
+  comes in only as far as it has to, stopping just in front of it instead of right
+  behind your head, and goes back out to the distance you chose as the way clears,
+  following it out as you move. Within a few steps of you it still does what the
+  game does.
+- A controller button tapped quickly, or pressed just as a game window comes to the
+  front, is no longer missed: the game read the controller once a frame and lost a
+  press that came and went in between. Xbox controllers on Windows are still read
+  once a frame.
+- Options > Extended > Characters: NPC/PC View Distance is now NPC/PC Distance, and
+  its number no longer runs into its name.
+- Problem reports now say how each player near you is moving (what they are doing,
+  how fast, and how long since the server last placed them), and, when a game
+  window came to the front, which keys were still held and when your first press
+  arrived.
+
 ## 2026-10-25 · Grass, shrubs and stones on the ground, and a World options page
 - The ground now grows the plants the game puts on it: tufts of grass, shrubs, cacti
   and stones round you wherever the game has them, such as the dunes round Freeport,
