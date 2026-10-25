@@ -189,6 +189,14 @@ pub fn note_state(state: impl FnOnce() -> String) {
     });
 }
 
+/// Update Notices (the Extended page, one setting for every window): off,
+/// the page's Reload notice is not put up (`web/main.js`'s `checkUpdate`),
+/// and the newest build is the page the next time it loads.
+#[wasm_bindgen]
+pub fn update_notices() -> bool {
+    crate::settings::update_notices()
+}
+
 /// The client's state as last noted, for the page's reports.
 #[wasm_bindgen]
 pub fn client_state() -> String {

@@ -486,18 +486,35 @@ fn with_offer<T>(f: impl FnOnce(&mut Offer) -> T) -> T {
     f(o.get_or_insert_with(|| Offer::new(intervals(std::env::var("EQOA_UPDATE_EVERY").ok().as_deref()).2)))
 }
 
+/// Whether the question may come up, a program being `ready`: only with
+/// Update Notices on (the Extended page, `settings::update_notices`); off,
+/// the program in place starts the next time the game does, unasked, and a
+/// question up is put away.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn asks(ready: bool) -> bool {
+    ready && crate::settings::update_notices()
+}
+
 /// Each frame there is a UI to draw on (the game's screens' or the HUD's):
 /// the window up or away by the moment.
 pub fn offer_frame(m: Moment) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let ready = ready().is_some();
+        if ready && !asks(ready) && !QUIET_SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            crate::say("update: Update Notices are off: the program in place starts the next time the game does");
+        }
         let notes = ready_notes();
-        with_offer(|o| o.frame(ready, notes.as_ref(), m));
+        with_offer(|o| o.frame(asks(ready), notes.as_ref(), m));
     }
     #[cfg(target_arch = "wasm32")]
     let _ = m;
 }
+
+/// The program in place said to wait for the next start (`offer_frame`),
+/// once a run.
+#[cfg(not(target_arch = "wasm32"))]
+static QUIET_SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Whether the window is up (it takes its own input).
 pub fn offer_shown() -> bool {
@@ -739,7 +756,7 @@ mod native {
                 WhatsNew::Nothing => "no notes new to this build".to_string(),
                 WhatsNew::Unread => "its notes not read".to_string(),
             };
-            crate::say(&format!("update: {version} is in place: the game offers to restart into it ({what})"));
+            crate::say(&format!("update: {version} is in place: the game offers to restart into it, Update Notices on ({what})"));
         }
         if let Ok(mut u) = UPDATER.lock()
             && let Some(s) = u.as_mut()
@@ -1321,6 +1338,32 @@ mod tests {
         o.key(27, 2 * QUIET_MS + 30);
         settle(&mut o, true, 2 * QUIET_MS + 40);
         assert!(!o.shown());
+    }
+
+    /// Update Notices off (the Extended page): a program ready never brings
+    /// the question up, and one up goes away unanswered (no Later, no
+    /// restart); on again, it comes up at the next quiet moment. The control:
+    /// with them on, the same moments bring it up.
+    #[test]
+    fn update_notices_off_never_ask() {
+        crate::settings::testing::reset(false);
+        let mut o = Offer::new(LATER);
+        settle(&mut o, asks(true), 0);
+        assert!(o.shown(), "the control: on, it asks");
+        crate::settings::set_client(crate::settings::ClientOptions { update_notices: false, ..Default::default() });
+        o.frame(asks(true), None, quiet(QUIET_MS + 5));
+        assert!(!o.shown() && !o.restart(), "turned off: put away, unanswered");
+        settle(&mut o, asks(true), QUIET_MS + 10);
+        settle(&mut o, asks(true), 10 * QUIET_MS);
+        assert!(!o.shown(), "off: never again");
+        let mut fresh = Offer::new(LATER);
+        settle(&mut fresh, asks(true), 0);
+        assert!(!fresh.shown(), "off from the start: never asked");
+        crate::settings::set_client(crate::settings::ClientOptions::default());
+        settle(&mut o, asks(true), 20 * QUIET_MS);
+        assert!(o.shown(), "on again: asked at the next quiet moment");
+        assert!(!asks(false), "nothing ready, nothing asked");
+        crate::settings::testing::reset(false);
     }
 
     /// Left standing it counts as a Later; any input puts that off.

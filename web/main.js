@@ -5,7 +5,7 @@
 // override the defaults: ?relay=ws://127.0.0.1:8790&server=203.0.113.10 for a
 // local server. Reports, notices and what goes wrong are report.js's
 // (window.eqoaReport).
-import init, { boot, view, client_state, want_shot, crash_test, disc_id, disc_2002 } from './eqoa.js';
+import init, { boot, view, client_state, want_shot, crash_test, disc_id, disc_2002, update_notices } from './eqoa.js';
 
 const $ = (id) => document.getElementById(id);
 // the client's own graphics line ("graphics: <adapter> (<backend>)"), for reports
@@ -559,11 +559,14 @@ window.eqoaAsk2002 = () => {
 // native game's question, update.rs's LATER), or until a newer build. The
 // notice says what is new in it: the sections of the new build's update
 // notes (build.sh's update-notes.md) this page's own lack, as the game's
-// question does (update.rs's whats_new).
+// question does (update.rs's whats_new). With Update Notices off (the
+// Extended page, settings::update_notices) it says nothing: the newest build
+// is the page the next time it loads, as the native game's starts unasked.
 
 const BUILD = (import.meta.url.match(/\/v\/([0-9a-f]+)\/main\.js(?:$|[?#])/) || [])[1] || null;
 window.eqoaBuild = BUILD;
 let latest = null;     // the newest build version.json named, when last asked
+let clientReady = false; // the client's exports can be called (init done)
 let asked = 0;
 let later = null;      // the build the player said "Later" to, and until when
 // how long a Later holds (`?later=<ms>` for tests)
@@ -636,6 +639,10 @@ async function checkUpdate(force) {
     location.reload();
     return latest;
   }
+  if (!noticesOn()) {
+    report.notice('update');
+    return latest;
+  }
   if (!later || later.build !== latest || Date.now() >= later.until) {
     const news = await whatsNew(latest);
     report.notice('update', '', (started
@@ -646,6 +653,12 @@ async function checkUpdate(force) {
     ]);
   }
   return latest;
+}
+// Update Notices, as the client keeps them (on until the client is loaded,
+// or if it cannot say).
+function noticesOn() {
+  if (!clientReady) return true;
+  try { return update_notices(); } catch { return true; }
 }
 window.eqoaCheckUpdate = () => checkUpdate(true);
 setInterval(checkUpdate, 60000);
@@ -679,6 +692,7 @@ $('report-gate').onclick = () => {
 checkGraphics();
 const ready = init({ module_or_path: wasmModule });
 ready.then(() => {
+  clientReady = true;
   window.eqoaClient = { state: client_state, wantShot: want_shot, crashTest: crash_test };
   status('ready');
 }).catch((e) => {
