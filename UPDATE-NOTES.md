@@ -5,6 +5,63 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-25 · Options > Extended sorted into pages
+- Options > Extended now opens a short list: Video, UI, Controller, Camera,
+  Characters and Sound. Each opens a page with just its own settings, so none of
+  them scrolls any more.
+- Triangle (or Escape) goes back one step: from a page to the list, from the list
+  to the Options menu. Every setting keeps its value and works as before.
+
+## 2026-10-25 · Level of Detail at any zoom, and names when zoomed out
+- Level of Detail Off now keeps every character at full detail however far you zoom
+  the camera out. Zoomed out, your own character's fingers, toes and face used to
+  stop moving.
+- With Level of Detail On, characters move as the PS2 shows them from its own camera,
+  NPCs and players alike, however far you zoom out.
+- Names over heads stay when you zoom out. Pulled back past the PS2's camera
+  distance, the names around you used to disappear, and at the farthest zoom none
+  showed at all.
+- Names get smaller as you zoom out, down to half size at the farthest, so they no
+  longer cover the characters; zoomed in they are the size they always were.
+- Options > Extended > Characters > Name Distance: how far away names show, from the
+  game's 22 up to 200.
+
+## 2026-10-25 · Clearer text, and a Text setting
+- Text is drawn evenly at every window size, names over heads too: before, at most
+  sizes some letters came out a pixel thicker than others (the game's font is made
+  for the PS2's small screen), which looked rough or blurry, worst in smaller
+  windows.
+- Options > Extended > Video > Text: Sharp (crisp, the default) or Smooth (softened,
+  the way the PS2's text looked on a TV).
+
+## 2026-10-25 · Hide the UI, and Target of Target
+- Press H to hide everything drawn over the world: the HUD, the chat, the names over
+  heads, the damage numbers and your target's rings. Press H again to bring it back;
+  any window that opens (the start menu, an NPC's words, a message, the map...)
+  brings it back too. Options > Controls moves it to another key or puts it on a
+  controller button.
+- Options > Extended > UI > Target of Target (off unless you turn it on): beside your
+  target's bar a second bar shows who your target is targeting. On eqoaclassic it
+  shows for players and monsters alike; Sandstorm sends it for players only, so
+  there it shows when you target a player (your tank, say), not a monster.
+- Press F to target your target's target: the game's own Assist Target, the server
+  telling the game whom to target. Clicking the Target of Target bar does the same.
+  Options > Controls can move it.
+
+## 2026-10-25 · Shouts stay off, and Update Notices
+- Ignore Shouts (in the quick chat) now stays on until you pick Restore Shouts, even
+  after you log out and back in: the game remembers it, tells the server again each
+  time you enter the world, and hides any shouts that still come through. Your own
+  shouts still show when you shout.
+- Options > Extended > UI > Update Notices: turn it off and the game never stops you
+  mid-play to ask about restarting for a new version; the new version simply starts
+  the next time you start the game. In a browser it hides the Reload notice the same
+  way.
+
+## 2026-10-25 · Every hit of a double or quad attack is heard
+- Each hit of a double or quad attack makes its sound, yours and everyone's, as on a
+  PS2: before, only the first hit of each round was heard.
+
 ## 2026-10-25 · PlayStation controllers on Bluetooth, two windows' controllers, the Steam Deck
 - On Windows a DualSense (PS5 controller) on Bluetooth works again: the d-pad no
   longer holds up by itself, triangle is triangle (it opened the quick chat, as L2

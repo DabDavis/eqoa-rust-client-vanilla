@@ -10,7 +10,9 @@ current.
 - Vanilla: nothing that changes the game's picture or play beyond what README "Vanilla" keeps
   (widescreen, the untethered frame rate, the mouse and the touch screen, the keyboard with WASD and
   the Controls page, 1,000 lines of chat, no green backdrop behind the start menu's windows, the
-  Extended page, the map, the updater, the problem and crash reports, the 2002 disc's art on F9). A
+  Extended options, the map, the updater, the problem and crash reports, the 2002 disc's art on F9, Hide UI
+  on H, Target of Target, names from farther and smaller zoomed out, Ignore Shouts kept, Update Notices, Text
+  Sharp or Smooth). A
   new client-side addition is the user's call: ask first.
   Fixes are made here and are not carried to eqoa-rs any more (the user, 2026-10-23: "vanilla
   only"); its remote `eqoa-rs` stays for reading it. Link no private repository from anything
@@ -133,7 +135,7 @@ current.
   `controls.rs` UpdateControls). Headless: `EQOA_PAD` (`start@2500;stick l 0 -1@1500+2000`),
   `EQOA_MOUSE` (`click @<name>@ms`, `click X Y@ms`, `rclick`, `wheel N`, `press l|r`, `release l|r`,
   `move DX DY`: a drag past the slop takes the pointer as a window would, `mouse::Grab`), `EQOA_TOUCH=1`,
-  `EQOA_TOUCHES`, `EQOA_TAP=<name|*>@ms` in a playshot; `drive.py --gamepad/--mobile/--touch/--mouse`
+  `EQOA_TOUCHES`, `EQOA_TAP=<name|*>@ms`, `EQOA_HIDE_UI=<ms>[;<ms>]` in a playshot; `drive.py --gamepad/--mobile/--touch/--mouse`
   in a page; `EQOA_PAD_TRACE=1` / `?padtrace`; `EQOA_GLYPHS=1` prints the button glyphs a frame drew.
   A DualSense is plugged in here and gilrs drives its motors: rumble is as real as the speakers.
   The local server spawns a character at a random heading each login, so click by name, not pixel.
@@ -141,8 +143,8 @@ current.
   a moved key becomes its row's default key before the keyboard dispatch (never while typing), the
   controllers' buttons the game's fields before `VIPad::Read`. A key added to the dispatch needs a
   row in `binds::ROWS` (a test reads `viewer.rs` for them).
-  Multiboxing: each window reads the controllers its Controller Focus picks (`input::pick`, the
-  Extended page; per window by its place, `multibox.rs`: lock files in the config directory's
+  Multiboxing: each window reads the controllers its Controller Focus picks (`input::pick`,
+  Extended's Controller page; per window by its place, `multibox.rs`: lock files in the config directory's
   `windows/`, Web Locks in a page; one place a program, never a thread's: a settings read on another
   thread took a second; let go at the loop's end). Windows' Xbox pads are read through XInput (`xinput.rs`) and its
   DualShock 4s and DualSenses over HID (`hidpad.rs`, read only, their motors gilrs's), both of which
