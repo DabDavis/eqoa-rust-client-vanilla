@@ -1,11 +1,14 @@
 //! What a window does as it comes to the front, said in one line of the log
 //! (and so in a problem report, which carries the log's last lines): how
-//! long until its first frame, the longest wait between two frames until its
-//! first press, that press (a controller's or a key's) and how long after it
-//! came, and the keys already down as it came, which it does not take
-//! (winit's synthetic presses, `viewer.rs`: Alt+Tab's Tab). F3
-//! 20261025-111324: "First button press after activating a window is often
-//! ignored ... when using WinActivate via an AutoHotkey script".
+//! long before it came its last frame was drawn (a window whose frames had
+//! stopped behind another takes the focus late), how long until its first
+//! frame, the longest wait between two frames until its first press, that
+//! press (a controller's or a key's) and how long after it came, and the keys
+//! already down as it came, which it does not take (winit's synthetic
+//! presses, `viewer.rs`: Alt+Tab's Tab). F3 20261025-111324: "First button
+//! press after activating a window is often ignored ... when using
+//! WinActivate via an AutoHotkey script"; and a second box whose "inputs are
+//! ignored for like 1-2 seconds" (2026-10-25).
 //!
 //! winit sends a focus's synthetic presses just before `Focused(true)` on
 //! Windows (both come out of WM_SETFOCUS, the keys first) and just after it
@@ -37,6 +40,10 @@ pub struct Arrival {
     held: Vec<String>,
     /// synthetic presses before any focus (Windows sends them first)
     early: Vec<(Instant, String)>,
+    /// the last frame drawn, whether or not it is in front, and how long
+    /// before it came to the front that was
+    drawn: Option<Instant>,
+    before: Option<Duration>,
 }
 
 /// A duration as the line says it.
@@ -48,7 +55,8 @@ impl Arrival {
     /// `Focused(true)`: from now, until said.
     pub fn focused(&mut self, now: Instant) {
         let early = std::mem::take(&mut self.early);
-        *self = Arrival { at: Some(now), ..Default::default() };
+        let drawn = self.drawn;
+        *self = Arrival { at: Some(now), drawn, before: drawn.map(|t| now.saturating_duration_since(t)), ..Default::default() };
         for (t, k) in early {
             if now.duration_since(t) <= NEAR {
                 self.held_key(t, &k);
@@ -75,6 +83,7 @@ impl Arrival {
 
     /// A frame begun: the line, once nothing was pressed for `QUIET`.
     pub fn frame(&mut self, now: Instant) -> Option<String> {
+        self.drawn = Some(now);
         let at = self.at?;
         if self.first_frame.is_none() {
             self.first_frame = Some(now.duration_since(at));
@@ -103,6 +112,9 @@ impl Arrival {
     fn say(&mut self, now: Instant, press: Option<&str>) -> String {
         let at = self.at.take().unwrap_or(now);
         let mut s = String::from("focus: in front; ");
+        if let Some(d) = self.before {
+            s += &format!("its last frame {} before, ", ms(d));
+        }
         s += &match self.first_frame {
             Some(d) => format!("its first frame {} after", ms(d)),
             None => "no frame drawn".to_string(),
@@ -161,6 +173,30 @@ mod tests {
         );
         assert_eq!(a.press(at(t0, 400), "a character key"), None, "the control: once an activation");
         assert_eq!(a.frame(at(t0, 6000)), None, "nor after it");
+    }
+
+    /// A window whose frames had stopped behind another says how long
+    /// before it came its last one was drawn (its focus taken late, the
+    /// presses meanwhile lost to it); one drawing on says its last frame was
+    /// a frame ago. The control: a window that drew none before says
+    /// nothing of it.
+    #[test]
+    fn a_window_says_how_long_before_it_came_it_last_drew() {
+        let t0 = Instant::now();
+        let mut a = Arrival::default();
+        assert_eq!(a.frame(at(t0, 0)), None);
+        a.focused(at(t0, 1500));
+        assert_eq!(a.frame(at(t0, 1510)), None);
+        assert_eq!(
+            a.press(at(t0, 1600), "the controller's cross").as_deref(),
+            Some("focus: in front; its last frame 1500 ms before, its first frame 10 ms after; the first press 100 ms after: the controller's cross")
+        );
+        assert_eq!(a.frame(at(t0, 1543)), None);
+        a.focused(at(t0, 1560));
+        assert_eq!(a.lost(at(t0, 1570)).as_deref(), Some("focus: in front; its last frame 17 ms before, no frame drawn; no press in 10 ms (left the front)"));
+        let mut b = Arrival::default();
+        b.focused(at(t0, 0));
+        assert_eq!(b.lost(at(t0, 5)).as_deref(), Some("focus: in front; no frame drawn; no press in 5 ms (left the front)"), "the control");
     }
 
     /// A named key by its name; a character's key never by its character
