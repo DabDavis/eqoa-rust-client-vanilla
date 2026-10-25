@@ -145,9 +145,10 @@ mod winplace;
 // natively by its tests)
 #[cfg(any(windows, test))]
 mod xinput;
-// Windows' PlayStation controllers, read over HID in the background (its
-// reports checked natively by its tests)
-#[cfg(any(windows, test))]
+// Windows' PlayStation controllers, read over HID in the background, and
+// their motors there and on a Mac (`hidpad::mac`, IOKit; its reports checked
+// natively by its tests)
+#[cfg(any(windows, target_os = "macos", test))]
 mod hidpad;
 
 #[cfg(target_arch = "wasm32")]
