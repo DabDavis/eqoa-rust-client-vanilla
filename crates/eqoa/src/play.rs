@@ -1437,6 +1437,8 @@ impl Play {
         // the server's patch (`s2`): as the patcher left its folder, or
         // `EQOA_S2_DIR`'s
         crate::s2::begin_session();
+        // a world entry shows what Hide UI hid (`hideui`)
+        crate::hideui::show();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
         let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: 0, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0 };
@@ -2579,6 +2581,8 @@ impl Play {
         // +0x19 is 0
         let valid = self.target_info.is_some() && !self.entities.slots.iter().flatten().any(|e| Some(e.id) == target && e.p19 == 0);
         let tris = self.rings.frame(lib, walker, aim, me, valid, self.cam_inside, self.mode == 38, view_proj, step);
+        // Hide UI (`hideui`): the rings go on easing, none drawn
+        let tris = if crate::hideui::hidden() { Vec::new() } else { tris };
         r.set_overlay(device, queue, view_proj, &tris, &render::library_textures(lib));
     }
 
@@ -2743,6 +2747,49 @@ impl Play {
     /// HUD (and the touch screen's whole pad).
     pub fn window_up(&self) -> bool {
         self.mode != 0 && self.mode != 38
+    }
+
+    /// What brings back what Hide UI hid (`hideui::frame`): a window up, the
+    /// map, a server's player search, the target's details (Q held), a line
+    /// being typed, or the player dead.
+    pub fn wants_ui(&mut self) -> bool {
+        self.window_up() || self.map.open || self.search.open || self.info_up || self.info_window.open > 0.0 || self.keyboard_typing() || self.is_dead()
+    }
+
+    /// The loading screen is up (drawn on the 2D layer, never hidden).
+    pub fn loading_up(&self) -> bool {
+        self.loading.up()
+    }
+
+    /// The Controls page's "Target: the target's target" (F, the client's
+    /// own key) and a click on the Target of Target bar: the game's Assist
+    /// Target (`DoAction(0x0B0E0006)`, 0x00CB), the server answering whom to
+    /// target (`Msg007B`). The server's answer, not the target's channel:
+    /// an object id there is the target's own session's on a server that
+    /// counts them per session (go-eqoa-server), and the server knows a
+    /// creature's enemy, which the channel does not carry.
+    pub fn assist_target(&mut self) {
+        self.do_action(0x0B0E_0006, 0);
+    }
+
+    /// Target of Target (the Extended page's, off by default): the name of
+    /// whom the target's channel says it targets (`Creature::target`, its
+    /// state's bytes 58-61, which CLIENT reads into `m_p74` and never looks
+    /// at), when that is an entity in view other than the target. Sandstorm
+    /// fills it for players (their own target; the player's own channel too)
+    /// and leaves every NPC's 0 (its captures of 2026-02: no creature's moved
+    /// in a fight), so a creature shows none; go-eqoa-server counts object
+    /// ids per session, and there a player's is its own session's id.
+    pub fn target_of_target(&self) -> Option<String> {
+        if !crate::settings::client().target_of_target || self.target == u32::MAX {
+            return None;
+        }
+        let find = |id: u32| self.entities.slots.iter().flatten().find(|e| e.id == id);
+        let t = find(self.target)?.creature.as_ref()?.target;
+        if t == 0 || t == u32::MAX || t == self.target {
+            return None;
+        }
+        find(t)?.creature.as_ref().map(|c| c.name.clone()).filter(|n| !n.trim().is_empty())
     }
 
     /// `FindEntity(m_selfId)`: the player's own entity is in.
@@ -3135,7 +3182,8 @@ impl Play {
         }
         // in play; a server's player search over it is a window
         if self.mode == 0 && !self.search.open {
-            if matches!(c, Click::Right(..)) {
+            // Hide UI (`hideui`): none of the HUD's buttons is there to press
+            if matches!(c, Click::Right(..)) || crate::hideui::hidden() {
                 return false;
             }
             // the quick menus and the chat box are drawn out at a wide
@@ -3165,6 +3213,11 @@ impl Play {
                 // the bug report (`report`)
                 Some(crate::hud::Pick::Report) => {
                     crate::report::open();
+                    return true;
+                }
+                // the Target of Target bar: the game's Assist Target
+                Some(crate::hud::Pick::TargetsTarget) => {
+                    self.assist_target();
                     return true;
                 }
                 Some(crate::hud::Pick::Me) => self.self_id32(),
@@ -6268,6 +6321,7 @@ impl Play {
             target_hp: target.map_or(0, |e| e.p19 as i32),
             target_info: self.target_info,
             self_targeted_flag: Some(self.target) == me && self.dump.player.p2c > 0,
+            target_of_target: self.target_of_target(),
             pet,
             group_count: self.group.count() as i32,
             group: self.group.members[..self.group.count()]
@@ -7600,5 +7654,85 @@ mod commands {
         assert_eq!((p.target, p.auto_attack), (0x300, true));
         p.msg_007b(u32::MAX);
         assert_eq!((p.target, last_line(&p)), (0x300, "(word 838)"));
+    }
+
+    /// Hide UI (`hideui`): a click on the compass opens the map only while
+    /// the HUD is shown; hidden, no HUD button is there and the click is the
+    /// world's. The control: shown, the same click opens the map.
+    #[test]
+    fn hidden_the_huds_buttons_take_no_click() {
+        let mut p = play();
+        p.hud = Some((crate::ui::Vui::new(Default::default(), Default::default(), Vec::new()), crate::ui::UiAssets::default(), crate::hud::Hud::new()));
+        let compass = crate::mouse::Click::Target(39.0, 54.0);
+        crate::hideui::toggle();
+        assert!(crate::hideui::hidden());
+        assert!(!p.point(compass, (640, 448), false), "hidden: the world's click");
+        assert!(!p.map.open);
+        crate::hideui::toggle();
+        assert!(p.point(compass, (640, 448), false), "the control: shown, the HUD's");
+        assert!(p.map.open, "and the compass opens the map");
+    }
+
+    /// What shows the UI again (`Play::wants_ui`): a mode of the game's but
+    /// the manual camera's, the map, the target's details, a line typed; and
+    /// a world entry. The control: play alone wants none.
+    #[test]
+    fn a_window_up_shows_the_ui_again() {
+        let mut p = play();
+        assert!(!p.wants_ui(), "the control: play alone");
+        p.mode = 13;
+        assert!(p.wants_ui(), "the start menu");
+        p.mode = 38;
+        assert!(!p.wants_ui(), "the manual camera is play's");
+        p.mode = 0;
+        p.map.open = true;
+        assert!(p.wants_ui(), "the map");
+        p.map.open = false;
+        p.info_up = true;
+        assert!(p.wants_ui(), "the target's details");
+        p.info_up = false;
+        p.typing = Some(String::new());
+        assert!(p.wants_ui(), "a line typed");
+        p.typing = None;
+        crate::hideui::toggle();
+        assert!(crate::hideui::frame(false), "hidden, play alone");
+        p.mode = 1;
+        assert!(!crate::hideui::frame(p.wants_ui()), "a corpse's window: shown again");
+        crate::hideui::toggle();
+        let _ = play();
+        assert!(!crate::hideui::hidden(), "a world entry shows it");
+    }
+
+    /// Target of Target (the Extended page's): the name of whom the target's
+    /// channel says it targets, among the entities in view, the player's own
+    /// included; none with the option off (the control), no target, a
+    /// target's target of 0 or -1 (Sandstorm's NPCs), itself, or one not in
+    /// view.
+    #[test]
+    fn the_target_of_target_is_the_targets_channels() {
+        use net::entity::{Creature, Entity};
+        crate::settings::testing::reset(false);
+        let mut p = play();
+        let put = |p: &mut Play, k: usize, id: u32, name: &str, target: u32| {
+            p.entities.slots[k] = Some(Entity { id, kind: 130, creature: Some(Creature { name: name.into(), target, ..Default::default() }), ..Default::default() });
+        };
+        put(&mut p, 0, 0x100, "Lanelook", 0x200);
+        put(&mut p, 1, 0x200, "Casil", 0x300);
+        put(&mut p, 2, 0x300, "Luck", u32::MAX);
+        p.target = 0x200;
+        assert_eq!(p.target_of_target(), None, "the control: off, the game's bar alone");
+        crate::settings::set_client(crate::settings::ClientOptions { target_of_target: true, ..Default::default() });
+        assert_eq!(p.target_of_target().as_deref(), Some("Luck"));
+        put(&mut p, 1, 0x200, "Casil", 0x100);
+        assert_eq!(p.target_of_target().as_deref(), Some("Lanelook"), "the player's own");
+        for (t, why) in [(0, "0: an NPC on Sandstorm"), (u32::MAX, "-1"), (0x200, "itself"), (0x999, "not in view")] {
+            put(&mut p, 1, 0x200, "Casil", t);
+            assert_eq!(p.target_of_target(), None, "{why}");
+        }
+        p.target = 0x300;
+        assert_eq!(p.target_of_target(), None, "Luck targets none");
+        p.target = u32::MAX;
+        assert_eq!(p.target_of_target(), None, "no target");
+        crate::settings::testing::reset(false);
     }
 }

@@ -34,6 +34,9 @@ pub struct HudState {
     pub target_info: Option<u8>,
     /// The player has targeted themselves and has +0x2C (`m_p2C > 0`).
     pub self_targeted_flag: bool,
+    /// Target of Target (the Extended page's, the client's own): the name of
+    /// whom the target targets (`Play::target_of_target`).
+    pub target_of_target: Option<String>,
     /// `HasPet()`: the pet, when the player has one.
     pub pet: Option<PetState>,
     /// `GetP2BE4C()`: the group's size (0 out of one).
@@ -112,14 +115,23 @@ pub struct Hud {
 
 /// What a pointer finds on the HUD's left side (`Hud::pick`): the player's
 /// own frame, a group member's bar (its id), the pet's bar. Each is what L1's
-/// cycle targets in turn. And the bug report's button.
+/// cycle targets in turn. And the bug report's button, and the Target of
+/// Target bar (the game's Assist Target asked).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Pick {
     Me,
     Member(u32),
     Pet,
     Report,
+    TargetsTarget,
 }
+
+/// The Target of Target bar's place (the frame's, out at a wide window's
+/// left and down a tall one's bottom with the target's bar) and width: right
+/// of the "Target" title, the target's bar's width, its foot above the chat
+/// box's top (378 in a 4:3 window).
+const TOT_AT: [i32; 2] = [200, 348];
+const TOT_WIDTH: i32 = 174;
 
 impl Hud {
     pub fn new() -> Self {
@@ -215,7 +227,23 @@ impl Hud {
             crate::ui::chat_strip(vui, ui, [p[0] + 2, p[1]], [203, 125]);
         }
         self.draw_target(vui, ui, [20, 348], s);
+        self.draw_target_of_target(vui, ui, TOT_AT, s);
         self.draw_report(vui, ui, [20, 421]);
+    }
+
+    /// Target of Target (the Extended page's, the client's own): a second
+    /// bar beside the target's, its art, glowing with it, the name of whom
+    /// the target targets in it as the group's bars hold their names; none
+    /// without a target or a name. A pointer on it asks the game's Assist
+    /// Target (`Pick::TargetsTarget`).
+    fn draw_target_of_target(&mut self, vui: &Vui, ui: &mut UiRaster, at: [i32; 2], s: &HudState) {
+        let Some(name) = s.target_of_target.as_deref().filter(|_| s.target_name.is_some()) else { return };
+        self.note(ui, [at[0], at[1], at[0] + TOT_WIDTH, at[1] + vui.entry(26).uv1[1]], Pick::TargetsTarget);
+        vui.blit_bar(ui, &[], [0.0; 4], at, 25, 26, TOT_WIDTH, 3, self.glow0, 0, true);
+        let mut w = vi::ui::Window::default();
+        w.init(vui, ui, [at[0] + TOT_WIDTH / 2, at[1] + 12], TOT_WIDTH - 14, 1, 0);
+        w.open(true);
+        w.text_box(vui, ui, &wide(name), 0, 0, TOT_WIDTH - 14, 1, [0.0, 0.0, 0.0, self.glow0], 10);
     }
 
     /// The bug report (F3, `report`) as a button under the target's bar:
@@ -481,6 +509,39 @@ mod tests {
             assert_eq!(hud.pick([report[0] - side, report[1] + up]), Some(Pick::Report), "{size:?}");
             if side + up > 0.0 {
                 assert_eq!((hud.pick(me), hud.pick(report)), (None, None), "{size:?}: the game's places");
+            }
+        }
+    }
+
+    /// Target of Target: its bar right of the "Target" title, where a
+    /// pointer finds it (in a 16:9 window out at the left side with the
+    /// target's bar), its foot above the chat box's top (378); none without
+    /// a name to show or without a target (the controls). Needs a graphics
+    /// adapter; without one it says so and passes.
+    #[test]
+    fn the_target_of_target_bar_sits_beside_the_targets() {
+        let _gpu = crate::GPU_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut ui) = crate::ui::tests::layer() else {
+            eprintln!("SKIP: no graphics adapter");
+            return;
+        };
+        let mut atlas = vec![vi::ui::UiTexEntry::default(); 27];
+        atlas[26].uv1 = [16, 28];
+        let vui = crate::ui::Vui::new(Default::default(), Default::default(), atlas);
+        let assets = crate::ui::UiAssets::default();
+        let at = [super::TOT_AT[0] as f32 + 87.0, super::TOT_AT[1] as f32 + 14.0];
+        assert!(super::TOT_AT[1] + 28 <= 378, "above the chat box");
+        let shown = HudState { target_name: Some("Casil".into()), target_of_target: Some("Luck".into()), ..Default::default() };
+        for (size, side) in [((640, 480), 0.0), ((1280, 720), 106.0)] {
+            for (s, want) in [
+                (shown.clone(), Some(Pick::TargetsTarget)),
+                (HudState { target_of_target: None, ..shown.clone() }, None),
+                (HudState { target_name: None, ..shown.clone() }, None),
+            ] {
+                ui.begin(size);
+                let mut hud = Hud::new();
+                hud.draw(&vui, &mut assets.raster(&mut ui), &s);
+                assert_eq!(hud.pick([at[0] - side, at[1]]), want, "{size:?} {:?}", s.target_of_target);
             }
         }
     }
