@@ -838,7 +838,11 @@ impl Gamepads {
             _ => None,
         };
         let waiting = self.bound.as_ref().is_some_and(|b| !names.contains(&b.as_str()));
-        if focus != Focus::Auto || seat.alone() || !waiting {
+        // an Auto window at rest while a window on Window is in front keeps
+        // the controller it reads, and says so: no other Auto window takes it
+        // meanwhile, and it reads it again after
+        let resting = focus == Focus::Auto && !seat.alone() && pick == Pick::Idle;
+        if !resting && (focus != Focus::Auto || seat.alone() || !waiting) {
             self.bound = one.clone().filter(|_| focus == Focus::Auto);
         }
         // what it reads (by Auto, or waits for), and since when it has had
@@ -1782,6 +1786,11 @@ mod tests {
         assert_eq!(pick(auto, false, &pads, &window_behind, None), one("p1"), "the Window one behind: its own, as ever");
         let auto_front = seat_at(1, &[(0, Some("p1"), auto, Some(5_000))]);
         assert_eq!(pick(auto, false, &["p1", "p2"], &auto_front, None), one("p2"), "an Auto one in front: each its own");
+        // two controllers: at rest with its own kept (`Gamepads::poll` keeps
+        // the one it read), then its own again, not the first by the order
+        assert_eq!(pick(auto, false, &["p1", "p2"], &window_front, Some("p1")), Pick::Idle);
+        assert_eq!(pick(auto, false, &["p1", "p2"], &window_behind, Some("p1")), one("p1"), "its own again");
+        assert_eq!(pick(auto, false, &["p1", "p2"], &window_behind, None), one("p2"), "the control: forgotten, the second by the order");
         // the words
         assert_eq!(describe(&Pick::Idle, &[], &window_front, auto, false), "controllers: window 2 of 2, Auto: none while window 1 (Window) is in front");
         assert_eq!(reads_text(&Pick::Idle, &pads, &window_front, false), "Window 2: none, window 1 in front");
