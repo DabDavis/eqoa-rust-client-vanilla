@@ -491,7 +491,8 @@ enum Source {
     #[cfg(windows)]
     XInput(u32),
     /// a PlayStation controller read over HID (`hidpad`), by its place among
-    /// them; its motors are gilrs's reading of it, if gilrs has one
+    /// them, its motors set there too; and gilrs's reading of it, if gilrs
+    /// has one
     #[cfg(windows)]
     Hid(u32, Option<gilrs::GamepadId>),
     #[cfg(target_arch = "wasm32")]
@@ -885,7 +886,8 @@ impl Gamepads {
             }
         }
         // the PlayStation controllers read over HID, each with its USB ids:
-        // gilrs's reading of the same one is passed over, its motors kept
+        // gilrs's reading of the same one is passed over; their motors are
+        // set over HID too (`hidpad::Hid::rumble`)
         #[cfg(windows)]
         let mut hid: Vec<(Controller, (u16, u16))> = Vec::new();
         #[cfg(windows)]
@@ -899,7 +901,7 @@ impl Gamepads {
                     self.seen.push(f.name.clone());
                 }
                 let notes = f.reports.iter().map(|r| format!("{}{}", if f.bluetooth { "on Bluetooth, " } else { "" }, r.describe())).collect();
-                let c = Controller { name: f.name, report, between: f.between, raw, rumbles: false, label: f.model.label().to_string(), source: Source::Hid(k as u32, None), order: (1, k as u64), notes };
+                let c = Controller { name: f.name, report, between: f.between, raw, rumbles: true, label: f.model.label().to_string(), source: Source::Hid(k as u32, None), order: (1, k as u64), notes };
                 hid.push((c, f.ids));
             }
         }
@@ -921,14 +923,13 @@ impl Gamepads {
                     continue;
                 }
                 // a controller with the USB ids of one read over HID is that
-                // one: read there, its motors through Windows.Gaming.Input as
-                // before (in front only)
+                // one: read there, its motors set there (Windows.Gaming.Input
+                // takes a PlayStation controller's vibration and drops it)
                 #[cfg(windows)]
                 if let Some((c, _)) = hid.iter_mut().find(|(c, ids)| matches!(c.source, Source::Hid(_, None)) && Some(*ids) == pad.vendor_id().zip(pad.product_id())) {
                     if let Source::Hid(k, _) = c.source {
                         c.source = Source::Hid(k, Some(id));
                     }
-                    c.rumbles = pad.is_ff_supported();
                     continue;
                 }
                 // a PlayStation controller HID has not read yet (the interfaces
@@ -1048,7 +1049,11 @@ impl Gamepads {
 
     /// The motors as `VIPad` set them, on the controllers this window reads:
     /// the small one on or off, the large one's level, for at most `ms` (the
-    /// longer one's time left; they are set again when it ends).
+    /// longer one's time left; they are set again when it ends). Natively an
+    /// Xbox controller's through XInput (Windows), a PlayStation one's read
+    /// over HID through its own reports (`hidpad`, Windows), any other's
+    /// through gilrs (evdev's force feedback on Linux, Windows.Gaming.Input's
+    /// vibration; macOS has none); in a page the Gamepad API's dual-rumble.
     pub fn rumble(&mut self, act: [u8; 2], ms: i64) {
         let ms = ms.clamp(0, 5000) as u32;
         #[cfg(target_arch = "wasm32")]
@@ -1069,22 +1074,27 @@ impl Gamepads {
                     }
                 }
             }
+            #[cfg(windows)]
+            if let Some(h) = self.hid.as_mut() {
+                for s in &self.rumble_to {
+                    if let Source::Hid(k, _) = s {
+                        h.rumble(*k as usize, crate::hidpad::Motors::of_act(act), ms);
+                    }
+                }
+            }
             self.effect = None;
             let Some(g) = self.gilrs.as_mut() else { return };
             if act == [0, 0] || ms == 0 {
                 return;
             }
-            // gilrs's own controllers, and the ones read over HID that gilrs
-            // has too (their motors are Windows.Gaming.Input's)
+            // gilrs's own controllers
             let ids: Vec<gilrs::GamepadId> = self
                 .rumble_to
                 .iter()
                 .filter_map(|s| match s {
                     Source::Gilrs(id) => Some(*id),
                     #[cfg(windows)]
-                    Source::Hid(_, id) => *id,
-                    #[cfg(windows)]
-                    Source::XInput(_) => None,
+                    Source::Hid(..) | Source::XInput(_) => None,
                 })
                 .collect();
             if ids.is_empty() {
@@ -1118,6 +1128,10 @@ impl Gamepads {
             #[cfg(windows)]
             if let Some(x) = self.xinput.as_mut() {
                 x.stop();
+            }
+            #[cfg(windows)]
+            if let Some(h) = self.hid.as_mut() {
+                h.stop_motors();
             }
         }
     }
