@@ -10,7 +10,9 @@
 //! 1 and 3. While fighting, or for a second after a swing's effect, the
 //! player turns to face the target (mode 3 heads straight for it). Autorun
 //! runs forward until the stick is pushed past 0.7; the player's own cast
-//! walks; the locks stop movement or the camera; a connection silent for 8 s
+//! walks; the locks stop movement or the camera (every window up holds both,
+//! but the chat line, a tell or reply, the quick chat and the chat box's
+//! history, as `UpdateMode` leaves them: `play::mode_locks`); a connection silent for 8 s
 //! stops both (`Client::timed_out`, which the client leaves off: see
 //! `Play::control_client`).
 //!

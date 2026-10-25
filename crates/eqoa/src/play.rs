@@ -492,6 +492,25 @@ const FAR_POSE_BUDGET: u32 = 50;
 /// How many frames drawn a far character waits between poses with `far` of
 /// them in view: every frame up to `FAR_POSE_BUDGET`, then about that many
 /// poses a frame.
+/// Movement and the camera as `VIWndGame::UpdateMode` leaves them in
+/// `mode` (`m_p06DC0`, `m_p06DC4`): it holds both first (`SetP06DC0(0, 0)`)
+/// and lets them go only in play (0), the edit box (2), a tell (28) and a
+/// reply (29), and the chat box's history (33: R2's `SetP06DC0(1, 1)` after
+/// it); fishing (36) lets the camera go (`SetP06DC0(0, 1)`). The quick chat
+/// (30) and the start menu (13) are opened from play without an
+/// `UpdateMode`, so they keep play's (the start menu's framing holds both
+/// itself: `ApplyRaceCamera`). Every other window (an NPC's words, a dialog,
+/// a prompt, the corpse, a merchant, the bank, the trainer, what the start
+/// menu opens, the manual camera) holds the player and the camera where they
+/// are until it closes (F3 20261025-045748).
+pub fn mode_locks(mode: i32) -> (bool, bool) {
+    match mode {
+        0 | 2 | 28 | 29 | 33 | 30 | 13 => (true, true),
+        36 => (false, true),
+        _ => (false, false),
+    }
+}
+
 fn far_pose_every(far: u32) -> u32 {
     far.div_ceil(FAR_POSE_BUDGET).max(1)
 }
@@ -4098,8 +4117,10 @@ impl Play {
             target,
             autorun: self.autorun,
             casting: now.wrapping_sub(a) as i32 >= 0 && (now.wrapping_sub(b) as i32) < 0,
-            move_ok: self.locks.0,
-            look_ok: self.locks.1,
+            // the window's (`mode_locks`) and the client's other holds (the
+            // start menu's framing, the manual camera, a server's search)
+            move_ok: self.locks.0 && mode_locks(self.mode).0,
+            look_ok: self.locks.1 && mode_locks(self.mode).1,
             rooted: self.rooted,
             // IsTimedOut (8 s with nothing arriving) is not applied:
             // go-eqoa-server sends nothing while nothing changes, so it would
@@ -7187,6 +7208,36 @@ mod commands {
 
     fn last_line(p: &Play) -> &str {
         p.chat.back().map_or("", |l| l.0.as_str())
+    }
+
+    /// `UpdateMode`'s holds (F3 20261025-045748: "When the NPC dialogue
+    /// window is opened, the player should stop running and not be able to
+    /// move until they clear out the dialogues"): an NPC's words (0x0046's
+    /// `ShowDialog`, mode 9) hold the walk and the camera until they are
+    /// answered, as every window does but the chat line, a tell or a reply,
+    /// the quick chat and the chat box's history; fishing holds the walk
+    /// only. The controls: play lets both go, and the client's own holds
+    /// (`locks`) still count there.
+    #[test]
+    fn a_window_holds_the_walk_and_the_camera_as_update_mode_does() {
+        let held = |p: &Play| {
+            let c = p.control_client();
+            (c.move_ok, c.look_ok)
+        };
+        let mut p = play();
+        assert_eq!(held(&p), (true, true), "in play");
+        p.show_dialog(&"Hail, traveller".encode_utf16().collect::<Vec<u16>>());
+        assert_eq!((p.mode, held(&p)), (9, (false, false)), "held while the NPC's words are up");
+        p.close_dialog();
+        assert_eq!((p.mode, held(&p)), (0, (true, true)), "answered: let go");
+        let modes = [(7, (false, false)), (14, (false, false)), (1, (false, false)), (10, (false, false)), (11, (false, false)), (5, (false, false)), (38, (false, false)), (2, (true, true)), (28, (true, true)), (29, (true, true)), (30, (true, true)), (33, (true, true)), (36, (false, true))];
+        for (mode, want) in modes {
+            p.mode = mode;
+            assert_eq!(held(&p), want, "mode {mode}");
+        }
+        p.mode = 0;
+        p.locks = (false, true);
+        assert_eq!(held(&p), (false, true), "the client's own hold");
     }
 
     /// A far 0x00B2 move in the same world (Freeport's open ground to the

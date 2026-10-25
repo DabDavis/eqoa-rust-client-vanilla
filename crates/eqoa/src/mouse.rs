@@ -36,6 +36,10 @@
 //!   (the game re-derives the orbit from where the camera was, so a sidestep
 //!   would drag it round); where the game would swing the camera round to a
 //!   clear angle it comes in to its closest instead.
+//! - while the player moves (the keys, a stick, autorun: `moving`), the
+//!   left button in the follow orbit steers as the right does (`held_as`),
+//!   the body turned to the view as the run begins; standing still it looks
+//!   round again (F3 20261025-044637).
 //! - both buttons run forward (the left stick all the way up), steered as
 //!   the right button steers; A and D add a sidestep, a diagonal.
 //! - in first person and the follow camera (0 and 2) either button turns the
@@ -107,6 +111,13 @@ pub enum Zoom {
     In,
     /// out, in first person: back to the camera it came from
     Out,
+}
+
+/// Whether the player moves this frame (`Mouse::moving`): the keys' or a
+/// stick's walk (the left stick's axes, 2 and 3 of `UpdateControls`' four:
+/// `keys` the keyboard's, `pad` the controller's), or autorun.
+pub fn moving(keys: &[f32; 4], pad: &[f32; 4], autorun: bool) -> bool {
+    autorun || [keys[2], keys[3], pad[2], pad[3]].iter().any(|v| *v != 0.0)
 }
 
 /// The wheel's `lines` (in positive) on `cam`: whether it changes the
@@ -263,6 +274,10 @@ pub struct Mouse {
     /// the last frame steered the follow orbit (a new hold turns the body
     /// to the view first)
     steered: bool,
+    /// the player moves this frame by the keys, a stick or autorun (the
+    /// caller's, before `look` and `steer`): the left button then steers in
+    /// the follow orbit as the right does (`held_as`)
+    pub moving: bool,
 }
 
 impl Mouse {
@@ -394,13 +409,24 @@ impl Mouse {
 
     /// Whether the mouse steers the body in camera `mode` this frame
     /// (`controls::Client::steer`): the right button in the follow orbit,
-    /// either in first person and the follow camera, which it turns itself.
+    /// and the left there too while the player moves (`held_as`), either in
+    /// first person and the follow camera, which it turns itself.
     pub fn steer(&self, mode: i32) -> bool {
         match mode {
-            3 => self.held[1],
+            3 => self.held_as(mode)[1],
             0 | 2 => self.held[0] || self.held[1],
             _ => false,
         }
+    }
+
+    /// The buttons as the look takes them in camera `mode`: in the follow
+    /// orbit the left one, held while the player moves (`moving`), steers as
+    /// the right does (F3 20261025-044637: "Moving should make it work
+    /// similar to holding right click"); standing still it looks round the
+    /// player without turning it.
+    fn held_as(&self, mode: i32) -> [bool; 2] {
+        let left_steers = mode == 3 && self.held[0] && self.moving;
+        [self.held[0], self.held[1] || left_steers]
     }
 
     /// The window lost the pointer or the focus, or the look was taken
@@ -532,8 +558,9 @@ impl Mouse {
         let wheel = std::mem::take(&mut self.wheel);
         self.steps = 0.0;
         let zoom = zoom_step(&w.cam, wheel);
-        let stick = look_held(&mut w.cam, self.held, dx as f32, dy as f32, inverted, frame_s, self.steered);
-        self.steered = self.held[1] && w.cam.camera_mode == 3;
+        let held = self.held_as(w.cam.camera_mode);
+        let stick = look_held(&mut w.cam, held, dx as f32, dy as f32, inverted, frame_s, self.steered);
+        self.steered = held[1] && w.cam.camera_mode == 3;
         if zoom == Zoom::None && wheel != 0.0 {
             self::zoom(&mut w.cam, &mut w.reach, wheel);
         }
@@ -1307,6 +1334,56 @@ mod tests {
         look_held(&mut cam, [false, true], 0.0, -10.0, false, 1.0 / 60.0, true);
         assert_eq!(cam.def_orbit_pitch, pitch + F::new(-10.0 * TILT_PER_PIXEL));
         assert_eq!(cam.walk.phys.angles.x, h1, "no turn");
+    }
+
+    /// The left button held while the player moves steers the follow orbit
+    /// as the right does (F3 20261025-044637: "Moving should make it work
+    /// similar to holding right click"), through `Mouse::look` and `steer`
+    /// on a walk on Freeport's ground: the body turned to the view as the run
+    /// begins, then the body and the camera behind it turned by the mouse.
+    /// The controls: standing still, before and after, the same hold and
+    /// drag swing the camera round alone, the body left as it faced.
+    #[test]
+    fn the_left_button_steers_while_the_player_moves() {
+        let Some(world) = crate::walker::tests::tunaria_round(25390.0, 15750.0) else { return };
+        let mut w = Walker::arrive(world, crate::walker::Spawn::ground(25390.0, 15750.0, 0.5));
+        assert_eq!(w.cam.camera_mode, 3, "the follow orbit");
+        let mut m = Mouse::default();
+        m.held = [true, false];
+        let h0 = w.cam.walk.phys.angles.x;
+        m.look = (-100.0, 0.0);
+        m.look(&mut w, false, 1.0 / 60.0);
+        assert!(!m.steer(3), "standing still the left button does not steer");
+        assert_eq!(w.cam.walk.phys.angles.x, h0, "standing still the body stays");
+        let view = w.cam.cur.orbit.x + F::new(PI);
+        assert!(wrapped((view - h0).0).abs() > 0.7, "the camera swung round");
+        m.moving = true;
+        assert!(m.steer(3), "moving, the left button steers");
+        m.look(&mut w, false, 1.0 / 60.0);
+        let h = w.cam.walk.phys.angles.x;
+        assert_eq!(h, view.fmodf(F::new(TWO_PI)), "the body to the view");
+        m.look = (50.0, 0.0);
+        m.look(&mut w, false, 1.0 / 60.0);
+        let h1 = (h + F::new(-(50.0 * LOOK_PER_PIXEL))).fmodf(F::new(TWO_PI));
+        assert_eq!(w.cam.walk.phys.angles.x, h1, "turned by the mouse");
+        assert_eq!(w.cam.cur.orbit.x, (h1 + F::new(PI)).fmodf(F::new(TWO_PI)), "the camera behind");
+        m.moving = false;
+        m.look = (-100.0, 0.0);
+        m.look(&mut w, false, 1.0 / 60.0);
+        assert_eq!(w.cam.walk.phys.angles.x, h1, "still again, the body stays");
+        assert!(wrapped((w.cam.cur.orbit.x - (h1 + F::new(PI))).0).abs() > 0.7, "and the camera swings round");
+    }
+
+    /// What counts as moving: the keys' or a stick's walk (axes 2 and 3), or
+    /// autorun; the right stick's look (axes 0 and 1) does not.
+    #[test]
+    fn moving_is_a_walk_or_autorun_not_a_look() {
+        assert!(moving(&[0.0, 0.0, 0.0, -1.0], &[0.0; 4], false), "W");
+        assert!(moving(&[0.0, 0.0, 1.0, 0.0], &[0.0; 4], false), "D");
+        assert!(moving(&[0.0; 4], &[0.0, 0.0, 0.0, 0.6], false), "the left stick");
+        assert!(moving(&[0.0; 4], &[0.0; 4], true), "autorun");
+        assert!(!moving(&[1.0, -1.0, 0.0, 0.0], &[0.8, 0.5, 0.0, 0.0], false), "a look is not a walk");
+        assert!(!moving(&[0.0; 4], &[0.0; 4], false), "standing still");
     }
 
     /// Steered, a snap of the orbit to a clear angle (the game's, near a

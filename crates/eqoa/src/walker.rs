@@ -537,12 +537,12 @@ impl AnimatedProps {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// The disc's TUNARIA.ESF with the zones round (x, z) read and the
     /// collision world made; None without `run/eqoa.iso`.
-    fn tunaria_round(x: f32, z: f32) -> Option<World<Ee>> {
+    pub(crate) fn tunaria_round(x: f32, z: f32) -> Option<World<Ee>> {
         let iso = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
         if !iso.exists() {
             eprintln!("SKIP: no run/eqoa.iso");

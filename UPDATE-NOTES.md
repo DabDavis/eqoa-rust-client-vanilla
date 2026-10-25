@@ -5,6 +5,16 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-25 · A window holds you in place, and the left mouse button steers on the move
+- When an NPC talks to you, or any window is up (a question, a corpse, a merchant,
+  the bank, the trainer, the spell book...), you stand still and the camera stays
+  where it is until you close it, as on a PlayStation 2. With autorun on, the run
+  waits and goes on once the window is closed. The chat line, a tell, the quick
+  chat and the chat box's history still let you move.
+- While you move (the keys, a stick or autorun), holding the left mouse button now
+  steers you as the right button does: you turn to where the camera looks and run
+  that way. Standing still, it still looks round you without turning you.
+
 ## 2026-10-25 · Vampires can go to Sanctuary on Sandstorm
 - On Sandstorm, a vampire's Sanctuary no longer answers "You can't go to Sanctuary
   (memcard patch 0 outdated)". The game now tells Sandstorm it plays with

@@ -522,6 +522,8 @@ pub fn shot_with(
             } else if look_free {
                 let inverted = play.as_ref().is_some_and(|p| p.options.inverted != 0);
                 let frame_s = frame_ms as f32 / 1000.0;
+                // the keys' and the pad's sticks are in `sticks` already
+                mouse.moving = crate::mouse::moving(&sticks, &[0.0; 4], play.as_ref().is_some_and(|p| p.autorun));
                 let (look, zoom) = mouse.look(&mut walker, inverted, frame_s);
                 if let Some(p) = play.as_mut() {
                     p.wheel_style(&mut walker, zoom, &mut mouse.back);
@@ -2336,6 +2338,10 @@ impl App {
         let free = !dead && !offer && self.play.as_ref().is_none_or(|p| p.look_free());
         let aim = !dead && !offer && self.play.as_ref().is_some_and(|p| p.aiming());
         let inverted = self.play.as_ref().is_some_and(|p| p.options.inverted != 0);
+        // (and its list has the pad's sticks: the walk does not)
+        let pad = if offer { [0.0; 4] } else { self.console.sticks() };
+        // the left button steers while the player moves (`Mouse::moving`)
+        self.mouse.moving = crate::mouse::moving(&a, &pad, self.play.as_ref().is_some_and(|p| p.autorun));
         let ((look, zoom), feel) = match self.walker.as_mut() {
             Some(w) if free => (self.mouse.look(w, inverted, self.frame_s), crate::mouse::look(w, tx, ty, pinch, inverted, self.frame_s)),
             // the manual camera (L1 or R1 held): the mouse's and a finger's
@@ -2368,8 +2374,6 @@ impl App {
         if free && self.mouse.running() {
             a[3] = -1.0;
         }
-        // (and its list has the pad's sticks: the walk does not)
-        let pad = if offer { [0.0; 4] } else { self.console.sticks() };
         for (i, a) in a.iter_mut().enumerate() {
             let (m, t) = if i < 2 { (look[i], feel[i]) } else { (0.0, 0.0) };
             for v in [pad[i], m, t] {
