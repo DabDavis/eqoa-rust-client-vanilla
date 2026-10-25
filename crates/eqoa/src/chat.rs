@@ -139,6 +139,27 @@ impl ChatText {
     }
 }
 
+/// A shout's colour, (63, 255, 63): 0x0A7B's three bytes as Sandstorm sends
+/// a shout (`pcaps/ps2_sandstorm.pcap`, `eqoa_live_capture.pcap`) and
+/// go-eqoa-server copies it.
+pub const SHOUT_COLOR: [u8; 3] = [63, 255, 63];
+
+/// Whether a line the server sent is someone else's shout: in the shout's
+/// colour and "<name> shouts: <text>", the name holding no colon (so a say,
+/// "<name>: ...", that quotes " shouts: " is not one), and the name not the
+/// player's own (`own`: their own shout, as the server echoes it, is kept).
+/// The game has no such test: the server stops sending shouts once told
+/// (0x0C01 [1, 0]); a server that does not listen still has them dropped
+/// while Ignore Shouts is kept (`settings::shouts`).
+pub fn is_shout(text: &str, color: [f32; 4], own: &str) -> bool {
+    let byte = |v: f32| (v * 255.0).round() as i32;
+    if (0..3).any(|i| byte(color[i]) != SHOUT_COLOR[i] as i32) {
+        return false;
+    }
+    let Some((name, _)) = text.split_once(" shouts: ") else { return false };
+    !name.is_empty() && !name.contains(':') && !name.eq_ignore_ascii_case(own)
+}
+
 /// `VIWndChat`.
 pub struct WndChat {
     /// Nonzero: the fixed box, every line.
@@ -337,6 +358,24 @@ impl WndChat {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A shout is someone else's "<name> shouts: <text>" in the shout's
+    /// colour, as Sandstorm's 0x0A7B carries it (the capture's own line); the
+    /// controls: the same words white, a say quoting " shouts: ", the
+    /// player's own shout, and another colour are not.
+    #[test]
+    fn a_shout_is_someone_elses_line_in_the_shouts_colour() {
+        let green = [63.0 / 255.0, 1.0, 63.0 / 255.0, 1.0];
+        assert!(is_shout("Powerbrick shouts: yrs?", green, "Gnolie"), "the capture's shout");
+        assert!(is_shout("Lord Bob shouts: run", green, "Gnolie"), "a name of two words");
+        assert!(!is_shout("Powerbrick shouts: yrs?", [1.0; 4], "Gnolie"), "white: not a shout");
+        assert!(!is_shout("Bob: Gnolie shouts: too much", green, "Gnolie"), "a say quoting a shout");
+        assert!(!is_shout("Gnolie shouts: lfg", green, "Gnolie"), "the player's own");
+        assert!(!is_shout("gnolie shouts: lfg", green, "Gnolie"), "the player's own, any case");
+        assert!(!is_shout("Powerbrick says: yrs?", green, "Gnolie"), "no shout in it");
+        assert!(!is_shout(" shouts: nameless", green, "Gnolie"), "no name");
+        assert!(!is_shout("Powerbrick shouts: yrs?", [64.0 / 255.0, 1.0, 63.0 / 255.0, 1.0], "Gnolie"), "a colour a step off");
+    }
 
     /// The history holds the last 1,000 lines, and R2's scroll goes back
     /// through all of them a line a step, sounding 9 at the oldest. The

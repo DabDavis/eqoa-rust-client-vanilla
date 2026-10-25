@@ -23,7 +23,10 @@
 //!   mode in `viewer`) and Art (Frontiers' or the 2002 disc's, `era`, as F9
 //!   swaps it: drawn as it moves, the 2002 disc asked for the first time);
 //! - UI: Ability Bars (the game's 2, or 3 or 4: the HUD's quick menus and
-//!   the spell book's slots, `hudmenu`);
+//!   the spell book's slots, `hudmenu`) and Update Notices (one setting for
+//!   every window: off, the game never asks to restart into a newer build,
+//!   which starts the next time the game does; `update::asks`, and a page's
+//!   Reload notice, `web/main.js`);
 //! - Controller: Controller Focus (which controllers this window reads:
 //!   Auto, Window, Pad 1 to 4 or Off, `input::pick`, kept for each window of
 //!   the client open, `multibox`; what it reads now is said beside Back) and
@@ -504,7 +507,8 @@ impl WndOptions {
     /// the game's 24 as a slider does, 200 to 204 its last, and NPC/PC View
     /// Distance (24) by fifties from the game's 100 to 1000; Art (25) and
     /// VSync (26) turn over, VSync natively only (a page's stays on with
-    /// sound 9: the browser paces it). A slider (`slider_at`) makes its own
+    /// sound 9: the browser paces it); Update Notices (29) turns over. A
+    /// slider (`slider_at`) makes its own
     /// sound, as a volume does; every other row sound 11.
     fn change(&mut self, o: &mut GameOptions, d: i32, cues: &mut Vec<i32>, ups: &mut Vec<OptionsUp>) {
         let tracks = if FEATURES & 0x100 != 0 { 10 } else { 3 };
@@ -567,6 +571,8 @@ impl WndOptions {
                     25 => c.art = crate::era::other(c.art),
                     26 if cfg!(target_arch = "wasm32") => cues.push(9),
                     26 => c.vsync = !c.vsync,
+                    // Update Notices (`update::asks`)
+                    29 => c.update_notices = !c.update_notices,
                     22 => {
                         let (lo, n) = (crate::settings::ABILITY_BARS_GAME, crate::hudmenu::MAX_BARS as u8 - crate::settings::ABILITY_BARS_GAME + 1);
                         c.ability_bars = lo + (c.ability_bars.saturating_sub(lo).min(n - 1) + if d < 0 { n - 1 } else { 1 }) % n;
@@ -975,7 +981,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 15] = [
+const EXTENDED_ITEMS: [(i32, &str); 16] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -991,6 +997,7 @@ const EXTENDED_ITEMS: [(i32, &str); 15] = [
     (24, "NPC/PC View Distance"),
     (25, "Art"),
     (26, "VSync"),
+    (29, "Update Notices"),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1016,7 +1023,7 @@ struct Category {
 /// Video, UI, Controller, etc."), each a page of `PAGE_MOST` rows at most.
 const CATEGORIES: [Category; 6] = [
     Category { name: "Video", items: &[13, 20, 14, 26, 25], note: Note::None },
-    Category { name: "UI", items: &[22], note: Note::None },
+    Category { name: "UI", items: &[22, 29], note: Note::None },
     Category { name: "Controller", items: &[16, 19], note: Note::Reads },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
     Category { name: "Characters", items: &[12, 23, 24], note: Note::Server },
@@ -1077,6 +1084,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
             esf::Era::Y2002 => "2002",
         }),
         26 => on_off(crate::settings::vsync()),
+        29 => on_off(c.update_notices),
         _ => return None,
     })
 }
@@ -1333,7 +1341,15 @@ mod tests {
         assert_eq!(settings::ability_bars(), 4, "and the other way");
         assert_eq!(cues.last(), Some(&11));
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (0, Some(&9)), "UI's one row");
+        assert_eq!(w.item, 29, "Update Notices");
+        assert!(settings::update_notices(), "on: the game asks to restart into a newer build");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::update_notices(), cues.last()), (false, Some(&11)), "off");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(settings::update_notices(), "and back: two values");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (1, Some(&9)), "UI's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         // Controller: Controller Focus, Capture Controller
         press(&mut w, &mut o, key::DOWN, &mut cues);
