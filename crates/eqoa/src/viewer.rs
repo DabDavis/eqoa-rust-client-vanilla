@@ -3653,14 +3653,34 @@ impl ApplicationHandler for App {
             self.attach(window, None, config, device, queue);
             return;
         }
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(self.display.clone())));
+        // each step in the log, and a start that dies in the driver tries
+        // the platform's other API next time (`gpustart`)
+        #[cfg(not(target_arch = "wasm32"))]
+        let start = crate::gpustart::Start::begin();
+        #[allow(unused_mut)]
+        let mut desc = wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(self.display.clone()));
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(b) = start.backends {
+            desc.backends = b;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::gpustart::step(&format!("making the instance ({:?})", desc.backends));
+        let instance = wgpu::Instance::new(desc);
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::gpustart::step("making the window's surface");
         let surface = instance.create_surface(window.clone()).expect("surface");
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::gpustart::step("asking for an adapter");
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             compatible_surface: Some(&surface),
             ..Default::default()
         }))
         .expect("adapter");
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let info = adapter.get_info();
+            crate::gpustart::step(&format!("{} ({:?}, driver {} {}): asking for its device", info.name, info.backend, info.driver, info.driver_info));
+        }
         let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).expect("device");
         let size = window.inner_size();
         let mut config = surface.get_default_config(&adapter, size.width.max(1), size.height.max(1)).expect("surface config");
@@ -3688,6 +3708,8 @@ impl ApplicationHandler for App {
         crate::settings::set_display_refresh(window.current_monitor().and_then(|m| m.refresh_rate_millihertz()));
         eprintln!("present mode {:?} (vsync {}; offered {offered:?})", config.present_mode, if crate::settings::vsync() { "on" } else { "off" });
         surface.configure(&device, &config);
+        #[cfg(not(target_arch = "wasm32"))]
+        start.done();
         self.attach(window, Some(surface), config, device, queue);
         if let Some(g) = self.gfx.as_mut() {
             g.present_modes = offered;

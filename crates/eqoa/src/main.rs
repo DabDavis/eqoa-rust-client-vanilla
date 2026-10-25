@@ -127,6 +127,8 @@ mod spells;
 mod stream;
 #[cfg(not(target_arch = "wasm32"))]
 mod gpulost;
+#[cfg(not(target_arch = "wasm32"))]
+mod gpustart;
 mod report;
 mod ui;
 mod update;
