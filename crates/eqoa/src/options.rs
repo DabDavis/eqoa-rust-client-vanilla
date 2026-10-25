@@ -992,8 +992,10 @@ impl WndOptions {
         let width = self.window2.size[0];
         let knob = vui.entry(166).uv1[0];
         let at = self.window2.top_left()[0] + width - 180;
-        // a number ends before its slider's left arrow
-        let end = width - 180 - (vui.entry(128).uv1[0] + 3) - 6;
+        // a number ends before its slider's left arrow, two units off it:
+        // room after the longest label for NPC/PC Distance's 1000 (F3
+        // 20261025-071119: six units off, it ran into the label)
+        let end = width - 180 - (vui.entry(128).uv1[0] + 3) - 2;
         for (k, &item) in cat.items.iter().enumerate() {
             let Some((t, number)) = slider_at(item) else { continue };
             let k = k as i32;
@@ -1050,7 +1052,7 @@ const EXTENDED_ITEMS: [(i32, &str); 25] = [
     (21, "Sound in Background"),
     (22, "Ability Bars"),
     (23, "NPC/PC Display"),
-    (24, "NPC/PC View Distance"),
+    (24, "NPC/PC Distance"),
     (25, "Art"),
     (26, "VSync"),
     (27, "Name Distance"),
@@ -1072,7 +1074,7 @@ enum Note {
     /// what this window reads (`input::reads`)
     Reads,
     /// what this server gives (`WndOptions::server_note`), while NPC/PC
-    /// Display or View Distance is chosen
+    /// Display or Distance is chosen
     Server,
     /// where the sound plays now (`audio::playing`), natively
     Output,
@@ -1586,7 +1588,7 @@ mod tests {
         assert!(settings::screen_shake(), "turned over again");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
-        // Characters: Level of Detail, NPC/PC Display, NPC/PC View Distance
+        // Characters: Level of Detail, NPC/PC Display, NPC/PC Distance
         press(&mut w, &mut o, key::DOWN, &mut cues);
         press(&mut w, &mut o, key::CROSS, &mut cues);
         assert_eq!((w.cat, w.item), (Some(5), 12), "Characters, Level of Detail");
@@ -1616,7 +1618,7 @@ mod tests {
         assert_eq!(settings::entity_slots(), 96, "a number between, as client.opt may hold, to the eight below");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!(w.item, 24, "NPC/PC View Distance");
+        assert_eq!(w.item, 24, "NPC/PC Distance");
         assert_eq!(settings::entity_view(), 100, "the game's 100");
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert_eq!((settings::entity_view(), cues.last()), (100, Some(&9)), "no nearer than the game's");
@@ -1993,7 +1995,7 @@ mod tests {
         w.draw(&vui, &mut r, &o, &mut ups);
         assert_eq!(w.point([slider + 30.0, y(&w, 1)]), down(1, key::LEFT), "left of the knob at 128");
         assert_eq!(w.point([slider + 110.0, y(&w, 1)]), down(1, key::RIGHT), "right of it");
-        // NPC/PC View Distance: its knob at the left end (the game's 100),
+        // NPC/PC Distance: its knob at the left end (the game's 100),
         // then at 1000 at the right end
         assert_eq!(w.point([slider + 30.0, y(&w, 2)]), down(2, key::RIGHT));
         crate::settings::set_client(ClientOptions { entity_view: 1000, ..crate::settings::client() });
@@ -2018,7 +2020,7 @@ mod tests {
 
     /// The notes beside a page's Back legend: what this window reads on
     /// Controller's, what this server gives on Characters' while NPC/PC
-    /// Display or View Distance is chosen (not on Level of Detail), where the
+    /// Display or Distance is chosen (not on Level of Detail), where the
     /// sound plays on Sound's, none on Video's (the control: the note there
     /// before the split).
     #[test]

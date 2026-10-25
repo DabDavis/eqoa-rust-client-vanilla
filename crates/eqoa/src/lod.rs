@@ -25,7 +25,7 @@
 //! options' Level of Detail off draws every LOD body's near level out to its
 //! off distance (`chosen`) and poses every skeleton at the nearest level
 //! (`anim_level`), the player's own and every NPC's, at any zoom. The
-//! options' NPC/PC View Distance draws every character at least that far
+//! options' NPC/PC Distance draws every character at least that far
 //! (`view_dist`), an LOD body past its last level at that level (the game's
 //! 100 changes nothing: no character's off distance is nearer).
 //!
@@ -62,7 +62,7 @@ pub fn off_dist(dists: &[f32]) -> f32 {
 }
 
 /// The distance a character is drawn to: its off distance (`off_dist`), or
-/// the options' NPC/PC View Distance where that is farther.
+/// the options' NPC/PC Distance where that is farther.
 pub fn view_dist(dists: &[f32]) -> f32 {
     off_dist(dists).max(crate::settings::entity_view() as f32)
 }
@@ -77,7 +77,7 @@ pub fn within(at: &Vect3<Ee>, eye: &Vect3<Ee>, off: f32) -> bool {
 
 /// A character's body as the camera at `eye` sees it this frame: the level
 /// of its LOD body (if it has one) for its centre transform `centre`, under
-/// the options' Level of Detail and NPC/PC View Distance. Whether it is
+/// the options' Level of Detail and NPC/PC Distance. Whether it is
 /// drawn at all is `within`'s, at the actor's place (to `view_dist`).
 pub fn place(body: &mut render::GpuModel, centre: &Matrix44<Ee>, eye: &Vect3<Ee>) {
     body.level = chosen(&body.lod_dists, &from_eye(centre, eye), crate::settings::client().lod, view_dist(&body.lod_dists));
@@ -232,7 +232,7 @@ mod tests {
         assert_eq!(chosen(&[], &at(5.0), false, 100.0), None, "no levels, none");
     }
 
-    /// NPC/PC View Distance: at the game's 100 a body's levels and off
+    /// NPC/PC Distance: at the game's 100 a body's levels and off
     /// distance are the game's (the control: none past 100, a sprite with no
     /// LOD body still to 500); farther, the far level out to it and nothing
     /// past it, and a sprite with no LOD body to whichever is farther.

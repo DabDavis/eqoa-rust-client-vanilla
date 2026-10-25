@@ -524,7 +524,7 @@ pub struct ClientOptions {
     /// them) the client keeps in view, the game's 24 (`ENTITY_SLOTS_GAME`)
     /// up to `ENTITY_SLOTS_MAX`, on a server that offers more (`net::entity`)
     pub entity_slots: u8,
-    /// NPC/PC View Distance: how far NPCs and players are drawn, the game's
+    /// NPC/PC Distance: how far NPCs and players are drawn, the game's
     /// 100 (`ENTITY_VIEW_GAME`: a player race's body to 100, any other to
     /// its own off distance) up to `ENTITY_VIEW_MAX`, each at least as far as
     /// the game draws it (`lod::view_dist`); a server that offers more looks
@@ -601,7 +601,7 @@ pub const ENTITY_SLOTS_GAME: u8 = net::entity::RETAIL_SLOTS as u8;
 pub const ENTITY_SLOTS_MAX: u8 = net::entity::MAX_SLOTS as u8;
 pub const ENTITY_SLOTS_STEP: u8 = 8;
 /// The game's character draw distance (a player race's LOD body's last
-/// level), the farthest NPC/PC View Distance goes (the client reads the
+/// level), the farthest NPC/PC Distance goes (the client reads the
 /// world's zones to 1050 round the player), and its step.
 pub const ENTITY_VIEW_GAME: u16 = 100;
 pub const ENTITY_VIEW_MAX: u16 = 1000;
@@ -665,7 +665,7 @@ impl ClientOptions {
     /// Fog only when they are not the game's, Screen Shake only when off, a
     /// window's Controller Focus as `controller.<window>` (from 1) only when
     /// it is not Auto, Capture Controller only when on, Sound in Background
-    /// only when off, Ability Bars, NPC/PC Display, NPC/PC View Distance and
+    /// only when off, Ability Bars, NPC/PC Display, NPC/PC Distance and
     /// Name Distance only when not the game's, Overlapping Names only when
     /// Show, Art only when it is the 2002 disc's, VSync, Shouts and Update
     /// Notices only when off, Target of Target only when on, Text only when
@@ -985,7 +985,7 @@ pub fn entity_slots() -> usize {
     client().entity_slots as usize
 }
 
-/// NPC/PC View Distance now: how far NPCs and players are drawn (`lod`), and
+/// NPC/PC Distance now: how far NPCs and players are drawn (`lod`), and
 /// looked for where the server offers more (`Play::agree_entity_view`).
 pub fn entity_view() -> u16 {
     client().entity_view
@@ -1566,7 +1566,7 @@ mod tests {
         for bad in ["entity_slots=23", "entity_slots=205", "entity_slots=999", "entity_slots=lots"] {
             assert_eq!(ClientOptions::from_text(bad).entity_slots, ENTITY_SLOTS_GAME, "{bad}: the game's 24");
         }
-        assert_eq!(ClientOptions { entity_view: 600, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nentity_view=600\n", "NPC/PC View Distance only when not the game's");
+        assert_eq!(ClientOptions { entity_view: 600, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nentity_view=600\n", "NPC/PC Distance only when not the game's");
         for bad in ["entity_view=99", "entity_view=1001", "entity_view=far"] {
             assert_eq!(ClientOptions::from_text(bad).entity_view, ENTITY_VIEW_GAME, "{bad}: the game's 100");
         }
