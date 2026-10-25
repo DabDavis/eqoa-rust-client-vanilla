@@ -778,16 +778,19 @@ pub fn shot_with(
                 if t == at + 96 && std::env::var_os("EQOA_INVITE").is_some() {
                     p.group_action(0x0701_0000);
                 }
-                // `EQOA_ACTION=<hex>@<ms>[;<hex>@<ms>...]`: a start-menu
-                // entry's message then (`DoAction`; 0B060000 asks the target
-                // to trade, 0B0E0006 is Assist Target).
+                // `EQOA_ACTION=<hex>[,<arg>]@<ms>[;...]`: a start-menu
+                // entry's message then (`DoAction`, its argument 0 unless
+                // given; 0B060000 asks the target to trade, 0B0E0006 is
+                // Assist Target, 0B030003 Ignore Shouts and with 1 Restore).
                 if let Ok(spec) = std::env::var("EQOA_ACTION") {
                     for part in spec.split(';') {
-                        if let Some((a, ms)) = part.split_once('@')
-                            && let (Ok(a), Ok(ms)) = (u32::from_str_radix(a.trim().trim_start_matches("0x"), 16), ms.trim().parse::<i64>())
-                            && t == ms / 16 * 16
-                        {
-                            p.do_action(a, 0);
+                        if let Some((a, ms)) = part.split_once('@') {
+                            let (a, arg) = a.split_once(',').unwrap_or((a, "0"));
+                            if let (Ok(a), Ok(arg), Ok(ms)) = (u32::from_str_radix(a.trim().trim_start_matches("0x"), 16), arg.trim().parse::<i32>(), ms.trim().parse::<i64>())
+                                && t == ms / 16 * 16
+                            {
+                                p.do_action(a, arg);
+                            }
                         }
                     }
                 }
