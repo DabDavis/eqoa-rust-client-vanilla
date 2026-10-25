@@ -5,6 +5,24 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-25 · PlayStation controllers on Bluetooth, two windows' controllers, the Steam Deck
+- On Windows a DualSense (PS5 controller) on Bluetooth works again: the d-pad no
+  longer holds up by itself, triangle is triangle (it opened the quick chat, as L2
+  does) and the shoulder buttons do what they say. If anything is still wrong with
+  yours, press F3: a report now shows exactly what the controller sends.
+- With two or more game windows open, entering the world no longer counts one window
+  too many for a moment, which could hand a controller to the wrong window.
+- A game window you close lets go of its controller at once, so the window you open
+  next gets it, even when the closed one is slow to finish shutting down.
+- Steam Deck, Game Mode: when the game cannot find your disc image it now looks where
+  a Deck keeps games (your Downloads, Desktop, Documents, Games or ROMs folder,
+  EmuDeck's Emulation/roms/ps2, and the same on the SD card) and otherwise asks in a
+  window Game Mode can show. Before, it asked in one Game Mode does not show, so the
+  game could look stuck. A disc image on a USB drive is not there in Game Mode: keep it on
+  the Deck or its SD card.
+- The game can no longer freeze when whatever started it never reads what it
+  writes out, as some launchers do.
+
 ## 2026-10-24 · The extra ability bars are back
 - Options > Extended has Ability Bars again: 2 (the game's), 3 or 4. With 3
   or 4, the HUD has a third and a fourth ability bar, five abilities each,

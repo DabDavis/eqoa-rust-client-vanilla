@@ -51,7 +51,9 @@ current.
 - A player's disc (`discs.rs`): the game (`eqoa`, `boot`, `eqoa <image>`) takes the named image, `EQOA_ISO`,
   `disc.opt` (the last pick, in the config directory), `run/eqoa.iso`; with none it asks in rfd's native dialog
   inside `resumed`, before the window (not before the event loop: a Mac has no running application there), judges
-  the pick by SYSTEM.CNF as the page does, and keeps it. `EQOA_OFFSCREEN` never shows a dialog. Test the Linux
+  the pick by SYSTEM.CNF as the page does, and keeps it. In Steam's Game Mode (`discs::game_mode`: gamescope,
+  which shows no portal's window) a missing disc is first looked for where a Deck keeps games (`deck_places`),
+  then asked for in zenity's dialog. `EQOA_OFFSCREEN` never shows a dialog. Test the Linux
   dialogs on :99 with a private bus (`dbus-run-session`, xdg-desktop-portal-gtk) or none (zenity): the session
   bus's portal draws on the user's own screen.
 - The 2002 art (`era.rs`, README "The 2002 art"; the user, 2026-10-24: "texture/model swapping of the eqoa
@@ -141,7 +143,8 @@ current.
   row in `binds::ROWS` (a test reads `viewer.rs` for them).
   Multiboxing: each window reads the controllers its Controller Focus picks (`input::pick`, the
   Extended page; per window by its place, `multibox.rs`: lock files in the config directory's
-  `windows/`, Web Locks in a page). Windows' Xbox pads are read through XInput (`xinput.rs`) and its
+  `windows/`, Web Locks in a page; one place a program, never a thread's: a settings read on another
+  thread took a second; let go at the loop's end). Windows' Xbox pads are read through XInput (`xinput.rs`) and its
   DualShock 4s and DualSenses over HID (`hidpad.rs`, read only, their motors gilrs's), both of which
   answer a window behind another; gilrs's Windows.Gaming.Input answers only the one in front.
   Test several windows natively with uinput pads (python-evdev, `/dev/uinput` is the user's) and a
