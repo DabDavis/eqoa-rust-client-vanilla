@@ -407,12 +407,14 @@ mod device {
         /// the first report of each ID it sent (`FirstReport`), each said
         /// once in the log
         first: Vec<FirstReport>,
+        /// the system's error when a read failed (`pump`)
+        error: u32,
     }
 
     impl Device {
         fn open(l: &Listed) -> Option<Device> {
             let handle = open(&l.path, GENERIC_READ, FILE_FLAG_OVERLAPPED)?;
-            Some(Device { listed: l.clone(), handle, read: Box::new(Pending { ov: OVERLAPPED::default(), buf: [0; 1024], busy: false }), pad: PsPad::default(), latch: Latch::default(), valid: None, first: Vec::new() })
+            Some(Device { listed: l.clone(), handle, read: Box::new(Pending { ov: OVERLAPPED::default(), buf: [0; 1024], busy: false }), pad: PsPad::default(), latch: Latch::default(), valid: None, first: Vec::new(), error: 0 })
         }
 
         /// Every report waiting read, the last state kept and every state's
@@ -430,15 +432,23 @@ mod device {
                     // SAFETY: the buffer and OVERLAPPED are boxed and outlive
                     // the read (`Drop` cancels a pending one and waits)
                     let ok = unsafe { ReadFile(self.handle, r.buf.as_mut_ptr(), r.buf.len() as u32, std::ptr::null_mut(), &mut r.ov) };
-                    if ok == 0 && unsafe { GetLastError() } != ERROR_IO_PENDING {
-                        return false;
+                    if ok == 0 {
+                        // SAFETY: the error ReadFile just left
+                        let e = unsafe { GetLastError() };
+                        if e != ERROR_IO_PENDING {
+                            self.error = e;
+                            return false;
+                        }
                     }
                     r.busy = true;
                 }
                 let mut n = 0u32;
                 // SAFETY: the read just made, or still pending; no wait
                 if unsafe { GetOverlappedResult(self.handle, &r.ov, &mut n, 0) } == 0 {
-                    return unsafe { GetLastError() } == ERROR_IO_INCOMPLETE;
+                    // SAFETY: the error GetOverlappedResult just left
+                    let e = unsafe { GetLastError() };
+                    self.error = e;
+                    return e == ERROR_IO_INCOMPLETE;
                 }
                 r.busy = false;
                 let data = &r.buf[..(n as usize).min(r.buf.len())];
@@ -503,6 +513,8 @@ mod device {
         failed: HashMap<String, (Instant, bool)>,
         /// the ones whose refusal was said (once each)
         said: Vec<String>,
+        /// when each one's failed read was last said (once a minute at most)
+        failed_said: HashMap<String, Instant>,
     }
 
     impl Hid {
@@ -517,7 +529,7 @@ mod device {
             if let Err(e) = std::thread::Builder::new().name("hid pads".into()).spawn(move || look(known, &l, &s)) {
                 crate::say(&format!("gamepad: no HID controllers: {e}"));
             }
-            Hid { listed, stop, devices: Vec::new(), failed: HashMap::new(), said: Vec::new() }
+            Hid { listed, stop, devices: Vec::new(), failed: HashMap::new(), said: Vec::new(), failed_said: HashMap::new() }
         }
 
         /// The controllers present and open, in their interfaces' order
@@ -555,6 +567,13 @@ mod device {
                     k += 1;
                 } else {
                     let d = self.devices.remove(k);
+                    // said, a minute apart at most: a controller that stops
+                    // answering while it is still there loses its presses
+                    // until it is opened again, with nothing else to show it
+                    if self.failed_said.get(&d.listed.path).is_none_or(|t| now.duration_since(*t) >= Duration::from_secs(60)) {
+                        crate::say(&format!("gamepad: {} {} stopped answering over HID (error {}): opened again in 2 s", d.listed.model.label(), name(&d.listed.path, d.listed.ids), d.error));
+                        self.failed_said.insert(d.listed.path.clone(), now);
+                    }
                     self.failed.insert(d.listed.path.clone(), (now, false));
                 }
             }
