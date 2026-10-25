@@ -562,8 +562,9 @@ fn boot(image: Option<&str>, server: Option<String>) -> Result<()> {
 pub fn world_library(player: &net::session::Player) -> Result<(esf::Library, viewer::Source)> {
     // the server's patch (`s2`) before the world's files are read
     s2::begin_session();
-    // The world the dump names: its file, by the path's last part.
-    let file = player.world_path.rsplit(['\\', '/']).next().unwrap_or("tunaria.esf").to_uppercase();
+    // The world the dump names: the world table's file for its id
+    // (`LoadWorld`), or its path for a world not on the disc.
+    let file = play::login_world_file(player);
     let (mut lib, src) = source(&file, &[])?;
     let main_file = 0;
     lib.add("CHAR.ESF", esf::Container::open(disc(None)?.read("CHAR.ESF")?)?);

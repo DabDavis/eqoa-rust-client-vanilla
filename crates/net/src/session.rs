@@ -83,6 +83,9 @@ pub struct Character {
 /// player needs.
 #[derive(Clone, Debug, Default)]
 pub struct Player {
+    /// The dump's `m_p0662C`: the world is not on the disc, so `LoadWorld`
+    /// loads `world_path`; clear, it loads the world table's file for `world`.
+    pub world_not_on_disc: bool,
     pub world_path: String,
     pub server_id: i64,
     pub name: String,
@@ -697,6 +700,7 @@ impl Session {
                 if !r.error {
                     let p = &dump.player;
                     let player = Player {
+                        world_not_on_disc: dump.world_not_on_disc,
                         world_path: dump.world_path.clone(),
                         server_id: p.id,
                         name: p.name.clone(),

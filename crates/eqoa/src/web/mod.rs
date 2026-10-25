@@ -751,7 +751,7 @@ fn world_loader(disc: &WebDisc) -> crate::pregame::host::WorldLoader {
         let (out, mut d, player) = (slot.clone(), d0.copy(), player.clone());
         wasm_bindgen_futures::spawn_local(async move {
             let r = async {
-                let world = player.world_path.rsplit(['\\', '/']).next().unwrap_or("tunaria.esf").to_uppercase();
+                let world = crate::play::login_world_file(&player);
                 let mut lib = Library::new();
                 let [x, _, z] = player.pos;
                 // the world off the disc of the art drawn when that disc has

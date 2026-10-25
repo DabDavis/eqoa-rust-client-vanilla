@@ -478,7 +478,7 @@ pub struct Play {
     far_last: u32,
 }
 
-/// Past the game's own distance (drawn only for NPC/PC View Distance) a
+/// Past the game's own distance (drawn only for NPC/PC Distance) a
 /// character is posed every frame while no more than this many are there;
 /// with more, each takes its turn (its slot's) one frame drawn in as many as
 /// keeps the poses to about this many a frame, and its place every frame:
@@ -530,6 +530,59 @@ pub enum Atmos {
 }
 
 pub const WORLD_FILES: [&str; 6] = ["TUNARIA.ESF", "RATHE.ESF", "ODUS.ESF", "LAVASTM.ESF", "PLANESKY.ESF", "SECRETS.ESF"];
+
+/// The world file a login loads, as `Msg000D`'s `LoadWorld(m_player.m_world)`
+/// picks it: the world table's file for the dump's world id (the server's
+/// patch's table, else CLIENT's six: `s2::Rules::world_file`), unless the
+/// dump says the world is not on the disc (`m_p0662C`), when its path is
+/// loaded; the path too for an id past the table. A file name in capitals.
+/// The login took the path alone, so a vampire standing in Sandstorm's
+/// Sanctuary (world 7, SECRETS.ESF) logged in to Tunaria's hills (F3
+/// 20261025-055704); a teleport there already went by the id.
+pub fn login_world_file(player: &net::session::Player) -> String {
+    let path = || player.world_path.rsplit(['\\', '/']).next().unwrap_or("tunaria.esf").to_uppercase();
+    if player.world_not_on_disc {
+        return path();
+    }
+    crate::s2::get().world_file(player.world).unwrap_or_else(path)
+}
+
+#[cfg(test)]
+mod login_world {
+    use super::*;
+
+    fn player(world: i64, path: &str, not_on_disc: bool) -> net::session::Player {
+        net::session::Player { world, world_path: path.into(), world_not_on_disc: not_on_disc, ..Default::default() }
+    }
+
+    /// A login goes to the world the dump's id names in the world table,
+    /// whatever its path says: Sandstorm's patch's seventh is Secrets
+    /// again. The dump's flag, or an id past the table, loads the path. The
+    /// control: the path alone, as the login had it, goes to Tunaria.
+    #[test]
+    fn a_login_loads_its_world_by_the_id() {
+        let world = |esf: &str| crate::s2::World { name: String::new(), esf: esf.into(), name_id: 0, bounds: [0; 4] };
+        let mut eight: Vec<_> = WORLD_FILES.iter().map(|f| world(&format!("data\\{f}"))).collect();
+        eight.push(world("data3\\Underfoot.esf"));
+        eight.push(world("data3\\Secrets.esf"));
+        let s2 = crate::s2::Rules { worlds: Some(eight), ..crate::s2::Rules::retail() };
+        let cases = [
+            (crate::s2::Rules::retail(), player(2, "data\\tunaria.esf", false), "ODUS.ESF"),
+            (crate::s2::Rules::retail(), player(9, "data3\\Underfoot.esf", false), "UNDERFOOT.ESF"),
+            (crate::s2::Rules::retail(), player(0, "data2\\odus.esf", true), "ODUS.ESF"),
+            (s2.clone(), player(7, "data\\tunaria.esf", false), "SECRETS.ESF"),
+            (s2.clone(), player(6, "data\\tunaria.esf", false), "UNDERFOOT.ESF"),
+            (s2, player(0, "data\\tunaria.esf", false), "TUNARIA.ESF"),
+        ];
+        let by_path = |p: &net::session::Player| p.world_path.rsplit(['\\', '/']).next().unwrap_or("tunaria.esf").to_uppercase();
+        let mut control_fails = false;
+        for (rules, p, want) in cases {
+            assert_eq!(crate::s2::with_rules(rules, || login_world_file(&p)), want, "world {} by {:?}", p.world, p.world_path);
+            control_fails |= by_path(&p) != want;
+        }
+        assert!(control_fails, "the path alone must miss one");
+    }
+}
 
 impl Play {
     /// `ShowDialog` as 0x0046 calls it (`b` 1): expanded (`%p` and the icon
@@ -2446,7 +2499,7 @@ impl Play {
             // (`VIScene::RasterActor`, at the actor's place), and of an LOD
             // body the one level its distance picks (`VILODSprite::Raster`),
             // from no farther than the game's camera could be (`lod::eye`);
-            // out to NPC/PC View Distance where that is farther (`lod`), and
+            // out to NPC/PC Distance where that is farther (`lod`), and
             // there posed in its turn (`far_pose_every`), past it not at all.
             let at = Vect3::new(f(e.actor_pos[0]), f(e.actor_pos[1]), f(e.actor_pos[2]));
             let eye = crate::lod::eye(&walker.cam, &walker.eye.position);
@@ -7011,7 +7064,7 @@ impl Play {
         self.puppets.get(slot)?.as_ref().and_then(|p| p.sprite.as_ref().and(p.slot4_at))
     }
 
-    /// NPC/PC Display and View Distance against the server's offer
+    /// NPC/PC Display and Distance against the server's offer
     /// (`net::session::OP_ENTITY_VIEW`): the slots read are the player's
     /// number within the server's most, the game's 24 from a server that
     /// offered none (Sandstorm, eqoa.live), and a server that offered is told
@@ -7173,7 +7226,7 @@ impl Play {
             }
         }
         let n = self.entities.slots.iter().flatten().count();
-        // the characters within their distance this frame (NPC/PC View Distance's)
+        // the characters within their distance this frame (NPC/PC Distance's)
         let drawn = self.puppets.iter().flatten().filter(|p| p.shown).count();
         let on_bar = self.abilities.values().filter(|a| a.valid != 0).count();
         let fx = self.spells.as_ref().map_or_else(String::new, |s| format!(", {}", s.describe()));
@@ -7807,7 +7860,7 @@ mod commands {
         out
     }
 
-    /// NPC/PC Display and View Distance against the server: one that offered
+    /// NPC/PC Display and Distance against the server: one that offered
     /// nothing (the control: Sandstorm's, eqoa.live's) is told nothing and the
     /// game's 24 are read; an offer is answered once with the player's numbers
     /// (the slots within it), again when either changes; a lowered number
