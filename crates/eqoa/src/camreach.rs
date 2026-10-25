@@ -18,12 +18,23 @@
 //! moving while no pull is under way) and by whatever sets the distance
 //! between two frames (a style, a touch screen's pinch); back from the start
 //! menu's framing
-//! (mode 1, `ApplyCameraPreset`) the choice it had stands. Once the game's own
-//! sweep reaches the chosen distance clear, with the camera at rest (no snap,
-//! no pull, no zoom under way), it eases back out there (`ease`): its speed
-//! grows from nothing, 30 a second, to at most 12 a second, and slows over
-//! the last 2: 3.5 to 11 in about 1.3 seconds. Pulled in again on its way,
-//! the pull is the game's.
+//! (mode 1, `ApplyCameraPreset`) the choice it had stands.
+//!
+//! Something in the way brings the camera in only as far as it must (F3
+//! 20261025-060553, the user's: "only zoom what is needed then zoom back out
+//! to where it was"): the game's pull goes on at its own 23.5 a second, and
+//! is held (`hold`) where the sphere the game sweeps from the head first
+//! meets what is in the way, `SHORT` this side of it, when that is past the
+//! game's closest collision distance (3.5); nearer, the pull to 3.5, the
+//! alternate pitch, the hunt for another angle and the way in to the closest
+//! are the game's, as before. With the camera at rest (no snap, no pull, no
+//! zoom under way) it eases back out toward the distance chosen as far as
+//! that sweep is clear, `SHORT` short of anything still in the way (`ease`):
+//! its speed grows from nothing, 30 a second, to at most 12 a second, and
+//! slows over the last 2: 3.5 to 11 in about 1.3 seconds. So a wall behind a
+//! player standing still holds the camera just in front of it, not at 3.5,
+//! and a camera a tree or a slope pulled in follows it back out as it goes;
+//! with nothing in the way the camera is the game's, bit for bit.
 //!
 //! The mouse's tilt (`mouse::tilt`) can lower the orbit's default pitch under
 //! the game's 15 degrees (`GAME_PITCH`, `SetCameraStyle(3)`'s), even level
@@ -46,17 +57,22 @@
 
 use vi::camera::{Eye, WalkCamera};
 use vi::coll::CollSphere;
-use vi::fpu::{Ee, F, clamp};
+use vi::fpu::{Ee, F, clamp, vimax, vimin};
 use vi::scene::{Filter, FilterKind, Scene};
 use vi::vect::Vect3;
 
 /// The way back out: its speed grows `ACCEL` a second from rest, to at most
 /// `SPEED`, and is at most `RATE` times the distance left (m/s); within
-/// `THERE` of the distance chosen it is there.
+/// `THERE` of where it goes it is there.
 const ACCEL: f32 = 30.0;
 const SPEED: f32 = 12.0;
 const RATE: f32 = 6.0;
 const THERE: f32 = 0.05;
+
+/// How far this side of what is in the way the camera is held, and eased
+/// out to: the sweep's sphere (the camera's 0.5) already keeps the eye that
+/// far off it; this keeps the game's next sweep from touching it again.
+const SHORT: f32 = 0.1;
 
 /// The distance spring moving faster than this (a second): a zoom under way.
 const MOVING: f32 = 0.001;
@@ -84,7 +100,8 @@ impl Reach {
     }
 
     /// The camera's frame (`Process`), `dt_s` seconds after the last: the
-    /// choice kept, and the way back out before it.
+    /// choice kept, the way back out before it, and the game's pull held
+    /// short of what is in the way after it.
     pub fn process<S: Scene<Ee>>(&mut self, cam: &mut WalkCamera<Ee>, scene: &mut S, dt_s: f32) -> Eye<Ee> {
         let mode = cam.camera_mode;
         if mode == 3 {
@@ -103,32 +120,54 @@ impl Reach {
             self.speed = 0.0;
         }
         let (d0, f0, spring) = (cam.cur.dist, cam.cur.flags, zooming(cam));
-        let eye = cam.process(scene);
+        // the shake's sample as `Process` found it, for the eye made again
+        let sample = cam.effect.sample;
+        let mut eye = cam.process(scene);
         // tilted under the game's pitch, no swing round (the module's doc)
         if cam.camera_mode == 3 && cam.def_orbit_pitch < F::new(GAME_PITCH) {
             crate::mouse::come_in_instead(cam);
         }
+        let pull = (f0 | cam.cur.flags) & 6 != 0;
         // the stick's zoom (the spring) is a choice; a pull (flags 2, 4) is not
-        if mode == 3 && cam.camera_mode == 3 && spring && (f0 | cam.cur.flags) & 6 == 0 && cam.cur.dist != d0 {
+        if mode == 3 && cam.camera_mode == 3 && spring && !pull && cam.cur.dist != d0 {
             self.chosen = Some(cam.cur.dist);
+        }
+        // the game's pull (or one begun and ended inside this frame's ticks:
+        // the distance down with no zoom of the stick's) held short of what
+        // is in the way, when that is past its closest collision distance
+        if mode == 3 && cam.camera_mode == 3 && (pull || (!spring && cam.cur.dist < d0))
+            && let Some(d) = hold(cam, scene, d0, self.chosen(cam))
+        {
+            place(cam, d);
+            cam.effect.sample = sample;
+            eye = cam.set_camera();
         }
         self.end = Some((cam.camera_mode, cam.cur.dist));
         eye
     }
 
-    /// A step back out toward the distance chosen, when the camera is at
-    /// rest and the game's sweep reaches that distance clear.
+    /// A step back out toward the distance chosen, as far as the game's
+    /// sweep is clear (`SHORT` short of what is in the way), when the
+    /// camera is at rest and that is past its closest collision distance.
     fn ease<S: Scene<Ee>>(&mut self, cam: &mut WalkCamera<Ee>, scene: &mut S, dt_s: f32) {
         let want = self.chosen(cam);
         let resting = cam.cur.flags & (1 | 2 | 4 | 8) == 0 && !zooming(cam);
-        if !resting || want <= cam.cur.dist || !clear(cam, scene, want) {
+        let to = if resting && cam.cur.dist < want {
+            match reach(cam, scene, want) {
+                None => Some(want),
+                Some(r) => Some(r - F::new(SHORT)).filter(|&to| cam.min_collision_dist < to),
+            }
+        } else {
+            None
+        };
+        let Some(to) = to.filter(|&to| cam.cur.dist < to) else {
             self.speed = 0.0;
             return;
-        }
-        let left = (want - cam.cur.dist).0;
+        };
+        let left = (to - cam.cur.dist).0;
         self.speed = (self.speed + ACCEL * dt_s).min(SPEED).min(left * RATE);
         let step = self.speed * dt_s;
-        let d = if step >= left - THERE { want } else { cam.cur.dist + F::new(step) };
+        let d = if step >= left - THERE { to } else { cam.cur.dist + F::new(step) };
         cam.cur.dist = d;
         cam.last.dist = d;
     }
@@ -139,9 +178,11 @@ fn zooming(cam: &WalkCamera<Ee>) -> bool {
     cam.cur.dist_force != F::ZERO || F::new(MOVING) < cam.cur.dist_vel.abs()
 }
 
-/// Whether the game's own sweep (`MoveCamera`'s first: from the head out
-/// along the orbit at the default pitch) reaches `dist` clear.
-pub fn clear<S: Scene<Ee>>(cam: &WalkCamera<Ee>, scene: &mut S, dist: F<Ee>) -> bool {
+/// Where the game's own sweep (`MoveCamera`'s first: the camera's sphere
+/// from the head out along the orbit at the default pitch) toward `dist`
+/// first meets something: how far out along the orbit, or `None` when it
+/// reaches `dist` clear.
+pub fn reach<S: Scene<Ee>>(cam: &WalkCamera<Ee>, scene: &mut S, dist: F<Ee>) -> Option<F<Ee>> {
     let p = &cam.walk.phys;
     let mut from = p.position;
     from.y += cam.target_height;
@@ -155,7 +196,44 @@ pub fn clear<S: Scene<Ee>>(cam: &WalkCamera<Ee>, scene: &mut S, dist: F<Ee>) -> 
     let mut s = CollSphere::<Ee>::default();
     s.init(from, to, cam.collision_radius);
     let mut f = Filter::new(FilterKind::WalkCamera, cam.walk.parm64);
-    !scene.collide_sphere(&mut s, &mut f)
+    if !scene.collide_sphere(&mut s, &mut f) {
+        return None;
+    }
+    Some(dist * s.ray.hit_time)
+}
+
+/// Where a pull this frame stops instead of the game's: `SHORT` this side
+/// of what is in the way out toward the distance chosen (`want`), at most
+/// `from` (where the frame began: out again is the way back out's), but
+/// only when that is past the closest collision distance and out from where
+/// the pull has brought the camera; `None` leaves the game's. Swept to the
+/// choice, not to `from`, so the camera stops at the same place whatever the
+/// frames' lengths: a pull's last frame can begin clear of the wall.
+fn hold<S: Scene<Ee>>(cam: &WalkCamera<Ee>, scene: &mut S, from: F<Ee>, want: F<Ee>) -> Option<F<Ee>> {
+    let to = match reach(cam, scene, vimax(from, want)) {
+        None => from,
+        Some(r) => vimin(from, r - F::new(SHORT)),
+    };
+    let to = vimin(to, cam.max_orbit_distance);
+    (cam.min_collision_dist < to && cam.cur.dist < to).then_some(to)
+}
+
+/// The camera put `d` out along its orbit as `MoveCamera` places it in the
+/// follow orbit, the game's pull (flag 4, or 2 to its closest) ended: in
+/// `cur` and in `last` alike, as the frame's last tick left them.
+fn place(cam: &mut WalkCamera<Ee>, d: F<Ee>) {
+    let p = cam.walk.phys;
+    let mut dir = Vect3::<Ee>::default();
+    dir.hpr(cam.cur.orbit.x, -cam.cur.orbit.y, F::ZERO);
+    let mut at = p.position;
+    at.y = at.y + cam.target_height;
+    at.add_scaled(&dir, d);
+    at.y = at.y + p.height_offset;
+    for s in [&mut cam.cur, &mut cam.last] {
+        s.dist = d;
+        s.camera_pos = at;
+        s.flags &= !6;
+    }
 }
 
 /// Scenes for the camera's and the mouse's tests.
@@ -270,16 +348,23 @@ mod tests {
     use super::*;
 
     /// The follow orbit (style 3) at `dist`, standing on the room's floor,
-    /// its distance taken as chosen by a first frame.
-    fn orbit(room: &mut Room, dist: f32) -> (WalkCamera<Ee>, Reach) {
+    /// its distance taken as chosen by a first frame; its zoom-out ceiling
+    /// `max` (the Extended page's Camera Distance).
+    fn orbit_to(room: &mut Room, dist: f32, max: f32) -> (WalkCamera<Ee>, Reach) {
         let mut cam = WalkCamera::<Ee>::default();
         cam.init(Vect3::of(100.0, 0.0, 100.0), Vect3::of(0.5, 0.0, 0.0), room);
         crate::camstyle::set_style(&mut cam, 3, None, room);
+        cam.max_orbit_distance = F::new(max);
         cam.set_orbit_distance(F::new(dist));
         let mut reach = Reach::default();
         room.t += 16;
         reach.process(&mut cam, room, 0.016);
         (cam, reach)
+    }
+
+    /// The follow orbit at `dist`, at the client's default ceiling (11).
+    fn orbit(room: &mut Room, dist: f32) -> (WalkCamera<Ee>, Reach) {
+        orbit_to(room, dist, crate::camstyle::FOLLOW_MAX_DISTANCE)
     }
 
     /// `n` frames of `ms` each, the distance after each.
@@ -297,33 +382,54 @@ mod tests {
             .collect()
     }
 
-    /// A wall 5 out pulls the 11 in to the game's 3.5 and the choice stays
-    /// 11; the wall gone, the camera eases back out to it, from rest (its
-    /// first step small), never faster than 12 a second nor ever back, there
-    /// within two seconds. The control: the game alone keeps 3.5.
+    /// Where the camera is held with the room's wall `wall` across: `SHORT`
+    /// this side of where the sweep, 15 degrees up (the game's pitch), meets
+    /// it.
+    fn held(wall: f32) -> f32 {
+        wall / GAME_PITCH.cos() - SHORT
+    }
+
+    /// A camera's state and eye as bits, to tell two cameras apart exactly.
+    fn bits(cam: &WalkCamera<Ee>, eye: &Eye<Ee>) -> Vec<u32> {
+        let v = |v: &Vect3<Ee>| [v.x.0.to_bits(), v.y.0.to_bits(), v.z.0.to_bits()];
+        let mut b = vec![cam.cur.dist.0.to_bits(), cam.cur.flags, cam.last.dist.0.to_bits(), cam.last.flags];
+        for w in [&cam.cur.orbit, &cam.cur.camera_pos, &cam.last.camera_pos, &eye.position, &eye.direction, &cam.walk.phys.position] {
+            b.extend(v(w));
+        }
+        b
+    }
+
+    /// A wall 5 out holds the 11 just this side of it, where the game's pull
+    /// goes on to its 3.5 (the control: `Process` alone, which then keeps
+    /// it), and the choice stays 11; the wall gone, the camera eases back out
+    /// to it, from rest (its first step small), never faster than 12 a second
+    /// nor ever back, there within a second and a half.
     #[test]
-    fn a_pulled_in_camera_eases_back_out_once_there_is_room() {
-        for reached in [true, false] {
+    fn a_wall_holds_the_camera_short_of_it_and_it_eases_back_out_once_gone() {
+        for ours in [true, false] {
             let mut room = Room { t: 0, wall: 100.0 };
             let (mut cam, mut reach) = orbit(&mut room, 11.0);
             assert_eq!(reach.chosen(&cam).0, 11.0);
             room.wall = 5.0;
-            frames(&mut cam, Some(&mut reach), &mut room, 60, 16);
-            assert_eq!(cam.cur.dist.0, 3.5, "the game's pull");
-            assert_eq!(reach.chosen(&cam).0, 11.0, "a pull is no choice");
-            room.wall = 100.0;
-            let d = frames(&mut cam, reached.then_some(&mut reach), &mut room, 125, 16);
-            if !reached {
+            frames(&mut cam, ours.then_some(&mut reach), &mut room, 60, 16);
+            if !ours {
+                assert_eq!(cam.cur.dist.0, 3.5, "the game's pull");
+                room.wall = 100.0;
+                let d = frames(&mut cam, None, &mut room, 125, 16);
                 assert_eq!(*d.last().unwrap(), 3.5, "the game keeps it");
                 continue;
             }
-            assert!(d[0] - 3.5 < 0.01, "from rest: {}", d[0]);
+            assert!((cam.cur.dist.0 - held(5.0)).abs() < 1e-3, "held short of the wall: {}", cam.cur.dist.0);
+            assert_eq!(reach.chosen(&cam).0, 11.0, "a pull is no choice");
+            room.wall = 100.0;
+            let d = frames(&mut cam, Some(&mut reach), &mut room, 125, 16);
+            assert!(d[0] - held(5.0) < 0.01, "from rest: {}", d[0]);
             for w in d.windows(2) {
                 assert!(w[1] >= w[0] && w[1] - w[0] <= SPEED * 0.016 + THERE, "{w:?}");
             }
             assert_eq!(*d.last().unwrap(), 11.0);
             let at = d.iter().position(|&v| v == 11.0).unwrap();
-            assert!((60..125).contains(&at), "there after {} frames", at + 1);
+            assert!((40..95).contains(&at), "there after {} frames", at + 1);
         }
     }
 
@@ -335,7 +441,7 @@ mod tests {
             let (mut cam, mut reach) = orbit(&mut room, 11.0);
             room.wall = 5.0;
             frames(&mut cam, Some(&mut reach), &mut room, 120, 8);
-            assert_eq!(cam.cur.dist.0, 3.5);
+            assert!((cam.cur.dist.0 - held(5.0)).abs() < 1e-3, "{}", cam.cur.dist.0);
             room.wall = 100.0;
             let n = (4000 / ms) as usize;
             let d = frames(&mut cam, Some(&mut reach), &mut room, n, ms);
@@ -346,20 +452,120 @@ mod tests {
         assert!((a - b).abs() < 100.0, "30 Hz {a} ms, 165 Hz {b} ms");
     }
 
-    /// Room for some of the way but not for the distance chosen: the camera
-    /// stays where the game left it (no creeping up to the wall, which a body
-    /// backing toward it would pull in again and again); the control, room
-    /// for all of it, goes.
+    /// The way out clear for some of the way: the camera goes back out as
+    /// far as it is, short of what is still in the way, then the rest once it
+    /// is clear. The control: the game alone stays at 3.5 throughout.
     #[test]
-    fn it_goes_back_only_where_the_distance_chosen_is_clear() {
-        for (wall, want) in [(7.0, 3.5), (12.0, 11.0)] {
+    fn it_goes_back_out_as_far_as_the_way_is_clear() {
+        for ours in [true, false] {
             let mut room = Room { t: 0, wall: 100.0 };
             let (mut cam, mut reach) = orbit(&mut room, 11.0);
             room.wall = 5.0;
-            frames(&mut cam, Some(&mut reach), &mut room, 60, 16);
-            room.wall = wall;
-            frames(&mut cam, Some(&mut reach), &mut room, 200, 16);
-            assert_eq!(cam.cur.dist.0, want, "a wall {wall} out");
+            frames(&mut cam, ours.then_some(&mut reach), &mut room, 60, 16);
+            for (wall, want) in [(7.0, held(7.0)), (12.0, 11.0)] {
+                room.wall = wall;
+                frames(&mut cam, ours.then_some(&mut reach), &mut room, 200, 16);
+                let want = if ours { want } else { 3.5 };
+                assert!((cam.cur.dist.0 - want).abs() < 1e-3, "ours {ours}, a wall {wall} out: {}", cam.cur.dist.0);
+            }
+        }
+    }
+
+    /// F3 20261025-060553: the camera 30 out (Camera Distance 50) and a wall
+    /// 20 out: in at the game's own 23.5 a second at most, never past the
+    /// wall, and held there, where the game's goes on to 3.5 (the control);
+    /// at 30 and 165 frames a second.
+    #[test]
+    fn far_out_a_wall_brings_the_camera_in_only_as_far_as_it() {
+        for ms in [33i64, 6] {
+            for ours in [true, false] {
+                let mut room = Room { t: 0, wall: 100.0 };
+                let (mut cam, mut reach) = orbit_to(&mut room, 30.0, 50.0);
+                assert_eq!((cam.cur.dist.0, reach.chosen(&cam).0), (30.0, 30.0));
+                room.wall = 20.0;
+                let d = frames(&mut cam, ours.then_some(&mut reach), &mut room, (3000 / ms) as usize, ms);
+                if !ours {
+                    assert_eq!(*d.last().unwrap(), 3.5, "the game's, {ms} ms");
+                    continue;
+                }
+                let mut was = 30.0f32;
+                for &v in &d {
+                    assert!(was - v <= 23.5 * ms as f32 / 1000.0 + 0.01, "in faster than the game's: {was} to {v}, {ms} ms");
+                    assert!(v >= held(20.0) - 1e-3, "past the wall: {v}, {ms} ms");
+                    was = v;
+                }
+                assert!((d.last().unwrap() - held(20.0)).abs() < 1e-3, "{ms} ms: {}", d.last().unwrap());
+                assert_eq!(reach.chosen(&cam).0, 30.0, "a pull is no choice");
+            }
+        }
+    }
+
+    /// A wall nearer than the closest collision distance (3 out: the sweep
+    /// meets it 3.1 along the orbit): the pull to 3.5, the hunt for another
+    /// angle and the way in to the closest are the game's, bit for bit, every
+    /// frame, at 30 and 165 frames a second. The control: a wall 6 out is
+    /// not the game's.
+    #[test]
+    fn nearer_than_the_closest_collision_distance_it_is_the_games() {
+        for ms in [33i64, 6] {
+            for (wall, same) in [(3.0f32, true), (6.0, false)] {
+                let (mut ra, mut rb) = (Room { t: 0, wall: 100.0 }, Room { t: 0, wall: 100.0 });
+                let (mut ours, mut reach) = orbit(&mut ra, 11.0);
+                let (mut game, _) = orbit(&mut rb, 11.0);
+                (ra.wall, rb.wall) = (wall, wall);
+                let mut differ = 0;
+                for _ in 0..4000 / ms {
+                    ra.t += ms;
+                    rb.t += ms;
+                    let ea = reach.process(&mut ours, &mut ra, ms as f32 / 1000.0);
+                    let eb = game.process(&mut rb);
+                    differ += (bits(&ours, &ea) != bits(&game, &eb)) as usize;
+                }
+                assert_eq!(differ == 0, same, "a wall {wall} out, {ms} ms: {differ} frames differ");
+                if same {
+                    assert_eq!(ours.cur.dist.0, 1.5, "in to its closest, as the game");
+                }
+            }
+        }
+    }
+
+    /// With nothing in the way the camera is the game's, bit for bit, every
+    /// frame, the body running and the orbit pushed round, at 30 and 165
+    /// frames a second. The control: a wall in the way is not.
+    #[test]
+    fn with_nothing_in_the_way_it_is_the_games() {
+        for ms in [33i64, 6] {
+            for (wall, same) in [(1.0e6f32, true), (8.0, false)] {
+                let (mut ra, mut rb) = (Room { t: 0, wall: 1.0e6 }, Room { t: 0, wall: 1.0e6 });
+                let (mut ours, mut reach) = orbit(&mut ra, 11.0);
+                let (mut game, _) = orbit(&mut rb, 11.0);
+                (ra.wall, rb.wall) = (wall, wall);
+                let mut differ = 0;
+                for i in 0..4000 / ms {
+                    ra.t += ms;
+                    rb.t += ms;
+                    for c in [&mut ours, &mut game] {
+                        c.walk.run(F::ONE, F::ZERO);
+                        c.orbit_right(F::new(if i % 50 < 25 { 0.6 } else { -0.4 }));
+                    }
+                    let ea = reach.process(&mut ours, &mut ra, ms as f32 / 1000.0);
+                    let eb = game.process(&mut rb);
+                    differ += (bits(&ours, &ea) != bits(&game, &eb)) as usize;
+                }
+                assert_eq!(differ == 0, same, "a wall {wall} out, {ms} ms: {differ} frames differ");
+            }
+            // it ran
+            let mut r = Room { t: 0, wall: 1.0e6 };
+            let (mut c, mut reach) = orbit(&mut r, 11.0);
+            let from = c.walk.phys.position;
+            for _ in 0..1000 / ms {
+                r.t += ms;
+                c.walk.run(F::ONE, F::ZERO);
+                reach.process(&mut c, &mut r, ms as f32 / 1000.0);
+            }
+            let mut moved = c.walk.phys.position;
+            moved -= from;
+            assert!(moved.magnitude().0 > 3.0, "{ms} ms: ran {}", moved.magnitude().0);
         }
     }
 
@@ -440,6 +646,79 @@ mod tests {
         [-h0.sin(), -h0.cos()]
     }
 
+    /// A wall 6 behind a body and the follow orbit 30 out (of 50): held this
+    /// side of it, not at 3.5; running away from it, the camera goes back
+    /// out after it, never in again and never past it; standing, it settles
+    /// with the body, never rocking; walking back toward it, it comes in with it,
+    /// never more than a frame's walk past where it is held. The control: the
+    /// game's stays at 3.5 however far the body runs. At 30 and 165 frames a
+    /// second.
+    #[test]
+    fn it_follows_a_wall_out_and_back_in_as_the_body_moves() {
+        let (at, h0) = ([100.0f32, 0.0, 100.0], 0.5f32);
+        let way = behind(h0);
+        let wall = [at[0] + way[0] * 6.0, at[2] + way[1] * 6.0];
+        // the camera's sphere centre in front of the wall, along the way back
+        let front = |p: &Vect3<Ee>| (wall[0] - p.x.0) * way[0] + (wall[1] - p.z.0) * way[1];
+        for ms in [33i64, 6] {
+            for ours in [true, false] {
+                let mut sc = super::testing::Planes::slope(at, way, 0.0);
+                let mut cam = WalkCamera::<Ee>::default();
+                cam.init(Vect3::of(at[0], at[1], at[2]), Vect3::of(h0, 0.0, 0.0), &mut sc);
+                crate::camstyle::set_style(&mut cam, 3, None, &mut sc);
+                cam.max_orbit_distance = F::new(50.0);
+                cam.set_orbit_distance(F::new(30.0));
+                let mut reach = Reach::default();
+                sc.t += 16;
+                reach.process(&mut cam, &mut sc, 0.016);
+                sc.planes = super::testing::Planes::wall(at, way, 6.0).planes;
+                // `n` frames pushing the body (`push` forward, - back): the
+                // distance and the camera's room in front of the wall after each
+                let mut go = |cam: &mut WalkCamera<Ee>, reach: &mut Reach, n: i64, push: f32| -> Vec<(f32, f32)> {
+                    (0..n)
+                        .map(|_| {
+                            sc.t += ms;
+                            if push != 0.0 {
+                                cam.walk.run(F::new(push), F::ZERO);
+                            }
+                            if ours {
+                                reach.process(cam, &mut sc, ms as f32 / 1000.0);
+                            } else {
+                                cam.process(&mut sc);
+                            }
+                            (cam.cur.dist.0, front(&cam.cur.camera_pos))
+                        })
+                        .collect()
+                };
+                let settle = go(&mut cam, &mut reach, 2000 / ms, 0.0);
+                let first = settle.last().unwrap().0;
+                let away = go(&mut cam, &mut reach, 1500 / ms, 1.0);
+                if !ours {
+                    assert_eq!((first, away.last().unwrap().0), (3.5, 3.5), "the game's, {ms} ms");
+                    continue;
+                }
+                assert!((first - (5.5 / GAME_PITCH.cos() - SHORT)).abs() < 1e-3, "held short of the wall: {first}, {ms} ms");
+                for w in away.windows(2) {
+                    assert!(w[1].0 >= w[0].0 - 1e-4 && w[1].1 >= 0.5 - 0.02, "running away, {ms} ms: {w:?}");
+                }
+                let gone = away.last().unwrap().0 - first;
+                assert!(gone > 8.0, "back out after the body, {ms} ms: {gone}");
+                // standing (the body glides to a stop): never in, and settled
+                let stand = go(&mut cam, &mut reach, 2000 / ms, 0.0);
+                for w in stand.windows(2) {
+                    assert!(w[1].0 >= w[0].0 - 1e-4 && w[1].1 >= 0.5 - 0.02, "standing, {ms} ms: {w:?}");
+                }
+                let tail = &stand[stand.len() - 10..];
+                assert!(tail.windows(2).all(|w| w[1].0 - w[0].0 < 1e-3), "standing it still goes, {ms} ms: {tail:?}");
+                let back = go(&mut cam, &mut reach, 1000 / ms, -1.0);
+                assert!(back.last().unwrap().0 < tail[0].0 - 2.0, "in with the body, {ms} ms: {:?}", back.last());
+                for &(d, room) in &back {
+                    assert!(room >= 0.5 - 3.0 * ms as f32 / 1000.0 - 0.02 && d > 3.5, "walking back, {ms} ms: {d}, {room}");
+                }
+            }
+        }
+    }
+
     /// F3 20261024-100428: the camera tilted level with the head (its
     /// default pitch -0.0094, the report's), a 22-degree slope rising behind
     /// a run downhill. The game's camera swings a quarter turn round (the
@@ -495,3 +774,4 @@ mod tests {
         }
     }
 }
+
