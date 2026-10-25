@@ -308,6 +308,9 @@ fn in_view(planes: &[glam::Vec4; 5], (lo, hi): (Vec3, Vec3)) -> bool {
 pub enum Draw<'a> {
     Model(&'a GpuModel),
     Group(&'a GpuGroup),
+    /// Some of a model's instances, in their order (a run of the radial
+    /// flora's plants, drawn farthest first: `Renderer::upload_flora`).
+    Instances(&'a GpuModel, std::ops::Range<u32>),
 }
 
 /// A texture source: the decoded image a DictID names, if any, and what the
@@ -651,6 +654,28 @@ impl Renderer {
         instances: &[[[f32; 4]; 4]],
         textures: &Textures,
     ) -> GpuModel {
+        self.upload_with(device, queue, m, instances, textures, false)
+    }
+
+    /// Uploads a radial flora plant (a flora sprite's model) with room for
+    /// `capacity` instances, lit as `VIRStrip6` lights it: no normal and no
+    /// vertex colour, the ambient plus the sun and the point light's falloff
+    /// each times 0.15, the falloff's distance in the plant's own space; the
+    /// vertex alpha is the plant's fade, an instance's static-light alpha
+    /// (`set_static_lights`). Draw its instances with `Draw::Instances`.
+    pub fn upload_flora(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, m: &esf::Model, capacity: usize, textures: &Textures) -> GpuModel {
+        self.upload_with(device, queue, m, &vec![IDENTITY; capacity.max(1)], textures, true)
+    }
+
+    fn upload_with(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        m: &esf::Model,
+        instances: &[[[f32; 4]; 4]],
+        textures: &Textures,
+        flora: bool,
+    ) -> GpuModel {
         let verts = vertices_of(m);
         let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("vertices"),
@@ -676,7 +701,8 @@ impl Renderer {
             let mut passes = Vec::new();
             for l in layers_of(b) {
                 let view = self.texture(device, queue, l.texture, textures);
-                let (blend, base, si) = layer_state(l, view.is_some());
+                let (blend, mut base, si) = layer_state(l, view.is_some());
+                base.flags[3] = flora as i32 as f32;
                 let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("layer"),
                     contents: bytemuck::bytes_of(&base),
@@ -997,7 +1023,7 @@ impl Renderer {
             pass.set_bind_group(0, &self.sky_frame_bg, &[]);
             let sky = items.iter().filter_map(|i| match i {
                 Draw::Model(m) => Some(*m),
-                Draw::Group(_) => None,
+                Draw::Group(_) | Draw::Instances(..) => None,
             });
             for m in sky.filter(|m| m.sky && m.visible && m.instance_count > 0) {
                 pass.set_vertex_buffer(0, m.vertices.slice(..));
@@ -1020,6 +1046,7 @@ impl Renderer {
         for item in items {
             match item {
                 Draw::Model(m) => drawn_models += Self::draws_anything(m) as u32,
+                Draw::Instances(m, r) => drawn_models += (Self::draws_anything(m) && !r.is_empty()) as u32,
                 Draw::Group(g) => drawn_models += g.runs.iter().filter(shown).map(|r| r.drawn.0).sum::<u32>(),
             }
         }
@@ -1042,7 +1069,18 @@ impl Renderer {
                             bound = true;
                             current = usize::MAX;
                         }
-                        draws += self.encode_model(&mut pass, m, deferred, &mut current);
+                        draws += self.encode_model(&mut pass, m, deferred, &mut current, 0..m.instance_count);
+                    }
+                    Draw::Instances(m, r) => {
+                        if !Self::draws_anything(m) || r.is_empty() {
+                            continue;
+                        }
+                        if !bound {
+                            pass.set_bind_group(0, &self.frame_bg, &[]);
+                            bound = true;
+                            current = usize::MAX;
+                        }
+                        draws += self.encode_model(&mut pass, m, deferred, &mut current, r.start..r.end.min(m.instance_count));
                     }
                     Draw::Group(g) => {
                         for r in g.runs.iter().filter(shown) {
@@ -1067,7 +1105,7 @@ impl Renderer {
     /// One model's commands for one of the two passes, into a pass or a
     /// bundle; `current` is the blend mode whose pipeline is set. Returns the
     /// draw calls.
-    fn encode_model<'a, E: wgpu::util::RenderEncoder<'a>>(&'a self, e: &mut E, m: &'a GpuModel, deferred: bool, current: &mut usize) -> u32 {
+    fn encode_model<'a, E: wgpu::util::RenderEncoder<'a>>(&'a self, e: &mut E, m: &'a GpuModel, deferred: bool, current: &mut usize, range: std::ops::Range<u32>) -> u32 {
         let in_pass = |passes: &[Pass], lod: Option<u8>| passes.first().is_some_and(|p| (p.blend != 0) == deferred) && level_drawn(lod, m.level);
         if !m.batches.iter().any(|(_, _, passes, lod)| in_pass(passes, *lod)) {
             return 0;
@@ -1088,7 +1126,7 @@ impl Renderer {
                     *current = p.blend;
                 }
                 e.set_bind_group(1, Some(&p.bg), &[]);
-                e.draw_indexed(0..*count, 0, 0..m.instance_count);
+                e.draw_indexed(0..*count, 0, range.clone());
                 draws += 1;
             }
         }

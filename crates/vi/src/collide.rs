@@ -7,6 +7,7 @@
 //! a flora byte (PackVGF), the terrain's.
 
 use crate::coll::{CollRay, CollSphere};
+use crate::flora::QueryTriList;
 use crate::fpu::{F, Model, f};
 use crate::geom::{BBox, Matrix44, Plane, Sphere, Vect4};
 use crate::vect::Vect3;
@@ -237,6 +238,61 @@ impl<M: Model> Collide<M> {
             return true;
         }
         false
+    }
+
+    /// `QueryObj(b, l, obj)`: the box into the buffer's space (`m_invWorld`),
+    /// then the buffer's walk (`Query`).
+    pub fn query_obj(&self, b: &BBox<M>, l: &mut QueryTriList<M>, buf: &CollBuffer<M>) {
+        let local = b.transform(&self.inv_world);
+        self.query_buffer(&local, l, buf);
+    }
+
+    /// `QueryBufferV`, `QueryBufferPackV`, `QueryBufferPackVGF`: one body with
+    /// the vertex fetch swapped, as the collide walk is. Where they differ from
+    /// it: every vertex goes through `m_world` before it is tested; there is no
+    /// whole-buffer cull; a group or strip is passed over when the box `o` (in
+    /// the buffer's space) does not overlap its own (`VIBBox::Intersects`); and
+    /// every triangle is handed to the list (`Intersect`), with the strip's
+    /// material for its index, or under PackVGF the newest vertex's flora byte.
+    pub fn query_buffer(&self, o: &BBox<M>, l: &mut QueryTriList<M>, b: &CollBuffer<M>) {
+        let pt = &self.pretrans[..];
+        let fetch = |v: usize| self.world.mul_point(&b.vertex(v, pt));
+        let (mut vert, mut prim) = (0usize, 0usize);
+        for g in &b.groups {
+            if o.intersects(&g.bbox) {
+                for _ in 0..g.num_prims {
+                    let pr = &b.prims[prim];
+                    if o.intersects(&pr.bbox) {
+                        let mut n = pr.num_verts - 2;
+                        let mut c = fetch(vert);
+                        vert += 1;
+                        let mut d = fetch(vert);
+                        vert += 1;
+                        let mut flip = false;
+                        while n != 0 {
+                            let a = c;
+                            c = d;
+                            d = fetch(vert);
+                            let idx = if b.kind == TYPE_PACK_VGF { b.flora[vert] as i32 } else { pr.mat };
+                            if !flip {
+                                l.intersect(idx, &a, &c, &d);
+                            } else {
+                                l.intersect(idx, &c, &a, &d);
+                            }
+                            flip = !flip;
+                            vert += 1;
+                            n -= 1;
+                        }
+                    } else {
+                        vert += pr.num_verts as usize;
+                    }
+                    prim += 1;
+                }
+            } else {
+                prim += g.num_prims as usize;
+                vert += g.num_verts as usize;
+            }
+        }
     }
 
     /// `Collide(VICollSphere &, VICollBuffer &)`: the three walks are one body

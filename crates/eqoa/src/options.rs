@@ -12,20 +12,26 @@
 //! The client's own, beside the game's: an Extended row between Sound and
 //! Save Changes (the menu a row longer), its words the client's (no
 //! WORDS.TXT entry). It opens a menu of its own over the options menu, drawn
-//! as that one is: Video, UI, Controller, Camera, Characters and Sound
-//! (`CATEGORIES`), each of which opens a page laid out and driven as the
-//! game's pages are, short enough that none scrolls (`PAGE_MOST`):
+//! as that one is: Video, World, UI, Controller, Camera, Characters and
+//! Sound (`CATEGORIES`), each of which opens a page laid out and driven as
+//! the game's pages are, short enough that none scrolls (`PAGE_MOST`):
 //! - Video: Display (natively: Window or Full Screen, the window's own as
 //!   F11 and Alt+Enter toggle it, `display`: it changes at once and stays,
 //!   kept with the window's place, and Triangle leaves it), Brightness (a
-//!   slider, `settings::curve`), Fog (a slider: the
-//!   game's distance fog and far plane in the middle, off at the left,
-//!   thicker to the right, `fog`), Mipmaps (On, the game's: the textures'
-//!   mip levels sampled by depth as the GS samples them, `render::gs_lod_k`;
-//!   Off: the base level alone, `render::set_mipmaps`), Frame Rate (30, 60
-//!   or the display's, `settings::frame_due`) and VSync (natively: a frame
-//!   shown only at the display's refresh, or at once; `settings::vsync`, the
-//!   surface's present mode in `viewer`);
+//!   slider, `settings::curve`), Frame Rate (30, 60 or the display's,
+//!   `settings::frame_due`) and VSync (natively: a frame shown only at the
+//!   display's refresh, or at once; `settings::vsync`, the surface's present
+//!   mode in `viewer`);
+//! - World (the user's, 2026-10-25): Fog (a slider: the game's distance fog
+//!   and far plane in the middle, off at the left, thicker to the right,
+//!   `fog`), Mipmaps (On, the game's: the textures' mip levels sampled by
+//!   depth as the GS samples them, `render::gs_lod_k`; Off: the base level
+//!   alone, `render::set_mipmaps`), Flora (On, the game's: the plants it
+//!   grows round the camera, `flora`; Off: none), Environment (On, the
+//!   game's: the effect volumes, ground fog, dust, leaves, light shafts and
+//!   flocks, `fx`; Off: none) and Art (Frontiers' or the 2002 disc's, `era`,
+//!   as F9 swaps it: drawn as it moves, the 2002 disc asked for the first
+//!   time);
 //! - UI: Ability Bars (the game's 2, or 3 or 4: the HUD's quick menus and
 //!   the spell book's slots, `hudmenu`), Target of Target (Off by default:
 //!   the target's bar shows whom the target targets, `Play::target_of_target`),
@@ -55,10 +61,7 @@
 //!   the game's camera could be a name plate is drawn, the game's 22, then
 //!   30 to 200 in tens, `play::PlateView`) and Overlapping Names (Hide, the
 //!   game's: a name whose plate meets a nearer one's is not drawn; Show,
-//!   every one, the nearest over the rest: `play::labels`) and Art
-//!   (Frontiers' or the 2002 disc's, `era`, as F9 swaps it: drawn as it
-//!   moves, the 2002 disc asked for the first time; on Video until Mipmaps
-//!   took its place);
+//!   every one, the nearest over the rest: `play::labels`);
 //! - Sound: Sound in Background (one setting for every window: off, a window
 //!   not in front is not heard, `audio::set_heard`) and natively Output
 //!   Device (Default, the system's, followed when it changes, or a device
@@ -606,6 +609,10 @@ impl WndOptions {
                     // Mipmaps: every texture's levels from the next frame
                     // (`viewer`, `render::set_mipmaps`)
                     35 => c.mipmaps = !c.mipmaps,
+                    // Flora: grown or let go from the next frame (`viewer`, `flora`)
+                    36 => c.flora = !c.flora,
+                    // Environment: the effect volumes from the next frame (`viewer`, `fx`)
+                    37 => c.environment = !c.environment,
                     // Output Device: the sound opened there from the next
                     // frame (`audio::retarget`)
                     32 => step_output(&mut c, &crate::audio::outputs().listed.map(|l| l.1).unwrap_or_default(), d),
@@ -1030,7 +1037,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 23] = [
+const EXTENDED_ITEMS: [(i32, &str); 25] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1054,6 +1061,8 @@ const EXTENDED_ITEMS: [(i32, &str); 23] = [
     (33, "Display"),
     (34, "Overlapping Names"),
     (35, "Mipmaps"),
+    (36, "Flora"),
+    (37, "Environment"),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1079,22 +1088,23 @@ struct Category {
 
 /// Extended's categories, in its menu's order (the user's: "Extended, then
 /// Video, UI, Controller, etc."), each a page of `PAGE_MOST` rows at most.
-const CATEGORIES: [Category; 6] = [
+const CATEGORIES: [Category; 7] = [
     Category { name: "Video", items: VIDEO, note: Note::None },
+    Category { name: "World", items: &[20, 35, 36, 37, 25], note: Note::None },
     Category { name: "UI", items: &[22, 31, 29, 30], note: Note::None },
     Category { name: "Controller", items: &[16, 19], note: Note::Reads },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
-    Category { name: "Characters", items: &[12, 23, 24, 27, 34, 25], note: Note::Server },
+    Category { name: "Characters", items: &[12, 23, 24, 27, 34], note: Note::Server },
     Category { name: "Sound", items: SOUND, note: Note::Output },
 ];
 
 /// Video's rows: natively Display first (F3 20261024-201507: full screen was
-/// F11's alone); a page's full screen is the browser's. Mipmaps after Fog
-/// (the user's, 2026-10-25), Art on Characters to make room.
+/// F11's alone); a page's full screen is the browser's. Fog and Mipmaps went
+/// to World with Art (the user's, 2026-10-25).
 #[cfg(not(target_arch = "wasm32"))]
-const VIDEO: &[i32] = &[33, 13, 20, 35, 14, 26];
+const VIDEO: &[i32] = &[33, 13, 14, 26];
 #[cfg(target_arch = "wasm32")]
-const VIDEO: &[i32] = &[13, 20, 35, 14, 26];
+const VIDEO: &[i32] = &[13, 14, 26];
 
 /// Sound's rows: natively Output Device after Sound in Background; a page
 /// plays where the browser does.
@@ -1161,6 +1171,8 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         31 => on_off(c.target_of_target),
         34 => wide(if c.overlapping_names { "Show" } else { "Hide" }),
         35 => on_off(c.mipmaps),
+        36 => on_off(c.flora),
+        37 => on_off(c.environment),
         30 => wide(match c.text {
             render::ui::TextFilter::Sharp => "Sharp",
             render::ui::TextFilter::Smooth => "Smooth",
@@ -1392,7 +1404,7 @@ mod tests {
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(cues.is_empty(), "left and right are nothing on the categories: {cues:?}");
         assert_eq!(settings::client(), settings::ClientOptions::default());
-        // Video: Display, Brightness, Fog, Mipmaps, Frame Rate, VSync
+        // Video: Display, Brightness, Frame Rate, VSync
         press(&mut w, &mut o, key::CROSS, &mut cues);
         assert_eq!((w.page, w.cat, w.row, w.item), (3, Some(0), 0, 33), "Video, on Display");
         assert_eq!(cues.last(), Some(&8));
@@ -1414,7 +1426,29 @@ mod tests {
         assert_eq!(settings::client().brightness, 10);
         assert_eq!(&cues[cues.len() - 2..], &[11, 9], "the last step, then its end");
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!(w.item, 20, "Fog");
+        assert_eq!(w.item, 14, "Frame Rate");
+        assert_eq!(settings::frame_rate(), FrameRate::Display, "the platform's");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!(settings::client().frame_rate, Some(FrameRate::Thirty), "round to 30");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert_eq!(settings::client().frame_rate, Some(FrameRate::Sixty));
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.item, 26, "VSync");
+        assert!(settings::vsync(), "on: a frame only at the display's refresh");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::vsync(), cues.last()), (false, Some(&11)), "off");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(settings::vsync(), "and back: two values");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (3, Some(&9)), "Video's last row");
+        press(&mut w, &mut o, key::TRIANGLE, &mut cues);
+        assert_eq!((w.page, w.cat, w.cat_sel, w.item), (3, None, 0, -1), "back to the categories, Video still lit");
+        // World: Fog, Mipmaps, Flora, Environment, Art
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        press(&mut w, &mut o, key::CROSS, &mut cues);
+        assert_eq!((w.cat, w.item), (Some(1), 20), "World, Fog");
         assert_eq!(settings::fog(), crate::fog::GAME, "the game's");
         for _ in 0..6 {
             press(&mut w, &mut o, key::RIGHT, &mut cues);
@@ -1438,29 +1472,34 @@ mod tests {
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(settings::client().mipmaps, "and back: two values");
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!(w.item, 14, "Frame Rate");
-        assert_eq!(settings::frame_rate(), FrameRate::Display, "the platform's");
+        assert_eq!(w.item, 36, "Flora");
+        assert!(settings::client().flora, "on: the game's");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
-        assert_eq!(settings::client().frame_rate, Some(FrameRate::Thirty), "round to 30");
+        assert_eq!((settings::client().flora, cues.last()), (false, Some(&11)), "off");
         press(&mut w, &mut o, key::LEFT, &mut cues);
-        press(&mut w, &mut o, key::LEFT, &mut cues);
-        assert_eq!(settings::client().frame_rate, Some(FrameRate::Sixty));
+        assert!(settings::client().flora, "and back: two values");
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!(w.item, 26, "VSync");
-        assert!(settings::vsync(), "on: a frame only at the display's refresh");
+        assert_eq!(w.item, 37, "Environment");
+        assert!(settings::client().environment, "on: the game's");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
-        assert_eq!((settings::vsync(), cues.last()), (false, Some(&11)), "off");
+        assert_eq!((settings::client().environment, settings::client().flora, cues.last()), (false, true, Some(&11)), "off, Flora still on");
         press(&mut w, &mut o, key::LEFT, &mut cues);
-        assert!(settings::vsync(), "and back: two values");
-        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert!(settings::client().environment, "and back: two values");
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (5, Some(&9)), "Video's last row");
+        assert_eq!(w.item, 25, "Art, on World since 2026-10-25");
+        assert_eq!(settings::art(), esf::Era::Frontiers, "Frontiers', the disc the game runs off");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::art(), cues.last()), (esf::Era::Y2002, Some(&11)), "the 2002 disc's");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert_eq!(settings::art(), esf::Era::Frontiers, "and back: two values");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (4, Some(&9)), "World's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
-        assert_eq!((w.page, w.cat, w.cat_sel, w.item), (3, None, 0, -1), "back to the categories, Video still lit");
+        assert_eq!((w.page, w.cat, w.cat_sel, w.item), (3, None, 1, -1), "back to the categories, World still lit");
         // UI: Ability Bars
         press(&mut w, &mut o, key::DOWN, &mut cues);
         press(&mut w, &mut o, key::CROSS, &mut cues);
-        assert_eq!((w.cat, w.item), (Some(1), 22), "UI, Ability Bars");
+        assert_eq!((w.cat, w.item), (Some(2), 22), "UI, Ability Bars");
         assert_eq!(settings::ability_bars(), 2, "the game's two");
         for want in [3, 4, 2] {
             press(&mut w, &mut o, key::RIGHT, &mut cues);
@@ -1499,7 +1538,7 @@ mod tests {
         // Controller: Controller Focus, Capture Controller
         press(&mut w, &mut o, key::DOWN, &mut cues);
         press(&mut w, &mut o, key::CROSS, &mut cues);
-        assert_eq!((w.cat, w.item), (Some(2), 16), "Controller, Controller Focus");
+        assert_eq!((w.cat, w.item), (Some(3), 16), "Controller, Controller Focus");
         assert_eq!(settings::focus(), Focus::Auto);
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert_eq!(settings::focus(), Focus::Off, "round to Off");
@@ -1518,7 +1557,7 @@ mod tests {
         // Camera: Camera Distance, Camera Turn Speed, Screen Shake
         press(&mut w, &mut o, key::DOWN, &mut cues);
         press(&mut w, &mut o, key::CROSS, &mut cues);
-        assert_eq!((w.cat, w.item), (Some(3), 15), "Camera, Camera Distance");
+        assert_eq!((w.cat, w.item), (Some(4), 15), "Camera, Camera Distance");
         for _ in 0..15 {
             press(&mut w, &mut o, key::RIGHT, &mut cues);
         }
@@ -1550,7 +1589,7 @@ mod tests {
         // Characters: Level of Detail, NPC/PC Display, NPC/PC View Distance
         press(&mut w, &mut o, key::DOWN, &mut cues);
         press(&mut w, &mut o, key::CROSS, &mut cues);
-        assert_eq!((w.cat, w.item), (Some(4), 12), "Characters, Level of Detail");
+        assert_eq!((w.cat, w.item), (Some(5), 12), "Characters, Level of Detail");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         assert!(!settings::client().lod);
         assert_eq!(cues.last(), Some(&11));
@@ -1612,19 +1651,12 @@ mod tests {
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(!settings::overlapping_names(), "and back: two values");
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!(w.item, 25, "Art, on Characters since Mipmaps took its place on Video");
-        assert_eq!(settings::art(), esf::Era::Frontiers, "Frontiers', the disc the game runs off");
-        press(&mut w, &mut o, key::RIGHT, &mut cues);
-        assert_eq!((settings::art(), cues.last()), (esf::Era::Y2002, Some(&11)), "the 2002 disc's");
-        press(&mut w, &mut o, key::LEFT, &mut cues);
-        assert_eq!(settings::art(), esf::Era::Frontiers, "and back: two values");
-        press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (5, Some(&9)), "Characters' last row");
+        assert_eq!((w.row, cues.last()), (4, Some(&9)), "Characters' last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         // Sound: Sound in Background
         press(&mut w, &mut o, key::DOWN, &mut cues);
         press(&mut w, &mut o, key::CROSS, &mut cues);
-        assert_eq!((w.cat, w.item), (Some(5), 21), "Sound, Sound in Background");
+        assert_eq!((w.cat, w.item), (Some(6), 21), "Sound, Sound in Background");
         assert!(settings::background_sound(), "on: a window behind others keeps its sound");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         assert!(!settings::background_sound());
@@ -1632,12 +1664,12 @@ mod tests {
         press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!(w.item, 32, "Output Device");
         assert_eq!(value_text(&vui, 32), Some(wide(SYSTEM_DEFAULT)), "the system's default");
-        assert!(w.page_note(5).is_some_and(|n| n.starts_with("Plays on ") || n == "No output now"), "where it plays, beside Back");
+        assert!(w.page_note(6).is_some_and(|n| n.starts_with("Plays on ") || n == "No output now"), "where it plays, beside Back");
         press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!((w.row, cues.last()), (1, Some(&9)), "Sound's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.cat_sel, cues.last()), (5, Some(&9)), "Sound, the last category");
+        assert_eq!((w.cat_sel, cues.last()), (6, Some(&9)), "Sound, the last category");
         // Triangle: the menu, then closed with every setting put back
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!((w.page, w.sel), (-1, 3), "the menu, on Extended");
@@ -1654,11 +1686,14 @@ mod tests {
             key::DOWN,
             key::DOWN,
             key::CROSS,
-            // Video: Brightness and Fog a step down (past Display)
+            // Video: Brightness a step down (past Display)
             key::CROSS,
             key::DOWN,
             key::LEFT,
+            key::TRIANGLE,
+            // World: Fog a step down
             key::DOWN,
+            key::CROSS,
             key::LEFT,
             key::TRIANGLE,
             // Camera: Camera Turn Speed a step up
@@ -1893,15 +1928,15 @@ mod tests {
         let y = |w: &WndOptions, k: i32| w.window2.row_center(&vui, &NullRaster, k + 1)[1] as f32;
         let down = |n: usize, last: i32| std::iter::repeat_n(key::DOWN, n).chain([last]).collect::<Vec<_>>();
         // the categories: Camera chosen at once
-        assert_eq!(w.point(category(&w, 3)), vec![key::CROSS]);
-        assert_eq!(w.cat_sel, 3, "Camera");
-        assert_eq!(w.point(category(&w, 5)), vec![key::CROSS]);
-        assert_eq!(w.cat_sel, 5, "Sound");
+        assert_eq!(w.point(category(&w, 4)), vec![key::CROSS]);
+        assert_eq!(w.cat_sel, 4, "Camera");
+        assert_eq!(w.point(category(&w, 6)), vec![key::CROSS]);
+        assert_eq!(w.cat_sel, 6, "Sound");
         assert!(w.point([5.0, 5.0]).is_empty());
-        w.point(category(&w, 3));
+        w.point(category(&w, 4));
         w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
         w.draw(&vui, &mut r, &o, &mut ups);
-        assert_eq!(w.cat, Some(3), "Camera's page");
+        assert_eq!(w.cat, Some(4), "Camera's page");
         for k in 0..CATEGORIES.len() as i32 {
             assert!(w.hits.at(category(&w, k)).is_none_or(|h| h >= LABEL), "category {k} behind the page answers nothing");
         }
@@ -1921,26 +1956,36 @@ mod tests {
         assert_eq!(w.point([frame + 20.0, y(&w, 2)]), down(2, key::LEFT));
         assert!(w.point([frame + 110.0, y(&w, 3)]).is_empty(), "the row under the last: nothing");
         assert!(w.point([slider + 70.0, y(&w, 4)]).is_empty(), "the legend's row: nothing");
-        // Video: Brightness and Fog at 5 of 10, their knobs mid-bar; Frame
-        // Rate's value
+        // Video: Display's value, Brightness at 5 of 10 (its knob mid-bar),
+        // Frame Rate's value
         w.key(&vui, &mut r, &mut o, key::TRIANGLE, 0, &mut cues, &mut ups);
         w.cat_sel = 0;
         w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
         w.draw(&vui, &mut r, &o, &mut ups);
         assert_eq!(w.cat, Some(0), "Video's page");
-        assert_eq!(w.point([slider + 10.0, y(&w, 0)]), vec![key::LEFT], "Brightness down");
-        assert_eq!(w.point([slider + 130.0, y(&w, 0)]), vec![key::RIGHT], "Brightness up");
-        assert_eq!(w.point([slider + 10.0, y(&w, 1)]), down(1, key::LEFT), "Fog thinner");
-        assert_eq!(w.point([slider + 130.0, y(&w, 1)]), down(1, key::RIGHT), "Fog thicker");
+        assert_eq!(w.point([frame + 20.0, y(&w, 0)]), vec![key::LEFT], "Display's value, left");
+        assert_eq!(w.point([slider + 10.0, y(&w, 1)]), down(1, key::LEFT), "Brightness down");
+        assert_eq!(w.point([slider + 130.0, y(&w, 1)]), down(1, key::RIGHT), "Brightness up");
         assert_eq!(w.point([frame + 110.0, y(&w, 2)]), down(2, key::RIGHT), "Frame Rate's value");
+        assert!(w.point([frame + 110.0, y(&w, 4)]).is_empty(), "the row under VSync: nothing");
+        // World: Fog at 5 of 10 (its knob mid-bar), Flora's and Art's values
+        w.key(&vui, &mut r, &mut o, key::TRIANGLE, 0, &mut cues, &mut ups);
+        w.cat_sel = 1;
+        w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
+        w.draw(&vui, &mut r, &o, &mut ups);
+        assert_eq!(w.cat, Some(1), "World's page");
+        assert_eq!(w.point([slider + 10.0, y(&w, 0)]), vec![key::LEFT], "Fog thinner");
+        assert_eq!(w.point([slider + 130.0, y(&w, 0)]), vec![key::RIGHT], "Fog thicker");
+        assert_eq!(w.point([frame + 110.0, y(&w, 2)]), down(2, key::RIGHT), "Flora's value");
+        assert_eq!(w.point([frame + 20.0, y(&w, 3)]), down(3, key::LEFT), "Environment's value");
         assert_eq!(w.point([frame + 20.0, y(&w, 4)]), down(4, key::LEFT), "Art's value");
         // Characters: NPC/PC Display's knob at its left end (the game's 24),
         // then at 128 near its middle
         w.key(&vui, &mut r, &mut o, key::TRIANGLE, 0, &mut cues, &mut ups);
-        w.cat_sel = 4;
+        w.cat_sel = 5;
         w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
         w.draw(&vui, &mut r, &o, &mut ups);
-        assert_eq!(w.cat, Some(4), "Characters' page");
+        assert_eq!(w.cat, Some(5), "Characters' page");
         assert_eq!(w.point([frame + 110.0, y(&w, 0)]), vec![key::RIGHT], "Level of Detail's value");
         assert_eq!(w.point([slider + 30.0, y(&w, 1)]), down(1, key::RIGHT));
         assert_eq!(w.point([slider - 2.0, y(&w, 1)]), down(1, key::LEFT), "left of the knob at the bar's end");
@@ -1963,7 +2008,7 @@ mod tests {
         assert_eq!(w.point([slider + 110.0, y(&w, 3)]), down(3, key::LEFT), "left of the knob at 200");
         // Controller: Controller Focus's halves
         w.key(&vui, &mut r, &mut o, key::TRIANGLE, 0, &mut cues, &mut ups);
-        w.cat_sel = 2;
+        w.cat_sel = 3;
         w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
         w.draw(&vui, &mut r, &o, &mut ups);
         assert_eq!(w.point([frame + 20.0, y(&w, 0)]), vec![key::LEFT], "Controller Focus's value, left");

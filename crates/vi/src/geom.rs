@@ -250,6 +250,35 @@ impl<M: Model> BBox<M> {
         ]
         .map(|p| m.apply(&Vect4::new(p.x, p.y, p.z, F::ONE)).xyz())
     }
+
+    /// `Store(VIVect3 *p)`: the eight corners, in `corners`' order.
+    pub fn store(&self) -> [Vect3<M>; 8] {
+        let (a, b) = (self.min, self.max);
+        [
+            Vect3::new(a.x, a.y, a.z),
+            Vect3::new(b.x, a.y, a.z),
+            Vect3::new(b.x, a.y, b.z),
+            Vect3::new(a.x, a.y, b.z),
+            Vect3::new(a.x, b.y, a.z),
+            Vect3::new(b.x, b.y, a.z),
+            Vect3::new(b.x, b.y, b.z),
+            Vect3::new(a.x, b.y, b.z),
+        ]
+    }
+
+    /// `Transform(m, VIBBox &)`: the box round the eight corners through `m`.
+    pub fn transform(&self, m: &Matrix44<M>) -> BBox<M> {
+        let mut b = BBox::default();
+        for (k, p) in self.corners(m).iter().enumerate() {
+            b.bound(k == 0, p);
+        }
+        b
+    }
+
+    /// `Intersects(const VIBBox &)`: no gap between the two on any axis.
+    pub fn intersects(&self, b: &BBox<M>) -> bool {
+        !(self.min.x > b.max.x || self.max.x < b.min.x || self.min.y > b.max.y || self.max.y < b.min.y || self.min.z > b.max.z || self.max.z < b.min.z)
+    }
 }
 
 #[repr(C)]

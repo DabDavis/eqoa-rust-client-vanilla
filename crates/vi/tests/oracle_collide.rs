@@ -195,3 +195,80 @@ fn collide_obj_on_real_buffers_matches() {
     eprintln!("CollideObj: {cases} sweeps over {} real buffers (by packing {kinds:?}), {hits} hits", bufs.len());
     assert!(hits > cases / 10, "too few hits to mean anything");
 }
+
+/// `VICollide::QueryObj`, the radial flora's query of one buffer, under the
+/// real `VIQueryTriList` (op 440), on the same buffers: boxes near each one,
+/// in the world under the identity (as rooms are) or a random transform, the
+/// list's size, direction and angle varied (the flora's own 100, up and 30
+/// degrees most often). Every triangle kept (its index, the flora byte under
+/// PackVGF, and its three vertices) bit for bit. The control: our box one
+/// float step off must not compare equal.
+#[test]
+fn query_obj_on_real_buffers_matches() {
+    use vi::flora::QueryTriList;
+    use vi::geom::BBox;
+    let Some(mut o) = Oracle::open() else { return };
+    let Some(bufs) = buffers() else { return };
+    let mut r = Rng(0x0F10_7A11);
+    let (mut cases, mut tris, mut flora, mut differs) = (0, 0, 0, 0);
+    let tri_bits = |l: &QueryTriList<Ieee>| -> Vec<u8> {
+        let mut v = Vec::new();
+        for t in &l.tris {
+            v.extend(t.actor.to_le_bytes());
+            for p in [t.v0, t.v1, t.v2] {
+                v.extend_from_slice(bytes(&p));
+            }
+        }
+        v
+    };
+    for (bi, (body, version, pre)) in bufs.iter().enumerate() {
+        let buf = CollBuffer::<Ieee>::parse(body, *version, pre).expect("parse");
+        let mut c = Collide::<Ieee>::default();
+        c.set_pretranslations(pre);
+        let (lo, hi) = (buf.bbox.min, buf.bbox.max);
+        for k in 0..16 {
+            let m = if k % 2 == 0 { Mx::identity() } else { matrix(&mut r) };
+            let at = [r.range(lo.x.0, hi.x.0), r.range(lo.y.0, hi.y.0), r.range(lo.z.0, hi.z.0)];
+            let half = [r.range(1.0, 40.0), r.range(2.0, 300.0), r.range(1.0, 40.0)];
+            let local = BBox { min: Vect3::of(at[0] - half[0], at[1] - half[1], at[2] - half[2]), max: Vect3::of(at[0] + half[0], at[1] + half[1], at[2] + half[2]) };
+            let bb = local.transform(&m);
+            let (n, dir, angle) = match k % 4 {
+                0 | 1 => (100, Vect3::of(0.0, 1.0, 0.0), 30.0),
+                2 => (5, Vect3::of(0.0, 1.0, 0.0), 30.0),
+                _ => {
+                    let mut d = Vect3::of(r.range(-1.0, 1.0), r.range(-1.0, 1.0), r.range(-1.0, 1.0));
+                    d.normalize();
+                    (1000, d, r.range(0.0, 180.0))
+                }
+            };
+            let mut payload = bytes(&bb).to_vec();
+            payload.extend_from_slice(bytes(&m));
+            payload.extend_from_slice(&(n as i32).to_le_bytes());
+            payload.extend(f32s(&[dir.x.0, dir.y.0, dir.z.0, angle]));
+            payload.extend_from_slice(&(pre.len() as i32).to_le_bytes());
+            payload.extend(f32s(&pre.iter().flat_map(|p| p.to_array()).collect::<Vec<_>>()));
+            payload.extend_from_slice(&(*version as i32).to_le_bytes());
+            payload.extend_from_slice(body);
+            let res = o.call(440, &payload);
+            assert_eq!(i32::from_le_bytes(res[0..4].try_into().unwrap()), 0, "buffer {bi}: QueryObj failed");
+            let count = i32::from_le_bytes(res[4..8].try_into().unwrap()) as usize;
+            c.set_world(&m);
+            let mut l = QueryTriList::<Ieee>::new(n, &bb, dir, F::new(angle));
+            c.query_obj(&bb, &mut l, &buf);
+            assert_eq!(l.tris.len(), count, "buffer {bi} case {k}: triangles");
+            assert!(tri_bits(&l) == res[8..], "buffer {bi} case {k}: the triangles differ");
+            // the control: the box a float step wider on one side
+            let mut nudged = bb;
+            nudged.min.x = F::new(f32::from_bits(bb.min.x.0.to_bits().wrapping_add(if bb.min.x.0 < 0.0 { 1 } else { -1i32 as u32 })));
+            let mut p = QueryTriList::<Ieee>::new(n, &nudged, dir, F::new(angle));
+            c.query_obj(&nudged, &mut p, &buf);
+            differs += (tri_bits(&p) != res[8..]) as usize;
+            cases += 1;
+            tris += count;
+            flora += l.tris.iter().filter(|t| buf.kind == vi::collide::TYPE_PACK_VGF && t.actor >= 0).count();
+        }
+    }
+    eprintln!("QueryObj: {cases} boxes over {} real buffers, {tris} triangles kept ({flora} with a flora set); the control differed in {differs}", bufs.len());
+    assert!(tris > cases && flora > 100, "too little kept to mean anything");
+    assert!(differs > cases / 10, "the control rarely differed");
+}

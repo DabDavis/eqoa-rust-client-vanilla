@@ -10,6 +10,9 @@
 //! v0 x,y,z f32 | u,v f32 | normal 3×f32 | colour 4×u8        36 B
 //! ```
 //!
+//! A flora prim buffer (0x1230, `ParseFloraPrimBuffer`) has no normal and no
+//! colour: x,y,z,u,v as five f32 (packing 7) or five i16 (packing 8).
+//!
 //! Packed positions are scaled by 2^-p1 and UVs by 2^-p2. Ported from the
 //! Blender importer's `esf.py`, except GroupSprite placement, which follows the
 //! decomp (see `Placement`).
@@ -51,6 +54,9 @@ fn vertex_size(kind: i32) -> Option<usize> {
 
 impl PrimBuffer {
     pub fn read(c: &Container, id: NodeId) -> PrimBuffer {
+        if c.node(id).ty == FLORAPRIMBUF {
+            return Self::read_flora(c, id);
+        }
         let n = c.node(id);
         let d = &c.data[..];
         let mut p = n.body;
@@ -112,6 +118,62 @@ impl PrimBuffer {
                         l.vgroup.push(i16::from_le_bytes([r[17], r[18]]));
                     }
                 }
+            }
+            p += count as usize * stride;
+            out.lists.push(l);
+        }
+        out
+    }
+}
+
+impl PrimBuffer {
+    /// `ParseFloraPrimBuffer`: id, packing, materials, strips, vertices,
+    /// position and UV bits; then per strip its count and material and its
+    /// vertices. No normal or colour comes off the file (`VIRStrip6` lights a
+    /// plant without them): each vertex gets an up normal and white.
+    fn read_flora(c: &Container, id: NodeId) -> PrimBuffer {
+        let d = &c.data[..];
+        let mut p = c.node(id).body;
+        let mut out = PrimBuffer::default();
+        if p + 28 > d.len() {
+            return out;
+        }
+        out.kind = i32le(d, p + 4);
+        let nprims = i32le(d, p + 12);
+        let (vbits, uvbits) = (i32le(d, p + 20), i32le(d, p + 24));
+        p += 28;
+        let stride = match out.kind {
+            7 => 20,
+            8 => 10,
+            _ => return out,
+        };
+        let (pack1, pack2) = ((2.0f64.powi(-vbits)) as f32, (2.0f64.powi(-uvbits)) as f32);
+        if !(0..=100_000).contains(&nprims) {
+            return out;
+        }
+        for _ in 0..nprims {
+            if p + 8 > d.len() {
+                break;
+            }
+            let (count, material) = (i32le(d, p), i32le(d, p + 4));
+            p += 8;
+            if !(0..=200_000).contains(&count) || p + count as usize * stride > d.len() {
+                break;
+            }
+            let mut l = VertexList { material, ..Default::default() };
+            for v in 0..count as usize {
+                let r = &d[p + v * stride..p + (v + 1) * stride];
+                if out.kind == 7 {
+                    let f = |k: usize| f32le(r, k * 4);
+                    l.pos.push([f(0), f(1), f(2)]);
+                    l.uv.push([f(3), f(4)]);
+                } else {
+                    let s = |k: usize| i16::from_le_bytes([r[k * 2], r[k * 2 + 1]]) as f32;
+                    l.pos.push([s(0) * pack1, s(1) * pack1, s(2) * pack1]);
+                    l.uv.push([s(3) * pack2, s(4) * pack2]);
+                }
+                l.normal.push([0.0, 1.0, 0.0]);
+                l.color.push([1.0, 1.0, 1.0, 1.0]);
             }
             p += count as usize * stride;
             out.lists.push(l);
@@ -326,7 +388,7 @@ fn add_sprite<'a>(
     resolve: &Resolve<'a>,
     lod: Option<u8>,
 ) {
-    let Some(pb) = c.child(sprite, PRIMBUF).or_else(|| c.child(sprite, SKINPRIMBUF)) else {
+    let Some(pb) = c.child(sprite, PRIMBUF).or_else(|| c.child(sprite, SKINPRIMBUF)).or_else(|| c.child(sprite, FLORAPRIMBUF)) else {
         return;
     };
     m.parts += 1;

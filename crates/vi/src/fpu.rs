@@ -255,6 +255,10 @@ impl<M: Model> F<M> {
     pub fn from_int(i: i32) -> Self {
         F::new(M::cvt_s_w(i))
     }
+    /// `(int)x` (`cvt.w.s`): toward zero, saturating at the ends.
+    pub fn to_int(self) -> i32 {
+        self.0 as i32
+    }
 }
 
 /// `VIMIN(a, b)`: `a < b ? a : b`.

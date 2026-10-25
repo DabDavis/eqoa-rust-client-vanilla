@@ -14,6 +14,7 @@ use crate::character::{AnimCache, load_hsprite};
 use crate::coll::{CollRay, CollSphere, EnvRay};
 use crate::hsprite::{AnimScene, HSprite};
 use crate::collide::{Capsule, Collide, CollBuffer, cull_ray_sphere, cull_sphere};
+use crate::flora::{Dist, FloraModel, FloraScene, QueryTriList, Set, ZoneFlora};
 use crate::fpu::{F, Model, clamp, f};
 use crate::geom::{BBox, Matrix44, Plane, Sphere};
 use crate::pick::{self, Color32F, PickBuffer, PickSegment};
@@ -59,6 +60,8 @@ pub struct Zone<M: Model> {
     pub leaves: Vec<(i32, u32)>,
     pub pretrans: Vec<Vect3<M>>,
     pub rooms: Vec<Room>,
+    /// The radial flora's tables (`VIZoneRadialFlora`, `ParseZoneFlora`).
+    pub flora: ZoneFlora<M>,
 }
 
 #[derive(Clone, Debug)]
@@ -88,7 +91,10 @@ pub enum SpriteKind {
     /// is one): collides as its capsule ([`Capsule::csprite`]) in its actor's
     /// space, as nothing while its actor's copy is dead, never with a ray.
     C,
-    /// Collides as nothing (flora, sounds, lights, emitters).
+    /// `VIFloraSprite` (0x2F00): a plant the radial flora draws
+    /// (`vi::flora`); collides as nothing.
+    Flora,
+    /// Collides as nothing (sounds, lights, emitters).
     None,
 }
 
@@ -191,6 +197,8 @@ pub const STREAM_OUTER: f32 = 950.0;
 /// (0x8240, version 2 up): one terrain-profile index per sub-cell.
 #[derive(Clone, Debug)]
 pub struct Grid<M: Model> {
+    /// The world's box (`VIWorld::m_bbox`): what a flora swatch spans in y.
+    pub bbox: BBox<M>,
     pub rows: i32,
     pub cols: i32,
     pub subdiv: i32,
@@ -213,7 +221,8 @@ impl<M: Model> Grid<M> {
         let d = c.body(h);
         let v = c.node(h).version;
         let mut p = if v != 0 { 4 } else { 0 };
-        p += 24; // the bbox
+        let bbox = BBox { min: v3(d, p), max: v3(d, p + 12) };
+        p += 24;
         let (rows, cols) = (rd_i(d, p), rd_i(d, p + 4));
         p += 8;
         let subdiv = if v != 0 {
@@ -233,7 +242,34 @@ impl<M: Model> Grid<M> {
             let k = n.min(b.len());
             regions[..k].copy_from_slice(&b[..k]);
         }
-        Some(Grid { rows, cols, subdiv, cell_size, origin, regions })
+        Some(Grid { bbox, rows, cols, subdiv, cell_size, origin, regions })
+    }
+
+    /// `VIScene::GetWorldGridCenter(a, b)`: column a, row b; the origin's
+    /// zero in a world of one cell.
+    pub fn center(&self, a: i32, b: i32) -> Vect3<M> {
+        if self.rows == 1 && self.cols == 1 {
+            return Vect3::default();
+        }
+        let mut v = Vect3::new(F::from_int(a) * self.cell_size, F::ZERO, F::from_int(b) * self.cell_size);
+        v += self.origin;
+        v
+    }
+
+    /// `VIScene::CalcWorldGridOffset(v)`: the column and row `v` is in (its
+    /// x and z over the cell size, truncated) and `v` less that cell's corner
+    /// and the origin; (0, 0, v) in a world of one cell.
+    pub fn offset(&self, v: &Vect3<M>) -> (i32, i32, Vect3<M>) {
+        if self.rows == 1 && self.cols == 1 {
+            return (0, 0, *v);
+        }
+        let a = (v.x / self.cell_size).to_int();
+        let b = (v.z / self.cell_size).to_int();
+        let mut out = *v;
+        out.x -= F::from_int(a) * self.cell_size;
+        out.z -= F::from_int(b) * self.cell_size;
+        out -= self.origin;
+        (a, b, out)
     }
 
     /// `VIScene::CalcFarPlane`: the camera's far plane at `at`, the terrain
@@ -637,6 +673,51 @@ impl<M: Model> World<M> {
                 }
             }
         }
+        // ParseZoneFlora (in the zone base 0x3200, of version 1 up), then
+        // Precalc: the flora sprites (0x32E0, each a sprite record, the
+        // models), the distributions (0x32F4: id, model, weight, scale,
+        // jitter) and the sets (0x32F8: first distribution, count) under 0x32F0.
+        if let Some(base) = c.child(z, 0x3200)
+            && c.node(base).version != 0
+            && let Some(fl) = c.child(base, 0x32D0)
+        {
+            let mut flora = ZoneFlora::default();
+            if let Some(arr) = c.child(fl, 0x32E0) {
+                for k in 0..c.node(arr).children.len() {
+                    let node = c.node(arr).children[k];
+                    let sprite = self.sprite(lib, Ref { file, node }, &pretrans).map_or(-1, |s| s as i32);
+                    flora.models.push(FloraModel { sprite, ..Default::default() });
+                }
+            }
+            if let Some(sets) = c.child(fl, 0x32F0) {
+                if let Some(t) = c.child(sets, 0x32F4) {
+                    let d = c.body(t);
+                    for k in 0..rd_i(d, 0).max(0) as usize {
+                        let o = 4 + k * 20;
+                        if d.len() < o + 20 {
+                            break;
+                        }
+                        let fl = |i: usize| F::new(rd_f(d, o + i));
+                        flora.dists.push(Dist { id: rd_i(d, o) as u32, model: rd_i(d, o + 4), weight: fl(8), scale: fl(12), jitter: fl(16), ..Default::default() });
+                    }
+                }
+                if let Some(t) = c.child(sets, 0x32F8) {
+                    let d = c.body(t);
+                    for k in 0..rd_i(d, 0).max(0) as usize {
+                        let o = 4 + k * 8;
+                        if d.len() < o + 8 {
+                            break;
+                        }
+                        flora.sets.push(Set { first: rd_i(d, o), count: rd_i(d, o + 4), ..Default::default() });
+                    }
+                }
+            }
+            // a model's prim buffer and palette are its scene sprite here
+            // (the renderer's model for it), its sphere the sprite's
+            let sprites = &self.sprites;
+            flora.precalc(|s| usize::try_from(s).ok().and_then(|i| sprites.get(i)).map(|sp| (s, s, sp.bsphere)));
+            self.zones[zi].flora = flora;
+        }
     }
 
     /// The scene sprite a dictionary entry is, built once.
@@ -688,6 +769,8 @@ impl<M: Model> World<M> {
             }
             // ParseCSpriteObj: the header's box (its sphere the box's)
             0x2700 => (SpriteKind::C, header_bbox(0x2710, 4), 5),
+            // ParseFloraSpriteObj: the header's id and box (its sphere the box's)
+            0x2F00 => (SpriteKind::Flora, header_bbox(0x2F01, 4), 13),
             // ParseSoundSpriteObj: radius and volume (1 and 1 before version
             // 1); the box and sphere are the radius about the origin
             0xB100 => {
@@ -1348,6 +1431,162 @@ impl<M: Model> World<M> {
         ((leaf as usize) < zone.leaves.len()).then_some((z as usize, leaf as usize))
     }
 
+    /// `VIWorld::FindLeaf`'s zone: the world leaf `at` falls in, whatever the
+    /// zone's own tree answers (-1 past the leaves).
+    pub fn find_zone(&self, at: &Vect3<M>) -> i32 {
+        let mut node = 0u32;
+        if !self.nodes.is_empty() {
+            loop {
+                let n = &self.nodes[(node & 0x0FFF_FFFF) as usize];
+                node = if F::ZERO <= n.plane.distance(at) { n.front } else { n.back };
+                if node & LEAF != 0 {
+                    break;
+                }
+            }
+            node &= 0x0FFF_FFFF;
+        }
+        self.leaves.get(node as usize).copied().unwrap_or(-1)
+    }
+
+    /// `VIScene::QueryIntersection(bb, VIRadialFloraFilter, tl)`: every
+    /// triangle of the rooms' own geometry in the box that faces the list's
+    /// direction, cut to the box (`VIQueryTriList`). The walk is the world's
+    /// tree and each zone's (the query's bounding sphere while it is clear of
+    /// a plane, else its eight corners), each room once (the tree's and the
+    /// scene's stamps), its sprite under the identity. The flora's filter
+    /// takes no actor (`VIRadialFloraFilter::FilterActor` is `return 1`), so
+    /// the actors are left out: the game only stamps them, with the pass's
+    /// stamp, which the pass then moves on.
+    pub fn query_intersection(&mut self, bb: &BBox<M>, tl: &mut QueryTriList<M>) {
+        let v = QueryVars { bbox: *bb, corners: bb.store(), sphere: Sphere::from_bbox(bb), stamp: self.state };
+        let root = if self.nodes.is_empty() { LEAF } else { 0 };
+        self.query_world(root, &v, tl);
+        self.state += 1;
+        self.stamp += 1;
+    }
+
+    fn query_world(&mut self, node: u32, v: &QueryVars<M>, tl: &mut QueryTriList<M>) {
+        let mut node = node;
+        if node & 0xF000_0000 != 0 {
+            if node & LEAF != 0 {
+                if let Some(z) = self.leaves.get((node & 0x0FFF_FFFF) as usize).and_then(|&z| usize::try_from(z).ok()) {
+                    self.query_zone(z, v, tl);
+                }
+                return;
+            }
+            node &= 0x0FFF_FFFF;
+        }
+        let n = self.nodes[node as usize].clone();
+        let (front, back) = split(&n.plane, &v.sphere, &v.corners);
+        if front {
+            self.query_world(n.front, v, tl);
+        }
+        if back {
+            self.query_world(n.back, v, tl);
+        }
+    }
+
+    /// `VIZone::QueryIntersection(v)`: the zone's pre-translations, then its
+    /// tree (an unloaded zone, a proxy with no leaves, has nothing).
+    fn query_zone(&mut self, z: usize, v: &QueryVars<M>, tl: &mut QueryTriList<M>) {
+        if !self.zones[z].pretrans.is_empty() {
+            let pt = self.zones[z].pretrans.clone();
+            self.collide.set_pretranslations(&pt);
+        }
+        if self.zones[z].leaves.is_empty() {
+            return;
+        }
+        let root = if self.zones[z].nodes.is_empty() { LEAF } else { 0 };
+        self.query_zone_node(z, root, v, tl);
+    }
+
+    fn query_zone_node(&mut self, z: usize, node: u32, v: &QueryVars<M>, tl: &mut QueryTriList<M>) {
+        let mut node = node;
+        if node & 0xF000_0000 != 0 {
+            if node & LEAF != 0 {
+                // QueryIntersectionLeaf, then QueryIntersectionRoom
+                let Some(room) = self.zones[z].leaves.get((node & 0x0FFF_FFFF) as usize).and_then(|l| usize::try_from(l.0).ok()) else { return };
+                let Some(r) = self.zones[z].rooms.get_mut(room) else { return };
+                if r.stamp20 != v.stamp {
+                    r.stamp20 = v.stamp;
+                    if r.stamp24 != self.stamp {
+                        r.stamp24 = self.stamp;
+                        if let Some(sprite) = r.sprite {
+                            self.query_sprite(sprite, &Matrix44::identity(), &v.bbox, tl);
+                        }
+                    }
+                }
+                return;
+            }
+            node &= 0x0FFF_FFFF;
+        }
+        let n = self.zones[z].nodes[node as usize].clone();
+        let (front, back) = split(&n.plane, &v.sphere, &v.corners);
+        if front {
+            self.query_zone_node(z, n.front, v, tl);
+        }
+        if back {
+            self.query_zone_node(z, n.back, v, tl);
+        }
+    }
+
+    /// Each sprite's `QueryIntersection(b, l, m, sc)`: a simple sprite its
+    /// buffer under `m` (`SetWorld`, `QueryObj`), a group each member under its
+    /// placement times `m`, a LOD sprite its first level, an HSprite (posed
+    /// for now) each node attachment; the rest nothing.
+    fn query_sprite(&mut self, sprite: usize, m: &Matrix44<M>, bb: &BBox<M>, tl: &mut QueryTriList<M>) {
+        match self.sprites[sprite].kind.clone() {
+            SpriteKind::Simple(Some(b)) => {
+                self.collide.set_world(m);
+                self.collide.query_obj(bb, tl, &self.buffers[b]);
+            }
+            SpriteKind::Group(members) => {
+                for (ms, angles, scale, t) in members {
+                    let mem = Matrix44::transform(&Vect3::of(angles[0], angles[1], angles[2]), F::new(scale), &Vect3::of(t[0], t[1], t[2]));
+                    let out = Matrix44::mul(&mem, m);
+                    self.query_sprite(ms, &out, bb, tl);
+                }
+            }
+            SpriteKind::Lod(levels) => {
+                if let Some(&(l, _)) = levels.first() {
+                    self.query_sprite(l, m, bb, tl);
+                }
+            }
+            SpriteKind::H(i) => {
+                self.anims.time = self.time;
+                let (h, attach) = &mut self.hsprites[i];
+                h.process(-1, &self.anims);
+                let u = h.calc_trans_about_center(m, &self.anims);
+                let parts: Vec<(usize, Matrix44<M>)> = attach
+                    .iter()
+                    .filter(|&&(_, node)| node != -1)
+                    .map(|&(sp, node)| (sp, Matrix44::mul(&h.nodes[node as usize].world, &u)))
+                    .collect();
+                for (sp, t) in parts {
+                    self.query_sprite(sp, &t, bb, tl);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// [`World::query_intersection`] by brute force: every room sprite of
+    /// `zones` under the identity, no tree, no stamps. For testing the walk: a
+    /// room it fails to reach shows up as triangles missing.
+    pub fn query_brute(&mut self, bb: &BBox<M>, tl: &mut QueryTriList<M>, zones: &[usize]) {
+        for &z in zones {
+            if !self.zones[z].pretrans.is_empty() {
+                let pt = self.zones[z].pretrans.clone();
+                self.collide.set_pretranslations(&pt);
+            }
+            for room in 0..self.zones[z].rooms.len() {
+                if let Some(sprite) = self.zones[z].rooms[room].sprite {
+                    self.query_sprite(sprite, &Matrix44::identity(), bb, tl);
+                }
+            }
+        }
+    }
+
     /// `VIWorld::FindLeaf` then the zone leaf's flags (`GetEnvFlags`).
     pub fn env_flags(&self, at: &Vect3<M>) -> u32 {
         self.find_leaf(at).map_or(!0, |(z, leaf)| self.zones[z].leaves[leaf].1)
@@ -1582,8 +1821,17 @@ fn descend<M: Model>(n: &Node<M>, v: &mut Vars<M>, mut go: impl FnMut(bool, &mut
     }
 }
 
-/// `InsertActor`'s choice at a node: the bound sphere alone when it is clear
-/// of the plane, else the eight corners.
+/// `VISceneIntersectVars`, what the query walk carries: the box, its eight
+/// corners (`Store`) and sphere (`VISphere::Init`), the tree's stamp.
+struct QueryVars<M: Model> {
+    bbox: BBox<M>,
+    corners: [Vect3<M>; 8],
+    sphere: Sphere<M>,
+    stamp: i32,
+}
+
+/// `InsertActor`'s choice at a node, and the query's: the bound sphere alone
+/// when it is clear of the plane, else the eight corners.
 fn split<M: Model>(pl: &Plane<M>, b: &Sphere<M>, corners: &[Vect3<M>; 8]) -> (bool, bool) {
     let d = pl.distance(&b.c);
     if b.r < d {
@@ -1600,6 +1848,45 @@ fn split<M: Model>(pl: &Plane<M>, b: &Sphere<M>, corners: &[Vect3<M>; 8]) -> (bo
             }
         }
         (front, back)
+    }
+}
+
+/// What the radial flora reads of the scene. A world with no grid record
+/// is `VIWorld`'s constructor's: one cell, 2000 a side, about the origin, in a
+/// box of +/-1000.
+impl<M: Model> FloraScene<M> for World<M> {
+    fn grid_rows(&self) -> i32 {
+        self.grid.as_ref().map_or(1, |g| g.rows)
+    }
+    fn grid_cols(&self) -> i32 {
+        self.grid.as_ref().map_or(1, |g| g.cols)
+    }
+    fn grid_center(&self, a: i32, b: i32) -> Vect3<M> {
+        self.grid.as_ref().map_or_else(Vect3::default, |g| g.center(a, b))
+    }
+    fn grid_offset(&self, v: &Vect3<M>) -> (i32, i32, Vect3<M>) {
+        self.grid.as_ref().map_or((0, 0, *v), |g| g.offset(v))
+    }
+    fn world_bbox(&self) -> BBox<M> {
+        self.grid.as_ref().map_or_else(
+            || {
+                let k = F::new(1000.0);
+                BBox { min: Vect3::new(-k, -k, -k), max: Vect3::new(k, k, k) }
+            },
+            |g| g.bbox,
+        )
+    }
+    fn find_zone(&self, v: &Vect3<M>) -> i32 {
+        World::find_zone(self, v)
+    }
+    fn flora(&self, zone: i32) -> Option<&ZoneFlora<M>> {
+        usize::try_from(zone).ok().and_then(|z| self.zones.get(z)).map(|z| &z.flora)
+    }
+    fn query(&mut self, b: &BBox<M>, l: &mut QueryTriList<M>) {
+        self.query_intersection(b, l)
+    }
+    fn time(&self) -> i64 {
+        self.time
     }
 }
 

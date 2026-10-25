@@ -343,8 +343,10 @@ pub fn shot_with(
     let mut batches: Vec<render::billboard::Batch> = Vec::new();
     let mut billboard_view: Option<(glam::Mat4, glam::Mat4)> = None;
     let mut sky_billboards: Option<(glam::Mat4, glam::Mat4, Vec<render::billboard::Batch>)> = None;
-    // the effect volumes round the walk (`fx.rs`)
+    // the effect volumes round the walk (`fx.rs`), and the radial flora
+    // (`flora.rs`), grown at the shot's camera
     let mut fx: Option<crate::fx::Fx> = None;
+    let mut flora: Option<crate::flora::Flora> = None;
     let cam = cam.unwrap_or_else(|| source.camera(s.bounds));
     let aspect = w as f32 / h as f32;
     let mut view = cam.view(s.bounds, aspect);
@@ -946,7 +948,7 @@ pub fn shot_with(
             // are the shot's
             weather.frame(&mut walker.scene, None, &walker.eye, t, game_hour(play.as_ref(), Instant::now()));
             // the effect volumes, stepped as the scene rasters them
-            if let Some(fx) = fx.as_mut() {
+            if let Some(fx) = fx.as_mut().filter(|_| crate::settings::client().environment) {
                 fx.stream(Vec3::from(walker.cam.walk.phys.position.to_array()), &walker.scene, lib);
                 let cam = crate::fx::camera(walker.eye.position, walker.eye.direction);
                 fx.lod_eye = Some(crate::lod::eye(&walker.cam, &walker.eye.position));
@@ -1051,13 +1053,21 @@ pub fn shot_with(
         view = frame.0;
         // the volumes as the shot's camera sees them (the walk's clock does
         // not move: nothing steps again)
-        if let Some(fx) = fx.as_mut() {
+        if let Some(fx) = fx.as_mut().filter(|_| crate::settings::client().environment) {
             fx.stream(Vec3::from(walker.cam.walk.phys.position.to_array()), &walker.scene, lib);
             let cam = crate::fx::camera(vi::vect::Vect3::of(shot_eye.x, shot_eye.y, shot_eye.z), shot_dir);
             fx.lod_eye = Some(shot_lod_eye);
             fx.frame(&walker.scene, lib, &cam, view.view_proj, view.eye, t, game_hour(play.as_ref(), Instant::now()));
             fx.upload(&mut renderer, &device, &queue, lib);
             eprintln!("{}", fx.describe());
+        }
+        // the flora at the shot's camera: a swatch grows the same plants
+        // whenever it is made, so the walk's frames need not have grown it
+        if crate::settings::client().flora {
+            let fl = flora.insert(crate::flora::Flora::new());
+            let drawn = fl.frame(&mut walker.scene, &vi::vect::Vect3::of(shot_eye.x, shot_eye.y, shot_eye.z), view.view_proj);
+            fl.upload(&mut renderer, &device, &queue, lib, &walker.scene, &drawn);
+            eprintln!("{}", fl.describe());
         }
         streamed = Some(streamer);
         if let Some(p) = &mut play {
@@ -1111,8 +1121,9 @@ pub fn shot_with(
             .iter()
             .map(render::Draw::Model)
             .chain(streamed.iter().flat_map(|s| s.draws()))
+            .chain(flora.iter().flat_map(|f| f.draws()))
             .chain(play.iter().flat_map(|p| p.models()).map(render::Draw::Model))
-            .chain(fx.iter().flat_map(|f| f.models()).map(render::Draw::Model))
+            .chain(fx.iter().filter(|_| crate::settings::client().environment).flat_map(|f| f.models()).map(render::Draw::Model))
             .collect(),
     };
     let textures = render::library_textures(lib);
@@ -1531,9 +1542,9 @@ struct Perf {
 }
 
 impl Perf {
-    const NAMES: [&str; 15] = [
+    const NAMES: [&str; 16] = [
         "stream", "walk", "play", "pose", "zones", "sound", "weather", "particles", "lights", "acquire", "hud", "encode", "submit",
-        "gpu wait", "volumes",
+        "gpu wait", "volumes", "flora",
     ];
 
     fn from_env() -> Option<Perf> {
@@ -1612,6 +1623,8 @@ struct App {
     batches: Vec<render::billboard::Batch>,
     /// The effect volumes round the walk (`fx.rs`).
     fx: Option<crate::fx::Fx>,
+    /// The radial flora round the walk (`flora.rs`).
+    flora: Option<crate::flora::Flora>,
     /// The sky and the weather (made once, kept across worlds as the
     /// scene's is), and this frame's sky billboards.
     weather: Option<crate::weather::Weather>,
@@ -1769,6 +1782,7 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         held_fx: None,
         batches: Vec::new(),
         fx: None,
+        flora: None,
         weather: None,
         sky_batches: Vec::new(),
         body_at: 0,
@@ -1859,6 +1873,7 @@ impl App {
                 self.streamer = Some(streamer);
                 self.particles = Some(crate::particles::Particles::new(&w.scene, 0));
                 self.fx = crate::fx::enabled().then(crate::fx::Fx::new);
+                self.flora = Some(crate::flora::Flora::new());
                 w
             });
             self.sky_at = None;
@@ -2084,6 +2099,7 @@ impl App {
         let now = self.clock.elapsed().as_millis() as i64;
         self.particles = Some(crate::particles::Particles::new(&w.scene, now));
         self.fx = crate::fx::enabled().then(crate::fx::Fx::new);
+        self.flora = Some(crate::flora::Flora::new());
         if let Some(s) = self.sound.as_mut() {
             s.world_changed();
         }
@@ -2714,6 +2730,7 @@ impl App {
         self.particles = None;
         self.held_fx = None;
         self.fx = None;
+        self.flora = None;
         self.batches.clear();
         self.sky_batches.clear();
         self.entering = None;
@@ -4211,6 +4228,7 @@ impl ApplicationHandler for App {
                 let held_fx = &mut self.held_fx;
                 let batches = &mut self.batches;
                 let fx = &mut self.fx;
+                let flora = &mut self.flora;
                 let weather = &mut self.weather;
                 let sky_batches = &mut self.sky_batches;
                 let mut bb_view = None;
@@ -4366,15 +4384,32 @@ impl ApplicationHandler for App {
                         bb_view = Some((v, proj));
                     }
                     mark(perf, 8);
-                    // the effect volumes (`VIScene::Render`'s deferred actors)
+                    // the effect volumes (`VIScene::Render`'s deferred actors);
+                    // none with the options' Environment off
                     if let Some(fx) = fx.as_mut() {
-                        fx.stream(Vec3::from(w.cam.walk.phys.position.to_array()), &w.scene, lib);
-                        let cam = crate::fx::camera(w.eye.position, w.eye.direction);
-                        fx.lod_eye = Some(crate::lod::eye(&w.cam, &w.eye.position));
-                        fx.frame(&w.scene, lib, &cam, proj * v, lights.0.eye, now, hour_now);
-                        fx.upload(&mut g.renderer, &g.device, &g.queue, lib);
+                        if crate::settings::client().environment {
+                            fx.stream(Vec3::from(w.cam.walk.phys.position.to_array()), &w.scene, lib);
+                            let cam = crate::fx::camera(w.eye.position, w.eye.direction);
+                            fx.lod_eye = Some(crate::lod::eye(&w.cam, &w.eye.position));
+                            fx.frame(&w.scene, lib, &cam, proj * v, lights.0.eye, now, hour_now);
+                            fx.upload(&mut g.renderer, &g.device, &g.queue, lib);
+                        } else {
+                            fx.hide(&mut g.renderer, &g.device, &g.queue, lib);
+                        }
                     }
                     mark(perf, 14);
+                    // the radial flora (`VIScene::Render`: Update at the
+                    // camera, Render after the rooms' deferred list); none
+                    // with the options' Flora off
+                    if let Some(fl) = flora.as_mut() {
+                        if crate::settings::client().flora {
+                            let drawn = fl.frame(&mut w.scene, &w.eye.position, proj * v);
+                            fl.upload(&mut g.renderer, &g.device, &g.queue, lib, &w.scene, &drawn);
+                        } else {
+                            fl.clear();
+                        }
+                    }
+                    mark(perf, 15);
                     lights
                 });
                 let ms = self.clock.elapsed().as_millis() as i64;
@@ -4475,8 +4510,9 @@ impl ApplicationHandler for App {
                         .iter()
                         .map(render::Draw::Model)
                         .chain(self.streamer.iter().flat_map(|s| s.draws()))
+                        .chain(self.flora.iter().flat_map(|f| f.draws()))
                         .chain(self.play.iter().flat_map(|p| p.models()).map(render::Draw::Model))
-                        .chain(self.fx.iter().flat_map(|f| f.models()).map(render::Draw::Model))
+                        .chain(self.fx.iter().filter(|_| crate::settings::client().environment).flat_map(|f| f.models()).map(render::Draw::Model))
                         .collect(),
                 };
                 // the options' Brightness: the scene through its curve (none

@@ -573,6 +573,13 @@ pub struct ClientOptions {
     /// game is drawn; off, every texel off the base level, sharper and
     /// shimmering in the distance (`render::set_mipmaps`).
     pub mipmaps: bool,
+    /// Flora: on, the radial flora the game grows round the camera out of
+    /// each zone's tables (`vi::flora`, `flora`), as it is drawn; off, none.
+    pub flora: bool,
+    /// Environment: on, the effect volumes placed in the world (ground fog,
+    /// dust, falling leaves, light shafts, the flocks of birds: `fx`), as the
+    /// game draws them; off, none.
+    pub environment: bool,
     /// Text: how the game's font is drawn scaled to the window, wherever it
     /// is drawn (`render::ui::TextFilter`): Sharp, crisp, or Smooth, the
     /// PS2's own filtering (F3 20261024-200725: "smooth out the text as per
@@ -646,6 +653,8 @@ impl Default for ClientOptions {
             target_of_target: false,
             text: render::ui::TextFilter::Sharp,
             mipmaps: true,
+            flora: true,
+            environment: true,
             output: None,
         }
     }
@@ -722,6 +731,13 @@ impl ClientOptions {
         if !self.mipmaps {
             s.push_str("mipmaps=off\n");
         }
+        // Flora and Environment only when off
+        if !self.flora {
+            s.push_str("flora=off\n");
+        }
+        if !self.environment {
+            s.push_str("environment=off\n");
+        }
         if let Some(d) = self.output {
             s.push_str(&format!("output={}\n", d.as_str()));
         }
@@ -780,6 +796,10 @@ impl ClientOptions {
                 ("text", "smooth") => c.text = render::ui::TextFilter::Smooth,
                 ("mipmaps", "on") => c.mipmaps = true,
                 ("mipmaps", "off") => c.mipmaps = false,
+                ("flora", "on") => c.flora = true,
+                ("flora", "off") => c.flora = false,
+                ("environment", "on") => c.environment = true,
+                ("environment", "off") => c.environment = false,
                 ("output", v) if !v.is_empty() => c.output = Some(DeviceName::new(v)),
                 ("ability_bars", v) => {
                     if let Some(n) = v.parse::<u8>().ok().filter(|&n| (ABILITY_BARS_GAME as i32..=crate::hudmenu::MAX_BARS).contains(&(n as i32))) {
@@ -1093,7 +1113,7 @@ pub fn describe() -> String {
         FrameRate::Display => "the display's",
     };
     format!(
-        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, output device {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, overlapping names {}, art {}, update notices {}, shouts {}, target of target {}, text {}, mipmaps {}; {}",
+        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, output device {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, overlapping names {}, art {}, update notices {}, shouts {}, target of target {}, text {}, mipmaps {}, flora {}, environment {}; {}",
         if c.lod { "on" } else { "off" },
         c.brightness,
         c.fog,
@@ -1125,6 +1145,8 @@ pub fn describe() -> String {
             render::ui::TextFilter::Smooth => "smooth",
         },
         if c.mipmaps { "on" } else { "off" },
+        if c.flora { "on" } else { "off" },
+        if c.environment { "on" } else { "off" },
         kept_where()
     )
 }
@@ -1599,7 +1621,7 @@ mod tests {
             "Screen Shake only off, Capture Controller only on"
         );
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, overlapping names hide, art frontiers, update notices on, shouts heard, target of target off, text sharp, mipmaps on; kept in the page's storage");
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, overlapping names hide, art frontiers, update notices on, shouts heard, target of target off, text sharp, mipmaps on, flora on, environment on; kept in the page's storage");
         testing::reset(true);
         assert!(describe().ends_with("refused: nothing is kept"));
         testing::reset(false);
@@ -1630,6 +1652,25 @@ mod tests {
         assert!(!ClientOptions::from_text("mipmaps=off").mipmaps && ClientOptions::from_text("mipmaps=on").mipmaps);
         for bad in ["mipmaps=0", "mipmaps=no", "mipmaps="] {
             assert!(ClientOptions::from_text(bad).mipmaps, "{bad}: on, the default");
+        }
+    }
+
+    /// Flora and Environment, on by default, each kept only when off;
+    /// anything but on or off leaves it on, and one never moves the other.
+    #[test]
+    fn flora_and_environment_kept_only_when_off() {
+        let d = ClientOptions::default();
+        assert!(d.flora && d.environment, "on, the game's");
+        assert_eq!(ClientOptions { flora: false, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nflora=off\n");
+        assert_eq!(ClientOptions { environment: false, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nenvironment=off\n");
+        let c = ClientOptions::from_text("flora=off");
+        assert!(!c.flora && c.environment, "Flora alone");
+        let c = ClientOptions::from_text("environment=off");
+        assert!(c.flora && !c.environment, "Environment alone");
+        assert!(ClientOptions::from_text("flora=on\nenvironment=on") == d);
+        for bad in ["flora=0", "environment=no", "flora="] {
+            let c = ClientOptions::from_text(bad);
+            assert!(c.flora && c.environment, "{bad}: on, the default");
         }
     }
 

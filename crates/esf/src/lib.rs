@@ -37,6 +37,10 @@ pub mod types {
     pub const MATPAL_HDR: u16 = 0x1111;
     pub const PRIMBUF: u16 = 0x1200;
     pub const SKINPRIMBUF: u16 = 0x1210;
+    /// `ParseFloraPrimBuffer`'s, in a flora sprite (`FLORASPRITE`).
+    pub const FLORAPRIMBUF: u16 = 0x1230;
+    /// `VIFloraSprite`: a header (0x2F01: id, box), a palette, a 0x1230.
+    pub const FLORASPRITE: u16 = 0x2F00;
     pub const SIMPLESPRITE: u16 = 0x2000;
     pub const SIMPLESPRITE_HDR: u16 = 0x2001;
     pub const HSPRITE: u16 = 0x2200;

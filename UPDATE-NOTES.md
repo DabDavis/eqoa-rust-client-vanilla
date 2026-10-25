@@ -5,6 +5,15 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-25 · Grass, shrubs and stones on the ground, and a World options page
+- The ground now grows the plants the game puts on it: tufts of grass, shrubs, cacti
+  and stones round you wherever the game has them, such as the dunes round Freeport,
+  fading out a few steps away, as on a PlayStation 2. They had never been drawn.
+- Options > Extended has a new World page: Fog, Mipmaps, Flora, Environment and Art.
+  Flora turns the plants off. Environment turns off the ground fog, dust, falling
+  leaves, light shafts and flocks of birds. Both are on by default. Fog and Mipmaps
+  moved here from Video, and Art from Characters.
+
 ## 2026-10-25 · Textures in the distance as the PlayStation 2 draws them
 - Ground, walls, trees and everything else far off now use their textures' smaller
   versions, blended by distance, as the PlayStation 2 draws them: the shimmering

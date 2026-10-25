@@ -22,6 +22,16 @@
 // Positions are taken relative to the eye before they are projected (see
 // vs_main): `view_proj` is the frame's with the camera at the origin.
 //
+// The radial flora's plants (a layer's flags.w) are `VIRStrip6`'s: no normal
+// and no vertex colour, so
+//
+//   light = min(ambient + sun · 0.15 + point · (1 − min(|L|/range, 1)) · 0.15, 1)
+//
+// with |L| in the plant's own space (the light goes through the inverse model
+// view: the world distance over the plant's scale), and the vertex alpha is
+// the plant's fade (the instance's static-light alpha), which the GS
+// multiplies into the texel's.
+//
 // A texel comes from the texture's mip levels as the GS takes it (TEX1:
 // trilinear, LCM 0): at level log2(w) + K, w the depth before the camera
 // (the strip programs' 1/Q, interpolated as the GS does: per pixel) and K
@@ -43,7 +53,7 @@ struct Frame {
 
 struct Layer {
     tint: vec4<f32>,
-    flags: vec4<f32>,    // x: textured, y: blended, z: the GS's K (levels)
+    flags: vec4<f32>,    // x: textured, y: blended, z: the GS's K (levels), w: flora
     uv0: vec4<f32>,      // m0, m1, m3, m4
     uv1: vec4<f32>,      // m6, m7, scroll rate u, v
 };
@@ -82,6 +92,8 @@ struct VsOut {
     @location(3) fog: f32,
     // w: the depth before the camera, the level's (1/Q)
     @location(4) depth: f32,
+    // the vertex alpha a flora plant's fade is (1 for the rest)
+    @location(5) fade: f32,
 };
 
 @vertex
@@ -137,6 +149,17 @@ fn vs_main(v: VsIn) -> VsOut {
         }
     }
     o.light = clamp(v.color.rgb + frame.ambient.rgb + sun + v.static_light.rgb + point, vec3<f32>(0.0), vec3<f32>(1.0));
+    o.fade = 1.0;
+    if (layer.flags.w > 0.5) {
+        let k = 0.15;
+        var pt = vec3<f32>(0.0);
+        if (frame.point.w > 0.0) {
+            let d = length((frame.point.xyz - frame.eye.xyz) - rel) / length(v.m0.xyz);
+            pt = frame.point_color.rgb * ((1.0 - min(d / frame.point.w, 1.0)) * k);
+        }
+        o.light = min(frame.ambient.rgb + frame.sun.rgb * k + pt, vec3<f32>(1.0));
+        o.fade = v.static_light.a;
+    }
     return o;
 }
 
@@ -150,7 +173,7 @@ fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
         }
         texel = textureSampleLevel(tex, samp, i.uv, lod);
     }
-    let alpha = texel.a * layer.tint.a;
+    let alpha = texel.a * layer.tint.a * i.fade;
     if (layer.flags.y < 0.5 && alpha < 0.5) {
         discard;
     }

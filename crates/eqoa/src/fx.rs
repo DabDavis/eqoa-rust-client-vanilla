@@ -589,6 +589,19 @@ impl Fx {
         }
     }
 
+    /// Nothing of the volumes drawn (the options' Environment off): no fans,
+    /// every boid hidden. They take up where they are when it is on again.
+    pub fn hide(&mut self, renderer: &mut render::Renderer, device: &wgpu::Device, queue: &wgpu::Queue, lib: &Library) {
+        renderer.set_fans(device, queue, &[], self.fans_eye, &render::library_textures(lib));
+        for s in self.sprites.slots.iter_mut().flatten() {
+            if let Sprite::Boid(b) = s
+                && let Some(g) = b.gpu.as_mut()
+            {
+                g.visible = false;
+            }
+        }
+    }
+
     /// The boids' models, for `Renderer::draw` (those not drawn this frame
     /// are not visible).
     pub fn models(&self) -> impl Iterator<Item = &render::GpuModel> {

@@ -25,6 +25,7 @@ pub mod emit;
 pub mod csprite;
 pub mod cust;
 pub mod collide;
+pub mod flora;
 pub mod fpu;
 pub mod geom;
 pub mod hash;

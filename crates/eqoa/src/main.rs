@@ -108,6 +108,7 @@ mod settings;
 mod social;
 mod wholist;
 mod zones;
+mod flora;
 mod fx;
 mod particles;
 mod patcher;
