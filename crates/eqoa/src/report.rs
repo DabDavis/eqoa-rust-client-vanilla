@@ -144,7 +144,7 @@ mod native {
     use std::fs::File;
     use std::io::{BufRead, Write};
     use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering};
     use std::sync::{Mutex, MutexGuard, mpsc};
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
     use vi::ui::{Raster, Vui, wide};
@@ -165,6 +165,9 @@ mod native {
     /// The line a run that closes writes last: a log without it is a run
     /// that did not close.
     const CLOSED: &str = "[eqoa] closed";
+    /// The lines waiting for the terminal's thread (`tee`), at most: past
+    /// them a line reaches the log and the report's ring only.
+    const TERMINAL_QUEUE: usize = 1024;
 
     fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
         m.lock().unwrap_or_else(|e| e.into_inner())
@@ -192,6 +195,10 @@ mod native {
     /// Where stderr went before the pipe, to write to (a descriptor, a
     /// handle), -1 without one: what must reach it before the program may end.
     static TERMINAL: AtomicIsize = AtomicIsize::new(-1);
+    /// Whether the terminal's thread is behind: its queue full, so a write
+    /// to where stderr went blocks (a pipe nothing reads) and the panic
+    /// hook writes there no more (`to_terminal`).
+    pub(super) static TERMINAL_BEHIND: AtomicBool = AtomicBool::new(false);
     /// This run's name: when it started, and which window it is past the
     /// first (`crash-<run>.txt` is its crash).
     static RUN: Mutex<String> = Mutex::new(String::new());
@@ -307,6 +314,10 @@ mod native {
             eprint!("{text}");
             return;
         }
+        // where stderr went reads nothing: a write there would never return
+        if TERMINAL_BEHIND.load(Ordering::Relaxed) {
+            return;
+        }
         // SAFETY: the copy `tee` made of the old stderr, never closed
         #[cfg(unix)]
         let f = unsafe { <File as std::os::fd::FromRawFd>::from_raw_fd(t as i32) };
@@ -321,7 +332,11 @@ mod native {
 
     /// stderr into a pipe whose other end a thread reads, line by line, into
     /// the log and back out to where stderr went. The thread never stops
-    /// reading (a full pipe would stop every writer, the game with it).
+    /// reading (a full pipe would stop every writer, the game with it), so
+    /// where stderr went is written by a thread of its own, which may block
+    /// there: a launcher's pipe that nothing reads (a Steam Deck in Steam's
+    /// game mode, "seems to hang from steam") once filled stopped the reader
+    /// in its write, then every `eprintln!`, the game's frames with them.
     fn tee() {
         let Ok((reader, writer)) = std::io::pipe() else { return };
         #[cfg(unix)]
@@ -368,26 +383,74 @@ mod native {
         };
         let (done, drained) = mpsc::channel();
         lock(&LOG).drained = Some(drained);
+        let terminal = to.and_then(|t| terminal_thread(Kept(std::mem::ManuallyDrop::new(t))));
         let _ = std::thread::Builder::new().name("log".into()).spawn(move || {
-            let mut to = to.map(std::mem::ManuallyDrop::new);
-            let mut r = std::io::BufReader::new(reader);
-            let mut line = Vec::new();
-            loop {
-                line.clear();
-                match r.read_until(b'\n', &mut line) {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) => {}
-                }
-                if let Some(t) = to.as_mut()
-                    && t.write_all(&line).is_err()
-                {
-                    to = None;
-                }
-                let text = String::from_utf8_lossy(&line);
-                push_line(&mut lock(&LOG), text.trim_end_matches(['\n', '\r']));
+            let (queue, written) = terminal.unzip();
+            read_lines(std::io::BufReader::new(reader), queue, |text| push_line(&mut lock(&LOG), text));
+            // what the terminal's thread still holds, a moment at most
+            if let Some(w) = written {
+                let _ = w.recv_timeout(Duration::from_millis(300));
             }
             let _ = done.send(());
         });
+    }
+
+    /// Where stderr went, written to and never closed (`restore_stderr` puts
+    /// it back as fd 2).
+    struct Kept(std::mem::ManuallyDrop<File>);
+
+    impl Write for Kept {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.write(b)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.0.flush()
+        }
+    }
+
+    /// A thread writing what it is handed to `to` (where stderr went), and
+    /// the queue to hand it lines by; the second channel says it is done
+    /// (the queue let go and emptied, or a write failed).
+    pub(super) fn terminal_thread<W: Write + Send + 'static>(mut to: W) -> Option<(mpsc::SyncSender<Vec<u8>>, mpsc::Receiver<()>)> {
+        let (queue, lines) = mpsc::sync_channel::<Vec<u8>>(TERMINAL_QUEUE);
+        let (written, done) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("terminal".into())
+            .spawn(move || {
+                for line in lines {
+                    if to.write_all(&line).is_err() {
+                        break;
+                    }
+                }
+                let _ = written.send(());
+            })
+            .ok()?;
+        Some((queue, done))
+    }
+
+    /// The log's reader: every line of `reader` to `sink` (the log and the
+    /// ring) as it comes, and queued for the terminal's thread, never waited
+    /// for: while its queue is full a line goes to `sink` only, and
+    /// `TERMINAL_BEHIND` says so (the panic hook's message too). Until the
+    /// pipe's end closes.
+    pub(super) fn read_lines(mut r: impl BufRead, mut terminal: Option<mpsc::SyncSender<Vec<u8>>>, mut sink: impl FnMut(&str)) {
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            match r.read_until(b'\n', &mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            if let Some(t) = terminal.as_ref() {
+                match t.try_send(line.clone()) {
+                    Ok(()) => TERMINAL_BEHIND.store(false, Ordering::Relaxed),
+                    Err(mpsc::TrySendError::Full(_)) => TERMINAL_BEHIND.store(true, Ordering::Relaxed),
+                    Err(mpsc::TrySendError::Disconnected(_)) => terminal = None,
+                }
+            }
+            let text = String::from_utf8_lossy(&line);
+            sink(text.trim_end_matches(['\n', '\r']));
+        }
     }
 
     /// stderr back where it went before `start` (a program started in this
@@ -1456,6 +1519,63 @@ mod tests {
         assert_eq!(none.stopped, Stopped::default());
         assert_eq!(crash_words(&none.stopped, "dev-3ff30da", offered), ("The game stopped earlier".to_string(), "It wrote a crash report then: sending it helps it get fixed.".to_string()));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A terminal that reads nothing (a launcher's pipe never drained: a
+    /// Steam Deck's game mode) does not stop the log: 20,000 lines, far past
+    /// the terminal's queue, all reach it while the terminal's thread is stuck
+    /// in its first write, and the panic hook is told to keep off it. The
+    /// control: the stuck writer itself, written as the log's reader used to
+    /// write (itself, in the loop), never returns.
+    #[test]
+    fn a_terminal_that_reads_nothing_does_not_stop_the_log() {
+        use native::{TERMINAL_BEHIND, read_lines, terminal_thread};
+        use std::io::Write;
+        use std::sync::atomic::Ordering;
+        use std::sync::mpsc;
+        use std::time::Duration;
+        /// A write that waits until the test lets it go (its sender dropped).
+        struct Stuck(mpsc::Receiver<()>);
+        impl Write for Stuck {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                let _ = self.0.recv();
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let (hold, stuck) = mpsc::channel::<()>();
+        let (queue, written) = terminal_thread(Stuck(stuck)).unwrap();
+        let text: String = (0..20_000).map(|i| format!("line {i}\n")).collect();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut n = 0;
+            let mut last = String::new();
+            read_lines(std::io::Cursor::new(text.into_bytes()), Some(queue), |l| {
+                n += 1;
+                last = l.to_string();
+            });
+            let _ = tx.send((n, last));
+        });
+        assert_eq!(rx.recv_timeout(Duration::from_secs(20)), Ok((20_000, "line 19999".to_string())));
+        assert!(TERMINAL_BEHIND.load(Ordering::Relaxed), "the panic hook keeps off a terminal that reads nothing");
+        // let go: the terminal's thread ends and says so
+        drop(hold);
+        assert_eq!(written.recv_timeout(Duration::from_secs(5)), Ok(()));
+        TERMINAL_BEHIND.store(false, Ordering::Relaxed);
+        // the control: writing to it in the loop, as the reader did, stops there
+        let (hold2, stuck2) = mpsc::channel::<()>();
+        let (tx2, rx2) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut t = Stuck(stuck2);
+            for i in 0..3 {
+                let _ = t.write_all(format!("line {i}\n").as_bytes());
+                let _ = tx2.send(i);
+            }
+        });
+        assert_eq!(rx2.recv_timeout(Duration::from_millis(300)), Err(mpsc::RecvTimeoutError::Timeout));
+        drop(hold2);
     }
 
     /// A report too long for the server is cut, at a character, saying so.
