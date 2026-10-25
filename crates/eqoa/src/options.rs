@@ -55,7 +55,7 @@
 //!   30 to 200 in tens, `play::PlateView`);
 //! - Sound: Sound in Background (one setting for every window: off, a window
 //!   not in front is not heard, `audio::set_heard`) and natively Output
-//!   Device (System Default, followed when the system's changes, or a device
+//!   Device (Default, the system's, followed when it changes, or a device
 //!   the system lists, the default while it is not connected: `audio`'s
 //!   `retarget`; its page says where the sound plays now).
 //! Triangle goes back a step: a page to the categories, the categories to
@@ -1153,8 +1153,9 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
     })
 }
 
-/// Output Device's value for the system's default.
-const SYSTEM_DEFAULT: &str = "System Default";
+/// Output Device's value for the system's default ("System Default" is too
+/// wide for a value's frame; the page's note says the device it is).
+const SYSTEM_DEFAULT: &str = "Default";
 
 /// Output Device (item 32) moved a step: round the system's default and the
 /// devices the system lists (`names`, the lister's last), the one chosen kept
