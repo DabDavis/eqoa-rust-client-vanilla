@@ -198,6 +198,15 @@ impl Report {
     }
 }
 
+/// Whether gilrs drives motors (its force feedback). Not on Windows: there an
+/// Xbox controller's are XInput's (`xinput`) and a PlayStation one's are set
+/// over HID (`hidpad`), and gilrs's force feedback tells every controller it
+/// has as a Windows.Gaming.Input gamepad its motors every 50 ms, at rest when
+/// it plays nothing: a DualShock 4 was told "motors off" (and its light off)
+/// twenty times a second, which stopped what HID had just set going (a
+/// virtual DualShock 4 on GitHub's Windows machines read the reports back).
+pub const GILRS_FF: bool = cfg!(not(windows));
+
 /// libpad on the host: port 0, slot 0 answers from the merged report;
 /// the motors set last are kept for the platform to play.
 #[derive(Default)]
@@ -311,6 +320,14 @@ impl Console {
         }
         let left = |end: i64| if end != 0 { end - now } else { 0 };
         Some((self.lib.act, left(self.pad.lf_end).max(left(self.pad.hf_end))))
+    }
+
+    /// `VIPad`'s clock set to `now` before the frame's `Rumble`s: the game
+    /// times a vibration from the last `Process`, the frame before, and a
+    /// frame that came later than a vibration lasts (the world loading, a
+    /// hitch; a PS2's frames never do) ended it before it began.
+    pub fn now(&mut self, now: i64) {
+        self.pad.time = now;
     }
 
     /// `Rumble` (CLIENT): motor 0 the small one for `ms`, 1 the large one at
@@ -449,6 +466,84 @@ pub fn from_device() -> bool {
     !*SCRIPTED.get_or_init(|| SCRIPTS.iter().any(|v| std::env::var_os(v).is_some()))
 }
 
+/// The spell effect `EQOA_RUMBLE_TEST` casts: Fiery Burst's, the visual
+/// go-eqoa-server gives a harmful spell it has no visual for, whose caster's
+/// list runs the large motor at 127 for 319 ms (and its target's at 220 for
+/// 140 ms, then the small one for 1979 ms).
+pub const RUMBLE_TEST_EFFECT: u32 = 0xE780_24D9;
+
+/// `EQOA_RUMBLE_TEST=<ms>[,<effect>]` (a test's): that long after the
+/// player's first frame in the world, the player casts that spell effect
+/// (`RUMBLE_TEST_EFFECT` by default) on itself, once: the pad's motors
+/// tested from a spell's vibrate events (`Rumble`, `VIPad`) to the
+/// controller. `caster` is the player's id.
+pub fn rumble_test(caster: u32) -> Option<crate::spells::Cast> {
+    use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static SPEC: OnceLock<Option<(u128, u32)>> = OnceLock::new();
+    static FIRST: OnceLock<web_time::Instant> = OnceLock::new();
+    static CAST: AtomicBool = AtomicBool::new(false);
+    let (at, effect) = (*SPEC.get_or_init(|| {
+        let v = std::env::var("EQOA_RUMBLE_TEST").ok()?;
+        let mut w = v.split(',');
+        let at = w.next()?.trim().parse().ok()?;
+        let effect = w.next().and_then(|e| u32::from_str_radix(e.trim().trim_start_matches("0x"), 16).ok()).unwrap_or(RUMBLE_TEST_EFFECT);
+        Some((at, effect))
+    }))?;
+    let first = *FIRST.get_or_init(web_time::Instant::now);
+    if first.elapsed().as_millis() < at || CAST.swap(true, Ordering::Relaxed) {
+        return None;
+    }
+    crate::say(&format!("EQOA_RUMBLE_TEST: the player casts spell effect {effect:#010x}"));
+    Some(crate::spells::Cast { effect, time: 0, caster, target: caster, targets: Vec::new() })
+}
+
+/// `eqoa rumble`: the controllers this window would read rumble as the game
+/// rumbles them, the options' Vibration aside: each read a frame at a time
+/// until `VIPad`'s handshake finds their motors (at most `wait_ms`), then the
+/// large motor at 200 for 600 ms, a rest, the small one for 600 ms, each
+/// through `Rumble`, `VIPad::Process` and the controller's own way
+/// (`Gamepads::rumble`), said as it goes. An error when no controller came or
+/// none that came can rumble.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn check_motors(wait_ms: i64) -> Result<(), String> {
+    let mut pads = Gamepads::new();
+    let mut console = Console::new();
+    let start = std::time::Instant::now();
+    let (mut step, mut at, mut seen) = (0, 0i64, false);
+    loop {
+        let now = start.elapsed().as_millis() as i64;
+        let (report, connected, motors) = pads.poll();
+        seen |= connected;
+        console.poll(report, connected, motors, false);
+        console.now(now);
+        match step {
+            0 if console.pad.active() => {
+                crate::say("rumble: the large motor at 200 for 600 ms");
+                console.rumble(1, 200, 600, true);
+                (step, at) = (1, now);
+            }
+            0 if now >= wait_ms => {
+                return Err(if seen { "rumble: the controllers read cannot rumble here".into() } else { "rumble: no controller".into() });
+            }
+            1 if now - at >= 900 => {
+                crate::say("rumble: the small motor for 600 ms");
+                console.rumble(0, 0, 600, true);
+                (step, at) = (2, now);
+            }
+            2 if now - at >= 900 => break,
+            _ => {}
+        }
+        if let Some((act, ms)) = console.process(now) {
+            crate::say(&format!("rumble: motors small {} large {}, for {ms} ms", act[0], act[1]));
+            pads.rumble(act, ms);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(16));
+    }
+    crate::say("rumble: done");
+    Ok(())
+}
+
 /// `EQOA_PAD_TRACE=1` (in a page `?padtrace`): each pad key as the game
 /// gets it, and gilrs's events and the controllers' report as they change.
 pub fn trace() -> bool {
@@ -491,7 +586,8 @@ enum Source {
     #[cfg(windows)]
     XInput(u32),
     /// a PlayStation controller read over HID (`hidpad`), by its place among
-    /// them; its motors are gilrs's reading of it, if gilrs has one
+    /// them, its motors set there too; and gilrs's reading of it, if gilrs
+    /// has one
     #[cfg(windows)]
     Hid(u32, Option<gilrs::GamepadId>),
     #[cfg(target_arch = "wasm32")]
@@ -645,6 +741,10 @@ pub struct Gamepads {
     xinput: Option<crate::xinput::XInput>,
     #[cfg(windows)]
     hid: Option<crate::hidpad::Hid>,
+    /// a Mac's PlayStation controllers' motors (`hidpad::mac`), from the
+    /// first time they are to run
+    #[cfg(target_os = "macos")]
+    mac: Option<crate::hidpad::mac::Mac>,
     /// gilrs's PlayStation controllers not (yet) read over HID, each since
     /// when gilrs has it (`read`)
     #[cfg(windows)]
@@ -705,7 +805,7 @@ impl Gamepads {
         let gilrs = if none {
             None
         } else {
-            match gilrs::GilrsBuilder::new().with_force_feedback(true).build() {
+            match gilrs::GilrsBuilder::new().with_force_feedback(GILRS_FF).build() {
                 Ok(g) => Some(g),
                 Err(e) => {
                     crate::say(&format!("no gamepads: {e}"));
@@ -722,6 +822,8 @@ impl Gamepads {
             xinput: (!none).then(crate::xinput::XInput::default),
             #[cfg(windows)]
             hid: (!none).then(crate::hidpad::Hid::start),
+            #[cfg(target_os = "macos")]
+            mac: None,
             #[cfg(windows)]
             unmatched: std::collections::HashMap::new(),
             #[cfg(target_arch = "wasm32")]
@@ -885,7 +987,8 @@ impl Gamepads {
             }
         }
         // the PlayStation controllers read over HID, each with its USB ids:
-        // gilrs's reading of the same one is passed over, its motors kept
+        // gilrs's reading of the same one is passed over; their motors are
+        // set over HID too (`hidpad::Hid::rumble`)
         #[cfg(windows)]
         let mut hid: Vec<(Controller, (u16, u16))> = Vec::new();
         #[cfg(windows)]
@@ -899,7 +1002,7 @@ impl Gamepads {
                     self.seen.push(f.name.clone());
                 }
                 let notes = f.reports.iter().map(|r| format!("{}{}", if f.bluetooth { "on Bluetooth, " } else { "" }, r.describe())).collect();
-                let c = Controller { name: f.name, report, between: f.between, raw, rumbles: false, label: f.model.label().to_string(), source: Source::Hid(k as u32, None), order: (1, k as u64), notes };
+                let c = Controller { name: f.name, report, between: f.between, raw, rumbles: true, label: f.model.label().to_string(), source: Source::Hid(k as u32, None), order: (1, k as u64), notes };
                 hid.push((c, f.ids));
             }
         }
@@ -921,14 +1024,13 @@ impl Gamepads {
                     continue;
                 }
                 // a controller with the USB ids of one read over HID is that
-                // one: read there, its motors through Windows.Gaming.Input as
-                // before (in front only)
+                // one: read there, its motors set there (Windows.Gaming.Input
+                // takes a PlayStation controller's vibration and drops it)
                 #[cfg(windows)]
                 if let Some((c, _)) = hid.iter_mut().find(|(c, ids)| matches!(c.source, Source::Hid(_, None)) && Some(*ids) == pad.vendor_id().zip(pad.product_id())) {
                     if let Source::Hid(k, _) = c.source {
                         c.source = Source::Hid(k, Some(id));
                     }
-                    c.rumbles = pad.is_ff_supported();
                     continue;
                 }
                 // a PlayStation controller HID has not read yet (the interfaces
@@ -978,7 +1080,13 @@ impl Gamepads {
                 let between = self.gilrs_seen.get_mut(&id).map_or(0, |l| l.take(report.buttons));
                 let raw = report.sticks;
                 report.rest(self.dead_zone);
-                out.push(Controller { name, report, between, raw, rumbles: pad.is_ff_supported(), label, source: Source::Gilrs(id), order, notes: Vec::new() });
+                // a Mac's PlayStation controller rumbles through IOKit
+                // (`hidpad::mac`), gilrs having no force feedback there
+                #[cfg(target_os = "macos")]
+                let rumbles = pad.is_ff_supported() || pad.vendor_id().zip(pad.product_id()).is_some_and(|(v, p)| crate::hidpad::Model::of(v, p).is_some());
+                #[cfg(not(target_os = "macos"))]
+                let rumbles = GILRS_FF && pad.is_ff_supported();
+                out.push(Controller { name, report, between, raw, rumbles, label, source: Source::Gilrs(id), order, notes: Vec::new() });
             }
             // what the ones passed over pressed (read through XInput or HID
             // instead) is not kept for later; a controller gone, forgotten
@@ -1048,7 +1156,11 @@ impl Gamepads {
 
     /// The motors as `VIPad` set them, on the controllers this window reads:
     /// the small one on or off, the large one's level, for at most `ms` (the
-    /// longer one's time left; they are set again when it ends).
+    /// longer one's time left; they are set again when it ends). Natively an
+    /// Xbox controller's through XInput (Windows), a PlayStation one's read
+    /// over HID through its own reports (`hidpad`, Windows), any other's
+    /// through gilrs (evdev's force feedback on Linux, Windows.Gaming.Input's
+    /// vibration; macOS has none); in a page the Gamepad API's dual-rumble.
     pub fn rumble(&mut self, act: [u8; 2], ms: i64) {
         let ms = ms.clamp(0, 5000) as u32;
         #[cfg(target_arch = "wasm32")]
@@ -1069,22 +1181,46 @@ impl Gamepads {
                     }
                 }
             }
+            #[cfg(windows)]
+            if let Some(h) = self.hid.as_mut() {
+                for s in &self.rumble_to {
+                    if let Source::Hid(k, _) = s {
+                        h.rumble(*k as usize, crate::hidpad::Motors::of_act(act), ms);
+                    }
+                }
+            }
             self.effect = None;
             let Some(g) = self.gilrs.as_mut() else { return };
-            if act == [0, 0] || ms == 0 {
+            #[cfg(target_os = "macos")]
+            {
+                let ps: Vec<(u16, u16)> = self
+                    .rumble_to
+                    .iter()
+                    .filter_map(|s| match s {
+                        Source::Gilrs(id) => g.connected_gamepad(*id).and_then(|p| p.vendor_id().zip(p.product_id())),
+                    })
+                    .filter(|&(v, p)| crate::hidpad::Model::of(v, p).is_some())
+                    .collect();
+                if !ps.is_empty() && self.mac.is_none() && act != [0, 0] {
+                    self.mac = crate::hidpad::mac::Mac::start();
+                }
+                if let Some(mac) = &self.mac {
+                    for ids in ps {
+                        mac.rumble(ids, crate::hidpad::Motors::of_act(act), ms);
+                    }
+                }
+            }
+            if act == [0, 0] || ms == 0 || !GILRS_FF {
                 return;
             }
-            // gilrs's own controllers, and the ones read over HID that gilrs
-            // has too (their motors are Windows.Gaming.Input's)
+            // gilrs's own controllers
             let ids: Vec<gilrs::GamepadId> = self
                 .rumble_to
                 .iter()
                 .filter_map(|s| match s {
                     Source::Gilrs(id) => Some(*id),
                     #[cfg(windows)]
-                    Source::Hid(_, id) => *id,
-                    #[cfg(windows)]
-                    Source::XInput(_) => None,
+                    Source::Hid(..) | Source::XInput(_) => None,
                 })
                 .collect();
             if ids.is_empty() {
@@ -1118,6 +1254,14 @@ impl Gamepads {
             #[cfg(windows)]
             if let Some(x) = self.xinput.as_mut() {
                 x.stop();
+            }
+            #[cfg(windows)]
+            if let Some(h) = self.hid.as_mut() {
+                h.stop_motors();
+            }
+            #[cfg(target_os = "macos")]
+            if self.mac.is_some() && !self.rumble_to.is_empty() {
+                self.rumble([0, 0], 0);
             }
         }
     }
@@ -1442,6 +1586,31 @@ mod tests {
         let mut d = Console::new();
         d.poll(r, true, false, false);
         assert!(d.poll(r, true, false, true).is_empty());
+    }
+
+    #[test]
+    fn a_frame_late_does_not_swallow_a_vibration() {
+        let r = Report::default();
+        let ready = || {
+            let mut c = Console::new();
+            for _ in 0..3 {
+                c.poll(r, true, true, false);
+            }
+            assert_eq!(c.process(1000), None, "the last Process, a frame before");
+            c
+        };
+        // the control: the game's own way, the vibration timed from the last
+        // Process; a frame 500 ms later and a 140 ms vibration is over before
+        // it is played (the pad told "off" at once)
+        let mut c = ready();
+        c.rumble(1, 220, 140, true);
+        assert_eq!(c.process(1500), Some(([0, 0], 0)), "swallowed");
+        // timed from this frame, it runs its 140 ms
+        let mut c = ready();
+        c.now(1500);
+        c.rumble(1, 220, 140, true);
+        assert_eq!(c.process(1500), Some(([0, 220], 140)));
+        assert_eq!(c.process(1641), Some(([0, 0], 0)), "and ends on time");
     }
 
     #[test]

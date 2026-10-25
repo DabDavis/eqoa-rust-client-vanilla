@@ -10,13 +10,18 @@
 //! the DualShock 4 (054C:05C4, 09CC, and the 0BA0 wireless adapter) and the
 //! DualSense (054C:0CE6, the Edge 0DF2), over USB or Bluetooth, their input
 //! reports as SDL's HIDAPI drivers lay them out (`SDL_hidapi_ps4.c`,
-//! `SDL_hidapi_ps5.c`). Read only: nothing is sent to a controller, so a
-//! Bluetooth one stays in the reduced reports it starts in (they hold every
-//! button, the triggers and the sticks), and its light is left as it is.
-//! gilrs's reading of the same controller is passed over (by USB vendor and
-//! product, as for XInput); its motors stay Windows.Gaming.Input's
-//! (`Gamepads::rumble`). A controller that cannot be opened (another program
-//! holds it alone) stays gilrs's.
+//! `SDL_hidapi_ps5.c`). gilrs's reading of the same controller is passed
+//! over (by USB vendor and product, as for XInput). A controller that cannot
+//! be opened (another program holds it alone) stays gilrs's.
+//!
+//! Its motors are set here too (`Hid::rumble`, `rumble_report`): Windows.
+//! Gaming.Input takes a PlayStation controller's vibration and does nothing
+//! with it, so the game's rumble never reached one (F3 pass 16: "I get no
+//! vibration on my controller (ps4)"). Nothing else is sent: a controller is
+//! written to only once it is to rumble, its light and its sound are left as
+//! they are, and a Bluetooth one stays in the reduced reports it starts in
+//! (they hold every button, the triggers and the sticks) until its first
+//! rumble, which turns it to its full reports, as SDL and Steam do.
 
 use crate::input::{Latch, Report, bit};
 
@@ -159,6 +164,98 @@ fn crc_ok(report: &[u8]) -> bool {
     crc.try_into().is_ok_and(|c| h.sum() == u32::from_le_bytes(c))
 }
 
+/// The motors a controller is told to run (`rumble_report`): the large one's
+/// level and the small one's, each 0..255, as `VIPad`'s two actuators are a
+/// DualShock 2's (the large one at a level, the small one on or off).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Motors {
+    pub large: u8,
+    pub small: u8,
+}
+
+impl Motors {
+    pub const OFF: Motors = Motors { large: 0, small: 0 };
+
+    /// `VIPad`'s `m_act`: [0] the small motor on or off, [1] the large one's
+    /// level.
+    pub fn of_act(act: [u8; 2]) -> Motors {
+        Motors { large: act[1], small: if act[0] != 0 { 255 } else { 0 } }
+    }
+}
+
+/// The DualSense firmware that has the newer rumble (Linux's
+/// `hid-playstation`: "feature version 2.21 introduced new vibration
+/// method"); the Edge has it whatever its firmware says.
+pub const DUALSENSE_RUMBLE_V2: u16 = 0x0215;
+
+/// The output report that sets a controller's motors and nothing else (its
+/// light and its sound left as they are), as Linux's `hid-playstation` and
+/// SDL's HIDAPI drivers lay it out. The DualShock 4: report 0x05 over USB, 32
+/// bytes, its flags' 0x01 (the motors), the small motor at 4 and the large
+/// at 5; over Bluetooth report 0x11, 78 bytes, two control bytes first (0xC0:
+/// HID data and a CRC follow, 4: the 4 ms report interval SDL asks for), so
+/// the flags at 3 and the motors at 6 and 7. The DualSense: report 0x02 over
+/// USB, 48 bytes, the motors at 3 and 4; over Bluetooth 0x31, 78 bytes, a
+/// sequence number in the top half of byte 1 (`seq`) and the tag 0x10 at 2,
+/// so its block starts at 3. Its block's flags choose the rumble: the newer
+/// one (`v2`, flag 0x04 at the block's 38 and "haptics select" 0x02 at 0),
+/// or the first firmware's (0x01 | 0x02 at 0). A Bluetooth report ends in
+/// the CRC-32 of 0xA2 (the HID header) and its other 74 bytes.
+pub fn rumble_report(model: Model, bluetooth: bool, m: Motors, seq: u8, v2: bool) -> Vec<u8> {
+    let mut r;
+    match model {
+        Model::DualShock4 => {
+            if bluetooth {
+                r = vec![0u8; 78];
+                r[0] = 0x11;
+                r[1] = 0xC0 | 4;
+                r[3] = 0x01;
+                r[6] = m.small;
+                r[7] = m.large;
+            } else {
+                r = vec![0u8; 32];
+                r[0] = 0x05;
+                r[1] = 0x01;
+                r[4] = m.small;
+                r[5] = m.large;
+            }
+        }
+        Model::DualSense | Model::DualSenseEdge => {
+            let at = if bluetooth { 3 } else { 1 };
+            r = vec![0u8; if bluetooth { 78 } else { 48 }];
+            r[0] = if bluetooth { 0x31 } else { 0x02 };
+            if bluetooth {
+                r[1] = (seq & 0x0F) << 4;
+                r[2] = 0x10;
+            }
+            if v2 || model == Model::DualSenseEdge {
+                r[at] = 0x02;
+                r[at + 38] = 0x04;
+            } else {
+                r[at] = 0x01 | 0x02;
+            }
+            r[at + 2] = m.small;
+            r[at + 3] = m.large;
+        }
+    }
+    if bluetooth {
+        let n = r.len() - 4;
+        let mut h = flate2::Crc::new();
+        h.update(&[0xA2]);
+        h.update(&r[..n]);
+        let crc = h.sum().to_le_bytes();
+        r[n..].copy_from_slice(&crc);
+    }
+    r
+}
+
+/// A DualSense's firmware version out of its firmware feature report (0x20,
+/// read with its ID first): bytes 44 and 45, little-endian (SDL's and
+/// `hid-playstation`'s reading); None for a report too short.
+pub fn dualsense_firmware(feature: &[u8]) -> Option<u16> {
+    (feature.first() == Some(&0x20) && feature.len() >= 46).then(|| u16::from_le_bytes([feature[44], feature[45]]))
+}
+
 /// What an input report holds, as SDL's drivers read it (`IsPacketValid`
 /// and `UpdateDevice`): `data` as a read returns it, the report ID first
 /// (Windows returns the collection's longest input report, the rest zeros),
@@ -252,6 +349,195 @@ pub fn bluetooth(path: &str) -> bool {
 
 #[cfg(windows)]
 pub use device::Hid;
+
+/// A Mac's PlayStation controllers' motors (`Gamepads::rumble`): gilrs reads
+/// them through IOKit and has no force feedback there, so their motors are
+/// set here, by `IOHIDDeviceSetReport` with `rumble_report`'s bytes. Over
+/// USB only: a Bluetooth one's first output report turns it to its full
+/// reports, which gilrs's reading (the HID descriptor's report 0x01) cannot
+/// read, and the controller would stop answering the game. One thread owns
+/// IOKit's side (its objects stay on it): each ask written to every USB
+/// controller with those USB ids (looked for again at most once a second),
+/// the motors stopped when their time is up or the program ends.
+#[cfg(target_os = "macos")]
+pub mod mac {
+    use super::{DUALSENSE_RUMBLE_V2, Model, Motors, dualsense_firmware, rumble_report};
+    use objc2_core_foundation::{CFNumber, CFRetained, CFString};
+    use objc2_io_kit::{IOHIDDevice, IOHIDManager, IOHIDReportType, kIOHIDOptionsTypeNone, kIOHIDProductIDKey, kIOHIDTransportKey, kIOHIDVendorIDKey, kIOReturnSuccess};
+    use std::ptr::NonNull;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    /// How long past its time a motor runs before the thread stops it
+    /// itself (the game stops it on time while its frames come).
+    const GRACE_MS: u64 = 100;
+
+    /// The thread, and what it is asked: a controller's USB ids, its motors,
+    /// for at most this many ms.
+    pub struct Mac {
+        tx: mpsc::Sender<((u16, u16), Motors, u32)>,
+        done: mpsc::Receiver<()>,
+    }
+
+    impl Mac {
+        pub fn start() -> Option<Mac> {
+            let (tx, rx) = mpsc::channel();
+            let (ended, done) = mpsc::channel();
+            std::thread::Builder::new()
+                .name("hid motors".into())
+                .spawn(move || {
+                    run(&rx);
+                    let _ = ended.send(());
+                })
+                .map_err(|e| crate::say(&format!("gamepad: no thread for the motors: {e}")))
+                .ok()?;
+            Some(Mac { tx, done })
+        }
+
+        /// The motors of the USB PlayStation controllers with these ids run
+        /// as `m`, for at most `ms`.
+        pub fn rumble(&self, ids: (u16, u16), m: Motors, ms: u32) {
+            let _ = self.tx.send((ids, m, ms));
+        }
+    }
+
+    impl Drop for Mac {
+        /// Every motor stopped as the program ends (a quarter of a second at
+        /// most).
+        fn drop(&mut self) {
+            let (gone, _) = mpsc::channel();
+            drop(std::mem::replace(&mut self.tx, gone));
+            let _ = self.done.recv_timeout(Duration::from_millis(250));
+        }
+    }
+
+    /// A USB PlayStation controller opened to be written to.
+    struct Pad {
+        dev: CFRetained<IOHIDDevice>,
+        ids: (u16, u16),
+        model: Model,
+        v2: bool,
+        /// what it was last told, and until when
+        on: Motors,
+        until: Option<Instant>,
+    }
+
+    fn number(dev: &IOHIDDevice, key: &std::ffi::CStr) -> Option<i32> {
+        let key = CFString::from_str(key.to_str().ok()?);
+        dev.property(&key)?.downcast::<CFNumber>().ok()?.as_i32()
+    }
+
+    fn text(dev: &IOHIDDevice, key: &std::ffi::CStr) -> Option<String> {
+        let key = CFString::from_str(key.to_str().ok()?);
+        Some(dev.property(&key)?.downcast::<CFString>().ok()?.to_string())
+    }
+
+    /// A DualSense's firmware version (its feature report 0x20).
+    fn firmware(dev: &IOHIDDevice) -> Option<u16> {
+        let mut buf = [0u8; 64];
+        buf[0] = 0x20;
+        let mut len: objc2_core_foundation::CFIndex = buf.len() as _;
+        // SAFETY: a buffer and its length, both alive for the call
+        let r = unsafe { dev.report(IOHIDReportType::Feature, 0x20, NonNull::new(buf.as_mut_ptr())?, NonNull::from(&mut len)) };
+        if r == kIOReturnSuccess { dualsense_firmware(&buf[..(len.max(0) as usize).min(64)]) } else { None }
+    }
+
+    /// The USB PlayStation controllers present now, each opened (not
+    /// alone: gilrs reads it too).
+    fn look() -> Vec<Pad> {
+        let manager = IOHIDManager::new(None, kIOHIDOptionsTypeNone);
+        // SAFETY: no dictionary: every device, the Sony ones kept below
+        unsafe { manager.set_device_matching(None) };
+        if manager.open(kIOHIDOptionsTypeNone) != kIOReturnSuccess {
+            return Vec::new();
+        }
+        let Some(set) = manager.devices() else { return Vec::new() };
+        let n = set.count().max(0) as usize;
+        let mut values: Vec<*const std::ffi::c_void> = vec![std::ptr::null(); n];
+        // SAFETY: room for every value of the set
+        unsafe { set.values(values.as_mut_ptr()) };
+        let mut out = Vec::new();
+        for v in values {
+            // SAFETY: the manager's set holds IOHIDDevices, alive while it is;
+            // each kept is retained
+            let Some(dev) = NonNull::new(v as *mut IOHIDDevice).map(|p| unsafe { CFRetained::retain(p) }) else { continue };
+            let (Some(vendor), Some(product)) = (number(&dev, kIOHIDVendorIDKey), number(&dev, kIOHIDProductIDKey)) else { continue };
+            let ids = (vendor as u16, product as u16);
+            let Some(model) = Model::of(ids.0, ids.1) else { continue };
+            if text(&dev, kIOHIDTransportKey).is_none_or(|t| t != "USB") {
+                continue;
+            }
+            if dev.open(kIOHIDOptionsTypeNone) != kIOReturnSuccess {
+                continue;
+            }
+            let v2 = model != Model::DualSense || firmware(&dev).is_none_or(|v| v >= DUALSENSE_RUMBLE_V2);
+            out.push(Pad { dev, ids, model, v2, on: Motors::OFF, until: None });
+        }
+        out
+    }
+
+    fn write(p: &mut Pad, m: Motors) {
+        let mut r = rumble_report(p.model, false, m, 0, p.v2);
+        let Some(ptr) = NonNull::new(r.as_mut_ptr()) else { return };
+        // SAFETY: the report's bytes, alive for the call (it is synchronous)
+        let res = unsafe { p.dev.set_report(IOHIDReportType::Output, r[0] as _, ptr, r.len() as _) };
+        if res != kIOReturnSuccess && p.on == Motors::OFF {
+            crate::say(&format!("gamepad: a {} took no report of its motors (IOKit {res:#x})", p.model.label()));
+        }
+        p.on = m;
+    }
+
+    fn run(rx: &mpsc::Receiver<((u16, u16), Motors, u32)>) {
+        let mut pads: Vec<Pad> = Vec::new();
+        let mut looked: Option<Instant> = None;
+        let mut said = false;
+        loop {
+            let next = pads.iter().filter_map(|p| p.until).min();
+            let ask = match next {
+                Some(t) => match rx.recv_timeout(t.saturating_duration_since(Instant::now())) {
+                    Ok(a) => Some(a),
+                    Err(mpsc::RecvTimeoutError::Timeout) => None,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                },
+                None => match rx.recv() {
+                    Ok(a) => Some(a),
+                    Err(_) => break,
+                },
+            };
+            let now = Instant::now();
+            // the motors whose time is up
+            for p in pads.iter_mut().filter(|p| p.until.is_some_and(|t| t <= now)) {
+                write(p, Motors::OFF);
+                p.until = None;
+            }
+            let Some((ids, m, ms)) = ask else { continue };
+            if m != Motors::OFF && looked.is_none_or(|t| now.duration_since(t) >= Duration::from_secs(1)) {
+                // the ones still running carried over, the new ones taken
+                let mut fresh = look();
+                for f in fresh.iter_mut() {
+                    if let Some(old) = pads.iter().find(|p| p.ids == f.ids && p.on != Motors::OFF) {
+                        (f.on, f.until) = (old.on, old.until);
+                    }
+                }
+                pads = fresh;
+                looked = Some(now);
+                if !said && pads.iter().any(|p| p.ids == ids) {
+                    crate::say(&format!("gamepad: {} USB PlayStation controller(s) rumble over IOKit", pads.len()));
+                    said = true;
+                }
+            }
+            for p in pads.iter_mut().filter(|p| p.ids == ids) {
+                if p.on != m {
+                    write(p, m);
+                }
+                p.until = (m != Motors::OFF).then(|| now + Duration::from_millis(ms as u64 + GRACE_MS));
+            }
+        }
+        for p in pads.iter_mut().filter(|p| p.on != Motors::OFF) {
+            write(p, Motors::OFF);
+        }
+    }
+}
 
 /// Windows' side: the HID interfaces present, looked through once a second on
 /// a thread of its own (a walk of the system's device lists takes
@@ -407,12 +693,14 @@ mod device {
         /// the first report of each ID it sent (`FirstReport`), each said
         /// once in the log
         first: Vec<FirstReport>,
+        /// its motors' writer, from the first time they are to run
+        motors: Option<writer::Writer>,
     }
 
     impl Device {
         fn open(l: &Listed) -> Option<Device> {
             let handle = open(&l.path, GENERIC_READ, FILE_FLAG_OVERLAPPED)?;
-            Some(Device { listed: l.clone(), handle, read: Box::new(Pending { ov: OVERLAPPED::default(), buf: [0; 1024], busy: false }), pad: PsPad::default(), latch: Latch::default(), valid: None, first: Vec::new() })
+            Some(Device { listed: l.clone(), handle, read: Box::new(Pending { ov: OVERLAPPED::default(), buf: [0; 1024], busy: false }), pad: PsPad::default(), latch: Latch::default(), valid: None, first: Vec::new(), motors: None })
         }
 
         /// Every report waiting read, the last state kept and every state's
@@ -476,6 +764,195 @@ mod device {
         }
     }
 
+    /// A controller's motors (`Hid::rumble`), set on a thread of its own
+    /// over a handle of their own: a write can take milliseconds (on
+    /// Bluetooth more), and the game's frames do not wait on it.
+    mod writer {
+        use super::super::{DUALSENSE_RUMBLE_V2, Model, Motors, dualsense_firmware, rumble_report};
+        use super::{Listed, name, open};
+        use std::sync::mpsc;
+        use std::time::{Duration, Instant};
+        use windows_sys::Win32::Devices::HumanInterfaceDevice::{HIDP_CAPS, HIDP_STATUS_SUCCESS, HidD_FreePreparsedData, HidD_GetFeature, HidD_GetPreparsedData, HidD_SetOutputReport, HidP_GetCaps};
+        use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_WRITE, GetLastError, HANDLE};
+        use windows_sys::Win32::Storage::FileSystem::WriteFile;
+
+        /// How long past its time a motor runs before the writer stops it
+        /// itself: the game stops it on time while its frames come
+        /// (`VIPad::Process`), this when they do not (the game ended, or
+        /// held up).
+        const GRACE_MS: u64 = 100;
+
+        enum Ask {
+            /// the motors as they are to run, for at most this many ms
+            Run(Motors, u32),
+            Stop,
+        }
+
+        /// The thread that sets one controller's motors.
+        pub struct Writer {
+            tx: mpsc::Sender<Ask>,
+            /// told as the thread ends (its last report written)
+            done: mpsc::Receiver<()>,
+        }
+
+        impl Writer {
+            pub fn start(l: &Listed) -> Option<Writer> {
+                let (tx, rx) = mpsc::channel();
+                let (ended, done) = mpsc::channel();
+                let own = l.clone();
+                let spawned = std::thread::Builder::new().name("hid motors".into()).spawn(move || {
+                    run(&own, &rx);
+                    let _ = ended.send(());
+                });
+                match spawned {
+                    Ok(_) => Some(Writer { tx, done }),
+                    Err(e) => {
+                        crate::say(&format!("gamepad: no thread for a {}'s motors: {e}", l.model.label()));
+                        None
+                    }
+                }
+            }
+
+            pub fn run(&self, m: Motors, ms: u32) {
+                let _ = self.tx.send(if m == Motors::OFF { Ask::Stop } else { Ask::Run(m, ms) });
+            }
+
+            pub fn stop(&self) {
+                let _ = self.tx.send(Ask::Stop);
+            }
+        }
+
+        impl Drop for Writer {
+            /// The motors stopped as the controller is let go or the program
+            /// ends, waited for a moment (a quarter of a second at most).
+            fn drop(&mut self) {
+                let (gone, _) = mpsc::channel();
+                drop(std::mem::replace(&mut self.tx, gone));
+                let _ = self.done.recv_timeout(Duration::from_millis(250));
+            }
+        }
+
+        /// The interface's capabilities, as its HID descriptor gives them
+        /// (the longest output report a write must be).
+        fn caps(h: HANDLE) -> Option<HIDP_CAPS> {
+            let mut pp = 0;
+            // SAFETY: an open HID handle; its preparsed data read, then freed
+            unsafe {
+                if !HidD_GetPreparsedData(h, &mut pp) {
+                    return None;
+                }
+                let mut c = HIDP_CAPS::default();
+                let ok = HidP_GetCaps(pp, &mut c) == HIDP_STATUS_SUCCESS;
+                HidD_FreePreparsedData(pp);
+                ok.then_some(c)
+            }
+        }
+
+        /// A DualSense's firmware version (its feature report 0x20).
+        fn firmware(h: HANDLE, caps: Option<&HIDP_CAPS>) -> Option<u16> {
+            let len = caps.map_or(64, |c| (c.FeatureReportByteLength as usize).max(64));
+            let mut buf = vec![0u8; len];
+            buf[0] = 0x20;
+            // SAFETY: an open HID handle and a buffer of the length given
+            let ok = unsafe { HidD_GetFeature(h, buf.as_mut_ptr().cast(), len as u32) };
+            if ok { dualsense_firmware(&buf) } else { None }
+        }
+
+        /// One report written as hidapi writes one on Windows: the
+        /// interface's longest output report (`out_len`), the rest zeros, by
+        /// `WriteFile`; failing that, the report alone by
+        /// `HidD_SetOutputReport` (what hidapi does on Windows 7, over
+        /// Bluetooth). The error of the write, if both fail.
+        fn write(h: HANDLE, report: &[u8], out_len: usize) -> Result<(), u32> {
+            let mut buf = report.to_vec();
+            if buf.len() < out_len {
+                buf.resize(out_len, 0);
+            }
+            let mut n = 0u32;
+            // SAFETY: a handle opened for writing, not overlapped; the buffer
+            // outlives the call
+            if unsafe { WriteFile(h, buf.as_ptr(), buf.len() as u32, &mut n, std::ptr::null_mut()) } != 0 {
+                return Ok(());
+            }
+            // SAFETY: the error the write just left
+            let e = unsafe { GetLastError() };
+            // SAFETY: as above, the report as it is
+            if unsafe { HidD_SetOutputReport(h, report.as_ptr().cast(), report.len() as u32) } {
+                return Ok(());
+            }
+            Err(e)
+        }
+
+        /// The thread: each ask written (one that changes nothing only moves
+        /// the time it ends), the motors stopped when their time is up, and
+        /// at the end.
+        fn run(l: &Listed, rx: &mpsc::Receiver<Ask>) {
+            let who = format!("{} {}{}", l.model.label(), name(&l.path, l.ids), if l.bluetooth { " on Bluetooth" } else { "" });
+            let Some(h) = open(&l.path, GENERIC_WRITE, 0) else {
+                // SAFETY: the error CreateFileW just left
+                crate::say(&format!("gamepad: the {who}'s motors could not be opened over HID (error {}): it does not rumble", unsafe { GetLastError() }));
+                while rx.recv().is_ok() {}
+                return;
+            };
+            let c = caps(h);
+            let out_len = c.map_or(0, |c| c.OutputReportByteLength as usize);
+            let v2 = match l.model {
+                // as SDL takes a DualSense whose firmware it cannot read:
+                // a new one
+                Model::DualSense => firmware(h, c.as_ref()).is_none_or(|v| v >= DUALSENSE_RUMBLE_V2),
+                _ => true,
+            };
+            let mut seq = 0u8;
+            let mut last = Motors::OFF;
+            let mut until: Option<Instant> = None;
+            let (mut failed, mut said) = (false, false);
+            let mut send = |m: Motors, seq: &mut u8| {
+                let report = rumble_report(l.model, l.bluetooth, m, *seq, v2);
+                *seq = seq.wrapping_add(1);
+                match write(h, &report, out_len) {
+                    Ok(()) if !said && m != Motors::OFF => {
+                        crate::say(&format!("gamepad: the {who} rumbles over HID (report {:#04x}, {} bytes, written as {})", report[0], report.len(), out_len.max(report.len())));
+                        said = true;
+                    }
+                    Ok(()) => {}
+                    Err(e) if !failed => {
+                        crate::say(&format!("gamepad: the {who} took no report of its motors (error {e})"));
+                        failed = true;
+                    }
+                    Err(_) => {}
+                }
+            };
+            loop {
+                let ask = match until {
+                    Some(t) => match rx.recv_timeout(t.saturating_duration_since(Instant::now())) {
+                        Ok(a) => Some(a),
+                        Err(mpsc::RecvTimeoutError::Timeout) => None,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    },
+                    None => match rx.recv() {
+                        Ok(a) => Some(a),
+                        Err(_) => break,
+                    },
+                };
+                let (m, end) = match ask {
+                    Some(Ask::Run(m, ms)) => (m, Some(Instant::now() + Duration::from_millis(ms as u64 + GRACE_MS))),
+                    // stopped, or its time up
+                    Some(Ask::Stop) | None => (Motors::OFF, None),
+                };
+                if m != last {
+                    send(m, &mut seq);
+                    last = m;
+                }
+                until = end;
+            }
+            if last != Motors::OFF {
+                send(Motors::OFF, &mut seq);
+            }
+            // SAFETY: the handle opened above, no longer used
+            unsafe { CloseHandle(h) };
+        }
+    }
+
     /// A controller read over HID: its name among the client's windows,
     /// model, USB ids, state, whether it is on Bluetooth, and the first
     /// report of each ID it sent (for a problem report).
@@ -503,6 +980,8 @@ mod device {
         failed: HashMap<String, (Instant, bool)>,
         /// the ones whose refusal was said (once each)
         said: Vec<String>,
+        /// the names `read` last gave, in its order (`rumble`'s places)
+        order: Vec<String>,
     }
 
     impl Hid {
@@ -517,7 +996,7 @@ mod device {
             if let Err(e) = std::thread::Builder::new().name("hid pads".into()).spawn(move || look(known, &l, &s)) {
                 crate::say(&format!("gamepad: no HID controllers: {e}"));
             }
-            Hid { listed, stop, devices: Vec::new(), failed: HashMap::new(), said: Vec::new() }
+            Hid { listed, stop, devices: Vec::new(), failed: HashMap::new(), said: Vec::new(), order: Vec::new() }
         }
 
         /// The controllers present and open, in their interfaces' order
@@ -569,7 +1048,33 @@ mod device {
                 }
                 out.push(Found { name: name(&d.listed.path, d.listed.ids), model: d.listed.model, ids: d.listed.ids, pad: d.pad, between, bluetooth: d.listed.bluetooth, reports: d.first.clone() });
             }
+            self.order = out.iter().map(|f| f.name.clone()).collect();
             out
+        }
+
+        /// The motors of the controller at place `k` in the last `read`'s
+        /// list run as `m`, for at most `ms` (`Gamepads::rumble`): its
+        /// writer started the first time they are to run, so a controller
+        /// never asked to rumble is never written to (one on Bluetooth
+        /// changes to its full reports at its first, as for SDL and Steam,
+        /// which `parse` reads).
+        pub fn rumble(&mut self, k: usize, m: super::Motors, ms: u32) {
+            let Some(wanted) = self.order.get(k) else { return };
+            let Some(d) = self.devices.iter_mut().find(|d| name(&d.listed.path, d.listed.ids) == *wanted) else { return };
+            if d.motors.is_none() && m != super::Motors::OFF {
+                d.motors = writer::Writer::start(&d.listed);
+            }
+            if let Some(w) = &d.motors {
+                w.run(m, ms);
+            }
+        }
+
+        /// Every motor this program set going stopped (the controllers a
+        /// window reads changed).
+        pub fn stop_motors(&mut self) {
+            for w in self.devices.iter().filter_map(|d| d.motors.as_ref()) {
+                w.stop();
+            }
         }
     }
 
@@ -591,6 +1096,88 @@ mod device {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The motors' reports as SDL's HIDAPI drivers and Linux's
+    /// `hid-playstation` lay them out: the DualShock 4's over USB and over
+    /// Bluetooth, the motors' flag alone (the light left as it is), the
+    /// small motor before the large; the Bluetooth one's CRC as Python's
+    /// zlib computes it over 0xA2 and the report. The controls: the input
+    /// reports' seed (0xA1) gives another CRC, and the motors swapped differ.
+    #[test]
+    fn a_dualshock_4_is_told_its_motors() {
+        let m = Motors { large: 0x80, small: 0xFF };
+        let usb = rumble_report(Model::DualShock4, false, m, 0, true);
+        assert_eq!(usb.len(), 32);
+        assert_eq!(&usb[..6], &[0x05, 0x01, 0, 0, 0xFF, 0x80], "report 5, the motors' flag, the small motor, the large");
+        assert!(usb[6..].iter().all(|&b| b == 0), "the light and the rest untouched");
+        let bt = rumble_report(Model::DualShock4, true, m, 0, true);
+        assert_eq!(bt.len(), 78);
+        assert_eq!(&bt[..8], &[0x11, 0xC4, 0, 0x01, 0, 0, 0xFF, 0x80], "report 0x11: HID data and a CRC follow, 4 ms reports; the flags at 3, the motors at 6 and 7");
+        assert!(bt[8..74].iter().all(|&b| b == 0));
+        assert_eq!(&bt[74..], &0xAE49_F571u32.to_le_bytes(), "zlib.crc32(b'\\xa2' + report[:74])");
+        // the controls
+        let mut seed = flate2::Crc::new();
+        seed.update(&[0xA1]);
+        seed.update(&bt[..74]);
+        assert_ne!(seed.sum(), 0xAE49_F571, "the input reports' seed gives another CRC");
+        let swapped = rumble_report(Model::DualShock4, false, Motors { large: 0xFF, small: 0x80 }, 0, true);
+        assert_ne!(swapped, usb);
+        assert_eq!(rumble_report(Model::DualShock4, false, Motors::OFF, 0, true)[..6], [0x05, 0x01, 0, 0, 0, 0], "stopped: the flag with the motors at 0");
+    }
+
+    /// The DualSense's: report 0x02 over USB (48 bytes, its block from 1),
+    /// 0x31 over Bluetooth (the sequence number in byte 1's top half, the tag
+    /// 0x10, its block from 3, the CRC). The newer rumble is "haptics select"
+    /// with flag 0x04 at the block's 38, the first firmware's 0x01 | 0x02;
+    /// the Edge always has the newer. The controls: another sequence number
+    /// moves the CRC, and the first firmware's flags differ.
+    #[test]
+    fn a_dualsense_is_told_its_motors() {
+        let m = Motors { large: 0x80, small: 0xFF };
+        let usb = rumble_report(Model::DualSense, false, m, 0, true);
+        assert_eq!(usb.len(), 48);
+        assert_eq!(&usb[..5], &[0x02, 0x02, 0, 0xFF, 0x80], "report 2: haptics select, the small motor at 3, the large at 4");
+        assert_eq!(usb[1 + 38], 0x04, "the newer rumble's flag");
+        assert_eq!(usb.iter().filter(|&&b| b != 0).count(), 5, "nothing else");
+        let old = rumble_report(Model::DualSense, false, m, 0, false);
+        assert_eq!((old[1], old[39]), (0x03, 0), "the first firmware's rumble");
+        assert_eq!(rumble_report(Model::DualSenseEdge, false, m, 0, false), usb, "the Edge has the newer whatever it is told");
+        let bt = rumble_report(Model::DualSense, true, m, 5, true);
+        assert_eq!(bt.len(), 78);
+        assert_eq!(&bt[..7], &[0x31, 0x50, 0x10, 0x02, 0, 0xFF, 0x80]);
+        assert_eq!(bt[3 + 38], 0x04);
+        assert_eq!(&bt[74..], &0x5FFB_8A7Du32.to_le_bytes(), "zlib.crc32(b'\\xa2' + report[:74])");
+        // the controls
+        let other = rumble_report(Model::DualSense, true, m, 6, true);
+        assert_ne!(other[74..], bt[74..], "another sequence number, another CRC");
+        assert_eq!(rumble_report(Model::DualSense, true, m, 16 + 5, true), bt, "the sequence number is four bits");
+    }
+
+    /// A DualSense's firmware version is bytes 44 and 45 of its report 0x20.
+    /// The controls: another report's ID, a short report.
+    #[test]
+    fn a_dualsense_says_its_firmware() {
+        let mut f = vec![0u8; 64];
+        f[0] = 0x20;
+        f[44] = 0x24;
+        f[45] = 0x02;
+        assert_eq!(dualsense_firmware(&f), Some(0x0224));
+        assert!(dualsense_firmware(&f).is_some_and(|v| v >= DUALSENSE_RUMBLE_V2));
+        f[45] = 0x01;
+        assert!(dualsense_firmware(&f).is_some_and(|v| v < DUALSENSE_RUMBLE_V2), "1.24: the first rumble");
+        f[0] = 0x05;
+        assert_eq!(dualsense_firmware(&f), None, "another report");
+        assert_eq!(dualsense_firmware(&[0x20; 45]), None, "too short");
+    }
+
+    /// `VIPad`'s motors as a controller's: the small one on (any nonzero) is
+    /// all the way; the large one's level as it is.
+    #[test]
+    fn the_dualshock_2s_motors_are_a_controllers() {
+        assert_eq!(Motors::of_act([1, 220]), Motors { large: 220, small: 255 });
+        assert_eq!(Motors::of_act([0, 127]), Motors { large: 127, small: 0 });
+        assert_eq!(Motors::of_act([0, 0]), Motors::OFF);
+    }
 
     /// A DualShock 4 USB report (64 bytes, ID 1) with the packet's first
     /// nine bytes as given.

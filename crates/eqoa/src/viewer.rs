@@ -4384,8 +4384,12 @@ impl ApplicationHandler for App {
                         }
                         // the HUD, once SUPPORT's atlas has come
                         p.attach_ui(&mut g.renderer, &g.device, &g.queue, g.config.format, lib);
-                        // the spell effects' vibrate events (`Rumble`)
+                        // the spell effects' vibrate events (`Rumble`), timed
+                        // from this frame (`Console::now`)
                         let vibration = p.options.vibration != 0;
+                        if !p.rumbles.is_empty() {
+                            console.now(now);
+                        }
                         for (motor, level, ms) in p.rumbles.drain(..) {
                             console.rumble(motor, level, ms, vibration);
                         }
