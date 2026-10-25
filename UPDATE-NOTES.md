@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-25 · Turning with the mouse keeps you running
+- Turning around with the mouse while you run now keeps you running the new way at
+  once. Before, a quick half turn made your character skid to a stop, stand, walk
+  and only then run again. Sticks and keys turn as before.
+
 ## 2026-10-25 · Back into Sanctuary at login, the camera at a wall, and quick presses
 - Logging in where you logged out in another world takes you back there: a vampire
   who logged out in Sanctuary came back to an empty hillside in Tunaria. The game
