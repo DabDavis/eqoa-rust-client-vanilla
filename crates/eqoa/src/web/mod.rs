@@ -124,6 +124,46 @@ pub fn has_focus() -> bool {
     web_sys::window().and_then(|w| w.document()).and_then(|d| d.has_focus().ok()).unwrap_or(true)
 }
 
+/// Whether the page is hidden (`document.hidden`: another tab in front, the
+/// browser minimised). A hidden page gets no animation frames, so its game
+/// goes on by `hidden_tick` instead, drawing nothing (`viewer`'s `covered`).
+pub fn page_hidden() -> bool {
+    web_sys::window().and_then(|w| w.document()).is_some_and(|d| d.hidden())
+}
+
+thread_local! {
+    /// The event loop's waker (`set_waker`, from `viewer::run_app`).
+    static WAKER: RefCell<Option<winit::event_loop::EventLoopProxy<()>>> = const { RefCell::new(None) };
+}
+
+/// The event loop `hidden_tick` wakes.
+pub fn set_waker(proxy: winit::event_loop::EventLoopProxy<()>) {
+    WAKER.with(|w| *w.borrow_mut() = Some(proxy));
+}
+
+/// One of the game's frames while the page is hidden (F3 20261025-175001: a
+/// tab left behind another for eleven minutes lost its session). A hidden page
+/// gets no animation frames and its own timers are held back (to once a
+/// second, then once a minute after five minutes), so the game stopped: no
+/// datagram went out, and the server let the session go after its 50 pings.
+/// The page's ticker (web/tick.js, a worker's timer, which the browser does
+/// not hold back) calls this at the game's 30 frames a second while it is
+/// hidden; the frame runs as a covered window's does natively (the game, its
+/// sound and its network; nothing drawn), the user event `viewer`'s
+/// `user_event` takes. Nothing while the page is shown: its animation frames
+/// draw the game.
+#[wasm_bindgen]
+pub fn hidden_tick() {
+    if !page_hidden() {
+        return;
+    }
+    WAKER.with(|w| {
+        if let Some(p) = w.borrow().as_ref() {
+            let _ = p.send_event(());
+        }
+    });
+}
+
 /// The tab's title (the window's, `viewer::title`: winit names only the
 /// canvas).
 pub fn set_title(t: &str) {
