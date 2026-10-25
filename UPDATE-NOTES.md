@@ -5,6 +5,13 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-25 · Coaches and ports no longer disconnect you on Sandstorm
+- A coach or a harbor to another world, a port, or Return Home no longer
+  disconnects you on Sandstorm with "This character has been modified by a
+  customer service representative". While the new place loaded, the game went on
+  telling the server it stood where it had left; it now tells the server it has
+  arrived only once it stands at the new place, as a PS2 does.
+
 ## 2026-10-25 · Options > Extended sorted into pages
 - Options > Extended now opens a short list: Video, UI, Controller, Camera,
   Characters and Sound. Each opens a page with just its own settings, so none of
