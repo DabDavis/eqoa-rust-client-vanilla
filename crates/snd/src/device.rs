@@ -12,6 +12,14 @@
 //!
 //! The float arithmetic is generic over `vi::Model`: `Ee` in the client, `Ieee`
 //! against eqoa-port's oracle. A float to int conversion truncates on both.
+//!
+//! Two departures, both where the console misbehaves (F3 20261025-190120,
+//! sounds garbled until a restart; `tests/device_upload.rs`): a sound let go
+//! while its upload is in flight leaves that upload nothing to mark done
+//! (`delete_sound`; the console writes through a pointer into the deleted
+//! sound, which the next sound made may occupy), and a wave that finds no SPU
+//! RAM is let go (`create_wave`; the console keeps it at address 0 and
+//! uploads zeros there).
 
 use std::marker::PhantomData;
 use vi::Model;
@@ -194,6 +202,10 @@ impl Blocks {
     }
 }
 
+/// The SPU RAM the device allocates from (0x5040 up): all of it but the
+/// SPU2's own areas below and its last 4 KB.
+pub const SPU_POOL: i32 = 0x1f9fc0;
+
 fn round64(size: i32) -> i32 {
     ((size + 63) / 64) * 64
 }
@@ -254,6 +266,10 @@ pub struct SoundDevice<M: Model> {
     args: [i32; 16],
     packet: [u32; 128],
     words: i32,
+    /// sounds that could not be made since the device was made: no free
+    /// slot of the 128, no SPU RAM (or XM pool) for it (the report's sound
+    /// line)
+    pub failed_creates: [u32; 2],
     _m: PhantomData<M>,
 }
 
@@ -300,6 +316,7 @@ impl<M: Model> SoundDevice<M> {
             args: [0; 16],
             packet: [0; 128],
             words: 0,
+            failed_creates: [0; 2],
             _m: PhantomData,
         };
         d.bgm_version = bgm_version;
@@ -472,7 +489,10 @@ impl<M: Model> SoundDevice<M> {
     // ---- sounds ------------------------------------------------------------------
 
     pub fn create_sound(&mut self, kind: Kind, share: bool) -> i32 {
-        let Some(i) = self.sounds.iter().position(|s| s.is_none()) else { return -1 };
+        let Some(i) = self.sounds.iter().position(|s| s.is_none()) else {
+            self.failed_creates[0] += 1;
+            return -1;
+        };
         self.sounds[i] = Some(Sound { id: 0, link: share as i32, kind });
         i as i32
     }
@@ -512,7 +532,23 @@ impl<M: Model> SoundDevice<M> {
 
     /// The destructors: a wave gives back its SPU memory, an XM its XM pool
     /// block and its SPU memory.
+    ///
+    /// An upload in flight for the sound still finishes (the next upload
+    /// always starts after it), but marks nothing done: by then its slot may
+    /// hold a new sound, which would be taken as uploaded and play whatever
+    /// its SPU RAM held, for as long as it lived (F3 20261025-190120:
+    /// garbled sounds until a restart). A departure from the console, whose
+    /// `IdleTransfer` writes `*m_xferFlag = 1` through a pointer into the
+    /// VIWave or VIXm deleted meanwhile: freed memory, which the next sound
+    /// made may well occupy. A module's transfer reads its sound's slot
+    /// block by block, so it goes on with nothing (zeros) instead.
     fn delete_sound(&mut self, i: usize) {
+        if matches!(self.xfer_flag, Some(Flag::WaveCached(k) | Flag::XmSample(k) | Flag::XmModule(k)) if k == i) {
+            self.xfer_flag = None;
+            if matches!(self.xfer_src, Some(Source::Module(k)) if k == i) {
+                self.xfer_src = Some(Source::Owned(Vec::new()));
+            }
+        }
         if let Some(s) = self.sounds[i].take() {
             match s.kind {
                 Kind::Wave(w) => {
@@ -563,6 +599,15 @@ impl<M: Model> SoundDevice<M> {
         w.size = size;
         w.spu_addr = spu;
         if spu == 0 {
+            // No SPU RAM: the sound goes again, as `create_xm`'s does. A
+            // departure: on the console `VIWave::Create` fails with the sound
+            // left in the table (and in the parser's dictionary, which
+            // `ParseAdpcmObj` fills first) at SPU address 0, never uploaded
+            // and never freed, so the upload sweep sends its size in zeros
+            // (the console: whatever its null buffer reads) to address 0,
+            // over the BGM ring's head.
+            self.failed_creates[1] += 1;
+            self.release_sound(i);
             return -1;
         }
         let mut buf = vec![0u8; size as usize];
@@ -591,6 +636,7 @@ impl<M: Model> SoundDevice<M> {
             x.xm_addr = xa;
         }
         if spu == 0 || xa == 0 {
+            self.failed_creates[1] += 1;
             self.release_sound(i);
             return -1;
         }
@@ -1030,7 +1076,17 @@ impl<M: Model> SoundDevice<M> {
     // ---- the two allocators --------------------------------------------------------
 
     fn init_spu_mem(&mut self) {
-        self.spu_mem = Blocks(vec![(0x5040, 0x1f9fc0)]);
+        self.spu_mem = Blocks(vec![(0x5040, SPU_POOL)]);
+    }
+
+    /// The SPU RAM the allocator has free: in all, and its largest block.
+    pub fn spu_free(&self) -> (i32, i32) {
+        (self.spu_mem.0.iter().map(|b| b.1).sum(), self.spu_mem.0.iter().map(|b| b.1).max().unwrap_or(0))
+    }
+
+    /// The sounds made and not yet let go, of the 128.
+    pub fn sounds_held(&self) -> usize {
+        self.sounds.iter().filter(|s| s.is_some()).count()
     }
 
     pub fn alloc_spu_mem(&mut self, size: i32) -> u32 {
