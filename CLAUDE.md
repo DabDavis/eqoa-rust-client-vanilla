@@ -140,8 +140,10 @@ current.
   `controls.rs` UpdateControls). Headless: `EQOA_PAD` (`start@2500;stick l 0 -1@1500+2000`),
   `EQOA_MOUSE` (`click @<name>@ms`, `click X Y@ms`, `rclick`, `wheel N`, `press l|r`, `release l|r`,
   `move DX DY`: a drag past the slop takes the pointer as a window would, `mouse::Grab`), `EQOA_TOUCH=1`,
-  `EQOA_TOUCHES`, `EQOA_TAP=<name|*>@ms`, `EQOA_HIDE_UI=<ms>[;<ms>]` in a playshot; `drive.py --gamepad/--mobile/--touch/--mouse`
+  `EQOA_TOUCHES`, `EQOA_TAP=<name|*>@ms`, `EQOA_HIDE_UI=<ms>[;<ms>]` in a playshot; `EQOA_WATCH=<name>` (that creature a frame as drawn, and the player's own 0x40s); `drive.py --gamepad/--mobile/--touch/--mouse`
   in a page; `EQOA_PAD_TRACE=1` / `?padtrace`; `EQOA_GLYPHS=1` prints the button glyphs a frame drew.
+  A button pressed and let go between two frames reaches the game (`input::Latch`, every source but XInput):
+  a new source keeps its presses through it.
   A DualSense is plugged in here and gilrs drives its motors: rumble is as real as the speakers.
   The local server spawns a character at a random heading each login, so click by name, not pixel.
   The player's own keys and buttons (`binds.rs`, the options' Controls page) work at the edge only:
