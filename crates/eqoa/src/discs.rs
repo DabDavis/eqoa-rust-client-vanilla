@@ -543,7 +543,7 @@ mod tests {
     /// Frontiers (a file that is not an image, however large; one too small
     /// to be a disc). The controls: the same image in a folder not looked
     /// through, and in a hidden folder, is not found; with no places, none.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(unix)]
     #[test]
     fn game_mode_finds_the_disc_where_a_deck_keeps_it() {
         let iso = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../run/eqoa.iso"));
