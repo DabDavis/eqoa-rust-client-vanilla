@@ -3404,7 +3404,7 @@ impl Play {
     fn send_position(&mut self, walk: &vi::walk::WalkPhysics<Ee>, now: u32) {
         self.last_send = now;
         if watching(&self.player.name) {
-            eprintln!("[sent] {now} pos {:.2?} vel {:.2?} loco {} flags {:#x} mode {}", walk.position.to_array(), walk.velocity.to_array(), walk.loco_state, walk.flags, self.mode);
+            eprintln!("[sent] {now} pos {:.2?} vel {:.2?} heading {:.3} loco {} flags {:#x} mode {}", walk.position.to_array(), walk.velocity.to_array(), walk.angles.x.0, walk.loco_state, walk.flags, self.mode);
         }
         let msg = vi::selfstate::encode(self.player.world as u8, walk, self.auto_attack as u8, self.target);
         self.session.send_state(0x40, &msg);
