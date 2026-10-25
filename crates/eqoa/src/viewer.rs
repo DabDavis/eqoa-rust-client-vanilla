@@ -865,6 +865,8 @@ pub fn shot_with(
                 p.draw_rings(&mut renderer, &device, &queue, &walker, proj * v, lib, game_frame);
                 // the map (`map.rs`): its build, and its view while up
                 p.map_frame(&walker, lib, &device, &queue, render::TARGET_FORMAT, (w, h), frame_ms as f32 / 1000.0, console.sticks());
+                // the frame's sends leave at its end (`Play::flush`)
+                p.flush();
                 // A teleport into another world: that world's file in place
                 // of this one, and the walk begun again there.
                 if let Some((file, at)) = p.take_world_change() {
@@ -4397,6 +4399,8 @@ impl ApplicationHandler for App {
                             t.labels.clear();
                         }
                     }
+                    // the frame's sends leave at its end (`Play::flush`)
+                    p.flush();
                 }
                 mark(&mut self.perf, 10);
                 let target = match (&frame, &g.offscreen) {

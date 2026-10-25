@@ -3185,6 +3185,16 @@ impl Play {
         }
     }
 
+    /// The frame's end: what it sent leaves now, as `VIClient::Process` ends
+    /// its frame with `drdp_flush` after `SendPosition` and the windows.
+    /// The session's own flush comes after what has arrived (`pump`), so a
+    /// 0x40 queued after it waited for the next frame's arrivals and left
+    /// with them: one made before a port rode in the datagram that
+    /// acknowledged the port, the old place given as the move's answer.
+    pub fn flush(&mut self) {
+        self.session.flush();
+    }
+
     /// `SendPosition`'s 0x40: the committed walk state, the attack held and
     /// the target.
     fn send_position(&mut self, walk: &vi::walk::WalkPhysics<Ee>, now: u32) {
