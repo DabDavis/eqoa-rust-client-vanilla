@@ -2719,8 +2719,8 @@ impl Play {
                 return self.self_at.map(|(pos, slot4)| crate::rings::Aim { id, pos, slot4 });
             }
             let k = self.entities.slots.iter().position(|e| e.as_ref().is_some_and(|e| e.id == id))?;
-            let p = self.puppets.get(k)?.as_ref()?;
-            Some(crate::rings::Aim { id, pos: self.entities.slots[k].as_ref()?.actor_pos, slot4: p.sprite.as_ref().and(p.slot4_at) })
+            let e = self.entities.slots[k].as_ref().filter(|e| self.in_scene(e))?;
+            Some(crate::rings::Aim { id, pos: e.actor_pos, slot4: self.slot4_of(k) })
         });
         // UpdateGame: the target info stops counting while the target's
         // +0x19 is 0
@@ -2799,9 +2799,9 @@ impl Play {
                 cand.push((0.0, self.pet_id));
             }
         }
-        for (slot, e) in self.entities.slots.iter().enumerate() {
+        for e in &self.entities.slots {
             let Some(e) = e else { continue };
-            if group || self.puppets.get(slot).is_none_or(|p| p.is_none()) || Some(e.id) == me || members.contains(&e.id) || e.id == self.pet_id {
+            if group || !self.in_scene(e) || Some(e.id) == me || members.contains(&e.id) || e.id == self.pet_id {
                 continue;
             }
             let mut dead = false;
@@ -3086,10 +3086,10 @@ impl Play {
             .entities
             .slots
             .iter()
-            .zip(&self.puppets)
-            .filter_map(|(e, p)| {
-                let (e, p) = (e.as_ref()?, p.as_ref()?);
-                let at = p.sprite.as_ref().and(p.slot4_at).unwrap_or(e.actor_pos);
+            .enumerate()
+            .filter_map(|(k, e)| {
+                let e = e.as_ref().filter(|e| self.in_scene(e))?;
+                let at = self.slot4_of(k).unwrap_or(e.actor_pos);
                 Some(Seen { id: e.id, at, selectable: e.p18 & 1 != 0, side: e.creature.as_ref().is_some_and(|c| c.p256 == 3) })
             })
             .collect();
@@ -3365,12 +3365,14 @@ impl Play {
         let me = self.self_id32();
         let mut best: Option<(u32, f32)> = None;
         for (slot, e) in self.entities.slots.iter().enumerate() {
-            let (Some(e), Some(Some(p))) = (e, self.puppets.get(slot)) else { continue };
+            // any with an actor, a body or none (its upright two high)
+            let Some(e) = e.as_ref().filter(|e| self.in_scene(e)) else { continue };
             if Some(e.id) == me {
                 continue;
             }
             let foot = glam::Vec3::from(e.actor_pos);
-            let head = p.name_at.map_or(foot + glam::Vec3::Y * 2.0, glam::Vec3::from);
+            let name_at = self.puppets.get(slot).and_then(|p| p.as_ref()).and_then(|p| p.name_at);
+            let head = name_at.map_or(foot + glam::Vec3::Y * 2.0, glam::Vec3::from);
             let (Some((a, depth)), Some((b, _))) = (px(foot), px(head)) else { continue };
             let reach = ((b - a).length() * 0.25).max(12.0);
             if crate::mouse::to_segment(cursor, a, b) <= reach && best.is_none_or(|(_, d)| depth < d) {
@@ -3565,9 +3567,12 @@ impl Play {
             if (name.trim() != "*" && c.name.trim() != name.trim()) || Some(e.id) == me {
                 return None;
             }
-            let p = self.puppets.get(slot)?.as_ref()?;
+            if !self.in_scene(e) {
+                return None;
+            }
+            let name_at = self.puppets.get(slot).and_then(|p| p.as_ref()).and_then(|p| p.name_at);
             let foot = glam::Vec3::from(e.actor_pos);
-            let head = p.name_at.map_or(foot + glam::Vec3::Y * 2.0, glam::Vec3::from);
+            let head = name_at.map_or(foot + glam::Vec3::Y * 2.0, glam::Vec3::from);
             let c = view_proj * ((foot + head) * 0.5).extend(1.0);
             let (x, y) = ((c.x / c.w + 1.0) * 0.5 * w, (1.0 - c.y / c.w) * 0.5 * h);
             (c.w > 0.0 && (0.0..w).contains(&x) && (0.0..h).contains(&y)).then_some((x as f64, y as f64))
@@ -6624,14 +6629,15 @@ impl Play {
             vui.time = time_ms;
             // VIClient's m_p4FD28.Process: after the scene, before the windows
             let font = assets.surface(vi::hash::hash_resource_id("damage_font.tga"));
-            let (slots, puppets, self_at, me) = (&self.entities.slots, &self.puppets, self.self_at, self.self_id32());
+            let (slots, puppets, self_at, me, world) = (&self.entities.slots, &self.puppets, self.self_at, self.self_id32(), self.player.world);
             self.damage.frame(font, time_ms, view_proj, |id| {
                 let k = slots.iter().position(|e| e.as_ref().is_some_and(|e| e.id == id))?;
                 if Some(id) == me {
                     return self_at.map(|(pos, slot4)| crate::damage::Target { pos, slot4 });
                 }
-                let p = puppets.get(k)?.as_ref()?;
-                Some(crate::damage::Target { pos: slots[k].as_ref()?.actor_pos, slot4: p.slot4_at })
+                // an actor (`in_scene`), slot 4 when its body has one
+                let e = slots[k].as_ref().filter(|e| e.world as i64 == world)?;
+                Some(crate::damage::Target { pos: e.actor_pos, slot4: puppets.get(k).and_then(|p| p.as_ref()).and_then(|p| p.slot4_at) })
             });
             let mut r = assets.raster(ui);
             // A window wider than 4:3 has the HUD at its sides (`Anchor`):
@@ -6847,11 +6853,27 @@ impl Play {
         self.actor_pos(id)
     }
 
-    /// An entity's actor position, while it is drawn.
+    /// An entity's actor position, while it has an actor (`in_scene`).
     fn actor_pos(&self, id: u32) -> Option<[f32; 3]> {
-        let k = self.entities.slots.iter().position(|e| e.as_ref().is_some_and(|e| e.id == id))?;
-        self.puppets.get(k)?.as_ref()?;
-        Some(self.entities.slots[k].as_ref()?.actor_pos)
+        self.entities.slots.iter().flatten().find(|e| e.id == id).filter(|e| self.in_scene(e)).map(|e| e.actor_pos)
+    }
+
+    /// Whether the entity has an actor in the scene, as every one in the
+    /// scene's dimension has on a PS2 (`VIEntity::OnWorldLoaded`: the
+    /// world it is in, the channel's byte, is the one loaded): one with no
+    /// model too, whose actor holds the null sprite (`VIClientPart06D00::
+    /// Create`), so `CycleTarget` and `TargetCentre` take it, the rings go
+    /// round it and its numbers float over it, where no body is drawn (F3
+    /// 20261024-203920: Sandstorm's Ice Statue in Geyvax Cave, model 0,
+    /// targetable only on a PS2).
+    fn in_scene(&self, e: &net::entity::Entity) -> bool {
+        e.world as i64 == self.player.world
+    }
+
+    /// The slot's character's slot 4 (`CalcSlotWorldTransform(4)`), when its
+    /// body is a character's: none for a creature with no body.
+    fn slot4_of(&self, slot: usize) -> Option<[f32; 3]> {
+        self.puppets.get(slot)?.as_ref().and_then(|p| p.sprite.as_ref().and(p.slot4_at))
     }
 
     /// NPC/PC Display and View Distance against the server's offer
@@ -7213,6 +7235,45 @@ mod commands {
             assert_eq!(there.cam.walk.committed.position, before);
             assert_eq!(sent(&mut p), [answer(4)]);
         });
+    }
+
+    /// A creature with no body (model 0: Sandstorm's Ice Statue in Geyvax
+    /// Cave, 0x101076) is targeted as on a PS2, where its actor holds the
+    /// null sprite and `CycleTarget` asks only for an actor: R1 picks it, the
+    /// mouse finds it (an upright two high where its body would stand), and
+    /// its place is its actor's for the rings and the numbers, with no slot
+    /// 4. The control: one in another world has no actor here and is left
+    /// out (the statue alone is cycled to); the old rule, a body drawn, left
+    /// the statue out too (R1 found nothing).
+    #[test]
+    fn a_creature_with_no_body_is_targeted() {
+        let mut p = play();
+        let creature = |id: u32, world: i8, at: [f32; 3], name: &str| net::entity::Entity {
+            id,
+            kind: 130,
+            world,
+            p18: 1,
+            p19: 1,
+            pos: at,
+            actor_pos: at,
+            creature: Some(net::entity::Creature { name: name.into(), ..Default::default() }),
+            ..Default::default()
+        };
+        p.entities.slots[0] = Some(creature(0x0020_0001, 2, [1.0, 0.0, -10.0], "Elsewhere"));
+        p.entities.slots[1] = Some(creature(0x0010_1076, 0, [0.0, 0.0, -10.0], "Ice Statue"));
+        let proj = glam::camera::rh::proj::directx::perspective(45f32.to_radians(), 4.0 / 3.0, 0.3, 6000.0);
+        let vp = proj * glam::camera::rh::view::look_to_mat4(glam::Vec3::ZERO, glam::Vec3::NEG_Z, glam::Vec3::Y);
+        p.cycle_target(false, glam::Vec3::ZERO, glam::Vec3::NEG_Z, vp);
+        assert_eq!(p.target, 0x0010_1076, "R1: the statue");
+        p.cycle_target(false, glam::Vec3::ZERO, glam::Vec3::NEG_Z, vp);
+        assert_eq!(p.target, 0x0010_1076, "R1 again: still the only one with an actor");
+        // a click a unit up its upright
+        let c = vp * glam::Vec4::new(0.0, 1.0, -10.0, 1.0);
+        let at = (((c.x / c.w + 1.0) * 0.5 * 640.0) as f64, ((1.0 - c.y / c.w) * 0.5 * 480.0) as f64);
+        assert_eq!(p.creature_at(at, (640, 480), vp), Some(0x0010_1076));
+        assert_eq!(p.actor_pos(0x0010_1076), Some([0.0, 0.0, -10.0]));
+        assert_eq!(p.slot4_of(1), None, "no body, no slot 4");
+        assert_eq!(p.actor_pos(0x0020_0001), None, "the control: another world's has no actor here");
     }
 
     fn grouped(p: &mut Play, ids: &[u32]) {
