@@ -42,6 +42,12 @@
 //!   round again (F3 20261025-044637).
 //! - both buttons run forward (the left stick all the way up), steered as
 //!   the right button steers; A and D add a sidestep, a diagonal.
+//! - a body the mouse turns (the steer, first person, the follow camera:
+//!   `set_heading`) takes its run round with it: on a floor or in a liquid
+//!   its velocity turns as it does, so half a turn at a run runs on the new
+//!   way at once, where the game's walk would back up, stand and walk first
+//!   (F3 20261025-163410, the user's choice); the sticks and keys turn by the
+//!   game's torque as ever, and a fall keeps its own momentum.
 //! - in first person and the follow camera (0 and 2) either button turns the
 //!   body at once (`set_heading`: full circles) and pitches it (`pitch_body`)
 //!   within the walk's range: in first person 89.4 degrees up or down, where
@@ -69,6 +75,8 @@
 use crate::walker::Walker;
 use vi::camera::WalkCamera;
 use vi::fpu::{Ee, F};
+use vi::vect::Vect3;
+use vi::walk::flags;
 use web_time::{Duration, Instant};
 
 /// A press moves this far (window pixels) before it is a drag.
@@ -164,16 +172,49 @@ pub fn tilt(cam: &mut WalkCamera<Ee>, d: F<Ee>) {
 /// only by torque, at most a quarter turn a second in first person): the
 /// working and committed states (wrapped as `UpdatePhysics` wraps it), the
 /// heading mode 3 tracks, no turn left coasting, and the walk's axes
-/// (`UpdateDirections`), which this frame's thrust is along.
+/// (`UpdateDirections`), which this frame's thrust is along. Where the walk
+/// can push (on a floor or in a liquid: `Walk`'s and `Run`'s test) the
+/// body's velocity turns with it (`carried`): the run goes on the new way at
+/// its pace, where the game's walk, its velocity in the world, would first
+/// spend the old run backing up, then stand and walk before it ran again (F3
+/// 20261025-163410: "the character physically stops and turns then runs
+/// again"; the user's choice, the mouse alone: the sticks and keys turn by
+/// the game's torque). A fall keeps its own momentum (the game has no jump).
 pub fn set_heading(cam: &mut WalkCamera<Ee>, h: F<Ee>) {
     let h = h.fmodf(F::new(TWO_PI));
     let w = &mut cam.walk;
+    let pushes = w.phys.flags & (flags::ON_FLOOR | flags::B1 | flags::LIQUID) != 0;
     for p in [&mut w.phys, &mut w.committed] {
+        if pushes {
+            p.velocity = carried(p.velocity, axes(p.angles.x, p.angles.z), axes(h, p.angles.z));
+        }
         p.angles.x = h;
         p.target_heading = h;
         p.angular_vel.x = F::ZERO;
     }
     w.update_directions();
+}
+
+/// The level axes a body facing `h` (rolled `r`) walks along, as
+/// `UpdateDirections` makes them: Forward and Right.
+fn axes(h: F<Ee>, r: F<Ee>) -> (Vect3<Ee>, Vect3<Ee>) {
+    let mut forward = Vect3::<Ee>::default();
+    forward.hpr(h, F::ZERO, r);
+    let mut right = Vect3::cross(&forward, &Vect3::of(0.0, 1.0, 0.0));
+    right.normalize();
+    (forward, right)
+}
+
+/// `v`'s parts along the first axes' Forward and Right put along the
+/// second's, the rest (up and down) kept: a level turn of the velocity.
+fn carried(v: Vect3<Ee>, from: (Vect3<Ee>, Vect3<Ee>), to: (Vect3<Ee>, Vect3<Ee>)) -> Vect3<Ee> {
+    let (a, b) = (v.dot(&from.0), v.dot(&from.1));
+    let mut out = v;
+    out.add_scaled(&from.0, -a);
+    out.add_scaled(&from.1, -b);
+    out.add_scaled(&to.0, a);
+    out.add_scaled(&to.1, b);
+    out
 }
 
 /// The body's pitch moved by `d` at once (down positive), within the walk's
@@ -1551,11 +1592,83 @@ mod tests {
             if let Some((held, steering)) = held {
                 look_held(&mut self.cam, held, 0.0, 0.0, false, 0.016, steering);
             }
+            self.step(sticks, steer, 16);
+        }
+
+        /// The rest of a frame `ms` long after its look: `UpdateControls` on
+        /// `sticks`, `Process`.
+        fn step(&mut self, sticks: [f32; 4], steer: bool, ms: i64) {
             let c = crate::controls::Client { steer, ..Default::default() };
             crate::controls::update_controls(self, sticks, &c);
-            self.room.t += 16;
+            self.room.t += ms;
             self.eye = self.cam.process(&mut self.room);
         }
+    }
+
+    /// A run steered by the mouse and turned half round in one frame's
+    /// motion (F3 20261025-163410: "the character physically stops and turns
+    /// then runs again"): the body faces the new way at once and runs on
+    /// that way, every frame a run (locomotion 3) and the run's pace along
+    /// the new heading from the turn on, at 30 and 165 frames a second. In
+    /// the air (a fall) the turn carries nothing: the fall's momentum is its
+    /// own. The control: the velocity left as it was (the game's walk, which
+    /// first spends the old run backing up), the body backs up, stands and
+    /// walks before it runs again.
+    #[test]
+    fn a_mouse_turn_carries_the_run_round_with_the_body() {
+        let half = std::f32::consts::PI / LOOK_PER_PIXEL;
+        let run = [0.0, 0.0, 0.0, -1.0];
+        for ms in [33i64, 6] {
+            for control in [false, true] {
+                let mut r = Rig::new();
+                let frames = |s: i64| (s / ms) as usize;
+                for f in 0..frames(1500) {
+                    look_held(&mut r.cam, [false, true], 0.0, 0.0, false, ms as f32 / 1000.0, f > 0);
+                    r.step(run, true, ms);
+                }
+                assert_eq!(r.cam.walk.phys.loco_state, 3, "running before the turn");
+                let pace = r.cam.walk.run_speed.0;
+                let (v, cv) = (r.cam.walk.phys.velocity, r.cam.walk.committed.velocity);
+                look_held(&mut r.cam, [false, true], half, 0.0, false, ms as f32 / 1000.0, true);
+                if control {
+                    r.cam.walk.phys.velocity = v;
+                    r.cam.walk.committed.velocity = cv;
+                }
+                let h = r.cam.walk.phys.angles.x.0;
+                let p0 = r.cam.walk.phys.position;
+                let mut states = Vec::new();
+                for f in 0..frames(500) {
+                    if f > 0 {
+                        look_held(&mut r.cam, [false, true], 0.0, 0.0, false, ms as f32 / 1000.0, true);
+                    }
+                    r.step(run, true, ms);
+                    states.push(r.cam.walk.phys.loco_state);
+                }
+                let p = r.cam.walk.phys.position;
+                let along = ((p.x.0 - p0.x.0) * h.sin() + (p.z.0 - p0.z.0) * h.cos()) / (frames(500) as f32 * ms as f32 / 1000.0);
+                let case = format!("{ms} ms frames, control {control}: states {states:?}, {along:.2} a second along the new heading (the run's {pace})");
+                if control {
+                    assert!(states.iter().any(|&s| s != 3) && along < 0.7 * pace, "the game's walk stops first: {case}");
+                } else {
+                    assert!(states.iter().all(|&s| s == 3), "a run all the way: {case}");
+                    assert!(along > 0.97 * pace, "at the run's pace: {case}");
+                }
+            }
+        }
+        // in the air (a fall): the body turns, its momentum does not
+        let mut r = Rig::new();
+        r.cam.walk.phys.velocity = vi::vect::Vect3::of(3.0, 2.0, -4.0);
+        r.cam.walk.phys.flags &= !1;
+        let v = r.cam.walk.phys.velocity;
+        let h = r.cam.walk.phys.angles.x + F::new(1.0);
+        set_heading(&mut r.cam, h);
+        assert_eq!(r.cam.walk.phys.velocity, v, "a fall's momentum is its own");
+        // the control: on the floor the same turn carries it round
+        r.cam.walk.phys.flags |= 1;
+        let h = r.cam.walk.phys.angles.x + F::new(1.0);
+        set_heading(&mut r.cam, h);
+        assert_ne!(r.cam.walk.phys.velocity, v, "on the floor it turns");
+        assert_eq!(r.cam.walk.phys.velocity.y, v.y, "up and down kept");
     }
 
     /// The right button and A: a sidestep along a line (the strafe's
