@@ -37,6 +37,13 @@ pub struct HudState {
     /// Target of Target (the Extended page's, the client's own): the name of
     /// whom the target targets (`Play::target_of_target`).
     pub target_of_target: Option<String>,
+    /// Mana Bars (the Extended page's, the client's own): the target's power
+    /// of 255, when there is one to show (`Play::bar_power`).
+    pub target_power: Option<u8>,
+    /// The target of target's health of 255 (its +0x19, while it is in
+    /// view) and power (Mana Bars), drawn right of its bar.
+    pub tot_hp: Option<u8>,
+    pub tot_power: Option<u8>,
     /// `HasPet()`: the pet, when the player has one.
     pub pet: Option<PetState>,
     /// `GetP2BE4C()`: the group's size (0 out of one).
@@ -73,6 +80,8 @@ pub struct MemberState {
     pub name: String,
     pub is_target: bool,
     pub hp: Option<(u8, bool, bool)>,
+    /// Mana Bars: its power of 255 when there is one to show.
+    pub power: Option<u8>,
 }
 
 /// What `DrawPet` reads: `GetPetName`, whether the pet is the target, and
@@ -132,6 +141,59 @@ pub enum Pick {
 /// box's top (378 in a 4:3 window).
 const TOT_AT: [i32; 2] = [200, 348];
 const TOT_WIDTH: i32 = 174;
+
+/// Where `DrawGroup` starts the group's bars and `DrawTarget` the target's.
+const GROUP_AT: [i32; 2] = [20, 93];
+const TARGET_AT: [i32; 2] = [20, 348];
+
+/// A gauge in `DrawGauge`'s frame (136): its fill's art (7 health, 9
+/// power, the player's own), where, lit or dimmed, and how full.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Gauge {
+    bar: i32,
+    at: [i32; 2],
+    lit: bool,
+    v: f32,
+}
+
+/// Mana Bars on the group's bars (the client's own, the game drawing no one's
+/// power but the player's): each member's power, where there is one, under
+/// its health as the player's own frame stacks them (10 below), lit as its
+/// health is. A member's bar is 46 high and the next 48 on (`DrawGroup`).
+fn member_gauges(s: &HudState) -> Vec<Gauge> {
+    s.group
+        .iter()
+        .enumerate()
+        .filter_map(|(k, m)| {
+            let at = [GROUP_AT[0] + 10, GROUP_AT[1] + 48 * k as i32 + 35];
+            m.power.map(|p| Gauge { bar: 9, at, lit: m.is_target, v: p as f32 / 255.0 })
+        })
+        .collect()
+}
+
+/// Mana Bars on the target's bar, under its health (`DrawTarget`'s at 25
+/// below the bar, the report's button 13 under that), and Target of
+/// Target's health and power stacked right of its bar (under it is the chat
+/// box): each where there is one to show, the target of target's only with
+/// its bar.
+fn target_gauges(s: &HudState) -> Vec<Gauge> {
+    let mut out = Vec::new();
+    if s.target_name.is_none() {
+        return out;
+    }
+    if let Some(p) = s.target_power {
+        out.push(Gauge { bar: 9, at: [TARGET_AT[0] + 10, TARGET_AT[1] + 60], lit: true, v: p as f32 / 255.0 });
+    }
+    if s.target_of_target.is_some() {
+        let at = [TOT_AT[0] + TOT_WIDTH + 4, TOT_AT[1] + 2];
+        for (k, (bar, v)) in [(7, s.tot_hp), (9, s.tot_power)].into_iter().enumerate() {
+            if let Some(v) = v {
+                out.push(Gauge { bar, at: [at[0], at[1] + 10 * k as i32], lit: true, v: v as f32 / 255.0 });
+            }
+        }
+    }
+    out
+}
 
 impl Hud {
     pub fn new() -> Self {
@@ -217,8 +279,11 @@ impl Hud {
         let part = part.clamp(0.0, 1.0);
         draw_gauge(vui, ui, 152, 151, [p[0], p[1] + 10], true, part);
         draw_gauge(vui, ui, 8, 136, p, true, v);
-        self.draw_group(vui, ui, [20, 93], s);
-        let y = 93 + ((s.group_count - 1) * 48).max(0);
+        self.draw_group(vui, ui, GROUP_AT, s);
+        for g in member_gauges(s) {
+            draw_gauge(vui, ui, g.bar, 136, g.at, g.lit, g.v);
+        }
+        let y = GROUP_AT[1] + ((s.group_count - 1) * 48).max(0);
         self.draw_pet(vui, ui, [20, y], s);
         ui.ui.vertical = Vertical::Bottom;
         let p = [-3, 331];
@@ -226,8 +291,11 @@ impl Hud {
             // the strip's left piece, left out with the strip (`ui::chat_strip`)
             crate::ui::chat_strip(vui, ui, [p[0] + 2, p[1]], [203, 125]);
         }
-        self.draw_target(vui, ui, [20, 348], s);
+        self.draw_target(vui, ui, TARGET_AT, s);
         self.draw_target_of_target(vui, ui, TOT_AT, s);
+        for g in target_gauges(s) {
+            draw_gauge(vui, ui, g.bar, 136, g.at, g.lit, g.v);
+        }
         self.draw_report(vui, ui, [20, 421]);
     }
 
@@ -455,7 +523,7 @@ pub fn draw_gauge(vui: &Vui, ui: &mut dyn Raster, bar: i32, frame: i32, at: [i32
 
 #[cfg(test)]
 mod tests {
-    use super::{Hud, HudState, Pick, patch_point};
+    use super::{Gauge, Hud, HudState, MemberState, Pick, member_gauges, patch_point, target_gauges};
 
     fn near(a: [f32; 2], b: [f32; 2]) -> bool {
         (a[0] - b[0]).abs() < 1e-3 && (a[1] - b[1]).abs() < 1e-3
@@ -479,6 +547,43 @@ mod tests {
         // 2000 is the edge, measured before y is dropped
         assert!(patch_point(0.0, [0.0, 0.0, 2000.0]).is_some());
         assert!(patch_point(0.0, [0.0, 100.0, 1998.0]).is_none());
+    }
+
+    /// Mana Bars: a member's power under its health (10 below, as the
+    /// player's own gauges stack), lit as its health is, the bars 48 apart;
+    /// the target's under its health, above the report's button (421); the
+    /// target of target's health and power right of its bar, above the chat
+    /// box (378); none where there is no value (the controls), and none for
+    /// the target of target without its bar or for anything without a
+    /// target.
+    #[test]
+    fn mana_bars_sit_under_the_health_they_go_with() {
+        let m = |id, power, is_target| MemberState { id, name: "x".into(), is_target, hp: Some((200, false, false)), power };
+        let s = HudState { group: vec![m(1, Some(255), false), m(2, None, false), m(3, Some(0), true)], ..Default::default() };
+        let health = [30, 93 + 25];
+        assert_eq!(
+            member_gauges(&s),
+            [Gauge { bar: 9, at: [health[0], health[1] + 10], lit: false, v: 1.0 }, Gauge { bar: 9, at: [30, 93 + 96 + 35], lit: true, v: 0.0 }],
+            "the second member has none; the third is the target's, lit"
+        );
+        assert!(35 + 10 <= 46, "inside a member's bar");
+
+        let t = HudState { target_name: Some("Casil".into()), target_power: Some(51), ..Default::default() };
+        assert_eq!(target_gauges(&t), [Gauge { bar: 9, at: [30, 398 + 10], lit: true, v: 0.2 }]);
+        assert!(408 + 10 <= 421, "above the report's button");
+        assert_eq!(target_gauges(&HudState { target_power: None, ..t.clone() }), [], "no power sent");
+        assert_eq!(target_gauges(&HudState { target_name: None, ..t.clone() }), [], "no target");
+
+        let tot = HudState { target_of_target: Some("Luck".into()), tot_hp: Some(255), tot_power: Some(0), ..t.clone() };
+        let right = super::TOT_AT[0] + super::TOT_WIDTH + 4;
+        assert_eq!(
+            target_gauges(&tot)[1..],
+            [Gauge { bar: 7, at: [right, 350], lit: true, v: 1.0 }, Gauge { bar: 9, at: [right, 360], lit: true, v: 0.0 }]
+        );
+        assert!(360 + 10 <= 378 && right + 60 <= 640, "above the chat box, inside the frame");
+        assert_eq!(target_gauges(&HudState { tot_hp: None, ..tot.clone() })[1..], [Gauge { bar: 9, at: [right, 360], lit: true, v: 0.0 }], "power alone keeps its row");
+        assert_eq!(target_gauges(&HudState { target_of_target: None, ..tot.clone() }).len(), 1, "no bar, no gauges beside it");
+        assert_eq!(target_gauges(&HudState { target_name: None, ..tot }), [], "no target");
     }
 
     /// A pointer finds the HUD's pieces where they were drawn: in a 4:3

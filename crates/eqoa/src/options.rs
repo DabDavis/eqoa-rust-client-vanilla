@@ -35,7 +35,10 @@
 //! - UI: Ability Bars (the game's 2, or 3 or 4: the HUD's quick menus and
 //!   the spell book's slots, `hudmenu`), Target of Target (Off by default:
 //!   the target's bar shows whom the target targets, `Play::target_of_target`),
-//!   Update Notices (one setting for
+//!   Mana Bars (On by default: a power gauge under each group member's, the
+//!   target's and the target of target's health, from a server that sends
+//!   others' power, `net::session::OP_POWER_BARS`; none from one that does
+//!   not, Sandstorm), Update Notices (one setting for
 //!   every window: off, the game never asks to restart into a newer build,
 //!   which starts the next time the game does; `update::asks`, and a page's
 //!   Reload notice, `web/main.js`), Text (Sharp or Smooth: the game's font
@@ -533,7 +536,7 @@ impl WndOptions {
     /// VSync (26) turn over, VSync natively only (a page's stays on with
     /// sound 9: the browser paces it); Name Distance (27) by tens from the
     /// game's 22 to 200 (`step_name_distance`); Text (30) goes between Sharp and
-    /// Smooth; Target of Target (31), Update Notices (29), Overlapping
+    /// Smooth; Target of Target (31), Mana Bars (42), Update Notices (29), Overlapping
     /// Names (34, Hide and Show), Mipmaps (35) and Loading Screens (38,
     /// Longer and Instant) turn over;
     /// Output Device (32) goes round the system default and the devices
@@ -605,6 +608,9 @@ impl WndOptions {
                     29 => c.update_notices = !c.update_notices,
                     // Target of Target (`Play::target_of_target`)
                     31 => c.target_of_target = !c.target_of_target,
+                    // Mana Bars: the server told from the next frame
+                    // (`Play::agree_power_bars`)
+                    42 => c.mana_bars = !c.mana_bars,
                     // Overlapping Names: the plates kept from the next
                     // frame (`play::labels`)
                     34 => c.overlapping_names = !c.overlapping_names,
@@ -1045,7 +1051,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 26] = [
+const EXTENDED_ITEMS: [(i32, &str); 27] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1072,6 +1078,7 @@ const EXTENDED_ITEMS: [(i32, &str); 26] = [
     (36, "Flora"),
     (37, "Environment"),
     (38, "Loading Screens"),
+    (42, "Mana Bars"),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1100,7 +1107,7 @@ struct Category {
 const CATEGORIES: [Category; 7] = [
     Category { name: "Video", items: VIDEO, note: Note::None },
     Category { name: "World", items: &[20, 35, 36, 37, 25], note: Note::None },
-    Category { name: "UI", items: &[22, 31, 29, 30, 38], note: Note::None },
+    Category { name: "UI", items: &[22, 31, 42, 29, 30, 38], note: Note::None },
     Category { name: "Controller", items: &[16, 19], note: Note::Reads },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
     Category { name: "Characters", items: &[12, 23, 24, 27, 34], note: Note::Server },
@@ -1178,6 +1185,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         26 => on_off(crate::settings::vsync()),
         29 => on_off(c.update_notices),
         31 => on_off(c.target_of_target),
+        42 => on_off(c.mana_bars),
         34 => wide(if c.overlapping_names { "Show" } else { "Hide" }),
         35 => on_off(c.mipmaps),
         36 => on_off(c.flora),
@@ -1527,6 +1535,13 @@ mod tests {
         assert!(!settings::client().target_of_target, "and back: two values");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.item, 42, "Mana Bars");
+        assert!(settings::client().mana_bars, "on: the power gauges where the server sends power");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::client().mana_bars, cues.last()), (false, Some(&11)), "off");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(settings::client().mana_bars, "and back: two values");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!(w.item, 29, "Update Notices");
         assert!(settings::update_notices(), "on: the game asks to restart into a newer build");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
@@ -1550,7 +1565,7 @@ mod tests {
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(settings::loading_longer(), "and back: two values");
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (4, Some(&9)), "UI's last row");
+        assert_eq!((w.row, cues.last()), (5, Some(&9)), "UI's last row (six, a page's most)");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         // Controller: Controller Focus, Capture Controller
         press(&mut w, &mut o, key::DOWN, &mut cues);
