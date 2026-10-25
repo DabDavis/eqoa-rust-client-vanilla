@@ -49,6 +49,12 @@ pub mod bit {
     pub const CROSS: u16 = 1 << 14;
     pub const SQUARE: u16 = 1 << 15;
 
+    /// The name of the first of `b`'s buttons (`named`'s), "?" for none.
+    pub fn name(b: u16) -> &'static str {
+        const NAMES: [&str; 16] = ["select", "l3", "r3", "start", "up", "right", "down", "left", "l2", "r2", "l1", "r1", "triangle", "circle", "cross", "square"];
+        NAMES.get(b.trailing_zeros() as usize).copied().unwrap_or("?")
+    }
+
     /// By name, as eqoa-port's pad scripts spell them.
     pub fn named(s: &str) -> Option<u16> {
         Some(match s {
@@ -118,6 +124,41 @@ pub fn dead_zone() -> f32 {
     #[cfg(not(target_arch = "wasm32"))]
     let v = std::env::var("EQOA_DEADZONE").ok();
     v.and_then(|v| v.parse::<f32>().ok()).filter(|v| (0.0..=0.9).contains(v)).unwrap_or(STICK_DEAD_ZONE)
+}
+
+/// The buttons a controller pressed since a window last read it
+/// (`Gamepads::poll`, once a frame drawn). A controller tells its state many
+/// times a frame (a DualSense on USB a thousand times a second) and only the
+/// last was kept, so a button pressed and let go between two frames, or
+/// while a frame came late, never reached the game (F3 20261025-111324: the
+/// first press in a window just brought to the front). Every state seen goes
+/// through here, and a read gives the last state and each button pressed
+/// since the last read that it no longer holds: such a press is down for
+/// one read and up the next, a tap a frame long. Only a press counts (a
+/// button going down), so one held through the last read and let go since
+/// is up at once; one still held is the state's, so nothing is pressed
+/// twice; a read clears what it took, so nothing stays down. Two presses
+/// between the same two reads are one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Latch {
+    /// the last state seen
+    last: u16,
+    /// the buttons pressed since the last read
+    pressed: u16,
+}
+
+impl Latch {
+    /// A state the controller sent (its buttons, `bit`'s).
+    pub fn saw(&mut self, buttons: u16) {
+        self.pressed |= buttons & !self.last;
+        self.last = buttons;
+    }
+
+    /// A read: the buttons pressed since the last read that `now` (the
+    /// state read) does not hold; the next read starts afresh.
+    pub fn take(&mut self, now: u16) -> u16 {
+        std::mem::take(&mut self.pressed) & !now
+    }
 }
 
 impl Report {
@@ -427,6 +468,9 @@ pub fn trace() -> bool {
 pub struct Controller {
     pub name: String,
     pub report: Report,
+    /// the buttons it pressed and let go since the last read, which
+    /// `report` (its state now) no longer holds (`Latch`)
+    pub between: u16,
     /// its sticks as they came, before the dead zone (for a report)
     pub raw: [f32; 4],
     pub rumbles: bool,
@@ -633,6 +677,13 @@ pub struct Gamepads {
     /// the sticks of the controllers it reads as they came, before the dead
     /// zone (for a report)
     pub raw: [f32; 4],
+    /// the buttons the last read gave that no controller it reads held any
+    /// more: pressed and let go between two reads (`Latch`)
+    pub between: u16,
+    /// each gilrs controller's buttons since the last read, from its events
+    /// (gilrs keeps only the last state)
+    #[cfg(not(target_arch = "wasm32"))]
+    gilrs_seen: std::collections::HashMap<gilrs::GamepadId, Latch>,
     /// each pad as a report gives it: its id, mapping, layout, every axis
     /// and every button pressed (in a page)
     #[cfg(target_arch = "wasm32")]
@@ -689,6 +740,9 @@ impl Gamepads {
             picked: None,
             rumble_to: Vec::new(),
             raw: [0.0; 4],
+            between: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            gilrs_seen: std::collections::HashMap::new(),
             #[cfg(target_arch = "wasm32")]
             described: Vec::new(),
         }
@@ -757,6 +811,7 @@ impl Gamepads {
         let mut out = Report::default();
         let mut raw = Report::default();
         let (mut any, mut motors) = (false, false);
+        let mut between = 0;
         self.rumble_to.clear();
         for c in pads.iter().filter(|c| match &pick {
             Pick::All => true,
@@ -764,6 +819,7 @@ impl Gamepads {
             Pick::Idle | Pick::Nothing => false,
         }) {
             out.merge(&c.report);
+            between |= c.between;
             raw.merge(&Report { buttons: 0, sticks: c.raw });
             any = true;
             motors |= c.rumbles;
@@ -777,6 +833,13 @@ impl Gamepads {
             motors = pads.iter().any(|c| c.rumbles);
         }
         self.raw = raw.sticks;
+        // what was pressed and let go since the last read (`Latch`): down
+        // for this read, as a tap a frame long
+        self.between = between & !out.buttons;
+        out.buttons |= self.between;
+        if self.trace && self.between != 0 {
+            crate::say(&format!("[pad] pressed and let go since the last frame: {:#06x}", self.between));
+        }
         if self.trace && out != self.last {
             crate::say(&format!("[pad] report {out:?}"));
             self.last = out;
@@ -815,7 +878,10 @@ impl Gamepads {
                     crate::say(&format!("gamepad: an Xbox controller, XInput's player {} (rumble)", i + 1));
                     self.seen.push(name.clone());
                 }
-                out.push(Controller { name, report, raw, rumbles: true, label: format!("Xbox controller {}", i + 1), source: Source::XInput(i), order: (0, i as u64), notes: Vec::new() });
+                // XInput says the state at the moment asked, no more (its packet
+                // number says only that something changed): a press let go
+                // between two frames is not seen
+                out.push(Controller { name, report, between: 0, raw, rumbles: true, label: format!("Xbox controller {}", i + 1), source: Source::XInput(i), order: (0, i as u64), notes: Vec::new() });
             }
         }
         // the PlayStation controllers read over HID, each with its USB ids:
@@ -833,7 +899,7 @@ impl Gamepads {
                     self.seen.push(f.name.clone());
                 }
                 let notes = f.reports.iter().map(|r| format!("{}{}", if f.bluetooth { "on Bluetooth, " } else { "" }, r.describe())).collect();
-                let c = Controller { name: f.name, report, raw, rumbles: false, label: f.model.label().to_string(), source: Source::Hid(k as u32, None), order: (1, k as u64), notes };
+                let c = Controller { name: f.name, report, between: f.between, raw, rumbles: false, label: f.model.label().to_string(), source: Source::Hid(k as u32, None), order: (1, k as u64), notes };
                 hid.push((c, f.ids));
             }
         }
@@ -841,6 +907,13 @@ impl Gamepads {
             while let Some(ev) = g.next_event() {
                 if self.trace {
                     crate::say(&format!("[gilrs] {:?}", ev.event));
+                }
+                // each state the controller went through, not only the last
+                // (`next_event` has put the event in its state)
+                if gilrs_event_buttons(&ev.event)
+                    && let Some(pad) = g.connected_gamepad(ev.id)
+                {
+                    self.gilrs_seen.entry(ev.id).or_default().saw(report_of(&pad).buttons);
                 }
             }
             for (id, pad) in g.gamepads() {
@@ -902,10 +975,17 @@ impl Gamepads {
                 #[cfg(not(any(target_os = "linux", windows)))]
                 let (name, order) = (format!("pad{slot}"), (1, slot));
                 let mut report = report_of(&pad);
+                let between = self.gilrs_seen.get_mut(&id).map_or(0, |l| l.take(report.buttons));
                 let raw = report.sticks;
                 report.rest(self.dead_zone);
-                out.push(Controller { name, report, raw, rumbles: pad.is_ff_supported(), label, source: Source::Gilrs(id), order, notes: Vec::new() });
+                out.push(Controller { name, report, between, raw, rumbles: pad.is_ff_supported(), label, source: Source::Gilrs(id), order, notes: Vec::new() });
             }
+            // what the ones passed over pressed (read through XInput or HID
+            // instead) is not kept for later; a controller gone, forgotten
+            for l in self.gilrs_seen.values_mut() {
+                l.take(0);
+            }
+            self.gilrs_seen.retain(|id, _| g.connected_gamepad(*id).is_some());
         }
         #[cfg(windows)]
         {
@@ -958,7 +1038,7 @@ impl Gamepads {
             described.push(d);
             let raw = r.sticks;
             r.rest(self.dead_zone);
-            out.push(Controller { name: format!("pad{}", p.index), report: r, raw, rumbles, label: p.id.clone(), source: Source::Page(p.index), order: (1, p.index as u64), notes: Vec::new() });
+            out.push(Controller { name: format!("pad{}", p.index), report: r, between: 0, raw, rumbles, label: p.id.clone(), source: Source::Page(p.index), order: (1, p.index as u64), notes: Vec::new() });
         }
         self.traced = traced;
         self.described = described;
@@ -1155,9 +1235,27 @@ pub fn focus_name(f: Focus) -> String {
 #[cfg(not(target_arch = "wasm32"))]
 fn report_of(p: &gilrs::Gamepad<'_>) -> Report {
     use gilrs::{Axis, Button};
-    let pressed = |b: Button| p.is_pressed(b) || p.button_data(b).is_some_and(|d| d.value() > 0.33 && matches!(b, Button::LeftTrigger2 | Button::RightTrigger2));
+    let pressed = |b: Button| p.is_pressed(b) || p.button_data(b).is_some_and(|d| d.value() > TRIGGER && matches!(b, Button::LeftTrigger2 | Button::RightTrigger2));
     let mut r = Report::default();
-    for (b, k) in [
+    for (b, k) in GILRS_BUTTONS {
+        if pressed(b) {
+            r.buttons |= k;
+        }
+    }
+    // gilrs reports y up; libpad's runs down
+    r.sticks = [p.value(Axis::RightStickX), -p.value(Axis::RightStickY), p.value(Axis::LeftStickX), -p.value(Axis::LeftStickY)];
+    r
+}
+
+/// How far a trigger goes (of its travel) before it counts as L2 or R2.
+#[cfg(not(target_arch = "wasm32"))]
+const TRIGGER: f32 = 0.33;
+
+/// gilrs's buttons (SDL's layout) as libpad's, by position.
+#[cfg(not(target_arch = "wasm32"))]
+const GILRS_BUTTONS: [(gilrs::Button, u16); 16] = {
+    use gilrs::Button;
+    [
         (Button::South, bit::CROSS),
         (Button::East, bit::CIRCLE),
         (Button::West, bit::SQUARE),
@@ -1174,14 +1272,15 @@ fn report_of(p: &gilrs::Gamepad<'_>) -> Report {
         (Button::DPadDown, bit::DOWN),
         (Button::DPadLeft, bit::LEFT),
         (Button::DPadRight, bit::RIGHT),
-    ] {
-        if pressed(b) {
-            r.buttons |= k;
-        }
-    }
-    // gilrs reports y up; libpad's runs down
-    r.sticks = [p.value(Axis::RightStickX), -p.value(Axis::RightStickY), p.value(Axis::LeftStickX), -p.value(Axis::LeftStickY)];
-    r
+    ]
+};
+
+/// Whether a gilrs event can change libpad's buttons (`report_of`): a
+/// button pressed, let go or moved (a trigger's travel).
+#[cfg(not(target_arch = "wasm32"))]
+fn gilrs_event_buttons(e: &gilrs::EventType) -> bool {
+    use gilrs::EventType;
+    matches!(e, EventType::ButtonPressed(..) | EventType::ButtonReleased(..) | EventType::ButtonChanged(..))
 }
 
 /// In a page: whether a connected gamepad has a vibration actuator (the
@@ -1194,6 +1293,85 @@ fn web_can_rumble() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What a read gives of a controller that sent `states` since the last
+    /// read (`Gamepads::poll`: the last state, and with `Latch` what was
+    /// let go since), read after read.
+    fn read_after_read(reads: &[&[u16]], latched: bool) -> Vec<u16> {
+        let mut l = Latch::default();
+        let mut now = 0;
+        reads
+            .iter()
+            .map(|states| {
+                for &s in *states {
+                    l.saw(s);
+                    now = s;
+                }
+                let between = l.take(now);
+                if latched { now | between } else { now }
+            })
+            .collect()
+    }
+
+    /// A press let go before the next read is down for that read and up
+    /// the next; one still held is the state's; one held through a read and
+    /// let go since is up at once; two between the same reads are one; a
+    /// tap before a stall (reads with nothing new) is down once, not for
+    /// good. The controls: the last state alone (the client's before) loses
+    /// the tap, and keeping every button seen (not only presses) holds a
+    /// let-go button a read too long.
+    #[test]
+    fn a_press_between_two_reads_is_read_once() {
+        let (x, o) = (bit::CROSS, bit::CIRCLE);
+        assert_eq!(read_after_read(&[&[x, 0], &[], &[]], true), [x, 0, 0], "a tap between two reads");
+        assert_eq!(read_after_read(&[&[x, 0], &[], &[]], false), [0, 0, 0], "the control: the last state alone loses it");
+        assert_eq!(read_after_read(&[&[x], &[x], &[x, 0], &[]], true), [x, x, 0, 0], "held, then let go: up at once");
+        assert_eq!(read_after_read(&[&[x, 0, x, 0], &[]], true), [x, 0], "two taps between the same reads: one");
+        assert_eq!(read_after_read(&[&[x, 0], &[], &[], &[], &[]], true), [x, 0, 0, 0, 0], "a stall after it: down once");
+        assert_eq!(read_after_read(&[&[o], &[o, o | x, o], &[o, 0]], true), [o, o | x, 0], "a tap while another is held");
+        // the control: every button seen kept (a level, not a press): a
+        // button let go since the last read stays down a read too long
+        let mut seen = 0u16;
+        let level: Vec<u16> = [&[x][..], &[x, 0][..], &[][..]]
+            .iter()
+            .map(|states| {
+                let now = states.last().copied().unwrap_or(0);
+                seen |= states.iter().fold(0, |a, s| a | s);
+                now | std::mem::take(&mut seen)
+            })
+            .collect();
+        assert_eq!(level, [x, x, 0], "the control: kept as a level, the release is a read late");
+        assert_ne!(level, read_after_read(&[&[x], &[x, 0], &[]], true));
+    }
+
+    /// Through the game's own pad path (`VIPad::Read`, `PadKeys`): a tap
+    /// between two reads is one press and one release, a held button one
+    /// press however many reads it is held over. The control: the last
+    /// state alone never presses it.
+    #[test]
+    fn a_tap_between_two_frames_reaches_the_game_once() {
+        let keys = |reads: &[&[u16]], latched: bool| -> Vec<(i32, bool)> {
+            let mut c = Console::new();
+            c.poll(Report::default(), true, false, false);
+            read_after_read(reads, latched).into_iter().flat_map(|b| c.poll(Report { buttons: b, sticks: [0.0; 4] }, true, false, false)).collect()
+        };
+        // cross is key 134 (`key_name`)
+        assert_eq!(key_name(134), "cross");
+        assert_eq!(keys(&[&[bit::CROSS, 0], &[], &[]], true), [(134, true), (134, false)]);
+        assert_eq!(keys(&[&[bit::CROSS], &[bit::CROSS], &[bit::CROSS], &[0], &[]], true), [(134, true), (134, false)], "held: once");
+        assert!(keys(&[&[bit::CROSS, 0], &[], &[]], false).is_empty(), "the control: lost");
+    }
+
+    /// A button's name is the one scripts give it (`named`), the first of
+    /// several; none is "?".
+    #[test]
+    fn a_button_is_named_as_a_script_names_it() {
+        for n in ["select", "l3", "r3", "start", "up", "right", "down", "left", "l2", "r2", "l1", "r1", "triangle", "circle", "cross", "square"] {
+            assert_eq!(bit::name(bit::named(n).unwrap()), n);
+        }
+        assert_eq!(bit::name(bit::CROSS | bit::SQUARE), "cross");
+        assert_eq!(bit::name(0), "?");
+    }
 
     #[test]
     fn a_stick_byte_rests_in_the_dead_zone_and_reaches_both_ends() {

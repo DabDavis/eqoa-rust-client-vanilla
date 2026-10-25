@@ -1664,6 +1664,10 @@ struct App {
     /// each key pressed was made, and the controllers' buttons a capture took.
     keys_edge: crate::binds::KeyEdge,
     pad_edge: crate::binds::PadEdge,
+    /// the window's coming to the front, said in the log once (`arrival`),
+    /// and the controllers' buttons the last frame read (its first press)
+    arrival: crate::arrival::Arrival,
+    pad_down: u16,
     /// the sticks `UpdateControls` got last frame: the pad's, the keys', the
     /// mouse's and the touch screen's (for a report)
     sticks_used: [f32; 4],
@@ -1805,6 +1809,8 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         pad_script: crate::input::Script::from_env(),
         keys_edge: Default::default(),
         pad_edge: Default::default(),
+        arrival: Default::default(),
+        pad_down: 0,
         sticks_used: [0.0; 4],
         mouse: crate::mouse::Mouse::default(),
         last_view: None,
@@ -2216,6 +2222,9 @@ impl App {
     /// Controller Focus's Window reads the controllers only in front.
     fn focus_lost(&mut self, el: &ActiveEventLoop) {
         self.pads.focused = false;
+        if let Some(line) = self.arrival.lost(Instant::now()) {
+            crate::say(&line);
+        }
         self.let_go_keys(el);
         self.mouse.release_all();
         self.grab_pointer(false);
@@ -2269,11 +2278,27 @@ impl App {
         }
     }
 
+    /// The controllers' buttons this frame read (`Gamepads::poll`): one
+    /// newly down is the first press since the window came to the front,
+    /// said once (`arrival`), with whether it was pressed and let go between
+    /// two frames (`input::Latch`).
+    fn arrival_pad(&mut self, buttons: u16) {
+        let fresh = buttons & !std::mem::replace(&mut self.pad_down, buttons);
+        if fresh == 0 {
+            return;
+        }
+        let tapped = if fresh & self.pads.between != 0 { ", pressed and let go between two frames" } else { "" };
+        if let Some(line) = self.arrival.press(Instant::now(), &format!("the controller's {}{tapped}", crate::input::bit::name(fresh))) {
+            crate::say(&line);
+        }
+    }
+
     /// The pad, once a frame: every source as libpad's one port
     /// (`VIPad::Read`), its mode to the client (`UpdateControls`' opening),
     /// and `PadKeys`' keys to the window that has them (`SetKey`).
     fn poll_pad(&mut self, el: &ActiveEventLoop) {
         let (mut report, mut connected, motors) = self.pads.poll();
+        self.arrival_pad(report.buttons);
         // a controller in use: the touch screen's pad goes
         if report.buttons != 0 || report.sticks.iter().any(|v| v.abs() > 0.5) {
             self.touch.hide();
@@ -2592,6 +2617,7 @@ impl App {
     /// to the pregame's window (`VIWindowManager::Update`'s 128..).
     fn poll_pad_host(&mut self) {
         let (mut report, mut connected, motors) = self.pads.poll();
+        self.arrival_pad(report.buttons);
         if report.buttons != 0 || report.sticks.iter().any(|v| v.abs() > 0.5) {
             self.touch.hide();
         }
@@ -3738,6 +3764,19 @@ impl ApplicationHandler for App {
                 return;
             }
         }
+        // a key pressed: the first since the window came to the front, or
+        // one already down as it came (`arrival`)
+        if let WindowEvent::KeyboardInput { event: e, is_synthetic, .. } = &event
+            && e.state == ElementState::Pressed
+            && !e.repeat
+        {
+            let name = crate::arrival::key_label(&e.logical_key);
+            if *is_synthetic {
+                self.arrival.held_key(Instant::now(), &name);
+            } else if let Some(line) = self.arrival.press(Instant::now(), &name) {
+                crate::say(&line);
+            }
+        }
         match event {
             WindowEvent::CloseRequested => el.exit(),
             // Quit, answered yes in the start menu (`m_p2EC28`), or the
@@ -3974,7 +4013,10 @@ impl ApplicationHandler for App {
             // keys would walk or turn the player on for good)
             // which window is in front: Controller Focus's Window reads the
             // controllers only there
-            WindowEvent::Focused(true) => self.pads.focused = true,
+            WindowEvent::Focused(true) => {
+                self.pads.focused = true;
+                self.arrival.focused(Instant::now());
+            }
             WindowEvent::Focused(false) => self.focus_lost(el),
             WindowEvent::CursorLeft { .. } => {
                 self.mouse.release_all();
@@ -4134,6 +4176,9 @@ impl ApplicationHandler for App {
                     crate::display::seen(g.window.fullscreen().is_some());
                 }
                 let frame_start = Instant::now();
+                if let Some(line) = self.arrival.frame(frame_start) {
+                    crate::say(&line);
+                }
                 // one of the game's frames, 30 a second whatever the
                 // display's rate: what the game counts in frames (the HUD and
                 // its windows, the rings, the death camera, the shake) steps

@@ -18,7 +18,7 @@
 //! (`Gamepads::rumble`). A controller that cannot be opened (another program
 //! holds it alone) stays gilrs's.
 
-use crate::input::{Report, bit};
+use crate::input::{Latch, Report, bit};
 
 /// The controllers read here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -192,6 +192,18 @@ pub fn parse(model: Model, bluetooth: bool, data: &[u8]) -> Option<PsPad> {
     }
 }
 
+/// A report as a read returned it, on what the controller last said
+/// (`pad`) and the buttons it pressed since a window last read it (`latch`):
+/// its state, if it holds one (`parse`), is the controller's now, and its
+/// buttons are kept for that read, so one pressed and let go before it
+/// still reaches the game (`Latch`).
+pub fn take(model: Model, bluetooth: bool, data: &[u8], pad: &mut PsPad, latch: &mut Latch) -> Option<PsPad> {
+    let p = parse(model, bluetooth, data)?;
+    *pad = p;
+    latch.saw(p.report().buttons);
+    Some(p)
+}
+
 /// A report as a controller first sent it, for the log and a problem
 /// report: its ID, the length the read returned, and its first bytes.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -247,7 +259,8 @@ pub use device::Hid;
 /// with an overlapped read drained every frame, the last one kept.
 #[cfg(windows)]
 mod device {
-    use super::{FirstReport, Model, PsPad, bluetooth, name, parse};
+    use super::{FirstReport, Model, PsPad, bluetooth, name, take};
+    use crate::input::Latch;
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
@@ -387,6 +400,8 @@ mod device {
         handle: HANDLE,
         read: Box<Pending>,
         pad: PsPad,
+        /// the buttons it pressed since the last read (`take`)
+        latch: Latch,
         /// when a report last held its state
         valid: Option<Instant>,
         /// the first report of each ID it sent (`FirstReport`), each said
@@ -397,11 +412,12 @@ mod device {
     impl Device {
         fn open(l: &Listed) -> Option<Device> {
             let handle = open(&l.path, GENERIC_READ, FILE_FLAG_OVERLAPPED)?;
-            Some(Device { listed: l.clone(), handle, read: Box::new(Pending { ov: OVERLAPPED::default(), buf: [0; 1024], busy: false }), pad: PsPad::default(), valid: None, first: Vec::new() })
+            Some(Device { listed: l.clone(), handle, read: Box::new(Pending { ov: OVERLAPPED::default(), buf: [0; 1024], busy: false }), pad: PsPad::default(), latch: Latch::default(), valid: None, first: Vec::new() })
         }
 
-        /// Every report waiting read, the last state kept; false when the
-        /// controller is gone (a read failed).
+        /// Every report waiting read, the last state kept and every state's
+        /// buttons latched (`take`); false when the controller is gone (a
+        /// read failed).
         fn pump(&mut self) -> bool {
             // the driver keeps a few dozen reports for a reader: a bound past them
             for _ in 0..256 {
@@ -426,9 +442,8 @@ mod device {
                 }
                 r.busy = false;
                 let data = &r.buf[..(n as usize).min(r.buf.len())];
-                let state = parse(self.listed.model, self.listed.bluetooth, data);
-                if let Some(p) = state {
-                    self.pad = p;
+                let state = take(self.listed.model, self.listed.bluetooth, data, &mut self.pad, &mut self.latch);
+                if state.is_some() {
                     self.valid = Some(Instant::now());
                 }
                 if let Some(f) = FirstReport::of(data, state.is_some())
@@ -469,6 +484,9 @@ mod device {
         pub model: Model,
         pub ids: (u16, u16),
         pub pad: PsPad,
+        /// the buttons pressed and let go since the last read, which `pad`
+        /// no longer holds (`input::Latch`)
+        pub between: u16,
         pub bluetooth: bool,
         pub reports: Vec<FirstReport>,
     }
@@ -541,11 +559,17 @@ mod device {
                 }
             }
             self.devices.sort_by(|a, b| a.listed.path.cmp(&b.listed.path));
-            self.devices
-                .iter()
-                .filter(|d| d.listed.ids.1 != super::DS4_ADAPTER || d.valid.is_some_and(|t| now.duration_since(t) < Duration::from_secs(1)))
-                .map(|d| Found { name: name(&d.listed.path, d.listed.ids), model: d.listed.model, ids: d.listed.ids, pad: d.pad, bluetooth: d.listed.bluetooth, reports: d.first.clone() })
-                .collect()
+            let mut out = Vec::new();
+            for d in self.devices.iter_mut() {
+                // taken every read, a controller counted or not, so nothing
+                // waits in its latch for a later one
+                let between = d.latch.take(d.pad.report().buttons);
+                if d.listed.ids.1 == super::DS4_ADAPTER && d.valid.is_none_or(|t| now.duration_since(t) >= Duration::from_secs(1)) {
+                    continue;
+                }
+                out.push(Found { name: name(&d.listed.path, d.listed.ids), model: d.listed.model, ids: d.listed.ids, pad: d.pad, between, bluetooth: d.listed.bluetooth, reports: d.first.clone() });
+            }
+            out
         }
     }
 
@@ -753,6 +777,51 @@ mod tests {
         // pad path a cross is a cross wherever it comes from
         let x = crate::xinput::XPad { buttons: 0x1000 | 0x0100, ..Default::default() }.report().buttons;
         assert_eq!(b(0x20 | 8, 0x01), x);
+    }
+
+    /// A DualSense on USB, its reports as a window's reads drain them
+    /// (`Hid::read`: every report waiting, through `take`, then the last
+    /// state and what was let go since, as `Gamepads::poll` merges them),
+    /// through the game's pad path (`input::Console`): cross tapped between
+    /// two reads among a thousand reports a second is pressed once and let
+    /// go once; a report that holds no state (another ID) changes nothing.
+    /// The control: the last state alone, as the client read it before (F3
+    /// 20261025-111324), never presses it.
+    #[test]
+    fn a_tap_between_two_reads_reaches_the_game() {
+        use crate::input::{Console, Latch, Report};
+        let usb = |b0: u8| ds5(0x01, 64, 1, &[128, 128, 128, 128, 0, 0, 7, b0, 0, 0]);
+        let rest = usb(8);
+        let cross = usb(0x20 | 8);
+        let other = ds5(0x05, 64, 1, &[0x20 | 8; 10]);
+        // 33 reports between two reads (a frame at 30 a second): the tap
+        // 8 ms long in the middle of the first frame
+        let frame = |tap: bool| -> Vec<Vec<u8>> { (0..33).map(|i| if tap && (12..20).contains(&i) { cross.clone() } else { rest.clone() }).collect() };
+        let reads = [frame(true), vec![other.clone()], frame(false), frame(false)];
+        let keys = |latched: bool| -> Vec<(i32, bool)> {
+            let (mut pad, mut latch) = (PsPad::default(), Latch::default());
+            let mut c = Console::new();
+            c.poll(Report::default(), true, false, false);
+            let mut out = Vec::new();
+            for reports in &reads {
+                for r in reports {
+                    take(Model::DualSense, false, r, &mut pad, &mut latch);
+                }
+                let mut report = pad.report();
+                let between = latch.take(report.buttons);
+                if latched {
+                    report.buttons |= between;
+                }
+                out.extend(c.poll(report, true, false, false));
+            }
+            out
+        };
+        assert_eq!(keys(true), [(134, true), (134, false)]);
+        assert!(keys(false).is_empty(), "the control: the last report alone");
+        // a report that holds no state: nothing taken
+        let (mut pad, mut latch) = (PsPad::default(), Latch::default());
+        assert_eq!(take(Model::DualSense, false, &other, &mut pad, &mut latch), None);
+        assert_eq!((pad, latch.take(0)), (PsPad::default(), 0));
     }
 
     /// The models by USB ids, and a controller's name: the same for its
