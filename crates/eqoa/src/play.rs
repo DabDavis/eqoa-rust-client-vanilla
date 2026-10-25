@@ -984,18 +984,23 @@ pub struct PlateView {
     /// at most this many: the game's 24, or as many as NPC/PC Display keeps
     /// in view
     pub most: usize,
+    /// Overlapping Names Show: every plate kept, a plate that meets a
+    /// nearer one's included (the game's `RasterDeferred` drops it: Hide)
+    pub overlap: bool,
 }
 
 impl PlateView {
-    /// The game's, from `eye`: within 22, at its size, at most 24.
+    /// The game's, from `eye`: within 22, at its size, at most 24, a plate
+    /// that meets a nearer one's dropped.
     #[cfg(test)]
     pub fn game(eye: glam::Vec3) -> PlateView {
-        PlateView { eye, distance: crate::settings::NAME_DISTANCE_GAME as f32, scale: 1.0, most: NAME_PLATES_GAME }
+        PlateView { eye, distance: crate::settings::NAME_DISTANCE_GAME as f32, scale: 1.0, most: NAME_PLATES_GAME, overlap: false }
     }
 
     /// This frame's for the walker's camera `cam` at `eye` in a window
     /// `size`: from `lod::eye`, to Name Distance, at the zoom's size
-    /// (`lod::plate_scale`), at most the entity slots NPC/PC Display keeps.
+    /// (`lod::plate_scale`), at most the entity slots NPC/PC Display keeps,
+    /// overlapping or not as Overlapping Names says.
     pub fn of(cam: &vi::camera::WalkCamera<Ee>, eye: &Vect3<Ee>, size: (u32, u32)) -> PlateView {
         let k = size.1 as f32 / render::text::SCREEN_H;
         PlateView {
@@ -1003,6 +1008,7 @@ impl PlateView {
             distance: crate::settings::name_distance(),
             scale: crate::lod::plate_scale(cam, eye, k),
             most: crate::settings::entity_slots().max(NAME_PLATES_GAME),
+            overlap: crate::settings::overlapping_names(),
         }
     }
 }
@@ -1012,7 +1018,10 @@ impl PlateView {
 /// (the squared view-space length plus w² under the distance squared: the
 /// game's 22, from the game's camera), at most its `most`, nearest first,
 /// each dropped if its rect on the PS2's 640x448 screen (at the view's
-/// scale) meets one already kept (`VIRect::Intersects`, inclusive).
+/// scale) meets one already kept (`VIRect::Intersects`, inclusive); with
+/// Overlapping Names Show (`overlap`) none is dropped, and they come
+/// farthest first, so the nearest is drawn over the rest (a plate tests the
+/// scene's depth but writes none: the order decides between plates).
 pub fn labels(plates: &[Plate], view: &PlateView, view_proj: glam::Mat4, text: &render::text::Text) -> Vec<render::text::Label> {
     labels_by(plates, view, view_proj, |s| text.width(s), text.height())
 }
@@ -1043,10 +1052,13 @@ fn labels_by(plates: &[Plate], view: &PlateView, view_proj: glam::Mat4, width: i
     type Kept<'a> = ((i32, i32), (i32, i32), glam::Vec3, &'a Plate);
     let mut kept: Vec<Kept> = Vec::new();
     for (_, min, max, ndc, p) in queued {
-        let meets = kept.iter().any(|k| !(min.0 > k.1.0 || max.0 < k.0.0 || min.1 > k.1.1 || max.1 < k.0.1));
+        let meets = !view.overlap && kept.iter().any(|k| !(min.0 > k.1.0 || max.0 < k.0.0 || min.1 > k.1.1 || max.1 < k.0.1));
         if !meets {
             kept.push((min, max, ndc, p));
         }
+    }
+    if view.overlap {
+        kept.reverse();
     }
     kept.into_iter().map(|(_, _, ndc, p)| render::text::Label { at: ndc.to_array(), color: p.color, text: p.name.clone() }).collect()
 }
@@ -1356,7 +1368,9 @@ mod name_plates {
         assert_eq!(PlateView::of(&cam, &back(8.0), (1920, 1080)), PlateView::game(Vec3::new(1000.0, 51.68, 1992.0)), "the game's camera: the game's");
         crate::settings::set_client(crate::settings::ClientOptions { name_distance: 90, entity_slots: 64, ..Default::default() });
         let v = PlateView::of(&cam, &back(50.0), (1920, 1080));
-        assert_eq!((v.distance, v.most), (90.0, 64));
+        assert_eq!((v.distance, v.most, v.overlap), (90.0, 64, false));
+        crate::settings::set_client(crate::settings::ClientOptions { overlapping_names: true, ..Default::default() });
+        assert!(PlateView::of(&cam, &back(50.0), (1920, 1080)).overlap, "Overlapping Names Show");
         assert!((v.eye - Vec3::new(1000.0, 51.68, 1950.0)).length() > 40.0, "the control: the camera itself");
         crate::settings::testing::reset(false);
     }
@@ -1392,6 +1406,23 @@ mod name_plates {
         let p: Vec<Plate> = (0..30).map(|i| plate([-0.9 + (i % 6) as f32 * 0.35, -0.8 + (i / 6) as f32 * 0.4, 10.0], "A")).collect();
         assert_eq!(names(&PlateView { most: 64, ..PlateView::game(eye) }, &p).len(), 30);
         assert_eq!(names(&PlateView::game(eye), &p).len(), NAME_PLATES_GAME, "the control: the game's 24");
+    }
+
+    /// Overlapping Names (F3 20261025-025611: five names of a crowd of
+    /// twenty-four): three names on one spot of the screen, 10, 12 and 14
+    /// away, through a perspective (the plates' depths differ). Show keeps
+    /// all three, the farthest first, so the nearest is drawn last, over
+    /// them; Hide, the game's `RasterDeferred`, keeps the nearest alone (the
+    /// control: the game's rule fails Show's).
+    #[test]
+    fn overlapping_names_show_keeps_every_plate_the_nearest_on_top() {
+        let eye = Vec3::ZERO;
+        // w = z: a perspective's depth, x and y over it
+        let proj = Mat4::from_cols(glam::Vec4::X, glam::Vec4::Y, glam::Vec4::new(0.0, 0.0, 1.0, 1.0), glam::Vec4::ZERO);
+        let p = [plate([0.0, 0.0, 12.0], "Cd"), plate([0.0, 0.0, 10.0], "Ab"), plate([0.0, 0.0, 14.0], "Ef")];
+        let shown = |view: &PlateView| -> Vec<String> { labels_by(&p, view, proj, width, 12).into_iter().map(|l| l.text).collect() };
+        assert_eq!(shown(&PlateView { overlap: true, ..PlateView::game(eye) }), ["Ef", "Cd", "Ab"]);
+        assert_eq!(shown(&PlateView::game(eye)), ["Ab"], "the control: the game's keeps the nearest alone");
     }
 }
 
