@@ -53,3 +53,54 @@ fn fs_tested(i: VsOut) -> @location(0) vec4<f32> {
     }
     return c;
 }
+
+// A font's quad through the filtering sampler under the options' Text
+// (`TextFilter`). Sharp: within a texel its own colour, and only round its
+// edge a mix with the next, over the band of `w` target pixels the edge
+// falls in ("sharp bilinear"). From two pixels a texel the band is a whole
+// pixel and every texel is drawn as wide as every other; it narrows as a
+// texel nears one pixel, to the nearest texel, which is near even there
+// and which a whole pixel's mix would blur. A pixel's centre that is not in
+// a band takes its texel's centre: at a whole scale none is, the nearest
+// texel. What a mix reaches past a glyph's edge is the clear texel round it
+// (`pack`).
+fn sharp(i: VsOut) -> vec2<f32> {
+    let size = vec2<f32>(textureDimensions(tex));
+    let t = i.uv * size;
+    // the target pixels a texel spans, across and down
+    let k = 1.0 / max(vec2<f32>(abs(dpdx(t.x)) + abs(dpdy(t.x)), abs(dpdx(t.y)) + abs(dpdy(t.y))), vec2<f32>(1.0 / 64.0));
+    let w = clamp(k - 1.0, vec2<f32>(1.0 / 256.0), vec2<f32>(1.0));
+    let c = fract(t) - 0.5;
+    let r = vec2<f32>(0.5) - 0.5 * w / k;
+    return (floor(t) + 0.5 + (c - clamp(c, -r, r)) * k / w) / size;
+}
+
+@fragment
+fn fs_sharp(i: VsOut) -> @location(0) vec4<f32> {
+    return textureSample(tex, samp, sharp(i)) * i.color;
+}
+
+@fragment
+fn fs_sharp_tested(i: VsOut) -> @location(0) vec4<f32> {
+    let c = textureSample(tex, samp, sharp(i)) * i.color;
+    if (c.a < 0.5) {
+        discard;
+    }
+    return c;
+}
+
+// Smooth: the texels mixed across their whole width, as the GS magnifies a
+// font's texture.
+@fragment
+fn fs_smooth(i: VsOut) -> @location(0) vec4<f32> {
+    return textureSample(tex, samp, i.uv) * i.color;
+}
+
+@fragment
+fn fs_smooth_tested(i: VsOut) -> @location(0) vec4<f32> {
+    let c = textureSample(tex, samp, i.uv) * i.color;
+    if (c.a < 0.5) {
+        discard;
+    }
+    return c;
+}

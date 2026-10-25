@@ -33,7 +33,10 @@ struct Glyph {
 }
 
 pub struct Text {
-    pipeline: wgpu::RenderPipeline,
+    /// The glyphs' quads under the options' Text (`ui::TextFilter`), Sharp
+    /// and Smooth, both through the filtering sampler (`bg`).
+    sharp: wgpu::RenderPipeline,
+    smooth: wgpu::RenderPipeline,
     bg: wgpu::BindGroup,
     glyphs: HashMap<u16, Glyph>,
     height: u32,
@@ -49,34 +52,11 @@ pub struct Text {
 
 impl Text {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat, depth: wgpu::TextureFormat, font: &esf::font::Font) -> Self {
-        // Pack the glyphs into rows of a 512-wide atlas.
-        let (w, h) = (512u32, font.height);
-        let mut x = 0u32;
-        let mut row = 0u32;
-        let mut places = Vec::new();
-        for g in &font.glyphs {
-            if x + g.width as u32 > w {
-                x = 0;
-                row += 1;
-            }
-            places.push((x, row));
-            x += g.width as u32 + 1;
-        }
-        let ah = (row + 1) * (h + 1);
-        let mut atlas = vec![0u8; (w * ah * 4) as usize];
-        let mut glyphs = HashMap::new();
-        for (g, &(gx, gr)) in font.glyphs.iter().zip(&places) {
-            let gy = gr * (h + 1);
-            for y in 0..h {
-                for xx in 0..g.width as u32 {
-                    let s = ((y * g.width as u32 + xx) * 4) as usize;
-                    let d = (((gy + y) * w + gx + xx) * 4) as usize;
-                    atlas[d..d + 4].copy_from_slice(&g.rgba[s..s + 4]);
-                }
-            }
-            let uv = [gx as f32 / w as f32, gy as f32 / ah as f32, (gx + g.width as u32) as f32 / w as f32, (gy + h) as f32 / ah as f32];
-            glyphs.entry(g.code).or_insert(Glyph { width: g.width as u32, uv });
-        }
+        // Pack the glyphs into rows of a 512-wide atlas, each with a clear
+        // texel round it (`ui::pack`).
+        let w = 512u32;
+        let (atlas, ah, packed) = crate::ui::pack(font, w);
+        let glyphs: HashMap<u16, Glyph> = packed.into_iter().map(|(c, (width, uv))| (c, Glyph { width, uv })).collect();
         let size = wgpu::Extent3d { width: w, height: ah, depth_or_array_layers: 1 };
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("font"),
@@ -90,7 +70,7 @@ impl Text {
         });
         queue.write_texture(tex.as_image_copy(), &atlas, wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(ah) }, size);
         let view = tex.create_view(&Default::default());
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor { mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, ..Default::default() });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("font"),
             entries: &[
@@ -122,38 +102,41 @@ impl Text {
         });
         let shader = device.create_shader_module(wgpu::include_wgsl!("text.wgsl"));
         let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("text"), bind_group_layouts: &[Some(&layout)], immediate_size: 0 });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("text"),
-            layout: Some(&pl),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<Vertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x4],
-                })],
-            },
-            primitive: Default::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: depth,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState { format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::COLOR })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-        Text { pipeline, bg, glyphs, height: font.height, labels: Vec::new(), plates: Vec::new() }
+        let make = |entry: &str| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("text"),
+                layout: Some(&pl),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<Vertex>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x4],
+                    })],
+                },
+                primitive: Default::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: depth,
+                    depth_write_enabled: Some(false),
+                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState { format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::COLOR })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let (sharp, smooth) = (make("fs_sharp"), make("fs_smooth"));
+        Text { sharp, smooth, bg, glyphs, height: font.height, labels: Vec::new(), plates: Vec::new() }
     }
 
     /// `GetStringWidth`, in PS2 pixels.
@@ -211,7 +194,10 @@ impl Text {
             return;
         }
         let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("text"), contents: bytemuck::cast_slice(&v), usage: wgpu::BufferUsages::VERTEX });
-        pass.set_pipeline(&self.pipeline);
+        pass.set_pipeline(match crate::ui::text_filter() {
+            crate::ui::TextFilter::Sharp => &self.sharp,
+            crate::ui::TextFilter::Smooth => &self.smooth,
+        });
         pass.set_bind_group(0, &self.bg, &[]);
         pass.set_vertex_buffer(0, buf.slice(..));
         pass.draw(0..v.len() as u32, 0..1);
