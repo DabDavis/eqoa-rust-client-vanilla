@@ -754,7 +754,13 @@ impl WndOptions {
             });
             self.preview = want;
         }
-        self.draw_menu(vui, r);
+        // Extended's categories stand in the menu's place (its window, where
+        // it is): the menu under them would show its words through theirs
+        if self.page == 3 {
+            self.item = -1;
+        } else {
+            self.draw_menu(vui, r);
+        }
         match self.page {
             0 => self.draw_game(vui, r, o),
             1 => self.draw_interface(vui, r, o),
