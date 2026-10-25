@@ -11,7 +11,7 @@ current.
   (widescreen, the untethered frame rate, the mouse and the touch screen, the keyboard with WASD and
   the Controls page, 1,000 lines of chat, no green backdrop behind the start menu's windows, the
   Extended options, the map, the updater, the problem and crash reports, the 2002 disc's art on F9, Hide UI
-  on H, Target of Target, names from farther and smaller zoomed out, Ignore Shouts kept, Update Notices, Text
+  on H, Target of Target, names from farther and smaller zoomed out (and every one in a crowd, Overlapping Names Show), Ignore Shouts kept, Update Notices, Text
   Sharp or Smooth). A
   new client-side addition is the user's call: ask first.
   Fixes are made here and are not carried to eqoa-rs any more (the user, 2026-10-23: "vanilla

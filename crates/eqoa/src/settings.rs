@@ -535,6 +535,12 @@ pub struct ClientOptions {
     /// (`NAME_DISTANCE_GAME`: `VINameSprite::Raster`) up to
     /// `NAME_DISTANCE_MAX` (`play::labels`)
     pub name_distance: u8,
+    /// Overlapping Names (F3 20261025-025611: a crowd within Name Distance
+    /// showed five names of twenty-four): false, Hide, the game's
+    /// `VINameSprite::RasterDeferred` (a plate whose rect meets a nearer
+    /// one's is dropped); true, Show, every plate kept, the nearest drawn
+    /// over the rest (`play::labels`)
+    pub overlapping_names: bool,
     /// Art: Frontiers' (the disc the game runs off), or the 2002 disc's
     /// (`era`, F9)
     pub art: esf::Era,
@@ -627,6 +633,7 @@ impl Default for ClientOptions {
             entity_slots: ENTITY_SLOTS_GAME,
             entity_view: ENTITY_VIEW_GAME,
             name_distance: NAME_DISTANCE_GAME,
+            overlapping_names: false,
             art: esf::Era::Frontiers,
             vsync: true,
             shouts: true,
@@ -644,10 +651,10 @@ impl ClientOptions {
     /// window's Controller Focus as `controller.<window>` (from 1) only when
     /// it is not Auto, Capture Controller only when on, Sound in Background
     /// only when off, Ability Bars, NPC/PC Display, NPC/PC View Distance and
-    /// Name Distance only when not the game's, Art only when it is the 2002
-    /// disc's, VSync, Shouts and Update Notices only when off, Target of
-    /// Target only when on, Text only when Smooth, and Output Device only
-    /// when a device is chosen (by its name).
+    /// Name Distance only when not the game's, Overlapping Names only when
+    /// Show, Art only when it is the 2002 disc's, VSync, Shouts and Update
+    /// Notices only when off, Target of Target only when on, Text only when
+    /// Smooth, and Output Device only when a device is chosen (by its name).
     pub fn to_text(self) -> String {
         let mut s = format!("lod={}\nbrightness={}\ncamera_distance={}\n", if self.lod { "on" } else { "off" }, self.brightness, self.camera_distance);
         if let Some(r) = self.frame_rate {
@@ -682,6 +689,9 @@ impl ClientOptions {
         }
         if self.name_distance != NAME_DISTANCE_GAME {
             s.push_str(&format!("name_distance={}\n", self.name_distance));
+        }
+        if self.overlapping_names {
+            s.push_str("overlapping_names=show\n");
         }
         if self.art == esf::Era::Y2002 {
             s.push_str("art=2002\n");
@@ -752,6 +762,8 @@ impl ClientOptions {
                 ("shouts", "off") => c.shouts = false,
                 ("update_notices", "on") => c.update_notices = true,
                 ("update_notices", "off") => c.update_notices = false,
+                ("overlapping_names", "show") => c.overlapping_names = true,
+                ("overlapping_names", "hide") => c.overlapping_names = false,
                 ("target_of_target", "on") => c.target_of_target = true,
                 ("target_of_target", "off") => c.target_of_target = false,
                 ("text", "sharp") => c.text = render::ui::TextFilter::Sharp,
@@ -953,6 +965,12 @@ pub fn name_distance() -> f32 {
     client().name_distance as f32
 }
 
+/// Overlapping Names now: Show (true), every name plate kept, or Hide, the
+/// game's rule (`play::PlateView`).
+pub fn overlapping_names() -> bool {
+    client().overlapping_names
+}
+
 /// What the windows share as another window saved it (Capture Controller,
 /// Sound in Background, Update Notices): `client.opt`'s, each taken when it changed since
 /// this window last looked (`multibox::seat`'s look, twice a second), so a
@@ -1063,7 +1081,7 @@ pub fn describe() -> String {
         FrameRate::Display => "the display's",
     };
     format!(
-        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, output device {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, art {}, update notices {}, shouts {}, target of target {}, text {}; {}",
+        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, output device {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, overlapping names {}, art {}, update notices {}, shouts {}, target of target {}, text {}; {}",
         if c.lod { "on" } else { "off" },
         c.brightness,
         c.fog,
@@ -1082,6 +1100,7 @@ pub fn describe() -> String {
         c.entity_slots,
         c.entity_view,
         c.name_distance,
+        if c.overlapping_names { "show" } else { "hide" },
         match c.art {
             esf::Era::Frontiers => "frontiers",
             esf::Era::Y2002 => "2002",
@@ -1554,6 +1573,11 @@ mod tests {
         for bad in ["target_of_target=yes", "target_of_target=1"] {
             assert!(!ClientOptions::from_text(bad).target_of_target, "{bad}: off, the default");
         }
+        assert_eq!(ClientOptions { overlapping_names: true, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\noverlapping_names=show\n", "Overlapping Names only when Show");
+        assert!(ClientOptions::from_text("overlapping_names=show").overlapping_names && !ClientOptions::from_text("overlapping_names=hide").overlapping_names);
+        for bad in ["overlapping_names=on", "overlapping_names=1", "overlapping_names=all"] {
+            assert!(!ClientOptions::from_text(bad).overlapping_names, "{bad}: Hide, the default");
+        }
         assert_eq!(ClientOptions::default().to_text(), "lod=on\nbrightness=5\ncamera_distance=11\n", "no Frame Rate until one is chosen, no game's turn, no window's Auto");
         assert_eq!(ClientOptions { camera_turn: 250, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\ncamera_turn=250\n");
         assert_eq!(
@@ -1562,7 +1586,7 @@ mod tests {
             "Screen Shake only off, Capture Controller only on"
         );
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, art frontiers, update notices on, shouts heard, target of target off, text sharp; kept in the page's storage");
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, overlapping names hide, art frontiers, update notices on, shouts heard, target of target off, text sharp; kept in the page's storage");
         testing::reset(true);
         assert!(describe().ends_with("refused: nothing is kept"));
         testing::reset(false);

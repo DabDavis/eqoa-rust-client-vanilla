@@ -50,9 +50,11 @@
 //!   100 to 1000 in fifties, `lod::view_dist`, and looked for on a server
 //!   that offers it; both told the server by `Play::agree_entity_view`, and
 //!   in the world the legend says what this server gives while either is
-//!   chosen) and Name Distance (a slider and its number: how far from where
+//!   chosen), Name Distance (a slider and its number: how far from where
 //!   the game's camera could be a name plate is drawn, the game's 22, then
-//!   30 to 200 in tens, `play::PlateView`);
+//!   30 to 200 in tens, `play::PlateView`) and Overlapping Names (Hide, the
+//!   game's: a name whose plate meets a nearer one's is not drawn; Show,
+//!   every one, the nearest over the rest: `play::labels`);
 //! - Sound: Sound in Background (one setting for every window: off, a window
 //!   not in front is not heard, `audio::set_heard`) and natively Output
 //!   Device (Default, the system's, followed when it changes, or a device
@@ -521,7 +523,8 @@ impl WndOptions {
     /// VSync (26) turn over, VSync natively only (a page's stays on with
     /// sound 9: the browser paces it); Name Distance (27) by tens from the
     /// game's 22 to 200 (`step_name_distance`); Text (30) goes between Sharp and
-    /// Smooth; Target of Target (31) and Update Notices (29) turn over;
+    /// Smooth; Target of Target (31), Update Notices (29) and Overlapping
+    /// Names (34, Hide and Show) turn over;
     /// Output Device (32) goes round the system default and the devices
     /// listed (`step_output`); Display (33) turns the window over (`display`). A
     /// slider (`slider_at`) makes its own
@@ -591,6 +594,9 @@ impl WndOptions {
                     29 => c.update_notices = !c.update_notices,
                     // Target of Target (`Play::target_of_target`)
                     31 => c.target_of_target = !c.target_of_target,
+                    // Overlapping Names: the plates kept from the next
+                    // frame (`play::labels`)
+                    34 => c.overlapping_names = !c.overlapping_names,
                     // Text: every font drawn from the next frame (`viewer`)
                     30 => c.text = c.text.other(),
                     // Output Device: the sound opened there from the next
@@ -1017,7 +1023,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 21] = [
+const EXTENDED_ITEMS: [(i32, &str); 22] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1039,6 +1045,7 @@ const EXTENDED_ITEMS: [(i32, &str); 21] = [
     (31, "Target of Target"),
     (32, "Output Device"),
     (33, "Display"),
+    (34, "Overlapping Names"),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1069,7 +1076,7 @@ const CATEGORIES: [Category; 6] = [
     Category { name: "UI", items: &[22, 31, 29, 30], note: Note::None },
     Category { name: "Controller", items: &[16, 19], note: Note::Reads },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
-    Category { name: "Characters", items: &[12, 23, 24, 27], note: Note::Server },
+    Category { name: "Characters", items: &[12, 23, 24, 27, 34], note: Note::Server },
     Category { name: "Sound", items: SOUND, note: Note::Output },
 ];
 
@@ -1143,6 +1150,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         26 => on_off(crate::settings::vsync()),
         29 => on_off(c.update_notices),
         31 => on_off(c.target_of_target),
+        34 => wide(if c.overlapping_names { "Show" } else { "Hide" }),
         30 => wide(match c.text {
             render::ui::TextFilter::Sharp => "Sharp",
             render::ui::TextFilter::Smooth => "Smooth",
@@ -1586,7 +1594,16 @@ mod tests {
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         assert_eq!((settings::client().name_distance, cues.last()), (200, Some(&9)), "its end");
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (3, Some(&9)), "Characters' last row");
+        assert_eq!(w.item, 34, "Overlapping Names");
+        assert!(!settings::overlapping_names(), "Hide: the game's");
+        assert_eq!(value_text(&vui, 34), Some(wide("Hide")));
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::overlapping_names(), cues.last()), (true, Some(&11)), "Show");
+        assert_eq!(value_text(&vui, 34), Some(wide("Show")));
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(!settings::overlapping_names(), "and back: two values");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (4, Some(&9)), "Characters' last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         // Sound: Sound in Background
         press(&mut w, &mut o, key::DOWN, &mut cues);
