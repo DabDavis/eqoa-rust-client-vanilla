@@ -2405,6 +2405,8 @@ impl Play {
             }
         }
         self.agree_entity_view();
+        // Mana Bars: a server that offers others' power told whether to send it
+        self.session.agree_power_bars(crate::settings::client().mana_bars);
         self.drop_dead_target_info();
         if self.has_self() {
             self.auto_attack_tick(walker, now);
@@ -3149,15 +3151,35 @@ impl Play {
     /// in a fight), so a creature shows none; go-eqoa-server counts object
     /// ids per session, and there a player's is its own session's id.
     pub fn target_of_target(&self) -> Option<String> {
+        let t = self.target_of_target_id()?;
+        self.entities.slots.iter().flatten().find(|e| e.id == t)?.creature.as_ref().map(|c| c.name.clone()).filter(|n| !n.trim().is_empty())
+    }
+
+    /// Whom the target targets, as its channel says (Target of Target's
+    /// entity): none with the option off, without a target, or naming none
+    /// or itself.
+    fn target_of_target_id(&self) -> Option<u32> {
         if !crate::settings::client().target_of_target || self.target == u32::MAX {
             return None;
         }
-        let find = |id: u32| self.entities.slots.iter().flatten().find(|e| e.id == id);
-        let t = find(self.target)?.creature.as_ref()?.target;
-        if t == 0 || t == u32::MAX || t == self.target {
+        let t = self.entities.slots.iter().flatten().find(|e| e.id == self.target)?.creature.as_ref()?.target;
+        (t != 0 && t != u32::MAX && t != self.target).then_some(t)
+    }
+
+    /// Mana Bars (the Extended page's, the client's own): entity `id`'s power
+    /// of 255 for a bar under its health, the player's own off the stat
+    /// channel and anyone else's as the server last sent it
+    /// (`net::session::OP_POWER_BARS`: none from a server that sends none,
+    /// Sandstorm); none with the option off.
+    fn bar_power(&self, id: u32) -> Option<u8> {
+        if !crate::settings::client().mana_bars {
             return None;
         }
-        find(t)?.creature.as_ref().map(|c| c.name.clone()).filter(|n| !n.trim().is_empty())
+        if Some(id) == self.self_id32() {
+            let (p, top) = (self.stats.stat[9] as i64, self.stats.stat[10] as i64);
+            return (top > 0).then(|| (p.clamp(0, top) * 255 / top) as u8);
+        }
+        self.session.power_of(id)
     }
 
     /// `FindEntity(m_selfId)`: the player's own entity is in.
@@ -6854,6 +6876,9 @@ impl Play {
             target_info: self.target_info,
             self_targeted_flag: Some(self.target) == me && self.dump.player.p2c > 0,
             target_of_target: self.target_of_target(),
+            target_power: target.and_then(|e| self.bar_power(e.id)),
+            tot_hp: self.target_of_target_id().and_then(|t| find(Some(t))).map(|e| e.p19),
+            tot_power: self.target_of_target_id().and_then(|t| self.bar_power(t)),
             pet,
             group_count: self.group.count() as i32,
             group: self.group.members[..self.group.count()]
@@ -6861,7 +6886,7 @@ impl Play {
                 .filter(|m| Some(m.id) != me && m.active)
                 .map(|m| {
                     let flags = find(Some(m.id)).and_then(|e| e.creature.as_ref()).map_or(0, |c| c.flags262);
-                    crate::hud::MemberState { id: m.id, name: m.name.clone(), is_target: m.id == self.target, hp: (m.hp_known != 0).then_some((m.hp, flags & 4 != 0, flags & 8 != 0)) }
+                    crate::hud::MemberState { id: m.id, name: m.name.clone(), is_target: m.id == self.target, hp: (m.hp_known != 0).then_some((m.hp, flags & 4 != 0, flags & 8 != 0)), power: self.bar_power(m.id) }
                 })
                 .collect(),
             patches: self.group.members[..self.group.count()]

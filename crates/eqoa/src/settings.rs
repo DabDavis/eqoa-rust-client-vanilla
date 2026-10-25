@@ -568,6 +568,12 @@ pub struct ClientOptions {
     /// default): the target's bar shows whom the target is targeting, as its
     /// channel says (`Play::target_of_target`)
     pub target_of_target: bool,
+    /// Mana Bars (a player's request, the user's option, on by default):
+    /// a power gauge under the health of each group member, the target and
+    /// the target of target, from a server that sends others' power
+    /// (`net::session::OP_POWER_BARS`; the game shows only the player's
+    /// own); none where none is sent (Sandstorm).
+    pub mana_bars: bool,
     /// Mipmaps: on, the textures' mip levels sampled as the GS samples them
     /// (`render::gs_lod_k`: the level by depth, blended), which is how the
     /// game is drawn; off, every texel off the base level, sharper and
@@ -657,6 +663,7 @@ impl Default for ClientOptions {
             shouts: true,
             update_notices: true,
             target_of_target: false,
+            mana_bars: true,
             text: render::ui::TextFilter::Sharp,
             mipmaps: true,
             flora: true,
@@ -675,7 +682,8 @@ impl ClientOptions {
     /// only when off, Ability Bars, NPC/PC Display, NPC/PC Distance and
     /// Name Distance only when not the game's, Overlapping Names only when
     /// Show, Art only when it is the 2002 disc's, VSync, Shouts and Update
-    /// Notices only when off, Target of Target only when on, Text only when
+    /// Notices only when off, Target of Target only when on, Mana Bars only
+    /// when off, Text only when
     /// Smooth, and Output Device only when a device is chosen (by its name).
     pub fn to_text(self) -> String {
         let mut s = format!("lod={}\nbrightness={}\ncamera_distance={}\n", if self.lod { "on" } else { "off" }, self.brightness, self.camera_distance);
@@ -730,6 +738,10 @@ impl ClientOptions {
         // Target of Target only when on
         if self.target_of_target {
             s.push_str("target_of_target=on\n");
+        }
+        // Mana Bars only when off
+        if !self.mana_bars {
+            s.push_str("mana_bars=off\n");
         }
         if self.text == render::ui::TextFilter::Smooth {
             s.push_str("text=smooth\n");
@@ -803,6 +815,8 @@ impl ClientOptions {
                 ("overlapping_names", "hide") => c.overlapping_names = false,
                 ("target_of_target", "on") => c.target_of_target = true,
                 ("target_of_target", "off") => c.target_of_target = false,
+                ("mana_bars", "on") => c.mana_bars = true,
+                ("mana_bars", "off") => c.mana_bars = false,
                 ("text", "sharp") => c.text = render::ui::TextFilter::Sharp,
                 ("text", "smooth") => c.text = render::ui::TextFilter::Smooth,
                 ("mipmaps", "on") => c.mipmaps = true,
@@ -1132,7 +1146,7 @@ pub fn describe() -> String {
         FrameRate::Display => "the display's",
     };
     format!(
-        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, output device {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, overlapping names {}, art {}, update notices {}, shouts {}, target of target {}, text {}, mipmaps {}, flora {}, environment {}, loading screens {}; {}",
+        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, output device {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, overlapping names {}, art {}, update notices {}, shouts {}, target of target {}, mana bars {}, text {}, mipmaps {}, flora {}, environment {}, loading screens {}; {}",
         if c.lod { "on" } else { "off" },
         c.brightness,
         c.fog,
@@ -1159,6 +1173,7 @@ pub fn describe() -> String {
         if c.update_notices { "on" } else { "off" },
         if c.shouts { "heard" } else { "ignored (kept)" },
         if c.target_of_target { "on" } else { "off" },
+        if c.mana_bars { "on" } else { "off" },
         match c.text {
             render::ui::TextFilter::Sharp => "sharp",
             render::ui::TextFilter::Smooth => "smooth",
@@ -1646,7 +1661,7 @@ mod tests {
             "Screen Shake only off, Capture Controller only on"
         );
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, overlapping names hide, art frontiers, update notices on, shouts heard, target of target off, text sharp, mipmaps on, flora on, environment on, loading screens longer; kept in the page's storage");
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, overlapping names hide, art frontiers, update notices on, shouts heard, target of target off, mana bars on, text sharp, mipmaps on, flora on, environment on, loading screens longer; kept in the page's storage");
         testing::reset(true);
         assert!(describe().ends_with("refused: nothing is kept"));
         testing::reset(false);
@@ -1677,6 +1692,19 @@ mod tests {
         assert!(!ClientOptions::from_text("mipmaps=off").mipmaps && ClientOptions::from_text("mipmaps=on").mipmaps);
         for bad in ["mipmaps=0", "mipmaps=no", "mipmaps="] {
             assert!(ClientOptions::from_text(bad).mipmaps, "{bad}: on, the default");
+        }
+    }
+
+    /// Mana Bars, on by default, kept only when off; anything but on or off
+    /// leaves it on.
+    #[test]
+    fn mana_bars_kept_only_when_off() {
+        assert!(ClientOptions::default().mana_bars, "on by default");
+        assert_eq!(ClientOptions { mana_bars: false, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nmana_bars=off\n");
+        assert!(!ClientOptions::from_text("mana_bars=off").mana_bars);
+        assert!(ClientOptions::from_text("mana_bars=on") == ClientOptions::default());
+        for bad in ["mana_bars=0", "mana_bars=no", "mana_bars="] {
+            assert!(ClientOptions::from_text(bad).mana_bars, "{bad}: on, the default");
         }
     }
 

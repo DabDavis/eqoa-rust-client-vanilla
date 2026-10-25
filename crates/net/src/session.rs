@@ -54,6 +54,18 @@ pub const EXPANSION_FLAGS: u32 = 3;
 /// for it (its dispatcher has no default), so a PS2 ignores the offer, and
 /// nothing is sent to a server that made none.
 pub const OP_ENTITY_VIEW: u16 = 0x7E00;
+/// go-eqoa-server's own, no retail message: others' power, for the bars the
+/// client draws under its group's, its target's and their target's health
+/// (the game shows no one's but the player's own). A u32 after the opcode,
+/// both ways: the server offers it (1) once the player is in the world, the
+/// client answers 1 to have it and 0 to stop (`agree_power_bars`). A PS2
+/// ignores the offer, as it does [`OP_ENTITY_VIEW`]'s; nothing is asked of a
+/// server that made none.
+pub const OP_POWER_BARS: u16 = 0x7E01;
+/// The power, from a server the client asked ([`OP_POWER_BARS`]): a u8
+/// count, then each a u32 id (as this client knows the entity) and a u8
+/// power of 255. Each is the whole set: an id it leaves out has no bar.
+pub const OP_POWER_BARS_DATA: u16 = 0x7E02;
 
 #[derive(Clone, Debug)]
 pub struct Shard {
@@ -279,6 +291,13 @@ pub struct Session {
     /// offered on this connection ([`OP_ENTITY_VIEW`]); none from one that
     /// never does (every retail server, Sandstorm's too).
     pub entity_view_offer: Option<(u32, u32)>,
+    /// Whether the server offered others' power on this connection
+    /// ([`OP_POWER_BARS`]), what it was last told (none since the offer),
+    /// and the set it last sent ([`OP_POWER_BARS_DATA`]: ids and power of
+    /// 255).
+    pub power_bars_offer: bool,
+    power_bars_asked: Option<bool>,
+    pub power_bars: Vec<(u32, u8)>,
     user: String,
     token: [u8; 32],
     start: Instant,
@@ -342,6 +361,9 @@ impl Session {
             self_id: None,
             expansion: 0,
             entity_view_offer: None,
+            power_bars_offer: false,
+            power_bars_asked: None,
+            power_bars: Vec::new(),
             user: user.to_string(),
             token,
             start: Instant::now(),
@@ -447,6 +469,29 @@ impl Session {
         let mut w = Writer::op(OP_ENTITY_VIEW);
         w.u32(slots).u32(view);
         self.send(&w.data);
+    }
+
+    /// Mana Bars: a server that offered others' power ([`OP_POWER_BARS`])
+    /// is told whether to send it (`want`), at once and whenever that
+    /// changes; one that made no offer is told nothing. Off, the set it
+    /// sent is forgotten.
+    pub fn agree_power_bars(&mut self, want: bool) {
+        if !want {
+            self.power_bars.clear();
+        }
+        if !self.power_bars_offer || self.power_bars_asked == Some(want) {
+            return;
+        }
+        self.power_bars_asked = Some(want);
+        let mut w = Writer::op(OP_POWER_BARS);
+        w.u32(want as u32);
+        self.send(&w.data);
+    }
+
+    /// The power of 255 the server last sent for entity `id`
+    /// ([`OP_POWER_BARS_DATA`]), if it sent one.
+    pub fn power_of(&self, id: u32) -> Option<u8> {
+        self.power_bars.iter().find(|&&(i, _)| i == id).map(|&(_, p)| p)
     }
 
     pub fn send_op_byte(&mut self, op: u16, v: u8) {
@@ -633,6 +678,9 @@ impl Session {
                 self.conn = m.connection;
                 self.self_id = None;
                 self.entity_view_offer = None;
+                self.power_bars_offer = false;
+                self.power_bars_asked = None;
+                self.power_bars.clear();
                 ev.push(Event::Promoted);
             }
             drdp::TYPE_DISCONNECT => {
@@ -668,6 +716,22 @@ impl Session {
                 let view = r.u32();
                 if !r.error {
                     self.entity_view_offer = Some((slots, view));
+                }
+            }
+            OP_POWER_BARS => {
+                // an offer (again at every world entry): told afresh what
+                // the client wants, the server's player being a new one
+                r.u32();
+                if !r.error {
+                    self.power_bars_offer = true;
+                    self.power_bars_asked = None;
+                }
+            }
+            OP_POWER_BARS_DATA => {
+                let n = r.u8() as usize;
+                let set: Vec<(u32, u8)> = (0..n).map(|_| (r.u32(), r.u8())).collect();
+                if !r.error {
+                    self.power_bars = set;
                 }
             }
             0x0013 => {
@@ -1375,6 +1439,54 @@ mod tests {
 
         deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
         assert_eq!(s.entity_view_offer, None, "a new connection, no offer yet");
+    }
+
+    // go-eqoa-server's 0x7E01 offer: nothing is asked before it, the answer
+    // goes once for each change of mind (1 to have the power, 0 to stop), and
+    // a new offer (a world entry) is answered afresh. Its 0x7E02 set replaces
+    // the last whole; a short one is not taken; off, or on a new connection,
+    // there is none.
+    #[test]
+    fn power_bars_offer_answer_and_set() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(_, d)| d.starts_with(&[0x01, 0x7E])).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        s.agree_power_bars(true);
+        assert_eq!(answers(&mut s), [], "no offer, nothing asked");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x01, 0x7E, 1, 0, 0, 0]);
+        assert!(ev.is_empty(), "{ev:?}");
+        assert!(s.power_bars_offer);
+        s.agree_power_bars(true);
+        s.agree_power_bars(true);
+        assert_eq!(answers(&mut s), [(251, vec![0x01, 0x7E, 1, 0, 0, 0])], "asked once");
+        s.agree_power_bars(false);
+        assert_eq!(answers(&mut s), [(251, vec![0x01, 0x7E, 0, 0, 0, 0])], "and stopped");
+        s.agree_power_bars(true);
+        assert_eq!(answers(&mut s), [(251, vec![0x01, 0x7E, 1, 0, 0, 0])]);
+
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x02, 0x7E, 2, 0xA1, 0x86, 1, 0, 63, 0xEA, 3, 0, 0x7F, 255]);
+        assert!(ev.is_empty(), "{ev:?}");
+        assert_eq!((s.power_of(100001), s.power_of(0x7F0003EA), s.power_of(100002)), (Some(63), Some(255), None));
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x02, 0x7E, 2, 0xA1, 0x86, 1, 0, 9]);
+        assert_eq!(s.power_of(100001), Some(63), "a short set is not taken");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x02, 0x7E, 1, 0xA2, 0x86, 1, 0, 9]);
+        assert_eq!((s.power_of(100001), s.power_of(100002)), (None, Some(9)), "each set is the whole set");
+
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x01, 0x7E, 1, 0, 0, 0]);
+        s.agree_power_bars(true);
+        assert_eq!(answers(&mut s), [(251, vec![0x01, 0x7E, 1, 0, 0, 0])], "a new offer, asked again");
+        s.agree_power_bars(false);
+        assert_eq!(s.power_of(100002), None, "off: the set forgotten");
+
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert!(!s.power_bars_offer && s.power_bars.is_empty(), "a new connection, no offer yet");
+        s.agree_power_bars(true);
+        assert_eq!(answers(&mut s), [], "and nothing asked");
     }
 
     // Msg000D's world entry is ONE datagram, as every PS2 capture's is: 0x0014,
