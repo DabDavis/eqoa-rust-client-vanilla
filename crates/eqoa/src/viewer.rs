@@ -1527,6 +1527,22 @@ impl Gfx {
 /// be skipped.
 const HIDDEN_GAP: std::time::Duration = std::time::Duration::from_millis(33);
 
+/// When a window that gave nothing to draw on takes its next frame
+/// (`HIDDEN_GAP`); a hidden page's come from its ticker at that rate
+/// (`web::hidden_tick`), none held back.
+fn hidden_gap() -> Option<Instant> {
+    (!page_hidden()).then(|| Instant::now() + HIDDEN_GAP)
+}
+
+/// Whether the window is a page that is hidden (`web::page_hidden`): its
+/// frames are drawn on nothing, as a covered window's.
+fn page_hidden() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    return crate::web::page_hidden();
+    #[cfg(not(target_arch = "wasm32"))]
+    false
+}
+
 /// `EQOA_PERF=1` (in a page, `?perf`): each frame's CPU time by phase,
 /// summed over five seconds and printed; `EQOA_QUIT=<s>` ends the run after
 /// that many seconds.
@@ -1840,6 +1856,8 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
     #[cfg(target_arch = "wasm32")]
     {
         use winit::platform::web::EventLoopExtWebSys;
+        // a hidden page's frames come through it (`web::hidden_tick`)
+        crate::web::set_waker(event_loop.create_proxy());
         event_loop.spawn_app(app);
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -2680,11 +2698,11 @@ impl App {
             crate::report::draw(vui, &mut r);
         }
         g.set_title(title(None));
-        let covered = self.covered_script.iter().any(|&(a, b)| (a..b).contains(&now));
+        let covered = self.covered_script.iter().any(|&(a, b)| (a..b).contains(&now)) || page_hidden();
         let frame = match g.acquire(covered) {
             Ok(f) => f,
             Err(()) => {
-                self.hidden_until = Some(Instant::now() + HIDDEN_GAP);
+                self.hidden_until = hidden_gap();
                 return;
             }
         };
@@ -3694,6 +3712,19 @@ impl ApplicationHandler for App {
         }
     }
 
+    /// A hidden page's frame (`web::hidden_tick`): the frame an animation
+    /// frame would run, the window covered (`covered`): the game, its sound
+    /// and its network go on, nothing is drawn.
+    #[cfg(target_arch = "wasm32")]
+    fn user_event(&mut self, el: &ActiveEventLoop, _: ()) {
+        if !crate::web::page_hidden() {
+            return;
+        }
+        if let Some(id) = self.gfx.as_ref().map(|g| g.window.id()) {
+            self.window_event(el, id, WindowEvent::RedrawRequested);
+        }
+    }
+
     /// The loop ends (the window closed, a Quit, the update's restart): the
     /// window's place written if it changed (`winplace`), then its place
     /// among the client's windows let go (`multibox::leave`), before the
@@ -4458,11 +4489,11 @@ impl ApplicationHandler for App {
                     lights
                 });
                 let ms = self.clock.elapsed().as_millis() as i64;
-                let covered = self.covered_script.iter().any(|&(a, b)| (a..b).contains(&ms));
+                let covered = self.covered_script.iter().any(|&(a, b)| (a..b).contains(&ms)) || page_hidden();
                 let frame = match g.acquire(covered) {
                     Ok(f) => f,
                     Err(()) => {
-                        self.hidden_until = Some(Instant::now() + HIDDEN_GAP);
+                        self.hidden_until = hidden_gap();
                         return;
                     }
                 };

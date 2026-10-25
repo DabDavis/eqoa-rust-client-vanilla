@@ -38,6 +38,10 @@ held), 'rdrag X0 Y0 X1 Y1 [MS]' (the right), 'press X Y [left|right]' and
 navigator.getGamepads (the standard layout's indices: 0 A, 1 B, 2 X, 3 Y,
 4 LB, 5 RB, 6 LT, 7 RT, 8 Back, 9 Start, 10 L3, 11 R3, 12-15 the d-pad):
 'tap N [MS]', 'press N', 'release N', 'axes LX LY RX RY'.
+--hide SECONDS=DURATION puts another tab in front then, for DURATION seconds, so
+the page is hidden as a player's is when they switch tabs (no animation
+frames, its timers held back; with --headed the browser's own throttling,
+which headless may not do), then brings the page's tab back.
 --iso-2002 PATH puts the 2002 disc (EverQuest Online Adventures (USA),
 SLUS-20470) into the page's second input with the first, for the art on F9;
 --ask-2002 PATH answers the picker F9's ask opens in the game (the file
@@ -101,7 +105,7 @@ async def main(a):
                 await asyncio.sleep(0.1)
         req = urllib.request.Request(f"http://127.0.0.1:{a.port}/json/new?about:blank", method="PUT")
         target = json.load(urllib.request.urlopen(req))
-        return await drive(a, base, target["webSocketDebuggerUrl"])
+        return await drive(a, base, target["webSocketDebuggerUrl"], target["id"])
     finally:
         proc.terminate()
         try:
@@ -112,7 +116,7 @@ async def main(a):
             httpd.shutdown()
 
 
-async def drive(a, base, ws_url):
+async def drive(a, base, ws_url, target_id):
     async with websockets.connect(ws_url, max_size=1 << 28) as ws:
         seq = 0
         pending = {}
@@ -369,7 +373,18 @@ async def drive(a, base, ws_url):
         for s in a.type:
             t, text = s.split("=", 1)
             events.append((float(t), "type", os.environ.get(text[1:], "") if text.startswith("$") else text))
+        for s in a.hide:
+            t, dur = s.split("=", 1)
+            events.append((float(t), "hide", ""))
+            events.append((float(t) + float(dur), "unhide", ""))
         events.sort()
+        other = []  # the tab put in front of the page (--hide)
+
+        def devtools(path, method="GET"):
+            req = urllib.request.Request(f"http://127.0.0.1:{a.port}/json/{path}", method=method)
+            with urllib.request.urlopen(req) as r:
+                body = r.read()
+            return json.loads(body) if body.strip().startswith(b"{") else body
         deadline = t_click + a.timeout
         for t, kind, arg in events:
             while time.monotonic() < t_click + t:
@@ -378,6 +393,17 @@ async def drive(a, base, ws_url):
                 await asyncio.sleep(0.05)
             if kind == "shot":
                 await shoot(arg)
+            elif kind == "hide":
+                blank = devtools("new?about:blank", "PUT")
+                devtools(f"activate/{blank['id']}")
+                other.append(blank["id"])
+                out(f"hidden: another tab in front (page visibility {await js('document.visibilityState')})")
+            elif kind == "unhide":
+                devtools(f"activate/{target_id}")
+                if other:
+                    devtools(f"close/{other.pop()}")
+                await asyncio.sleep(0.5)
+                out(f"shown again (page visibility {await js('document.visibilityState')})")
             elif kind == "js":
                 out(f"js {arg[:60]} -> {await js(arg)}")
             elif kind == "touch":
@@ -439,6 +465,7 @@ if __name__ == "__main__":
     ap.add_argument("--gamepad", action="append", default=[], help="SECONDS=STEPS: a gamepad, through navigator.getGamepads")
     ap.add_argument("--mouse", action="append", default=[], help="SECONDS=STEPS: the mouse over the canvas")
     ap.add_argument("--start-when", help="a page expression, or line:TEXT for a console line: the events' seconds count from when it first holds ('line:the HUD is in')")
+    ap.add_argument("--hide", action="append", default=[], help="SECONDS=DURATION: another tab in front for DURATION seconds (the page hidden)")
     ap.add_argument("--final-shot")
     ap.add_argument("--until")
     ap.add_argument("--timeout", type=float, default=60)

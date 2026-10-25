@@ -586,6 +586,21 @@ game's clock runs on through it, as VITimer does (the viewer used to restart it,
 which put the creatures' animations before their start and panicked on a frame
 of -1).
 
+**A hidden page plays on.** A page behind another tab gets no animation frames,
+and the browser holds its timers back (Chromium: to once a second, then about
+once a minute after five minutes hidden), so the game stopped, its session sent
+nothing, and the server let it go after its 50 pings: a tab left for eleven
+minutes came back to "disconnected" (F3 20261025-175001). A worker's timer is not
+held back, so while the page is hidden `web/tick.js` ticks at the game's 30
+frames a second and each tick runs the frame an animation frame would
+(`web::hidden_tick`, a user event on the event loop), the window counted as
+covered: the game, its sound and its network go on and nothing is drawn, as a
+covered window's frames natively (`HIDDEN_GAP`). Measured in Chromium with
+another tab in front: 30.3 ticks a second through a 7-minute hide (no gap over
+76 ms) while the page's own timer fell to none; about a quarter of one core
+while hidden. A page the browser freezes or discards (a laptop asleep, low
+memory) runs nothing and still loses its session.
+
 **The 2002 art in a page.** The form has a second, optional input for the 2002 disc
 (EverQuest Online Adventures (USA), SLUS-20470), judged as it is picked by the
 client's own rules (`web::disc_2002` over `era::judge_listing`) and read a slice at a

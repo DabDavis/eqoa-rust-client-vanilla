@@ -1,6 +1,6 @@
 #!/bin/sh
 # The browser client: web/dist/ gets the page (index.html) and its build,
-# v/<build>/: main.js and report.js, the worker (unpack.js), the AudioWorklet
+# v/<build>/: main.js and report.js, the workers (unpack.js, tick.js), the AudioWorklet
 # (sound.js), the update notes (update-notes.md), eqoa.js and eqoa_bg.wasm (wasm-bindgen 0.2.129, the version
 # Cargo.lock pins: `cargo install wasm-bindgen-cli --version 0.2.129`), and
 # build.json. A build is named by the digest of its files, the page and the
@@ -24,7 +24,7 @@ if [ -n "$OPT" ]; then
     "$OPT" -O2 --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext --enable-mutable-globals \
         --enable-reference-types --enable-multivalue "$STAGE/eqoa_bg.wasm" -o "$STAGE/eqoa_bg.wasm"
 fi
-cp web/main.js web/report.js web/unpack.js web/sound.js "$STAGE/"
+cp web/main.js web/report.js web/unpack.js web/sound.js web/tick.js "$STAGE/"
 # the update notes: an open page of an older build shows the sections this
 # build's have and its own lack, with its Reload notice (main.js)
 cp UPDATE-NOTES.md "$STAGE/update-notes.md"

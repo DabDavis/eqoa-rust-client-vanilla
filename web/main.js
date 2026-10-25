@@ -5,7 +5,7 @@
 // override the defaults: ?relay=ws://127.0.0.1:8790&server=203.0.113.10 for a
 // local server. Reports, notices and what goes wrong are report.js's
 // (window.eqoaReport).
-import init, { boot, view, client_state, want_shot, crash_test, disc_id, disc_2002, update_notices } from './eqoa.js';
+import init, { boot, view, client_state, want_shot, crash_test, disc_id, disc_2002, update_notices, hidden_tick } from './eqoa.js';
 
 const $ = (id) => document.getElementById(id);
 // the client's own graphics line ("graphics: <adapter> (<backend>)"), for reports
@@ -689,11 +689,38 @@ $('report-gate').onclick = () => {
   if (report) report.open(e ? `The page said: ${e}` : '');
 };
 
+// ---- a hidden page: no animation frames come, and the browser holds the
+// page's timers back, so the game would stop and the server let its session
+// go (F3 20261025-175001). A worker's timer (tick.js) is not held back: while
+// the page is hidden it ticks at the game's 30 frames a second, and each tick
+// runs a frame of the game with nothing drawn (web::hidden_tick), its sound
+// and its network going on. A frozen page (the browser's own choice, on low
+// memory or a laptop asleep) runs nothing at all.
+
+window.eqoaHiddenTicks = 0;
+function hiddenTicker() {
+  let ticker;
+  try {
+    ticker = new Worker(new URL('tick.js', import.meta.url));
+  } catch (e) {
+    console.log(`no ticker for a hidden page (${e}): the game stops while the page is hidden`);
+    return;
+  }
+  ticker.onmessage = () => {
+    window.eqoaHiddenTicks++; // for web/pagetest.py
+    try { hidden_tick(); } catch { /* the client stopped: its crash report says so */ }
+  };
+  const tell = () => ticker.postMessage(document.hidden);
+  document.addEventListener('visibilitychange', tell);
+  tell();
+}
+
 checkGraphics();
 const ready = init({ module_or_path: wasmModule });
 ready.then(() => {
   clientReady = true;
   window.eqoaClient = { state: client_state, wantShot: want_shot, crashTest: crash_test };
+  hiddenTicker();
   status('ready');
 }).catch((e) => {
   status('could not load the client: ' + e);

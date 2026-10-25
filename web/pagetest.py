@@ -20,6 +20,9 @@ version.json under it:
   offer     a tab that died while shown is offered next visit; one hidden is
             not
   missing   a page whose build is gone says so in its status line
+  hidden    a hidden page's game is ticked at 30 frames a second (tick.js, a
+            worker's timer, which a hidden page's own are not), a shown one's
+            not at all
   disc      the disc is named when picked (with a second image in --other-iso)
   2002      the 2002 disc (--iso-2002) is taken in the second input, the
             Frontiers disc there refused; F9's ask opens its picker inside
@@ -361,6 +364,35 @@ async def tests(a, site, base, page):
     said = await page.until("document.getElementById('status').textContent.includes('did not load')", 10)
     check("a page whose build is gone says so", bool(said))
 
+    # ---- hidden: another tab in front (the browser's own hiding: no
+    # animation frames, the page's timers held back); the ticker runs the
+    # game while the page is hidden (web::hidden_tick), never while it is
+    # shown
+    def devtools(path, method="GET"):
+        with urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{a.port}/json/{path}", method=method)) as r:
+            body = r.read()
+        return json.loads(body) if body.strip().startswith(b"{") else body
+
+    await page.open(base + q)
+    ticks = "window.eqoaHiddenTicks"
+    t0 = await page.js(ticks)
+    await asyncio.sleep(1.5)
+    check("a shown page's game is not ticked (control)", await page.js(ticks) == t0 and await page.js("document.visibilityState") == "visible")
+    blank = devtools("new?about:blank", "PUT")
+    devtools(f"activate/{blank['id']}")
+    await asyncio.sleep(0.5)
+    t1 = await page.js(ticks)
+    await asyncio.sleep(3)
+    n = await page.js(ticks) - t1
+    vis = await page.js("document.visibilityState")
+    check("a hidden page's game is ticked at 30 frames a second", vis == "hidden" and 75 <= n <= 100, f"{vis}, {n} ticks in 3 s")
+    devtools(f"activate/{a.target_id}")
+    devtools(f"close/{blank['id']}")
+    await asyncio.sleep(0.5)
+    t2 = await page.js(ticks)
+    await asyncio.sleep(1.5)
+    check("shown again, the ticks stop", await page.js(ticks) == t2 and await page.js("document.visibilityState") == "visible")
+
     # ---- disc
     await page.open(base + q)
     await page.pick(a.iso)
@@ -450,6 +482,7 @@ async def main(a):
                 await asyncio.sleep(0.1)
         req = urllib.request.Request(f"http://127.0.0.1:{a.port}/json/new?about:blank", method="PUT")
         target = json.load(urllib.request.urlopen(req))
+        a.target_id = target["id"]
         async with websockets.connect(target["webSocketDebuggerUrl"], max_size=1 << 26) as ws:
             page = Page(ws)
             rt = asyncio.ensure_future(page.reader())
