@@ -9,36 +9,43 @@
 //! `game.opt`, here `settings::save`) and applies; Triangle on the menu puts
 //! every setting back as it was and applies.
 //!
-//! The client's own, beside the game's: an Extended page between Sound and
+//! The client's own, beside the game's: an Extended row between Sound and
 //! Save Changes (the menu a row longer), its words the client's (no
-//! WORDS.TXT entry): Level of Detail (On: the game's levels of an LOD body;
-//! Off: its near level out to its off distance, `lod.rs`), Brightness (a
-//! slider, `settings::curve`), Fog (a slider: the game's distance fog and
-//! far plane in the middle, off at the left, thicker to the right, `fog`),
-//! Frame Rate (30, 60 or the display's,
-//! `settings::frame_due`), Camera Distance (a slider: the follow orbit's
-//! zoom-out ceiling, 8 to 50, `camstyle`), Camera Turn Speed (a slider: how
-//! fast the stick and the keys turn the view, half to three times the
-//! game's, `camstyle::turn_speed`), Screen Shake, Controller Focus (which
-//! controllers this window reads: Auto, Window, Pad 1 to 4 or Off,
-//! `input::pick`, kept for each window of the client open, `multibox`; what
-//! it reads now is said beside Back), Capture Controller and Sound in
-//! Background (one setting for every window: off, a window not in front is
-//! not heard, `audio::set_heard`), Ability Bars (the game's 2, or 3 or 4:
-//! the HUD's quick menus and the spell book's slots, `hudmenu`), NPC/PC
-//! Display (a slider and its number: the NPCs and players kept in view, the
-//! game's 24 to 204 in eights, on a server that offers more) and NPC/PC View
-//! Distance (a slider and its number: how far they are drawn, the game's 100
-//! to 1000 in fifties, `lod::view_dist`, and looked for on a server that
-//! offers it; both told the server by `Play::agree_entity_view`, and in the
-//! world the legend says what this server gives while either is chosen) and
-//! Art (Frontiers' or the 2002 disc's, `era`, as F9 swaps it: drawn as it
-//! moves, the 2002 disc asked for the first time) and VSync (natively: a
-//! frame shown only at the display's refresh, or at once; `settings::vsync`,
-//! the surface's present mode in `viewer`),
-//! laid out and driven as the game's rows are, eight at a time (the page
-//! scrolls seven rows). They change as they are moved, Triangle on the menu
-//! puts them back, and Save Changes keeps them with the game's
+//! WORDS.TXT entry). It opens a menu of its own over the options menu, drawn
+//! as that one is: Video, UI, Controller, Camera, Characters and Sound
+//! (`CATEGORIES`), each of which opens a page laid out and driven as the
+//! game's pages are, short enough that none scrolls (`PAGE_MOST`):
+//! - Video: Brightness (a slider, `settings::curve`), Fog (a slider: the
+//!   game's distance fog and far plane in the middle, off at the left,
+//!   thicker to the right, `fog`), Frame Rate (30, 60 or the display's,
+//!   `settings::frame_due`), VSync (natively: a frame shown only at the
+//!   display's refresh, or at once; `settings::vsync`, the surface's present
+//!   mode in `viewer`) and Art (Frontiers' or the 2002 disc's, `era`, as F9
+//!   swaps it: drawn as it moves, the 2002 disc asked for the first time);
+//! - UI: Ability Bars (the game's 2, or 3 or 4: the HUD's quick menus and
+//!   the spell book's slots, `hudmenu`);
+//! - Controller: Controller Focus (which controllers this window reads:
+//!   Auto, Window, Pad 1 to 4 or Off, `input::pick`, kept for each window of
+//!   the client open, `multibox`; what it reads now is said beside Back) and
+//!   Capture Controller (one setting for every window);
+//! - Camera: Camera Distance (a slider: the follow orbit's zoom-out ceiling,
+//!   8 to 50, `camstyle`), Camera Turn Speed (a slider: how fast the stick
+//!   and the keys turn the view, half to three times the game's,
+//!   `camstyle::turn_speed`) and Screen Shake;
+//! - Characters: Level of Detail (On: the game's levels of an LOD body; Off:
+//!   its near level out to its off distance, `lod.rs`), NPC/PC Display (a
+//!   slider and its number: the NPCs and players kept in view, the game's 24
+//!   to 204 in eights, on a server that offers more) and NPC/PC View
+//!   Distance (a slider and its number: how far they are drawn, the game's
+//!   100 to 1000 in fifties, `lod::view_dist`, and looked for on a server
+//!   that offers it; both told the server by `Play::agree_entity_view`, and
+//!   in the world the legend says what this server gives while either is
+//!   chosen);
+//! - Sound: Sound in Background (one setting for every window: off, a window
+//!   not in front is not heard, `audio::set_heard`).
+//! Triangle goes back a step: a page to the categories, the categories to
+//! the options menu. They change as they are moved, Triangle on the options
+//! menu puts them back, and Save Changes keeps them with the game's
 //! (`client.opt`).
 //!
 //! The client's own Controls page after it (`bindpage`): every key and
@@ -242,11 +249,13 @@ pub struct WndOptions {
     page: i32,
     /// `m_row`: the page's row
     row: i32,
-    /// the Extended page's first row shown: it holds fifteen, eight at a time
-    ext_top: i32,
+    /// Extended's: the category whose page is open (`CATEGORIES`), none while
+    /// its menu of categories has the keys; and that menu's row
+    cat: Option<usize>,
+    cat_sel: i32,
     /// In the world, what this server gives (`Play::agree_entity_view` sets
-    /// it), the legend's while NPC/PC Display or View Distance is chosen;
-    /// none on the title
+    /// it), the Characters page's legend's while NPC/PC Display or View
+    /// Distance is chosen; none on the title
     pub server_note: Option<String>,
     /// `m_item`: what the page's row changes (set as the page is drawn)
     item: i32,
@@ -267,21 +276,24 @@ pub struct WndOptions {
     window: Window,
     window2: Window,
     window3: Window,
+    /// Extended's menu of categories, drawn as the options menu is, over it
+    window4: Window,
     /// the preview last asked for
     preview: Option<i32>,
-    /// what was drawn where, for a pointer: the menu's rows (their index),
-    /// a page's labels (10 + row), the left and right of its values (20 +
-    /// row, 30 + row); and when
+    /// what was drawn where, for a pointer: the menu's rows, or Extended's
+    /// categories (their index), a page's labels (`LABEL` + row), the left
+    /// and right of its values (`LABEL` + `HIT_ROWS` + row, `LABEL` + 2
+    /// `HIT_ROWS` + row); and when
     hits: Hits,
     now: i64,
 }
 
 impl WndOptions {
     /// A pointer at frame point `p` (`pointer`): the box's choices; a menu
-    /// row chosen at once (✕); a page's row reached with up and down, its
-    /// label then its value stepped on (right), left or right of a value's
-    /// middle (a slider's knob) left or right. Nothing while saving. The
-    /// keys to press.
+    /// row (the options menu's, or Extended's categories) chosen at once
+    /// (✕); a page's row reached with up and down, its label then its value
+    /// stepped on (right), left or right of a value's middle (a slider's
+    /// knob) left or right. Nothing while saving. The keys to press.
     pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
         if self.message.visible {
             return self.message.point(p).into_iter().collect();
@@ -295,8 +307,12 @@ impl WndOptions {
         let Some(h) = self.hits.at(p) else { return Vec::new() };
         let k = h % HIT_ROWS;
         if h < LABEL {
-            // the menu: `Prev`/`Next` start the tick's pulse over
-            self.sel = k;
+            // a menu: `Prev`/`Next` start the tick's pulse over
+            if self.page == 3 {
+                self.cat_sel = k;
+            } else {
+                self.sel = k;
+            }
             self.window.reset_tick_pulse(self.now);
             return vec![key::CROSS];
         }
@@ -324,6 +340,8 @@ impl WndOptions {
         self.edit = [(o.no_faction == 0) as u8, (o.no_loot == 0) as u8, o.auto_attack, o.vibration];
         self.sel = 0;
         self.page = -1;
+        self.cat = None;
+        self.cat_sel = 0;
         self.item = -1;
         self.save_count = 0;
         self.preview = None;
@@ -426,9 +444,19 @@ impl WndOptions {
         }
     }
 
+    /// The row up and down move: the options menu's, Extended's
+    /// categories', or a page's.
+    fn at(&mut self) -> &mut i32 {
+        match (self.page, self.cat) {
+            (-1, _) => &mut self.sel,
+            (3, None) => &mut self.cat_sel,
+            _ => &mut self.row,
+        }
+    }
+
     /// `Prev`.
     fn prev(&mut self, now: i64, cues: &mut Vec<i32>) {
-        let at = if self.page == -1 { &mut self.sel } else { &mut self.row };
+        let at = self.at();
         if *at > 0 {
             *at -= 1;
             self.window.reset_tick_pulse(now);
@@ -439,18 +467,22 @@ impl WndOptions {
     }
 
     /// `Next`: the last row of each page; Interface gains Vibration; the
-    /// menu's Extended and Controls are the client's.
+    /// menu's Extended and Controls are the client's, and so are Extended's
+    /// categories and their pages.
     fn next(&mut self, now: i64, cues: &mut Vec<i32>) {
-        let last = if self.page == -1 {
-            5
-        } else {
-            let mut last = [2, 3, 3, EXTENDED_ROWS.len() as i32 - 1];
-            if FEATURES & 0x100 != 0 {
-                last[1] = 4;
+        let last = match (self.page, self.cat) {
+            (-1, _) => 5,
+            (3, None) => CATEGORIES.len() as i32 - 1,
+            (3, Some(c)) => CATEGORIES[c].items.len() as i32 - 1,
+            (page, _) => {
+                let mut last = [2, 3, 3];
+                if FEATURES & 0x100 != 0 {
+                    last[1] = 4;
+                }
+                last[page as usize]
             }
-            last[self.page as usize]
         };
-        let at = if self.page == -1 { &mut self.sel } else { &mut self.row };
+        let at = self.at();
         if *at < last {
             *at += 1;
             self.window.reset_tick_pulse(now);
@@ -461,17 +493,19 @@ impl WndOptions {
     }
 
     /// `Decrement` (`d` -1) and `Increment` (1): the item's value; a volume
-    /// stops at its end with sound 9. Items 12 to 22 are the client's
-    /// Extended rows: Level of Detail, Screen Shake (18), Capture Controller
-    /// (19) and Sound in Background (21) turn over, Brightness, Fog (20), Camera Distance and
-    /// Camera Turn Speed (17) step as a volume does (stopping at their ends
-    /// with sound 9), Frame Rate goes round 30, 60 and the display's,
-    /// Controller Focus round its seven and Ability Bars (22) round 2, 3 and
-    /// 4 as Battle Music goes round its tracks; NPC/PC Display (23) steps by
-    /// eights from the game's 24 as a slider does, 200 to 204 its last, and
-    /// NPC/PC View Distance (24) by fifties from the game's 100 to 1000; Art
-    /// (25) and VSync (26) turn over, VSync natively only (a page's stays on
-    /// with sound 9: the browser paces it).
+    /// stops at its end with sound 9. Items from 12 on are the client's
+    /// Extended rows (`EXTENDED_ITEMS`): Level of Detail, Screen Shake (18),
+    /// Capture Controller (19) and Sound in Background (21) turn over,
+    /// Brightness (13), Fog (20), Camera Distance (15) and Camera Turn Speed
+    /// (17) step as a volume does (stopping at their ends with sound 9),
+    /// Frame Rate (14) goes round 30, 60 and the display's, Controller Focus
+    /// (16) round its seven and Ability Bars (22) round 2, 3 and 4 as Battle
+    /// Music goes round its tracks; NPC/PC Display (23) steps by eights from
+    /// the game's 24 as a slider does, 200 to 204 its last, and NPC/PC View
+    /// Distance (24) by fifties from the game's 100 to 1000; Art (25) and
+    /// VSync (26) turn over, VSync natively only (a page's stays on with
+    /// sound 9: the browser paces it). A slider (`slider_at`) makes its own
+    /// sound, as a volume does; every other row sound 11.
     fn change(&mut self, o: &mut GameOptions, d: i32, cues: &mut Vec<i32>, ups: &mut Vec<OptionsUp>) {
         let tracks = if FEATURES & 0x100 != 0 { 10 } else { 3 };
         let step = F::<Ee>::new(0.1);
@@ -512,7 +546,7 @@ impl WndOptions {
                 let at = all.iter().position(|&f| f == crate::settings::focus()).unwrap_or(0);
                 crate::settings::set_focus(all[(at + if d < 0 { all.len() - 1 } else { 1 }) % all.len()]);
             }
-            12..=15 | 17..=26 => {
+            item if extended(item) => {
                 let mut c = crate::settings::client();
                 // a slider's step, or sound 9 at its end
                 let mut slide = |v: &mut u8, lo: u8, hi: u8, by: u8| {
@@ -572,19 +606,20 @@ impl WndOptions {
                             cues.push(9);
                         }
                     }
-                    // 14, Frame Rate
-                    _ => {
+                    14 => {
                         let all = FrameRate::ALL;
                         let at = all.iter().position(|&r| r == crate::settings::frame_rate()).unwrap_or(0);
                         c.frame_rate = Some(all[(at + if d < 0 { all.len() - 1 } else { 1 }) % all.len()]);
                     }
+                    _ => {}
                 }
                 crate::settings::set_client(c);
             }
             _ => {}
         }
         let inert = self.item == 26 && cfg!(target_arch = "wasm32");
-        if !matches!(self.item, 3 | 4 | 13 | 15 | 17 | 20 | 23 | 24) && !inert && (0..=26).contains(&self.item) {
+        let slides = matches!(self.item, 3 | 4) || slider_at(self.item).is_some();
+        if !slides && !inert && ((0..=11).contains(&self.item) || extended(self.item)) {
             cues.push(11);
         }
         if d < 0 {
@@ -605,17 +640,26 @@ impl WndOptions {
     }
 
     /// `Select`: X on the menu opens a page (its window 440 wide, six to
-    /// eight rows, an empty title; the client's Extended nine, eight of its
-    /// rows and the legend, its Controls 600 wide over the middle of the
-    /// frame, as many rows as fit), or on Save Changes asks (true).
+    /// eight rows, an empty title; the client's Controls 600 wide over the
+    /// middle of the frame, as many rows as fit), the client's Extended its
+    /// menu of categories (a window as the menu's, titled Extended, over it)
+    /// and X there a category's page (`page_window`), or on Save Changes
+    /// asks (true).
     fn select(&mut self, vui: &Vui, r: &dyn Raster, cues: &mut Vec<i32>) -> bool {
+        if self.page == 3 && self.cat.is_none() {
+            cues.push(8);
+            let c = self.cat_sel.clamp(0, CATEGORIES.len() as i32 - 1) as usize;
+            self.cat = Some(c);
+            self.row = 0;
+            self.page_window(vui, r, CATEGORIES[c].items.len() as i32 + 3);
+            return false;
+        }
         if self.page != -1 {
             cues.push(9);
             return false;
         }
         cues.push(8);
         self.row = 0;
-        self.ext_top = 0;
         let rows = match self.sel {
             0 => 6,
             1 => {
@@ -626,7 +670,17 @@ impl WndOptions {
                 }
             }
             2 => 7,
-            3 => 9,
+            3 => {
+                self.page = 3;
+                self.cat = None;
+                self.cat_sel = 0;
+                // the menu's window (`open`) again, where it is
+                self.window4.close(true);
+                self.window4.init(vui, r, self.window.center, 300, 9, 0);
+                self.window4.open(false);
+                self.window4.set_title(Some(&wide(EXTENDED)));
+                return false;
+            }
             4 => {
                 self.page = 4;
                 self.controls.reset();
@@ -639,15 +693,21 @@ impl WndOptions {
             _ => return true,
         };
         self.page = self.sel;
+        self.page_window(vui, r, rows);
+        false
+    }
+
+    /// A page's window, 440 wide and `rows` high, an empty title bar, over
+    /// the menu's middle. One of more rows than the game's pages (eight: a
+    /// category of `PAGE_MOST`) goes without their empty title bar (six
+    /// pixels each way) and its top where theirs is, so the options window's
+    /// title tab above it still shows and its bottom stays clear of the
+    /// title's menu under it.
+    fn page_window(&mut self, vui: &Vui, r: &dyn Raster, rows: i32) {
         self.window2.close(true);
         self.window2.init(vui, r, self.window.center, 440, rows, 0);
         self.window2.open(false);
         if rows > 8 {
-            // the client's Extended page holds a row more than the game's
-            // pages (eight): it goes without their empty title bar (six
-            // pixels each way) and its top where theirs is, so the options
-            // window's title tab above it still shows and its bottom stays
-            // clear of the title's menu under it
             self.window2.set_title(None);
             let mut eight = Window::default();
             eight.init(vui, r, self.window.center, 440, 8, 0);
@@ -656,13 +716,17 @@ impl WndOptions {
         } else {
             self.window2.set_title(Some(&[]));
         }
-        false
     }
 
-    /// `Back`: Triangle on a page goes back to the menu; on the menu, true
-    /// to close.
+    /// `Back`: Triangle on a page goes back to the menu (on a category's,
+    /// to Extended's categories, and from there to the menu); on the menu,
+    /// true to close.
     fn back(&mut self, cues: &mut Vec<i32>) -> bool {
         cues.push(8);
+        if self.page == 3 && self.cat.is_some() {
+            self.cat = None;
+            return false;
+        }
         if self.page >= 0 {
             self.page = -1;
             return false;
@@ -690,12 +754,23 @@ impl WndOptions {
             });
             self.preview = want;
         }
-        self.draw_menu(vui, r);
+        // Extended's categories stand in the menu's place (its window, where
+        // it is): the menu under them would show its words through theirs
+        if self.page == 3 {
+            self.item = -1;
+        } else {
+            self.draw_menu(vui, r);
+        }
         match self.page {
             0 => self.draw_game(vui, r, o),
             1 => self.draw_interface(vui, r, o),
             2 => self.draw_sound(vui, r, o),
-            3 => self.draw_extended(vui, r),
+            3 => {
+                self.draw_categories(vui, r);
+                if let Some(c) = self.cat {
+                    self.draw_category(vui, r, c);
+                }
+            }
             4 => self.controls.draw(vui, r, &mut self.window2, &mut self.controls_cues),
             _ => {}
         }
@@ -744,33 +819,26 @@ impl WndOptions {
 
     /// A page's rows: its labels, the tick, and each value in its frame
     /// (the arrows on the selected one); a value `None` is a slider drawn by
-    /// the caller. The game's pages start a row down (`first` 1).
+    /// the caller. The pages start a row down.
     fn draw_rows(&mut self, vui: &Vui, r: &mut dyn Raster, labels: &[Vec<u16>], values: &[Option<Vec<u16>>]) {
-        self.draw_rows_from(vui, r, labels, values, 1, 0);
-    }
-
-    /// `draw_rows` with the first label at row `first`, the page's rows from
-    /// `skip` on (a page that scrolls: the labels and values given are the
-    /// ones shown, the hits and the tick the page's own rows).
-    fn draw_rows_from(&mut self, vui: &Vui, r: &mut dyn Raster, labels: &[Vec<u16>], values: &[Option<Vec<u16>>], first: i32, skip: i32) {
         self.window2.draw(vui, r);
         let width = self.window2.size[0];
         for (k, label) in labels.iter().enumerate() {
-            let c = UI_COLORS[(self.row == k as i32 + skip) as usize];
-            self.window2.text_box(vui, r, label, 40, k as i32 + first, width - 80, 1, c, 0);
-            self.hits.push(rows_rect(&self.window2, vui, r, 40, k as i32 + first, width - 176 - 48, 1), LABEL + k as i32 + skip);
+            let c = UI_COLORS[(self.row == k as i32) as usize];
+            self.window2.text_box(vui, r, label, 40, k as i32 + 1, width - 80, 1, c, 0);
+            self.hits.push(rows_rect(&self.window2, vui, r, 40, k as i32 + 1, width - 176 - 48, 1), LABEL + k as i32);
         }
-        if (skip..skip + labels.len() as i32).contains(&self.row) {
-            self.window2.tick_r(vui, r, 36, self.row - skip + first, true);
+        if (0..labels.len() as i32).contains(&self.row) {
+            self.window2.tick_r(vui, r, 36, self.row + 1, true);
         }
         for (k, v) in values.iter().enumerate() {
             let Some(v) = v else { continue };
-            let row = k as i32 + first;
-            self.window2.draw_frame(vui, r, width - 176, row, 132, 1, if self.row == k as i32 + skip { 96 } else { 64 });
+            let row = k as i32 + 1;
+            self.window2.draw_frame(vui, r, width - 176, row, 132, 1, if self.row == k as i32 { 96 } else { 64 });
             self.window2.text_box(vui, r, v, width - 176, row, 132, 1, UI_COLORS[0], 8);
             // the frame's two halves (its side arrows are glyphs)
             let at = self.window2.top_left()[0] + width - 176;
-            self.halves(rows_rect(&self.window2, vui, r, width - 176, row, 132, 1), at - 4, at + 66, at + 136, k as i32 + skip);
+            self.halves(rows_rect(&self.window2, vui, r, width - 176, row, 132, 1), at - 4, at + 66, at + 136, k as i32);
         }
     }
 
@@ -832,120 +900,202 @@ impl WndOptions {
         self.back_legend(vui, r, 6);
     }
 
-    /// The client's Extended page, laid out as the Interface page is: Level
-    /// of Detail (the game's On and Off), Brightness and Fog (sliders as the
-    /// volumes are, and each side of a knob for a pointer), Frame Rate,
-    /// Camera Distance and Camera Turn Speed (sliders), Screen Shake,
-    /// Controller Focus (Off the game's word), Capture Controller, Sound in
-    /// Background, Ability Bars (how many), NPC/PC Display and NPC/PC View
-    /// Distance (sliders, each number before it), Art and VSync (natively;
-    /// a page's shows On, the browser pacing it); under them, beside the Back
-    /// legend, what this window reads (`input::reads`), or with one of the
-    /// last two chosen in the world, what this server gives.
-    /// Its rows and the legend are more than the game's pages hold (seven and
-    /// the legend under an empty row): they start at the top row, with the
-    /// legend's row shared, so the page is no taller than nine rows
-    /// (`select`) and clears the options window's title tab and the title's
-    /// menu under it; eight rows show at a time, the selected one among them,
-    /// with a scroll bar down the right as the Controls page has.
-    fn draw_extended(&mut self, vui: &Vui, r: &mut dyn Raster) {
-        self.item = [12, 13, 20, 14, 15, 17, 18, 16, 19, 21, 22, 23, 24, 25, 26].get(self.row as usize).copied().unwrap_or(self.item);
-        let n = EXTENDED_ROWS.len() as i32;
-        if self.row < self.ext_top {
-            self.ext_top = self.row;
-        } else if self.row >= self.ext_top + EXTENDED_SHOWN {
-            self.ext_top = self.row - EXTENDED_SHOWN + 1;
+    /// Extended's menu: its categories, the selected one lit, and the
+    /// legend, laid out as the options menu is (`draw_menu`) in a window as
+    /// its (`select`), over it; its rows answer a pointer only while it has
+    /// the keys (no category's page open).
+    fn draw_categories(&mut self, vui: &Vui, r: &mut dyn Raster) {
+        self.window4.draw(vui, r);
+        let width = self.window4.size[0];
+        for (k, c) in CATEGORIES.iter().enumerate() {
+            let on = self.cat_sel == k as i32;
+            let s = if on { format!("|q{}|w", c.name) } else { c.name.to_string() };
+            self.window4.text_box(vui, r, &wide(&s), 40, k as i32 + 1, width - 80, 1, UI_COLORS[on as usize], 8);
+            if self.cat.is_none() {
+                self.hits.push(rows_rect(&self.window4, vui, r, 40, k as i32 + 1, width - 80, 1), k as i32);
+            }
         }
-        self.ext_top = self.ext_top.clamp(0, (n - EXTENDED_SHOWN).max(0));
-        let top = self.ext_top;
-        let c = crate::settings::client();
-        let on_off = |on: bool| wide(vui.words.get(if on { 551 } else { 552 }, vui.language));
-        let lod = on_off(c.lod);
-        let rate = match crate::settings::frame_rate() {
-            FrameRate::Thirty => "30",
-            FrameRate::Sixty => "60",
-            FrameRate::Display => "Display",
-        };
-        let focus = match crate::settings::focus() {
-            Focus::Off => vui.words.get(552, vui.language).to_string(),
-            f => crate::input::focus_name(f),
-        };
-        let art = match c.art {
-            esf::Era::Frontiers => "Frontiers",
-            esf::Era::Y2002 => "2002",
-        };
-        let values = [
-            Some(lod),
-            None,
-            None,
-            Some(wide(rate)),
-            None,
-            None,
-            Some(on_off(c.screen_shake)),
-            Some(wide(&focus)),
-            Some(on_off(c.capture)),
-            Some(on_off(c.background_sound)),
-            Some(wide(&c.ability_bars.to_string())),
-            None,
-            None,
-            Some(wide(art)),
-            Some(on_off(crate::settings::vsync())),
-        ];
-        let shown = top as usize..(top + EXTENDED_SHOWN).min(n) as usize;
-        let labels: Vec<Vec<u16>> = EXTENDED_ROWS[shown.clone()].iter().map(|l| wide(l)).collect();
-        self.draw_rows_from(vui, r, &labels, &values[shown], 0, top);
+        let w = |id: i32| vui.words.get(id, vui.language);
+        let legend = wide(&format!("|x {}   |t {}", w(212), w(750)));
+        self.window4.text(vui, r, &legend, 40, 8, UI_COLORS[0], 0);
+    }
+
+    /// A category's page (`CATEGORIES`), laid out as the game's pages are (a
+    /// row down, the legend two under the last): each row's label, its value
+    /// in its frame (`value_text`) or its slider (`slider_at`: each side of
+    /// the knob for a pointer, and a number before it where it has one);
+    /// under them the Back legend and, beside it, the category's note
+    /// (`Note`).
+    fn draw_category(&mut self, vui: &Vui, r: &mut dyn Raster, c: usize) {
+        let cat = &CATEGORIES[c];
+        self.item = cat.items.get(self.row as usize).copied().unwrap_or(self.item);
+        let labels: Vec<Vec<u16>> = cat.items.iter().map(|&i| wide(label_of(i))).collect();
+        let values: Vec<Option<Vec<u16>>> = cat.items.iter().map(|&i| value_text(vui, i)).collect();
+        self.draw_rows(vui, r, &labels, &values);
         let width = self.window2.size[0];
         let knob = vui.entry(166).uv1[0];
         let at = self.window2.top_left()[0] + width - 180;
-        let fog = c.fog as f32 / crate::fog::STEPS as f32;
-        let camera = (c.camera_distance - CAMERA_MIN) as f32 / (CAMERA_MAX - CAMERA_MIN) as f32;
-        let turn = (c.camera_turn - TURN_MIN) as f32 / (TURN_MAX - TURN_MIN) as f32;
-        let slots = (c.entity_slots - ENTITY_SLOTS_GAME) as f32 / (ENTITY_SLOTS_MAX - ENTITY_SLOTS_GAME) as f32;
-        let view = (c.entity_view - ENTITY_VIEW_GAME) as f32 / (ENTITY_VIEW_MAX - ENTITY_VIEW_GAME) as f32;
-        for (k, t) in [(1, c.brightness as f32 / BRIGHTNESS_STEPS as f32), (2, fog), (4, camera), (5, turn), (11, slots), (12, view)] {
-            if !(top..top + EXTENDED_SHOWN).contains(&k) {
-                continue;
-            }
-            self.window2.draw_hscroll(vui, r, width - 180, k - top, 140, t, if self.row == k { 32 } else { 0 });
-            let mid = at + (t * (140 - knob) as f32) as i32 + knob / 2;
-            self.halves(rows_rect(&self.window2, vui, r, width - 180, k - top, 140, 1), at - 4, mid, at + 144, k);
-        }
-        // NPC/PC Display's and View Distance's numbers, before their sliders'
-        // left arrows
+        // a number ends before its slider's left arrow
         let end = width - 180 - (vui.entry(128).uv1[0] + 3) - 6;
-        for (k, n) in [(11, c.entity_slots as u16), (12, c.entity_view)] {
-            if (top..top + EXTENDED_SHOWN).contains(&k) {
-                self.window2.text_box(vui, r, &wide(&n.to_string()), 40, k - top, end - 40, 1, UI_COLORS[(self.row == k) as usize], 0x10);
+        for (k, &item) in cat.items.iter().enumerate() {
+            let Some((t, number)) = slider_at(item) else { continue };
+            let k = k as i32;
+            self.window2.draw_hscroll(vui, r, width - 180, k + 1, 140, t, if self.row == k { 32 } else { 0 });
+            let mid = at + (t * (140 - knob) as f32) as i32 + knob / 2;
+            self.halves(rows_rect(&self.window2, vui, r, width - 180, k + 1, 140, 1), at - 4, mid, at + 144, k);
+            if let Some(n) = number {
+                self.window2.text_box(vui, r, &wide(&n.to_string()), 40, k + 1, end - 40, 1, UI_COLORS[(self.row == k) as usize], 0x10);
             }
         }
-        // the scroll bar, as the Controls page's
-        if n > EXTENDED_SHOWN {
-            let h = vui.font_height(r) - 4;
-            let y = self.window2.row_center(vui, r, 0)[1] - 4;
-            let t = top as f32 / (n - EXTENDED_SHOWN) as f32;
-            self.window2.draw_vscroll(vui, r, [self.window2.top_left()[0] + width - 24, y - 3], EXTENDED_SHOWN * h + 4, t);
-        }
-        // the legend, and what this window reads at the row's right
-        let legend = EXTENDED_SHOWN;
+        let legend = cat.items.len() as i32 + 2;
         self.back_legend(vui, r, legend);
-        let after = 40 + self.window2.text_width(vui, r, &wide(&format!("|t {}", vui.words.get(750, vui.language)))) + 16;
-        let note = match &self.server_note {
-            Some(n) if matches!(self.row, 11 | 12) => n.clone(),
-            _ => crate::input::reads(),
-        };
-        self.window2.text_box(vui, r, &wide(&note), after, legend, width - 40 - after, 1, UI_COLORS[0], 0x10 | 2);
+        if let Some(note) = self.page_note(c) {
+            let after = 40 + self.window2.text_width(vui, r, &wide(&format!("|t {}", vui.words.get(750, vui.language)))) + 16;
+            self.window2.text_box(vui, r, &wide(&note), after, legend, width - 40 - after, 1, UI_COLORS[0], 0x10 | 2);
+        }
+    }
+
+    /// What category `c`'s page says beside its Back legend (`Note`), its
+    /// row being the one drawn last (`item`).
+    fn page_note(&self, c: usize) -> Option<String> {
+        match CATEGORIES[c].note {
+            Note::Reads => Some(crate::input::reads()),
+            Note::Server => self.server_note.clone().filter(|_| matches!(self.item, 23 | 24)),
+            Note::None => None,
+        }
     }
 }
 
 /// The client's words for its own pages (no WORDS.TXT entry): the menu's
-/// rows and the Extended page's fifteen. (WORDS.TXT's "CONTROLS", 1039, is in
-/// capitals and used by none of the game's modules.)
+/// rows, Extended's categories and its rows (`EXTENDED_ITEMS`). (WORDS.TXT's
+/// "CONTROLS", 1039, is in capitals and used by none of the game's modules.)
 const EXTENDED: &str = "Extended";
 const CONTROLS: &str = "Controls";
-const EXTENDED_ROWS: [&str; 15] = ["Level of Detail", "Brightness", "Fog", "Frame Rate", "Camera Distance", "Camera Turn Speed", "Screen Shake", "Controller Focus", "Capture Controller", "Sound in Background", "Ability Bars", "NPC/PC Display", "NPC/PC View Distance", "Art", "VSync"];
-/// The Extended page's rows shown at a time: as many as nine rows' height
-/// holds with the legend's.
-const EXTENDED_SHOWN: i32 = 8;
+
+/// Extended's rows, by the item each changes (`change`), and their labels.
+/// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
+/// and shown on the page of the category that lists it (`CATEGORIES`).
+const EXTENDED_ITEMS: [(i32, &str); 15] = [
+    (12, "Level of Detail"),
+    (13, "Brightness"),
+    (14, "Frame Rate"),
+    (15, "Camera Distance"),
+    (16, "Controller Focus"),
+    (17, "Camera Turn Speed"),
+    (18, "Screen Shake"),
+    (19, "Capture Controller"),
+    (20, "Fog"),
+    (21, "Sound in Background"),
+    (22, "Ability Bars"),
+    (23, "NPC/PC Display"),
+    (24, "NPC/PC View Distance"),
+    (25, "Art"),
+    (26, "VSync"),
+];
+
+/// What a category's page says beside its Back legend.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Note {
+    None,
+    /// what this window reads (`input::reads`)
+    Reads,
+    /// what this server gives (`WndOptions::server_note`), while NPC/PC
+    /// Display or View Distance is chosen
+    Server,
+}
+
+/// One of Extended's categories: its name, its rows (their items, in the
+/// page's order) and its note.
+struct Category {
+    name: &'static str,
+    items: &'static [i32],
+    note: Note,
+}
+
+/// Extended's categories, in its menu's order (the user's: "Extended, then
+/// Video, UI, Controller, etc."), each a page of `PAGE_MOST` rows at most.
+const CATEGORIES: [Category; 6] = [
+    Category { name: "Video", items: &[13, 20, 14, 26, 25], note: Note::None },
+    Category { name: "UI", items: &[22], note: Note::None },
+    Category { name: "Controller", items: &[16, 19], note: Note::Reads },
+    Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
+    Category { name: "Characters", items: &[12, 23, 24], note: Note::Server },
+    Category { name: "Sound", items: &[21], note: Note::None },
+];
+
+/// The most rows a category's page holds: six and the legend are as tall as
+/// nine rows, the most the options window has room for (`page_window`), so
+/// no page scrolls.
+const PAGE_MOST: usize = 6;
+
+/// Whether every category's page holds its rows (`PAGE_MOST`).
+const fn fits(cats: &[Category]) -> bool {
+    let mut i = 0;
+    while i < cats.len() {
+        if cats[i].items.len() > PAGE_MOST {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+const _: () = assert!(fits(&CATEGORIES), "a category's page would scroll: give its rows another category");
+
+/// Whether `item` is one of Extended's rows.
+fn extended(item: i32) -> bool {
+    EXTENDED_ITEMS.iter().any(|&(i, _)| i == item)
+}
+
+/// An Extended row's label.
+fn label_of(item: i32) -> &'static str {
+    EXTENDED_ITEMS.iter().find(|&&(i, _)| i == item).map_or("", |&(_, l)| l)
+}
+
+/// An Extended row's value as its frame shows it; none for a slider
+/// (`slider_at`).
+fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
+    let c = crate::settings::client();
+    let on_off = |on: bool| wide(vui.words.get(if on { 551 } else { 552 }, vui.language));
+    Some(match item {
+        12 => on_off(c.lod),
+        14 => wide(match crate::settings::frame_rate() {
+            FrameRate::Thirty => "30",
+            FrameRate::Sixty => "60",
+            FrameRate::Display => "Display",
+        }),
+        16 => wide(&match crate::settings::focus() {
+            Focus::Off => vui.words.get(552, vui.language).to_string(),
+            f => crate::input::focus_name(f),
+        }),
+        18 => on_off(c.screen_shake),
+        19 => on_off(c.capture),
+        21 => on_off(c.background_sound),
+        22 => wide(&c.ability_bars.to_string()),
+        25 => wide(match c.art {
+            esf::Era::Frontiers => "Frontiers",
+            esf::Era::Y2002 => "2002",
+        }),
+        26 => on_off(crate::settings::vsync()),
+        _ => return None,
+    })
+}
+
+/// An Extended row's slider, if it is one: where its knob is (0 to 1), and
+/// the number shown before it where it has one.
+fn slider_at(item: i32) -> Option<(f32, Option<u16>)> {
+    let c = crate::settings::client();
+    let at = |v: f32, lo: f32, hi: f32| (v - lo) / (hi - lo);
+    Some(match item {
+        13 => (c.brightness as f32 / BRIGHTNESS_STEPS as f32, None),
+        20 => (c.fog as f32 / crate::fog::STEPS as f32, None),
+        15 => (at(c.camera_distance as f32, CAMERA_MIN as f32, CAMERA_MAX as f32), None),
+        17 => (at(c.camera_turn as f32, TURN_MIN as f32, TURN_MAX as f32), None),
+        23 => (at(c.entity_slots as f32, ENTITY_SLOTS_GAME as f32, ENTITY_SLOTS_MAX as f32), Some(c.entity_slots as u16)),
+        24 => (at(c.entity_view as f32, ENTITY_VIEW_GAME as f32, ENTITY_VIEW_MAX as f32), Some(c.entity_view)),
+        _ => return None,
+    })
+}
 
 /// A page's pointer notes (`point`): a menu row below `LABEL`, a row's label
 /// at `LABEL` + its row, its value's left half `HIT_ROWS` past that and its
@@ -1081,15 +1231,18 @@ mod tests {
         assert!(w.point(menu(&w, 1)).is_empty());
     }
 
-    /// The client's Extended page, by the pad: down three rows on the menu
-    /// and ✕; each row's left and right (Level of Detail turns over,
-    /// Brightness, Fog, Camera Distance and Camera Turn Speed stop at their
-    /// ends with sound 9, Frame Rate goes round from the platform's); the
-    /// page scrolls a row to show the last; Triangle on the menu puts them
-    /// back; Save Changes keeps them, and the game's, where nothing was kept
-    /// before (the control).
+    /// Extended by the pad: down three rows on the menu and ✕ opens its
+    /// categories (Video lit, left and right changing nothing there); ✕
+    /// opens a category's page on its first row, down walks its rows and
+    /// stops at its last with sound 9, Triangle goes back to the categories
+    /// and from them to the menu. Each row's left and right as it was on the
+    /// one page: Level of Detail turns over, Brightness, Fog, Camera Distance
+    /// and Camera Turn Speed stop at their ends with sound 9, Frame Rate goes
+    /// round from the platform's; Triangle on the menu puts them back; Save
+    /// Changes keeps them, and the game's, where nothing was kept before (the
+    /// control).
     #[test]
-    fn the_extended_page() {
+    fn the_extended_pages() {
         use crate::pointer::testing::{NullRaster, vui};
         use crate::settings::{self, testing};
         testing::reset(false);
@@ -1107,11 +1260,16 @@ mod tests {
         for k in [key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
             press(&mut w, &mut o, k, &mut cues);
         }
-        assert_eq!((w.sel, w.page, w.item), (3, 3, 12), "Extended, Level of Detail");
+        assert_eq!((w.sel, w.page, w.cat, w.cat_sel, w.item), (3, 3, None, 0, -1), "Extended's categories, Video lit");
         cues.clear();
         press(&mut w, &mut o, key::RIGHT, &mut cues);
-        assert!(!settings::client().lod);
-        press(&mut w, &mut o, key::DOWN, &mut cues);
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(cues.is_empty(), "left and right are nothing on the categories: {cues:?}");
+        assert_eq!(settings::client(), settings::ClientOptions::default());
+        // Video: Brightness, Fog, Frame Rate, VSync, Art
+        press(&mut w, &mut o, key::CROSS, &mut cues);
+        assert_eq!((w.page, w.cat, w.row, w.item), (3, Some(0), 0, 13), "Video, on Brightness");
+        assert_eq!(cues.last(), Some(&8));
         for _ in 0..6 {
             press(&mut w, &mut o, key::RIGHT, &mut cues);
         }
@@ -1135,6 +1293,7 @@ mod tests {
         }
         assert_eq!(settings::fog(), crate::fog::GAME);
         press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.item, 14, "Frame Rate");
         assert_eq!(settings::frame_rate(), FrameRate::Display, "the platform's");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         assert_eq!(settings::client().frame_rate, Some(FrameRate::Thirty), "round to 30");
@@ -1142,7 +1301,63 @@ mod tests {
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert_eq!(settings::client().frame_rate, Some(FrameRate::Sixty));
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!(w.item, 15, "Camera Distance");
+        assert_eq!(w.item, 26, "VSync");
+        assert!(settings::vsync(), "on: a frame only at the display's refresh");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::vsync(), cues.last()), (false, Some(&11)), "off");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(settings::vsync(), "and back: two values");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.item, 25, "Art");
+        assert_eq!(settings::art(), esf::Era::Frontiers, "Frontiers', the disc the game runs off");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::art(), cues.last()), (esf::Era::Y2002, Some(&11)), "the 2002 disc's");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert_eq!(settings::art(), esf::Era::Frontiers, "and back: two values");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (4, Some(&9)), "Video's last row");
+        press(&mut w, &mut o, key::TRIANGLE, &mut cues);
+        assert_eq!((w.page, w.cat, w.cat_sel, w.item), (3, None, 0, -1), "back to the categories, Video still lit");
+        // UI: Ability Bars
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        press(&mut w, &mut o, key::CROSS, &mut cues);
+        assert_eq!((w.cat, w.item), (Some(1), 22), "UI, Ability Bars");
+        assert_eq!(settings::ability_bars(), 2, "the game's two");
+        for want in [3, 4, 2] {
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
+            assert_eq!(settings::ability_bars(), want, "round 2, 3 and 4");
+        }
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert_eq!(settings::ability_bars(), 4, "and the other way");
+        assert_eq!(cues.last(), Some(&11));
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (0, Some(&9)), "UI's one row");
+        press(&mut w, &mut o, key::TRIANGLE, &mut cues);
+        // Controller: Controller Focus, Capture Controller
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        press(&mut w, &mut o, key::CROSS, &mut cues);
+        assert_eq!((w.cat, w.item), (Some(2), 16), "Controller, Controller Focus");
+        assert_eq!(settings::focus(), Focus::Auto);
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert_eq!(settings::focus(), Focus::Off, "round to Off");
+        for _ in 0..3 {
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
+        }
+        assert_eq!(settings::focus(), Focus::Pad(1), "Auto, Window, Pad 1");
+        assert_eq!(settings::client().controller[0], Focus::Pad(1), "the first window's: this one, with nowhere to take a place");
+        assert_eq!(cues.last(), Some(&11));
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.item, 19, "Capture Controller");
+        assert!(!settings::capture(), "off: every window on a pad reads it");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert!(settings::capture());
+        press(&mut w, &mut o, key::TRIANGLE, &mut cues);
+        // Camera: Camera Distance, Camera Turn Speed, Screen Shake
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        press(&mut w, &mut o, key::CROSS, &mut cues);
+        assert_eq!((w.cat, w.item), (Some(3), 15), "Camera, Camera Distance");
         for _ in 0..15 {
             press(&mut w, &mut o, key::RIGHT, &mut cues);
         }
@@ -1170,45 +1385,16 @@ mod tests {
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(settings::screen_shake(), "turned over again");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
+        press(&mut w, &mut o, key::TRIANGLE, &mut cues);
+        // Characters: Level of Detail, NPC/PC Display, NPC/PC View Distance
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!(w.item, 16, "Controller Focus");
-        assert_eq!(settings::focus(), Focus::Auto);
-        press(&mut w, &mut o, key::LEFT, &mut cues);
-        assert_eq!(settings::focus(), Focus::Off, "round to Off");
-        for _ in 0..3 {
-            press(&mut w, &mut o, key::RIGHT, &mut cues);
-        }
-        assert_eq!(settings::focus(), Focus::Pad(1), "Auto, Window, Pad 1");
-        assert_eq!(settings::client().controller[0], Focus::Pad(1), "the first window's: this one, with nowhere to take a place");
-        assert_eq!(cues.last(), Some(&11));
-        assert_eq!(w.ext_top, 0, "the first eight rows");
-        press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!(w.item, 19, "Capture Controller");
-        assert_eq!(w.ext_top, 1, "scrolled a row to show it");
-        assert!(!settings::capture(), "off: every window on a pad reads it");
+        press(&mut w, &mut o, key::CROSS, &mut cues);
+        assert_eq!((w.cat, w.item), (Some(4), 12), "Characters, Level of Detail");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
-        assert!(settings::capture());
-        press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!(w.item, 21, "Sound in Background");
-        assert_eq!(w.ext_top, 2, "scrolled another row");
-        assert!(settings::background_sound(), "on: a window behind others keeps its sound");
-        press(&mut w, &mut o, key::RIGHT, &mut cues);
-        assert!(!settings::background_sound());
-        assert_eq!(cues.last(), Some(&11));
-        press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!(w.item, 22, "Ability Bars");
-        assert_eq!(w.ext_top, 3, "scrolled a third row");
-        assert_eq!(settings::ability_bars(), 2, "the game's two");
-        for want in [3, 4, 2] {
-            press(&mut w, &mut o, key::RIGHT, &mut cues);
-            assert_eq!(settings::ability_bars(), want, "round 2, 3 and 4");
-        }
-        press(&mut w, &mut o, key::LEFT, &mut cues);
-        assert_eq!(settings::ability_bars(), 4, "and the other way");
+        assert!(!settings::client().lod);
         assert_eq!(cues.last(), Some(&11));
         press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!(w.item, 23, "NPC/PC Display");
-        assert_eq!(w.ext_top, 4, "scrolled a fourth row");
         assert_eq!(settings::entity_slots(), 24, "the game's 24");
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert_eq!((settings::entity_slots(), cues.last()), (24, Some(&9)), "no fewer than the game's");
@@ -1231,7 +1417,6 @@ mod tests {
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!(w.item, 24, "NPC/PC View Distance");
-        assert_eq!(w.ext_top, 5, "scrolled a fifth row");
         assert_eq!(settings::entity_view(), 100, "the game's 100");
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert_eq!((settings::entity_view(), cues.last()), (100, Some(&9)), "no nearer than the game's");
@@ -1243,35 +1428,56 @@ mod tests {
             press(&mut w, &mut o, key::RIGHT, &mut cues);
         }
         assert_eq!((settings::entity_view(), cues.last()), (1000, Some(&9)), "1000, then its end");
+        press(&mut w, &mut o, key::TRIANGLE, &mut cues);
+        // Sound: Sound in Background
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!(w.item, 25, "Art");
-        assert_eq!(w.ext_top, 6, "scrolled a sixth row");
-        assert_eq!(settings::art(), esf::Era::Frontiers, "Frontiers', the disc the game runs off");
+        press(&mut w, &mut o, key::CROSS, &mut cues);
+        assert_eq!((w.cat, w.item), (Some(5), 21), "Sound, Sound in Background");
+        assert!(settings::background_sound(), "on: a window behind others keeps its sound");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
-        assert_eq!((settings::art(), cues.last()), (esf::Era::Y2002, Some(&11)), "the 2002 disc's");
-        press(&mut w, &mut o, key::LEFT, &mut cues);
-        assert_eq!(settings::art(), esf::Era::Frontiers, "and back: two values");
-        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert!(!settings::background_sound());
+        assert_eq!(cues.last(), Some(&11));
+        press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!(w.item, 26, "VSync");
-        assert_eq!(w.ext_top, 7, "scrolled a seventh row");
-        assert!(settings::vsync(), "on: a frame only at the display's refresh");
-        press(&mut w, &mut o, key::RIGHT, &mut cues);
-        assert_eq!((settings::vsync(), cues.last()), (false, Some(&11)), "off");
-        press(&mut w, &mut o, key::LEFT, &mut cues);
-        assert!(settings::vsync(), "and back: two values");
-        press(&mut w, &mut o, key::RIGHT, &mut cues);
-        press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (14, Some(&9)), "the last row");
+        assert_eq!((w.cat_sel, cues.last()), (5, Some(&9)), "Sound, the last category");
         // Triangle: the menu, then closed with every setting put back
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
-        assert_eq!(w.page, -1);
+        assert_eq!((w.page, w.sel), (-1, 3), "the menu, on Extended");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!(settings::client(), settings::ClientOptions::default());
         assert_eq!(testing::kept("client.opt"), None, "nothing kept yet");
         // again, and saved this time, Auto Attack with it
         w.open(&vui, &NullRaster, &o);
-        for k in [key::DOWN, key::CROSS, key::RIGHT, key::TRIANGLE, key::DOWN, key::DOWN, key::CROSS, key::DOWN, key::LEFT, key::DOWN, key::LEFT, key::DOWN, key::DOWN, key::DOWN, key::RIGHT, key::TRIANGLE, key::DOWN, key::DOWN, key::CROSS, key::LEFT, key::CROSS] {
+        for k in [
+            key::DOWN,
+            key::CROSS,
+            key::RIGHT,
+            key::TRIANGLE,
+            key::DOWN,
+            key::DOWN,
+            key::CROSS,
+            // Video: Brightness and Fog a step down
+            key::CROSS,
+            key::LEFT,
+            key::DOWN,
+            key::LEFT,
+            key::TRIANGLE,
+            // Camera: Camera Turn Speed a step up
+            key::DOWN,
+            key::DOWN,
+            key::DOWN,
+            key::CROSS,
+            key::DOWN,
+            key::RIGHT,
+            key::TRIANGLE,
+            key::TRIANGLE,
+            // Save Changes, Yes
+            key::DOWN,
+            key::DOWN,
+            key::CROSS,
+            key::LEFT,
+            key::CROSS,
+        ] {
             press(&mut w, &mut o, k, &mut cues);
         }
         assert_eq!(w.save_count, 3, "Saving... (one frame drawn)");
@@ -1284,13 +1490,14 @@ mod tests {
         testing::reset(false);
     }
 
-    /// The Extended page, a row more than the game's eight-row pages, keeps
-    /// its top where theirs is (the Interface page's: under the options
-    /// window's title tab) and, without their empty title bar, ends less than
-    /// a row lower; the control: centred as the game's are, its top was half
-    /// a row higher, over the tab.
+    /// Every category's page opens on its first row, its window its rows and
+    /// three high (the game's pages': a row down, the legend two under the
+    /// last), and down walks the rows in the table's order; Triangle goes
+    /// back a step at a time: the categories with that one still lit, then
+    /// the menu on Extended, then closed. (Planted: a Back from a page
+    /// straight to the menu, or a page opening on the category before.)
     #[test]
-    fn the_extended_page_keeps_the_title_tab_in_view() {
+    fn each_category_opens_its_rows_and_back_goes_up_a_step() {
         use crate::pointer::testing::{NullRaster, vui};
         crate::settings::testing::reset(false);
         let vui = vui();
@@ -1298,15 +1505,74 @@ mod tests {
         let mut o = GameOptions::default();
         let mut w = WndOptions::default();
         let (mut cues, mut ups) = (Vec::new(), Vec::new());
-        let page = |w: &mut WndOptions, sel: i32, r: &mut NullRaster, o: &mut GameOptions, cues: &mut Vec<i32>, ups: &mut Vec<OptionsUp>| {
-            w.open(&vui, r, o);
-            w.sel = sel;
-            w.key(&vui, r, o, key::CROSS, 0, cues, ups);
-            (w.window2.top_left()[1], w.window2.size[1])
+        w.open(&vui, &r, &o);
+        w.sel = 3;
+        w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
+        for (k, c) in CATEGORIES.iter().enumerate() {
+            w.draw(&vui, &mut r, &o, &mut ups);
+            assert_eq!((w.page, w.cat, w.cat_sel), (3, None, k as i32), "{}: on the categories", c.name);
+            w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
+            assert_eq!((w.cat, w.row, w.window2.rows), (Some(k), 0, c.items.len() as i32 + 3), "{}: its page", c.name);
+            let mut seen = Vec::new();
+            for _ in 0..c.items.len() {
+                w.draw(&vui, &mut r, &o, &mut ups);
+                seen.push(w.item);
+                w.key(&vui, &mut r, &mut o, key::DOWN, 0, &mut cues, &mut ups);
+            }
+            assert_eq!(seen, c.items, "{}: its rows in order", c.name);
+            assert_eq!((w.row, cues.last()), (c.items.len() as i32 - 1, Some(&9)), "{}: stopped at its last", c.name);
+            w.key(&vui, &mut r, &mut o, key::TRIANGLE, 0, &mut cues, &mut ups);
+            assert_eq!((w.page, w.cat, w.cat_sel), (3, None, k as i32), "{}: back to the categories, it still lit", c.name);
+            w.key(&vui, &mut r, &mut o, key::DOWN, 0, &mut cues, &mut ups);
+        }
+        assert_eq!(cues.last(), Some(&9), "no category past Sound");
+        assert!(!w.back(&mut cues), "the categories go back to the menu");
+        assert_eq!((w.page, w.sel), (-1, 3));
+        assert!(w.back(&mut cues), "and the menu closes");
+    }
+
+    /// Extended's rows are its categories' between them, every one on one
+    /// page and none twice, each with its label, no page more than
+    /// `PAGE_MOST`; the controls: a table missing a row, and a page of
+    /// seven, fail.
+    #[test]
+    fn every_row_on_one_page_and_no_page_scrolls() {
+        let listed = |cats: &[Category]| {
+            let mut v: Vec<i32> = cats.iter().flat_map(|c| c.items.iter().copied()).collect();
+            v.sort();
+            v
         };
-        let (top8, h8) = page(&mut w, 1, &mut r, &mut o, &mut cues, &mut ups);
+        let all: Vec<i32> = EXTENDED_ITEMS.iter().map(|&(i, _)| i).collect();
+        assert_eq!(listed(&CATEGORIES), all);
+        assert!(fits(&CATEGORIES));
+        assert!(EXTENDED_ITEMS.iter().all(|&(i, l)| !l.is_empty() && label_of(i) == l));
+        let short = [Category { name: "Video", items: &[13, 20], note: Note::None }];
+        assert_ne!(listed(&short), all, "the control: rows left out");
+        let seven = [Category { name: "Video", items: &[13, 20, 14, 26, 25, 12, 15], note: Note::None }];
+        assert!(!fits(&seven), "the control: a page that would scroll");
+    }
+
+    /// A category's page of `PAGE_MOST` rows, a row more than the game's
+    /// eight-row pages, keeps its top where theirs is (the Interface page's:
+    /// under the options window's title tab) and, without their empty title
+    /// bar, ends less than a row lower; the control: centred as the game's
+    /// are, its top was half a row higher, over the tab.
+    #[test]
+    fn a_full_page_keeps_the_title_tab_in_view() {
+        use crate::pointer::testing::{NullRaster, vui};
+        crate::settings::testing::reset(false);
+        let vui = vui();
+        let mut r = NullRaster;
+        let mut o = GameOptions::default();
+        let mut w = WndOptions::default();
+        let (mut cues, mut ups) = (Vec::new(), Vec::new());
+        w.open(&vui, &r, &o);
+        w.sel = 1;
+        w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
+        let (top8, h8) = (w.window2.top_left()[1], w.window2.size[1]);
         assert_eq!(w.window2.rows, 8, "Interface: eight rows (Vibration)");
-        let (top9, h9) = page(&mut w, 3, &mut r, &mut o, &mut cues, &mut ups);
+        w.page_window(&vui, &r, PAGE_MOST as i32 + 3);
+        let (top9, h9) = (w.window2.top_left()[1], w.window2.size[1]);
         assert_eq!((w.window2.rows, w.window2.title_h), (9, 18), "a row more, no title bar");
         assert_eq!(top9, top8, "the top where an eight-row page's is");
         let d = vui.font_height(&r) - 4;
@@ -1370,13 +1636,13 @@ mod tests {
         testing::reset(false);
     }
 
-    /// A pointer on the Extended page: a label is reached by up and down,
-    /// a value's halves are left and right, each slider's sides of its knob
-    /// are; nothing where no row was drawn. Scrolled a row (the last row
-    /// selected), the rows shown answer as the page's own rows: the first,
-    /// gone from view, answers nothing, and the last is where the eighth was.
+    /// A pointer on Extended: a category's row is chosen at once (✕) and
+    /// opens its page; while a page is open the categories behind it answer
+    /// nothing. On a page a label is reached by up and down (the selected
+    /// one's steps it on), a value's halves are left and right, each
+    /// slider's sides of its knob are; nothing where no row was drawn.
     #[test]
-    fn a_pointer_on_the_extended_page() {
+    fn a_pointer_on_the_extended_pages() {
         use crate::pointer::testing::{NullRaster, mid, vui};
         crate::settings::testing::reset(false);
         let vui = vui();
@@ -1388,80 +1654,115 @@ mod tests {
         w.sel = 3;
         w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
         w.draw(&vui, &mut r, &o, &mut ups);
-        assert_eq!(w.page, 3);
+        let category = |w: &WndOptions, k: i32| mid(rows_rect(&w.window4, &vui, &NullRaster, 40, k + 1, 200, 1));
+        let label = |w: &WndOptions, k: i32| mid(rows_rect(&w.window2, &vui, &NullRaster, 40, k + 1, 100, 1));
+        let y = |w: &WndOptions, k: i32| w.window2.row_center(&vui, &NullRaster, k + 1)[1] as f32;
+        let down = |n: usize, last: i32| std::iter::repeat_n(key::DOWN, n).chain([last]).collect::<Vec<_>>();
+        // the categories: Camera chosen at once
+        assert_eq!(w.point(category(&w, 3)), vec![key::CROSS]);
+        assert_eq!(w.cat_sel, 3, "Camera");
+        assert_eq!(w.point(category(&w, 5)), vec![key::CROSS]);
+        assert_eq!(w.cat_sel, 5, "Sound");
+        assert!(w.point([5.0, 5.0]).is_empty());
+        w.point(category(&w, 3));
+        w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
+        w.draw(&vui, &mut r, &o, &mut ups);
+        assert_eq!(w.cat, Some(3), "Camera's page");
+        for k in 0..CATEGORIES.len() as i32 {
+            assert!(w.hits.at(category(&w, k)).is_none_or(|h| h >= LABEL), "category {k} behind the page answers nothing");
+        }
         let width = w.window2.size[0];
         let left = w.window2.top_left()[0] as f32;
-        // its rows from the top one (eight shown and the legend:
-        // `draw_extended`)
-        let y = |w: &WndOptions, k: i32| w.window2.row_center(&vui, &NullRaster, k)[1] as f32;
-        let label = |w: &WndOptions, k: i32| mid(rows_rect(&w.window2, &vui, &NullRaster, 40, k, 100, 1));
-        let down = |n: usize, last: i32| std::iter::repeat_n(key::DOWN, n).chain([last]).collect::<Vec<_>>();
-        assert_eq!(w.point(label(&w, 2)), vec![key::DOWN, key::DOWN], "Fog's label");
-        assert_eq!(w.point(label(&w, 3)), vec![key::DOWN, key::DOWN, key::DOWN], "Frame Rate's label");
-        assert_eq!(w.point(label(&w, 0)), vec![key::RIGHT], "Level of Detail's, selected: stepped on");
         let frame = left + (width - 176) as f32;
-        assert_eq!(w.point([frame + 20.0, y(&w, 0)]), vec![key::LEFT]);
-        assert_eq!(w.point([frame + 110.0, y(&w, 3)]), down(3, key::RIGHT), "Frame Rate's value");
         let slider = left + (width - 180) as f32;
-        // Brightness and Fog at 5 of 10: their knobs mid-bar
-        assert_eq!(w.point([slider + 10.0, y(&w, 1)]), vec![key::DOWN, key::LEFT]);
-        assert_eq!(w.point([slider + 130.0, y(&w, 1)]), vec![key::DOWN, key::RIGHT]);
-        assert_eq!(w.point([slider + 10.0, y(&w, 2)]), down(2, key::LEFT), "Fog thinner");
-        assert_eq!(w.point([slider + 130.0, y(&w, 2)]), down(2, key::RIGHT), "Fog thicker");
+        assert_eq!(w.point(label(&w, 2)), vec![key::DOWN, key::DOWN], "Screen Shake's label");
+        assert_eq!(w.point(label(&w, 0)), vec![key::RIGHT], "Camera Distance's, selected: stepped on");
         // Camera Distance at 11 of 8..50: its knob near the left end
-        assert_eq!(w.point([slider + 30.0, y(&w, 4)]), down(4, key::RIGHT));
-        assert_eq!(w.point([slider + 2.0, y(&w, 4)]), down(4, key::LEFT));
+        assert_eq!(w.point([slider + 30.0, y(&w, 0)]), vec![key::RIGHT]);
+        assert_eq!(w.point([slider + 2.0, y(&w, 0)]), vec![key::LEFT]);
         // Camera Turn Speed at 100 of 50..300: its knob a fifth of the way
-        assert_eq!(w.point([slider + 70.0, y(&w, 5)]), down(5, key::RIGHT));
-        assert_eq!(w.point([slider + 2.0, y(&w, 5)]), down(5, key::LEFT));
-        assert_eq!(w.point([frame + 110.0, y(&w, 6)]), down(6, key::RIGHT), "Screen Shake's value");
-        assert_eq!(w.point([frame + 20.0, y(&w, 7)]), down(7, key::LEFT), "Controller Focus's value");
-        assert!(w.point([frame + 110.0, y(&w, 8)]).is_empty(), "the legend's row: Capture Controller not shown yet");
-        assert!(w.point([slider + 70.0, y(&w, 7) + 60.0]).is_empty(), "below the rows");
-        // down to the last row: the page scrolls a row
-        for _ in 0..8 {
-            w.key(&vui, &mut r, &mut o, key::DOWN, 0, &mut cues, &mut ups);
-        }
+        assert_eq!(w.point([slider + 70.0, y(&w, 1)]), down(1, key::RIGHT));
+        assert_eq!(w.point([slider + 2.0, y(&w, 1)]), down(1, key::LEFT));
+        assert_eq!(w.point([frame + 110.0, y(&w, 2)]), down(2, key::RIGHT), "Screen Shake's value");
+        assert_eq!(w.point([frame + 20.0, y(&w, 2)]), down(2, key::LEFT));
+        assert!(w.point([frame + 110.0, y(&w, 3)]).is_empty(), "the row under the last: nothing");
+        assert!(w.point([slider + 70.0, y(&w, 4)]).is_empty(), "the legend's row: nothing");
+        // Video: Brightness and Fog at 5 of 10, their knobs mid-bar; Frame
+        // Rate's value
+        w.key(&vui, &mut r, &mut o, key::TRIANGLE, 0, &mut cues, &mut ups);
+        w.cat_sel = 0;
+        w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
         w.draw(&vui, &mut r, &o, &mut ups);
-        assert_eq!((w.row, w.ext_top, w.item), (8, 1, 19), "Capture Controller, a row scrolled");
-        assert_eq!(w.point([frame + 110.0, y(&w, 7)]), vec![key::RIGHT], "Capture Controller's value, where the eighth row was");
-        assert_eq!(w.point(label(&w, 0)), std::iter::repeat_n(key::UP, 7).collect::<Vec<_>>(), "the top row shown is Brightness");
-        assert_eq!(w.point([slider + 130.0, y(&w, 1)]), std::iter::repeat_n(key::UP, 6).chain([key::RIGHT]).collect::<Vec<_>>(), "Fog's slider a row up");
-        // Sound in Background: two rows scrolled
-        w.key(&vui, &mut r, &mut o, key::DOWN, 0, &mut cues, &mut ups);
+        assert_eq!(w.cat, Some(0), "Video's page");
+        assert_eq!(w.point([slider + 10.0, y(&w, 0)]), vec![key::LEFT], "Brightness down");
+        assert_eq!(w.point([slider + 130.0, y(&w, 0)]), vec![key::RIGHT], "Brightness up");
+        assert_eq!(w.point([slider + 10.0, y(&w, 1)]), down(1, key::LEFT), "Fog thinner");
+        assert_eq!(w.point([slider + 130.0, y(&w, 1)]), down(1, key::RIGHT), "Fog thicker");
+        assert_eq!(w.point([frame + 110.0, y(&w, 2)]), down(2, key::RIGHT), "Frame Rate's value");
+        assert_eq!(w.point([frame + 20.0, y(&w, 4)]), down(4, key::LEFT), "Art's value");
+        // Characters: NPC/PC Display's knob at its left end (the game's 24),
+        // then at 128 near its middle
+        w.key(&vui, &mut r, &mut o, key::TRIANGLE, 0, &mut cues, &mut ups);
+        w.cat_sel = 4;
+        w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
         w.draw(&vui, &mut r, &o, &mut ups);
-        assert_eq!((w.row, w.ext_top, w.item), (9, 2, 21), "Sound in Background, two rows scrolled");
-        assert_eq!(w.point([frame + 110.0, y(&w, 7)]), vec![key::RIGHT], "its value, turned over");
-        assert_eq!(w.point([frame + 20.0, y(&w, 6)]), vec![key::UP, key::LEFT], "Capture Controller's a row up");
-        // Ability Bars: three rows scrolled
-        w.key(&vui, &mut r, &mut o, key::DOWN, 0, &mut cues, &mut ups);
-        w.draw(&vui, &mut r, &o, &mut ups);
-        assert_eq!((w.row, w.ext_top, w.item), (10, 3, 22), "Ability Bars, three rows scrolled");
-        assert_eq!(w.point([frame + 110.0, y(&w, 7)]), vec![key::RIGHT], "its value, stepped on");
-        assert_eq!(w.point([frame + 20.0, y(&w, 6)]), vec![key::UP, key::LEFT], "Sound in Background's a row up");
-        // the last row, NPC/PC Display: four rows scrolled, a slider whose
-        // knob is at its left end (the game's 24), then at 128 near its middle
-        w.key(&vui, &mut r, &mut o, key::DOWN, 0, &mut cues, &mut ups);
-        w.draw(&vui, &mut r, &o, &mut ups);
-        assert_eq!((w.row, w.ext_top, w.item), (11, 4, 23), "NPC/PC Display, four rows scrolled");
-        assert_eq!(w.point([slider + 30.0, y(&w, 7)]), vec![key::RIGHT]);
-        assert_eq!(w.point([slider - 2.0, y(&w, 7)]), vec![key::LEFT], "left of the knob at the bar's end");
+        assert_eq!(w.cat, Some(4), "Characters' page");
+        assert_eq!(w.point([frame + 110.0, y(&w, 0)]), vec![key::RIGHT], "Level of Detail's value");
+        assert_eq!(w.point([slider + 30.0, y(&w, 1)]), down(1, key::RIGHT));
+        assert_eq!(w.point([slider - 2.0, y(&w, 1)]), down(1, key::LEFT), "left of the knob at the bar's end");
         crate::settings::set_client(ClientOptions { entity_slots: 128, ..crate::settings::client() });
         w.draw(&vui, &mut r, &o, &mut ups);
-        assert_eq!(w.point([slider + 30.0, y(&w, 7)]), vec![key::LEFT], "left of the knob at 128");
-        assert_eq!(w.point([slider + 110.0, y(&w, 7)]), vec![key::RIGHT], "right of it");
-        assert_eq!(w.point(label(&w, 7)), vec![key::RIGHT], "its label, selected: stepped on");
-        // the last row, NPC/PC View Distance: five rows scrolled, its knob at
-        // the left end (the game's 100), then at 1000 at the right end
-        w.key(&vui, &mut r, &mut o, key::DOWN, 0, &mut cues, &mut ups);
-        w.draw(&vui, &mut r, &o, &mut ups);
-        assert_eq!((w.row, w.ext_top, w.item), (12, 5, 24), "NPC/PC View Distance, five rows scrolled");
-        assert_eq!(w.point([slider + 30.0, y(&w, 7)]), vec![key::RIGHT]);
-        assert_eq!(w.point([slider - 2.0, y(&w, 7)]), vec![key::LEFT]);
-        assert_eq!(w.point([slider + 30.0, y(&w, 6)]), vec![key::UP, key::LEFT], "NPC/PC Display's a row up, left of its knob");
+        assert_eq!(w.point([slider + 30.0, y(&w, 1)]), down(1, key::LEFT), "left of the knob at 128");
+        assert_eq!(w.point([slider + 110.0, y(&w, 1)]), down(1, key::RIGHT), "right of it");
+        // NPC/PC View Distance: its knob at the left end (the game's 100),
+        // then at 1000 at the right end
+        assert_eq!(w.point([slider + 30.0, y(&w, 2)]), down(2, key::RIGHT));
         crate::settings::set_client(ClientOptions { entity_view: 1000, ..crate::settings::client() });
         w.draw(&vui, &mut r, &o, &mut ups);
-        assert_eq!(w.point([slider + 110.0, y(&w, 7)]), vec![key::LEFT], "left of the knob at 1000");
+        assert_eq!(w.point([slider + 110.0, y(&w, 2)]), down(2, key::LEFT), "left of the knob at 1000");
+        // Controller: Controller Focus's halves
+        w.key(&vui, &mut r, &mut o, key::TRIANGLE, 0, &mut cues, &mut ups);
+        w.cat_sel = 2;
+        w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
+        w.draw(&vui, &mut r, &o, &mut ups);
+        assert_eq!(w.point([frame + 20.0, y(&w, 0)]), vec![key::LEFT], "Controller Focus's value, left");
+        assert_eq!(w.point([frame + 110.0, y(&w, 1)]), down(1, key::RIGHT), "Capture Controller's, right");
+        crate::settings::testing::reset(false);
     }
 
+    /// The notes beside a page's Back legend: what this window reads on
+    /// Controller's, what this server gives on Characters' while NPC/PC
+    /// Display or View Distance is chosen (not on Level of Detail), none on
+    /// Video's (the control: the note there before the split).
+    #[test]
+    fn each_note_on_its_page() {
+        use crate::pointer::testing::{NullRaster, vui};
+        crate::settings::testing::reset(false);
+        let vui = vui();
+        let mut r = NullRaster;
+        let mut o = GameOptions::default();
+        let mut w = WndOptions { server_note: Some("This server: 24 (the game's)".into()), ..Default::default() };
+        let (mut cues, mut ups) = (Vec::new(), Vec::new());
+        let note = |w: &WndOptions, c: usize| w.page_note(c);
+        w.open(&vui, &r, &o);
+        w.sel = 3;
+        w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
+        let by_name = |n: &str| CATEGORIES.iter().position(|c| c.name == n).unwrap();
+        assert_eq!(CATEGORIES[by_name("Controller")].note, Note::Reads);
+        assert_eq!(CATEGORIES[by_name("Characters")].note, Note::Server);
+        assert!(CATEGORIES.iter().filter(|c| c.note != Note::None).count() == 2, "the two notes only");
+        w.cat_sel = by_name("Characters") as i32;
+        w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
+        w.draw(&vui, &mut r, &o, &mut ups);
+        assert_eq!(note(&w, by_name("Characters")), None, "Level of Detail: no note");
+        w.key(&vui, &mut r, &mut o, key::DOWN, 0, &mut cues, &mut ups);
+        w.draw(&vui, &mut r, &o, &mut ups);
+        assert_eq!(note(&w, by_name("Characters")).as_deref(), Some("This server: 24 (the game's)"), "NPC/PC Display: the server's");
+        w.key(&vui, &mut r, &mut o, key::TRIANGLE, 0, &mut cues, &mut ups);
+        w.cat_sel = by_name("Controller") as i32;
+        w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
+        w.draw(&vui, &mut r, &o, &mut ups);
+        assert_eq!(note(&w, by_name("Controller")), Some(crate::input::reads()), "Controller: what this window reads");
+        assert_eq!(note(&w, by_name("Video")), None, "the control: none on Video's");
+    }
 }
