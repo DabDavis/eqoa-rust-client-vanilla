@@ -186,16 +186,166 @@ mod native {
     /// when one is at hand (taken), else None, the question kept for
     /// `settle`.
     pub fn boot_disc(arg: Option<&str>) -> Option<String> {
+        let game_mode = game_mode();
+        if game_mode {
+            crate::say("session: Steam's game mode (gamescope): no desktop dialogs, zenity's instead");
+        }
         match start(arg, std::env::var("EQOA_ISO").ok(), crate::settings::disc(), usable) {
             Start::Ready(p) => {
                 let _ = TAKEN.set(p.clone());
                 Some(p)
+            }
+            // where a Steam Deck keeps its games, before a dialog
+            Start::Pick { note } if game_mode => {
+                let home = std::env::var_os("HOME").map(PathBuf::from);
+                match find_frontiers(&deck_places(home.as_deref(), Path::new("/run/media"))) {
+                    Some(p) => {
+                        if let Some(n) = &note {
+                            crate::say(n);
+                        }
+                        crate::say(&format!("disc: {p}, found where a Steam Deck keeps its games"));
+                        if let Err(e) = crate::settings::set_disc(&p) {
+                            crate::say(&format!("the disc image's place was not kept: {e}"));
+                        }
+                        let _ = TAKEN.set(p.clone());
+                        Some(p)
+                    }
+                    None => {
+                        *ASK.lock().unwrap() = Some(Start::Pick { note });
+                        None
+                    }
+                }
             }
             ask => {
                 *ASK.lock().unwrap() = Some(ask);
                 None
             }
         }
+    }
+
+    /// Steam's game mode: SteamOS's gamescope session, or a game run in
+    /// gamescope. It shows the windows of the program Steam started and of
+    /// the programs that one starts, never a desktop portal's: the portal's
+    /// file dialog (rfd's) is not seen there and the game waits on it as if
+    /// hung (a Steam Deck player, 2026-10-25: "works flawlessly from desktop
+    /// but seems to hang from steam"), where zenity's, the game's own child,
+    /// is seen. A disc chosen in the desktop and kept on a USB drive is not
+    /// there in game mode either: it mounts the microSD card, not a drive.
+    pub fn game_mode() -> bool {
+        cfg!(target_os = "linux")
+            && (std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_some() || std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.split(':').any(|p| p.eq_ignore_ascii_case("gamescope"))))
+    }
+
+    /// Where a Steam Deck keeps a disc image, in the order looked through:
+    /// the home folder and its Downloads, Desktop, Documents, Games and ROMs
+    /// folders and EmuDeck's `Emulation/roms/ps2`, then the same on each card
+    /// or drive under `media` (`/run/media/<card>`, `/run/media/<user>/<card>`).
+    /// Only the folders that are there.
+    pub(super) fn deck_places(home: Option<&Path>, media: &Path) -> Vec<PathBuf> {
+        const SUBS: [&str; 10] = ["", "Downloads", "Desktop", "Documents", "Games", "games", "ROMs", "roms", "Emulation/roms/ps2", "Emulation/roms/PS2"];
+        let dirs = |d: &Path| -> Vec<PathBuf> {
+            let mut v: Vec<PathBuf> = std::fs::read_dir(d).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+            v.sort();
+            v
+        };
+        let mut roots: Vec<PathBuf> = home.into_iter().map(Path::to_path_buf).collect();
+        for card in dirs(media) {
+            let below = dirs(&card);
+            roots.push(card);
+            roots.extend(below);
+        }
+        let mut out = Vec::new();
+        for r in roots {
+            for s in SUBS {
+                let p = if s.is_empty() { r.clone() } else { r.join(s) };
+                if p.is_dir() && !out.contains(&p) {
+                    out.push(p);
+                }
+            }
+        }
+        out
+    }
+
+    /// The first Frontiers image (`judge_file`'s Take) among the image files
+    /// in `places` and in their folders one down (not the hidden ones), by
+    /// name; at most 48 images opened, none smaller than 100 MB.
+    pub(super) fn find_frontiers(places: &[PathBuf]) -> Option<String> {
+        const LOOKS: usize = 48;
+        const SMALLEST: u64 = 100 << 20;
+        let image = |p: &Path| {
+            p.extension().and_then(|e| e.to_str()).is_some_and(|e| ["iso", "bin", "img"].iter().any(|x| e.eq_ignore_ascii_case(x))) && p.metadata().is_ok_and(|m| m.is_file() && m.len() >= SMALLEST)
+        };
+        let listed = |d: &Path| -> Vec<PathBuf> {
+            let mut v: Vec<PathBuf> = std::fs::read_dir(d).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| !p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with('.'))).collect();
+            v.sort();
+            v
+        };
+        let mut looked = 0;
+        for place in places {
+            let entries = listed(place);
+            let mut files: Vec<PathBuf> = entries.iter().filter(|p| image(p)).cloned().collect();
+            for d in entries.iter().filter(|p| p.is_dir()) {
+                files.extend(listed(d).into_iter().filter(|p| image(p)));
+            }
+            for f in files {
+                if looked == LOOKS {
+                    return None;
+                }
+                looked += 1;
+                if let Some(t) = f.to_str()
+                    && matches!(judge_file(t), Verdict::Take(_))
+                {
+                    return Some(t.to_string());
+                }
+            }
+        }
+        None
+    }
+
+    /// zenity's file dialog, which Steam's game mode shows (`game_mode`):
+    /// the image picked, None when cancelled; Err when zenity did not start.
+    fn zenity_pick(title: &str, dir: Option<&Path>) -> std::io::Result<Option<PathBuf>> {
+        let mut c = std::process::Command::new("zenity");
+        c.args(["--file-selection", "--title", title, "--file-filter", "PlayStation 2 disc image | *.iso *.ISO *.bin *.BIN *.img *.IMG", "--file-filter", "All files | *"]);
+        if let Some(d) = dir {
+            let mut s = d.as_os_str().to_os_string();
+            s.push("/");
+            c.arg("--filename").arg(s);
+        }
+        let out = c.output()?;
+        // 1 is Cancel; anything else said, with what zenity wrote
+        if !out.status.success() {
+            if out.status.code() != Some(1) {
+                let why = String::from_utf8_lossy(&out.stderr);
+                crate::say(&format!("disc: zenity's dialog ended {}: {}", out.status, why.lines().last().unwrap_or("")));
+            }
+            return Ok(None);
+        }
+        let path = String::from_utf8_lossy(&out.stdout).trim_end_matches(['\n', '\r']).to_string();
+        Ok((!path.is_empty()).then(|| PathBuf::from(path)))
+    }
+
+    /// A file dialog for a disc image: zenity's in Steam's game mode
+    /// (`game_mode`) while it is there, else the desktop's (rfd's: on Linux
+    /// the portal's), its filters the disc images' and all files', opening
+    /// in `dir`; the image picked, or None.
+    fn file_dialog(title: &str, dir: Option<PathBuf>) -> Option<PathBuf> {
+        if game_mode() {
+            match zenity_pick(title, dir.as_deref()) {
+                Ok(p) => return p,
+                Err(e) => crate::say(&format!("disc: no zenity in Steam's game mode ({e}): the desktop's dialog, which it may not show")),
+            }
+        }
+        let mut d = rfd::FileDialog::new().set_title(title);
+        // a Mac's open panel takes every filter's types as one list, with no
+        // "All files" to switch to: there the check after the pick does it
+        if !cfg!(target_os = "macos") {
+            d = d.add_filter("PlayStation 2 disc image", &["iso", "ISO", "bin", "BIN", "img", "IMG"]).add_filter("All files", &["*"]);
+        }
+        if let Some(dir) = dir {
+            d = d.set_directory(dir);
+        }
+        d.pick_file()
     }
 
     /// Whether a boot still has to ask for its disc (`settle`).
@@ -272,17 +422,9 @@ mod native {
             Some(n) => format!("{n} {CHOOSE}"),
             None => CHOOSE.to_string(),
         };
-        let mut d = rfd::FileDialog::new().set_title(&title);
-        // a Mac's open panel takes every filter's types as one list, with no
-        // "All files" to switch to: there the check after the pick does it
-        if !cfg!(target_os = "macos") {
-            d = d.add_filter("PlayStation 2 disc image", &["iso", "ISO", "bin", "BIN", "img", "IMG"]).add_filter("All files", &["*"]);
-        }
         // where the kept one was, when its folder is still there
-        if let Some(dir) = crate::settings::disc().and_then(|k| Path::new(&k).parent().map(Path::to_path_buf)).filter(|d| d.is_dir()) {
-            d = d.set_directory(dir);
-        }
-        d.pick_file()
+        let dir = crate::settings::disc().and_then(|k| Path::new(&k).parent().map(Path::to_path_buf)).filter(|d| d.is_dir());
+        file_dialog(&title, dir)
     }
 
     /// The 2002 disc for F9's art (`era`), in the desktop's file dialog,
@@ -300,14 +442,8 @@ mod native {
                 Some(n) => format!("{n} {CHOOSE_2002}"),
                 None => CHOOSE_2002.to_string(),
             };
-            let mut d = rfd::FileDialog::new().set_title(&title);
-            if !cfg!(target_os = "macos") {
-                d = d.add_filter("PlayStation 2 disc image", &["iso", "ISO", "bin", "BIN", "img", "IMG"]).add_filter("All files", &["*"]);
-            }
-            if let Some(dir) = crate::settings::disc_2002().or_else(crate::settings::disc).and_then(|k| Path::new(&k).parent().map(Path::to_path_buf)).filter(|d| d.is_dir()) {
-                d = d.set_directory(dir);
-            }
-            let path = d.pick_file().ok_or("no 2002 disc image was chosen")?;
+            let dir = crate::settings::disc_2002().or_else(crate::settings::disc).and_then(|k| Path::new(&k).parent().map(Path::to_path_buf)).filter(|d| d.is_dir());
+            let path = file_dialog(&title, dir).ok_or("no 2002 disc image was chosen")?;
             let path = std::path::absolute(&path).unwrap_or(path);
             let Some(text) = path.to_str().map(str::to_string) else {
                 let line = format!("The client cannot open {} (its name is not Unicode): rename it or move it.", path.display());
@@ -399,6 +535,48 @@ mod tests {
             Start::Pick { note: Some(n) } => assert!(n.contains("/games/eqoa frontiers.iso") && n.contains("not there"), "{n}"),
             s => panic!("{s:?}"),
         }
+    }
+
+    /// Steam's game mode finds the disc where a Steam Deck keeps its games:
+    /// EmuDeck's `Emulation/roms/ps2` on the microSD card (under /run/media,
+    /// one folder or two down), its name any case, passing over what is not
+    /// Frontiers (a file that is not an image, however large; one too small
+    /// to be a disc). The controls: the same image in a folder not looked
+    /// through, and in a hidden folder, is not found; with no places, none.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn game_mode_finds_the_disc_where_a_deck_keeps_it() {
+        let iso = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../run/eqoa.iso"));
+        if !iso.exists() {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        }
+        let iso = std::fs::canonicalize(&iso).unwrap();
+        let root = std::env::temp_dir().join(format!("eqoa-deck-places-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let home = root.join("home/deck");
+        let media = root.join("run/media");
+        let card = media.join("deck/SD card");
+        for d in [home.join("Downloads"), home.join(".hidden"), home.join("elsewhere/deeper/still"), card.join("Emulation/roms/ps2")] {
+            std::fs::create_dir_all(&d).unwrap();
+        }
+        // a large file that is not an image (sparse), and a small "image"
+        let big = std::fs::File::create(home.join("Downloads/big.iso")).unwrap();
+        big.set_len(200 << 20).unwrap();
+        std::fs::write(home.join("Downloads/tiny.ISO"), b"not a disc").unwrap();
+        let places = native::deck_places(Some(&home), &media);
+        assert!(places.contains(&home.join("Downloads")) && places.contains(&card.join("Emulation/roms/ps2")), "{places:?}");
+        assert_eq!(native::find_frontiers(&places), None, "nothing that is Frontiers yet");
+        std::os::unix::fs::symlink(&iso, card.join("Emulation/roms/ps2/EverQuest Online Adventures - Frontiers (USA).ISO")).unwrap();
+        let found = native::find_frontiers(&native::deck_places(Some(&home), &media));
+        assert_eq!(found.as_deref(), card.join("Emulation/roms/ps2/EverQuest Online Adventures - Frontiers (USA).ISO").to_str());
+        // the controls: hidden, or deeper than a place's folders, is not looked at
+        std::fs::remove_file(card.join("Emulation/roms/ps2/EverQuest Online Adventures - Frontiers (USA).ISO")).unwrap();
+        std::os::unix::fs::symlink(&iso, home.join(".hidden/eqoa.iso")).unwrap();
+        std::os::unix::fs::symlink(&iso, home.join("elsewhere/deeper/still/eqoa.iso")).unwrap();
+        assert_eq!(native::find_frontiers(&native::deck_places(Some(&home), &media)), None);
+        assert_eq!(native::find_frontiers(&[]), None);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// The disc itself, through the native path the dialog's pick takes:
