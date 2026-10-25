@@ -449,6 +449,38 @@ pub fn from_device() -> bool {
     !*SCRIPTED.get_or_init(|| SCRIPTS.iter().any(|v| std::env::var_os(v).is_some()))
 }
 
+/// The spell effect `EQOA_RUMBLE_TEST` casts: Fiery Burst's, the visual
+/// go-eqoa-server gives a harmful spell it has no visual for, whose caster's
+/// list runs the large motor at 127 for 319 ms (and its target's at 220 for
+/// 140 ms, then the small one for 1979 ms).
+pub const RUMBLE_TEST_EFFECT: u32 = 0xE780_24D9;
+
+/// `EQOA_RUMBLE_TEST=<ms>[,<effect>]` (a test's): that long after the
+/// player's first frame in the world, the player casts that spell effect
+/// (`RUMBLE_TEST_EFFECT` by default) on itself, once: the pad's motors
+/// tested from a spell's vibrate events (`Rumble`, `VIPad`) to the
+/// controller. `caster` is the player's id.
+pub fn rumble_test(caster: u32) -> Option<crate::spells::Cast> {
+    use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static SPEC: OnceLock<Option<(u128, u32)>> = OnceLock::new();
+    static FIRST: OnceLock<web_time::Instant> = OnceLock::new();
+    static CAST: AtomicBool = AtomicBool::new(false);
+    let (at, effect) = (*SPEC.get_or_init(|| {
+        let v = std::env::var("EQOA_RUMBLE_TEST").ok()?;
+        let mut w = v.split(',');
+        let at = w.next()?.trim().parse().ok()?;
+        let effect = w.next().and_then(|e| u32::from_str_radix(e.trim().trim_start_matches("0x"), 16).ok()).unwrap_or(RUMBLE_TEST_EFFECT);
+        Some((at, effect))
+    }))?;
+    let first = *FIRST.get_or_init(web_time::Instant::now);
+    if first.elapsed().as_millis() < at || CAST.swap(true, Ordering::Relaxed) {
+        return None;
+    }
+    crate::say(&format!("EQOA_RUMBLE_TEST: the player casts spell effect {effect:#010x}"));
+    Some(crate::spells::Cast { effect, time: 0, caster, target: caster, targets: Vec::new() })
+}
+
 /// `EQOA_PAD_TRACE=1` (in a page `?padtrace`): each pad key as the game
 /// gets it, and gilrs's events and the controllers' report as they change.
 pub fn trace() -> bool {

@@ -2874,6 +2874,10 @@ impl Play {
                 self.entities.slots.iter().position(|e| e.as_ref().is_some_and(|e| e.id == id)).map_or(-1, |s| s as i32)
             }
         };
+        // `EQOA_RUMBLE_TEST`: a cast of the player's own, to test the motors
+        if has_self && let Some(c) = me.and_then(crate::input::rumble_test) {
+            self.casts.push(c);
+        }
         let casts: Vec<_> = std::mem::take(&mut self.casts)
             .into_iter()
             .map(|c| {
