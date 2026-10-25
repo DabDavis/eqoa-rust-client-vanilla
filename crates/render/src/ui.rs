@@ -23,7 +23,7 @@
 
 use bytemuck::{Pod, Zeroable};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use wgpu::util::DeviceExt;
 
 pub const SCREEN_W: f32 = 640.0;
@@ -89,6 +89,146 @@ pub fn window_from_frame(size: (u32, u32), p: [f32; 2]) -> [f32; 2] {
 /// the texel past it. So a quad also keeps to its own texels (`ui.wgsl`,
 /// `Vertex::rect`).
 pub const SAMPLE_BIAS: f32 = 1.0 / 32.0;
+
+/// How the game's fonts are drawn scaled to the target: every 2D layer's
+/// (the HUD, the windows, the pregame, the map) and the labels' and name
+/// plates' (`text`). The game's fonts hold whole texels only (ArialUI white
+/// or clear, Arial with a grey edge as well), two texels to a stroke, drawn
+/// one texel to a pixel on the PS2's 640x448 and softened by the TV.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextFilter {
+    /// Crisp: a texel's own colour across it, the next one's mixed in only
+    /// round its edge ("sharp bilinear", `ui.wgsl`), so from two pixels a
+    /// texel every texel is as wide as every other; the nearest texel alone
+    /// makes some a pixel wider than the rest (at 1.5 a two-texel stroke is
+    /// two, three or four pixels wide, letter by letter). Nearer one pixel a
+    /// texel the mix narrows to none, the nearest texel, as at a whole scale.
+    #[default]
+    Sharp,
+    /// Each texel blended with its neighbours across its whole width, as the
+    /// GS magnifies a font's texture (`VIRFont`'s material filters its
+    /// magnification): smooth, as text looks on a TV or upscaled.
+    Smooth,
+}
+
+/// A font's glyphs packed into rows of a `width`-wide RGBA8 atlas, each
+/// with a ring of clear texels of its own round all four sides, so a glyph's quad filtered
+/// (`TextFilter`) mixes in only clear texels past its edges, never another
+/// glyph's: the atlas, its height, and each code's width and texture
+/// rectangle (the first glyph of a code kept, as `FindChar` finds it). A
+/// clear texel next to ink takes the ink's colour and stays clear: mixed
+/// with it, the ink fades out where straight alpha would also darken it
+/// toward the clear texel's black. Nearest, a clear texel is clear whatever
+/// its colour.
+pub(crate) fn pack(font: &esf::font::Font, width: u32) -> (Vec<u8>, u32, HashMap<u16, (u32, [f32; 4])>) {
+    let h = font.height;
+    let (mut x, mut row) = (1u32, 0u32);
+    let mut places = Vec::new();
+    for g in &font.glyphs {
+        if x + g.width as u32 + 1 > width {
+            x = 1;
+            row += 1;
+        }
+        places.push((x, row));
+        x += g.width as u32 + 2;
+    }
+    let ah = (row + 1) * (h + 2);
+    let mut atlas = vec![0u8; (width * ah * 4) as usize];
+    let mut glyphs = HashMap::new();
+    for (g, &(gx, gr)) in font.glyphs.iter().zip(&places) {
+        let gy = 1 + gr * (h + 2);
+        for y in 0..h {
+            for xx in 0..g.width as u32 {
+                let s = ((y * g.width as u32 + xx) * 4) as usize;
+                let d = (((gy + y) * width + gx + xx) * 4) as usize;
+                atlas[d..d + 4].copy_from_slice(&g.rgba[s..s + 4]);
+            }
+        }
+        let uv = [gx as f32 / width as f32, gy as f32 / ah as f32, (gx + g.width as u32) as f32 / width as f32, (gy + h) as f32 / ah as f32];
+        glyphs.entry(g.code).or_insert((g.width as u32, uv));
+    }
+    // each glyph's clear texels, its ring's too, coloured by the ink round
+    // them (the mean of their eight neighbours' that are not clear)
+    let ink = atlas.clone();
+    let at = |x: u32, y: u32| ((y * width + x) * 4) as usize;
+    for (g, &(gx, gr)) in font.glyphs.iter().zip(&places) {
+        let gy = 1 + gr * (h + 2);
+        for y in gy - 1..=gy + h {
+            for x in gx - 1..=gx + g.width as u32 {
+                if ink[at(x, y) + 3] != 0 {
+                    continue;
+                }
+                let (mut sum, mut n) = ([0u32; 3], 0);
+                for (nx, ny) in (y.saturating_sub(1)..=(y + 1).min(ah - 1)).flat_map(|ny| (x.saturating_sub(1)..=(x + 1).min(width - 1)).map(move |nx| (nx, ny))) {
+                    let i = at(nx, ny);
+                    if ink[i + 3] != 0 {
+                        for k in 0..3 {
+                            sum[k] += ink[i + k] as u32;
+                        }
+                        n += 1;
+                    }
+                }
+                if n > 0 {
+                    let i = at(x, y);
+                    for k in 0..3 {
+                        atlas[i + k] = (sum[k] / n) as u8;
+                    }
+                }
+            }
+        }
+    }
+    (atlas, ah, glyphs)
+}
+
+impl TextFilter {
+    /// The other one (the options' Text turned over).
+    pub fn other(self) -> TextFilter {
+        match self {
+            TextFilter::Sharp => TextFilter::Smooth,
+            TextFilter::Smooth => TextFilter::Sharp,
+        }
+    }
+}
+
+/// A font's quad (an upright rectangle, its uvs running with its corners)
+/// drawn one texel wider all round, onto the clear ring round its glyph
+/// (`pack`): a mix at the glyph's edge (`TextFilter`) reaches half a pixel or
+/// more past it, and drawn only to its edge an edge column lost that light.
+/// The quad the game made, which the layer keeps, is its glyph's.
+fn ringed(q: &Quad, w: u32, h: u32) -> Quad {
+    let mut r = *q;
+    let (dx, dy) = (q.pos[1][0] - q.pos[0][0], q.pos[3][1] - q.pos[0][1]);
+    let (du, dv) = (q.uv[1][0] - q.uv[0][0], q.uv[3][1] - q.uv[0][1]);
+    if dx == 0.0 || dy == 0.0 || du == 0.0 || dv == 0.0 {
+        return r;
+    }
+    // a texel across and down in frame pixels, and which way the uvs run
+    let (kx, ky) = ((dx / (du * w as f32)).abs(), (dy / (dv * h as f32)).abs());
+    let (su, sv) = ((du / dx).signum(), (dv / dy).signum());
+    let (cx, cy) = ((q.pos[0][0] + q.pos[2][0]) / 2.0, (q.pos[0][1] + q.pos[2][1]) / 2.0);
+    for i in 0..4 {
+        let (ex, ey) = (if q.pos[i][0] > cx { 1.0 } else { -1.0 }, if q.pos[i][1] > cy { 1.0 } else { -1.0 });
+        r.pos[i] = [q.pos[i][0] + ex * kx, q.pos[i][1] + ey * ky];
+        r.uv[i] = [q.uv[i][0] + ex * su / w as f32, q.uv[i][1] + ey * sv / h as f32];
+    }
+    r
+}
+
+/// The fonts' filter (`TextFilter`): 0 Sharp, 1 Smooth.
+static TEXT_FILTER: AtomicU8 = AtomicU8::new(0);
+
+/// Sets how every layer's fonts and the labels are drawn from now on (the
+/// options' Text).
+pub fn set_text_filter(f: TextFilter) {
+    TEXT_FILTER.store(f as u8, Ordering::Relaxed);
+}
+
+pub fn text_filter() -> TextFilter {
+    match TEXT_FILTER.load(Ordering::Relaxed) {
+        1 => TextFilter::Smooth,
+        _ => TextFilter::Sharp,
+    }
+}
 
 /// The whole frame pixels a `size` target shows beyond each side of the
 /// frame: none when it is 4:3 or narrower.
@@ -358,6 +498,9 @@ pub struct Quad {
 
 struct Texture {
     bg: wgpu::BindGroup,
+    /// A font's: the same texture through the filtering sampler, which its
+    /// quads take under either `TextFilter`.
+    filtered: Option<wgpu::BindGroup>,
     width: u32,
     height: u32,
 }
@@ -390,7 +533,12 @@ impl Font {
 pub struct Ui {
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
+    /// The fonts' (`Texture::filtered`): linear.
+    filtering: wgpu::Sampler,
     pipelines: Vec<wgpu::RenderPipeline>,
+    /// A font's quads by blend mode, under `TextFilter::Sharp` and `Smooth`.
+    sharp: Vec<wgpu::RenderPipeline>,
+    smooth: Vec<wgpu::RenderPipeline>,
     textures: Vec<Texture>,
     pub fonts: Vec<Font>,
     pub quads: Vec<Quad>,
@@ -461,42 +609,57 @@ impl Ui {
         });
         let shader = device.create_shader_module(wgpu::include_wgsl!("ui.wgsl"));
         let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("ui"), bind_group_layouts: &[Some(&layout)], immediate_size: 0 });
-        let pipelines = (0..5)
-            .map(|mode| {
-                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: Some("ui"),
-                    layout: Some(&pl),
-                    vertex: wgpu::VertexState {
-                        module: &shader,
-                        entry_point: Some("vs_main"),
-                        compilation_options: Default::default(),
-                        buffers: &[Some(wgpu::VertexBufferLayout {
-                            array_stride: std::mem::size_of::<Vertex>() as u64,
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                            attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32x4],
-                        })],
-                    },
-                    primitive: Default::default(),
-                    depth_stencil: Some(wgpu::DepthStencilState {
-                        format: depth,
-                        depth_write_enabled: Some(false),
-                        depth_compare: Some(wgpu::CompareFunction::Always),
-                        stencil: Default::default(),
-                        bias: Default::default(),
-                    }),
-                    multisample: Default::default(),
-                    fragment: Some(wgpu::FragmentState {
-                        module: &shader,
-                        entry_point: Some(if mode == 0 { "fs_tested" } else { "fs_main" }),
-                        compilation_options: Default::default(),
-                        targets: &[Some(wgpu::ColorTargetState { format, blend: crate::blend_state(mode), write_mask: wgpu::ColorWrites::COLOR })],
-                    }),
-                    multiview_mask: None,
-                    cache: None,
+        // A font's (`Texture::filtered`): its quads mix texels (`TextFilter`).
+        let filtering = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        // A pipeline for each blend mode, mode 0 alpha tested (`tested`), the
+        // others through `main`.
+        let set = |label: &str, tested: &str, main: &str| -> Vec<wgpu::RenderPipeline> {
+            (0..5)
+                .map(|mode| {
+                    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                        label: Some(label),
+                        layout: Some(&pl),
+                        vertex: wgpu::VertexState {
+                            module: &shader,
+                            entry_point: Some("vs_main"),
+                            compilation_options: Default::default(),
+                            buffers: &[Some(wgpu::VertexBufferLayout {
+                                array_stride: std::mem::size_of::<Vertex>() as u64,
+                                step_mode: wgpu::VertexStepMode::Vertex,
+                                attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32x4],
+                            })],
+                        },
+                        primitive: Default::default(),
+                        depth_stencil: Some(wgpu::DepthStencilState {
+                            format: depth,
+                            depth_write_enabled: Some(false),
+                            depth_compare: Some(wgpu::CompareFunction::Always),
+                            stencil: Default::default(),
+                            bias: Default::default(),
+                        }),
+                        multisample: Default::default(),
+                        fragment: Some(wgpu::FragmentState {
+                            module: &shader,
+                            entry_point: Some(if mode == 0 { tested } else { main }),
+                            compilation_options: Default::default(),
+                            targets: &[Some(wgpu::ColorTargetState { format, blend: crate::blend_state(mode), write_mask: wgpu::ColorWrites::COLOR })],
+                        }),
+                        multiview_mask: None,
+                        cache: None,
+                    })
                 })
-            })
-            .collect();
-        Ui { layout, sampler, pipelines, textures: Vec::new(), fonts: Vec::new(), quads: Vec::new(), viewport: None, anchor: Anchor::Middle, vertical: Vertical::Middle, side: 0.0, top: 0.0, sided: Vec::new(), risen: Vec::new(), opaque: Vec::new(), kept: Vec::new(), split: None, serial: LAYERS.fetch_add(1, Ordering::Relaxed) }
+                .collect()
+        };
+        let pipelines = set("ui", "fs_tested", "fs_main");
+        let sharp = set("ui sharp text", "fs_sharp_tested", "fs_sharp");
+        let smooth = set("ui smooth text", "fs_smooth_tested", "fs_smooth");
+        Ui { layout, sampler, filtering, pipelines, sharp, smooth, textures: Vec::new(), fonts: Vec::new(), quads: Vec::new(), viewport: None, anchor: Anchor::Middle, vertical: Vertical::Middle, side: 0.0, top: 0.0, sided: Vec::new(), risen: Vec::new(), opaque: Vec::new(), kept: Vec::new(), split: None, serial: LAYERS.fetch_add(1, Ordering::Relaxed) }
     }
 
     /// A new frame's quads, for a `size` target: none yet, and those made
@@ -553,6 +716,11 @@ impl Ui {
 
     /// A texture for the layer: RGBA8, top row first. Its index.
     pub fn add_texture(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32, rgba: &[u8]) -> usize {
+        self.add_texture_as(device, queue, width, height, rgba, false)
+    }
+
+    /// `add_texture`, a font's (`font`) with its filtered binding too.
+    fn add_texture_as(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32, rgba: &[u8], font: bool) -> usize {
         let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("ui"),
@@ -566,15 +734,18 @@ impl Ui {
         });
         queue.write_texture(tex.as_image_copy(), rgba, wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(width * 4), rows_per_image: Some(height) }, size);
         let view = tex.create_view(&Default::default());
-        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("ui"),
-            layout: &self.layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-            ],
-        });
-        self.textures.push(Texture { bg, width, height });
+        let bind = |sampler: &wgpu::Sampler| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("ui"),
+                layout: &self.layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+                ],
+            })
+        };
+        let (bg, filtered) = (bind(&self.sampler), font.then(|| bind(&self.filtering)));
+        self.textures.push(Texture { bg, filtered, width, height });
         self.textures.len() - 1
     }
 
@@ -597,36 +768,11 @@ impl Ui {
         (t.width, t.height)
     }
 
-    /// A font, packed into rows of a 2048-wide texture. Its index.
+    /// A font, packed into rows of a 2048-wide texture (`pack`). Its index.
     pub fn add_font(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, font: &esf::font::Font) -> usize {
-        let (w, h) = (2048u32, font.height);
-        let (mut x, mut row) = (0u32, 0u32);
-        let mut places = Vec::new();
-        for g in &font.glyphs {
-            if x + g.width as u32 > w {
-                x = 0;
-                row += 1;
-            }
-            places.push((x, row));
-            x += g.width as u32 + 1;
-        }
-        let ah = (row + 1) * (h + 1);
-        let mut atlas = vec![0u8; (w * ah * 4) as usize];
-        let mut glyphs = HashMap::new();
-        for (g, &(gx, gr)) in font.glyphs.iter().zip(&places) {
-            let gy = gr * (h + 1);
-            for y in 0..h {
-                for xx in 0..g.width as u32 {
-                    let s = ((y * g.width as u32 + xx) * 4) as usize;
-                    let d = (((gy + y) * w + gx + xx) * 4) as usize;
-                    atlas[d..d + 4].copy_from_slice(&g.rgba[s..s + 4]);
-                }
-            }
-            let uv = [gx as f32 / w as f32, gy as f32 / ah as f32, (gx + g.width as u32) as f32 / w as f32, (gy + h) as f32 / ah as f32];
-            glyphs.entry(g.code).or_insert((g.width as u32, uv));
-        }
-        let tex = self.add_texture(device, queue, w, ah, &atlas);
-        self.fonts.push(Font { tex, height: h, glyphs });
+        let (atlas, ah, glyphs) = pack(font, 2048);
+        let tex = self.add_texture_as(device, queue, 2048, ah, &atlas, true);
+        self.fonts.push(Font { tex, height: font.height, glyphs });
         self.fonts.len() - 1
     }
 
@@ -713,8 +859,12 @@ impl Ui {
         let mut v = Vec::with_capacity(quads.len() * 6);
         for q in quads {
             let rect = q.uv.iter().fold([f32::MAX, f32::MAX, f32::MIN, f32::MIN], |r, t| [r[0].min(t[0]), r[1].min(t[1]), r[2].max(t[0]), r[3].max(t[1])]);
+            // a font's quad as its filter draws it (`ringed`), with no bias:
+            // that picks a nearest texel, and a font's mixes are its filter's
+            let t = &self.textures[q.tex];
+            let (q, bias) = if t.filtered.is_some() { (ringed(q, t.width, t.height), 0.0) } else { (*q, SAMPLE_BIAS) };
             let p = |i: usize| Vertex {
-                pos: [(ox + (q.pos[i][0] - SAMPLE_BIAS) * sx) / tw * 2.0 - 1.0, 1.0 - (oy + (q.pos[i][1] - SAMPLE_BIAS) * sy) / th * 2.0],
+                pos: [(ox + (q.pos[i][0] - bias) * sx) / tw * 2.0 - 1.0, 1.0 - (oy + (q.pos[i][1] - bias) * sy) / th * 2.0],
                 uv: q.uv[i],
                 color: q.color,
                 rect,
@@ -740,8 +890,15 @@ impl Ui {
                 continue;
             }
             pass.set_scissor_rect(a, b, c - a, d - b);
-            pass.set_pipeline(&self.pipelines[blend.min(4) as usize]);
-            pass.set_bind_group(0, &self.textures[tex].bg, &[]);
+            // a font's quads through its filter, the rest the nearest texel
+            let t = &self.textures[tex];
+            let (pipelines, bg) = match (&t.filtered, text_filter()) {
+                (Some(f), TextFilter::Sharp) => (&self.sharp, f),
+                (Some(f), TextFilter::Smooth) => (&self.smooth, f),
+                (None, _) => (&self.pipelines, &t.bg),
+            };
+            pass.set_pipeline(&pipelines[blend.min(4) as usize]);
+            pass.set_bind_group(0, bg, &[]);
             pass.draw((i * 6) as u32..(j * 6) as u32, 0..1);
             i = j;
         }
@@ -751,7 +908,65 @@ impl Ui {
 
 #[cfg(test)]
 mod tests {
-    use super::{Anchor, Quad, Vertical, note, place, rise, rose, settle, settle_along, side, top, viewport_of};
+    use super::{Anchor, Quad, Vertical, note, pack, place, rise, rose, settle, settle_along, side, top, viewport_of};
+
+    /// A glyph `w` wide and 3 tall: every texel ink of colour `c` but its
+    /// middle row's first, clear.
+    fn glyph(code: u16, w: u8, c: [u8; 3]) -> esf::font::Glyph {
+        let mut rgba = Vec::new();
+        for y in 0..3 {
+            for x in 0..w {
+                rgba.extend(if y == 1 && x == 0 { [0, 0, 0, 0] } else { [c[0], c[1], c[2], 255] });
+            }
+        }
+        esf::font::Glyph { code, width: w, rgba }
+    }
+
+    /// Whether every texel of the ring round `r` (x0, y0, x1, y1 exclusive)
+    /// in a `width`-wide atlas is clear.
+    fn ring_clear(atlas: &[u8], width: u32, r: [u32; 4]) -> bool {
+        let a = |x: u32, y: u32| atlas[((y * width + x) * 4 + 3) as usize];
+        (r[0] - 1..=r[2]).all(|x| a(x, r[1] - 1) == 0 && a(x, r[3]) == 0) && (r[1] - 1..=r[3]).all(|y| a(r[0] - 1, y) == 0 && a(r[2], y) == 0)
+    }
+
+    /// Each glyph is its own texels, at its rectangle, inside a clear ring
+    /// (rows filled to the atlas's last column included), the clear texels
+    /// next to its ink of the ink's colour; a code's first glyph is kept.
+    /// The control: ink planted in a ring is seen.
+    #[test]
+    fn a_packed_glyph_keeps_a_clear_ring_of_its_inks_colour() {
+        let red = [200, 10, 10];
+        // the first two fill a 16-wide row, ring and all (1 + 6 + 2 + 6 + 1)
+        let font = esf::font::Font { id: 1, height: 3, glyphs: vec![glyph(65, 6, red), glyph(66, 6, [10, 200, 10]), glyph(67, 1, [10, 10, 200]), glyph(68, 5, red), glyph(65, 2, [0, 0, 0])] };
+        let (atlas, ah, glyphs) = pack(&font, 16);
+        assert_eq!(ah, 2 * 5, "two rows of 3, each glyph's ring above and below");
+        assert_eq!(glyphs[&65].0, 6, "a code's first glyph");
+        for (k, g) in font.glyphs.iter().take(4).enumerate() {
+            let uv = glyphs[&g.code].1;
+            let r = [(uv[0] * 16.0).round() as u32, (uv[1] * ah as f32).round() as u32, (uv[2] * 16.0).round() as u32, (uv[3] * ah as f32).round() as u32];
+            assert_eq!((r[2] - r[0], r[3] - r[1]), (g.width as u32, 3), "glyph {k}");
+            for y in 0..3 {
+                for x in 0..g.width as u32 {
+                    let (d, s) = ((((r[1] + y) * 16 + r[0] + x) * 4) as usize, ((y * g.width as u32 + x) * 4) as usize);
+                    let ink = g.rgba.chunks(4).find(|t| t[3] != 0).unwrap();
+                    let want = if g.rgba[s + 3] == 0 { [ink[0], ink[1], ink[2], 0] } else { [g.rgba[s], g.rgba[s + 1], g.rgba[s + 2], 255] };
+                    assert_eq!(atlas[d..d + 4], want, "glyph {k} texel {x},{y}: its own, a clear one of its ink's colour");
+                }
+            }
+            assert!(ring_clear(&atlas, 16, r), "glyph {k}'s ring");
+            let left = (((r[1] + 1) * 16 + r[0] - 1) * 4) as usize;
+            let ink = g.rgba.chunks(4).find(|t| t[3] != 0).unwrap();
+            assert_eq!(atlas[left..left + 3], ink[..3], "glyph {k}: the ring by its ink takes its colour");
+        }
+        let uv = glyphs[&66].1;
+        assert_eq!((uv[2] * 16.0).round() as u32, 15, "the second glyph's ring is the row's last column");
+        assert_eq!((glyphs[&67].1[1] * ah as f32).round() as u32, 6, "the third glyph on the next row");
+        // the control
+        let r = [1, 1, 7, 4];
+        let mut planted = atlas.clone();
+        planted[((4 * 16 + 3) * 4 + 3) as usize] = 255;
+        assert!(ring_clear(&atlas, 16, r) && !ring_clear(&planted, 16, r), "ink in the ring is seen");
+    }
 
     fn quad(x0: f32, x1: f32) -> Quad {
         Quad { tex: 0, blend: 0, pos: [[x0, 10.0], [x1, 10.0], [x1, 20.0], [x0, 20.0]], uv: [[0.0; 2]; 4], color: [1.0; 4], clip: None }

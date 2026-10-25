@@ -20,8 +20,10 @@
 //!   thicker to the right, `fog`), Frame Rate (30, 60 or the display's,
 //!   `settings::frame_due`), VSync (natively: a frame shown only at the
 //!   display's refresh, or at once; `settings::vsync`, the surface's present
-//!   mode in `viewer`) and Art (Frontiers' or the 2002 disc's, `era`, as F9
-//!   swaps it: drawn as it moves, the 2002 disc asked for the first time);
+//!   mode in `viewer`), Art (Frontiers' or the 2002 disc's, `era`, as F9
+//!   swaps it: drawn as it moves, the 2002 disc asked for the first time)
+//!   and Text (Sharp or Smooth: the game's font scaled to the window with
+//!   even strokes, or filtered as the PS2 filters it, `render::ui::TextFilter`);
 //! - UI: Ability Bars (the game's 2, or 3 or 4: the HUD's quick menus and
 //!   the spell book's slots, `hudmenu`), Target of Target (Off by default:
 //!   the target's bar shows whom the target targets, `Play::target_of_target`)
@@ -509,8 +511,8 @@ impl WndOptions {
     /// the game's 24 as a slider does, 200 to 204 its last, and NPC/PC View
     /// Distance (24) by fifties from the game's 100 to 1000; Art (25) and
     /// VSync (26) turn over, VSync natively only (a page's stays on with
-    /// sound 9: the browser paces it); Target of Target (31) and Update
-    /// Notices (29) turn over. A
+    /// sound 9: the browser paces it); Text (30) goes between Sharp and
+    /// Smooth; Target of Target (31) and Update Notices (29) turn over. A
     /// slider (`slider_at`) makes its own
     /// sound, as a volume does; every other row sound 11.
     fn change(&mut self, o: &mut GameOptions, d: i32, cues: &mut Vec<i32>, ups: &mut Vec<OptionsUp>) {
@@ -578,6 +580,8 @@ impl WndOptions {
                     29 => c.update_notices = !c.update_notices,
                     // Target of Target (`Play::target_of_target`)
                     31 => c.target_of_target = !c.target_of_target,
+                    // Text: every font drawn from the next frame (`viewer`)
+                    30 => c.text = c.text.other(),
                     22 => {
                         let (lo, n) = (crate::settings::ABILITY_BARS_GAME, crate::hudmenu::MAX_BARS as u8 - crate::settings::ABILITY_BARS_GAME + 1);
                         c.ability_bars = lo + (c.ability_bars.saturating_sub(lo).min(n - 1) + if d < 0 { n - 1 } else { 1 }) % n;
@@ -986,7 +990,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 17] = [
+const EXTENDED_ITEMS: [(i32, &str); 18] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1003,6 +1007,7 @@ const EXTENDED_ITEMS: [(i32, &str); 17] = [
     (25, "Art"),
     (26, "VSync"),
     (29, "Update Notices"),
+    (30, "Text"),
     (31, "Target of Target"),
 ];
 
@@ -1028,7 +1033,7 @@ struct Category {
 /// Extended's categories, in its menu's order (the user's: "Extended, then
 /// Video, UI, Controller, etc."), each a page of `PAGE_MOST` rows at most.
 const CATEGORIES: [Category; 6] = [
-    Category { name: "Video", items: &[13, 20, 14, 26, 25], note: Note::None },
+    Category { name: "Video", items: &[13, 20, 14, 26, 25, 30], note: Note::None },
     Category { name: "UI", items: &[22, 31, 29], note: Note::None },
     Category { name: "Controller", items: &[16, 19], note: Note::Reads },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
@@ -1092,6 +1097,10 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         26 => on_off(crate::settings::vsync()),
         29 => on_off(c.update_notices),
         31 => on_off(c.target_of_target),
+        30 => wide(match c.text {
+            render::ui::TextFilter::Sharp => "Sharp",
+            render::ui::TextFilter::Smooth => "Smooth",
+        }),
         _ => return None,
     })
 }
@@ -1332,7 +1341,15 @@ mod tests {
         assert_eq!(settings::art(), esf::Era::Frontiers, "and back: two values");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (4, Some(&9)), "Video's last row");
+        assert_eq!(w.item, 30, "Text");
+        assert_eq!(settings::client().text, render::ui::TextFilter::Sharp, "Sharp, the default");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::client().text, cues.last()), (render::ui::TextFilter::Smooth, Some(&11)), "Smooth");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert_eq!(settings::client().text, render::ui::TextFilter::Sharp, "and back: two values");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (5, Some(&9)), "Video's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!((w.page, w.cat, w.cat_sel, w.item), (3, None, 0, -1), "back to the categories, Video still lit");
         // UI: Ability Bars

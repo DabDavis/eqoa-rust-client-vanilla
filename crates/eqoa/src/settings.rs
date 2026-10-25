@@ -517,6 +517,11 @@ pub struct ClientOptions {
     /// default): the target's bar shows whom the target is targeting, as its
     /// channel says (`Play::target_of_target`)
     pub target_of_target: bool,
+    /// Text: how the game's font is drawn scaled to the window, wherever it
+    /// is drawn (`render::ui::TextFilter`): Sharp, crisp, or Smooth, the
+    /// PS2's own filtering (F3 20261024-200725: "smooth out the text as per
+    /// live").
+    pub text: render::ui::TextFilter,
 }
 
 /// The game's ability bars (with the expansion's second).
@@ -554,6 +559,7 @@ impl Default for ClientOptions {
             shouts: true,
             update_notices: true,
             target_of_target: false,
+            text: render::ui::TextFilter::Sharp,
         }
     }
 }
@@ -565,8 +571,8 @@ impl ClientOptions {
     /// it is not Auto, Capture Controller only when on, Sound in Background
     /// only when off, Ability Bars, NPC/PC Display and NPC/PC View Distance
     /// only when not the game's, Art only when it is the 2002 disc's, VSync,
-    /// Shouts and Update Notices only when off, and Target of Target only
-    /// when on.
+    /// Shouts and Update Notices only when off, Target of Target only when
+    /// on, and Text only when Smooth.
     pub fn to_text(self) -> String {
         let mut s = format!("lod={}\nbrightness={}\ncamera_distance={}\n", if self.lod { "on" } else { "off" }, self.brightness, self.camera_distance);
         if let Some(r) = self.frame_rate {
@@ -614,6 +620,9 @@ impl ClientOptions {
         // Target of Target only when on
         if self.target_of_target {
             s.push_str("target_of_target=on\n");
+        }
+        if self.text == render::ui::TextFilter::Smooth {
+            s.push_str("text=smooth\n");
         }
         s
     }
@@ -664,6 +673,8 @@ impl ClientOptions {
                 ("update_notices", "off") => c.update_notices = false,
                 ("target_of_target", "on") => c.target_of_target = true,
                 ("target_of_target", "off") => c.target_of_target = false,
+                ("text", "sharp") => c.text = render::ui::TextFilter::Sharp,
+                ("text", "smooth") => c.text = render::ui::TextFilter::Smooth,
                 ("ability_bars", v) => {
                     if let Some(n) = v.parse::<u8>().ok().filter(|&n| (ABILITY_BARS_GAME as i32..=crate::hudmenu::MAX_BARS).contains(&(n as i32))) {
                         c.ability_bars = n;
@@ -959,7 +970,7 @@ pub fn describe() -> String {
         FrameRate::Display => "the display's",
     };
     format!(
-        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, art {}, update notices {}, shouts {}, target of target {}; {}",
+        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, art {}, update notices {}, shouts {}, target of target {}, text {}; {}",
         if c.lod { "on" } else { "off" },
         c.brightness,
         c.fog,
@@ -983,6 +994,10 @@ pub fn describe() -> String {
         if c.update_notices { "on" } else { "off" },
         if c.shouts { "heard" } else { "ignored (kept)" },
         if c.target_of_target { "on" } else { "off" },
+        match c.text {
+            render::ui::TextFilter::Sharp => "sharp",
+            render::ui::TextFilter::Smooth => "smooth",
+        },
         kept_where()
     )
 }
@@ -1373,8 +1388,14 @@ mod tests {
             ClientOptions { entity_view: 450, ..Default::default() },
             ClientOptions { entity_view: ENTITY_VIEW_MAX, ..Default::default() },
             ClientOptions { art: esf::Era::Y2002, ..Default::default() },
+            ClientOptions { text: render::ui::TextFilter::Smooth, ..Default::default() },
         ] {
             assert_eq!(ClientOptions::from_text(&c.to_text()), c);
+        }
+        assert_eq!(ClientOptions { text: render::ui::TextFilter::Smooth, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\ntext=smooth\n", "Text only when Smooth");
+        assert_eq!(ClientOptions::from_text("text=sharp").text, render::ui::TextFilter::Sharp);
+        for bad in ["text=blurry", "text=", "text=1"] {
+            assert_eq!(ClientOptions::from_text(bad).text, render::ui::TextFilter::Sharp, "{bad}: Sharp, the default");
         }
         assert_eq!(ClientOptions { entity_slots: 128, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nentity_slots=128\n", "NPC/PC Display only when not the game's");
         assert_eq!(ClientOptions::from_text("entity_slots=100").entity_slots, 100, "any number in range");
@@ -1425,7 +1446,7 @@ mod tests {
             "Screen Shake only off, Capture Controller only on"
         );
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, ability bars 2, npc/pc display 24, npc/pc view distance 100, art frontiers, update notices on, shouts heard, target of target off; kept in the page's storage");
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, ability bars 2, npc/pc display 24, npc/pc view distance 100, art frontiers, update notices on, shouts heard, target of target off, text sharp; kept in the page's storage");
         testing::reset(true);
         assert!(describe().ends_with("refused: nothing is kept"));
         testing::reset(false);
