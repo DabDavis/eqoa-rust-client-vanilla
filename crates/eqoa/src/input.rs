@@ -723,6 +723,10 @@ pub struct Gamepads {
     xinput: Option<crate::xinput::XInput>,
     #[cfg(windows)]
     hid: Option<crate::hidpad::Hid>,
+    /// a Mac's PlayStation controllers' motors (`hidpad::mac`), from the
+    /// first time they are to run
+    #[cfg(target_os = "macos")]
+    mac: Option<crate::hidpad::mac::Mac>,
     /// gilrs's PlayStation controllers not (yet) read over HID, each since
     /// when gilrs has it (`read`)
     #[cfg(windows)]
@@ -800,6 +804,8 @@ impl Gamepads {
             xinput: (!none).then(crate::xinput::XInput::default),
             #[cfg(windows)]
             hid: (!none).then(crate::hidpad::Hid::start),
+            #[cfg(target_os = "macos")]
+            mac: None,
             #[cfg(windows)]
             unmatched: std::collections::HashMap::new(),
             #[cfg(target_arch = "wasm32")]
@@ -1056,7 +1062,13 @@ impl Gamepads {
                 let between = self.gilrs_seen.get_mut(&id).map_or(0, |l| l.take(report.buttons));
                 let raw = report.sticks;
                 report.rest(self.dead_zone);
-                out.push(Controller { name, report, between, raw, rumbles: pad.is_ff_supported(), label, source: Source::Gilrs(id), order, notes: Vec::new() });
+                // a Mac's PlayStation controller rumbles through IOKit
+                // (`hidpad::mac`), gilrs having no force feedback there
+                #[cfg(target_os = "macos")]
+                let rumbles = pad.is_ff_supported() || pad.vendor_id().zip(pad.product_id()).is_some_and(|(v, p)| crate::hidpad::Model::of(v, p).is_some());
+                #[cfg(not(target_os = "macos"))]
+                let rumbles = pad.is_ff_supported();
+                out.push(Controller { name, report, between, raw, rumbles, label, source: Source::Gilrs(id), order, notes: Vec::new() });
             }
             // what the ones passed over pressed (read through XInput or HID
             // instead) is not kept for later; a controller gone, forgotten
@@ -1161,6 +1173,25 @@ impl Gamepads {
             }
             self.effect = None;
             let Some(g) = self.gilrs.as_mut() else { return };
+            #[cfg(target_os = "macos")]
+            {
+                let ps: Vec<(u16, u16)> = self
+                    .rumble_to
+                    .iter()
+                    .filter_map(|s| match s {
+                        Source::Gilrs(id) => g.connected_gamepad(*id).and_then(|p| p.vendor_id().zip(p.product_id())),
+                    })
+                    .filter(|&(v, p)| crate::hidpad::Model::of(v, p).is_some())
+                    .collect();
+                if !ps.is_empty() && self.mac.is_none() && act != [0, 0] {
+                    self.mac = crate::hidpad::mac::Mac::start();
+                }
+                if let Some(mac) = &self.mac {
+                    for ids in ps {
+                        mac.rumble(ids, crate::hidpad::Motors::of_act(act), ms);
+                    }
+                }
+            }
             if act == [0, 0] || ms == 0 {
                 return;
             }
@@ -1209,6 +1240,10 @@ impl Gamepads {
             #[cfg(windows)]
             if let Some(h) = self.hid.as_mut() {
                 h.stop_motors();
+            }
+            #[cfg(target_os = "macos")]
+            if self.mac.is_some() && !self.rumble_to.is_empty() {
+                self.rumble([0, 0], 0);
             }
         }
     }

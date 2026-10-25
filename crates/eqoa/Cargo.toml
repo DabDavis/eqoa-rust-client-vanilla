@@ -51,6 +51,11 @@ libc = "0.2.191"
 objc2 = "0.6.5"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString"] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSMenu", "NSMenuItem", "NSResponder"] }
+# A PlayStation controller's motors over IOKit (`hidpad::mac`): gilrs reads
+# it there and has no force feedback. The versions and features gilrs's own
+# IOKit reading already brings.
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFNumber", "CFSet", "CFString"] }
+objc2-io-kit = { version = "0.3.2", default-features = false, features = ["std", "libc", "hid"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_HumanInterfaceDevice", "Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_UI_Input_XboxController"] }

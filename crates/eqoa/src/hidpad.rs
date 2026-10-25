@@ -350,6 +350,195 @@ pub fn bluetooth(path: &str) -> bool {
 #[cfg(windows)]
 pub use device::Hid;
 
+/// A Mac's PlayStation controllers' motors (`Gamepads::rumble`): gilrs reads
+/// them through IOKit and has no force feedback there, so their motors are
+/// set here, by `IOHIDDeviceSetReport` with `rumble_report`'s bytes. Over
+/// USB only: a Bluetooth one's first output report turns it to its full
+/// reports, which gilrs's reading (the HID descriptor's report 0x01) cannot
+/// read, and the controller would stop answering the game. One thread owns
+/// IOKit's side (its objects stay on it): each ask written to every USB
+/// controller with those USB ids (looked for again at most once a second),
+/// the motors stopped when their time is up or the program ends.
+#[cfg(target_os = "macos")]
+pub mod mac {
+    use super::{DUALSENSE_RUMBLE_V2, Model, Motors, dualsense_firmware, rumble_report};
+    use objc2_core_foundation::{CFNumber, CFRetained, CFString};
+    use objc2_io_kit::{IOHIDDevice, IOHIDManager, IOHIDReportType, kIOHIDOptionsTypeNone, kIOHIDProductIDKey, kIOHIDTransportKey, kIOHIDVendorIDKey, kIOReturnSuccess};
+    use std::ptr::NonNull;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    /// How long past its time a motor runs before the thread stops it
+    /// itself (the game stops it on time while its frames come).
+    const GRACE_MS: u64 = 100;
+
+    /// The thread, and what it is asked: a controller's USB ids, its motors,
+    /// for at most this many ms.
+    pub struct Mac {
+        tx: mpsc::Sender<((u16, u16), Motors, u32)>,
+        done: mpsc::Receiver<()>,
+    }
+
+    impl Mac {
+        pub fn start() -> Option<Mac> {
+            let (tx, rx) = mpsc::channel();
+            let (ended, done) = mpsc::channel();
+            std::thread::Builder::new()
+                .name("hid motors".into())
+                .spawn(move || {
+                    run(&rx);
+                    let _ = ended.send(());
+                })
+                .map_err(|e| crate::say(&format!("gamepad: no thread for the motors: {e}")))
+                .ok()?;
+            Some(Mac { tx, done })
+        }
+
+        /// The motors of the USB PlayStation controllers with these ids run
+        /// as `m`, for at most `ms`.
+        pub fn rumble(&self, ids: (u16, u16), m: Motors, ms: u32) {
+            let _ = self.tx.send((ids, m, ms));
+        }
+    }
+
+    impl Drop for Mac {
+        /// Every motor stopped as the program ends (a quarter of a second at
+        /// most).
+        fn drop(&mut self) {
+            let (gone, _) = mpsc::channel();
+            drop(std::mem::replace(&mut self.tx, gone));
+            let _ = self.done.recv_timeout(Duration::from_millis(250));
+        }
+    }
+
+    /// A USB PlayStation controller opened to be written to.
+    struct Pad {
+        dev: CFRetained<IOHIDDevice>,
+        ids: (u16, u16),
+        model: Model,
+        v2: bool,
+        /// what it was last told, and until when
+        on: Motors,
+        until: Option<Instant>,
+    }
+
+    fn number(dev: &IOHIDDevice, key: &std::ffi::CStr) -> Option<i32> {
+        let key = CFString::from_str(key.to_str().ok()?);
+        dev.property(&key)?.downcast::<CFNumber>().ok()?.as_i32()
+    }
+
+    fn text(dev: &IOHIDDevice, key: &std::ffi::CStr) -> Option<String> {
+        let key = CFString::from_str(key.to_str().ok()?);
+        Some(dev.property(&key)?.downcast::<CFString>().ok()?.to_string())
+    }
+
+    /// A DualSense's firmware version (its feature report 0x20).
+    fn firmware(dev: &IOHIDDevice) -> Option<u16> {
+        let mut buf = [0u8; 64];
+        buf[0] = 0x20;
+        let mut len: objc2_core_foundation::CFIndex = buf.len() as _;
+        // SAFETY: a buffer and its length, both alive for the call
+        let r = unsafe { dev.report(IOHIDReportType::Feature, 0x20, NonNull::new(buf.as_mut_ptr())?, NonNull::from(&mut len)) };
+        if r == kIOReturnSuccess { dualsense_firmware(&buf[..(len.max(0) as usize).min(64)]) } else { None }
+    }
+
+    /// The USB PlayStation controllers present now, each opened (not
+    /// alone: gilrs reads it too).
+    fn look() -> Vec<Pad> {
+        let manager = IOHIDManager::new(None, kIOHIDOptionsTypeNone);
+        // SAFETY: no dictionary: every device, the Sony ones kept below
+        unsafe { manager.set_device_matching(None) };
+        if manager.open(kIOHIDOptionsTypeNone) != kIOReturnSuccess {
+            return Vec::new();
+        }
+        let Some(set) = manager.devices() else { return Vec::new() };
+        let n = set.count().max(0) as usize;
+        let mut values: Vec<*const std::ffi::c_void> = vec![std::ptr::null(); n];
+        // SAFETY: room for every value of the set
+        unsafe { set.values(values.as_mut_ptr()) };
+        let mut out = Vec::new();
+        for v in values {
+            // SAFETY: the manager's set holds IOHIDDevices, alive while it is;
+            // each kept is retained
+            let Some(dev) = NonNull::new(v as *mut IOHIDDevice).map(|p| unsafe { CFRetained::retain(p) }) else { continue };
+            let (Some(vendor), Some(product)) = (number(&dev, kIOHIDVendorIDKey), number(&dev, kIOHIDProductIDKey)) else { continue };
+            let ids = (vendor as u16, product as u16);
+            let Some(model) = Model::of(ids.0, ids.1) else { continue };
+            if text(&dev, kIOHIDTransportKey).is_none_or(|t| t != "USB") {
+                continue;
+            }
+            if dev.open(kIOHIDOptionsTypeNone) != kIOReturnSuccess {
+                continue;
+            }
+            let v2 = model != Model::DualSense || firmware(&dev).is_none_or(|v| v >= DUALSENSE_RUMBLE_V2);
+            out.push(Pad { dev, ids, model, v2, on: Motors::OFF, until: None });
+        }
+        out
+    }
+
+    fn write(p: &mut Pad, m: Motors) {
+        let mut r = rumble_report(p.model, false, m, 0, p.v2);
+        let Some(ptr) = NonNull::new(r.as_mut_ptr()) else { return };
+        // SAFETY: the report's bytes, alive for the call (it is synchronous)
+        let res = unsafe { p.dev.set_report(IOHIDReportType::Output, r[0] as _, ptr, r.len() as _) };
+        if res != kIOReturnSuccess && p.on == Motors::OFF {
+            crate::say(&format!("gamepad: a {} took no report of its motors (IOKit {res:#x})", p.model.label()));
+        }
+        p.on = m;
+    }
+
+    fn run(rx: &mpsc::Receiver<((u16, u16), Motors, u32)>) {
+        let mut pads: Vec<Pad> = Vec::new();
+        let mut looked: Option<Instant> = None;
+        let mut said = false;
+        loop {
+            let next = pads.iter().filter_map(|p| p.until).min();
+            let ask = match next {
+                Some(t) => match rx.recv_timeout(t.saturating_duration_since(Instant::now())) {
+                    Ok(a) => Some(a),
+                    Err(mpsc::RecvTimeoutError::Timeout) => None,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                },
+                None => match rx.recv() {
+                    Ok(a) => Some(a),
+                    Err(_) => break,
+                },
+            };
+            let now = Instant::now();
+            // the motors whose time is up
+            for p in pads.iter_mut().filter(|p| p.until.is_some_and(|t| t <= now)) {
+                write(p, Motors::OFF);
+                p.until = None;
+            }
+            let Some((ids, m, ms)) = ask else { continue };
+            if m != Motors::OFF && looked.is_none_or(|t| now.duration_since(t) >= Duration::from_secs(1)) {
+                // the ones still running carried over, the new ones taken
+                let mut fresh = look();
+                for f in fresh.iter_mut() {
+                    if let Some(old) = pads.iter().find(|p| p.ids == f.ids && p.on != Motors::OFF) {
+                        (f.on, f.until) = (old.on, old.until);
+                    }
+                }
+                pads = fresh;
+                looked = Some(now);
+                if !said && pads.iter().any(|p| p.ids == ids) {
+                    crate::say(&format!("gamepad: {} USB PlayStation controller(s) rumble over IOKit", pads.len()));
+                    said = true;
+                }
+            }
+            for p in pads.iter_mut().filter(|p| p.ids == ids) {
+                if p.on != m {
+                    write(p, m);
+                }
+                p.until = (m != Motors::OFF).then(|| now + Duration::from_millis(ms as u64 + GRACE_MS));
+            }
+        }
+        for p in pads.iter_mut().filter(|p| p.on != Motors::OFF) {
+            write(p, Motors::OFF);
+        }
+    }
+}
+
 /// Windows' side: the HID interfaces present, looked through once a second on
 /// a thread of its own (a walk of the system's device lists takes
 /// milliseconds), and each controller's reports read on the game's thread
