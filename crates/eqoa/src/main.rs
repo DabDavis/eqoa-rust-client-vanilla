@@ -657,7 +657,7 @@ fn login(host: &str, user: &str, pass: &str) -> Result<(net::session::Session, n
                         if std::env::var_os("EQOA_GAME_PORT").is_some() {
                             ep = (ep & !0xFFFF_0000) | (port("EQOA_GAME_PORT", 10070) as u64) << 16;
                         }
-                        s.connect_shard(ep);
+                        s.connect_shard(ep, crate::s2::get().shard_hello().as_deref());
                     }
                 }
                 Event::Characters(list) => {

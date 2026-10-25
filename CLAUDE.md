@@ -72,7 +72,12 @@ current.
   WORDS.TXT) is read as Sandstorm's SS stub applies S2 on a PS2, feature by feature at the addresses S2 hooks; no S2, or one the
   stub refuses, is retail. Never commit an S2 or anything read out of one (Sandstorm's code); tests take them from
   `$EQOA_S2_BUILDS` (default: beside this repository) and skip without. A test that needs rules runs under `s2::with_rules`
-  (its thread's own), never `s2::set`.
+  (its thread's own), never `s2::set`. What the live S2 tells the server is sent as S2 sends it (the user, 2026-10-25, for
+  Sanctuary): the shard hello (`s2::Hello`, `Rules::shard_hello`) and UseSkill's record of the pad (`s2::Presses`), each from
+  what this client really has: no hardware address, the install id kept as `ii` in the server's folder, the presses its own
+  input made (`input::from_device`: a run with an input script says its presses were not the player's). Nothing invented
+  to look like a PS2's; a new field S2 adds is the user's call. The July S2's hello is not sent (our server reads 19 as
+  its hard-disk loader's 30 worlds).
 - Game-logic floats go through `ee::*`, never host `f32` operators; every compare too.
 - Port from the decomp (`../decomp/src`), not from the Go client: the Go client's
   differences from the original are listed in `../claude-notes/go-client-vs-decomp-audit-20261015.md`.

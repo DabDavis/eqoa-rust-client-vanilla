@@ -18,10 +18,18 @@
 //! it (`image`: the Group menu's Search, Register and Unregister, read by
 //! `client_image` like any other menu). What a patch server delivers is kept
 //! in the server's own folder; with no S2 there, or one its stub would
-//! refuse, the client is retail's, as before. Not taken from S2, on purpose:
-//! its identity and telemetry layer (DiscVersion 21 with a hardware address
-//! and an install id, the pad timing on UseSkill, 0x07E1's heap lines, the
-//! 0x1505/0x1507 crash reports) and its PS2 memory layer.
+//! refuse, the client is retail's, as before.
+//!
+//! What the live S2 tells the server is taken too (the user, 2026-10-25, for
+//! a vampire's Sanctuary, which Sandstorm refuses "memcard patch 0
+//! outdated" without it): the shard connection's hello (`Hello`: DiscVersion
+//! 21, the boot patch's word, the patch's build, the device block) and
+//! UseSkill's record of the pad (`Presses`), each made as S2 makes it but
+//! from what this client has: no hardware address (S2 sends none when it
+//! finds no network interface), an install id kept in the server's folder as
+//! S2 keeps it on the card, the presses this client's own input made. Not
+//! taken: 0x07E1's heap lines, the 0x1505/0x1507 crash reports, and the PS2
+//! memory layer.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -437,6 +445,187 @@ mod at {
     /// slti v0, v0, 128: `VIClientPart2EF24::CanInvite`'s guild cap
     /// (`Count() >= 128` is full)
     pub const CLIENT_GUILD_CAP: u32 = 0x39D60;
+    /// li v0, 18: `ConnectShard`'s hello, its DiscVersion
+    pub const CLIENT_HELLO_VERSION: u32 = 0xD548;
+    /// lw v1, 0(s2): `ConnectShard` once the DiscVersion is written, where
+    /// S2 calls the rest of its hello
+    pub const CLIENT_HELLO_MORE: u32 = 0xD564;
+    /// ori v0, v0, 0x8000: `VIClient::Process` past its frame's wait, where
+    /// S2 reads the pad itself (a frame counted)
+    pub const CLIENT_PROCESS_PAD: u32 = 0x13784;
+    /// `VIClient::SetKey` past its dead test, where S2 records a pad key
+    pub const CLIENT_SET_KEY: u32 = 0x1B078;
+    /// `VIClient::Send0032`'s SendRaw, before which S2 adds its record
+    pub const CLIENT_SEND_0032: u32 = 0x17654;
+    /// The boot patch's SS block in SLUS_207.44: its first word, which S2's
+    /// hello reads
+    pub const BOOT_SS_BLOCK: u32 = 0x0015_7200;
+    /// S2's device block (the hardware address, a status byte, an interface
+    /// byte, the install id, twelve bytes more), which its hello sends
+    pub const DEVICE_BLOCK: u32 = 0x0015_7C84;
+    pub const DEVICE_BLOCK_LEN: u32 = 28;
+}
+
+/// The boot patch's SS block word (`at::BOOT_SS_BLOCK`), which S2's hello
+/// sends: 3 in the `SLUS_207.44` Sandstorm's disc patch makes (its xdelta as
+/// of 2026-10-23; August's, which `EQOA-local.iso` and eqoa-boot carry, made
+/// 2). This client boots no patched disc; it says what Sandstorm's own
+/// patch says now.
+pub const BOOT_SS_WORD: u32 = 3;
+
+/// `ConnectShard`'s hello as a patch makes it: its DiscVersion, then what
+/// the patch's cave writes after it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Hello {
+    /// retail 18, the July S2 19, the live one 21
+    pub version: u32,
+    /// the cave's writes, in order
+    pub more: Vec<HelloPart>,
+    /// the card file the device block's install id is kept in (`ii`), when
+    /// the cave makes the block
+    pub id_file: Option<String>,
+}
+
+/// One write of S2's hello cave.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum HelloPart {
+    /// a u32 the cave holds (the patch's build: 4 in July, 0x31 live)
+    Const(u32),
+    /// the u32 at an address the cave reads (`at::BOOT_SS_BLOCK`)
+    Word(u32),
+    /// that many bytes from an address (`at::DEVICE_BLOCK`)
+    Block(u32, u32),
+}
+
+impl Hello {
+    /// Whether it is the live S2's: the patch's numbers and the device
+    /// block whose install id is kept on the card.
+    pub fn has_device_block(&self) -> bool {
+        self.id_file.is_some() && self.more.contains(&HelloPart::Block(at::DEVICE_BLOCK, at::DEVICE_BLOCK_LEN))
+    }
+}
+
+/// S2's device block as this client makes it, once a run for each server's
+/// folder as S2 makes it once a boot (0x000FC630). S2 asks the network
+/// interfaces for a hardware address (`sceInetInterfaceControl` code 13)
+/// and, for the first with one, code 9's twelve bytes and an interface byte
+/// (0x00157880); this client has no PS2 network adapter to name, so they
+/// are the zeros S2 sends when it finds none, and the status byte's bit 1
+/// (an address found) is clear. The install id (bytes 8 to 16) comes out of
+/// the folder's `id_file` as S2 reads it off the card
+/// (`VIMemCardReadFile(name, block + 8, 8)`), its result in the status
+/// byte's bits 2 to 4; a short read mints one as S2 mints it (0x000FC760:
+/// the clock, then the CLIENT base plus the address's halves plus the clock
+/// << 13; the clock `clock`, the wall clock in play, where S2 has VITimer's
+/// count) and writes it there, the write's result in bits 5 to 7.
+fn make_device_block(dir: &Path, id_file: &str, clock: u32) -> [u8; 28] {
+    let mut b = [0u8; 28];
+    let path = dir.join(id_file);
+    // VIMemCardReadFile: the bytes read, -2 for no file, -1 a failure
+    let n: i32 = match std::fs::read(&path) {
+        Ok(d) => {
+            let k = d.len().min(8);
+            b[8..8 + k].copy_from_slice(&d[..k]);
+            k as i32
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => -2,
+        Err(_) => -1,
+    };
+    let short = (n < 8) as i32;
+    b[6] |= (((short + 1 - n.min(0)) & 7) << 2) as u8;
+    if short != 0 {
+        b[8..12].copy_from_slice(&clock.to_le_bytes());
+        b[12..16].copy_from_slice(&CLIENT_BASE.wrapping_add(clock << 13).to_le_bytes());
+        // VIMemCardWriteFile: 0 written, -1 not
+        let w: i32 = if std::fs::write(&path, &b[8..16]).is_ok() { 0 } else { -1 };
+        b[6] |= (((1 - w) & 7) << 5) as u8;
+    }
+    b
+}
+
+/// `make_device_block` for this run: the first connection to a server's
+/// shard makes its folder's, later ones send the same.
+fn device_block(dir: &Path, id_file: &str) -> [u8; 28] {
+    static MADE: std::sync::Mutex<Vec<(PathBuf, [u8; 28])>> = std::sync::Mutex::new(Vec::new());
+    let mut made = MADE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, b)) = made.iter().find(|(d, _)| d == dir) {
+        return *b;
+    }
+    let clock = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u32);
+    let b = make_device_block(dir, id_file, clock);
+    made.push((dir.to_path_buf(), b));
+    b
+}
+
+/// S2's record of the pad (its block at 0x000F9900), which a PS2 running
+/// the live S2 adds to every UseSkill, kept from this client's own input:
+/// `frame_end` is its read at the end of `VIClient::Process` (0x000F9A20: a
+/// frame counted), `key` its record of a pad key in `SetKey` (0x000F9BC0),
+/// `tail` the 11 bytes `Send0032` adds (0x000F9D20). The times are the
+/// client's clock (`m_p07568`, VITimer's ticks).
+#[derive(Clone, Debug, Default)]
+pub struct Presses {
+    /// +0x00: the frames counted
+    frame: u32,
+    /// +0x20: the last pad key pressed (128 + a `VIConsolePad` field)
+    key: i32,
+    /// +0x24: bit 0 S2's own pad read saw the press, bit 1 it read the pad
+    flags: u32,
+    /// +0x28: that key's hold the time before
+    hold: u32,
+    /// +0x2C: when it was pressed
+    time: u32,
+    /// +0x30: the frame it was pressed in
+    frame_pressed: u32,
+    /// +0x70: each of keys 132-147's press (0 while it is up) and last hold
+    keys: [(u32, u32); 16],
+}
+
+impl Presses {
+    /// The end of one of the game's frames.
+    pub fn frame_end(&mut self) {
+        self.frame = self.frame.wrapping_add(1);
+    }
+
+    /// Pad key `key` (132-147, the buttons; the sticks' 128-131 are not
+    /// kept) down or up at `now`. `seen`: the press is the player's own, on
+    /// a controller, the keyboard, the mouse or the touch screen, where S2
+    /// asks whether its own read of the pad has the button newly down (a
+    /// script's is not seen). The pad was read: bit 1, which S2 sets when
+    /// its read worked, is always set.
+    pub fn key(&mut self, key: i32, down: bool, now: u32, seen: bool) {
+        let Some(k) = usize::try_from(key - 132).ok().and_then(|i| self.keys.get_mut(i)) else { return };
+        if down {
+            k.0 = now;
+            self.time = now;
+            self.key = key;
+            self.frame_pressed = self.frame;
+            self.hold = k.1;
+            self.flags = seen as u32 | 2;
+        } else if k.0 != 0 {
+            k.1 = now.wrapping_sub(k.0);
+            k.0 = 0;
+        }
+    }
+
+    /// What `Send0032` adds after the target: when the last pad key was
+    /// pressed, the frame now, that key's hold the time before (0xFFFF when
+    /// none was measured or it does not fit), and the flags (bit 2: pressed
+    /// this frame) with the key's low four bits above them.
+    pub fn tail(&self) -> [u8; 11] {
+        let hold = if self.hold == 0 || self.hold >> 16 != 0 { 0xFFFF } else { self.hold as u16 };
+        let mut flags = self.flags;
+        if self.frame_pressed == self.frame {
+            flags |= 4;
+        }
+        flags |= ((self.key & 0xF) as u32) << 4;
+        let mut t = [0u8; 11];
+        t[0..4].copy_from_slice(&self.time.to_le_bytes());
+        t[4..8].copy_from_slice(&self.frame.to_le_bytes());
+        t[8..10].copy_from_slice(&hold.to_le_bytes());
+        t[10] = flags as u8;
+        t
+    }
 }
 
 /// `VIWndAuction::CanSell`'s last test, on the item's `m_maxStack` (the
@@ -532,6 +721,10 @@ pub struct Features {
     /// an armour set past retail's: its five slots' DictIDs, and the
     /// CHAR.ESF records (by file offset) registered under them
     pub armor_art: Vec<(u8, [u32; 5], [u32; 5])>,
+    /// `ConnectShard`'s hello
+    pub hello: Option<Hello>,
+    /// UseSkill carries S2's record of the pad
+    pub use_skill_record: bool,
 }
 
 impl Features {
@@ -571,7 +764,95 @@ impl Features {
         }
         f.read_worlds(img);
         f.read_set9(img);
+        f.read_hello(img);
+        f.read_presses(img);
         f
+    }
+
+    /// `ConnectShard`'s hello: its DiscVersion (`li v0, N`), and when S2
+    /// calls a cave after it, that cave's writes, each a `jalr` into
+    /// CLIENT's stream write of `a2` bytes: from an address the cave built,
+    /// or the u32 it last stored at 16(sp), a constant or a word it loaded.
+    /// A `jal` among them is the routine that makes the device block, whose
+    /// VIMemCardReadFile of eight bytes into the block's install id names
+    /// the id's card file. A write of another shape leaves the hello
+    /// unread.
+    fn read_hello(&mut self, img: &Image) {
+        let Some(w) = img.word(CLIENT_BASE + at::CLIENT_HELLO_VERSION) else { return };
+        if w >> 16 != 0x2402 {
+            return;
+        }
+        let mut hello = Hello { version: w as u16 as i16 as i32 as u32, more: Vec::new(), id_file: None };
+        if let Some(cave) = img.call_target(CLIENT_BASE + at::CLIENT_HELLO_MORE).filter(|&c| in_cave(c)) {
+            let (mut stored, mut loaded, mut maker, mut ok) = (None, None, None, true);
+            img.walk(cave, 96, |pc, w, r| {
+                let (op, rs, rt) = (w >> 26, (w >> 21) & 31, (w >> 16) & 31);
+                match op {
+                    // lw rt, off(rs): the register and the address it read
+                    35 => loaded = r.get(rs).map(|b| (rt, b.wrapping_add(w as u16 as i16 as i32 as u32))),
+                    // sw rt, 16(sp): the u32 the next write sends
+                    43 if rs == 29 && w & 0xFFFF == 16 => {
+                        stored = match (r.get(rt), loaded) {
+                            (Some(v), _) => Some(HelloPart::Const(v)),
+                            (None, Some((reg, a))) if reg == rt => Some(HelloPart::Word(a)),
+                            _ => None,
+                        }
+                    }
+                    3 => maker = Some(j_target(pc, w)),
+                    _ => {}
+                }
+                // jalr t9: the stream write
+                if w == 0x0320_F809 {
+                    match (r.get(6), r.get(5)) {
+                        (Some(n), Some(src)) => hello.more.push(HelloPart::Block(src, n)),
+                        (Some(4), None) => match stored.take() {
+                            Some(p) => hello.more.push(p),
+                            None => ok = false,
+                        },
+                        _ => ok = false,
+                    }
+                }
+                ok
+            });
+            if !ok {
+                return;
+            }
+            if let Some(m) = maker {
+                img.walk(m, 64, |pc, w, r| {
+                    if w >> 26 == 3
+                        && j_target(pc, w) == at::MEM_CARD_READ_FILE
+                        && r.after(5) == Some(at::DEVICE_BLOCK + 8)
+                        && r.after(6) == Some(8)
+                        && let Some(a0) = r.after(4)
+                    {
+                        hello.id_file = img.cstring(a0);
+                        return false;
+                    }
+                    true
+                });
+            }
+        }
+        self.hello = Some(hello);
+    }
+
+    /// UseSkill's record of the pad: S2 hooks Process (its own pad read),
+    /// SetKey (its record of a key) and Send0032, whose cave writes 11
+    /// bytes (a `jalr` into the stream write with `a2` 11) before SendRaw.
+    fn read_presses(&mut self, img: &Image) {
+        let hooked = |site: u32| img.jals_into_cave(CLIENT_BASE + site);
+        if !(hooked(at::CLIENT_PROCESS_PAD) && hooked(at::CLIENT_SET_KEY) && hooked(at::CLIENT_SEND_0032)) {
+            return;
+        }
+        let Some(cave) = img.call_target(CLIENT_BASE + at::CLIENT_SEND_0032) else { return };
+        let mut n = None;
+        img.walk(cave, 64, |_, w, r| {
+            if w == 0x0320_F809 {
+                n = r.get(6);
+                return false;
+            }
+            true
+        });
+        self.use_skill_record = n == Some(11);
     }
 
     /// Set 9: GetArmorSetTexture jumps to the arena, which reads set 9 from
@@ -777,6 +1058,11 @@ pub struct Rules {
     /// an armour set past retail's: its slots' DictIDs, and the CHAR.ESF
     /// records (by file offset) registered under them (`register_art`)
     pub armor_art: Vec<(u8, [u32; 5], [u32; 5])>,
+    /// `ConnectShard`'s hello, the live S2's (`shard_hello`); `None` is
+    /// retail's DiscVersion 18 alone
+    pub hello: Option<Hello>,
+    /// UseSkill carries S2's record of the pad (`Presses::tail`)
+    pub use_skill_record: bool,
 }
 
 impl Default for Rules {
@@ -807,6 +1093,8 @@ impl Rules {
             image: None,
             dir: None,
             armor_art: Vec::new(),
+            hello: None,
+            use_skill_record: false,
         }
     }
 
@@ -866,8 +1154,37 @@ impl Rules {
             r.worlds = Some(f.worlds.clone());
         }
         r.armor_art = f.armor_art.clone();
+        // The hello in the live S2's shape alone (its numbers and the device
+        // block; Sandstorm's server reads its patch out of it). The July S2's
+        // (19, then its build) is not taken: our own server, whose S2 is July's,
+        // reads 19 as that S2 with our hard-disk loader after it, and offers
+        // the loader's 30 worlds (go-eqoa-server's `LoadableWorlds`), which this
+        // client's table does not have.
+        r.hello = f.hello.clone().filter(Hello::has_device_block);
+        r.use_skill_record = f.use_skill_record;
         r.image = Some(Arc::new(img));
         r
+    }
+
+    /// What `ConnectShard`'s hello sends after its opcode under this patch
+    /// (`net::session::Session::connect_shard`): the DiscVersion, then each
+    /// of the cave's writes as a PS2 running it sends it, the boot patch's
+    /// word as Sandstorm's makes it (`BOOT_SS_WORD`) and the device block as
+    /// this client makes it (`make_device_block`, in the server's folder).
+    /// `None` is retail's hello: none in the patch, or a part this client
+    /// does not know how to make.
+    pub fn shard_hello(&self) -> Option<Vec<u8>> {
+        let h = self.hello.as_ref()?;
+        let mut out = h.version.to_le_bytes().to_vec();
+        for p in &h.more {
+            match *p {
+                HelloPart::Const(v) => out.extend(v.to_le_bytes()),
+                HelloPart::Word(at::BOOT_SS_BLOCK) => out.extend(BOOT_SS_WORD.to_le_bytes()),
+                HelloPart::Block(at::DEVICE_BLOCK, at::DEVICE_BLOCK_LEN) => out.extend(device_block(self.dir.as_deref()?, h.id_file.as_deref()?)),
+                _ => return None,
+            }
+        }
+        Some(out)
     }
 
     /// The CHAR.ESF surfaces the patch registers under DictIDs of its own
@@ -891,8 +1208,15 @@ impl Rules {
     pub fn describe(&self) -> String {
         let tints = self.tints.as_ref().map_or(15, |t| self.tint_count_of(t.len()));
         let worlds = self.worlds.as_ref().map_or(6, Vec::len);
+        let hello = self.hello.as_ref().map_or_else(|| "18".to_string(), |h| {
+            let build = h.more.iter().find_map(|p| match p {
+                HelloPart::Const(v) => Some(*v),
+                _ => None,
+            });
+            format!("{} (build {})", h.version, build.map_or("?".to_string(), |b| format!("{b:#x}")))
+        });
         format!(
-            "{} (tints {tints}, sets below {}, robes {}, worlds {worlds}, art {}, search {}, damage colours {}, commands to the server {}, auction level {}, stacks auctioned {}, guilds of {})",
+            "{} (tints {tints}, sets below {}, robes {}, worlds {worlds}, art {}, search {}, damage colours {}, commands to the server {}, auction level {}, stacks auctioned {}, guilds of {}, hello {hello}, pad record {})",
             self.source,
             self.armor_set_limit,
             self.robe_limit,
@@ -902,7 +1226,8 @@ impl Rules {
             self.commands_to_server,
             self.auction_max_level,
             self.sell_stack.passes(2),
-            self.guild_cap
+            self.guild_cap,
+            self.use_skill_record
         )
     }
 
@@ -1078,6 +1403,107 @@ mod tests {
         assert_eq!((w0.name.as_str(), w0.name_id, w0.bounds[1], w0.bounds[3]), ("tunaria", 0x413, 12, 15));
         assert_eq!(r.world_file(6).as_deref(), Some("UNDERFOOT.ESF"));
         assert_eq!(r.armor_art, vec![(9, [0xC214_1C0A, 0x03C1_BE9E, 0x85EA_2A1D, 0x432C_4890, 0xB179_23D2], [0x073BEC, 0x072257, 0x0C7D31, 0x06C8BE, 0x06AF29])]);
+    }
+
+    /// The live S2's hello and record of the pad, read off its caves: 21,
+    /// then the boot patch's word, the build 0x31 and the 28-byte device
+    /// block whose install id is the card's `ii`; UseSkill's 11 bytes. The
+    /// July build's hello (and ours, which is July's) is 19 and its build
+    /// 4, no device block, and is not taken (retail's goes); neither has the
+    /// record.
+    #[test]
+    fn the_hello_and_the_record_of_the_pad() {
+        let live_hello = Hello { version: 21, more: vec![HelloPart::Word(at::BOOT_SS_BLOCK), HelloPart::Const(0x31), HelloPart::Block(at::DEVICE_BLOCK, 28)], id_file: Some("ii".into()) };
+        if let Some(data) = build("live") {
+            let p = Patch::parse(&data).unwrap();
+            let f = Features::read(&p.apply(0));
+            assert_eq!(f.hello.as_ref(), Some(&live_hello));
+            assert!(f.use_skill_record);
+            let r = Rules::from_patch(&p);
+            assert_eq!(r.hello, Some(live_hello));
+            assert!(r.use_skill_record);
+        }
+        for which in ["july", "ours"] {
+            let Some(data) = build(which) else { continue };
+            let p = Patch::parse(&data).unwrap();
+            let f = Features::read(&p.apply(0));
+            assert_eq!(f.hello, Some(Hello { version: 19, more: vec![HelloPart::Word(at::BOOT_SS_BLOCK), HelloPart::Const(4)], id_file: None }), "{which}");
+            assert!(!f.use_skill_record, "{which}");
+            let r = Rules::from_patch(&p);
+            assert!(r.hello.is_none() && r.shard_hello().is_none() && !r.use_skill_record, "{which}: retail's hello");
+        }
+    }
+
+    /// The device block as this client makes it: no hardware address, the
+    /// install id minted from the clock as S2 mints it and written as the
+    /// folder's `ii` (status 0x30: no file read, then written), read back
+    /// later (0x04), a short file minted over (0x08 | 0x20). The hello's
+    /// bytes after its opcode: 21, the boot word 3, the build, the block.
+    /// The controls: retail's rules, and a hello with a part this client
+    /// cannot make, send retail's.
+    #[test]
+    fn the_hello_s_bytes_and_the_install_id() {
+        let dir = std::env::temp_dir().join(format!("eqoa-s2-hello-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = make_device_block(&dir, "ii", 0x1234_5678);
+        assert_eq!(first[..6], [0; 6], "no hardware address");
+        assert_eq!((first[6], first[7]), (0x30, 0));
+        assert_eq!(first[8..12], 0x1234_5678u32.to_le_bytes());
+        assert_eq!(first[12..16], CLIENT_BASE.wrapping_add(0x1234_5678 << 13).to_le_bytes());
+        assert_eq!(first[16..], [0; 12]);
+        assert_eq!(std::fs::read(dir.join("ii")).unwrap(), first[8..16]);
+        let again = make_device_block(&dir, "ii", 0x9999);
+        assert_eq!(again[6], 0x04, "read back");
+        assert_eq!(again[8..16], first[8..16], "the same id");
+        std::fs::write(dir.join("ii"), [1, 2, 3]).unwrap();
+        let short = make_device_block(&dir, "ii", 7);
+        assert_eq!(short[6], 0x08 | 0x20);
+        assert_eq!(short[8..12], 7u32.to_le_bytes());
+        let live = Hello { version: 21, more: vec![HelloPart::Word(at::BOOT_SS_BLOCK), HelloPart::Const(0x31), HelloPart::Block(at::DEVICE_BLOCK, 28)], id_file: Some("ii".into()) };
+        let r = Rules { hello: Some(live.clone()), dir: Some(dir.clone()), ..Rules::retail() };
+        let h = r.shard_hello().unwrap();
+        assert_eq!(h[..12], [21, 0, 0, 0, 3, 0, 0, 0, 0x31, 0, 0, 0]);
+        assert_eq!(h.len(), 12 + 28);
+        assert_eq!(h[12 + 6], 0x04, "the folder's id");
+        assert_eq!(h[12 + 8..12 + 16], std::fs::read(dir.join("ii")).unwrap()[..]);
+        assert_eq!(r.shard_hello(), Some(h), "made once a run");
+        assert!(Rules::retail().shard_hello().is_none());
+        let odd = Rules { hello: Some(Hello { more: vec![HelloPart::Word(0x0015_7204)], ..live.clone() }), dir: Some(dir.clone()), ..Rules::retail() };
+        assert!(odd.shard_hello().is_none());
+        assert!(Rules { hello: Some(live), ..Rules::retail() }.shard_hello().is_none(), "no folder to keep the id in");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// S2's record of the pad as its caves keep it: the press's time, the
+    /// frame, the key's hold the time before (0xFFFF when none was measured
+    /// or past 65535), the flags (bit 0 the player's own press, bit 1 the
+    /// pad read, bit 2 pressed this frame) under the key's low four bits.
+    /// The controls: a stick's key and one past the buttons change nothing.
+    #[test]
+    fn the_record_of_the_pad() {
+        let mut p = Presses::default();
+        assert_eq!(p.tail(), [0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0x04]);
+        for _ in 0..3 {
+            p.frame_end();
+        }
+        p.key(135, true, 1000, true);
+        assert_eq!(p.tail(), [0xE8, 0x03, 0, 0, 3, 0, 0, 0, 0xFF, 0xFF, 0x77]);
+        p.key(135, false, 1100, true);
+        p.frame_end();
+        p.key(135, true, 2000, false);
+        assert_eq!(p.tail(), [0xD0, 0x07, 0, 0, 4, 0, 0, 0, 100, 0, 0x76], "the hold the time before; a script's press is not seen");
+        p.frame_end();
+        assert_eq!(p.tail()[10], 0x72, "a frame later");
+        let before = p.tail();
+        p.key(129, true, 3000, true);
+        p.key(148, true, 3000, true);
+        assert_eq!(p.tail(), before, "a stick's key and one past the buttons");
+        p.key(135, false, 72_000, true);
+        p.key(135, true, 80_000, true);
+        assert_eq!(p.tail()[8..10], [0xFF, 0xFF], "a hold past 16 bits");
+        p.key(132, true, 90_000, true);
+        assert_eq!(p.tail()[10] >> 4, 132 & 0xF);
     }
 
     /// July's build is the live one without the auction change; ours raises

@@ -463,15 +463,25 @@ impl Session {
         self.send(&w.data);
     }
 
-    /// `ConnectShard`: the game endpoint, the hello and 0x0001.
-    pub fn connect_shard(&mut self, endpoint: u64) {
+    /// `ConnectShard`: the game endpoint, the hello and 0x0001. `hello` is
+    /// what follows the hello's opcode when a server's patch makes it more
+    /// than retail's DiscVersion (the live S2's: its version, its numbers
+    /// and its device block); `None` is retail's.
+    pub fn connect_shard(&mut self, endpoint: u64, hello: Option<&[u8]>) {
         self.state = State::Shard;
         if let Some(c) = self.conn.take() {
             self.drdp.connection_close(c);
         }
         let sys = self.drdp.system_endpoint;
         self.conn = self.drdp.connection_open(sys, endpoint);
-        self.send_hello();
+        match hello {
+            Some(h) => {
+                let mut w = Writer::op(0x0000);
+                w.bytes(h);
+                self.send(&w.data);
+            }
+            None => self.send_hello(),
+        }
         let mut w = Writer::op(0x0001);
         w.u8(0).u32(EXPANSION_FLAGS);
         self.send_login(w);

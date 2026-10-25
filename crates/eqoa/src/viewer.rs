@@ -656,7 +656,9 @@ pub fn shot_with(
                         _ => None,
                     };
                     if let Some(k) = k {
+                        p.note_hud_key(k, true);
                         p.hud_key(k);
+                        p.note_hud_key(k, false);
                     }
                 }
                 // `EQOA_START_KEYS` (o open, u d l r e x, s square, c circle, t R1, any
@@ -3461,6 +3463,10 @@ impl App {
                 _ => None,
             };
             if let Some(k) = k {
+                // the pad key it stands for in S2's record, pressed and let go
+                if !event.repeat {
+                    p.note_hud_key(k, event.state == ElementState::Pressed);
+                }
                 if event.state == ElementState::Pressed {
                     p.hud_key(k);
                 }

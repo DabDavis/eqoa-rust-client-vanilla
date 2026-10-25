@@ -379,6 +379,35 @@ impl Script {
     }
 }
 
+/// The scripts that press the game's keys in a run of the client's own.
+const SCRIPTS: [&str; 16] = [
+    "EQOA_PAD",
+    "EQOA_KEYS",
+    "EQOA_MOUSE",
+    "EQOA_TAP",
+    "EQOA_TOUCHES",
+    "EQOA_HUD_KEYS",
+    "EQOA_START_KEYS",
+    "EQOA_BOX_KEYS",
+    "EQOA_ACTION",
+    "EQOA_GROUP_ACTION",
+    "EQOA_TARGET",
+    "EQOA_WALK",
+    "EQOA_ATTACK",
+    "EQOA_INTERACT",
+    "EQOA_INVITE",
+    "EQOA_ACCEPT",
+];
+
+/// Whether this run's presses are the player's own (a controller, the
+/// keyboard, the mouse, the touch screen): not in a run any script presses
+/// keys in, whose presses S2's record of the pad then says its own pad read
+/// did not see (`s2::Presses`).
+pub fn from_device() -> bool {
+    static SCRIPTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    !*SCRIPTED.get_or_init(|| SCRIPTS.iter().any(|v| std::env::var_os(v).is_some()))
+}
+
 /// `EQOA_PAD_TRACE=1` (in a page `?padtrace`): each pad key as the game
 /// gets it, and gilrs's events and the controllers' report as they change.
 pub fn trace() -> bool {

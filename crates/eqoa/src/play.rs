@@ -121,6 +121,9 @@ pub struct Play {
     /// (`m_p2BB60`) that 0x0032 echoes.
     pub abilities: std::collections::BTreeMap<i64, net::dump::Ability>,
     ability_token: u32,
+    /// S2's record of the pad, which 0x0032 carries on a server whose patch
+    /// has it (`s2::Presses`: Sandstorm's live S2)
+    presses: crate::s2::Presses,
     /// The HUD's quick menus.
     pub hud_menus: crate::hudmenu::HudMenus,
     /// A 0x0033 for a slot past the game's ten (the Extended page's Ability
@@ -1667,7 +1670,7 @@ impl Play {
         crate::hideui::show();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: 0, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0 };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: 0, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0 };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -2576,6 +2579,10 @@ impl Play {
             }
         }
         self.manual_frame(walker, game_frame);
+        // S2's pad read at the end of `VIClient::Process`: a frame counted
+        if game_frame {
+            self.presses.frame_end();
+        }
         new_model
     }
 
@@ -3497,7 +3504,10 @@ impl Play {
                 return true;
             }
             if let Some(k) = self.hud_menus.point([f[0] - side, f[1] + up]) {
+                // the pad key it stands for in S2's record, let go at once
+                self.note_hud_key(k, true);
                 self.hud_key(k);
+                self.note_hud_key(k, false);
                 return true;
             }
             // the chat box: the chat line, as R3 opens it
@@ -4228,6 +4238,10 @@ impl Play {
     /// walker and the window's shape.
     pub fn set_key(&mut self, key: i32, down: bool, walker: &mut Walker, aspect: f32) {
         use crate::hudmenu::Key as H;
+        // S2's record of a pad key (its hook in SetKey, past the dead test)
+        if !self.is_dead() {
+            self.presses.key(key, down, self.session.timer() as u32, crate::input::from_device());
+        }
         self.keyboard = false;
         if self.typing.is_some() || self.window_key(key, down) {
             return;
@@ -5630,13 +5644,35 @@ impl Play {
         self.cues.push(crate::sound::Cue::Ui(6));
     }
 
-    /// `Send0032`: use an ability, by its slot, on the target.
+    /// `Send0032`: use an ability, by its slot, on the target; on a server
+    /// whose patch has it, with S2's record of the pad after (the live S2's
+    /// cave before SendRaw: 11 bytes).
     fn send_0032(&mut self, id: i64) {
         let Some(slot) = self.abilities.get(&id).map(|a| a.slot) else { return };
         eprintln!("play: use slot {slot} ({:?})", self.abilities.get(&id).map_or("", |a| a.name.as_str()));
         let mut w = net::stream::Writer::op(0x0032);
         w.u32(self.ability_token).u8(slot as u8).u32(self.target);
+        if crate::s2::get().use_skill_record {
+            w.bytes(&self.presses.tail());
+        }
         self.session.send(&w.data);
+    }
+
+    /// A keyboard's or a pointer's key for the HUD's quick menus (the
+    /// arrows, E, a click), into S2's record as the pad key it stands for
+    /// (on a PS2 each is that key through SetKey: the d-pad, circle).
+    pub fn note_hud_key(&mut self, key: crate::hudmenu::Key, down: bool) {
+        use crate::hudmenu::Key as H;
+        let code = match key {
+            H::Up => 138,
+            H::Down => 139,
+            H::Left => 136,
+            H::Right => 137,
+            H::Use => 135,
+        };
+        if !self.is_dead() {
+            self.presses.key(code, down, self.session.timer() as u32, crate::input::from_device());
+        }
     }
 
     /// The keyboard's C (99) held in play: the chat box's history, as R2
@@ -7811,6 +7847,77 @@ mod commands {
         p.session.flush();
         let msgs = guaranteed(&sent.borrow());
         assert!(msgs.iter().any(|m| m[..] == [0x7B, 0x07]), "0x077B answered: {msgs:02x?}");
+    }
+
+    /// 0x0032 on the rules of a patch with S2's record of the pad carries its
+    /// 11 bytes after the target: the press E made (circle's low bits, the
+    /// pad read, pressed this frame). The control: retail's rules send the
+    /// game's 0x0032 alone, the same bytes up to the target.
+    #[test]
+    fn use_skill_carries_s2s_record_of_the_pad() {
+        struct Rec(std::rc::Rc<std::cell::RefCell<Vec<Vec<u8>>>>);
+        impl net::session::Datagrams for Rec {
+            fn send_to(&mut self, d: &[u8], _: [u8; 4], _: u16) {
+                self.0.borrow_mut().push(d.to_vec());
+            }
+            fn recv_from(&mut self) -> Option<(Vec<u8>, [u8; 4], u16)> {
+                None
+            }
+        }
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 5000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        s.self_id = Some(0x100);
+        let mut p = Play::new(s, Player::default(), Box::default());
+        p.abilities.insert(7, net::dump::Ability { slot: 1, name: "Sanctuary".into(), ..Default::default() });
+        p.ability_token = 0x55;
+        p.target = 0x4242;
+        let used = |p: &mut Play, r: crate::s2::Rules| -> Vec<u8> {
+            crate::s2::with_rules(r, || {
+                p.session.flush();
+                sent.borrow_mut().clear();
+                p.note_hud_key(crate::hudmenu::Key::Use, true);
+                p.send_0032(7);
+                p.note_hud_key(crate::hudmenu::Key::Use, false);
+                p.session.flush();
+            });
+            guaranteed(&sent.borrow()).into_iter().find(|m| m.starts_with(&[0x32, 0x00])).expect("0x0032 sent")
+        };
+        let retail = used(&mut p, crate::s2::Rules::retail());
+        assert_eq!(retail, [0x32, 0x00, 0x55, 0, 0, 0, 1, 0x42, 0x42, 0, 0], "the control: the game's");
+        let live = used(&mut p, crate::s2::Rules { use_skill_record: true, ..crate::s2::Rules::retail() });
+        assert_eq!(live.len(), 22);
+        assert_eq!(live[..11], retail[..]);
+        assert_eq!(live[21] & !1, 0x76, "circle, the pad read, pressed this frame");
+    }
+
+    /// ConnectShard's hello: the patch's bytes after the opcode when it has
+    /// them, before 0x0001 (as the session records what it sends). The
+    /// control: none sends retail's DiscVersion 18.
+    #[test]
+    fn the_shard_hello_is_the_patch_s() {
+        struct Nowhere;
+        impl net::session::Datagrams for Nowhere {
+            fn send_to(&mut self, _: &[u8], _: [u8; 4], _: u16) {}
+            fn recv_from(&mut self) -> Option<(Vec<u8>, [u8; 4], u16)> {
+                None
+            }
+        }
+        let mut s = Session::connect_with(Box::new(Nowhere), ([127, 0, 0, 1], 5000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        // two shards: the one just closed is not opened again at once
+        let hello = |s: &mut Session, drdp_port: u16, h: Option<&[u8]>| -> Vec<Vec<u8>> {
+            s.record = Some(Vec::new());
+            s.connect_shard(drdp::address_to_endpoint([127, 0, 0, 1], 10070, drdp_port), h);
+            s.record.take().unwrap().into_iter().filter(|(t, _)| *t == drdp::TYPE_GUARANTEED).map(|(_, m)| m).collect()
+        };
+        let retail = hello(&mut s, 1, None);
+        assert_eq!(retail[0], [0, 0, 18, 0, 0, 0], "the control: retail's");
+        assert!(retail[1].starts_with(&[0x01, 0x00]), "then 0x0001");
+        let patch = [21, 0, 0, 0, 3, 0, 0, 0, 0x31, 0, 0, 0, 9, 9];
+        let live = hello(&mut s, 2, Some(&patch));
+        assert_eq!(live[0][..2], [0, 0]);
+        assert_eq!(live[0][2..], patch);
+        assert!(live[1].starts_with(&[0x01, 0x00]));
+        assert_eq!(live.len(), 2);
     }
 
     /// Ignore Shouts (the quick chat's |10, DoAction 0x0B030003 with 0) sends

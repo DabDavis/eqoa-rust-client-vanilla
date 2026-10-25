@@ -5,6 +5,16 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-25 · Vampires can go to Sanctuary on Sandstorm
+- On Sandstorm, a vampire's Sanctuary no longer answers "You can't go to Sanctuary
+  (memcard patch 0 outdated)". The game now tells Sandstorm it plays with
+  Sandstorm's own patch, as a PlayStation 2 with that patch does.
+- What it sends with that is what the patch sends: no network adapter's address,
+  an id the game makes once and keeps in that server's folder, and, with each
+  ability you use, when you pressed its button and how long you held it the time
+  before.
+- Other servers are unchanged.
+
 ## 2026-10-25 · Names over heads in a crowd
 - Options > Extended > Characters > Overlapping Names: Show puts a name over every
   character within Name Distance, even in a crowd, the nearest on top. Hide, the

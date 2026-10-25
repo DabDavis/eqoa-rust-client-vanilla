@@ -713,8 +713,9 @@ impl Client {
                     self.state = 20;
                     // `EQOA_GAME_PORT` (a page's `?game_port=`): a test server's list names the default port
                     let ep = if super::port_given("EQOA_GAME_PORT") { (ep & !0xFFFF_0000) | (super::port("EQOA_GAME_PORT", super::GAME_PORT) as u64) << 16 } else { ep };
+                    // the hello the server's patch makes it (`s2`: the live S2's), else retail's
                     if let Some(s) = self.session.as_mut() {
-                        s.connect_shard(ep);
+                        s.connect_shard(ep, crate::s2::get().shard_hello().as_deref());
                     }
                 }
                 Req::Disconnect { reason, quiet, code } => {
