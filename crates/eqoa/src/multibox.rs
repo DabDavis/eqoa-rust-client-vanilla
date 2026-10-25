@@ -68,6 +68,9 @@ impl Seat {
 struct Here {
     /// the place taken: unasked, then one or none for good
     taken: Option<Option<Place>>,
+    /// the place's number once it was let go (`leave`): no longer held for
+    /// the other windows, still this window's for what it writes as it ends
+    left: Option<usize>,
     others: Vec<Other>,
     looked: Option<web_time::Instant>,
     /// what this window said it reads, and whether saying it last failed
@@ -86,7 +89,7 @@ fn here() -> MutexGuard<'static, Here> {
 
 impl Here {
     const fn new() -> Here {
-        Here { taken: None, others: Vec::new(), looked: None, said: None, failed: false }
+        Here { taken: None, left: None, others: Vec::new(), looked: None, said: None, failed: false }
     }
 
     /// The place, taken the first time it is asked for (in a page, once
@@ -102,6 +105,15 @@ impl Here {
         }
         self.taken.as_ref()?.as_ref()
     }
+
+    /// The place let go (`leave`), its number kept.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn leave(&mut self) {
+        if let Some(Some(p)) = &self.taken {
+            self.left = self.left.or(Some(p.n));
+        }
+        self.taken = Some(None);
+    }
 }
 
 /// This window's place, from 0 (0 alone, with nowhere to keep one): which
@@ -112,7 +124,11 @@ pub fn place() -> usize {
     if let Some(n) = testing::PLACE.with(|p| p.get()) {
         return n;
     }
-    here().place().map_or(0, |p| p.n)
+    let mut h = here();
+    if let Some(n) = h.left {
+        return n;
+    }
+    h.place().map_or(0, |p| p.n)
 }
 
 #[cfg(test)]
@@ -127,12 +143,18 @@ pub mod testing {
     }
 }
 
-/// This window's place let go (natively its lock closed), as the window
-/// closes for the updater to start the release's build in its place: that
-/// one takes the same place, though this program has not ended yet.
+/// This window's place let go (natively its lock closed) as its window
+/// closes (`viewer`'s `exiting`), whatever the program does after: the
+/// updater's build or the game started again takes the same place though
+/// this program has not ended yet, and one that never ends (its teardown
+/// stuck in a driver) holds no place and no controller from the windows
+/// open after it (a window stopped while it held its place kept the next
+/// window from its controller: the next took the next place and the spare
+/// controller, none where there was none). Its number stays this
+/// program's (`place`), for the files it writes as it ends.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn leave() {
-    here().taken = Some(None);
+    here().leave();
 }
 
 /// This window and the others open now, as last looked at.
@@ -418,6 +440,28 @@ mod tests {
         // the control: a Here of its own, as a thread's was
         let mut own = Here::new();
         assert_eq!(own.place_by(take).map(|p| p.n), Some(2), "a second place for the same program");
+    }
+
+    /// A window let go of (`leave`): its place is the next window's at once,
+    /// and its number stays its own. The control: a window that has not let
+    /// go still holds its place.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_window_that_closes_lets_go_of_its_place_at_once() {
+        let d = Dir::new("leave");
+        let first = Place::take(&d.0).unwrap().unwrap();
+        let mut closing = Here::new();
+        assert_eq!(closing.place_by(|| Some(Place::take(&d.0).unwrap())).map(|p| p.n), Some(1));
+        let third = Place::take(&d.0).unwrap().unwrap();
+        assert_eq!(third.n, 2, "the control: held, the next window passes it by");
+        closing.leave();
+        assert_eq!(closing.left, Some(1), "its number kept");
+        assert!(closing.place().is_none(), "held no more");
+        let next = Place::take(&d.0).unwrap().unwrap();
+        assert_eq!(next.n, 1, "the next window takes it");
+        assert_eq!(first.others().iter().map(|o| o.place).collect::<Vec<_>>(), vec![1, 2], "window 1 sees the new window 2 and window 3");
+        closing.leave();
+        assert_eq!(closing.left, Some(1), "let go twice: the first number");
     }
 
     /// Every place taken: none for the next window (it reads as if alone).

@@ -259,10 +259,10 @@ mod device {
     use windows_sys::Win32::Devices::HumanInterfaceDevice::{HIDD_ATTRIBUTES, HidD_GetAttributes, HidD_GetHidGuid};
     use windows_sys::Win32::Foundation::{
         CloseHandle, ERROR_DEV_NOT_EXIST, ERROR_DEVICE_NOT_CONNECTED, ERROR_FILE_NOT_FOUND, ERROR_IO_INCOMPLETE, ERROR_IO_PENDING, ERROR_NO_SUCH_DEVICE, ERROR_PATH_NOT_FOUND, GENERIC_READ, GetLastError, HANDLE,
-        INVALID_HANDLE_VALUE,
+        INVALID_HANDLE_VALUE, WAIT_TIMEOUT,
     };
     use windows_sys::Win32::Storage::FileSystem::{CreateFileW, FILE_FLAG_OVERLAPPED, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, ReadFile};
-    use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
+    use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, GetOverlappedResultEx, OVERLAPPED};
 
     /// A Sony controller's HID interface present now, and whether it is a
     /// Bluetooth one (`bluetooth`: its reports are read by it, `parse`).
@@ -444,13 +444,17 @@ mod device {
 
     impl Drop for Device {
         fn drop(&mut self) {
-            // SAFETY: a pending read cancelled and waited for before its box
-            // goes; then the handle closed
+            // SAFETY: a pending read cancelled and waited for (half a second
+            // at most) before its box goes; one the driver has not let go of
+            // by then keeps its box for good, as the program ends without
+            // waiting on it; then the handle closed
             unsafe {
                 if self.read.busy {
                     CancelIoEx(self.handle, &self.read.ov);
                     let mut n = 0u32;
-                    GetOverlappedResult(self.handle, &self.read.ov, &mut n, 1);
+                    if GetOverlappedResultEx(self.handle, &self.read.ov, &mut n, 500, 0) == 0 && GetLastError() == WAIT_TIMEOUT {
+                        std::mem::forget(std::mem::replace(&mut self.read, Box::new(Pending { ov: OVERLAPPED::default(), buf: [0; 1024], busy: false })));
+                    }
                 }
                 CloseHandle(self.handle);
             }
