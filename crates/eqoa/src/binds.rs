@@ -119,6 +119,7 @@ pub const ROWS: &[Row] = &[
     row("target_4", "Target: group 4", &["4"], Pad::None, ""),
     row("target_5", "Target: group 5", &["5"], Pad::None, ""),
     row("target_pet", "Target: {418}", &["6"], Pad::None, ""),
+    row("target_target", "Target: the target's target", &["f"], Pad::None, "The game's Assist Target: whom the target is targeting, as the server answers. A click on the Target of Target bar (the Extended page's) asks the same."),
     row("orbit_left", "Orbit left", &["home"], Pad::None, "The orbiting camera's. On the map: |x."),
     row("orbit_right", "Orbit right", &["end"], Pad::None, "The orbiting camera's."),
     row("tilt_up", "Tilt up, zoom in", &["pageup"], Pad::None, "On the map: zoom in."),
@@ -131,6 +132,7 @@ pub const ROWS: &[Row] = &[
     row("group_disband", "Group: {529}", &["f7"], Pad::None, ""),
     row("group_leave", "{994}", &["f8"], Pad::None, ""),
     row("art", "Art: Frontiers' or 2002's", &["f9"], Pad::None, "Everything drawn swaps between Frontiers' art and the 2002 disc's (EverQuest Online Adventures, USA, SLUS-20470), at once; the first time, it asks for that disc."),
+    row("hide_ui", "Hide UI", &["h"], Pad::None, "Hides everything over the world: the HUD, the chat, the names over heads, the damage numbers and the target's rings. Again, or any window coming up, shows them."),
     row("controls", "Controls", &["f1"], Pad::None, "This page, from play."),
 ];
 

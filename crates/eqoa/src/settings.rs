@@ -513,6 +513,10 @@ pub struct ClientOptions {
     /// next time the game does (`update`'s check before the title, as ever).
     /// A page's Reload notice the same (`web/main.js`).
     pub update_notices: bool,
+    /// Target of Target (a player's request, the user's option, off by
+    /// default): the target's bar shows whom the target is targeting, as its
+    /// channel says (`Play::target_of_target`)
+    pub target_of_target: bool,
 }
 
 /// The game's ability bars (with the expansion's second).
@@ -549,6 +553,7 @@ impl Default for ClientOptions {
             vsync: true,
             shouts: true,
             update_notices: true,
+            target_of_target: false,
         }
     }
 }
@@ -559,8 +564,9 @@ impl ClientOptions {
     /// window's Controller Focus as `controller.<window>` (from 1) only when
     /// it is not Auto, Capture Controller only when on, Sound in Background
     /// only when off, Ability Bars, NPC/PC Display and NPC/PC View Distance
-    /// only when not the game's, Art only when it is the 2002 disc's, and
-    /// VSync, Shouts and Update Notices only when off.
+    /// only when not the game's, Art only when it is the 2002 disc's, VSync,
+    /// Shouts and Update Notices only when off, and Target of Target only
+    /// when on.
     pub fn to_text(self) -> String {
         let mut s = format!("lod={}\nbrightness={}\ncamera_distance={}\n", if self.lod { "on" } else { "off" }, self.brightness, self.camera_distance);
         if let Some(r) = self.frame_rate {
@@ -604,6 +610,10 @@ impl ClientOptions {
         }
         if !self.update_notices {
             s.push_str("update_notices=off\n");
+        }
+        // Target of Target only when on
+        if self.target_of_target {
+            s.push_str("target_of_target=on\n");
         }
         s
     }
@@ -652,6 +662,8 @@ impl ClientOptions {
                 ("shouts", "off") => c.shouts = false,
                 ("update_notices", "on") => c.update_notices = true,
                 ("update_notices", "off") => c.update_notices = false,
+                ("target_of_target", "on") => c.target_of_target = true,
+                ("target_of_target", "off") => c.target_of_target = false,
                 ("ability_bars", v) => {
                     if let Some(n) = v.parse::<u8>().ok().filter(|&n| (ABILITY_BARS_GAME as i32..=crate::hudmenu::MAX_BARS).contains(&(n as i32))) {
                         c.ability_bars = n;
@@ -947,7 +959,7 @@ pub fn describe() -> String {
         FrameRate::Display => "the display's",
     };
     format!(
-        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, art {}, update notices {}, shouts {}; {}",
+        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, art {}, update notices {}, shouts {}, target of target {}; {}",
         if c.lod { "on" } else { "off" },
         c.brightness,
         c.fog,
@@ -970,6 +982,7 @@ pub fn describe() -> String {
         },
         if c.update_notices { "on" } else { "off" },
         if c.shouts { "heard" } else { "ignored (kept)" },
+        if c.target_of_target { "on" } else { "off" },
         kept_where()
     )
 }
@@ -1399,6 +1412,11 @@ mod tests {
             let c = ClientOptions::from_text(bad);
             assert!(c.shouts && c.update_notices, "{bad}: on, the defaults");
         }
+        assert_eq!(ClientOptions { target_of_target: true, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\ntarget_of_target=on\n", "Target of Target only when on");
+        assert!(ClientOptions::from_text("target_of_target=on").target_of_target && !ClientOptions::from_text("target_of_target=off").target_of_target);
+        for bad in ["target_of_target=yes", "target_of_target=1"] {
+            assert!(!ClientOptions::from_text(bad).target_of_target, "{bad}: off, the default");
+        }
         assert_eq!(ClientOptions::default().to_text(), "lod=on\nbrightness=5\ncamera_distance=11\n", "no Frame Rate until one is chosen, no game's turn, no window's Auto");
         assert_eq!(ClientOptions { camera_turn: 250, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\ncamera_turn=250\n");
         assert_eq!(
@@ -1407,7 +1425,7 @@ mod tests {
             "Screen Shake only off, Capture Controller only on"
         );
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, ability bars 2, npc/pc display 24, npc/pc view distance 100, art frontiers, update notices on, shouts heard; kept in the page's storage");
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, ability bars 2, npc/pc display 24, npc/pc view distance 100, art frontiers, update notices on, shouts heard, target of target off; kept in the page's storage");
         testing::reset(true);
         assert!(describe().ends_with("refused: nothing is kept"));
         testing::reset(false);

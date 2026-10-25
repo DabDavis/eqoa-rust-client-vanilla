@@ -69,6 +69,7 @@ mod binds;
 mod blacksmith;
 mod gear;
 mod gram;
+mod hideui;
 mod hud;
 mod damage;
 mod hudmenu;

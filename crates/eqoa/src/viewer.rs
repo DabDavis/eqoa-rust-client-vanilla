@@ -608,6 +608,10 @@ pub fn shot_with(
                 if std::env::var("EQOA_P").ok().and_then(|v| v.parse::<i64>().ok()).is_some_and(|ms| ms / 16 * 16 == t) {
                     p.camera_style_key(&mut walker);
                 }
+                // `EQOA_HIDE_UI=<ms>[;<ms>...]`: the Hide UI key then (`hideui`)
+                if std::env::var("EQOA_HIDE_UI").is_ok_and(|s| s.split(';').filter_map(|ms| ms.trim().parse::<i64>().ok()).any(|ms| ms / 16 * 16 == t)) {
+                    crate::hideui::toggle();
+                }
                 if t == at && tab {
                     let (proj, v) = walker.view(aspect);
                     let dir = Vec3::from(walker.eye.direction.to_array());
@@ -1043,9 +1047,14 @@ pub fn shot_with(
         }
         streamed = Some(streamer);
         if let Some(p) = &mut play {
+            // Hide UI (`hideui`), as the window's frame has it
+            let hide = crate::hideui::frame(p.wants_ui()) && !p.loading_up();
             if let Some(u) = renderer.ui.as_mut() {
                 // the last of the game's frames' HUD (made now if none came)
                 p.hud(u, &walker, t, view.view_proj, (w, h), !hud_drawn);
+                if hide {
+                    u.quads.clear();
+                }
                 touch.textures(u, &device, &queue);
                 p.draw_touch(u, &touch, (w, h));
             }
@@ -1053,6 +1062,10 @@ pub fn shot_with(
             if let Some(t) = renderer.text.as_mut() {
                 t.plates = crate::play::labels(&plates, shot_eye, view.view_proj, t);
                 t.labels = crate::play::chat_labels(p, t, (w, h));
+                if hide {
+                    t.plates.clear();
+                    t.labels.clear();
+                }
             }
         }
         if let Some(p) = &play {
@@ -3279,6 +3292,19 @@ impl App {
                     p.map.show();
                     return;
                 }
+                // H: Hide UI (the client's own, `hideui`; free in the
+                // game's keyboard table), in play and the manual camera
+                (None, Key::Character(c)) if (p.mode == 0 || p.mode == 38) && c.eq_ignore_ascii_case("h") && !event.repeat => {
+                    crate::hideui::toggle();
+                    return;
+                }
+                // F: the target's target, the game's Assist Target asked
+                // (the client's key for it, `Play::assist_target`; free in
+                // the game's keyboard table)
+                (None, Key::Character(c)) if (p.mode == 0 || p.mode == 38) && c.eq_ignore_ascii_case("f") && !event.repeat => {
+                    p.assist_target();
+                    return;
+                }
                 // X (88, 120): autorun (`ToggleP74`), as L3.
                 (None, Key::Character(c)) if p.mode == 0 && c.eq_ignore_ascii_case("x") => {
                     p.toggle_autorun();
@@ -4296,8 +4322,21 @@ impl ApplicationHandler for App {
                 };
                 self.last_view = Some(view.view_proj);
                 if let (Some(p), Some(w)) = (&mut self.play, &self.walker) {
+                    // Hide UI (`hideui`): a window up, the update's question
+                    // or the report's dialog shows it all again; the loading
+                    // screen is never hidden
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let boxed = crate::update::offer_shown() || crate::report::is_open();
+                    #[cfg(target_arch = "wasm32")]
+                    let boxed = crate::update::offer_shown();
+                    let hide = crate::hideui::frame(p.wants_ui() || boxed) && !p.loading_up();
                     if let Some(u) = g.renderer.ui.as_mut() {
                         p.hud(u, w, self.clock.elapsed().as_millis() as i64, view.view_proj, (g.config.width, g.config.height), game_frame);
+                        // the HUD's quads (the damage numbers under them) made,
+                        // and dropped; the touch pad and the boxes below stay
+                        if hide {
+                            u.quads.clear();
+                        }
                         self.touch.textures(u, &g.device, &g.queue);
                         p.draw_touch(u, &self.touch, (g.config.width, g.config.height));
                         // the update's question (its Yes logs out: the window
@@ -4331,6 +4370,11 @@ impl ApplicationHandler for App {
                     if let Some(t) = g.renderer.text.as_mut() {
                         t.plates = crate::play::labels(&plates, w.eye_position(), view.view_proj, t);
                         t.labels = crate::play::chat_labels(p, t, (g.config.width, g.config.height));
+                        // Hide UI: no names over heads, no line typed
+                        if hide {
+                            t.plates.clear();
+                            t.labels.clear();
+                        }
                     }
                 }
                 mark(&mut self.perf, 10);
