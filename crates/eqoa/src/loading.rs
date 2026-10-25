@@ -43,6 +43,22 @@ use vi::hsprite::{AnimScene, HSprite};
 /// answers): the client's, where the game would wait for good.
 pub const CAP_MS: i64 = 60_000;
 
+/// A move at least this far, or into another world, keeps the screen up at
+/// least `FAR_HOLD_MS`: a PS2 shows it while `EnterWorld` reads the zones
+/// round a far arrival off the disc, seconds of it, where this client has
+/// them in about a millisecond and the screen went by unseen, the world
+/// jumping from one place to the other (F3 20261025-171303, Return Home:
+/// "even a flash will do so its not so jarring"; the user's choice,
+/// 2026-10-25). The client's, not the game's; a short hop is as before.
+pub const FAR_MOVE: f32 = 200.0;
+pub const FAR_HOLD_MS: i64 = 1000;
+
+/// Whether a move from `from` to `to` is a far one (`FAR_MOVE`).
+pub fn far(from: [f32; 3], to: [f32; 3]) -> bool {
+    let d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
+    (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() >= FAR_MOVE
+}
+
 /// `LoadingProgress`'s 2D half: the logo out of "sheet1", the expansion's
 /// logo and the bar, the Frontiers layout when `frontiers`
 /// (`VIGetExpansionFlags() & 2`, the disc's flags this client sends as its
@@ -187,17 +203,26 @@ impl Screen {
     /// world's file first), the move `Respawn`'s when `respawn`. A move
     /// while it is up waits for the new place.
     pub fn begin(&mut self, at: [f32; 3], heading: f32, entering: bool, respawn: bool, now: i64) {
+        let up = self.wait.is_some();
         let since = self.wait.map_or(now, |w| w.since);
         self.wait = Some(Wait { at, heading, entering: entering || self.wait.is_some_and(|w| w.entering), respawn, since, held: None });
         #[cfg(target_arch = "wasm32")]
         let hold = crate::web::page_value("loadinghold");
         #[cfg(not(target_arch = "wasm32"))]
         let hold = std::env::var("EQOA_LOADING_HOLD").ok();
-        self.hold = hold.and_then(|v| v.parse().ok()).unwrap_or(0);
+        let hold = hold.and_then(|v| v.parse().ok()).unwrap_or(0);
+        // a move while it is up keeps the hold the first asked for
+        self.hold = if up { self.hold.max(hold) } else { hold };
     }
 
     pub fn up(&self) -> bool {
         self.wait.is_some()
+    }
+
+    /// The screen up at least `ms` from when it went up (`FAR_HOLD_MS` for a
+    /// far move); a longer hold already asked for stands.
+    pub fn hold_at_least(&mut self, ms: i64) {
+        self.hold = self.hold.max(ms);
     }
 
     /// The world it waits for is entered: the zones are what it waits on now,
@@ -430,6 +455,28 @@ mod tests {
         s.begin([0.0; 3], 0.0, true, false, 10_000);
         assert_eq!(s.end(false, 10_000 + CAP_MS - 1), None);
         assert!(s.end(false, 10_000 + CAP_MS).is_some());
+    }
+
+    /// A far move's hold (F3 20261025-171303): the screen stays up
+    /// `FAR_HOLD_MS` though the zones are in at once, a move while it is up
+    /// keeps that hold, and 200 is far where 199.9 is not. The control: with
+    /// no hold the screen comes down the moment the zones are in.
+    #[test]
+    fn a_far_move_holds_the_screen_a_second() {
+        let mut s = Screen::default();
+        s.begin([0.0; 3], 0.0, false, true, 5000);
+        s.hold_at_least(FAR_HOLD_MS);
+        assert_eq!(s.end(true, 5000 + FAR_HOLD_MS - 1), None, "the zones are in, the screen held");
+        s.begin([10.0, 0.0, 0.0], 0.0, false, true, 5500);
+        assert_eq!(s.end(true, 5000 + FAR_HOLD_MS - 1), None, "a short move after it keeps the hold");
+        assert!(s.end(true, 5000 + FAR_HOLD_MS).is_some());
+        // the control: no hold asked for
+        let mut c = Screen::default();
+        c.begin([0.0; 3], 0.0, false, true, 5000);
+        assert!(c.end(true, 5000).is_some(), "down as the zones are in");
+        assert!(far([0.0; 3], [120.0, 0.0, 160.0]), "200 away");
+        assert!(!far([0.0; 3], [119.9, 0.0, 160.0]), "under 200");
+        assert!(far([0.0, 0.0, 0.0], [0.0, 200.0, 0.0]), "straight up counts");
     }
 
     /// The walk is held where it first stood once the wait began (where the

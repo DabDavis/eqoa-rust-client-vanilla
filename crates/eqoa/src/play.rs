@@ -1200,6 +1200,12 @@ fn v3(a: [f32; 3]) -> Vect3<Ee> {
     Vect3::of(a[0], a[1], a[2])
 }
 
+/// Where the walk stands now (`self.player.pos` changes only on a move).
+fn walker_at(walker: &Walker) -> [f32; 3] {
+    let p = walker.cam.walk.phys.position;
+    [p.x.0, p.y.0, p.z.0]
+}
+
 /// The scale an entity's actor has: the channel's, as it is drawn (1 for
 /// none).
 fn actor_scale(s: f32) -> F<Ee> {
@@ -2341,6 +2347,7 @@ impl Play {
                     // first, black until it is in (`world_entered`)
                     let mut elsewhere = false;
                     let (arrival, heading, here) = (player.pos, player.hpr[0], player.world == self.player.world);
+                    let far = !here || crate::loading::far(walker_at(walker), arrival);
                     if player.world != self.player.world {
                         match crate::s2::get().world_file(player.world) {
                             Some(f) => {
@@ -2368,6 +2375,9 @@ impl Play {
                     }
                     if here || elsewhere {
                         self.loading.begin(arrival, heading, elsewhere, false, now as i64);
+                        if far {
+                            self.loading.hold_at_least(crate::loading::FAR_HOLD_MS);
+                        }
                     }
                     if self.cam_entered {
                         let rc = self.race_camera();
@@ -3431,6 +3441,7 @@ impl Play {
                     // Respawn's casts at the arrival
                     self.world_change = Some((f.to_string(), Spawn { pos, heading: hpr[0], placing: Placing::Respawn }));
                     self.loading.begin(pos, hpr[0], true, true, now);
+                    self.loading.hold_at_least(crate::loading::FAR_HOLD_MS);
                     // black until the new world is entered (`world_entered`),
                     // the old one not shown while it loads
                     self.fade.set(1.0, 0.0);
@@ -3447,10 +3458,14 @@ impl Play {
             }
         } else {
             eprintln!("play: teleport to {pos:?}");
+            let far = crate::loading::far(walker_at(walker), pos);
             walker.relocate(pos, hpr[0]);
             self.player.pos = pos;
             // EnterWorld: StreamFillCache there under the loading screen
             self.loading.begin(pos, hpr[0], false, true, now);
+            if far {
+                self.loading.hold_at_least(crate::loading::FAR_HOLD_MS);
+            }
             true
         };
         // Respawn ends with SetSky(m_camera, 1): the sky where it stands, at
@@ -7371,7 +7386,12 @@ mod commands {
         let floor = crate::walker::ground(&mut with_b(), b.0, b.1).unwrap();
         let pos = [b.0, floor - 2.0, b.1];
         let mut p = play();
-        p.teleport(&mut walker, 0, pos, [0.5, 0.0, 0.0], 0);
+        // the world entry's own screen down first, as in play
+        p.loading_step(&mut walker, true);
+        assert!(!p.loading());
+        // made FAR_HOLD_MS ago: the far move's hold is past
+        let ago = p.session.now() as i64 - crate::loading::FAR_HOLD_MS;
+        p.teleport(&mut walker, 0, pos, [0.5, 0.0, 0.0], ago);
         assert!(p.loading());
         assert_eq!(walker.cam.walk.phys.position.y.0, floor - 2.0, "the control: no floor met, the server's height");
         // the zones round the arrival come in (the streamer's), and the screen comes down
@@ -7380,6 +7400,23 @@ mod commands {
         assert!(!p.loading());
         let y = walker.cam.walk.phys.position.y.0;
         assert!((y - floor).abs() < 0.3, "on the ground at {floor}: {y}");
+        // made now, the far move's hold keeps the screen up a second though
+        // its zones are in (F3 20261025-171303); a short hop's does not
+        let mut held = play();
+        let mut w2 = Walker::arrive(with_b(), Spawn::ground(a.0, a.1, 0.0));
+        held.loading_step(&mut w2, true);
+        let now = held.session.now() as i64;
+        held.teleport(&mut w2, 0, pos, [0.5, 0.0, 0.0], now);
+        held.loading_step(&mut w2, true);
+        assert!(held.loading(), "a far port: held");
+        let mut hop = play();
+        let mut w3 = Walker::arrive(with_b(), Spawn::ground(b.0, b.1, 0.0));
+        let near = [b.0 + 50.0, floor, b.1];
+        hop.loading_step(&mut w3, true);
+        let now = hop.session.now() as i64;
+        hop.teleport(&mut w3, 0, near, [0.5, 0.0, 0.0], now);
+        hop.loading_step(&mut w3, true);
+        assert!(!hop.loading(), "the control: a 50-unit hop comes down at once");
         // a dump's arrival there: as given
         let mut d = play();
         d.loading.begin(pos, 0.5, false, false, 0);
@@ -7441,7 +7478,9 @@ mod commands {
 
             // a far port within the world: nothing until the screen comes down
             let floor = crate::walker::ground(&mut tunaria(), b.0, b.1).unwrap();
-            p.msg_00b2(&mut walker, 0, [b.0, floor + 1.0, b.1], [0.5, 0.0, 0.0], 7, 0);
+            // made FAR_HOLD_MS ago (the far move's hold past)
+            let ago = |p: &Play| p.session.now() as i64 - crate::loading::FAR_HOLD_MS;
+            p.msg_00b2(&mut walker, 0, [b.0, floor + 1.0, b.1], [0.5, 0.0, 0.0], 7, ago(&p));
             assert!(p.loading());
             tick(&mut p, &walker, 5);
             assert_eq!(sent(&mut p), [], "no answer and no 0x40 before the arrival");
@@ -7459,7 +7498,7 @@ mod commands {
             // and none of it is sent; the answer and the 0x40 come from the
             // new world's walk at the arrival
             let odus = [7338.18f32, 54.21, 11124.25];
-            p.msg_00b2(&mut walker, 2, odus, [1.0, 0.0, 0.0], 0x1234, 0);
+            p.msg_00b2(&mut walker, 2, odus, [1.0, 0.0, 0.0], 0x1234, ago(&p));
             assert!(p.world_pending());
             let (file, spawn) = p.take_world_change().expect("a world change");
             assert_eq!(file, "ODUS.ESF");
