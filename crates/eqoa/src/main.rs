@@ -52,6 +52,7 @@ mod playersearch;
 mod searchwnd;
 mod s2;
 mod controls;
+mod arrival;
 mod craft;
 mod craftwnd;
 mod death;

@@ -49,6 +49,12 @@ pub mod bit {
     pub const CROSS: u16 = 1 << 14;
     pub const SQUARE: u16 = 1 << 15;
 
+    /// The name of the first of `b`'s buttons (`named`'s), "?" for none.
+    pub fn name(b: u16) -> &'static str {
+        const NAMES: [&str; 16] = ["select", "l3", "r3", "start", "up", "right", "down", "left", "l2", "r2", "l1", "r1", "triangle", "circle", "cross", "square"];
+        NAMES.get(b.trailing_zeros() as usize).copied().unwrap_or("?")
+    }
+
     /// By name, as eqoa-port's pad scripts spell them.
     pub fn named(s: &str) -> Option<u16> {
         Some(match s {
@@ -1354,6 +1360,17 @@ mod tests {
         assert_eq!(keys(&[&[bit::CROSS, 0], &[], &[]], true), [(134, true), (134, false)]);
         assert_eq!(keys(&[&[bit::CROSS], &[bit::CROSS], &[bit::CROSS], &[0], &[]], true), [(134, true), (134, false)], "held: once");
         assert!(keys(&[&[bit::CROSS, 0], &[], &[]], false).is_empty(), "the control: lost");
+    }
+
+    /// A button's name is the one scripts give it (`named`), the first of
+    /// several; none is "?".
+    #[test]
+    fn a_button_is_named_as_a_script_names_it() {
+        for n in ["select", "l3", "r3", "start", "up", "right", "down", "left", "l2", "r2", "l1", "r1", "triangle", "circle", "cross", "square"] {
+            assert_eq!(bit::name(bit::named(n).unwrap()), n);
+        }
+        assert_eq!(bit::name(bit::CROSS | bit::SQUARE), "cross");
+        assert_eq!(bit::name(0), "?");
     }
 
     #[test]
