@@ -2207,6 +2207,7 @@ impl Play {
             // there posed in its turn (`far_pose_every`), past it not at all.
             let at = Vect3::new(f(e.actor_pos[0]), f(e.actor_pos[1]), f(e.actor_pos[2]));
             let eye = crate::lod::eye(&walker.cam, &walker.eye.position);
+            let lod_on = crate::settings::client().lod;
             let shown = crate::lod::within(&at, &eye, crate::lod::view_dist(&p.gpu.lod_dists));
             let near = crate::lod::within(&at, &eye, crate::lod::off_dist(&p.gpu.lod_dists));
             far += (shown && !near) as u32;
@@ -2238,8 +2239,11 @@ impl Play {
                     if let Some(s) = sound.as_deref_mut() {
                         cs.process_sounds(&walker.eye.position, &walker.eye.direction, &at, Some(&mut s.sink()));
                     }
+                    // VIHSprite::Raster's Process at the skeleton's level for
+                    // its distance, from the eye the levels go by
+                    // (`lod::anim_level`; every node with Level of Detail off)
                     if pose {
-                        cs.h.process(0, &p.anims);
+                        cs.h.process(crate::lod::anim_level(&cs.h, &actor, &eye, lod_on), &p.anims);
                     }
                     p.first = false;
                     let m = cs.h.calc_trans_about_center(&actor, &p.anims);

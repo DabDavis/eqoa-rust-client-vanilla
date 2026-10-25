@@ -199,11 +199,11 @@ impl Walker {
             let at = self.cam.walk.phys.smooth_location();
             cs.process_sounds(&self.eye.position, &self.eye.direction, &at, sound);
         }
-        let mut rel = actor;
-        rel.m[3].x -= self.eye.position.x;
-        rel.m[3].y -= self.eye.position.y;
-        rel.m[3].z -= self.eye.position.z;
-        let lod = cs.h.calc_lod_level_index(&rel);
+        // the skeleton's level from no farther than the game's camera could
+        // be, as the mesh's (`lod::eye`): zoomed out, the camera only moves
+        // back; every node with Level of Detail off
+        let eye = crate::lod::eye(&self.cam, &self.eye.position);
+        let lod = crate::lod::anim_level(&cs.h, &actor, &eye, crate::settings::client().lod);
         cs.h.process(lod, &self.anims);
         let model = cs.h.calc_trans_about_center(&actor, &self.anims);
         cs.h.set_blend_matrices();
@@ -615,6 +615,39 @@ mod tests {
         let mut src = crate::stream::FileZones::open(&iso, "TUNARIA.ESF").unwrap();
         crate::stream::fill(&mut lib, w, x, z, &mut src);
         Some((lib, w))
+    }
+
+    /// The player's own skeleton zoomed out (F3 pass 11: "the LoD off setting
+    /// only disable the mid level LoD, not when zoomed far out"): a human
+    /// posed with the camera 50 back is posed exactly as at the game's 8, its
+    /// level taken from `lod::eye`; with Level of Detail off at 50, as up
+    /// close (every node moving). The control: up close it is posed
+    /// otherwise than at 8 (one node fewer at its rest frame), so the pose
+    /// shows the level; from the camera itself at 50 (as the client had it)
+    /// 22 of its 40 nodes rest and this fails.
+    #[test]
+    fn zoomed_out_the_players_body_moves_as_at_the_games_camera() {
+        let (x, z) = (25275.115f32, 15766.627f32);
+        let Some((lib, file)) = tunaria_and_chars(x, z) else { return };
+        let human = lib.lookup(0x70D898C6).unwrap();
+        let pose_from = |d: f32, lod: bool| {
+            crate::settings::testing::reset(false);
+            crate::settings::set_client(crate::settings::ClientOptions { lod, ..Default::default() });
+            let mut w = Walker::arrive(World::load(&lib, file).unwrap(), Spawn::ground(x, z, 0.0));
+            w.set_character(&lib, human);
+            w.cam.camera_mode = 3;
+            let p = w.cam.walk.phys.position;
+            let pivot_y = p.y + w.cam.target_height + w.cam.walk.phys.height_offset;
+            w.eye.position = Vect3::new(p.x, pivot_y, p.z - F::new(d));
+            w.scene.time = 1234;
+            w.pose().1
+        };
+        let at8 = pose_from(8.0, true);
+        assert_eq!(pose_from(50.0, true), at8, "50 back, posed as at 8");
+        let near = pose_from(2.0, true);
+        assert_ne!(near, at8, "the control: up close, posed otherwise");
+        assert_eq!(pose_from(50.0, false), near, "Level of Detail off: as up close, at any zoom");
+        crate::settings::testing::reset(false);
     }
 
     /// The character loaded again (a form taken and dropped, the art

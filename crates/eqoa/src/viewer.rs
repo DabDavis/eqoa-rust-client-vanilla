@@ -936,6 +936,7 @@ pub fn shot_with(
             if let Some(fx) = fx.as_mut() {
                 fx.stream(Vec3::from(walker.cam.walk.phys.position.to_array()), &walker.scene, lib);
                 let cam = crate::fx::camera(walker.eye.position, walker.eye.direction);
+                fx.lod_eye = Some(crate::lod::eye(&walker.cam, &walker.eye.position));
                 fx.frame(&walker.scene, lib, &cam, proj * v, walker.eye_position(), t, game_hour(play.as_ref(), Instant::now()));
             }
             if t < script.ms {
@@ -990,6 +991,9 @@ pub fn shot_with(
         let (mut proj, mut v) = walker.view(aspect);
         let mut shot_eye = walker.eye_position();
         let mut shot_dir = walker.eye.direction;
+        // where the levels go by (`lod::eye`): the walker's camera, or the
+        // offset's below
+        let mut shot_lod_eye = crate::lod::eye(&walker.cam, &walker.eye.position);
         // `EQOA_SHOT_EYE=dx,dy,dz`: look at the character from that offset
         // instead of through the game's camera (for checking poses).
         let eye: Vec<f32> = std::env::var("EQOA_SHOT_EYE")
@@ -1010,6 +1014,7 @@ pub fn shot_with(
             let far = crate::fog::far_plane(&walker.scene, at, crate::settings::fog());
             proj = glam::camera::rh::proj::directx::perspective(40f32.to_radians(), aspect, 0.1, far);
             shot_eye = at;
+            shot_lod_eye = vi::vect::Vect3::of(at.x, at.y, at.z);
             shot_dir = vi::vect::Vect3::of(p.x - at.x, p.y - at.y, p.z - at.z);
             v = glam::camera::rh::view::look_at_mat4(at, p, Vec3::Y);
         }
@@ -1034,6 +1039,7 @@ pub fn shot_with(
         if let Some(fx) = fx.as_mut() {
             fx.stream(Vec3::from(walker.cam.walk.phys.position.to_array()), &walker.scene, lib);
             let cam = crate::fx::camera(vi::vect::Vect3::of(shot_eye.x, shot_eye.y, shot_eye.z), shot_dir);
+            fx.lod_eye = Some(shot_lod_eye);
             fx.frame(&walker.scene, lib, &cam, view.view_proj, view.eye, t, game_hour(play.as_ref(), Instant::now()));
             fx.upload(&mut renderer, &device, &queue, lib);
             eprintln!("{}", fx.describe());
@@ -4259,6 +4265,7 @@ impl ApplicationHandler for App {
                     if let Some(fx) = fx.as_mut() {
                         fx.stream(Vec3::from(w.cam.walk.phys.position.to_array()), &w.scene, lib);
                         let cam = crate::fx::camera(w.eye.position, w.eye.direction);
+                        fx.lod_eye = Some(crate::lod::eye(&w.cam, &w.eye.position));
                         fx.frame(&w.scene, lib, &cam, proj * v, lights.0.eye, now, hour_now);
                         fx.upload(&mut g.renderer, &g.device, &g.queue, lib);
                     }
