@@ -38,6 +38,12 @@ pub const PLACES: usize = 16;
 /// How often the other windows are looked at.
 const LOOK_MS: u128 = 500;
 
+/// How often what the other windows looked at last say is read again
+/// between looks: a window on Auto rests within this of a window on Window
+/// coming to the front (`input::pick`), where a press could reach both
+/// windows until the next look (five of eighty on GitHub's Windows machine).
+const QUICK_MS: u128 = 100;
+
 /// Another window of the client, open now.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Other {
@@ -96,6 +102,8 @@ struct Here {
     left: Option<usize>,
     others: Vec<Other>,
     looked: Option<web_time::Instant>,
+    /// when what they say was read again (`QUICK_MS`)
+    quick: Option<web_time::Instant>,
     /// what this window said it reads, its Controller Focus and since when
     /// it is in front, and whether saying it last failed
     said: Option<(Option<String>, Focus, Option<u64>)>,
@@ -113,7 +121,7 @@ fn here() -> MutexGuard<'static, Here> {
 
 impl Here {
     const fn new() -> Here {
-        Here { taken: None, left: None, others: Vec::new(), looked: None, said: None, failed: false }
+        Here { taken: None, left: None, others: Vec::new(), looked: None, quick: None, said: None, failed: false }
     }
 
     /// The place, taken the first time it is asked for (in a page, once
@@ -193,6 +201,14 @@ pub fn seat() -> Seat {
                 if look {
                     h.others = h.place().map(Place::others).unwrap_or_default();
                     h.looked = Some(now);
+                    h.quick = Some(now);
+                } else if h.quick.is_none_or(|t| now.duration_since(t).as_millis() >= QUICK_MS) {
+                    let others = std::mem::take(&mut h.others);
+                    h.others = match h.place() {
+                        Some(p) => p.read_again(others),
+                        None => others,
+                    };
+                    h.quick = Some(now);
                 }
                 (Seat { place: n, others: h.others.clone() }, look)
             }
@@ -311,6 +327,13 @@ impl Place {
             .collect()
     }
 
+    /// What the windows looked at last say now, each read again (between
+    /// looks: a window closed meanwhile shows at the next look); one that
+    /// cannot be read is as it was.
+    pub fn read_again(&self, others: Vec<Other>) -> Vec<Other> {
+        others.into_iter().map(|o| std::fs::read_to_string(Self::pad_path(&self.dir, o.place)).map_or(o.clone(), |t| read_pad_text(o.place, &t))).collect()
+    }
+
     /// Says what this window reads: written beside and moved over, so a
     /// window looking never reads half of it.
     pub fn say(&self, pad: Option<&str>, focus: Focus, front: Option<u64>) -> Result<(), String> {
@@ -366,6 +389,11 @@ impl Place {
                 read_pad_text(n, &text)
             })
             .collect()
+    }
+
+    fn read_again(&self, others: Vec<Other>) -> Vec<Other> {
+        let Some(store) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) else { return others };
+        others.into_iter().map(|o| store.get_item(&Self::key(o.place)).ok().flatten().map_or(o.clone(), |t| read_pad_text(o.place, &t))).collect()
     }
 
     fn say(&self, pad: Option<&str>, focus: Focus, front: Option<u64>) -> Result<(), String> {
@@ -444,6 +472,25 @@ mod tests {
         assert_eq!(a.others()[1], Other { place: 2, pad: None, focus: Focus::Off, front: None }, "behind again: no time");
         // looking takes nothing: the places are as they were
         assert_eq!(d2.others().iter().map(|o| o.place).collect::<Vec<_>>(), vec![0, 2]);
+    }
+
+    /// Between looks, what the windows looked at last say is read again: a
+    /// window's new word reaches the others within `QUICK_MS`. The control:
+    /// a window that opened since is not among them until the next look.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn what_the_others_say_is_read_again_between_looks() {
+        let d = Dir::new("quick");
+        let a = Place::take(&d.0).unwrap().unwrap();
+        let b = Place::take(&d.0).unwrap().unwrap();
+        let seen = a.others();
+        assert_eq!(seen[0].front, None);
+        b.say(None, Focus::Window, Some(7_000)).unwrap();
+        let c = Place::take(&d.0).unwrap().unwrap();
+        let again = a.read_again(seen);
+        assert_eq!(again, vec![Other { place: 1, pad: None, focus: Focus::Window, front: Some(7_000) }], "window 2's new word; the control: window 3 not yet");
+        assert_eq!(a.others().len(), 2, "the next look finds window 3");
+        drop(c);
     }
 
     /// One place for the program, whichever thread asks: two threads asking
