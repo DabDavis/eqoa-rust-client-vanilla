@@ -5,6 +5,15 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-25 · Names over heads in a crowd
+- Options > Extended > Characters > Overlapping Names: Show puts a name over every
+  character within Name Distance, even in a crowd, the nearest on top. Hide, the
+  default, is the game's own rule: in a crowd, a name that would overlap a nearer
+  one is not drawn.
+- Names over heads no longer flicker against a head, hat or helm. Where a name sits
+  is the game's own: with the 2002 art (F9) that is right on top of the head, as on
+  the 2002 disc.
+
 ## 2026-10-25 · Pick where the sound plays, and full screen from the options
 - In the downloaded game, Options > Extended > Sound > Output Device: play the
   game's sound on the speakers or headphones you pick. Left on Default, it now
