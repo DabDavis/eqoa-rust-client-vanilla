@@ -5,6 +5,30 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-25 · Mana bars, rumble for PlayStation controllers, and multiboxing fixes
+- Mana bars: on a server that sends them (eqoaclassic does), each group member,
+  your target and your target's target show a power bar under their health.
+  Options > Extended > UI > Mana Bars turns them off. Sandstorm doesn't send
+  anyone's power, so you won't see them there.
+- Target of Target now shows its health and power beside its name.
+- PS4 and PS5 controllers rumble on Windows now, as on a PlayStation 2: when you
+  cast a spell and when one hits you (melee never rumbled in EQOA). Options >
+  Vibration turns it off.
+- On a Mac, PS4 and PS5 controllers plugged in by USB rumble too. Over Bluetooth
+  they don't yet.
+- On Windows a PS4 controller's light no longer goes dark while the game runs.
+- A short rumble is no longer lost when the game is slow for a moment, like when
+  the world loads.
+- Run `eqoa rumble` from a terminal to check that a controller rumbles.
+- Multiboxing: a window on Controller Focus Auto no longer takes the controller
+  while another window on Window is in front, so one press reaches one window.
+  With Capture Controller on, a window on a Pad does the same.
+- Problem reports say more when a window comes to the front: how long it had
+  stopped drawing, any controller press it held back and why, and a PlayStation
+  controller that stopped answering.
+- In a browser, a problem report now says how the game's connection to the
+  server stands, so a connection that went quiet shows in the report.
+
 ## 2026-10-25 · Clean sound in long fights, loading screens on long trips, and Klik'Anon
 - Sounds no longer turn crunchy or garbled after a lot of fighting and spells. A
   sound let go while it was still loading could leave the next one made in its place

@@ -38,7 +38,7 @@ or a browser (each described where it lives below):
 - **The Extended options**, a page for each of Video (Display: a window or full
   screen, as F11 and Alt+Enter toggle it; Brightness, Frame Rate, VSync), World
   (Fog, Mipmaps, Flora, Environment, Art), UI (Ability Bars, Target of Target, Update Notices, Text: Sharp or
-  Smooth, Loading Screens: Longer or Instant), Controller (Controller Focus, Capture Controller), Camera (Distance,
+  Smooth, Loading Screens: Longer or Instant, Mana Bars), Controller (Controller Focus, Capture Controller), Camera (Distance,
   Turn Speed, Screen Shake), Characters (Level of Detail, NPC/PC Display and
   Distance, Name Distance, Overlapping Names) and Sound (Sound in Background, Output Device:
   the system's default, followed when it changes, or a device by its name), and
@@ -63,7 +63,13 @@ or a browser (each described where it lives below):
 - **Hide UI** (H): everything drawn over the world hidden until H again or a
   window opens.
 - **Target of Target** (UI's, off unless chosen): whom the target is targeting,
-  beside the target's bar; F targets them, through the game's Assist Target.
+  beside the target's bar, with their health and power; F targets them,
+  through the game's Assist Target.
+- **Mana Bars** (UI's, on unless turned off): a power bar under the health of
+  each group member, the target and the target of target, on a server that
+  sends others' power (go-eqoa-server does, 0x7E01/0x7E02, players only;
+  Sandstorm sends no one's, so there are none there; the game shows only the
+  player's own).
 - **Ignore Shouts kept** until Restore Shouts, across logins (the game keeps
   none, and a server forgets it at the next login).
 - **Several windows at once** (multiboxing): each window reads its own

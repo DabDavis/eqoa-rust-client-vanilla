@@ -12,7 +12,7 @@ current.
   the Controls page, 1,000 lines of chat, no green backdrop behind the start menu's windows, the
   Extended options, the map, the updater, the problem and crash reports, the 2002 disc's art on F9, Hide UI
   on H, Target of Target, names from farther and smaller zoomed out (and every one in a crowd, Overlapping Names Show), Ignore Shouts kept, Update Notices, Text
-  Sharp or Smooth, Loading Screens Longer or Instant). A
+  Sharp or Smooth, Loading Screens Longer or Instant, Mana Bars from a server that sends others' power). A
   new client-side addition is the user's call: ask first.
   Fixes are made here and are not carried to eqoa-rs any more (the user, 2026-10-23: "vanilla
   only"); its remote `eqoa-rs` stays for reading it. Link no private repository from anything
@@ -144,7 +144,8 @@ current.
   in a page; `EQOA_PAD_TRACE=1` / `?padtrace`; `EQOA_GLYPHS=1` prints the button glyphs a frame drew.
   A button pressed and let go between two frames reaches the game (`input::Latch`, every source but XInput):
   a new source keeps its presses through it.
-  A DualSense is plugged in here and gilrs drives its motors: rumble is as real as the speakers.
+  A DualSense is plugged in here and gilrs drives its motors: rumble is as real as the speakers. `eqoa rumble` runs each controller's motors through the game's path;
+  `EQOA_RUMBLE_TEST=<ms>` casts a vibrating spell effect on the player in a scripted run.
   The local server spawns a character at a random heading each login, so click by name, not pixel.
   The player's own keys and buttons (`binds.rs`, the options' Controls page) work at the edge only:
   a moved key becomes its row's default key before the keyboard dispatch (never while typing), the
@@ -154,7 +155,8 @@ current.
   Extended's Controller page; per window by its place, `multibox.rs`: lock files in the config directory's
   `windows/`, Web Locks in a page; one place a program, never a thread's: a settings read on another
   thread took a second; let go at the loop's end). Windows' Xbox pads are read through XInput (`xinput.rs`) and its
-  DualShock 4s and DualSenses over HID (`hidpad.rs`, read only, their motors gilrs's), both of which
+  DualShock 4s and DualSenses over HID (`hidpad.rs`, which also sets their motors; gilrs's force feedback
+  is off on Windows, and a Mac's PlayStation pads by USB get their motors through IOKit), both of which
   answer a window behind another; gilrs's Windows.Gaming.Input answers only the one in front.
   Test several windows natively with uinput pads (python-evdev, `/dev/uinput` is the user's) and a
   shared `EQOA_CONFIG`; Windows on GitHub's runners with ViGEmBus pads.
