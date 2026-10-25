@@ -388,6 +388,10 @@ pub struct Play {
     sound_ops: Vec<crate::options::OptionsUp>,
     apply_camera: bool,
     filters_sent: Option<(bool, bool)>,
+    /// Ignore Shouts told the server this login (`tell_shouts`), and a shout
+    /// it sent dropped since (said once in the log).
+    shouts_told: bool,
+    shouts_dropped: bool,
     /// The buddy list (VIClient's map, `VIWndBuddy`: mode 18, a request
     /// mode 17) and the ignore list (`VIClientPart38300`,
     /// `VIWndIgnoreList`: mode 26); a panel to open with the next HUD
@@ -1439,7 +1443,7 @@ impl Play {
         crate::s2::begin_session();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: 0, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0 };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: 0, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0 };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -1968,10 +1972,7 @@ impl Play {
                     }
                     self.disconnected = Some(r);
                 }
-                Event::Chat(text, color) => {
-                    eprintln!("chat: {text}");
-                    self.add_chat(text, color);
-                }
+                Event::Chat(text, color) => self.server_line(text, color),
                 // CastingCombat (0x00B1) and Msg0776: an effect to play; one
                 // the player cast itself (0x0776) it has already played.
                 Event::Opcode { op, data } => {
@@ -2063,6 +2064,7 @@ impl Play {
             self.auto_attack_tick(walker, now);
             self.self_visibility(walker);
             self.options_tick();
+            self.tell_shouts();
         }
         // what the Options window asked of the sound device and the camera
         // (kept until there is a device: the volumes loaded with the options)
@@ -3444,6 +3446,22 @@ impl Play {
     /// world, `viewer`'s `ask_disc`).
     pub fn no_2002_disc(&mut self) {
         self.add_chat("The 2002 art needs your EverQuest Online Adventures (USA) disc image: choose it with F9 at the title or at character select.".to_string(), [1.0; 4]);
+    }
+
+    /// A line the server sent (0x0A7A, 0x0A7B, 0x069E, 0x0758, 0x00CE) for
+    /// the chat box, logged; but someone else's shout while Ignore Shouts is
+    /// kept is dropped (a server that does not listen to 0x0C01's flag still
+    /// sends them), the first said in the log.
+    fn server_line(&mut self, text: String, color: [f32; 4]) {
+        if !crate::settings::shouts() && crate::chat::is_shout(&text, color, &self.player.name) {
+            if !self.shouts_dropped {
+                eprintln!("chat: shouts ignored (Ignore Shouts, kept): the server's shouts are not shown");
+                self.shouts_dropped = true;
+            }
+            return;
+        }
+        eprintln!("chat: {text}");
+        self.add_chat(text, color);
     }
 
     /// `VIWndGame::AddText`: a line for the chat box (queued with its time
@@ -5079,11 +5097,17 @@ impl Play {
             // Stop Ignoring: DoAction has no case for it (the start menu's
             // entry asks for a name on its own path)
             0x0B05_3002 => {}
-            // VIClientPart2EFCC::SendFlag: shouts heard or not (0x0C01, 1)
+            // VIClientPart2EFCC::SendFlag: shouts heard or not (0x0C01, 1);
+            // the client keeps the choice (the game keeps none: the server
+            // forgets it at the next login), told again at each login
+            // (`tell_shouts`), and drops what shouts still come meanwhile
             0x0B03_0003 => {
-                let mut w = net::stream::Writer::op(0x0C01);
-                w.u8(1).u8((arg != 0) as u8);
-                self.session.send(&w.data);
+                self.send_shout_flag(arg != 0);
+                self.shouts_told = true;
+                match crate::settings::set_shouts(arg != 0) {
+                    Ok(()) => eprintln!("chat: shouts {} (kept)", if arg != 0 { "heard" } else { "ignored" }),
+                    Err(e) => eprintln!("chat: shouts {}, not kept: {e}", if arg != 0 { "heard" } else { "ignored" }),
+                }
             }
             // m_p2EF24.SetChat: the guild's chat heard or not
             0x0B05_100C => self.session.send(&crate::guild::Cmds::set_chat(arg != 0)),
@@ -5732,6 +5756,31 @@ impl Play {
             }
         }
         self.filters_sent = Some(on);
+    }
+
+    /// `VIClientPart2EFCC::SendFlag(b)`: 0x0C01, 1, whether shouts are heard.
+    fn send_shout_flag(&mut self, heard: bool) {
+        let mut w = net::stream::Writer::op(0x0C01);
+        w.u8(1).u8(heard as u8);
+        self.session.send(&w.data);
+    }
+
+    /// Ignore Shouts kept (`settings::shouts`): the server told once a login,
+    /// as the player in the world, as if Ignore Shouts were chosen again. A
+    /// login and not each dump: the server keeps the flag while the session
+    /// stands (the PS2 sends it only when chosen), and what a server answers
+    /// to it is in no capture, so a reply line at every respawn and world
+    /// change could follow; a server that forgets meanwhile has its shouts
+    /// dropped (`Event::Chat`).
+    fn tell_shouts(&mut self) {
+        if self.shouts_told {
+            return;
+        }
+        self.shouts_told = true;
+        if !crate::settings::shouts() {
+            eprintln!("chat: shouts ignored (kept): the server told again");
+            self.send_shout_flag(false);
+        }
     }
 
     /// `Msg076F`: a buddy request. Busy (any window up) refuses it with
@@ -7225,6 +7274,73 @@ mod commands {
         p.session.flush();
         let msgs = guaranteed(&sent.borrow());
         assert!(msgs.iter().any(|m| m[..] == [0x7B, 0x07]), "0x077B answered: {msgs:02x?}");
+    }
+
+    /// Ignore Shouts (the quick chat's |10, DoAction 0x0B030003 with 0) sends
+    /// the game's 0x0C01 [1, 0] and is kept; the next login tells the server
+    /// again, once, and a shout the server still sends is dropped while the
+    /// player's own and a say are not; Restore Shouts (1) sends [1, 1] and
+    /// brings them back. The control: a login with shouts heard tells the
+    /// server nothing.
+    #[test]
+    fn ignore_shouts_stays_until_restored() {
+        struct Rec(std::rc::Rc<std::cell::RefCell<Vec<Vec<u8>>>>);
+        impl net::session::Datagrams for Rec {
+            fn send_to(&mut self, d: &[u8], _: [u8; 4], _: u16) {
+                self.0.borrow_mut().push(d.to_vec());
+            }
+            fn recv_from(&mut self) -> Option<(Vec<u8>, [u8; 4], u16)> {
+                None
+            }
+        }
+        crate::settings::testing::reset(false);
+        let login = |sent: &std::rc::Rc<std::cell::RefCell<Vec<Vec<u8>>>>| {
+            let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 5000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+            s.self_id = Some(0x100);
+            let mut p = Play::new(s, Player { name: "Gnolie".into(), ..Default::default() }, Box::default());
+            p.session.flush();
+            sent.borrow_mut().clear();
+            p
+        };
+        let flags = |p: &mut Play, sent: &std::rc::Rc<std::cell::RefCell<Vec<Vec<u8>>>>| -> Vec<Vec<u8>> {
+            p.session.flush();
+            let out = guaranteed(&sent.borrow()).into_iter().filter(|m| m.starts_with(&[0x01, 0x0C, 0x01])).collect();
+            sent.borrow_mut().clear();
+            out
+        };
+        let green = [63.0 / 255.0, 1.0, 63.0 / 255.0, 1.0];
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        // the control: shouts heard, a login tells nothing, a shout is shown
+        let mut p = login(&sent);
+        p.tell_shouts();
+        assert!(flags(&mut p, &sent).is_empty(), "the control: nothing told");
+        p.server_line("Powerbrick shouts: yrs?".into(), green);
+        assert_eq!(last_line(&p), "Powerbrick shouts: yrs?");
+        // Ignore Shouts: sent and kept
+        p.do_action(0x0B03_0003, 0);
+        assert_eq!(flags(&mut p, &sent), [vec![0x01, 0x0C, 0x01, 0x00]], "the game's 0x0C01 [1, 0]");
+        assert!(!crate::settings::shouts(), "kept");
+        // the next login: told once, shouts dropped, own and says kept
+        let mut p = login(&sent);
+        p.tell_shouts();
+        p.tell_shouts();
+        assert_eq!(flags(&mut p, &sent), [vec![0x01, 0x0C, 0x01, 0x00]], "told again, once");
+        p.server_line("Powerbrick shouts: yrs?".into(), green);
+        assert_eq!(last_line(&p), "", "someone else's shout dropped");
+        p.server_line("Gnolie shouts: lfg".into(), green);
+        assert_eq!(last_line(&p), "Gnolie shouts: lfg", "the player's own kept");
+        p.server_line("Powerbrick: no shouts: here".into(), [1.0; 4]);
+        assert_eq!(last_line(&p), "Powerbrick: no shouts: here", "a say kept");
+        // Restore Shouts: sent, kept, heard again
+        p.do_action(0x0B03_0003, 1);
+        assert_eq!(flags(&mut p, &sent), [vec![0x01, 0x0C, 0x01, 0x01]], "the game's 0x0C01 [1, 1]");
+        assert!(crate::settings::shouts());
+        p.server_line("Powerbrick shouts: back".into(), green);
+        assert_eq!(last_line(&p), "Powerbrick shouts: back");
+        let mut p = login(&sent);
+        p.tell_shouts();
+        assert!(flags(&mut p, &sent).is_empty(), "restored: the next login tells nothing");
+        crate::settings::testing::reset(false);
     }
 
     #[test]

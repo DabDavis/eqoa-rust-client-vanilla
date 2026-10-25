@@ -500,6 +500,19 @@ pub struct ClientOptions {
     /// display's refresh itself (`frame_wait`). A page's frames are the
     /// browser's to pace: there it is always on.
     pub vsync: bool,
+    /// Shouts heard: the game's Restore Shouts (true) and Ignore Shouts
+    /// (false), the quick chat's (DoAction 0x0B030003, `SendFlag`), kept by
+    /// the client as soon as they are chosen (`set_shouts`; the game keeps
+    /// none, and the server forgets at the next login): ignored, the server
+    /// is told again at each login (`Play::tell_shouts`) and any shout it
+    /// still sends is dropped (`chat::is_shout`). Each window its own.
+    pub shouts: bool,
+    /// Update Notices, one setting for every window: on, the game asks in
+    /// its own window to restart into a newer build once one is in place
+    /// (`update::Offer`); off, it never asks, and the newer build starts the
+    /// next time the game does (`update`'s check before the title, as ever).
+    /// A page's Reload notice the same (`web/main.js`).
+    pub update_notices: bool,
 }
 
 /// The game's ability bars (with the expansion's second).
@@ -534,6 +547,8 @@ impl Default for ClientOptions {
             entity_view: ENTITY_VIEW_GAME,
             art: esf::Era::Frontiers,
             vsync: true,
+            shouts: true,
+            update_notices: true,
         }
     }
 }
@@ -545,7 +560,7 @@ impl ClientOptions {
     /// it is not Auto, Capture Controller only when on, Sound in Background
     /// only when off, Ability Bars, NPC/PC Display and NPC/PC View Distance
     /// only when not the game's, Art only when it is the 2002 disc's, and
-    /// VSync only when off.
+    /// VSync, Shouts and Update Notices only when off.
     pub fn to_text(self) -> String {
         let mut s = format!("lod={}\nbrightness={}\ncamera_distance={}\n", if self.lod { "on" } else { "off" }, self.brightness, self.camera_distance);
         if let Some(r) = self.frame_rate {
@@ -583,6 +598,12 @@ impl ClientOptions {
         }
         if !self.vsync {
             s.push_str("vsync=off\n");
+        }
+        if !self.shouts {
+            s.push_str("shouts=off\n");
+        }
+        if !self.update_notices {
+            s.push_str("update_notices=off\n");
         }
         s
     }
@@ -627,6 +648,10 @@ impl ClientOptions {
                 ("background_sound", "off") => c.background_sound = false,
                 ("vsync", "on") => c.vsync = true,
                 ("vsync", "off") => c.vsync = false,
+                ("shouts", "on") => c.shouts = true,
+                ("shouts", "off") => c.shouts = false,
+                ("update_notices", "on") => c.update_notices = true,
+                ("update_notices", "off") => c.update_notices = false,
                 ("ability_bars", v) => {
                     if let Some(n) = v.parse::<u8>().ok().filter(|&n| (ABILITY_BARS_GAME as i32..=crate::hudmenu::MAX_BARS).contains(&(n as i32))) {
                         c.ability_bars = n;
@@ -658,9 +683,9 @@ impl ClientOptions {
 impl ClientOptions {
     /// A later window's own file (`client-<n>.opt`): the Extended page's rows,
     /// the lines the windows share (Controller Focus, Capture Controller,
-    /// Sound in Background) left to client.opt.
+    /// Sound in Background, Update Notices) left to client.opt.
     fn rows_text(self) -> String {
-        ClientOptions { controller: [Focus::Auto; crate::multibox::PLACES], capture: false, background_sound: true, ..self }.to_text()
+        ClientOptions { controller: [Focus::Auto; crate::multibox::PLACES], capture: false, background_sound: true, update_notices: true, ..self }.to_text()
     }
 }
 
@@ -676,7 +701,7 @@ fn read_client() -> ClientOptions {
     let shared = read_shared();
     let me = place();
     match store::read(&own_file("client", me)).filter(|_| me > 0) {
-        Some(b) => ClientOptions { controller: shared.controller, capture: shared.capture, background_sound: shared.background_sound, ..ClientOptions::from_text(&String::from_utf8_lossy(&b)) },
+        Some(b) => ClientOptions { controller: shared.controller, capture: shared.capture, background_sound: shared.background_sound, update_notices: shared.update_notices, ..ClientOptions::from_text(&String::from_utf8_lossy(&b)) },
         None => shared,
     }
 }
@@ -694,13 +719,14 @@ fn save_client() -> Result<(), String> {
     shared.controller[me] = mine.controller[me];
     shared.capture = mine.capture;
     shared.background_sound = mine.background_sound;
+    shared.update_notices = mine.update_notices;
     if me == 0 {
         store::write(CLIENT_FILE, ClientOptions { controller: shared.controller, ..mine }.to_text().as_bytes())?;
     } else {
         store::write(&own_file("client", me), mine.rows_text().as_bytes())?;
         store::write(CLIENT_FILE, shared.to_text().as_bytes())?;
     }
-    FILE_SHARED.with(|f| f.set(Some((shared.capture, shared.background_sound))));
+    FILE_SHARED.with(|f| f.set(Some((shared.capture, shared.background_sound, shared.update_notices))));
     Ok(())
 }
 
@@ -717,8 +743,8 @@ thread_local! {
     /// The display's refresh, in ms (`set_display_refresh`).
     static DISPLAY_GAP: Cell<f64> = const { Cell::new(1000.0 / 60.0) };
     /// What the windows share as `client.opt` last had it (`look_shared`):
-    /// Capture Controller and Sound in Background.
-    static FILE_SHARED: Cell<Option<(bool, bool)>> = const { Cell::new(None) };
+    /// Capture Controller, Sound in Background and Update Notices.
+    static FILE_SHARED: Cell<Option<(bool, bool, bool)>> = const { Cell::new(None) };
 }
 
 /// The client's settings now: what this window kept (`read_client`), as the
@@ -730,7 +756,7 @@ pub fn client() -> ClientOptions {
         _ => {
             let v = read_client();
             c.set(Some((me, v)));
-            FILE_SHARED.with(|f| f.set(Some((v.capture, v.background_sound))));
+            FILE_SHARED.with(|f| f.set(Some((v.capture, v.background_sound, v.update_notices))));
             v
         }
     })
@@ -812,7 +838,7 @@ pub fn entity_view() -> u16 {
 }
 
 /// What the windows share as another window saved it (Capture Controller,
-/// Sound in Background): `client.opt`'s, each taken when it changed since
+/// Sound in Background, Update Notices): `client.opt`'s, each taken when it changed since
 /// this window last looked (`multibox::seat`'s look, twice a second), so a
 /// change saved in one window reaches the others while they run; this
 /// window's own change, not saved yet, stands until then. The other settings
@@ -820,7 +846,7 @@ pub fn entity_view() -> u16 {
 pub fn look_shared() {
     let Some(b) = store::read(CLIENT_FILE) else { return };
     let file = ClientOptions::from_text(&String::from_utf8_lossy(&b));
-    let kept = (file.capture, file.background_sound);
+    let kept = (file.capture, file.background_sound, file.update_notices);
     let _ = client();
     let Some(last) = FILE_SHARED.with(|f| f.replace(Some(kept))) else { return };
     let mut c = client();
@@ -831,6 +857,10 @@ pub fn look_shared() {
     if last.1 != kept.1 {
         c.background_sound = kept.1;
         crate::say(&format!("sound: Sound in Background {} (saved in another window)", if kept.1 { "on" } else { "off" }));
+    }
+    if last.2 != kept.2 {
+        c.update_notices = kept.2;
+        crate::say(&format!("update: Update Notices {} (saved in another window)", if kept.2 { "on" } else { "off" }));
     }
     if last != kept {
         set_client(c);
@@ -849,6 +879,27 @@ pub fn set_art(art: esf::Era) -> Result<(), String> {
     c.art = art;
     set_client(c);
     save_client()
+}
+
+/// Whether shouts are heard: Restore Shouts, or Ignore Shouts kept
+/// (`ClientOptions::shouts`).
+pub fn shouts() -> bool {
+    client().shouts
+}
+
+/// Ignore Shouts (false) or Restore Shouts (true), kept at once, as F9's
+/// Art is (the quick chat's choice is no page's row that Save Changes
+/// keeps): this window's client options written as they stand.
+pub fn set_shouts(heard: bool) -> Result<(), String> {
+    let mut c = client();
+    c.shouts = heard;
+    set_client(c);
+    save_client()
+}
+
+/// Whether the game asks to restart into a newer build (Update Notices).
+pub fn update_notices() -> bool {
+    client().update_notices
 }
 
 /// This window's Controller Focus: its place's (`multibox::place`).
@@ -896,7 +947,7 @@ pub fn describe() -> String {
         FrameRate::Display => "the display's",
     };
     format!(
-        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, art {}; {}",
+        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, art {}, update notices {}, shouts {}; {}",
         if c.lod { "on" } else { "off" },
         c.brightness,
         c.fog,
@@ -917,6 +968,8 @@ pub fn describe() -> String {
             esf::Era::Frontiers => "frontiers",
             esf::Era::Y2002 => "2002",
         },
+        if c.update_notices { "on" } else { "off" },
+        if c.shouts { "heard" } else { "ignored (kept)" },
         kept_where()
     )
 }
@@ -1338,6 +1391,14 @@ mod tests {
         for bad in ["vsync=no", "vsync=0", "vsync=adaptive"] {
             assert!(ClientOptions::from_text(bad).vsync, "{bad}: on, the default");
         }
+        assert_eq!(ClientOptions { shouts: false, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nshouts=off\n", "Shouts only when ignored");
+        assert!(!ClientOptions::from_text("shouts=off").shouts && ClientOptions::from_text("shouts=on").shouts);
+        assert_eq!(ClientOptions { update_notices: false, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nupdate_notices=off\n", "Update Notices only when off");
+        assert!(!ClientOptions::from_text("update_notices=off").update_notices && ClientOptions::from_text("update_notices=on").update_notices);
+        for bad in ["shouts=no\nupdate_notices=0", "shouts=ignored\nupdate_notices=never"] {
+            let c = ClientOptions::from_text(bad);
+            assert!(c.shouts && c.update_notices, "{bad}: on, the defaults");
+        }
         assert_eq!(ClientOptions::default().to_text(), "lod=on\nbrightness=5\ncamera_distance=11\n", "no Frame Rate until one is chosen, no game's turn, no window's Auto");
         assert_eq!(ClientOptions { camera_turn: 250, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\ncamera_turn=250\n");
         assert_eq!(
@@ -1346,7 +1407,7 @@ mod tests {
             "Screen Shake only off, Capture Controller only on"
         );
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, ability bars 2, npc/pc display 24, npc/pc view distance 100, art frontiers; kept in the page's storage");
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, ability bars 2, npc/pc display 24, npc/pc view distance 100, art frontiers, update notices on, shouts heard; kept in the page's storage");
         testing::reset(true);
         assert!(describe().ends_with("refused: nothing is kept"));
         testing::reset(false);
@@ -1412,6 +1473,66 @@ mod tests {
         assert!(!background_sound(), "taken at the next look");
         assert_eq!(client().brightness, 5, "the control: this window's own brightness stays");
         assert!(!ClientOptions { background_sound: false, ..Default::default() }.rows_text().contains("background_sound"), "a window's own file: the shared line left to client.opt");
+        testing::reset(false);
+    }
+
+    /// Update Notices is one setting for every window, as Sound in Background
+    /// is: another window's save reaches this one at its next look, Save
+    /// Changes in a later window puts it in client.opt (never in its own
+    /// file), and window 1 reads it back. The control: this window's own
+    /// brightness stays as it read it.
+    #[test]
+    fn update_notices_reach_every_window() {
+        use crate::multibox::testing::set_place;
+        testing::reset(false);
+        assert!(update_notices(), "on until turned off");
+        look_shared();
+        testing::put(CLIENT_FILE, b"lod=on\nbrightness=9\ncamera_distance=11\nupdate_notices=off\n");
+        look_shared();
+        assert!(!update_notices(), "taken at the next look");
+        assert_eq!(client().brightness, 5, "the control: this window's own brightness stays");
+        assert!(!ClientOptions { update_notices: false, ..Default::default() }.rows_text().contains("update_notices"), "a window's own file: the shared line left to client.opt");
+        // a later window turns it on again and saves: client.opt has it
+        testing::reset(false);
+        testing::put(CLIENT_FILE, b"lod=on\nbrightness=5\ncamera_distance=11\nupdate_notices=off\n");
+        set_place(Some(1));
+        assert!(!update_notices(), "window 2 reads the shared line");
+        set_client(ClientOptions { update_notices: true, brightness: 3, ..client() });
+        assert!(save(&GameOptions::default()));
+        assert!(!String::from_utf8(testing::kept(CLIENT_FILE).unwrap()).unwrap().contains("update_notices"), "on again in client.opt");
+        assert!(!String::from_utf8(testing::kept("client-2.opt").unwrap()).unwrap().contains("update_notices"), "never in a window's own file");
+        set_place(Some(0));
+        CLIENT.with(|c| c.set(None));
+        assert!(update_notices(), "window 1 reads it back on");
+        testing::reset(false);
+    }
+
+    /// Ignore Shouts is kept as soon as it is chosen (no Save Changes: the
+    /// quick chat's choice is no page's row), each window its own: window 2's
+    /// goes to client-2.opt and leaves window 1's file byte for byte, and
+    /// Restore Shouts takes the line out again. The control: window 1 still
+    /// hears them.
+    #[test]
+    fn ignore_shouts_is_kept_at_once_for_its_window() {
+        use crate::multibox::testing::set_place;
+        testing::reset(false);
+        set_place(Some(0));
+        assert!(shouts(), "heard until ignored");
+        set_shouts(false).unwrap();
+        assert_eq!(String::from_utf8(testing::kept(CLIENT_FILE).unwrap()).unwrap(), "lod=on\nbrightness=5\ncamera_distance=11\nshouts=off\n", "kept at once");
+        CLIENT.with(|c| c.set(None));
+        assert!(!shouts(), "read back at the next start");
+        set_shouts(true).unwrap();
+        assert_eq!(String::from_utf8(testing::kept(CLIENT_FILE).unwrap()).unwrap(), "lod=on\nbrightness=5\ncamera_distance=11\n", "Restore Shouts takes the line out");
+        // window 2 ignores them: its own file, window 1's untouched
+        let one = testing::kept(CLIENT_FILE).unwrap();
+        set_place(Some(1));
+        set_shouts(false).unwrap();
+        assert_eq!(String::from_utf8(testing::kept("client-2.opt").unwrap()).unwrap(), "lod=on\nbrightness=5\ncamera_distance=11\nshouts=off\n");
+        assert_eq!(testing::kept(CLIENT_FILE).unwrap(), one, "window 1's file byte for byte");
+        set_place(Some(0));
+        CLIENT.with(|c| c.set(None));
+        assert!(shouts(), "the control: window 1 still hears them");
         testing::reset(false);
     }
 
