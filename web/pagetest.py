@@ -374,7 +374,8 @@ async def tests(a, site, base, page):
         return json.loads(body) if body.strip().startswith(b"{") else body
 
     await page.open(base + q)
-    ticks = "window.eqoaHiddenTicks"
+    ticks = "window.eqoaHiddenTicks || 0"
+    check("the page has a ticker for when it is hidden", await page.js("typeof window.eqoaHiddenTicks") == "number")
     t0 = await page.js(ticks)
     await asyncio.sleep(1.5)
     check("a shown page's game is not ticked (control)", await page.js(ticks) == t0 and await page.js("document.visibilityState") == "visible")

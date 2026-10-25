@@ -595,11 +595,15 @@ held back, so while the page is hidden `web/tick.js` ticks at the game's 30
 frames a second and each tick runs the frame an animation frame would
 (`web::hidden_tick`, a user event on the event loop), the window counted as
 covered: the game, its sound and its network go on and nothing is drawn, as a
-covered window's frames natively (`HIDDEN_GAP`). Measured in Chromium with
-another tab in front: 30.3 ticks a second through a 7-minute hide (no gap over
-76 ms) while the page's own timer fell to none; about a quarter of one core
-while hidden. A page the browser freezes or discards (a laptop asleep, low
-memory) runs nothing and still loses its session.
+covered window's frames natively (`HIDDEN_GAP`). Measured with another tab in
+front: in Chromium 30.3 ticks a second through a 7-minute hide (no gap over 76
+ms) while the page's own timer fell to about one a minute, in Firefox 30.1 (its
+own timer at one a second); a page hidden for 12.5 minutes on a server with
+eqoaclassic's settings kept its session, ran 30 frames a second, came back
+where it stood and walked on, where the page before it was dropped 8.4 minutes
+in and came back to "Connection problem" 30 seconds after it was shown; about a
+quarter of one core while hidden. A page the browser freezes or discards (a
+laptop asleep, low memory) runs nothing and still loses its session.
 
 **The 2002 art in a page.** The form has a second, optional input for the 2002 disc
 (EverQuest Online Adventures (USA), SLUS-20470), judged as it is picked by the
