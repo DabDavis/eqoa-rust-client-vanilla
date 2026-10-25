@@ -446,6 +446,46 @@ impl Focus {
     }
 }
 
+/// The most bytes of an output device's name Output Device keeps.
+pub const DEVICE_NAME_MAX: usize = 200;
+
+/// An output device as the system names it (Output Device, `audio`), held in
+/// place so the settings stay `Copy`: at most `DEVICE_NAME_MAX` bytes, a
+/// longer name cut at a character, and every name compared by its cut
+/// (`same`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct DeviceName {
+    len: u8,
+    bytes: [u8; DEVICE_NAME_MAX],
+}
+
+impl DeviceName {
+    pub fn new(name: &str) -> DeviceName {
+        let mut end = name.len().min(DEVICE_NAME_MAX);
+        while !name.is_char_boundary(end) {
+            end -= 1;
+        }
+        let mut bytes = [0; DEVICE_NAME_MAX];
+        bytes[..end].copy_from_slice(&name.as_bytes()[..end]);
+        DeviceName { len: end as u8, bytes }
+    }
+
+    pub fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.bytes[..self.len as usize]).unwrap_or("")
+    }
+
+    /// Whether the system's `name` is this device (by the cut both keep).
+    pub fn same(&self, name: &str) -> bool {
+        *self == DeviceName::new(name)
+    }
+}
+
+impl std::fmt::Debug for DeviceName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.as_str())
+    }
+}
+
 /// The client's own settings: the Options window's Extended page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ClientOptions {
@@ -527,6 +567,12 @@ pub struct ClientOptions {
     /// PS2's own filtering (F3 20261024-200725: "smooth out the text as per
     /// live").
     pub text: render::ui::TextFilter,
+    /// Output Device, natively (F3 20261024-201433: the game played into
+    /// the system's default output, a television, while the player listened
+    /// elsewhere): none, the system's default, followed when it changes; or
+    /// a device by its name, the default while it is not connected
+    /// (`audio::retarget`). Each window its own.
+    pub output: Option<DeviceName>,
 }
 
 /// The game's ability bars (with the expansion's second).
@@ -587,6 +633,7 @@ impl Default for ClientOptions {
             update_notices: true,
             target_of_target: false,
             text: render::ui::TextFilter::Sharp,
+            output: None,
         }
     }
 }
@@ -599,7 +646,8 @@ impl ClientOptions {
     /// only when off, Ability Bars, NPC/PC Display, NPC/PC View Distance and
     /// Name Distance only when not the game's, Art only when it is the 2002
     /// disc's, VSync, Shouts and Update Notices only when off, Target of
-    /// Target only when on, and Text only when Smooth.
+    /// Target only when on, Text only when Smooth, and Output Device only
+    /// when a device is chosen (by its name).
     pub fn to_text(self) -> String {
         let mut s = format!("lod={}\nbrightness={}\ncamera_distance={}\n", if self.lod { "on" } else { "off" }, self.brightness, self.camera_distance);
         if let Some(r) = self.frame_rate {
@@ -654,6 +702,9 @@ impl ClientOptions {
         if self.text == render::ui::TextFilter::Smooth {
             s.push_str("text=smooth\n");
         }
+        if let Some(d) = self.output {
+            s.push_str(&format!("output={}\n", d.as_str()));
+        }
         s
     }
 
@@ -705,6 +756,7 @@ impl ClientOptions {
                 ("target_of_target", "off") => c.target_of_target = false,
                 ("text", "sharp") => c.text = render::ui::TextFilter::Sharp,
                 ("text", "smooth") => c.text = render::ui::TextFilter::Smooth,
+                ("output", v) if !v.is_empty() => c.output = Some(DeviceName::new(v)),
                 ("ability_bars", v) => {
                     if let Some(n) = v.parse::<u8>().ok().filter(|&n| (ABILITY_BARS_GAME as i32..=crate::hudmenu::MAX_BARS).contains(&(n as i32))) {
                         c.ability_bars = n;
@@ -1011,7 +1063,7 @@ pub fn describe() -> String {
         FrameRate::Display => "the display's",
     };
     format!(
-        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, art {}, update notices {}, shouts {}, target of target {}, text {}; {}",
+        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, output device {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, art {}, update notices {}, shouts {}, target of target {}, text {}; {}",
         if c.lod { "on" } else { "off" },
         c.brightness,
         c.fog,
@@ -1025,6 +1077,7 @@ pub fn describe() -> String {
         focus().key(),
         if c.capture { "on" } else { "off" },
         if c.background_sound { "on" } else { "off" },
+        c.output.map_or("the system default".to_string(), |d| format!("{:?}", d.as_str())),
         c.ability_bars,
         c.entity_slots,
         c.entity_view,
@@ -1431,10 +1484,25 @@ mod tests {
             ClientOptions { entity_view: ENTITY_VIEW_MAX, ..Default::default() },
             ClientOptions { art: esf::Era::Y2002, ..Default::default() },
             ClientOptions { text: render::ui::TextFilter::Smooth, ..Default::default() },
+            ClientOptions { output: Some(DeviceName::new("Speakers (Realtek(R) Audio)")), ..Default::default() },
+            ClientOptions { output: Some(DeviceName::new("Kopfhörer (2- Arctis 7 Game) = Ü")), ..Default::default() },
         ] {
             assert_eq!(ClientOptions::from_text(&c.to_text()), c);
         }
         assert_eq!(ClientOptions { text: render::ui::TextFilter::Smooth, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\ntext=smooth\n", "Text only when Smooth");
+        // Output Device: only when one is chosen, by its name; an empty name
+        // is the system default; a name past the most kept is cut at a
+        // character, and the system's own name still matches it
+        let tv = DeviceName::new("LG TV SSCR2 (NVIDIA High Definition Audio)");
+        assert_eq!(ClientOptions { output: Some(tv), ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\noutput=LG TV SSCR2 (NVIDIA High Definition Audio)\n", "Output Device only when chosen");
+        assert_eq!(ClientOptions::from_text("output=").output, None, "the system default");
+        assert!(tv.same("LG TV SSCR2 (NVIDIA High Definition Audio)") && !tv.same("LG TV SSCR2"), "the whole name");
+        let long = "é".repeat(150);
+        let cut = DeviceName::new(&long);
+        assert_eq!(cut.as_str().len(), DEVICE_NAME_MAX, "cut at a character: 100 two-byte é");
+        assert!(cut.same(&long) && ClientOptions::from_text(&format!("output={long}")).output == Some(cut), "matched by its cut");
+        let odd = DeviceName::new(&format!("a{}", "é".repeat(150)));
+        assert_eq!(odd.as_str().len(), DEVICE_NAME_MAX - 1, "the character across the end left out");
         assert_eq!(ClientOptions::from_text("text=sharp").text, render::ui::TextFilter::Sharp);
         for bad in ["text=blurry", "text=", "text=1"] {
             assert_eq!(ClientOptions::from_text(bad).text, render::ui::TextFilter::Sharp, "{bad}: Sharp, the default");
@@ -1494,7 +1562,7 @@ mod tests {
             "Screen Shake only off, Capture Controller only on"
         );
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, art frontiers, update notices on, shouts heard, target of target off, text sharp; kept in the page's storage");
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, art frontiers, update notices on, shouts heard, target of target off, text sharp; kept in the page's storage");
         testing::reset(true);
         assert!(describe().ends_with("refused: nothing is kept"));
         testing::reset(false);

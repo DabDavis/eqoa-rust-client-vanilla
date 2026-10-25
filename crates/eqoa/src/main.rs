@@ -72,6 +72,7 @@ mod gram;
 mod hideui;
 mod hud;
 mod damage;
+mod display;
 mod hudmenu;
 mod influence;
 mod input;
