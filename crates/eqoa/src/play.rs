@@ -1036,7 +1036,13 @@ fn labels_by(plates: &[Plate], view: &PlateView, view_proj: glam::Mat4, width: i
         if reach <= (at - view.eye).length_squared() + 1.0 || queued.len() >= view.most {
             continue;
         }
-        let clip = view_proj * at.extend(1.0);
+        // in doubles, as the models' view-projection is made eye-relative
+        // (`Renderer::draw_in`): at Freeport's x 25,300 a float steps 2 mm,
+        // and a plate's depth projected in floats came out up to that far
+        // from the models' it is tested against, by a different amount each
+        // frame, so where a head reached a name's depth its edge flickered
+        // (F3 20261025-025540)
+        let clip = (view_proj.as_dmat4() * at.as_dvec3().extend(1.0)).as_vec4();
         if clip.w <= 0.0 {
             continue;
         }
@@ -1406,6 +1412,47 @@ mod name_plates {
         let p: Vec<Plate> = (0..30).map(|i| plate([-0.9 + (i % 6) as f32 * 0.35, -0.8 + (i / 6) as f32 * 0.4, 10.0], "A")).collect();
         assert_eq!(names(&PlateView { most: 64, ..PlateView::game(eye) }, &p).len(), 30);
         assert_eq!(names(&PlateView::game(eye), &p).len(), NAME_PLATES_GAME, "the control: the game's 24");
+    }
+
+    /// A plate's depth at Freeport's coordinates (x 25,300, where a float
+    /// steps 2 mm) is the depth the models are drawn at there: their
+    /// view-projection is made relative to the eye in doubles
+    /// (`Renderer::draw_in`) and their places taken from the eye, so the
+    /// reference is that, in doubles. Forty names 8 to 30 away in front of a
+    /// camera in the square, through the game's projection (near 0.3), each
+    /// projected alone: within a float step or two of a depth near 1. The
+    /// control, the projection in floats (as before), is off by thousands of
+    /// times that, up to 0.28 of depth along the view, a different amount as
+    /// the camera moves: the flicker where a head reached a name's depth (F3
+    /// 20261025-025540).
+    #[test]
+    fn a_plates_depth_is_the_models_far_from_the_origin() {
+        let eye = Vec3::new(25272.58, 56.2, 15727.70);
+        // the walker's (`Walker::view`): the game's projection to a fog's far
+        // plane, looking along the camera's direction
+        let proj = crate::walker::projection_to(16.0 / 9.0, 300.0);
+        let view_proj = proj * glam::camera::rh::view::look_to_mat4(eye, Vec3::new(20.0, -1.5, 3.0).normalize(), Vec3::Y);
+        let rel = view_proj.as_dmat4() * glam::DMat4::from_translation(eye.as_dvec3());
+        let view = PlateView { distance: 200.0, most: 64, overlap: true, ..PlateView::game(eye) };
+        let (mut ours, mut floats, mut world) = (0f64, 0f64, 0f64);
+        for k in 0..40 {
+            let (d, a) = (8.0 + (k % 8) as f32 * 3.1, -0.5 + (k / 8) as f32 * 0.25);
+            let at = eye + Vec3::new(d * a.cos(), -1.0 + (k % 3) as f32 * 0.7, d * a.sin());
+            let c = rel * (at.as_dvec3() - eye.as_dvec3()).extend(1.0);
+            let want = c.z / c.w;
+            let got = labels_by(&[plate(at.to_array(), "Ab")], &view, view_proj, width, 12);
+            assert_eq!(got.len(), 1, "{at:?} in view");
+            let f = view_proj * at.extend(1.0);
+            ours = ours.max((got[0].at[2] as f64 - want).abs());
+            let off = ((f.z / f.w) as f64 - want).abs();
+            floats = floats.max(off);
+            // the depth that is, along the view: d(ndc)/dz = near·far/((far-near)·z²)
+            let z = c.w;
+            world = world.max(off * z * z * (300.0 - 0.3) / (0.3 * 300.0));
+        }
+        eprintln!("the plates' depth off the models' by at most {ours:e} (projected in floats: {floats:e}, as much as {world:.3} of depth)");
+        assert!(ours < 2.5e-7, "a float step or two: {ours:e}");
+        assert!(floats > 1e-5, "the control: in floats {floats:e}");
     }
 
     /// Overlapping Names (F3 20261025-025611: five names of a crowd of
