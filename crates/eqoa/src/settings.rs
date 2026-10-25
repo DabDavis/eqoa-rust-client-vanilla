@@ -500,6 +500,11 @@ pub struct ClientOptions {
     /// display's refresh itself (`frame_wait`). A page's frames are the
     /// browser's to pace: there it is always on.
     pub vsync: bool,
+    /// Text: how the game's font is drawn scaled to the window, wherever it
+    /// is drawn (`render::ui::TextFilter`): Sharp, crisp, or Smooth, the
+    /// PS2's own filtering (F3 20261024-200725: "smooth out the text as per
+    /// live").
+    pub text: render::ui::TextFilter,
 }
 
 /// The game's ability bars (with the expansion's second).
@@ -534,6 +539,7 @@ impl Default for ClientOptions {
             entity_view: ENTITY_VIEW_GAME,
             art: esf::Era::Frontiers,
             vsync: true,
+            text: render::ui::TextFilter::Sharp,
         }
     }
 }
@@ -544,8 +550,8 @@ impl ClientOptions {
     /// window's Controller Focus as `controller.<window>` (from 1) only when
     /// it is not Auto, Capture Controller only when on, Sound in Background
     /// only when off, Ability Bars, NPC/PC Display and NPC/PC View Distance
-    /// only when not the game's, Art only when it is the 2002 disc's, and
-    /// VSync only when off.
+    /// only when not the game's, Art only when it is the 2002 disc's, VSync
+    /// only when off, and Text only when Smooth.
     pub fn to_text(self) -> String {
         let mut s = format!("lod={}\nbrightness={}\ncamera_distance={}\n", if self.lod { "on" } else { "off" }, self.brightness, self.camera_distance);
         if let Some(r) = self.frame_rate {
@@ -583,6 +589,9 @@ impl ClientOptions {
         }
         if !self.vsync {
             s.push_str("vsync=off\n");
+        }
+        if self.text == render::ui::TextFilter::Smooth {
+            s.push_str("text=smooth\n");
         }
         s
     }
@@ -627,6 +636,8 @@ impl ClientOptions {
                 ("background_sound", "off") => c.background_sound = false,
                 ("vsync", "on") => c.vsync = true,
                 ("vsync", "off") => c.vsync = false,
+                ("text", "sharp") => c.text = render::ui::TextFilter::Sharp,
+                ("text", "smooth") => c.text = render::ui::TextFilter::Smooth,
                 ("ability_bars", v) => {
                     if let Some(n) = v.parse::<u8>().ok().filter(|&n| (ABILITY_BARS_GAME as i32..=crate::hudmenu::MAX_BARS).contains(&(n as i32))) {
                         c.ability_bars = n;
@@ -896,7 +907,7 @@ pub fn describe() -> String {
         FrameRate::Display => "the display's",
     };
     format!(
-        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, art {}; {}",
+        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, art {}, text {}; {}",
         if c.lod { "on" } else { "off" },
         c.brightness,
         c.fog,
@@ -916,6 +927,10 @@ pub fn describe() -> String {
         match c.art {
             esf::Era::Frontiers => "frontiers",
             esf::Era::Y2002 => "2002",
+        },
+        match c.text {
+            render::ui::TextFilter::Sharp => "sharp",
+            render::ui::TextFilter::Smooth => "smooth",
         },
         kept_where()
     )
@@ -1307,8 +1322,14 @@ mod tests {
             ClientOptions { entity_view: 450, ..Default::default() },
             ClientOptions { entity_view: ENTITY_VIEW_MAX, ..Default::default() },
             ClientOptions { art: esf::Era::Y2002, ..Default::default() },
+            ClientOptions { text: render::ui::TextFilter::Smooth, ..Default::default() },
         ] {
             assert_eq!(ClientOptions::from_text(&c.to_text()), c);
+        }
+        assert_eq!(ClientOptions { text: render::ui::TextFilter::Smooth, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\ntext=smooth\n", "Text only when Smooth");
+        assert_eq!(ClientOptions::from_text("text=sharp").text, render::ui::TextFilter::Sharp);
+        for bad in ["text=blurry", "text=", "text=1"] {
+            assert_eq!(ClientOptions::from_text(bad).text, render::ui::TextFilter::Sharp, "{bad}: Sharp, the default");
         }
         assert_eq!(ClientOptions { entity_slots: 128, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nentity_slots=128\n", "NPC/PC Display only when not the game's");
         assert_eq!(ClientOptions::from_text("entity_slots=100").entity_slots, 100, "any number in range");
@@ -1346,7 +1367,7 @@ mod tests {
             "Screen Shake only off, Capture Controller only on"
         );
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, ability bars 2, npc/pc display 24, npc/pc view distance 100, art frontiers; kept in the page's storage");
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, ability bars 2, npc/pc display 24, npc/pc view distance 100, art frontiers, text sharp; kept in the page's storage");
         testing::reset(true);
         assert!(describe().ends_with("refused: nothing is kept"));
         testing::reset(false);
