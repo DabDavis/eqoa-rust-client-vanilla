@@ -5,6 +5,23 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-25 · Pick where the sound plays, and full screen from the options
+- In the downloaded game, Options > Extended > Sound > Output Device: play the
+  game's sound on the speakers or headphones you pick. Left on Default, it now
+  follows your computer's default output when you change it there; before, it
+  stayed on the device that was the default when the game started. The Sound page
+  shows where the sound is playing.
+- In the downloaded game, Options > Extended > Video > Display: switch between a
+  window and full screen. Alt+Enter does it too, as F11 already did (in a browser,
+  F11 is the browser's own full screen).
+- Text (Sharp or Smooth) has moved to Options > Extended > UI.
+
+## 2026-10-25 · Damage numbers, and targets with no body
+- Damage and healing numbers stay over their creature while it runs, instead of
+  shaking at high frame rates.
+- Creatures with no body of their own, like the Ice Statue in Geyvax Cave, can be
+  targeted with R1 (or the mouse), as on a PS2, and show their target rings.
+
 ## 2026-10-25 · Coaches and ports no longer disconnect you on Sandstorm
 - A coach or a harbor to another world, a port, or Return Home no longer
   disconnects you on Sandstorm with "This character has been modified by a
