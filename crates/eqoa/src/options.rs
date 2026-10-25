@@ -15,22 +15,25 @@
 //! as that one is: Video, UI, Controller, Camera, Characters and Sound
 //! (`CATEGORIES`), each of which opens a page laid out and driven as the
 //! game's pages are, short enough that none scrolls (`PAGE_MOST`):
-//! - Video: Brightness (a slider, `settings::curve`), Fog (a slider: the
+//! - Video: Display (natively: Window or Full Screen, the window's own as
+//!   F11 and Alt+Enter toggle it, `display`: it changes at once and stays,
+//!   kept with the window's place, and Triangle leaves it), Brightness (a
+//!   slider, `settings::curve`), Fog (a slider: the
 //!   game's distance fog and far plane in the middle, off at the left,
 //!   thicker to the right, `fog`), Frame Rate (30, 60 or the display's,
 //!   `settings::frame_due`), VSync (natively: a frame shown only at the
 //!   display's refresh, or at once; `settings::vsync`, the surface's present
-//!   mode in `viewer`), Art (Frontiers' or the 2002 disc's, `era`, as F9
-//!   swaps it: drawn as it moves, the 2002 disc asked for the first time)
-//!   and Text (Sharp or Smooth: the game's font scaled to the window with
-//!   even strokes, or filtered as the PS2 filters it, `render::ui::TextFilter`);
+//!   mode in `viewer`) and Art (Frontiers' or the 2002 disc's, `era`, as F9
+//!   swaps it: drawn as it moves, the 2002 disc asked for the first time);
 //! - UI: Ability Bars (the game's 2, or 3 or 4: the HUD's quick menus and
 //!   the spell book's slots, `hudmenu`), Target of Target (Off by default:
-//!   the target's bar shows whom the target targets, `Play::target_of_target`)
-//!   and Update Notices (one setting for
+//!   the target's bar shows whom the target targets, `Play::target_of_target`),
+//!   Update Notices (one setting for
 //!   every window: off, the game never asks to restart into a newer build,
 //!   which starts the next time the game does; `update::asks`, and a page's
-//!   Reload notice, `web/main.js`);
+//!   Reload notice, `web/main.js`) and Text (Sharp or Smooth: the game's font
+//!   scaled to the window with even strokes, or filtered as the PS2 filters
+//!   it, `render::ui::TextFilter`; on Video until Display took its place);
 //! - Controller: Controller Focus (which controllers this window reads:
 //!   Auto, Window, Pad 1 to 4 or Off, `input::pick`, kept for each window of
 //!   the client open, `multibox`; what it reads now is said beside Back) and
@@ -51,7 +54,10 @@
 //!   the game's camera could be a name plate is drawn, the game's 22, then
 //!   30 to 200 in tens, `play::PlateView`);
 //! - Sound: Sound in Background (one setting for every window: off, a window
-//!   not in front is not heard, `audio::set_heard`).
+//!   not in front is not heard, `audio::set_heard`) and natively Output
+//!   Device (Default, the system's, followed when it changes, or a device
+//!   the system lists, the default while it is not connected: `audio`'s
+//!   `retarget`; its page says where the sound plays now).
 //! Triangle goes back a step: a page to the categories, the categories to
 //! the options menu. They change as they are moved, Triangle on the options
 //! menu puts them back, and Save Changes keeps them with the game's
@@ -515,7 +521,9 @@ impl WndOptions {
     /// VSync (26) turn over, VSync natively only (a page's stays on with
     /// sound 9: the browser paces it); Name Distance (27) by tens from the
     /// game's 22 to 200 (`step_name_distance`); Text (30) goes between Sharp and
-    /// Smooth; Target of Target (31) and Update Notices (29) turn over. A
+    /// Smooth; Target of Target (31) and Update Notices (29) turn over;
+    /// Output Device (32) goes round the system default and the devices
+    /// listed (`step_output`); Display (33) turns the window over (`display`). A
     /// slider (`slider_at`) makes its own
     /// sound, as a volume does; every other row sound 11.
     fn change(&mut self, o: &mut GameOptions, d: i32, cues: &mut Vec<i32>, ups: &mut Vec<OptionsUp>) {
@@ -585,6 +593,12 @@ impl WndOptions {
                     31 => c.target_of_target = !c.target_of_target,
                     // Text: every font drawn from the next frame (`viewer`)
                     30 => c.text = c.text.other(),
+                    // Output Device: the sound opened there from the next
+                    // frame (`audio::retarget`)
+                    32 => step_output(&mut c, &crate::audio::outputs().listed.map(|l| l.1).unwrap_or_default(), d),
+                    // Display: the window's own, carried out on the next
+                    // frame (`display`, `viewer`)
+                    33 => crate::display::ask(!crate::display::full()),
                     22 => {
                         let (lo, n) = (crate::settings::ABILITY_BARS_GAME, crate::hudmenu::MAX_BARS as u8 - crate::settings::ABILITY_BARS_GAME + 1);
                         c.ability_bars = lo + (c.ability_bars.saturating_sub(lo).min(n - 1) + if d < 0 { n - 1 } else { 1 }) % n;
@@ -854,7 +868,7 @@ impl WndOptions {
             let Some(v) = v else { continue };
             let row = k as i32 + 1;
             self.window2.draw_frame(vui, r, width - 176, row, 132, 1, if self.row == k as i32 { 96 } else { 64 });
-            self.window2.text_box(vui, r, v, width - 176, row, 132, 1, UI_COLORS[0], 8);
+            self.window2.text_box(vui, r, v, width - 176, row, 132, 1, UI_COLORS[0], 8 | 2);
             // the frame's two halves (its side arrows are glyphs)
             let at = self.window2.top_left()[0] + width - 176;
             self.halves(rows_rect(&self.window2, vui, r, width - 176, row, 132, 1), at - 4, at + 66, at + 136, k as i32);
@@ -948,6 +962,10 @@ impl WndOptions {
     fn draw_category(&mut self, vui: &Vui, r: &mut dyn Raster, c: usize) {
         let cat = &CATEGORIES[c];
         self.item = cat.items.get(self.row as usize).copied().unwrap_or(self.item);
+        // Output Device's round: the system's devices listed while it shows
+        if cat.items.contains(&32) {
+            crate::audio::want_listing();
+        }
         let labels: Vec<Vec<u16>> = cat.items.iter().map(|&i| wide(label_of(i))).collect();
         let values: Vec<Option<Vec<u16>>> = cat.items.iter().map(|&i| value_text(vui, i)).collect();
         self.draw_rows(vui, r, &labels, &values);
@@ -980,6 +998,11 @@ impl WndOptions {
         match CATEGORIES[c].note {
             Note::Reads => Some(crate::input::reads()),
             Note::Server => self.server_note.clone().filter(|_| matches!(self.item, 23 | 24)),
+            Note::Output if cfg!(target_arch = "wasm32") => None,
+            Note::Output => Some(match crate::audio::playing() {
+                Some(d) => format!("Plays on {d}"),
+                None => "No output now".to_string(),
+            }),
             Note::None => None,
         }
     }
@@ -994,7 +1017,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 19] = [
+const EXTENDED_ITEMS: [(i32, &str); 21] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1014,6 +1037,8 @@ const EXTENDED_ITEMS: [(i32, &str); 19] = [
     (29, "Update Notices"),
     (30, "Text"),
     (31, "Target of Target"),
+    (32, "Output Device"),
+    (33, "Display"),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1025,6 +1050,8 @@ enum Note {
     /// what this server gives (`WndOptions::server_note`), while NPC/PC
     /// Display or View Distance is chosen
     Server,
+    /// where the sound plays now (`audio::playing`), natively
+    Output,
 }
 
 /// One of Extended's categories: its name, its rows (their items, in the
@@ -1038,13 +1065,27 @@ struct Category {
 /// Extended's categories, in its menu's order (the user's: "Extended, then
 /// Video, UI, Controller, etc."), each a page of `PAGE_MOST` rows at most.
 const CATEGORIES: [Category; 6] = [
-    Category { name: "Video", items: &[13, 20, 14, 26, 25, 30], note: Note::None },
-    Category { name: "UI", items: &[22, 31, 29], note: Note::None },
+    Category { name: "Video", items: VIDEO, note: Note::None },
+    Category { name: "UI", items: &[22, 31, 29, 30], note: Note::None },
     Category { name: "Controller", items: &[16, 19], note: Note::Reads },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
     Category { name: "Characters", items: &[12, 23, 24, 27], note: Note::Server },
-    Category { name: "Sound", items: &[21], note: Note::None },
+    Category { name: "Sound", items: SOUND, note: Note::Output },
 ];
+
+/// Video's rows: natively Display first (F3 20261024-201507: full screen was
+/// F11's alone); a page's full screen is the browser's.
+#[cfg(not(target_arch = "wasm32"))]
+const VIDEO: &[i32] = &[33, 13, 20, 14, 26, 25];
+#[cfg(target_arch = "wasm32")]
+const VIDEO: &[i32] = &[13, 20, 14, 26, 25];
+
+/// Sound's rows: natively Output Device after Sound in Background; a page
+/// plays where the browser does.
+#[cfg(not(target_arch = "wasm32"))]
+const SOUND: &[i32] = &[21, 32];
+#[cfg(target_arch = "wasm32")]
+const SOUND: &[i32] = &[21];
 
 /// The most rows a category's page holds: six and the legend are as tall as
 /// nine rows, the most the options window has room for (`page_window`), so
@@ -1106,8 +1147,27 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
             render::ui::TextFilter::Sharp => "Sharp",
             render::ui::TextFilter::Smooth => "Smooth",
         }),
+        32 => wide(c.output.as_ref().map_or(SYSTEM_DEFAULT, |d| d.as_str())),
+        33 => wide(if crate::display::full() { "Full Screen" } else { "Window" }),
         _ => return None,
     })
+}
+
+/// Output Device's value for the system's default ("System Default" is too
+/// wide for a value's frame; the page's note says the device it is).
+const SYSTEM_DEFAULT: &str = "Default";
+
+/// Output Device (item 32) moved a step: round the system's default and the
+/// devices the system lists (`names`, the lister's last), the one chosen kept
+/// in the round while it is not listed (not connected now), after them.
+fn step_output(c: &mut ClientOptions, names: &[String], d: i32) {
+    let mut all: Vec<Option<crate::settings::DeviceName>> = vec![None];
+    all.extend(names.iter().map(|n| Some(crate::settings::DeviceName::new(n))));
+    if let Some(chosen) = c.output.filter(|d| !names.iter().any(|n| d.same(n))) {
+        all.push(Some(chosen));
+    }
+    let at = all.iter().position(|o| *o == c.output).unwrap_or(0);
+    c.output = all[(at + if d < 0 { all.len() - 1 } else { 1 }) % all.len()];
 }
 
 /// An Extended row's slider, if it is one: where its knob is (0 to 1), and
@@ -1314,10 +1374,22 @@ mod tests {
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(cues.is_empty(), "left and right are nothing on the categories: {cues:?}");
         assert_eq!(settings::client(), settings::ClientOptions::default());
-        // Video: Brightness, Fog, Frame Rate, VSync, Art
+        // Video: Display, Brightness, Fog, Frame Rate, VSync, Art
         press(&mut w, &mut o, key::CROSS, &mut cues);
-        assert_eq!((w.page, w.cat, w.row, w.item), (3, Some(0), 0, 13), "Video, on Brightness");
+        assert_eq!((w.page, w.cat, w.row, w.item), (3, Some(0), 0, 33), "Video, on Display");
         assert_eq!(cues.last(), Some(&8));
+        crate::display::seen(false);
+        assert_eq!(value_text(&vui, 33), Some(wide("Window")), "the window as it is");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((crate::display::full(), cues.last()), (true, Some(&11)), "full screen, shown at once");
+        assert_eq!(value_text(&vui, 33), Some(wide("Full Screen")));
+        assert_eq!(crate::display::take(), Some(true), "for the viewer to carry out");
+        crate::display::seen(true);
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert_eq!((crate::display::full(), crate::display::take()), (false, Some(false)), "and back: a window");
+        crate::display::seen(false);
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.item, 13, "Brightness");
         for _ in 0..6 {
             press(&mut w, &mut o, key::RIGHT, &mut cues);
         }
@@ -1365,14 +1437,6 @@ mod tests {
         assert_eq!(settings::art(), esf::Era::Frontiers, "and back: two values");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!(w.item, 30, "Text");
-        assert_eq!(settings::client().text, render::ui::TextFilter::Sharp, "Sharp, the default");
-        press(&mut w, &mut o, key::RIGHT, &mut cues);
-        assert_eq!((settings::client().text, cues.last()), (render::ui::TextFilter::Smooth, Some(&11)), "Smooth");
-        press(&mut w, &mut o, key::LEFT, &mut cues);
-        assert_eq!(settings::client().text, render::ui::TextFilter::Sharp, "and back: two values");
-        press(&mut w, &mut o, key::RIGHT, &mut cues);
-        press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!((w.row, cues.last()), (5, Some(&9)), "Video's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!((w.page, w.cat, w.cat_sel, w.item), (3, None, 0, -1), "back to the categories, Video still lit");
@@ -1405,7 +1469,15 @@ mod tests {
         assert!(settings::update_notices(), "and back: two values");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (2, Some(&9)), "UI's last row");
+        assert_eq!(w.item, 30, "Text, on UI since Display took its place on Video");
+        assert_eq!(settings::client().text, render::ui::TextFilter::Sharp, "Sharp, the default");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::client().text, cues.last()), (render::ui::TextFilter::Smooth, Some(&11)), "Smooth");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert_eq!(settings::client().text, render::ui::TextFilter::Sharp, "and back: two values");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (3, Some(&9)), "UI's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         // Controller: Controller Focus, Capture Controller
         press(&mut w, &mut o, key::DOWN, &mut cues);
@@ -1524,6 +1596,12 @@ mod tests {
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         assert!(!settings::background_sound());
         assert_eq!(cues.last(), Some(&11));
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.item, 32, "Output Device");
+        assert_eq!(value_text(&vui, 32), Some(wide(SYSTEM_DEFAULT)), "the system's default");
+        assert!(w.page_note(5).is_some_and(|n| n.starts_with("Plays on ") || n == "No output now"), "where it plays, beside Back");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (1, Some(&9)), "Sound's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!((w.cat_sel, cues.last()), (5, Some(&9)), "Sound, the last category");
@@ -1543,8 +1621,9 @@ mod tests {
             key::DOWN,
             key::DOWN,
             key::CROSS,
-            // Video: Brightness and Fog a step down
+            // Video: Brightness and Fog a step down (past Display)
             key::CROSS,
+            key::DOWN,
             key::LEFT,
             key::DOWN,
             key::LEFT,
@@ -1575,6 +1654,41 @@ mod tests {
         assert_eq!(kept, "lod=on\nbrightness=4\ncamera_distance=11\ncamera_turn=125\nfog=4\n");
         assert_eq!(GameOptions::from_card(&testing::kept("game.opt").unwrap()).unwrap().auto_attack, 1);
         testing::reset(false);
+    }
+
+    /// Output Device goes round the system default and the devices the
+    /// system lists, either way; a device chosen but not listed now (not
+    /// connected) stays in the round while it is the choice, after them, so
+    /// a step off it either way lands on a neighbour (the control: a round of
+    /// the listed alone would find no place for it and start from the
+    /// default).
+    #[test]
+    fn output_device_goes_round_the_listed_devices() {
+        use crate::settings::DeviceName;
+        let (sp, tv) = ("Speakers (Realtek(R) Audio)", "LG TV SSCR2 (NVIDIA High Definition Audio)");
+        let names = vec![sp.to_string(), tv.to_string()];
+        let mut c = ClientOptions::default();
+        let name = |c: &ClientOptions| c.output.map(|d| d.as_str().to_string());
+        step_output(&mut c, &names, 1);
+        assert_eq!(name(&c).as_deref(), Some(sp));
+        step_output(&mut c, &names, 1);
+        assert_eq!(name(&c).as_deref(), Some(tv));
+        step_output(&mut c, &names, 1);
+        assert_eq!(c.output, None, "round to the system default");
+        step_output(&mut c, &names, -1);
+        assert_eq!(name(&c).as_deref(), Some(tv), "and the other way");
+        // a device chosen and not connected now: after the listed ones
+        let h = "Headphones (2- Arctis 7 Game)";
+        c.output = Some(DeviceName::new(h));
+        step_output(&mut c, &names, -1);
+        assert_eq!(name(&c).as_deref(), Some(tv), "left of it, the last listed");
+        c.output = Some(DeviceName::new(h));
+        step_output(&mut c, &names, 1);
+        assert_eq!(c.output, None, "right of it, round to the start");
+        // nothing listed (a page, or the system says nothing): the default
+        let mut d = ClientOptions::default();
+        step_output(&mut d, &[], 1);
+        assert_eq!(d.output, None);
     }
 
     /// Every category's page opens on its first row, its window its rows and
@@ -1826,8 +1940,9 @@ mod tests {
 
     /// The notes beside a page's Back legend: what this window reads on
     /// Controller's, what this server gives on Characters' while NPC/PC
-    /// Display or View Distance is chosen (not on Level of Detail), none on
-    /// Video's (the control: the note there before the split).
+    /// Display or View Distance is chosen (not on Level of Detail), where the
+    /// sound plays on Sound's, none on Video's (the control: the note there
+    /// before the split).
     #[test]
     fn each_note_on_its_page() {
         use crate::pointer::testing::{NullRaster, vui};
@@ -1844,7 +1959,8 @@ mod tests {
         let by_name = |n: &str| CATEGORIES.iter().position(|c| c.name == n).unwrap();
         assert_eq!(CATEGORIES[by_name("Controller")].note, Note::Reads);
         assert_eq!(CATEGORIES[by_name("Characters")].note, Note::Server);
-        assert!(CATEGORIES.iter().filter(|c| c.note != Note::None).count() == 2, "the two notes only");
+        assert_eq!(CATEGORIES[by_name("Sound")].note, Note::Output);
+        assert!(CATEGORIES.iter().filter(|c| c.note != Note::None).count() == 3, "the three notes only");
         w.cat_sel = by_name("Characters") as i32;
         w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
         w.draw(&vui, &mut r, &o, &mut ups);
@@ -1858,5 +1974,7 @@ mod tests {
         w.draw(&vui, &mut r, &o, &mut ups);
         assert_eq!(note(&w, by_name("Controller")), Some(crate::input::reads()), "Controller: what this window reads");
         assert_eq!(note(&w, by_name("Video")), None, "the control: none on Video's");
+        // no output in a test (no device opened): said so
+        assert_eq!(note(&w, by_name("Sound")).as_deref(), Some("No output now"), "Sound: where it plays");
     }
 }

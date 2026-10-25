@@ -1637,6 +1637,10 @@ struct App {
     /// macOS: ⌘ held (`ModifiersChanged`), for ⌘, as a key (`macos::ask`)
     #[cfg(target_os = "macos")]
     super_held: bool,
+    /// Alt held (`ModifiersChanged`), for Alt+Enter (`display`), and an
+    /// Enter it took, whose release is its too
+    alt_held: bool,
+    alt_enter_down: bool,
     pad_script: Option<crate::input::Script>,
     /// The player's own keys and buttons (`binds`) at the input's edge: what
     /// each key pressed was made, and the controllers' buttons a capture took.
@@ -1777,6 +1781,8 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         pads: crate::input::Gamepads::new(),
         #[cfg(target_os = "macos")]
         super_held: false,
+        alt_held: false,
+        alt_enter_down: false,
         pad_script: crate::input::Script::from_env(),
         keys_edge: Default::default(),
         pad_edge: Default::default(),
@@ -2436,6 +2442,18 @@ impl App {
         v != Vec3::ZERO
     }
 
+    /// F11, and natively Alt+Enter: full screen (borderless, on the window's
+    /// monitor) and back, which the Extended page's Display shows
+    /// (`display`).
+    fn toggle_full_screen(&mut self) {
+        if let Some(g) = &self.gfx {
+            let full = g.window.fullscreen().is_none();
+            g.window.set_fullscreen(full.then_some(Fullscreen::Borderless(None)));
+            crate::display::seen(full);
+            crate::say(&format!("display: {} (a key)", if full { "full screen" } else { "a window" }));
+        }
+    }
+
     /// What a report says of the client (web/report.js's in a page, natively
     /// `report`'s): the frames, the surface, the files in the library and
     /// play's own.
@@ -2444,7 +2462,7 @@ impl App {
         let mut o = String::new();
         let _ = writeln!(o, "frames {}, clock {:.1} s", FRAMES.load(std::sync::atomic::Ordering::Relaxed), self.clock.elapsed().as_secs_f64());
         if let Some(g) = &self.gfx {
-            let _ = writeln!(o, "surface {}x{} {:?}", g.config.width, g.config.height, g.config.format);
+            let _ = writeln!(o, "surface {}x{} {:?}, {}", g.config.width, g.config.height, g.config.format, if g.window.fullscreen().is_some() { "full screen" } else { "a window" });
         }
         let _ = writeln!(o, "files: {}", self.lib.files.iter().map(|f| f.0.as_str()).collect::<Vec<_>>().join(", "));
         let _ = writeln!(o, "options, extended: {}", crate::settings::describe());
@@ -2454,6 +2472,9 @@ impl App {
         // it was chosen by, and the two classes' volumes (Fx, Music)
         if let Some(s) = &self.sound {
             let _ = writeln!(o, "sound: {}", s.describe());
+            // where it plays, and what the system offers (Output Device)
+            #[cfg(not(target_arch = "wasm32"))]
+            let _ = writeln!(o, "audio: {}", s.audio().report_line());
         }
         // the controls: a pad's sticks as they came (before the host's dead
         // zone), as the game reads them and with the keys, the mouse and the
@@ -3719,20 +3740,34 @@ impl ApplicationHandler for App {
                 g.depth = render::depth_view(&g.device, s.width, s.height);
                 g.window.request_redraw();
             }
-            // F11: full screen (borderless, on the window's monitor) and back.
-            // A page leaves F11 to the browser (web/main.js).
+            // F11: full screen (borderless, on the window's monitor) and back,
+            // as the Extended page's Display does (`display`); natively
+            // Alt+Enter too, Windows' own key for it, which the game never sees
+            // (its Enter neither pressed nor let go). A page leaves F11 to the
+            // browser (web/main.js), and its Alt+Enter is the game's Enter.
             // macOS: ⌘ held or not, and ⌘, (the settings' key) when no menu
             // item took it, asking as Settings… does (`macos`)
-            #[cfg(target_os = "macos")]
-            WindowEvent::ModifiersChanged(m) => self.super_held = m.state().super_key(),
+            WindowEvent::ModifiersChanged(m) => {
+                self.alt_held = m.state().alt_key();
+                #[cfg(target_os = "macos")]
+                {
+                    self.super_held = m.state().super_key();
+                }
+            }
             #[cfg(target_os = "macos")]
             WindowEvent::KeyboardInput { event, .. } if self.super_held && event.state == ElementState::Pressed && matches!(&event.logical_key, Key::Character(c) if c == ",") => {
                 crate::macos::ask();
             }
             WindowEvent::KeyboardInput { event: KeyEvent { logical_key: Key::Named(NamedKey::F11), state: ElementState::Pressed, repeat: false, .. }, .. } => {
-                if let Some(g) = &self.gfx {
-                    let full = g.window.fullscreen().is_some();
-                    g.window.set_fullscreen((!full).then_some(Fullscreen::Borderless(None)));
+                self.toggle_full_screen();
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            WindowEvent::KeyboardInput { event: KeyEvent { logical_key: Key::Named(NamedKey::Enter), state, repeat, .. }, .. }
+                if (state == ElementState::Pressed && self.alt_held) || (state == ElementState::Released && self.alt_enter_down) =>
+            {
+                self.alt_enter_down = state == ElementState::Pressed;
+                if crate::display::toggles(false, self.alt_enter_down && !repeat, self.alt_held) {
+                    self.toggle_full_screen();
                 }
             }
             WindowEvent::Touch(t) => {
@@ -4059,6 +4094,16 @@ impl ApplicationHandler for App {
                 FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 // the 2002 disc's files, read since (`era`)
                 self.poll_era();
+                // Display (the Extended page): what the row asked carried
+                // out, and the window as it is for the row to show
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(g) = &self.gfx {
+                    if let Some(full) = crate::display::take() {
+                        g.window.set_fullscreen(full.then_some(Fullscreen::Borderless(None)));
+                        crate::say(&format!("display: {} (the options)", if full { "full screen" } else { "a window" }));
+                    }
+                    crate::display::seen(g.window.fullscreen().is_some());
+                }
                 let frame_start = Instant::now();
                 // one of the game's frames, 30 a second whatever the
                 // display's rate: what the game counts in frames (the HUD and

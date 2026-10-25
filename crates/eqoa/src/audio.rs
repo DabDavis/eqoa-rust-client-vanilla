@@ -32,7 +32,18 @@
 //! 10 ms (`ramp`), and back the same way. The driver mixes on all the while,
 //! so the game's sound keeps its clock and comes back where it is, with no
 //! burst of what was held.
+//!
+//! Output Device (the Extended page's Sound, natively; F3 20261024-201433:
+//! the game played into the system's default output, a television, while the
+//! player listened elsewhere): the system's default, followed when it
+//! changes, or a device by its name, the default meanwhile while it is not
+//! connected and back on it when it is (`retarget`). cpal tells no program
+//! that the default changed, so a thread reads the default's name every two
+//! seconds and lists the devices while they are wanted (`lister`); a frame
+//! only compares. With ALSA (Linux) the default is ALSA's own `default`,
+//! which PulseAudio or PipeWire move to wherever the sound server sends it.
 
+use crate::settings::DeviceName;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use snd::device::Link;
 use snd::{Disc, Driver};
@@ -293,6 +304,150 @@ impl Watch {
     }
 }
 
+/// How the stream playing came to its device (`Audio::stream`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum How {
+    /// the system's default, Output Device's System Default
+    Default,
+    /// the device Output Device names
+    Chosen,
+    /// the device Output Device names is not connected: the system's default
+    /// meanwhile
+    Missing,
+}
+
+/// The stream playing: its device's name as the system gives it, how it came
+/// to be that one, and the choice it was opened for.
+#[derive(Clone, Debug, PartialEq)]
+struct On {
+    name: String,
+    how: How,
+    choice: Option<DeviceName>,
+}
+
+/// What Output Device asks of the stream playing (`retarget`).
+#[derive(Debug, PartialEq)]
+enum Retarget {
+    Stay,
+    /// opened again, for the reason said
+    Open(&'static str),
+}
+
+/// What the stream playing (`on`) should do now, for the choice `want` (none:
+/// the system's default), the system's default `default` and the devices
+/// `listed` lately, as the lister last read them: opened again when the
+/// choice changed; on the default, when the default is another device now;
+/// while the device chosen is not connected, when it is listed again (or the
+/// default changed meanwhile). On the device chosen it stays, whatever the
+/// default does; a device gone takes its stream (`Watch`), and the look after
+/// it finds the default meanwhile.
+fn retarget(want: Option<DeviceName>, on: &On, default: Option<&str>, listed: Option<&[String]>) -> Retarget {
+    if want != on.choice {
+        return Retarget::Open(if want.is_some() { "the device chosen" } else { "the system default chosen" });
+    }
+    let moved = default.is_some_and(|d| d != on.name);
+    let back = want.is_some_and(|w| listed.is_some_and(|l| l.iter().any(|n| w.same(n))));
+    match on.how {
+        How::Default if moved => Retarget::Open("the system default changed"),
+        How::Missing if back => Retarget::Open("the device chosen is connected again"),
+        How::Missing if moved => Retarget::Open("the system default changed"),
+        _ => Retarget::Stay,
+    }
+}
+
+/// The device Output Device names among the system's `names` (by its name,
+/// as `DeviceName` keeps it), if it is there.
+fn find_chosen(want: DeviceName, names: &[String]) -> Option<usize> {
+    names.iter().position(|n| want.same(n))
+}
+
+/// The system's outputs as the lister last read them: its default's name,
+/// and every output device's name with when they were listed.
+#[derive(Clone, Debug, Default)]
+pub struct Outputs {
+    pub default: Option<String>,
+    pub listed: Option<(Instant, Vec<String>)>,
+}
+
+static OUTPUTS: Mutex<Outputs> = Mutex::new(Outputs { default: None, listed: None });
+/// Until when the lister lists the devices again and again (`want_listing`).
+static LIST_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
+/// The device the stream playing is on, for the Options window (`playing`).
+static PLAYING: Mutex<Option<String>> = Mutex::new(None);
+
+/// How often the lister reads the system's default, lists the devices while
+/// they are wanted, and how long one ask wants them.
+const DEFAULT_EVERY: Duration = Duration::from_secs(2);
+const LIST_EVERY: Duration = Duration::from_secs(4);
+const LIST_FOR: Duration = Duration::from_secs(5);
+
+/// The system's outputs as the lister last read them (none in a page, offline
+/// or with `EQOA_AUDIO=0`, where there is no lister).
+pub fn outputs() -> Outputs {
+    OUTPUTS.lock().unwrap().clone()
+}
+
+/// The devices listed again within a second or so, and every few seconds
+/// for the next `LIST_FOR` (the Options window's Sound page while it shows,
+/// the device chosen while it is not connected).
+pub fn want_listing() {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        *LIST_UNTIL.lock().unwrap() = Some(Instant::now() + LIST_FOR);
+    }
+}
+
+/// The device the game's sound plays on now, natively; none while there is
+/// no output.
+pub fn playing() -> Option<String> {
+    PLAYING.lock().unwrap().clone()
+}
+
+/// The stream playing's device, for the Options window (`playing`).
+fn note_playing(on: Option<&On>) {
+    *PLAYING.lock().unwrap() = on.map(|o| o.name.clone());
+}
+
+/// Natively, the system's outputs read off the frames' thread (cpal says
+/// nothing when the default changes, and a listing can take a moment): the
+/// default's name every `DEFAULT_EVERY`, the devices once at the start and
+/// then every `LIST_EVERY` while they are wanted (`want_listing`), into
+/// `OUTPUTS`; a listing that differs from the last is said in the log. The
+/// thread ends with the `Audio` (`alive`).
+fn lister(alive: Arc<()>) {
+    let run = move || {
+        let host = cpal::default_host();
+        let mut read: Option<Instant> = None;
+        let mut first = true;
+        loop {
+            if Arc::strong_count(&alive) == 1 {
+                return;
+            }
+            let now = Instant::now();
+            if read.is_none_or(|t| now.saturating_duration_since(t) >= DEFAULT_EVERY) {
+                let d = host.default_output_device().and_then(|d| d.name().ok());
+                OUTPUTS.lock().unwrap().default = d;
+                read = Some(now);
+            }
+            let wanted = first || LIST_UNTIL.lock().unwrap().is_some_and(|u| now < u);
+            let stale = OUTPUTS.lock().unwrap().listed.as_ref().is_none_or(|(t, _)| now.saturating_duration_since(*t) >= LIST_EVERY);
+            if wanted && (first || stale) {
+                let names: Vec<String> = host.output_devices().map(|ds| ds.filter_map(|d| d.name().ok()).collect()).unwrap_or_default();
+                let mut o = OUTPUTS.lock().unwrap();
+                if o.listed.as_ref().is_none_or(|(_, was)| *was != names) {
+                    crate::say(&format!("audio: the system's outputs: {}", if names.is_empty() { "none".to_string() } else { names.join(", ") }));
+                }
+                o.listed = Some((Instant::now(), names));
+                first = false;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    };
+    if let Err(e) = std::thread::Builder::new().name("audio outputs".into()).spawn(run) {
+        crate::say(&format!("audio: the outputs are not watched ({e})"));
+    }
+}
+
 pub struct Audio {
     shared: Arc<Mutex<Shared>>,
     _stream: Option<cpal::Stream>,
@@ -300,6 +455,13 @@ pub struct Audio {
     /// natively, the device output watched (`Watch`); none offline, in a
     /// page, or with `EQOA_AUDIO=0`
     watch: Option<Watch>,
+    /// natively, the stream playing's device (Output Device, `retarget`)
+    on: Option<On>,
+    /// a stream opened again for Output Device: the reason, said when it
+    /// plays
+    switched: Option<&'static str>,
+    /// the lister's thread runs while this is held twice (`lister`)
+    _alive: Option<Arc<()>>,
     #[cfg(target_arch = "wasm32")]
     page: Option<Page>,
 }
@@ -375,14 +537,18 @@ impl Audio {
             _stream: stream,
             describe,
             watch: None,
+            on: None,
+            switched: None,
+            _alive: None,
             #[cfg(target_arch = "wasm32")]
             page: None,
         }
     }
 
-    /// The driver, playing on the default output device, watched (`Watch`);
-    /// with none, on the wall clock while one is looked for, and with
-    /// `EQOA_AUDIO=0` on the wall clock for good.
+    /// The driver, playing on the output Output Device names (the default
+    /// output device unless one is chosen), watched (`Watch`); with none, on
+    /// the wall clock while one is looked for, and with `EQOA_AUDIO=0` on the
+    /// wall clock for good.
     pub fn open(disc: Box<dyn Disc>) -> Audio {
         let shared = Arc::new(Mutex::new(Shared::new(disc)));
         let now = Instant::now();
@@ -391,37 +557,64 @@ impl Audio {
             wall_clock(shared.clone());
             return Self::with_shared(shared, None, "no audio output (EQOA_AUDIO=0): the driver runs on the wall clock".into());
         }
+        let alive = Arc::new(());
+        lister(alive.clone());
         let lost = Arc::new(AtomicBool::new(false));
-        let (stream, describe, mut watch) = match Self::stream(shared.clone(), lost.clone()) {
-            Ok((stream, describe)) => (Some(stream), describe, Watch::new(now, true)),
+        let want = crate::settings::client().output;
+        let (stream, describe, on, mut watch) = match Self::stream(shared.clone(), lost.clone(), want) {
+            Ok((stream, on, describe)) => (Some(stream), describe, Some(on), Watch::new(now, true)),
             Err(e) => {
                 shared.lock().unwrap().wall_from(now);
                 wall_clock(shared.clone());
                 let mut w = Watch::new(now, false);
                 w.walling = true;
-                (None, format!("no audio output ({e}): the driver runs on the wall clock, and an output is looked for now and then"), w)
+                (None, format!("no audio output ({e}): the driver runs on the wall clock, and an output is looked for now and then"), None, w)
             }
         };
         watch.lost = lost;
         let mut a = Self::with_shared(shared, stream, describe);
         a.watch = Some(watch);
+        note_playing(on.as_ref());
+        a.on = on;
+        a._alive = Some(alive);
         a
     }
 
+
     /// Natively, the output watched once a frame (`Watch`): a stream gone
     /// dropped and the driver put on the wall clock, an output looked for
-    /// when one is due, and the log told when it stops, fails or plays.
+    /// when one is due, and the log told when it stops, fails or plays; and
+    /// while one plays, opened again where Output Device and the system's
+    /// default say (`retarget`).
     fn watch_output(&mut self) {
         let Some(w) = self.watch.as_mut() else { return };
         let now = Instant::now();
         let called = self.shared.lock().unwrap().called;
+        let want = crate::settings::client().output;
         match w.step(now, called) {
-            Step::Keep => {}
+            Step::Keep => {
+                let Some(on) = self.on.as_ref() else { return };
+                // the device chosen is not connected: is it again?
+                if on.how == How::Missing {
+                    want_listing();
+                }
+                let o = outputs();
+                if let Retarget::Open(why) = retarget(want, on, o.default.as_deref(), o.listed.as_ref().map(|l| l.1.as_slice())) {
+                    self.reopen(now, want, why);
+                }
+            }
             Step::Plays(again) => {
-                crate::say(&format!("{}: {}", self.describe, if again { "the sound has its output again" } else { "an output found" }));
+                let why = match self.switched.take() {
+                    Some(why) => why,
+                    None if again => "the sound has its output again",
+                    None => "an output found",
+                };
+                crate::say(&format!("{}: {why}", self.describe));
             }
             Step::Stopped(why) => {
                 self._stream = None;
+                self.on = None;
+                note_playing(None);
                 self.shared.lock().unwrap().wall_from(now);
                 if !std::mem::replace(&mut w.walling, true) {
                     wall_clock(self.shared.clone());
@@ -430,15 +623,19 @@ impl Audio {
             }
             Step::Silent => {
                 self._stream = None;
+                self.on = None;
+                note_playing(None);
                 if let Some(line) = w.failed(now, "an output opened, but asked for no sound") {
                     crate::say(&line);
                 }
             }
-            Step::Look => match Self::stream(self.shared.clone(), w.lost.clone()) {
-                Ok((stream, describe)) => {
+            Step::Look => match Self::stream(self.shared.clone(), w.lost.clone(), want) {
+                Ok((stream, on, describe)) => {
                     self._stream = Some(stream);
                     self.describe = describe;
                     w.open(now);
+                    note_playing(Some(&on));
+                    self.on = Some(on);
                 }
                 Err(e) => {
                     if let Some(line) = w.failed(now, &e) {
@@ -447,6 +644,59 @@ impl Audio {
                 }
             },
         }
+    }
+
+    /// Output Device's move (`retarget`, `why`): the stream playing dropped
+    /// first (a device that takes one stream at a time frees for the next)
+    /// and one opened for `want`, the driver on the wall clock between them
+    /// as for a device gone, so the game's sound keeps its clock; the new
+    /// one said as it plays. One that will not open is a look that failed:
+    /// looked for again as after a device gone.
+    fn reopen(&mut self, now: Instant, want: Option<DeviceName>, why: &'static str) {
+        let Some(w) = self.watch.as_mut() else { return };
+        self._stream = None;
+        self.shared.lock().unwrap().wall_from(now);
+        if !std::mem::replace(&mut w.walling, true) {
+            wall_clock(self.shared.clone());
+        }
+        w.lost.store(false, Ordering::Relaxed);
+        crate::say(&format!("audio: {why}: opened again"));
+        match Self::stream(self.shared.clone(), w.lost.clone(), want) {
+            Ok((stream, on, describe)) => {
+                self._stream = Some(stream);
+                self.describe = describe;
+                w.open(now);
+                note_playing(Some(&on));
+                self.on = Some(on);
+                self.switched = Some(why);
+            }
+            Err(e) => {
+                w.opened = None;
+                w.heard = false;
+                w.retry = (now, RETRY_FIRST);
+                self.on = None;
+                note_playing(None);
+                if let Some(line) = w.failed(now, &e) {
+                    crate::say(&line);
+                }
+            }
+        }
+    }
+
+    /// For a report: where the sound plays and how it came to, the system's
+    /// default and outputs as last read, and what Output Device names.
+    pub fn report_line(&self) -> String {
+        let o = outputs();
+        let listed = match &o.listed {
+            Some((at, names)) => format!("{} (listed {:.0} s ago)", if names.is_empty() { "none".to_string() } else { names.join(", ") }, at.elapsed().as_secs_f64()),
+            None => "not listed".to_string(),
+        };
+        format!(
+            "{}; the system's default {}; outputs {listed}; Output Device {}",
+            self.describe,
+            o.default.as_deref().unwrap_or("not read"),
+            crate::settings::client().output.map_or("the system default".to_string(), |d| format!("{:?}", d.as_str()))
+        )
     }
 
     /// `EQOA_AUDIO_LOST_TEST=<ms>[,silent]`, natively: that long after the
@@ -474,11 +724,24 @@ impl Audio {
         }
     }
 
-    /// A stream on the default output device: SNDDRV mixed on its callback.
-    /// `lost` is set when the device says it is gone.
-    fn stream(shared: Arc<Mutex<Shared>>, lost: Arc<AtomicBool>) -> Result<(cpal::Stream, String), String> {
+    /// A stream on the output device `want` names (Output Device: the
+    /// system's default for none, or while the one named is not connected),
+    /// SNDDRV mixed on its callback: the stream, its device (`On`) and the
+    /// log's line. `lost` is set when the device says it is gone.
+    fn stream(shared: Arc<Mutex<Shared>>, lost: Arc<AtomicBool>, want: Option<DeviceName>) -> Result<(cpal::Stream, On, String), String> {
         let host = cpal::default_host();
-        let device = host.default_output_device().ok_or("no output device")?;
+        let default_device = || host.default_output_device().ok_or("no output device");
+        let (device, how) = match want {
+            None => (default_device()?, How::Default),
+            Some(w) => {
+                let mut devices: Vec<cpal::Device> = host.output_devices().map(|ds| ds.collect()).unwrap_or_default();
+                let names: Vec<String> = devices.iter().map(|d| d.name().unwrap_or_default()).collect();
+                match find_chosen(w, &names) {
+                    Some(k) => (devices.swap_remove(k), How::Chosen),
+                    None => (default_device()?, How::Missing),
+                }
+            }
+        };
         let name = device.name().unwrap_or_default();
         let default = device.default_output_config().map_err(|e| e.to_string())?;
         // 48 kHz stereo if the device takes it; otherwise its own rate,
@@ -560,7 +823,13 @@ impl Audio {
         }
         .map_err(|e| e.to_string())?;
         stream.play().map_err(|e| e.to_string())?;
-        Ok((stream, format!("audio on {name} at {rate} Hz, {channels} channels")))
+        let picked = match (how, want) {
+            (How::Missing, Some(w)) => format!("{:?} is not connected: the system default meanwhile", w.as_str()),
+            (How::Chosen, _) => "chosen".to_string(),
+            _ => "the system default".to_string(),
+        };
+        let describe = format!("audio on {name} at {rate} Hz, {channels} channels ({picked})");
+        Ok((stream, On { name, how, choice: want }, describe))
     }
 
     /// The driver with no output and no thread: `render` advances it.
@@ -920,6 +1189,69 @@ mod tests {
         w.lost.store(true, Ordering::Relaxed);
         assert_eq!(w.step(ms(now, 90), Some(ms(now, 80))), Step::Stopped("its device is gone"));
         assert_eq!(w.retry, (ms(now, 90), RETRY_FIRST));
+    }
+
+    fn on(name: &str, how: How, choice: Option<&str>) -> On {
+        On { name: name.into(), how, choice: choice.map(DeviceName::new) }
+    }
+
+    /// Output Device's System Default follows the system's default: the
+    /// stream opened again when the default is another device, not while it
+    /// is the same one or not read yet. A device chosen stays whatever the
+    /// default does (the control: a rule that follows the default for every
+    /// stream fails here, and one that never follows fails the first half).
+    #[test]
+    fn the_system_default_is_followed_and_a_device_chosen_is_kept() {
+        let tv = on("LG TV SSCR2 (NVIDIA High Definition Audio)", How::Default, None);
+        assert_eq!(retarget(None, &tv, Some("LG TV SSCR2 (NVIDIA High Definition Audio)"), None), Retarget::Stay);
+        assert_eq!(retarget(None, &tv, None, None), Retarget::Stay, "the default not read yet");
+        assert_eq!(retarget(None, &tv, Some("Speakers (Realtek(R) Audio)"), None), Retarget::Open("the system default changed"));
+        let chosen = on("Speakers (Realtek(R) Audio)", How::Chosen, Some("Speakers (Realtek(R) Audio)"));
+        let want = Some(DeviceName::new("Speakers (Realtek(R) Audio)"));
+        assert_eq!(retarget(want, &chosen, Some("LG TV SSCR2 (NVIDIA High Definition Audio)"), None), Retarget::Stay, "on the device chosen whatever the default");
+        assert_eq!(retarget(want, &chosen, Some("Speakers (Realtek(R) Audio)"), Some(&[])), Retarget::Stay, "nor does a listing without it move it: its loss is the watch's");
+    }
+
+    /// A device chosen but not connected: the default meanwhile (followed
+    /// as the default is), and the device chosen again once it is listed.
+    /// The control: the same listing without it keeps the default.
+    #[test]
+    fn a_device_chosen_comes_back_when_it_is_connected() {
+        let h = "Headphones (2- Arctis 7 Game)";
+        let missing = on("LG TV SSCR2 (NVIDIA High Definition Audio)", How::Missing, Some(h));
+        let want = Some(DeviceName::new(h));
+        let without = ["LG TV SSCR2 (NVIDIA High Definition Audio)".to_string()];
+        let with = ["LG TV SSCR2 (NVIDIA High Definition Audio)".to_string(), h.to_string()];
+        assert_eq!(retarget(want, &missing, Some(&without[0]), Some(&without)), Retarget::Stay);
+        assert_eq!(retarget(want, &missing, Some(&without[0]), None), Retarget::Stay, "not listed yet");
+        assert_eq!(retarget(want, &missing, Some(&without[0]), Some(&with)), Retarget::Open("the device chosen is connected again"));
+        assert_eq!(retarget(want, &missing, Some("Speakers (Realtek(R) Audio)"), Some(&without)), Retarget::Open("the system default changed"));
+    }
+
+    /// The choice moved in the options opens the stream again at once,
+    /// either way; the same choice does not (the control).
+    #[test]
+    fn a_new_choice_opens_again() {
+        let tv = on("LG TV", How::Default, None);
+        let h = Some(DeviceName::new("Headphones"));
+        assert_eq!(retarget(h, &tv, Some("LG TV"), None), Retarget::Open("the device chosen"));
+        let chosen = on("Headphones", How::Chosen, Some("Headphones"));
+        assert_eq!(retarget(None, &chosen, Some("LG TV"), None), Retarget::Open("the system default chosen"));
+        assert_eq!(retarget(h, &chosen, Some("LG TV"), None), Retarget::Stay);
+    }
+
+    /// The device chosen is found among the system's by its whole name, a
+    /// long one by the cut Output Device keeps; another device's name, or
+    /// part of it, is not it (the controls).
+    #[test]
+    fn the_device_chosen_is_found_by_its_name() {
+        let names = ["Speakers (Realtek(R) Audio)".to_string(), "LG TV SSCR2 (NVIDIA High Definition Audio)".to_string()];
+        assert_eq!(find_chosen(DeviceName::new("LG TV SSCR2 (NVIDIA High Definition Audio)"), &names), Some(1));
+        assert_eq!(find_chosen(DeviceName::new("Speakers (Realtek(R) Audio)"), &names), Some(0));
+        assert_eq!(find_chosen(DeviceName::new("LG TV SSCR2"), &names), None, "part of a name");
+        assert_eq!(find_chosen(DeviceName::new("Headphones"), &names), None);
+        let long = format!("Lautsprecher ({})", "x".repeat(300));
+        assert_eq!(find_chosen(DeviceName::new(&long), &[long.clone()]), Some(0), "by its cut");
     }
 
     /// While no device takes the frames the driver keeps to the wall clock,
