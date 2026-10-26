@@ -151,6 +151,8 @@ pub(crate) struct Shared {
     /// the server's levels, each with when it came
     heard: Mutex<HashMap<u32, (f32, Instant)>>,
     volumes: Mutex<HashMap<u32, f32>>,
+    /// `mix_i16`'s float frames, kept so the output's callback does not allocate
+    scratch: Mutex<Vec<f32>>,
     /// the run going on (0: stopped); a run's tasks write only while it is theirs, so one
     /// still closing after a stop never reaches the next start's
     run: AtomicU64,
@@ -170,6 +172,7 @@ impl Shared {
             audio: std::array::from_fn(|_| Mutex::new(Playback::new())),
             heard: Mutex::default(),
             volumes: Mutex::default(),
+            scratch: Mutex::default(),
             run: AtomicU64::new(0),
             runs: AtomicU64::new(0),
         }
@@ -283,11 +286,13 @@ impl VoiceOutput {
         }
     }
 
-    /// `mix` into 16-bit frames (the game's mixer's), saturating.
+    /// `mix` into 16-bit frames (the game's mixer's: 48 kHz stereo), saturating.
     pub fn mix_i16(&self, out: &mut [i16], channels: usize) {
-        let mut f = vec![0.0f32; out.len()];
+        let mut f = self.0.scratch.lock().unwrap();
+        f.clear();
+        f.resize(out.len(), 0.0);
         self.mix(&mut f, channels);
-        for (o, v) in out.iter_mut().zip(f) {
+        for (o, v) in out.iter_mut().zip(f.iter()) {
             *o = (*o as f32 + v * 32767.0).clamp(-32768.0, 32767.0) as i16;
         }
     }
@@ -348,7 +353,7 @@ impl NativeEngine {
         engine
     }
 
-    /// What the game's output mixes in.
+    /// What the game's output mixes in: take it once, it holds across `start` and `stop`.
     pub fn output(&self) -> VoiceOutput {
         VoiceOutput(self.shared.clone())
     }
@@ -905,6 +910,35 @@ mod tests {
         assert_eq!((level_of_rms(0.0), level_of_rms(0.001), level_of_rms(1.0)), (0.0, 0.0, 1.0));
         assert_eq!((dbov_of_rms(sine), dbov_of_rms(0.0), dbov_of_rms(1.0), dbov_of_rms(2.0)), (13, 127, 0, 0));
         assert_eq!((level_of_dbov(0), level_of_dbov(30), level_of_dbov(60), level_of_dbov(127)), (1.0, 0.5, 0.0, 0.0));
+    }
+
+    /// `mix_i16` adds what `mix` does, the same sample on both channels, saturating; nothing
+    /// playing adds nothing.
+    #[test]
+    fn the_output_adds_into_the_games_frames() {
+        let shared = Arc::new(Shared::new());
+        let out = VoiceOutput(shared.clone());
+        let mut frames = vec![100i16; 960 * 2];
+        out.mix_i16(&mut frames, 2);
+        assert!(frames.iter().all(|&s| s == 100), "silence adds nothing");
+        let mut enc = opus::Encoder::new(RATE, opus::Channels::Mono, opus::Application::Voip).unwrap();
+        let mut t = 0;
+        for seq in 0..6u16 {
+            let tone: Vec<f32> = (0..FRAME)
+                .map(|_| {
+                    t += 1;
+                    0.8 * (2.0 * std::f32::consts::PI * 1000.0 * t as f32 / RATE as f32).sin()
+                })
+                .collect();
+            let packet = enc.encode_vec_float(&tone, 1500).unwrap();
+            shared.audio[1].lock().unwrap().push(seq, &packet);
+        }
+        let mut frames = vec![30000i16; 960 * 2 * 2];
+        out.mix_i16(&mut frames, 2);
+        assert!(frames.chunks(2).all(|lr| lr[0] == lr[1]), "both channels the same");
+        let top = frames[960 * 2..].iter().filter(|&&s| s == 32767).count();
+        assert!(top > 100, "the peaks saturate: {top}");
+        assert!(frames.iter().all(|&s| s > 0), "and do not wrap below");
     }
 
     /// The data channel's slots and levels as the server sends them; a slot past the four, a
