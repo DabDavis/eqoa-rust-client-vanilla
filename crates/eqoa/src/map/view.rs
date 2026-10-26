@@ -131,6 +131,13 @@ pub fn horseshoe_radius(size: (u32, u32), compact: bool) -> (f32, f32) {
     (lines(size, if compact { 5.0 } else { 8.0 }), lines(size, 1.0))
 }
 
+/// A community marker's pin (`community`), its head's half width and its
+/// outline's, in window pixels: 5.5 and 1 of the frame's lines (3.5 far out,
+/// `compact`, where a world's may be many).
+pub fn pin_radius(size: (u32, u32), compact: bool) -> (f32, f32) {
+    (lines(size, if compact { 3.5 } else { 5.5 }), lines(size, 1.0))
+}
+
 /// A coach route's dashes (`markers`), the gaps between them, its line's
 /// half width and its shadow's more, in window pixels: 5, 3.5, 0.7 and 0.7 of
 /// the frame's lines.

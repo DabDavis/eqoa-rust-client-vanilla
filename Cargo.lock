@@ -592,6 +592,7 @@ dependencies = [
  "pollster 1.0.1",
  "render",
  "rfd",
+ "serde_json",
  "sha2",
  "snd",
  "ureq",

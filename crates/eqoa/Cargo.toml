@@ -17,6 +17,8 @@ snd.workspace = true
 web-time.workspace = true
 # the patcher's files (`patcher::http`): gzip's deflate, and zlib's CRC-32
 flate2.workspace = true
+# the community map markers' list (`map::community`), natively and in a page
+serde_json.workspace = true
 winit = "0.30.13"
 pollster = "1.0.1"
 glam = "0.34.1"

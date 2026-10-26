@@ -16,6 +16,8 @@ mod bankplay;
 mod mail;
 #[path = "support.rs"]
 mod support;
+#[path = "mapsuggest.rs"]
+mod mapsuggest;
 
 use crate::walker::{Placing, Spawn, Walker};
 use esf::Library;
@@ -5503,7 +5505,10 @@ impl Play {
             match self.edit.key(vui, r, key, now, &mut cues) {
                 crate::editbox::EditUp::Done(purpose) => self.edit_done(purpose),
                 crate::editbox::EditUp::Cancel => {
-                    self.mode = if self.who_tell.take().is_some() { 35 } else { 0 };
+                    let purpose = self.edit.purpose;
+                    if !self.map_edit_done(purpose, false) {
+                        self.mode = if self.who_tell.take().is_some() { 35 } else { 0 };
+                    }
                 }
                 _ => {}
             }
@@ -5513,6 +5518,10 @@ impl Play {
 
     /// 259: the edit box's text to where it was for.
     fn edit_done(&mut self, purpose: u32) {
+        // a community marker's name and note (`mapsuggest`)
+        if self.map_edit_done(purpose, true) {
+            return;
+        }
         let text = String::from_utf16_lossy(&self.edit.text);
         // VIWndWhoList::SendTell, back to the list
         if let Some(name) = self.who_tell.take() {
@@ -6796,6 +6805,9 @@ impl Play {
         if self.map.open && (self.mode != 0 || self.is_dead()) {
             self.map.close();
         }
+        // a community marker the map asked to suggest: the edit box for its
+        // name (`mapsuggest`)
+        self.take_map_suggest();
         let now = self.session.now();
         self.guide_frame(walker, now);
         let guide_on = self.guide_on(now);

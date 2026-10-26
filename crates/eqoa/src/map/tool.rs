@@ -42,6 +42,9 @@ pub fn shot(s: &Shot, out: &str) -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("mapshot on {:?}", adapter.get_info().name);
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default()))?;
     let mut map = Map::default();
+    // the community's markers only from a list named (`EQOA_MAPMARKS`): a
+    // tool's run asks no server of its own accord
+    map.community.set_base(std::env::var("EQOA_MAPMARKS").ok().filter(|b| !b.trim().is_empty()));
     crate::modules::load_now(crate::modules::Module::Client, std::path::Path::new(&iso));
     if let Some(img) = crate::modules::get(crate::modules::Module::Client).and_then(|i| crate::client_image::ClientImage::from_bytes(i.to_vec())) {
         map.client_data(&img);

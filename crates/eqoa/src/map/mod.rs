@@ -33,6 +33,16 @@
 //! it; a click puts it there at once) or under the pad's middle cross. X (○ on
 //! a pad) shows or hides them, as Extended's Map Markers does.
 //!
+//! The community's markers (`community`, the user's: "Players can submit
+//! waypoints to be added to the in-game map. Submissions would require
+//! official approval, similar to our spellfx"): the list a GM accepted on
+//! eqoaclassic, for every player on any server, a pin each with its card, shown
+//! and hidden with the markers. L3 (N on a keyboard, the Suggest button)
+//! suggests one: this world's waypoint, else the place under the pointer (the
+//! pad's cross once the map is panned), else the map's middle; Play asks its
+//! name and a note in the game's edit box (`play::mapsuggest`), and the map
+//! says what the list answered.
+//!
 //! Over them the quest marks a server sends, or the client's own guide makes
 //! on a server that sends none (`quests`, `questguide`; the user's: "add quest
 //! markers for givers to the map too"): a gold "!" at a giver of a quest the
@@ -44,6 +54,7 @@
 pub mod build;
 pub mod cells;
 pub mod chrome;
+pub mod community;
 pub mod markers;
 mod markers_data;
 // the minimap, in play under the quick menus (`mini`)
@@ -247,6 +258,10 @@ pub struct Map {
     /// the minimap's own (`mini`): its zoom, whether it is drawn this
     /// frame, where, and the tiles it keeps on the GPU
     pub mini: mini::Mini,
+    /// the community's markers, their asks and a suggestion's (`community`)
+    pub community: community::Community,
+    /// a keyboard was in use last frame (a pad's cross is not then)
+    keyboard: bool,
 }
 
 impl Map {
@@ -287,6 +302,7 @@ impl Map {
             key::CIRCLE if down => self.toggle_markers(),
             key::R3 if down => self.toggle_quests(),
             key::SELECT if down => self.toggle_towns(),
+            key::L3 if down => self.suggest(),
             key::R1 if down => self.steps -= 1,
             key::L1 if down => self.steps += 1,
             key::UP => hold(&mut self.held, 0),
@@ -434,6 +450,20 @@ impl Map {
             return true;
         }
         self.quests.pinned = None;
+        // a community marker (`community`), over the camps and coaches, as a
+        // marker is
+        if let Some(i) = crate::settings::map_markers().then(|| self.community.under(world, v, size, s, view::marker_reach(size, finger), self.pin_size(v))).flatten() {
+            self.pinned = None;
+            if finger && self.community.pinned != Some(i) {
+                self.community.pinned = Some(i);
+                return true;
+            }
+            self.community.pinned = None;
+            let at = self.community.marks[i].at;
+            self.set_waypoint(world, Some(at));
+            return true;
+        }
+        self.community.pinned = None;
         // a marker: a tap shows its card, a click (or a second tap) puts the
         // waypoint on it
         if let Some(m) = crate::settings::map_markers().then(|| markers::under(world, v, size, s, finger)).flatten() {
@@ -555,6 +585,36 @@ impl Map {
         None
     }
 
+    /// The community marker whose card shows (`community`), as `card_quest`
+    /// picks a quest mark's; none while the markers are hidden.
+    fn card_community(&self, keyboard: bool) -> Option<usize> {
+        let (true, Some(v), Some(w)) = (crate::settings::map_markers(), self.view, self.world.as_ref()) else { return None };
+        let (size, world) = (self.size, w.index);
+        let (reach, r) = (view::marker_reach(size, false), self.pin_size(v));
+        if let Some(i) = self.community.pinned.filter(|&i| self.community.marks.get(i).is_some_and(|m| m.world == world)) {
+            return Some(i);
+        }
+        if let Some(p) = self.hover_world {
+            return self.community.under(world, v, size, community::head(v.to_window(size, p), r), reach, r);
+        }
+        if self.pointer_seen
+            && !self.press.is_some_and(|p| p.dragged)
+            && let Some(i) = self.community.under(world, v, size, self.cursor, reach, r)
+        {
+            return Some(i);
+        }
+        if !self.follow && !keyboard {
+            let m = [size.0 as f32 / 2.0, size.1 as f32 / 2.0];
+            return self.community.under(world, v, size, community::head(m, r), reach, r);
+        }
+        None
+    }
+
+    /// A pin's size in this view (`view::pin_radius`): smaller far out.
+    fn pin_size(&self, v: View) -> f32 {
+        view::pin_radius(self.size, v.scale > markers::COMPACT_FROM).0
+    }
+
     /// The card to show, a quest mark's or a marker's: the quest mark's
     /// (`card_quest`) first, the marks being over the markers, but a marker
     /// a finger tapped keeps its card.
@@ -615,6 +675,55 @@ impl Map {
         if let (Some((iw, ih, px)), None, Some(l)) = (icon.image.as_ref(), icon.tex, self.layers.as_mut()) {
             icon.tex = Some(l.ui.add_texture(cx.device, cx.queue, *iw, *ih, px));
         }
+    }
+
+    /// L3 (N on a keyboard, the Suggest button): a spot of this world asked
+    /// to be suggested to the community's list (`community`): this world's
+    /// waypoint, else the place under the pointer (not a pointer on the
+    /// chrome: the button's own) or under a pad's cross once the map is
+    /// panned (`pointer_world`), else the map's middle. Play takes it
+    /// (`take_suggest`) and asks its name.
+    fn suggest(&mut self) {
+        let (Some(v), Some(w)) = (self.view, self.world.as_ref()) else { return };
+        let world = w.index;
+        self.read_waypoints();
+        let pointer = if self.on_chrome() { None } else { self.pointer_world(self.keyboard) };
+        let at = self.waypoints.get(&world).copied().or(pointer).unwrap_or(v.center);
+        self.community.ask(community::Spot { world, at });
+    }
+
+    /// Whether the mouse is over the chrome's buttons (`point`'s).
+    fn on_chrome(&self) -> bool {
+        if !self.pointer_seen {
+            return false;
+        }
+        let f = frame_from_window(self.size, self.cursor);
+        self.buttons.iter().any(|b| f[0] >= b.0[0] as f32 && f[0] < b.0[2] as f32 && f[1] >= b.0[1] as f32 && f[1] < b.0[3] as f32)
+    }
+
+    /// The spot the map asked to suggest, once (`suggest`): Play's to ask
+    /// its name (`play::mapsuggest`).
+    pub fn take_suggest(&mut self) -> Option<community::Spot> {
+        self.community.take_spot()
+    }
+
+    /// Whether the map follows the player.
+    pub fn following(&self) -> bool {
+        self.follow
+    }
+
+    /// The map up again where it was (after the edit box a suggestion took):
+    /// its view kept, following the player or not as it was.
+    pub fn resume(&mut self, follow: bool) {
+        self.show();
+        self.follow = follow;
+    }
+
+    /// The map panned off the player (`false`) or following it, for a test
+    /// beside it (`play::mapsuggest`).
+    #[cfg(test)]
+    pub fn follow_for_test(&mut self, on: bool) {
+        self.follow = on;
     }
 
     /// □ (Q on a keyboard): the waypoint at the map's middle, once the map
@@ -691,7 +800,9 @@ impl Map {
     pub fn frame(&mut self, cx: &Context) {
         self.frame += 1;
         self.size = cx.size;
+        self.keyboard = cx.keyboard;
         self.quests.set(cx.quest_marks.unwrap_or_default());
+        self.community.frame(self.open);
         self.read_waypoints();
         self.arrive(cx.player, cx.world);
         let name = cx.lib.files.get(WORLD_FILE).map(|f| f.0.clone()).unwrap_or_default();
@@ -902,6 +1013,9 @@ impl Map {
     /// group and the marker; the chrome (`chrome::draw`).
     fn compose(&mut self, cx: &Context) {
         let (quest, card) = self.cards(cx.keyboard);
+        // a community marker's card over a marker's, but a marker a finger
+        // tapped keeps its own
+        let shared = if quest.is_none() { self.card_community(cx.keyboard).filter(|_| card.is_none() || card != self.pinned) } else { None };
         let pointer = self.pointer_world(cx.keyboard).map(|p| format!("x {:.0}, z {:.0}", p[0], p[1]));
         let icon = self.icon.tex;
         let (Some(w), Some(v), Some(l)) = (self.world.as_ref(), self.view, self.layers.as_mut()) else { return };
@@ -997,6 +1111,7 @@ impl Map {
             progress: (built < of).then_some((built, of)),
             quests: cx.quest_marks.map(|_| crate::settings::quest_markers()),
             pointer,
+            notice: self.community.notice_now().map(str::to_string),
         };
         let fallback;
         let vui = match cx.vui {
@@ -1037,10 +1152,21 @@ impl Map {
             }
             let camps: Vec<(markers::Marker, [f32; 2])> = shown.iter().copied().filter(|(m, _)| matches!(m, markers::Marker::Camp(_))).collect();
             markers::draw_badges(ui, &l.assets, vui, white, font, &camps, v.scale);
+            // the community's pins (`community`) over the camps
+            let pins: Vec<(community::Kind, [f32; 2])> = self
+                .community
+                .of_world(w.index)
+                .map(|(_, m)| (m.kind, v.to_window(size, m.at)))
+                .filter(|(_, p)| p[0] >= lo[0] && p[1] >= lo[1] && p[0] <= hi[0] && p[1] <= hi[1])
+                .map(|(k, p)| (k, f(p)))
+                .collect();
+            let (r, o) = view::pin_radius(size, v.scale > markers::COMPACT_FROM);
+            community::draw_pins(ui, white, &pins, r * k, o * k);
         }
         // the towns' names over them, the biggest first, clear of the
         // player's arrow, the chrome and the map's own names (a town the map
         // names itself is left to it)
+        let mut town_rects: Vec<[f32; 4]> = Vec::new();
         if let (true, Some((h, fo))) = (crate::settings::map_towns(), font) {
             let t = markers::name_scale(v.scale);
             let pad = [3.0 * t, 1.0 * t];
@@ -1069,6 +1195,42 @@ impl Map {
             let gap = view::name_gap(size, v.scale > markers::COMPACT_FROM) * k;
             let placed = markers::place_names(&cands, gap, &obstacles, [c.corners[0][0], c.corners[0][1], c.corners[1][0], c.corners[1][1]]);
             markers::draw_towns(ui, white, fo, &placed, t, pad);
+            town_rects.extend(placed.iter().map(|(_, r)| *r));
+        }
+        // the community markers' names in close (`community`), as the towns'
+        // are, clear of them too
+        if let (true, true, Some((h, fo))) = (crate::settings::map_markers(), v.scale < markers::NAMES_FROM, font) {
+            let t = markers::name_scale(v.scale);
+            let pad = [3.0 * t, 1.0 * t];
+            let mut obstacles: Vec<[f32; 4]> = c
+                .names
+                .iter()
+                .map(|(p, n)| {
+                    let w = ui.fonts[fo].string_width(&vi::ui::wide(n)).max(0) as f32;
+                    [p[0] - w / 2.0, p[1] - h / 2.0, p[0] + w / 2.0, p[1] + h / 2.0]
+                })
+                .collect();
+            obstacles.extend_from_slice(&footprint);
+            obstacles.extend_from_slice(&town_rects);
+            if let Some((p, _)) = cx.player {
+                let at = f(v.to_window(size, [p[0], p[2]]));
+                let (r, o) = view::marker_radius(size);
+                let e = (r + o) * k * 1.25;
+                obstacles.push([at[0] - e, at[1] - e, at[0] + e, at[1] + e]);
+            }
+            let (r, _) = view::pin_radius(size, false);
+            let mut names = Vec::new();
+            let cands: Vec<(usize, [f32; 2], [f32; 2])> = self
+                .community
+                .of_world(w.index)
+                .map(|(_, m)| {
+                    names.push(m.name.clone());
+                    let width = ui.fonts[fo].string_width(&vi::ui::wide(&m.name)).max(0) as f32 * t;
+                    (names.len() - 1, f(community::head(v.to_window(size, m.at), r)), [width + pad[0] * 2.0, h * t + pad[1] * 2.0])
+                })
+                .collect();
+            let placed = markers::place_names(&cands, r * k * 1.6, &obstacles, [c.corners[0][0], c.corners[0][1], c.corners[1][0], c.corners[1][1]]);
+            community::draw_names(ui, white, fo, &placed, &names, t, pad);
         }
         // the quest marks (`quests`) over the markers and the towns' names,
         // under the group and the player
@@ -1130,6 +1292,9 @@ impl Map {
         let win = [[c.corners[0][0], band[0]], [c.corners[1][0], band[1]]];
         if let Some(m) = quest.and_then(|i| self.quests.marks.get(i)) {
             markers::draw_lines_card(ui, &l.assets, vui, white, quests::card(m), f(v.to_window(size, [m.x, m.z])), win);
+        } else if let Some(m) = shared.and_then(|i| self.community.marks.get(i)) {
+            let r = view::pin_radius(size, v.scale > markers::COMPACT_FROM).0;
+            markers::draw_lines_card(ui, &l.assets, vui, white, m.card(), f(community::head(v.to_window(size, m.at), r)), win);
         } else if let Some(m) = card {
             markers::draw_card(ui, &l.assets, vui, white, m, f(v.to_window(size, m.at())), win);
         }
@@ -1172,6 +1337,7 @@ impl Map {
         } else if !self.quests.marks.is_empty() {
             waypoints.push_str(&format!(", {} quest marks", self.quests.marks.len()));
         }
+        waypoints.push_str(&self.community.describe());
         match &self.world {
             Some(w) => format!("{}{}{waypoints}", w.builder.describe(), if self.open { ", up" } else { "" }),
             None => format!("map: no world{waypoints}"),
@@ -1225,6 +1391,8 @@ pub fn keyboard(name: &str) -> Option<(i32, Hold)> {
         "q" => (key::SQUARE, Hold::Once),
         // J (the journal's letter) is R3: the quest marks shown or hidden
         "j" => (key::R3, Hold::Once),
+        // N is L3: a community marker suggested (`community`)
+        "n" => (key::L3, Hold::Once),
         "+" | "=" | "pageup" => (key::R1, Hold::Step),
         "-" | "_" | "pagedown" => (key::L1, Hold::Step),
         "up" | "w" => (key::UP, Hold::Held),
