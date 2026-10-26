@@ -13,14 +13,19 @@
 //! server counts, its effects' share in it), a resist derived as the Summary
 //! derives one (`trainer::Data::derived`: a seventh of wisdom and 40 on, 315
 //! at most). Against it stands what the stat is without the effects: the base
-//! stat, the worn items' (`GetStatTotal`) and the masteries' (the Summary's
-//! Base), the seven within their cap (`GetP44Total`, as the server keeps them).
-//! A value an effect raises is drawn blue and one it lowers red, as the
-//! Summary's list of items marks a bonus and a malus (`DrawItems`), made light
-//! to read on the dark box; the rest in white. So a buff or a debuff shows at
-//! once, and one that changes nothing (a stat at its cap) shows nothing.
-//! Stamina's hit points are the base maximum's on the channel already (a
-//! stamina buff moves HPMax in white); a spell's own hit points are blue.
+//! stat and the worn items' (`GetStatTotal`), or that and the masteries' (the
+//! Summary's Base adds them to the channel's base, as go-eqoa-server leaves
+//! them out of it; Sandstorm's base hit points hold them), the seven within
+//! their cap (`GetP44Total`, as the server keeps them). A value above both is
+//! drawn blue and one below both red, as the Summary's list of items marks a
+//! bonus and a malus (`DrawItems`), made light to read on the dark box; the
+//! rest in white. So a buff or a debuff shows at once, and one that changes
+//! nothing (a stat at its cap) shows nothing. Stamina's hit points are the
+//! base maximum's on the channel already (a stamina buff moves HPMax in
+//! white); a spell's own hit points are blue. POW is never marked: the
+//! server's maximum power is worked out of every stat, worn ones too, and
+//! its base of the base stats alone (go-eqoa-server's and Sandstorm's
+//! alike), so the two differ by what the worn items' stats give as well.
 //!
 //! Extended's UI page's Stats Box turns it on (off by default), and so does B
 //! (`binds`' "stats_box", a controller's button can take it on the Controls
@@ -39,12 +44,12 @@ use render::ui::{Anchor, Vertical};
 /// the group's bars (to 194, `hud`'s `GROUP_AT`), above the death notice's bar
 /// (y 229) and the manual camera's crosshair (208), and clear of the right
 /// side's minimap, quest tracker and target's details (from x 380).
-pub const FRAME: [i32; 4] = [200, 54, 340, 178];
+pub const FRAME: [i32; 4] = [200, 54, 348, 186];
 
-/// The frame art's border (the minimap's, `map::mini::INSET`) and the rows'
-/// room inside it.
-const INSET: i32 = crate::map::mini::INSET;
-const PAD: f32 = 3.0;
+/// The frame art's border as it is drawn (frame pixels: its bars 9 thick at
+/// the top and the bottom, 7 at the sides) and the rows' room inside it.
+const BORDER: [f32; 2] = [7.0, 9.0];
+const PAD: [f32; 2] = [3.0, 2.0];
 /// The least gap between the two columns, frame pixels, and between the
 /// rows' words (of the font's height).
 const GAP: f32 = 6.0;
@@ -53,7 +58,7 @@ const LEADING: f32 = 0.08;
 /// The words' size, of the HUD's font, at most: less when the rows would not
 /// fit the frame, eight high and the widest word and value of each column
 /// across (the language's words: `layout`). The disc's ArialUI is 21 high,
-/// and the English words come out at about 0.56.
+/// and the English words come out at 0.6.
 pub const SCALE: f32 = 0.6;
 /// The widest value a column makes room for.
 const ROOM: &str = "8888";
@@ -84,20 +89,22 @@ pub enum Shift {
     Lowered,
 }
 
-/// A row: its stat's word, its value and what it is without the effects.
+/// A row: its stat's word, its value, and what it is without the effects:
+/// between the base's and the worn items' alone and that with the masteries'
+/// (none for POW, whose effects' share cannot be told).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Row {
     pub word: i32,
     pub value: i32,
-    pub without: i32,
+    pub without: Option<(i32, i32)>,
 }
 
 impl Row {
     pub fn shift(&self) -> Shift {
-        match self.value.cmp(&self.without) {
-            std::cmp::Ordering::Greater => Shift::Raised,
-            std::cmp::Ordering::Less => Shift::Lowered,
-            std::cmp::Ordering::Equal => Shift::Same,
+        match self.without {
+            Some((_, high)) if self.value > high => Shift::Raised,
+            Some((low, _)) if self.value < low => Shift::Lowered,
+            _ => Shift::Same,
         }
     }
 
@@ -134,20 +141,21 @@ pub fn view(s: &Source) -> Option<View> {
     if s.stats.stat[8] <= 0 {
         return None;
     }
-    // each stat without the effects: the base, the worn items and the
-    // masteries, the seven within their cap
-    let mut without = [0i32; 29];
-    for (i, w) in without.iter_mut().enumerate() {
-        let mut v = crate::infotext::stat_total(&s.stats.base, s.inv, i as i64) as i32 + crate::trainer::mastery_stat(s.mastery, i as i32);
-        if i < 7 && s.p44 > 0 {
-            v = v.min(crate::trainer::stat_cap(s.p44, s.bonuses, i as i32));
-        }
-        *w = v;
+    // each stat without the effects: the base and the worn items, and that
+    // with the masteries, the seven within their cap
+    let (mut low, mut high) = ([0i32; 29], [0i32; 29]);
+    for i in 0..29 {
+        let gear = crate::infotext::stat_total(&s.stats.base, s.inv, i as i64) as i32;
+        let m = crate::trainer::mastery_stat(s.mastery, i as i32);
+        let cap = |v: i32| if i < 7 && s.p44 > 0 { v.min(crate::trainer::stat_cap(s.p44, s.bonuses, i as i32)) } else { v };
+        (low[i], high[i]) = (cap(gear.min(gear + m)), cap(gear.max(gear + m)));
     }
     let mut out = View::default();
     for (col, rows) in ROWS.iter().enumerate() {
         for (k, &(word, stat)) in rows.iter().enumerate() {
-            out.rows[col][k] = Row { word, value: crate::trainer::Data::derived(&s.stats.stat, stat), without: crate::trainer::Data::derived(&without, stat) };
+            let derived = |v: &[i32; 29]| crate::trainer::Data::derived(v, stat);
+            let without = (stat != 10).then(|| (derived(&low), derived(&high)));
+            out.rows[col][k] = Row { word, value: derived(&s.stats.stat), without };
         }
     }
     Some(out)
@@ -183,8 +191,8 @@ pub struct Rows {
 /// columns at the frame's two sides (the room left over between them).
 pub fn layout(font_h: f32, wide: [f32; 2]) -> Rows {
     let (x0, y0, x1, y1) = (FRAME[0] as f32, FRAME[1] as f32, FRAME[2] as f32, FRAME[3] as f32);
-    let (left, right) = (x0 + INSET as f32 + PAD, x1 - INSET as f32 - PAD);
-    let (top, bottom) = (y0 + INSET as f32 + PAD, y1 - INSET as f32 - PAD);
+    let (left, right) = (x0 + BORDER[0] + PAD[0], x1 - BORDER[0] - PAD[0]);
+    let (top, bottom) = (y0 + BORDER[1] + PAD[1], y1 - BORDER[1] - PAD[1]);
     let font_h = font_h.max(1.0);
     let by_height = (bottom - top) / (8.0 * font_h * (1.0 + LEADING));
     let by_width = (right - left - GAP) / (wide[0] + wide[1]).max(1.0);
@@ -289,13 +297,13 @@ mod tests {
         assert_eq!(of(&v, 24).value, 50 / 7 + 15 + 40, "fire: a seventh of wisdom, 40 and the raw 15");
         let buffed = channel(&[(0, 7), (14, 40), (24, 5)], &[(0, 10), (2, -5)]);
         let v = view(&src(&buffed)).expect("a view");
-        assert_eq!((of(&v, 0).value, of(&v, 0).without, of(&v, 0).shift()), (67, 57, Shift::Raised));
+        assert_eq!((of(&v, 0).value, of(&v, 0).without, of(&v, 0).shift()), (67, Some((57, 57)), Shift::Raised));
         assert_eq!((of(&v, 2).value, of(&v, 2).shift(), of(&v, 2).color()), (45, Shift::Lowered, LOWERED));
         assert_eq!(of(&v, 1).shift(), Shift::Same, "stamina untouched");
         // wisdom raised: every resist with it (its seventh), each marked
         let wise = channel(&[], &[(4, 14)]);
         let v = view(&Source { stats: &wise, inv: &ItemList::default(), mastery: &[0; 29], bonuses: &[0; 7], p44: 0 }).expect("a view");
-        assert!([24, 25, 26, 27, 22, 23].iter().all(|&s| of(&v, s).shift() == Shift::Raised && of(&v, s).value == of(&v, s).without + 2));
+        assert!([24, 25, 26, 27, 22, 23].iter().all(|&s| of(&v, s).shift() == Shift::Raised && Some(of(&v, s).value - 2) == of(&v, s).without.map(|w| w.1)));
         // the control: the worn item not counted
         let v = view(&Source { stats: &plain, inv: &ItemList::default(), mastery: &[0; 29], bonuses: &[0; 7], p44: 0 }).expect("a view");
         assert_eq!(of(&v, 0).shift(), Shift::Raised, "the control must fail");
@@ -314,20 +322,38 @@ mod tests {
         let capped = channel(&[(0, 20)], &[]);
         let src = |s, p44| Source { stats: s, inv: &inv, mastery: &[0; 29], bonuses: &bonuses, p44 };
         let v = view(&src(&capped, 60)).expect("a view");
-        assert_eq!((of(&v, 0).value, of(&v, 0).without, of(&v, 0).shift()), (70, 70, Shift::Same));
+        assert_eq!((of(&v, 0).value, of(&v, 0).without, of(&v, 0).shift()), (70, Some((70, 70)), Shift::Same));
         // the control: no cap
         assert_eq!(view(&src(&capped, 0)).expect("a view").rows[0][0].shift(), Shift::Lowered, "the control must fail");
-        // a mastery's 5 stamina (slot 1) is the base's
+        // a mastery's 5 stamina (slot 1) is the base's, whether the server
+        // counts it on top (go-eqoa-server) or in its base (as Sandstorm its
+        // hit points'); 6 more is an effect's
         let mut m = [0; 29];
         m[1] = 5;
-        let sta = channel(&[], &[(1, 5)]);
         let none = ItemList::default();
-        let v = view(&Source { stats: &sta, inv: &none, mastery: &m, bonuses: &[0; 7], p44: 0 }).expect("a view");
-        assert_eq!(of(&v, 1).shift(), Shift::Same);
-        let v = view(&Source { stats: &sta, inv: &none, mastery: &[0; 29], bonuses: &[0; 7], p44: 0 }).expect("a view");
-        assert_eq!(of(&v, 1).shift(), Shift::Raised, "without the mastery, an effect's");
+        let with = |s: &Stats, m: &[i64; 29]| view(&Source { stats: s, inv: &none, mastery: m, bonuses: &[0; 7], p44: 0 }).expect("a view");
+        let on_top = channel(&[], &[(1, 5)]);
+        assert_eq!(of(&with(&on_top, &m), 1).shift(), Shift::Same);
+        let mut in_base = channel(&[], &[(1, 5)]);
+        in_base.base[1] += 5;
+        assert_eq!(of(&with(&in_base, &m), 1).shift(), Shift::Same, "counted in the base");
+        let buffed = channel(&[], &[(1, 11)]);
+        assert_eq!(of(&with(&buffed, &m), 1).shift(), Shift::Raised);
+        assert_eq!(of(&with(&on_top, &[0; 29]), 1).shift(), Shift::Raised, "the control: without the mastery, an effect's");
+        // POW is never marked: worn stats move the server's maximum power off
+        // its base too
+        let mut pow = channel(&[], &[(10, 37)]);
+        pow.stat[9] = 0;
+        assert_eq!((of(&with(&pow, &[0; 29]), 10).value, of(&with(&pow, &[0; 29]), 10).shift()), (237, Shift::Same));
+        assert_eq!(of(&with(&channel(&[], &[(8, 37)]), &[0; 29]), 8).shift(), Shift::Raised, "the control: HPMax's own share is");
         // nothing before the channel
         assert!(view(&Source { stats: &Stats::default(), inv: &none, mastery: &m, bonuses: &[0; 7], p44: 0 }).is_none());
+        // a mastery that takes away (an alchemist's Pow -100 kind): the band
+        // the other way round
+        let mut minus = [0; 29];
+        minus[14] = -20;
+        let hp = channel(&[], &[(8, -20)]);
+        assert_eq!(of(&with(&hp, &minus), 8).shift(), Shift::Same, "{:?}", of(&with(&hp, &minus), 8));
     }
 
     /// The frame clears the HUD's left side (the player's gauges, the
