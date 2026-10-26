@@ -3619,6 +3619,9 @@ impl ApplicationHandler for App {
         // macOS: Settings… (⌘,) in the app menu winit made (`macos`), once
         #[cfg(target_os = "macos")]
         crate::macos::add_settings_item();
+        // macOS: the Dock's picture (`icon`), winit setting none
+        #[cfg(target_os = "macos")]
+        crate::icon::dock_now();
         if self.gfx.is_some() {
             return;
         }
@@ -3649,7 +3652,12 @@ impl ApplicationHandler for App {
             return;
         }
         // where the player last had it (`winplace`)
-        let window = Arc::new(el.create_window(self.winplace.attributes(el, Window::default_attributes().with_title("EQOA"))).expect("window"));
+        let attrs = Window::default_attributes().with_title("EQOA");
+        // the program's icon: the drawn disc, or the game's save icon kept
+        // for this disc (`icon`)
+        #[cfg(not(target_arch = "wasm32"))]
+        let attrs = crate::icon::attributes(attrs);
+        let window = Arc::new(el.create_window(self.winplace.attributes(el, attrs)).expect("window"));
         // `EQOA_OFFSCREEN=WxH`: drawn on the adapter the environment names
         // into a texture of that size, never presented. A GPU with no display
         // to present on (an X server without DRI3) measures as it plays.
@@ -4176,6 +4184,11 @@ impl ApplicationHandler for App {
                 }
                 if let Some(g) = self.gfx.as_mut() {
                     g.apply_vsync();
+                }
+                // the game's save icon on the window once SUPPORT has come (`icon`)
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(g) = &self.gfx {
+                    crate::icon::poll(&g.window);
                 }
                 // Sound in Background (the Extended page): off, this window
                 // is heard only while it is the one in front (has the focus:

@@ -62,6 +62,14 @@ mod craft;
 mod craftwnd;
 mod death;
 mod discs;
+// the program's icon: the drawn disc it carries, then the game's own save
+// icon off the player's disc (natively; a page has its favicon)
+#[cfg(not(target_arch = "wasm32"))]
+mod icon;
+#[cfg(not(target_arch = "wasm32"))]
+mod icon_art;
+#[cfg(not(target_arch = "wasm32"))]
+mod saveicon;
 mod editbox;
 mod fog;
 mod frames;
@@ -437,6 +445,29 @@ fn run(args: &[String]) -> Result<()> {
                 let (lib, src) = source(file, rest)?;
                 viewer::run(lib, src)?;
             }
+        }
+        // `eqoa icon <size> <out.png>`: the program's own icon, the drawn disc
+        // (a desktop entry's picture); `eqoa icon <size> <out.png> save`: the
+        // game's save icon off the disc's SUPPORT, as the window takes it once
+        // the disc is known (the player's own: never shared)
+        #[cfg(not(target_arch = "wasm32"))]
+        Some("icon") => {
+            let usage = "usage: eqoa icon <size> <out.png> [save]";
+            let size: u32 = args.get(1).ok_or(usage)?.parse()?;
+            let out = args.get(2).ok_or(usage)?;
+            if !(1..=1024).contains(&size) {
+                return Err(usage.into());
+            }
+            let rgba = match args.get(3).map(String::as_str) {
+                None => icon_art::disc_rgba(size),
+                Some("save") => {
+                    let support = modules::load_now(modules::Module::Support, std::path::Path::new(&disc_path(None))).ok_or("no SUPPORT: no disc image, or not the Frontiers one")?;
+                    saveicon::read(&support).ok_or("no save icon in SUPPORT")?.render(size)
+                }
+                Some(_) => return Err(usage.into()),
+            };
+            std::fs::write(out, icon::encode(&rgba, size)?)?;
+            say(&format!("{out}: {size}x{size}"));
         }
         // `eqoa fxview [visual] [cast seconds]`: the GM panel's spell-visual
         // preview in a window; `eqoa fxview <visual> <out.png> [ms,...]

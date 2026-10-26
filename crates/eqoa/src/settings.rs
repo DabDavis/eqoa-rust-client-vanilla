@@ -315,6 +315,29 @@ pub fn set_disc(path: &str) -> Result<(), String> {
     store::write(DISC_FILE, format!("{path}\n").as_bytes())
 }
 
+// ---- the client's own: the game's save icon off the player's disc (natively) -----
+
+const ICON_FILE: &str = "saveicon.png";
+const ICON_KEY_FILE: &str = "saveicon.key";
+
+/// The game's save icon as `icon` drew it off a disc (`saveicon.png`), if the
+/// disc it came from (`saveicon.key`) is `disc`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn kept_icon(disc: &str) -> Option<Vec<u8>> {
+    let key = store::read(ICON_KEY_FILE)?;
+    if String::from_utf8_lossy(&key).trim_end_matches(['\r', '\n']) != disc {
+        return None;
+    }
+    store::read(ICON_FILE)
+}
+
+/// Keeps the save icon drawn off `disc` (a PNG).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn keep_icon(disc: &str, png: &[u8]) -> Result<(), String> {
+    store::write(ICON_FILE, png)?;
+    store::write(ICON_KEY_FILE, format!("{disc}\n").as_bytes())
+}
+
 // ---- the client's own: the 2002 disc (natively), for F9's art (`era`) ------------
 
 const DISC_2002_FILE: &str = "disc2002.opt";

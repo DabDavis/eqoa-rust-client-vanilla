@@ -796,6 +796,8 @@ impl winit::application::ApplicationHandler for App {
             return;
         }
         let attrs = winit::window::Window::default_attributes().with_title("EQOA spell visual").with_inner_size(winit::dpi::LogicalSize::new(960.0, 540.0));
+        #[cfg(not(target_arch = "wasm32"))]
+        let attrs = crate::icon::attributes(attrs);
         let window = match el.create_window(attrs) {
             Ok(w) => std::sync::Arc::new(w),
             Err(e) => {
