@@ -38,6 +38,10 @@ version.json under it:
             that can't start in the kept folder opens without it; a report
             says what is remembered (the picker is a stand-in: the real one
             can't be driven headless)
+  typed     while the client says an edit box has the keys, a touch puts
+            the focus in the page's input (a phone's own keyboard comes up
+            with it), and what is typed there comes to the canvas as key
+            events, none of it kept; with none, a touch puts no keyboard up
   spellfx   the community page (spellfx.html): the server's spells (a
             stand-in answers <api>/spells), filtered by class and by a
             stand-in visual; a pick needs a spell and a visual; the pick is
@@ -787,6 +791,25 @@ async def tests(a, site, base, page):
     build = json.loads((HERE / "dist" / "version.json").read_text())["build"]
     icons = [p for p in ("index", "fxview", "spellfx") if f'href="./v/{build}/disc.svg"' in (HERE / "dist" / f"{p}.html").read_text()]
     check("every page carries the program's icon, in its build", icons == ["index", "fxview", "spellfx"] and (HERE / "dist" / "v" / build / "disc.svg").is_file(), str(icons))
+
+    # ---- typed: a phone's or a tablet's own keyboard for the game's edit
+    # boxes, the client stood in for by eqoaWantText (main.js)
+    await page.open(base + q)
+    await page.js("window.__keys = []; document.getElementById('eqoa').addEventListener('keydown', (e) => window.__keys.push(e.key)); true")
+    touch_up = "document.getElementById('eqoa').dispatchEvent(new PointerEvent('pointerup', {pointerType: 'touch', bubbles: true})); document.activeElement && document.activeElement.id"
+    check("no edit box: a touch puts no keyboard up (control)", await page.js(touch_up) != "eqoatyped")
+    await page.js("window.eqoaWantText(true); true")
+    check("an edit box: a touch puts the focus in the page's input, its keyboard with it", await page.js(touch_up) == "eqoatyped")
+    for ch in "Ab 1":
+        await page.call("Input.insertText", text=ch)
+    await page.key("Backspace", "Backspace", 8)
+    await page.key("Enter", "Enter", 13)
+    keys = await page.js("JSON.stringify(window.__keys)")
+    check("what is typed there comes to the canvas as its keys", json.loads(keys or "null") == ["A", "b", " ", "1", "Backspace", "Enter"], str(keys))
+    check("and none of it stays in the input", await page.js("document.getElementById('eqoatyped').value.trim()") == "")
+    await page.js("window.eqoaWantText(false); true")
+    check("the box gone, the focus is the canvas's again", await page.js("document.activeElement && document.activeElement.id") == "eqoa")
+    check("and a touch puts no keyboard up any more", await page.js(touch_up) != "eqoatyped")
 
     errors = [l for l in page.lines if l.startswith("EXCEPTION") and "crash_test" not in l and "unreachable" not in l and "a test rejection" not in l]
     check("no exception in the page beyond the crash test's", not errors, "; ".join(errors[:3]))

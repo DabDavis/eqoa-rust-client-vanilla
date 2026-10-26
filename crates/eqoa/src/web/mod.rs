@@ -176,6 +176,20 @@ pub fn set_title(t: &str) {
 
 /// Whether the page is on a touch-first device (`window.eqoaTouchFirst`:
 /// its main pointer is coarse), so the touch screen's pad shows at once.
+/// An edit box of the game's has the keys now, or none has: the page puts
+/// a phone's or a tablet's own keyboard up for it at the next touch, and its
+/// characters come to the canvas as key events (`window.eqoaWantText`,
+/// main.js).
+pub fn want_text(on: bool) {
+    call_page("eqoaWantText", &JsValue::from_bool(on));
+}
+
+/// The keys coming now are the device's own keyboard's, not a keyboard's:
+/// the page's input for the game's edit boxes has the focus (`want_text`).
+pub fn device_keyboard() -> bool {
+    web_sys::window().and_then(|w| w.document()).and_then(|d| d.active_element()).is_some_and(|e| e.id() == "eqoatyped")
+}
+
 pub fn touch_first() -> bool {
     let Some(w) = web_sys::window() else { return false };
     js_sys::Reflect::get(&w, &"eqoaTouchFirst".into())

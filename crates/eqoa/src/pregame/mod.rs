@@ -288,6 +288,19 @@ impl Pregame {
 
     /// A pointer's click at frame point `p`: the keys to press, from the
     /// window under it (`pointer`).
+    /// An edit box has the keys (Network Setup's address, Station's boxes,
+    /// creation's name): what a phone's or a tablet's own keyboard types
+    /// into, in a page (`web::want_text`).
+    pub fn typing(&self) -> bool {
+        self.entering.is_none()
+            && match self.stage {
+                Stage::Boot => false,
+                Stage::Setup => self.setup.typing(),
+                Stage::Station => self.station.typing(),
+                Stage::Client => self.client.typing(),
+            }
+    }
+
     pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
         if self.entering.is_some() {
             return Vec::new();

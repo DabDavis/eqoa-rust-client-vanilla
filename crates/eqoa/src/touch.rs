@@ -22,6 +22,11 @@
 //!
 //! Shown from the first touch (in a page on a touch-first device from the
 //! start); a key or a controller hides it.
+//!
+//! Before the world there is no pad on the screen: the game's screens take
+//! a finger as the mouse's pointer (`pointer`), and so do the client's own
+//! dialogs over the game (the report's, the update's question). A finger
+//! there is a [`Taps`]': lifted where it came down, it is a click there.
 
 use crate::input::{Report, bit};
 use crate::mouse::Click;
@@ -391,10 +396,89 @@ impl TouchPad {
     }
 }
 
+/// The pad over a `size` window on `ui`, its buttons wearing SUPPORT's
+/// glyphs once the game's UI (`parts`: its words and its atlas on this
+/// layer) is in; `dim` with a window up (`TouchPad::draw`). The discs are
+/// put on the layer first (`TouchPad::textures`).
+pub fn draw_pad(ui: &mut Ui, device: &render::wgpu::Device, queue: &render::wgpu::Queue, touch: &mut TouchPad, size: (u32, u32), dim: bool, parts: Option<(&vi::ui::Vui, &crate::ui::UiAssets)>) {
+    touch.textures(ui, device, queue);
+    let mut glyphs: Vec<(i32, Glyph)> = Vec::new();
+    if let Some((vui, assets)) = parts {
+        for b in layout(size).buttons {
+            let e = vui.entry(b.glyph);
+            let Some(tex) = assets.surface(vui.entry_id(&e)) else { continue };
+            let (w, h) = ui.texture_size(tex);
+            let (w, h) = (w as f32, h as f32);
+            let uv = [e.uv0[0] as f32 / w, e.uv0[1] as f32 / h, (e.uv0[0] + e.uv1[0]) as f32 / w, (e.uv0[1] + e.uv1[1]) as f32 / h];
+            glyphs.push((b.glyph, (tex, uv, [e.uv1[0] as f32, e.uv1[1] as f32])));
+        }
+    }
+    touch.draw(ui, size, dim, &|id| glyphs.iter().find(|g| g.0 == id).map(|g| g.1));
+}
+
+/// The fingers where a pointer is taken instead of the pad (the screens
+/// before the world, the client's own dialogs): a finger's tap is a click
+/// where it came down, at its lift (a mouse's is at its press, but a finger
+/// that moves on is no click, and only the lift can tell). Each finger on
+/// its own, as a looking finger on the pad is (`TouchPad::touch`): one that
+/// moves farther than its slop (a drag, a pinch) or that the system cancels
+/// clicks nothing.
+#[derive(Clone, Debug, Default)]
+pub struct Taps {
+    /// the fingers down: id, where it came down, whether it moved on
+    fingers: Vec<(u64, [f32; 2], bool)>,
+}
+
+/// Fingers kept down at most: one whose lift never came (the window lost
+/// it) goes when more than this come down after it.
+const TAP_FINGERS: usize = 10;
+
+impl Taps {
+    /// A finger's event in a `size` window at window pixels `at`: where it
+    /// came down, when this is a tap's lift.
+    pub fn touch(&mut self, id: u64, phase: Phase, at: [f32; 2], size: (u32, u32)) -> Option<[f32; 2]> {
+        match phase {
+            Phase::Started => {
+                self.fingers.retain(|f| f.0 != id);
+                if self.fingers.len() >= TAP_FINGERS {
+                    self.fingers.remove(0);
+                }
+                self.fingers.push((id, at, false));
+            }
+            Phase::Moved => {
+                if let Some(f) = self.fingers.iter_mut().find(|f| f.0 == id)
+                    && dist(f.1, at) > tap_slop(size)
+                {
+                    f.2 = true;
+                }
+            }
+            Phase::Ended | Phase::Cancelled => {
+                let k = self.fingers.iter().position(|f| f.0 == id)?;
+                let (_, start, moved) = self.fingers.remove(k);
+                return (phase == Phase::Ended && !moved).then_some(start);
+            }
+        }
+        None
+    }
+
+    /// Every finger down forgotten (the window lost the focus): their lifts
+    /// click nothing.
+    pub fn forget(&mut self) {
+        self.fingers.clear();
+    }
+}
+
+/// How far (window pixels) a finger may move and still tap: as far as a
+/// looking finger on the pad may before it looks.
+fn tap_slop(size: (u32, u32)) -> f32 {
+    0.12 * layout(size).u
+}
+
 /// `EQOA_TOUCHES`, for headless runs: `;`-separated finger events at a time
 /// in ms, `down <id> <x> <y>@<ms>`, `move <id> <x> <y>@<ms>`, `up <id> <x>
 /// <y>@<ms>` (window pixels), played through a `TouchPad` as the window's
-/// would be.
+/// would be (in a playshot at the script's time; in a window at the
+/// client's clock, the pregame's taps too).
 pub fn script() -> Vec<(i64, u64, Phase, [f32; 2])> {
     let Ok(s) = std::env::var("EQOA_TOUCHES") else { return Vec::new() };
     s.split(';')
@@ -462,6 +546,53 @@ mod tests {
     }
 
     const SIZE: (u32, u32) = (2400, 1080);
+
+    /// Before the world a finger lifted where it came down is a click there
+    /// (where it came down, its wobble inside the slop); one that moved on
+    /// (a drag, a pinch's two) or was cancelled is none, and each finger is
+    /// its own (a thumb resting on the screen takes nothing from a tap
+    /// beside it). The controls: the same finger moved just past the slop
+    /// clicks nothing, and just inside it clicks.
+    #[test]
+    fn a_tap_is_a_click_where_the_finger_came_down() {
+        let slop = tap_slop(SIZE);
+        assert!(slop > 5.0 && slop < 40.0, "a fingertip's wobble on a 1080-high screen: {slop}");
+        let at = [700.0, 400.0];
+        let mut t = Taps::default();
+        assert_eq!(t.touch(1, Phase::Started, at, SIZE), None, "nothing at the press");
+        assert_eq!(t.touch(1, Phase::Moved, [at[0] + slop - 0.5, at[1]], SIZE), None);
+        assert_eq!(t.touch(1, Phase::Ended, [at[0] + slop - 0.5, at[1]], SIZE), Some(at), "inside the slop: a tap where it came down");
+        // the control: just past the slop, a drag
+        t.touch(2, Phase::Started, at, SIZE);
+        t.touch(2, Phase::Moved, [at[0], at[1] + slop + 0.5], SIZE);
+        assert_eq!(t.touch(2, Phase::Ended, at, SIZE), None, "moved past the slop and back: no tap");
+        // a thumb resting while another finger taps: the tap is a tap
+        t.touch(3, Phase::Started, [20.0, 900.0], SIZE);
+        t.touch(4, Phase::Started, at, SIZE);
+        assert_eq!(t.touch(4, Phase::Ended, at, SIZE), Some(at), "the tap beside the resting thumb");
+        // a pinch: both move, neither taps
+        t.touch(5, Phase::Started, [600.0, 500.0], SIZE);
+        t.touch(3, Phase::Moved, [20.0, 960.0], SIZE);
+        t.touch(5, Phase::Moved, [540.0, 500.0], SIZE);
+        assert_eq!(t.touch(5, Phase::Ended, [540.0, 500.0], SIZE), None);
+        assert_eq!(t.touch(3, Phase::Ended, [20.0, 960.0], SIZE), None);
+        // a cancelled finger, and forgotten ones
+        t.touch(6, Phase::Started, at, SIZE);
+        assert_eq!(t.touch(6, Phase::Cancelled, at, SIZE), None);
+        assert_eq!(t.touch(6, Phase::Ended, at, SIZE), None, "its lift after the cancel");
+        t.touch(7, Phase::Started, at, SIZE);
+        t.forget();
+        assert_eq!(t.touch(7, Phase::Ended, at, SIZE), None, "forgotten");
+        // a lift with no press seen (the finger came down before the window had it)
+        assert_eq!(t.touch(8, Phase::Ended, at, SIZE), None);
+        // lifts lost: the oldest fingers go, a new one still taps
+        for id in 100..100 + TAP_FINGERS as u64 + 3 {
+            t.touch(id, Phase::Started, [1.0, 1.0], SIZE);
+        }
+        assert_eq!(t.fingers.len(), TAP_FINGERS);
+        t.touch(9, Phase::Started, [10.0, 20.0], SIZE);
+        assert_eq!(t.touch(9, Phase::Ended, [10.0, 20.0], SIZE), Some([10.0, 20.0]));
+    }
 
     #[test]
     fn the_layout_keeps_its_buttons_apart_and_on_the_screen() {

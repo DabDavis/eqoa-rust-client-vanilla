@@ -7048,19 +7048,9 @@ impl Play {
 
     /// The touch screen's pad over the HUD (`touch.rs`): its discs, and the
     /// atlas's glyphs once SUPPORT's atlas is here.
-    pub fn draw_touch(&self, ui: &mut render::ui::Ui, touch: &crate::touch::TouchPad, size: (u32, u32)) {
-        let mut glyphs: Vec<(i32, crate::touch::Glyph)> = Vec::new();
-        if let Some((vui, assets, _)) = self.hud.as_ref() {
-            for b in crate::touch::layout(size).buttons {
-                let e = vui.entry(b.glyph);
-                let Some(tex) = assets.surface(vui.entry_id(&e)) else { continue };
-                let (w, h) = ui.texture_size(tex);
-                let (w, h) = (w as f32, h as f32);
-                let uv = [e.uv0[0] as f32 / w, e.uv0[1] as f32 / h, (e.uv0[0] + e.uv1[0]) as f32 / w, (e.uv0[1] + e.uv1[1]) as f32 / h];
-                glyphs.push((b.glyph, (tex, uv, [e.uv1[0] as f32, e.uv1[1] as f32])));
-            }
-        }
-        touch.draw(ui, size, self.window_up(), &|id| glyphs.iter().find(|g| g.0 == id).map(|g| g.1));
+    pub fn draw_touch(&self, ui: &mut render::ui::Ui, device: &render::wgpu::Device, queue: &render::wgpu::Queue, touch: &mut crate::touch::TouchPad, size: (u32, u32)) {
+        let parts = self.hud.as_ref().map(|(vui, assets, _)| (vui, assets));
+        crate::touch::draw_pad(ui, device, queue, touch, size, self.window_up(), parts);
     }
 
     /// The HUD on a frame drawn: on one of the game's (`step`, `frames.rs`)

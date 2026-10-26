@@ -28,6 +28,10 @@ pub enum Up {
     Cancelled,
 }
 
+/// The failure box's legend among the window's hits (its choices are 0
+/// and 1, `m_sel`'s).
+const RESTART: i32 = 2;
+
 /// Which window of its own has the keys.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Has {
@@ -208,14 +212,18 @@ impl PatchWnd {
         None
     }
 
-    /// A pointer at frame point `p`: the keys for the child with them, or a
-    /// Done choice (selected by a click, picked by a second).
+    /// A pointer at frame point `p`: the keys for the child with them, a
+    /// Done choice (selected by a click, picked by a second), or the failure
+    /// box's Restart (its legend's ✕, pressed at once).
     pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
         match self.has {
             Has::Message => self.message.point(p).into_iter().collect(),
             Has::Notes => self.notes.point(p),
             Has::Own => {
                 let Some(k) = self.hits.at(p) else { return Vec::new() };
+                if k == RESTART {
+                    return vec![key::CROSS];
+                }
                 if k == self.sel {
                     vec![key::CROSS]
                 } else {
@@ -294,6 +302,7 @@ impl PatchWnd {
             let mut s = wide("|x ");
             s.extend(word(vui, 793));
             self.window2.text(vui, r, &s, 40, 5, UI_COLORS[0], 0);
+            self.hits.push(rows_rect(&self.window2, vui, r, 40, 5, w2 - 80, 1), RESTART);
         }
         if self.show_message {
             self.show_message = false;
@@ -320,6 +329,8 @@ pub struct Notes {
     rows: i32,
     pub top: i32,
     dirty: bool,
+    /// the legend's row as last drawn (frame x0 y0 x1 y1): its △ Back
+    back: [i32; 4],
 }
 
 impl Notes {
@@ -360,9 +371,14 @@ impl Notes {
         false
     }
 
-    /// The pointer: the legend's △ is a glyph (the raster's); a click in the
-    /// text's upper or lower half scrolls.
+    /// The pointer: the legend's △ Back goes back (the screens before the
+    /// world note no glyphs of the raster's); a click in the text's upper or
+    /// lower half scrolls.
     pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        let b = self.back;
+        if p[0] >= b[0] as f32 && p[0] < b[2] as f32 && p[1] >= b[1] as f32 && p[1] < b[3] as f32 {
+            return vec![key::TRIANGLE];
+        }
         let c = self.window.center;
         let half = self.window.size[1] / 2;
         if (p[1] as i32) < c[1] - half || (p[1] as i32) > c[1] + half {
@@ -386,6 +402,7 @@ impl Notes {
         let mut s = wide("|t ");
         s.extend(word(vui, 750));
         self.window.text(vui, r, &s, 40, 9, UI_COLORS[0], 0);
+        self.back = rows_rect(&self.window, vui, r, 40, 9, w - 80, 1);
     }
 }
 
@@ -484,5 +501,39 @@ mod tests {
         assert_eq!(w.point(play), vec![MOVED]);
         assert_eq!(w.sel, 1);
         assert_eq!(w.point(play), vec![key::CROSS]);
+    }
+
+    /// A finger or a mouse alone can leave the notes and restart after a
+    /// failure: the notes' legend is △ Back, the failure box's is ✕ Restart
+    /// (pressed at once). The controls: the notes' text below the middle
+    /// still scrolls down, and the failure box's row is nothing before a
+    /// failure.
+    #[test]
+    fn a_pointer_leaves_the_notes_and_restarts() {
+        let (mut w, v) = wnd();
+        let mut cues = Vec::new();
+        w.state = state::DONE;
+        w.append_message(&wide("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten"));
+        assert_eq!(w.key(&v, &mut NullRaster, key::CROSS, 0, &mut cues), None, "View Messages");
+        assert_eq!(w.has, Has::Notes);
+        w.draw(&v, &mut NullRaster, &mut cues);
+        let back = crate::pointer::testing::mid(rows_rect(&w.notes.window, &v, &NullRaster, 40, 9, w.notes.window.size[0] - 80, 1));
+        let text = crate::pointer::testing::mid(rows_rect(&w.notes.window, &v, &NullRaster, 40, 6, w.notes.window.size[0] - 80, 1));
+        assert_eq!(w.point(text), vec![key::DOWN], "the control: the text's lower half scrolls");
+        assert_eq!(w.point(back), vec![key::TRIANGLE], "the legend's △ Back");
+        w.key(&v, &mut NullRaster, key::TRIANGLE, 0, &mut cues);
+        assert_eq!(w.has, Has::Own, "back on the window's own choices");
+        // the failure box
+        let (mut w, v) = wnd();
+        w.state = state::CHECKING;
+        w.draw(&v, &mut NullRaster, &mut cues);
+        let restart = |w: &PatchWnd| crate::pointer::testing::mid(rows_rect(&w.window2, &v, &NullRaster, 40, 5, w.window2.size[0] - 80, 1));
+        let at = restart(&w);
+        assert!(w.point(at).is_empty(), "the control: no failure, no Restart");
+        w.state = state::FAILED;
+        w.draw(&v, &mut NullRaster, &mut cues);
+        let at = restart(&w);
+        assert_eq!(w.point(at), vec![key::CROSS], "✕ Restart at once");
+        assert_eq!(w.key(&v, &mut NullRaster, key::CROSS, 0, &mut cues), Some(Up::Restart));
     }
 }

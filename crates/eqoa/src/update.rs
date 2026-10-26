@@ -569,6 +569,28 @@ pub fn offer_drag(p: [f32; 2], now: i64) -> bool {
     }
 }
 
+/// What a point is on of the question (`offer_part`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub enum OfferPart {
+    /// its list, which a press drags
+    List,
+    /// elsewhere on its window (its choices among it)
+    Window,
+}
+
+/// What frame point `p` is on of the question while it is up: a finger put
+/// down there is the question's, not the touch screen's pad's.
+pub fn offer_part(p: [f32; 2]) -> Option<OfferPart> {
+    #[cfg(not(target_arch = "wasm32"))]
+    return with_offer(|o| o.shown.then(|| o.wnd.part(p)).flatten());
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = p;
+        None
+    }
+}
+
 /// The press let go: true when it was the window's drag.
 pub fn offer_release() -> bool {
     #[cfg(not(target_arch = "wasm32"))]

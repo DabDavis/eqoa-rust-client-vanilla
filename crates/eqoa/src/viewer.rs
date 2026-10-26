@@ -1106,8 +1106,7 @@ pub fn shot_with(
                 if hide {
                     u.quads.clear();
                 }
-                touch.textures(u, &device, &queue);
-                p.draw_touch(u, &touch, (w, h));
+                p.draw_touch(u, &device, &queue, &mut touch, (w, h));
             }
             let plates = p.plates();
             if let Some(t) = renderer.text.as_mut() {
@@ -1337,6 +1336,16 @@ fn pregame_key(event: &KeyEvent) -> Option<i32> {
         }
         _ => return None,
     })
+}
+
+/// A key from the device's own keyboard (a phone's or a tablet's, in a page:
+/// `web::device_keyboard`), which leaves the touch screen's pad where it is,
+/// where a keyboard's key hides it.
+fn device_keyboard() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    return crate::web::device_keyboard();
+    #[cfg(not(target_arch = "wasm32"))]
+    false
 }
 
 /// Whether the touch screen's pad shows from the start: in a page on a
@@ -1726,6 +1735,16 @@ struct App {
     last_view: Option<glam::Mat4>,
     /// The touch screen's pad (`touch.rs`).
     touch: crate::touch::TouchPad,
+    /// A finger where the pointer is taken instead of the pad (`touch::Taps`:
+    /// before the world, the client's dialogs), and whose each finger down
+    /// is, from where it came down (`finger`).
+    taps: crate::touch::Taps,
+    fingers: Vec<(u64, Finger)>,
+    /// `EQOA_TOUCHES` in a window: finger events at ms on `clock`.
+    touch_script: Vec<(i64, u64, crate::touch::Phase, [f32; 2])>,
+    /// An edit box of the game's had the keys at the last frame (told to a
+    /// page as it changes, `note_typing`).
+    typing: bool,
     /// The game's frames among those drawn (`frames.rs`): what the game
     /// counts in frames steps on these.
     frames: crate::frames::Frames,
@@ -1785,6 +1804,17 @@ struct App {
     /// The art as last chosen (`settings::art`), against which the Extended
     /// page's row is seen to move.
     art_chosen: esf::Era,
+}
+
+/// Whose a finger is, from where it came down (`App::finger`): the touch
+/// screen's pad's (in the world and on the game's screens before it), the
+/// pointer's (over the report's dialog, on the update's question), or the
+/// update's question's list's, which it drags.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Finger {
+    Pad,
+    Pointer,
+    OfferList,
 }
 
 pub fn run(lib: Library, source: Source) -> Result<(), Error> {
@@ -1869,6 +1899,14 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         mouse: crate::mouse::Mouse::default(),
         last_view: None,
         touch: crate::touch::TouchPad::new(touch_first()),
+        taps: Default::default(),
+        fingers: Vec::new(),
+        touch_script: {
+            let mut s = crate::touch::script();
+            s.sort_by_key(|e| e.0);
+            s
+        },
+        typing: false,
         frames: crate::frames::Frames::default(),
         drawn_at: None,
         frame_s: 1.0 / 60.0,
@@ -2287,6 +2325,8 @@ impl App {
         self.let_go_keys(el);
         self.mouse.release_all();
         self.grab_pointer(false);
+        // a finger down as the focus goes: its lift is no tap
+        self.taps.forget();
         if let Some(p) = self.play.as_mut() {
             p.map.let_go();
         }
@@ -2513,6 +2553,130 @@ impl App {
     /// A click in play (a finger's tap with `finger`): a window takes it
     /// first (`Play::point`); else the creature under it targeted (through
     /// the last frame's view), and with a double or right click talked to.
+    /// A finger's event (`WindowEvent::Touch`, or `EQOA_TOUCHES`'s) at
+    /// window pixels `at`, to whose it is from where it came down: the touch
+    /// screen's pad's, in the world and on the game's screens before it (a
+    /// tap off its buttons there is a click for the screen, `host_frame`);
+    /// over the report's dialog and on the update's question, the pointer's,
+    /// as the mouse's is there: a tap is a click where it came down (`tap`),
+    /// and a finger put down on the question's list drags it, as a press
+    /// there does.
+    fn finger(&mut self, id: u64, phase: crate::touch::Phase, at: [f32; 2], size: (u32, u32)) {
+        use crate::touch::Phase;
+        let p = render::ui::frame_from_window(size, at);
+        let whose = match phase {
+            Phase::Started => {
+                let w = self.finger_on(p);
+                self.fingers.retain(|f| f.0 != id);
+                if let Some(w) = w {
+                    self.fingers.push((id, w));
+                }
+                w
+            }
+            // a finger whose press was not seen: whose one put down there now is
+            _ => self.fingers.iter().find(|f| f.0 == id).map(|f| f.1).or_else(|| self.finger_on(p)),
+        };
+        let Some(whose) = whose else { return };
+        if matches!(phase, Phase::Ended | Phase::Cancelled) {
+            self.fingers.retain(|f| f.0 != id);
+        }
+        match whose {
+            Finger::Pad => {
+                self.touch.touch(id, phase, at, Instant::now(), size);
+                if let Some(p) = self.play.as_mut() {
+                    p.keyboard = false;
+                }
+            }
+            Finger::Pointer => {
+                if let Some(down) = self.taps.touch(id, phase, at, size) {
+                    self.tap(down, size);
+                }
+            }
+            Finger::OfferList => {
+                #[cfg(not(target_arch = "wasm32"))]
+                match phase {
+                    Phase::Started => {
+                        if let Some(cues) = crate::update::offer_click(p, self.clock.elapsed().as_millis() as i64) {
+                            self.ui_cues(cues);
+                        }
+                    }
+                    Phase::Moved => {
+                        crate::update::offer_drag(p, self.clock.elapsed().as_millis() as i64);
+                    }
+                    Phase::Ended | Phase::Cancelled => {
+                        crate::update::offer_release();
+                    }
+                }
+            }
+        }
+    }
+
+    /// Whose a finger put down at frame point `p` is now (`Finger`): none's
+    /// in the viewer, which has neither a world nor the game's screens.
+    fn finger_on(&self, p: [f32; 2]) -> Option<Finger> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if crate::report::is_open() {
+                return Some(Finger::Pointer);
+            }
+            match crate::update::offer_part(p) {
+                Some(crate::update::OfferPart::List) => return Some(Finger::OfferList),
+                Some(crate::update::OfferPart::Window) => return Some(Finger::Pointer),
+                None => {}
+            }
+        }
+        let _ = p;
+        (self.walker.is_some() || self.host.is_some()).then_some(Finger::Pad)
+    }
+
+    /// A finger's tap where the pointer is taken, at window pixels `at`
+    /// (where it came down): the click the mouse's would be there, to the
+    /// first that takes it, in the mouse's order: the report's dialog (every
+    /// click is its), the update's question (its choices), the game's
+    /// screens before the world.
+    fn tap(&mut self, at: [f32; 2], size: (u32, u32)) {
+        let p = render::ui::frame_from_window(size, at);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if crate::report::is_open() {
+                crate::report::click(p);
+                return;
+            }
+            if crate::update::offer_shown()
+                && let Some(cues) = crate::update::offer_click(p, self.clock.elapsed().as_millis() as i64)
+            {
+                self.ui_cues(cues);
+                return;
+            }
+        }
+        if let Some(h) = self.host.as_mut() {
+            h.click(p);
+        }
+    }
+
+    /// Whether an edit box of the game's has the keys (one of the screens'
+    /// before the world, or play's editor), told to a page when it changes:
+    /// a phone's or a tablet's own keyboard comes up for it there
+    /// (`web::want_text`).
+    fn note_typing(&mut self) {
+        let on = self.host.as_ref().map_or_else(|| self.play.as_ref().is_some_and(|p| p.mode == 2), |h| h.pre.typing());
+        if on != std::mem::replace(&mut self.typing, on) {
+            #[cfg(target_arch = "wasm32")]
+            crate::web::want_text(on);
+        }
+    }
+
+    /// `EQOA_TOUCHES`' events due by now (ms on `clock`), as the window's.
+    fn play_touches(&mut self) {
+        let now = self.clock.elapsed().as_millis() as i64;
+        let size = self.gfx.as_ref().map_or((1, 1), |g| (g.config.width, g.config.height));
+        while self.touch_script.first().is_some_and(|e| e.0 <= now) {
+            let (_, id, phase, at) = self.touch_script.remove(0);
+            eprintln!("touch: {phase:?} {id} at ({:.0}, {:.0}), {now} ms", at[0], at[1]);
+            self.finger(id, phase, at, size);
+        }
+    }
+
     fn click(&mut self, c: crate::mouse::Click, finger: bool) {
         let (Some(p), Some(g), Some(vp)) = (self.play.as_mut(), self.gfx.as_ref(), self.last_view) else { return };
         let size = (g.config.width, g.config.height);
@@ -2719,6 +2883,21 @@ impl App {
     /// over a black frame (the loading screen's gears while the world's files
     /// come), then the world entered once they are in.
     fn host_frame(&mut self, el: &ActiveEventLoop, game_frame: bool) {
+        // the touch screen's pad over the game's screens as over a window of
+        // the world's: only its face buttons are the pad's, and a tap off
+        // them is a click for the screen (`Host::click`, as the mouse's); its
+        // drags scroll nothing (no screen before the world takes the wheel)
+        self.touch.window = true;
+        self.touch.dpad = false;
+        let taps = self.touch.take_clicks();
+        let _ = self.touch.take_look();
+        if let (Some(h), Some(g)) = (self.host.as_mut(), self.gfx.as_ref()) {
+            let size = (g.config.width, g.config.height);
+            for c in taps {
+                let (x, y) = c.at();
+                h.click(render::ui::frame_from_window(size, [x as f32, y as f32]));
+            }
+        }
         self.poll_pad_host();
         if self.sound.is_none() {
             self.sound = crate::sound::make(std::path::Path::new(&crate::disc_path(None)));
@@ -2728,6 +2907,13 @@ impl App {
         let Some(host) = self.host.as_mut() else { return };
         let size = (g.config.width, g.config.height);
         let done = host.frame(&mut g.renderer, &g.device, &g.queue, g.config.format, size, now, game_frame, self.sound.as_mut());
+        // the touch screen's pad over them (shown from the first touch; on a
+        // touch-first device from the start), dimmed as over a window
+        if self.touch.shown
+            && let Some(ui) = g.renderer.ui.as_mut()
+        {
+            crate::touch::draw_pad(ui, &g.device, &g.queue, &mut self.touch, size, true, host.ui_parts());
+        }
         // the update's question, then the report's dialog, over the game's
         // screens (`update`, `report`)
         #[cfg(not(target_arch = "wasm32"))]
@@ -3967,12 +4153,7 @@ impl ApplicationHandler for App {
                     T::Cancelled => crate::touch::Phase::Cancelled,
                 };
                 let size = self.gfx.as_ref().map_or((1, 1), |g| (g.config.width, g.config.height));
-                if self.walker.is_some() {
-                    self.touch.touch(t.id, phase, [t.location.x as f32, t.location.y as f32], Instant::now(), size);
-                    if let Some(p) = self.play.as_mut() {
-                        p.keyboard = false;
-                    }
-                }
+                self.finger(t.id, phase, [t.location.x as f32, t.location.y as f32], size);
             }
             // The report's dialog (`report`): F3 opens it, over the game's
             // screens or the world, once there is a UI to draw it on; while
@@ -4029,7 +4210,9 @@ impl ApplicationHandler for App {
             // Before the world: the pregame's keys, the game's codes
             // (`VIKeyboard::Read`'s), and its clicks.
             WindowEvent::KeyboardInput { event, .. } if self.host.is_some() => {
-                self.touch.hide();
+                if !device_keyboard() {
+                    self.touch.hide();
+                }
                 // F9 (`era`), as the Controls page has it: the art swapped
                 if event.state == ElementState::Pressed && !event.repeat && is_art_key(&event.logical_key) && self.host.as_ref().is_some_and(|h| h.pre.setup.capturing().is_none()) {
                     self.toggle_era();
@@ -4077,7 +4260,9 @@ impl ApplicationHandler for App {
                 // compact face, with the options' Soft Keyboard on; the
                 // touch screen's pad goes
                 if event.state == ElementState::Pressed {
-                    self.touch.hide();
+                    if !device_keyboard() {
+                        self.touch.hide();
+                    }
                     if let Some(p) = self.play.as_mut() {
                         p.keyboard = true;
                     }
@@ -4237,6 +4422,10 @@ impl ApplicationHandler for App {
                 if !self.unfocus_script.is_empty() {
                     self.unfocus_script(el);
                 }
+                if !self.touch_script.is_empty() {
+                    self.play_touches();
+                }
+                self.note_typing();
                 // VSync (the Extended page) on the surface, as it moves
                 if self.vsync_script.first().is_some_and(|&t| t <= self.clock.elapsed().as_millis() as i64) {
                     self.vsync_script.remove(0);
@@ -4645,8 +4834,7 @@ impl ApplicationHandler for App {
                         if hide {
                             u.quads.clear();
                         }
-                        self.touch.textures(u, &g.device, &g.queue);
-                        p.draw_touch(u, &self.touch, (g.config.width, g.config.height));
+                        p.draw_touch(u, &g.device, &g.queue, &mut self.touch, (g.config.width, g.config.height));
                         // the update's question (its Yes logs out: the window
                         // closes) and the report's dialog over the HUD and the
                         // touch pad (`update`, `report`)
