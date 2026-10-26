@@ -4161,8 +4161,12 @@ impl ApplicationHandler for App {
                     MouseScrollDelta::LineDelta(_, y) => (y, y.clamp(-1.0, 1.0)),
                     MouseScrollDelta::PixelDelta(p) => (p.y as f32 / 40.0, p.y as f32 / 100.0),
                 };
+                let at = [self.cursor.0 as f32, self.cursor.1 as f32];
                 if let Some(p) = self.play.as_mut().filter(|p| p.map.open) {
-                    p.map.wheel(steps, Some([self.cursor.0 as f32, self.cursor.1 as f32]));
+                    p.map.wheel(steps, Some(at));
+                } else if let Some(p) = self.play.as_mut().filter(|p| p.map.mini_contains(at)) {
+                    // over the minimap: its zoom, not the camera's
+                    p.map.mini_wheel(steps);
                 } else if self.walker.is_some() {
                     self.mouse.wheel(d, steps);
                 } else if let Camera::Orbit { zoom, .. } = &mut self.camera {
@@ -4666,7 +4670,15 @@ impl ApplicationHandler for App {
                     g.renderer.draw_billboards(&g.device, &g.queue, &mut enc, st, &g.depth, v, p, &self.batches, &textures);
                 }
                 g.renderer.curve.apply(&g.queue, &mut enc, &target);
-                g.renderer.draw_text(&g.device, &mut enc, &target, &g.depth, (g.config.width, g.config.height));
+                // the names, then the minimap (`map::mini`: over the names,
+                // under the HUD and its windows), then the HUD
+                let size = (g.config.width, g.config.height);
+                let play = self.play.as_ref();
+                g.renderer.draw_text_around(&g.device, &mut enc, &target, &g.depth, size, |enc| {
+                    if let Some(p) = play {
+                        p.map.draw_mini(&g.device, enc, &target, &g.depth, size);
+                    }
+                });
                 if let Some(p) = &self.play {
                     p.map.draw(&g.device, &mut enc, &target, &g.depth, (g.config.width, g.config.height));
                 }

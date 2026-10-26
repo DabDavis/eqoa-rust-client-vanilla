@@ -863,9 +863,26 @@ impl Renderer {
     /// writing it), then the overlay (`set_overlay`), then the 2D layer.
     /// `size` is the target's, in pixels.
     pub fn draw_text(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, depth: &wgpu::TextureView, size: (u32, u32)) {
-        let labels = self.text.as_ref().filter(|t| !t.labels.is_empty());
-        let overlay = self.overlay.as_ref().filter(|o| !o.is_empty());
-        let quads = self.ui.as_ref().filter(|u| !u.quads.is_empty());
+        self.text_pass(device, encoder, target, depth, size, true, true);
+    }
+
+    /// `draw_text` in two passes with `between` drawn between them: the
+    /// labels and the overlay, then `between`'s (a piece of the HUD another
+    /// layer draws, the minimap: over the names, under the HUD and its
+    /// windows), then the 2D layer's quads.
+    pub fn draw_text_around(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, depth: &wgpu::TextureView, size: (u32, u32), between: impl FnOnce(&mut wgpu::CommandEncoder)) {
+        self.text_pass(device, encoder, target, depth, size, true, false);
+        between(encoder);
+        self.text_pass(device, encoder, target, depth, size, false, true);
+    }
+
+    /// The text pass: the labels and the overlay (`over`), the 2D layer's
+    /// quads (`hud`).
+    #[allow(clippy::too_many_arguments)]
+    fn text_pass(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, depth: &wgpu::TextureView, size: (u32, u32), over: bool, hud: bool) {
+        let labels = self.text.as_ref().filter(|t| over && !t.labels.is_empty());
+        let overlay = self.overlay.as_ref().filter(|o| over && !o.is_empty());
+        let quads = self.ui.as_ref().filter(|u| hud && !u.quads.is_empty());
         if labels.is_none() && overlay.is_none() && quads.is_none() {
             return;
         }
