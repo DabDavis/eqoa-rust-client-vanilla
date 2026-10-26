@@ -511,6 +511,21 @@ impl Map {
         None
     }
 
+    /// The world's place (x, z) the chrome names under its title: under the
+    /// mouse while it is over the map, else, for a pad, under the middle
+    /// cross once the map is panned (as `card_marker` picks a card's).
+    fn pointer_world(&self, keyboard: bool) -> Option<[f32; 2]> {
+        let v = self.view?;
+        let size = self.size;
+        if let Some(p) = self.hover_world {
+            return Some(p);
+        }
+        if self.pointer_seen {
+            return Some(v.to_world(size, self.cursor));
+        }
+        (!self.follow && !keyboard).then(|| v.to_world(size, [size.0 as f32 / 2.0, size.1 as f32 / 2.0]))
+    }
+
     /// The quest mark whose card shows (`quests`), as `card_marker` picks a
     /// marker's: the one a finger tapped, else the one under the mouse (not
     /// while it drags the map), else, for a pad, the one under the middle
@@ -884,6 +899,7 @@ impl Map {
     /// group and the marker; the chrome (`chrome::draw`).
     fn compose(&mut self, cx: &Context) {
         let (quest, card) = self.cards(cx.keyboard);
+        let pointer = self.pointer_world(cx.keyboard).map(|p| format!("x {:.0}, z {:.0}", p[0], p[1]));
         let icon = self.icon.tex;
         let (Some(w), Some(v), Some(l)) = (self.world.as_ref(), self.view, self.layers.as_mut()) else { return };
         let size = cx.size;
@@ -977,6 +993,7 @@ impl Map {
             keyboard: cx.keyboard,
             progress: (built < of).then_some((built, of)),
             quests: cx.quest_marks.map(|_| crate::settings::quest_markers()),
+            pointer,
         };
         let fallback;
         let vui = match cx.vui {

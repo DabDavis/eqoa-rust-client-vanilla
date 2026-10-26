@@ -577,3 +577,25 @@ fn the_quest_marks_answer_the_pointer_over_the_markers() {
     assert!(m.key(key::R3, true));
     assert!(crate::settings::quest_markers(), "shown again");
 }
+
+/// The map names the world's place under the pointer (x and z, as the game
+/// counts them), and under a pad's cross once the map is panned off the
+/// player; the controls: following the player with no pointer it names none,
+/// and the place moves with the pointer.
+#[test]
+fn the_map_names_the_place_under_the_pointer() {
+    let size = (640, 448);
+    let mut m = super::testing::up(size);
+    assert_eq!(m.pointer_world(false), None, "the control: following the player, no pointer");
+    m.mouse_moved([320.0, 224.0]);
+    let mid = m.pointer_world(false).unwrap();
+    assert!((mid[0] - super::testing::FREEPORT[0]).abs() < 1.0 && (mid[1] - super::testing::FREEPORT[1]).abs() < 1.0, "the middle is the player's place: {mid:?}");
+    m.mouse_moved([420.0, 224.0]);
+    let right = m.pointer_world(false).unwrap();
+    assert!(right[0] > mid[0] + 1.0 && (right[1] - mid[1]).abs() < 1.0, "a pointer to the right is east of it: {right:?}");
+    m.let_go();
+    assert_eq!(m.pointer_world(false), None, "the pointer gone, none");
+    m.follow = false;
+    assert!(m.pointer_world(false).is_some(), "a pad's cross on a panned map");
+    assert_eq!(m.pointer_world(true), None, "the control: a keyboard has no cross");
+}

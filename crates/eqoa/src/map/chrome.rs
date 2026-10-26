@@ -38,6 +38,10 @@ pub struct Chrome {
     /// while a server offers quest marks (`quests`): whether they are shown,
     /// for their button and the legend's R3 (J on a keyboard)
     pub quests: Option<bool>,
+    /// the world's place under the pointer (or a pad's cross once the map is
+    /// panned), as words, under the title (F3 20261026-090726, a player's
+    /// ask: "X, Y coordinates of cursor position displayed on map")
+    pub pointer: Option<String>,
 }
 
 /// A panel the size of `w` x `h` at `at` (VIWndGoto's).
@@ -157,10 +161,11 @@ pub fn draw(r: &mut dyn Raster, vui: &Vui, c: &Chrome) -> Vec<Button> {
     }
     panel(vui, r, [tl[0] + m, y], tw + 12, line);
     vui.draw_string_ex(r, &s, tl[0] + m + 6, y + 3, NAME, true);
-    if let Some((done, of)) = c.progress {
-        let s = wide(&format!("Drawing the map: {done} of {of} areas"));
+    let mut y = y;
+    for words in [c.progress.map(|(done, of)| format!("Drawing the map: {done} of {of} areas")), c.pointer.clone()].into_iter().flatten() {
+        let s = wide(&words);
         let tw = r.string_width(&s).max(0);
-        let y = y + line + 4;
+        y += line + 4;
         panel(vui, r, [tl[0] + m, y], tw + 12, line);
         vui.draw_string_ex(r, &s, tl[0] + m + 6, y + 3, NAME, true);
     }
@@ -255,7 +260,7 @@ mod tests {
     }
 
     fn chrome(keyboard: bool) -> Chrome {
-        Chrome { corners: [[-106.0, 0.0], [746.0, 448.0]], title: "Tunaria: Freeport (North)".into(), names: Vec::new(), keyboard, progress: Some((3, 175)), quests: None }
+        Chrome { corners: [[-106.0, 0.0], [746.0, 448.0]], title: "Tunaria: Freeport (North)".into(), names: Vec::new(), keyboard, progress: Some((3, 175)), quests: None, pointer: None }
     }
 
     /// The chrome's footprint covers its title (top left), its buttons (top

@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · The map shows where your pointer is
+- Under the map's title, the place under the mouse pointer, as the game counts
+  it: "x 24611, z 15502" (on a controller, the place under the middle cross once
+  you pan the map off yourself). Thanks for the idea.
+
 ## 2026-10-26 · Two windows, one PlayStation controller
 - With two windows of the game on one PlayStation controller (Windows), a press
   made while a window is busy coming to the front is no longer lost: the game
