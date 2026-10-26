@@ -6792,7 +6792,16 @@ impl Play {
             })
             .collect();
         let target = self.actor_pos(self.target).filter(|_| Some(self.target) != me).map(|p| [p[0], p[2]]);
-        crate::map::mini::MiniView { dots, target, marks: Vec::new() }
+        crate::map::mini::MiniView { dots, target, marks: self.mini_marks() }
+    }
+
+    /// The marks on the minimap (`map::mini::Mark`: a kind, a world, a place
+    /// and a tooltip), every source's: the map's XP camps and coach stops,
+    /// the quests' to take and steps to do. Each source appends its own here;
+    /// the minimap draws what it is given (the quests' over the rest, on its
+    /// rim while farther).
+    fn mini_marks(&self) -> Vec<crate::map::mini::Mark> {
+        Vec::new()
     }
 
     /// Builds the HUD on the viewer's device: the 2D layer, UI.CSF's and

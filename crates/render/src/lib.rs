@@ -1471,6 +1471,25 @@ pub fn capture_with_sky(
     particles: Option<(Mat4, Mat4, &[billboard::Batch], &Textures)>,
     sky: Option<(Mat4, Mat4, &[billboard::Batch], &Textures)>,
 ) -> Vec<u8> {
+    capture_around(device, queue, renderer, w, h, view, items, particles, sky, |_, _, _| {})
+}
+
+/// `capture_with_sky` with `between` drawn between the labels and the 2D
+/// layer, as `Renderer::draw_text_around` draws it (the minimap): given the
+/// encoder, the target and its depth.
+#[allow(clippy::too_many_arguments)]
+pub fn capture_around(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    renderer: &mut Renderer,
+    w: u32,
+    h: u32,
+    view: &View,
+    items: &[Draw],
+    particles: Option<(Mat4, Mat4, &[billboard::Batch], &Textures)>,
+    sky: Option<(Mat4, Mat4, &[billboard::Batch], &Textures)>,
+    between: impl FnOnce(&mut wgpu::CommandEncoder, &wgpu::TextureView, &wgpu::TextureView),
+) -> Vec<u8> {
     let format = TARGET_FORMAT;
     let target = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("capture"),
@@ -1505,7 +1524,7 @@ pub fn capture_with_sky(
         renderer.draw_billboards(device, queue, &mut enc, st, &depth, v, p, batches, textures);
     }
     renderer.curve.apply(queue, &mut enc, &tv);
-    renderer.draw_text(device, &mut enc, &tv, &depth, (w, h));
+    renderer.draw_text_around(device, &mut enc, &tv, &depth, (w, h), |enc| between(enc, &tv, &depth));
     enc.copy_texture_to_buffer(
         target.as_image_copy(),
         wgpu::TexelCopyBufferInfo {
