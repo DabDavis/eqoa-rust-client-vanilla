@@ -1236,6 +1236,10 @@ fn voice_note(item: i32) -> String {
     if item == 49 {
         return "eqoaclassic's: anyone who knows your group or room can join".to_string();
     }
+    // natively nothing cancels the voices' echo (crate `voice`)
+    if !cfg!(target_arch = "wasm32") && crate::settings::client().voice == crate::settings::VoiceChat::OpenMic {
+        return "Open Mic: wear headphones (no echo cancelling here)".to_string();
+    }
     let b = crate::settings::binds();
     let key = |id: &str| crate::binds::row_named(id).and_then(|r| b.key(r)).map_or("-".to_string(), crate::binds::display);
     format!("Hold {} (group) or {} (room) to talk", key("push_to_talk"), key("push_to_talk_room"))

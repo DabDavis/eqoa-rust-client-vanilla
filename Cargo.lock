@@ -910,6 +910,7 @@ dependencies = [
  "tungstenite",
  "ureq",
  "vi",
+ "voice",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

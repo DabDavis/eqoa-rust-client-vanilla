@@ -468,7 +468,8 @@ impl FrameRate {
 /// turned on", push-to-talk by default with open mic as the option): Off,
 /// nothing asked of the microphone and the server told nothing; Push to Talk,
 /// the group or the room hears the player while its key is held; Open Mic,
-/// both whenever the microphone hears speech (`voice`).
+/// both whenever the microphone hears speech (`voice`). Natively nothing
+/// cancels the echo of the voices heard: Open Mic wants headphones.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum VoiceChat {
     #[default]
