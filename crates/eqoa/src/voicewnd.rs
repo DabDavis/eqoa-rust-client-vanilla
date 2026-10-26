@@ -40,17 +40,17 @@
 use crate::pointer::{Hits, MOVED, key, rows_rect};
 use crate::ui::Layout;
 use crate::voice::{VoiceMember, VoiceMode, VoiceRoomInfo, VoiceView};
-use vi::ui::{FrameParam, Raster, UI_COLORS, Vui, Window, wide};
+use vi::ui::{FrameParam, UI_COLORS, Vui, Window, wide};
 
 /// The window, and its rows: voice's own at the top (the mode, the
-/// connection and the microphone, the keys, voice's last line), the list
+/// microphone, the connection, the keys, voice's last line), the list
 /// framed under them with its scroll bar, the legend at the foot.
 const WIDTH: i32 = 560;
 const ROWS: i32 = 20;
 const LIST_X: i32 = 34;
 const LIST_W: i32 = WIDTH - 68;
-const LIST_ROW: i32 = 5;
-const LIST_ROWS: usize = 13;
+const LIST_ROW: i32 = 6;
+const LIST_ROWS: usize = 12;
 const LEGEND_ROW: i32 = ROWS - 1;
 /// The header's value frames: the mode's, the meter's.
 const VALUE_X: i32 = WIDTH - 214;
@@ -59,16 +59,16 @@ const VALUE_W: i32 = 160;
 /// "room", its volume's slider and number, Mute; a form row's value frame.
 const MARK_X: i32 = 22;
 const NAME_X: i32 = 36;
-const NAME_W: i32 = 160;
-const TAG_X: i32 = 200;
-const SLIDER_X: i32 = 262;
-const SLIDER_W: i32 = 110;
-const PERCENT_X: i32 = 376;
-const PERCENT_W: i32 = 42;
-const MUTE_X: i32 = 428;
-const MUTE_W: i32 = 54;
+const NAME_W: i32 = 150;
+const TAG_X: i32 = 190;
+const SLIDER_X: i32 = 246;
+const SLIDER_W: i32 = 100;
+const PERCENT_X: i32 = 362;
+const PERCENT_W: i32 = 46;
+const MUTE_X: i32 = 418;
+const MUTE_W: i32 = 62;
 const FIELD_X: i32 = 200;
-const FIELD_W: i32 = 200;
+const FIELD_W: i32 = 170;
 /// A member's own volume: its voice's level 1, at most twice it, in tenths.
 const VOLUME_STEP: f32 = 0.1;
 const VOLUME_MAX: f32 = 2.0;
@@ -252,12 +252,13 @@ fn people(n: usize) -> String {
     if n == 1 { "1 person".to_string() } else { format!("{n} people") }
 }
 
-/// Who hears the player while `bits` (bit 0 the group, bit 1 the room).
-fn to_whom(bits: u8) -> &'static str {
+/// Who hears the player while `bits` (bit 0 the group, bit 1 the room),
+/// short enough for the status's half of its row.
+fn heard_by(bits: u8) -> &'static str {
     match bits & 3 {
-        1 => "your group",
-        2 => "your room",
-        3 => "your group and your room",
+        1 => "your group hears you",
+        2 => "your room hears you",
+        3 => "group and room hear you",
         _ => "",
     }
 }
@@ -710,25 +711,26 @@ impl VoiceWnd {
         if !v.available || v.mode == VoiceMode::Off {
             return "Off".to_string();
         }
-        let demo = if v.mode == VoiceMode::Demo { " to the demo" } else { "" };
+        let demo = v.mode == VoiceMode::Demo;
         if !v.connected {
-            return format!("Connecting{demo}...");
+            return if demo { "Connecting to the demo..." } else { "Connecting..." }.to_string();
         }
-        match to_whom(v.transmitting) {
-            "" => format!("Connected{demo}"),
-            who => format!("Connected{demo}: {who} hears you"),
+        match heard_by(v.transmitting) {
+            "" if demo => "Connected to the demo".to_string(),
+            "" => "Connected".to_string(),
+            who => format!("{}: {who}", if demo { "Demo" } else { "Connected" }),
         }
     }
 
     /// Which keys talk, or how the player is heard.
     fn hint(v: &VoiceView) -> String {
         let [group, room] = talk_keys();
-        let held = format!("Hold {group} to talk to your group, {room} to your room (Options, Controls).");
+        let held = format!("Hold {group} to talk to your group, {room} to your room.");
         match v.mode {
             VoiceMode::Off => String::new(),
             VoiceMode::PushToTalk => held,
             VoiceMode::OpenMic => "Open mic: your group and your room hear you whenever you speak.".to_string(),
-            VoiceMode::Demo => format!("Demo: eqoaclassic's voice server. {held}"),
+            VoiceMode::Demo => format!("eqoaclassic's demo: {held}"),
         }
     }
 
@@ -762,10 +764,9 @@ impl VoiceWnd {
         let vr = rows_rect(w, vui, r, VALUE_X, 0, VALUE_W, 1);
         self.hits.push([at - 4, vr[1], at + VALUE_W / 2, vr[3]], hit(0, PART_LESS));
         self.hits.push([at + VALUE_W / 2, vr[1], at + VALUE_W + 4, vr[3]], hit(0, PART_MORE));
-        // the connection, and the microphone's level (green while heard)
-        w.text_box(vui, r, &wide(&Self::status(v)), 40, 1, VALUE_X - 100, 1, black, 2);
+        // the microphone's level (green while heard), then the connection
         if v.available && v.mode != VoiceMode::Off {
-            w.text_box(vui, r, &wide("Mic"), VALUE_X - 60, 1, 52, 1, black, 0x10);
+            w.text_box(vui, r, &wide("Microphone"), 40, 1, VALUE_X - 60, 1, black, 0);
             w.draw_frame(vui, r, VALUE_X, 1, VALUE_W, 1, 64);
             let h = vui.font_height(r) - 4;
             let y = w.row_center(vui, r, 1)[1] - 4;
@@ -780,11 +781,12 @@ impl VoiceWnd {
             let s = x0 + (crate::voice::SPEAKING * full as f32) as i32;
             vui.fill_rectangle(r, [[s, y], [s + 1, y + h - 1]], [0.15, 0.15, 0.15, 1.0]);
         }
+        w.text_box(vui, r, &wide(&Self::status(v)), 40, 2, WIDTH - 80, 1, black, 2);
         // the keys, and voice's last line (or the window's own)
-        w.text_box(vui, r, &wide(&Self::hint(v)), 40, 2, WIDTH - 80, 1, black, 2);
+        w.text_box(vui, r, &wide(&Self::hint(v)), 40, 3, WIDTH - 80, 1, black, 2);
         let said = self.said.as_ref().filter(|s| s.1 == v.status).map(|s| s.0.clone());
         let line = said.unwrap_or_else(|| v.status.clone());
-        w.text_box(vui, r, &wide(&line), 40, 3, WIDTH - 80, 1, dim, 2);
+        w.text_box(vui, r, &wide(&line), 40, 4, WIDTH - 80, 1, dim, 2);
         // the list, framed, its bar's thumb where the top is
         let most = rows.len().saturating_sub(LIST_ROWS);
         let t = if most > 0 { self.top as f32 / most as f32 } else { -1.0 };
@@ -853,8 +855,8 @@ impl VoiceWnd {
                     let (label, value, after) = match row {
                         Row::Name => ("Name", if self.form.name.is_empty() { None } else { Some(self.form.name.clone()) }, ""),
                         // as stars, one a character typed
-                        Row::Password => ("Password", (!self.form.password.is_empty()).then(|| "*".repeat(self.form.password.chars().count())), "none: an open room"),
-                        _ => ("Unlisted", Some(if self.form.unlisted { "Yes" } else { "No" }.to_string()), "a new room's"),
+                        Row::Password => ("Password", (!self.form.password.is_empty()).then(|| "*".repeat(self.form.password.chars().count())), "optional"),
+                        _ => ("Unlisted", Some(if self.form.unlisted { "Yes" } else { "No" }.to_string()), "if new"),
                     };
                     w.text_box(vui, r, &wide(label), LIST_X + NAME_X, wr, FIELD_X - NAME_X - 8, 1, c, 0);
                     let arrows = chosen && matches!(row, Row::Unlisted);
@@ -863,7 +865,8 @@ impl VoiceWnd {
                         Some(s) => w.text_box(vui, r, &wide(&s), LIST_X + FIELD_X, wr, FIELD_W, 1, black, 8 | 2),
                         None => w.text_box(vui, r, &wide("none"), LIST_X + FIELD_X, wr, FIELD_W, 1, dim, 8),
                     };
-                    w.text_box(vui, r, &wide(after), LIST_X + FIELD_X + FIELD_W + 12, wr, LIST_W - FIELD_X - FIELD_W - 20, 1, dim, 2);
+                    // past the value's side arrow (atlas 128) while it is chosen
+                    w.text_box(vui, r, &wide(after), LIST_X + FIELD_X + FIELD_W + 24, wr, LIST_W - FIELD_X - FIELD_W - 32, 1, dim, 2);
                     let fr = rows_rect(w, vui, r, LIST_X + FIELD_X, wr, FIELD_W, 1);
                     let fx = w.top_left()[0] + LIST_X + FIELD_X;
                     self.hits.push([whole[0], whole[1], fx - 4, whole[3]], hit(slot, PART_ROW));
@@ -1042,6 +1045,7 @@ pub fn apply_test(v: &mut VoiceView, a: &Ask) {
 mod tests {
     use super::*;
     use crate::pointer::testing::{NullRaster, mid, vui};
+    use vi::ui::Raster;
 
     fn opened(v: &VoiceView) -> VoiceWnd {
         let mut w = VoiceWnd::default();
@@ -1124,12 +1128,14 @@ mod tests {
         assert!(w.top > 0 && w.top + LIST_ROWS == rows.len(), "the list scrolled to its end: {}", w.top);
         w.key(24, &v, 0);
         assert_eq!((on(&w), w.top), (Sel::Mode, 0), "Home");
+        // a page is the list's rows less one: eleven
+        assert_eq!(LIST_ROWS, 12);
         w.key(22, &v, 0);
-        assert_eq!(on(&w), Sel::Unlisted, "a page down: the last within twelve rows (the list's 11th)");
+        assert_eq!(on(&w), Sel::Password, "a page down: the last within eleven rows (the list's 10th)");
         w.key(22, &v, 0);
-        assert_eq!(on(&w), Sel::Room("Highpass Traders".into()), "and the next: the list's end, within twelve");
+        assert_eq!(on(&w), Sel::Room("Highpass Traders".into()), "and the next: the list's end, within eleven");
         w.key(21, &v, 0);
-        assert_eq!(on(&w), Sel::Member(22), "a page up: the first within twelve rows back (the list's 7th)");
+        assert_eq!(on(&w), Sel::Name, "a page up: the first within eleven rows back (the list's 9th; the 8th is a heading)");
         w.key(21, &v, 0);
         w.key(21, &v, 0);
         assert_eq!(on(&w), Sel::Mode, "past the list's top: Voice Chat");
