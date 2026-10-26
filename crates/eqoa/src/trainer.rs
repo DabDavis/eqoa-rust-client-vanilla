@@ -75,12 +75,12 @@ impl Data<'_> {
 
     /// `VIClientPart4EC58::GetStat(id)`.
     fn mastery(&self, id: i32) -> i32 {
-        MASTERY_IDS.iter().position(|&m| m == id).map_or(0, |k| self.mastery[k] as i32)
+        mastery_stat(self.mastery, id)
     }
 
     /// `GetP44Total(i)`: the cap with the mastery bonus for stat `i`.
     fn cap(&self, i: i32) -> i32 {
-        self.p44 + if (0..7).contains(&i) { self.bonuses[i as usize] as i32 } else { 0 }
+        stat_cap(self.p44, self.bonuses, i)
     }
 
     /// `FindStat(i, stat)`: an equipped item's bonus to `stat`.
@@ -98,12 +98,24 @@ impl Data<'_> {
 
     /// `BaseStat`/`CurStat`: the resists (16-27) are derived, 40 plus the
     /// stat plus a seventh of wisdom, 315 at most.
-    fn derived(v: &[i32; 29], stat: i32) -> i32 {
+    pub(crate) fn derived(v: &[i32; 29], stat: i32) -> i32 {
         if !(0..29).contains(&stat) {
             return 0;
         }
         if (16..=27).contains(&stat) { (v[4] / 7 + v[stat as usize] + 40).min(315) } else { v[stat as usize] }
     }
+}
+
+/// `VIClientPart4EC58::GetStat(id)`: the masteries' share of stat `id`, out
+/// of their 29 slots (`MASTERY_IDS`); 0 for a stat no slot holds.
+pub(crate) fn mastery_stat(m: &[i64; 29], id: i32) -> i32 {
+    MASTERY_IDS.iter().position(|&s| s == id).map_or(0, |k| m[k] as i32)
+}
+
+/// `GetP44Total(i)` over the stat cap `p44` and the masteries' bonuses: the
+/// cap of trainable stat `i` (0-6), none for another.
+pub(crate) fn stat_cap(p44: i32, bonuses: &[i64; 7], i: i32) -> i32 {
+    p44 + if (0..7).contains(&i) { bonuses[i as usize] as i32 } else { 0 }
 }
 
 /// What the trainer asks of the game.

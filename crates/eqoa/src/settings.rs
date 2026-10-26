@@ -660,6 +660,11 @@ pub struct ClientOptions {
     /// Minimap (the user's ask, on by default): the map's pictures round the
     /// player under the quick menus' name plate (`map::mini`); off, none.
     pub minimap: bool,
+    /// Stats Box (the user, 2026-10-26: "make your stats show on the screen
+    /// in a box like the mini map ... a toggle off by default"): the
+    /// player's stats in a box on the HUD, an effect's raise or cut marked
+    /// (`statbox`); off by default. B turns it too (`binds`' "stats_box").
+    pub stats_box: bool,
     /// Quest Markers (the user's ask, on by default): the map's "!" at each
     /// giver of a quest the player may take and "?" where a step of its
     /// quests is to be done, from a server that sends them
@@ -773,6 +778,7 @@ impl Default for ClientOptions {
             target_of_target: false,
             mana_bars: true,
             minimap: true,
+            stats_box: false,
             quest_markers: true,
             quest_tracker: true,
             text: render::ui::TextFilter::Sharp,
@@ -796,7 +802,7 @@ impl ClientOptions {
     /// Name Distance only when not the game's, Overlapping Names only when
     /// Show, Art only when it is the 2002 disc's, VSync, Shouts and Update
     /// Notices only when off, Target of Target only when on, Mana Bars only
-    /// when off, Text only when
+    /// when off, Stats Box only when on, Text only when
     /// Smooth, and Output Device only when a device is chosen (by its name).
     pub fn to_text(self) -> String {
         let mut s = format!("lod={}\nbrightness={}\ncamera_distance={}\n", if self.lod { "on" } else { "off" }, self.brightness, self.camera_distance);
@@ -859,6 +865,10 @@ impl ClientOptions {
         // Minimap only when off
         if !self.minimap {
             s.push_str("minimap=off\n");
+        }
+        // Stats Box only when on
+        if self.stats_box {
+            s.push_str("stats_box=on\n");
         }
         // Quest Markers and Quest Tracker only when off
         if !self.quest_markers {
@@ -951,6 +961,8 @@ impl ClientOptions {
                 ("mana_bars", "off") => c.mana_bars = false,
                 ("minimap", "on") => c.minimap = true,
                 ("minimap", "off") => c.minimap = false,
+                ("stats_box", "on") => c.stats_box = true,
+                ("stats_box", "off") => c.stats_box = false,
                 ("quest_markers", "on") => c.quest_markers = true,
                 ("quest_markers", "off") => c.quest_markers = false,
                 ("quest_tracker", "on") => c.quest_tracker = true,
@@ -1273,6 +1285,29 @@ pub fn set_quest_markers(on: bool) -> Result<(), String> {
     save_client()
 }
 
+/// Minimap turned (its key, N: `binds`' "minimap"), and kept at once, as
+/// the map's own keys keep theirs.
+pub fn set_minimap(on: bool) -> Result<(), String> {
+    let mut c = client();
+    c.minimap = on;
+    set_client(c);
+    save_client()
+}
+
+/// Whether the Stats Box is up where it could be (`statbox`).
+pub fn stats_box() -> bool {
+    client().stats_box
+}
+
+/// Stats Box turned (its key, B: `binds`' "stats_box"), and kept at once, as
+/// Minimap's key keeps it.
+pub fn set_stats_box(on: bool) -> Result<(), String> {
+    let mut c = client();
+    c.stats_box = on;
+    set_client(c);
+    save_client()
+}
+
 /// Whether the game asks to restart into a newer build (Update Notices).
 pub fn update_notices() -> bool {
     client().update_notices
@@ -1329,7 +1364,7 @@ pub fn describe() -> String {
         FrameRate::Display => "the display's",
     };
     format!(
-        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, output device {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, overlapping names {}, art {}, update notices {}, shouts {}, target of target {}, mana bars {}, minimap {}, quest markers {}, quest tracker {}, text {}, mipmaps {}, flora {}, environment {}, map markers {}, map towns {}, loading screens {}; {}",
+        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, output device {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, overlapping names {}, art {}, update notices {}, shouts {}, target of target {}, mana bars {}, minimap {}, stats box {}, quest markers {}, quest tracker {}, text {}, mipmaps {}, flora {}, environment {}, map markers {}, map towns {}, loading screens {}; {}",
         if c.lod { "on" } else { "off" },
         c.brightness,
         c.fog,
@@ -1358,6 +1393,7 @@ pub fn describe() -> String {
         if c.target_of_target { "on" } else { "off" },
         if c.mana_bars { "on" } else { "off" },
         if c.minimap { "on" } else { "off" },
+        if c.stats_box { "on" } else { "off" },
         if c.quest_markers { "on" } else { "off" },
         if c.quest_tracker { "on" } else { "off" },
         match c.text {
@@ -1849,7 +1885,7 @@ mod tests {
             "Screen Shake only off, Capture Controller only on"
         );
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, overlapping names hide, art frontiers, update notices on, shouts heard, target of target off, mana bars on, minimap on, quest markers on, quest tracker on, text sharp, mipmaps on, flora on, environment on, map markers on, map towns on, loading screens longer; kept in the page's storage");
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, overlapping names hide, art frontiers, update notices on, shouts heard, target of target off, mana bars on, minimap on, stats box off, quest markers on, quest tracker on, text sharp, mipmaps on, flora on, environment on, map markers on, map towns on, loading screens longer; kept in the page's storage");
         testing::reset(true);
         assert!(describe().ends_with("refused: nothing is kept"));
         testing::reset(false);
@@ -1919,6 +1955,21 @@ mod tests {
         assert!(ClientOptions::from_text("minimap=on") == ClientOptions::default());
         for bad in ["minimap=0", "minimap=no", "minimap="] {
             assert!(ClientOptions::from_text(bad).minimap, "{bad}: on, the default");
+        }
+    }
+
+    /// Stats Box, off by default, kept only when on, apart from Minimap;
+    /// anything but on or off leaves it off. The control: Minimap's own line
+    /// does not turn it.
+    #[test]
+    fn stats_box_kept_only_when_on() {
+        assert!(!ClientOptions::default().stats_box, "off by default");
+        assert_eq!(ClientOptions { stats_box: true, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nstats_box=on\n");
+        let on = ClientOptions::from_text("stats_box=on");
+        assert!(on.stats_box && on.minimap, "the box on, the minimap kept");
+        assert!(ClientOptions::from_text("stats_box=off") == ClientOptions::default());
+        for bad in ["stats_box=1", "stats_box=yes", "stats_box=", "minimap=on"] {
+            assert!(!ClientOptions::from_text(bad).stats_box, "{bad}: off, the default");
         }
     }
 

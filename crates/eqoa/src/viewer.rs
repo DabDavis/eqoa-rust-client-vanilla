@@ -1754,6 +1754,11 @@ struct App {
     /// `EQOA_SAY=<line>@<ms>[;...]`: what a test's script says in the
     /// world's chat line then (ms on `clock`), as a playshot's does.
     say_script: Vec<(i64, String)>,
+    /// `EQOA_PLAY_KEYS=<key>@<ms>[;...]`: keys a test's script presses then
+    /// (ms on `clock`; a key by its `keys.opt` name), down and up through the
+    /// keyboard's dispatch, as a controller's button on a key's row is
+    /// (`pad_rows`).
+    key_script: Vec<(i64, String)>,
     /// `EQOA_VSYNC_AT=<ms>;<ms>...`: when a test's script turns VSync over
     /// (ms on `clock`), as the Extended page's row does.
     vsync_script: Vec<i64>,
@@ -1875,6 +1880,9 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         art_script: std::env::var("EQOA_ART_AT").map(|v| v.split(';').filter_map(|t| t.trim().parse().ok()).collect()).unwrap_or_default(),
         say_script: std::env::var("EQOA_SAY")
             .map(|v| v.split(';').filter_map(|s| s.rsplit_once('@').and_then(|(l, t)| Some((t.trim().parse().ok()?, l.to_string())))).collect())
+            .unwrap_or_default(),
+        key_script: std::env::var("EQOA_PLAY_KEYS")
+            .map(|v| v.split(';').filter_map(|s| s.rsplit_once('@').and_then(|(k, t)| Some((t.trim().parse().ok()?, k.trim().to_string())))).collect())
             .unwrap_or_default(),
         vsync_script: std::env::var("EQOA_VSYNC_AT").map(|v| v.split(';').filter_map(|t| t.trim().parse().ok()).collect()).unwrap_or_default(),
         hidden_until: None,
@@ -3448,6 +3456,17 @@ impl App {
                     crate::hideui::toggle();
                     return;
                 }
+                // N and B: Extended's Minimap and Stats Box turned, kept (the
+                // client's own, `map::mini`, `statbox`; free in the game's
+                // keyboard table), in play and the manual camera
+                (None, Key::Character(c)) if (p.mode == 0 || p.mode == 38) && c.eq_ignore_ascii_case("n") && !event.repeat => {
+                    crate::map::mini::toggle();
+                    return;
+                }
+                (None, Key::Character(c)) if (p.mode == 0 || p.mode == 38) && c.eq_ignore_ascii_case("b") && !event.repeat => {
+                    crate::statbox::toggle();
+                    return;
+                }
                 // F: the target's target, the game's Assist Target asked
                 // (the client's key for it, `Play::assist_target`; free in
                 // the game's keyboard table)
@@ -4226,6 +4245,12 @@ impl ApplicationHandler for App {
                 }
                 if let Some(g) = self.gfx.as_mut() {
                     g.apply_vsync();
+                }
+                while self.key_script.first().is_some_and(|k| k.0 <= self.clock.elapsed().as_millis() as i64) {
+                    let (_, key) = self.key_script.remove(0);
+                    crate::say(&format!("script: {key} pressed"));
+                    self.keyboard(el, KeyIn::named(&key, true));
+                    self.keyboard(el, KeyIn::named(&key, false));
                 }
                 // the game's save icon on the window once SUPPORT has come (`icon`)
                 #[cfg(not(target_arch = "wasm32"))]

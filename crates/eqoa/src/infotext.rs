@@ -647,11 +647,7 @@ impl Info<'_> {
 
     /// `GetStatTotal`: the base stat plus every worn item's.
     pub fn stat_total(&self, stat: i64) -> i64 {
-        let mut total = self.base.get(stat as usize).copied().unwrap_or(0) as i64;
-        for it in self.inv.items.iter().filter(|it| it.equip_slot != -1) {
-            total += it.item.stats.iter().filter(|s| s.id == stat).map(|s| s.value).sum::<i64>();
-        }
-        total
+        stat_total(self.base, self.inv, stat)
     }
 
     /// `StatWithItem(index, stat, 1)`: the stat with a merchant's item worn,
@@ -682,6 +678,16 @@ impl Info<'_> {
         }
         (total, true)
     }
+}
+
+/// `GetStatTotal` over base stats `base` and list `inv`: the base stat plus
+/// every worn item's.
+pub fn stat_total(base: &[i32; 29], inv: &ItemList, stat: i64) -> i64 {
+    let mut total = base.get(stat as usize).copied().unwrap_or(0) as i64;
+    for it in inv.items.iter().filter(|it| it.equip_slot != -1) {
+        total += it.item.stats.iter().filter(|s| s.id == stat).map(|s| s.value).sum::<i64>();
+    }
+    total
 }
 
 /// `FindStatWord`.

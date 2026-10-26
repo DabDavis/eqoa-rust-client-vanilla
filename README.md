@@ -37,9 +37,9 @@ or a browser (each described where it lives below):
   them.
 - **The Extended options**, a page for each of Video (Display: a window or full
   screen, as F11 and Alt+Enter toggle it; Brightness, Frame Rate, VSync, Loading
-  Screens: Longer or Instant), World (Fog, Mipmaps, Flora, Environment, Art, Map
-  Markers), UI (Ability Bars, Target of Target, Mana Bars, Minimap, Update Notices,
-  Text: Sharp or Smooth), Controller (Controller Focus, Capture Controller), Camera (Distance,
+  Screens: Longer or Instant, Text: Sharp or Smooth), World (Fog, Mipmaps, Flora,
+  Environment, Art, Map Markers), UI (Ability Bars, Target of Target, Mana Bars,
+  Minimap, Stats Box, Update Notices), Controller (Controller Focus, Capture Controller), Camera (Distance,
   Turn Speed, Screen Shake), Characters (Level of Detail, NPC/PC Display and
   Distance, Name Distance, Overlapping Names), Sound (Sound in Background, Output Device:
   the system's default, followed when it changes, or a device by its name) and
@@ -148,7 +148,14 @@ or a browser (each described where it lives below):
   creatures and players in view, the target, the waypoint (on its rim while
   farther) and marks of other kinds by `map::mini::Mark` (camps, coach stops,
   quests: their tooltips under the mouse); the wheel over it zooms, a click or a
-  tap opens the map; shown where the quick menus are, never under Hide UI.
+  tap opens the map; shown where the quick menus are, never under Hide UI. N
+  shows or hides it, kept as UI's Minimap row is.
+- **The Stats Box** (UI's Stats Box, off unless turned on, or B): the player's
+  stats as the Summary has them (Str to Cha, AC, HPMax, POW and the six
+  resists, under the game's own short words) in a box framed as the minimap,
+  under the effects' icons; a value an effect raises in blue and one it lowers
+  in red (POW unmarked); a click or a tap opens the Summary; shown where the
+  minimap could be, never under Hide UI.
 - **The 2002 art** (F9, or the Extended page's Art): the game drawn as
   EverQuest Online Adventures looked before Frontiers, out of the player's own
   USA disc of 2002 (SLUS-20470) beside the Frontiers one: every race's body,

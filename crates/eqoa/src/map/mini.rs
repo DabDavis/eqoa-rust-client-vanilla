@@ -89,6 +89,16 @@ impl Default for Mini {
     }
 }
 
+/// N (`binds`' "minimap"): the minimap shown or hidden, kept (Extended's
+/// Minimap).
+pub fn toggle() {
+    let on = !crate::settings::client().minimap;
+    if let Err(e) = crate::settings::set_minimap(on) {
+        crate::say(&format!("minimap {}, not kept: {e}", if on { "shown" } else { "hidden" }));
+    }
+    crate::say(&format!("minimap {}", if on { "shown" } else { "hidden" }));
+}
+
 /// The map's own marks to draw in world `world` out of the minimap's
 /// (`Mini::map_marks`): that world's, none with Map Markers off (`on`, the
 /// map's toggle, X there and Extended's World page).
