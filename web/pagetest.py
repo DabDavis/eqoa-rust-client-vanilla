@@ -42,9 +42,12 @@ version.json under it:
             stand-in answers <api>/spells), filtered by class and by a
             stand-in visual; a pick needs a spell and a visual; the pick is
             sent as the server takes it, a refusal said, the name kept for the
-            next visit; the game's page links it (the preview and the disc's
-            visuals are drive's: a visual list is handed over as the preview
-            sends it)
+            next visit; a cast lands by the spell (a harmful one at a second
+            human, never the dummy), or on the caster and a second human at
+            once, kept; W and S step through the visuals from the page and
+            from the preview, not while typing; the game's page links it (the
+            preview and the disc's visuals are drive's: a visual list is
+            handed over as the preview sends it)
 
 Each check has its negative control. Needs the `websockets` package.
 
@@ -703,11 +706,45 @@ async def tests(a, site, base, page):
     check("a spell alone is no pick yet (control)", await page.js(sendable) is False and "Test Tap" in (await page.js("document.getElementById('pick-spell').textContent") or ""))
     # the visual list as the preview sends it when it has read the disc
     await page.until("(() => { const w = document.getElementById('preview').contentWindow; return w.location.pathname.endsWith('fxview.html') && w.document.readyState === 'complete'; })()", 10)
+    # what the page asks the preview to play, as the preview's frame gets it
+    await page.js("(() => { const w = document.getElementById('preview').contentWindow; w.__asked = []; w.addEventListener('message', (e) => { if (e.data && e.data.type === 'fxview-play') w.__asked.push(e.data.effect + ' ' + e.data.aim); }); return true; })()")
+    asked = "document.getElementById('preview').contentWindow.__asked.join()"
     await page.js("document.getElementById('preview').contentWindow.eval(\"parent.postMessage({source: 'eqoa-fxview', type: 'started', visuals: ['0x11111111', '0x55555555']}, location.origin)\")")
     listed = await page.until("document.querySelectorAll('#visuals li[data-visual]').length === 2 && [...document.querySelectorAll('#visuals li[data-visual]')].map((l) => l.dataset.visual).join()", 5)
     check("the visuals the preview read are listed", listed == "0x11111111,0x55555555", str(listed))
     given = await page.js("document.querySelector('#visuals li[data-visual=\"0x11111111\"]').textContent")
     check("a visual says which spell has it", "Test Bolt" in (given or ""), str(given))
+    # what a cast lands on: by the spell a harmful one at a second human, never
+    # the dummy (the user: its hitbox makes the visual smaller), the caster and a
+    # second human at once when asked, and that kept
+    played = await page.until(asked, 5)
+    check("a harmful spell lands on a second human by itself", played == "0x44444444 human", str(played))
+    offered = await page.js("[...document.getElementById('aim').options].map((o) => o.value).join()")
+    check("the training dummy is not offered", offered == "auto,both,human,caster", str(offered))
+    await page.js("document.querySelector('#spells li[data-id=\"3\"] button').click(); true")
+    played = await page.until(f"{asked}.endsWith('0x33333333 caster') && {asked}", 5)
+    check("a beneficial one at the caster (control)", bool(played), str(await page.js(asked)))
+    await page.js("(() => { const a = document.getElementById('aim'); a.value = 'both'; a.dispatchEvent(new Event('change')); return true; })()")
+    played = await page.until(f"{asked}.endsWith('0x33333333 both') && {asked}", 5)
+    check("the caster and a second human at once, kept", bool(played) and await page.js("localStorage.getItem('eqoa.spellfxAim')") == "both", str(await page.js(asked)))
+    await page.js("document.querySelector('#spells li[data-id=\"4\"] button').click(); true")
+    # W and S: the visual before and after, wherever the page's keys are, the preview's too
+    visual = "eqoaSpellfx.visual"
+    await page.js("document.activeElement && document.activeElement.blur(); true")
+    await page.key("s", "KeyS", 83)
+    check("S steps to the next visual", await page.until(f"{visual} === '0x11111111'", 3) is True, str(await page.js(visual)))
+    await page.js("document.getElementById('spell-search').focus(); true")
+    # a key that types: its text with it, as a keyboard's
+    await page.call("Input.dispatchKeyEvent", type="keyDown", key="s", code="KeyS", windowsVirtualKeyCode=83, text="s")
+    await page.call("Input.dispatchKeyEvent", type="keyUp", key="s", code="KeyS", windowsVirtualKeyCode=83)
+    await asyncio.sleep(0.3)
+    typed = await page.js(f"{visual} + ' ' + document.getElementById('spell-search').value")
+    check("not while a box takes typing (control)", typed == "0x11111111 s", str(typed))
+    await page.js("(() => { const s = document.getElementById('spell-search'); s.value = ''; s.dispatchEvent(new Event('input')); s.blur(); return true; })()")
+    await page.until(f"{ids} === '[2,3,4]'", 3)
+    await page.js("(() => { const f = document.getElementById('preview'); f.focus(); f.contentDocument.getElementById('eqoa').focus(); return true; })()")
+    await page.key("w", "KeyW", 87)
+    check("W in the preview steps back", await page.until(f"{visual} === '0x55555555'", 3) is True, str(await page.js(visual)))
     await page.js("document.querySelector('#visuals li[data-visual=\"0x55555555\"] button').click(); true")
     check("a spell and a visual make a pick", await page.js(sendable) is True and "Test Tap" in (await page.js("document.getElementById('send').textContent") or ""))
     await page.js("document.getElementById('who').value = 'Tester'; document.getElementById('note').value = 'it rang'; document.getElementById('send').click(); true")
@@ -730,9 +767,11 @@ async def tests(a, site, base, page):
     check("a refusal is said, not thanked", "Too many picks" in (refused or "") and len(site.picks) == 3, str(refused))
     await open_fx()
     check("the name is kept for the next visit", await page.js("document.getElementById('who').value") == "flood")
-    await page.js("localStorage.removeItem('eqoa.spellfxName'); true")
+    check("so is what a cast lands on", await page.js("document.getElementById('aim').value") == "both")
+    await page.js("localStorage.removeItem('eqoa.spellfxName'); localStorage.removeItem('eqoa.spellfxAim'); true")
     await open_fx()
     check("none kept, the field is empty (control)", await page.js("document.getElementById('who').value") == "")
+    check("and a cast lands by the spell (control)", await page.js("document.getElementById('aim').value") == "auto")
     # a spell GMs give its visual while the page is open leaves the list at the next refresh
     await page.until(f"{ids} === '[2,3,4]'", 5)
     SPELLFX_SPELLS[1]["standin"] = False  # Test Heal (id 2) has its visual now

@@ -85,8 +85,8 @@ pub async fn fxview_disc(file: web_sys::File, opts: JsValue) -> Result<(), JsVal
 }
 
 /// Plays `effect` (a DictID: `0x1DAEB5B6`, the eight digits, or a number)
-/// cast for `cast_ms`, landing on `aim` (`caster`, `human` or `dummy`; empty
-/// leaves it as it was).
+/// cast for `cast_ms`, landing on `aim` (`caster`, `human`, `dummy` or `both`,
+/// the caster and a second human at once; empty leaves it as it was).
 #[wasm_bindgen]
 pub fn fxview_play(effect: String, cast_ms: f64, aim: String) -> bool {
     let Some(e) = fxview::parse_visual(&effect) else { return false };
@@ -100,7 +100,7 @@ pub fn fxview_again() {
     fxview::send(Command::Again);
 }
 
-/// What the cast lands on: `caster`, `human` or `dummy`.
+/// What the cast lands on: `caster`, `human`, `dummy` or `both`.
 #[wasm_bindgen]
 pub fn fxview_aim(aim: String) -> bool {
     let Some(a) = Aim::parse(&aim) else { return false };

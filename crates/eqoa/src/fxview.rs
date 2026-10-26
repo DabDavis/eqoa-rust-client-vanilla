@@ -7,7 +7,10 @@
 //! on the two characters' own skeletons (the caster's casting action, the
 //! target's reaction, the particles, the lightning and the projectiles), on
 //! an empty stage under an orbit camera. Nothing else of the game runs: no
-//! world, no session, no sound.
+//! world, no session, no sound. With [`Aim::Both`] the target is a second
+//! human and a third, behind the caster, casts the same visual at itself in
+//! the same moment, so what it does to its caster and to a target are seen
+//! side by side.
 //!
 //! Natively `eqoa fxview [visual] [cast seconds]` opens a window (drag to
 //! orbit, scroll to zoom, ←/→ the previous or next visual on the disc, Space
@@ -49,6 +52,14 @@ pub const DISTANCES: std::ops::RangeInclusive<f32> = 1.0..=40.0;
 const CASTER_ID: u32 = 0x0100;
 const TARGET_ID: u32 = 0x0101;
 const TARGET: i32 = 1;
+/// The ids of [`Aim::Both`]'s human casting at itself (its cast names it
+/// twice, as a cast at oneself does), where it stands (behind the caster,
+/// away from the target, so a projectile never passes it) and its heading
+/// (turned to the side camera, as the caster alone is seen from in front).
+const TWIN_ID: u32 = 0x0102;
+const TWIN: i32 = 2;
+const TWIN_GAP: f32 = 4.0;
+const TWIN_HEADING: f32 = -1.25;
 
 /// The training dummies' body (every "Training Dummy", "Regular Dummy" and
 /// "Sparring Dummy" row of eqoaclassic's `npcs` has it): the target of a
@@ -64,11 +75,22 @@ pub const DUMMY_SIZE: f32 = 0.25;
 /// training dummy (a harmful spell's, and a bare visual's unless the GM
 /// picks another). The page decides by the spell (the panel asks the server
 /// whether its line is harmful); the stage only stands the figure there.
+/// `Both` is the caster and a human at once (the community page's players,
+/// 2026-10-26: "an option so the spell casts on a target and self ... so you
+/// can see if its a buff, debuff or dps spell without having to toggle"): the
+/// cast at a second human as `Human` plays it and, beside it, a third human's
+/// at itself as `Caster` plays it, the two cast together. A human, not the
+/// dummy (the user: "the hitbox makes the spellfx smaller harder to see,
+/// while human target is accurate": a landing scales with its actor, and the
+/// dummy's rows are a quarter size). Not one cast landing on both: a cast's
+/// area targets get only the events flagged for them (`PlayTargetInstant`'s
+/// bit 2), so the caster would not be shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Aim {
     Caster,
     Human,
     Dummy,
+    Both,
 }
 
 impl Aim {
@@ -77,6 +99,7 @@ impl Aim {
             "caster" | "self" => Some(Aim::Caster),
             "human" => Some(Aim::Human),
             "dummy" => Some(Aim::Dummy),
+            "both" => Some(Aim::Both),
             _ => None,
         }
     }
@@ -84,9 +107,19 @@ impl Aim {
     fn name(self) -> &'static str {
         match self {
             Aim::Caster => "the caster",
-            Aim::Human => "a human",
+            Aim::Human | Aim::Both => "a human",
             Aim::Dummy => "a training dummy",
         }
+    }
+
+    /// Whether a second figure stands in front of the caster, and whether
+    /// a human casting at itself stands behind it.
+    fn target_on(self) -> bool {
+        self != Aim::Caster
+    }
+
+    fn twin_on(self) -> bool {
+        self == Aim::Both
     }
 }
 
@@ -106,12 +139,12 @@ fn look() -> vi::cust::Look {
 }
 
 /// The 0x00B1 a server sends for a cast of `effect` taking `cast_ms`, from
-/// the caster onto the target (onto itself with `at_self`, as a server names
-/// a cast at oneself), read as the client reads it.
-pub fn casting_combat(effect: u32, cast_ms: i32, at_self: bool) -> Option<Cast> {
+/// `caster` onto `target` (entity ids; a cast at oneself names the caster
+/// twice, as a server's does), read as the client reads it.
+pub fn casting_combat(effect: u32, cast_ms: i32, caster: u32, target: u32) -> Option<Cast> {
     let mut b = Vec::with_capacity(17);
-    b.extend(CASTER_ID.to_le_bytes());
-    b.extend(if at_self { CASTER_ID } else { TARGET_ID }.to_le_bytes());
+    b.extend(caster.to_le_bytes());
+    b.extend(target.to_le_bytes());
     b.push(0);
     b.extend((cast_ms.max(0) as u32).to_le_bytes());
     b.extend(effect.to_le_bytes());
@@ -223,12 +256,14 @@ impl Orbit {
     }
 }
 
-/// The stage: the two, the effects, the visual and its cast time, and when
-/// the next cast comes.
+/// The stage: the two (and [`Aim::Both`]'s human casting at itself, made
+/// the first time it is asked for), the effects, the visual and its cast
+/// time, and when the next cast comes.
 pub struct Stage {
     pub lib: Library,
     caster: Actor,
     target: Actor,
+    twin: Option<Actor>,
     spells: Spells,
     effect: u32,
     cast_ms: i32,
@@ -260,6 +295,7 @@ impl Stage {
             lib,
             caster,
             target,
+            twin: None,
             spells,
             effect,
             cast_ms: CAST_MS,
@@ -279,10 +315,20 @@ impl Stage {
     }
 
     /// The caster at the origin facing the target, the target `distance`
-    /// ahead (+z) facing back.
+    /// ahead (+z) facing back, `Both`'s self-caster `TWIN_GAP` behind.
     fn place(&mut self) {
         self.caster.place(Vect3::default(), 0.0);
         self.target.place(Vect3::of(0.0, 0.0, self.distance), std::f32::consts::PI);
+        if let Some(t) = self.twin.as_mut() {
+            t.place(Vect3::of(0.0, 0.0, -TWIN_GAP), TWIN_HEADING);
+        }
+    }
+
+    /// The figures standing now: the caster, the target unless the cast is
+    /// at the caster, the self-caster with `Both`.
+    fn shown(&mut self) -> impl Iterator<Item = &mut Actor> {
+        let (target_on, twin_on) = (self.aim.target_on(), self.aim.twin_on());
+        [Some(&mut self.caster), target_on.then_some(&mut self.target), self.twin.as_mut().filter(|_| twin_on)].into_iter().flatten()
     }
 
     /// Every visual on the disc, in its order (SPELLFX.CSF's records): what
@@ -339,15 +385,19 @@ impl Stage {
     }
 
     /// What the cast lands on: the caster, or a second figure in front of
-    /// it (a human, or the training dummy's body).
+    /// it (a human, or the training dummy's body), or a human in front and a
+    /// third casting at itself behind.
     pub fn set_aim(&mut self, aim: Aim) -> Result<(), String> {
         let body = match aim {
             Aim::Caster => None,
-            Aim::Human => Some((crate::viewer::HUMAN, 1.0)),
+            Aim::Human | Aim::Both => Some((crate::viewer::HUMAN, 1.0)),
             Aim::Dummy => Some(self.dummy),
         };
         if let Some((m, size)) = body.filter(|&(m, size)| m != self.target.model || size != self.target.scale) {
             self.target = Actor::new(&self.lib, m, size, 2)?;
+        }
+        if aim.twin_on() && self.twin.is_none() {
+            self.twin = Some(Actor::new(&self.lib, crate::viewer::HUMAN, 1.0, 3)?);
         }
         if aim != self.aim {
             self.camera = Orbit::for_aim(aim);
@@ -390,13 +440,15 @@ impl Stage {
         let i = self.spells.index_of(self.effect).map_or(0, |i| i + 1);
         let at = match self.aim {
             Aim::Caster => "at the caster".to_string(),
+            Aim::Both => format!("at {} {:.0} off and, by another human, at itself", Aim::Both.name(), self.distance),
             a => format!("at {} {:.0} off", a.name(), self.distance),
         };
         format!("visual {:#010x} ({i} of {n}), cast {:.1} s, {at}", self.effect, self.cast_ms as f32 / 1000.0)
     }
 
-    /// One frame at `now` ms: the two posed standing, a cast when one is
-    /// due (the 0x00B1 the server would send), every effect run.
+    /// One frame at `now` ms: the figures posed standing, a cast when one is
+    /// due (the 0x00B1 the server would send; with `Both` the self-caster's
+    /// at itself too, in the same frame), every effect run.
     pub fn step(&mut self, now: i64) {
         self.now = now;
         if let Some(at) = self.cast_at {
@@ -410,27 +462,31 @@ impl Stage {
                 self.due = true;
             }
         }
-        let at_self = self.aim == Aim::Caster;
-        self.caster.pose(now);
-        if !at_self {
-            self.target.pose(now);
+        let (target_on, twin_on) = (self.aim.target_on(), self.aim.twin_on());
+        for a in self.shown() {
+            a.pose(now);
         }
         let mut casts = Vec::new();
         if std::mem::take(&mut self.due) {
-            if let Some(c) = casting_combat(self.effect, self.cast_ms, at_self) {
-                casts.push((c, SELF, if at_self { SELF } else { TARGET }, Vec::new()));
+            let (to_id, to) = if target_on { (TARGET_ID, TARGET) } else { (CASTER_ID, SELF) };
+            casts.extend(casting_combat(self.effect, self.cast_ms, CASTER_ID, to_id).map(|c| (c, SELF, to, Vec::new())));
+            if twin_on {
+                casts.extend(casting_combat(self.effect, self.cast_ms, TWIN_ID, TWIN_ID).map(|c| (c, TWIN, TWIN, Vec::new())));
             }
             self.cast_at = Some(now);
             self.quiet_since = None;
             self.casts += 1;
         }
         let mut bodies = vec![self.caster.body(SELF)];
-        if !at_self {
+        if target_on {
             bodies.push(self.target.body(TARGET));
+        }
+        if let Some(t) = self.twin.as_mut().filter(|_| twin_on) {
+            bodies.push(t.body(TWIN));
         }
         self.spells.frame(&mut bodies, &casts, SELF, None, now, &Eye::default(), &self.lib, None);
         drop(bodies);
-        for a in [&mut self.caster, &mut self.target] {
+        for a in [&mut self.caster, &mut self.target].into_iter().chain(self.twin.as_mut()) {
             if let Some(cs) = a.sprite.as_mut() {
                 cs.h.set_blend_matrices();
             }
@@ -441,9 +497,14 @@ impl Stage {
     /// (fixed daylight, no fog) at `aspect`.
     pub fn view(&self, aspect: f32) -> (View, Mat4, Mat4) {
         let c = &self.camera;
-        // round the middle of the two, or the caster alone
+        // round the middle of the two, or the caster alone; of the three (the
+        // self-caster behind the caster), nearer the target, whose end of the
+        // row the side camera stands nearer, so the row's two ends are as far
+        // in from the picture's sides, and closer in than two are framed (a
+        // row a third longer, its figures not a third smaller)
         let (centre, reach) = match self.aim {
             Aim::Caster => (Vec3::new(0.0, 1.0, 0.0), 3.4),
+            Aim::Both => (Vec3::new(0.0, 1.2, (self.distance - TWIN_GAP) * 0.5 + 0.9), (self.distance + TWIN_GAP) * 0.55 + 2.3),
             _ => (Vec3::new(0.0, 1.2, self.distance * 0.5), self.distance * 0.62 + 2.3),
         };
         let dir = Vec3::new(c.yaw.sin() * c.pitch.cos(), c.pitch.sin(), c.yaw.cos() * c.pitch.cos());
@@ -455,10 +516,11 @@ impl Stage {
         (view, v, p)
     }
 
-    /// The two on the GPU (again, after `set_bodies`).
+    /// The figures on the GPU (each once: a new target's, or the
+    /// self-caster's when it is first made, at the next frame).
     pub fn upload(&mut self, r: &mut Renderer, device: &wgpu::Device, queue: &wgpu::Queue) {
         let textures = render::library_textures(&self.lib);
-        for a in [&mut self.caster, &mut self.target] {
+        for a in [&mut self.caster, &mut self.target].into_iter().chain(self.twin.as_mut()) {
             if a.gpu.is_none() {
                 a.gpu = a.mesh.as_ref().map(|m| r.upload(device, queue, m, &[render::IDENTITY], &textures));
             }
@@ -471,11 +533,12 @@ impl Stage {
     pub fn prepare(&mut self, r: &mut Renderer, device: &wgpu::Device, queue: &wgpu::Queue, eye: Vec3) {
         self.upload(r, device, queue);
         let eye = Vect3::of(eye.x, eye.y, eye.z);
-        let at_self = self.aim == Aim::Caster;
-        if let Some(g) = self.target.gpu.as_mut() {
-            g.visible = !at_self;
+        for a in [&mut self.caster, &mut self.target].into_iter().chain(self.twin.as_mut()) {
+            if let Some(g) = a.gpu.as_mut() {
+                g.visible = false;
+            }
         }
-        for a in [&mut self.caster, &mut self.target].into_iter().take(if at_self { 1 } else { 2 }) {
+        for a in self.shown() {
             let Some(g) = a.gpu.as_mut() else { continue };
             r.set_instances(queue, g, &[a.centre.to_cols()]);
             if let Some(cs) = &a.sprite {
@@ -512,7 +575,7 @@ impl Stage {
     }
 
     pub fn draws(&self) -> Vec<render::Draw<'_>> {
-        let bodies = [&self.caster, &self.target].into_iter().filter_map(|a| a.gpu.as_ref()).filter(|g| g.visible);
+        let bodies = [Some(&self.caster), Some(&self.target), self.twin.as_ref()].into_iter().flatten().filter_map(|a| a.gpu.as_ref()).filter(|g| g.visible);
         let flying = self.projectiles.values().flat_map(|(_, pool)| pool.iter()).filter(|g| g.visible);
         bodies.chain(flying).map(render::Draw::Model).collect()
     }
@@ -686,7 +749,8 @@ pub fn shots(lib: Library, effect: Option<u32>, cast_ms: i32, aim: Option<Aim>, 
         enc.set_color(png::ColorType::Rgba);
         enc.set_depth(png::BitDepth::Eight);
         enc.write_header().and_then(|mut wr| wr.write_image_data(&rgba)).map_err(|e| e.to_string())?;
-        eprintln!("{path}: at {at} ms, the caster's action {:?}, the target's {:?}, {}", stage.caster.action(), stage.target.action(), stage.spells.describe());
+        let twin = stage.twin.as_ref().filter(|_| stage.aim.twin_on()).map_or(String::new(), |t| format!(", the self-caster's {:?}", t.action()));
+        eprintln!("{path}: at {at} ms, the caster's action {:?}, the target's {:?}{twin}, {}", stage.caster.action(), stage.target.action(), stage.spells.describe());
     }
     Ok(())
 }
@@ -886,13 +950,16 @@ mod tests {
     /// visuals parse as the panel writes them.
     #[test]
     fn the_cast_is_a_casting_combat() {
-        let c = casting_combat(0x1DAE_B5B6, 2500, false).expect("read back");
+        let c = casting_combat(0x1DAE_B5B6, 2500, CASTER_ID, TARGET_ID).expect("read back");
         assert_eq!((c.caster, c.target, c.time, c.effect), (CASTER_ID, TARGET_ID, 2500, 0x1DAE_B5B6));
         assert!(c.targets.is_empty());
         // a cast at oneself names the caster twice, as a server's does
-        let me = casting_combat(0x1DAE_B5B6, 0, true).expect("read back");
-        assert_eq!((me.caster, me.target), (CASTER_ID, CASTER_ID));
-        assert_eq!([Aim::parse("self"), Aim::parse("Human"), Aim::parse("dummy"), Aim::parse("x")], [Some(Aim::Caster), Some(Aim::Human), Some(Aim::Dummy), None]);
+        let me = casting_combat(0x1DAE_B5B6, 0, TWIN_ID, TWIN_ID).expect("read back");
+        assert_eq!((me.caster, me.target), (TWIN_ID, TWIN_ID));
+        assert_eq!(
+            [Aim::parse("self"), Aim::parse("Human"), Aim::parse("dummy"), Aim::parse(" both"), Aim::parse("x")],
+            [Some(Aim::Caster), Some(Aim::Human), Some(Aim::Dummy), Some(Aim::Both), None]
+        );
         assert_eq!(parse_visual("0x1DAEB5B6"), Some(0x1DAE_B5B6));
         assert_eq!(parse_visual("1DAEB5B6"), Some(0x1DAE_B5B6));
         assert_eq!(parse_visual("12"), Some(12));
@@ -972,5 +1039,51 @@ mod tests {
         assert!(list.iter().all(|&e| stage.set_visual(e, 1000)), "each one plays");
         // the control: a DictID the list lacks is one the stage refuses
         assert!(!list.contains(&0x0BAD_F00D) && !stage.set_visual(0x0BAD_F00D, 1000));
+    }
+
+    /// `Both` (SKIPs without run/eqoa.iso): one step casts twice, the
+    /// caster's at the target and the self-caster's at itself, each its own
+    /// playback; the target is a human at its full size, not the dummy; the
+    /// three stand in a row, apart, and all three are in the picture, where
+    /// the one-target framing leaves the self-caster at its edge, half cut
+    /// (the control); back to `Human`, one cast at two figures.
+    #[test]
+    fn both_casts_at_a_human_and_at_itself() {
+        let iso_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut disc) = iso::Iso::open(&iso_path) else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let mut stage = Stage::new(library_off(&mut disc).expect("the files")).expect("a stage");
+        let e = stage.spells.nth(0).unwrap();
+        stage.set_aim(Aim::Both).expect("the self-caster's body");
+        assert!(stage.set_visual(e, 2000));
+        stage.step(0);
+        assert_eq!(stage.spells.playing(), 2, "two casts in one step ({})", stage.describe());
+        assert_eq!(stage.shown().count(), 3);
+        assert_eq!((stage.target.model, stage.target.scale), (crate::viewer::HUMAN, 1.0), "a human at full size");
+        // where they stand (mid-body), and where the camera puts them at 16:9
+        let at = |a: &Actor| Mat4::from_cols_array_2d(&a.transform.to_cols()).transform_point3(Vec3::Y);
+        let (twin, caster, target) = (at(stage.twin.as_ref().unwrap()), at(&stage.caster), at(&stage.target));
+        assert!(twin.z < caster.z - 3.0 && target.z > caster.z + 3.0, "in a row, apart: {twin} {caster} {target}");
+        let across = |stage: &Stage, p: Vec3| {
+            let (_, v, proj) = stage.view(16.0 / 9.0);
+            let c = proj * v * p.extend(1.0);
+            (c.x / c.w, c.y / c.w, c.w > 0.0)
+        };
+        for (who, p) in [("self-caster", twin), ("caster", caster), ("target", target)] {
+            let (x, y, ahead) = across(&stage, p);
+            assert!(ahead && x.abs() < 0.8 && y.abs() < 0.8, "the {who} in the picture: {x:.2}, {y:.2}");
+        }
+        let (left, _, _) = across(&stage, twin);
+        let (right, _, _) = across(&stage, target);
+        assert!((left + right).abs() < 0.1, "the row's ends as far in from the sides: {left:.2} {right:.2}");
+        // the control: one cast at a second human, the self-caster not shown
+        // and, where it stood, at the one-target picture's edge, half cut
+        stage.set_aim(Aim::Human).expect("a human");
+        stage.step(16);
+        assert_eq!((stage.spells.playing(), stage.shown().count()), (1, 2), "{}", stage.describe());
+        let (x, _, _) = across(&stage, twin);
+        assert!(x < -0.9, "the self-caster's place at the one-target picture's edge: {x:.2}");
     }
 }

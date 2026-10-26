@@ -659,12 +659,15 @@ preview go-eqoa-server's GM panel frames on its Spell visuals page (`gm.preview_
 a server's 0x00B1 plays it (`spells::cast_of` reads the bytes, `spells.rs` plays
 them on the two characters' own skeletons) at a training dummy (body 0x66262F1C
 at its rows' size, 0.25), a second human or itself, again and again, under an
-orbit camera. The panel hands it the six files it reads off the GM's own disc as
+orbit camera; or (`both`) at a second human while a third, behind the caster,
+casts it at itself in the same frame, so a visual's look on its caster and on a
+target are seen side by side (two casts, not one at two targets: a cast's area
+targets get only the events flagged for them). The panel hands it the six files it reads off the GM's own disc as
 Blobs (opened on its own it asks for the image) and the visual by postMessage,
 origins checked both ways (`https://gm.eqoaclassic.com`, or a loopback panel
 named with `?panel=`); its host lets only the panel frame it. Natively
 `eqoa fxview [visual [secs]]` is the same in a window and `eqoa fxview <visual>
-<out.png> [ms,...] [secs]` draws PNGs (`EQOA_FX_AIM=caster|human|dummy`); off
+<out.png> [ms,...] [secs]` draws PNGs (`EQOA_FX_AIM=caster|human|dummy|both`); off
 the disc its test (`fxview::tests`) finds a visual that moves its caster and
 shows particles and sees it cast again once nothing of it is left. Nothing
 changes for a player who opens the game's page.
@@ -677,8 +680,12 @@ account service, `GET /eqoa/account/api/spellfx/spells`), filtered by class, by
 a search and by "still on a stand-in visual", and every visual on the player's
 own disc, which the preview reads and lists (`fxview::visuals`, the
 `started` message); a spell picked plays what it plays now as its own cast
-(its cast time; a harmful one at the dummy), a visual tried plays as that
-spell's, and "This visual is <spell>'s" sends the pick with an optional name
+(its cast time; a harmful one at a second human, the rest at the caster, or
+what "Lands on" says, kept for the next visit: the caster and a second human
+at once, a second human, the caster; never the dummy, whose quarter size
+shrinks what lands on it), a visual tried plays as that spell's, W and S step
+to the visual before and after from anywhere on the page (the preview too, not
+while typing), and "This visual is <spell>'s" sends the pick with an optional name
 and note (`POST .../suggest`; a pick for the same spell from the same place
 replaces the last; GMs compare and accept them in the GM panel). The preview
 is the build's own copy of `fxview.html`, framed on this origin and handed the
