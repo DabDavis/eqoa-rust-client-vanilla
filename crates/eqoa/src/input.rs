@@ -814,6 +814,9 @@ pub struct Gamepads {
     /// (gilrs keeps only the last state)
     #[cfg(not(target_arch = "wasm32"))]
     gilrs_seen: std::collections::HashMap<gilrs::GamepadId, Latch>,
+    /// a gilrs fault stepped over has been said (the log says it once)
+    #[cfg(not(target_arch = "wasm32"))]
+    gilrs_fault_said: bool,
     /// each pad as a report gives it: its id, mapping, layout, every axis
     /// and every button pressed (in a page)
     #[cfg(target_arch = "wasm32")]
@@ -877,6 +880,8 @@ impl Gamepads {
             between: 0,
             #[cfg(not(target_arch = "wasm32"))]
             gilrs_seen: std::collections::HashMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            gilrs_fault_said: false,
             #[cfg(target_arch = "wasm32")]
             described: Vec::new(),
         }
@@ -1077,7 +1082,26 @@ impl Gamepads {
             }
         }
         if let Some(g) = self.gilrs.as_mut() {
-            while let Some(ev) = g.next_event() {
+            // gilrs panics on an event of a controller it holds no state for
+            // yet (F3 crashes 20261026-154532 and -170104, twice in an hour
+            // for a Steam player with two pads, at a window's focus change):
+            // on Windows its polling thread reports a controller that has just
+            // appeared (a Steam Input pad) before the added callback's
+            // Connected, and `next_event` indexes its data by that id. Such an
+            // event is dropped, said once, and the controller read once its
+            // Connected comes.
+            loop {
+                let ev = match crate::report::caught(|| g.next_event()) {
+                    Ok(Some(ev)) => ev,
+                    Ok(None) => break,
+                    Err(e) => {
+                        if !self.gilrs_fault_said {
+                            self.gilrs_fault_said = true;
+                            crate::say(&format!("gamepad: an event of a controller gilrs has no state for yet, dropped ({e})"));
+                        }
+                        continue;
+                    }
+                };
                 if self.trace {
                     crate::say(&format!("[gilrs] {:?}", ev.event));
                 }

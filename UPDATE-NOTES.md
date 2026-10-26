@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · A controller that turns up mid-game
+- On Windows the game no longer stops when a controller turns up while it runs (Steam can make
+  one as a window comes to the front, and two pads made it likelier): until Windows has finished
+  connecting it, the game passes over what it sends, and reads it from then on.
+
 ## 2026-10-26 · Clearer voices, new swings at once, Extended's menu
 - Voice chat in the game itself now evens out your microphone, as the page already did: a quiet
   one (a laptop's own) comes up to a normal speaking level, a loud one is left as it is, and a

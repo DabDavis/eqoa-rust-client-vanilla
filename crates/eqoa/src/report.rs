@@ -135,7 +135,7 @@ pub fn fit(text: &str, max: usize) -> String {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{Key, clean_exit, click, crash, draw, is_open, is_report_key, key, key_of, restore_stderr, set_gpu, set_shot, start, wants_shot};
+pub use native::{Key, caught, clean_exit, click, crash, draw, is_open, is_report_key, key, key_of, restore_stderr, set_gpu, set_shot, start, wants_shot};
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
@@ -280,6 +280,10 @@ mod native {
         // pipe): the pipe's reader is a thread the program does not wait for
         // as a panic ends it, and the terminal would miss the message
         std::panic::set_hook(Box::new(move |info| {
+            // one `caught` steps over: no crash, nothing on the terminal
+            if CAUGHT.with(|c| c.get()) > 0 {
+                return;
+            }
             let thread = std::thread::current().name().unwrap_or("unnamed").to_string();
             // after the graphics device was lost (an upload in the frame that
             // lost it): the game starts again in this one's place, its log
@@ -309,6 +313,22 @@ mod native {
             let shown = std::env::var("RUST_BACKTRACE").is_ok_and(|v| v != "0");
             to_terminal(&if shown { format!("{text}\nstack backtrace:\n{bt}\n") } else { format!("{text}\n") });
         }));
+    }
+
+    thread_local! {
+        /// How deep this thread is in `caught`: a panic there is no crash.
+        static CAUGHT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    /// `f` with a panic in it caught and handed back as its message, written
+    /// as no crash report and said nowhere: for a library's own fault the game
+    /// can step over (gilrs's lookup of a controller it holds no state for
+    /// yet, `input.rs`).
+    pub fn caught<T>(f: impl FnOnce() -> T) -> Result<T, String> {
+        CAUGHT.with(|c| c.set(c.get() + 1));
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        CAUGHT.with(|c| c.set(c.get() - 1));
+        r.map_err(|e| e.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| e.downcast_ref::<String>().cloned()).unwrap_or_else(|| "a panic".to_string()))
     }
 
     /// `text` to where stderr went before the pipe (stderr itself without
@@ -1422,6 +1442,24 @@ mod native {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+
+    /// `caught` hands a panic back as its message (gilrs's index panic is a
+    /// formatted String, a literal a &str) and a value through as it is, its
+    /// depth back to none after each, a nested one's too; the control: the
+    /// same panic outside `caught` unwinds to `catch_unwind`, uncaught by it.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_caught_panic_comes_back_as_its_message() {
+        use native::caught;
+        let v: Vec<u8> = vec![1, 2];
+        let i = v.len();
+        assert_eq!(caught(|| v[i]), Err("index out of bounds: the len is 2 but the index is 2".to_string()));
+        assert_eq!(caught(|| -> u8 { panic!("a literal") }), Err("a literal".to_string()));
+        assert_eq!(caught(|| 7), Ok(7));
+        assert_eq!(caught(|| caught(|| -> u8 { panic!("inner") }).map_err(|e| e + " (nested)")), Ok(Err("inner (nested)".to_string())));
+        assert!(std::panic::catch_unwind(|| v[i]).is_err(), "the control: it panics");
+        assert_eq!(caught(|| v[0]), Ok(1), "and after all that, a plain call");
+    }
 
     /// A start takes the run before's leavings: a run that closed leaves no
     /// crash, and its state is put away; the next run, stopped at its
