@@ -109,6 +109,7 @@ mod modules;
 mod mouse;
 mod multibox;
 mod quantity;
+mod questguide;
 mod questlog;
 mod tracker;
 mod quickchat;
