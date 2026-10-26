@@ -374,3 +374,42 @@ fn a_page_patch_missing_a_file_leaves_the_folder() {
     let (s, _) = replayed(&site(&files), &mut mem);
     assert_eq!(s.state, state::DONE, "{:?}", s.err);
 }
+
+/// A page's server whose web site answers the manifest with an error (its
+/// own 404 page: eqoaclassic.com serves no patch) is unreachable, its folder
+/// played as it stands, as a patch port that never answers is: not a failed
+/// patch, whose box's only way on is Restart, at every Play. The control: a
+/// file the manifest lists that the site answers 404 still fails the patch,
+/// as natively, and leaves the folder.
+#[test]
+fn a_site_that_serves_no_patch_is_unreachable() {
+    let manifest = "patch/eqoa/eqoa-frontierslive-update.xml.gz";
+    let mut got = replay::Fetched::new();
+    got.insert(manifest.into(), Ok((404, b"<html><body>404 Not Found</body></html>".to_vec())));
+    let mut mem = Mem::default();
+    let (s, missing) = replay::play(&cfg(), &got, &mut mem);
+    assert!(missing.is_empty(), "{missing:?}");
+    assert!(s.unreachable, "{:?}", s.err);
+    assert_ne!(s.state, state::FAILED);
+    assert!(mem.files.is_empty() && mem.writes == 0);
+    // the control: the manifest there, its words file answered 404
+    let files = two();
+    let mut site = site(&files);
+    site.remove("words-1.gz");
+    let mut got = replay::Fetched::new();
+    let mut mem = Mem::default();
+    let s = loop {
+        let mut trial = mem.clone();
+        let (s, missing) = replay::play(&cfg(), &got, &mut trial);
+        if missing.is_empty() {
+            break s;
+        }
+        for p in missing {
+            let r = site.get(&p).map_or_else(|| Ok((404, b"<html>404</html>".to_vec())), |b| Ok((200, b.clone())));
+            got.insert(p, r);
+        }
+    };
+    assert!(!s.unreachable);
+    assert_eq!(s.state, state::FAILED, "a listed file the site lacks fails the patch");
+    assert!(mem.files.is_empty() && mem.writes == 0, "nothing written");
+}

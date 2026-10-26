@@ -18,6 +18,14 @@ struct Replay<'a> {
     got: &'a Fetched,
     /// paths asked for that are not fetched yet
     missing: Vec<String>,
+    /// the manifest's path: a site that answers it with an error (its own
+    /// 404 page) serves no patch, so the server is unreachable as a patch
+    /// port that never answers is, and its folder is played as it stands;
+    /// natively a patch port that answers 404 is a failed patch, but a
+    /// server's web site need not serve its patch at all (eqoaclassic.com's
+    /// does not), and a failed patch puts up the box whose only way on is
+    /// Restart, at every Play
+    manifest: &'a str,
 }
 
 impl super::Wire for Replay<'_> {
@@ -27,6 +35,9 @@ impl super::Wire for Replay<'_> {
         let req = String::from_utf8_lossy(request);
         let path = req.split(' ').nth(1).unwrap_or("/").trim_start_matches('/').to_string();
         let (status, body) = match self.got.get(&path) {
+            Some(Ok((s, _))) if path == self.manifest && !(200..300).contains(s) => {
+                return Err(Error::new(5, format!("{path}: the site answers {s}: it serves no patch")));
+            }
             Some(Ok((s, b))) => (*s, b.as_slice()),
             Some(Err(e)) => return Err(Error::new(5, e.clone())),
             None => {
@@ -46,7 +57,7 @@ impl super::Wire for Replay<'_> {
 /// One play of `run` into `folder` over `got`: its status, and the paths it
 /// asked for that are not fetched yet (none: this play stands).
 pub fn play(cfg: &Config, got: &Fetched, folder: &mut dyn Folder) -> (Status, Vec<String>) {
-    let mut wire = Replay { got, missing: Vec::new() };
+    let mut wire = Replay { got, missing: Vec::new(), manifest: cfg.manifest.trim_start_matches('/') };
     let st: Shared = Default::default();
     super::run(cfg, &mut wire, folder, &st);
     let s = st.lock().unwrap().clone();
