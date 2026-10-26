@@ -5,6 +5,13 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · Help match spell visuals
+- A new page, eqoaclassic.com/spellfx (linked under the game's page as "Help match spell
+  visuals"): pick a spell (filter by class), try the visuals off your own disc in a
+  preview, and send the one that spell really had, with your name and a note if you like.
+  No sign-in; GMs compare everyone's picks and set the right one. Your disc image stays
+  on your computer.
+
 ## 2026-10-26 · The browser remembers your disc images properly
 - In a browser, "Remember my disc images" now also keeps a disc you chose before
   ticking it: ticking it opens the picker so you choose the disc once more, and that one
