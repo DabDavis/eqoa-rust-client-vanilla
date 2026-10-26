@@ -3651,9 +3651,13 @@ impl Play {
         self.keyboard = !finger;
         let (Click::Target(x, y) | Click::Interact(x, y) | Click::Right(x, y)) = c;
         let f = render::ui::frame_from_window(size, [x as f32, y as f32]);
-        // the map, while it is up: its buttons and glyphs; a right click is △
+        // the map, while it is up: its buttons and glyphs; a right click is △;
+        // a click on the map itself puts the waypoint there or takes it away
         if self.map.open {
             let keys = if matches!(c, Click::Right(..)) { vec![crate::pointer::key::TRIANGLE] } else { self.map.point(f, finger) };
+            if keys.is_empty() && matches!(c, Click::Target(..)) {
+                self.map.click([x as f32, y as f32], finger);
+            }
             self.press(&keys);
             return true;
         }
@@ -6907,6 +6911,7 @@ impl Play {
             target: self.target,
             camera: walker.eye.position.to_array(),
             time_ms,
+            waypoint: self.map.waypoint(self.player.world as i32),
         };
         let now = self.session.now();
         let dt = ((time_ms - self.hud_last).clamp(0, 250)) as f32 / 1000.0;
@@ -7369,6 +7374,29 @@ mod commands {
         let mut s = Session::connect_with(Box::new(Nowhere), ([127, 0, 0, 1], 5000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
         s.self_id = Some(0x100);
         Play::new(s, Player::default(), dump)
+    }
+
+    /// A click on the map while it is up, on no button of its, puts the
+    /// waypoint under it (`Map::click`) and is the map's; a right click is
+    /// △ (it closes the map) and puts none. The control: the map not up,
+    /// the same click puts none.
+    #[test]
+    fn a_click_on_the_map_puts_the_waypoint() {
+        use crate::mouse::Click;
+        crate::settings::testing::reset(false);
+        let size = (1280, 720);
+        let mut p = play();
+        p.point(Click::Target(900.0, 300.0), size, false);
+        assert_eq!(p.map.waypoint(0), None, "the control: the map not up");
+        p.map = crate::map::testing::up(size);
+        assert!(p.point(Click::Target(900.0, 300.0), size, false), "the map's");
+        let at = p.map.waypoint(0).expect("put");
+        assert!(p.point(Click::Right(200.0, 200.0), size, false));
+        assert_eq!(p.map.waypoint(0), Some(at), "a right click puts none");
+        assert!(!p.map.open, "a right click is △: the map closed");
+        p.map.show();
+        assert!(p.point(Click::Target(400.0, 500.0), size, true), "a finger's tap");
+        assert_ne!(p.map.waypoint(0), Some(at), "moved by the tap");
     }
 
     fn last_line(p: &Play) -> &str {

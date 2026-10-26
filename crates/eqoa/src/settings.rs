@@ -226,6 +226,38 @@ pub fn save_login(user: &str, password: &str, on: bool) -> bool {
     }
 }
 
+// ---- the map's waypoints (`map::Map::click`) ------------------------------------------
+
+/// The map's waypoints as this window keeps them (`waypoints.opt`, window n's
+/// `waypoints-<n>.opt`): a line a world, `<world> <x> <z>`, its `gWorldInfo`
+/// index and the point on its ground. The client's own (the game has no
+/// map), kept the moment one is set or cleared and never sent anywhere; a
+/// line that does not read is left out.
+pub fn waypoints() -> Vec<(i32, [f32; 2])> {
+    let Some(b) = store::read(&own_file("waypoints", place())) else { return Vec::new() };
+    String::from_utf8_lossy(&b)
+        .lines()
+        .filter_map(|l| {
+            let mut it = l.split_whitespace();
+            let world = it.next()?.parse().ok()?;
+            let (x, z): (f32, f32) = (it.next()?.parse().ok()?, it.next()?.parse().ok()?);
+            (it.next().is_none() && x.is_finite() && z.is_finite()).then_some((world, [x, z]))
+        })
+        .collect()
+}
+
+/// Keeps this window's waypoints (`waypoints`): whether they were kept.
+pub fn save_waypoints(w: &[(i32, [f32; 2])]) -> bool {
+    let text: String = w.iter().map(|(world, p)| format!("{world} {} {}\n", p[0], p[1])).collect();
+    match store::write(&own_file("waypoints", place()), text.as_bytes()) {
+        Ok(()) => true,
+        Err(e) => {
+            crate::say(&format!("the map's waypoint was not kept: {e}"));
+            false
+        }
+    }
+}
+
 // ---- game.opt's home shard (`VIGameOptions::m_homeShard`) ---------------------------
 
 /// `m_homeShard[64]` at +0x98: the server list's last pick, UTF-16.

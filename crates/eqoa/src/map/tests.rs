@@ -1,26 +1,8 @@
 //! The map's keys, pointer and view, without a GPU: a map over Tunaria's
 //! layout (a zone a 2,000 square, x 2,000..28,000, z 0..34,000).
 
+use super::testing::{FREEPORT, tunaria, up};
 use super::*;
-
-fn tunaria() -> Vec<[f32; 4]> {
-    (0..17).flat_map(|r| (1..14).map(move |c| [c as f32 * CELL, r as f32 * CELL, (c + 1) as f32 * CELL, (r + 1) as f32 * CELL])).collect()
-}
-
-/// A map up over Tunaria in a `size` window, its view made on the player at
-/// Freeport (25,300, 15,200).
-fn up(size: (u32, u32)) -> Map {
-    let mut m = Map {
-        world: Some(World { name: "TUNARIA.ESF".into(), era: esf::Era::Frontiers, index: 0, builder: Builder::new(WORLD_FILE, &tunaria(), None, None), overview: None, tiles: BTreeMap::new(), made: Instant::now(), view: None }),
-        size,
-        ..Default::default()
-    };
-    m.show();
-    m.steer(size, 0.0, [0.0; 4], Some(FREEPORT));
-    m
-}
-
-const FREEPORT: [f32; 2] = [25300.0, 15200.0];
 
 /// Opened on the player at the opening zoom; △ (and Start) close it; a key
 /// while it is down is not the map's. The control: a map that is not up
@@ -245,9 +227,10 @@ fn the_keyboard_works_the_map() {
     assert!(x > FREEPORT[0], "D pans east");
     m.steer(size, 0.1, [0.0; 4], Some(FREEPORT));
     assert_eq!(m.view.unwrap().center[0], x, "let go: still");
-    m.keyboard_key("q", true, false);
-    assert!(m.open, "the control: Q is not the map's");
-    assert_eq!(keyboard("q"), None);
+    m.keyboard_key("y", true, false);
+    assert!(m.open, "the control: Y is not the map's");
+    assert_eq!(keyboard("y"), None);
+    assert_eq!(keyboard("q"), Some((key::SQUARE, Hold::Once)), "Q is the keyboard's □: the waypoint");
     m.keyboard_key("escape", true, false);
     assert!(!m.open);
 }
@@ -308,4 +291,131 @@ fn the_map_is_made_again_when_the_art_or_the_worlds_disc_changes() {
     let by_name = |mapped: Option<(&str, esf::Era)>, name: &str| mapped.is_none_or(|(n, _)| n != name);
     assert!(!by_name(Some(("TUNARIA.ESF", F)), "TUNARIA.ESF"));
     assert!(renew(Some(Y), Y, Some(("TUNARIA.ESF", F)), "TUNARIA.ESF", Y).world);
+}
+
+fn near(a: [f32; 2], b: [f32; 2], e: f32) -> bool {
+    (a[0] - b[0]).abs() <= e && (a[1] - b[1]).abs() <= e
+}
+
+/// A click on the map puts the world's waypoint at the point under it; a
+/// click on it (within twice its diamond) takes it away, a finger's tap
+/// from a little farther; a click elsewhere moves it. The controls: a
+/// click just outside the mouse's reach does not take it away; a map not
+/// up takes no click; off the world's edge nothing is put.
+#[test]
+fn a_click_puts_the_waypoint_and_one_on_it_takes_it_away() {
+    crate::settings::testing::reset(false);
+    let size = (1280, 720);
+    let mut m = up(size);
+    let v = m.view.unwrap();
+    assert!(m.click([900.0, 300.0], false));
+    let at = m.waypoint(0).expect("put");
+    assert!(near(at, v.to_world(size, [900.0, 300.0]), 1e-3), "{at:?}");
+    assert_eq!(m.waypoint(1), None, "one world's");
+    let reach = view::waypoint_reach(size, false);
+    let finger = view::waypoint_reach(size, true);
+    assert!(finger > reach);
+    // just outside the mouse's reach: the click moves it there instead
+    assert!(m.click([900.0 + reach + 1.0, 300.0], false));
+    let moved = m.waypoint(0).expect("moved, not taken away");
+    assert!(!near(moved, at, 1e-3), "the control: just outside the reach moves it");
+    // a finger from farther than the mouse's reach takes it away
+    let p = v.to_window(size, moved);
+    assert!(m.click([p[0] + (reach + finger) / 2.0, p[1]], true));
+    assert_eq!(m.waypoint(0), None, "a tap a little off it takes it away");
+    // on it with the mouse
+    m.click([400.0, 500.0], false);
+    assert!(m.click([401.0, 501.0], false));
+    assert_eq!(m.waypoint(0), None);
+    // off the world: nothing put
+    let mut far = up(size);
+    far.view = Some(View { center: [2000.0, 0.0], scale: 10.0 });
+    assert!(!far.click([10.0, 10.0], false), "west and north of the world's edge");
+    assert_eq!(far.waypoint(0), None);
+    // the control: a map not up
+    let mut shut = up(size);
+    shut.close();
+    assert!(!shut.click([900.0, 300.0], false));
+    assert_eq!(shut.waypoint(0), None);
+}
+
+/// □ (Q) puts the waypoint at the map's middle once the map is panned off
+/// the player, takes it away at the middle, and takes it away wherever it
+/// is while the map follows the player. The control: following the player
+/// with none, □ puts nothing (the middle is the player, already there).
+#[test]
+fn square_puts_it_at_the_middle_once_panned() {
+    crate::settings::testing::reset(false);
+    let size = (1280, 720);
+    let mut m = up(size);
+    m.key(key::SQUARE, true);
+    assert_eq!(m.waypoint(0), None, "the control: following, none put");
+    m.mouse_button(false, true, [640.0, 360.0]);
+    m.mouse_moved([540.0, 300.0]);
+    m.mouse_button(false, false, [540.0, 300.0]);
+    m.steer(size, 0.0, [0.0; 4], Some(FREEPORT));
+    let middle = m.view.unwrap().center;
+    assert_ne!(middle, FREEPORT, "panned");
+    m.keyboard_key("q", true, false);
+    assert_eq!(m.waypoint(0), Some(middle), "Q at the middle");
+    m.key(key::SQUARE, true);
+    assert_eq!(m.waypoint(0), None, "□ at the middle takes it away");
+    m.key(key::SQUARE, true);
+    m.key(key::CROSS, true);
+    m.steer(size, 0.0, [0.0; 4], Some(FREEPORT));
+    m.key(key::SQUARE, true);
+    assert_eq!(m.waypoint(0), None, "following the player: taken away wherever it was");
+}
+
+/// The waypoints are kept as they change, a line a world, this window's own
+/// (window 2's `waypoints-2.opt`), and read back by a map made later; a
+/// line that does not read is left out. The control: a store that refuses
+/// keeps nothing, and the map still has it.
+#[test]
+fn the_waypoints_are_kept_per_world_and_per_window() {
+    crate::settings::testing::reset(false);
+    let size = (1280, 720);
+    let mut m = up(size);
+    m.click([900.0, 300.0], false);
+    let at = m.waypoint(0).unwrap();
+    let kept = String::from_utf8(crate::settings::testing::kept("waypoints.opt").expect("kept")).unwrap();
+    assert!(kept.starts_with("0 "), "{kept:?}");
+    let mut later = Map::default();
+    later.read_waypoints();
+    assert_eq!(later.waypoint(0), Some(at), "read back");
+    assert_eq!(later.waypoint(2), None);
+    crate::settings::testing::put("waypoints.opt", b"0 1 2\nnot a line\n2 300.5 400\n1 nan 3\n");
+    let mut read = Map::default();
+    read.read_waypoints();
+    assert_eq!((read.waypoint(0), read.waypoint(2), read.waypoint(1)), (Some([1.0, 2.0]), Some([300.5, 400.0]), None));
+    // window 2 keeps its own
+    crate::multibox::testing::set_place(Some(1));
+    let mut two = up(size);
+    two.click([300.0, 300.0], false);
+    assert!(crate::settings::testing::kept("waypoints-2.opt").is_some(), "window 2's own file");
+    crate::multibox::testing::set_place(None);
+    // the control: a store that refuses
+    crate::settings::testing::reset(true);
+    let mut refused = up(size);
+    refused.click([900.0, 300.0], false);
+    assert!(refused.waypoint(0).is_some(), "the map has it");
+    assert_eq!(crate::settings::testing::kept("waypoints.opt"), None, "nothing kept");
+    crate::settings::testing::reset(false);
+}
+
+/// The player reaching the waypoint (within `ARRIVE`) takes it away; in
+/// another world, or just outside, it stays. The control: 1 past the
+/// radius keeps it.
+#[test]
+fn reaching_the_waypoint_takes_it_away() {
+    crate::settings::testing::reset(false);
+    let mut m = up((1280, 720));
+    m.click([900.0, 300.0], false);
+    let at = m.waypoint(0).unwrap();
+    m.arrive(Some(([at[0] + ARRIVE + 1.0, 50.0, at[1]], 0.0)), 0);
+    assert!(m.waypoint(0).is_some(), "the control: just outside");
+    m.arrive(Some(([at[0], 50.0, at[1] + 1.0], 0.0)), 1);
+    assert!(m.waypoint(0).is_some(), "in another world");
+    m.arrive(Some(([at[0] + ARRIVE - 1.0, 50.0, at[1]], 0.0)), 0);
+    assert_eq!(m.waypoint(0), None, "reached");
 }

@@ -52,6 +52,9 @@ pub struct HudState {
     pub group: Vec<MemberState>,
     /// Every member, for `DrawPatch`.
     pub patches: Vec<PatchMember>,
+    /// The map's waypoint in this world (x, z): a dot on the compass's rim
+    /// at any distance, the client's own (`map::Map::click`).
+    pub waypoint: Option<[f32; 2]>,
     /// `m_selfId` and `m_target`.
     pub self_id: Option<u32>,
     pub target: u32,
@@ -450,7 +453,8 @@ impl Hud {
     /// out from (39, 55) at its bearing from the camera's heading, in its
     /// index's colour (1 green, 2 blue, 3 cyan, the rest yellow); the
     /// target's is off for the last 150 ms of every 1.5 s, counted from the
-    /// first call with the art.
+    /// first call with the art. The map's waypoint goes on the rim the same
+    /// way, magenta, at any distance (`waypoint_point`).
     fn draw_patch(&mut self, ui: &mut UiRaster, s: &HudState) {
         let Some(tex) = ui.assets.surface(icon_id("Patch_Art")) else { return };
         let start = *self.patch_start.get_or_insert(s.time_ms);
@@ -481,6 +485,19 @@ impl Hud {
                 clip: None,
             });
         }
+        if let Some(p) = s.waypoint.map(|w| waypoint_point(s.heading, s.camera, w)) {
+            let (hx, hy) = ((size[0] >> 1) as f32, (size[1] >> 1) as f32);
+            let (u0, v0) = (uv[0] / tex_size, uv[1] / tex_size);
+            let (u1, v1) = ((uv[0] + size[0] as f32) / tex_size, (uv[1] + size[1] as f32) / tex_size);
+            ui.ui.push(Quad {
+                tex,
+                blend: 0,
+                pos: [[p[0] - hx, p[1] - hy], [p[0] + hx, p[1] - hy], [p[0] + hx, p[1] + hy], [p[0] - hx, p[1] + hy]],
+                uv: [[u0, v0], [u1, v0], [u1, v1], [u0, v1]],
+                color: crate::map::WAYPOINT,
+                clip: None,
+            });
+        }
     }
 }
 
@@ -489,11 +506,24 @@ impl Hud {
 /// past 2000. (The game's two wraps, the first testing the heading as read,
 /// move the angle by whole turns.)
 fn patch_point(yaw: f32, d: [f32; 3]) -> Option<[f32; 2]> {
-    use std::f32::consts::PI;
-    let (center, radius) = ([39.0f32, 55.0], 27.0f32);
     if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() > 2000.0 {
         return None;
     }
+    Some(rim_point(yaw, d))
+}
+
+/// Where the map's waypoint `w` (x, z) goes on the compass seen from the
+/// camera at `camera` turned to `yaw`: `DrawPatch`'s rim at its bearing,
+/// however far it is (the client's own: a member past 2000 has no patch).
+fn waypoint_point(yaw: f32, camera: [f32; 3], w: [f32; 2]) -> [f32; 2] {
+    rim_point(yaw, [w[0] - camera[0], 0.0, w[1] - camera[2]])
+}
+
+/// `DrawPatch`'s rim: 27 pixels out from (39, 55) at the bearing of `d`
+/// from a camera turned to `yaw`.
+fn rim_point(yaw: f32, d: [f32; 3]) -> [f32; 2] {
+    use std::f32::consts::PI;
+    let (center, radius) = ([39.0f32, 55.0], 27.0f32);
     // HPR with y zeroed
     let h = d[0].atan2(d[2]);
     let mut x = h;
@@ -504,7 +534,7 @@ fn patch_point(yaw: f32, d: [f32; 3]) -> Option<[f32; 2]> {
         x += 2.0 * PI;
     }
     x -= yaw;
-    Some([center[0] - x.sin() * radius, center[1] - x.cos() * radius])
+    [center[0] - x.sin() * radius, center[1] - x.cos() * radius]
 }
 
 /// `DrawGauge`: the frame (`frame`'s art), then `bar`'s art cut to `v` of
@@ -523,7 +553,7 @@ pub fn draw_gauge(vui: &Vui, ui: &mut dyn Raster, bar: i32, frame: i32, at: [i32
 
 #[cfg(test)]
 mod tests {
-    use super::{Gauge, Hud, HudState, MemberState, Pick, member_gauges, patch_point, target_gauges};
+    use super::{Gauge, Hud, HudState, MemberState, Pick, member_gauges, patch_point, target_gauges, waypoint_point};
 
     fn near(a: [f32; 2], b: [f32; 2]) -> bool {
         (a[0] - b[0]).abs() < 1e-3 && (a[1] - b[1]).abs() < 1e-3
@@ -547,6 +577,21 @@ mod tests {
         // 2000 is the edge, measured before y is dropped
         assert!(patch_point(0.0, [0.0, 0.0, 2000.0]).is_some());
         assert!(patch_point(0.0, [0.0, 100.0, 1998.0]).is_none());
+    }
+
+    /// The map's waypoint sits on the rim at its bearing from the camera,
+    /// as a member's patch does, but at any distance and whatever the
+    /// camera's height: one 5,000 ahead is at the top, one to the east (+x)
+    /// at the left facing +z and at the top facing +x. The control: a
+    /// member as far has no patch at all.
+    #[test]
+    fn the_waypoint_sits_on_the_rim_at_any_distance() {
+        let cam = [25000.0, 60.0, 15000.0];
+        assert!(near(waypoint_point(0.0, cam, [25000.0, 20000.0]), [39.0, 28.0]));
+        assert!(near(waypoint_point(0.0, cam, [25100.0, 15000.0]), [12.0, 55.0]));
+        assert!(near(waypoint_point(std::f32::consts::FRAC_PI_2, cam, [25100.0, 15000.0]), [39.0, 28.0]));
+        assert!(near(waypoint_point(0.0, cam, [25000.0, 15000.0 - 9000.0]), [39.0, 82.0]));
+        assert!(patch_point(0.0, [0.0, 0.0, 5000.0]).is_none(), "the control: a member that far has no patch");
     }
 
     /// Mana Bars: a member's power under its health (10 below, as the

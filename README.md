@@ -82,7 +82,9 @@ or a browser (each described where it lives below):
   monitor and maximized or full-screen state (F11, Alt+Enter or Video's Display) it last had, each of
   several windows its own.
 - **The map** (M), drawn from the player's own disc for every world, on any
-  server.
+  server, with a waypoint of the player's own (a click or a tap on the map,
+  □ or Q at its middle; shown on the compass's rim, kept per world, sent
+  nowhere).
 - **The 2002 art** (F9, or the Extended page's Art): the game drawn as
   EverQuest Online Adventures looked before Frontiers, out of the player's own
   USA disc of 2002 (SLUS-20470) beside the Frontiers one: every race's body,
