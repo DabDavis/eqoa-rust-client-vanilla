@@ -13,7 +13,16 @@
 //! - the group in its compass colours;
 //! - the creatures and players in view, in their names' colours;
 //! - the target, ringed;
-//! - the waypoint, on the rim while it is farther than the minimap shows.
+//! - the waypoint, on the rim while it is farther than the minimap shows;
+//! - the map's XP camps and coaches (`markers`, with Map Markers on), as the
+//!   map marks them, smaller: not its coach routes (a line between two towns
+//!   thousands of units apart crosses 600 units of picture saying nothing of
+//!   where it goes) nor its town names (a name is as wide as the minimap);
+//! - marks of other kinds it is given (`Mark`, `MiniView::marks`: the
+//!   quests'), a quest's over the rest and on the rim while farther.
+//!
+//! Every mark is a `Mark` (a kind, a world, a place, its card's lines): the
+//! one under the mouse's pointer shows its card left of the minimap.
 //!
 //! A click or a tap on it opens the map (`hud::Pick::Minimap`); the wheel over
 //! it zooms it (`Map::mini_wheel`, between `SCALE_LIMITS`). It is shown where
@@ -26,7 +35,7 @@
 
 use super::{Context, Map, NOT_DRAWN, OUTLINE, OUTSIDE, WAYPOINT, view};
 use render::map::MapQuad;
-use render::ui::{Anchor, Quad, Vertical, frame_from_window, window_from_frame};
+use render::ui::{Anchor, Quad, Ui, Vertical, frame_from_window, window_from_frame};
 use render::wgpu;
 
 /// The minimap's frame in the HUD's 640x448 frame (`Anchor::Right`,
@@ -67,23 +76,50 @@ pub struct Mini {
     /// the tiles it shows, by zone: kept on the GPU (`Map::take_pictures`)
     pub wanted: Vec<usize>,
     /// the mouse's pointer, window pixels, while it is over the window
-    /// (`Map::mini_hover`): a mark under it says its tooltip
+    /// (`Map::mini_hover`): a mark under it shows its card
     pub cursor: Option<[f32; 2]>,
+    /// the map's own markers as marks, a world's (`map_marks`): made once
+    /// a world, their cards with them
+    pub map_marks: Option<(i32, Vec<Mark>)>,
 }
 
 impl Default for Mini {
     fn default() -> Self {
-        Mini { scale: SCALE, up: false, frame_px: [0.0; 4], wanted: Vec::new(), cursor: None }
+        Mini { scale: SCALE, up: false, frame_px: [0.0; 4], wanted: Vec::new(), cursor: None, map_marks: None }
     }
+}
+
+/// The map's own marks to draw in world `world` out of the minimap's
+/// (`Mini::map_marks`): that world's, none with Map Markers off (`on`, the
+/// map's toggle, X there and Extended's World page).
+fn own_marks(made: &Option<(i32, Vec<Mark>)>, world: i32, on: bool) -> &[Mark] {
+    match made {
+        Some((w, marks)) if *w == world && on => marks,
+        _ => &[],
+    }
+}
+
+/// The map's markers of world `world` (`markers::of_world`: its coaches and
+/// XP camps) as the minimap's marks, each with its card for a tooltip.
+pub fn map_marks(world: i32) -> Vec<Mark> {
+    super::markers::of_world(world)
+        .map(|m| {
+            let kind = match m {
+                super::markers::Marker::Camp(_) => MarkKind::Camp,
+                super::markers::Marker::Coach(_) => MarkKind::Coach,
+            };
+            Mark { kind, world: m.world(), at: m.at(), tip: m.card() }
+        })
+        .collect()
 }
 
 /// What a mark on the minimap is, which is how it is drawn: the hook other
 /// parts of the client fill (`MiniView::marks`) without touching the drawing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MarkKind {
-    /// a popular XP camp (the map's camps): an orange diamond
+    /// a popular XP camp: "XP" in gold on red, as the map marks it
     Camp,
-    /// a coach stop: a horseshoe
+    /// a coach: the stable's horseshoe, as the map marks it
     Coach,
     /// a quest to take there: "!" in gold, over the other marks and on the
     /// rim while it is farther than the minimap shows
@@ -137,11 +173,16 @@ pub struct MiniView {
     pub marks: Vec<Mark>,
 }
 
-/// The marks' colours: a camp's orange, a coach's horseshoe iron, a quest's
-/// gold.
-const CAMP: [f32; 4] = [1.0, 0.55, 0.1, 1.0];
-const COACH: [f32; 4] = [0.78, 0.8, 0.84, 1.0];
+/// A quest's mark's gold.
 const QUEST: [f32; 4] = [1.0, 0.82, 0.12, 1.0];
+/// A card's backing under the game's panel, as the map's (`markers`).
+const CARD_BACK: [f32; 4] = [0.05, 0.06, 0.08, 0.9];
+/// A coach's horseshoe from its middle to an edge, a camp's badge's letters'
+/// size (of the map font's), and how far from its place a mark is found or
+/// still drawn, in the frame's lines.
+const HORSESHOE: f32 = 4.5;
+const BADGE_TEXT: f32 = 0.6;
+const MARK_REACH: f32 = 6.0;
 
 /// The pictures' rectangle in the HUD's frame: `FRAME` less the border.
 pub fn inner() -> [i32; 4] {
@@ -200,10 +241,37 @@ fn diamond(q: [f32; 2], r: f32) -> [[f32; 2]; 4] {
     [[q[0], q[1] - r], [q[0] + r, q[1]], [q[0], q[1] + r], [q[0] - r, q[1]]]
 }
 
+/// A plain quad at frame points `pos`, cut to `cut`, pushed as it is (the
+/// minimap's points are the window's, `frame_from_window`).
+fn plain(ui: &mut Ui, white: usize, pos: [[f32; 2]; 4], color: [f32; 4], cut: Option<[i32; 4]>) {
+    ui.quads.push(Quad { tex: white, blend: 3, pos, uv: [[0.5, 0.5]; 4], color, clip: cut });
+}
+
+/// A square dot at frame point `p`, `r` frame pixels from its middle to an
+/// edge, outlined `o` more.
+fn square_dot(ui: &mut Ui, white: usize, cut: Option<[i32; 4]>, p: [f32; 2], r: f32, o: f32, color: [f32; 4]) {
+    plain(ui, white, square(p, r + o), OUTLINE, cut);
+    plain(ui, white, square(p, r), color, cut);
+}
+
+/// A camp's badge at frame point `p`: "XP" in gold on red, outlined, as the
+/// map's (`markers::draw_badges`), its letters `BADGE_TEXT` of the font's.
+fn badge(ui: &mut Ui, white: usize, font: Option<usize>, p: [f32; 2]) {
+    let label = vi::ui::wide("XP");
+    let (h, tw) = font.map_or((14.0, 20.0), |fo| (ui.fonts[fo].height as f32, ui.fonts[fo].string_width(&label) as f32));
+    let (h, tw) = (h * BADGE_TEXT, tw * BADGE_TEXT);
+    let (hw, hh) = (tw / 2.0 + 2.0, h / 2.0);
+    plain(ui, white, corners([p[0] - hw - 1.0, p[1] - hh - 1.0, p[0] + hw + 1.0, p[1] + hh + 1.0]), OUTLINE, None);
+    plain(ui, white, corners([p[0] - hw, p[1] - hh, p[0] + hw, p[1] + hh]), super::markers::BADGE, None);
+    if let Some(fo) = font {
+        ui.text_scaled(fo, p[0] - tw / 2.0, p[1] - h / 2.0, BADGE_TEXT, super::markers::BADGE_TEXT, &label);
+    }
+}
+
 /// A tooltip's most lines and its widest, frame pixels (a line wider goes
 /// on over the next).
-const TIP_LINES: usize = 10;
-const TIP_WIDTH: i32 = 220;
+const TIP_LINES: usize = 14;
+const TIP_WIDTH: i32 = 260;
 
 /// `line` cut at its spaces into lines no wider than `most` (by `width`): a
 /// word wider than that alone on its line.
@@ -231,8 +299,8 @@ fn wrap(line: &str, most: i32, width: impl Fn(&[u16]) -> i32) -> Vec<Vec<u16>> {
 /// pictures (`r` its half-width); a quest's where it lies or on the rim of
 /// `edge` while farther, pointing the way, and after the others, so drawn
 /// over them.
-fn place_marks<'a>(marks: &'a [Mark], world: i32, to_px: &dyn Fn([f32; 2]) -> [f32; 2], inside: [f32; 4], r: f32, mid: [f32; 2], edge: [f32; 4]) -> Vec<([f32; 2], &'a Mark)> {
-    let here = || marks.iter().filter(move |m| m.world == world);
+fn place_marks<'a>(marks: &[&'a Mark], world: i32, to_px: &dyn Fn([f32; 2]) -> [f32; 2], inside: [f32; 4], r: f32, mid: [f32; 2], edge: [f32; 4]) -> Vec<([f32; 2], &'a Mark)> {
+    let here = || marks.iter().copied().filter(move |m| m.world == world);
     let mut placed: Vec<([f32; 2], &Mark)> = here()
         .filter(|m| !m.kind.quest())
         .map(|m| (to_px(m.at), m))
@@ -280,6 +348,9 @@ impl Map {
     /// mapped is not the player's (a teleport's first frames).
     pub fn mini_frame(&mut self, cx: &Context, mv: &MiniView) {
         self.mini.up = false;
+        if self.mini.map_marks.as_ref().is_none_or(|(world, _)| *world != cx.world) {
+            self.mini.map_marks = Some((cx.world, map_marks(cx.world)));
+        }
         let Some((p, heading)) = cx.player.filter(|_| !self.open) else {
             self.mini.wanted.clear();
             return;
@@ -358,43 +429,37 @@ impl Map {
         let cut = Some([a[0].floor() as i32, a[1].floor() as i32, b[0].ceil() as i32, b[1].ceil() as i32]);
         let px_line = window_from_frame(size, [0.0, 1.0])[1] - window_from_frame(size, [0.0, 0.0])[1];
         let (dot, dot_o) = dot_radius(size);
-        // where the marks go: the quests' on the rim while farther, a glyph's
-        // half height in from it
-        let half = l.assets.font.map_or(8.0, |fo| ui.fonts[fo].height as f32 / 2.0) * px_line;
+        let font = l.assets.font;
+        // where the marks go: the map's own camps and coaches (Map Markers),
+        // then the rest it is given; the quests' on the rim while farther, a
+        // glyph's half height in from it
+        let half = font.map_or(8.0, |fo| ui.fonts[fo].height as f32 / 2.0) * px_line;
         let edge = [inside[0] + half * 0.6, inside[1] + half, inside[2] - half * 0.6, inside[3] - half];
-        let placed = place_marks(&mv.marks, cx.world, &to_px, inside, mark_radius(size), mid, edge);
-        // a plain quad of window pixels, cut to the pictures
-        let mut put = |d: [[f32; 2]; 4], color: [f32; 4]| {
-            ui.quads.push(Quad { tex: white, blend: 3, pos: d.map(f), uv: [[0.5, 0.5]; 4], color, clip: cut });
-        };
+        let own = own_marks(&self.mini.map_marks, cx.world, crate::settings::map_markers());
+        let all: Vec<&Mark> = own.iter().chain(&mv.marks).collect();
+        let placed = place_marks(&all, cx.world, &to_px, inside, MARK_REACH * px_line, mid, edge);
         let on = |q: [f32; 2], m: f32| q[0] >= inside[0] - m && q[0] <= inside[2] + m && q[1] >= inside[1] - m && q[1] <= inside[3] + m;
-        let dot_at = |put: &mut dyn FnMut([[f32; 2]; 4], [f32; 4]), q: [f32; 2], r: f32, o: f32, color: [f32; 4]| {
-            put(square(q, r + o), OUTLINE);
-            put(square(q, r), color);
-        };
+        // the coaches (the stable's horseshoe, the map's: off the disc), then
+        // the camps' XP badges over them, as the map draws them, smaller;
+        // the creatures and players over those (a camp's own among them)
+        let from = ui.quads.len();
+        for &(q, m) in &placed {
+            if m.kind == MarkKind::Coach {
+                super::markers::draw_horseshoe(ui, white, self.icon.tex, f(q), HORSESHOE, 1.0);
+            }
+        }
+        for &(q, m) in &placed {
+            if m.kind == MarkKind::Camp {
+                badge(ui, white, font, f(q));
+            }
+        }
+        for q in &mut ui.quads[from..] {
+            q.clip = cut;
+        }
         for &(at, color) in &mv.dots {
             let q = to_px(at);
             if on(q, dot + dot_o) {
-                dot_at(&mut put, q, dot, dot_o, color);
-            }
-        }
-        // the camps (a tent) and the coach stops (a horseshoe, opening down)
-        let r = mark_radius(size);
-        for &(q, m) in placed.iter().filter(|(_, m)| !m.kind.quest()) {
-            match m.kind {
-                MarkKind::Camp => {
-                    for (rr, color) in [(r + dot_o * 1.5, OUTLINE), (r, CAMP)] {
-                        put([[q[0], q[1] - rr], [q[0], q[1] - rr], [q[0] + rr, q[1] + rr * 0.8], [q[0] - rr, q[1] + rr * 0.8]], color);
-                    }
-                }
-                _ => {
-                    let (w, t) = (r * 0.9, (r * 0.45).max(px_line));
-                    for (g, color) in [(dot_o, OUTLINE), (0.0, COACH)] {
-                        put(corners([q[0] - w - g, q[1] - w - g, q[0] - w + t + g, q[1] + w + g]), color);
-                        put(corners([q[0] + w - t - g, q[1] - w - g, q[0] + w + g, q[1] + w + g]), color);
-                        put(corners([q[0] - w - g, q[1] - w - g, q[0] + w + g, q[1] - w + t + g]), color);
-                    }
-                }
+                square_dot(ui, white, cut, f(q), dot / px_line, dot_o / px_line, color);
             }
         }
         // the target: a white ring round its dot
@@ -404,20 +469,18 @@ impl Map {
             if on(q, r + o) {
                 for (rr, color) in [(r + o, OUTLINE), (r, [1.0; 4])] {
                     let t = o.max(1.0);
-                    put(corners([q[0] - rr, q[1] - rr, q[0] + rr, q[1] - rr + t]), color);
-                    put(corners([q[0] - rr, q[1] + rr - t, q[0] + rr, q[1] + rr]), color);
-                    put(corners([q[0] - rr, q[1] - rr, q[0] - rr + t, q[1] + rr]), color);
-                    put(corners([q[0] + rr - t, q[1] - rr, q[0] + rr, q[1] + rr]), color);
+                    for e in [[q[0] - rr, q[1] - rr, q[0] + rr, q[1] - rr + t], [q[0] - rr, q[1] + rr - t, q[0] + rr, q[1] + rr], [q[0] - rr, q[1] - rr, q[0] - rr + t, q[1] + rr], [q[0] + rr - t, q[1] - rr, q[0] + rr, q[1] + rr]] {
+                        plain(ui, white, corners(e).map(f), color, cut);
+                    }
                 }
             }
         }
         // the group's members, their compass colours, as the map has them
         for (pos, index) in &cx.group {
             let q = to_px([pos[0], pos[2]]);
-            let color = super::member_color(*index);
             let (r, o) = view::member_radius(size);
             if on(q, r + o) {
-                dot_at(&mut put, q, r, o, color);
+                square_dot(ui, white, cut, f(q), r / px_line, o / px_line, super::member_color(*index));
             }
         }
         // the waypoint, on the rim while it is farther than the minimap shows
@@ -427,7 +490,7 @@ impl Map {
             let edge = [inside[0] + r + o, inside[1] + r + o, inside[2] - r - o, inside[3] - r - o];
             let q = to_rim(mid, to_px(at), edge);
             for (rr, color) in [(r + o * 1.5, OUTLINE), (r, WAYPOINT)] {
-                put(diamond(q, rr), color);
+                plain(ui, white, diamond(q, rr).map(f), color, cut);
             }
         }
         let mut r = l.assets.raster(ui);
@@ -458,11 +521,11 @@ impl Map {
         // than the map's
         let (dr, o) = view::marker_radius(size);
         for (rr, color) in [(dr * 0.85 + o, OUTLINE), (dr * 0.85, super::MARKER)] {
-            let d = view::dart(mid, heading, rr).map(f);
-            r.ui.quads.push(Quad { tex: white, blend: 3, pos: d, uv: [[0.5, 0.5]; 4], color, clip: cut });
+            plain(r.ui, white, view::dart(mid, heading, rr).map(f), color, cut);
         }
-        // the tooltip of the mark under the mouse's pointer, left of the frame
-        let reach = (dot * 2.5).max(half) + px_line;
+        // the card of the mark under the mouse's pointer, left of the frame,
+        // drawn as the map's cards are
+        let reach = (MARK_REACH * px_line).max(half) + px_line;
         if let (Some(vui), Some((q, m))) = (cx.vui, self.mini.cursor.and_then(|c| mark_under(&placed, c, reach))) {
             r.ui.anchor = Anchor::Middle;
             r.ui.vertical = Vertical::Middle;
@@ -473,20 +536,23 @@ impl Map {
                 .take(TIP_LINES)
                 .collect();
             if !lines.is_empty() {
-                let h = vui.font_height(&r);
-                let w = lines.iter().map(|(l, _)| vui.string_width(&r, l)).max().unwrap_or(0) as f32 + 12.0;
-                let (lh, hgt) = (h - 2, ((h - 2) * lines.len() as i32 + 8) as f32);
+                // the map's card, closer set: it is over the game
+                let line = vui.font_height(&r) - 1;
+                let (pad, wide) = (6.0, lines.iter().map(|(l, _)| vui.string_width(&r, l)).max().unwrap_or(0) as f32);
+                let (w, hgt) = (wide + pad * 2.0, lines.len() as f32 * line as f32 + pad * 2.0);
                 // left of the frame, level with the mark, below the name
                 // plate (the HUD's pass, after this one, would cover it), in
                 // the window
                 let (corner, at) = (f([0.0, 0.0]), f([outer[0], q[1]]));
                 let (plate, bottom) = (f([0.0, window_rect(size, PLATE)[3]])[1] + 1.0, f([0.0, size.1 as f32])[1]);
-                let x0 = (at[0] - 4.0 - w).max(corner[0]);
-                let y0 = (at[1] - hgt / 2.0).min(bottom - hgt).max(plate);
+                let x = (at[0] - 6.0 - w).max(corner[0] + 1.0);
+                let y = (at[1] - hgt / 2.0).min(bottom - hgt - 1.0).max(plate);
                 let from = r.ui.quads.len();
-                r.ui.quads.push(Quad { tex: white, blend: 3, pos: corners([x0, y0, x0 + w, y0 + hgt]), uv: [[0.5, 0.5]; 4], color: [0.0, 0.0, 0.0, 0.78], clip: None });
+                plain(r.ui, white, corners([x - 1.0, y - 1.0, x + w + 1.0, y + hgt + 1.0]), OUTLINE, None);
+                plain(r.ui, white, corners([x, y, x + w, y + hgt]), CARD_BACK, None);
+                vui.stretch_blit_ex(&mut r, 61, [x.round() as i32, y.round() as i32], [w.round() as i32, hgt.round() as i32], 3, 0.75);
                 for (k, (l, c)) in lines.iter().enumerate() {
-                    vui.draw_string_ex(&mut r, l, x0 as i32 + 6, y0 as i32 + 4 + k as i32 * lh, *c, true);
+                    vui.draw_string_ex(&mut r, l, (x + pad).round() as i32, (y + pad).round() as i32 + k as i32 * line, *c, true);
                 }
                 for q in &mut r.ui.quads[from..] {
                     q.clip = Some(render::ui::WHOLE);
@@ -522,13 +588,6 @@ impl Map {
 pub fn dot_radius(size: (u32, u32)) -> (f32, f32) {
     let line = window_from_frame(size, [0.0, 1.0])[1] - window_from_frame(size, [0.0, 0.0])[1];
     (1.2 * line, 0.4 * line)
-}
-
-/// A camp's or a coach stop's half-width on the minimap, window pixels: 2.6
-/// of the frame's lines, twice a dot's and more.
-pub fn mark_radius(size: (u32, u32)) -> f32 {
-    let line = window_from_frame(size, [0.0, 1.0])[1] - window_from_frame(size, [0.0, 0.0])[1];
-    2.6 * line
 }
 
 #[cfg(test)]
@@ -597,6 +656,7 @@ mod tests {
         // 100 pixels round (0, 0), a world unit a pixel
         let (inside, mid) = ([0.0, 0.0, 100.0, 100.0], [50.0, 50.0]);
         let to_px = |q: [f32; 2]| [mid[0] + q[0], mid[1] + q[1]];
+        let marks: Vec<&Mark> = marks.iter().collect();
         let placed = place_marks(&marks, 0, &to_px, inside, 3.0, mid, [5.0, 8.0, 95.0, 92.0]);
         let kinds: Vec<MarkKind> = placed.iter().map(|(_, m)| m.kind).collect();
         assert_eq!(kinds, [MarkKind::Camp, MarkKind::QuestOffer, MarkKind::QuestStep]);
@@ -605,6 +665,26 @@ mod tests {
         assert!(near(placed[1].0, [95.0, 50.0]), "the far quest on the east rim: {:?}", placed[1].0);
         assert!(near(placed[2].0, [30.0, 20.0]), "the near one where it lies: {:?}", placed[2].0);
         assert!(place_marks(&marks, 2, &to_px, inside, 3.0, mid, [5.0, 8.0, 95.0, 92.0]).is_empty(), "no marks of world 2");
+    }
+
+    /// The map's camps and coaches come in as marks of their kinds, a
+    /// world's only, each with its card (the title first); none with Map
+    /// Markers off, nor for another world than the one they were made for.
+    #[test]
+    fn the_maps_camps_and_coaches_are_its_marks() {
+        let marks = map_marks(0);
+        let camps = marks.iter().filter(|m| m.kind == MarkKind::Camp).count();
+        let coaches = marks.iter().filter(|m| m.kind == MarkKind::Coach).count();
+        assert_eq!(camps, super::super::markers::of_world(0).filter(|m| matches!(m, super::super::markers::Marker::Camp(_))).count());
+        assert!(camps > 0 && coaches > 0, "Tunaria has both: {camps} camps, {coaches} coaches");
+        assert!(marks.iter().all(|m| m.world == 0 && !m.tip.is_empty() && m.tip[0].1 == super::super::markers::TITLE));
+        let freeport = marks.iter().find(|m| m.kind == MarkKind::Coach && m.tip.iter().any(|(l, _)| l.contains("Ronks"))).expect("Coachman Ronks's coach");
+        assert!((freeport.at[0] - 25274.0).abs() < 100.0 && (freeport.at[1] - 15719.0).abs() < 100.0, "{:?}", freeport.at);
+        let made = Some((0, marks));
+        assert!(!own_marks(&made, 0, true).is_empty());
+        assert!(own_marks(&made, 0, false).is_empty(), "Map Markers off");
+        assert!(own_marks(&made, 2, true).is_empty(), "made for another world");
+        assert!(own_marks(&None, 0, true).is_empty());
     }
 
     /// The tooltip is the topmost mark's under the pointer: a quest's over a
