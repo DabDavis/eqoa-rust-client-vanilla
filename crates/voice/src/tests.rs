@@ -263,7 +263,7 @@ impl PeerConnectionEventHandler for HubHandler {
 }
 
 /// A sine at `freq`, 0.3 full scale (RMS 0.212, −13.5 dBFS), for a microphone.
-fn tone(freq: f64) -> impl FnMut(&mut [f32]) + Send {
+pub(crate) fn tone(freq: f64) -> impl FnMut(&mut [f32]) + Send {
     let mut t = 0u64;
     move |frame| {
         for s in frame {
@@ -274,7 +274,7 @@ fn tone(freq: f64) -> impl FnMut(&mut [f32]) + Send {
 }
 
 /// The power at `freq` (Goertzel), per sample squared.
-fn power(x: &[f32], freq: f64) -> f64 {
+pub(crate) fn power(x: &[f32], freq: f64) -> f64 {
     let c = 2.0 * (2.0 * std::f64::consts::PI * freq / 48_000.0).cos();
     let (mut s1, mut s2) = (0.0f64, 0.0f64);
     for &v in x {
@@ -286,7 +286,7 @@ fn power(x: &[f32], freq: f64) -> f64 {
     (s1 * s1 + s2 * s2 - c * s1 * s2) / (n * n)
 }
 
-fn rms(x: &[f32]) -> f32 {
+pub(crate) fn rms(x: &[f32]) -> f32 {
     (x.iter().map(|v| v * v).sum::<f32>() / x.len().max(1) as f32).sqrt()
 }
 
