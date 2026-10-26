@@ -28,6 +28,11 @@ version.json under it:
             Frontiers disc there refused; F9's ask opens its picker inside
             the key's activation (not without one) and puts up its notice,
             whose button opens it again and takes the disc picked
+  remember  with Remember ticked a disc's handle is kept (a file of the
+            origin's own storage stands in for one): the next visit puts it
+            back in its input, or offers it on a button when the browser must
+            ask; unticked it is forgotten; a file moved since is said so; a
+            ticked click opens the picker that can be remembered
 
 Each check has its negative control. Needs the `websockets` package.
 
@@ -444,6 +449,72 @@ async def tests(a, site, base, page):
         await page.call("Page.setInterceptFileChooserDialog", enabled=False)
         facts = await page.js("eqoaReport.facts().join('\\n')") or ""
         check("a report names the 2002 disc", "2002 disc: EverQuest Online Adventures (USA), SLUS-20470" in facts, facts[-200:])
+
+    # ---- remember: the disc images kept in this browser (main.js
+    # `remembering`), with a file of the origin's own storage (OPFS) standing
+    # in for a picked image: its handle is kept as a picked one is
+    await page.open(base + q)
+    check("the Remember box is offered, unticked", await page.js("!document.getElementById('remember-row').hidden && !document.getElementById('remember').checked") is True)
+    keep_js = """(async () => {
+      const root = await navigator.storage.getDirectory();
+      const fh = await root.getFileHandle('remembered.iso', { create: true });
+      const w = await fh.createWritable(); await w.write(new Uint8Array(4096)); await w.close();
+      localStorage.setItem('eqoa.rememberDiscs', '1');
+      await new Promise((ok) => { const o = indexedDB.open('eqoa-discs', 1);
+        o.onupgradeneeded = () => o.result.createObjectStore('handles');
+        o.onsuccess = () => { const t = o.result.transaction('handles', 'readwrite'); t.objectStore('handles').put({ handle: fh, name: 'remembered.iso' }, 'disc'); t.oncomplete = ok; }; });
+      return true; })()"""
+    kept_js = """new Promise((ok) => { const o = indexedDB.open('eqoa-discs', 1);
+      o.onupgradeneeded = () => o.result.createObjectStore('handles');
+      o.onsuccess = () => { const q = o.result.transaction('handles').objectStore('handles').get('disc'); q.onsuccess = () => ok(!!q.result); q.onerror = () => ok(false); }; })"""
+    picked = "(document.getElementById('iso').files[0] || {}).name || ''"
+    await page.js(keep_js)
+    await page.open(base + q)
+    name = await page.until(f"{picked} === 'remembered.iso' && document.getElementById('iso').dataset.again === '1' && document.getElementById('iso-what').textContent && {picked}", 10)
+    check("a kept disc is back in its input next visit, and named", name == "remembered.iso", str(await page.js(picked)))
+    # the control: unticked, it is forgotten and the next visit has none
+    await page.gesture("document.getElementById('remember').click()")
+    await asyncio.sleep(0.3)
+    gone = await page.js(kept_js) is False and await page.js("localStorage.getItem('eqoa.rememberDiscs')") is None
+    await page.open(base + q)
+    await asyncio.sleep(1.0)
+    check("unticked, the disc is forgotten (control)", gone and await page.js(picked) == "", str(await page.js(picked)))
+    # moved or deleted since: said, and forgotten
+    await page.js(keep_js)
+    await page.js("navigator.storage.getDirectory().then((r) => r.removeEntry('remembered.iso')).then(() => true)")
+    await page.open(base + q)
+    line = await page.until("document.getElementById('iso-what').textContent.includes('no longer where it was') && document.getElementById('iso-what').textContent", 10)
+    check("a kept disc moved since is said so and forgotten", bool(line) and "remembered.iso" in line and await page.js(kept_js) is False, str(line))
+    # not allowed without asking: offered on a button, taken on its click
+    await page.js(keep_js)
+    hook = await page.call("Page.addScriptToEvaluateOnNewDocument", source="""
+      FileSystemHandle.prototype.queryPermission = async function () { return 'prompt'; };
+      FileSystemHandle.prototype.requestPermission = async function () { return navigator.userActivation.isActive ? 'granted' : 'denied'; };""")
+    await page.open(base + q)
+    offer = await page.until("!document.getElementById('iso-again-row').hidden && document.getElementById('iso-again').textContent", 10)
+    check("a disc the browser must ask for is offered, not taken", offer == "Use remembered.iso again" and await page.js(picked) == "", str(offer))
+    await page.gesture("document.getElementById('iso-again').click()")
+    name = await page.until(f"{picked} === 'remembered.iso' && document.getElementById('iso-again-row').hidden && {picked}", 10)
+    check("its button takes it", name == "remembered.iso", str(await page.js(picked)))
+    await page.call("Page.removeScriptToEvaluateOnNewDocument", identifier=hook["identifier"])
+    # ticked, a click opens the picker that can be remembered, not the input's
+    await page.call("Page.setInterceptFileChooserDialog", enabled=True)
+    n = len(page.choosers)
+    await page.gesture("document.getElementById('iso').click()")
+    await asyncio.sleep(0.8)
+    own = [c for c in page.choosers[n:] if c.get("backendNodeId")]
+    check("ticked, a click does not open the input's own chooser", not own, str(page.choosers[n:]))
+    await page.gesture("document.getElementById('remember').click()")
+    await asyncio.sleep(0.3)
+    n = len(page.choosers)
+    await page.gesture("document.getElementById('iso').click()")
+    for _ in range(20):
+        if len(page.choosers) > n:
+            break
+        await asyncio.sleep(0.1)
+    check("unticked, the input's own chooser opens (control)", any(c.get("backendNodeId") for c in page.choosers[n:]), str(page.choosers[n:]))
+    await page.call("Page.setInterceptFileChooserDialog", enabled=False)
+    await page.js("navigator.storage.getDirectory().then((r) => r.removeEntry('remembered.iso')).catch(() => 0).then(() => true)")
 
     errors = [l for l in page.lines if l.startswith("EXCEPTION") and "crash_test" not in l and "unreachable" not in l and "a test rejection" not in l]
     check("no exception in the page beyond the crash test's", not errors, "; ".join(errors[:3]))

@@ -557,7 +557,14 @@ page on WebGL2 draws 30 frames a second (`web::frame_due`: an animation frame
 before the next is due is skipped whole, the game's clocks seeing longer
 frames; the options' Frame Rate, or `?uncapped`, lifts it). The
 player picks their own disc image in the page; it is read there a slice at a
-time (`File.slice`), never uploaded, and nothing from it is served. What the
+time (`File.slice`), never uploaded, and nothing from it is served. With
+"Remember my disc images in this browser" ticked (Chromium-based browsers,
+which have the File System Access picker), a pick goes through
+`showOpenFilePicker` and its handle, never the image, is kept in the origin's
+IndexedDB: the next visit puts the image back in its input when the browser
+still allows reading it, else offers it on a "Use <file> again" button whose
+click asks; a file moved since is said so and forgotten, and unticking
+forgets both (`web/main.js`, `web/pagetest.py` "remember"). What the
 game reads synchronously is fetched first; whatever walks the image (its
 directory, a world file's record headers) runs against `iso::Sparse`, a cache
 that answers `WouldBlock` for bytes it lacks and is filled between attempts

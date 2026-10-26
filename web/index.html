@@ -52,6 +52,8 @@
   textarea { width: 100%; box-sizing: border-box; padding: 9px 10px; background: #0e1217; color: var(--text); border: 1px solid var(--line); border-radius: 6px; font: inherit; resize: vertical; }
   label.check { display: flex; gap: 8px; align-items: center; color: var(--text); }
   label.check input { width: auto; }
+  .row.again { margin-top: 6px; }
+  .row.again button { flex: 0 1 auto; text-align: left; overflow-wrap: anywhere; }
   #rp-pic { display: block; box-sizing: border-box; max-width: 100%; max-height: 26vh; margin-top: 8px; border: 1px solid var(--line); border-radius: 6px; }
   pre.crash { margin: 0 0 6px; padding: 8px 10px; max-height: 160px; overflow: auto; background: #0e1217; border: 1px solid var(--line); border-radius: 6px; font: 12px/1.4 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
   .ok a { color: var(--good); }
@@ -72,9 +74,13 @@
     </div>
     <label for="iso">Disc image (SLUS-20744, .iso)</label>
     <input id="iso" type="file" accept=".iso,.bin,.img" required>
+    <div class="row again" id="iso-again-row" hidden><button type="button" class="small" id="iso-again"></button></div>
     <div class="note" id="iso-what"></div>
+    <label class="check" id="remember-row" hidden><input id="remember" type="checkbox"> Remember my disc images in this browser</label>
+    <div class="note" id="remember-what" hidden>The browser keeps where the images are on your computer, not the images themselves, so the next visit can use them again (it may ask your permission once). Nothing is uploaded.</div>
     <label for="iso2002">The 2002 disc, for its art on F9 (optional: EverQuest Online Adventures (USA), SLUS-20470, .iso)</label>
     <input id="iso2002" type="file" accept=".iso,.bin,.img">
+    <div class="row again" id="iso2002-again-row" hidden><button type="button" class="small" id="iso2002-again"></button></div>
     <div class="note" id="iso2002-what"></div>
     <details>
       <summary>Server and viewer</summary>
