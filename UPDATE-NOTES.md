@@ -5,6 +5,13 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · An even pulse at 30 frames a second, and the spell list shrinks as visuals are set
+- With Frame Rate set to 30, the pointer beside a list's selection (the who list, the
+  menus) pulses evenly again, and the HUD no longer skips a beat every few seconds: the
+  cap now runs at exactly the game's own 30 frames a second.
+- On the Help match spell visuals page, a spell leaves the list once GMs have set its
+  visual, so what is left is what still needs a match.
+
 ## 2026-10-26 · Help match spell visuals
 - A new page, eqoaclassic.com/spellfx (linked under the game's page as "Help match spell
   visuals"): pick a spell (filter by class), try the visuals off your own disc in a
