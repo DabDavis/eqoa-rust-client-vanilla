@@ -317,7 +317,7 @@ fn replayed(site: &HashMap<String, Vec<u8>>, mem: &mut Mem) -> (Status, Vec<Vec<
     let mut plays = Vec::new();
     loop {
         let mut trial = mem.clone();
-        let (s, missing) = replay::play(&cfg(), &got, &mut trial);
+        let (s, missing, _) = replay::play(&cfg(), &got, &mut trial);
         plays.push(missing.clone());
         if missing.is_empty() {
             if s.state == state::DONE {
@@ -387,7 +387,7 @@ fn a_site_that_serves_no_patch_is_unreachable() {
     let mut got = replay::Fetched::new();
     got.insert(manifest.into(), Ok((404, b"<html><body>404 Not Found</body></html>".to_vec())));
     let mut mem = Mem::default();
-    let (s, missing) = replay::play(&cfg(), &got, &mut mem);
+    let (s, missing, _) = replay::play(&cfg(), &got, &mut mem);
     assert!(missing.is_empty(), "{missing:?}");
     assert!(s.unreachable, "{:?}", s.err);
     assert_ne!(s.state, state::FAILED);
@@ -397,12 +397,11 @@ fn a_site_that_serves_no_patch_is_unreachable() {
     let mut site = site(&files);
     site.remove("words-1.gz");
     let mut got = replay::Fetched::new();
-    let mut mem = Mem::default();
-    let s = loop {
-        let mut trial = mem.clone();
-        let (s, missing) = replay::play(&cfg(), &got, &mut trial);
+    let (s, last) = loop {
+        let mut trial = Mem::default();
+        let (s, missing, _) = replay::play(&cfg(), &got, &mut trial);
         if missing.is_empty() {
-            break s;
+            break (s, trial);
         }
         for p in missing {
             let r = site.get(&p).map_or_else(|| Ok((404, b"<html>404</html>".to_vec())), |b| Ok((200, b.clone())));
@@ -411,5 +410,40 @@ fn a_site_that_serves_no_patch_is_unreachable() {
     };
     assert!(!s.unreachable);
     assert_eq!(s.state, state::FAILED, "a listed file the site lacks fails the patch");
-    assert!(mem.files.is_empty() && mem.writes == 0, "nothing written");
+    assert!(last.files.is_empty() && last.writes == 0, "the play that stands wrote nothing");
+}
+
+/// In a page only the play that stands is told (`replay::play`'s lines):
+/// the plays before it answer what was not fetched yet with nothing, so
+/// their errors ("Document of the wrong type", "Failed") are not the
+/// patch's, and a page's log would have them in every patch, a good one
+/// too. The control: a patch that fails for real tells its failure.
+#[test]
+fn only_the_play_that_stands_is_told() {
+    fn told(site: &HashMap<String, Vec<u8>>) -> (Status, Vec<String>) {
+        let mut got = replay::Fetched::new();
+        let mem = Mem::default();
+        loop {
+            let (s, missing, said) = replay::play(&cfg(), &got, &mut mem.clone());
+            if missing.is_empty() {
+                return (s, said);
+            }
+            assert!(said.is_empty(), "a play thrown away tells nothing: {said:?}");
+            for p in missing {
+                let r = site.get(&p).map_or_else(|| Ok((404, b"<html>404</html>".to_vec())), |b| Ok((200, b.clone())));
+                got.insert(p, r);
+            }
+        }
+    }
+    let files = two();
+    let (s, said) = told(&site(&files));
+    assert_eq!(s.state, state::DONE, "{:?}", s.err);
+    assert!(said.iter().any(|l| l.contains("Patching with XML")), "{said:?}");
+    assert!(!said.iter().any(|l| l.contains("ERROR CODE") || l.contains("Failed")), "{said:?}");
+    // the control: a listed file the site lacks fails, and the last play says so
+    let mut gone = site(&files);
+    gone.remove("words-1.gz");
+    let (s, said) = told(&gone);
+    assert_eq!(s.state, state::FAILED);
+    assert!(said.iter().any(|l| l.contains("ERROR CODE")), "{said:?}");
 }

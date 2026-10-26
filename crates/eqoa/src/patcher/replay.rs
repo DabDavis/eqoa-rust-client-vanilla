@@ -54,12 +54,18 @@ impl super::Wire for Replay<'_> {
     }
 }
 
-/// One play of `run` into `folder` over `got`: its status, and the paths it
-/// asked for that are not fetched yet (none: this play stands).
-pub fn play(cfg: &Config, got: &Fetched, folder: &mut dyn Folder) -> (Status, Vec<String>) {
+/// One play of `run` into `folder` over `got`: its status, the paths it
+/// asked for that are not fetched yet (none: this play stands), and the
+/// lines it would have said, only when it stands: a play thrown away tells
+/// nothing, its errors being the empty answers to what was not fetched yet
+/// ("Document of the wrong type" for the manifest), not the patch's.
+pub fn play(cfg: &Config, got: &Fetched, folder: &mut dyn Folder) -> (Status, Vec<String>, Vec<String>) {
     let mut wire = Replay { got, missing: Vec::new(), manifest: cfg.manifest.trim_start_matches('/') };
     let st: Shared = Default::default();
+    super::HELD.with(|h| *h.borrow_mut() = Some(Vec::new()));
     super::run(cfg, &mut wire, folder, &st);
+    let said = super::HELD.with(|h| h.borrow_mut().take()).unwrap_or_default();
     let s = st.lock().unwrap().clone();
-    (s, wire.missing)
+    let said = if wire.missing.is_empty() { said } else { Vec::new() };
+    (s, wire.missing, said)
 }

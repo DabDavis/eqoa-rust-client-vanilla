@@ -120,13 +120,13 @@ pub fn write_folder(dir: &std::path::Path, images: &Images, progress: &mut dyn F
             return Err(format!("refusing to write {:?}: not a plain file name", im.name));
         }
         if im.dirty && !im.deleted {
-            crate::say(&format!("patcher: POST PATCH: Writing (new/modified) file ({}), CRC = {}", im.name, im.crc));
+            super::say(&format!("patcher: POST PATCH: Writing (new/modified) file ({}), CRC = {}", im.name, im.crc));
             let path = dir.join(&im.name);
             let part = dir.join(format!("{}.part", im.name));
             std::fs::write(&part, &im.data).and_then(|_| std::fs::rename(&part, &path)).map_err(|e| format!("{}: {e}", path.display()))?;
         }
         if im.deleted {
-            crate::say(&format!("patcher: POST PATCH: Deleting file ({})", im.name));
+            super::say(&format!("patcher: POST PATCH: Deleting file ({})", im.name));
             match std::fs::remove_file(dir.join(&im.name)) {
                 Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(format!("{}: {e}", im.name)),
                 _ => {}

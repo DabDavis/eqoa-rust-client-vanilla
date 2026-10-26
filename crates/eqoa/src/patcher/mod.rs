@@ -29,6 +29,20 @@ pub mod web;
 use image::Images;
 use std::sync::{Arc, Mutex};
 
+thread_local! {
+    /// The lines of a play `replay` may throw away, held until it is known
+    /// to stand (`replay::play`); None: each line said as it comes.
+    static HELD: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// A line of the patcher's: said, or held while a page's play runs.
+fn say(s: &str) {
+    let held = HELD.with(|h| h.borrow_mut().as_mut().map(|v| v.push(s.to_string())).is_some());
+    if !held {
+        crate::say(s);
+    }
+}
+
 /// The patch port SETUP passes `Initialize`.
 pub const PORT: u16 = 7000;
 
@@ -307,7 +321,7 @@ impl<'a> Api<'a> {
         self.bytes_total = self.tree.size(d, 0, true);
         let ok = tree::Tree::download(self, d, 0) == 0;
         if !ok {
-            crate::say("patcher: PatcherAPI_Impl::DownloadRoutine successFalse 1");
+            say("patcher: PatcherAPI_Impl::DownloadRoutine successFalse 1");
         }
         self.tree.reset_scan(d, 2);
         if self.tree.size(d, 0, true) == 0 {
@@ -404,7 +418,7 @@ impl Setup<'_> {
 
 impl Callbacks for Setup<'_> {
     fn on_file(&mut self, name: &str) {
-        crate::say(&format!("patcher: On File: {name}"));
+        say(&format!("patcher: On File: {name}"));
         if !self.initializing {
             self.set_state(state::UPDATING);
             self.frames(4);
@@ -425,7 +439,7 @@ impl Callbacks for Setup<'_> {
     }
 
     fn on_error(&mut self, code: i32, text: &str) {
-        crate::say(&format!("patcher: ERROR CODE {code} / '{}'", text.trim_end()));
+        say(&format!("patcher: ERROR CODE {code} / '{}'", text.trim_end()));
     }
 
     fn set_initializing(&mut self, on: bool) {
@@ -442,7 +456,7 @@ impl Callbacks for Setup<'_> {
 pub fn run(cfg: &Config, wire: &mut dyn Wire, folder: &mut dyn Folder, st: &Shared) {
     let mut s = Setup { st, frame_ms: cfg.frame_ms, initializing: false, read_done: 0.0, write_done: 0.0 };
     let fail = |st: &Shared, msg: String, unreachable: bool| {
-        crate::say(&format!("patcher: {msg}"));
+        say(&format!("patcher: {msg}"));
         let mut g = st.lock().unwrap();
         if !unreachable {
             g.state = state::FAILED;
@@ -455,7 +469,7 @@ pub fn run(cfg: &Config, wire: &mut dyn Wire, folder: &mut dyn Folder, st: &Shar
     s.frames(20);
     s.set_state(state::READING);
     s.frames(10);
-    crate::say("patcher: reading patch data");
+    say("patcher: reading patch data");
     let images = {
         let mut read_done = 0.0;
         let r = folder.read(&mut |f| {
@@ -471,7 +485,7 @@ pub fn run(cfg: &Config, wire: &mut dyn Wire, folder: &mut dyn Folder, st: &Shar
     };
     s.set_state(state::CONNECTING);
     s.frames(32);
-    crate::say(&format!("patcher: Patching with XML: {}", cfg.manifest));
+    say(&format!("patcher: Patching with XML: {}", cfg.manifest));
     let mut cb = Setup { st, frame_ms: cfg.frame_ms, initializing: true, read_done: s.read_done, write_done: 0.0 };
     let mut api = Api::new(&mut cb, wire, images);
     let server = format!("{}:{}", cfg.host, cfg.port);
@@ -506,7 +520,7 @@ pub fn run(cfg: &Config, wire: &mut dyn Wire, folder: &mut dyn Folder, st: &Shar
     files.sort_by(|a, b| a.name.cmp(&b.name));
     let when = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
     folder.record(&crate::servers::Record { server: cfg.host.clone(), manifest: cfg.manifest.clone(), when, files });
-    crate::say(&format!("patcher: {} version {version}: done ({})", cfg.host, if changed { "files changed" } else { "nothing to change" }));
+    say(&format!("patcher: {} version {version}: done ({})", cfg.host, if changed { "files changed" } else { "nothing to change" }));
     let mut g = st.lock().unwrap();
     g.progress = 1.0;
     g.state = state::DONE;

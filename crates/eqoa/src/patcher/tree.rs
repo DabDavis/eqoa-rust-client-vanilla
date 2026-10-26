@@ -794,7 +794,7 @@ impl Tree {
             Some(im) => {
                 let crc = crc32(&im.data);
                 if crc != d.crc {
-                    crate::say(&format!("patcher: {}: CRC {crc}, the manifest says {}", target.as_deref().unwrap_or(""), d.crc));
+                    super::say(&format!("patcher: {}: CRC {crc}, the manifest says {}", target.as_deref().unwrap_or(""), d.crc));
                     result = 100;
                 }
             }
@@ -810,7 +810,7 @@ impl Tree {
         api.tree.nodes[n].need_download = 0;
         if d.restart {
             api.cb.on_finish();
-            crate::say(&format!("patcher: {} asks for a restart; the patch is cancelled", d.local_name.as_deref().unwrap_or("")));
+            super::say(&format!("patcher: {} asks for a restart; the patch is cancelled", d.local_name.as_deref().unwrap_or("")));
             api.cancel = true;
         }
         0

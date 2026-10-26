@@ -105,8 +105,11 @@ async fn patch(cfg: &Config, st: &Shared) {
     let mut got = Fetched::new();
     for _ in 0..PLAYS {
         let mut folder = Page { dir: crate::servers::folder(&cfg.host), written: None, record: None };
-        let (mut s, missing) = replay::play(cfg, &got, &mut folder);
+        let (mut s, missing, said) = replay::play(cfg, &got, &mut folder);
         if missing.is_empty() {
+            for line in &said {
+                crate::say(line);
+            }
             if s.state == state::DONE
                 && let Err(e) = folder.keep()
             {
@@ -119,6 +122,9 @@ async fn patch(cfg: &Config, st: &Shared) {
         }
         st.lock().unwrap().state = if got.is_empty() { state::CONNECTING } else { state::UPDATING };
         // every path this play asked for, fetched at once
+        for p in &missing {
+            crate::say(&format!("patcher: fetching {base}/{p}"));
+        }
         let fetches: Vec<_> = missing.into_iter().map(|p| (fetch(&format!("{base}/{p}")), p)).collect();
         for (f, p) in fetches {
             got.insert(p, f.await);
