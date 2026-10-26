@@ -142,6 +142,49 @@ pub struct Sound {
     pub weather: F<Ee>,
     /// `CalcOutdoorsIntensity`'s value this frame (`m_soundTrack.m_p30`).
     pub outdoors: F<Ee>,
+    /// voices playing that no sound holds (`Strays`)
+    strays: Strays,
+}
+
+/// Voices the SPU2 plays that none of the device's sounds holds, the BGM's
+/// pair aside, counted frame by frame (`Sound::frame`): one stopped in the
+/// packet just sent still shows for a frame, so a voice counts once it has
+/// played on so for `STRAY_FRAMES` (the device's own rule for a sound that
+/// went quiet). A voice nothing holds is never stopped by anything, and plays
+/// whatever its RAM holds now (the report's sound line; F3 20261025-225337).
+#[derive(Clone)]
+struct Strays {
+    /// each voice's frames playing with no sound (core 0's 24, then core 1's)
+    frames: [u8; 48],
+    /// how many times a voice has reached `STRAY_FRAMES`
+    times: u32,
+}
+
+const STRAY_FRAMES: u8 = 3;
+
+impl Strays {
+    fn new() -> Strays {
+        Strays { frames: [0; 48], times: 0 }
+    }
+
+    /// A frame's look: `playing` the status block's voices (core 0, core 1)
+    /// and `held` the device's channels.
+    fn look(&mut self, playing: [u32; 2], held: u64) {
+        let free = [!(held & 0xff_ffff) as u32, !((held >> 24) & 0xff_ffff) as u32 & !0xc0_0000];
+        for c in 0..2 {
+            for v in 0..24 {
+                let k = c * 24 + v;
+                if playing[c] & free[c] & (1 << v) != 0 {
+                    self.frames[k] = self.frames[k].saturating_add(1);
+                    if self.frames[k] == STRAY_FRAMES {
+                        self.times += 1;
+                    }
+                } else {
+                    self.frames[k] = 0;
+                }
+            }
+        }
+    }
 }
 
 thread_local! {
@@ -186,12 +229,38 @@ impl Sound {
     /// What plays, in a line: the BGM request and track, the XM slots, and
     /// what the device holds: its sounds of the 128, the SPU RAM they take of
     /// the pool (the BGM ring's 256 KB among them), and the sounds it could
-    /// not make since the start (no slot, no memory).
+    /// not make since the start (no slot, no memory). Then, for a crunch
+    /// (F3 20261025-225337): every uploaded sound's RAM against what its
+    /// upload sent (`check_ram`: a sound whose RAM was overwritten plays
+    /// garbled until it is let go), the voices playing that no sound of the
+    /// device's holds (the BGM's pair aside), the packets and upload steps
+    /// kept back, and the commands a full packet dropped (a busy frame's) and
+    /// the stops it sent with the next one instead.
     pub fn describe(&self) -> String {
         let st = self.audio.status();
         let t = &self.track;
         let (free, largest) = self.dev.spu_free();
         let pool = snd::device::SPU_POOL;
+        let ram = match self.audio.check_ram(&self.dev) {
+            None => "not compared now (a copy still to go)".to_string(),
+            Some(c) if c.differ.is_empty() => format!("all {} as uploaded", c.checked),
+            Some(c) => format!("{} of {} NOT as uploaded (slots {:?})", c.differ.len(), c.checked, c.differ),
+        };
+        let lasting = |c: usize| (0..24).filter(|&v| self.strays.frames[c * 24 + v] >= STRAY_FRAMES).fold(0u32, |m, v| m | 1 << v);
+        format!(
+            "{}; sounds' RAM: {ram}; voices playing on with no sound {:06x} {:06x} ({} times since the start); packets kept back {}, upload steps held {}, commands that found the packet full {} (stops sent next {})",
+            self.describe_play(st, t, free, largest, pool),
+            lasting(0),
+            lasting(1),
+            self.strays.times,
+            self.dev.flushes_refused,
+            self.dev.uploads_held,
+            self.dev.cmds_dropped,
+            self.dev.stops_dropped
+        )
+    }
+
+    fn describe_play(&self, st: [u32; 128], t: &SoundTrack, free: i32, largest: i32, pool: i32) -> String {
         format!(
             "battle {}, region music {} (bgm {} {:?}), ambient track {:08x}/{:08x} (states {}/{}; terrain profile {}, music {}, played as effects), voices {:06x} {:06x}; volumes: effects {:.2}, music {:.2}; sounds {} of 128, sound RAM {} of {} KB (largest free {} KB), failed creates {} (no slot {}, no memory {})",
             self.battle.1,
@@ -249,6 +318,7 @@ impl Sound {
             preview: None,
             weather: F::ZERO,
             outdoors: F::ONE,
+            strays: Strays::new(),
         })
         .map(|mut s| {
             s.load_resident(read);
@@ -496,6 +566,8 @@ impl Sound {
         self.update_stream_emitters(world, eye);
         self.set_sound_track(world, eye, hour, time);
         self.dev.process(&mut self.link);
+        let st = self.audio.status();
+        self.strays.look([st[4], st[5]], self.dev.channels());
         self.audio.feed();
     }
 
@@ -792,6 +864,33 @@ impl vi::csprite::SoundSink for Sink<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A voice playing that no sound holds counts once it has played on so
+    /// for three frames, once a run; the controls: a voice a sound holds, the
+    /// BGM's pair, and one seen with no sound for only two frames (a stop
+    /// in the packet just sent shows for a frame) never count.
+    #[test]
+    fn voices_no_sound_holds_count_after_three_frames() {
+        let mut s = Strays::new();
+        // channel 2 held (core 0 voice 2); core 0 voice 5 and core 1 voice 1
+        // (channel 25) playing with no sound; the BGM pair (core 1 22, 23)
+        let held = 1u64 << 2;
+        let playing = [(1 << 2) | (1 << 5), (1 << 1) | 0xc0_0000];
+        s.look(playing, held);
+        s.look(playing, held);
+        assert_eq!(s.times, 0, "two frames: a stop not yet heard");
+        s.look(playing, held);
+        assert_eq!(s.times, 2, "three: core 0 voice 5 and core 1 voice 1");
+        assert_eq!((s.frames[5], s.frames[24 + 1], s.frames[2], s.frames[24 + 22]), (3, 3, 0, 0));
+        s.look(playing, held);
+        assert_eq!(s.times, 2, "once a run");
+        s.look([1 << 2, 0], held);
+        s.look(playing, held);
+        s.look(playing, held);
+        assert_eq!(s.times, 2, "a new run starts again from nothing");
+        s.look(playing, held);
+        assert_eq!(s.times, 4);
+    }
 
     /// The ambience at a spot of `world`, three seconds of it at `hour`, with
     /// the two classes' volumes (Fx, Music) as the options set them: the
