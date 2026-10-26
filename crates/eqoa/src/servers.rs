@@ -9,7 +9,8 @@
 //! servers never takes another's files.
 //!
 //! The patcher (`patcher`) writes it; the game reads it: the server's words
-//! (`words`), and its S2 and art.
+//! (`words`), and its S2 and art. In a page the folder is kept in the
+//! origin's localStorage (`page`).
 
 use std::path::{Path, PathBuf};
 
@@ -37,12 +38,13 @@ fn base() -> PathBuf {
 }
 
 /// Whether a patch may be kept: natively with a config directory (the game,
-/// `$EQOA_CONFIG`); the test commands and a page keep nothing.
+/// `$EQOA_CONFIG`), in a page with the origin's storage; the test commands
+/// keep nothing.
 pub fn keeps() -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     return crate::settings::config_dir().is_some();
     #[cfg(target_arch = "wasm32")]
-    false
+    page::available()
 }
 
 /// A file of the server's folder, if it has one.
@@ -50,9 +52,56 @@ pub fn file(host: &str, name: &str) -> Option<Vec<u8>> {
     #[cfg(not(target_arch = "wasm32"))]
     return std::fs::read(folder(host).join(name)).ok();
     #[cfg(target_arch = "wasm32")]
-    {
-        let _ = (host, name);
-        None
+    page::read(&folder(host), name)
+}
+
+/// In a page: a server's folder in the origin's localStorage, one item a
+/// file (`eqoa.<folder>/<name>`, hex, as `settings` keeps its own), every
+/// access allowed to fail. A name is found in any case, as `s2` finds one
+/// natively ("UNDERFOOT.ESF" finds "Underfoot.esf").
+#[cfg(target_arch = "wasm32")]
+pub mod page {
+    use std::path::Path;
+
+    fn storage() -> Option<web_sys::Storage> {
+        web_sys::window()?.local_storage().ok().flatten()
+    }
+
+    fn prefix(dir: &Path) -> String {
+        format!("eqoa.{}/", dir.to_string_lossy())
+    }
+
+    pub fn available() -> bool {
+        storage().is_some()
+    }
+
+    /// The files the folder holds.
+    pub fn names(dir: &Path) -> Vec<String> {
+        let Some(s) = storage() else { return Vec::new() };
+        let pre = prefix(dir);
+        (0..s.length().unwrap_or(0)).filter_map(|i| s.key(i).ok().flatten()).filter_map(|k| k.strip_prefix(&pre).map(str::to_string)).collect()
+    }
+
+    pub fn read(dir: &Path, name: &str) -> Option<Vec<u8>> {
+        let name = names(dir).into_iter().find(|n| n.eq_ignore_ascii_case(name))?;
+        let s = storage()?.get_item(&format!("{}{name}", prefix(dir))).ok().flatten()?;
+        let b = s.as_bytes();
+        (b.len() % 2 == 0).then_some(())?;
+        b.chunks(2).map(|p| u8::from_str_radix(std::str::from_utf8(p).ok()?, 16).ok()).collect()
+    }
+
+    pub fn write(dir: &Path, name: &str, b: &[u8]) -> Result<(), String> {
+        let s = storage().ok_or("the page has no storage")?;
+        let hex: String = b.iter().map(|v| format!("{v:02x}")).collect();
+        s.set_item(&format!("{}{name}", prefix(dir)), &hex).map_err(|e| format!("{name}: {e:?}"))
+    }
+
+    pub fn remove(dir: &Path, name: &str) {
+        if let Some(s) = storage() {
+            for n in names(dir).into_iter().filter(|n| n.eq_ignore_ascii_case(name)) {
+                let _ = s.remove_item(&format!("{}{n}", prefix(dir)));
+            }
+        }
     }
 }
 
@@ -148,10 +197,7 @@ pub fn write_record(dir: &Path, r: &Record) -> Result<(), String> {
         std::fs::write(&tmp, r.to_json()).and_then(|_| std::fs::rename(&tmp, dir.join(RECORD))).map_err(|e| format!("{}: {e}", dir.join(RECORD).display()))
     }
     #[cfg(target_arch = "wasm32")]
-    {
-        let _ = (dir, r);
-        Ok(())
-    }
+    page::write(dir, RECORD, r.to_json().as_bytes())
 }
 
 fn quote(s: &str) -> String {

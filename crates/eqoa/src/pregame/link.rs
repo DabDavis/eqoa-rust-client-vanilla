@@ -160,9 +160,10 @@ pub fn session(host: &str, port: u16, user: &str, token: [u8; 32]) -> Opening {
 
 /// SETUP's patcher (`patcher::run`) against the player's server, into that
 /// server's own folder (`servers::folder`): natively on a thread of its own
-/// (`patcher::native`), the window reading the status it returns each
-/// frame. None where it cannot run: in a page (a page cannot reach the
-/// patch port), and in a run that keeps nothing (the test commands).
+/// (`patcher::native`), in a page on a task over the server's web server
+/// (`patcher::web`: a page cannot reach the patch port), the window reading
+/// the status it returns each frame. None in a run that keeps nothing (the
+/// test commands, a page without storage).
 pub fn patch(host: &str, manifest: &str) -> Option<crate::patcher::Shared> {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -180,8 +181,10 @@ pub fn patch(host: &str, manifest: &str) -> Option<crate::patcher::Shared> {
     }
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = (host, manifest);
-        None
+        if !crate::servers::keeps() {
+            return None;
+        }
+        Some(crate::patcher::web::start(host, manifest))
     }
 }
 

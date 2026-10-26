@@ -21,7 +21,10 @@ pub mod http;
 pub mod image;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native;
+pub mod replay;
 pub mod tree;
+#[cfg(target_arch = "wasm32")]
+pub mod web;
 
 use image::Images;
 use std::sync::{Arc, Mutex};

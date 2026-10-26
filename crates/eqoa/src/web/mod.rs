@@ -824,6 +824,22 @@ fn world_loader(disc: &WebDisc) -> crate::pregame::host::WorldLoader {
                 log(&format!("{n} zones read round the spawn"));
                 for name in SHARED.iter().copied().chain(["CHAR.ESF", "ITEM.ESF", "ARIAL.CSF", "UI.CSF", "ARIALUI.CSF", "ITEMICON.ESF", "SPELLFX.CSF", "FX.CSF", "ADDART.CSF"]) {
                     add(&mut lib, &mut d, name).await?;
+                    // a server's patch's own names for CHAR.ESF's art (`s2`:
+                    // Sandstorm's set 9), as natively
+                    if name == "CHAR.ESF" {
+                        crate::s2::get().register_art(&mut lib);
+                    }
+                }
+                // a server's patch's own art (`s2`: Sandstorm's ss-art.csf,
+                // robes 4 and 5), out of the server's folder, as natively
+                let rules = crate::s2::get();
+                if let Some(b) = rules.folder_bytes(&rules.art_file) {
+                    match esf::Container::open(b) {
+                        Ok(c) => {
+                            lib.add(rules.art_file.to_uppercase(), c);
+                        }
+                        Err(e) => log(&format!("s2: {}: {e:?}", rules.art_file)),
+                    }
                 }
                 // the 2002 disc's art while it is the art drawn (`era`, F9):
                 // its files in place of their namesakes, read with the world's

@@ -520,9 +520,8 @@ impl Hello {
 /// count) and writes it there, the write's result in bits 5 to 7.
 fn make_device_block(dir: &Path, id_file: &str, clock: u32) -> [u8; 28] {
     let mut b = [0u8; 28];
-    let path = dir.join(id_file);
     // VIMemCardReadFile: the bytes read, -2 for no file, -1 a failure
-    let n: i32 = match std::fs::read(&path) {
+    let n: i32 = match folder_read(dir, id_file) {
         Ok(d) => {
             let k = d.len().min(8);
             b[8..8 + k].copy_from_slice(&d[..k]);
@@ -537,10 +536,26 @@ fn make_device_block(dir: &Path, id_file: &str, clock: u32) -> [u8; 28] {
         b[8..12].copy_from_slice(&clock.to_le_bytes());
         b[12..16].copy_from_slice(&CLIENT_BASE.wrapping_add(clock << 13).to_le_bytes());
         // VIMemCardWriteFile: 0 written, -1 not
-        let w: i32 = if std::fs::write(&path, &b[8..16]).is_ok() { 0 } else { -1 };
+        let w: i32 = if folder_write(dir, id_file, &b[8..16]).is_ok() { 0 } else { -1 };
         b[6] |= (((1 - w) & 7) << 5) as u8;
     }
     b
+}
+
+/// A file of a server's folder: natively on disk, in a page in the origin's
+/// storage (`servers::page`).
+fn folder_read(dir: &Path, name: &str) -> std::io::Result<Vec<u8>> {
+    #[cfg(not(target_arch = "wasm32"))]
+    return std::fs::read(dir.join(name));
+    #[cfg(target_arch = "wasm32")]
+    crate::servers::page::read(dir, name).ok_or_else(|| std::io::ErrorKind::NotFound.into())
+}
+
+fn folder_write(dir: &Path, name: &str, b: &[u8]) -> std::io::Result<()> {
+    #[cfg(not(target_arch = "wasm32"))]
+    return std::fs::write(dir.join(name), b);
+    #[cfg(target_arch = "wasm32")]
+    crate::servers::page::write(dir, name, b).map_err(std::io::Error::other)
 }
 
 /// `make_device_block` for this run: the first connection to a server's
@@ -1103,7 +1118,7 @@ impl Rules {
     /// then either).
     pub fn from_dir(dir: &Path) -> Rules {
         let path = dir.join("S2");
-        let Ok(data) = std::fs::read(&path) else { return Rules::retail() };
+        let Ok(data) = folder_read(dir, "S2") else { return Rules::retail() };
         match Patch::parse(&data) {
             Ok(p) => {
                 let mut r = Rules::from_patch(&p);
@@ -1272,8 +1287,16 @@ impl Rules {
     /// card's copy read before the disc's as the game reads it; `None` with
     /// no copy there.
     pub fn words(&self) -> Option<vi::strtab::StringTable> {
-        let bytes = std::fs::read(self.folder_file("WORDS.TXT")?).ok()?;
-        crate::spelling::words(&bytes)
+        crate::spelling::words(&self.folder_bytes("WORDS.TXT")?)
+    }
+
+    /// A file of the server's folder, its name in any case (`folder_file`;
+    /// in a page out of the origin's storage).
+    pub fn folder_bytes(&self, name: &str) -> Option<Vec<u8>> {
+        #[cfg(not(target_arch = "wasm32"))]
+        return std::fs::read(self.folder_file(name)?).ok();
+        #[cfg(target_arch = "wasm32")]
+        crate::servers::page::read(self.dir.as_ref()?, name)
     }
 
     /// A file in the server's folder, its name in any case ("UNDERFOOT.ESF"
