@@ -2,7 +2,7 @@
 # The browser client: web/dist/ gets the page (index.html, and beside it the
 # GM panel's preview fxview.html and the community page spellfx.html) and its build,
 # v/<build>/: main.js and report.js, the workers (unpack.js, tick.js), the AudioWorklet
-# (sound.js), the update notes (update-notes.md), eqoa.js and eqoa_bg.wasm (wasm-bindgen 0.2.129, the version
+# (sound.js), the update notes (update-notes.md), the pages' icon (disc.svg), eqoa.js and eqoa_bg.wasm (wasm-bindgen 0.2.129, the version
 # Cargo.lock pins: `cargo install wasm-bindgen-cli --version 0.2.129`), and
 # build.json. A build is named by the digest of its files, the page and the
 # commit, so its files never change under that name: the host keeps them
@@ -26,6 +26,8 @@ if [ -n "$OPT" ]; then
         --enable-reference-types --enable-multivalue "$STAGE/eqoa_bg.wasm" -o "$STAGE/eqoa_bg.wasm"
 fi
 cp web/main.js web/report.js web/unpack.js web/sound.js web/tick.js web/fxview.js web/discstore.js web/spellfx.js "$STAGE/"
+# the pages' icon: the program's own drawn disc (crates/eqoa/src/icon_art.rs)
+cp web/disc.svg "$STAGE/"
 # the preview again inside the build, for the community page (spellfx.html) to frame on its
 # own origin: the page at the top level is framed by the GM panel alone (nginx)
 cp web/fxview.html "$STAGE/fxview.html"
@@ -39,16 +41,19 @@ BUILD="$( { (cd "$STAGE" && sha256sum -- *); sha256sum < web/index.html; sha256s
 printf '{"build":"%s","commit":"%s"}\n' "$BUILD" "$COMMIT" > "$STAGE/build.json"
 mkdir -p web/dist/v
 mv "$STAGE" "web/dist/v/$BUILD"
-sed -e "s|src=\"\./main\.js\"|src=\"./v/$BUILD/main.js\"|" -e "s|src=\"\./report\.js\"|src=\"./v/$BUILD/report.js\"|" web/index.html > web/dist/index.html
+sed -e "s|src=\"\./main\.js\"|src=\"./v/$BUILD/main.js\"|" -e "s|src=\"\./report\.js\"|src=\"./v/$BUILD/report.js\"|" -e "s|href=\"\./disc\.svg\"|href=\"./v/$BUILD/disc.svg\"|" web/index.html > web/dist/index.html
 # the GM panel's spell-visual preview (fxview.js, crates/eqoa/src/fxview.rs),
 # a page of its own beside the game's, on the same build
-sed -e "s|src=\"\./fxview\.js\"|src=\"./v/$BUILD/fxview.js\"|" web/fxview.html > web/dist/fxview.html
+sed -e "s|src=\"\./fxview\.js\"|src=\"./v/$BUILD/fxview.js\"|" -e "s|href=\"\./disc\.svg\"|href=\"./v/$BUILD/disc.svg\"|" web/fxview.html > web/dist/fxview.html
 # the community page that matches spells to their visuals, on the same build
-sed -e "s|src=\"\./spellfx\.js\"|src=\"./v/$BUILD/spellfx.js\"|" web/spellfx.html > web/dist/spellfx.html
+sed -e "s|src=\"\./spellfx\.js\"|src=\"./v/$BUILD/spellfx.js\"|" -e "s|href=\"\./disc\.svg\"|href=\"./v/$BUILD/disc.svg\"|" web/spellfx.html > web/dist/spellfx.html
 # a page that names no build would load files that are not there
 grep -q "src=\"./v/$BUILD/main.js\"" web/dist/index.html && grep -q "src=\"./v/$BUILD/report.js\"" web/dist/index.html \
     || { echo "web/index.html: its scripts are not ./main.js and ./report.js" >&2; exit 1; }
 grep -q "src=\"./v/$BUILD/fxview.js\"" web/dist/fxview.html || { echo "web/fxview.html: its script is not ./fxview.js" >&2; exit 1; }
 grep -q "src=\"./v/$BUILD/spellfx.js\"" web/dist/spellfx.html || { echo "web/spellfx.html: its script is not ./spellfx.js" >&2; exit 1; }
+for page in index fxview spellfx; do
+    grep -q "href=\"./v/$BUILD/disc.svg\"" "web/dist/$page.html" || { echo "web/$page.html: its icon is not ./disc.svg" >&2; exit 1; }
+done
 cp "web/dist/v/$BUILD/build.json" web/dist/version.json
 ls -la "web/dist" "web/dist/v/$BUILD"

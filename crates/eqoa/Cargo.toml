@@ -49,8 +49,9 @@ libc = "0.2.191"
 # winit makes, its action on an object of a class of its own. The versions
 # another dependency already brings.
 objc2 = "0.6.5"
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString"] }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSMenu", "NSMenuItem", "NSResponder"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSData"] }
+# ... and the Dock's picture (`icon`): the program's, as an image of a PNG
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSMenu", "NSMenuItem", "NSResponder", "NSImage"] }
 # A PlayStation controller's motors over IOKit (`hidpad::mac`): gilrs reads
 # it there and has no force feedback. The versions and features gilrs's own
 # IOKit reading already brings.
