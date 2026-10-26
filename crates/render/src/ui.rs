@@ -780,14 +780,20 @@ impl Ui {
     /// pixel apart, alpha-blended in `color` (`'?'` for a character the
     /// font lacks; nothing when it lacks that too).
     pub fn text(&mut self, font: usize, x: i32, y: i32, color: [f32; 4], s: &[u16]) {
+        self.text_scaled(font, x as f32, y as f32, 1.0, color, s);
+    }
+
+    /// `text` drawn `scale` times its size from (x, y): its glyphs, their
+    /// widths and the pixel between them all scaled (1 is `text` exactly).
+    pub fn text_scaled(&mut self, font: usize, x: f32, y: f32, scale: f32, color: [f32; 4], s: &[u16]) {
         let f = &self.fonts[font];
-        let (tex, h) = (f.tex, f.height as f32);
-        let mut x0 = x as f32;
-        let y0 = y as f32;
+        let (tex, h) = (f.tex, f.height as f32 * scale);
+        let mut x0 = x;
+        let y0 = y;
         let mut quads = Vec::new();
         for &c in s {
             let Some(&(w, uv)) = f.find(c) else { return };
-            let x1 = x0 + w as f32;
+            let x1 = x0 + w as f32 * scale;
             quads.push(Quad {
                 tex,
                 blend: 3,
@@ -796,7 +802,7 @@ impl Ui {
                 color,
                 clip: None,
             });
-            x0 = x1 + 1.0;
+            x0 = x1 + scale;
         }
         for q in quads {
             self.push(q);

@@ -12,9 +12,26 @@ is put on the page by `.github/workflows/notes.yml`.
   you: the NPC to see next, or the nearest places of the creatures to hunt.
 - Point at a mark (or tap it, or pan the map's cross onto it with a
   controller) to see its quests: their names and levels, how the offer starts
-  or what the step asks, and the rewards or what you still need.
-- ○ on the map (J on a keyboard, or the map's Quests button) hides them for
-  now; Extended's new Map page turns them off for good.
+  or what the step asks, and the rewards or what you still need. Click it, or
+  tap it again, to put your waypoint on it.
+- The marks sit over the XP camps and coaches. J on the map (R3 on a pad, or
+  the map's Quests button) hides or shows them, and so does Options > Extended
+  > Quests > Quest Markers.
+
+## 2026-10-26 · XP camps, coaches, routes and towns on the map
+- The map (M) marks the popular XP camps with a red XP badge and every coach with the
+  horseshoe the stables wear (the one on Freeport's stable sign, read from your own disc).
+  Point at one, with the mouse, a tap, or the pad's middle cross once the map is panned,
+  for its card: a camp's levels, the guide's note, the rare creatures near it and notable
+  drops; a coach's town, its coachman and the towns it runs to.
+- Click a marker, or tap it a second time, to put your waypoint on it.
+- The coach routes are dashed lines between the towns they join; the coach you point at
+  has its own drawn bright.
+- The towns' names are on the map too, blue for good, red for evil, cream for neutral,
+  the bigger town's first where they crowd, smaller as you zoom out.
+- X (○ on a pad) hides or shows the markers and routes, and so does Options > Extended >
+  World > Map Markers; T (Select) the town names. The camps, routes and towns are from
+  EQOA-Data's map guide.
 
 ## 2026-10-26 · Lightning you can see
 - Lightning spells shoot their bolts in the world now: a wizard's Static Bolt, Shocking

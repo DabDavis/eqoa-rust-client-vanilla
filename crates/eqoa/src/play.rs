@@ -6751,7 +6751,7 @@ impl Play {
             keyboard: self.keyboard,
             words: self.words.as_ref(),
             vui: self.hud.as_ref().map(|h| &h.0),
-            quest_marks: if crate::settings::client().quest_markers { &self.session.quest_marks } else { &[] },
+            quest_marks: self.session.quest_marks_offer.then_some(if crate::settings::client().quest_markers { &self.session.quest_marks[..] } else { &[] }),
         };
         self.map.frame(&cx);
     }

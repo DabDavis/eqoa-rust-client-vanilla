@@ -50,9 +50,15 @@ pub fn shot(s: &Shot, out: &str) -> Result<(), Box<dyn std::error::Error>> {
     let t = Instant::now();
     let mut frames = 0u32;
     map.show();
+    // `EQOA_MAP_HOVER=<x>,<z>`: that world point taken as the mouse's, its
+    // marker's card shown (`markers`)
+    map.hover_world = std::env::var("EQOA_MAP_HOVER").ok().and_then(|v| {
+        let (x, z) = v.split_once(',')?;
+        Some([x.trim().parse().ok()?, z.trim().parse().ok()?])
+    });
     let player = Some(([s.at[0], 0.0, s.at[1]], s.heading));
     loop {
-        let cx = Context { lib: &lib, device: &device, queue: &queue, format: render::TARGET_FORMAT, size: s.size, dt: 1.0 / 60.0, player, world, origin: [1000.0, 1000.0], group: Vec::new(), sticks: [0.0; 4], keyboard: true, words: words.as_ref(), vui: None, quest_marks: &[] };
+        let cx = Context { lib: &lib, device: &device, queue: &queue, format: render::TARGET_FORMAT, size: s.size, dt: 1.0 / 60.0, player, world, origin: [1000.0, 1000.0], group: Vec::new(), sticks: [0.0; 4], keyboard: true, words: words.as_ref(), vui: None, quest_marks: None };
         map.budget = budget;
         map.frame(&cx);
         frames += 1;
@@ -68,7 +74,7 @@ pub fn shot(s: &Shot, out: &str) -> Result<(), Box<dyn std::error::Error>> {
     }
     // a few more frames: the view's tiles asked of the cache and shown
     for _ in 0..30 {
-        let cx = Context { lib: &lib, device: &device, queue: &queue, format: render::TARGET_FORMAT, size: s.size, dt: 1.0 / 60.0, player, world, origin: [1000.0, 1000.0], group: Vec::new(), sticks: [0.0; 4], keyboard: true, words: words.as_ref(), vui: None, quest_marks: &[] };
+        let cx = Context { lib: &lib, device: &device, queue: &queue, format: render::TARGET_FORMAT, size: s.size, dt: 1.0 / 60.0, player, world, origin: [1000.0, 1000.0], group: Vec::new(), sticks: [0.0; 4], keyboard: true, words: words.as_ref(), vui: None, quest_marks: None };
         map.frame(&cx);
     }
     if let Some(w) = &map.world {
