@@ -10,6 +10,8 @@ is put on the page by `.github/workflows/notes.yml`.
   picture of the land round you, north up, with you as the arrow in the middle, your group in
   their colours, the creatures and players near you as dots in their names' colours, your
   target ringed and your waypoint (on its edge while it is farther than it shows).
+- The map's XP camps and coaches are on it too, as the map marks them; point at one with
+  the mouse for its card. Map Markers (X on the map) hides them here as well.
 - Click or tap it to open the map; the mouse wheel over it zooms it in and out. It goes
   away with the rest of the HUD under Hide UI (H) and while a window is open.
 - Turn it off under Options > Extended > UI > Minimap. Loading Screens moved from UI to the
