@@ -419,11 +419,14 @@ impl FrameRate {
     pub const ALL: [FrameRate; 3] = [FrameRate::Thirty, FrameRate::Sixty, FrameRate::Display];
 
     /// The time between two frames it keeps, in ms (0: every frame the
-    /// display shows). 30 is the 33 ms a page on WebGL2 has kept since
-    /// 2026-10-20.
+    /// display shows). 30 is the game's own frame (`frames::FRAME_MS`), so
+    /// that under it every frame drawn is one of the game's: at the 33 ms a
+    /// page on WebGL2 kept from 2026-10-20 the frames drawn crept ahead of the
+    /// game's and every few seconds one was not, the HUD then holding a frame
+    /// (F3 20261026-030902: a list's pointer pulsing unevenly).
     pub fn gap_ms(self) -> f64 {
         match self {
-            FrameRate::Thirty => 33.0,
+            FrameRate::Thirty => crate::frames::FRAME_MS,
             FrameRate::Sixty => 1000.0 / 60.0,
             FrameRate::Display => 0.0,
         }
@@ -2049,6 +2052,65 @@ mod tests {
         assert!(curve(6).unwrap()[64] < curve(7).unwrap()[64]);
     }
 
+    /// Under the 30 cap every frame drawn is one of the game's (`frames.rs`), so
+    /// what the game counts in frames (the HUD's windows, a list's pulsing
+    /// pointer) steps once a frame drawn, at even times (F3 20261026-030902: the
+    /// who list's pointer pulsed unevenly at Frame Rate 30). Natively the loop
+    /// wakes when the cap's frame is due (`frame_wait`, a millisecond or so late
+    /// at most) whatever the display, and in a page on each animation frame of a
+    /// 60 to 165 Hz display; the cap's gap was 33.0 ms against the game's
+    /// 33.33, so the frames drawn crept 0.33 ms a frame ahead of the game's and
+    /// about every hundredth (every 3.3 s) came over `frames::EARLY_MS` early:
+    /// no step, a frame of the HUD shown twice (66 ms), at a different point of
+    /// each pulse. The control: that gap again, which skips.
+    #[test]
+    fn under_the_30_cap_every_frame_drawn_is_the_games() {
+        // (frames drawn, those of the game's, the longest gap between the game's)
+        let run = |gap: f64, wake: &dyn Fn(f64, f64) -> f64| {
+            let (mut due, mut frames, mut t, mut drawn, mut games, mut last, mut longest) =
+                (0.0, crate::frames::Frames::default(), 1000.0, 0, 0, f64::NAN, 0.0f64);
+            let mut seed = 0x9E37_79B9u32;
+            while t < 61_000.0 {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                let jitter = (seed % 1000) as f64 / 1000.0;
+                if let Some(next) = take(due, t, gap) {
+                    due = next;
+                    drawn += 1;
+                    if frames.due(t) {
+                        games += 1;
+                        if !last.is_nan() {
+                            longest = longest.max(t - last);
+                        }
+                        last = t;
+                    }
+                }
+                t = wake(t, due).max(t + 0.5) + jitter;
+            }
+            (drawn, games, longest)
+        };
+        // natively: asleep until the cap's frame is due (less `EARLY`)
+        let native = |_: f64, due: f64| due - EARLY;
+        let thirty = FrameRate::Thirty.gap_ms();
+        let (drawn, games, longest) = run(thirty, &native);
+        assert!((1795..=1805).contains(&drawn), "natively: {drawn} frames drawn in a minute");
+        assert_eq!(games, drawn, "natively: every frame drawn is the game's");
+        assert!(longest < crate::frames::FRAME_MS + 1.5, "natively: the game's frames at most {longest} ms apart");
+        // a page: an animation frame of the display each time
+        for hz in [60.0, 75.0, 120.0, 144.0, 165.0] {
+            let page = move |t: f64, _: f64| ((t / (1000.0 / hz)).floor() + 1.0) * (1000.0 / hz);
+            let (drawn, games, longest) = run(thirty, &page);
+            assert!(drawn > 1700, "{hz} Hz: {drawn} frames drawn in a minute");
+            assert_eq!(games, drawn, "{hz} Hz: every frame drawn is the game's");
+            assert!(longest < crate::frames::FRAME_MS + 1000.0 / hz + 1.5, "{hz} Hz: the game's frames at most {longest} ms apart");
+        }
+        // the control: the cap's old 33.0 ms
+        let (drawn, games, longest) = run(33.0, &native);
+        assert!(drawn - games >= 10, "33.0 ms: {} frames drawn of the game's skipped", drawn - games);
+        assert!(longest > 2.0 * crate::frames::FRAME_MS - 1.0, "33.0 ms: a frame of the HUD shown twice ({longest} ms)");
+    }
+
     /// The 30 cap as a page on WebGL2 has kept it: on a 60 Hz display every
     /// other frame, on 165 Hz 30 a second and never two within 29 ms; 60 on
     /// 60 Hz every frame, the first frame drawn 3 ms late or not (the due
@@ -2076,7 +2138,7 @@ mod tests {
         };
         let thirty = FrameRate::Thirty.gap_ms();
         let sixty = FrameRate::Sixty.gap_ms();
-        assert_eq!(thirty, 33.0, "the page's 30 as it was");
+        assert_eq!(thirty, crate::frames::FRAME_MS, "30: the game's own frame");
         let (fps, _) = run(60.0, thirty, 0.0, EARLY);
         assert!((29.5..=31.0).contains(&fps), "30 on 60 Hz: {fps}");
         let (fps, min) = run(165.0, thirty, 0.0, EARLY);
@@ -2126,9 +2188,9 @@ mod tests {
         set_display_refresh(None);
         assert!((frame_gap() - 1000.0 / 60.0).abs() < 1e-9, "no refresh reported: 60");
         set_client(ClientOptions { frame_rate: Some(FrameRate::Thirty), ..client() });
-        assert_eq!(frame_gap(), 33.0, "a chosen cap is its own");
+        assert_eq!(frame_gap(), crate::frames::FRAME_MS, "a chosen cap is its own");
         set_client(ClientOptions { frame_rate: Some(FrameRate::Thirty), vsync: true, ..client() });
-        assert_eq!(frame_gap(), 33.0);
+        assert_eq!(frame_gap(), crate::frames::FRAME_MS);
         set_display_refresh(None);
         testing::reset(false);
     }
