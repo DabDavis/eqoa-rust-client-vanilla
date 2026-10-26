@@ -441,6 +441,7 @@ fn run(args: &[String]) -> Result<()> {
         // `eqoa fxview [visual] [cast seconds]`: the GM panel's spell-visual
         // preview in a window; `eqoa fxview <visual> <out.png> [ms,...]
         // [cast seconds]` drawn at those times
+        #[cfg(not(target_arch = "wasm32"))]
         Some("fxview") => {
             let usage = "usage: eqoa fxview [visual [cast seconds]] | eqoa fxview <visual> <out.png> [ms,ms,...] [cast seconds]";
             let rest = &args[1..];

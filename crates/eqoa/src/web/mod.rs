@@ -28,6 +28,8 @@
 
 mod bgm;
 mod disc;
+// the GM panel's spell-visual preview (`crate::fxview`, web/fxview.html)
+mod fxview;
 pub mod pad;
 pub mod relay;
 

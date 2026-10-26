@@ -386,7 +386,7 @@ impl Stage {
             Aim::Caster => "at the caster".to_string(),
             a => format!("at {} {:.0} off", a.name(), self.distance),
         };
-        format!("visual {:#010x} ({i} of {n}), cast {:.1} s, {at}, {} casts", self.effect, self.cast_ms as f32 / 1000.0, self.casts)
+        format!("visual {:#010x} ({i} of {n}), cast {:.1} s, {at}", self.effect, self.cast_ms as f32 / 1000.0)
     }
 
     /// One frame at `now` ms: the two posed standing, a cast when one is

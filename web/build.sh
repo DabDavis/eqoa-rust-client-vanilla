@@ -24,20 +24,24 @@ if [ -n "$OPT" ]; then
     "$OPT" -O2 --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext --enable-mutable-globals \
         --enable-reference-types --enable-multivalue "$STAGE/eqoa_bg.wasm" -o "$STAGE/eqoa_bg.wasm"
 fi
-cp web/main.js web/report.js web/unpack.js web/sound.js web/tick.js "$STAGE/"
+cp web/main.js web/report.js web/unpack.js web/sound.js web/tick.js web/fxview.js "$STAGE/"
 # the update notes: an open page of an older build shows the sections this
 # build's have and its own lack, with its Reload notice (main.js)
 cp UPDATE-NOTES.md "$STAGE/update-notes.md"
 # the commit, with a + when tracked files differ from it
 COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo none)"
 git diff --quiet HEAD 2>/dev/null || COMMIT="$COMMIT+"
-BUILD="$( { (cd "$STAGE" && sha256sum -- *); sha256sum < web/index.html; echo "$COMMIT"; } | sha256sum | cut -c1-12)"
+BUILD="$( { (cd "$STAGE" && sha256sum -- *); sha256sum < web/index.html; sha256sum < web/fxview.html; echo "$COMMIT"; } | sha256sum | cut -c1-12)"
 printf '{"build":"%s","commit":"%s"}\n' "$BUILD" "$COMMIT" > "$STAGE/build.json"
 mkdir -p web/dist/v
 mv "$STAGE" "web/dist/v/$BUILD"
 sed -e "s|src=\"\./main\.js\"|src=\"./v/$BUILD/main.js\"|" -e "s|src=\"\./report\.js\"|src=\"./v/$BUILD/report.js\"|" web/index.html > web/dist/index.html
+# the GM panel's spell-visual preview (fxview.js, crates/eqoa/src/fxview.rs),
+# a page of its own beside the game's, on the same build
+sed -e "s|src=\"\./fxview\.js\"|src=\"./v/$BUILD/fxview.js\"|" web/fxview.html > web/dist/fxview.html
 # a page that names no build would load files that are not there
 grep -q "src=\"./v/$BUILD/main.js\"" web/dist/index.html && grep -q "src=\"./v/$BUILD/report.js\"" web/dist/index.html \
     || { echo "web/index.html: its scripts are not ./main.js and ./report.js" >&2; exit 1; }
+grep -q "src=\"./v/$BUILD/fxview.js\"" web/dist/fxview.html || { echo "web/fxview.html: its script is not ./fxview.js" >&2; exit 1; }
 cp "web/dist/v/$BUILD/build.json" web/dist/version.json
 ls -la "web/dist" "web/dist/v/$BUILD"
