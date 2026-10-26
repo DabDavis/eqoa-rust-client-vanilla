@@ -285,6 +285,12 @@ impl Stage {
         self.target.place(Vect3::of(0.0, 0.0, self.distance), std::f32::consts::PI);
     }
 
+    /// Every visual on the disc, in its order (SPELLFX.CSF's records): what
+    /// the community page lists to be tried.
+    pub fn visual_list(&self) -> Vec<u32> {
+        (0..self.spells.count()).filter_map(|i| self.spells.nth(i)).collect()
+    }
+
     /// A visual as the command line names one: a DictID, or a place in the
     /// disc's list when no visual has that DictID and the list is that long.
     pub fn visual_or_index(&self, v: u32) -> u32 {
@@ -575,6 +581,14 @@ thread_local! {
     static INBOX: std::cell::RefCell<Vec<Command>> = const { std::cell::RefCell::new(Vec::new()) };
     /// The stage's last status line, for the page to read.
     static STATUS: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+    /// The disc's visuals (`Stage::visual_list`), kept as the stage starts.
+    static VISUALS: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The disc's visuals, in its order, once a stage has started (empty before).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn visuals() -> Vec<u32> {
+    VISUALS.with(|v| v.borrow().clone())
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
@@ -681,6 +695,8 @@ pub fn shots(lib: Library, effect: Option<u32>, cast_ms: i32, aim: Option<Aim>, 
 /// a browser, where the loop is handed to the page and this returns at once).
 pub fn run(lib: Library, effect: Option<u32>, cast_ms: i32, aim: Option<Aim>, pending: Option<crate::viewer::PendingGfx>) -> Result<(), String> {
     let mut stage = Stage::new(lib)?;
+    let list = stage.visual_list();
+    VISUALS.with(|v| *v.borrow_mut() = list);
     if let Some(a) = aim {
         stage.set_aim(a)?;
     }
@@ -933,5 +949,26 @@ mod tests {
         // the control: a visual not on the disc is refused, the one playing stays
         assert!(!stage.set_visual(0x0BAD_F00D, 2000));
         assert_eq!(stage.effect(), e);
+    }
+
+    /// The community page's list of visuals (SKIPs without run/eqoa.iso):
+    /// every visual on the disc once, in its order, each one the stage plays.
+    #[test]
+    fn the_visual_list_is_every_visual_the_stage_plays() {
+        let iso_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut disc) = iso::Iso::open(&iso_path) else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let mut stage = Stage::new(library_off(&mut disc).expect("the files")).expect("a stage");
+        let list = stage.visual_list();
+        assert_eq!(list.len(), stage.spells.count());
+        assert!(list.len() > 200, "SPELLFX.CSF's visuals: {}", list.len());
+        assert_eq!(list[0], stage.spells.nth(0).unwrap(), "in the disc's order");
+        let mut seen = std::collections::HashSet::new();
+        assert!(list.iter().all(|e| seen.insert(*e)), "each visual once");
+        assert!(list.iter().all(|&e| stage.set_visual(e, 1000)), "each one plays");
+        // the control: a DictID the list lacks is one the stage refuses
+        assert!(!list.contains(&0x0BAD_F00D) && !stage.set_visual(0x0BAD_F00D, 1000));
     }
 }
