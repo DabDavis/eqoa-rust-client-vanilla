@@ -5,6 +5,16 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · Two windows, one PlayStation controller
+- With two windows of the game on one PlayStation controller (Windows), a press
+  made while a window is busy coming to the front is no longer lost: the game
+  now keeps every report the controller sends until it can read them, as it
+  already does for the keyboard. Before, the second window could ignore the
+  controller for up to half a second as it came to the front.
+- A problem report from one window now also carries the other windows' last
+  lines on coming to the front and on their controllers, so a delay in one
+  window shows up whichever window you press F3 in.
+
 ## 2026-10-26 · A quest tracker
 - Under the minimap, the quests you are on and what each one wants next, counted as you go:
   "Bat Eye: 1/3", "Orc Pawn: 2/3", "Speak with Kellina". A goal you have all of turns grey.

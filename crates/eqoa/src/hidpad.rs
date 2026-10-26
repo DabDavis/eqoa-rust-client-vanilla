@@ -555,7 +555,7 @@ mod device {
         DIGCF_DEVICEINTERFACE, DIGCF_PRESENT, SP_DEVICE_INTERFACE_DATA, SP_DEVICE_INTERFACE_DETAIL_DATA_W, SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInterfaces, SetupDiGetClassDevsW,
         SetupDiGetDeviceInterfaceDetailW,
     };
-    use windows_sys::Win32::Devices::HumanInterfaceDevice::{HIDD_ATTRIBUTES, HidD_GetAttributes, HidD_GetHidGuid};
+    use windows_sys::Win32::Devices::HumanInterfaceDevice::{HIDD_ATTRIBUTES, HidD_GetAttributes, HidD_GetHidGuid, HidD_SetNumInputBuffers};
     use windows_sys::Win32::Foundation::{
         CloseHandle, ERROR_DEV_NOT_EXIST, ERROR_DEVICE_NOT_CONNECTED, ERROR_FILE_NOT_FOUND, ERROR_IO_INCOMPLETE, ERROR_IO_PENDING, ERROR_NO_SUCH_DEVICE, ERROR_PATH_NOT_FOUND, GENERIC_READ, GetLastError, HANDLE,
         INVALID_HANDLE_VALUE, WAIT_TIMEOUT,
@@ -699,9 +699,22 @@ mod device {
         error: u32,
     }
 
+    /// The reports the driver keeps for this program's reading, the most
+    /// it allows (its default is 32: a DualSense's 4 ms reports for 128 ms).
+    /// A frame the window holds up (a window coming to the front from
+    /// behind another, the system's activation waiting on it) loses no
+    /// press: all of it is read at the next frame and its presses latched,
+    /// as the keys' messages wait for it. F3 20261026-091519: the second of
+    /// two windows took no controller press for 300-500 ms as it came to the
+    /// front while the keyboard's came through.
+    const INPUT_BUFFERS: u32 = 512;
+
     impl Device {
         fn open(l: &Listed) -> Option<Device> {
             let handle = open(&l.path, GENERIC_READ, FILE_FLAG_OVERLAPPED)?;
+            // SAFETY: an open HID handle; a refusal leaves the driver's own
+            // number, as before
+            unsafe { HidD_SetNumInputBuffers(handle, INPUT_BUFFERS) };
             Some(Device { listed: l.clone(), handle, read: Box::new(Pending { ov: OVERLAPPED::default(), buf: [0; 1024], busy: false }), pad: PsPad::default(), latch: Latch::default(), valid: None, first: Vec::new(), motors: None, error: 0 })
         }
 
@@ -709,8 +722,8 @@ mod device {
         /// buttons latched (`take`); false when the controller is gone (a
         /// read failed).
         fn pump(&mut self) -> bool {
-            // the driver keeps a few dozen reports for a reader: a bound past them
-            for _ in 0..256 {
+            // the driver keeps `INPUT_BUFFERS` reports for a reader: a bound past them
+            for _ in 0..INPUT_BUFFERS + 8 {
                 let r = &mut *self.read;
                 if !r.busy {
                     r.ov = OVERLAPPED::default();

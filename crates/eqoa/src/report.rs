@@ -213,7 +213,12 @@ mod native {
     /// One of this window's files: `eqoa.log` the first window's,
     /// `eqoa-2.log` the second's.
     fn own(base: &str, ext: &str) -> String {
-        match WINDOW.load(Ordering::Relaxed) {
+        window_file(base, ext, WINDOW.load(Ordering::Relaxed))
+    }
+
+    /// A window's file by its number (from 1).
+    pub(super) fn window_file(base: &str, ext: &str, window: usize) -> String {
+        match window {
             0 | 1 => format!("{base}.{ext}"),
             n => format!("{base}-{n}.{ext}"),
         }
@@ -716,7 +721,7 @@ mod native {
         let log = tail(LOG_LINES);
         let report = fit(
             &clean_now(&format!(
-                "EQOA native client problem report\nversion: {}\nchannel: {}\nname: {}\nnote: {}\n\n--- trace ---\neqoa native client trace {}\nplatform: {}\n\n[client]\n{}\n\n[controllers]\n{}\n\n[log] last {} lines\n{}\n",
+                "EQOA native client problem report\nversion: {}\nchannel: {}\nname: {}\nnote: {}\n\n--- trace ---\neqoa native client trace {}\nplatform: {}\n\n[client]\n{}\n\n[controllers]\n{}\n\n[other windows]\n{}\n\n[log] last {} lines\n{}\n",
                 version(),
                 channel(),
                 if name.is_empty() { "-" } else { name },
@@ -725,6 +730,7 @@ mod native {
                 platform(),
                 state.trim_end(),
                 controllers(),
+                other_windows(),
                 log.len(),
                 log.join("\n")
             )),
@@ -747,6 +753,49 @@ mod native {
     fn controllers() -> String {
         let l = crate::input::describe_controllers();
         if l.is_empty() { "not read yet".into() } else { l.join("\n") }
+    }
+
+    /// The lines of another window's log a report carries (`other_windows`).
+    const OTHER_LINES: usize = 12;
+    /// How much of the end of another window's log is read for them.
+    const OTHER_TAIL: u64 = 256 * 1024;
+
+    /// The other windows open, each with the last lines of its own log on
+    /// its arrivals at the front and its controllers (`focus:`,
+    /// `controllers:`, `gamepad:`, `multibox:`; nothing a player typed or
+    /// was sent): a report carries only its own window's log, and the delay
+    /// of F3 20261026-091519 was the second window's, reported from the
+    /// first.
+    fn other_windows() -> String {
+        let Some(d) = dir() else { return "none read (no config directory)".into() };
+        let me = WINDOW.load(Ordering::Relaxed).max(1);
+        let windows: Vec<usize> = crate::multibox::seat().others.iter().map(|o| o.place + 1).collect();
+        other_windows_in(&d, me, &windows)
+    }
+
+    pub(super) fn other_windows_in(dir: &Path, me: usize, windows: &[usize]) -> String {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut out = Vec::new();
+        for &n in windows.iter().filter(|&&n| n != me) {
+            let name = window_file("eqoa", "log", n);
+            let mut text = String::new();
+            let read = File::open(dir.join(&name)).and_then(|mut f| {
+                let len = f.metadata()?.len();
+                f.seek(SeekFrom::Start(len.saturating_sub(OTHER_TAIL)))?;
+                let mut b = Vec::new();
+                f.read_to_end(&mut b)?;
+                text = String::from_utf8_lossy(&b).into_owned();
+                Ok(())
+            });
+            if read.is_err() {
+                out.push(format!("window {n}: no {name}"));
+                continue;
+            }
+            let lines: Vec<&str> = text.lines().filter(|l| ["focus:", "controllers:", "gamepad:", "multibox:"].iter().any(|p| l.starts_with(p))).collect();
+            out.push(format!("window {n} ({name}), its last {} of these lines:", lines.len().min(OTHER_LINES)));
+            out.extend(lines.iter().skip(lines.len().saturating_sub(OTHER_LINES)).map(|l| l.chars().take(LOG_LINE_MAX).collect::<String>()));
+        }
+        if out.is_empty() { "none open".into() } else { out.join("\n") }
     }
 
     fn crash_body(text: &str, note: &str) -> String {
@@ -1344,6 +1393,37 @@ mod native {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+
+    /// A report carries the other windows' arrivals and controllers out of
+    /// their own logs, the last few of those lines only; the controls: this
+    /// window's own log is not read again, a line of anything else (chat) is
+    /// left out, and a window with no log says so.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_report_carries_the_other_windows_arrivals() {
+        use native::{other_windows_in, window_file};
+        let dir = std::env::temp_dir().join(format!("eqoa-other-windows-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!((window_file("eqoa", "log", 1), window_file("eqoa", "log", 2)), ("eqoa.log".to_string(), "eqoa-2.log".to_string()));
+        let mut two = String::new();
+        for k in 0..20 {
+            two += &format!("focus: in front; its last frame {k} ms before, its first frame 412 ms after; the first press 450 ms after: the controller's cross\n");
+        }
+        two += "chat: Someone tells the group: my account is hunter2\n";
+        two += "controllers: window 2 of 2, Pad 1: controller 1 (DualSense) while this window is in front (Capture Controller)\n";
+        std::fs::write(dir.join("eqoa-2.log"), &two).unwrap();
+        std::fs::write(dir.join("eqoa.log"), "focus: this window's own line\n").unwrap();
+        let text = other_windows_in(&dir, 1, &[2, 3]);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[0], "window 2 (eqoa-2.log), its last 12 of these lines:");
+        assert_eq!(lines.len(), 1 + 12 + 1, "{text}");
+        assert!(lines[1].contains("its last frame 9 ms before"), "the last twelve, oldest first: {text}");
+        assert!(lines[12].starts_with("controllers: window 2 of 2"));
+        assert_eq!(lines[13], "window 3: no eqoa-3.log");
+        assert!(!text.contains("hunter2") && !text.contains("this window's own line"), "the controls: {text}");
+        assert_eq!(other_windows_in(&dir, 2, &[2]), "none open", "the control: its own window is not another");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// Strings as JSON strings: quotes, backslashes, line ends and control
     /// characters escaped, the rest as it is.
