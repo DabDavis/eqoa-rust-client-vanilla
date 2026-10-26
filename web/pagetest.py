@@ -725,6 +725,17 @@ async def tests(a, site, base, page):
     await page.js("localStorage.removeItem('eqoa.spellfxName'); true")
     await open_fx()
     check("none kept, the field is empty (control)", await page.js("document.getElementById('who').value") == "")
+    # a spell GMs give its visual while the page is open leaves the list at the next refresh
+    await page.until(f"{ids} === '[2,3,4]'", 5)
+    SPELLFX_SPELLS[1]["standin"] = False  # Test Heal (id 2) has its visual now
+    try:
+        await page.js("eqoaSpellfx.refresh(); true")
+        gone = await page.until(f"{ids} === '[3,4]'", 5)
+        check("a spell given its visual meanwhile leaves the open page", gone is True, str(await page.js(ids)))
+    finally:
+        SPELLFX_SPELLS[1]["standin"] = True
+    await page.js("eqoaSpellfx.refresh(); true")
+    check("and comes back if it is put back on a stand-in (control)", await page.until(f"{ids} === '[2,3,4]'", 5) is True)
     check("the game's page links it", 'href="./spellfx.html"' in (HERE / "dist" / "index.html").read_text())
     build = json.loads((HERE / "dist" / "version.json").read_text())["build"]
     icons = [p for p in ("index", "fxview", "spellfx") if f'href="./v/{build}/disc.svg"' in (HERE / "dist" / f"{p}.html").read_text()]

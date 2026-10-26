@@ -55,21 +55,36 @@ const state = {
 };
 
 // ---- the spells
-async function loadSpells() {
+// `again`: a refresh of an open page (a minute on, the tab shown again, after a
+// send), so a spell GMs have just given its visual leaves the list (the user: "i
+// still see on the spellfx page spells that have been approved"); a refresh that
+// fails keeps the list it has.
+async function loadSpells(again = false) {
   try {
     const r = await fetch(API + '/spells', { cache: 'no-cache' });
     if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
     const body = await r.json();
     state.spells = (body.spells || []).map((s) => ({ ...s, visual: hex(s.visual), classes: Array.isArray(s.classes) ? s.classes : [] }));
     state.byId = new Map(state.spells.map((s) => [s.id, s]));
+    if (state.spell) state.spell = state.byId.get(state.spell.id) || state.spell;
+    // a ticked spell that has its visual now is done
+    for (const id of [...state.checked]) {
+      const s = state.byId.get(id);
+      if (!s || !s.standin) state.checked.delete(id);
+    }
     status('');
   } catch (e) {
+    if (again) return;
     state.spells = [];
     status(`The spells could not be loaded (${e.message || e}): try again in a while.`, true);
   }
   drawSpells();
   drawVisuals();
+  drawPick();
 }
+state.refresh = () => loadSpells(true);
+setInterval(() => { if (document.visibilityState === 'visible') loadSpells(true); }, 60000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') loadSpells(true); });
 
 function spellMatches(s) {
   const c = $('class').value;
@@ -356,6 +371,7 @@ $('suggest').addEventListener('submit', async (ev) => {
   }
   drawPick();
   $('sent').scrollIntoView({ block: 'nearest' });
+  loadSpells(true);
 });
 
 // ---- the disc: picked here, or the one remembered (the game's page and
