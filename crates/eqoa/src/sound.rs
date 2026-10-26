@@ -178,6 +178,9 @@ impl Strays {
                     self.frames[k] = self.frames[k].saturating_add(1);
                     if self.frames[k] == STRAY_FRAMES {
                         self.times += 1;
+                        // when, for a report: a stop or a module's stop the
+                        // device sent and SNDDRV never had
+                        crate::say(&format!("sound: voice {v} of core {c} plays on with no sound to stop it"));
                     }
                 } else {
                     self.frames[k] = 0;

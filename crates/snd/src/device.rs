@@ -337,8 +337,11 @@ pub struct SoundDevice<M: Model> {
     /// packet instead, so not among the dropped)
     pub cmds_dropped: u32,
     pub stops_dropped: u32,
-    /// stops that found the packet full, for the head of the next one
+    /// stops that found the packet full, for the head of the next one: the
+    /// channels', and the XM players' (`stop`), sent first, as `stop` sends
+    /// a module's before its channels'
     stops_waiting: u64,
+    xm_stops_waiting: Vec<(i32, i32)>,
     /// the most words a packet has held when it was sent (of 127): how near
     /// a frame's commands come to filling it (the report's sound line)
     pub most_words: i32,
@@ -409,6 +412,7 @@ impl<M: Model> SoundDevice<M> {
             cmds_dropped: 0,
             stops_dropped: 0,
             stops_waiting: 0,
+            xm_stops_waiting: Vec::new(),
             most_words: 0,
             dropped_by_id: [0; 16],
             between: false,
@@ -550,9 +554,16 @@ impl<M: Model> SoundDevice<M> {
         self.send_held();
         self.sound_cmd(3, 0);
         self.sound_flush(link);
-        if self.stops_waiting != 0 && self.packet[0] == 0 {
+        if (self.stops_waiting != 0 || !self.xm_stops_waiting.is_empty()) && self.packet[0] == 0 {
+            for (lo, hi) in std::mem::take(&mut self.xm_stops_waiting) {
+                self.args[0] = lo;
+                self.args[1] = hi;
+                self.sound_cmd(9, 2);
+            }
             let mask = std::mem::take(&mut self.stops_waiting);
-            self.stop_channels(mask);
+            if mask != 0 {
+                self.stop_channels(mask);
+            }
         }
         self.frame = self.frame.wrapping_add(1);
         // the next commands are the next frame's, until a frame drawn
@@ -1007,9 +1018,19 @@ impl<M: Model> SoundDevice<M> {
         }
         let p = self.playbacks[pb];
         if let Some(Kind::Xm(_)) = self.sound(p.sound).map(|s| &s.kind) {
-            self.args[0] = (p.channels & 0xffffff) as i32;
-            self.args[1] = (p.channels >> 24) as i32;
-            self.sound_cmd(9, 2);
+            let (lo, hi) = ((p.channels & 0xffffff) as i32, (p.channels >> 24) as i32);
+            self.args[0] = lo;
+            self.args[1] = hi;
+            if !self.sound_cmd(9, 2) {
+                // A departure, as for the channels' stop (`stop_channels`):
+                // dropped, the module plays on in SNDDRV's player on the
+                // channels the device lets go here, over every sound it puts
+                // on them next, for good when it repeats (an ambient track):
+                // its notes keyed over theirs. It heads the next packet
+                // instead. (F3 20261026-075325)
+                self.xm_stops_waiting.push((lo, hi));
+                self.stops_dropped += 1;
+            }
         }
         self.stop_channels(p.channels);
         self.channels &= !p.channels;
