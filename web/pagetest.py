@@ -710,6 +710,9 @@ async def tests(a, site, base, page):
     await open_fx()
     check("none kept, the field is empty (control)", await page.js("document.getElementById('who').value") == "")
     check("the game's page links it", 'href="./spellfx.html"' in (HERE / "dist" / "index.html").read_text())
+    build = json.loads((HERE / "dist" / "version.json").read_text())["build"]
+    icons = [p for p in ("index", "fxview", "spellfx") if f'href="./v/{build}/disc.svg"' in (HERE / "dist" / f"{p}.html").read_text()]
+    check("every page carries the program's icon, in its build", icons == ["index", "fxview", "spellfx"] and (HERE / "dist" / "v" / build / "disc.svg").is_file(), str(icons))
 
     errors = [l for l in page.lines if l.startswith("EXCEPTION") and "crash_test" not in l and "unreachable" not in l and "a test rejection" not in l]
     check("no exception in the page beyond the crash test's", not errors, "; ".join(errors[:3]))
