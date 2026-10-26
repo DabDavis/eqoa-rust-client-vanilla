@@ -63,7 +63,8 @@ or a browser (each described where it lives below):
 - **Hide UI** (H): everything drawn over the world hidden until H again or a
   window opens.
 - **Target of Target** (UI's, off unless chosen): whom the target is targeting,
-  beside the target's bar, with their health and power; F targets them,
+  in a bar just above the target's, with their health and power under it (left
+  of the chat box, which covered it beside the target's); F targets them,
   through the game's Assist Target.
 - **Mana Bars** (UI's, on unless turned off): a power bar under the health of
   each group member, the target and the target of target, on a server that

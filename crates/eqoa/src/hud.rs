@@ -139,10 +139,14 @@ pub enum Pick {
 }
 
 /// The Target of Target bar's place (the frame's, out at a wide window's
-/// left and down a tall one's bottom with the target's bar) and width: right
-/// of the "Target" title, the target's bar's width, its foot above the chat
-/// box's top (378 in a 4:3 window).
-const TOT_AT: [i32; 2] = [200, 348];
+/// left and down a tall one's bottom with the target's bar) and width: just
+/// above the "Target" title (348), in the HUD's own column with its health and
+/// power under it as a group member's (46 high, to 346), below a whole group's
+/// bars and its pet's (a group of four and a pet end at 283). Right of the
+/// title (200, 348) it was under the chat box's left half, which reaches 191
+/// and grows up past 340 with five lines (F3 20261026-053926: "concealed
+/// behind a full chat log, maybe just above the target?").
+const TOT_AT: [i32; 2] = [20, 300];
 const TOT_WIDTH: i32 = 174;
 
 /// Where `DrawGroup` starts the group's bars and `DrawTarget` the target's.
@@ -176,9 +180,9 @@ fn member_gauges(s: &HudState) -> Vec<Gauge> {
 
 /// Mana Bars on the target's bar, under its health (`DrawTarget`'s, 25
 /// below the bar) and above the report's button, and Target of Target's
-/// health and power stacked right of its bar (under it is the chat box):
-/// each where there is one to show, the target of target's only with its
-/// bar.
+/// health and power under its bar, as a group member's are (25 and 35
+/// below it): each where there is one to show, the target of target's only
+/// with its bar.
 fn target_gauges(s: &HudState) -> Vec<Gauge> {
     let mut out = Vec::new();
     if s.target_name.is_none() {
@@ -188,7 +192,7 @@ fn target_gauges(s: &HudState) -> Vec<Gauge> {
         out.push(Gauge { bar: 9, at: [TARGET_AT[0] + 10, TARGET_AT[1] + 60], lit: true, v: p as f32 / 255.0 });
     }
     if s.target_of_target.is_some() {
-        let at = [TOT_AT[0] + TOT_WIDTH + 4, TOT_AT[1] + 2];
+        let at = [TOT_AT[0] + 10, TOT_AT[1] + 25];
         for (k, (bar, v)) in [(7, s.tot_hp), (9, s.tot_power)].into_iter().enumerate() {
             if let Some(v) = v {
                 out.push(Gauge { bar, at: [at[0], at[1] + 10 * k as i32], lit: true, v: v as f32 / 255.0 });
@@ -303,7 +307,7 @@ impl Hud {
     }
 
     /// Target of Target (the Extended page's, the client's own): a second
-    /// bar beside the target's, its art, glowing with it, the name of whom
+    /// bar above the target's, its art, glowing with it, the name of whom
     /// the target targets in it as the group's bars hold their names; none
     /// without a target or a name. A pointer on it asks the game's Assist
     /// Target (`Pick::TargetsTarget`).
@@ -597,8 +601,8 @@ mod tests {
     /// Mana Bars: a member's power under its health (10 below, as the
     /// player's own gauges stack), lit as its health is, the bars 48 apart;
     /// the target's under its health, above the report's button (421); the
-    /// target of target's health and power right of its bar, above the chat
-    /// box (378); none where there is no value (the controls), and none for
+    /// target of target's health and power under its bar, above the target's
+    /// title (348); none where there is no value (the controls), and none for
     /// the target of target without its bar or for anything without a
     /// target.
     #[test]
@@ -620,13 +624,12 @@ mod tests {
         assert_eq!(target_gauges(&HudState { target_name: None, ..t.clone() }), [], "no target");
 
         let tot = HudState { target_of_target: Some("Luck".into()), tot_hp: Some(255), tot_power: Some(0), ..t.clone() };
-        let right = super::TOT_AT[0] + super::TOT_WIDTH + 4;
         assert_eq!(
             target_gauges(&tot)[1..],
-            [Gauge { bar: 7, at: [right, 350], lit: true, v: 1.0 }, Gauge { bar: 9, at: [right, 360], lit: true, v: 0.0 }]
+            [Gauge { bar: 7, at: [30, 325], lit: true, v: 1.0 }, Gauge { bar: 9, at: [30, 335], lit: true, v: 0.0 }]
         );
-        assert!(360 + 10 <= 378 && right + 60 <= 640, "above the chat box, inside the frame");
-        assert_eq!(target_gauges(&HudState { tot_hp: None, ..tot.clone() })[1..], [Gauge { bar: 9, at: [right, 360], lit: true, v: 0.0 }], "power alone keeps its row");
+        assert!(335 + 10 <= 348, "above the target's title");
+        assert_eq!(target_gauges(&HudState { tot_hp: None, ..tot.clone() })[1..], [Gauge { bar: 9, at: [30, 335], lit: true, v: 0.0 }], "power alone keeps its row");
         assert_eq!(target_gauges(&HudState { target_of_target: None, ..tot.clone() }).len(), 1, "no bar, no gauges beside it");
         assert_eq!(target_gauges(&HudState { target_name: None, ..tot }), [], "no target");
     }
@@ -663,13 +666,15 @@ mod tests {
         }
     }
 
-    /// Target of Target: its bar right of the "Target" title, where a
+    /// Target of Target: its bar just above the "Target" title, where a
     /// pointer finds it (in a 16:9 window out at the left side with the
-    /// target's bar), its foot above the chat box's top (378); none without
-    /// a name to show or without a target (the controls). Needs a graphics
-    /// adapter; without one it says so and passes.
+    /// target's bar), in the HUD's column left of the chat box (which reaches
+    /// x 191 and y 340 holding five lines: F3 20261026-053926) and below a
+    /// whole group's bars and its pet's (283); none without a name to show or
+    /// without a target (the controls). Needs a graphics adapter; without one
+    /// it says so and passes.
     #[test]
-    fn the_target_of_target_bar_sits_beside_the_targets() {
+    fn the_target_of_target_bar_sits_above_the_targets() {
         let _gpu = crate::GPU_TEST.lock().unwrap_or_else(|e| e.into_inner());
         let Some(mut ui) = crate::ui::tests::layer() else {
             eprintln!("SKIP: no graphics adapter");
@@ -680,7 +685,9 @@ mod tests {
         let vui = crate::ui::Vui::new(Default::default(), Default::default(), atlas);
         let assets = crate::ui::UiAssets::default();
         let at = [super::TOT_AT[0] as f32 + 87.0, super::TOT_AT[1] as f32 + 14.0];
-        assert!(super::TOT_AT[1] + 28 <= 378, "above the chat box");
+        assert!(super::TOT_AT[1] + 46 <= 348, "above the target's title");
+        assert!(super::TOT_AT[1] >= 93 + 3 * 48 + 46, "below a group of four's bars and the pet's");
+        assert!(super::TOT_AT[0] + super::TOT_WIDTH <= 194 && super::TOT_AT[0] == super::TARGET_AT[0], "the target's column, left of the chat box");
         let shown = HudState { target_name: Some("Casil".into()), target_of_target: Some("Luck".into()), ..Default::default() };
         for (size, side) in [((640, 480), 0.0), ((1280, 720), 106.0)] {
             for (s, want) in [

@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · Target of Target above the target
+- Target of Target (Options > Extended > UI) now sits just above the target's bar, with the
+  health and power of whoever your target is targeting under it, as a group member's are:
+  beside the target it went behind the chat box once the chat held a few lines.
+
 ## 2026-10-26 · One visual for several spells
 - On the Help match spell visuals page, tick the spells that share a visual (a spell
   line's ranks often do), pick the visual once, and send: it goes for every ticked spell.
