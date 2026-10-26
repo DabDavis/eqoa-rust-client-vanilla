@@ -226,6 +226,7 @@ impl PeerConnectionEventHandler for HubHandler {
                 for (listener, slot) in routes {
                     let Some(outs) = hub.slots.lock().unwrap().get(&listener).cloned() else { continue };
                     let out = &outs[slot];
+                    // as the forwarding server sends it: the speaker's voice id its one CSRC
                     let packet = rtp::Packet {
                         header: rtp::header::Header {
                             version: 2,
@@ -234,6 +235,7 @@ impl PeerConnectionEventHandler for HubHandler {
                             sequence_number: out.seq.fetch_add(1, Ordering::Relaxed),
                             timestamp: p.header.timestamp,
                             ssrc: out.ssrc,
+                            csrc: vec![client],
                             ..Default::default()
                         },
                         payload: p.payload.clone(),
@@ -490,10 +492,10 @@ fn a_voice_goes_through_the_server() {
     assert!(power(b, 440.0) > 30.0 * power(b, 620.0), "and still the tone");
 }
 
-/// Four speakers on one listener's four slots, each played at the volume of the peer the
-/// server says is on it: all four heard; then 3 muted (gone), 2 at 200% (twice the amplitude),
-/// and 99, on no slot, muted (the control: nothing else changes); the speaking marks from the
-/// slots, and a server level for a peer on none.
+/// Four speakers on one listener's four slots, each played at the volume of the peer on it as
+/// its packets' CSRC says (no `{"slots"}` sent): all four heard; then 3 muted (gone), 2 at 200%
+/// (twice the amplitude), and 99, on no slot, muted (the control: nothing else changes); the
+/// speaking marks from the slots, and a server level for a peer on none.
 #[test]
 fn each_slot_plays_at_its_peers_volume() {
     let freqs = [300.0, 500.0, 700.0, 900.0];
@@ -507,7 +509,6 @@ fn each_slot_plays_at_its_peers_volume() {
         net.engine(i).set_send(1);
     }
     assert!(net.run_until(30_000, |n| n.hub.channels() == 5 && rms(n.tail(10, 200)) > 0.2), "the four within 30 s");
-    net.hub.say(10, r#"{"slots":[[0,1],[1,2],[2,3],[3,4]]}"#);
     net.run(1200);
     let before = net.tail(10, 1000).to_vec();
     for f in freqs {

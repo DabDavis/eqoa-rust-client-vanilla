@@ -178,7 +178,8 @@ impl Shared {
         }
     }
 
-    /// A message off the data channel: who is on the slots, or the speakers' levels.
+    /// A message off the data channel: who is on the slots (the taken ones; one not listed is
+    /// free), or the levels of who is talking.
     pub(crate) fn server_says(&self, text: &str) {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else { return };
         let pairs = |key: &str| -> Option<Vec<(u64, u64)>> {
@@ -202,9 +203,10 @@ impl Shared {
             *self.slots.lock().unwrap() = now;
         }
         if let Some(levels) = pairs("levels") {
+            // each message is the whole set of who is talking: one empty when the last stops
             let when = Instant::now();
             let mut heard = self.heard.lock().unwrap();
-            heard.retain(|_, (_, at)| when.duration_since(*at) < 10 * HEARD_FOR);
+            heard.clear();
             for (peer, level) in levels {
                 if let Ok(peer) = u32::try_from(peer) {
                     heard.insert(peer, (level_of_dbov(level.min(127) as u8), when));
@@ -260,6 +262,17 @@ impl Run {
     fn server_says(&self, text: &str) {
         if self.live() {
             self.shared.server_says(text);
+        }
+    }
+
+    /// A forwarded packet's speaker (its one CSRC, the voice id) is who is on its slot now: the
+    /// packets say it as they come, the data channel's `{"slots"}` a moment apart.
+    fn speaker_on(&self, slot: usize, peer: u32) {
+        if self.live() {
+            let mut slots = self.shared.slots.lock().unwrap();
+            if slots[slot] != Some(peer) {
+                slots[slot] = Some(peer);
+            }
         }
     }
 }
@@ -625,6 +638,9 @@ impl PeerConnectionEventHandler for Handler {
                     }
                     TrackRemoteEvent::OnRtpPacket(p) => {
                         if let Some(k) = slot {
+                            if let Some(&speaker) = p.header.csrc.first() {
+                                run.speaker_on(k, speaker);
+                            }
                             run.audio_in(k, p.header.sequence_number, &p.payload);
                         }
                     }
@@ -952,8 +968,9 @@ mod tests {
         assert!(frames.iter().all(|&s| s > 0), "and do not wrap below");
     }
 
-    /// The data channel's slots and levels as the server sends them; a slot past the four, a
-    /// pair that is not two numbers, and text that is not JSON change nothing.
+    /// The data channel's slots and levels as the server sends them, each message the whole set;
+    /// a slot past the four, a pair that is not two numbers, and text that is not JSON change
+    /// nothing.
     #[test]
     fn the_server_says_who_is_on_the_slots_and_how_loud() {
         let shared = Shared::new();
@@ -961,9 +978,13 @@ mod tests {
         assert_eq!(*shared.slots.lock().unwrap(), [Some(7), None, None, Some(9)]);
         shared.server_says(r#"{"slots":[[1,7]]}"#);
         assert_eq!(*shared.slots.lock().unwrap(), [None, Some(7), None, None], "each message is the whole mapping");
+        let heard = |shared: &Shared| shared.heard.lock().unwrap().iter().map(|(&p, &(l, _))| (p, l)).collect::<HashMap<_, _>>();
         shared.server_says(r#"{"levels":[[7,30],[8,200]]}"#);
-        let heard = shared.heard.lock().unwrap().iter().map(|(&p, &(l, _))| (p, l)).collect::<HashMap<_, _>>();
-        assert_eq!(heard, HashMap::from([(7, 0.5), (8, 0.0)]));
+        assert_eq!(heard(&shared), HashMap::from([(7, 0.5), (8, 0.0)]));
+        shared.server_says(r#"{"levels":[[8,0]]}"#);
+        assert_eq!(heard(&shared), HashMap::from([(8, 1.0)]), "each message is the whole set");
+        shared.server_says(r#"{"levels":[]}"#);
+        assert!(heard(&shared).is_empty(), "the last speaker stopped");
         shared.server_says("not json");
         shared.server_says(r#"{"other":1}"#);
         assert_eq!(*shared.slots.lock().unwrap(), [None, Some(7), None, None]);
