@@ -347,8 +347,15 @@ impl NativeEngine {
     /// Tests only: host candidates on loopback, no TURN, `generator` for the microphone.
     #[cfg(test)]
     pub(crate) fn loopback(generator: impl FnMut(&mut [f32]) + Send + 'static) -> NativeEngine {
-        let mut engine = NativeEngine::new();
+        let mut engine = NativeEngine::with_generator(generator);
         engine.mode = Mode::Loopback;
+        engine
+    }
+
+    /// Tests only: the game's network settings, `generator` for the microphone.
+    #[cfg(test)]
+    pub(crate) fn with_generator(generator: impl FnMut(&mut [f32]) + Send + 'static) -> NativeEngine {
+        let mut engine = NativeEngine::new();
         engine.generator = Some(Arc::new(Mutex::new(Box::new(generator))));
         engine
     }
@@ -386,15 +393,19 @@ impl VoiceEngine for NativeEngine {
         let id = self.shared.runs.fetch_add(1, Ordering::Relaxed) + 1;
         self.shared.run.store(id, Ordering::Relaxed);
         let run = Run { shared: self.shared.clone(), id };
-        let source = match self.mode {
-            Mode::Server => {
+        #[cfg(test)]
+        let generator = self.generator.clone();
+        #[cfg(not(test))]
+        let generator: Option<()> = None;
+        let source = match generator {
+            #[cfg(test)]
+            Some(g) => Source::Generator(g),
+            _ => {
                 let mic = Arc::new(Mic::default());
                 let denied = run.clone();
                 self.capture = Some(Capture::start(mic.clone(), move |_| denied.event(VoiceEvent::MicDenied)));
                 Source::Mic(mic)
             }
-            #[cfg(test)]
-            Mode::Loopback => Source::Generator(self.generator.clone().unwrap_or_else(|| Arc::new(Mutex::new(Box::new(|f: &mut [f32]| f.fill(0.0)))))),
         };
         runtime.spawn(encode(run.clone(), source));
         let (tx, rx) = mpsc::unbounded_channel();

@@ -531,3 +531,20 @@ fn each_slot_plays_at_its_peers_volume() {
     assert!(levels[..4].iter().all(|(_, l)| *l > 0.6), "the four talking, muted or not: {levels:?}");
     assert!((levels[4].1 - 0.5).abs() < 1e-6, "42 at 30 -dBov");
 }
+
+/// The game's own network settings (every interface's host candidates, mDNS off, no loopback
+/// candidate, ICE policy all) reach the stand-in too: a tone through it to a loopback listener.
+#[test]
+fn the_games_network_settings_connect() {
+    let mut net = Net::new(vec![
+        (1, NativeEngine::with_generator(tone(440.0))),
+        (2, NativeEngine::loopback(|f: &mut [f32]| f.fill(0.0))),
+    ]);
+    net.hub.route(1, 2, 0);
+    net.engine(1).set_send(1);
+    assert!(net.run_until(20_000, |n| rms(n.tail(2, 200)) > 0.05), "heard within 20 s");
+    net.run(800);
+    let b = net.tail(2, 600);
+    assert!(power(b, 440.0) > 30.0 * power(b, 620.0), "the tone");
+    assert_eq!(net.engine(1).take_events(), [VoiceEvent::Connected]);
+}
