@@ -110,6 +110,7 @@ mod mouse;
 mod multibox;
 mod quantity;
 mod questlog;
+mod tracker;
 mod quickchat;
 mod alarm;
 mod startmenu;

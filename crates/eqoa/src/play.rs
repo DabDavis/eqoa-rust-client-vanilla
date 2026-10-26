@@ -366,6 +366,9 @@ pub struct Play {
     quests: crate::questlog::Quests,
     quest_log: crate::questlog::QuestLog,
     quest_open: bool,
+    /// the journal was opened from the quest tracker (`Pick::Quests`): closed,
+    /// it goes back to the world, not to the start menu
+    quest_from_hud: bool,
     quest_keys: Vec<(i32, bool)>,
     /// The stat trainer (mode 12): opened, 0x001D's refresh, keys.
     trainer: crate::trainer::Trainer,
@@ -1783,7 +1786,7 @@ impl Play {
         crate::hideui::show();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: 0, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0 };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: 0, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0 };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -2409,6 +2412,7 @@ impl Play {
         self.session.agree_power_bars(crate::settings::client().mana_bars);
         // Quest Markers: a server that offers quest marks told whether to send them
         self.session.agree_quest_marks(crate::settings::client().quest_markers);
+        self.session.agree_quest_progress(crate::settings::client().quest_tracker);
         self.drop_dead_target_info();
         if self.has_self() {
             self.auto_attack_tick(walker, now);
@@ -3709,6 +3713,14 @@ impl Play {
                 // the minimap: the map opened, as the compass opens it
                 Some(crate::hud::Pick::Minimap) => {
                     self.map.show();
+                    return true;
+                }
+                // the quest tracker: the quest journal (OpenQuestLog's mode
+                // 22), closed back to the world
+                Some(crate::hud::Pick::Quests) => {
+                    self.quest_open = true;
+                    self.quest_from_hud = true;
+                    self.mode = 22;
                     return true;
                 }
                 Some(crate::hud::Pick::Me) => self.self_id32(),
@@ -5246,10 +5258,13 @@ impl Play {
         self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
         for up in ups {
             match up {
-                // ClosePanel6DC: CloseQuestLog, back to the start menu
+                // ClosePanel6DC: CloseQuestLog, back to the start menu (to
+                // the world when the quest tracker opened it)
                 crate::questlog::QuestUp::Close => {
                     self.mode = 0;
-                    self.open_start_menu(false);
+                    if !std::mem::take(&mut self.quest_from_hud) {
+                        self.open_start_menu(false);
+                    }
                 }
                 crate::questlog::QuestUp::Drop(i) => {
                     let m = self.quests.send_remove(i);
@@ -6772,7 +6787,20 @@ impl Play {
     /// play where the HUD's quick menus are (no window up, no player
     /// search), the HUD made, the map not up and no loading screen.
     pub fn minimap_up(&self) -> bool {
-        crate::settings::client().minimap && (self.mode == 0 || self.mode == 30 || self.mode == 38) && !self.search.open && !self.map.open && !self.loading.up() && self.hud.is_some()
+        crate::settings::client().minimap && self.right_hud_up()
+    }
+
+    /// Whether the HUD's right side under the quick menus is up: the game's
+    /// own play (mode 0, the quick chat's 30, the manual camera's 38), no
+    /// search, map or loading screen over it, the HUD made.
+    fn right_hud_up(&self) -> bool {
+        (self.mode == 0 || self.mode == 30 || self.mode == 38) && !self.search.open && !self.map.open && !self.loading.up() && self.hud.is_some()
+    }
+
+    /// The quest tracker's quests while it is up (`tracker`): Quest Tracker
+    /// on, where the minimap could be.
+    fn tracker_quests(&self) -> Vec<net::session::TrackedQuest> {
+        if crate::settings::client().quest_tracker && self.right_hud_up() { self.session.quest_progress.clone() } else { Vec::new() }
     }
 
     /// What the minimap shows of the entities: every creature and player in
@@ -6972,6 +7000,7 @@ impl Play {
             time_ms,
             waypoint: self.map.waypoint(self.player.world as i32),
             minimap: self.minimap_up(),
+            tracker: self.tracker_quests(),
         };
         let now = self.session.now();
         let dt = ((time_ms - self.hud_last).clamp(0, 250)) as f32 / 1000.0;

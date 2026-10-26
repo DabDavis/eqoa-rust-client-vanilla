@@ -5,6 +5,15 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · A quest tracker
+- Under the minimap, the quests you are on and what each one wants next, counted as you go:
+  "Bat Eye: 1/3", "Orc Pawn: 2/3", "Speak with Kellina". A goal you have all of turns grey.
+  On a server that sends it (ours does; Sandstorm sends none).
+- It has no box behind it, so the world shows through; when there is not room for all your
+  quests it shows the first ones and how many more there are.
+- Click it to open your quest journal. Turn it off under Options > Extended > Quests >
+  Quest Tracker.
+
 ## 2026-10-26 · Quest markers on the map
 - The map shows where your quests are, on a server that sends them (ours does;
   Sandstorm sends none): a gold "!" at each NPC with a quest you can take now,
