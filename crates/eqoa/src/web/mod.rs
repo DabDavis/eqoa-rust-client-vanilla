@@ -32,8 +32,6 @@ mod disc;
 mod fxview;
 pub mod pad;
 pub mod relay;
-// voice chat's engine (web/voice.js) and the voice demo's socket
-pub mod voice;
 
 use crate::{sky, viewer};
 use disc::WebDisc;

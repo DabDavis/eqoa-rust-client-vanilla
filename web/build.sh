@@ -2,7 +2,7 @@
 # The browser client: web/dist/ gets the page (index.html, and beside it the
 # GM panel's preview fxview.html and the community page spellfx.html) and its build,
 # v/<build>/: main.js and report.js, the workers (unpack.js, tick.js), the AudioWorklet
-# (sound.js), voice chat's engine (voice.js), the update notes (update-notes.md), the pages' icon (disc.svg), eqoa.js and eqoa_bg.wasm (wasm-bindgen 0.2.129, the version
+# (sound.js), the update notes (update-notes.md), the pages' icon (disc.svg), eqoa.js and eqoa_bg.wasm (wasm-bindgen 0.2.129, the version
 # Cargo.lock pins: `cargo install wasm-bindgen-cli --version 0.2.129`), and
 # build.json. A build is named by the digest of its files, the page and the
 # commit, so its files never change under that name: the host keeps them
@@ -25,7 +25,7 @@ if [ -n "$OPT" ]; then
     "$OPT" -O2 --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext --enable-mutable-globals \
         --enable-reference-types --enable-multivalue "$STAGE/eqoa_bg.wasm" -o "$STAGE/eqoa_bg.wasm"
 fi
-cp web/main.js web/report.js web/unpack.js web/sound.js web/voice.js web/tick.js web/fxview.js web/discstore.js web/spellfx.js "$STAGE/"
+cp web/main.js web/report.js web/unpack.js web/sound.js web/tick.js web/fxview.js web/discstore.js web/spellfx.js "$STAGE/"
 # the pages' icon: the program's own drawn disc (crates/eqoa/src/icon_art.rs)
 cp web/disc.svg "$STAGE/"
 # the preview again inside the build, for the community page (spellfx.html) to frame on its

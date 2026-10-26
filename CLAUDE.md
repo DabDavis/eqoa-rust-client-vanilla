@@ -13,7 +13,7 @@ current.
   Extended options, the map (its XP camps, coaches, routes and town names) and the minimap, the updater, the problem and crash reports, the 2002 disc's art on F9, Hide UI
   on H, Target of Target, names from farther and smaller zoomed out (and every one in a crowd, Overlapping Names Show), Ignore Shouts kept, Update Notices, Text
   Sharp or Smooth, Loading Screens Longer or Instant, Mana Bars from a server that sends others' power, Quest Markers on
-  the map and the Quest Tracker from a server that sends them, else the client's own quest guide's, labelled "(guide)"; the voice chat window on O and the HUD's mic badge). A
+  the map and the Quest Tracker from a server that sends them, else the client's own quest guide's, labelled "(guide)"). A
   new client-side addition is the user's call: ask first.
   Fixes are made here and are not carried to eqoa-rs any more (the user, 2026-10-23: "vanilla
   only"); its remote `eqoa-rs` stays for reading it. Link no private repository from anything

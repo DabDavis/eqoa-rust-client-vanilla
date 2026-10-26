@@ -5,15 +5,20 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · Voice chat was only a test
+- Voice chat was only a test, and it is out of the game and the page: the voice chat window (O)
+  and the microphone badge beside the minimap, the /voice commands, Voice Chat, Voice Demo and
+  Voice Volume in Options > Extended > Sound, and the push-to-talk keys (V and N) on the Controls
+  page.
+- The game asks nothing of your microphone any more. Your other options and keys are kept as
+  they were.
+
 ## 2026-10-26 · A controller that turns up mid-game
 - On Windows the game no longer stops when a controller turns up while it runs (Steam can make
   one as a window comes to the front, and two pads made it likelier): until Windows has finished
   connecting it, the game passes over what it sends, and reads it from then on.
 
-## 2026-10-26 · Clearer voices, new swings at once, Extended's menu
-- Voice chat in the game itself now evens out your microphone, as the page already did: a quiet
-  one (a laptop's own) comes up to a normal speaking level, a loud one is left as it is, and a
-  shout never clips. Some of you were heard far too quietly.
+## 2026-10-26 · New swings at once, Extended's menu
 - A level reached while you play counts for your swings at once: at 20 and at 35, where a round
   gains hits, your character swings the new round straight away instead of after you log out and
   in again.
