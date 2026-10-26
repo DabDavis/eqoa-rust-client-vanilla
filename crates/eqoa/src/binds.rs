@@ -136,6 +136,7 @@ pub const ROWS: &[Row] = &[
     row("controls", "Controls", &["f1"], Pad::None, "This page, from play."),
     row("push_to_talk", "Voice: push to talk (group)", &["v"], Pad::None, "Held, your group hears you (Options, Extended, Sound: Voice Chat)."),
     row("push_to_talk_room", "Voice: push to talk (room)", &["n"], Pad::None, "Held, your voice room hears you (/voice join <room>)."),
+    row("voice_window", "Voice: the voice chat window", &["o"], Pad::None, "Who is talking, your group's and your room's volumes, the lobby's rooms, a room joined or made. Again, or Escape, closes it; /voice in the chat opens it too."),
 ];
 
 /// A row's index by its name.

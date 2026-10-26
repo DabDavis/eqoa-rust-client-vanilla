@@ -61,6 +61,9 @@ pub struct HudState {
     /// The quest tracker's quests (`tracker`), none while it is not up: drawn
     /// under the minimap, a pointer on it opens the quest journal.
     pub tracker: Vec<net::session::TrackedQuest>,
+    /// The mic badge while voice is on, where the minimap could be
+    /// (`voicewnd::Badge`).
+    pub voice: Option<crate::voicewnd::Badge>,
     /// `m_selfId` and `m_target`.
     pub self_id: Option<u32>,
     pub target: u32,
@@ -146,6 +149,8 @@ pub enum Pick {
     Minimap,
     /// the quest tracker (`tracker`): the quest journal opened
     Quests,
+    /// the mic badge (`voicewnd::BADGE`): the voice window opened
+    Voice,
 }
 
 /// The Target of Target bar's place (the frame's, out at a wide window's
@@ -324,6 +329,13 @@ impl Hud {
         // the quest tracker under it, placed the same way (`tracker`)
         if let Some(r) = crate::tracker::draw(ui, &s.tracker) {
             self.note(ui, r, Pick::Quests);
+        }
+        // the mic badge left of the minimap's foot, placed the same way
+        if let Some(b) = &s.voice {
+            ui.ui.anchor = Anchor::Right;
+            ui.ui.vertical = Vertical::Top;
+            crate::voicewnd::draw_badge(vui, ui, b, s.time_ms);
+            self.note(ui, crate::voicewnd::BADGE, Pick::Voice);
         }
     }
 
@@ -711,6 +723,37 @@ mod tests {
                 let mut hud = Hud::new();
                 hud.draw(&vui, &mut assets.raster(&mut ui), &HudState { minimap: on, ..Default::default() });
                 assert_eq!(hud.pick([mid[0] + side, mid[1] - up]), want, "{size:?}, minimap {on}");
+                if side + up > 0.0 {
+                    assert_eq!(hud.pick(mid), None, "{size:?}: not at the frame's own place");
+                }
+            }
+        }
+    }
+
+    /// The mic badge's place (`voicewnd::BADGE`): a pointer finds it as the
+    /// minimap's, in a 4:3 window where it is, in a 16:9 one out at the
+    /// right (106 frame pixels), in a tall one (798x828) up at the top (85);
+    /// the control: voice off, no badge, nothing there. Needs a graphics
+    /// adapter; without one it says so and passes.
+    #[test]
+    fn a_pointer_finds_the_mic_badge_beside_the_minimap() {
+        let _gpu = crate::GPU_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut ui) = crate::ui::tests::layer() else {
+            eprintln!("SKIP: no graphics adapter");
+            return;
+        };
+        let mut atlas = vec![vi::ui::UiTexEntry::default(); 27];
+        atlas[26].uv1 = [16, 28];
+        let vui = crate::ui::Vui::new(Default::default(), Default::default(), atlas);
+        let assets = crate::ui::UiAssets::default();
+        let b = crate::voicewnd::BADGE;
+        let mid = [(b[0] + b[2]) as f32 / 2.0, (b[1] + b[3]) as f32 / 2.0];
+        for (size, side, up) in [((640, 480), 0.0, 0.0), ((1280, 720), 106.0, 0.0), ((798, 828), 0.0, 85.0)] {
+            for (voice, want) in [(Some(crate::voicewnd::Badge { connected: true, transmitting: true, level: 0.5 }), Some(Pick::Voice)), (None, None)] {
+                ui.begin(size);
+                let mut hud = Hud::new();
+                hud.draw(&vui, &mut assets.raster(&mut ui), &HudState { voice, ..Default::default() });
+                assert_eq!(hud.pick([mid[0] + side, mid[1] - up]), want, "{size:?}, {voice:?}");
                 if side + up > 0.0 {
                     assert_eq!(hud.pick(mid), None, "{size:?}: not at the frame's own place");
                 }

@@ -18,6 +18,8 @@ mod mail;
 mod support;
 #[path = "voiceplay.rs"]
 mod voiceplay;
+#[path = "voicewndplay.rs"]
+mod voicewndplay;
 
 use crate::walker::{Placing, Spawn, Walker};
 use esf::Library;
@@ -483,6 +485,8 @@ pub struct Play {
     far_last: u32,
     /// Voice chat (`voice`, `voiceplay`): the server's, or the demo's.
     pub voice: crate::voice::PlayVoice,
+    /// The voice window (`voicewnd`, `voicewndplay`), over play.
+    voice_wnd: crate::voicewnd::VoiceWnd,
 }
 
 /// Past the game's own distance (drawn only for NPC/PC Distance) a
@@ -1790,7 +1794,7 @@ impl Play {
         crate::hideui::show();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: 0, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, voice: crate::voice::PlayVoice::for_platform() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: 0, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, voice: crate::voice::PlayVoice::for_platform(), voice_wnd: Default::default() };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -1880,6 +1884,9 @@ impl Play {
         if self.search.open || !self.search.list().is_empty() {
             let [race, class, min, max] = self.search.filter();
             let _ = writeln!(o, "player search: {}, race {race} class {class} levels {min}-{max}, {} found", if self.search.open { "open" } else { "closed" }, self.search.list().len());
+        }
+        if self.voice_wnd.open {
+            let _ = writeln!(o, "{}", self.voice_wnd.describe());
         }
         let _ = writeln!(o, "{}", self.map.describe());
         if let Some(w) = self.loading.wait {
@@ -3136,10 +3143,10 @@ impl Play {
     }
 
     /// What brings back what Hide UI hid (`hideui::frame`): a window up, the
-    /// map, a server's player search, the target's details (Q held), a line
-    /// being typed, or the player dead.
+    /// map, a server's player search, the voice window, the target's details
+    /// (Q held), a line being typed, or the player dead.
     pub fn wants_ui(&mut self) -> bool {
-        self.window_up() || self.map.open || self.search.open || self.info_up || self.info_window.open > 0.0 || self.keyboard_typing() || self.is_dead()
+        self.window_up() || self.map.open || self.search.open || self.voice_wnd.open || self.info_up || self.info_window.open > 0.0 || self.keyboard_typing() || self.is_dead()
     }
 
     /// The loading screen is up (drawn on the 2D layer, never hidden).
@@ -3322,7 +3329,7 @@ impl Play {
         }
         if game_frame {
             let now = self.session.now();
-            let busy = self.mode != 0 || self.map.open || self.search.open || self.typing.is_some();
+            let busy = self.mode != 0 || self.map.open || self.search.open || self.voice_wnd.open || self.typing.is_some();
             if self.aim_hold && now.wrapping_sub(self.aim_at) as i32 > 300 && !busy {
                 self.begin_manual_camera(cam, dir);
                 self.aim_hold = false;
@@ -3673,8 +3680,9 @@ impl Play {
             self.press(&keys);
             return true;
         }
-        // in play; a server's player search over it is a window
-        if self.mode == 0 && !self.search.open {
+        // in play; a server's player search or the voice window over it is
+        // a window
+        if self.mode == 0 && !self.search.open && !self.voice_wnd.open {
             // Hide UI (`hideui`): none of the HUD's buttons is there to press
             if matches!(c, Click::Right(..)) || crate::hideui::hidden() {
                 return false;
@@ -3729,6 +3737,11 @@ impl Play {
                     self.mode = 22;
                     return true;
                 }
+                // the mic badge: the voice window
+                Some(crate::hud::Pick::Voice) => {
+                    self.open_voice_window();
+                    return true;
+                }
                 Some(crate::hud::Pick::Me) => self.self_id32(),
                 Some(crate::hud::Pick::Member(id)) => Some(id),
                 Some(crate::hud::Pick::Pet) => (self.pet_id != u32::MAX).then_some(self.pet_id),
@@ -3756,7 +3769,7 @@ impl Play {
     /// waiting). False in play.
     pub fn window_wheel(&mut self, lines: f32) -> bool {
         use crate::pointer::key;
-        if ((self.mode == 0 || self.mode == 38) && !self.search.open) || self.quick_dpad() {
+        if ((self.mode == 0 || self.mode == 38) && !self.search.open && !self.voice_wnd.open) || self.quick_dpad() {
             self.wheel = 0.0;
             return self.mode != 0 && self.mode != 38;
         }
@@ -3785,6 +3798,9 @@ impl Play {
         }
         if self.mode == 2 {
             return one(self.edit.point(f).flatten());
+        }
+        if self.voice_window_owns() {
+            return self.voice_wnd.point(f);
         }
         if self.bank_owns() {
             return self.bank_point(f);
@@ -3977,6 +3993,8 @@ impl Play {
             "/t" | "/tell" => self.session.say(text, target),
             "/alarm" => self.alarm_command(&rest),
             // the client's own, never sent: the voice lobby (`voiceplay`)
+            // alone, the voice window (`voicewndplay`)
+            "/voice" if rest.trim().is_empty() => self.open_voice_window(),
             "/voice" => self.voice_command(&rest),
             "/time" => self.do_action(0x0B0E_0008, 0),
             "/follow" => self.do_action(0x0B0E_0007, 0),
@@ -4341,6 +4359,11 @@ impl Play {
         }
         if self.mode == 2 {
             self.edit_key(key, down);
+            return true;
+        }
+        // the voice window, while it is up over play: every key
+        if self.voice_window_owns() {
+            self.voice_window_key(key, down);
             return true;
         }
         if self.bank_owns() {
@@ -5365,6 +5388,8 @@ impl Play {
         let target = if name { self.target_name().unwrap_or_default() } else { String::new() };
         let e = &mut self.edit;
         e.clear();
+        // the face of the voice window's password left on no other line
+        e.password = false;
         e.set_max_length(max);
         e.set_text(&crate::ui::wide(&target));
         e.title = if title >= 0 { self.words.as_ref().map_or_else(Vec::new, |w| crate::ui::wide(w.get(title, 0))) } else { Vec::new() };
@@ -5478,7 +5503,9 @@ impl Play {
             match self.edit.key(vui, r, key, now, &mut cues) {
                 crate::editbox::EditUp::Done(purpose) => self.edit_done(purpose),
                 crate::editbox::EditUp::Cancel => {
-                    self.mode = if self.who_tell.take().is_some() { 35 } else { 0 };
+                    if !self.voice_edit_done(self.edit.purpose, false) {
+                        self.mode = if self.who_tell.take().is_some() { 35 } else { 0 };
+                    }
                 }
                 _ => {}
             }
@@ -5488,6 +5515,10 @@ impl Play {
 
     /// 259: the edit box's text to where it was for.
     fn edit_done(&mut self, purpose: u32) {
+        // the voice window's fields (`voicewndplay`)
+        if self.voice_edit_done(purpose, true) {
+            return;
+        }
         let text = String::from_utf16_lossy(&self.edit.text);
         // VIWndWhoList::SendTell, back to the list
         if let Some(name) = self.who_tell.take() {
@@ -6800,9 +6831,9 @@ impl Play {
 
     /// Whether the HUD's right side under the quick menus is up: the game's
     /// own play (mode 0, the quick chat's 30, the manual camera's 38), no
-    /// search, map or loading screen over it, the HUD made.
+    /// search, voice window, map or loading screen over it, the HUD made.
     fn right_hud_up(&self) -> bool {
-        (self.mode == 0 || self.mode == 30 || self.mode == 38) && !self.search.open && !self.map.open && !self.loading.up() && self.hud.is_some()
+        (self.mode == 0 || self.mode == 30 || self.mode == 38) && !self.search.open && !self.voice_wnd.open && !self.map.open && !self.loading.up() && self.hud.is_some()
     }
 
     /// The quest tracker's quests while it is up (`tracker`): Quest Tracker
@@ -7009,6 +7040,7 @@ impl Play {
             waypoint: self.map.waypoint(self.player.world as i32),
             minimap: self.minimap_up(),
             tracker: self.tracker_quests(),
+            voice: self.voice_badge(),
         };
         let now = self.session.now();
         let dt = ((time_ms - self.hud_last).clamp(0, 250)) as f32 / 1000.0;
@@ -7116,6 +7148,11 @@ impl Play {
             self.run_guild(vui, &mut r);
             self.run_mail(vui, &mut r);
             self.run_support(vui, &mut r);
+            // the voice window over play's windows, under the edit box that
+            // types its fields
+            r.ui.anchor = Anchor::Middle;
+            r.ui.vertical = Vertical::Middle;
+            self.draw_voice_window(vui, &mut r);
             self.run_edit(vui, &r);
             if self.mode == 2 {
                 let mut cues = Vec::new();
@@ -7194,7 +7231,7 @@ impl Play {
             // UpdateQuickBars, then the menu up (the HUD's, in play; L2's
             // menus open over it without `UpdateMode`, so it stays up there;
             // a server's player search hides them while it is up)
-            if (self.mode == 0 || self.mode == 30 || self.mode == 38) && !self.search.open {
+            if (self.mode == 0 || self.mode == 30 || self.mode == 38) && !self.search.open && !self.voice_wnd.open {
                 let bars = self.hud_bars();
                 self.hud_menus.build(&self.abilities, &self.dump.inventory, &self.gear, bars);
                 let abilities = &self.abilities;

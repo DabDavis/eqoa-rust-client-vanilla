@@ -151,6 +151,7 @@ mod update;
 mod updatewnd;
 mod viewer;
 mod voice;
+mod voicewnd;
 mod wndlist;
 mod walker;
 mod weather;
