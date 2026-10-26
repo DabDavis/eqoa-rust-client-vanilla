@@ -59,7 +59,7 @@ import websockets
 HERE = Path(__file__).resolve().parent
 
 # what the community page's server (go-eqoa-server's account service) answers
-# at <api>/spells, four spells of four classes, two still on a stand-in
+# at <api>/spells, four spells of four classes, three still on a stand-in (Test Bolt's visual is set)
 SPELLFX_SPELLS = [
     {"id": 1, "name": "Test Bolt", "level": 3, "classes": [13], "line": "Target, Decrease Hitpoints by 10", "harmful": True,
      "target": "Target", "cast": 2.0, "visual": "0x11111111", "standin": False},
@@ -68,7 +68,7 @@ SPELLFX_SPELLS = [
     {"id": 3, "name": "Test Ward", "level": 5, "classes": [9], "line": "Self, Increase AC by 5, 30min", "harmful": False,
      "target": "Self", "cast": 3.0, "visual": "0x33333333", "standin": True, "kind": "buff"},
     {"id": 4, "name": "Test Tap", "level": 8, "classes": [11], "line": "Target, Drain HP by 30", "harmful": True,
-     "target": "Target", "cast": 2.5, "visual": "0x44444444", "standin": False},
+     "target": "Target", "cast": 2.5, "visual": "0x44444444", "standin": True, "kind": "damage"},
 ]
 SPELLFX_API = "/eqoa/account/api/spellfx"
 
@@ -672,24 +672,22 @@ async def tests(a, site, base, page):
     async def open_fx():
         await page.call("Page.navigate", url=fx)
         return await page.until("window.eqoaSpellfx && eqoaSpellfx.spells.length === 4 && document.querySelectorAll('#spells li[data-id]').length", 15)
-    check("the community page lists the server's spells", await open_fx() == 4 and await page.js(ids) == "[2,1,3,4]",
+    check("the community page lists the spells still on a stand-in", await open_fx() == 3 and await page.js(ids) == "[2,3,4]",
           str(await page.js(ids)))
+    check("a spell whose visual is set is not listed, though the page has it (control)",
+          await page.js("eqoaSpellfx.byId.has(1) && !document.querySelector('#spells li[data-id=\"1\"]')") is True)
     await page.js("(() => { const c = document.getElementById('class'); c.value = '9'; c.dispatchEvent(new Event('change')); return true; })()")
     check("a class shows its own spells alone", await page.js(ids) == "[2,3]", str(await page.js(ids)))
     await page.js("(() => { const c = document.getElementById('class'); c.value = ''; c.dispatchEvent(new Event('change')); return true; })()")
-    check("every class shows them all (control)", await page.js(ids) == "[2,1,3,4]", str(await page.js(ids)))
-    await page.js("document.getElementById('unknown').click(); true")
-    check("only the spells still on a stand-in", await page.js(ids) == "[2,3]", str(await page.js(ids)))
-    await page.js("document.getElementById('unknown').click(); true")
-    check("unticked, all of them again (control)", await page.js(ids) == "[2,1,3,4]", str(await page.js(ids)))
+    check("every class shows them all (control)", await page.js(ids) == "[2,3,4]", str(await page.js(ids)))
     await page.js("document.getElementById('spell-search').value = 'tap'; document.getElementById('spell-search').dispatchEvent(new Event('input')); true")
     check("a search finds a spell by its name", await page.until(f"{ids} === '[4]'", 3) is True)
     await page.js("document.getElementById('spell-search').value = ''; document.getElementById('spell-search').dispatchEvent(new Event('input')); true")
-    await page.until(f"{ids} === '[2,1,3,4]'", 3)
+    await page.until(f"{ids} === '[2,3,4]'", 3)
     sendable = "!document.getElementById('send').disabled"
     check("no pick, nothing to send (control)", await page.js(sendable) is False)
-    await page.js("document.querySelector('#spells li[data-id=\"1\"] button').click(); true")
-    check("a spell alone is no pick yet (control)", await page.js(sendable) is False and "Test Bolt" in (await page.js("document.getElementById('pick-spell').textContent") or ""))
+    await page.js("document.querySelector('#spells li[data-id=\"4\"] button').click(); true")
+    check("a spell alone is no pick yet (control)", await page.js(sendable) is False and "Test Tap" in (await page.js("document.getElementById('pick-spell').textContent") or ""))
     # the visual list as the preview sends it when it has read the disc
     await page.until("(() => { const w = document.getElementById('preview').contentWindow; return w.location.pathname.endsWith('fxview.html') && w.document.readyState === 'complete'; })()", 10)
     await page.js("document.getElementById('preview').contentWindow.eval(\"parent.postMessage({source: 'eqoa-fxview', type: 'started', visuals: ['0x11111111', '0x55555555']}, location.origin)\")")
@@ -698,10 +696,10 @@ async def tests(a, site, base, page):
     given = await page.js("document.querySelector('#visuals li[data-visual=\"0x11111111\"]').textContent")
     check("a visual says which spell has it", "Test Bolt" in (given or ""), str(given))
     await page.js("document.querySelector('#visuals li[data-visual=\"0x55555555\"] button').click(); true")
-    check("a spell and a visual make a pick", await page.js(sendable) is True and "Test Bolt" in (await page.js("document.getElementById('send').textContent") or ""))
+    check("a spell and a visual make a pick", await page.js(sendable) is True and "Test Tap" in (await page.js("document.getElementById('send').textContent") or ""))
     await page.js("document.getElementById('who').value = 'Tester'; document.getElementById('note').value = 'it rang'; document.getElementById('send').click(); true")
     thanked = await page.until("document.getElementById('sent').textContent.startsWith('Thanks') && document.getElementById('sent').textContent", 5)
-    check("the pick is sent as the server takes it", bool(thanked) and site.picks[-1:] == [{"spell": 1, "visual": "0x55555555", "name": "Tester", "note": "it rang"}],
+    check("the pick is sent as the server takes it", bool(thanked) and site.picks[-1:] == [{"spell": 4, "visual": "0x55555555", "name": "Tester", "note": "it rang"}],
           f"{thanked} {site.picks[-1:]}")
     await page.js("document.getElementById('who').value = 'flood'; document.getElementById('send').click(); true")
     refused = await page.until("document.getElementById('sent').textContent.startsWith('Not sent') && document.getElementById('sent').textContent", 5)

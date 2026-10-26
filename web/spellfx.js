@@ -73,7 +73,8 @@ async function loadSpells() {
 function spellMatches(s) {
   const c = $('class').value;
   if (c !== '' && !s.classes.includes(Number(c))) return false;
-  if ($('unknown').checked && !s.standin) return false;
+  // a spell whose visual GMs have set (accepted from the picks, or set by hand) is done: off the list
+  if (!s.standin) return false;
   const q = $('spell-search').value.trim().toLowerCase();
   if (!q) return true;
   return s.name.toLowerCase().includes(q) || (s.line || '').toLowerCase().includes(q) || (q.length >= 3 && s.visual.toLowerCase().includes(q));
@@ -83,9 +84,10 @@ function drawSpells() {
   const list = $('spells');
   list.replaceChildren();
   const shown = state.spells.filter(spellMatches).sort((a, b) => a.level - b.level || a.name.localeCompare(b.name));
-  $('spells-count').textContent = state.spells.length ? `${shown.length} of ${state.spells.length}` : '';
+  const needing = state.spells.filter((x) => x.standin).length;
+  $('spells-count').textContent = state.spells.length ? `${shown.length} of ${needing}` : '';
   if (!shown.length) {
-    list.append(el('li', 'empty', state.spells.length ? 'No spell matches.' : 'No spells yet.'));
+    list.append(el('li', 'empty', !state.spells.length ? 'No spells yet.' : needing ? 'No spell matches.' : 'Every spell has its visual now: thank you!'));
     return;
   }
   for (const s of shown) {
@@ -385,7 +387,6 @@ CLASSES.forEach((name, i) => {
 });
 classSel.value = /^\d+$/.test(params.get('class') || '') ? params.get('class') : store.get('spellfxClass');
 classSel.addEventListener('change', () => { store.set('spellfxClass', classSel.value); drawSpells(); });
-$('unknown').addEventListener('change', drawSpells);
 let typing = 0;
 const later = (fn) => () => { clearTimeout(typing); typing = setTimeout(fn, 120); };
 $('spell-search').addEventListener('input', later(drawSpells));
