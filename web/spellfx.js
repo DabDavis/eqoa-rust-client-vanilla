@@ -101,6 +101,12 @@ function drawSpells() {
   const list = $('spells');
   list.replaceChildren();
   const shown = state.spells.filter(spellMatches).sort((a, b) => a.level - b.level || a.name.localeCompare(b.name));
+  // every spell the filters show, ticked or unticked at once (the user: "select all ... we can select all
+  // pacts for example and they all share the same dictid")
+  state.shownIds = shown.map((s) => s.id);
+  const allTicked = shown.length > 0 && shown.every((s) => state.checked.has(s.id));
+  $('tick-shown').hidden = !shown.length;
+  $('tick-shown').textContent = allTicked ? `Untick these ${shown.length}` : `Tick all ${shown.length}`;
   const needing = state.spells.filter((x) => x.standin).length;
   $('spells-count').textContent = state.spells.length ? `${shown.length} of ${needing}${state.checked.size ? ` · ${state.checked.size} ticked` : ''}` : '';
   $('clear-checked').hidden = !state.checked.size;
@@ -310,6 +316,16 @@ function drawPick() {
   $('send').textContent = !(for_.length && state.visual) ? 'Send my pick' : for_.length > 1 ? `This visual is these ${for_.length} spells'` : `This visual is ${for_[0].name}'s`;
 }
 
+$('tick-shown').addEventListener('click', () => {
+  const ids = state.shownIds || [];
+  const all = ids.length > 0 && ids.every((id) => state.checked.has(id));
+  for (const id of ids) {
+    if (all) state.checked.delete(id);
+    else state.checked.add(id);
+  }
+  drawSpells();
+  drawPick();
+});
 $('clear-checked').addEventListener('click', () => {
   state.checked.clear();
   drawSpells();

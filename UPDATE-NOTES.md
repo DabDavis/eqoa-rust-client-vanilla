@@ -8,7 +8,8 @@ is put on the page by `.github/workflows/notes.yml`.
 ## 2026-10-26 · One visual for several spells
 - On the Help match spell visuals page, tick the spells that share a visual (a spell
   line's ranks often do), pick the visual once, and send: it goes for every ticked spell.
-  Clear ticks starts over; with nothing ticked the page works as before.
+  Tick all ticks every spell your filters show (search "pact" and tick them all at
+  once); Clear ticks starts over; with nothing ticked the page works as before.
 
 ## 2026-10-26 · An icon of its own
 - The game has an icon of its own now: a disc, on the program and its window. Once it

@@ -680,8 +680,16 @@ async def tests(a, site, base, page):
     check("a class shows its own spells alone", await page.js(ids) == "[2,3]", str(await page.js(ids)))
     await page.js("(() => { const c = document.getElementById('class'); c.value = ''; c.dispatchEvent(new Event('change')); return true; })()")
     check("every class shows them all (control)", await page.js(ids) == "[2,3,4]", str(await page.js(ids)))
+    # tick every spell the filters show, then untick them (the user's "select all")
+    ticked = "document.querySelectorAll('#spells input.pickbox:checked').length"
+    await page.js("document.getElementById('tick-shown').click(); true")
+    check("Tick all ticks every spell shown", await page.js(ticked) == 3 and "3 spells" in (await page.js("document.getElementById('pick-spell').textContent") or ""),
+          str(await page.js("document.getElementById('pick-spell').textContent")))
+    await page.js("document.getElementById('tick-shown').click(); true")
+    check("pressed again it unticks them (control)", await page.js(ticked) == 0)
     await page.js("document.getElementById('spell-search').value = 'tap'; document.getElementById('spell-search').dispatchEvent(new Event('input')); true")
     check("a search finds a spell by its name", await page.until(f"{ids} === '[4]'", 3) is True)
+    check("Tick all counts only the spells shown", "Tick all 1" in (await page.js("document.getElementById('tick-shown').textContent") or ""))
     tagged = await page.js("document.querySelector('#spells li[data-id=\"4\"] .tag.got') && document.querySelector('#spells li[data-id=\"4\"] .tag.got').textContent")
     check("a master class's spell says so", tagged == "master class · Lich", str(tagged))
     await page.js("document.getElementById('spell-search').value = 'lich'; document.getElementById('spell-search').dispatchEvent(new Event('input')); true")
