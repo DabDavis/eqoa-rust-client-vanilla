@@ -228,7 +228,10 @@ impl Renderer {
     }
 
     /// The billboards, after any strips; `far` puts them at the far plane
-    /// with Z off.
+    /// with Z off. The strips are the world's (the lightning, the weapon
+    /// trails), drawn by the world's call alone: the sky's comes first and
+    /// its view has no translation, so taken there they went where nothing
+    /// is (F3 20261026-041245: no spell's bolt was ever seen in the world).
     #[allow(clippy::too_many_arguments)]
     fn billboards(
         &mut self,
@@ -243,9 +246,11 @@ impl Renderer {
         textures: &Textures,
         far: bool,
     ) {
-        let strips = std::mem::take(&mut self.strips);
-        if !strips.is_empty() {
-            self.draw_strips(device, queue, encoder, target, depth, view, proj, &strips, textures);
+        if !far {
+            let strips = std::mem::take(&mut self.strips);
+            if !strips.is_empty() {
+                self.draw_strips(device, queue, encoder, target, depth, view, proj, &strips, textures);
+            }
         }
         let mut verts: Vec<Vert> = Vec::new();
         let mut draws = Vec::new();
