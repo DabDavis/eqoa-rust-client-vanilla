@@ -182,17 +182,14 @@ function error(where, text) {
 
 let started = false; // the game or the viewer began: a reload would end it
 
-// The game server's IPv4 address when the game's Network Setup names none:
-// given, or this page's host as the relay resolves it (the relay reaches
-// only the server's own ports anyway).
+// The game server when the game's Network Setup names none: given, or this
+// page's host. Kept a name, not resolved here: the client resolves it through
+// the relay for each connection itself, and fetches the server's patch over
+// https by it, which an address has no certificate for.
 async function serverAddress(relay) {
   const given = $('server').value.trim();
   if (given) return given;
-  const host = location.hostname;
-  if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) return host;
-  const r = await fetch(relay.replace(/^ws/, 'http') + '/resolve?name=' + encodeURIComponent(host));
-  if (!r.ok) throw new Error('the relay could not resolve ' + host);
-  return (await r.text()).trim();
+  return location.hostname;
 }
 
 function busy(on) {
