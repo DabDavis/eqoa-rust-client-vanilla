@@ -233,6 +233,12 @@ impl Create {
         &self.form
     }
 
+    /// The name page's editor has the keys (its box of a name, no message
+    /// over it): what a phone's own keyboard may type into.
+    pub fn typing(&self) -> bool {
+        self.open && self.page == Page::Name && !self.name.mbox_up
+    }
+
     #[cfg(test)]
     pub fn page(&self) -> Page {
         self.page

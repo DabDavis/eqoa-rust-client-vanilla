@@ -793,6 +793,11 @@ impl Client {
         }
     }
 
+    /// An editor has the keys (creation's name).
+    pub fn typing(&self) -> bool {
+        self.active == Wnd::Create && self.create.typing()
+    }
+
     /// A pointer at frame point `p`: the keys the window under it asks for.
     pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
         let mut keys = match self.active {

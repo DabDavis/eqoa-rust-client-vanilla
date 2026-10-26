@@ -260,7 +260,75 @@ window.eqoaDisconnected = (text) => {
   }
 }
 
-$('eqoa').addEventListener('pointerdown', () => $('eqoa').focus());
+// A phone's or a tablet's own keyboard for the game's edit boxes (Station's
+// name and password, Network Setup's address, creation's name, play's editor):
+// while the client says one has the keys (window.eqoaWantText), a touch on the
+// canvas puts the focus in a hidden input (in the touch, so the keyboard comes
+// up: a browser shows it only for a user's gesture), and what is typed there
+// goes to the canvas as the key events a keyboard's would be. Nothing typed is
+// kept or logged: the input holds a few spaces between keystrokes, and what
+// changed is all that is read.
+const typed = document.createElement('input');
+typed.id = 'eqoatyped';
+typed.type = 'text';
+typed.setAttribute('aria-hidden', 'true');
+typed.tabIndex = -1;
+for (const [k, v] of [['autocomplete', 'off'], ['autocorrect', 'off'], ['autocapitalize', 'none'], ['spellcheck', 'false'], ['inputmode', 'text'], ['enterkeyhint', 'done']]) typed.setAttribute(k, v);
+// out of sight, 16 px so no browser zooms to it, at the top so none scrolls to it
+typed.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;border:0;padding:0;font-size:16px;pointer-events:none';
+document.body.append(typed);
+const TYPED_REST = '    ';
+let typedLast = TYPED_REST;
+let wantText = false;
+const keyTo = (key) => {
+  for (const type of ['keydown', 'keyup']) $('eqoa').dispatchEvent(new KeyboardEvent(type, { key, code: '', cancelable: true }));
+};
+const typedRest = () => {
+  typed.value = TYPED_REST;
+  typedLast = TYPED_REST;
+  try { typed.setSelectionRange(TYPED_REST.length, TYPED_REST.length); } catch { /* not focused */ }
+};
+typed.addEventListener('input', (e) => {
+  // what changed since the last: characters taken away (Backspace each), then the ones put in
+  const v = typed.value;
+  let same = 0;
+  while (same < v.length && same < typedLast.length && v[same] === typedLast[same]) same++;
+  for (let k = same; k < typedLast.length; k++) keyTo('Backspace');
+  for (const ch of v.slice(same)) keyTo(ch === '\n' ? 'Enter' : ch);
+  typedLast = v;
+  // a word still being put together by the keyboard is left alone until it is done
+  if (!e.isComposing) typedRest();
+});
+typed.addEventListener('compositionend', typedRest);
+typed.addEventListener('keydown', (e) => {
+  // a keyboard's keys that put nothing in the input: as they are
+  if (['Enter', 'Escape', 'Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+    e.preventDefault();
+    keyTo(e.key);
+  } else if (e.key === 'Backspace' && typed.value === '') {
+    keyTo('Backspace');
+    typedRest();
+  }
+});
+const typeHere = () => {
+  typedRest();
+  typed.focus({ preventScroll: true });
+};
+let lastTouch = false;
+window.eqoaWantText = (on) => {
+  wantText = !!on;
+  if (!wantText && document.activeElement === typed) $('eqoa').focus();
+  // the touch that opened the box still the user's gesture: the keyboard up at once
+  // (where a browser allows it; else at the next touch)
+  if (wantText && lastTouch && navigator.userActivation && navigator.userActivation.isActive) typeHere();
+};
+$('eqoa').addEventListener('pointerdown', (e) => {
+  lastTouch = e.pointerType === 'touch';
+  $('eqoa').focus();
+});
+// winit puts the focus on the canvas at every press: a touch while the game
+// wants text puts it back in the input, the device's keyboard with it
+$('eqoa').addEventListener('pointerup', (e) => { if (wantText && e.pointerType === 'touch') typeHere(); });
 
 // ---- a DNAS module off the disc (CLIENT, for the start menu): unpacked by
 // the disc's own library in a worker (unpack.js), and kept in this origin's

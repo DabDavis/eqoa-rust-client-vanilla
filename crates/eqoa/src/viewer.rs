@@ -1338,6 +1338,16 @@ fn pregame_key(event: &KeyEvent) -> Option<i32> {
     })
 }
 
+/// A key from the device's own keyboard (a phone's or a tablet's, in a page:
+/// `web::device_keyboard`), which leaves the touch screen's pad where it is,
+/// where a keyboard's key hides it.
+fn device_keyboard() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    return crate::web::device_keyboard();
+    #[cfg(not(target_arch = "wasm32"))]
+    false
+}
+
 /// Whether the touch screen's pad shows from the start: in a page on a
 /// touch-first device (`window.eqoaTouchFirst`), or with `EQOA_TOUCH=1`.
 /// Whether a key pressed before the world is the art's (`era`): F9, or the
@@ -1732,6 +1742,9 @@ struct App {
     fingers: Vec<(u64, Finger)>,
     /// `EQOA_TOUCHES` in a window: finger events at ms on `clock`.
     touch_script: Vec<(i64, u64, crate::touch::Phase, [f32; 2])>,
+    /// An edit box of the game's had the keys at the last frame (told to a
+    /// page as it changes, `note_typing`).
+    typing: bool,
     /// The game's frames among those drawn (`frames.rs`): what the game
     /// counts in frames steps on these.
     frames: crate::frames::Frames,
@@ -1888,6 +1901,7 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
             s.sort_by_key(|e| e.0);
             s
         },
+        typing: false,
         frames: crate::frames::Frames::default(),
         drawn_at: None,
         frame_s: 1.0 / 60.0,
@@ -2629,6 +2643,18 @@ impl App {
         }
         if let Some(h) = self.host.as_mut() {
             h.click(p);
+        }
+    }
+
+    /// Whether an edit box of the game's has the keys (one of the screens'
+    /// before the world, or play's editor), told to a page when it changes:
+    /// a phone's or a tablet's own keyboard comes up for it there
+    /// (`web::want_text`).
+    fn note_typing(&mut self) {
+        let on = self.host.as_ref().map_or_else(|| self.play.as_ref().is_some_and(|p| p.mode == 2), |h| h.pre.typing());
+        if on != std::mem::replace(&mut self.typing, on) {
+            #[cfg(target_arch = "wasm32")]
+            crate::web::want_text(on);
         }
     }
 
@@ -4165,7 +4191,9 @@ impl ApplicationHandler for App {
             // Before the world: the pregame's keys, the game's codes
             // (`VIKeyboard::Read`'s), and its clicks.
             WindowEvent::KeyboardInput { event, .. } if self.host.is_some() => {
-                self.touch.hide();
+                if !device_keyboard() {
+                    self.touch.hide();
+                }
                 // F9 (`era`), as the Controls page has it: the art swapped
                 if event.state == ElementState::Pressed && !event.repeat && is_art_key(&event.logical_key) && self.host.as_ref().is_some_and(|h| h.pre.setup.capturing().is_none()) {
                     self.toggle_era();
@@ -4213,7 +4241,9 @@ impl ApplicationHandler for App {
                 // compact face, with the options' Soft Keyboard on; the
                 // touch screen's pad goes
                 if event.state == ElementState::Pressed {
-                    self.touch.hide();
+                    if !device_keyboard() {
+                        self.touch.hide();
+                    }
                     if let Some(p) = self.play.as_mut() {
                         p.keyboard = true;
                     }
@@ -4376,6 +4406,7 @@ impl ApplicationHandler for App {
                 if !self.touch_script.is_empty() {
                     self.play_touches();
                 }
+                self.note_typing();
                 // VSync (the Extended page) on the surface, as it moves
                 if self.vsync_script.first().is_some_and(|&t| t <= self.clock.elapsed().as_millis() as i64) {
                     self.vsync_script.remove(0);

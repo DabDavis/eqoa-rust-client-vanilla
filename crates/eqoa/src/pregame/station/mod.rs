@@ -134,6 +134,11 @@ impl Station {
         self.keys.push((key, down));
     }
 
+    /// The editor has the keys (a page's box: a name, a password).
+    pub fn typing(&self) -> bool {
+        self.run.as_ref().is_some_and(|run| run.r.result == 0 && run.r.focus == Focus::Editor && run.r.editor_visible)
+    }
+
     /// A pointer at frame point `p`: the editor's keys while it is up, the
     /// dialog's prompt while one is, else a page's object (moved to, and X
     /// on the one already there) or a button glyph drawn on the page.

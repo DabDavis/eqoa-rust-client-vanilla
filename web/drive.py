@@ -19,8 +19,11 @@ and 'w:up' press it and let it go apart, the canvas focused only for the press,
 so a --js between them can move the focus: a key let go elsewhere);
 --type SECONDS=TEXT types TEXT on the canvas then, a character at a time
 (an account's name into Station's login; a password from the environment:
---type 20='$EQOA_PASSWORD'); --js SECONDS=EXPR evaluates EXPR in the page
-then, its value printed.
+--type 20='$EQOA_PASSWORD'); --insert SECONDS=TEXT puts TEXT into the element
+with the focus as a phone's own keyboard does (CDP Input.insertText, a newline
+its Enter; the page's input for the game's edit boxes once a touch has put the
+focus there), and prints only how many; --js SECONDS=EXPR evaluates EXPR in
+the page then, its value printed.
 WebGL/WebGPU run on the machine's GPU (--no-gpu: SwiftShader, every core).
 --headed opens a real window on $DISPLAY instead (F11 needs one); --resize
 SECONDS=WxH sets the page's viewport then, as a resized window would; --scale
@@ -373,6 +376,9 @@ async def drive(a, base, ws_url, target_id):
         for s in a.type:
             t, text = s.split("=", 1)
             events.append((float(t), "type", os.environ.get(text[1:], "") if text.startswith("$") else text))
+        for s in a.insert:
+            t, text = s.split("=", 1)
+            events.append((float(t), "insert", os.environ.get(text[1:], "") if text.startswith("$") else text))
         for s in a.hide:
             t, dur = s.split("=", 1)
             events.append((float(t), "hide", ""))
@@ -412,6 +418,18 @@ async def drive(a, base, ws_url, target_id):
                 await gamepad(arg)
             elif kind == "mouse":
                 await mice(arg)
+            elif kind == "insert":
+                # a phone's own keyboard: into the element with the focus, the
+                # focus left where it is (the page's input for the game's edit
+                # boxes); a newline is its Enter. What it typed is not printed.
+                for ch in arg:
+                    if ch == "\n":
+                        for kind_ in ("keyDown", "keyUp"):
+                            await call("Input.dispatchKeyEvent", type=kind_, key="Enter", code="Enter", windowsVirtualKeyCode=13)
+                    else:
+                        await call("Input.insertText", text=ch)
+                    await asyncio.sleep(0.08)
+                out(f"inserted {len(arg)} characters into #{await js('document.activeElement ? document.activeElement.id : null')}")
             elif kind == "type":
                 await js("document.getElementById('eqoa').focus()")
                 for ch in arg:
@@ -452,6 +470,7 @@ if __name__ == "__main__":
     g.add_argument("--view", help="the viewer's file and arguments")
     g.add_argument("--boot", action="store_true", help="Start: the game from its boot")
     ap.add_argument("--type", action="append", default=[], help="SECONDS=TEXT: typed on the canvas ($VAR: from the environment)")
+    ap.add_argument("--insert", action="append", default=[], help="SECONDS=TEXT: put into the element with the focus as a phone's keyboard puts it, a newline its Enter ($VAR: from the environment)")
     ap.add_argument("--js", action="append", default=[])
     ap.add_argument("--init", action="append", default=[], help="a script run before the page's own (wrap a constructor, say)")
     ap.add_argument("--params", default="", help="the page's query string")
