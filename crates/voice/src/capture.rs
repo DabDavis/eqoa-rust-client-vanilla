@@ -2,7 +2,8 @@
 //! 48 kHz into a short ring the encoder takes 20 ms frames from. The stream lives on a thread
 //! of its own (a cpal stream is not `Send` everywhere), which keeps it until `stop`. No
 //! microphone (or one not allowed) is told once, through `denied`; the engine then receives
-//! only, its level 0.
+//! only, its level 0. `EQOA_VOICE_TONE=<hz>`: a test's microphone instead, a sine at that
+//! pitch in real time (two clients on a machine with no microphone).
 
 use crate::jitter::{FRAME, RATE};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -85,6 +86,11 @@ impl Capture {
     pub fn start(mic: Arc<Mic>, denied: impl FnOnce(String) + Send + 'static) -> Capture {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
+        if let Some(hz) = std::env::var("EQOA_VOICE_TONE").ok().and_then(|v| v.parse::<f64>().ok()) {
+            eprintln!("voice: a {hz} Hz tone for the microphone (EQOA_VOICE_TONE)");
+            let _ = std::thread::Builder::new().name("voice-tone".into()).spawn(move || tone(&mic, hz, &flag));
+            return Capture { stop };
+        }
         let _ = std::thread::Builder::new()
             .name("voice-mic".into())
             .spawn(move || {
@@ -112,6 +118,24 @@ impl Capture {
 impl Drop for Capture {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+/// The test tone into `mic` until `stop`: a quarter of full scale (about -15 dBFS, past Open
+/// Mic's detection), as many samples as real time has made at each 10 ms wake-up.
+fn tone(mic: &Mic, hz: f64, stop: &AtomicBool) {
+    let start = std::time::Instant::now();
+    let mut made = 0u64;
+    let mut out = Vec::new();
+    while !stop.load(Ordering::Relaxed) {
+        let due = (start.elapsed().as_secs_f64() * RATE as f64) as u64;
+        out.clear();
+        for n in made..due {
+            out.push((0.25 * (std::f64::consts::TAU * hz * n as f64 / RATE as f64).sin()) as f32);
+        }
+        made = due;
+        mic.push(&out);
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -189,6 +213,29 @@ mod tests {
         let mut out = Vec::new();
         same.run(&[0.1, 0.2, 0.3], &mut out);
         assert_eq!(out, [0.0, 0.1, 0.2]);
+    }
+
+    /// `EQOA_VOICE_TONE`'s sine: a quarter of full scale, at its pitch (zero crossings),
+    /// made in real time; the control, another pitch, crosses zero as often as it should.
+    #[test]
+    fn the_test_tone_is_a_sine_at_its_pitch_in_real_time() {
+        let crossings = |hz: f64| {
+            let mic = Arc::new(Mic::default());
+            let stop = Arc::new(AtomicBool::new(false));
+            let (m, s) = (mic.clone(), stop.clone());
+            let t = std::thread::spawn(move || tone(&m, hz, &s));
+            std::thread::sleep(Duration::from_millis(120));
+            stop.store(true, Ordering::Relaxed);
+            t.join().unwrap();
+            let mut frame = vec![0.0; FRAME];
+            assert!(mic.take_frame(&mut frame), "a 20 ms frame within 120 ms");
+            let rms = (frame.iter().map(|s| s * s).sum::<f32>() / FRAME as f32).sqrt();
+            assert!((rms - 0.25 / 2f32.sqrt()).abs() < 0.01, "{hz} Hz: rms {rms}");
+            frame.windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0)).count()
+        };
+        // 20 ms of 440 Hz crosses zero 17 or 18 times, of 1 kHz 39 to 41 (the control)
+        assert!((17..=18).contains(&crossings(440.0)));
+        assert!((39..=41).contains(&crossings(1000.0)));
     }
 
     /// The encoder takes whole 20 ms frames, and a backlog is cut short.
