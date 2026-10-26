@@ -111,6 +111,7 @@ mod multibox;
 mod quantity;
 mod questguide;
 mod questlog;
+mod statbox;
 mod tracker;
 mod quickchat;
 mod alarm;

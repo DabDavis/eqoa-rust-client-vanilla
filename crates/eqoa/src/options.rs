@@ -19,9 +19,14 @@
 //!   F11 and Alt+Enter toggle it, `display`: it changes at once and stays,
 //!   kept with the window's place, and Triangle leaves it), Brightness (a
 //!   slider, `settings::curve`), Frame Rate (30, 60 or the display's,
-//!   `settings::frame_due`) and VSync (natively: a frame shown only at the
+//!   `settings::frame_due`), VSync (natively: a frame shown only at the
 //!   display's refresh, or at once; `settings::vsync`, the surface's present
-//!   mode in `viewer`);
+//!   mode in `viewer`), Loading Screens (Longer: a long trip's loading screen
+//!   up at least a second, as a PS2's disc read keeps it; Instant: down as
+//!   soon as the place is in, `loading::Screen::hold_far`) and Text (Sharp or
+//!   Smooth: the game's font scaled to the window with even strokes, or
+//!   filtered as the PS2 filters it, `render::ui::TextFilter`; on UI until the
+//!   Stats Box took its place there);
 //! - World (the user's, 2026-10-25): Fog (a slider: the game's distance fog
 //!   and far plane in the middle, off at the left, thicker to the right,
 //!   `fog`), Mipmaps (On, the game's: the textures' mip levels sampled by
@@ -39,15 +44,13 @@
 //!   Mana Bars (On by default: a power gauge under each group member's, the
 //!   target's and the target of target's health, from a server that sends
 //!   others' power, `net::session::OP_POWER_BARS`; none from one that does
-//!   not, Sandstorm), Update Notices (one setting for
-//!   every window: off, the game never asks to restart into a newer build,
-//!   which starts the next time the game does; `update::asks`, and a page's
-//!   Reload notice, `web/main.js`), Text (Sharp or Smooth: the game's font
-//!   scaled to the window with even strokes, or filtered as the PS2 filters
-//!   it, `render::ui::TextFilter`; on Video until Display took its place)
-//!   and Loading Screens (Longer: a long trip's loading screen up at least a
-//!   second, as a PS2's disc read keeps it; Instant: down as soon as the
-//!   place is in, `loading::Screen::hold_far`);
+//!   not, Sandstorm), Minimap (On by default: the map round the player under
+//!   the quick menus, `map::mini`; N turns it too), Stats Box (Off by default:
+//!   the player's stats in a box under the effects' icons, an effect's raise
+//!   blue and its cut red, `statbox`; B turns it too) and Update Notices (one
+//!   setting for every window: off, the game never asks to restart into a
+//!   newer build, which starts the next time the game does; `update::asks`,
+//!   and a page's Reload notice, `web/main.js`);
 //! - Controller: Controller Focus (which controllers this window reads:
 //!   Auto, Window, Pad 1 to 4 or Off, `input::pick`, kept for each window of
 //!   the client open, `multibox`; what it reads now is said beside Back) and
@@ -543,7 +546,7 @@ impl WndOptions {
     /// VSync (26) turn over, VSync natively only (a page's stays on with
     /// sound 9: the browser paces it); Name Distance (27) by tens from the
     /// game's 22 to 200 (`step_name_distance`); Text (30) goes between Sharp and
-    /// Smooth; Target of Target (31), Mana Bars (42), Minimap (44), Quest Markers (45), Quest Tracker (46), Update Notices (29), Overlapping
+    /// Smooth; Target of Target (31), Mana Bars (42), Minimap (44), Stats Box (47), Quest Markers (45), Quest Tracker (46), Update Notices (29), Overlapping
     /// Names (34, Hide and Show), Mipmaps (35) and Loading Screens (38,
     /// Longer and Instant) turn over;
     /// Output Device (32) goes round the system default and the devices
@@ -620,6 +623,8 @@ impl WndOptions {
                     42 => c.mana_bars = !c.mana_bars,
                     // Minimap: drawn or not from the next frame (`map::mini`)
                     44 => c.minimap = !c.minimap,
+                    // Stats Box: drawn or not from the next frame (`statbox`)
+                    47 => c.stats_box = !c.stats_box,
                     // Quest Markers: the server told from the next frame
                     // (`Play::agree_quest_marks`), the map's marks drawn or not
                     45 => c.quest_markers = !c.quest_markers,
@@ -1074,7 +1079,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 31] = [
+const EXTENDED_ITEMS: [(i32, &str); 32] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1106,6 +1111,7 @@ const EXTENDED_ITEMS: [(i32, &str); 31] = [
     (44, "Minimap"),
     (45, "Quest Markers"),
     (46, "Quest Tracker"),
+    (47, "Stats Box"),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1134,7 +1140,7 @@ struct Category {
 const CATEGORIES: [Category; 8] = [
     Category { name: "Video", items: VIDEO, note: Note::None },
     Category { name: "World", items: &[20, 35, 36, 37, 25, 43], note: Note::None },
-    Category { name: "UI", items: &[22, 31, 42, 44, 29, 30], note: Note::None },
+    Category { name: "UI", items: &[22, 31, 42, 44, 47, 29], note: Note::None },
     Category { name: "Controller", items: &[16, 19], note: Note::Reads },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
     Category { name: "Characters", items: &[12, 23, 24, 27, 34], note: Note::Server },
@@ -1147,11 +1153,12 @@ const CATEGORIES: [Category; 8] = [
 /// Video's rows: natively Display first (F3 20261024-201507: full screen was
 /// F11's alone); a page's full screen is the browser's. Fog and Mipmaps went
 /// to World with Art (the user's, 2026-10-25); Loading Screens came from UI
-/// when Minimap took its place there (F3 pass 18).
+/// when Minimap took its place there (F3 pass 18), and Text when the Stats Box
+/// did (2026-10-26).
 #[cfg(not(target_arch = "wasm32"))]
-const VIDEO: &[i32] = &[33, 13, 14, 26, 38];
+const VIDEO: &[i32] = &[33, 13, 14, 26, 38, 30];
 #[cfg(target_arch = "wasm32")]
-const VIDEO: &[i32] = &[13, 14, 26, 38];
+const VIDEO: &[i32] = &[13, 14, 26, 38, 30];
 
 /// Sound's rows: natively Output Device after Sound in Background; a page
 /// plays where the browser does.
@@ -1226,6 +1233,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         31 => on_off(c.target_of_target),
         42 => on_off(c.mana_bars),
         44 => on_off(c.minimap),
+        47 => on_off(c.stats_box),
         45 => on_off(c.quest_markers),
         46 => on_off(c.quest_tracker),
         34 => wide(if c.overlapping_names { "Show" } else { "Hide" }),
@@ -1510,7 +1518,14 @@ mod tests {
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(settings::loading_longer(), "and back: two values");
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (4, Some(&9)), "Video's last row");
+        assert_eq!(w.item, 30, "Text, on Video since the Stats Box took its place on UI");
+        assert_eq!(settings::client().text, render::ui::TextFilter::Sharp, "Sharp, the default");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::client().text, cues.last()), (render::ui::TextFilter::Smooth, Some(&11)), "Smooth");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert_eq!(settings::client().text, render::ui::TextFilter::Sharp, "and back: two values");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (5, Some(&9)), "Video's last row (six, a page's most)");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!((w.page, w.cat, w.cat_sel, w.item), (3, None, 0, -1), "back to the categories, Video still lit");
         // World: Fog, Mipmaps, Flora, Environment, Art, Map Markers
@@ -1606,20 +1621,20 @@ mod tests {
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(settings::client().minimap, "and back: two values");
         press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.item, 47, "Stats Box");
+        assert!(!settings::client().stats_box, "off: no box, the default");
+        assert_eq!(value_text(&vui, 47), Some(wide(vui.words.get(552, vui.language))), "Off, the game's word");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::client().stats_box, cues.last()), (true, Some(&11)), "on");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(!settings::client().stats_box, "and back: two values");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!(w.item, 29, "Update Notices");
         assert!(settings::update_notices(), "on: the game asks to restart into a newer build");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         assert_eq!((settings::update_notices(), cues.last()), (false, Some(&11)), "off");
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(settings::update_notices(), "and back: two values");
-        press(&mut w, &mut o, key::RIGHT, &mut cues);
-        press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!(w.item, 30, "Text, on UI since Display took its place on Video");
-        assert_eq!(settings::client().text, render::ui::TextFilter::Sharp, "Sharp, the default");
-        press(&mut w, &mut o, key::RIGHT, &mut cues);
-        assert_eq!((settings::client().text, cues.last()), (render::ui::TextFilter::Smooth, Some(&11)), "Smooth");
-        press(&mut w, &mut o, key::LEFT, &mut cues);
-        assert_eq!(settings::client().text, render::ui::TextFilter::Sharp, "and back: two values");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!((w.row, cues.last()), (5, Some(&9)), "UI's last row (six, a page's most)");
@@ -2083,7 +2098,8 @@ mod tests {
         assert_eq!(w.point([slider + 130.0, y(&w, 1)]), down(1, key::RIGHT), "Brightness up");
         assert_eq!(w.point([frame + 110.0, y(&w, 2)]), down(2, key::RIGHT), "Frame Rate's value");
         assert_eq!(w.point([frame + 110.0, y(&w, 4)]), down(4, key::RIGHT), "Loading Screens' value, under VSync since Minimap took its place on UI");
-        assert!(w.point([frame + 110.0, y(&w, 5)]).is_empty(), "the row under Loading Screens: nothing");
+        assert_eq!(w.point([frame + 110.0, y(&w, 5)]), down(5, key::RIGHT), "Text's value, under Loading Screens since the Stats Box took its place on UI");
+        assert!(w.point([frame + 110.0, y(&w, 6)]).is_empty(), "the row under Text: nothing");
         // World: Fog at 5 of 10 (its knob mid-bar), Flora's and Art's values
         w.key(&vui, &mut r, &mut o, key::TRIANGLE, 0, &mut cues, &mut ups);
         w.cat_sel = 1;

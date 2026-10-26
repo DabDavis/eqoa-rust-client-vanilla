@@ -3448,6 +3448,17 @@ impl App {
                     crate::hideui::toggle();
                     return;
                 }
+                // N and B: Extended's Minimap and Stats Box turned, kept (the
+                // client's own, `map::mini`, `statbox`; free in the game's
+                // keyboard table), in play and the manual camera
+                (None, Key::Character(c)) if (p.mode == 0 || p.mode == 38) && c.eq_ignore_ascii_case("n") && !event.repeat => {
+                    crate::map::mini::toggle();
+                    return;
+                }
+                (None, Key::Character(c)) if (p.mode == 0 || p.mode == 38) && c.eq_ignore_ascii_case("b") && !event.repeat => {
+                    crate::statbox::toggle();
+                    return;
+                }
                 // F: the target's target, the game's Assist Target asked
                 // (the client's key for it, `Play::assist_target`; free in
                 // the game's keyboard table)

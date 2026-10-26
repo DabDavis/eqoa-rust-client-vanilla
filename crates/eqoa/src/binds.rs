@@ -133,6 +133,8 @@ pub const ROWS: &[Row] = &[
     row("group_leave", "{994}", &["f8"], Pad::None, ""),
     row("art", "Art: Frontiers' or 2002's", &["f9"], Pad::None, "Everything drawn swaps between Frontiers' art and the 2002 disc's (EverQuest Online Adventures, USA, SLUS-20470), at once; the first time, it asks for that disc."),
     row("hide_ui", "Hide UI", &["h"], Pad::None, "Hides everything over the world: the HUD, the chat, the names over heads, the damage numbers and the target's rings. Again, or any window coming up, shows them."),
+    row("minimap", "Minimap", &["n"], Pad::None, "Shows or hides the minimap, as Extended's UI page does, and keeps it. On the map: a community marker suggested."),
+    row("stats_box", "Stats Box", &["b"], Pad::None, "Shows or hides your stats in a box under the effects' icons (an effect's raise in blue, its cut in red), as Extended's UI page does, and keeps it."),
     row("controls", "Controls", &["f1"], Pad::None, "This page, from play."),
 ];
 
@@ -902,11 +904,11 @@ mod tests {
         assert_eq!(t.bind_key(clear, "q"), Moved::Swapped(talk));
         assert_eq!((t.key(clear), t.key(talk)), (Some("q"), Some("")), "Talk left with no key");
         assert_eq!(t.alias("q"), Alias::Button(bit::TRIANGLE));
-        assert_eq!(t.bind_key(clear, "b"), Moved::Freed(Some("q".into())));
-        assert_eq!((t.alias("b"), t.alias("q")), (Alias::Button(bit::TRIANGLE), Alias::Nothing));
+        assert_eq!(t.bind_key(clear, "g"), Moved::Freed(Some("q".into())));
+        assert_eq!((t.alias("g"), t.alias("q")), (Alias::Button(bit::TRIANGLE), Alias::Nothing));
         // from a key, onto another row's: that row takes the key it left
         assert_eq!(t.bind_key(clear, "e"), Moved::Swapped(use_));
-        assert_eq!(t.key(use_), Some("b"));
+        assert_eq!(t.key(use_), Some("g"));
         // a stick's row has keys; no row without keys or a button exists to refuse
         assert!(ROWS.iter().all(|r| !r.keys.is_empty() || matches!(r.pad, Pad::Button(_))));
     }

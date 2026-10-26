@@ -61,6 +61,9 @@ pub struct HudState {
     /// The quest tracker's quests (`tracker`), none while it is not up: drawn
     /// under the minimap, a pointer on it opens the quest journal.
     pub tracker: Vec<net::session::TrackedQuest>,
+    /// The Stats Box's rows (`statbox`) while it is up: drawn under the
+    /// effects' icons, a pointer on it opens the Summary.
+    pub stats_box: Option<crate::statbox::View>,
     /// `m_selfId` and `m_target`.
     pub self_id: Option<u32>,
     pub target: u32,
@@ -146,6 +149,8 @@ pub enum Pick {
     Minimap,
     /// the quest tracker (`tracker`): the quest journal opened
     Quests,
+    /// the Stats Box (`statbox`): the Character menu's Summary opened
+    Stats,
 }
 
 /// The Target of Target bar's place (the frame's, out at a wide window's
@@ -324,6 +329,12 @@ impl Hud {
         // the quest tracker under it, placed the same way (`tracker`)
         if let Some(r) = crate::tracker::draw(ui, &s.tracker) {
             self.note(ui, r, Pick::Quests);
+        }
+        // the Stats Box under the effects' icons, out at a wide window's left
+        // and up a tall one's top with the HUD's left side (`statbox`)
+        if let Some(v) = &s.stats_box {
+            crate::statbox::draw(vui, ui, v);
+            self.note(ui, crate::statbox::FRAME, Pick::Stats);
         }
     }
 
