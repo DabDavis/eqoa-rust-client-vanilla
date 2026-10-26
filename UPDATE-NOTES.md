@@ -15,6 +15,29 @@ is put on the page by `.github/workflows/notes.yml`.
 - Turn it off under Options > Extended > UI > Minimap. Loading Screens moved from UI to the
   Video page to make room.
 
+## 2026-10-26 · XP camps, coaches, routes and towns on the map
+- The map (M) marks the popular XP camps with a red XP badge and every coach with the
+  horseshoe the stables wear (the one on Freeport's stable sign, read from your own disc).
+  Point at one, with the mouse, a tap, or the pad's middle cross once the map is panned,
+  for its card: a camp's levels, the guide's note, the rare creatures near it and notable
+  drops; a coach's town, its coachman and the towns it runs to.
+- Click a marker, or tap it a second time, to put your waypoint on it.
+- The coach routes are dashed lines between the towns they join; the coach you point at
+  has its own drawn bright.
+- The towns' names are on the map too, blue for good, red for evil, cream for neutral,
+  the bigger town's first where they crowd, smaller as you zoom out.
+- X (○ on a pad) hides or shows the markers and routes, and so does Options > Extended >
+  World > Map Markers; T (Select) the town names. The camps, routes and towns are from
+  EQOA-Data's map guide.
+
+## 2026-10-26 · Lightning you can see
+- Lightning spells shoot their bolts in the world now: a wizard's Static Bolt, Shocking
+  Strike, Lightning Blast, Thunderbolt and the rest, and every other spell whose visual
+  has lightning, yours and other players' and creatures', whoever they hit. The bolts
+  were worked out all along but drawn where nothing is; the spell preview always showed
+  them.
+- Weapons leave their swing trails in the world now too, hidden the same way until now.
+
 ## 2026-10-26 · Target of Target above the target
 - Target of Target (Options > Extended > UI) now sits just above the target's bar, with the
   health and power of whoever your target is targeting under it, as a group member's are:

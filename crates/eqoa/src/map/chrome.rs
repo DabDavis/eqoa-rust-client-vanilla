@@ -14,10 +14,10 @@ use vi::ui::{Raster, Vui, wide};
 /// the pad's keys they press.
 pub const BUTTONS: [(&str, i32); 4] = [("Close", key::TRIANGLE), ("+", key::R1), ("-", key::L1), ("Center", key::CROSS)];
 
-/// The legend for the pad: the inline glyphs (△ 65, ✕ 66, □ 67, L1 185,
-/// R1 187) and what each does.
-const PAD_LEGEND: [(i32, &str); 7] = [(65, "Close"), (66, "Center"), (67, "Waypoint"), (185, ""), (187, "Zoom"), (-1, "Sticks, drag, pinch: pan and zoom"), (-1, "Tap: waypoint")];
-const KEY_LEGEND: [&str; 5] = ["M Close", "Space Center", "+ - or wheel Zoom", "Arrows, WASD or drag Pan", "Click or Q Waypoint"];
+/// The legend for the pad: the inline glyphs (△ 65, ✕ 66, □ 67, ○ 68, L1
+/// 185, R1 187) and what each does.
+const PAD_LEGEND: [(i32, &str); 9] = [(65, "Close"), (66, "Center"), (67, "Waypoint"), (68, "Markers"), (189, "Towns"), (185, ""), (187, "Zoom"), (-1, "Sticks, drag, pinch: pan and zoom"), (-1, "Tap: waypoint")];
+const KEY_LEGEND: [&str; 7] = ["M Close", "Space Center", "+ - or wheel Zoom", "Arrows, WASD or drag Pan", "Click or Q Waypoint", "X Markers", "T Towns"];
 
 pub const NAME: [f32; 4] = [1.0, 0.97, 0.85, 1.0];
 const PANEL: i32 = 61;
@@ -48,6 +48,68 @@ pub fn names(r: &mut dyn Raster, vui: &Vui, c: &Chrome) {
     for (at, name) in &c.names {
         vui.draw_centered_string_ex(r, &wide(name), at[0] as i32, at[1] as i32, NAME, 0, true);
     }
+}
+
+/// Where `draw` will put the chrome's pieces (frame rects x0, y0, x1, y1:
+/// every panel, word and glyph, 4 more each way), laid out against raster
+/// `r`'s font: for what keeps clear of it (the towns' names, a card), drawn
+/// before it.
+pub fn footprint(r: &dyn Raster, vui: &Vui, c: &Chrome) -> Vec<[f32; 4]> {
+    struct Measure<'a> {
+        r: &'a dyn Raster,
+        rects: Vec<[f32; 4]>,
+    }
+    impl Measure<'_> {
+        fn note(&mut self, at: [i32; 2], size: [i32; 2]) {
+            let e = 4.0;
+            self.rects.push([at[0] as f32 - e, at[1] as f32 - e, (at[0] + size[0]) as f32 + e, (at[1] + size[1]) as f32 + e]);
+        }
+    }
+    impl Raster for Measure<'_> {
+        fn blit(&mut self, _: u32, _: u32, at: [i32; 2], _: [i32; 2], b: [i32; 2], _: i32, _: f32) {
+            self.note(at, b);
+        }
+        fn stretch_blit(&mut self, _: u32, _: u32, at: [i32; 2], size: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {
+            self.note(at, size);
+        }
+        fn fill_fan(&mut self, _: [f32; 4], corners: [[i32; 2]; 4]) {
+            self.note(corners[0], [corners[2][0] - corners[0][0], corners[2][1] - corners[0][1]]);
+        }
+        fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+        fn draw_string(&mut self, at: [i32; 2], _: [f32; 4], s: &[u16]) {
+            let size = [self.r.string_width(s).max(0), self.r.point_size()];
+            self.note(at, size);
+        }
+        fn draw_centered_string(&mut self, at: [i32; 2], _: [f32; 4], s: &[u16], mode: u32) {
+            let (w, h) = (self.r.string_width(s).max(0), self.r.point_size());
+            let x = if mode == 1 { at[0] } else { at[0] - w / 2 };
+            let y = if mode == 2 { at[1] } else { at[1] - h / 2 };
+            self.note([x, y], [w, h]);
+        }
+        fn string_width(&self, s: &[u16]) -> i32 {
+            self.r.string_width(s)
+        }
+        fn point_size(&self) -> i32 {
+            self.r.point_size()
+        }
+        fn viewport(&self) -> [i32; 4] {
+            self.r.viewport()
+        }
+        fn set_viewport(&mut self, _: [i32; 4]) {}
+    }
+    let mut m = Measure { r, rects: Vec::new() };
+    draw(&mut m, vui, c);
+    m.rects
+}
+
+/// The band between the chrome's top and its foot (frame y: under the
+/// lowest piece above the middle, over the highest below it) out of
+/// `footprint`'s rects, within the window's corners.
+pub fn clear_band(rects: &[[f32; 4]], corners: [[f32; 2]; 2]) -> [f32; 2] {
+    let mid = (corners[0][1] + corners[1][1]) / 2.0;
+    let top = rects.iter().filter(|r| r[3] < mid).map(|r| r[3]).fold(corners[0][1], f32::max);
+    let foot = rects.iter().filter(|r| r[1] > mid).map(|r| r[1]).fold(corners[1][1], f32::min);
+    [top, foot]
 }
 
 /// Draws the chrome over everything; where its buttons went, with their
@@ -173,6 +235,27 @@ mod tests {
 
     fn chrome(keyboard: bool) -> Chrome {
         Chrome { corners: [[-106.0, 0.0], [746.0, 448.0]], title: "Tunaria: Freeport (North)".into(), names: Vec::new(), keyboard, progress: Some((3, 175)) }
+    }
+
+    /// The chrome's footprint covers its title (top left), its buttons (top
+    /// right) and its legend (the foot), and the band clear of it runs from
+    /// under the title's progress line to over the legend; the control: with
+    /// no chrome the band is the whole window.
+    #[test]
+    fn the_chrome_says_where_it_goes() {
+        let c = chrome(true);
+        let rects = footprint(&NullRaster, &vui(), &c);
+        let at = |x: f32, y: f32| rects.iter().any(|r| (r[0]..r[2]).contains(&x) && (r[1]..r[3]).contains(&y));
+        // the title's words at (-90, 11), "Close" right, "M Close" at the foot
+        assert!(at(-80.0, 16.0) && at(730.0, 16.0) && at(-80.0, 430.0), "title, buttons, legend: {rects:?}");
+        assert!(!at(320.0, 224.0), "nothing in the middle");
+        let band = clear_band(&rects, c.corners);
+        assert!(band[0] > 40.0 && band[1] < 420.0 && band[0] < band[1], "{band:?}");
+        let hits = draw(&mut NullRaster, &vui(), &c);
+        for (r, _) in hits {
+            assert!(at(r[0] as f32 + 1.0, r[1] as f32 + 1.0), "button {r:?} in it");
+        }
+        assert_eq!(clear_band(&[], c.corners), [0.0, 448.0], "the control");
     }
 
     /// Each button is where it was drawn, against the window's top right

@@ -29,9 +29,10 @@
 //!   alone, `render::set_mipmaps`), Flora (On, the game's: the plants it
 //!   grows round the camera, `flora`; Off: none), Environment (On, the
 //!   game's: the effect volumes, ground fog, dust, leaves, light shafts and
-//!   flocks, `fx`; Off: none) and Art (Frontiers' or the 2002 disc's, `era`,
+//!   flocks, `fx`; Off: none), Art (Frontiers' or the 2002 disc's, `era`,
 //!   as F9 swaps it: drawn as it moves, the 2002 disc asked for the first
-//!   time);
+//!   time) and Map Markers (On: the map's XP camps and coaches, `map::markers`;
+//!   Off: neither; the map's own X or ○ turns it too);
 //! - UI: Ability Bars (the game's 2, or 3 or 4: the HUD's quick menus and
 //!   the spell book's slots, `hudmenu`), Target of Target (Off by default:
 //!   the target's bar shows whom the target targets, `Play::target_of_target`),
@@ -627,6 +628,8 @@ impl WndOptions {
                     36 => c.flora = !c.flora,
                     // Environment: the effect volumes from the next frame (`viewer`, `fx`)
                     37 => c.environment = !c.environment,
+                    // Map Markers: the map's camps and coaches from its next frame (`map::markers`)
+                    43 => c.map_markers = !c.map_markers,
                     // Output Device: the sound opened there from the next
                     // frame (`audio::retarget`)
                     32 => step_output(&mut c, &crate::audio::outputs().listed.map(|l| l.1).unwrap_or_default(), d),
@@ -1053,7 +1056,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 28] = [
+const EXTENDED_ITEMS: [(i32, &str); 29] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1081,6 +1084,7 @@ const EXTENDED_ITEMS: [(i32, &str); 28] = [
     (37, "Environment"),
     (38, "Loading Screens"),
     (42, "Mana Bars"),
+    (43, "Map Markers"),
     (44, "Minimap"),
 ];
 
@@ -1109,7 +1113,7 @@ struct Category {
 /// Video, UI, Controller, etc."), each a page of `PAGE_MOST` rows at most.
 const CATEGORIES: [Category; 7] = [
     Category { name: "Video", items: VIDEO, note: Note::None },
-    Category { name: "World", items: &[20, 35, 36, 37, 25], note: Note::None },
+    Category { name: "World", items: &[20, 35, 36, 37, 25, 43], note: Note::None },
     Category { name: "UI", items: &[22, 31, 42, 44, 29, 30], note: Note::None },
     Category { name: "Controller", items: &[16, 19], note: Note::Reads },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
@@ -1195,6 +1199,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         35 => on_off(c.mipmaps),
         36 => on_off(c.flora),
         37 => on_off(c.environment),
+        43 => on_off(c.map_markers),
         38 => wide(if c.loading_longer { "Longer" } else { "Instant" }),
         30 => wide(match c.text {
             render::ui::TextFilter::Sharp => "Sharp",
@@ -1475,7 +1480,7 @@ mod tests {
         assert_eq!((w.row, cues.last()), (4, Some(&9)), "Video's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!((w.page, w.cat, w.cat_sel, w.item), (3, None, 0, -1), "back to the categories, Video still lit");
-        // World: Fog, Mipmaps, Flora, Environment, Art
+        // World: Fog, Mipmaps, Flora, Environment, Art, Map Markers
         press(&mut w, &mut o, key::DOWN, &mut cues);
         press(&mut w, &mut o, key::CROSS, &mut cues);
         assert_eq!((w.cat, w.item), (Some(1), 20), "World, Fog");
@@ -1523,7 +1528,14 @@ mod tests {
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert_eq!(settings::art(), esf::Era::Frontiers, "and back: two values");
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (4, Some(&9)), "World's last row");
+        assert_eq!(w.item, 43, "Map Markers");
+        assert!(settings::client().map_markers, "on: the camps and coaches marked");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::client().map_markers, cues.last()), (false, Some(&11)), "off");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(settings::client().map_markers, "and back: two values");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (5, Some(&9)), "World's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!((w.page, w.cat, w.cat_sel, w.item), (3, None, 1, -1), "back to the categories, World still lit");
         // UI: Ability Bars
