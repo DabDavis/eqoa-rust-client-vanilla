@@ -2179,6 +2179,14 @@ impl App {
     /// or zoom. The arrows, which walk and turn in the game, stay 0: here
     /// WASD walks and the arrows are the quick menus' d-pad (the user's
     /// choice, 2026-10-20; the game has W/S/A/D on the quick menus).
+    /// The push-to-talk keys held: the group's and the room's (`voice`).
+    /// A bound key reaches the dispatch as its row's own (`binds`), so these
+    /// are V and N whatever the player moved them to; a key typed into an
+    /// edit box is never held.
+    fn voice_keys(&self) -> [bool; 2] {
+        [self.held.contains("v"), self.held.contains("n")]
+    }
+
     fn game_keys(&self) -> [f32; 8] {
         if self.play.as_ref().is_some_and(|p| p.is_dead()) {
             return [0.0; 8];
@@ -4369,6 +4377,11 @@ impl ApplicationHandler for App {
                 let look_free = !self.play.as_ref().is_some_and(|p| p.is_dead()) && self.play.as_ref().is_none_or(|p| p.look_free());
                 let steer = look_free && self.walker.as_ref().is_some_and(|w| self.mouse.steer(w.cam.camera_mode));
                 let game_keys = self.game_keys();
+                // voice's push-to-talk keys, held (their rows' keys, as bound)
+                let talk = self.voice_keys();
+                if let Some(p) = self.play.as_mut() {
+                    p.voice.keys = talk;
+                }
                 let now = self.clock.elapsed().as_millis() as i64;
                 let Some(g) = &mut self.gfx else { return };
                 let body_at = self.body_at;
