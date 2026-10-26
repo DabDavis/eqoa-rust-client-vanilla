@@ -565,8 +565,12 @@ which have the File System Access picker), a pick goes through
 `showOpenFilePicker` and its handle, never the image, is kept in the origin's
 IndexedDB: the next visit puts the image back in its input when the browser
 still allows reading it, else offers it on a "Use <file> again" button whose
-click asks; a file moved since is said so and forgotten, and unticking
-forgets both (`web/main.js`, `web/pagetest.py` "remember"). What the
+click asks, and Start asks for it in its own click; ticked after a disc was
+picked the browser's own way, the picker opens at once to keep it (or a
+"Remember <file>" button offers it); a dropped file's handle is kept too; a
+file moved since is said so and forgotten, and unticking forgets both; a
+report's `remember:` line says what is kept and what the browser answered
+(`web/main.js`, `web/pagetest.py` "remember"). What the
 game reads synchronously is fetched first; whatever walks the image (its
 directory, a world file's record headers) runs against `iso::Sparse`, a cache
 that answers `WouldBlock` for bytes it lacks and is filled between attempts

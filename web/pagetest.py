@@ -32,7 +32,12 @@ version.json under it:
             origin's own storage stands in for one): the next visit puts it
             back in its input, or offers it on a button when the browser must
             ask; unticked it is forgotten; a file moved since is said so; a
-            ticked click opens the picker that can be remembered
+            ticked click opens the picker that can be remembered; ticked
+            after a pick, that picker opens at once (or a button offers it);
+            Start asks the browser for a kept disc in its click; a picker
+            that can't start in the kept folder opens without it; a report
+            says what is remembered (the picker is a stand-in: the real one
+            can't be driven headless)
 
 Each check has its negative control. Needs the `websockets` package.
 
@@ -515,6 +520,95 @@ async def tests(a, site, base, page):
     check("unticked, the input's own chooser opens (control)", any(c.get("backendNodeId") for c in page.choosers[n:]), str(page.choosers[n:]))
     await page.call("Page.setInterceptFileChooserDialog", enabled=False)
     await page.js("navigator.storage.getDirectory().then((r) => r.removeEntry('remembered.iso')).catch(() => 0).then(() => true)")
+
+    # ---- remember, F3 20261026-014934 ("did not actually remember"). The
+    # File System Access picker can't be driven headless: a stand-in for
+    # window.showOpenFilePicker hands back a file of the origin's own storage
+    # and, as the real one, refuses without an activation; `fail` makes it
+    # refuse a start in a kept image's folder ('start') or every call ('all').
+    stub_js = """(async () => {
+      const root = await navigator.storage.getDirectory();
+      for (const n of ['remembered.iso', 'picked-again.iso']) {
+        const fh = await root.getFileHandle(n, { create: true });
+        const w = await fh.createWritable(); await w.write(new Uint8Array(4096)); await w.close();
+      }
+      window.__picks = [];
+      window.__pickFail = '';
+      window.__pickName = 'remembered.iso';
+      window.showOpenFilePicker = async (opts) => {
+        window.__picks.push({ startIn: !!(opts && opts.startIn), id: opts && opts.id });
+        if (!navigator.userActivation.isActive) throw new DOMException('Must be handling a user gesture to show a file picker.', 'SecurityError');
+        if (window.__pickFail === 'all' || (window.__pickFail === 'start' && opts.startIn)) throw new DOMException('the picker could not open there', 'NotFoundError');
+        return [await (await navigator.storage.getDirectory()).getFileHandle(window.__pickName)];
+      };
+      return true; })()"""
+    facts_js = "eqoaReport.facts().join('\\n')"
+    keep_row = "!document.getElementById('iso-again-row').hidden && document.getElementById('iso-again').textContent"
+    # a disc picked the browser's own way, then the box ticked: without an
+    # activation the picker can't open, so a button that opens it is offered
+    await page.open(base + q)
+    await page.js(stub_js)
+    await page.pick(a.iso)
+    await page.until("document.getElementById('iso').files.length > 0", 10)
+    await page.js("document.getElementById('remember').click()")
+    offer = await page.until(keep_row, 5)
+    check("ticked after a pick with no activation, a button to remember it is offered (control)",
+          bool(offer) and offer.startswith("Remember ") and await page.js("window.__picks.length") == 0, str(offer))
+    await page.js("document.getElementById('remember').click()")
+    check("unticked, that button goes", await page.js("document.getElementById('iso-again-row').hidden") is True)
+    # ticked after the pick in the tick's own activation: the picker that can
+    # keep it opens at once, and the disc is kept
+    await page.gesture("document.getElementById('remember').click()")
+    name = await page.until(f"({picked}) === 'remembered.iso' && ({picked})", 10)
+    check("ticked after a pick, the picker opens at once and the disc is kept",
+          name == "remembered.iso" and await page.js("window.__picks.length") == 1 and await page.js(kept_js) is True,
+          f"{await page.js(picked)} picks {await page.js('window.__picks.length')}")
+    # next visit, the browser must ask: Start asks it in its own click and
+    # starts with the kept disc (the form's submit stood in for, to stop short
+    # of booting a stand-in file)
+    hook = await page.call("Page.addScriptToEvaluateOnNewDocument", source="""
+      FileSystemHandle.prototype.queryPermission = async function () { return 'prompt'; };
+      FileSystemHandle.prototype.requestPermission = async function () { return navigator.userActivation.isActive ? 'granted' : 'denied'; };""")
+    await page.open(base + q)
+    offer = await page.until("!document.getElementById('iso-again-row').hidden && document.getElementById('iso-what').textContent", 10)
+    check("a kept disc the browser must ask for is said on the disc's line", bool(offer) and "press Start" in offer, str(offer))
+    submit_js = """document.getElementById('gate').addEventListener('submit', (e) => {
+      window.__submitted = (document.getElementById('iso').files[0] || {}).name || 'none';
+      e.preventDefault(); e.stopImmediatePropagation(); }, true); true"""
+    await page.js(submit_js)
+    await page.js("document.getElementById('go').click()")
+    await asyncio.sleep(0.5)
+    check("Start without an activation asks nothing and starts nothing (control)",
+          await page.js("window.__submitted === undefined") is True and await page.js(picked) == "", str(await page.js("window.__submitted")))
+    await page.gesture("document.getElementById('go').click()")
+    went = await page.until("window.__submitted", 10)
+    check("Start asks the browser for the kept disc in its click and starts with it", went == "remembered.iso", str(went))
+    facts = await page.js(facts_js) or ""
+    check("a report says what is remembered and what the browser said",
+          'remember: on; disc kept "remembered.iso" (checked: prompt, asked: granted)' in facts, facts[-300:])
+    await page.call("Page.removeScriptToEvaluateOnNewDocument", identifier=hook["identifier"])
+    # a picker that can't start in the kept image's folder opens without it
+    await page.open(base + q)
+    await page.until(f"({picked}) === 'remembered.iso'", 10)
+    await page.js(stub_js)
+    await page.js("window.__pickFail = 'all'; true")
+    await page.gesture("document.getElementById('iso').click()")
+    line = await page.until("document.getElementById('iso-what').textContent.includes('did not open') && document.getElementById('iso-what').textContent", 5)
+    check("a picker that opens nowhere says so, and nothing is picked (control)", bool(line) and await page.js(picked) == "remembered.iso", str(line))
+    await page.open(base + q)
+    await page.until(f"({picked}) === 'remembered.iso'", 10)
+    await page.js(stub_js)
+    await page.js("window.__pickFail = 'start'; window.__pickName = 'picked-again.iso'; true")
+    await page.gesture("document.getElementById('iso').click()")
+    name = await page.until(f"({picked}) === 'picked-again.iso' && ({picked})", 10)
+    starts = await page.js("JSON.stringify(window.__picks.map((p) => p.startIn))")
+    facts = await page.js(facts_js) or ""
+    check("a start where the kept image was that fails is tried once more without it",
+          name == "picked-again.iso" and starts == "[true,false]" and "starting where it was (opened without it)" in facts, f"{name} {starts} {facts[-160:]}")
+    await page.js("document.getElementById('remember').click()")
+    facts = await page.js(facts_js) or ""
+    check("unticked, a report says so (control)", "remember: off; disc not kept" in facts, facts[-200:])
+    await page.js("navigator.storage.getDirectory().then(async (r) => { for (const n of ['remembered.iso', 'picked-again.iso']) await r.removeEntry(n).catch(() => 0); return true; })")
 
     errors = [l for l in page.lines if l.startswith("EXCEPTION") and "crash_test" not in l and "unreachable" not in l and "a test rejection" not in l]
     check("no exception in the page beyond the crash test's", not errors, "; ".join(errors[:3]))
