@@ -291,3 +291,35 @@ fn a_stop_that_finds_the_packet_full_still_stops() {
         assert_eq!(d.stops_dropped > 0, full, "full {full}: the stop found no room");
     }
 }
+
+/// A volume and a pitch that find the packet full were dropped, as the
+/// console drops them: a sound just started then played its whole life at
+/// the full volume and the pitch it started with. They now go in the next
+/// packet: the voice's volume and pitch are the ones set, a frame late. The
+/// control: the same sets with room for them, at once.
+#[test]
+fn a_set_that_finds_the_packet_full_goes_in_the_next() {
+    // the left volume and the pitch of voice `ch` on the first core
+    let regs = |l: &Local, ch: u16| (l.drv.io.sd_get_param(ch << 1), l.drv.io.sd_get_param((ch << 1) | 0x200));
+    for full in [false, true] {
+        let (mut d, mut l) = device();
+        let w = make(&mut d, &wave(64, 0x33));
+        d.flush(&mut l);
+        if full {
+            // thirteen starts (117 words): the fourteenth fits, its sets do not
+            for _ in 0..13 {
+                d.play(w, 0, 0);
+            }
+        }
+        let p = d.play(w, 0, 0);
+        assert!(p >= 0);
+        d.set_volume(p, 0.25);
+        d.set_pitch(p, 2048);
+        let ch = if full { 13 } else { 0 };
+        assert_eq!(d.sets_kept > 0, full, "full {full}: the sets found no room");
+        frame(&mut d, &mut l);
+        frame(&mut d, &mut l);
+        let base = ((22050i32 << 12) / 48000) as u16;
+        assert_eq!(regs(&l, ch), ((0.25f32 * 16383.0) as u16, base / 2), "full {full}: the voice has the volume and pitch set");
+    }
+}

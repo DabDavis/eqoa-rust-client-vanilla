@@ -248,7 +248,7 @@ impl Sound {
         };
         let lasting = |c: usize| (0..24).filter(|&v| self.strays.frames[c * 24 + v] >= STRAY_FRAMES).fold(0u32, |m, v| m | 1 << v);
         format!(
-            "{}; sounds' RAM: {ram}; voices playing on with no sound {:06x} {:06x} ({} times since the start); packets up to {} words of 127, kept back {}, upload steps held {}, commands that found the packet full {}{} (stops sent next {}); sets held between the game's frames {}",
+            "{}; sounds' RAM: {ram}; voices playing on with no sound {:06x} {:06x} ({} times since the start); packets up to {} words of 127, kept back {}, upload steps held {}, commands that found the packet full {}{} (stops sent next {}, volumes and pitches next {}); sets held between the game's frames {}",
             self.describe_play(st, t, free, largest, pool),
             lasting(0),
             lasting(1),
@@ -259,6 +259,7 @@ impl Sound {
             self.dev.cmds_dropped,
             dropped_kinds(&self.dev.dropped_by_id),
             self.dev.stops_dropped,
+            self.dev.sets_kept,
             self.dev.held_sets
         )
     }

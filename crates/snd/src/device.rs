@@ -45,7 +45,11 @@
 //! pitch among them (it played at full volume wherever it was). Between two of
 //! the game's frames (`set_between`) a playing sound's volume, pan and pitch
 //! are held and sent once, at the game's frame, so the packets are the
-//! console's at any frame rate (`tests/device_cadence.rs`).
+//! console's at any frame rate (`tests/device_cadence.rs`). Where the console
+//! itself drops one (a busy frame at its own cadence), a volume, pan or pitch
+//! that finds the packet full is held for the next packet the same way, as
+//! the stops are: a sound started then plays a frame at full volume, not its
+//! whole life.
 
 use std::marker::PhantomData;
 use vi::Model;
@@ -349,6 +353,10 @@ pub struct SoundDevice<M: Model> {
     /// the frames drawn, counted by `set_between`
     drawn: u32,
     pub held_sets: u32,
+    /// volumes, pans and pitches that found the packet full, held for the
+    /// next one instead of dropped (`keep_volume`, `keep_pitch`; among
+    /// `cmds_dropped`, as the stops are)
+    pub sets_kept: u32,
     _m: PhantomData<M>,
 }
 
@@ -406,6 +414,7 @@ impl<M: Model> SoundDevice<M> {
             between: false,
             drawn: 0,
             held_sets: 0,
+            sets_kept: 0,
             _m: PhantomData,
         };
         d.bgm_version = bgm_version;
@@ -1035,17 +1044,27 @@ impl<M: Model> SoundDevice<M> {
                 self.args[0] = first_channel(p.channels);
                 self.args[1] = next_channel(p.channels, self.args[0]);
                 self.args[2] = scaled;
-                self.sound_cmd(5, 3);
+                self.keep_pitch(pb, 5, 3);
             }
             Some(View::Xm { .. }) => {
                 self.args[0] = (p.channels & 0xffffff) as i32;
                 self.args[1] = (p.channels >> 24) as i32;
                 self.args[2] = pitch;
-                self.sound_cmd(11, 3);
+                self.keep_pitch(pb, 11, 3);
             }
             None => {}
         }
     }
+    /// A playback's pitch queued; held for the next packet when this one is
+    /// full (`sets_kept`).
+    fn keep_pitch(&mut self, pb: usize, id: u32, argc: i32) {
+        if !self.sound_cmd(id, argc) {
+            let p = &mut self.playbacks[pb];
+            p.held_pitch = Some(p.pitch);
+            self.sets_kept += 1;
+        }
+    }
+
 
     pub fn volume(&self, handle: i32) -> f32 {
         self.playback(handle).map_or(0.0, |pb| self.playbacks[pb].held_volume.unwrap_or(self.playbacks[pb].volume))
@@ -1065,7 +1084,7 @@ impl<M: Model> SoundDevice<M> {
                     pan = 0;
                 }
                 self.args[3] = pan;
-                self.sound_cmd(6, 4);
+                self.keep_volume(pb, 6, 4);
             }
             Some(View::Xm { volume, .. }) => {
                 let g = M::mul(M::mul(volume, p.volume), cv);
@@ -1077,11 +1096,21 @@ impl<M: Model> SoundDevice<M> {
                     pan = 0;
                 }
                 self.args[3] = pan;
-                self.sound_cmd(10, 4);
+                self.keep_volume(pb, 10, 4);
             }
             None => {}
         }
     }
+    /// A playback's volume and pan queued; held for the next packet when
+    /// this one is full (`sets_kept`).
+    fn keep_volume(&mut self, pb: usize, id: u32, argc: i32) {
+        if !self.sound_cmd(id, argc) {
+            let p = &mut self.playbacks[pb];
+            p.held_volume = Some(p.volume);
+            self.sets_kept += 1;
+        }
+    }
+
 
     pub fn set_volume(&mut self, handle: i32, v: f32) {
         let lo = if M::lt(v, 0.0) { 0.0 } else { v };
@@ -1487,7 +1516,9 @@ impl<M: Model> SoundDevice<M> {
         n
     }
 
-    fn sound_cmd(&mut self, id: u32, argc: i32) {
+    /// Queues command `id` with `argc` arguments: false when the packet is
+    /// full and it is dropped, as the console's SoundCmd drops it.
+    fn sound_cmd(&mut self, id: u32, argc: i32) -> bool {
         let n = self.words;
         if n + argc + 3 < 128 {
             let n = n as usize;
@@ -1498,12 +1529,14 @@ impl<M: Model> SoundDevice<M> {
             }
             self.words += 2 + argc;
             self.packet[0] += 1;
+            true
         } else {
             self.cmds_dropped += 1;
             self.dropped_by_id[if (id as usize) < 16 { id as usize } else { 0 }] += 1;
             if id == 4 {
                 self.stops_dropped += 1;
             }
+            false
         }
     }
 
