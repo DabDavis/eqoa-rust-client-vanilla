@@ -258,6 +258,31 @@ pub fn save_waypoints(w: &[(i32, [f32; 2])]) -> bool {
     }
 }
 
+// ---- the quest guide's record (`questguide`) --------------------------------------------
+
+/// The quest guide's file: what it keeps of each character (the quests it
+/// finished, its home city, the kills seen), one line a character
+/// (`questguide::Kept`). One file for every window, as a character is the same
+/// in any of them: read again before each write, so another window's lines
+/// stay.
+const QUEST_GUIDE_FILE: &str = "questguide.opt";
+
+/// The quest guide's file as text (empty when there is none).
+pub fn quest_guide() -> String {
+    store::read(QUEST_GUIDE_FILE).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default()
+}
+
+/// Keeps the quest guide's file: whether it was kept.
+pub fn save_quest_guide(text: &str) -> bool {
+    match store::write(QUEST_GUIDE_FILE, text.as_bytes()) {
+        Ok(()) => true,
+        Err(e) => {
+            crate::say(&format!("the quest guide's record was not kept: {e}"));
+            false
+        }
+    }
+}
+
 // ---- game.opt's home shard (`VIGameOptions::m_homeShard`) ---------------------------
 
 /// `m_homeShard[64]` at +0x98: the server list's last pick, UTF-16.
@@ -638,13 +663,14 @@ pub struct ClientOptions {
     /// Quest Markers (the user's ask, on by default): the map's "!" at each
     /// giver of a quest the player may take and "?" where a step of its
     /// quests is to be done, from a server that sends them
-    /// (`net::session::OP_QUEST_MARKERS`: go-eqoa-server; none from
-    /// Sandstorm, which sends no such thing).
+    /// (`net::session::OP_QUEST_MARKERS`: go-eqoa-server), else the client's
+    /// own guide's (`questguide`: Sandstorm sends no such thing).
     pub quest_markers: bool,
     /// Quest Tracker (the user's ask, on by default): the HUD's list of the
     /// quests under way under the minimap, each step's objectives counted
     /// ("Bat Eye 0/3"), from a server that sends them
-    /// (`net::session::OP_QUEST_PROGRESS`: go-eqoa-server); off, none.
+    /// (`net::session::OP_QUEST_PROGRESS`: go-eqoa-server), else the guide's;
+    /// off, none.
     pub quest_tracker: bool,
     /// Mipmaps: on, the textures' mip levels sampled as the GS samples them
     /// (`render::gs_lod_k`: the level by depth, blended), which is how the

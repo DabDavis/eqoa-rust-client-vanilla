@@ -75,10 +75,11 @@
 //!   the system lists, the default while it is not connected: `audio`'s
 //!   `retarget`; its page says where the sound plays now);
 //! - Quests: Quest Markers (On: the map's marks of the quests the player may
-//!   take and the steps it has to do, from a server that sends them,
-//!   `map::quests`; Off: the server is asked for none; the map's own J or R3
-//!   turns it too) and Quest Tracker (On: the HUD's list of the quests under
-//!   way, each step counted, under the minimap, `tracker`; Off: none).
+//!   take and the steps it has to do, from a server that sends them, else the
+//!   client's own guide, `questguide`, `map::quests`; Off: the server is asked
+//!   for none; the map's own J or R3 turns it too) and Quest Tracker (On: the
+//!   HUD's list of the quests under way, each step counted, under the
+//!   minimap, `tracker`, the server's or the guide's; Off: none).
 //! Triangle goes back a step: a page to the categories, the categories to
 //! the options menu. They change as they are moved, Triangle on the options
 //! menu puts them back, and Save Changes keeps them with the game's

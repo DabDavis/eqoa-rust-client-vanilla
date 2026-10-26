@@ -1,8 +1,10 @@
 //! The quest marks on the map (the user: "add quest markers for givers to the
 //! map too", "only if eligible for the class/level", "on the quest icon on the
 //! map have hover tooltip with quest info"): what a server sends for the
-//! player (`net::session::OP_QUEST_MARKERS_DATA`, go-eqoa-server's: none from
-//! Sandstorm), a gold "!" at each giver of a quest the player may take and a
+//! player (`net::session::OP_QUEST_MARKERS_DATA`, go-eqoa-server's), or on a
+//! server that sends none (Sandstorm) the client's own guide's (`questguide`,
+//! each card's first line "<NPC> (guide)"), a gold "!" at each giver of a
+//! quest the player may take and a
 //! "?" where a step of its quests is to be done (pale at an NPC to see, warmer
 //! where a kill or loot step's creatures are), over the map's other markers
 //! (`markers`), each with a card of its quests drawn as theirs are: the name

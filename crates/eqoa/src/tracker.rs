@@ -6,11 +6,14 @@
 //! above the chat box at its tallest, out at a wide window's right and up a
 //! tall one's top with the quick menus as the minimap is. No backing: the
 //! words outlined so they read over the world, each quest's name in gold, its
-//! objectives under it ("Bat Eye: 0/3"), one counted whole dimmed; as many
-//! quests as fit, whole, then "+N more". A click on it opens the quest
-//! journal (`Hud`'s `Pick::Quests`). Extended's Quest Tracker turns it off;
-//! it is up where the minimap could be (`Play::tracker_up`), so never under
-//! Hide UI, with the map up or a window open.
+//! objectives under it ("Bat Eye: 0/3"), one counted whole dimmed, a line too
+//! wide for the column wrapped onto a second row (cut there, never its count
+//! or the guide's label); as many quests as fit, whole, then "+N more". A
+//! click on it opens the quest journal (`Hud`'s `Pick::Quests`). On a server
+//! that sends none, the client's own guide makes it (`questguide`, its quests
+//! named "... (guide)"). Extended's Quest Tracker turns it off; it is up where
+//! the minimap could be (`Play::tracker_up`), so never under Hide UI, with the
+//! map up or a window open.
 
 use crate::ui::UiRaster;
 use net::session::TrackedQuest;
@@ -30,6 +33,11 @@ pub const GOAL: [f32; 4] = [0.96, 0.95, 0.9, 1.0];
 pub const DONE: [f32; 4] = [0.6, 0.6, 0.56, 1.0];
 pub const MORE: [f32; 4] = [0.85, 0.85, 0.8, 1.0];
 const OUTLINE: [f32; 4] = [0.0, 0.0, 0.0, 0.85];
+/// What the quest guide's quests say after their names (`questguide`): kept
+/// whole when a name is cut.
+pub const GUIDE: &str = " (guide)";
+/// The rows a line wraps onto at most.
+const WRAP: usize = 2;
 
 /// A line of the tracker: its words, colour and whether it is indented (an
 /// objective).
@@ -67,30 +75,76 @@ fn fit(text: &str, most: f32, width: &impl Fn(&str) -> f32) -> String {
     String::new()
 }
 
+/// `text` and its `tail` (a count, the guide's label) in rows no wider than
+/// `most` by `width`, at most `max`: as many whole words a row as fit, the
+/// last row cut with "..." and the tail kept on it whole; one row when it
+/// fits or a word alone is too wide.
+fn wrap(text: &str, tail: &str, most: f32, width: &impl Fn(&str) -> f32, max: usize) -> Vec<String> {
+    let one = || vec![fit(text, most - width(tail), width) + tail];
+    if width(&format!("{text}{tail}")) <= most || max <= 1 {
+        return one();
+    }
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let mut rows = Vec::new();
+    let mut k = 0;
+    while rows.len() + 1 < max {
+        let mut row = String::new();
+        let start = k;
+        while k < words.len() {
+            let more = if row.is_empty() { words[k].to_string() } else { format!("{row} {}", words[k]) };
+            if width(&more) > most {
+                break;
+            }
+            row = more;
+            k += 1;
+        }
+        // the tail goes with a word, never alone on its row
+        if k == words.len() && k - start > 1 {
+            k -= 1;
+            row = words[start..k].join(" ");
+        }
+        if k == start || k == words.len() {
+            return one();
+        }
+        rows.push(row);
+        let rest = words[k..].join(" ");
+        if width(&format!("{rest}{tail}")) <= most {
+            rows.push(format!("{rest}{tail}"));
+            return rows;
+        }
+    }
+    rows.push(fit(&words[k..].join(" "), most - width(tail), width) + tail);
+    rows
+}
+
 /// The tracker's lines in `rows` rows at most, each no wider than `most`
-/// by `width`: the quests whole (a name, its objectives) in their order
-/// while they fit, then "+N more" for the rest (a row kept for it).
+/// by `width`: the quests whole (a name, its objectives, each wrapped onto
+/// two rows at most) in their order while they fit, then "+N more" for the
+/// rest (a row kept for it).
 pub fn lines(quests: &[TrackedQuest], rows: usize, most: f32, width: impl Fn(&str) -> f32) -> Vec<Line> {
     let mut out = Vec::new();
     for (i, q) in quests.iter().enumerate() {
-        let need = 1 + q.goals.len();
+        let (name, label) = match q.name.strip_suffix(GUIDE) {
+            Some(n) => (n, GUIDE),
+            None => (q.name.as_str(), ""),
+        };
+        let mut mine: Vec<Line> = wrap(name, label, most, &width, WRAP).into_iter().map(|text| Line { text, color: NAME, indent: false }).collect();
+        for g in &q.goals {
+            let color = if g.done() { DONE } else { GOAL };
+            // a long name is cut, never its count
+            let count = count_text(g.have, g.need);
+            mine.extend(wrap(&g.text, &count, most - INDENT, &width, WRAP).into_iter().map(|text| Line { text, color, indent: true }));
+        }
         let left = quests.len() - i - 1;
         let room = rows.saturating_sub(out.len());
-        if need > room || (left > 0 && need + 1 > room) {
+        if mine.len() > room || (left > 0 && mine.len() + 1 > room) {
             let more = quests.len() - i;
             if out.len() < rows {
                 out.push(Line { text: format!("+{more} more"), color: MORE, indent: false });
             }
             return out;
         }
-        out.push(Line { text: fit(&q.name, most, &width), color: NAME, indent: false });
-        for g in &q.goals {
-            let color = if g.done() { DONE } else { GOAL };
-            // a long name is cut, never its count
-            let count = count_text(g.have, g.need);
-            let text = fit(&g.text, most - INDENT - width(&count), &width) + &count;
-            out.push(Line { text, color, indent: true });
-        }
+        out.extend(mine);
     }
     out
 }
@@ -162,11 +216,18 @@ mod tests {
         assert_eq!(text(6), ["One", "a: 0/1", "Two", "b: 0/1", "c: 0/1", "+1 more"]);
         assert_eq!(text(4), ["One", "a: 0/1", "+2 more"], "Two is three rows and the count's");
         assert_eq!(text(1), ["+3 more"]);
-        let cut = lines(&[quest("A very long quest name indeed", &[("drained poison sac", 1, 3)])], 5, 12.0, |s: &str| s.len() as f32);
-        assert_eq!(cut[0].text, "A very lo...");
-        // an objective's name is cut, its count kept (of 16: 6 the indent, 5
-        // the count, 5 the name's)
-        let cut = lines(&[quest("Q", &[("drained poison sac", 1, 3)])], 5, 16.0, |s: &str| s.len() as f32);
-        assert_eq!(cut[1].text, "dr...: 1/3");
+        let text = |qs: &[TrackedQuest], most: f32| lines(qs, 9, most, |s: &str| s.len() as f32).into_iter().map(|l| l.text).collect::<Vec<_>>();
+        // a name wider than the column goes onto a second row, cut there
+        assert_eq!(text(&[quest("A very long quest name indeed", &[])], 12.0), ["A very long", "quest nam..."]);
+        assert_eq!(text(&[quest("A very long", &[])], 12.0), ["A very long"], "the control: one that fits is one row");
+        // an objective's too: its count kept whole on its last row (of 16:
+        // 6 the indent, so 10, 5 of them the count's)
+        assert_eq!(text(&[quest("Q", &[("drained poison sac", 1, 3)])], 16.0), ["Q", "drained", "po...: 1/3"]);
+        assert_eq!(text(&[quest("Q", &[("poison sac", 1, 3)])], 21.0), ["Q", "poison sac: 1/3"], "the control: it fits");
+        // the guide's label is never cut, nor alone on its row
+        assert_eq!(text(&[quest(&format!("The Militia Bracer{GUIDE}"), &[])], 22.0), ["The Militia", &format!("Bracer{GUIDE}")]);
+        assert_eq!(text(&[quest(&format!("Orc Pawns{GUIDE}"), &[])], 15.0), ["Orc", &format!("Pawns{GUIDE}")]);
+        // a word wider than the column alone is cut on one row
+        assert_eq!(text(&[quest("Unbelievablylongword here", &[])], 10.0), ["Unbelie..."]);
     }
 }

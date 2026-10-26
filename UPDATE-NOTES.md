@@ -5,6 +5,19 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · Quest markers and the tracker on Sandstorm too
+- On a server that sends no quest markers or tracker of its own (Sandstorm), the game now
+  makes its own from a guide built in: the quests of levels 1 to 20 of every home city's
+  classes. A "!" at the NPC with your next quest, a "?" at whoever your quest wants next or
+  where its creatures are, and the tracker under the minimap.
+- It reads your quest journal to know where you are, so it can be wrong: a quest it does not
+  know shows as the journal says it, and everything it made says "(guide)".
+- Items are counted from your bags and what you wear ("Slashed Pawn Belt: 1/2"); kills only as
+  the game saw you or your pet make them, so they say "(seen)".
+- It remembers the quests it saw you finish on this computer. On our own server nothing changes:
+  the server's markers and tracker are used.
+- A quest name or goal too long for the tracker now goes onto a second line.
+
 ## 2026-10-26 · The map shows where your pointer is
 - Under the map's title, the place under the mouse pointer, as the game counts
   it: "x 24611, z 15502" (on a controller, the place under the middle cross once

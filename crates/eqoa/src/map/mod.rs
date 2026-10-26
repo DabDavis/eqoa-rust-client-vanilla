@@ -33,7 +33,8 @@
 //! it; a click puts it there at once) or under the pad's middle cross. X (○ on
 //! a pad) shows or hides them, as Extended's Map Markers does.
 //!
-//! Over them the quest marks a server sends (`quests`, the user's: "add quest
+//! Over them the quest marks a server sends, or the client's own guide makes
+//! on a server that sends none (`quests`, `questguide`; the user's: "add quest
 //! markers for givers to the map too"): a gold "!" at a giver of a quest the
 //! player may take, a "?" where a step is to be done, each with a card of its
 //! quests that answers the pointer as a marker's does and before it. J (R3 on
@@ -158,8 +159,10 @@ pub struct Context<'a> {
     pub words: Option<&'a vi::strtab::StringTable>,
     /// the HUD's `VIUI`, once SUPPORT's atlas is here (the pad's glyphs)
     pub vui: Option<&'a vi::ui::Vui>,
-    /// the quest marks a server sent (`quests`) while it offers them, none
-    /// with Quest Markers off; `None` from a server that offers none
+    /// the quest marks a server sent (`quests`) while it offers them, or the
+    /// client's own guide's on one that offers none (`questguide`), none with
+    /// Quest Markers off; `None` with neither (the guide's first seconds in
+    /// the world)
     pub quest_marks: Option<&'a [net::session::QuestMark]>,
 }
 

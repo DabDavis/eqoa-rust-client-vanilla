@@ -92,9 +92,10 @@ or a browser (each described where it lives below):
   coachman and route), the coach routes as lines and the towns' names (X or
   ○ hides the markers, T or Select the names).
 - **Quest Markers** on the map (the Extended page's Quests, on unless turned
-  off), from a server that sends them (go-eqoa-server does, 0x7E03/0x7E04;
-  Sandstorm sends none, so there are none there): a gold "!" at each NPC with
-  a quest the player may take now (its class, race and level), a "?" where a
+  off), from a server that sends them (go-eqoa-server does, 0x7E03/0x7E04),
+  else the client's own quest guide's (below; Sandstorm sends none): a gold
+  "!" at each NPC with a quest the player may take now (its class, race and
+  level), a "?" where a
   step of a quest under way is to be done (an NPC to see, or the nearest
   places of the creatures a kill or loot step hunts), over the camps and
   coaches, each with a card of its quests as theirs have (their names and
@@ -104,13 +105,30 @@ or a browser (each described where it lives below):
   minimap too (its rim while farther than it shows, the tooltip under the
   mouse); J or R3 (or the map's Quests button) hides them, kept.
 - **The quest tracker** (the Extended page's Quests, on unless turned off),
-  from a server that sends it (go-eqoa-server does, 0x7E05/0x7E06): the
-  quests under way under the minimap and above the chat box, with no backing,
+  from a server that sends it (go-eqoa-server does, 0x7E05/0x7E06), else the
+  quest guide's: the quests under way under the minimap and above the chat box, with no backing,
   the words outlined, each quest's name in gold and what its step asks
   counted under it ("Bat Eye: 0/3", "Speak with Kellina"), one counted whole
   dimmed; as many as fit, then "+N more"; a click on it opens the quest
   journal (closed, back to the world); hidden with the minimap (Hide UI, a
-  window open, the map up).
+  window open, the map up). A line too wide wraps onto a second row.
+- **The quest guide** (`questguide`; the user: "let it be built into client also,
+  so sandstorm can benefit without server additions, though may not be as
+  accurate"): on a server that offers no quest marks or tracker of its own in
+  the session (3 s into the world), the same marks and tracker made by the
+  client, every card and tracked quest saying "(guide)", from a table compiled
+  in (`tools/gen_quest_guide.py`: EQOA-Data's 746 class quests of levels 1-20,
+  MIT, as go-eqoa-server's quest files hold them, and where their people stand
+  on go-eqoa-server). A journal line is a quest's step when it names its NPC
+  or items, among the quests of the player's class, race, level and home city
+  (Sandstorm's own wording: "Return to Nothard.", "Bring Norgram 2 slashed orc
+  pawn belts ."); a line naming nothing it knows shows as its text. A "!" is
+  for the next quest of the home city's chain (its race and class's start, or
+  the city its quests named), or of a chain begun elsewhere. Items are
+  counted from the inventory, worn ones too; a kill step's kills as the client
+  saw them by the player's or its pet's hand, marked "(seen)". What it keeps
+  of a character (`questguide.opt`: the quests it finished, its home city, the
+  kills seen) never leaves the computer.
 - **The minimap** (UI's Minimap, on unless turned off): the map's pictures round
   the player under the quick menus' name plate, left of their icons (out at a wide
   window's right and up a tall one's top with them), north up, with the group, the

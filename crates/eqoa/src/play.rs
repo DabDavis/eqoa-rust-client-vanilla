@@ -370,6 +370,16 @@ pub struct Play {
     /// it goes back to the world, not to the start menu
     quest_from_hud: bool,
     quest_keys: Vec<(i32, bool)>,
+    /// The quest guide (`questguide`): the client's own quest marks and
+    /// tracker where the server sends none; whether this server offered its
+    /// own in the session (then the guide stays off for good); when the guide
+    /// may begin, on the session's clock (`GUIDE_WAIT_MS` into the world, so
+    /// a server's offer comes first); and whether a scripted run turned it on
+    /// whatever the server offers (`EQOA_QUEST_GUIDE`).
+    guide: crate::questguide::Guide,
+    server_quests: bool,
+    guide_from: Option<u32>,
+    guide_forced: bool,
     /// The stat trainer (mode 12): opened, 0x001D's refresh, keys.
     trainer: crate::trainer::Trainer,
     trainer_open: bool,
@@ -491,6 +501,24 @@ pub struct Play {
 /// stepped at a quarter of the frame rate (F3 20261024-065253: Desert
 /// Madmen, a human's LOD body, at 110 in the dawn fog).
 const FAR_POSE_BUDGET: u32 = 50;
+
+/// How long into the world the quest guide waits for a server's own quest
+/// marks and tracker before making its own (`Play::guide_on`): go-eqoa-server
+/// offers them at once, with the world entry's first replies.
+const GUIDE_WAIT_MS: u32 = 3000;
+
+/// The quest marks for the map and the minimap: the guide's while it is on
+/// (`guide_on`), else the server's while it offers them, none of either with
+/// Quest Markers off; `None` (no Quests button) with neither. Of the fields,
+/// not of `Play`, so the map borrows beside it.
+fn quest_marks_of<'a>(session: &'a Session, guide: &'a crate::questguide::Guide, guide_on: bool) -> Option<&'a [net::session::QuestMark]> {
+    let on = crate::settings::client().quest_markers;
+    if guide_on {
+        Some(if on { &guide.estimate.marks[..] } else { &[] })
+    } else {
+        session.quest_marks_offer.then_some(if on { &session.quest_marks[..] } else { &[] })
+    }
+}
 
 /// How many frames drawn a far character waits between poses with `far` of
 /// them in view: every frame up to `FAR_POSE_BUDGET`, then about that many
@@ -1786,7 +1814,7 @@ impl Play {
         crate::hideui::show();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: 0, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0 };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: 0, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0 };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -1921,7 +1949,12 @@ impl Play {
                     let line = format!("{}: {}", w(550), w(if on { 551 } else { 552 }));
                     self.add_chat(line, [1.0; 4]);
                 }
-                Event::Dialog { text, .. } => self.show_dialog(&text),
+                Event::Dialog { text, .. } => {
+                    if crate::questguide::is_finished(&text) {
+                        self.guide_finished(now);
+                    }
+                    self.show_dialog(&text);
+                }
                 Event::DialogBox { id, text, options } => self.dialog_box(id, &text, &options),
                 Event::Opcode { op: 0x005E, .. } => self.msg_005e(walker),
                 Event::Teleport { world, pos, hpr, token } => self.msg_00b2(walker, world, pos, hpr, token, now as i64),
@@ -2411,8 +2444,10 @@ impl Play {
         // Mana Bars: a server that offers others' power told whether to send it
         self.session.agree_power_bars(crate::settings::client().mana_bars);
         // Quest Markers: a server that offers quest marks told whether to send them
-        self.session.agree_quest_marks(crate::settings::client().quest_markers);
-        self.session.agree_quest_progress(crate::settings::client().quest_tracker);
+        // (none while a scripted run has the guide make them)
+        self.session.agree_quest_marks(crate::settings::client().quest_markers && !self.guide_forced);
+        self.session.agree_quest_progress(crate::settings::client().quest_tracker && !self.guide_forced);
+        self.guide_wait(now);
         self.drop_dead_target_info();
         if self.has_self() {
             self.auto_attack_tick(walker, now);
@@ -4946,6 +4981,10 @@ impl Play {
         let rest = &r.data[r.pos..];
         let rgb = (crate::s2::get().damage_rgb && rest.len() >= 3).then(|| [rest[0], rest[1], rest[2]]);
         let me = self.self_id32();
+        // the player's or its pet's hit: the guide's kill when it dies
+        if amount > 0 && (Some(attacker) == me || (attacker == self.pet_id && self.pet_id != u32::MAX)) {
+            self.guide.hit(defender, self.session.now());
+        }
         // the player's own hit: after a swap the swing timer follows the
         // server's rounds (`attackclock`), whatever the damage numbers show
         if Some(attacker) == me {
@@ -6743,6 +6782,9 @@ impl Play {
         if self.map.open && (self.mode != 0 || self.is_dead()) {
             self.map.close();
         }
+        let now = self.session.now();
+        self.guide_frame(walker, now);
+        let guide_on = self.guide_on(now);
         let p = &walker.cam.walk.phys;
         let me = self.self_id32();
         let group = self.group.members[..self.group.count()]
@@ -6771,7 +6813,7 @@ impl Play {
             keyboard: self.keyboard,
             words: self.words.as_ref(),
             vui: self.hud.as_ref().map(|h| &h.0),
-            quest_marks: self.session.quest_marks_offer.then_some(if crate::settings::client().quest_markers { &self.session.quest_marks[..] } else { &[] }),
+            quest_marks: quest_marks_of(&self.session, &self.guide, guide_on),
         };
         self.map.frame(&cx);
         // the minimap where the quick menus are, not under Hide UI
@@ -6800,7 +6842,79 @@ impl Play {
     /// The quest tracker's quests while it is up (`tracker`): Quest Tracker
     /// on, where the minimap could be.
     fn tracker_quests(&self) -> Vec<net::session::TrackedQuest> {
-        if crate::settings::client().quest_tracker && self.right_hud_up() { self.session.quest_progress.clone() } else { Vec::new() }
+        if !crate::settings::client().quest_tracker || !self.right_hud_up() {
+            Vec::new()
+        } else if self.guide_on(self.session.now()) {
+            self.guide.estimate.tracker.clone()
+        } else {
+            self.session.quest_progress.clone()
+        }
+    }
+
+    /// The quest marks for the map and the minimap now (`quest_marks_of`).
+    fn quest_marks(&self, now: u32) -> Option<&[net::session::QuestMark]> {
+        quest_marks_of(&self.session, &self.guide, self.guide_on(now))
+    }
+
+    /// The guide off for good once this server offers its own quest marks or
+    /// tracker; its wait begun once the player is in the world.
+    fn guide_wait(&mut self, now: u32) {
+        self.server_quests |= !self.guide_forced && (self.session.quest_marks_offer || self.session.quest_progress_offer);
+        if self.guide_from.is_none() && self.self_id32().is_some() && !self.loading.up() {
+            self.guide_from = Some(now.wrapping_add(GUIDE_WAIT_MS));
+        }
+    }
+
+    /// Whether the quest guide makes the marks and the tracker: this server
+    /// never offered its own in the session (a scripted run may say it did
+    /// not), and the wait into the world is over.
+    fn guide_on(&self, now: u32) -> bool {
+        !self.server_quests && self.guide_from.is_some_and(|t| now.wrapping_sub(t) as i32 >= 0)
+    }
+
+    /// The guide's frame while it is on: the journal, the player and its
+    /// items as they are, and the creatures the player hit that lie dead.
+    fn guide_frame(&mut self, walker: &Walker, now: u32) {
+        if !self.guide_on(now) {
+            return;
+        }
+        self.guide.character(self.player.server_id, &self.dump.player.name);
+        let p = &walker.cam.walk.phys.position;
+        let journal: Vec<String> = self.quests.titles.iter().map(|t| String::from_utf16_lossy(t)).collect();
+        let input = crate::questguide::Input {
+            journal: &journal,
+            class: self.dump.player.class,
+            race: self.dump.player.race,
+            level: self.dump.player.level,
+            world: self.player.world as i32,
+            at: [p.x.0, p.z.0],
+            items: &self.dump.inventory.items,
+            tunar: self.dump.player.p34,
+        };
+        let entities = &self.entities;
+        let dead = |id: u32| entities.slots.iter().flatten().find(|e| e.id == id && e.p18 & 2 != 0).and_then(|e| e.creature.as_ref()).map(|c| c.name.clone());
+        self.guide.frame(&input, &dead, now);
+    }
+
+    /// The game's "You have finished a quest!" (0x0046): the guide's quest
+    /// whose line left the journal is finished.
+    fn guide_finished(&mut self, now: u32) {
+        if !self.guide_on(now) {
+            return;
+        }
+        let journal: Vec<String> = self.quests.titles.iter().map(|t| String::from_utf16_lossy(t)).collect();
+        let at = self.dump.player.pos;
+        let input = crate::questguide::Input {
+            journal: &journal,
+            class: self.dump.player.class,
+            race: self.dump.player.race,
+            level: self.dump.player.level,
+            world: self.player.world as i32,
+            at: [at[0], at[2]],
+            items: &self.dump.inventory.items,
+            tunar: self.dump.player.p34,
+        };
+        self.guide.finished_notice(&input, now);
     }
 
     /// What the minimap shows of the entities: every creature and player in
@@ -6833,9 +6947,10 @@ impl Play {
     /// rim while farther).
     fn mini_marks(&self) -> Vec<crate::map::mini::Mark> {
         let mut out = Vec::new();
-        // the quests' (`map::quests`), while Quest Markers is on
-        if self.session.quest_marks_offer && crate::settings::client().quest_markers {
-            out.extend(crate::map::quests::mini_marks(&self.session.quest_marks));
+        // the quests' (`map::quests`, the server's or the guide's), while
+        // Quest Markers is on
+        if let Some(m) = self.quest_marks(self.session.now()) {
+            out.extend(crate::map::quests::mini_marks(m));
         }
         out
     }
@@ -7463,6 +7578,53 @@ mod commands {
         let mut s = Session::connect_with(Box::new(Nowhere), ([127, 0, 0, 1], 5000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
         s.self_id = Some(0x100);
         Play::new(s, Player::default(), dump)
+    }
+
+    /// The quest guide speaks only where the server does not (the user's
+    /// "so sandstorm can benefit without server additions"; no mixing): its
+    /// marks once the wait into the world is over on a server that offered
+    /// none; the server's alone, the guide off for good, once it offers its
+    /// own, even after a world change takes the offer back; a scripted run's
+    /// `EQOA_QUEST_GUIDE` the guide's whatever the server offers.
+    #[test]
+    fn the_quest_guide_speaks_only_where_the_server_does_not() {
+        crate::settings::testing::reset(false);
+        let mark = |npc: &str| net::session::QuestMark { kind: 1, world: 0, x: 0.0, z: 0.0, npc: npc.into(), quests: Vec::new() };
+        let npcs = |m: Option<&[net::session::QuestMark]>| m.map(|m| m.iter().map(|m| m.npc.clone()).collect::<Vec<_>>());
+        let mut p = play();
+        p.guide.estimate.marks = vec![mark("Commander Nothard (guide)")];
+        p.guide_wait(500);
+        assert_eq!((p.guide_from, npcs(p.quest_marks(500))), (None, None), "under the loading screen: no wait yet, no Quests button");
+        p.loading.wait = None;
+        p.guide_wait(1000);
+        assert_eq!(p.guide_from, Some(1000 + GUIDE_WAIT_MS));
+        assert!(!p.guide_on(1000 + GUIDE_WAIT_MS - 1), "the wait");
+        assert_eq!(npcs(p.quest_marks(1000 + GUIDE_WAIT_MS)), Some(vec!["Commander Nothard (guide)".to_string()]), "Sandstorm: the guide's");
+        // a server's own: its alone, for good
+        p.session.quest_marks_offer = true;
+        p.session.quest_marks = vec![mark("Commander Nothard")];
+        p.guide_wait(9000);
+        assert!(!p.guide_on(9000));
+        assert_eq!(npcs(p.quest_marks(9000)), Some(vec!["Commander Nothard".to_string()]), "the server's, none of the guide's");
+        p.session.quest_marks_offer = false;
+        p.guide_wait(9100);
+        assert_eq!(npcs(p.quest_marks(9100)), None, "a world change: still not the guide's");
+        // Quest Markers off: none of either
+        let mut c = crate::settings::client();
+        c.quest_markers = false;
+        crate::settings::set_client(c);
+        let mut q = play();
+        q.guide.estimate.marks = vec![mark("Commander Nothard (guide)")];
+        q.loading.wait = None;
+        q.guide_wait(0);
+        assert_eq!(npcs(q.quest_marks(GUIDE_WAIT_MS)), Some(Vec::new()), "off: the button, no marks");
+        // a scripted run's: the guide's, the server's offer ignored
+        let mut r = play();
+        r.guide_forced = true;
+        r.session.quest_marks_offer = true;
+        r.loading.wait = None;
+        r.guide_wait(0);
+        assert!(r.guide_on(GUIDE_WAIT_MS));
     }
 
     /// A click on the map while it is up, on no button of its, puts the
