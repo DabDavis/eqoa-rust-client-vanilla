@@ -33,6 +33,19 @@
 //! next one (`stop_channels`): dropped, its voices played on with no sound to
 //! stop them. None of these changes a packet the decomp's device sends where
 //! the console loses nothing (`tests/oracle_snddev.rs`).
+//!
+//! And one that is the client's own, not the console's (F3 20261026-075325,
+//! crunchy again at Frame Rate 60): the console runs every sound's caller once
+//! a frame of the game's, and so does this device (`process`, once a frame of
+//! the game's), but a frame drawn between two of the game's runs the callers
+//! that set a playing sound's volume and pan every frame (a creature's loop,
+//! an effect's sound sprites, the rain) again, into the same packet: twice the
+//! console's sets at 60 frames a second, more above it, until the packet was
+//! full and the console's rule dropped the rest, a new sound's volume, pan and
+//! pitch among them (it played at full volume wherever it was). Between two of
+//! the game's frames (`set_between`) a playing sound's volume, pan and pitch
+//! are held and sent once, at the game's frame, so the packets are the
+//! console's at any frame rate (`tests/device_cadence.rs`).
 
 use std::marker::PhantomData;
 use vi::Model;
@@ -184,6 +197,19 @@ struct Playback {
     /// the device's frame when it started
     frame: i32,
     class: i32,
+    /// the frame drawn it started in (`set_between`)
+    drawn: u32,
+    /// what was set between two of the game's frames and is still to send
+    /// (`set_between`); the fields above are what was sent
+    held_volume: Option<f32>,
+    held_pan: Option<f32>,
+    held_pitch: Option<i32>,
+}
+
+impl Playback {
+    fn held(&self) -> bool {
+        self.held_volume.is_some() || self.held_pan.is_some() || self.held_pitch.is_some()
+    }
 }
 
 /// A first-fit allocator over a list of free blocks, in list order.
@@ -312,6 +338,17 @@ pub struct SoundDevice<M: Model> {
     /// the most words a packet has held when it was sent (of 127): how near
     /// a frame's commands come to filling it (the report's sound line)
     pub most_words: i32,
+    /// the commands a full packet dropped, by their id (`sound_cmd`; 99,
+    /// the test tone, as 0): which kinds a busy frame loses (the report's
+    /// sound line)
+    pub dropped_by_id: [u32; 16],
+    /// a frame drawn between two of the game's (`set_between`), and the
+    /// volumes, pans and pitches it held for the game's frame since the
+    /// device was made (the report's sound line)
+    between: bool,
+    /// the frames drawn, counted by `set_between`
+    drawn: u32,
+    pub held_sets: u32,
     _m: PhantomData<M>,
 }
 
@@ -365,6 +402,10 @@ impl<M: Model> SoundDevice<M> {
             stops_dropped: 0,
             stops_waiting: 0,
             most_words: 0,
+            dropped_by_id: [0; 16],
+            between: false,
+            drawn: 0,
+            held_sets: 0,
             _m: PhantomData,
         };
         d.bgm_version = bgm_version;
@@ -497,6 +538,7 @@ impl<M: Model> SoundDevice<M> {
             self.bgm_playing.clear();
         }
         self.stream_bgm(link);
+        self.send_held();
         self.sound_cmd(3, 0);
         self.sound_flush(link);
         if self.stops_waiting != 0 && self.packet[0] == 0 {
@@ -504,7 +546,62 @@ impl<M: Model> SoundDevice<M> {
             self.stop_channels(mask);
         }
         self.frame = self.frame.wrapping_add(1);
+        // the next commands are the next frame's, until a frame drawn
+        // between two of the game's says otherwise
+        self.between = false;
         0
+    }
+
+    /// Whether the frame being drawn is between two of the game's frames
+    /// (`true`) or one of them (`false`, the default, as on the console, where
+    /// every frame is one). The packet goes at the game's frames (`process`),
+    /// and the client draws more frames than the game's 30 a second (Frame
+    /// Rate 60, or the display's): each runs the callers that set a playing
+    /// sound's volume and pan every frame (a creature's loop, the effects'
+    /// sound sprites, the rain), which on the console run once a frame of the
+    /// game's. Between two of them a playback started in an earlier frame
+    /// drawn has its volume, pan and pitch held, not queued (what it is asked
+    /// for it answers, as on the console): the game's frame sends them as the
+    /// console's callers do, once (its own call sends what it is given, as
+    /// the console's, and `process` what no call sent), and a stop sends them
+    /// before itself, so no command on a playback's voices goes ahead of one
+    /// set before it. A playback started in the frame drawn now takes its sets
+    /// at once: they are its start's, as on the console. Called at the start
+    /// of every frame drawn; each `process` ends it.
+    pub fn set_between(&mut self, on: bool) {
+        self.between = on;
+        self.drawn = self.drawn.wrapping_add(1);
+    }
+
+    /// Whether playback `pb`'s sets are held now (`set_between`).
+    fn holds(&self, pb: usize) -> bool {
+        self.between && self.playbacks[pb].drawn != self.drawn
+    }
+
+    /// What playback `pb` has held, sent now (`set_between`).
+    fn send_held_of(&mut self, pb: usize) {
+        let p = &mut self.playbacks[pb];
+        let (volume, pan, pitch) = (p.held_volume.take(), p.held_pan.take(), p.held_pitch.take());
+        if volume.is_some() || pan.is_some() {
+            p.volume = volume.unwrap_or(p.volume);
+            p.pan = pan.unwrap_or(p.pan);
+            self.send_volume(pb);
+        }
+        if let Some(pitch) = pitch {
+            self.playbacks[pb].pitch = pitch;
+            self.send_pitch(pb);
+        }
+    }
+
+    /// Every playback's held sets, sent (the game's frame, before its packet
+    /// goes), in the order the playbacks were started.
+    fn send_held(&mut self) {
+        for k in 0..self.active.len() {
+            let pb = self.active[k];
+            if self.playbacks[pb].held() {
+                self.send_held_of(pb);
+            }
+        }
     }
 
     /// The 128-entry sweep for the first sound with something still to send:
@@ -847,6 +944,10 @@ impl<M: Model> SoundDevice<M> {
         p.pitch = 4096;
         p.volume = 1.0;
         p.pan = pan;
+        p.drawn = self.drawn;
+        p.held_volume = None;
+        p.held_pan = None;
+        p.held_pitch = None;
         let p = *p;
         match view {
             View::Wave { spu_addr, size, rate, volume } => {
@@ -891,6 +992,10 @@ impl<M: Model> SoundDevice<M> {
 
     pub fn stop(&mut self, handle: i32) {
         let Some(pb) = self.playback(handle) else { return };
+        // what was held for its voices goes before the stop (`set_between`)
+        if self.playbacks[pb].held() {
+            self.send_held_of(pb);
+        }
         let p = self.playbacks[pb];
         if let Some(Kind::Xm(_)) = self.sound(p.sound).map(|s| &s.kind) {
             self.args[0] = (p.channels & 0xffffff) as i32;
@@ -904,13 +1009,25 @@ impl<M: Model> SoundDevice<M> {
     }
 
     pub fn pitch(&self, handle: i32) -> i32 {
-        self.playback(handle).map_or(4096, |pb| self.playbacks[pb].pitch)
+        self.playback(handle).map_or(4096, |pb| self.playbacks[pb].held_pitch.unwrap_or(self.playbacks[pb].pitch))
     }
 
     pub fn set_pitch(&mut self, handle: i32, pitch: i32) {
         let Some(pb) = self.playback(handle) else { return };
+        if self.holds(pb) {
+            self.playbacks[pb].held_pitch = Some(pitch);
+            self.held_sets += 1;
+            return;
+        }
+        self.playbacks[pb].held_pitch = None;
         self.playbacks[pb].pitch = pitch;
+        self.send_pitch(pb);
+    }
+
+    /// Playback `pb`'s pitch, as `SetPitch` sends it.
+    fn send_pitch(&mut self, pb: usize) {
         let p = self.playbacks[pb];
+        let pitch = p.pitch;
         match self.sound(p.sound).map(|s| s.view()) {
             Some(View::Wave { rate, .. }) => {
                 let rate = (rate << 12) / 48000;
@@ -931,7 +1048,7 @@ impl<M: Model> SoundDevice<M> {
     }
 
     pub fn volume(&self, handle: i32) -> f32 {
-        self.playback(handle).map_or(0.0, |pb| self.playbacks[pb].volume)
+        self.playback(handle).map_or(0.0, |pb| self.playbacks[pb].held_volume.unwrap_or(self.playbacks[pb].volume))
     }
 
     fn send_volume(&mut self, pb: usize) {
@@ -970,18 +1087,30 @@ impl<M: Model> SoundDevice<M> {
         let lo = if M::lt(v, 0.0) { 0.0 } else { v };
         let vol = if M::lt(lo, 1.0) { lo } else { 1.0 };
         let Some(pb) = self.playback(handle) else { return };
+        if self.holds(pb) {
+            self.playbacks[pb].held_volume = Some(vol);
+            self.held_sets += 1;
+            return;
+        }
+        self.playbacks[pb].held_volume = None;
         self.playbacks[pb].volume = vol;
         self.send_volume(pb);
     }
 
     pub fn pan(&self, handle: i32) -> f32 {
-        self.playback(handle).map_or(0.0, |pb| self.playbacks[pb].pan)
+        self.playback(handle).map_or(0.0, |pb| self.playbacks[pb].held_pan.unwrap_or(self.playbacks[pb].pan))
     }
 
     pub fn set_pan(&mut self, handle: i32, p: f32) {
         let lo = if M::lt(p, -1.0) { -1.0 } else { p };
         let pan = if M::lt(lo, 1.0) { lo } else { 1.0 };
         let Some(pb) = self.playback(handle) else { return };
+        if self.holds(pb) {
+            self.playbacks[pb].held_pan = Some(pan);
+            self.held_sets += 1;
+            return;
+        }
+        self.playbacks[pb].held_pan = None;
         self.playbacks[pb].pan = pan;
         self.send_volume(pb);
     }
@@ -1371,6 +1500,7 @@ impl<M: Model> SoundDevice<M> {
             self.packet[0] += 1;
         } else {
             self.cmds_dropped += 1;
+            self.dropped_by_id[if (id as usize) < 16 { id as usize } else { 0 }] += 1;
             if id == 4 {
                 self.stops_dropped += 1;
             }

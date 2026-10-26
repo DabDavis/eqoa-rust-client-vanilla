@@ -4375,6 +4375,12 @@ impl ApplicationHandler for App {
                 let clock = self.clock;
                 let streamer = &mut self.streamer;
                 let sound = &mut self.sound;
+                // a frame drawn between two of the game's: a playing sound's
+                // volume, pan and pitch wait for the game's frame, which sends
+                // its packet (`SoundDevice::set_between`)
+                if let Some(s) = sound.as_mut() {
+                    s.dev.set_between(!game_frame);
+                }
                 let walker_sounds = &mut self.walker_sounds;
                 let particles = &mut self.particles;
                 let held_fx = &mut self.held_fx;
