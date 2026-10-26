@@ -23,7 +23,9 @@ pub mod demo;
 pub mod ids;
 pub mod view;
 
-pub use api::{IceServer, NullEngine, SignalKind, VoiceEngine, VoiceEvent};
+#[cfg(test)]
+pub use api::NullEngine;
+pub use api::{IceServer, SignalKind, VoiceEngine, VoiceEvent, kind_byte, kind_of};
 pub use view::{VoiceMember, VoiceMode, VoiceRoomInfo, VoiceView};
 
 use crate::settings::VoiceChat;
@@ -246,8 +248,7 @@ impl Voice {
         }
     }
 
-    /// The platform's: a page's WebRTC; natively none yet (crate `voice`'s
-    /// engine is lane voicenat18's).
+    /// The platform's: a page's WebRTC, natively crate `voice`'s.
     pub fn for_platform() -> Self {
         let (engine, media) = platform_engine();
         Voice::new(engine, media)
@@ -278,7 +279,7 @@ impl Voice {
         link.agree(on);
         if w.chat != VoiceChat::Off && !self.has_media && !self.told_no_media {
             self.told_no_media = true;
-            self.say("Voice chat is coming to this build; the page has it now (eqoaclassic.com/eqoa/play/).".to_string());
+            self.say("Voice chat: this build has no voice.".to_string());
         }
         if !on {
             if self.was_on {
@@ -348,7 +349,7 @@ impl Voice {
             return;
         }
         for (kind, text) in link.take_signals() {
-            match SignalKind::of(kind) {
+            match kind_of(kind) {
                 Some(SignalKind::Bye) => {
                     self.lost(now);
                     return;
@@ -358,7 +359,7 @@ impl Voice {
             }
         }
         for (k, text) in self.engine.take_outgoing() {
-            link.send_signal(k.byte(), &text);
+            link.send_signal(kind_byte(k), &text);
         }
         // what is sent: the group's key the group, the room's the room; open
         // mic both while it hears speech
@@ -555,7 +556,7 @@ impl Voice {
             return;
         }
         match c {
-            Command::Rooms => self.refresh_lobby(),
+            Command::Rooms => self.refresh_lobby(true),
             Command::Join { name, password, unlisted } => self.join(&name, password.as_deref().unwrap_or(""), unlisted),
             Command::Leave => self.leave(),
             Command::Who => self.who(),
@@ -564,10 +565,11 @@ impl Voice {
         }
     }
 
-    /// The lobby asked for (`/voice rooms`, the window), said when it comes.
-    pub fn refresh_lobby(&mut self) {
+    /// The lobby asked for: `/voice rooms`'s said in the chat when it comes
+    /// (`say`), the window's shown by the window alone.
+    pub fn refresh_lobby(&mut self, say: bool) {
         self.ops.push(Op::List);
-        self.lobby_asked = true;
+        self.lobby_asked |= say;
     }
 
     /// Room `name` joined, made when it is not there (locked with
@@ -718,13 +720,20 @@ impl Voice {
 }
 
 /// The platform's engine and whether it carries voice: a page's WebRTC;
-/// natively one that does nothing until crate `voice`'s is in.
+/// natively crate `voice`'s, its voices mixed into the game's sound as the
+/// driver makes it (`audio::set_voice_output`). In a test, none.
 fn platform_engine() -> (Box<dyn VoiceEngine>, bool) {
     #[cfg(target_arch = "wasm32")]
     {
         (Box::new(crate::web::voice::WebEngine::default()), true)
     }
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), not(test)))]
+    {
+        let e = voice_engine::NativeEngine::new();
+        crate::audio::set_voice_output(Some(e.output()));
+        (Box::new(e), true)
+    }
+    #[cfg(all(not(target_arch = "wasm32"), test))]
     {
         (Box::new(NullEngine::default()), false)
     }

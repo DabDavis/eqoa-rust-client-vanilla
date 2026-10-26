@@ -64,9 +64,10 @@ impl Play {
         }
     }
 
-    /// The lobby asked for again.
+    /// The lobby asked for again, for the window to show (not said in the
+    /// chat: `/voice rooms` says it).
     pub fn voice_refresh_lobby(&mut self) {
-        self.voice.voice.refresh_lobby();
+        self.voice.voice.refresh_lobby(false);
     }
 
     /// A room joined, made when it is not there: locked with `password` (""
@@ -86,5 +87,13 @@ impl Play {
 
     pub fn voice_set_muted(&mut self, peer: u32, muted: bool) {
         self.voice.voice.set_muted(peer, muted);
+    }
+
+    /// A click on a voice mark (`hud::Pick::VoiceMark`): that one muted, or
+    /// heard again, and said.
+    pub(super) fn voice_toggle_mute(&mut self, peer: u32) {
+        let Some(name) = self.voice.voice.marks().into_iter().find(|m| m.peer == peer).map(|m| m.name) else { return };
+        let muted = self.voice.voice.toggle_mute(peer);
+        self.add_chat(format!("Voice: {name} {}.", if muted { "muted (click again to hear them)" } else { "heard again" }), LINE);
     }
 }

@@ -3742,6 +3742,11 @@ impl Play {
                     self.open_voice_window();
                     return true;
                 }
+                // a voice mark: that one muted, or heard again (`voiceplay`)
+                Some(crate::hud::Pick::VoiceMark(peer)) => {
+                    self.voice_toggle_mute(peer);
+                    return true;
+                }
                 Some(crate::hud::Pick::Me) => self.self_id32(),
                 Some(crate::hud::Pick::Member(id)) => Some(id),
                 Some(crate::hud::Pick::Pet) => (self.pet_id != u32::MAX).then_some(self.pet_id),
@@ -7041,6 +7046,7 @@ impl Play {
             minimap: self.minimap_up(),
             tracker: self.tracker_quests(),
             voice: self.voice_badge(),
+            voice_marks: self.voice.voice.marks(),
         };
         let now = self.session.now();
         let dt = ((time_ms - self.hud_last).clamp(0, 250)) as f32 / 1000.0;

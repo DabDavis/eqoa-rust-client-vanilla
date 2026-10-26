@@ -5,7 +5,7 @@
 //! the browser's own. What crosses to the page is JSON text and numbers.
 
 use crate::voice::demo::{Socket, SocketState};
-use crate::voice::{IceServer, SignalKind, VoiceEngine, VoiceEvent};
+use crate::voice::{IceServer, SignalKind, VoiceEngine, VoiceEvent, kind_byte, kind_of};
 use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -48,14 +48,14 @@ impl VoiceEngine for WebEngine {
     }
 
     fn signal(&mut self, kind: SignalKind, text: &str) {
-        call("signal", &[JsValue::from(kind.byte()), text.into()]);
+        call("signal", &[JsValue::from(kind_byte(kind)), text.into()]);
     }
 
     fn take_outgoing(&mut self) -> Vec<(SignalKind, String)> {
         let Value::Array(a) = json_of(call("takeOutgoing", &[])) else { return Vec::new() };
         a.iter()
             .filter_map(|m| {
-                let kind = SignalKind::of(m.get(0)?.as_u64()? as u8)?;
+                let kind = kind_of(m.get(0)?.as_u64()? as u8)?;
                 Some((kind, m.get(1)?.as_str()?.to_string()))
             })
             .collect()

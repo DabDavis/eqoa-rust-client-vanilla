@@ -26,6 +26,9 @@ cpal = "0.16"
 # also the updater's download check), and the demo's JSON.
 sha2 = "0.10.9"
 serde_json.workspace = true
+# ... and its engine's interface (crate `voice`: natively the engine itself,
+# in a page the interface alone), named apart from the client's own `voice`
+voice_engine = { package = "voice", path = "../voice" }
 
 # The gamepads natively (SDL's layout, force feedback); a page reads the
 # Gamepad API itself (`padmap`, `web::pad`).
