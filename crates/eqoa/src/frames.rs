@@ -18,11 +18,12 @@
 //! last quads drawn again on the frames between (`render::ui::Ui::keep`).
 
 /// The game's frame, in ms. The console's is two fields at 59.94 Hz
-/// (33.37 ms); a thirtieth keeps step with a page held to 30 frames a
-/// second (`web::frame_due`, whose frames would otherwise come early
-/// against it one in a hundred) and with 60 and 120 Hz displays. What is
-/// counted in these frames is too short for the difference to show (a
-/// repeat after 16 frames: 533 ms against 534).
+/// (33.37 ms); a thirtieth keeps step with 60 and 120 Hz displays, and the
+/// Frame Rate's 30 cap is this same gap (`settings::FrameRate::gap_ms`), so
+/// that every frame drawn under it is one of these (at 33.0 ms the frames
+/// drawn crept ahead and every few seconds one was not: F3 20261026-030902).
+/// What is counted in these frames is too short for the difference from the
+/// console's to show (a repeat after 16 frames: 533 ms against 534).
 pub const FRAME_MS: f64 = 1000.0 / 30.0;
 
 /// A frame drawn up to this early still counts as on time: displays'
