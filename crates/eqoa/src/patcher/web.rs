@@ -19,6 +19,12 @@ use wasm_bindgen::JsCast;
 /// and room for a tree that asks for its files one at a time.
 const PLAYS: usize = 12;
 
+/// How long a fetch waits for the server's answer: natively 10 s to connect
+/// to its patch port (`native::Tcp`); a fetch would otherwise wait as long
+/// as the browser tries a host that drops its packets, the window on
+/// Connecting all that time (Chromium on Linux: 185 s, measured).
+const ANSWER_MS: i32 = 10_000;
+
 /// The server's folder in the page's storage; what `run` writes is held
 /// until the play it came from is known to be the last.
 struct Page {
@@ -133,17 +139,25 @@ fn base(host: &str) -> String {
 }
 
 /// A GET of `url` begun now (every fetch of a play runs at once), the
-/// browser's copy revalidated: its status and body, or why there is none.
+/// browser's copy revalidated: its status and body, or why there is none
+/// (no answer in `ANSWER_MS` among them).
 fn fetch(url: &str) -> impl std::future::Future<Output = Result<(u16, Vec<u8>), String>> + use<> {
     let begun = web_sys::window().map(|w| {
         let init = web_sys::RequestInit::new();
         init.set_cache(web_sys::RequestCache::NoCache);
-        w.fetch_with_str_and_init(url, &init)
+        let answer = w.fetch_with_str_and_init(url, &init);
+        // rejects with undefined, where a failed fetch rejects with an error
+        let late = js_sys::Promise::new(&mut |_, reject| {
+            let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(&reject, ANSWER_MS);
+        });
+        js_sys::Promise::race(&js_sys::Array::of2(&answer, &late))
     });
     let url = url.to_string();
     async move {
         let p = begun.ok_or("no window")?;
-        let r = wasm_bindgen_futures::JsFuture::from(p).await.map_err(|e| format!("{url}: {e:?}"))?;
+        let r = wasm_bindgen_futures::JsFuture::from(p).await.map_err(|e| {
+            if e.is_undefined() { format!("{url}: no answer in {} s", ANSWER_MS / 1000) } else { format!("{url}: {e:?}") }
+        })?;
         let r: web_sys::Response = r.dyn_into().map_err(|_| format!("{url}: not a response"))?;
         let body = r.array_buffer().map_err(|e| format!("{url}: {e:?}"))?;
         let body = wasm_bindgen_futures::JsFuture::from(body).await.map_err(|e| format!("{url}: {e:?}"))?;
