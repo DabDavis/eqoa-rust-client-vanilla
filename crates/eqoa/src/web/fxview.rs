@@ -133,3 +133,11 @@ pub fn fxview_camera(yaw: f64, pitch: f64, zoom: f64) {
 pub fn fxview_status() -> String {
     fxview::status()
 }
+
+/// Every visual on the disc, in its order, as `0x1DAEB5B6`: what the
+/// community page (`web/spellfx.html`) lists to be tried; empty until the
+/// stage has started.
+#[wasm_bindgen]
+pub fn fxview_visuals() -> js_sys::Array {
+    fxview::visuals().iter().map(|v| JsValue::from_str(&format!("0x{v:08X}"))).collect()
+}

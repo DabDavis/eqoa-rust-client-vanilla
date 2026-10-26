@@ -41,7 +41,7 @@
   .note.ok { color: var(--good); }
   .note.warn { color: var(--accent); }
   .link { flex: 0 0 auto; padding: 4px 0; background: none; border: none; color: var(--dim); font: 500 13px system-ui, sans-serif; text-decoration: underline; cursor: pointer; }
-  .row.end { justify-content: flex-end; gap: 16px; margin-top: 10px; }
+  .row.end { justify-content: flex-end; flex-wrap: wrap; gap: 4px 16px; margin-top: 10px; }
   #notices { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 20; width: min(560px, calc(100% - 32px)); display: grid; gap: 8px; pointer-events: none; }
   .notice { pointer-events: auto; display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 8px; font-size: 13px; box-shadow: 0 4px 16px #0009; }
   .notice.bad { border-left-color: var(--bad); }
@@ -94,7 +94,7 @@
     </details>
     <div class="error" id="gate-error"></div>
     <div class="row"><button type="submit" id="go" class="primary">Start</button></div>
-    <div class="row end"><a class="link" href="/eqoa/reports/board" target="_blank" rel="noopener">Bug reports board</a><button type="button" class="link" id="report-gate">Report a problem (F3)</button></div>
+    <div class="row end"><a class="link" href="./spellfx.html" target="_blank" rel="noopener">Help match spell visuals</a><a class="link" href="/eqoa/reports/board" target="_blank" rel="noopener">Bug reports board</a><button type="button" class="link" id="report-gate">Report a problem (F3)</button></div>
   </form>
 
 </div>

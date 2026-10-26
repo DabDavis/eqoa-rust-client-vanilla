@@ -38,6 +38,13 @@ version.json under it:
             that can't start in the kept folder opens without it; a report
             says what is remembered (the picker is a stand-in: the real one
             can't be driven headless)
+  spellfx   the community page (spellfx.html): the server's spells (a
+            stand-in answers <api>/spells), filtered by class and by a
+            stand-in visual; a pick needs a spell and a visual; the pick is
+            sent as the server takes it, a refusal said, the name kept for the
+            next visit; the game's page links it (the preview and the disc's
+            visuals are drive's: a visual list is handed over as the preview
+            sends it)
 
 Each check has its negative control. Needs the `websockets` package.
 
@@ -50,6 +57,20 @@ from pathlib import Path
 import websockets
 
 HERE = Path(__file__).resolve().parent
+
+# what the community page's server (go-eqoa-server's account service) answers
+# at <api>/spells, four spells of four classes, two still on a stand-in
+SPELLFX_SPELLS = [
+    {"id": 1, "name": "Test Bolt", "level": 3, "classes": [13], "line": "Target, Decrease Hitpoints by 10", "harmful": True,
+     "target": "Target", "cast": 2.0, "visual": "0x11111111", "standin": False},
+    {"id": 2, "name": "Test Heal", "level": 1, "classes": [9, 7], "line": "Target, Increase HP by 20", "harmful": False,
+     "target": "Target", "cast": 1.5, "visual": "0x22222222", "standin": True, "kind": "heal"},
+    {"id": 3, "name": "Test Ward", "level": 5, "classes": [9], "line": "Self, Increase AC by 5, 30min", "harmful": False,
+     "target": "Self", "cast": 3.0, "visual": "0x33333333", "standin": True, "kind": "buff"},
+    {"id": 4, "name": "Test Tap", "level": 8, "classes": [11], "line": "Target, Drain HP by 30", "harmful": True,
+     "target": "Target", "cast": 2.5, "visual": "0x44444444", "standin": False},
+]
+SPELLFX_API = "/eqoa/account/api/spellfx"
 
 
 class Site:
@@ -64,6 +85,8 @@ class Site:
         self.page = (dist / "index.html").read_text()
         self.posts = []
         self.keep = None
+        # the community page's picks, as its server was sent them
+        self.picks = []
 
     def deploy(self, build, page=True, version=True, notes=None):
         """A build named `build` (a copy of the first's files, `notes` put on
@@ -100,12 +123,27 @@ class Site:
                 self.send_header("Cache-Control", "public, max-age=31536000, immutable" if self.path.startswith("/v/") else "no-cache")
                 super().end_headers()
 
+            def answer_json(self, code, answer):
+                data = json.dumps(answer).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_GET(self):
+                if self.path.split("?")[0] == SPELLFX_API + "/spells":
+                    return self.answer_json(200, {"spells": SPELLFX_SPELLS})
+                return super().do_GET()
+
             def do_POST(self):
                 route = self.path.split("?")[0]
                 body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
                 code, answer = 404, {"ok": False, "error": "no such route"}
                 if route in ("/reports/report", "/reports/crash"):
                     code, answer = site.take(route.rsplit("/", 1)[1], body)
+                elif route == SPELLFX_API + "/suggest":
+                    code, answer = site.pick(body)
                 data = json.dumps(answer).encode()
                 self.send_response(code)
                 self.send_header("Content-Type", "application/json")
@@ -118,6 +156,24 @@ class Site:
         httpd.daemon_threads = True
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         return httpd
+
+    def pick(self, body):
+        """The community page's pick, checked as its server checks it (the
+        contract: a spell, a visual, a name and a note of their lengths);
+        the name 'flood' is refused as an address that sent too many."""
+        try:
+            req = json.loads(body)
+        except ValueError:
+            return 400, {"error": "bad body"}
+        if req.get("name") == "flood":
+            return 429, {"error": "Too many picks from here: try again in an hour."}
+        ok = (isinstance(req.get("spell"), int) and isinstance(req.get("visual"), str) and req["visual"].startswith("0x")
+              and isinstance(req.get("name", ""), str) and len(req.get("name", "")) <= 32
+              and isinstance(req.get("note", ""), str) and len(req.get("note", "")) <= 200)
+        if not ok:
+            return 400, {"error": "a spell, a visual, a name of 32 and a note of 200 at most"}
+        self.picks.append(req)
+        return 200, {"ok": True, "count": sum(1 for p in self.picks if p["spell"] == req["spell"])}
 
     def take(self, kind, body):
         """reportd's checks on a /report or a /crash (cmd/reportd/main.go)."""
@@ -609,6 +665,53 @@ async def tests(a, site, base, page):
     facts = await page.js(facts_js) or ""
     check("unticked, a report says so (control)", "remember: off; disc not kept" in facts, facts[-200:])
     await page.js("navigator.storage.getDirectory().then(async (r) => { for (const n of ['remembered.iso', 'picked-again.iso']) await r.removeEntry(n).catch(() => 0); return true; })")
+
+    # ---- spellfx: the community page, its server a stand-in (Site.pick)
+    fx = base + "spellfx.html"
+    ids = "JSON.stringify([...document.querySelectorAll('#spells li[data-id]')].map((l) => +l.dataset.id))"
+    async def open_fx():
+        await page.call("Page.navigate", url=fx)
+        return await page.until("window.eqoaSpellfx && eqoaSpellfx.spells.length === 4 && document.querySelectorAll('#spells li[data-id]').length", 15)
+    check("the community page lists the server's spells", await open_fx() == 4 and await page.js(ids) == "[2,1,3,4]",
+          str(await page.js(ids)))
+    await page.js("(() => { const c = document.getElementById('class'); c.value = '9'; c.dispatchEvent(new Event('change')); return true; })()")
+    check("a class shows its own spells alone", await page.js(ids) == "[2,3]", str(await page.js(ids)))
+    await page.js("(() => { const c = document.getElementById('class'); c.value = ''; c.dispatchEvent(new Event('change')); return true; })()")
+    check("every class shows them all (control)", await page.js(ids) == "[2,1,3,4]", str(await page.js(ids)))
+    await page.js("document.getElementById('unknown').click(); true")
+    check("only the spells still on a stand-in", await page.js(ids) == "[2,3]", str(await page.js(ids)))
+    await page.js("document.getElementById('unknown').click(); true")
+    check("unticked, all of them again (control)", await page.js(ids) == "[2,1,3,4]", str(await page.js(ids)))
+    await page.js("document.getElementById('spell-search').value = 'tap'; document.getElementById('spell-search').dispatchEvent(new Event('input')); true")
+    check("a search finds a spell by its name", await page.until(f"{ids} === '[4]'", 3) is True)
+    await page.js("document.getElementById('spell-search').value = ''; document.getElementById('spell-search').dispatchEvent(new Event('input')); true")
+    await page.until(f"{ids} === '[2,1,3,4]'", 3)
+    sendable = "!document.getElementById('send').disabled"
+    check("no pick, nothing to send (control)", await page.js(sendable) is False)
+    await page.js("document.querySelector('#spells li[data-id=\"1\"] button').click(); true")
+    check("a spell alone is no pick yet (control)", await page.js(sendable) is False and "Test Bolt" in (await page.js("document.getElementById('pick-spell').textContent") or ""))
+    # the visual list as the preview sends it when it has read the disc
+    await page.until("(() => { const w = document.getElementById('preview').contentWindow; return w.location.pathname.endsWith('fxview.html') && w.document.readyState === 'complete'; })()", 10)
+    await page.js("document.getElementById('preview').contentWindow.eval(\"parent.postMessage({source: 'eqoa-fxview', type: 'started', visuals: ['0x11111111', '0x55555555']}, location.origin)\")")
+    listed = await page.until("document.querySelectorAll('#visuals li[data-visual]').length === 2 && [...document.querySelectorAll('#visuals li[data-visual]')].map((l) => l.dataset.visual).join()", 5)
+    check("the visuals the preview read are listed", listed == "0x11111111,0x55555555", str(listed))
+    given = await page.js("document.querySelector('#visuals li[data-visual=\"0x11111111\"]').textContent")
+    check("a visual says which spell has it", "Test Bolt" in (given or ""), str(given))
+    await page.js("document.querySelector('#visuals li[data-visual=\"0x55555555\"] button').click(); true")
+    check("a spell and a visual make a pick", await page.js(sendable) is True and "Test Bolt" in (await page.js("document.getElementById('send').textContent") or ""))
+    await page.js("document.getElementById('who').value = 'Tester'; document.getElementById('note').value = 'it rang'; document.getElementById('send').click(); true")
+    thanked = await page.until("document.getElementById('sent').textContent.startsWith('Thanks') && document.getElementById('sent').textContent", 5)
+    check("the pick is sent as the server takes it", bool(thanked) and site.picks[-1:] == [{"spell": 1, "visual": "0x55555555", "name": "Tester", "note": "it rang"}],
+          f"{thanked} {site.picks[-1:]}")
+    await page.js("document.getElementById('who').value = 'flood'; document.getElementById('send').click(); true")
+    refused = await page.until("document.getElementById('sent').textContent.startsWith('Not sent') && document.getElementById('sent').textContent", 5)
+    check("a refusal is said, not thanked", "Too many picks" in (refused or "") and len(site.picks) == 1, str(refused))
+    await open_fx()
+    check("the name is kept for the next visit", await page.js("document.getElementById('who').value") == "flood")
+    await page.js("localStorage.removeItem('eqoa.spellfxName'); true")
+    await open_fx()
+    check("none kept, the field is empty (control)", await page.js("document.getElementById('who').value") == "")
+    check("the game's page links it", 'href="./spellfx.html"' in (HERE / "dist" / "index.html").read_text())
 
     errors = [l for l in page.lines if l.startswith("EXCEPTION") and "crash_test" not in l and "unreachable" not in l and "a test rejection" not in l]
     check("no exception in the page beyond the crash test's", not errors, "; ".join(errors[:3]))
