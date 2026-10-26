@@ -11,7 +11,7 @@
 //! (`demo`). The platform's engine (`api::VoiceEngine`: a page's WebRTC,
 //! `web::voice`; natively crate `voice`'s) owns the microphone and the
 //! connection; this decides what is sent and how each voice is heard: the
-//! group's push-to-talk key (V) sends to the group, the room's (B) to the
+//! group's push-to-talk key (V) sends to the group, the room's (N) to the
 //! room, Open Mic to both while the microphone hears speech; every voice at
 //! Voice Volume times its member's own, a muted member at none. Nothing is
 //! asked of the microphone, and nothing told the server, while Voice Chat is
