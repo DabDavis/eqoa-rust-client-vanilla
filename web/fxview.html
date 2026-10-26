@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EQOA spell visual</title>
+<style>
+  :root { color-scheme: dark; --bg: #0b0d10; --panel: #151a20; --raised: #1c232b; --line: #2a323c; --text: #e6e9ee; --dim: #9aa4b1; --accent: #d9a441; --bad: #e0745f; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, sans-serif; overflow: hidden; }
+  canvas#eqoa { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; outline: none; touch-action: none; }
+  #pick { position: fixed; inset: 0; display: grid; place-items: center; padding: 16px; overflow: auto; }
+  .card { width: min(420px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; box-sizing: border-box; }
+  h1 { margin: 0 0 6px; font-size: 18px; }
+  p { margin: 0 0 10px; color: var(--dim); font-size: 13px; }
+  label { display: block; margin: 10px 0 4px; color: var(--dim); font-size: 12px; }
+  input, select, button { box-sizing: border-box; padding: 7px 9px; background: #0e1217; color: var(--text); border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+  input, select { width: 100%; }
+  button { background: var(--raised); cursor: pointer; font-weight: 600; }
+  button.primary { background: var(--accent); color: #1a1406; border-color: var(--accent); }
+  .row { display: flex; gap: 8px; margin-top: 14px; }
+  .row > * { flex: 1; }
+  #bar { position: fixed; left: 8px; top: 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; max-width: calc(100% - 16px); }
+  #bar input { width: 9.5em; }
+  #bar select, #bar button { width: auto; }
+  #status { position: fixed; left: 10px; bottom: 8px; right: 10px; color: var(--dim); font-size: 12px; pointer-events: none; text-shadow: 0 1px 2px #000; overflow-wrap: anywhere; }
+  #error { color: var(--bad); font-size: 13px; min-height: 1.2em; margin-top: 8px; white-space: pre-line; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<canvas id="eqoa" tabindex="0"></canvas>
+<div id="pick" hidden>
+  <form class="card" id="pick-form">
+    <h1>Spell visual</h1>
+    <p>A human casts a spell visual (a SPELLFX.CSF DictID) as a cast's 0x00B1 plays it in the game, again and again. Read off your own <i>Frontiers</i> disc image, which stays on your computer.</p>
+    <label for="iso">Disc image (SLUS-20744, .iso)</label>
+    <input id="iso" type="file" accept=".iso,.bin,.img" required>
+    <label for="fx">Visual</label>
+    <input id="fx" value="0xE78024D9" spellcheck="false">
+    <div class="row">
+      <div><label for="secs">Cast time (seconds)</label><input id="secs" type="number" min="0" max="30" step="0.1" value="2"></div>
+      <div><label for="aim">Lands on</label><select id="aim"><option value="dummy">a training dummy</option><option value="human">a second human</option><option value="caster">the caster</option></select></div>
+    </div>
+    <div id="error"></div>
+    <div class="row"><button class="primary" type="submit">Play</button></div>
+  </form>
+</div>
+<div id="bar" hidden>
+  <input id="bar-fx" spellcheck="false" aria-label="Visual">
+  <input id="bar-secs" type="number" min="0" max="30" step="0.1" aria-label="Cast time (seconds)" style="width:5em">
+  <select id="bar-aim" aria-label="Lands on"><option value="dummy">dummy</option><option value="human">human</option><option value="caster">caster</option></select>
+  <button id="bar-play" type="button">Play</button>
+  <button id="bar-again" type="button" title="Cast again now (Space)">Again</button>
+</div>
+<div id="status">loading…</div>
+<script type="module" src="./fxview.js"></script>
+</body>
+</html>

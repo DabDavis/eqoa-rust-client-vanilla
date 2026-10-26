@@ -570,6 +570,22 @@ directory, a world file's record headers) runs against `iso::Sparse`, a cache
 that answers `WouldBlock` for bytes it lacks and is filled between attempts
 (`tests/sparse.rs`: the listing in 2 fetches, 128 KB, equal to the file's).
 
+Beside the game's page the same build has `fxview.html`, the spell-visual
+preview go-eqoa-server's GM panel frames on its Spell visuals page (`gm.preview_url`;
+`crates/eqoa/src/fxview.rs`, `web/fxview.js`): a robed human casts a visual as
+a server's 0x00B1 plays it (`spells::cast_of` reads the bytes, `spells.rs` plays
+them on the two characters' own skeletons) at a training dummy (body 0x66262F1C
+at its rows' size, 0.25), a second human or itself, again and again, under an
+orbit camera. The panel hands it the six files it reads off the GM's own disc as
+Blobs (opened on its own it asks for the image) and the visual by postMessage,
+origins checked both ways (`https://gm.eqoaclassic.com`, or a loopback panel
+named with `?panel=`); its host lets only the panel frame it. Natively
+`eqoa fxview [visual [secs]]` is the same in a window and `eqoa fxview <visual>
+<out.png> [ms,...] [secs]` draws PNGs (`EQOA_FX_AIM=caster|human|dummy`); off
+the disc its test (`fxview::tests`) finds a visual that moves its caster and
+shows particles and sees it cast again once nothing of it is left. Nothing
+changes for a player who opens the game's page.
+
 The page asks only for the player's disc image (the gate; the relay and the
 offline viewer are folded under "Server and viewer"); Start runs the game from
 its boot on the canvas, as natively: the loading screens, the licence, the title,

@@ -1466,6 +1466,11 @@ impl<M: Model> SpellSystem<M> {
         (self.pbis[p].handle == handle).then_some(p)
     }
 
+    /// How many playbacks are running (`m_active`'s length).
+    pub fn playing(&self) -> usize {
+        self.active.len()
+    }
+
     pub fn is_playing(&self, handle: i32) -> bool {
         self.playback(handle).is_some()
     }

@@ -991,7 +991,7 @@ pub fn place_body(body: &mut GpuModel, walker: &Walker, matrix: [[f32; 4]; 4]) -
 }
 
 /// Puts layer changes onto the batches of the palette entries they name.
-fn dress(model: &mut esf::Model, changes: &[vi::cust::LayerChange]) {
+pub(crate) fn dress(model: &mut esf::Model, changes: &[vi::cust::LayerChange]) {
     for ch in changes {
         for b in model.batches.iter_mut().filter(|b| b.material == ch.entry) {
             if let Some(l) = b.layers.get_mut(ch.layer as usize) {

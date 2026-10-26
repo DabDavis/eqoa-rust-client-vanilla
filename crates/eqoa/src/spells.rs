@@ -297,6 +297,21 @@ impl Spells {
         self.sys.effects.get(i).map(|e| e.id)
     }
 
+    /// How many effects there are, and an effect's place by its DictID.
+    pub fn count(&self) -> usize {
+        self.sys.effects.len()
+    }
+
+    pub fn index_of(&self, effect: u32) -> Option<usize> {
+        self.by_dict.get(&effect).copied()
+    }
+
+    /// Nothing of any effect is left: no playback running, no particle
+    /// alive, nothing flying (the preview casts again then, `fxview`).
+    pub fn quiet(&self) -> bool {
+        self.sys.playing() == 0 && self.sys.particle_count(&self.ps) == 0 && self.flying.is_empty() && self.made.is_empty()
+    }
+
     /// `m_dict.FindTyped(effect, 21)`
     pub fn has(&self, effect: u32) -> bool {
         self.by_dict.contains_key(&effect)
