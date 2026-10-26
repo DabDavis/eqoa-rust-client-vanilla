@@ -5,6 +5,14 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · A waypoint of your own on the map
+- The map has a waypoint of your own: click or tap a spot on the map (M) to put a
+  magenta marker there, and click it again to take it away. With a controller, pan the
+  map and press □ to put it at the middle (Q on the keyboard does the same).
+- The compass shows it as a magenta dot on its rim pointing the way to go, however far
+  it is, and it goes away when you get there. It is kept for each world, and nobody
+  else sees it.
+
 ## 2026-10-26 · Sound that stays clean, the training dummies' string, and remembered discs
 - Sound no longer turns crunchy after a busy fight: with many spells sounding at once, a
   sound that was loading at that moment could be stored with part of it missing and play
