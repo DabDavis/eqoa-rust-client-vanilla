@@ -16,10 +16,11 @@ use crate::ui::UiRaster;
 use net::session::TrackedQuest;
 use render::ui::{Anchor, Vertical};
 
-/// Its column in the HUD's frame (`Anchor::Right`, `Vertical::Top`): the
-/// quick menu's name plate's left (`map::mini::PLATE`) to the minimap's
-/// right, from under the minimap to above the chat box with five lines.
-pub const COLUMN: [i32; 4] = [430, 168, 586, 336];
+/// Its column in the HUD's frame (`Anchor::Right`, `Vertical::Top`): from
+/// 50 left of the quick menu's name plate (`map::mini::PLATE`, a long item's
+/// name and its count on one line) to the minimap's right, from under the
+/// minimap to above the chat box with five lines.
+pub const COLUMN: [i32; 4] = [380, 168, 586, 336];
 /// Its words' size, of the HUD's font, and the objectives' indent.
 pub const SCALE: f32 = 0.8;
 const INDENT: f32 = 6.0;
@@ -39,10 +40,15 @@ pub struct Line {
     pub indent: bool,
 }
 
+/// An objective's count: ": 0/3", none with nothing to count.
+fn count_text(have: u16, need: u16) -> String {
+    if need == 0 { String::new() } else { format!(": {}/{need}", have.min(need)) }
+}
+
 /// An objective's words: "Bat Eye: 0/3", or as they are with nothing to
 /// count ("Speak with Kellina").
 pub fn goal_text(text: &str, have: u16, need: u16) -> String {
-    if need == 0 { text.to_string() } else { format!("{text}: {}/{need}", have.min(need)) }
+    format!("{text}{}", count_text(have, need))
 }
 
 /// `text` no wider than `most` by `width`, cut at a character with "...".
@@ -80,7 +86,10 @@ pub fn lines(quests: &[TrackedQuest], rows: usize, most: f32, width: impl Fn(&st
         out.push(Line { text: fit(&q.name, most, &width), color: NAME, indent: false });
         for g in &q.goals {
             let color = if g.done() { DONE } else { GOAL };
-            out.push(Line { text: fit(&goal_text(&g.text, g.have, g.need), most - INDENT, &width), color, indent: true });
+            // a long name is cut, never its count
+            let count = count_text(g.have, g.need);
+            let text = fit(&g.text, most - INDENT - width(&count), &width) + &count;
+            out.push(Line { text, color, indent: true });
         }
     }
     out
@@ -153,7 +162,11 @@ mod tests {
         assert_eq!(text(6), ["One", "a: 0/1", "Two", "b: 0/1", "c: 0/1", "+1 more"]);
         assert_eq!(text(4), ["One", "a: 0/1", "+2 more"], "Two is three rows and the count's");
         assert_eq!(text(1), ["+3 more"]);
-        let cut = lines(&[quest("A very long quest name indeed", &[])], 5, 12.0, |s: &str| s.len() as f32);
+        let cut = lines(&[quest("A very long quest name indeed", &[("drained poison sac", 1, 3)])], 5, 12.0, |s: &str| s.len() as f32);
         assert_eq!(cut[0].text, "A very lo...");
+        // an objective's name is cut, its count kept (of 16: 6 the indent, 5
+        // the count, 5 the name's)
+        let cut = lines(&[quest("Q", &[("drained poison sac", 1, 3)])], 5, 16.0, |s: &str| s.len() as f32);
+        assert_eq!(cut[1].text, "dr...: 1/3");
     }
 }
