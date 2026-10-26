@@ -309,6 +309,9 @@ pub struct SoundDevice<M: Model> {
     pub stops_dropped: u32,
     /// stops that found the packet full, for the head of the next one
     stops_waiting: u64,
+    /// the most words a packet has held when it was sent (of 127): how near
+    /// a frame's commands come to filling it (the report's sound line)
+    pub most_words: i32,
     _m: PhantomData<M>,
 }
 
@@ -361,6 +364,7 @@ impl<M: Model> SoundDevice<M> {
             cmds_dropped: 0,
             stops_dropped: 0,
             stops_waiting: 0,
+            most_words: 0,
             _m: PhantomData,
         };
         d.bgm_version = bgm_version;
@@ -1346,6 +1350,7 @@ impl<M: Model> SoundDevice<M> {
         if self.packet[0] == 0 {
             return -2;
         }
+        self.most_words = self.most_words.max(self.words);
         self.status = link.call(0x80f0, &self.packet);
         self.packet[0] = 0;
         let n = self.words;

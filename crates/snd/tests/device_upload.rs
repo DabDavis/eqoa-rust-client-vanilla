@@ -250,6 +250,7 @@ fn a_full_packet_does_not_lose_a_copy() {
         }
         assert_eq!(held(&d, l.drv.io.spu.ram(), ia, &a), (true, true), "busy {busy}: A uploaded, its bytes in place");
         assert_eq!(d.check_ram(l.drv.io.spu.ram(), false).map(|c| c.differ), Some(vec![]));
+        assert!(d.most_words >= 121 && d.cmds_dropped > 0, "the packet filled: {} words, {} dropped", d.most_words, d.cmds_dropped);
     }
 }
 
