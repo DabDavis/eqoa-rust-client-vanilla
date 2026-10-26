@@ -127,6 +127,95 @@ struct Shared {
     /// thread mixes them and drops them (`wall_clock`), from when this began
     /// and the driver's clock then; a device's first callback ends it
     wall: Option<(Instant, u64)>,
+    /// natively, how the output has kept time (`Out`, the report's line)
+    out: Out,
+}
+
+/// Natively, how the output has kept time since the start, for a report
+/// (`Audio::report_line`; F3 20261025-225337, crunchy on a Mac with two
+/// windows): what can be heard as crackling. A callback whose stream time
+/// came later than the last one's end by more than half its buffer is a gap
+/// (the device played something we never gave it); one that waited for the
+/// lock and mixed for longer than its buffer lasts is late (the device will
+/// have run dry). The driver held at the output's last block (`catch_up`'s
+/// cap: no callback for `CATCH_UP_MAX`) stops its clock, and with it a call
+/// that waits for a vblank; such a call is run on (`Shared::run_on`).
+#[derive(Default)]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+struct Out {
+    callbacks: u64,
+    /// the frames a callback asked for, fewest and most, and its rate
+    frames: Option<(usize, usize)>,
+    rate: u32,
+    /// the last callback's stream time and frames
+    last: Option<(cpal::StreamInstant, usize)>,
+    gaps: u64,
+    /// the last gap: when, and how much was missing
+    last_gap: Option<(Instant, Duration)>,
+    late: u64,
+    last_late: Option<Instant>,
+    /// the longest wait for the lock, and the longest mix
+    wait_max: Duration,
+    work_max: Duration,
+    held: u64,
+    last_held: Option<Instant>,
+    ran_on: u64,
+}
+
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+impl Out {
+    /// A callback for `frames` at `rate`, its stream time `at`, after waiting
+    /// `wait` for the lock and mixing for `work`.
+    fn callback(&mut self, at: cpal::StreamInstant, frames: usize, rate: u32, wait: Duration, work: Duration, now: Instant) {
+        self.callbacks += 1;
+        self.rate = rate;
+        self.frames = Some(match self.frames {
+            Some((lo, hi)) => (lo.min(frames), hi.max(frames)),
+            None => (frames, frames),
+        });
+        let lasts = |n: usize| Duration::from_secs_f64(n as f64 / rate.max(1) as f64);
+        if let Some((t, n)) = self.last
+            && let Some(since) = at.duration_since(&t)
+        {
+            let ends = lasts(n);
+            if since > ends + (ends / 2).max(Duration::from_millis(5)) {
+                self.gaps += 1;
+                self.last_gap = Some((now, since - ends));
+            }
+        }
+        self.last = Some((at, frames));
+        self.wait_max = self.wait_max.max(wait);
+        self.work_max = self.work_max.max(work);
+        if wait + work > lasts(frames) {
+            self.late += 1;
+            self.last_late = Some(now);
+        }
+    }
+
+    /// The report's words for it.
+    fn describe(&self) -> String {
+        let ago = |t: Option<Instant>| t.map_or(String::new(), |t| format!(", the last {:.0} s ago", t.elapsed().as_secs_f64()));
+        let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+        let frames = match self.frames {
+            Some((lo, hi)) if lo == hi => format!("{lo} frames"),
+            Some((lo, hi)) => format!("{lo} to {hi} frames"),
+            None => "no frames".into(),
+        };
+        let gap = self.last_gap.map_or(String::new(), |(t, d)| format!(", the last {:.0} s ago, {:.1} ms missing", t.elapsed().as_secs_f64(), ms(d)));
+        format!(
+            "{} callbacks of {frames} at {} Hz, {} gaps{gap}, {} late{} (waits for the mixer up to {:.1} ms, mixing up to {:.1} ms); the driver held at the output {} times{}, a waiting call run on {} times",
+            self.callbacks,
+            self.rate,
+            self.gaps,
+            self.late,
+            ago(self.last_late),
+            ms(self.wait_max),
+            ms(self.work_max),
+            self.held,
+            ago(self.last_held),
+            self.ran_on
+        )
+    }
 }
 
 /// How far `catch_up` mixes past what was last handed to the device (100
@@ -137,7 +226,7 @@ const CATCH_UP_MAX: u64 = 4800;
 
 impl Shared {
     fn new(disc: Box<dyn Disc>) -> Self {
-        Shared { drv: Driver::new(disc), status: [0; 128], pcm: Vec::new(), handed: None, called: None, wall: None }
+        Shared { drv: Driver::new(disc), status: [0; 128], pcm: Vec::new(), handed: None, called: None, wall: None, out: Out::default() }
     }
 
     /// The driver onto the wall clock from `now`: no device takes its frames.
@@ -153,9 +242,37 @@ impl Shared {
     /// what it still lacks. Nothing before the first callback, nor offline.
     fn catch_up(&mut self) {
         let Some((at, handed)) = self.handed else { return };
-        let due = handed + ((at.elapsed().as_secs_f64() * 48000.0) as u64).min(CATCH_UP_MAX);
+        let since = (at.elapsed().as_secs_f64() * 48000.0) as u64;
+        if since > CATCH_UP_MAX && self.out.last_held.is_none_or(|t| t < at) {
+            // once a stall: the output's callback is that late
+            self.out.held += 1;
+            self.out.last_held = Some(Instant::now());
+        }
+        let due = handed + since.min(CATCH_UP_MAX);
         if due > self.drv.now {
             self.pump(due - self.drv.now);
+        }
+    }
+
+    /// Whether the output's clock is held: its last callback is older than
+    /// `catch_up` runs the driver past (`CATCH_UP_MAX`). Never offline, nor
+    /// on the wall clock (its thread stands in for the callback).
+    fn held(&self) -> bool {
+        self.handed.is_some_and(|(at, _)| at.elapsed().as_secs_f64() * 48000.0 > CATCH_UP_MAX as f64)
+    }
+
+    /// The driver run on, its frames kept for the output, until the call it
+    /// is running answers (a second of frames at most): for when the
+    /// output's clock will not bring the vblank the call waits for
+    /// (`AudioLink`). The output plays them once it calls back, a little
+    /// late; nothing is skipped.
+    fn run_on(&mut self) {
+        self.out.ran_on += 1;
+        for _ in 0..100 {
+            if !self.drv.busy() {
+                break;
+            }
+            self.pump(480);
         }
     }
 
@@ -692,11 +809,19 @@ impl Audio {
             None => "not listed".to_string(),
         };
         format!(
-            "{}; the system's default {}; outputs {listed}; Output Device {}",
+            "{}; the system's default {}; outputs {listed}; Output Device {}; output: {}",
             self.describe,
             o.default.as_deref().unwrap_or("not read"),
-            crate::settings::client().output.map_or("the system default".to_string(), |d| format!("{:?}", d.as_str()))
+            crate::settings::client().output.map_or("the system default".to_string(), |d| format!("{:?}", d.as_str())),
+            self.shared.lock().unwrap().out.describe()
         )
+    }
+
+    /// The sound device's uploads against the SPU2's RAM (`check_ram`), under
+    /// the driver's lock.
+    pub fn check_ram<M: vi::Model>(&self, dev: &snd::device::SoundDevice<M>) -> Option<snd::device::RamCheck> {
+        let g = self.shared.lock().unwrap();
+        dev.check_ram(g.drv.io.spu.ram(), g.drv.busy())
     }
 
     /// `EQOA_AUDIO_LOST_TEST=<ms>[,silent]`, natively: that long after the
@@ -769,8 +894,10 @@ impl Audio {
             }
         };
         let s = shared.clone();
-        let mut fill = move |out: &mut dyn FnMut(usize, f32), frames: usize| {
+        let mut fill = move |out: &mut dyn FnMut(usize, f32), frames: usize, at: cpal::StreamInstant| {
+            let asked = Instant::now();
             let mut g = s.lock().unwrap();
+            let locked = Instant::now();
             // the device takes the driver's frames from the wall clock
             // (`wall_clock`): what that mixed was dropped
             if g.wall.take().is_some() {
@@ -799,22 +926,24 @@ impl Audio {
             g.pcm.drain(..n);
             phase -= used as f64;
             g.handed = Some((Instant::now(), g.drv.now - (g.pcm.len() / 2) as u64));
+            let done = Instant::now();
+            g.out.callback(at, frames, rate, locked - asked, done - locked, done);
         };
         let stream = match default.sample_format() {
             cpal::SampleFormat::F32 => device.build_output_stream(
                 &config,
-                move |d: &mut [f32], _| {
+                move |d: &mut [f32], info: &cpal::OutputCallbackInfo| {
                     let n = d.len() / channels;
-                    fill(&mut |k, v| d[k] = v, n)
+                    fill(&mut |k, v| d[k] = v, n, info.timestamp().callback)
                 },
                 err(),
                 None,
             ),
             cpal::SampleFormat::I16 => device.build_output_stream(
                 &config,
-                move |d: &mut [i16], _| {
+                move |d: &mut [i16], info: &cpal::OutputCallbackInfo| {
                     let n = d.len() / channels;
-                    fill(&mut |k, v| d[k] = (v * 32767.0) as i16, n)
+                    fill(&mut |k, v| d[k] = (v * 32767.0) as i16, n, info.timestamp().callback)
                 },
                 err(),
                 None,
@@ -941,6 +1070,11 @@ impl Audio {
     }
 }
 
+/// How long a DMA waits on the output's clock for a call still waiting
+/// (`AudioLink::dma`): past a vblank's 16.7 ms, the clock is held.
+#[cfg(not(target_arch = "wasm32"))]
+const DMA_WAIT: Duration = Duration::from_millis(25);
+
 /// The EE's side of SIF, to the driver on the audio thread.
 pub struct AudioLink(Arc<Mutex<Shared>>);
 
@@ -948,6 +1082,10 @@ impl Link for AudioLink {
     fn call(&mut self, fno: u32, packet: &[u32; 128]) -> [u32; 128] {
         let mut g = self.0.lock().unwrap();
         g.catch_up();
+        #[cfg(not(target_arch = "wasm32"))]
+        if g.drv.busy() && g.held() {
+            g.run_on();
+        }
         // the device refuses to flush while busy (`busy`): a call here
         // over a running one would be a packet lost
         if !g.drv.busy() {
@@ -958,14 +1096,23 @@ impl Link for AudioLink {
     }
 
     fn dma(&mut self, addr: u32, data: &[u8]) {
-        // a call still waiting may yet read the IOP buffer: let it finish
+        // A call still waiting may yet copy out of the IOP buffer: let it
+        // finish. It waits for a vblank, which the output's clock brings
+        // within `DMA_WAIT`; past that the clock is held (its callback later
+        // than `CATCH_UP_MAX`), and the call is run on to its vblank, the
+        // frames kept for the output, as a page's is. It once wrote over the
+        // buffer after 100 ms instead, and the waiting copy took the new
+        // bytes (F3 20261025-225337).
         #[cfg(not(target_arch = "wasm32"))]
         {
             let start = Instant::now();
             loop {
                 let mut g = self.0.lock().unwrap();
                 g.catch_up();
-                if !g.drv.busy() || start.elapsed() > Duration::from_millis(100) {
+                if g.drv.busy() && (g.held() || start.elapsed() > DMA_WAIT) {
+                    g.run_on();
+                }
+                if !g.drv.busy() || start.elapsed() > DMA_WAIT {
                     g.drv.io.dma(addr, data);
                     return;
                 }
@@ -988,9 +1135,19 @@ impl Link for AudioLink {
         }
     }
 
+    /// A call still running (`sceSifCheckStatRpc`): one waiting for a vblank
+    /// the output's clock brings within one. With the clock held (no callback
+    /// for `CATCH_UP_MAX`) it is run on instead: it would wait for as long as
+    /// the output did, the device keeping its packets meanwhile and a
+    /// `VISoundDevice::Flush` spinning on the game's thread, where the watch
+    /// that would put the driver on the wall clock runs.
     fn busy(&mut self) -> bool {
         let mut g = self.0.lock().unwrap();
         g.catch_up();
+        #[cfg(not(target_arch = "wasm32"))]
+        if g.drv.busy() && g.held() {
+            g.run_on();
+        }
         g.drv.busy()
     }
 
@@ -1252,6 +1409,111 @@ mod tests {
         assert_eq!(find_chosen(DeviceName::new("Headphones"), &names), None);
         let long = format!("Lautsprecher ({})", "x".repeat(300));
         assert_eq!(find_chosen(DeviceName::new(&long), &[long.clone()]), Some(0), "by its cut");
+    }
+
+    /// A packet: its commands as (id, args), as the device ships one.
+    fn packet(cmds: &[(u32, &[u32])]) -> [u32; 128] {
+        let mut p = [0u32; 128];
+        p[0] = cmds.len() as u32;
+        let mut k = 1;
+        for (id, args) in cmds {
+            p[k] = *id;
+            p[k + 1] = args.len() as u32;
+            p[k + 2..k + 2 + args.len()].copy_from_slice(args);
+            k += 2 + args.len();
+        }
+        p
+    }
+
+    /// A DMA into the IOP's buffer while a call still waits for its vblank
+    /// with a copy out of that buffer queued behind it (F3 20261025-225337):
+    /// with the output's clock held (here: no output at all) the call is run
+    /// on first, so the copy takes the bytes that were there, not the new
+    /// ones. It once wrote over the buffer after 100 ms and the copy took the
+    /// new bytes. The control: with the call not waiting, the DMA lands at
+    /// once and runs nothing on.
+    #[test]
+    fn a_dma_never_writes_under_a_waiting_copy() {
+        for waiting in [false, true] {
+            let a = Audio::offline(Box::new(snd::NoDisc));
+            let mut link = a.link();
+            link.call(0x80f0, &packet(&[(0, &[])]));
+            let buf = a.shared.lock().unwrap().drv.io.buf_addr;
+            let (old, new) = (vec![0x11u8; 64], vec![0x99u8; 64]);
+            link.dma(buf, &old);
+            // a BGM stop, which waits for the BGM thread's vblank, then the
+            // copy of the buffer to SPU RAM 0x10000
+            let first: &[(u32, &[u32])] = if waiting { &[(14, &[0])] } else { &[] };
+            let cmds: Vec<(u32, &[u32])> = first.iter().copied().chain([(1, &[64u32, 0x10000][..])]).collect();
+            link.call(0x80f0, &packet(&cmds));
+            assert_eq!(a.shared.lock().unwrap().drv.busy(), waiting, "the call waits ({waiting})");
+            link.dma(buf, &new);
+            a.render(1600);
+            let g = a.shared.lock().unwrap();
+            assert!(!g.drv.busy(), "the call answered ({waiting})");
+            assert_eq!(&g.drv.io.spu.ram()[0x10000..0x10040], &old[..], "the copy took what it was queued for ({waiting})");
+            assert_eq!(&g.drv.io.buf[..64], &new[..], "and the DMA landed after it ({waiting})");
+            assert_eq!(g.out.ran_on, waiting as u64, "run on only for a waiting call");
+        }
+    }
+
+    /// A call waiting for its vblank while the output's clock is held (its
+    /// last callback 200 ms ago, past `CATCH_UP_MAX`): `busy` runs it on, so
+    /// the device's packets and a `Flush` go on. The control: with the clock
+    /// live (5 ms since the callback) nothing is run on.
+    #[test]
+    fn a_held_clock_does_not_keep_a_call_waiting() {
+        for held in [false, true] {
+            let a = Audio::offline(Box::new(snd::NoDisc));
+            let mut link = a.link();
+            link.call(0x80f0, &packet(&[(0, &[])]));
+            let mut out = Vec::new();
+            testing::callback(&a, 512, true, &mut out);
+            testing::since_callback(&a, if held { 200.0 } else { 5.0 });
+            link.busy();
+            link.call(0x80f0, &packet(&[(14, &[0])]));
+            let busy = link.busy();
+            let g = a.shared.lock().unwrap();
+            assert_eq!(g.out.ran_on, held as u64, "run on only with the clock held ({held})");
+            if held {
+                assert!(!busy, "the stop answered");
+            }
+        }
+    }
+
+    /// The output's record: a callback that starts later than the last
+    /// one's end by more than half a buffer is a gap; one whose wait and mix
+    /// outlast its buffer is late. The controls: callbacks back to back, and
+    /// one a little late (scheduling jitter), are neither.
+    #[test]
+    fn the_output_counts_gaps_and_late_callbacks() {
+        let mut o = Out::default();
+        let t0 = cpal::StreamInstant::new(1000, 0);
+        let now = Instant::now();
+        let ms = Duration::from_millis;
+        let fast = (ms(0), ms(1));
+        // 512 frames at 48 kHz last 10.67 ms
+        let mut at = t0;
+        for _ in 0..100 {
+            o.callback(at, 512, 48000, fast.0, fast.1, now);
+            at = at.add(Duration::from_micros(10_667)).unwrap();
+        }
+        assert_eq!((o.gaps, o.late), (0, 0), "back to back");
+        at = at.add(ms(3)).unwrap();
+        o.callback(at, 512, 48000, fast.0, fast.1, now);
+        assert_eq!(o.gaps, 0, "a jitter of 3 ms is no gap");
+        // a skipped cycle: the next callback a whole buffer later
+        at = at.add(Duration::from_micros(10_667 * 2)).unwrap();
+        o.callback(at, 512, 48000, fast.0, fast.1, now);
+        assert_eq!(o.gaps, 1, "a buffer missing");
+        let (_, missing) = o.last_gap.unwrap();
+        assert!((10.0..11.0).contains(&(missing.as_secs_f64() * 1000.0)), "{missing:?}");
+        // a callback that waited 6 ms for the lock and mixed for 6
+        at = at.add(Duration::from_micros(10_667)).unwrap();
+        o.callback(at, 512, 48000, ms(6), ms(6), now);
+        assert_eq!((o.gaps, o.late), (1, 1), "late, not a gap yet");
+        assert_eq!((o.wait_max, o.work_max), (ms(6), ms(6)));
+        assert!(o.describe().contains("1 gaps"), "{}", o.describe());
     }
 
     /// While no device takes the frames the driver keeps to the wall clock,

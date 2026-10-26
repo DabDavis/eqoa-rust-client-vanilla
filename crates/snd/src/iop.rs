@@ -42,8 +42,17 @@ impl Iop {
         None
     }
 
-    /// The EE's SIF DMA: bytes into IOP memory at an IOP address.
+    /// The EE's SIF DMA: bytes into IOP memory at an IOP address. A block
+    /// that lies inside one of the two regions (every upload's) is one copy:
+    /// natively this runs under the lock the output's callback mixes under.
     pub fn dma(&mut self, addr: u32, data: &[u8]) {
+        for (base, mem) in [(self.pool_addr, &mut self.pool), (self.buf_addr, &mut self.buf)] {
+            let off = addr.wrapping_sub(base) as usize;
+            if off < mem.len() && data.len() <= mem.len() - off {
+                mem[off..off + data.len()].copy_from_slice(data);
+                return;
+            }
+        }
         for (k, &b) in data.iter().enumerate() {
             self.w8(addr.wrapping_add(k as u32), b);
         }

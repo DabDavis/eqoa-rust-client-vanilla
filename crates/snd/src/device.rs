@@ -20,6 +20,19 @@
 //! sound, which the next sound made may occupy), and a wave that finds no SPU
 //! RAM is let go (`create_wave`; the console keeps it at address 0 and
 //! uploads zeros there).
+//!
+//! More of the same kind (F3 20261025-225337, crunchy again with the first
+//! fixed), where the console loses an upload's command: the packet is 128
+//! words and a busy frame's own sounds fill it, and the console drops what
+//! does not fit, the copy of a block included, so the sound was marked
+//! uploaded with whatever its RAM held; the packet is now sent first to make
+//! room (`idle_transfer`). A block is not sent into the IOP's buffer while
+//! the packet still holds, unsent, the copy of the last one (the console
+//! guards only a copy that opens it, `gSndPacket[1] == 1`), nor a module
+//! while a relocation waits. And a stop that finds the packet full heads the
+//! next one (`stop_channels`): dropped, its voices played on with no sound to
+//! stop them. None of these changes a packet the decomp's device sends where
+//! the console loses nothing (`tests/oracle_snddev.rs`).
 
 use std::marker::PhantomData;
 use vi::Model;
@@ -65,6 +78,8 @@ pub struct Wave {
     pub buffer: Option<Vec<u8>>,
     pub size: i32,
     pub spu_addr: u32,
+    /// the CRC-32 of the `size` bytes its upload sends (`check_ram`)
+    pub crc: u32,
 }
 
 /// A tracker module and its sample bank.
@@ -80,6 +95,8 @@ pub struct Xm {
     /// the sample bank, until its upload has started
     pub sample: Option<Vec<u8>>,
     pub spu_size: i32,
+    /// the CRC-32 of the sample bank (`check_ram`)
+    pub sample_crc: u32,
     pub repeat: i32,
     pub volume: f32,
     pub pan: f32,
@@ -226,6 +243,14 @@ enum Flag {
     XmModule(usize),
 }
 
+/// `check_ram`'s answer: how many uploaded sounds were compared, and the
+/// slots of those whose SPU RAM is not what their upload sent.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RamCheck {
+    pub checked: usize,
+    pub differ: Vec<usize>,
+}
+
 pub struct SoundDevice<M: Model> {
     channels: u64,
     playbacks: [Playback; 46],
@@ -270,6 +295,23 @@ pub struct SoundDevice<M: Model> {
     /// slot of the 128, no SPU RAM (or XM pool) for it (the report's sound
     /// line)
     pub failed_creates: [u32; 2],
+    /// packets kept back because the IOP was still busy with the last call
+    /// (`sound_flush`), and blocks of an upload held back because a copy or
+    /// relocation for the last one was among them (`idle_transfer`): the
+    /// report's sound line
+    pub flushes_refused: u32,
+    pub uploads_held: u32,
+    /// commands `sound_cmd` dropped because the packet was full, as the
+    /// console's SoundCmd drops them (a busy frame's sounds), and the stops
+    /// that found it full (`stop_channels`: sent at the head of the next
+    /// packet instead, so not among the dropped)
+    pub cmds_dropped: u32,
+    pub stops_dropped: u32,
+    /// stops that found the packet full, for the head of the next one
+    stops_waiting: u64,
+    /// the most words a packet has held when it was sent (of 127): how near
+    /// a frame's commands come to filling it (the report's sound line)
+    pub most_words: i32,
     _m: PhantomData<M>,
 }
 
@@ -317,6 +359,12 @@ impl<M: Model> SoundDevice<M> {
             packet: [0; 128],
             words: 0,
             failed_creates: [0; 2],
+            flushes_refused: 0,
+            uploads_held: 0,
+            cmds_dropped: 0,
+            stops_dropped: 0,
+            stops_waiting: 0,
+            most_words: 0,
             _m: PhantomData,
         };
         d.bgm_version = bgm_version;
@@ -451,6 +499,10 @@ impl<M: Model> SoundDevice<M> {
         self.stream_bgm(link);
         self.sound_cmd(3, 0);
         self.sound_flush(link);
+        if self.stops_waiting != 0 && self.packet[0] == 0 {
+            let mask = std::mem::take(&mut self.stops_waiting);
+            self.stop_channels(mask);
+        }
         self.frame = self.frame.wrapping_add(1);
         0
     }
@@ -613,6 +665,7 @@ impl<M: Model> SoundDevice<M> {
         let mut buf = vec![0u8; size as usize];
         let n = adpcm.len().min(buf.len());
         buf[..n].copy_from_slice(&adpcm[..n]);
+        w.crc = crc32fast::hash(&buf);
         w.buffer = Some(buf);
         w.cached = 0;
         i
@@ -624,7 +677,8 @@ impl<M: Model> SoundDevice<M> {
     /// the parser then releases sound -1.)
     pub fn create_xm(&mut self, volume: f32, pan: f32, module: Vec<u8>, samples: Vec<u8>) -> i32 {
         let (xm_size, spu_size) = (module.len() as i32, samples.len() as i32);
-        let x = Xm { volume, pan, xm: Some(module), xm_size, sample: Some(samples), spu_size, ..Default::default() };
+        let sample_crc = crc32fast::hash(&samples);
+        let x = Xm { volume, pan, xm: Some(module), xm_size, sample: Some(samples), spu_size, sample_crc, ..Default::default() };
         let i = self.create_sound(Kind::Xm(x), true);
         if i < 0 {
             return -1;
@@ -1055,6 +1109,14 @@ impl<M: Model> SoundDevice<M> {
         if let Some(k) = self.find_cmd(4) {
             self.packet[k] |= (mask & 0xffffff) as u32;
             self.packet[k + 1] |= (mask >> 24) as u32;
+        } else if self.words + 2 + 3 >= 128 {
+            // A departure: the packet is full and the console drops the stop,
+            // leaving its voices playing with no sound to stop them (a looped
+            // one for good, over whatever its RAM comes to hold). It goes at
+            // the head of the next packet instead, ahead of anything started
+            // there on those channels (`process`). (F3 20261025-225337)
+            self.stops_waiting |= mask;
+            self.stops_dropped += 1;
         } else {
             self.args[0] = (mask & 0xffffff) as i32;
             self.args[1] = (mask >> 24) as i32;
@@ -1087,6 +1149,34 @@ impl<M: Model> SoundDevice<M> {
     /// The sounds made and not yet let go, of the 128.
     pub fn sounds_held(&self) -> usize {
         self.sounds.iter().filter(|s| s.is_some()).count()
+    }
+
+    /// Every uploaded sound's SPU RAM against the bytes its upload sent: a
+    /// wave's, and an XM's sample bank (its module is relocated in place on
+    /// the IOP, so it is not compared). Nothing but an upload writes a
+    /// sound's RAM, so a difference is RAM that something else overwrote.
+    /// `ram` is the SPU2's; None while a copy is still to be sent (`busy`:
+    /// the IOP has not answered the last call, so one may wait inside it),
+    /// when what is marked uploaded may not be there yet.
+    pub fn check_ram(&self, ram: &[u8], busy: bool) -> Option<RamCheck> {
+        if busy || (self.packet[0] != 0 && self.find_cmd(1).is_some()) {
+            return None;
+        }
+        let mut c = RamCheck::default();
+        for (i, s) in self.sounds.iter().enumerate() {
+            let Some(s) = s else { continue };
+            let (addr, size, crc) = match &s.kind {
+                Kind::Wave(w) if w.cached != 0 && w.spu_addr != 0 => (w.spu_addr as usize, w.size as usize, w.crc),
+                Kind::Xm(x) if x.sample_cached != 0 && x.spu_addr != 0 => (x.spu_addr as usize, x.spu_size as usize, x.sample_crc),
+                _ => continue,
+            };
+            let Some(bytes) = ram.get(addr..addr + size) else { continue };
+            c.checked += 1;
+            if crc32fast::hash(bytes) != crc {
+                c.differ.push(i);
+            }
+        }
+        Some(c)
     }
 
     pub fn alloc_spu_mem(&mut self, size: i32) -> u32 {
@@ -1149,6 +1239,18 @@ impl<M: Model> SoundDevice<M> {
     /// otherwise the next block of at most 64 KB goes.
     fn idle_transfer(&mut self, link: &mut dyn Link) {
         if self.xfer_dma != 0 {
+            // A departure: the packet fills (a busy frame's sounds started,
+            // stopped, their volumes and pans set, all queued before this
+            // step; or packets kept back while the IOP was busy) and
+            // `sound_cmd` drops what does not fit, as the console's SoundCmd
+            // does: the copy (or relocation) dropped, the sound was marked
+            // uploaded with whatever its RAM held, and played so until it was
+            // let go. The packet is sent first to make room, and while the IOP
+            // is too busy to take it the step waits. (F3 20261025-225337)
+            if self.words + 2 + 3 >= 128 && self.sound_flush(link) < 0 {
+                self.uploads_held += 1;
+                return;
+            }
             self.xfer_dma = 0;
             if self.xfer_spu_addr != -1 {
                 self.args[0] = self.xfer_last;
@@ -1193,6 +1295,20 @@ impl<M: Model> SoundDevice<M> {
             if self.packet[1] == 1 {
                 return;
             }
+            // A departure: the console waits only for a copy that opens the
+            // packet. While the IOP is busy (a BGM stop or start waiting for
+            // its vblank) the packet is kept and grows (`sound_flush`), the
+            // game's commands of the frame ahead of the copy; the next block
+            // then went into the IOP's buffer before the copy of the last one
+            // was sent, which copied the new block in its place, and the sound
+            // was marked uploaded with another part of itself (or the next
+            // sound's start) where that part belonged, wrong for as long as it
+            // was kept. A relocation waiting would apply to the next module's
+            // bytes as well as its own. (F3 20261025-225337)
+            if self.packet[0] != 0 && (self.find_cmd(1).is_some() || self.find_cmd(7).is_some()) {
+                self.uploads_held += 1;
+                return;
+            }
             let n = if self.xfer_remain > 65535 { 0x10000 } else { (self.xfer_remain + 63) & -64 };
             // a whole block of n bytes, past the end of the source as the
             // console reads it (zeros here)
@@ -1228,11 +1344,13 @@ impl<M: Model> SoundDevice<M> {
     /// Ship the packet if there is anything in it.
     fn sound_flush(&mut self, link: &mut dyn Link) -> i32 {
         if link.busy() {
+            self.flushes_refused += 1;
             return -1;
         }
         if self.packet[0] == 0 {
             return -2;
         }
+        self.most_words = self.most_words.max(self.words);
         self.status = link.call(0x80f0, &self.packet);
         self.packet[0] = 0;
         let n = self.words;
@@ -1251,6 +1369,11 @@ impl<M: Model> SoundDevice<M> {
             }
             self.words += 2 + argc;
             self.packet[0] += 1;
+        } else {
+            self.cmds_dropped += 1;
+            if id == 4 {
+                self.stops_dropped += 1;
+            }
         }
     }
 
