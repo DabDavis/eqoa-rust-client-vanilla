@@ -7,6 +7,8 @@
 // (window.eqoaReport).
 import init, { boot, view, client_state, want_shot, crash_test, disc_id, disc_2002, update_notices, hidden_tick } from './eqoa.js';
 import { canRemember, keptHandle, keepHandle, forgetHandle } from './discstore.js';
+// voice chat's engine (window.eqoaVoice: WebRTC to the server's forwarding server)
+import './voice.js';
 
 const $ = (id) => document.getElementById(id);
 // the client's own graphics line ("graphics: <adapter> (<backend>)"), for reports
