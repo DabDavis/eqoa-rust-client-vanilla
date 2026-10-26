@@ -419,3 +419,35 @@ fn reaching_the_waypoint_takes_it_away() {
     m.arrive(Some(([at[0] + ARRIVE - 1.0, 50.0, at[1]], 0.0)), 0);
     assert_eq!(m.waypoint(0), None, "reached");
 }
+
+/// A finger's tap on a quest mark shows its tooltip and puts no waypoint; a
+/// tap elsewhere lets it go and puts the waypoint (the control); ○ hides the
+/// marks (nothing placed, a tap there is the waypoint's again) and shows them
+/// back; the chrome has the marks' button only while there are marks.
+#[test]
+fn a_tap_on_a_quest_mark_shows_it_and_circle_hides_them() {
+    use net::session::{MarkQuest, QuestMark};
+    crate::settings::testing::reset(false);
+    let size = (1280, 720);
+    let mut m = up(size);
+    let v = m.view.unwrap();
+    let giver = v.to_world(size, [700.0, 400.0]);
+    let mark = QuestMark { kind: 1, world: 0, x: giver[0], z: giver[1], npc: "Commander Nothard".into(), quests: vec![MarkQuest { name: "The Militia Bracer".into(), levels: (1, 60), line: "Every recruit wears our bracer.".into(), detail: "430 XP".into() }] };
+    m.quests.set(std::slice::from_ref(&mark));
+    m.quests.place(0, |p| v.to_window(size, p));
+    assert!(m.click([703.0, 398.0], true));
+    assert_eq!((m.quests.tapped, m.waypoint(0)), (Some(0), None), "the mark's tooltip, no waypoint");
+    assert!(m.click([300.0, 300.0], true));
+    assert!(m.quests.tapped.is_none() && m.waypoint(0).is_some(), "elsewhere: the waypoint, the tooltip let go");
+    m.set_waypoint(0, None);
+    // ○ hides them: none placed, and a tap where one was is the waypoint's
+    assert!(m.key(key::CIRCLE, true));
+    m.quests.place(0, |p| v.to_window(size, p));
+    assert!(m.quests.spots().is_empty() && m.quests.at([700.0, 400.0], 50.0).is_none());
+    assert!(m.click([703.0, 398.0], true));
+    assert!(m.quests.tapped.is_none() && m.waypoint(0).is_some(), "hidden: the waypoint's");
+    m.key(key::CIRCLE, true);
+    m.quests.place(0, |p| v.to_window(size, p));
+    assert_eq!(m.quests.at([700.0, 400.0], 10.0), Some(0), "shown again");
+    assert_eq!(keyboard("j"), Some((key::CIRCLE, Hold::Once)), "J is ○");
+}

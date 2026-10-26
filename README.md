@@ -40,9 +40,9 @@ or a browser (each described where it lives below):
   (Fog, Mipmaps, Flora, Environment, Art), UI (Ability Bars, Target of Target, Update Notices, Text: Sharp or
   Smooth, Loading Screens: Longer or Instant, Mana Bars), Controller (Controller Focus, Capture Controller), Camera (Distance,
   Turn Speed, Screen Shake), Characters (Level of Detail, NPC/PC Display and
-  Distance, Name Distance, Overlapping Names) and Sound (Sound in Background, Output Device:
-  the system's default, followed when it changes, or a device by its name), and
-  the rows below.
+  Distance, Name Distance, Overlapping Names), Sound (Sound in Background, Output Device:
+  the system's default, followed when it changes, or a device by its name) and
+  Map (Quest Markers), and the rows below.
 - **More ability bars**: the Extended page's Ability Bars adds a third and a
   fourth, five abilities each, on the HUD and in the spell book, on a server
   that keeps abilities past the game's ten slots.
@@ -86,6 +86,15 @@ or a browser (each described where it lives below):
   server, with a waypoint of the player's own (a click or a tap on the map,
   □ or Q at its middle; shown on the compass's rim, kept per world, sent
   nowhere).
+- **Quest Markers** on the map (Map's, on unless turned off), from a server
+  that sends them (go-eqoa-server does, 0x7E03/0x7E04; Sandstorm sends none,
+  so there are none there): a gold "!" at each NPC with a quest the player may
+  take now (its class, race and level), a "?" where a step of a quest under way
+  is to be done (an NPC to see, or the nearest places of the creatures a kill
+  or loot step hunts), each with a tooltip of its quests (their names and
+  levels, the start of the offer or the step's journal line, and the rewards
+  or what the step needs) under the mouse, on a tap, or under the pad's middle
+  cross; ○ (J, or the map's Quests button) hides them for now.
 - **The 2002 art** (F9, or the Extended page's Art): the game drawn as
   EverQuest Online Adventures looked before Frontiers, out of the player's own
   USA disc of 2002 (SLUS-20470) beside the Frontiers one: every race's body,

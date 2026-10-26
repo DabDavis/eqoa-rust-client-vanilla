@@ -632,6 +632,12 @@ pub struct ClientOptions {
     /// (`net::session::OP_POWER_BARS`; the game shows only the player's
     /// own); none where none is sent (Sandstorm).
     pub mana_bars: bool,
+    /// Quest Markers (the user's ask, on by default): the map's "!" at each
+    /// giver of a quest the player may take and "?" where a step of its
+    /// quests is to be done, from a server that sends them
+    /// (`net::session::OP_QUEST_MARKERS`: go-eqoa-server; none from
+    /// Sandstorm, which sends no such thing).
+    pub quest_markers: bool,
     /// Mipmaps: on, the textures' mip levels sampled as the GS samples them
     /// (`render::gs_lod_k`: the level by depth, blended), which is how the
     /// game is drawn; off, every texel off the base level, sharper and
@@ -722,6 +728,7 @@ impl Default for ClientOptions {
             update_notices: true,
             target_of_target: false,
             mana_bars: true,
+            quest_markers: true,
             text: render::ui::TextFilter::Sharp,
             mipmaps: true,
             flora: true,
@@ -801,6 +808,10 @@ impl ClientOptions {
         if !self.mana_bars {
             s.push_str("mana_bars=off\n");
         }
+        // Quest Markers only when off
+        if !self.quest_markers {
+            s.push_str("quest_markers=off\n");
+        }
         if self.text == render::ui::TextFilter::Smooth {
             s.push_str("text=smooth\n");
         }
@@ -875,6 +886,8 @@ impl ClientOptions {
                 ("target_of_target", "off") => c.target_of_target = false,
                 ("mana_bars", "on") => c.mana_bars = true,
                 ("mana_bars", "off") => c.mana_bars = false,
+                ("quest_markers", "on") => c.quest_markers = true,
+                ("quest_markers", "off") => c.quest_markers = false,
                 ("text", "sharp") => c.text = render::ui::TextFilter::Sharp,
                 ("text", "smooth") => c.text = render::ui::TextFilter::Smooth,
                 ("mipmaps", "on") => c.mipmaps = true,
@@ -1204,7 +1217,7 @@ pub fn describe() -> String {
         FrameRate::Display => "the display's",
     };
     format!(
-        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, output device {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, overlapping names {}, art {}, update notices {}, shouts {}, target of target {}, mana bars {}, text {}, mipmaps {}, flora {}, environment {}, loading screens {}; {}",
+        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, output device {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, overlapping names {}, art {}, update notices {}, shouts {}, target of target {}, mana bars {}, quest markers {}, text {}, mipmaps {}, flora {}, environment {}, loading screens {}; {}",
         if c.lod { "on" } else { "off" },
         c.brightness,
         c.fog,
@@ -1232,6 +1245,7 @@ pub fn describe() -> String {
         if c.shouts { "heard" } else { "ignored (kept)" },
         if c.target_of_target { "on" } else { "off" },
         if c.mana_bars { "on" } else { "off" },
+        if c.quest_markers { "on" } else { "off" },
         match c.text {
             render::ui::TextFilter::Sharp => "sharp",
             render::ui::TextFilter::Smooth => "smooth",
@@ -1719,7 +1733,7 @@ mod tests {
             "Screen Shake only off, Capture Controller only on"
         );
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, overlapping names hide, art frontiers, update notices on, shouts heard, target of target off, mana bars on, text sharp, mipmaps on, flora on, environment on, loading screens longer; kept in the page's storage");
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, overlapping names hide, art frontiers, update notices on, shouts heard, target of target off, mana bars on, quest markers on, text sharp, mipmaps on, flora on, environment on, loading screens longer; kept in the page's storage");
         testing::reset(true);
         assert!(describe().ends_with("refused: nothing is kept"));
         testing::reset(false);
@@ -1750,6 +1764,19 @@ mod tests {
         assert!(!ClientOptions::from_text("mipmaps=off").mipmaps && ClientOptions::from_text("mipmaps=on").mipmaps);
         for bad in ["mipmaps=0", "mipmaps=no", "mipmaps="] {
             assert!(ClientOptions::from_text(bad).mipmaps, "{bad}: on, the default");
+        }
+    }
+
+    /// Quest Markers, on by default, kept only when off; anything but on or
+    /// off leaves it on.
+    #[test]
+    fn quest_markers_kept_only_when_off() {
+        assert!(ClientOptions::default().quest_markers, "on by default");
+        assert_eq!(ClientOptions { quest_markers: false, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nquest_markers=off\n");
+        assert!(!ClientOptions::from_text("quest_markers=off").quest_markers);
+        assert!(ClientOptions::from_text("quest_markers=on") == ClientOptions::default());
+        for bad in ["quest_markers=0", "quest_markers=no", "quest_markers="] {
+            assert!(ClientOptions::from_text(bad).quest_markers, "{bad}: on, the default");
         }
     }
 

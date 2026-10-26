@@ -29,6 +29,7 @@ pub mod build;
 pub mod cells;
 pub mod chrome;
 pub mod picture;
+pub mod quests;
 pub mod store;
 // natively (a page has nothing to call it; it compiles there as main.rs's
 // commands do)
@@ -127,6 +128,8 @@ pub struct Context<'a> {
     pub words: Option<&'a vi::strtab::StringTable>,
     /// the HUD's `VIUI`, once SUPPORT's atlas is here (the pad's glyphs)
     pub vui: Option<&'a vi::ui::Vui>,
+    /// the quest marks a server sent (`quests`), none with Quest Markers off
+    pub quest_marks: &'a [net::session::QuestMark],
 }
 
 /// A world's map.
@@ -194,6 +197,8 @@ pub struct Map {
     /// the settings at the first use (`read_waypoints`)
     waypoints: BTreeMap<i32, [f32; 2]>,
     waypoints_read: bool,
+    /// the quest marks drawn and the one a finger tapped (`quests`)
+    pub quests: quests::QuestMarks,
     /// the build's time a frame, open or not, in place of the usual
     /// (`EQOA_MAP_BUDGET` in ms, `mapshot`'s measurements)
     pub budget: Option<Duration>,
@@ -234,6 +239,7 @@ impl Map {
             key::TRIANGLE | key::START if down => self.close(),
             key::CROSS if down => self.follow = true,
             key::SQUARE if down => self.square(),
+            key::CIRCLE if down => self.quests.toggle(),
             key::R1 if down => self.steps -= 1,
             key::L1 if down => self.steps += 1,
             key::UP => hold(&mut self.held, 0),
@@ -353,6 +359,15 @@ impl Map {
     pub fn click(&mut self, s: [f32; 2], finger: bool) -> bool {
         let (true, Some(v), Some(w)) = (self.open, self.view, self.world.as_ref()) else { return false };
         let (world, extent, size) = (w.index, w.builder.cells.extent(), self.size);
+        // a finger's tap on a quest mark shows its tooltip (a mouse's over
+        // one already does), a tap elsewhere lets it go
+        if finger {
+            let on = self.quests.at(s, view::waypoint_reach(size, true));
+            self.quests.tapped = on;
+            if on.is_some() {
+                return true;
+            }
+        }
         self.read_waypoints();
         if let Some(at) = self.waypoints.get(&world) {
             let p = v.to_window(size, *at);
@@ -443,6 +458,7 @@ impl Map {
     pub fn frame(&mut self, cx: &Context) {
         self.frame += 1;
         self.size = cx.size;
+        self.quests.set(cx.quest_marks);
         self.read_waypoints();
         self.arrive(cx.player, cx.world);
         let name = cx.lib.files.get(WORLD_FILE).map(|f| f.0.clone()).unwrap_or_default();
@@ -737,6 +753,7 @@ impl Map {
             names,
             keyboard: cx.keyboard,
             progress: (built < of).then_some((built, of)),
+            quests: (!self.quests.marks.is_empty()).then_some(!self.quests.hidden),
         };
         let fallback;
         let vui = match cx.vui {
@@ -770,6 +787,18 @@ impl Map {
                 ui.push(Quad { tex: white, blend: 3, pos: d, uv: [[0.5, 0.5]; 4], color, clip: None });
             }
         }
+        // the quest marks (`quests`): a badge each, dark inside a ring of the
+        // mark's colour, their glyphs over it with the chrome's words
+        self.quests.place(w.index, |p| v.to_window(size, p));
+        {
+            let (r, o) = view::quest_radius(size);
+            for &(p, i) in self.quests.spots() {
+                let ring = quests::look(self.quests.marks[i].kind).1;
+                for (grow, color) in [(o * 2.0, OUTLINE), (o, ring), (0.0, quests::BADGE)] {
+                    solid(&mut *ui, [p[0] - r - grow, p[1] - r - grow, p[0] + r + grow, p[1] + r + grow], color);
+                }
+            }
+        }
         // the middle, where □ puts the waypoint, once the map is panned off
         // the player (for a pad: a mouse or a finger points at the place)
         if !self.follow && !cx.keyboard {
@@ -791,6 +820,17 @@ impl Map {
             }
         }
         let mut r = l.assets.raster(ui);
+        // the marks' glyphs, and the tooltip of the one under the mouse, the
+        // finger's tap or the pad's middle cross
+        quests::draw_glyphs(&mut r, vui, &self.quests, f);
+        let reach = view::waypoint_reach(size, false);
+        let middle = [size.0 as f32 / 2.0, size.1 as f32 / 2.0];
+        let shown = self.quests.tapped.or_else(|| self.quests.at(self.cursor, reach)).or_else(|| (!self.follow && !cx.keyboard).then(|| self.quests.at(middle, reach)).flatten());
+        if let Some(i) = shown
+            && let (Some(m), Some(p)) = (self.quests.marks.get(i), self.quests.spot(i))
+        {
+            quests::draw_tooltip(&mut r, vui, m, f(p), c.corners, |r, at, w, h| chrome::solid_panel(vui, r, at, w, h));
+        }
         self.buttons = chrome::draw(&mut r, vui, &c);
         self.glyphs = r.glyphs;
         // laid out against the window: cut to it, not to the frame
@@ -865,6 +905,8 @@ pub fn keyboard(name: &str) -> Option<(i32, Hold)> {
         "space" | "enter" | "home" => (key::CROSS, Hold::Once),
         // Q is the keyboard's □ (`binds`' "talk" row): the waypoint
         "q" => (key::SQUARE, Hold::Once),
+        // J (the journal's letter) is ○: the quest marks shown or hidden
+        "j" => (key::CIRCLE, Hold::Once),
         "+" | "=" | "pageup" => (key::R1, Hold::Step),
         "-" | "_" | "pagedown" => (key::L1, Hold::Step),
         "up" | "w" => (key::UP, Hold::Held),

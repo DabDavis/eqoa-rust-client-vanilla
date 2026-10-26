@@ -52,7 +52,7 @@ pub fn shot(s: &Shot, out: &str) -> Result<(), Box<dyn std::error::Error>> {
     map.show();
     let player = Some(([s.at[0], 0.0, s.at[1]], s.heading));
     loop {
-        let cx = Context { lib: &lib, device: &device, queue: &queue, format: render::TARGET_FORMAT, size: s.size, dt: 1.0 / 60.0, player, world, origin: [1000.0, 1000.0], group: Vec::new(), sticks: [0.0; 4], keyboard: true, words: words.as_ref(), vui: None };
+        let cx = Context { lib: &lib, device: &device, queue: &queue, format: render::TARGET_FORMAT, size: s.size, dt: 1.0 / 60.0, player, world, origin: [1000.0, 1000.0], group: Vec::new(), sticks: [0.0; 4], keyboard: true, words: words.as_ref(), vui: None, quest_marks: &[] };
         map.budget = budget;
         map.frame(&cx);
         frames += 1;
@@ -68,7 +68,7 @@ pub fn shot(s: &Shot, out: &str) -> Result<(), Box<dyn std::error::Error>> {
     }
     // a few more frames: the view's tiles asked of the cache and shown
     for _ in 0..30 {
-        let cx = Context { lib: &lib, device: &device, queue: &queue, format: render::TARGET_FORMAT, size: s.size, dt: 1.0 / 60.0, player, world, origin: [1000.0, 1000.0], group: Vec::new(), sticks: [0.0; 4], keyboard: true, words: words.as_ref(), vui: None };
+        let cx = Context { lib: &lib, device: &device, queue: &queue, format: render::TARGET_FORMAT, size: s.size, dt: 1.0 / 60.0, player, world, origin: [1000.0, 1000.0], group: Vec::new(), sticks: [0.0; 4], keyboard: true, words: words.as_ref(), vui: None, quest_marks: &[] };
         map.frame(&cx);
     }
     if let Some(w) = &map.world {

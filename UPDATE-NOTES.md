@@ -5,6 +5,17 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · Quest markers on the map
+- The map shows where your quests are, on a server that sends them (ours does;
+  Sandstorm sends none): a gold "!" at each NPC with a quest you can take now,
+  for your class, race and level, and a "?" where a quest you are on needs
+  you: the NPC to see next, or the nearest places of the creatures to hunt.
+- Point at a mark (or tap it, or pan the map's cross onto it with a
+  controller) to see its quests: their names and levels, how the offer starts
+  or what the step asks, and the rewards or what you still need.
+- ○ on the map (J on a keyboard, or the map's Quests button) hides them for
+  now; Extended's new Map page turns them off for good.
+
 ## 2026-10-26 · Lightning you can see
 - Lightning spells shoot their bolts in the world now: a wizard's Static Bolt, Shocking
   Strike, Lightning Blast, Thunderbolt and the rest, and every other spell whose visual

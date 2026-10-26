@@ -118,6 +118,12 @@ pub fn waypoint_radius(size: (u32, u32)) -> (f32, f32) {
     (lines(size, 4.5), lines(size, 1.0))
 }
 
+/// A quest mark's badge (`quests`), its half side and its outline, in window
+/// pixels: a glyph's room, at every zoom.
+pub fn quest_radius(size: (u32, u32)) -> (f32, f32) {
+    (lines(size, 6.5), lines(size, 1.0))
+}
+
 /// How near the waypoint a click must be to clear it, in window pixels:
 /// twice its diamond, and a finger's miss more (`pointer::FINGER` frame
 /// pixels) for a tap.

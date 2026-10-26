@@ -2407,6 +2407,8 @@ impl Play {
         self.agree_entity_view();
         // Mana Bars: a server that offers others' power told whether to send it
         self.session.agree_power_bars(crate::settings::client().mana_bars);
+        // Quest Markers: a server that offers quest marks told whether to send them
+        self.session.agree_quest_marks(crate::settings::client().quest_markers);
         self.drop_dead_target_info();
         if self.has_self() {
             self.auto_attack_tick(walker, now);
@@ -6749,6 +6751,7 @@ impl Play {
             keyboard: self.keyboard,
             words: self.words.as_ref(),
             vui: self.hud.as_ref().map(|h| &h.0),
+            quest_marks: if crate::settings::client().quest_markers { &self.session.quest_marks } else { &[] },
         };
         self.map.frame(&cx);
     }

@@ -536,7 +536,7 @@ impl WndOptions {
     /// VSync (26) turn over, VSync natively only (a page's stays on with
     /// sound 9: the browser paces it); Name Distance (27) by tens from the
     /// game's 22 to 200 (`step_name_distance`); Text (30) goes between Sharp and
-    /// Smooth; Target of Target (31), Mana Bars (42), Update Notices (29), Overlapping
+    /// Smooth; Target of Target (31), Mana Bars (42), Quest Markers (43), Update Notices (29), Overlapping
     /// Names (34, Hide and Show), Mipmaps (35) and Loading Screens (38,
     /// Longer and Instant) turn over;
     /// Output Device (32) goes round the system default and the devices
@@ -611,6 +611,9 @@ impl WndOptions {
                     // Mana Bars: the server told from the next frame
                     // (`Play::agree_power_bars`)
                     42 => c.mana_bars = !c.mana_bars,
+                    // Quest Markers: the server told from the next frame
+                    // (`Play::agree_quest_marks`), the map's marks drawn or not
+                    43 => c.quest_markers = !c.quest_markers,
                     // Overlapping Names: the plates kept from the next
                     // frame (`play::labels`)
                     34 => c.overlapping_names = !c.overlapping_names,
@@ -1051,7 +1054,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 27] = [
+const EXTENDED_ITEMS: [(i32, &str); 28] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1079,6 +1082,7 @@ const EXTENDED_ITEMS: [(i32, &str); 27] = [
     (37, "Environment"),
     (38, "Loading Screens"),
     (42, "Mana Bars"),
+    (43, "Quest Markers"),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1104,7 +1108,7 @@ struct Category {
 
 /// Extended's categories, in its menu's order (the user's: "Extended, then
 /// Video, UI, Controller, etc."), each a page of `PAGE_MOST` rows at most.
-const CATEGORIES: [Category; 7] = [
+const CATEGORIES: [Category; 8] = [
     Category { name: "Video", items: VIDEO, note: Note::None },
     Category { name: "World", items: &[20, 35, 36, 37, 25], note: Note::None },
     Category { name: "UI", items: &[22, 31, 42, 29, 30, 38], note: Note::None },
@@ -1112,6 +1116,8 @@ const CATEGORIES: [Category; 7] = [
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
     Category { name: "Characters", items: &[12, 23, 24, 27, 34], note: Note::Server },
     Category { name: "Sound", items: SOUND, note: Note::Output },
+    // the map's own (UI holds its six): the quest marks a server sends
+    Category { name: "Map", items: &[43], note: Note::None },
 ];
 
 /// Video's rows: natively Display first (F3 20261024-201507: full screen was
@@ -1186,6 +1192,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         29 => on_off(c.update_notices),
         31 => on_off(c.target_of_target),
         42 => on_off(c.mana_bars),
+        43 => on_off(c.quest_markers),
         34 => wide(if c.overlapping_names { "Show" } else { "Hide" }),
         35 => on_off(c.mipmaps),
         36 => on_off(c.flora),
@@ -1700,8 +1707,20 @@ mod tests {
         press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!((w.row, cues.last()), (1, Some(&9)), "Sound's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
+        // Map: Quest Markers
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.cat_sel, cues.last()), (6, Some(&9)), "Sound, the last category");
+        press(&mut w, &mut o, key::CROSS, &mut cues);
+        assert_eq!((w.cat, w.item), (Some(7), 43), "Map, Quest Markers");
+        assert!(settings::client().quest_markers, "on: the map's marks where the server sends them");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::client().quest_markers, cues.last()), (false, Some(&11)), "off");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(settings::client().quest_markers, "and back: two values");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (0, Some(&9)), "Map's last row");
+        press(&mut w, &mut o, key::TRIANGLE, &mut cues);
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.cat_sel, cues.last()), (7, Some(&9)), "Map, the last category");
         // Triangle: the menu, then closed with every setting put back
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!((w.page, w.sel), (-1, 3), "the menu, on Extended");
