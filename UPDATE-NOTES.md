@@ -5,6 +5,15 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · A Stats Box, and N for the minimap
+- A Stats Box: your stats (Str to Cha, AC, max HP and power, the resists) in a small box
+  under your effect icons. A buff that raises a stat shows it in blue, a debuff that lowers
+  one in red. It is off unless you turn it on: Options > Extended > UI > Stats Box, or press
+  B. Click or tap it to open your Summary.
+- Press N to show or hide the minimap. Both keys can be moved, or given a controller
+  button, on the Controls page.
+- Options > Extended: Text (Sharp or Smooth) is on the Video page now.
+
 ## 2026-10-26 · Spell visuals on yourself and on a target at once
 - On the Help match spell visuals page, "Lands on: the caster and a second human" plays a
   visual both ways at once: the human on the left casts it on itself while the one beside
