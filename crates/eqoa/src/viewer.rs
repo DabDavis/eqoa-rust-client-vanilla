@@ -2550,9 +2550,6 @@ impl App {
         }
     }
 
-    /// A click in play (a finger's tap with `finger`): a window takes it
-    /// first (`Play::point`); else the creature under it targeted (through
-    /// the last frame's view), and with a double or right click talked to.
     /// A finger's event (`WindowEvent::Touch`, or `EQOA_TOUCHES`'s) at
     /// window pixels `at`, to whose it is from where it came down: the touch
     /// screen's pad's, in the world and on the game's screens before it (a
@@ -2677,6 +2674,9 @@ impl App {
         }
     }
 
+    /// A click in play (a finger's tap with `finger`): a window takes it
+    /// first (`Play::point`); else the creature under it targeted (through
+    /// the last frame's view), and with a double or right click talked to.
     fn click(&mut self, c: crate::mouse::Click, finger: bool) {
         let (Some(p), Some(g), Some(vp)) = (self.play.as_mut(), self.gfx.as_ref(), self.last_view) else { return };
         let size = (g.config.width, g.config.height);
