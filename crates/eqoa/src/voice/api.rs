@@ -6,7 +6,7 @@
 //! one sendonly audio transceiver, four recvonly ones (the slots) and a data
 //! channel "eqoa"), and the voices it plays.
 //!
-//! The types and the trait are PROTOCOL.md's (voice v2) and crate `voice`'s
+//! The types and the trait are crate `voice`'s
 //! (`voice_engine` here): natively its `NativeEngine`, in a page this
 //! client's `web::voice`; `take_events` has a default body, so an engine
 //! without it still fits.

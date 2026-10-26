@@ -6,7 +6,7 @@
 //! RTP packet with its audio level), one a slot reading what the server forwards, and the data
 //! channel's reader. The game's output mixes the slots in (`VoiceOutput`).
 //!
-//! The offer, in this order (PROTOCOL.md's agreed details): the sendonly audio, the four recvonly
+//! The offer, in this order (as go-eqoa-server's forwarding server reads it): the sendonly audio, the four recvonly
 //! slots, the data channel "eqoa". ICE takes every candidate type (the server's are public; the
 //! TURN servers from 0x7E07 are a fallback, over UDP: webrtc-rs has no TURN over TCP, so a
 //! `?transport=tcp` URL is left to the page's browser). Only UDP sockets are opened, so no
@@ -748,7 +748,7 @@ impl Connection {
             .await
             .map_err(e)?;
         let pc: Arc<dyn PeerConnection> = Arc::new(pc);
-        // the offer's order (PROTOCOL.md): our voice, the four slots, the data channel
+        // the offer's order (the forwarding server's): our voice, the four slots, the data channel
         let ssrc = random_u32().max(1);
         let track = Arc::new(TrackLocalStaticRTP::new(MediaStreamTrack::new(
             "eqoa-voice".to_owned(),
@@ -928,7 +928,7 @@ async fn read_channel(channel: Arc<dyn DataChannel>, session: u64, commands: mps
 mod tests {
     use super::*;
 
-    /// The levels' scales (PROTOCOL.md's agreed details): 0..1 = (dBFS + 60) / 60 for the game,
+    /// The levels' scales (the forwarding server's): 0..1 = (dBFS + 60) / 60 for the game,
     /// −dBov for the wire, (60 − L) / 60 for a server level; silence is 0 and 127.
     #[test]
     fn the_level_scales() {

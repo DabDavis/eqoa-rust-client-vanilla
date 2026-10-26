@@ -1,5 +1,5 @@
 //! End to end against a REAL voice server: go-eqoa-server's forwarding server through its demo
-//! WebSocket (PROTOCOL.md's demo mode: a hello naming one "d:" channel, then the signals in parts
+//! WebSocket (its demo mode: a hello naming one "d:" channel, then the signals in parts
 //! as 0x7E13 carries them), engines with the game's network settings and a tone for a microphone.
 //! Ignored by default, since CI has no server:
 //!
@@ -8,8 +8,8 @@
 //! EQOA_VOICE_DEMO=ws://<host>:18030/api/voice/demo cargo test -p voice -- --ignored live
 //! ```
 //!
-//! The default URL is voicesrv18's private server (127.0.0.30). Its ICE over TCP cannot be
-//! checked there: 127.0.0.30 is not loopback's own address.
+//! The default URL is a private server on 127.0.0.30. Its ICE over TCP cannot be checked
+//! there: 127.0.0.30 is not loopback's own address.
 
 use crate::tests::{power, rms, tone};
 use crate::{IceServer, NativeEngine, SignalKind, VoiceEngine, VoiceEvent, VoiceOutput};
@@ -83,7 +83,7 @@ impl Player {
             roster: Vec::new(),
             started: false,
         };
-        p.send(json!({"hello": {"name": name, "server": "voicenat18", "channels": [channel]}}));
+        p.send(json!({"hello": {"name": name, "server": "live-test", "channels": [channel]}}));
         p
     }
 
@@ -212,7 +212,7 @@ impl Demo {
 /// tone heard by the listener (its frequency, and the roster's talker on a slot and talking),
 /// nothing at all by the third (the control), and push-to-talk off silences it.
 #[test]
-#[ignore = "needs a running voice server: EQOA_VOICE_DEMO, default voicesrv18's private one"]
+#[ignore = "needs a running voice server: EQOA_VOICE_DEMO, default a private one on 127.0.0.30"]
 fn live_demo_server() {
     let url = std::env::var("EQOA_VOICE_DEMO").unwrap_or_else(|_| "ws://127.0.0.30:18030/api/voice/demo".to_owned());
     let (here, there) = (channel(), channel());

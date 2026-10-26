@@ -1,5 +1,5 @@
 //! What a client derives itself, the same on every client and never the
-//! password it comes from: a locked room's H (PROTOCOL.md's voice lobby: the
+//! password it comes from: a locked room's H (go-eqoa-server's voice lobby: the
 //! server keeps H while the room lives and never sees the password), and the
 //! demo's group channel (eqoaclassic's voice server used from a server with no
 //! voice of its own, `demo`). A name is folded as every client folds it:

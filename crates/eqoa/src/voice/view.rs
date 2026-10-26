@@ -1,6 +1,6 @@
-//! What the voice window (lane voicegui18's `voicewnd`, the user: "add voice
-//! chat gui in addition to the chat commands, so it is easy") reads and asks
-//! of voice: PROTOCOL.md's "The voice window's interface", exactly. It reads
+//! What the voice window (`voicewnd`; the user: "add voice chat gui in
+//! addition to the chat commands, so it is easy") reads and asks of voice,
+//! and nothing more. It reads
 //! a `VoiceView` (`Play::voice_view`) and asks through `Play::voice_set_mode`,
 //! `voice_refresh_lobby`, `voice_join`, `voice_leave`, `voice_set_volume` and
 //! `voice_set_muted`, the same functions the `/voice` commands call.

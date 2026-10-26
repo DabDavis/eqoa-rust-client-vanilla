@@ -7,7 +7,7 @@
 //! the camera still and hides the HUD's right side. It opens from the
 //! Controls page's Voice Window key (O), `/voice` alone in the chat, or a click
 //! on the HUD's mic badge (`Badge`), and reads only voice's view
-//! (`Play::voice_view`, PROTOCOL.md's "The voice window's interface"); what it
+//! (`Play::voice_view`, `voice::view`'s types); what it
 //! asks goes through the same `Play::voice_*` calls the `/voice` commands use.
 //!
 //! At its top, voice itself: Voice Chat (Off, Push to Talk, Open Mic; Off or

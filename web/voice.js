@@ -4,8 +4,8 @@
 // server sends (0x7E11) as an ICE server (iceTransportPolicy "all"). No player
 // connects to another: every voice goes through the server.
 //
-// The client makes the offer, in this m-line order (PROTOCOL.md's agreed
-// details): one sendonly audio transceiver (the microphone: Opus, mono, DTX,
+// The client makes the offer, in this m-line order (as go-eqoa-server's
+// forwarding server reads it): one sendonly audio transceiver (the microphone: Opus, mono, DTX,
 // the RFC 6464 audio-level header extension the browser adds for audio), then
 // four recvonly ones (the slots: slot i is the i-th recvonly m-line), then the
 // data channel "eqoa": {"send": B} out (bit 0 the group, bit 1 the room; 0

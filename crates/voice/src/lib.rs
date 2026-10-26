@@ -18,7 +18,7 @@
 //! from it `{"slots": [[slot, peer], ...]}` (who is on each slot) and `{"levels": [[peer, level],
 //! ...]}` (RFC 6464's −dBov, 0 the loudest, 127 silence) for the speaking marks. The levels the
 //! engine hands the game, the microphone's and each peer's, are 0..1 = (dBFS + 60) / 60, so a
-//! server level L is (60 − L) / 60 (PROTOCOL.md's agreed details). A bye from the server ends the
+//! server level L is (60 − L) / 60 (as go-eqoa-server's forwarding server sends them). A bye from the server ends the
 //! connection; the game's voice then stops the engine and starts it again, with a backoff.
 //!
 //! Natively, [`NativeEngine`] is WebRTC (webrtc-rs: ICE over UDP, DTLS-SRTP, SCTP), Opus through

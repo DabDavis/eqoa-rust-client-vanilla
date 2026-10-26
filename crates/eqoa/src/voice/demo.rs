@@ -10,7 +10,7 @@
 //! transport differs (`Socket`: the page's WebSocket, natively tungstenite on
 //! rustls).
 //!
-//! The JSON (PROTOCOL.md's demo mode), a message an object of one key: the
+//! The JSON (go-eqoa-server's demo mode), a message an object of one key: the
 //! client sends `{"hello": {"name", "server", "channels": [id]}}` once the
 //! socket is open, `{"channels": [...]}` when the group changes, `{"room":
 //! {"op": "join", "name", "hash", "unlisted"}}`, `{"room": {"op": "leave"}}`,

@@ -2,8 +2,8 @@
 //! Extended page's Voice Chat, Voice Demo and Voice Volume, the push-to-talk
 //! keys), who the player is to the demo, the manager's frame and its lines in
 //! the chat; the `/voice` commands; and the voice window's interface
-//! (PROTOCOL.md's "The voice window's interface", lane voicegui18's
-//! `voicewnd`), which the commands go through too.
+//! (`voice::view`, what `voicewnd` reads and asks), which the commands go
+//! through too.
 
 use super::Play;
 use crate::settings::VoiceChat;
