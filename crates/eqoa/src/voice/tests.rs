@@ -246,6 +246,13 @@ fn the_lobby_and_its_lines() {
     game.lobby = Some(Vec::new());
     v.frame(&mut game, &mut demo, ptt(false, false), 2_050);
     assert!(v.take_lines().is_empty(), "a lobby not asked for is not said");
+    v.refresh_lobby(false);
+    v.frame(&mut game, &mut demo, ptt(false, false), 2_052);
+    assert_eq!(game.ops, [ROOM_LIST, ROOM_LIST], "the window's asks");
+    game.lobby = Some(vec![WireRoom { name: "Raid".into(), members: 3, locked: false }]);
+    v.frame(&mut game, &mut demo, ptt(false, false), 2_054);
+    assert!(v.take_lines().is_empty(), "and is not said: the window shows it");
+    assert_eq!(v.view(ptt(false, false), 2_054).lobby, [VoiceRoomInfo { name: "Raid".into(), members: 3, locked: false }]);
     game.states = vec![(ROOM_REFUSED, "Bad".into())];
     v.frame(&mut game, &mut demo, ptt(false, false), 2_060);
     assert_eq!(v.take_lines(), ["Voice: that name is refused."]);

@@ -64,9 +64,10 @@ impl Play {
         }
     }
 
-    /// The lobby asked for again.
+    /// The lobby asked for again, for the window to show (not said in the
+    /// chat: `/voice rooms` says it).
     pub fn voice_refresh_lobby(&mut self) {
-        self.voice.voice.refresh_lobby();
+        self.voice.voice.refresh_lobby(false);
     }
 
     /// A room joined, made when it is not there: locked with `password` (""

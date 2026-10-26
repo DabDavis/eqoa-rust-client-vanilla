@@ -555,7 +555,7 @@ impl Voice {
             return;
         }
         match c {
-            Command::Rooms => self.refresh_lobby(),
+            Command::Rooms => self.refresh_lobby(true),
             Command::Join { name, password, unlisted } => self.join(&name, password.as_deref().unwrap_or(""), unlisted),
             Command::Leave => self.leave(),
             Command::Who => self.who(),
@@ -564,10 +564,11 @@ impl Voice {
         }
     }
 
-    /// The lobby asked for (`/voice rooms`, the window), said when it comes.
-    pub fn refresh_lobby(&mut self) {
+    /// The lobby asked for: `/voice rooms`'s said in the chat when it comes
+    /// (`say`), the window's shown by the window alone.
+    pub fn refresh_lobby(&mut self, say: bool) {
         self.ops.push(Op::List);
-        self.lobby_asked = true;
+        self.lobby_asked |= say;
     }
 
     /// Room `name` joined, made when it is not there (locked with
