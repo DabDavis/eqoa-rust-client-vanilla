@@ -5,6 +5,14 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · Lightning you can see
+- Lightning spells shoot their bolts in the world now: a wizard's Static Bolt, Shocking
+  Strike, Lightning Blast, Thunderbolt and the rest, and every other spell whose visual
+  has lightning, yours and other players' and creatures', whoever they hit. The bolts
+  were worked out all along but drawn where nothing is; the spell preview always showed
+  them.
+- Weapons leave their swing trails in the world now too, hidden the same way until now.
+
 ## 2026-10-26 · Target of Target above the target
 - Target of Target (Options > Extended > UI) now sits just above the target's bar, with the
   health and power of whoever your target is targeting under it, as a group member's are:
