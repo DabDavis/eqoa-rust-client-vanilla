@@ -134,9 +134,6 @@ pub const ROWS: &[Row] = &[
     row("art", "Art: Frontiers' or 2002's", &["f9"], Pad::None, "Everything drawn swaps between Frontiers' art and the 2002 disc's (EverQuest Online Adventures, USA, SLUS-20470), at once; the first time, it asks for that disc."),
     row("hide_ui", "Hide UI", &["h"], Pad::None, "Hides everything over the world: the HUD, the chat, the names over heads, the damage numbers and the target's rings. Again, or any window coming up, shows them."),
     row("controls", "Controls", &["f1"], Pad::None, "This page, from play."),
-    row("push_to_talk", "Voice: push to talk (group)", &["v"], Pad::None, "Held, your group hears you (Options, Extended, Sound: Voice Chat)."),
-    row("push_to_talk_room", "Voice: push to talk (room)", &["n"], Pad::None, "Held, your voice room hears you (/voice join <room>)."),
-    row("voice_window", "Voice: the voice chat window", &["o"], Pad::None, "Who is talking, your group's and your room's volumes, the lobby's rooms, a room joined or made. Again, or Escape, closes it; /voice in the chat opens it too."),
 ];
 
 /// A row's index by its name.
@@ -763,10 +760,9 @@ mod tests {
                 names.push(if pat == "NamedKey::" { name_of(&Key::Named(named(&n))).unwrap_or(n.to_lowercase()) } else { n.to_lowercase() });
             }
         }
-        // 1 to 6 (`matches!(c.as_str(), "1" | ...)`), the held keys the
-        // walk and the camera read (`controls`, `game_keys`) and voice's
-        // push-to-talk keys (`voice_keys`)
-        names.extend(["1", "2", "3", "4", "5", "6", "w", "s", "a", "d", "i", "j", "k", "l", "pageup", "pagedown", "home", "end", "v", "n"].map(String::from));
+        // 1 to 6 (`matches!(c.as_str(), "1" | ...)`) and the held keys the
+        // walk and the camera read (`controls`, `game_keys`)
+        names.extend(["1", "2", "3", "4", "5", "6", "w", "s", "a", "d", "i", "j", "k", "l", "pageup", "pagedown", "home", "end"].map(String::from));
         // read only while typing (the soft keyboard's key, an editor's
         // done), never bound (full screen, the fly camera's speed)
         let not_rows = ["insert", "f11", "shift"];
@@ -847,6 +843,19 @@ mod tests {
         let changed: Vec<&&str> = all.iter().filter(|k| moved.alias(k) != Alias::Same).collect();
         assert_eq!(changed, vec![&"e", &"7"]);
         assert_eq!((moved.alias("7"), moved.alias("e")), (Alias::To("e"), Alias::Nothing));
+    }
+
+    /// A layout kept by a build with voice chat (its push-to-talk rows and
+    /// the voice window's, gone with it: voice chat was only a test) still
+    /// loads: those lines are left out and written back no more, and the rest
+    /// of the file is read. The control: a known row's line beside them is.
+    #[test]
+    fn a_layout_with_the_voice_rows_still_loads() {
+        let b = Binds::from_text("key.push_to_talk=b\nkey.push_to_talk_room=\nkey.voice_window=p\nbutton.push_to_talk=l3\nkey.attack=v\n");
+        assert_eq!(b.key(row_named("attack").unwrap()), Some("v"), "the known line read");
+        let text = b.to_text();
+        assert!(!text.contains("push_to_talk") && !text.contains("voice"), "{text}");
+        assert!(text.contains("key.attack=v"), "{text}");
     }
 
     /// Moving a row: to a free key it goes there and its key is free; to

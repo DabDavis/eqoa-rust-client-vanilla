@@ -723,8 +723,6 @@ pub fn shot_with(
                     if let Some(k) = k {
                         if p.search_open() {
                             p.search_key(k, down);
-                        } else if p.voice_window_owns() {
-                            p.voice_window_key(k, down);
                         } else if p.bank_owns() {
                             p.bank_key(k, down);
                         } else if p.npcw_owns() {
@@ -2181,14 +2179,6 @@ impl App {
     /// or zoom. The arrows, which walk and turn in the game, stay 0: here
     /// WASD walks and the arrows are the quick menus' d-pad (the user's
     /// choice, 2026-10-20; the game has W/S/A/D on the quick menus).
-    /// The push-to-talk keys held: the group's and the room's (`voice`).
-    /// A bound key reaches the dispatch as its row's own (`binds`), so these
-    /// are V and N whatever the player moved them to; a key typed into an
-    /// edit box is never held.
-    fn voice_keys(&self) -> [bool; 2] {
-        [self.held.contains("v"), self.held.contains("n")]
-    }
-
     fn game_keys(&self) -> [f32; 8] {
         if self.play.as_ref().is_some_and(|p| p.is_dead()) {
             return [0.0; 8];
@@ -3029,45 +3019,6 @@ impl App {
             }
             return;
         }
-        // The voice window (`voicewnd`), while it is up over play: the
-        // arrows (held, they go on), Enter or E (X), Escape, Backspace or O
-        // (it closes, as O opened it), Q (square: a member muted), ` and Tab
-        // (L1 and R1: the parts), Page Up and Page Down, Home and End. Every
-        // other key goes to it too, for nothing, but the push-to-talk keys
-        // (V and N, `voice_keys`), which go on to be held: the window's
-        // microphone level shows them working.
-        if let Some(p) = self.play.as_mut()
-            && p.typing.is_none()
-            && p.voice_window_owns()
-            && !matches!(held_name(&event.logical_key).as_deref(), Some("v" | "n"))
-        {
-            use crate::startmenu::keys as K;
-            let down = event.state == ElementState::Pressed;
-            let (k, repeats) = match &event.logical_key {
-                Key::Named(NamedKey::ArrowUp) => (Some(K::UP), true),
-                Key::Named(NamedKey::ArrowDown) => (Some(K::DOWN), true),
-                Key::Named(NamedKey::ArrowLeft) => (Some(K::LEFT), true),
-                Key::Named(NamedKey::ArrowRight) => (Some(K::RIGHT), true),
-                Key::Named(NamedKey::PageUp) => (Some(21), true),
-                Key::Named(NamedKey::PageDown) => (Some(22), true),
-                Key::Named(NamedKey::Home) => (Some(24), false),
-                Key::Named(NamedKey::End) => (Some(23), false),
-                Key::Named(NamedKey::Enter) => (Some(K::CROSS), false),
-                Key::Character(c) if c.eq_ignore_ascii_case("e") => (Some(K::CROSS), false),
-                Key::Character(c) if c.eq_ignore_ascii_case("q") => (Some(133), false),
-                Key::Character(c) if c.as_str() == "`" || c.as_str() == "~" => (Some(140), false),
-                Key::Named(NamedKey::Tab) => (Some(142), false),
-                Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => (Some(K::ESCAPE), false),
-                Key::Character(c) if c.eq_ignore_ascii_case("o") => (Some(K::ESCAPE), false),
-                _ => (None, false),
-            };
-            if let Some(k) = k
-                && (repeats || !(down && event.repeat))
-            {
-                p.voice_window_key(k, down);
-            }
-            return;
-        }
         // The bank (mode 11): the arrows, Enter or E (X), Escape
         // (triangle); the auction form's editor takes the keyboard.
         if let Some(p) = self.play.as_mut()
@@ -3481,12 +3432,6 @@ impl App {
                 // keyboard table, `map.rs`; dead, it closes again).
                 (None, Key::Character(c)) if p.mode == 0 && c.eq_ignore_ascii_case("m") && !event.repeat => {
                     p.map.show();
-                    return;
-                }
-                // O: the voice window (the client's own, `voicewnd`; free in
-                // the game's keyboard table), in play and the manual camera
-                (None, Key::Character(c)) if (p.mode == 0 || p.mode == 38) && c.eq_ignore_ascii_case("o") && !event.repeat => {
-                    p.toggle_voice_window();
                     return;
                 }
                 // H: Hide UI (the client's own, `hideui`; free in the
@@ -4424,11 +4369,6 @@ impl ApplicationHandler for App {
                 let look_free = !self.play.as_ref().is_some_and(|p| p.is_dead()) && self.play.as_ref().is_none_or(|p| p.look_free());
                 let steer = look_free && self.walker.as_ref().is_some_and(|w| self.mouse.steer(w.cam.camera_mode));
                 let game_keys = self.game_keys();
-                // voice's push-to-talk keys, held (their rows' keys, as bound)
-                let talk = self.voice_keys();
-                if let Some(p) = self.play.as_mut() {
-                    p.voice.keys = talk;
-                }
                 let now = self.clock.elapsed().as_millis() as i64;
                 let Some(g) = &mut self.gfx else { return };
                 let body_at = self.body_at;

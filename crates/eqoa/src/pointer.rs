@@ -76,12 +76,6 @@ impl Hits {
     pub fn at(&self, p: [f32; 2]) -> Option<i32> {
         self.0.iter().rev().find(|(r, _)| inside(r.map(|v| v as f32), p, 0.0)).map(|h| h.1)
     }
-
-    /// Every rectangle noted with what it is, in the order drawn (tests).
-    #[cfg(test)]
-    pub fn all(&self) -> &[([i32; 4], i32)] {
-        &self.0
-    }
 }
 
 /// Rows `row` .. `row + rows` of window `w` from `x`, `width` wide, as

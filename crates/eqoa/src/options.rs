@@ -547,9 +547,7 @@ impl WndOptions {
     /// Names (34, Hide and Show), Mipmaps (35) and Loading Screens (38,
     /// Longer and Instant) turn over;
     /// Output Device (32) goes round the system default and the devices
-    /// listed (`step_output`); Display (33) turns the window over (`display`);
-    /// Voice Chat (47) goes round Off, Push to Talk and Open Mic, Voice Demo
-    /// (49) turns over and Voice Volume (50) slides by tenths to 200%. A
+    /// listed (`step_output`); Display (33) turns the window over (`display`). A
     /// slider (`slider_at`) makes its own
     /// sound, as a volume does; every other row sound 11.
     fn change(&mut self, o: &mut GameOptions, d: i32, cues: &mut Vec<i32>, ups: &mut Vec<OptionsUp>) {
@@ -644,16 +642,6 @@ impl WndOptions {
                     37 => c.environment = !c.environment,
                     // Map Markers: the map's camps and coaches from its next frame (`map::markers`)
                     43 => c.map_markers = !c.map_markers,
-                    // Voice Chat round Off, Push to Talk and Open Mic, Voice
-                    // Demo over: the server told from the next frame (`voice`)
-                    47 => {
-                        let all = crate::settings::VoiceChat::ALL;
-                        let at = all.iter().position(|&v| v == c.voice).unwrap_or(0);
-                        c.voice = all[(at + if d < 0 { all.len() - 1 } else { 1 }) % all.len()];
-                    }
-                    49 => c.voice_demo = !c.voice_demo,
-                    // Voice Volume: by tenths, 0 to twice the voices' own
-                    50 => slide(&mut c.voice_volume, 0, crate::settings::VOICE_VOLUME_MAX, 1),
                     // Output Device: the sound opened there from the next
                     // frame (`audio::retarget`)
                     32 => step_output(&mut c, &crate::audio::outputs().listed.map(|l| l.1).unwrap_or_default(), d),
@@ -1067,7 +1055,6 @@ impl WndOptions {
         match CATEGORIES[c].note {
             Note::Reads => Some(crate::input::reads()),
             Note::Server => self.server_note.clone().filter(|_| matches!(self.item, 23 | 24)),
-            Note::Output if matches!(self.item, 47 | 49) => Some(voice_note(self.item)),
             Note::Output if cfg!(target_arch = "wasm32") => None,
             Note::Output => Some(match crate::audio::playing() {
                 Some(d) => format!("Plays on {d}"),
@@ -1087,7 +1074,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 34] = [
+const EXTENDED_ITEMS: [(i32, &str); 31] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1119,9 +1106,6 @@ const EXTENDED_ITEMS: [(i32, &str); 34] = [
     (44, "Minimap"),
     (45, "Quest Markers"),
     (46, "Quest Tracker"),
-    (47, "Voice Chat"),
-    (49, "Voice Demo"),
-    (50, "Voice Volume"),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1169,13 +1153,12 @@ const VIDEO: &[i32] = &[33, 13, 14, 26, 38];
 #[cfg(target_arch = "wasm32")]
 const VIDEO: &[i32] = &[13, 14, 26, 38];
 
-/// Sound's rows: natively Output Device after Sound in Background (a page
-/// plays where the browser does), then voice chat's: Voice Chat, Voice Demo
-/// and Voice Volume (F3 pass 18).
+/// Sound's rows: natively Output Device after Sound in Background; a page
+/// plays where the browser does.
 #[cfg(not(target_arch = "wasm32"))]
-const SOUND: &[i32] = &[21, 32, 47, 49, 50];
+const SOUND: &[i32] = &[21, 32];
 #[cfg(target_arch = "wasm32")]
-const SOUND: &[i32] = &[21, 47, 49, 50];
+const SOUND: &[i32] = &[21];
 
 /// Extended's menu (`draw_categories`): the categories from its first row,
 /// the legend two under the last, as the options menu's six and its legend
@@ -1250,12 +1233,6 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         36 => on_off(c.flora),
         37 => on_off(c.environment),
         43 => on_off(c.map_markers),
-        47 => match c.voice {
-            crate::settings::VoiceChat::Off => on_off(false),
-            crate::settings::VoiceChat::PushToTalk => wide("Push to Talk"),
-            crate::settings::VoiceChat::OpenMic => wide("Open Mic"),
-        },
-        49 => on_off(c.voice_demo),
         38 => wide(if c.loading_longer { "Longer" } else { "Instant" }),
         30 => wide(match c.text {
             render::ui::TextFilter::Sharp => "Sharp",
@@ -1265,22 +1242,6 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         33 => wide(if crate::display::full() { "Full Screen" } else { "Window" }),
         _ => return None,
     })
-}
-
-/// What the Sound page says beside its legend on a voice row: the keys that
-/// talk (the Controls page's), and what the demo is (the user's: "labelled in
-/// the UI as a demo").
-fn voice_note(item: i32) -> String {
-    if item == 49 {
-        return "eqoaclassic's: anyone who knows your group or room can join".to_string();
-    }
-    // natively nothing cancels the voices' echo (crate `voice`)
-    if !cfg!(target_arch = "wasm32") && crate::settings::client().voice == crate::settings::VoiceChat::OpenMic {
-        return "Open Mic: wear headphones (no echo cancelling here)".to_string();
-    }
-    let b = crate::settings::binds();
-    let key = |id: &str| crate::binds::row_named(id).and_then(|r| b.key(r)).map_or("-".to_string(), crate::binds::display);
-    format!("Hold {} (group) or {} (room) to talk", key("push_to_talk"), key("push_to_talk_room"))
 }
 
 /// Output Device's value for the system's default ("System Default" is too
@@ -1313,8 +1274,6 @@ fn slider_at(item: i32) -> Option<(f32, Option<u16>)> {
         23 => (at(c.entity_slots as f32, ENTITY_SLOTS_GAME as f32, ENTITY_SLOTS_MAX as f32), Some(c.entity_slots as u16)),
         24 => (at(c.entity_view as f32, ENTITY_VIEW_GAME as f32, ENTITY_VIEW_MAX as f32), Some(c.entity_view)),
         27 => name_distance_slider(&c),
-        // Voice Volume: 0 to 200%, the voices' own (100%) in the middle
-        50 => (c.voice_volume as f32 / crate::settings::VOICE_VOLUME_MAX as f32, Some(c.voice_volume as u16 * 10)),
         _ => return None,
     })
 }
@@ -1795,44 +1754,8 @@ mod tests {
         assert_eq!(w.item, 32, "Output Device");
         assert_eq!(value_text(&vui, 32), Some(wide(SYSTEM_DEFAULT)), "the system's default");
         assert!(w.page_note(6).is_some_and(|n| n.starts_with("Plays on ") || n == "No output now"), "where it plays, beside Back");
-        // Voice Chat: Off (the user's), round Push to Talk and Open Mic
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!(w.item, 47, "Voice Chat");
-        assert_eq!((settings::client().voice, value_text(&vui, 47)), (settings::VoiceChat::Off, Some(wide(vui.words.get(552, vui.language)))), "off until turned on");
-        assert_eq!(w.page_note(6).as_deref(), Some("Hold V (group) or N (room) to talk"), "the keys that talk, beside Back");
-        press(&mut w, &mut o, key::RIGHT, &mut cues);
-        assert_eq!((settings::client().voice, value_text(&vui, 47), cues.last()), (settings::VoiceChat::PushToTalk, Some(wide("Push to Talk")), Some(&11)));
-        press(&mut w, &mut o, key::RIGHT, &mut cues);
-        assert_eq!(value_text(&vui, 47), Some(wide("Open Mic")));
-        press(&mut w, &mut o, key::RIGHT, &mut cues);
-        assert_eq!(settings::client().voice, settings::VoiceChat::Off, "and round");
-        press(&mut w, &mut o, key::LEFT, &mut cues);
-        assert_eq!(settings::client().voice, settings::VoiceChat::OpenMic, "left goes round the other way");
-        press(&mut w, &mut o, key::RIGHT, &mut cues);
-        // Voice Demo: off, turned over, said to be a demo
-        press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!(w.item, 49, "Voice Demo");
-        assert!(w.page_note(6).is_some_and(|n| n.contains("anyone")), "a demo, and said so");
-        press(&mut w, &mut o, key::RIGHT, &mut cues);
-        assert!(settings::client().voice_demo);
-        press(&mut w, &mut o, key::LEFT, &mut cues);
-        assert!(!settings::client().voice_demo);
-        // Voice Volume: a slider by tenths, 100% the voices' own, to 200%
-        press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!(w.item, 50, "Voice Volume");
-        assert_eq!(slider_at(50), Some((0.5, Some(100))));
-        for _ in 0..10 {
-            press(&mut w, &mut o, key::RIGHT, &mut cues);
-        }
-        assert_eq!(slider_at(50), Some((1.0, Some(200))));
-        press(&mut w, &mut o, key::RIGHT, &mut cues);
-        assert_eq!(cues.last(), Some(&9), "200% its end");
-        for _ in 0..10 {
-            press(&mut w, &mut o, key::LEFT, &mut cues);
-        }
-        assert_eq!(settings::client().voice_volume, settings::VOICE_VOLUME_GAME);
-        press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (4, Some(&9)), "Sound's last row");
+        assert_eq!((w.row, cues.last()), (1, Some(&9)), "Sound's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         // Quests: Quest Markers
         press(&mut w, &mut o, key::DOWN, &mut cues);
