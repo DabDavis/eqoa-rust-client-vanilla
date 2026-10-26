@@ -5,6 +5,21 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · Sound that stays clean, the training dummies' string, and remembered discs
+- Sound no longer turns crunchy after a busy fight: with many spells sounding at once, a
+  sound that was loading at that moment could be stored with part of it missing and play
+  garbled for the rest of the session (a PS2 does the same), and a sound's stop could be
+  lost and leave it looping. If a crunch ever comes back, press F3 while it lasts: the
+  report now says whether any sound is stored wrong and whether your computer's sound
+  output fell behind.
+- The training dummies, and a few other tree-shaped creatures, no longer trail a thin
+  string from their hand down to the ground: this client drew the last points of their
+  hands at their feet.
+- In a browser: tick "Remember my disc images in this browser" (Chrome, Edge and other
+  Chromium-based browsers) and pick your discs once; next time they're put back for you,
+  or offered on a button when the browser wants to ask first. The images stay on your
+  computer.
+
 ## 2026-10-25 · Mana bars, rumble for PlayStation controllers, and multiboxing fixes
 - Mana bars: on a server that sends them (eqoaclassic does), each group member,
   your target and your target's target show a power bar under their health.
