@@ -5,6 +5,12 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · An icon of its own
+- The game has an icon of its own now: a disc, on the program and its window. Once it
+  has read your disc image it shows the game's own memory card icon instead, the head a
+  PlayStation 2 showed for the EQOA save (drawn from your disc and kept for the next
+  start). The page has the disc as its icon too.
+
 ## 2026-10-26 · Masteries, epics and master-class spells to match
 - The Help match spell visuals page now lists the class masteries, the level 60 epics and
   the master classes' spells too, each tagged as such; search "epic", "mastery" or a master
