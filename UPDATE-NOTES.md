@@ -5,6 +5,16 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · Spell visuals on yourself and on a target at once
+- On the Help match spell visuals page, "Lands on: the caster and a second human" plays a
+  visual both ways at once: the human on the left casts it on itself while the one beside
+  it casts it on a second human, so a buff, a debuff and a damage spell can be told apart
+  without switching back and forth. The page remembers what you picked.
+- The training dummy is gone from that preview: its small size shrank what landed on it.
+  A harmful spell now lands on a second human.
+- W and S step to the visual before and after in the list from anywhere on the page, the
+  preview too, except while you type in a box.
+
 ## 2026-10-26 · A server's patch in the browser too
 - In the browser the game now takes the server's patch, as the program does: on
   Sandstorm, its damage colours, robes and armour, menus, words and the rest, where the
