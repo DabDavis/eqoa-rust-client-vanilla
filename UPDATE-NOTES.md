@@ -5,6 +5,16 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · A minimap
+- A minimap in the top right, under the name plate of the menus beside it: the map's own
+  picture of the land round you, north up, with you as the arrow in the middle, your group in
+  their colours, the creatures and players near you as dots in their names' colours, your
+  target ringed and your waypoint (on its edge while it is farther than it shows).
+- Click or tap it to open the map; the mouse wheel over it zooms it in and out. It goes
+  away with the rest of the HUD under Hide UI (H) and while a window is open.
+- Turn it off under Options > Extended > UI > Minimap. Loading Screens moved from UI to the
+  Video page to make room.
+
 ## 2026-10-26 · Target of Target above the target
 - Target of Target (Options > Extended > UI) now sits just above the target's bar, with the
   health and power of whoever your target is targeting under it, as a group member's are:
