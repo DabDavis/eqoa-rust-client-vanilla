@@ -5,6 +5,14 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · A server's patch in the browser too
+- In the browser the game now takes the server's patch, as the program does: on
+  Sandstorm, its damage colours, robes and armour, menus, words and the rest, where the
+  page played every server as the plain disc before. The patch comes from the server's
+  own website (https), so a server whose site serves its patch files gives it; one that
+  does not is played as before.
+- The page keeps the patch between visits, so the next start fetches only what changed.
+
 ## 2026-10-26 · Community markers on the map
 - The map shows places other players suggested and a GM accepted: a pin each, coloured by what it
   marks (a landmark, a camp, a quest's place, a merchant, a way to travel, a danger), its name
