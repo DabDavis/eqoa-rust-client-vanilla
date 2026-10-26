@@ -5,6 +5,25 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · Voice chat
+- Talk to your group by voice: Options > Extended > Sound > Voice Chat, Push to Talk
+  (hold V) or Open Mic. It is off until you turn it on, and nothing is asked of your
+  microphone before then. Voice Volume sets how loud the voices are, up to twice.
+- A lobby of voice rooms anyone can make: `/voice join <room>` joins one, or makes it;
+  add a password to lock it (`/voice join <room> <password>`: the password never leaves
+  your computer). `/voice unlisted <room>` makes one only those who know its name can
+  find. `/voice rooms` lists them, `/voice who` says who is in yours, `/voice leave`
+  leaves it. Hold N to talk to your room (Open Mic talks to both).
+- A speaking mark lights on each groupmate's bar while they talk; the room's speakers
+  show beside your own frame. Click a mark to mute someone, again to hear them.
+- The voices go through the server, never from player to player, so nobody sees your
+  address. The keys are on the Controls page, to move as you like.
+- On a server without voice (Sandstorm), Voice Demo (same page) uses eqoaclassic's
+  voice server instead: a demo, open to anyone who knows your group's names or your
+  room's name.
+- In the game itself (not the page) there is no echo cancelling yet: wear headphones
+  for Open Mic.
+
 ## 2026-10-26 · XP camps, coaches, routes and towns on the map
 - The map (M) marks the popular XP camps with a red XP badge and every coach with the
   horseshoe the stables wear (the one on Freeport's stable sign, read from your own disc).

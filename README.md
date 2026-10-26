@@ -41,8 +41,18 @@ or a browser (each described where it lives below):
   Smooth, Loading Screens: Longer or Instant, Mana Bars), Controller (Controller Focus, Capture Controller), Camera (Distance,
   Turn Speed, Screen Shake), Characters (Level of Detail, NPC/PC Display and
   Distance, Name Distance, Overlapping Names) and Sound (Sound in Background, Output Device:
-  the system's default, followed when it changes, or a device by its name), and
-  the rows below.
+  the system's default, followed when it changes, or a device by its name; Voice Chat,
+  Voice Demo, Voice Volume), and the rows below.
+- **Voice chat**, on a server that offers it (go-eqoa-server does): off until
+  turned on (Extended > Sound > Voice Chat: Push to Talk, or Open Mic), your
+  group heard while V is held and a lobby room's while N is, rooms anyone
+  makes, open, locked by a password that never leaves your computer, or
+  unlisted (`/voice rooms`, `/voice join <room> [password]`, `/voice unlisted
+  <room> [password]`, `/voice leave`, `/voice who`); a speaking mark on each
+  groupmate's bar (a click mutes them) and the room's speakers beside your own;
+  every voice through the server's own forwarding server, so no player sees
+  another's address. Where the server offers none (Sandstorm), Voice Demo uses
+  eqoaclassic's, open to anyone who knows your group's names or a room's name.
 - **More ability bars**: the Extended page's Ability Bars adds a third and a
   fourth, five abilities each, on the HUD and in the spell book, on a server
   that keeps abilities past the game's ten slots.
