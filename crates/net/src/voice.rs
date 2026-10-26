@@ -1,42 +1,53 @@
-//! go-eqoa-server's group, guild and room voice (F3 pass 18; no retail
+//! go-eqoa-server's group voice and its voice lobby (F3 pass 18; no retail
 //! message): the server offers it, a client that has the Voice Chat option on
 //! says so, and the server then sends a fallback relay (its TURN server,
-//! credentials it minted) and the roster of whom the player may hear. The
-//! voice itself goes through the server's own forwarding server
-//! (go-eqoa-server's `internal/voice`), ONE WebRTC connection a player, its
-//! signaling riding the game connection: no player sees another's address. A
-//! PS2 ignores all of it, as it does [`crate::session::OP_ENTITY_VIEW`]'s offer.
+//! credentials it minted) and the roster of whom the player may hear: its
+//! group, and the room of the lobby it is in (rooms anyone makes, open or
+//! locked by a password the server never sees). The voice itself goes through
+//! the server's own forwarding server (go-eqoa-server's `internal/voice`), ONE
+//! WebRTC connection a player, its signaling riding the game connection: no
+//! player sees another's address. A PS2 ignores all of it, as it does
+//! [`crate::session::OP_ENTITY_VIEW`]'s offer.
 //!
 //! On the wire, beside the opcode: integers little-endian, a string a u16 byte
 //! length and its UTF-8.
 //! - [`OP_VOICE`]: the server's offer, a u32 1, once the player is in the
-//!   world; the client's answer, u32 flags ([`FLAG_ON`] voice on, [`FLAG_GUILD`]
-//!   in its guild's voice channel; 0 off), at once after the offer and
-//!   whenever the options change.
+//!   world; the client's answer, u32 [`FLAG_ON`] (voice on) or 0, at once
+//!   after the offer and whenever the option changes.
 //! - [`OP_VOICE_CONFIG`]: a u8 count, each { url, username, credential }, then
 //!   a u32 time to live in seconds (sent again before it runs out).
 //! - [`OP_VOICE_ROSTER`]: a u8 count, each { u32 peer, name, u8 channels }:
 //!   whom the player may hear, each by its voice id (stable for its session),
 //!   `channels` what joins the two ([`CHANNEL_GROUP`] a groupmate,
-//!   [`CHANNEL_GUILD`] both in their guild's channel, [`CHANNEL_ROOM`] both in
-//!   one room). The whole set each time.
+//!   [`CHANNEL_ROOM`] in the player's room). The whole set each time.
 //! - [`OP_VOICE_SIGNAL`], both ways, between the client and the forwarding
 //!   server: u32 seq (the sender's message number), u8 kind (1 the client's
 //!   offer, 2 the server's answer, 3 an ICE candidate, 4 bye), u16 part, u16
 //!   parts, then a chunk of the message's text (at most [`CHUNK`] bytes), the
 //!   parts put back together by seq.
-//! - [`OP_VOICE_ROOM`], the client's: a room's id ("r:" and 32 hex digits,
-//!   derived from its name and password, which the server never sees), or
-//!   empty to leave it.
+//! - [`OP_VOICE_ROOM`], the client's: u8 op, 1 join (a string name, a string
+//!   H: the lowercase hex of SHA-256("eqoa-voice-room\n" + the name folded +
+//!   "\n" + the password), empty for an open room, then u8 flags,
+//!   [`ROOM_UNLISTED`] the room made unlisted when this join makes it), 2
+//!   leave, 3 the lobby.
+//! - [`OP_VOICE_LOBBY`]: u16 count, each { name, u16 members, u8 locked }:
+//!   every listed room, after a list and after the player's own join or
+//!   leave (an unlisted one is found only by its name).
+//! - [`OP_VOICE_ROOM_STATE`]: u8 result ([`ROOM_IN`], [`ROOM_WRONG_PASSWORD`],
+//!   [`ROOM_REFUSED`], [`ROOM_LEFT`]) and the room's name.
 
 use crate::stream::{Reader, Writer};
 use std::collections::HashMap;
 
-pub const OP_VOICE: u16 = 0x7E06;
-pub const OP_VOICE_CONFIG: u16 = 0x7E07;
-pub const OP_VOICE_ROSTER: u16 = 0x7E08;
-pub const OP_VOICE_SIGNAL: u16 = 0x7E09;
-pub const OP_VOICE_ROOM: u16 = 0x7E0A;
+// a block of their own: 0x7E00 is the entity view's, 0x7E01-0x7E02 the
+// power bars', 0x7E03-0x7E06 the quest marks' and tracker's
+pub const OP_VOICE: u16 = 0x7E10;
+pub const OP_VOICE_CONFIG: u16 = 0x7E11;
+pub const OP_VOICE_ROSTER: u16 = 0x7E12;
+pub const OP_VOICE_SIGNAL: u16 = 0x7E13;
+pub const OP_VOICE_ROOM: u16 = 0x7E14;
+pub const OP_VOICE_LOBBY: u16 = 0x7E15;
+pub const OP_VOICE_ROOM_STATE: u16 = 0x7E16;
 
 /// The most UTF-8 bytes of a message one [`OP_VOICE_SIGNAL`] carries.
 pub const CHUNK: usize = 900;
@@ -46,16 +57,24 @@ pub const CHUNK: usize = 900;
 pub const MAX_PARTS: u16 = 64;
 const MAX_PENDING: usize = 32;
 
-/// [`OP_VOICE`]'s answer: voice on, and in the guild's voice channel (alone
-/// it means nothing).
+/// [`OP_VOICE`]'s answer: voice on.
 pub const FLAG_ON: u32 = 1;
-pub const FLAG_GUILD: u32 = 2;
 /// [`OP_VOICE_ROSTER`]'s channels (and the forwarding server's `send`): a
-/// groupmate, one in the guild's voice channel with this player, one in its
-/// room.
+/// groupmate, one in the player's room.
 pub const CHANNEL_GROUP: u8 = 1;
-pub const CHANNEL_GUILD: u8 = 2;
-pub const CHANNEL_ROOM: u8 = 4;
+pub const CHANNEL_ROOM: u8 = 2;
+
+/// [`OP_VOICE_ROOM`]'s ops.
+pub const ROOM_JOIN: u8 = 1;
+pub const ROOM_LEAVE: u8 = 2;
+pub const ROOM_LIST: u8 = 3;
+/// A join's flags: the room it makes is unlisted (a later join's is ignored).
+pub const ROOM_UNLISTED: u8 = 1;
+/// [`OP_VOICE_ROOM_STATE`]'s results.
+pub const ROOM_IN: u8 = 0;
+pub const ROOM_WRONG_PASSWORD: u8 = 1;
+pub const ROOM_REFUSED: u8 = 2;
+pub const ROOM_LEFT: u8 = 3;
 
 /// A signal's kinds (the `kind` byte).
 pub const KIND_OFFER: u8 = 1;
@@ -76,8 +95,16 @@ pub struct WireIce {
 pub struct WireMember {
     pub peer: u32,
     pub name: String,
-    /// [`CHANNEL_GROUP`], [`CHANNEL_GUILD`], [`CHANNEL_ROOM`], or more than one
+    /// [`CHANNEL_GROUP`], [`CHANNEL_ROOM`] or both
     pub channels: u8,
+}
+
+/// A room of the lobby, as [`OP_VOICE_LOBBY`] names it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WireRoom {
+    pub name: String,
+    pub members: u16,
+    pub locked: bool,
 }
 
 /// A string: a u16 byte length and the UTF-8 (cut at a character's end to
@@ -143,11 +170,65 @@ pub fn decode_roster(r: &mut Reader) -> Option<Vec<WireMember>> {
     (!r.error).then_some(roster)
 }
 
-/// [`OP_VOICE_ROOM`]: a room's id, or empty to leave the room.
-pub fn encode_room(id: &str) -> Vec<u8> {
+/// [`OP_VOICE_ROOM`]'s join: the room's name, H (empty: an open room) and
+/// whether a room it makes is unlisted.
+pub fn encode_join(name: &str, hash: &str, unlisted: bool) -> Vec<u8> {
     let mut w = Writer::op(OP_VOICE_ROOM);
-    put_str(&mut w, id);
+    w.u8(ROOM_JOIN);
+    put_str(&mut w, name);
+    put_str(&mut w, hash);
+    w.u8(if unlisted { ROOM_UNLISTED } else { 0 });
     w.data
+}
+
+/// [`OP_VOICE_ROOM`]'s leave or list.
+pub fn encode_room_op(op: u8) -> Vec<u8> {
+    let mut w = Writer::op(OP_VOICE_ROOM);
+    w.u8(op);
+    w.data
+}
+
+/// [`OP_VOICE_LOBBY`]'s body (a server's, for tests).
+pub fn encode_lobby(rooms: &[WireRoom]) -> Vec<u8> {
+    let mut w = Writer::op(OP_VOICE_LOBBY);
+    w.bytes(&(rooms.len().min(u16::MAX as usize) as u16).to_le_bytes());
+    for r in rooms {
+        put_str(&mut w, &r.name);
+        w.bytes(&r.members.to_le_bytes()).u8(r.locked as u8);
+    }
+    w.data
+}
+
+/// [`OP_VOICE_LOBBY`] read past its opcode, none when it is cut short.
+pub fn decode_lobby(r: &mut Reader) -> Option<Vec<WireRoom>> {
+    let n = r.u16() as usize;
+    let mut rooms = Vec::with_capacity(n.min(256));
+    for _ in 0..n {
+        let name = get_str(r);
+        let members = r.u16();
+        let locked = r.u8() != 0;
+        if r.error {
+            return None;
+        }
+        rooms.push(WireRoom { name, members, locked });
+    }
+    (!r.error).then_some(rooms)
+}
+
+/// [`OP_VOICE_ROOM_STATE`]'s body (a server's, for tests).
+pub fn encode_room_state(result: u8, name: &str) -> Vec<u8> {
+    let mut w = Writer::op(OP_VOICE_ROOM_STATE);
+    w.u8(result);
+    put_str(&mut w, name);
+    w.data
+}
+
+/// [`OP_VOICE_ROOM_STATE`] read past its opcode: the result and the room's
+/// name, none when it is cut short or the result is not one of the four.
+pub fn decode_room_state(r: &mut Reader) -> Option<(u8, String)> {
+    let result = r.u8();
+    let name = get_str(r);
+    (!r.error && result <= ROOM_LEFT).then_some((result, name))
 }
 
 /// A message's text cut into parts of at most [`CHUNK`] bytes, each at a
@@ -278,24 +359,45 @@ mod tests {
             WireIce { url: "turn:104.156.237.19:3479?transport=tcp".into(), username: "1761500000:77".into(), credential: "c3VyZQ==".into() },
         ];
         let m = encode_config(&ice, 86400);
-        assert_eq!(&m[..3], &[0x07, 0x7E, 2]);
+        assert_eq!(&m[..3], &[0x11, 0x7E, 2]);
         assert_eq!(&m[3..5], &(ice[0].url.len() as u16).to_le_bytes(), "a string's length is a u16");
         assert_eq!(decode_config(&mut body(&m)), Some((ice.clone(), 86400)));
         assert_eq!(decode_config(&mut body(&m[..m.len() - 1])), None, "cut short");
 
         let roster = vec![
             WireMember { peer: 9, name: "Jibrish".into(), channels: CHANNEL_GROUP },
-            WireMember { peer: 12, name: "Dabsha".into(), channels: CHANNEL_GROUP | CHANNEL_GUILD | CHANNEL_ROOM },
+            WireMember { peer: 12, name: "Dabsha".into(), channels: CHANNEL_GROUP | CHANNEL_ROOM },
         ];
         let m = encode_roster(&roster);
-        assert_eq!(m, [&[0x08, 0x7E, 2, 9, 0, 0, 0, 7, 0][..], b"Jibrish", &[1, 12, 0, 0, 0, 6, 0], b"Dabsha", &[7]].concat());
+        assert_eq!(m, [&[0x12, 0x7E, 2, 9, 0, 0, 0, 7, 0][..], b"Jibrish", &[1, 12, 0, 0, 0, 6, 0], b"Dabsha", &[3]].concat());
         assert_eq!(decode_roster(&mut body(&m)), Some(roster));
         assert_eq!(decode_roster(&mut body(&m[..m.len() - 1])), None, "cut short");
         assert_eq!(decode_roster(&mut body(&encode_roster(&[]))), Some(Vec::new()), "the empty set");
+    }
 
-        let id = format!("r:{}", "0f".repeat(16));
-        assert_eq!(encode_room(&id), [&[0x0A, 0x7E, 34, 0][..], id.as_bytes()].concat());
-        assert_eq!(encode_room(""), [0x0A, 0x7E, 0, 0], "leaving: the empty string");
+    /// The lobby's messages as the contract spells them: a join with its
+    /// name and H, an open room's H empty, leave and list a byte; the lobby
+    /// and a room's state read back; cut short or a result past 3, neither
+    /// is taken (the controls).
+    #[test]
+    fn the_lobby_s_messages() {
+        let h = "ab".repeat(32);
+        assert_eq!(encode_join("Raid", &h, false), [&[0x14, 0x7E, 1, 4, 0][..], b"Raid", &[64, 0], h.as_bytes(), &[0]].concat());
+        assert_eq!(encode_join("Raid", "", false), [&[0x14, 0x7E, 1, 4, 0][..], b"Raid", &[0, 0, 0]].concat(), "an open room: H empty");
+        assert_eq!(encode_join("Raid", "", true), [&[0x14, 0x7E, 1, 4, 0][..], b"Raid", &[0, 0, ROOM_UNLISTED]].concat(), "unlisted: the flags' bit 0");
+        assert_eq!(encode_room_op(ROOM_LEAVE), [0x14, 0x7E, 2]);
+        assert_eq!(encode_room_op(ROOM_LIST), [0x14, 0x7E, 3]);
+        let rooms = vec![WireRoom { name: "Guild Hall".into(), members: 12, locked: true }, WireRoom { name: "Raid".into(), members: 3, locked: false }];
+        let m = encode_lobby(&rooms);
+        assert_eq!(&m[..4], &[0x15, 0x7E, 2, 0], "a u16 count");
+        assert_eq!(decode_lobby(&mut body(&m)), Some(rooms));
+        assert_eq!(decode_lobby(&mut body(&m[..m.len() - 1])), None, "cut short");
+        assert_eq!(decode_lobby(&mut body(&encode_lobby(&[]))), Some(Vec::new()));
+        let st = encode_room_state(ROOM_WRONG_PASSWORD, "Guild Hall");
+        assert_eq!(st, [&[0x16, 0x7E, 1, 10, 0][..], b"Guild Hall"].concat());
+        assert_eq!(decode_room_state(&mut body(&st)), Some((ROOM_WRONG_PASSWORD, "Guild Hall".into())));
+        assert_eq!(decode_room_state(&mut body(&encode_room_state(4, "x"))), None, "a result past 3");
+        assert_eq!(decode_room_state(&mut body(&st[..st.len() - 1])), None, "cut short");
     }
 
     /// A long description goes in parts of at most CHUNK bytes, cut at a
@@ -307,7 +409,7 @@ mod tests {
         let text: String = (0..2500).map(|i| if i % 97 == 0 { 'é' } else { (b'a' + (i % 26) as u8) as char }).collect();
         let msgs = encode_signal(41, KIND_OFFER, &text);
         assert_eq!(msgs.len(), 3);
-        assert_eq!(&msgs[1][..11], &[0x09, 0x7E, 41, 0, 0, 0, KIND_OFFER, 1, 0, 3, 0], "seq, kind, part, parts: no peer");
+        assert_eq!(&msgs[1][..11], &[0x13, 0x7E, 41, 0, 0, 0, KIND_OFFER, 1, 0, 3, 0], "seq, kind, part, parts: no peer");
         let mut decoded: Vec<_> = msgs.iter().map(|m| decode_signal(&mut body(m)).expect("a part")).collect();
         for (_, _, _, _, chunk) in &decoded {
             assert!(chunk.len() <= CHUNK, "{}", chunk.len());

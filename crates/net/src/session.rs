@@ -299,17 +299,19 @@ pub struct Session {
     power_bars_asked: Option<bool>,
     pub power_bars: Vec<(u32, u8)>,
     /// Voice ([`crate::voice`]): whether the server offered it on this
-    /// connection, what it was last told (the flags, the room), the fallback
-    /// ICE servers and their time to live it last sent (none before it sent
-    /// any since voice was on), the roster it last sent, the signals come in
-    /// whole and not yet taken (`take_voice_signals`), the parts of those
-    /// still coming, and this client's next message number.
+    /// connection, what it was last told, the fallback ICE servers and their
+    /// time to live it last sent (none before it sent any since voice was
+    /// on), the roster and the lobby it last sent, the rooms' answers not yet
+    /// taken, the signals come in whole and not yet taken
+    /// (`take_voice_signals`), the parts of those still coming, and this
+    /// client's next message number.
     pub voice_offer: bool,
     voice_asked: Option<u32>,
-    voice_room_asked: Option<String>,
     pub voice_ice: Option<Vec<crate::voice::WireIce>>,
     pub voice_ttl: u32,
     pub voice_roster: Vec<crate::voice::WireMember>,
+    pub voice_lobby: Option<Vec<crate::voice::WireRoom>>,
+    voice_room_states: Vec<(u8, String)>,
     voice_in: Vec<(u8, String)>,
     voice_parts: crate::voice::Reassembly,
     voice_seq: u32,
@@ -381,10 +383,11 @@ impl Session {
             power_bars: Vec::new(),
             voice_offer: false,
             voice_asked: None,
-            voice_room_asked: None,
             voice_ice: None,
             voice_ttl: 0,
             voice_roster: Vec::new(),
+            voice_lobby: None,
+            voice_room_states: Vec::new(),
             voice_in: Vec::new(),
             voice_parts: crate::voice::Reassembly::default(),
             voice_seq: 0,
@@ -512,19 +515,20 @@ impl Session {
         self.send(&w.data);
     }
 
-    /// Voice Chat and Guild Voice: a server that offered voice
-    /// ([`crate::voice::OP_VOICE`]) is told this client's flags
-    /// ([`crate::voice::FLAG_ON`], [`crate::voice::FLAG_GUILD`]), at once and
-    /// whenever they change; one that made no offer is told nothing. Off, the
-    /// members, servers and signals it sent are forgotten.
+    /// Voice Chat: a server that offered voice ([`crate::voice::OP_VOICE`])
+    /// is told whether this client has it on ([`crate::voice::FLAG_ON`]), at
+    /// once and whenever that changes; one that made no offer is told
+    /// nothing. Off, the roster, the lobby, the servers and the signals it
+    /// sent are forgotten.
     pub fn agree_voice(&mut self, flags: u32) {
-        let flags = if flags & crate::voice::FLAG_ON == 0 { 0 } else { flags & (crate::voice::FLAG_ON | crate::voice::FLAG_GUILD) };
+        let flags = flags & crate::voice::FLAG_ON;
         if flags == 0 {
             self.voice_roster.clear();
+            self.voice_lobby = None;
+            self.voice_room_states.clear();
             self.voice_ice = None;
             self.voice_in.clear();
             self.voice_parts.clear();
-            self.voice_room_asked = None;
         }
         if !self.voice_offer || self.voice_asked == Some(flags) {
             return;
@@ -540,15 +544,25 @@ impl Session {
         self.voice_asked.is_some_and(|f| f & crate::voice::FLAG_ON != 0)
     }
 
-    /// The room the player is in (its id, [`crate::voice::OP_VOICE_ROOM`]),
-    /// or none: told the server once voice is on, and whenever it changes.
-    pub fn agree_voice_room(&mut self, id: Option<&str>) {
-        let id = id.unwrap_or("");
-        if !self.voice_on() || self.voice_room_asked.as_deref() == Some(id) || (self.voice_room_asked.is_none() && id.is_empty()) {
-            return;
+    /// The voice lobby ([`crate::voice::OP_VOICE_ROOM`]), while voice is on:
+    /// a room joined (its name and H, empty for an open one; unlisted, when
+    /// the join makes it), left, or the lobby asked for.
+    pub fn voice_room_join(&mut self, name: &str, hash: &str, unlisted: bool) {
+        if self.voice_on() {
+            self.send(&crate::voice::encode_join(name, hash, unlisted));
         }
-        self.voice_room_asked = Some(id.to_string());
-        self.send(&crate::voice::encode_room(id));
+    }
+
+    pub fn voice_room_op(&mut self, op: u8) {
+        if self.voice_on() {
+            self.send(&crate::voice::encode_room_op(op));
+        }
+    }
+
+    /// The rooms' answers ([`crate::voice::OP_VOICE_ROOM_STATE`]: the result
+    /// and the room's name) since the last call.
+    pub fn take_voice_room_states(&mut self) -> Vec<(u8, String)> {
+        std::mem::take(&mut self.voice_room_states)
     }
 
     /// A WebRTC signal to the forwarding server
@@ -770,10 +784,11 @@ impl Session {
                 self.power_bars.clear();
                 self.voice_offer = false;
                 self.voice_asked = None;
-                self.voice_room_asked = None;
                 self.voice_ice = None;
                 self.voice_ttl = 0;
                 self.voice_roster.clear();
+                self.voice_lobby = None;
+                self.voice_room_states.clear();
                 self.voice_in.clear();
                 self.voice_parts.clear();
                 ev.push(Event::Promoted);
@@ -850,6 +865,21 @@ impl Session {
                     && self.voice_on()
                 {
                     self.voice_roster = roster;
+                }
+            }
+            crate::voice::OP_VOICE_LOBBY => {
+                if let Some(rooms) = crate::voice::decode_lobby(&mut r)
+                    && self.voice_on()
+                {
+                    self.voice_lobby = Some(rooms);
+                }
+            }
+            crate::voice::OP_VOICE_ROOM_STATE => {
+                if let Some(st) = crate::voice::decode_room_state(&mut r)
+                    && self.voice_on()
+                    && self.voice_room_states.len() < 64
+                {
+                    self.voice_room_states.push(st);
                 }
             }
             crate::voice::OP_VOICE_SIGNAL => {
@@ -1618,14 +1648,15 @@ mod tests {
         assert_eq!(answers(&mut s), [], "and nothing asked");
     }
 
-    // go-eqoa-server's voice (0x7E06-0x7E0A): nothing is told a server that
-    // made no offer; the answer goes once a change of mind, the room once
-    // voice is on and once a change; the servers and the roster are taken
-    // only while voice is on; a long signal goes in parts and one coming in
-    // parts is taken whole; off forgets them; a new connection is a new start
-    // (the controls: before the offer and after it went, nothing is sent).
+    // go-eqoa-server's voice (0x7E10-0x7E16): nothing is told a server that
+    // made no offer; the answer goes once a change of mind; the lobby's ops
+    // only while voice is on; the servers, the roster, the lobby and the
+    // rooms' answers are taken only while voice is on; a long signal goes in
+    // parts and one coming in parts is taken whole; off forgets them; a new
+    // connection is a new start (the controls: before the offer and after it
+    // went, nothing is sent).
     #[test]
-    fn voice_offer_answer_config_roster_room_and_signals() {
+    fn voice_offer_answer_config_roster_lobby_and_signals() {
         use crate::voice::*;
         let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
@@ -1633,50 +1664,46 @@ mod tests {
         s.record = Some(Vec::new());
         let ours = |s: &mut Session| -> Vec<Vec<u8>> {
             let m = s.record.replace(Vec::new()).unwrap_or_default();
-            m.into_iter().map(|(_, d)| d).filter(|d| d.len() >= 2 && d[1] == 0x7E && (6..=10).contains(&d[0])).collect()
+            m.into_iter().map(|(_, d)| d).filter(|d| d.len() >= 2 && d[1] == 0x7E && (0x10..=0x16).contains(&d[0])).collect()
         };
-        let room = format!("r:{}", "ab".repeat(16));
         s.agree_voice(FLAG_ON);
-        s.agree_voice_room(Some(&room));
+        s.voice_room_join("Raid", "", false);
         s.send_voice_signal(KIND_OFFER, "v=0");
         assert_eq!(ours(&mut s), Vec::<Vec<u8>>::new(), "no offer: nothing told, nothing signalled");
-        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x06, 0x7E, 1, 0, 0, 0]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x10, 0x7E, 1, 0, 0, 0]);
         assert!(s.voice_offer);
         // the config before voice is on is not taken
         let ice = vec![WireIce { url: "turn:104.156.237.19:3479?transport=udp".into(), username: "1:2".into(), credential: "x".into() }];
         deliver(&mut s, drdp::TYPE_GUARANTEED, encode_config(&ice, 600));
         assert_eq!(s.voice_ice, None, "taken before voice was on");
-        s.agree_voice_room(None);
-        assert_eq!(ours(&mut s), Vec::<Vec<u8>>::new(), "no room before voice is on");
+        s.voice_room_op(ROOM_LIST);
+        assert_eq!(ours(&mut s), Vec::<Vec<u8>>::new(), "no lobby before voice is on");
         s.agree_voice(FLAG_ON);
-        s.agree_voice(FLAG_ON);
-        assert_eq!(ours(&mut s), vec![vec![0x06, 0x7E, 1, 0, 0, 0]], "told once");
-        s.agree_voice_room(None);
-        assert_eq!(ours(&mut s), Vec::<Vec<u8>>::new(), "no room to leave: nothing");
-        s.agree_voice_room(Some(&room));
-        s.agree_voice_room(Some(&room));
-        assert_eq!(ours(&mut s), vec![encode_room(&room)], "the room told once");
-        s.agree_voice_room(None);
-        assert_eq!(ours(&mut s), vec![encode_room("")], "and left");
-        s.agree_voice(FLAG_ON | FLAG_GUILD);
-        assert_eq!(ours(&mut s), vec![vec![0x06, 0x7E, 3, 0, 0, 0]], "and the guild's channel");
-        s.agree_voice(FLAG_GUILD);
-        assert_eq!(ours(&mut s), vec![vec![0x06, 0x7E, 0, 0, 0, 0]], "the guild's alone is off");
-        s.agree_voice(FLAG_ON);
-        assert_eq!(ours(&mut s), vec![vec![0x06, 0x7E, 1, 0, 0, 0]]);
+        s.agree_voice(FLAG_ON | 2);
+        assert_eq!(ours(&mut s), vec![vec![0x10, 0x7E, 1, 0, 0, 0]], "told once; no other bit");
+        s.voice_room_join("Raid", "", true);
+        s.voice_room_op(ROOM_LEAVE);
+        s.voice_room_op(ROOM_LIST);
+        assert_eq!(ours(&mut s), vec![encode_join("Raid", "", true), vec![0x14, 0x7E, 2], vec![0x14, 0x7E, 3]]);
         deliver(&mut s, drdp::TYPE_GUARANTEED, encode_config(&[], 600));
         assert_eq!(s.voice_ice, Some(Vec::new()), "a server with no fallback relay still answered");
         deliver(&mut s, drdp::TYPE_GUARANTEED, encode_config(&ice, 600));
         let roster = vec![WireMember { peer: 9, name: "Jibrish".into(), channels: CHANNEL_GROUP }];
         deliver(&mut s, drdp::TYPE_GUARANTEED, encode_roster(&roster));
         assert_eq!((s.voice_ice.clone(), s.voice_ttl, s.voice_roster.clone()), (Some(ice.clone()), 600, roster.clone()));
+        let rooms = vec![WireRoom { name: "Raid".into(), members: 2, locked: false }];
+        deliver(&mut s, drdp::TYPE_GUARANTEED, encode_lobby(&rooms));
+        deliver(&mut s, drdp::TYPE_GUARANTEED, encode_room_state(ROOM_IN, "Raid"));
+        assert_eq!(s.voice_lobby, Some(rooms.clone()));
+        assert_eq!(s.take_voice_room_states(), [(ROOM_IN, "Raid".to_string())]);
+        assert!(s.take_voice_room_states().is_empty(), "taken once");
 
         // out: a description of 2,000 bytes in three parts, one seq
         let sdp: String = "a".repeat(2000);
         s.send_voice_signal(KIND_OFFER, &sdp);
         let out = ours(&mut s);
         assert_eq!(out.len(), 3);
-        assert!(out.iter().all(|m| m[..2] == [0x09, 0x7E]));
+        assert!(out.iter().all(|m| m[..2] == [0x13, 0x7E]));
         let seqs: Vec<u32> = out.iter().map(|m| u32::from_le_bytes(m[2..6].try_into().unwrap())).collect();
         assert!(seqs.iter().all(|&q| q == seqs[0]), "one message number");
         // in: the parts out of order, taken whole once
@@ -1689,16 +1716,15 @@ mod tests {
         assert!(s.take_voice_signals().is_empty(), "taken once");
 
         s.agree_voice(0);
-        assert_eq!(ours(&mut s), vec![vec![0x06, 0x7E, 0, 0, 0, 0]], "and off");
-        assert!(s.voice_roster.is_empty() && s.voice_ice.is_none(), "off: forgotten");
+        assert_eq!(ours(&mut s), vec![vec![0x10, 0x7E, 0, 0, 0, 0]], "and off");
+        assert!(s.voice_roster.is_empty() && s.voice_ice.is_none() && s.voice_lobby.is_none(), "off: forgotten");
         deliver(&mut s, drdp::TYPE_GUARANTEED, encode_roster(&roster));
-        assert!(s.voice_roster.is_empty(), "the roster is not taken while off");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, encode_lobby(&rooms));
+        deliver(&mut s, drdp::TYPE_GUARANTEED, encode_room_state(ROOM_LEFT, "Raid"));
+        assert!(s.voice_roster.is_empty() && s.voice_lobby.is_none() && s.take_voice_room_states().is_empty(), "none taken while off");
         s.send_voice_signal(KIND_BYE, "");
-        s.agree_voice_room(Some(&room));
+        s.voice_room_join("Raid", "", false);
         assert_eq!(ours(&mut s), Vec::<Vec<u8>>::new(), "nothing signalled, no room while off");
-        s.agree_voice(FLAG_ON);
-        s.agree_voice_room(Some(&room));
-        assert_eq!(ours(&mut s), vec![vec![0x06, 0x7E, 1, 0, 0, 0], encode_room(&room)], "on again: the room told again");
 
         deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
         assert!(!s.voice_offer, "a new connection, no offer yet");
