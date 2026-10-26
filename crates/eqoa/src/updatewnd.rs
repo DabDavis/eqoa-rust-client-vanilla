@@ -294,6 +294,20 @@ impl NotesWnd {
         self.drag.take().is_some()
     }
 
+    /// What frame point `p` is on, as last drawn: the list, elsewhere on
+    /// the window (the choices among it), or nothing of it.
+    pub fn part(&self, p: [f32; 2]) -> Option<crate::update::OfferPart> {
+        let inside = |r: [i32; 4]| p[0] >= r[0] as f32 && p[0] < r[2] as f32 && p[1] >= r[1] as f32 && p[1] < r[3] as f32;
+        let (c, s) = (self.window.center, self.window.size);
+        if inside(self.list) {
+            Some(crate::update::OfferPart::List)
+        } else if inside([c[0] - s[0] / 2, c[1] - s[1] / 2, c[0] + s[0] / 2, c[1] + s[1] / 2]) {
+            Some(crate::update::OfferPart::Window)
+        } else {
+            None
+        }
+    }
+
     /// `OnDrawSelf`: the window, the heading, the list and its scroll bar,
     /// the question and the choices; `left_ms` until it is left standing,
     /// the last ten seconds counted down by the choices.
@@ -472,5 +486,24 @@ mod tests {
         assert!(!w.drag_to([at[0], at[1] - 90.0]), "let go: no more dragging");
         assert_eq!(w.top, 3.0);
         assert!(!w.release());
+    }
+
+    /// What a finger is put down on (`part`): the list, which it drags; the
+    /// window's choices and the rest of it, where it taps; off the window,
+    /// the game's (the touch screen's pad keeps it). The control: a corner
+    /// of the frame, which the window does not reach, is nothing of it.
+    #[test]
+    fn a_finger_finds_the_list_the_window_or_nothing() {
+        use crate::update::OfferPart;
+        let w = opened(notes(3, 4));
+        let mid = |b: [i32; 4]| [(b[0] + b[2]) as f32 / 2.0, (b[1] + b[3]) as f32 / 2.0];
+        assert_eq!(w.part(mid(w.list)), Some(OfferPart::List));
+        assert_eq!(w.part(mid(w.choices[0])), Some(OfferPart::Window), "Restart now");
+        assert_eq!(w.part(mid(w.choices[1])), Some(OfferPart::Window), "Later");
+        // the title bar, above the list: still the window
+        let c = w.window.center;
+        assert_eq!(w.part([c[0] as f32, (c[1] - w.window.size[1] / 2 + 4) as f32]), Some(OfferPart::Window));
+        assert_eq!(w.part([2.0, 2.0]), None, "the control: the frame's corner");
+        assert_eq!(w.part([(c[0] + w.window.size[0] / 2 + 3) as f32, c[1] as f32]), None, "just right of the window");
     }
 }
