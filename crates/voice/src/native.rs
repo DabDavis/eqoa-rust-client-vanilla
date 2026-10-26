@@ -13,6 +13,7 @@
 //! firewall asks the player about a listening port (a player the game reaches over UDP reaches
 //! the voice server so too).
 
+use crate::agc::Agc;
 use crate::capture::{Capture, Mic};
 use crate::jitter::{FRAME, Playback, RATE};
 use crate::{IceServer, SignalKind, VoiceEngine, VoiceEvent};
@@ -512,8 +513,8 @@ impl Drop for NativeEngine {
 }
 
 /// Every 20 ms: the frames the microphone has (up to three, catching up a late tick; a
-/// generator's one), each one's level kept, and while anything is sent to, coded once for the
-/// connection's writer.
+/// generator's one), the microphone's through its automatic gain (`agc`; a generator's as made),
+/// each one's level kept, and while anything is sent to, coded once for the connection's writer.
 async fn encode(run: Run, mut source: Source) {
     let shared = &run.shared;
     let mut enc = match opus::Encoder::new(RATE, opus::Channels::Mono, opus::Application::Voip) {
@@ -531,6 +532,7 @@ async fn encode(run: Run, mut source: Source) {
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut frame = vec![0.0f32; FRAME];
     let mut packet = vec![0u8; 1500];
+    let mut agc = Agc::default();
     // the RTP clock: 960 a frame taken, sent or not, so a pause is a gap in time
     let mut timestamp = random_u32();
     let mut was_sending = false;
@@ -546,7 +548,10 @@ async fn encode(run: Run, mut source: Source) {
         }
         for _ in 0..per_tick {
             let got = match &mut source {
-                Source::Mic(m) => m.take_frame(&mut frame),
+                Source::Mic(m) => m.take_frame(&mut frame) && {
+                    agc.process(&mut frame);
+                    true
+                },
                 #[cfg(test)]
                 Source::Generator(g) => {
                     (g.lock().unwrap())(&mut frame);

@@ -5,6 +5,19 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · Clearer voices, new swings at once, Extended's menu
+- Voice chat in the game itself now evens out your microphone, as the page already did: a quiet
+  one (a laptop's own) comes up to a normal speaking level, a loud one is left as it is, and a
+  shout never clips. Some of you were heard far too quietly.
+- A level reached while you play counts for your swings at once: at 20 and at 35, where a round
+  gains hits, your character swings the new round straight away instead of after you log out and
+  in again.
+- Options > Extended's menu has room for all eight of its parts: Quests no longer sits on top
+  of Select and Back.
+- A problem or crash report says which version you are on and what the game found when it last
+  looked for a new one, so a game that stops updating itself tells us why; a crash report also
+  carries only that run's own details.
+
 ## 2026-10-26 · A voice chat window
 - Press O (or type /voice in the chat) for the voice chat window: turn voice chat on or off and
   pick Push to Talk or Open Mic, see whether you are connected and how loud your microphone is,

@@ -22,7 +22,8 @@
 //! connection; the game's voice then stops the engine and starts it again, with a backoff.
 //!
 //! Natively, [`NativeEngine`] is WebRTC (webrtc-rs: ICE over UDP, DTLS-SRTP, SCTP), Opus through
-//! libopus, the default microphone through cpal, and [`VoiceOutput`], which the game's own audio
+//! libopus, the default microphone through cpal with an automatic gain of our own (`agc`, as a
+//! browser gives the page's microphone), and [`VoiceOutput`], which the game's own audio
 //! output mixes in at 48 kHz, each slot at the volume of the peer on it. It runs on a runtime of
 //! its own: no call here blocks the game's frame. On wasm32 this crate is the interface alone; the
 //! page's engine is the browser's own WebRTC.
@@ -75,6 +76,8 @@ pub trait VoiceEngine {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+mod agc;
 #[cfg(not(target_arch = "wasm32"))]
 mod capture;
 #[cfg(not(target_arch = "wasm32"))]

@@ -1971,13 +1971,7 @@ impl Play {
                 Event::Teleport { world, pos, hpr, token } => self.msg_00b2(walker, world, pos, hpr, token, now as i64),
                 // 0x00F8: `m_speed`, then SetSpeed (a speed buff, a snare)
                 Event::Speed(v) => self.set_speed(v),
-                Event::LevelExp { level, exp } => {
-                    if self.dump.player.level < level {
-                        self.cues.push(crate::sound::Cue::Ui(16));
-                    }
-                    self.dump.player.level = level;
-                    self.dump.player.exp = exp;
-                }
+                Event::LevelExp { level, exp } => self.level_exp(level, exp),
                 Event::GroupRoster { ids, names } => {
                     let me = self.self_id32();
                     self.group.roster(&ids, &names, me);
@@ -6236,6 +6230,26 @@ impl Play {
         self.add_chat(text, [1.0, 0.25, 0.25, 1.0]);
     }
 
+    /// 0x0020: `m_player`'s level and experience (the dump's), a rise
+    /// heard as the game's level-up sound.
+    fn level_exp(&mut self, level: i64, exp: i64) {
+        if self.dump.player.level < level {
+            self.cues.push(crate::sound::Cue::Ui(16));
+        }
+        self.dump.player.level = level;
+        self.dump.player.exp = exp;
+    }
+
+    /// `GetSwing` as AutoAttackTick calls it: `m_player`'s class and level
+    /// (the dump's, which 0x0020 keeps: a level gained in play counts at
+    /// once, F3 20261026-135808: a character reaching 35 swung twice until a
+    /// relog, read off the world entry's copy) and what is worn, by equip
+    /// slot 14, 15, 16, 17, 18, 19, 20.
+    fn get_swing(&self, worn: [bool; 7]) -> i32 {
+        let [b14, b15, b16, b17, b18, b19, b20] = worn;
+        vi::swing::get_swing(self.dump.player.class as i32, self.dump.player.level as i32, b14, b15, b16, b18, b17, b19, b20)
+    }
+
     /// `AutoAttackTick`, each frame while auto-attack is held: when the
     /// swing is due, what is worn picks the swing (`GetSwing`), and with
     /// the target in reach its spell effect plays, the player on the target
@@ -6273,7 +6287,7 @@ impl Play {
                 _ => {}
             }
         }
-        let swing = vi::swing::get_swing(self.player.class as i32, self.player.level as i32, b14, b15, b16, b18, b17, b19, b20);
+        let swing = self.get_swing([b14, b15, b16, b17, b18, b19, b20]);
         // a swing other than the last tick's (a swap) has the timer follow
         // the server's rounds for the rest of the fight
         self.attack.swing(swing);
@@ -7629,6 +7643,32 @@ mod commands {
         let mut s = Session::connect_with(Box::new(Nowhere), ([127, 0, 0, 1], 5000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
         s.self_id = Some(0x100);
         Play::new(s, Player::default(), dump)
+    }
+
+    /// GetSwing takes `m_player`'s level, which 0x0020 writes: a warrior who
+    /// reaches 35 in play swings four times at once, not after a relog (F3
+    /// 20261026-135808), and the level-up sound plays; with a shield, two.
+    /// The control: the world entry's copy of the level stays
+    /// where it was (the swing used to read it).
+    #[test]
+    fn a_level_gained_in_play_swings_at_once() {
+        let mut p = play();
+        p.dump.player.class = 0;
+        p.dump.player.level = 34;
+        p.player.level = 34;
+        let bare = [false; 7];
+        assert_eq!(p.get_swing(bare), 4, "below 35: two hits (Attack2)");
+        p.cues.clear();
+        p.level_exp(35, 1_000);
+        assert_eq!(p.get_swing(bare), 5, "35: four hits (Attack4)");
+        assert_eq!(vi::swing::swing_effect(p.get_swing(bare)), vi::hash::hash_resource_id("Attack4"));
+        assert!(p.cues.iter().any(|c| matches!(c, crate::sound::Cue::Ui(16))), "the level-up sound");
+        let shield = [false, false, false, true, false, false, false];
+        assert_eq!(p.get_swing(shield), 2, "a shield: two (Attack3)");
+        assert_eq!(p.player.level, 34, "the world entry's copy is not what the swing reads");
+        p.cues.clear();
+        p.level_exp(35, 2_000);
+        assert!(p.cues.is_empty(), "no sound for experience alone");
     }
 
     /// The quest guide speaks only where the server does not (the user's

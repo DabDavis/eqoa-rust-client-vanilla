@@ -261,7 +261,7 @@ mod native {
             if log.exists() {
                 let _ = std::fs::rename(&log, &prev);
             }
-            ended_without_closing(d, &prev);
+            take_last_run(d, &prev);
             // the newest kept (one is offered a start)
             let old = waiting();
             for f in &old[..old.len().saturating_sub(CRASHES_KEPT)] {
@@ -632,7 +632,14 @@ mod native {
     /// one is held.
     fn write_crash(detail: &str, log: Option<(&str, &[String], &str)>, at: SystemTime) {
         let Some(d) = crashes() else { return };
-        let _ = std::fs::create_dir_all(&d);
+        write_crash_in(&d, detail, log, at, None);
+    }
+
+    /// `write_crash` into the crash directory `d`; `of` the version that
+    /// stopped as its log's first line names it ("dev-79f115e (dev)"), this
+    /// program's when it is this run's.
+    fn write_crash_in(d: &Path, detail: &str, log: Option<(&str, &[String], &str)>, at: SystemTime, of: Option<&str>) {
+        let _ = std::fs::create_dir_all(d);
         let run = RUN.try_lock().map(|r| r.clone()).unwrap_or_default();
         let (name, state, lines) = match log {
             Some((run, lines, state)) => (format!("crash-{run}.txt"), state.to_string(), lines.to_vec()),
@@ -643,9 +650,8 @@ mod native {
             }
         };
         let text = format!(
-            "EQOA native client crash report\nversion: {} ({})\nwhen: {}\nplatform: {}\n\n--- crash ---\n{}\n\n[client, as last noted]\n{}\n\n[log] last {} lines\n{}\n",
-            version(),
-            channel(),
+            "EQOA native client crash report\nversion: {}\nwhen: {}\nplatform: {}\n\n--- crash ---\n{}\n\n[client, as last noted]\n{}\n\n[log] last {} lines\n{}\n",
+            of.map_or_else(|| format!("{} ({})", version(), channel()), str::to_string),
             stamp(at),
             platform(),
             detail.trim_end(),
@@ -654,6 +660,22 @@ mod native {
             lines.join("\n")
         );
         let _ = std::fs::write(d.join(name), clean_now(&text));
+    }
+
+    /// The run before's leavings, at a start: its crash report if it did not
+    /// close (`ended_without_closing`), then the state it noted put away, so
+    /// a run that stops before noting any (a graphics driver ending the
+    /// program as its device is made) is reported with none, never with an
+    /// earlier run's (F3 crash 20261026-130834: a run that stopped at its
+    /// window came with the state of a two-and-a-half-hour run before it).
+    pub(super) fn take_last_run(dir: &Path, prev: &Path) {
+        ended_without_closing(dir, prev);
+        let _ = std::fs::remove_file(dir.join(own("state", "txt")));
+    }
+
+    #[cfg(test)]
+    pub(super) fn ended_without_closing_for_test(dir: &Path, prev: &Path) {
+        ended_without_closing(dir, prev);
     }
 
     /// The run before (this window's), if it did not close (no `CLOSED` in
@@ -667,6 +689,8 @@ mod native {
             return;
         }
         let Some(run) = first.strip_prefix("[eqoa] run ").and_then(|r| r.split(',').next()) else { return };
+        // "[eqoa] run <run>, <version> (<channel>), <os> <arch>, window <n>"
+        let of = first.split(", ").nth(1).filter(|v| v.ends_with(')'));
         if dir.join("crashes").join(format!("crash-{run}.txt")).exists() {
             return;
         }
@@ -674,7 +698,7 @@ mod native {
         let tail: Vec<String> = lines[lines.len().saturating_sub(LOG_LINES)..].iter().map(|l| l.chars().take(LOG_LINE_MAX).collect()).collect();
         // it stopped about when its log was last written, not now
         let at = std::fs::metadata(prev).and_then(|m| m.modified()).unwrap_or_else(|_| SystemTime::now());
-        write_crash(&format!("The run of {run} ended without closing: killed, or stopped by a fault no panic caught (its log's last line is the last it wrote)."), Some((run, &tail, &state)), at);
+        write_crash_in(&dir.join("crashes"), &format!("The run of {run} ended without closing: killed, or stopped by a fault no panic caught (its log's last line is the last it wrote)."), Some((run, &tail, &state)), at, of);
     }
 
     /// The crash reports waiting, oldest first.
@@ -721,13 +745,14 @@ mod native {
         let log = tail(LOG_LINES);
         let report = fit(
             &clean_now(&format!(
-                "EQOA native client problem report\nversion: {}\nchannel: {}\nname: {}\nnote: {}\n\n--- trace ---\neqoa native client trace {}\nplatform: {}\n\n[client]\n{}\n\n[controllers]\n{}\n\n[other windows]\n{}\n\n[log] last {} lines\n{}\n",
+                "EQOA native client problem report\nversion: {}\nchannel: {}\nname: {}\nnote: {}\n\n--- trace ---\neqoa native client trace {}\nplatform: {}\n{}\n\n[client]\n{}\n\n[controllers]\n{}\n\n[other windows]\n{}\n\n[log] last {} lines\n{}\n",
                 version(),
                 channel(),
                 if name.is_empty() { "-" } else { name },
                 if note.is_empty() { "-".to_string() } else { note.replace('\n', " ") },
                 stamp(SystemTime::now()),
                 platform(),
+                crate::update::describe(),
                 state.trim_end(),
                 controllers(),
                 other_windows(),
@@ -798,8 +823,12 @@ mod native {
         if out.is_empty() { "none open".into() } else { out.join("\n") }
     }
 
+    /// A crash report as sent: the file the run before wrote, the note, and
+    /// the program sending it (its version and updater: the crash may be of a
+    /// version long gone, and a player who stays on one says why).
     fn crash_body(text: &str, note: &str) -> String {
-        let report = fit(&clean_now(&format!("{}\nnote: {}\n", text.trim_end(), if note.is_empty() { "-" } else { note })), CRASH_MAX);
+        let sender = format!("[the program sending it]\nversion: {} ({})\n{}", version(), channel(), crate::update::describe());
+        let report = fit(&clean_now(&format!("{}\nnote: {}\n\n{sender}\n", text.trim_end(), if note.is_empty() { "-" } else { note })), CRASH_MAX);
         format!(
             "{{\"report\":{},\"note\":{},\"version\":{},\"platform\":{},\"channel\":{}}}",
             json_string(&report),
@@ -1393,6 +1422,42 @@ mod native {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+
+    /// A start takes the run before's leavings: a run that closed leaves no
+    /// crash, and its state is put away; the next run, stopped at its
+    /// window before noting any (F3 crash 20261026-130834), is reported with
+    /// no state and as the version its own log names, not the state of the
+    /// run before it nor the version reading it. The control: the same
+    /// unclosed log with the old state left in place (`ended_without_closing`
+    /// alone, as a start did) reports that state.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_crash_carries_its_own_runs_state_and_version() {
+        use native::take_last_run;
+        let dir = std::env::temp_dir().join(format!("eqoa-last-run-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (prev, state) = (dir.join("eqoa.prev.log"), dir.join("state.txt"));
+        let crash = |run: &str| std::fs::read_to_string(dir.join("crashes").join(format!("crash-{run}.txt")));
+        std::fs::write(&prev, "[eqoa] run 20261025-180304, dev-da994c8 (dev), windows x86_64, window 1\nplay: in the world\n[eqoa] closed\n").unwrap();
+        std::fs::write(&state, "frames 536108, clock 9020.2 s\n").unwrap();
+        take_last_run(&dir, &prev);
+        assert!(crash("20261025-180304").is_err(), "a run that closed is no crash");
+        assert!(!state.exists(), "its state put away");
+        let stopped = "[eqoa] run 20261025-205606, dev-79f115e (dev), windows x86_64, window 1\nwindow: as kept (at 952,0, 958x991), on \\\\.\\DISPLAY1 of 1 monitor(s)\n";
+        std::fs::write(&prev, stopped).unwrap();
+        take_last_run(&dir, &prev);
+        let text = crash("20261025-205606").unwrap();
+        assert!(text.contains("\nversion: dev-79f115e (dev)\n"), "{text}");
+        assert!(text.contains("[client, as last noted]\n-\n"), "{text}");
+        assert!(text.contains("[log] last 2 lines\n[eqoa] run 20261025-205606"), "{text}");
+        // the control
+        std::fs::remove_dir_all(dir.join("crashes")).unwrap();
+        std::fs::write(&state, "frames 536108, clock 9020.2 s\n").unwrap();
+        native::ended_without_closing_for_test(&dir, &prev);
+        assert!(crash("20261025-205606").unwrap().contains("[client, as last noted]\nframes 536108"), "the old state, left in place, is taken");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// A report carries the other windows' arrivals and controllers out of
     /// their own logs, the last few of those lines only; the controls: this

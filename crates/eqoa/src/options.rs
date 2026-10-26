@@ -768,11 +768,16 @@ impl WndOptions {
                 self.page = 3;
                 self.cat = None;
                 self.cat_sel = 0;
-                // the menu's window (`open`) again, where it is
+                // a window as the menu's (`open`), as tall as its categories
+                // and their legend (`CATEGORY_ROWS`), its bottom where the
+                // menu's is: the rows past the menu's nine go up, clear of
+                // the title's own menu under it
                 self.window4.close(true);
-                self.window4.init(vui, r, self.window.center, 300, 9, 0);
+                self.window4.init(vui, r, self.window.center, 300, CATEGORY_ROWS, 0);
                 self.window4.open(false);
                 self.window4.set_title(Some(&wide(EXTENDED)));
+                let bottom = |w: &Window| w.top_left()[1] + w.size[1];
+                self.window4.center[1] -= bottom(&self.window4) - bottom(&self.window);
                 return false;
             }
             4 => {
@@ -995,9 +1000,10 @@ impl WndOptions {
     }
 
     /// Extended's menu: its categories, the selected one lit, and the
-    /// legend, laid out as the options menu is (`draw_menu`) in a window as
-    /// its (`select`), over it; its rows answer a pointer only while it has
-    /// the keys (no category's page open).
+    /// legend, laid out as the options menu is (`draw_menu`: a row down, the
+    /// legend two under the last) in a window as its (`select`), over it; its
+    /// rows answer a pointer only while it has the keys (no category's page
+    /// open).
     fn draw_categories(&mut self, vui: &Vui, r: &mut dyn Raster) {
         self.window4.draw(vui, r);
         let width = self.window4.size[0];
@@ -1011,7 +1017,7 @@ impl WndOptions {
         }
         let w = |id: i32| vui.words.get(id, vui.language);
         let legend = wide(&format!("|x {}   |t {}", w(212), w(750)));
-        self.window4.text(vui, r, &legend, 40, 8, UI_COLORS[0], 0);
+        self.window4.text(vui, r, &legend, 40, CATEGORY_LEGEND, UI_COLORS[0], 0);
     }
 
     /// A category's page (`CATEGORIES`), laid out as the game's pages are (a
@@ -1170,6 +1176,14 @@ const VIDEO: &[i32] = &[13, 14, 26, 38];
 const SOUND: &[i32] = &[21, 32, 47, 49, 50];
 #[cfg(target_arch = "wasm32")]
 const SOUND: &[i32] = &[21, 47, 49, 50];
+
+/// Extended's menu (`draw_categories`): the categories from its first row,
+/// the legend two under the last, as the options menu's six and its legend
+/// on its eighth row of nine (`draw_menu`). The window was the menu's nine
+/// rows until an eighth category came, drawn on the legend's row (F3
+/// 20261026-135758: "Quests" over "Select" and "Back").
+const CATEGORY_LEGEND: i32 = CATEGORIES.len() as i32 + 2;
+const CATEGORY_ROWS: i32 = CATEGORY_LEGEND + 1;
 
 /// The most rows a category's page holds: six and the legend are as tall as
 /// nine rows, the most the options window has room for (`page_window`), so
@@ -1948,6 +1962,13 @@ mod tests {
         w.open(&vui, &r, &o);
         w.sel = 3;
         w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
+        // the menu's window holds every category and, a row clear of the
+        // last, the legend (F3 20261026-135758: the eighth on the legend's row)
+        assert_eq!(w.window4.rows, CATEGORIES.len() as i32 + 3, "the categories' window");
+        assert!(CATEGORY_LEGEND > CATEGORIES.len() as i32 + 1 && CATEGORY_LEGEND < w.window4.rows, "the legend under the last category, in the window");
+        let bottom = |w: &Window| w.top_left()[1] + w.size[1];
+        assert_eq!(bottom(&w.window4), bottom(&w.window), "its bottom where the menu's is (the title's menu under it in view)");
+        assert!(w.window4.top_left()[1] < w.window.top_left()[1] && w.window4.top_left()[1] > 24, "grown upward, its title tab on the picture");
         for (k, c) in CATEGORIES.iter().enumerate() {
             w.draw(&vui, &mut r, &o, &mut ups);
             assert_eq!((w.page, w.cat, w.cat_sel), (3, None, k as i32), "{}: on the categories", c.name);
