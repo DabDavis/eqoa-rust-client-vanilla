@@ -28,7 +28,7 @@ use rtc::rtp_transceiver::rtp_sender::{
 };
 use std::collections::HashMap;
 use std::hash::BuildHasher;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -151,7 +151,10 @@ pub(crate) struct Shared {
     /// the server's levels, each with when it came
     heard: Mutex<HashMap<u32, (f32, Instant)>>,
     volumes: Mutex<HashMap<u32, f32>>,
-    stopped: AtomicBool,
+    /// the run going on (0: stopped); a run's tasks write only while it is theirs, so one
+    /// still closing after a stop never reaches the next start's
+    run: AtomicU64,
+    runs: AtomicU64,
 }
 
 impl Shared {
@@ -167,25 +170,8 @@ impl Shared {
             audio: std::array::from_fn(|_| Mutex::new(Playback::new())),
             heard: Mutex::default(),
             volumes: Mutex::default(),
-            stopped: AtomicBool::new(true),
-        }
-    }
-
-    fn push_out(&self, kind: SignalKind, text: String) {
-        if !self.stopped.load(Ordering::Relaxed) {
-            self.outgoing.lock().unwrap().push((kind, text));
-        }
-    }
-
-    fn event(&self, event: VoiceEvent) {
-        if !self.stopped.load(Ordering::Relaxed) {
-            self.events.lock().unwrap().push(event);
-        }
-    }
-
-    fn audio_in(&self, slot: usize, seq: u16, payload: &[u8]) {
-        if !self.stopped.load(Ordering::Relaxed) {
-            self.audio[slot].lock().unwrap().push(seq, payload);
+            run: AtomicU64::new(0),
+            runs: AtomicU64::new(0),
         }
     }
 
@@ -215,6 +201,7 @@ impl Shared {
         if let Some(levels) = pairs("levels") {
             let when = Instant::now();
             let mut heard = self.heard.lock().unwrap();
+            heard.retain(|_, (_, at)| when.duration_since(*at) < 10 * HEARD_FOR);
             for (peer, level) in levels {
                 if let Ok(peer) = u32::try_from(peer) {
                     heard.insert(peer, (level_of_dbov(level.min(127) as u8), when));
@@ -234,6 +221,43 @@ impl Shared {
         }
         self.heard.lock().unwrap().clear();
         self.mic_rms.store(0f32.to_bits(), Ordering::Relaxed);
+    }
+}
+
+/// One start's tasks' view of `Shared`: what they write counts only while the run is theirs.
+#[derive(Clone)]
+struct Run {
+    shared: Arc<Shared>,
+    id: u64,
+}
+
+impl Run {
+    fn live(&self) -> bool {
+        self.shared.run.load(Ordering::Relaxed) == self.id
+    }
+
+    fn push_out(&self, kind: SignalKind, text: String) {
+        if self.live() {
+            self.shared.outgoing.lock().unwrap().push((kind, text));
+        }
+    }
+
+    fn event(&self, event: VoiceEvent) {
+        if self.live() {
+            self.shared.events.lock().unwrap().push(event);
+        }
+    }
+
+    fn audio_in(&self, slot: usize, seq: u16, payload: &[u8]) {
+        if self.live() {
+            self.shared.audio[slot].lock().unwrap().push(seq, payload);
+        }
+    }
+
+    fn server_says(&self, text: &str) {
+        if self.live() {
+            self.shared.server_says(text);
+        }
     }
 }
 
@@ -354,20 +378,22 @@ impl VoiceEngine for NativeEngine {
                 return;
             }
         };
-        self.shared.stopped.store(false, Ordering::Relaxed);
+        let id = self.shared.runs.fetch_add(1, Ordering::Relaxed) + 1;
+        self.shared.run.store(id, Ordering::Relaxed);
+        let run = Run { shared: self.shared.clone(), id };
         let source = match self.mode {
             Mode::Server => {
                 let mic = Arc::new(Mic::default());
-                let shared = self.shared.clone();
-                self.capture = Some(Capture::start(mic.clone(), move |_| shared.event(VoiceEvent::MicDenied)));
+                let denied = run.clone();
+                self.capture = Some(Capture::start(mic.clone(), move |_| denied.event(VoiceEvent::MicDenied)));
                 Source::Mic(mic)
             }
             #[cfg(test)]
             Mode::Loopback => Source::Generator(self.generator.clone().unwrap_or_else(|| Arc::new(Mutex::new(Box::new(|f: &mut [f32]| f.fill(0.0)))))),
         };
-        runtime.spawn(encode(self.shared.clone(), source));
+        runtime.spawn(encode(run.clone(), source));
         let (tx, rx) = mpsc::unbounded_channel();
-        self.task = Some(runtime.spawn(run(self.mode, self.shared.clone(), tx.clone(), rx)));
+        self.task = Some(runtime.spawn(connection_task(self.mode, run, tx.clone(), rx)));
         self.commands = Some(tx);
         self.runtime = Some(runtime);
     }
@@ -424,7 +450,7 @@ impl VoiceEngine for NativeEngine {
     }
 
     fn stop(&mut self) {
-        self.shared.stopped.store(true, Ordering::Relaxed);
+        self.shared.run.store(0, Ordering::Relaxed);
         if let Some(tx) = self.commands.take() {
             let _ = tx.send(Cmd::Stop);
         }
@@ -459,11 +485,12 @@ impl Drop for NativeEngine {
 /// Every 20 ms: the frames the microphone has (up to three, catching up a late tick; a
 /// generator's one), each one's level kept, and while anything is sent to, coded once for the
 /// connection's writer.
-async fn encode(shared: Arc<Shared>, mut source: Source) {
+async fn encode(run: Run, mut source: Source) {
+    let shared = &run.shared;
     let mut enc = match opus::Encoder::new(RATE, opus::Channels::Mono, opus::Application::Voip) {
         Ok(e) => e,
         Err(e) => {
-            shared.event(VoiceEvent::Note(format!("voice: no Opus encoder ({e})")));
+            run.event(VoiceEvent::Note(format!("voice: no Opus encoder ({e})")));
             return;
         }
     };
@@ -485,7 +512,7 @@ async fn encode(shared: Arc<Shared>, mut source: Source) {
     };
     loop {
         tick.tick().await;
-        if shared.stopped.load(Ordering::Relaxed) {
+        if !run.live() {
             return;
         }
         for _ in 0..per_tick {
@@ -517,7 +544,9 @@ async fn encode(shared: Arc<Shared>, mut source: Source) {
             }
             let level = dbov_of_rms(rms);
             let frame = Frame { data: Bytes::copy_from_slice(&packet[..n]), timestamp: ts, level, voice: level < 50 };
-            let _ = queue.try_send(frame);
+            if run.live() {
+                let _ = queue.try_send(frame);
+            }
         }
     }
 }
@@ -553,7 +582,7 @@ async fn write(track: Arc<TrackLocalStaticRTP>, ssrc: u32, payload_type: Arc<Ato
 struct Handler {
     session: u64,
     commands: mpsc::UnboundedSender<Cmd>,
-    shared: Arc<Shared>,
+    run: Run,
     /// the slots' transceiver ids, slot by slot
     slot_ids: Arc<Mutex<Vec<usize>>>,
 }
@@ -564,12 +593,12 @@ impl PeerConnectionEventHandler for Handler {
         if let Ok(init) = event.candidate.to_json()
             && let Ok(json) = serde_json::to_string(&init)
         {
-            self.shared.push_out(SignalKind::Candidate, json);
+            self.run.push_out(SignalKind::Candidate, json);
         }
     }
 
     async fn on_track(&self, track: Arc<dyn TrackRemote>) {
-        let (shared, slot_ids) = (self.shared.clone(), self.slot_ids.clone());
+        let (run, slot_ids) = (self.run.clone(), self.slot_ids.clone());
         tokio::spawn(async move {
             let mut slot = None;
             while let Some(event) = track.poll().await {
@@ -580,7 +609,7 @@ impl PeerConnectionEventHandler for Handler {
                     }
                     TrackRemoteEvent::OnRtpPacket(p) => {
                         if let Some(k) = slot {
-                            shared.audio_in(k, p.header.sequence_number, &p.payload);
+                            run.audio_in(k, p.header.sequence_number, &p.payload);
                         }
                     }
                     TrackRemoteEvent::OnEnded => break,
@@ -602,19 +631,19 @@ impl PeerConnectionEventHandler for Handler {
 
 /// The connection task: a session a connection, each made by `start` (the first, or one after
 /// the last went down), until `stop`.
-async fn run(mode: Mode, shared: Arc<Shared>, commands: mpsc::UnboundedSender<Cmd>, mut rx: mpsc::UnboundedReceiver<Cmd>) {
+async fn connection_task(mode: Mode, run: Run, commands: mpsc::UnboundedSender<Cmd>, mut rx: mpsc::UnboundedReceiver<Cmd>) {
     let mut session = 0;
     loop {
         session += 1;
-        let stop = match Connection::open(mode, &shared, session, &commands).await {
+        let stop = match Connection::open(mode, &run, session, &commands).await {
             Ok(mut conn) => {
-                let stop = conn.run(&shared, session, &mut rx).await;
-                conn.close(&shared).await;
+                let stop = conn.run(&run, session, &mut rx).await;
+                conn.close(&run.shared).await;
                 stop
             }
             Err(e) => {
-                shared.event(VoiceEvent::Note(format!("voice: no connection ({e})")));
-                shared.event(VoiceEvent::Failed);
+                run.event(VoiceEvent::Note(format!("voice: no connection ({e})")));
+                run.event(VoiceEvent::Failed);
                 false
             }
         };
@@ -636,6 +665,8 @@ struct Connection {
     pc: Arc<dyn PeerConnection>,
     sender: Arc<dyn RtpSender>,
     channel: Arc<dyn DataChannel>,
+    /// its writer's queue, as `Shared::packets` holds it while this is the connection
+    queue: mpsc::Sender<Frame>,
     payload_type: Arc<AtomicU32>,
     channel_open: bool,
     writer: tokio::task::JoinHandle<()>,
@@ -643,7 +674,8 @@ struct Connection {
 }
 
 impl Connection {
-    async fn open(mode: Mode, shared: &Arc<Shared>, session: u64, commands: &mpsc::UnboundedSender<Cmd>) -> Result<Connection, String> {
+    async fn open(mode: Mode, run: &Run, session: u64, commands: &mpsc::UnboundedSender<Cmd>) -> Result<Connection, String> {
+        let shared = &run.shared;
         let e = |e: webrtc::error::Error| e.to_string();
         let mut media = media_engine().map_err(e)?;
         let registry = register_default_interceptors(Registry::new(), &mut media).map_err(e)?;
@@ -672,7 +704,7 @@ impl Connection {
             ),
         };
         let slot_ids = Arc::new(Mutex::new(Vec::new()));
-        let handler = Handler { session, commands: commands.clone(), shared: shared.clone(), slot_ids: slot_ids.clone() };
+        let handler = Handler { session, commands: commands.clone(), run: run.clone(), slot_ids: slot_ids.clone() };
         let pc = PeerConnectionBuilder::new()
             .with_configuration(config)
             .with_media_engine(media)
@@ -716,29 +748,37 @@ impl Connection {
             slot_ids.lock().unwrap().push(slot.id());
         }
         let channel = pc.create_data_channel("eqoa", None).await.map_err(e)?;
-        let reader = tokio::spawn(read_channel(channel.clone(), session, commands.clone(), shared.clone()));
+        let reader = tokio::spawn(read_channel(channel.clone(), session, commands.clone(), run.clone()));
         let payload_type = Arc::new(AtomicU32::new(u32::MAX));
         let (queue, frames) = mpsc::channel(QUEUE);
         let writer = tokio::spawn(write(track, ssrc, payload_type.clone(), frames));
-        *shared.packets.lock().unwrap() = Some(queue);
-        Ok(Connection { pc, sender, channel, payload_type, channel_open: false, writer, reader })
+        {
+            // only while this run is the engine's (a stop between the two would leave the
+            // next start's encoder writing to a connection already closed)
+            let mut packets = shared.packets.lock().unwrap();
+            if run.live() {
+                *packets = Some(queue.clone());
+            }
+        }
+        Ok(Connection { pc, sender, channel, queue, payload_type, channel_open: false, writer, reader })
     }
 
     /// The offer, then every command in order until the connection is over: true at `stop`.
-    async fn run(&mut self, shared: &Arc<Shared>, session: u64, rx: &mut mpsc::UnboundedReceiver<Cmd>) -> bool {
+    async fn run(&mut self, run: &Run, session: u64, rx: &mut mpsc::UnboundedReceiver<Cmd>) -> bool {
+        let shared = &run.shared;
         let offer = match self.pc.create_offer(None).await {
             Ok(o) => o,
             Err(err) => {
-                shared.event(VoiceEvent::Note(format!("voice: no offer ({err})")));
-                shared.event(VoiceEvent::Failed);
+                run.event(VoiceEvent::Note(format!("voice: no offer ({err})")));
+                run.event(VoiceEvent::Failed);
                 return false;
             }
         };
         // the offer goes out before its candidates (they come once the description is set)
-        shared.push_out(SignalKind::Offer, offer.sdp.clone());
+        run.push_out(SignalKind::Offer, offer.sdp.clone());
         if let Err(err) = self.pc.set_local_description(offer).await {
-            shared.event(VoiceEvent::Note(format!("voice: the offer refused ({err})")));
-            shared.event(VoiceEvent::Failed);
+            run.event(VoiceEvent::Note(format!("voice: the offer refused ({err})")));
+            run.event(VoiceEvent::Failed);
             return false;
         }
         let deadline = tokio::time::Instant::now() + CONNECT_TIMEOUT;
@@ -751,7 +791,7 @@ impl Connection {
                 match tokio::time::timeout_at(deadline, rx.recv()).await {
                     Ok(cmd) => cmd,
                     Err(_) => {
-                        shared.event(VoiceEvent::Failed);
+                        run.event(VoiceEvent::Failed);
                         return false;
                     }
                 }
@@ -764,8 +804,8 @@ impl Connection {
                         Err(err) => Err(err),
                     };
                     if let Err(err) = set {
-                        shared.event(VoiceEvent::Note(format!("voice: the server's answer refused ({err})")));
-                        shared.event(VoiceEvent::Failed);
+                        run.event(VoiceEvent::Note(format!("voice: the server's answer refused ({err})")));
+                        run.event(VoiceEvent::Failed);
                         return false;
                     }
                     remote = true;
@@ -795,10 +835,10 @@ impl Connection {
                 }
                 Cmd::Connected(s) if s == session && !connected => {
                     connected = true;
-                    shared.event(VoiceEvent::Connected);
+                    run.event(VoiceEvent::Connected);
                 }
                 Cmd::Failed(s) if s == session => {
-                    shared.event(VoiceEvent::Failed);
+                    run.event(VoiceEvent::Failed);
                     return false;
                 }
                 Cmd::Stop => return true,
@@ -820,7 +860,13 @@ impl Connection {
     }
 
     async fn close(&self, shared: &Shared) {
-        *shared.packets.lock().unwrap() = None;
+        {
+            // its own queue only: a run closing after a stop must not take the next start's
+            let mut packets = shared.packets.lock().unwrap();
+            if packets.as_ref().is_some_and(|q| q.same_channel(&self.queue)) {
+                *packets = None;
+            }
+        }
         self.writer.abort();
         self.reader.abort();
         let _ = self.channel.close().await;
@@ -829,7 +875,7 @@ impl Connection {
 }
 
 /// The data channel's events: its opening for the connection task, the server's messages here.
-async fn read_channel(channel: Arc<dyn DataChannel>, session: u64, commands: mpsc::UnboundedSender<Cmd>, shared: Arc<Shared>) {
+async fn read_channel(channel: Arc<dyn DataChannel>, session: u64, commands: mpsc::UnboundedSender<Cmd>, run: Run) {
     while let Some(event) = channel.poll().await {
         match event {
             DataChannelEvent::OnOpen => {
@@ -837,7 +883,7 @@ async fn read_channel(channel: Arc<dyn DataChannel>, session: u64, commands: mps
             }
             DataChannelEvent::OnMessage(m) => {
                 if let Ok(text) = std::str::from_utf8(&m.data) {
-                    shared.server_says(text);
+                    run.server_says(text);
                 }
             }
             DataChannelEvent::OnClose => break,

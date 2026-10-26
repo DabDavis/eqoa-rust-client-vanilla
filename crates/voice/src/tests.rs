@@ -421,7 +421,7 @@ fn the_offer_is_in_the_agreed_order() {
 /// tone and not its own (the negative control: the other frequency); the server sees the audio
 /// level of the frame (13.5 −dBov, voice) and `{"send": 1}`; the levels; push-to-talk off sends
 /// nothing and plays silence, the room's bit sends again and is told as is; stop is at once and a
-/// start after it connects again.
+/// start after it connects again, and one right after a stop too.
 #[test]
 fn a_voice_goes_through_the_server() {
     let mut net = Net::new(vec![(1, NativeEngine::loopback(tone(440.0))), (2, NativeEngine::loopback(tone(880.0)))]);
@@ -475,6 +475,19 @@ fn a_voice_goes_through_the_server() {
     net.engine(1).set_send(1);
     assert!(net.run_until(20_000, |n| rms(n.tail(2, 200)) > 0.05), "a start after stop connects again");
     assert_eq!(net.engine(1).take_events(), [VoiceEvent::Connected]);
+
+    // a stop and a start at once: a connection again, sending 50 packets a second
+    net.engine(1).stop();
+    net.engine(1).start(&[]);
+    let restarted = net.hub.seen(1).packets;
+    assert!(net.run_until(20_000, |n| n.hub.seen(1).packets > restarted + 25), "a start right after a stop connects");
+    assert_eq!(net.engine(1).take_events(), [VoiceEvent::Connected]);
+    let before = net.hub.seen(1).packets;
+    net.run(1000);
+    let sent = net.hub.seen(1).packets - before;
+    assert!((40..=60).contains(&sent), "{sent} packets a second, not 50");
+    let b = net.tail(2, 800);
+    assert!(power(b, 440.0) > 30.0 * power(b, 620.0), "and still the tone");
 }
 
 /// Four speakers on one listener's four slots, each played at the volume of the peer the
