@@ -5,6 +5,16 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · Play on a phone or a tablet from the first screen
+- On a phone or a tablet you can now play from the very first screen: tap your way through
+  the licence, the title, Station's login, the server list and character select and
+  creation. ✕ △ ○ □ stay on screen the whole way, and in the world the whole on-screen pad
+  is there as before.
+- In the browser, tapping a name or password box brings up your device's own keyboard. The
+  game's on-screen keyboard still works too, by tapping its keys.
+- The update notes' Back and the failed update's Restart can now be clicked or tapped.
+- On a touch screen, the bug report's buttons now take a tap.
+
 ## 2026-10-26 · A Stats Box, and N for the minimap
 - A Stats Box: your stats (Str to Cha, AC, max HP and power, the resists) in a small box
   under your effect icons. A buff that raises a stat shows it in blue, a debuff that lowers
