@@ -45,6 +45,8 @@ pub mod cells;
 pub mod chrome;
 pub mod markers;
 mod markers_data;
+// the minimap, in play under the quick menus (`mini`)
+pub mod mini;
 pub mod picture;
 pub mod quests;
 pub mod store;
@@ -104,6 +106,17 @@ pub const WAYPOINT: [f32; 4] = [1.0, 0.3, 0.85, 1.0];
 /// How near the waypoint the player must come (world units, about two
 /// seconds' run) for it to be reached and taken away.
 pub const ARRIVE: f32 = 15.0;
+
+/// A group member's colour on the map and the minimap, by its index (the
+/// compass's: 1 green, 2 blue, 3 cyan, the rest yellow).
+pub(crate) fn member_color(index: usize) -> [f32; 4] {
+    match index {
+        1 => [0.0, 1.0, 0.0, 1.0],
+        2 => [0.2, 0.4, 1.0, 1.0],
+        3 => [0.0, 1.0, 1.0, 1.0],
+        _ => [1.0, 1.0, 0.0, 1.0],
+    }
+}
 
 /// CLIENT's part: `gWorldInfo`'s grid bounds and world names, by world.
 #[derive(Clone, Copy, Debug, Default)]
@@ -228,6 +241,9 @@ pub struct Map {
     /// the build's time a frame, open or not, in place of the usual
     /// (`EQOA_MAP_BUDGET` in ms, `mapshot`'s measurements)
     pub budget: Option<Duration>,
+    /// the minimap's own (`mini`): its zoom, whether it is drawn this
+    /// frame, where, and the tiles it keeps on the GPU
+    pub mini: mini::Mini,
 }
 
 impl Map {
@@ -700,9 +716,9 @@ impl Map {
             crate::say(&format!("{} in {:.1} s ({:.2} s of it working, the longest frame's {:.1} ms)", w.builder.describe(), w.builder.stats.took.unwrap_or_default().as_secs_f64(), w.builder.stats.busy.as_secs_f64(), w.builder.stats.worst.as_secs_f64() * 1e3));
             self.reported = Some(progress);
         }
-        // what the build made, onto the GPU
+        // what the build made, onto the GPU (the minimap's tiles too)
         if let Some(l) = self.layers.as_mut() {
-            Self::take_pictures(w, l, cx, self.open, self.view, self.frame);
+            Self::take_pictures(w, l, cx, self.open, self.view, self.frame, &self.mini.wanted);
         }
         if !self.open {
             return;
@@ -777,17 +793,20 @@ impl Map {
     }
 
     /// The build's overview cells into the overview; its tiles onto the GPU
-    /// when the view wants them (the rest are in the cache for later).
-    fn take_pictures(w: &mut World, l: &mut Layers, cx: &Context, open: bool, v: Option<View>, frame: u64) {
+    /// when the view wants them, or the minimap (`mini`: its zones), the rest
+    /// in the cache for later.
+    #[allow(clippy::too_many_arguments)]
+    fn take_pictures(w: &mut World, l: &mut Layers, cx: &Context, open: bool, v: Option<View>, frame: u64, mini: &[usize]) {
         for (zi, px) in w.builder.cells_out.drain(..) {
             if let (Some(t), Some(cell)) = (w.overview, w.builder.cells.cell_of.get(zi).copied().flatten()) {
                 l.map.write(cx.queue, t, w.builder.cells.overview_at(cell), cells::OVERVIEW, cells::OVERVIEW, &px);
             }
         }
-        let wanted = match (open, v) {
+        let mut wanted = match (open, v) {
             (true, Some(v)) => wanted_tiles(&w.builder.cells, v, cx.size),
             _ => Vec::new(),
         };
+        wanted.extend_from_slice(mini);
         for (zi, px) in std::mem::take(&mut w.builder.tiles_out) {
             if !wanted.contains(&zi) || w.tiles.contains_key(&zi) {
                 continue;

@@ -55,6 +55,9 @@ pub struct HudState {
     /// The map's waypoint in this world (x, z): a dot on the compass's rim
     /// at any distance, the client's own (`map::Map::click`).
     pub waypoint: Option<[f32; 2]>,
+    /// The minimap is up (`map::mini`, drawn by the map's own layer under
+    /// the HUD): its place noted for a pointer, which opens the map there.
+    pub minimap: bool,
     /// `m_selfId` and `m_target`.
     pub self_id: Option<u32>,
     pub target: u32,
@@ -136,6 +139,8 @@ pub enum Pick {
     Pet,
     Report,
     TargetsTarget,
+    /// the minimap (`map::mini`): the map opened
+    Minimap,
 }
 
 /// The Target of Target bar's place (the frame's, out at a wide window's
@@ -304,6 +309,13 @@ impl Hud {
             draw_gauge(vui, ui, g.bar, 136, g.at, g.lit, g.v);
         }
         self.draw_report(vui, ui, [20, 421]);
+        // the minimap's place, out at a wide window's right and up a tall
+        // one's top with the quick menus (`map::mini::FRAME`)
+        if s.minimap {
+            ui.ui.anchor = Anchor::Right;
+            ui.ui.vertical = Vertical::Top;
+            self.note(ui, crate::map::mini::FRAME, Pick::Minimap);
+        }
     }
 
     /// Target of Target (the Extended page's, the client's own): a second
@@ -662,6 +674,37 @@ mod tests {
             assert_eq!(hud.pick([report[0] - side, report[1] + up]), Some(Pick::Report), "{size:?}");
             if side + up > 0.0 {
                 assert_eq!((hud.pick(me), hud.pick(report)), (None, None), "{size:?}: the game's places");
+            }
+        }
+    }
+
+    /// The minimap's place (`map::mini::FRAME`): a pointer finds it in a
+    /// 4:3 window where it is, in a 16:9 one out at the right with the quick
+    /// menus (106 frame pixels), in a tall one (798x828) up at the top (85);
+    /// the control: with the minimap off nothing is there. Needs a graphics
+    /// adapter; without one it says so and passes.
+    #[test]
+    fn a_pointer_finds_the_minimap_where_the_quick_menus_go() {
+        let _gpu = crate::GPU_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut ui) = crate::ui::tests::layer() else {
+            eprintln!("SKIP: no graphics adapter");
+            return;
+        };
+        let mut atlas = vec![vi::ui::UiTexEntry::default(); 27];
+        atlas[26].uv1 = [16, 28];
+        let vui = crate::ui::Vui::new(Default::default(), Default::default(), atlas);
+        let assets = crate::ui::UiAssets::default();
+        let f = crate::map::mini::FRAME;
+        let mid = [(f[0] + f[2]) as f32 / 2.0, (f[1] + f[3]) as f32 / 2.0];
+        for (size, side, up) in [((640, 480), 0.0, 0.0), ((1280, 720), 106.0, 0.0), ((798, 828), 0.0, 85.0)] {
+            for (on, want) in [(true, Some(Pick::Minimap)), (false, None)] {
+                ui.begin(size);
+                let mut hud = Hud::new();
+                hud.draw(&vui, &mut assets.raster(&mut ui), &HudState { minimap: on, ..Default::default() });
+                assert_eq!(hud.pick([mid[0] + side, mid[1] - up]), want, "{size:?}, minimap {on}");
+                if side + up > 0.0 {
+                    assert_eq!(hud.pick(mid), None, "{size:?}: not at the frame's own place");
+                }
             }
         }
     }

@@ -14,9 +14,22 @@ is put on the page by `.github/workflows/notes.yml`.
   controller) to see its quests: their names and levels, how the offer starts
   or what the step asks, and the rewards or what you still need. Click it, or
   tap it again, to put your waypoint on it.
-- The marks sit over the XP camps and coaches. J on the map (R3 on a pad, or
-  the map's Quests button) hides or shows them, and so does Options > Extended
-  > Quests > Quest Markers.
+- The marks sit over the XP camps and coaches, and are on the minimap too, on
+  its edge while farther than it shows (point at one for its quests). J on the
+  map (R3 on a pad, or the map's Quests button) hides or shows them, and so
+  does Options > Extended > Quests > Quest Markers.
+
+## 2026-10-26 · A minimap
+- A minimap in the top right, under the name plate of the menus beside it: the map's own
+  picture of the land round you, north up, with you as the arrow in the middle, your group in
+  their colours, the creatures and players near you as dots in their names' colours, your
+  target ringed and your waypoint (on its edge while it is farther than it shows).
+- The map's XP camps and coaches are on it too, as the map marks them; point at one with
+  the mouse for its card. Map Markers (X on the map) hides them here as well.
+- Click or tap it to open the map; the mouse wheel over it zooms it in and out. It goes
+  away with the rest of the HUD under Hide UI (H) and while a window is open.
+- Turn it off under Options > Extended > UI > Minimap. Loading Screens moved from UI to the
+  Video page to make room.
 
 ## 2026-10-26 · XP camps, coaches, routes and towns on the map
 - The map (M) marks the popular XP camps with a red XP badge and every coach with the

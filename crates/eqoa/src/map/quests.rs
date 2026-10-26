@@ -99,6 +99,14 @@ pub fn card(m: &QuestMark) -> Vec<(String, [f32; 4])> {
     out
 }
 
+/// The marks as the minimap's (`mini::Mark`): a quest to take a gold "!"
+/// (`QuestOffer`), a step to do a "?" (`QuestStep`), each with its card for
+/// a tooltip.
+pub fn mini_marks(marks: &[QuestMark]) -> Vec<super::mini::Mark> {
+    use super::mini::{Mark, MarkKind};
+    marks.iter().map(|m| Mark { kind: if m.kind == 1 { MarkKind::QuestOffer } else { MarkKind::QuestStep }, world: m.world as i32, at: [m.x, m.z], tip: card(m) }).collect()
+}
+
 fn rect(ui: &mut Ui, white: usize, r: [f32; 4], color: [f32; 4]) {
     ui.push(Quad { tex: white, blend: 3, pos: [[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]], uv: [[0.5, 0.5]; 4], color, clip: None });
 }
@@ -155,6 +163,19 @@ mod tests {
         assert_eq!(q.pinned, Some(1), "the same set keeps the tap");
         q.set(&[mark(1, 0, 101.0, 200.0)]);
         assert_eq!(q.pinned, None, "a new set lets it go");
+    }
+
+    /// On the minimap a giver's mark is a quest to take, a step's and a
+    /// hunt's a step to do, each at its place in its world with its card;
+    /// the control: no marks, none there.
+    #[test]
+    fn the_minimap_has_the_marks() {
+        use super::super::mini::MarkKind;
+        let got = mini_marks(&[mark(1, 0, 10.0, 20.0), mark(2, 3, 30.0, 40.0), mark(3, 0, 50.0, 60.0)]);
+        let kinds: Vec<(MarkKind, i32, [f32; 2])> = got.iter().map(|m| (m.kind, m.world, m.at)).collect();
+        assert_eq!(kinds, [(MarkKind::QuestOffer, 0, [10.0, 20.0]), (MarkKind::QuestStep, 3, [30.0, 40.0]), (MarkKind::QuestStep, 0, [50.0, 60.0])]);
+        assert_eq!(got[0].tip, card(&mark(1, 0, 10.0, 20.0)), "its card for a tooltip");
+        assert!(mini_marks(&[]).is_empty());
     }
 
     /// A giver's "!" is gold, a step's "?" pale, a hunt's warmer; the card
