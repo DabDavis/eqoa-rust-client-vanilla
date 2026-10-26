@@ -13,4 +13,5 @@ wgpu = "30.0.1"
 web-time.workspace = true
 
 [dev-dependencies]
+iso.workspace = true
 pollster = "1.0.1"
