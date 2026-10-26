@@ -494,7 +494,7 @@ $('iso').addEventListener('change', async () => {
     const [ok, text] = await disc_id(file);
     line.className = 'note ' + (ok ? 'ok' : 'warn');
     line.textContent = text;
-    discLine = `${text} (${file.size} bytes)`;
+    discLine = `${text} (${file.size} bytes${$('iso').dataset.again ? ', remembered from the last visit' : ''})`;
   } catch (e) {
     line.className = 'note warn';
     line.textContent = String(e && e.message ? e.message : e);
@@ -542,7 +542,13 @@ $('iso2002').addEventListener('change', async () => {
 // it again (a browser that would not open it from a key, a player who
 // closed it).
 window.eqoaAsk2002 = () => {
-  try { $('iso2002').click(); } catch { /* the notice's button does */ }
+  // a 2002 disc remembered from an earlier visit (`remembering`): asked for
+  // in this key's activation, the picker only when it cannot be had
+  if (rememberOn() && remembered.disc2002) {
+    takeAgain('iso2002').then((ok) => { if (ok && report) report.notice('disc2002'); });
+  } else {
+    try { $('iso2002').click(); } catch { /* the notice's button does */ }
+  }
   if (report) {
     report.notice('disc2002', '', 'The 2002 art comes off your own EverQuest Online Adventures (USA) disc image, SLUS-20470: pick it, and F9 swaps the art.', [
       ['Choose the disc', () => $('iso2002').click(), true],
@@ -550,6 +556,161 @@ window.eqoaAsk2002 = () => {
     ]);
   }
 };
+
+// ---- remembering the disc images (jib's F3 20261025-214009: "Remember
+// location"): with the box ticked, a disc is picked through the File System
+// Access picker (Chromium-based browsers; `showOpenFilePicker`, its `id`
+// opening it where the last image was), and its handle is kept in this
+// origin's IndexedDB, never the image: the next visit puts it back in its
+// input at once when the browser still allows reading it, else offers it on
+// a button ("Use <file> again", whose click asks the browser). A file moved
+// or deleted is said so and forgotten. Unticked (the default), or in a
+// browser without the picker, the inputs are the browser's own, as before.
+
+const canRemember = typeof window.showOpenFilePicker === 'function' && typeof indexedDB !== 'undefined';
+// per input: where its handle is kept, and its picker's own memory of a folder
+const discInputs = { iso: { key: 'disc', id: 'eqoa-disc' }, iso2002: { key: 'disc2002', id: 'eqoa-disc-2002' } };
+// what is kept, read once at the start: { handle, name } by key
+const remembered = {};
+const rememberOn = () => canRemember && $('remember').checked;
+
+function handleStore(mode, fn) {
+  return new Promise((done) => {
+    let open;
+    try {
+      open = indexedDB.open('eqoa-discs', 1);
+    } catch {
+      return done(null);
+    }
+    open.onupgradeneeded = () => open.result.createObjectStore('handles');
+    open.onerror = () => done(null);
+    open.onsuccess = () => {
+      const db = open.result;
+      try {
+        const tx = db.transaction('handles', mode);
+        const q = fn(tx.objectStore('handles'));
+        tx.oncomplete = () => { db.close(); done(q.result === undefined ? null : q.result); };
+        tx.onerror = tx.onabort = () => { db.close(); done(null); };
+      } catch {
+        db.close();
+        done(null);
+      }
+    };
+  });
+}
+const keptHandle = (key) => handleStore('readonly', (s) => s.get(key));
+const keepHandle = (key, value) => handleStore('readwrite', (s) => s.put(value, key));
+const forgetHandle = (key) => handleStore('readwrite', (s) => s.delete(key));
+
+// the file put in its input as if picked there (its change handler names it)
+function putFile(name, file, again) {
+  const dt = new DataTransfer();
+  dt.items.add(file);
+  $(name).files = dt.files;
+  $(name).dataset.again = again ? '1' : '';
+  $(name + '-again-row').hidden = true;
+  $(name).dispatchEvent(new Event('change'));
+}
+
+function saySoft(name, text) {
+  const line = $(name + '-what');
+  line.className = 'note warn';
+  line.textContent = text;
+}
+
+// The kept handle's file, read now: false when it cannot be (moved, deleted,
+// not allowed). `ask`: asking the browser first (in a click's activation).
+async function takeAgain(name, ask = true) {
+  const d = discInputs[name];
+  const r = remembered[d.key];
+  if (!r) return false;
+  let state = 'prompt';
+  try {
+    state = await (ask ? r.handle.requestPermission({ mode: 'read' }) : r.handle.queryPermission({ mode: 'read' }));
+  } catch { /* an old handle: as not allowed */ }
+  if (state !== 'granted') {
+    if (ask) saySoft(name, `The browser did not allow reading ${r.name}: choose it again.`);
+    return false;
+  }
+  try {
+    putFile(name, await r.handle.getFile(), true);
+    return true;
+  } catch {
+    // moved, renamed or deleted since
+    delete remembered[d.key];
+    forgetHandle(d.key);
+    $(name + '-again-row').hidden = true;
+    saySoft(name, `${r.name} is no longer where it was last time: choose it again.`);
+    return false;
+  }
+}
+
+function offerAgain(name) {
+  const r = remembered[discInputs[name].key];
+  const b = $(name + '-again');
+  b.textContent = `Use ${r.name} again`;
+  $(name + '-again-row').hidden = false;
+}
+
+if (canRemember) {
+  // a pick in the browser's own picker is not the last visit's
+  for (const name of Object.keys(discInputs)) $(name).addEventListener('input', () => { $(name).dataset.again = ''; });
+  $('remember-row').hidden = false;
+  $('remember').checked = store.get('rememberDiscs') === '1';
+  $('remember-what').hidden = !$('remember').checked;
+  for (const name of Object.keys(discInputs)) {
+    const d = discInputs[name];
+    $(name + '-again').addEventListener('click', () => takeAgain(name));
+    // the picker that can be remembered, in the click's own activation
+    $(name).addEventListener('click', (ev) => {
+      if (!rememberOn()) return; // the browser's own picker
+      ev.preventDefault();
+      const opts = { id: d.id, types: [{ description: 'Disc image', accept: { 'application/octet-stream': ['.iso', '.bin', '.img'] } }] };
+      if (remembered[d.key]) opts.startIn = remembered[d.key].handle;
+      window.showOpenFilePicker(opts).then(async ([handle]) => {
+        const file = await handle.getFile();
+        remembered[d.key] = { handle, name: file.name };
+        keepHandle(d.key, remembered[d.key]);
+        putFile(name, file, false);
+      }).catch((e) => {
+        if (e && e.name === 'AbortError') return; // closed without a pick
+        saySoft(name, `The picker did not open (${e && e.message ? e.message : e}): untick Remember to use the browser's own.`);
+      });
+    });
+  }
+  $('remember').addEventListener('change', () => {
+    const on = $('remember').checked;
+    $('remember-what').hidden = !on;
+    if (on) {
+      store.set('rememberDiscs', '1');
+      // a disc already picked the browser's own way has no handle to keep
+      for (const name of Object.keys(discInputs)) {
+        if ($(name).files.length && !remembered[discInputs[name].key]) {
+          $(name + '-what').textContent += ' Choose it once more and it is remembered.';
+        }
+      }
+    } else {
+      store.drop('rememberDiscs');
+      for (const name of Object.keys(discInputs)) {
+        delete remembered[discInputs[name].key];
+        forgetHandle(discInputs[name].key);
+        $(name + '-again-row').hidden = true;
+      }
+    }
+  });
+  // what the last visit kept: back in its input when still allowed, else
+  // offered (a disc picked meanwhile, by a quick player or a test, stays)
+  (async () => {
+    if (!$('remember').checked) return;
+    for (const name of Object.keys(discInputs)) {
+      const r = await keptHandle(discInputs[name].key);
+      if (!r || !r.handle) continue;
+      remembered[discInputs[name].key] = r;
+      if ($(name).files.length) continue;
+      if (!(await takeAgain(name, false)) && remembered[discInputs[name].key]) offerAgain(name);
+    }
+  })();
+}
 
 // ---- updates: this page is one build (web/build.sh puts each in
 // v/<build>/, kept as it is for good), and version.json beside the page names

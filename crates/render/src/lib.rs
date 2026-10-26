@@ -39,8 +39,13 @@ pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 pub const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 pub const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
-/// Palette size: enough for every character skeleton (40 nodes on a human).
-pub const MAX_BONES: usize = 64;
+/// Palette size: enough for every character skeleton. A human has 40 nodes;
+/// the most on either disc (Frontiers' and 2002's CHAR.ESF) is 68, four tree
+/// bodies, the training dummies' among them, whose hands are skinned to nodes
+/// 64 and 65. A vertex on a node past the palette was drawn at the model's
+/// origin (the shader skips that node but keeps its weight), a thin wedge
+/// from the hand down to the feet (`tests/skin_palette.rs`).
+pub const MAX_BONES: usize = 72;
 
 /// The GS's level of a texel (`VIEESurfCache::Set`'s TEX1: LCM 0, L 0,
 /// MMIN 5, MXL the levels kept less one): LOD = log2(1/|Q|) + K, where 1/Q

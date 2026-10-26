@@ -62,9 +62,10 @@ struct Layer {
 @group(1) @binding(2) var<uniform> layer: Layer;
 
 // The skin palette, `VIRStrip4`'s: four node matrices per vertex, weighted.
-// Unskinned models carry identities and bone 255 (unused).
+// Unskinned models carry identities and bone 255 (unused). Its size is
+// `MAX_BONES` (lib.rs), which tests/skin_palette.rs holds this to.
 struct Palette {
-    m: array<mat4x4<f32>, 64>,
+    m: array<mat4x4<f32>, 72>,
 };
 @group(2) @binding(0) var<uniform> palette: Palette;
 
@@ -108,7 +109,7 @@ fn vs_main(v: VsIn) -> VsOut {
         var sn = vec4<f32>(0.0);
         for (var k = 0u; k < 4u; k++) {
             let b = v.bones[k];
-            if (b < 64u && v.weights[k] > 0u) {
+            if (b < 72u && v.weights[k] > 0u) {
                 let w = f32(v.weights[k]) / wsum;
                 sp += palette.m[b] * pos * w;
                 sn += palette.m[b] * nrm * w;
