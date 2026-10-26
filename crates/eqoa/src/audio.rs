@@ -285,10 +285,34 @@ impl Shared {
     /// Mix `frames` more 48 kHz frames into `pcm`.
     fn pump(&mut self, frames: u64) {
         let until = self.drv.now + frames;
+        #[cfg(not(target_arch = "wasm32"))]
+        let from = self.pcm.len();
         while self.drv.now < until {
             self.drv.step(until, &mut self.pcm);
             self.take_answer();
         }
+        // voice chat's voices over the game's sound, as it is made
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Ok(v) = VOICE_OUT.try_lock()
+            && let Some(v) = v.as_ref()
+        {
+            v.mix_i16(&mut self.pcm[from..], 2);
+        }
+    }
+}
+
+/// Voice chat's voices natively (crate `voice`'s output, `voice`), mixed into
+/// the driver's 48 kHz stereo frames as they are made (`Shared::pump`), on
+/// the audio's thread.
+#[cfg(not(target_arch = "wasm32"))]
+static VOICE_OUT: Mutex<Option<voice_engine::VoiceOutput>> = Mutex::new(None);
+
+/// The voice engine's output, taken once an engine is made.
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(test, allow(dead_code))]
+pub fn set_voice_output(out: Option<voice_engine::VoiceOutput>) {
+    if let Ok(mut v) = VOICE_OUT.lock() {
+        *v = out;
     }
 }
 

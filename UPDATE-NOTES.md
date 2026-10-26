@@ -5,6 +5,39 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · A voice chat window
+- Press O (or type /voice in the chat) for the voice chat window: turn voice chat on or off and
+  pick Push to Talk or Open Mic, see whether you are connected and how loud your microphone is,
+  and which keys talk (V to your group, N to your room; change them on the Controls page).
+- It lists your group and your room with a light by each person who is talking. Turn anyone up or
+  down (0 to 200%) or mute them.
+- Join a room from the lobby (a locked one asks for its password), leave the one you are in, or
+  join a room by typing its name: that is also how you make one, with a password if you like, and
+  unlisted if only people who know its name should find it.
+- While voice chat is on, a small microphone sits left of the minimap: grey while you are quiet,
+  green while you are heard. Click it to open the window.
+- Works with the keyboard, a controller (✕ to choose, △ to close, L1 and R1 to jump between
+  parts) and the mouse or touch screen.
+
+## 2026-10-26 · Voice chat
+- Talk to your group by voice: Options > Extended > Sound > Voice Chat, Push to Talk
+  (hold V) or Open Mic. It is off until you turn it on, and nothing is asked of your
+  microphone before then. Voice Volume sets how loud the voices are, up to twice.
+- A lobby of voice rooms anyone can make: `/voice join <room>` joins one, or makes it;
+  add a password to lock it (`/voice join <room> <password>`: the password never leaves
+  your computer). `/voice unlisted <room>` makes one only those who know its name can
+  find. `/voice rooms` lists them, `/voice who` says who is in yours, `/voice leave`
+  leaves it. Hold N to talk to your room (Open Mic talks to both).
+- A speaking mark lights on each groupmate's bar while they talk; the room's speakers
+  show beside your own frame. Click a mark to mute someone, again to hear them.
+- The voices go through the server, never from player to player, so nobody sees your
+  address. The keys are on the Controls page, to move as you like.
+- On a server without voice (Sandstorm), Voice Demo (same page) uses eqoaclassic's
+  voice server instead: a demo, open to anyone who knows your group's names or your
+  room's name.
+- In the game itself (not the page) there is no echo cancelling yet: wear headphones
+  for Open Mic.
+
 ## 2026-10-26 · Sound at 60 frames a second
 - At Frame Rate 60 (or the display's) a busy moment lost sound commands: a sound could
   start at full volume however far away it was, or not start at all, and an ambient

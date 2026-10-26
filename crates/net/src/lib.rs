@@ -7,3 +7,4 @@ pub mod dump;
 pub mod entity;
 pub mod session;
 pub mod stream;
+pub mod voice;

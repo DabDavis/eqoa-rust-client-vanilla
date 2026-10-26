@@ -61,6 +61,9 @@ pub struct HudState {
     /// The quest tracker's quests (`tracker`), none while it is not up: drawn
     /// under the minimap, a pointer on it opens the quest journal.
     pub tracker: Vec<net::session::TrackedQuest>,
+    /// The mic badge while voice is on, where the minimap could be
+    /// (`voicewnd::Badge`).
+    pub voice: Option<crate::voicewnd::Badge>,
     /// `m_selfId` and `m_target`.
     pub self_id: Option<u32>,
     pub target: u32,
@@ -68,6 +71,12 @@ pub struct HudState {
     pub camera: [f32; 3],
     /// The scene's clock, in ms.
     pub time_ms: i64,
+    /// Voice chat (`voice`): each one the player may hear, its level and
+    /// whether it is muted. A groupmate's mark is on its bar; the room's
+    /// speakers who are not groupmates are listed right of the player's
+    /// frame. (The player's own, the microphone's badge, is the voice
+    /// window's: `voicewnd`.)
+    pub voice_marks: Vec<crate::voice::Mark>,
 }
 
 /// What `DrawPatch` reads of a group member: its index in the group (which
@@ -146,6 +155,10 @@ pub enum Pick {
     Minimap,
     /// the quest tracker (`tracker`): the quest journal opened
     Quests,
+    /// the mic badge (`voicewnd::BADGE`): the voice window opened
+    Voice,
+    /// a voice mark: that one (its voice id) muted, or heard again
+    VoiceMark(u32),
 }
 
 /// The Target of Target bar's place (the frame's, out at a wide window's
@@ -162,6 +175,51 @@ const TOT_WIDTH: i32 = 174;
 /// Where `DrawGroup` starts the group's bars and `DrawTarget` the target's.
 const GROUP_AT: [i32; 2] = [20, 93];
 const TARGET_AT: [i32; 2] = [20, 348];
+
+/// A groupmate's voice mark on its bar: right of its gauges and its status
+/// icons (65 to 125 in), on their row.
+const VOICE_ON_BAR: [i32; 2] = [152, 27];
+/// The room's speakers who are not groupmates: a list right of the player's
+/// frame (which ends at 200), the most at once, a row's height.
+const ROOM_SPEAKERS_AT: [i32; 2] = [210, 20];
+const ROOM_SPEAKERS_MOST: usize = 4;
+const ROOM_SPEAKER_ROW: i32 = 15;
+
+/// A voice mark: three bars, 13 wide and 10 high from `at`, lit green by
+/// the voice's level (one to three while it speaks), grey while it is
+/// quiet, red while muted, each on a dark edge so it reads on any ground.
+fn draw_voice_mark(vui: &Vui, ui: &mut UiRaster, at: [i32; 2], level: f32, muted: bool) {
+    let lit = voice_bars_lit(level);
+    for i in 0..3 {
+        let h = 4 + 3 * i as i32;
+        let x = at[0] + 5 * i as i32;
+        let (top, bottom) = (at[1] + 10 - h, at[1] + 10);
+        vui.fill_rectangle(ui, [[x - 1, top - 1], [x + 4, bottom + 1]], [0.0, 0.0, 0.0, 0.55]);
+        let c = if muted {
+            [0.92, 0.28, 0.22, 0.9]
+        } else if i < lit {
+            [0.38, 0.96, 0.44, 1.0]
+        } else {
+            [0.78, 0.78, 0.78, 0.5]
+        };
+        vui.fill_rectangle(ui, [[x, top], [x + 3, bottom]], c);
+    }
+}
+
+/// How many of a mark's three bars are lit at `level`: none below
+/// `voice::SPEAKING`, then one to three as it rises.
+fn voice_bars_lit(level: f32) -> usize {
+    if level <= crate::voice::SPEAKING {
+        return 0;
+    }
+    1 + (((level - crate::voice::SPEAKING) / (1.0 - crate::voice::SPEAKING)) * 3.0).clamp(0.0, 2.0) as usize
+}
+
+/// Whether a roster's name is a group member's: the demo's carry " (demo)".
+fn same_name(voice: &str, member: &str) -> bool {
+    let v = voice.strip_suffix(" (demo)").unwrap_or(voice);
+    crate::voice::ids::fold(v) == crate::voice::ids::fold(member)
+}
 
 /// A gauge in `DrawGauge`'s frame (136): its fill's art (7 health, 9
 /// power, the player's own), where, lit or dimmed, and how full.
@@ -297,6 +355,7 @@ impl Hud {
         draw_gauge(vui, ui, 152, 151, [p[0], p[1] + 10], true, part);
         draw_gauge(vui, ui, 8, 136, p, true, v);
         self.draw_group(vui, ui, GROUP_AT, s);
+        self.draw_room_speakers(vui, ui, s);
         for g in member_gauges(s) {
             draw_gauge(vui, ui, g.bar, 136, g.at, g.lit, g.v);
         }
@@ -324,6 +383,13 @@ impl Hud {
         // the quest tracker under it, placed the same way (`tracker`)
         if let Some(r) = crate::tracker::draw(ui, &s.tracker) {
             self.note(ui, r, Pick::Quests);
+        }
+        // the mic badge left of the minimap's foot, placed the same way
+        if let Some(b) = &s.voice {
+            ui.ui.anchor = Anchor::Right;
+            ui.ui.vertical = Vertical::Top;
+            crate::voicewnd::draw_badge(vui, ui, b, s.time_ms);
+            self.note(ui, crate::voicewnd::BADGE, Pick::Voice);
         }
     }
 
@@ -379,9 +445,32 @@ impl Hud {
                     vui.blit_ex(ui, 119, p, 3, glow, 0);
                 }
             }
+            // voice chat's: the member's mark while it is in voice, a click
+            // on it muting it (`Pick::VoiceMark`)
+            if let Some(v) = s.voice_marks.iter().find(|v| v.group && same_name(&v.name, &m.name)) {
+                let at = [start[0] + VOICE_ON_BAR[0], start[1] + VOICE_ON_BAR[1]];
+                draw_voice_mark(vui, ui, at, v.level, v.muted);
+                self.note(ui, [at[0] - 3, at[1] - 3, at[0] + 16, at[1] + 13], Pick::VoiceMark(v.peer));
+            }
             p = [start[0], start[1] + 48];
         }
         self.glow1_on = if glowing { 1 } else { -1 };
+    }
+
+    /// The room's speakers who are not groupmates (whose bars show theirs):
+    /// each a mark and its name, right of the player's frame, while it speaks;
+    /// a click mutes it.
+    fn draw_room_speakers(&mut self, vui: &Vui, ui: &mut UiRaster, s: &HudState) {
+        let speaking = s.voice_marks.iter().filter(|v| v.room && !v.group && (v.level > crate::voice::SPEAKING || v.muted && v.level > 0.0)).take(ROOM_SPEAKERS_MOST);
+        for (k, v) in speaking.enumerate() {
+            let at = [ROOM_SPEAKERS_AT[0], ROOM_SPEAKERS_AT[1] + k as i32 * ROOM_SPEAKER_ROW];
+            draw_voice_mark(vui, ui, at, v.level, v.muted);
+            let mut w = vi::ui::Window::default();
+            w.init(vui, ui, [at[0] + 18 + 75, at[1] + 5], 150, 1, 0);
+            w.open(true);
+            w.text_box(vui, ui, &wide(&v.name), 0, 0, 150, 1, [0.62, 0.84, 1.0, if v.muted { 0.5 } else { 1.0 }], 2);
+            self.note(ui, [at[0] - 3, at[1] - 3, at[0] + 170, at[1] + 13], Pick::VoiceMark(v.peer));
+        }
     }
 
     /// `DrawPet`: the bar, glowing while the pet is the target, its name,
@@ -716,6 +805,91 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The mic badge's place (`voicewnd::BADGE`): a pointer finds it as the
+    /// minimap's, in a 4:3 window where it is, in a 16:9 one out at the
+    /// right (106 frame pixels), in a tall one (798x828) up at the top (85);
+    /// the control: voice off, no badge, nothing there. Needs a graphics
+    /// adapter; without one it says so and passes.
+    #[test]
+    fn a_pointer_finds_the_mic_badge_beside_the_minimap() {
+        let _gpu = crate::GPU_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut ui) = crate::ui::tests::layer() else {
+            eprintln!("SKIP: no graphics adapter");
+            return;
+        };
+        let mut atlas = vec![vi::ui::UiTexEntry::default(); 27];
+        atlas[26].uv1 = [16, 28];
+        let vui = crate::ui::Vui::new(Default::default(), Default::default(), atlas);
+        let assets = crate::ui::UiAssets::default();
+        let b = crate::voicewnd::BADGE;
+        let mid = [(b[0] + b[2]) as f32 / 2.0, (b[1] + b[3]) as f32 / 2.0];
+        for (size, side, up) in [((640, 480), 0.0, 0.0), ((1280, 720), 106.0, 0.0), ((798, 828), 0.0, 85.0)] {
+            for (voice, want) in [(Some(crate::voicewnd::Badge { connected: true, transmitting: true, level: 0.5 }), Some(Pick::Voice)), (None, None)] {
+                ui.begin(size);
+                let mut hud = Hud::new();
+                hud.draw(&vui, &mut assets.raster(&mut ui), &HudState { voice, ..Default::default() });
+                assert_eq!(hud.pick([mid[0] + side, mid[1] - up]), want, "{size:?}, {voice:?}");
+                if side + up > 0.0 {
+                    assert_eq!(hud.pick(mid), None, "{size:?}: not at the frame's own place");
+                }
+            }
+        }
+    }
+
+    /// A voice mark's bars: none lit at or below speaking, one to three as
+    /// the level rises; a roster's name is a member's whatever its case and
+    /// the demo's " (demo)" (the controls: another name, a name only
+    /// beginning the same).
+    #[test]
+    fn a_voice_mark_lights_by_its_level() {
+        use super::{same_name, voice_bars_lit};
+        let s = crate::voice::SPEAKING;
+        assert_eq!([0.0, s, s + 0.01, 0.7, 0.99, 1.0].map(voice_bars_lit), [0, 0, 1, 2, 3, 3]);
+        assert!(same_name("Jibrish", "jibrish") && same_name("Jibrish (demo)", "Jibrish"));
+        assert!(!same_name("Jibrishes", "Jibrish") && !same_name("Dabsha", "Jibrish") && !same_name("Jib", "Jibrish"));
+    }
+
+    /// The voice marks: a groupmate in voice has one on its bar, right of
+    /// its gauges and status icons, where a pointer finds it (and the bar
+    /// elsewhere is still the member's); a member not in voice none (the
+    /// control); the room's speaker who is not a groupmate is listed right of
+    /// the player's frame, a quiet one not. Needs a graphics adapter; without
+    /// one it says so and passes.
+    #[test]
+    fn the_voice_marks_sit_on_the_bars_and_beside_the_frame() {
+        use super::{GROUP_AT, ROOM_SPEAKERS_AT, VOICE_ON_BAR};
+        use crate::voice::Mark;
+        let _gpu = crate::GPU_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut ui) = crate::ui::tests::layer() else {
+            eprintln!("SKIP: no graphics adapter");
+            return;
+        };
+        assert!(VOICE_ON_BAR[0] > 125 && VOICE_ON_BAR[0] + 16 <= 174 && VOICE_ON_BAR[1] >= 25 && VOICE_ON_BAR[1] + 13 <= 46, "inside a member's bar, past its icons");
+        assert!(ROOM_SPEAKERS_AT[0] > 200, "right of the player's frame");
+        let mut atlas = vec![vi::ui::UiTexEntry::default(); 27];
+        atlas[26].uv1 = [16, 28];
+        let vui = crate::ui::Vui::new(Default::default(), Default::default(), atlas);
+        let assets = crate::ui::UiAssets::default();
+        let m = |id, name: &str| MemberState { id, name: name.into(), hp: Some((200, false, false)), ..Default::default() };
+        let mark = |peer, name: &str, level, group, room| Mark { peer, name: name.into(), level, muted: false, group, room };
+        let s = HudState {
+            group_count: 3,
+            group: vec![m(1, "Jibrish"), m(2, "Dabsha")],
+            voice_marks: vec![mark(9, "Jibrish (demo)", 0.7, true, false), mark(12, "Kellina", 0.8, false, true), mark(13, "Quiet", 0.0, false, true)],
+            ..Default::default()
+        };
+        ui.begin((640, 480));
+        let mut hud = Hud::new();
+        hud.draw(&vui, &mut assets.raster(&mut ui), &s);
+        let on = |bar: i32, d: [i32; 2]| [(GROUP_AT[0] + VOICE_ON_BAR[0] + d[0]) as f32, (GROUP_AT[1] + 48 * bar + VOICE_ON_BAR[1] + d[1]) as f32];
+        assert_eq!(hud.pick(on(0, [6, 5])), Some(Pick::VoiceMark(9)), "Jibrish's mark");
+        assert_eq!(hud.pick([GROUP_AT[0] as f32 + 87.0, GROUP_AT[1] as f32 + 12.0]), Some(Pick::Member(1)), "Jibrish's bar elsewhere");
+        assert_eq!(hud.pick(on(1, [6, 5])), Some(Pick::Member(2)), "Dabsha in no voice: no mark");
+        let row = |k: i32| [(ROOM_SPEAKERS_AT[0] + 40) as f32, (ROOM_SPEAKERS_AT[1] + 15 * k + 5) as f32];
+        assert_eq!(hud.pick(row(0)), Some(Pick::VoiceMark(12)), "the room's speaker, listed");
+        assert_eq!(hud.pick(row(1)), None, "a quiet one is not");
     }
 
     /// Target of Target: its bar just above the "Target" title, where a

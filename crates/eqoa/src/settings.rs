@@ -489,6 +489,38 @@ impl FrameRate {
     }
 }
 
+/// Voice Chat (Extended > Sound; the user, F3 pass 18: voice, "off until
+/// turned on", push-to-talk by default with open mic as the option): Off,
+/// nothing asked of the microphone and the server told nothing; Push to Talk,
+/// the group or the room hears the player while its key is held; Open Mic,
+/// both whenever the microphone hears speech (`voice`). Natively nothing
+/// cancels the echo of the voices heard: Open Mic wants headphones.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VoiceChat {
+    #[default]
+    Off,
+    PushToTalk,
+    OpenMic,
+}
+
+impl VoiceChat {
+    /// The row's order, which left and right step through (and round).
+    pub const ALL: [VoiceChat; 3] = [VoiceChat::Off, VoiceChat::PushToTalk, VoiceChat::OpenMic];
+
+    fn key(self) -> &'static str {
+        match self {
+            VoiceChat::Off => "off",
+            VoiceChat::PushToTalk => "ptt",
+            VoiceChat::OpenMic => "open",
+        }
+    }
+}
+
+/// Voice Volume's steps: tenths of the voices' own level, 0 to twice it, the
+/// voices' own (100%) the default.
+pub const VOICE_VOLUME_MAX: u8 = 20;
+pub const VOICE_VOLUME_GAME: u8 = 10;
+
 /// The Extended page's Controller Focus: which controllers a window of the
 /// client reads (`input::Gamepads`), kept for each window by the place it
 /// takes among the client's windows open on the computer (`multibox`).
@@ -705,6 +737,13 @@ pub struct ClientOptions {
     /// PS2's own filtering (F3 20261024-200725: "smooth out the text as per
     /// live").
     pub text: render::ui::TextFilter,
+    /// Voice Chat (`VoiceChat`), Voice Demo (the user, F3 pass 18: "a demo
+    /// mode for sandstorm": eqoaclassic's voice server where the server
+    /// offers none; off by default) and Voice Volume (the voices heard, in
+    /// tenths: 10 their own level).
+    pub voice: VoiceChat,
+    pub voice_demo: bool,
+    pub voice_volume: u8,
     /// Output Device, natively (F3 20261024-201433: the game played into
     /// the system's default output, a television, while the player listened
     /// elsewhere): none, the system's default, followed when it changes; or
@@ -782,6 +821,9 @@ impl Default for ClientOptions {
             map_markers: true,
             map_towns: true,
             loading_longer: true,
+            voice: VoiceChat::Off,
+            voice_demo: false,
+            voice_volume: VOICE_VOLUME_GAME,
             output: None,
         }
     }
@@ -893,6 +935,17 @@ impl ClientOptions {
         if !self.loading_longer {
             s.push_str("loading=instant\n");
         }
+        // Voice Chat only when on, Voice Demo only when on, Voice Volume only
+        // when not the voices' own
+        if self.voice != VoiceChat::Off {
+            s.push_str(&format!("voice={}\n", self.voice.key()));
+        }
+        if self.voice_demo {
+            s.push_str("voice_demo=on\n");
+        }
+        if self.voice_volume != VOICE_VOLUME_GAME {
+            s.push_str(&format!("voice_volume={}\n", self.voice_volume));
+        }
         if let Some(d) = self.output {
             s.push_str(&format!("output={}\n", d.as_str()));
         }
@@ -969,6 +1022,18 @@ impl ClientOptions {
                 ("map_towns", "off") => c.map_towns = false,
                 ("loading", "longer") => c.loading_longer = true,
                 ("loading", "instant") => c.loading_longer = false,
+                ("voice", v) => {
+                    if let Some(m) = VoiceChat::ALL.into_iter().find(|m| m.key() == v) {
+                        c.voice = m;
+                    }
+                }
+                ("voice_demo", "on") => c.voice_demo = true,
+                ("voice_demo", "off") => c.voice_demo = false,
+                ("voice_volume", v) => {
+                    if let Some(n) = v.parse::<u8>().ok().filter(|&n| n <= VOICE_VOLUME_MAX) {
+                        c.voice_volume = n;
+                    }
+                }
                 ("output", v) if !v.is_empty() => c.output = Some(DeviceName::new(v)),
                 ("ability_bars", v) => {
                     if let Some(n) = v.parse::<u8>().ok().filter(|&n| (ABILITY_BARS_GAME as i32..=crate::hudmenu::MAX_BARS).contains(&(n as i32))) {
@@ -1273,6 +1338,16 @@ pub fn set_quest_markers(on: bool) -> Result<(), String> {
     save_client()
 }
 
+/// Voice Chat and Voice Demo as the voice window chose them, kept at once
+/// (the window is no page's row that Save Changes keeps).
+pub fn set_voice(chat: VoiceChat, demo: bool) -> Result<(), String> {
+    let mut c = client();
+    c.voice = chat;
+    c.voice_demo = demo;
+    set_client(c);
+    save_client()
+}
+
 /// Whether the game asks to restart into a newer build (Update Notices).
 pub fn update_notices() -> bool {
     client().update_notices
@@ -1329,7 +1404,7 @@ pub fn describe() -> String {
         FrameRate::Display => "the display's",
     };
     format!(
-        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, output device {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, overlapping names {}, art {}, update notices {}, shouts {}, target of target {}, mana bars {}, minimap {}, quest markers {}, quest tracker {}, text {}, mipmaps {}, flora {}, environment {}, map markers {}, map towns {}, loading screens {}; {}",
+        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, output device {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, overlapping names {}, art {}, update notices {}, shouts {}, target of target {}, mana bars {}, minimap {}, quest markers {}, quest tracker {}, text {}, mipmaps {}, flora {}, environment {}, map markers {}, map towns {}, loading screens {}, voice chat {}, voice demo {}, voice volume {}%; {}",
         if c.lod { "on" } else { "off" },
         c.brightness,
         c.fog,
@@ -1370,6 +1445,13 @@ pub fn describe() -> String {
         if c.map_markers { "on" } else { "off" },
         if c.map_towns { "on" } else { "off" },
         if c.loading_longer { "longer" } else { "instant" },
+        match c.voice {
+            VoiceChat::Off => "off",
+            VoiceChat::PushToTalk => "push to talk",
+            VoiceChat::OpenMic => "open mic",
+        },
+        if c.voice_demo { "on" } else { "off" },
+        c.voice_volume as u32 * 10,
         kept_where()
     )
 }
@@ -1849,7 +1931,7 @@ mod tests {
             "Screen Shake only off, Capture Controller only on"
         );
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, overlapping names hide, art frontiers, update notices on, shouts heard, target of target off, mana bars on, minimap on, quest markers on, quest tracker on, text sharp, mipmaps on, flora on, environment on, map markers on, map towns on, loading screens longer; kept in the page's storage");
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, overlapping names hide, art frontiers, update notices on, shouts heard, target of target off, mana bars on, minimap on, quest markers on, quest tracker on, text sharp, mipmaps on, flora on, environment on, map markers on, map towns on, loading screens longer, voice chat off, voice demo off, voice volume 100%; kept in the page's storage");
         testing::reset(true);
         assert!(describe().ends_with("refused: nothing is kept"));
         testing::reset(false);
@@ -1954,6 +2036,27 @@ mod tests {
 
     /// Map Markers is on unless chosen off, kept only when off; a value not
     /// understood leaves it on. The control: off read back off.
+    /// Voice Chat is off by default (the user's), kept only when on, Voice
+    /// Demo only when on and Voice Volume only when not the voices' own; a
+    /// value read back as written (the controls: one it does not know, or a
+    /// volume past twice, is the default).
+    #[test]
+    fn voice_settings_kept_only_when_chosen() {
+        let d = ClientOptions::default();
+        assert_eq!((d.voice, d.voice_demo, d.voice_volume), (VoiceChat::Off, false, VOICE_VOLUME_GAME), "off, no demo, the voices' own level");
+        assert!(!d.to_text().contains("voice"), "the defaults write nothing of voice: {:?}", d.to_text());
+        for m in [VoiceChat::PushToTalk, VoiceChat::OpenMic] {
+            let c = ClientOptions { voice: m, voice_demo: true, voice_volume: 15, ..Default::default() };
+            let back = ClientOptions::from_text(&c.to_text());
+            assert_eq!((back.voice, back.voice_demo, back.voice_volume), (m, true, 15), "{:?}", c.to_text());
+        }
+        assert!(ClientOptions { voice: VoiceChat::PushToTalk, ..Default::default() }.to_text().contains("voice=ptt\n"));
+        for bad in ["voice=on", "voice=", "voice_volume=21", "voice_volume=x", "voice_demo=1"] {
+            let c = ClientOptions::from_text(bad);
+            assert_eq!((c.voice, c.voice_demo, c.voice_volume), (VoiceChat::Off, false, VOICE_VOLUME_GAME), "{bad}: the default");
+        }
+    }
+
     #[test]
     fn map_markers_kept_only_when_off() {
         assert!(ClientOptions::default().map_markers, "on");
