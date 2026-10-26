@@ -210,6 +210,24 @@ function slotTrack(e) {
   applyGains();
 }
 
+// Each forwarded packet carries its speaker's voice id as its one CSRC: the
+// newest a slot's receiver saw names who is on it now, ahead of {"slots"}.
+function slotsFromCsrc() {
+  const now = performance.now();
+  let changed = false;
+  for (const s of v.slots) {
+    const r = s.transceiver && s.transceiver.receiver;
+    if (!r || !r.getContributingSources) continue;
+    let best = null;
+    for (const c of r.getContributingSources()) if (!best || c.timestamp > best.timestamp) best = c;
+    if (best && now - best.timestamp < 1000 && best.source !== s.peer) {
+      s.peer = best.source;
+      changed = true;
+    }
+  }
+  if (changed) applyGains();
+}
+
 function fromServer(data) {
   let m;
   try {
@@ -341,6 +359,7 @@ window.eqoaVoice = {
   },
   // each speaker's level: the server's, or its slot's where that is louder
   levels() {
+    slotsFromCsrc();
     const now = performance.now();
     const out = new Map();
     for (const [peer, [l, at]] of v.levels) if (now - at < LEVEL_FRESH_MS) out.set(peer, l);
