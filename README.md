@@ -41,9 +41,9 @@ or a browser (each described where it lives below):
   Markers), UI (Ability Bars, Target of Target, Mana Bars, Minimap, Update Notices,
   Text: Sharp or Smooth), Controller (Controller Focus, Capture Controller), Camera (Distance,
   Turn Speed, Screen Shake), Characters (Level of Detail, NPC/PC Display and
-  Distance, Name Distance, Overlapping Names) and Sound (Sound in Background, Output Device:
-  the system's default, followed when it changes, or a device by its name), and
-  the rows below.
+  Distance, Name Distance, Overlapping Names), Sound (Sound in Background, Output Device:
+  the system's default, followed when it changes, or a device by its name) and
+  Quests (Quest Markers, Quest Tracker), and the rows below.
 - **More ability bars**: the Extended page's Ability Bars adds a third and a
   fourth, five abilities each, on the HUD and in the spell book, on a server
   that keeps abilities past the game's ten slots.
@@ -91,6 +91,26 @@ or a browser (each described where it lives below):
   guide's note, the rare creatures near it and notable drops; a coach's town,
   coachman and route), the coach routes as lines and the towns' names (X or
   ○ hides the markers, T or Select the names).
+- **Quest Markers** on the map (the Extended page's Quests, on unless turned
+  off), from a server that sends them (go-eqoa-server does, 0x7E03/0x7E04;
+  Sandstorm sends none, so there are none there): a gold "!" at each NPC with
+  a quest the player may take now (its class, race and level), a "?" where a
+  step of a quest under way is to be done (an NPC to see, or the nearest
+  places of the creatures a kill or loot step hunts), over the camps and
+  coaches, each with a card of its quests as theirs have (their names and
+  levels, the start of the offer or the step's journal line, and the rewards
+  or what the step needs) under the mouse, on a tap (a second puts the
+  waypoint on it, as a click does), or under the pad's middle cross; on the
+  minimap too (its rim while farther than it shows, the tooltip under the
+  mouse); J or R3 (or the map's Quests button) hides them, kept.
+- **The quest tracker** (the Extended page's Quests, on unless turned off),
+  from a server that sends it (go-eqoa-server does, 0x7E05/0x7E06): the
+  quests under way under the minimap and above the chat box, with no backing,
+  the words outlined, each quest's name in gold and what its step asks
+  counted under it ("Bat Eye: 0/3", "Speak with Kellina"), one counted whole
+  dimmed; as many as fit, then "+N more"; a click on it opens the quest
+  journal (closed, back to the world); hidden with the minimap (Hide UI, a
+  window open, the map up).
 - **The minimap** (UI's Minimap, on unless turned off): the map's pictures round
   the player under the quick menus' name plate, left of their icons (out at a wide
   window's right and up a tall one's top with them), north up, with the group, the

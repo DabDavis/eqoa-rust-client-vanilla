@@ -527,3 +527,53 @@ fn t_turns_the_town_names() {
     assert!(m.key(key::SELECT, true));
     assert!(crate::settings::map_towns(), "Select: shown again");
 }
+
+/// The quest marks answer the pointer over the markers: the mouse over a
+/// giver's "!" where a coach stands shows the mark's card, not the coach's
+/// (the control: the mark gone, the coach's); a finger's tap shows the mark's
+/// card with no waypoint, a second tap puts the waypoint on the giver; a coach
+/// a finger tapped keeps its card under the mouse over a mark (the control:
+/// let go, the mark's). J is R3: hidden, kept, the set let go and nothing
+/// answers; R3 again shows them.
+#[test]
+fn the_quest_marks_answer_the_pointer_over_the_markers() {
+    use super::markers::Marker;
+    use super::markers_data::COACHES;
+    use net::session::{MarkQuest, QuestMark};
+    crate::settings::testing::reset(false);
+    let size = (1280, 720);
+    let mut m = up(size);
+    let v = m.view.unwrap();
+    let ronks = COACHES.iter().position(|c| c.coachman == "Coachman Ronks").unwrap();
+    let at = COACHES[ronks].at;
+    let p = v.to_window(size, at);
+    let giver = QuestMark { kind: 1, world: 0, x: at[0] + 1.0, z: at[1], npc: "Commander Nothard".into(), quests: vec![MarkQuest { name: "The Militia Bracer".into(), levels: (1, 60), line: "Every recruit wears our bracer.".into(), detail: "430 XP".into() }] };
+    m.quests.set(std::slice::from_ref(&giver));
+    m.mouse_moved(p);
+    assert_eq!(m.cards(true), (Some(0), None), "the mark's card over the coach's");
+    m.quests.set(&[]);
+    assert_eq!(m.cards(true), (None, Some(Marker::Coach(ronks))), "the control: no mark, the coach's");
+    m.quests.set(std::slice::from_ref(&giver));
+    m.let_go();
+    // a finger: the mark's card, then the waypoint on the giver
+    assert!(m.click([p[0] + 3.0, p[1]], true));
+    assert_eq!((m.cards(false), m.waypoint(0)), ((Some(0), None), None), "a tap shows its card");
+    assert!(m.click(p, true));
+    assert_eq!((m.waypoint(0), m.quests.pinned), (Some([giver.x, giver.z]), None), "tapped again: the waypoint on the giver");
+    m.set_waypoint(0, None);
+    // the mark off the coach: a coach a finger tapped keeps its card
+    let off = v.to_world(size, [p[0] + 120.0, p[1]]);
+    m.quests.set(&[QuestMark { x: off[0], z: off[1], ..giver.clone() }]);
+    assert!(m.click(p, true));
+    m.mouse_moved([p[0] + 120.0, p[1]]);
+    assert_eq!(m.cards(true), (None, Some(Marker::Coach(ronks))), "the tapped coach's");
+    m.pinned = None;
+    assert_eq!(m.cards(true), (Some(0), None), "the control: let go, the mark's under the mouse");
+    // J is R3: hidden and kept, the set let go, nothing answers
+    assert_eq!(keyboard("j"), Some((key::R3, Hold::Once)));
+    assert!(m.key(key::R3, true));
+    assert!(!crate::settings::quest_markers(), "hidden, and kept");
+    assert!(m.quests.marks.is_empty() && m.cards(true).0.is_none(), "nothing answers");
+    assert!(m.key(key::R3, true));
+    assert!(crate::settings::quest_markers(), "shown again");
+}

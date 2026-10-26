@@ -118,6 +118,12 @@ pub fn waypoint_radius(size: (u32, u32)) -> (f32, f32) {
     (lines(size, 4.5), lines(size, 1.0))
 }
 
+/// A quest mark's badge (`quests`), its half side and its outline, in window
+/// pixels: a glyph's room, at every zoom.
+pub fn quest_radius(size: (u32, u32)) -> (f32, f32) {
+    (lines(size, 6.5), lines(size, 1.0))
+}
+
 /// A coach's horseshoe (`markers`), from its middle to an edge, and its
 /// outline's width, in window pixels: 8 and 1 of the frame's lines, about the
 /// player's dart (5 zoomed far out, `compact`, where a world's are many).

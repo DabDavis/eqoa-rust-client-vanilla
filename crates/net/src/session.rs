@@ -66,6 +66,124 @@ pub const OP_POWER_BARS: u16 = 0x7E01;
 /// count, then each a u32 id (as this client knows the entity) and a u8
 /// power of 255. Each is the whole set: an id it leaves out has no bar.
 pub const OP_POWER_BARS_DATA: u16 = 0x7E02;
+/// go-eqoa-server's own, no retail message: the quest marks the map draws (a
+/// "!" at each giver of a quest the player may take, a "?" where a step of
+/// its quests is to be done). A u32 after the opcode, both ways, as
+/// [`OP_POWER_BARS`]: offered once the player is in the world, answered 1 to
+/// have them and 0 to stop (`agree_quest_marks`). A PS2 ignores the offer.
+pub const OP_QUEST_MARKERS: u16 = 0x7E03;
+/// The marks, from a server the client asked ([`OP_QUEST_MARKERS`]): a u8
+/// count, then each its u8 kind ([`QuestMark::kind`]), u8 world, f32 x and z,
+/// the NPC's name and a u8 count of quests, each its name, u8 lowest and
+/// highest levels, a line and a detail; every text a u8 byte count and UTF-8.
+/// Each is the whole set.
+pub const OP_QUEST_MARKERS_DATA: u16 = 0x7E04;
+/// go-eqoa-server's own too: the quest tracker the HUD draws (each quest
+/// under way and what its step asks, counted: "Bat Eye 0/3"), offered and
+/// answered as [`OP_QUEST_MARKERS`] is (`agree_quest_progress`).
+pub const OP_QUEST_PROGRESS: u16 = 0x7E05;
+/// The tracker, from a server the client asked ([`OP_QUEST_PROGRESS`]): a u8
+/// count of quests (the journal's, in its order), each its name and a u8
+/// count of objectives, each its text, u16 had and u16 needed (needed 0:
+/// nothing to count); every text a u8 byte count and UTF-8. Each is the
+/// whole tracker.
+pub const OP_QUEST_PROGRESS_DATA: u16 = 0x7E06;
+
+/// One quest on the tracker ([`OP_QUEST_PROGRESS_DATA`]): its name and its
+/// step's objectives.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TrackedQuest {
+    pub name: String,
+    pub goals: Vec<QuestGoal>,
+}
+
+/// One objective: its words, and how many the player has of how many are
+/// needed (`need` 0: a thing to do, nothing to count).
+#[derive(Clone, Debug, PartialEq)]
+pub struct QuestGoal {
+    pub text: String,
+    pub have: u16,
+    pub need: u16,
+}
+
+impl QuestGoal {
+    /// Counted, and all there.
+    pub fn done(&self) -> bool {
+        self.need > 0 && self.have >= self.need
+    }
+}
+
+/// [`OP_QUEST_PROGRESS_DATA`]'s body, or None when it is short.
+fn read_quest_progress(r: &mut Reader) -> Option<Vec<TrackedQuest>> {
+    let text = |r: &mut Reader| {
+        let n = r.u8() as usize;
+        String::from_utf8_lossy(r.bytes(n)).into_owned()
+    };
+    let n = r.u8() as usize;
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        let name = text(r);
+        let g = r.u8() as usize;
+        let goals = (0..g)
+            .map(|_| {
+                let text = text(r);
+                QuestGoal { text, have: r.u16(), need: r.u16() }
+            })
+            .collect();
+        out.push(TrackedQuest { name, goals });
+    }
+    (!r.error).then_some(out)
+}
+
+/// One quest mark ([`OP_QUEST_MARKERS_DATA`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct QuestMark {
+    /// 1 a quest the player may take from this NPC ("!"), 2 a step of its
+    /// quests to do at it ("?"), 3 a kill or loot step's creature ("?")
+    pub kind: u8,
+    /// `gWorldInfo`'s index
+    pub world: u8,
+    pub x: f32,
+    pub z: f32,
+    /// the NPC's (or the creature's) name
+    pub npc: String,
+    pub quests: Vec<MarkQuest>,
+}
+
+/// One quest on a mark: its name and levels, a line (the start of the
+/// giver's offer, or the step's journal line) and a detail (its rewards, or
+/// what the step needs).
+#[derive(Clone, Debug, PartialEq)]
+pub struct MarkQuest {
+    pub name: String,
+    pub levels: (u8, u8),
+    pub line: String,
+    pub detail: String,
+}
+
+/// [`OP_QUEST_MARKERS_DATA`]'s body, or None when it is short.
+fn read_quest_marks(r: &mut Reader) -> Option<Vec<QuestMark>> {
+    let text = |r: &mut Reader| {
+        let n = r.u8() as usize;
+        String::from_utf8_lossy(r.bytes(n)).into_owned()
+    };
+    let n = r.u8() as usize;
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        let (kind, world, x, z) = (r.u8(), r.u8(), r.f32(), r.f32());
+        let npc = text(r);
+        let q = r.u8() as usize;
+        let quests = (0..q)
+            .map(|_| {
+                let name = text(r);
+                let levels = (r.u8(), r.u8());
+                MarkQuest { name, levels, line: text(r), detail: text(r) }
+            })
+            .collect();
+        out.push(QuestMark { kind, world, x, z, npc, quests });
+    }
+    (!r.error).then_some(out)
+}
 
 #[derive(Clone, Debug)]
 pub struct Shard {
@@ -298,6 +416,16 @@ pub struct Session {
     pub power_bars_offer: bool,
     power_bars_asked: Option<bool>,
     pub power_bars: Vec<(u32, u8)>,
+    /// Whether the server offered quest marks ([`OP_QUEST_MARKERS`]), what it
+    /// was last told, and the set it last sent ([`OP_QUEST_MARKERS_DATA`]).
+    pub quest_marks_offer: bool,
+    quest_marks_asked: Option<bool>,
+    pub quest_marks: Vec<QuestMark>,
+    /// The same for the quest tracker ([`OP_QUEST_PROGRESS`],
+    /// [`OP_QUEST_PROGRESS_DATA`]).
+    pub quest_progress_offer: bool,
+    quest_progress_asked: Option<bool>,
+    pub quest_progress: Vec<TrackedQuest>,
     user: String,
     token: [u8; 32],
     start: Instant,
@@ -364,6 +492,12 @@ impl Session {
             power_bars_offer: false,
             power_bars_asked: None,
             power_bars: Vec::new(),
+            quest_marks_offer: false,
+            quest_marks_asked: None,
+            quest_marks: Vec::new(),
+            quest_progress_offer: false,
+            quest_progress_asked: None,
+            quest_progress: Vec::new(),
             user: user.to_string(),
             token,
             start: Instant::now(),
@@ -484,6 +618,40 @@ impl Session {
         }
         self.power_bars_asked = Some(want);
         let mut w = Writer::op(OP_POWER_BARS);
+        w.u32(want as u32);
+        self.send(&w.data);
+    }
+
+    /// Quest Markers: a server that offered quest marks
+    /// ([`OP_QUEST_MARKERS`]) is told whether to send them (`want`), at once
+    /// and whenever that changes; one that made no offer is told nothing.
+    /// Off, the set it sent is forgotten.
+    pub fn agree_quest_marks(&mut self, want: bool) {
+        if !want {
+            self.quest_marks.clear();
+        }
+        if !self.quest_marks_offer || self.quest_marks_asked == Some(want) {
+            return;
+        }
+        self.quest_marks_asked = Some(want);
+        let mut w = Writer::op(OP_QUEST_MARKERS);
+        w.u32(want as u32);
+        self.send(&w.data);
+    }
+
+    /// Quest Tracker: a server that offered the tracker
+    /// ([`OP_QUEST_PROGRESS`]) is told whether to send it (`want`), as
+    /// `agree_quest_marks` tells it of the marks. Off, the tracker it sent is
+    /// forgotten.
+    pub fn agree_quest_progress(&mut self, want: bool) {
+        if !want {
+            self.quest_progress.clear();
+        }
+        if !self.quest_progress_offer || self.quest_progress_asked == Some(want) {
+            return;
+        }
+        self.quest_progress_asked = Some(want);
+        let mut w = Writer::op(OP_QUEST_PROGRESS);
         w.u32(want as u32);
         self.send(&w.data);
     }
@@ -681,6 +849,12 @@ impl Session {
                 self.power_bars_offer = false;
                 self.power_bars_asked = None;
                 self.power_bars.clear();
+                self.quest_marks_offer = false;
+                self.quest_marks_asked = None;
+                self.quest_marks.clear();
+                self.quest_progress_offer = false;
+                self.quest_progress_asked = None;
+                self.quest_progress.clear();
                 ev.push(Event::Promoted);
             }
             drdp::TYPE_DISCONNECT => {
@@ -732,6 +906,32 @@ impl Session {
                 let set: Vec<(u32, u8)> = (0..n).map(|_| (r.u32(), r.u8())).collect();
                 if !r.error {
                     self.power_bars = set;
+                }
+            }
+            OP_QUEST_MARKERS => {
+                // an offer (again at every world entry): told afresh
+                r.u32();
+                if !r.error {
+                    self.quest_marks_offer = true;
+                    self.quest_marks_asked = None;
+                }
+            }
+            OP_QUEST_MARKERS_DATA => {
+                if let Some(set) = read_quest_marks(&mut r) {
+                    self.quest_marks = set;
+                }
+            }
+            OP_QUEST_PROGRESS => {
+                // an offer (again at every world entry): told afresh
+                r.u32();
+                if !r.error {
+                    self.quest_progress_offer = true;
+                    self.quest_progress_asked = None;
+                }
+            }
+            OP_QUEST_PROGRESS_DATA => {
+                if let Some(set) = read_quest_progress(&mut r) {
+                    self.quest_progress = set;
                 }
             }
             0x0013 => {
@@ -1487,6 +1687,101 @@ mod tests {
         assert!(!s.power_bars_offer && s.power_bars.is_empty(), "a new connection, no offer yet");
         s.agree_power_bars(true);
         assert_eq!(answers(&mut s), [], "and nothing asked");
+    }
+
+    // Quest marks (go-eqoa-server's 0x7E03/0x7E04): nothing asked without an
+    // offer; an offer answered once for each change of mind; a set read whole
+    // (a giver's "!" with its quest's levels, offer and rewards), a short one
+    // not taken, off forgotten.
+    #[test]
+    fn quest_marks_offer_answer_and_set() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(_, d)| d.starts_with(&[0x03, 0x7E])).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        s.agree_quest_marks(true);
+        assert_eq!(answers(&mut s), [], "no offer, nothing asked");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x03, 0x7E, 1, 0, 0, 0]);
+        s.agree_quest_marks(true);
+        s.agree_quest_marks(true);
+        assert_eq!(answers(&mut s), [(251, vec![0x03, 0x7E, 1, 0, 0, 0])], "asked once");
+
+        let text = |b: &mut Vec<u8>, t: &str| {
+            b.push(t.len() as u8);
+            b.extend_from_slice(t.as_bytes());
+        };
+        let mut m = vec![0x04, 0x7E, 1, 1, 0];
+        m.extend_from_slice(&25403.5f32.to_le_bytes());
+        m.extend_from_slice(&15725.5f32.to_le_bytes());
+        text(&mut m, "Malsis");
+        m.push(1);
+        text(&mut m, "The pincers");
+        m.extend_from_slice(&[1, 10]);
+        text(&mut m, "You there.");
+        text(&mut m, "430 XP, Smoldering Aura");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, m.clone());
+        assert_eq!(
+            s.quest_marks,
+            [QuestMark {
+                kind: 1,
+                world: 0,
+                x: 25403.5,
+                z: 15725.5,
+                npc: "Malsis".into(),
+                quests: vec![MarkQuest { name: "The pincers".into(), levels: (1, 10), line: "You there.".into(), detail: "430 XP, Smoldering Aura".into() }],
+            }]
+        );
+        deliver(&mut s, drdp::TYPE_GUARANTEED, m[..m.len() - 4].to_vec());
+        assert_eq!(s.quest_marks.len(), 1, "a short set is not taken");
+        s.agree_quest_marks(false);
+        assert_eq!(answers(&mut s), [(251, vec![0x03, 0x7E, 0, 0, 0, 0])], "and stopped");
+        assert!(s.quest_marks.is_empty(), "off: the set forgotten");
+    }
+
+    /// The quest tracker's offer is answered once, its body read whole (the
+    /// counts, a goal done only counted and all there), a short one not
+    /// taken (the control), and off it is stopped and forgotten.
+    #[test]
+    fn quest_progress_offer_answer_and_set() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(_, d)| d.starts_with(&[0x05, 0x7E])).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        s.agree_quest_progress(true);
+        assert_eq!(answers(&mut s), [], "no offer, nothing asked");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x05, 0x7E, 1, 0, 0, 0]);
+        s.agree_quest_progress(true);
+        s.agree_quest_progress(true);
+        assert_eq!(answers(&mut s), [(251, vec![0x05, 0x7E, 1, 0, 0, 0])], "asked once");
+        let text = |b: &mut Vec<u8>, t: &str| {
+            b.push(t.len() as u8);
+            b.extend_from_slice(t.as_bytes());
+        };
+        let mut m = vec![0x06, 0x7E, 1];
+        text(&mut m, "Bat eyes");
+        m.push(2);
+        text(&mut m, "Bat Eye");
+        m.extend_from_slice(&[1, 0, 3, 0]);
+        text(&mut m, "Give to Kellina");
+        m.extend_from_slice(&[0, 0, 0, 0]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, m.clone());
+        let want = [TrackedQuest { name: "Bat eyes".into(), goals: vec![QuestGoal { text: "Bat Eye".into(), have: 1, need: 3 }, QuestGoal { text: "Give to Kellina".into(), have: 0, need: 0 }] }];
+        assert_eq!(s.quest_progress, want);
+        assert!(!s.quest_progress[0].goals[0].done() && !s.quest_progress[0].goals[1].done(), "1 of 3, and nothing counted");
+        assert!(QuestGoal { text: String::new(), have: 3, need: 3 }.done());
+        deliver(&mut s, drdp::TYPE_GUARANTEED, m[..m.len() - 2].to_vec());
+        assert_eq!(s.quest_progress, want, "a short one is not taken");
+        s.agree_quest_progress(false);
+        assert_eq!(answers(&mut s), [(251, vec![0x05, 0x7E, 0, 0, 0, 0])], "and stopped");
+        assert!(s.quest_progress.is_empty(), "off: forgotten");
     }
 
     // Msg000D's world entry is ONE datagram, as every PS2 capture's is: 0x0014,

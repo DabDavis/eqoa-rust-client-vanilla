@@ -503,6 +503,10 @@ pub fn shot_with(
                     continue;
                 }
                 let click = mouse.play(&step, (w, h), Instant::now());
+                // the map up: the script's cursor is its pointer too (a hover's tooltip)
+                if let Some(p) = play.as_mut().filter(|p| p.map.open) {
+                    p.map.mouse_moved([mouse.cursor.0 as f32, mouse.cursor.1 as f32]);
+                }
                 if let (Some(c), Some(p), Some(vp)) = (click, play.as_mut(), last_view) {
                     let mode = p.mode;
                     if p.point(c, (w, h), false) {

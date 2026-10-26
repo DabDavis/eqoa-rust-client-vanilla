@@ -32,6 +32,13 @@
 //! mouse, under a finger that tapped it (tapped again, the waypoint goes on
 //! it; a click puts it there at once) or under the pad's middle cross. X (○ on
 //! a pad) shows or hides them, as Extended's Map Markers does.
+//!
+//! Over them the quest marks a server sends (`quests`, the user's: "add quest
+//! markers for givers to the map too"): a gold "!" at a giver of a quest the
+//! player may take, a "?" where a step is to be done, each with a card of its
+//! quests that answers the pointer as a marker's does and before it. J (R3 on
+//! a pad, the Quests button) shows or hides them, as Extended's Quest Markers
+//! does.
 
 pub mod build;
 pub mod cells;
@@ -41,6 +48,7 @@ mod markers_data;
 // the minimap, in play under the quick menus (`mini`)
 pub mod mini;
 pub mod picture;
+pub mod quests;
 pub mod store;
 // natively (a page has nothing to call it; it compiles there as main.rs's
 // commands do)
@@ -150,6 +158,9 @@ pub struct Context<'a> {
     pub words: Option<&'a vi::strtab::StringTable>,
     /// the HUD's `VIUI`, once SUPPORT's atlas is here (the pad's glyphs)
     pub vui: Option<&'a vi::ui::Vui>,
+    /// the quest marks a server sent (`quests`) while it offers them, none
+    /// with Quest Markers off; `None` from a server that offers none
+    pub quest_marks: Option<&'a [net::session::QuestMark]>,
 }
 
 /// A world's map.
@@ -217,6 +228,8 @@ pub struct Map {
     /// the settings at the first use (`read_waypoints`)
     waypoints: BTreeMap<i32, [f32; 2]>,
     waypoints_read: bool,
+    /// the quest marks the server sent and the one a finger tapped (`quests`)
+    pub quests: quests::QuestMarks,
     /// the marker whose card a finger tapped up (`click`), and whether the
     /// mouse is over the map (its cursor's card); `hover_world`, a world
     /// point taken as the pointer's (`mapshot`'s `EQOA_MAP_HOVER`)
@@ -269,6 +282,7 @@ impl Map {
             key::CROSS if down => self.follow = true,
             key::SQUARE if down => self.square(),
             key::CIRCLE if down => self.toggle_markers(),
+            key::R3 if down => self.toggle_quests(),
             key::SELECT if down => self.toggle_towns(),
             key::R1 if down => self.steps -= 1,
             key::L1 if down => self.steps += 1,
@@ -403,6 +417,20 @@ impl Map {
                 return true;
             }
         }
+        // a quest mark (`quests`), over the markers, as a marker is: a tap
+        // shows its card, a click (or a second tap) puts the waypoint on it
+        if let Some(i) = self.quests.under(world, v, size, s, view::marker_reach(size, finger)) {
+            self.pinned = None;
+            if finger && self.quests.pinned != Some(i) {
+                self.quests.pinned = Some(i);
+                return true;
+            }
+            self.quests.pinned = None;
+            let at = [self.quests.marks[i].x, self.quests.marks[i].z];
+            self.set_waypoint(world, Some(at));
+            return true;
+        }
+        self.quests.pinned = None;
         // a marker: a tap shows its card, a click (or a second tap) puts the
         // waypoint on it
         if let Some(m) = crate::settings::map_markers().then(|| markers::under(world, v, size, s, finger)).flatten() {
@@ -432,6 +460,21 @@ impl Map {
         }
         self.pinned = None;
         crate::say(&format!("map: markers {}", if on { "shown" } else { "hidden" }));
+    }
+
+    /// R3 (J on a keyboard, the Quests button): the quest marks shown or
+    /// hidden, kept (Extended's Quest Markers); hidden, the server is told to
+    /// send none (`Play`'s `agree_quest_marks`).
+    fn toggle_quests(&mut self) {
+        let on = !crate::settings::quest_markers();
+        if let Err(e) = crate::settings::set_quest_markers(on) {
+            crate::say(&format!("map: quest marks {}, not kept: {e}", if on { "shown" } else { "hidden" }));
+        }
+        if !on {
+            self.quests.set(&[]);
+        }
+        self.quests.pinned = None;
+        crate::say(&format!("map: quest marks {}", if on { "shown" } else { "hidden" }));
     }
 
     /// The towns' names shown or hidden (T, Select), and kept.
@@ -466,6 +509,41 @@ impl Map {
             return markers::under(w.index, v, size, [size.0 as f32 / 2.0, size.1 as f32 / 2.0], false);
         }
         None
+    }
+
+    /// The quest mark whose card shows (`quests`), as `card_marker` picks a
+    /// marker's: the one a finger tapped, else the one under the mouse (not
+    /// while it drags the map), else, for a pad, the one under the middle
+    /// cross once the map is panned.
+    fn card_quest(&self, keyboard: bool) -> Option<usize> {
+        let (Some(v), Some(w)) = (self.view, self.world.as_ref()) else { return None };
+        let (size, world) = (self.size, w.index);
+        let reach = view::marker_reach(size, false);
+        if let Some(i) = self.quests.pinned.filter(|&i| self.quests.marks.get(i).is_some_and(|m| m.world as i32 == world)) {
+            return Some(i);
+        }
+        if let Some(p) = self.hover_world {
+            return self.quests.under(world, v, size, v.to_window(size, p), reach);
+        }
+        if self.pointer_seen
+            && !self.press.is_some_and(|p| p.dragged)
+            && let Some(i) = self.quests.under(world, v, size, self.cursor, reach)
+        {
+            return Some(i);
+        }
+        if !self.follow && !keyboard {
+            return self.quests.under(world, v, size, [size.0 as f32 / 2.0, size.1 as f32 / 2.0], reach);
+        }
+        None
+    }
+
+    /// The card to show, a quest mark's or a marker's: the quest mark's
+    /// (`card_quest`) first, the marks being over the markers, but a marker
+    /// a finger tapped keeps its card.
+    fn cards(&self, keyboard: bool) -> (Option<usize>, Option<markers::Marker>) {
+        let marker = self.card_marker(keyboard);
+        let quest = self.card_quest(keyboard).filter(|&i| self.quests.pinned == Some(i) || marker.is_none() || marker != self.pinned);
+        if quest.is_some() { (quest, None) } else { (None, marker) }
     }
 
     /// The coaches' horseshoe: the map's cache first (`ICON_FILE` under
@@ -595,6 +673,7 @@ impl Map {
     pub fn frame(&mut self, cx: &Context) {
         self.frame += 1;
         self.size = cx.size;
+        self.quests.set(cx.quest_marks.unwrap_or_default());
         self.read_waypoints();
         self.arrive(cx.player, cx.world);
         let name = cx.lib.files.get(WORLD_FILE).map(|f| f.0.clone()).unwrap_or_default();
@@ -804,7 +883,7 @@ impl Map {
     /// This frame's quads: the overview and the tiles; the grid, the
     /// group and the marker; the chrome (`chrome::draw`).
     fn compose(&mut self, cx: &Context) {
-        let card = self.card_marker(cx.keyboard);
+        let (quest, card) = self.cards(cx.keyboard);
         let icon = self.icon.tex;
         let (Some(w), Some(v), Some(l)) = (self.world.as_ref(), self.view, self.layers.as_mut()) else { return };
         let size = cx.size;
@@ -897,6 +976,7 @@ impl Map {
             names,
             keyboard: cx.keyboard,
             progress: (built < of).then_some((built, of)),
+            quests: cx.quest_marks.map(|_| crate::settings::quest_markers()),
         };
         let fallback;
         let vui = match cx.vui {
@@ -970,6 +1050,18 @@ impl Map {
             let placed = markers::place_names(&cands, gap, &obstacles, [c.corners[0][0], c.corners[0][1], c.corners[1][0], c.corners[1][1]]);
             markers::draw_towns(ui, white, fo, &placed, t, pad);
         }
+        // the quest marks (`quests`) over the markers and the towns' names,
+        // under the group and the player
+        let (lo, hi) = ([-40.0, -40.0], [size.0 as f32 + 40.0, size.1 as f32 + 40.0]);
+        let marks: Vec<(u8, [f32; 2])> = self
+            .quests
+            .of_world(w.index)
+            .map(|(_, m)| (m.kind, v.to_window(size, [m.x, m.z])))
+            .filter(|(_, p)| p[0] >= lo[0] && p[1] >= lo[1] && p[0] <= hi[0] && p[1] <= hi[1])
+            .map(|(kind, p)| (kind, f(p)))
+            .collect();
+        let (r, o) = view::quest_radius(size);
+        quests::draw_marks(ui, &l.assets, vui, white, &marks, r * k, o * k);
         // the group's members, their compass colours (1 green, 2 blue, 3 cyan, the rest yellow)
         for (pos, index) in &cx.group {
             let p = v.to_window(size, [pos[0], pos[2]]);
@@ -1012,11 +1104,13 @@ impl Map {
                 ui.push(Quad { tex: white, blend: 3, pos: d, uv: [[0.5, 0.5]; 4], color, clip: None });
             }
         }
-        // the card of the marker under the pointer, over the rest but the chrome
-        // (between the chrome's title and its legend)
-        if let Some(m) = card {
-            let band = chrome::clear_band(&footprint, c.corners);
-            let win = [[c.corners[0][0], band[0]], [c.corners[1][0], band[1]]];
+        // the card of the quest mark or the marker under the pointer, over the
+        // rest but the chrome (between the chrome's title and its legend)
+        let band = chrome::clear_band(&footprint, c.corners);
+        let win = [[c.corners[0][0], band[0]], [c.corners[1][0], band[1]]];
+        if let Some(m) = quest.and_then(|i| self.quests.marks.get(i)) {
+            markers::draw_lines_card(ui, &l.assets, vui, white, quests::card(m), f(v.to_window(size, [m.x, m.z])), win);
+        } else if let Some(m) = card {
             markers::draw_card(ui, &l.assets, vui, white, m, f(v.to_window(size, m.at())), win);
         }
         let mut r = l.assets.raster(ui);
@@ -1052,6 +1146,11 @@ impl Map {
         }
         if !crate::settings::map_towns() {
             waypoints.push_str(", town names hidden");
+        }
+        if !crate::settings::quest_markers() {
+            waypoints.push_str(", quest marks hidden");
+        } else if !self.quests.marks.is_empty() {
+            waypoints.push_str(&format!(", {} quest marks", self.quests.marks.len()));
         }
         match &self.world {
             Some(w) => format!("{}{}{waypoints}", w.builder.describe(), if self.open { ", up" } else { "" }),
@@ -1104,6 +1203,8 @@ pub fn keyboard(name: &str) -> Option<(i32, Hold)> {
         "space" | "enter" | "home" => (key::CROSS, Hold::Once),
         // Q is the keyboard's □ (`binds`' "talk" row): the waypoint
         "q" => (key::SQUARE, Hold::Once),
+        // J (the journal's letter) is R3: the quest marks shown or hidden
+        "j" => (key::R3, Hold::Once),
         "+" | "=" | "pageup" => (key::R1, Hold::Step),
         "-" | "_" | "pagedown" => (key::L1, Hold::Step),
         "up" | "w" => (key::UP, Hold::Held),

@@ -58,6 +58,9 @@ pub struct HudState {
     /// The minimap is up (`map::mini`, drawn by the map's own layer under
     /// the HUD): its place noted for a pointer, which opens the map there.
     pub minimap: bool,
+    /// The quest tracker's quests (`tracker`), none while it is not up: drawn
+    /// under the minimap, a pointer on it opens the quest journal.
+    pub tracker: Vec<net::session::TrackedQuest>,
     /// `m_selfId` and `m_target`.
     pub self_id: Option<u32>,
     pub target: u32,
@@ -141,6 +144,8 @@ pub enum Pick {
     TargetsTarget,
     /// the minimap (`map::mini`): the map opened
     Minimap,
+    /// the quest tracker (`tracker`): the quest journal opened
+    Quests,
 }
 
 /// The Target of Target bar's place (the frame's, out at a wide window's
@@ -315,6 +320,10 @@ impl Hud {
             ui.ui.anchor = Anchor::Right;
             ui.ui.vertical = Vertical::Top;
             self.note(ui, crate::map::mini::FRAME, Pick::Minimap);
+        }
+        // the quest tracker under it, placed the same way (`tracker`)
+        if let Some(r) = crate::tracker::draw(ui, &s.tracker) {
+            self.note(ui, r, Pick::Quests);
         }
     }
 

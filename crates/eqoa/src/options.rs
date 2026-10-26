@@ -73,7 +73,12 @@
 //!   not in front is not heard, `audio::set_heard`) and natively Output
 //!   Device (Default, the system's, followed when it changes, or a device
 //!   the system lists, the default while it is not connected: `audio`'s
-//!   `retarget`; its page says where the sound plays now).
+//!   `retarget`; its page says where the sound plays now);
+//! - Quests: Quest Markers (On: the map's marks of the quests the player may
+//!   take and the steps it has to do, from a server that sends them,
+//!   `map::quests`; Off: the server is asked for none; the map's own J or R3
+//!   turns it too) and Quest Tracker (On: the HUD's list of the quests under
+//!   way, each step counted, under the minimap, `tracker`; Off: none).
 //! Triangle goes back a step: a page to the categories, the categories to
 //! the options menu. They change as they are moved, Triangle on the options
 //! menu puts them back, and Save Changes keeps them with the game's
@@ -537,7 +542,7 @@ impl WndOptions {
     /// VSync (26) turn over, VSync natively only (a page's stays on with
     /// sound 9: the browser paces it); Name Distance (27) by tens from the
     /// game's 22 to 200 (`step_name_distance`); Text (30) goes between Sharp and
-    /// Smooth; Target of Target (31), Mana Bars (42), Minimap (44), Update Notices (29), Overlapping
+    /// Smooth; Target of Target (31), Mana Bars (42), Minimap (44), Quest Markers (45), Quest Tracker (46), Update Notices (29), Overlapping
     /// Names (34, Hide and Show), Mipmaps (35) and Loading Screens (38,
     /// Longer and Instant) turn over;
     /// Output Device (32) goes round the system default and the devices
@@ -614,6 +619,12 @@ impl WndOptions {
                     42 => c.mana_bars = !c.mana_bars,
                     // Minimap: drawn or not from the next frame (`map::mini`)
                     44 => c.minimap = !c.minimap,
+                    // Quest Markers: the server told from the next frame
+                    // (`Play::agree_quest_marks`), the map's marks drawn or not
+                    45 => c.quest_markers = !c.quest_markers,
+                    // Quest Tracker: the server told from the next frame
+                    // (`Play::agree_quest_progress`), the HUD's list drawn or not
+                    46 => c.quest_tracker = !c.quest_tracker,
                     // Overlapping Names: the plates kept from the next
                     // frame (`play::labels`)
                     34 => c.overlapping_names = !c.overlapping_names,
@@ -1056,7 +1067,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 29] = [
+const EXTENDED_ITEMS: [(i32, &str); 31] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1086,6 +1097,8 @@ const EXTENDED_ITEMS: [(i32, &str); 29] = [
     (42, "Mana Bars"),
     (43, "Map Markers"),
     (44, "Minimap"),
+    (45, "Quest Markers"),
+    (46, "Quest Tracker"),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1111,7 +1124,7 @@ struct Category {
 
 /// Extended's categories, in its menu's order (the user's: "Extended, then
 /// Video, UI, Controller, etc."), each a page of `PAGE_MOST` rows at most.
-const CATEGORIES: [Category; 7] = [
+const CATEGORIES: [Category; 8] = [
     Category { name: "Video", items: VIDEO, note: Note::None },
     Category { name: "World", items: &[20, 35, 36, 37, 25, 43], note: Note::None },
     Category { name: "UI", items: &[22, 31, 42, 44, 29, 30], note: Note::None },
@@ -1119,6 +1132,9 @@ const CATEGORIES: [Category; 7] = [
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
     Category { name: "Characters", items: &[12, 23, 24, 27, 34], note: Note::Server },
     Category { name: "Sound", items: SOUND, note: Note::Output },
+    // the quests' (UI holds its six): the marks a server sends for the map
+    // and its tracker for the HUD
+    Category { name: "Quests", items: &[45, 46], note: Note::None },
 ];
 
 /// Video's rows: natively Display first (F3 20261024-201507: full screen was
@@ -1195,6 +1211,8 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         31 => on_off(c.target_of_target),
         42 => on_off(c.mana_bars),
         44 => on_off(c.minimap),
+        45 => on_off(c.quest_markers),
+        46 => on_off(c.quest_tracker),
         34 => wide(if c.overlapping_names { "Show" } else { "Hide" }),
         35 => on_off(c.mipmaps),
         36 => on_off(c.flora),
@@ -1724,8 +1742,27 @@ mod tests {
         press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!((w.row, cues.last()), (1, Some(&9)), "Sound's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
+        // Quests: Quest Markers
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.cat_sel, cues.last()), (6, Some(&9)), "Sound, the last category");
+        press(&mut w, &mut o, key::CROSS, &mut cues);
+        assert_eq!((w.cat, w.item), (Some(7), 45), "Quests, Quest Markers");
+        assert!(settings::client().quest_markers, "on: the map's marks where the server sends them");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::client().quest_markers, cues.last()), (false, Some(&11)), "off");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(settings::client().quest_markers, "and back: two values");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.item, 46, "Quest Tracker");
+        assert!(settings::client().quest_tracker, "on: the HUD's list where the server sends it");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::client().quest_tracker, cues.last()), (false, Some(&11)), "off");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(settings::client().quest_tracker, "and back: two values");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (1, Some(&9)), "Quests' last row");
+        press(&mut w, &mut o, key::TRIANGLE, &mut cues);
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.cat_sel, cues.last()), (7, Some(&9)), "Quests, the last category");
         // Triangle: the menu, then closed with every setting put back
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!((w.page, w.sel), (-1, 3), "the menu, on Extended");

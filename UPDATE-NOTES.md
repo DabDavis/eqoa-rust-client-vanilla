@@ -5,6 +5,29 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · A quest tracker
+- Under the minimap, the quests you are on and what each one wants next, counted as you go:
+  "Bat Eye: 1/3", "Orc Pawn: 2/3", "Speak with Kellina". A goal you have all of turns grey.
+  On a server that sends it (ours does; Sandstorm sends none).
+- It has no box behind it, so the world shows through; when there is not room for all your
+  quests it shows the first ones and how many more there are.
+- Click it to open your quest journal. Turn it off under Options > Extended > Quests >
+  Quest Tracker.
+
+## 2026-10-26 · Quest markers on the map
+- The map shows where your quests are, on a server that sends them (ours does;
+  Sandstorm sends none): a gold "!" at each NPC with a quest you can take now,
+  for your class, race and level, and a "?" where a quest you are on needs
+  you: the NPC to see next, or the nearest places of the creatures to hunt.
+- Point at a mark (or tap it, or pan the map's cross onto it with a
+  controller) to see its quests: their names and levels, how the offer starts
+  or what the step asks, and the rewards or what you still need. Click it, or
+  tap it again, to put your waypoint on it.
+- The marks sit over the XP camps and coaches, and are on the minimap too, on
+  its edge while farther than it shows (point at one for its quests). J on the
+  map (R3 on a pad, or the map's Quests button) hides or shows them, and so
+  does Options > Extended > Quests > Quest Markers.
+
 ## 2026-10-26 · A minimap
 - A minimap in the top right, under the name plate of the menus beside it: the map's own
   picture of the land round you, north up, with you as the arrow in the middle, your group in

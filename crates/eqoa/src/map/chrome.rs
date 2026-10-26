@@ -20,6 +20,8 @@ const PAD_LEGEND: [(i32, &str); 9] = [(65, "Close"), (66, "Center"), (67, "Waypo
 const KEY_LEGEND: [&str; 7] = ["M Close", "Space Center", "+ - or wheel Zoom", "Arrows, WASD or drag Pan", "Click or Q Waypoint", "X Markers", "T Towns"];
 
 pub const NAME: [f32; 4] = [1.0, 0.97, 0.85, 1.0];
+/// A button's words while what it shows is hidden.
+const DIM: [f32; 4] = [0.55, 0.53, 0.48, 1.0];
 const PANEL: i32 = 61;
 
 /// What the chrome shows.
@@ -33,12 +35,16 @@ pub struct Chrome {
     pub keyboard: bool,
     /// zones on the map, of how many, while it is being drawn
     pub progress: Option<(usize, usize)>,
+    /// while a server offers quest marks (`quests`): whether they are shown,
+    /// for their button and the legend's R3 (J on a keyboard)
+    pub quests: Option<bool>,
 }
 
 /// A panel the size of `w` x `h` at `at` (VIWndGoto's).
-fn panel(vui: &Vui, r: &mut dyn Raster, at: [i32; 2], w: i32, h: i32) {
+pub fn panel(vui: &Vui, r: &mut dyn Raster, at: [i32; 2], w: i32, h: i32) {
     vui.stretch_blit_ex(r, PANEL, at, [w, h], 3, 0.75);
 }
+
 
 /// A button drawn: its frame rectangle (x0, y0, x1, y1) and its key.
 pub type Button = ([i32; 4], i32);
@@ -131,6 +137,16 @@ pub fn draw(r: &mut dyn Raster, vui: &Vui, c: &Chrome) -> Vec<Button> {
         hits.push(([at[0], at[1], at[0] + bw, at[1] + line], k));
         x = at[0] - 6;
     }
+    // the quest marks' button, while a server sends them: dim while hidden
+    if let Some(shown) = c.quests {
+        let s = wide("Quests");
+        let bw = r.string_width(&s).max(0) + 16;
+        let at = [x - bw, tl[1] + m];
+        panel(vui, r, at, bw, line);
+        vui.draw_centered_string_ex(r, &s, at[0] + bw / 2, at[1] + line / 2, if shown { NAME } else { DIM }, 0, true);
+        hits.push(([at[0], at[1], at[0] + bw, at[1] + line], key::R3));
+        x = at[0] - 6;
+    }
     // the title, top left (under the buttons when they would meet), and the
     // build's progress under it
     let s = wide(&c.title);
@@ -149,7 +165,12 @@ pub fn draw(r: &mut dyn Raster, vui: &Vui, c: &Chrome) -> Vec<Button> {
         vui.draw_string_ex(r, &s, tl[0] + m + 6, y + 3, NAME, true);
     }
     // the legend: its pieces (a glyph or none, and words) in lines that fit
-    let pieces: Vec<(i32, &str)> = if c.keyboard { KEY_LEGEND.iter().map(|s| (-1, *s)).collect() } else { PAD_LEGEND.to_vec() };
+    let mut pieces: Vec<(i32, &str)> = if c.keyboard { KEY_LEGEND.iter().map(|s| (-1, *s)).collect() } else { PAD_LEGEND.to_vec() };
+    if c.quests.is_some() {
+        // after the towns' key (R3's glyph, 215, inline)
+        let at = pieces.iter().position(|p| p.1.ends_with("Towns")).map_or(pieces.len(), |i| i + 1);
+        pieces.insert(at, if c.keyboard { (-1, "J Quests") } else { (215, "Quests") });
+    }
     let width = |r: &dyn Raster, (g, s): (i32, &str)| if g >= 0 { vui.entry(g).uv1[0] + 2 } else { 0 } + r.string_width(&wide(s)).max(0) + 12;
     let mut lines: Vec<Vec<(i32, &str)>> = vec![Vec::new()];
     let mut used = 0;
@@ -234,7 +255,7 @@ mod tests {
     }
 
     fn chrome(keyboard: bool) -> Chrome {
-        Chrome { corners: [[-106.0, 0.0], [746.0, 448.0]], title: "Tunaria: Freeport (North)".into(), names: Vec::new(), keyboard, progress: Some((3, 175)) }
+        Chrome { corners: [[-106.0, 0.0], [746.0, 448.0]], title: "Tunaria: Freeport (North)".into(), names: Vec::new(), keyboard, progress: Some((3, 175)), quests: None }
     }
 
     /// The chrome's footprint covers its title (top left), its buttons (top
@@ -279,5 +300,21 @@ mod tests {
         // a finger's slop reaches a button just missed
         assert_eq!(map.point([close[2] as f32 + 3.0, mid(close)[1]], true), vec![key::TRIANGLE]);
         assert!(map.point([close[2] as f32 + 3.0, mid(close)[1]], false).is_empty());
+    }
+
+    /// While a server offers quest marks the chrome has their button, R3's
+    /// (hidden or shown), left of the others and pressed where drawn; the
+    /// control: with none, no R3 anywhere.
+    #[test]
+    fn the_quest_marks_button_is_there_only_with_marks() {
+        for shown in [true, false] {
+            let hits = draw(&mut NullRaster, &vui(), &Chrome { quests: Some(shown), ..chrome(true) });
+            let quests = hits.iter().find(|h| h.1 == key::R3).expect("the marks' button").0;
+            assert!(hits.iter().filter(|h| h.1 != key::R3).all(|h| h.0[0] > quests[2]), "left of the others: {hits:?}");
+            let mut map = super::super::Map { buttons: hits.clone(), ..Default::default() };
+            assert_eq!(map.point(mid(quests), false), vec![key::R3]);
+            map.buttons.clear();
+        }
+        assert!(draw(&mut NullRaster, &vui(), &chrome(true)).iter().all(|h| h.1 != key::R3), "no marks, no button");
     }
 }

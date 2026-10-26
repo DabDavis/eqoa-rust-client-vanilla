@@ -525,10 +525,16 @@ pub fn draw_badges(ui: &mut Ui, assets: &crate::ui::UiAssets, vui: &vi::ui::Vui,
 /// frame corners `win`: its lines wrapped to `CARD_WIDTH` on a dark backing
 /// under the game's panel (VIWndGoto's, as the map's chrome has it).
 pub fn draw_card(ui: &mut Ui, assets: &crate::ui::UiAssets, vui: &vi::ui::Vui, white: usize, m: Marker, p: [f32; 2], win: [[f32; 2]; 2]) {
+    draw_lines_card(ui, assets, vui, white, m.card(), p, win);
+}
+
+/// A card of `card`'s lines (a marker's, a quest mark's: `quests::card`)
+/// beside frame point `p`, as `draw_card` draws a marker's.
+pub fn draw_lines_card(ui: &mut Ui, assets: &crate::ui::UiAssets, vui: &vi::ui::Vui, white: usize, card: Vec<(String, [f32; 4])>, p: [f32; 2], win: [[f32; 2]; 2]) {
     let (lines, line, width) = {
         let r = assets.raster(ui);
         let mut lines: Vec<(String, [f32; 4])> = Vec::new();
-        for (text, color) in m.card() {
+        for (text, color) in card {
             lines.extend(wrap(&r, &text, CARD_WIDTH).into_iter().map(|l| (l, color)));
         }
         let width = lines.iter().map(|(l, _)| r.string_width(&vi::ui::wide(l))).max().unwrap_or(0);
