@@ -5,6 +5,20 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · A voice chat window
+- Press O (or type /voice in the chat) for the voice chat window: turn voice chat on or off and
+  pick Push to Talk or Open Mic, see whether you are connected and how loud your microphone is,
+  and which keys talk (V to your group, N to your room; change them on the Controls page).
+- It lists your group and your room with a light by each person who is talking. Turn anyone up or
+  down (0 to 200%) or mute them.
+- Join a room from the lobby (a locked one asks for its password), leave the one you are in, or
+  join a room by typing its name: that is also how you make one, with a password if you like, and
+  unlisted if only people who know its name should find it.
+- While voice chat is on, a small microphone sits left of the minimap: grey while you are quiet,
+  green while you are heard. Click it to open the window.
+- Works with the keyboard, a controller (✕ to choose, △ to close, L1 and R1 to jump between
+  parts) and the mouse or touch screen.
+
 ## 2026-10-26 · A quest tracker
 - Under the minimap, the quests you are on and what each one wants next, counted as you go:
   "Bat Eye: 1/3", "Orc Pawn: 2/3", "Speak with Kellina". A goal you have all of turns grey.
