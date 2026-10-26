@@ -490,7 +490,8 @@ fn run(args: &[String]) -> Result<()> {
                 Ok((s * 1000.0) as i32)
             };
             let lib = fxview::library_off(&mut disc(None)?)?;
-            // `EQOA_FX_AIM=caster|human|dummy`: what the cast lands on (a dummy)
+            // `EQOA_FX_AIM=caster|human|dummy|both`: what the cast lands on (a
+            // dummy; `both` a second human, and a third casting at itself)
             let aim = std::env::var("EQOA_FX_AIM").ok().and_then(|a| fxview::Aim::parse(&a));
             match rest.get(1).filter(|a| a.ends_with(".png")) {
                 Some(out) => {

@@ -40,7 +40,7 @@
     <input id="fx" value="0xE78024D9" spellcheck="false">
     <div class="row">
       <div><label for="secs">Cast time (seconds)</label><input id="secs" type="number" min="0" max="30" step="0.1" value="2"></div>
-      <div><label for="aim">Lands on</label><select id="aim"><option value="dummy">a training dummy</option><option value="human">a second human</option><option value="caster">the caster</option></select></div>
+      <div><label for="aim">Lands on</label><select id="aim"><option value="dummy">a training dummy</option><option value="human">a second human</option><option value="caster">the caster</option><option value="both">the caster and a second human</option></select></div>
     </div>
     <div id="error"></div>
     <div class="row"><button class="primary" type="submit">Play</button></div>
@@ -49,7 +49,7 @@
 <div id="bar" hidden>
   <input id="bar-fx" spellcheck="false" aria-label="Visual">
   <input id="bar-secs" type="number" min="0" max="30" step="0.1" aria-label="Cast time (seconds)" style="width:5em">
-  <select id="bar-aim" aria-label="Lands on"><option value="dummy">dummy</option><option value="human">human</option><option value="caster">caster</option></select>
+  <select id="bar-aim" aria-label="Lands on"><option value="dummy">dummy</option><option value="human">human</option><option value="caster">caster</option><option value="both">caster + human</option></select>
   <button id="bar-play" type="button">Play</button>
   <button id="bar-again" type="button" title="Cast again now (Space)">Again</button>
 </div>

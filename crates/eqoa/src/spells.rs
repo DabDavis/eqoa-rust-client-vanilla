@@ -306,6 +306,12 @@ impl Spells {
         self.by_dict.get(&effect).copied()
     }
 
+    /// The playbacks running (a cast is one until its effect ends).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn playing(&self) -> usize {
+        self.sys.playing()
+    }
+
     /// Nothing of any effect is left: no playback running, no particle
     /// alive, nothing flying (the preview casts again then, `fxview`).
     pub fn quiet(&self) -> bool {

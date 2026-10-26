@@ -57,6 +57,8 @@
   .stage iframe { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; border-radius: 8px; background: #05070a; }
   .stage .controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
   .stage .controls select { flex: 1 1 160px; }
+  .stage .controls .hint { color: var(--dim); font-size: 12px; }
+  @media (hover: none) { .stage .controls .hint { display: none; } }
   .stage .caption { color: var(--dim); font-size: 12px; min-height: 1.3em; overflow-wrap: anywhere; }
   .pick { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 13px; }
   .pick .k { color: var(--dim); }
@@ -115,15 +117,16 @@
     <div class="stage" id="stage">
       <iframe id="preview" title="Spell visual preview"></iframe>
       <div class="controls">
-        <button type="button" id="prev" title="The visual before (in the list)">◀</button>
+        <button type="button" id="prev" title="The visual before (in the list): W" aria-keyshortcuts="W">◀</button>
         <button type="button" id="again" title="Cast it again">Again</button>
-        <button type="button" id="next" title="The next visual (in the list)">▶</button>
+        <button type="button" id="next" title="The next visual (in the list): S" aria-keyshortcuts="S">▶</button>
         <select id="aim" aria-label="What the cast lands on">
           <option value="auto">Lands on: by the spell</option>
-          <option value="dummy">Lands on: a training dummy</option>
+          <option value="both">Lands on: the caster and a second human</option>
           <option value="human">Lands on: a second human</option>
           <option value="caster">Lands on: the caster</option>
         </select>
+        <span class="hint">W / S: the visual before / after</span>
       </div>
       <div class="caption" id="caption">Choose your disc image to see the visuals.</div>
       <div class="discline" id="disc-line" hidden><span id="disc-name"></span><button type="button" id="disc-change">Change</button></div>

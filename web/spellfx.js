@@ -17,8 +17,6 @@ const params = new URLSearchParams(location.search);
 const API = (params.get('api') || '/eqoa/account/api/spellfx').replace(/\/$/, '');
 const CLASSES = ['Warrior', 'Ranger', 'Paladin', 'Shadow Knight', 'Monk', 'Bard', 'Rogue', 'Druid', 'Shaman', 'Cleric', 'Magician', 'Necromancer', 'Enchanter', 'Wizard', 'Alchemist'];
 const SHORT = ['WAR', 'RAN', 'PAL', 'SK', 'MNK', 'BRD', 'RGE', 'DRD', 'SHA', 'CL', 'MAG', 'NEC', 'ENC', 'WIZ', 'ALC'];
-// the body every training dummy wears (CHAR.ESF) and its rows' size, as the GM panel's preview has it
-const DUMMY = { model: '0x66262F1C', size: 0.25 };
 const store = {
   get(k) { try { return localStorage.getItem('eqoa.' + k) || ''; } catch { return ''; } },
   set(k, v) { try { localStorage.setItem('eqoa.' + k, v); } catch { /* private window */ } },
@@ -203,14 +201,22 @@ const frameUrl = new URL('fxview.html', import.meta.url);
 frame.src = frameUrl.href;
 const post = (m) => frame.contentWindow && frame.contentWindow.postMessage(m, location.origin);
 
+// what a cast lands on: the one picked, or by the spell (a harmful one, and a
+// visual tried with no spell, at a second human; the rest at the caster); never
+// the training dummy, whose rows are a quarter size and shrink what lands on it
+// (the user: "the hitbox makes the spellfx smaller harder to see, while human
+// target is accurate"). 'both' is the caster and a second human at once (the
+// user: "an option so the spell casts on a target and self"): the preview's
+// human on the left casts it at itself as the one beside it casts it at the
+// human on the right.
 function aimFor(spell) {
   const a = $('aim').value;
   if (a !== 'auto') return a;
-  return spell ? (spell.harmful ? 'dummy' : 'caster') : 'dummy';
+  return spell && !spell.harmful ? 'caster' : 'human';
 }
 const castMs = (spell) => Math.round((spell && Number.isFinite(Number(spell.cast)) ? Number(spell.cast) : 2) * 1000);
 
-const AIMS = { dummy: 'the training dummy', human: 'a second human', caster: 'the caster' };
+const AIMS = { human: 'a second human', caster: 'the caster', both: 'a second human (right) and, cast by the one on the left, on itself' };
 
 function play(visual) {
   if (!visual) return;
@@ -230,7 +236,7 @@ function startPreview(first) {
   const playMsg = first || { effect: state.playing || '', castMs: castMs(state.spell), aim: aimFor(state.spell) };
   state.sent = playMsg.effect;
   $('caption').textContent = 'reading your disc…';
-  post({ type: 'fxview-disc', file: state.disc, play: playMsg, dummy: DUMMY });
+  post({ type: 'fxview-disc', file: state.disc, play: playMsg });
 }
 
 addEventListener('message', (e) => {
@@ -293,7 +299,31 @@ function step(by) {
 $('prev').addEventListener('click', () => step(-1));
 $('next').addEventListener('click', () => step(1));
 $('again').addEventListener('click', () => state.started && post({ type: 'fxview-again' }));
-$('aim').addEventListener('change', () => { if (state.playing) play(state.playing); });
+// what it lands on, kept for the next visit
+if ([...$('aim').options].some((o) => o.value === store.get('spellfxAim'))) $('aim').value = store.get('spellfxAim');
+$('aim').addEventListener('change', () => {
+  store.set('spellfxAim', $('aim').value);
+  if (state.playing) play(state.playing);
+});
+
+// W and S: the visual before and after, as ◀ and ▶ (the user: "allow W/S to go
+// to next/prev spell fx without clicking on the webpage"), from anywhere on the
+// page and from the preview (its frame is this origin's), but not while a box
+// takes typing; a key held steps once
+function stepKey(ev) {
+  if (ev.repeat || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  const by = { w: -1, s: 1 }[String(ev.key).toLowerCase()];
+  if (!by) return;
+  const t = ev.target;
+  if (t && (t.isContentEditable || t.tagName === 'TEXTAREA' || (t.tagName === 'INPUT' && !/^(checkbox|radio|button|submit|file)$/.test(t.type)))) return;
+  ev.preventDefault();
+  step(by);
+}
+document.addEventListener('keydown', stepKey);
+// the preview's own document, each time it loads (a disc changed loads it again)
+frame.addEventListener('load', () => {
+  try { frame.contentWindow.addEventListener('keydown', stepKey, true); } catch { /* not this origin */ }
+});
 
 // ---- the form
 // the spells a pick is for: the ticked ones, else the one picked
