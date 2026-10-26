@@ -14,3 +14,8 @@ opus = "0.4.0"
 cpal = "0.16"
 serde_json.workspace = true
 bytes = "1"
+
+# the ignored end-to-end test's way to the voice server's demo WebSocket (src/live.rs); the
+# version the game's own demo client takes
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }

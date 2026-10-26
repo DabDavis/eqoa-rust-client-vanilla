@@ -3851,6 +3851,7 @@ dependencies = [
  "rtc",
  "serde_json",
  "tokio",
+ "tungstenite",
  "webrtc",
 ]
 

@@ -83,6 +83,8 @@ mod jitter;
 mod native;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod live;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::{NativeEngine, SLOTS, VoiceOutput};

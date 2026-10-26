@@ -226,6 +226,7 @@ impl PeerConnectionEventHandler for HubHandler {
                 for (listener, slot) in routes {
                     let Some(outs) = hub.slots.lock().unwrap().get(&listener).cloned() else { continue };
                     let out = &outs[slot];
+                    // as the forwarding server sends it: the speaker's voice id its one CSRC
                     let packet = rtp::Packet {
                         header: rtp::header::Header {
                             version: 2,
@@ -234,6 +235,7 @@ impl PeerConnectionEventHandler for HubHandler {
                             sequence_number: out.seq.fetch_add(1, Ordering::Relaxed),
                             timestamp: p.header.timestamp,
                             ssrc: out.ssrc,
+                            csrc: vec![client],
                             ..Default::default()
                         },
                         payload: p.payload.clone(),
@@ -261,7 +263,7 @@ impl PeerConnectionEventHandler for HubHandler {
 }
 
 /// A sine at `freq`, 0.3 full scale (RMS 0.212, −13.5 dBFS), for a microphone.
-fn tone(freq: f64) -> impl FnMut(&mut [f32]) + Send {
+pub(crate) fn tone(freq: f64) -> impl FnMut(&mut [f32]) + Send {
     let mut t = 0u64;
     move |frame| {
         for s in frame {
@@ -272,7 +274,7 @@ fn tone(freq: f64) -> impl FnMut(&mut [f32]) + Send {
 }
 
 /// The power at `freq` (Goertzel), per sample squared.
-fn power(x: &[f32], freq: f64) -> f64 {
+pub(crate) fn power(x: &[f32], freq: f64) -> f64 {
     let c = 2.0 * (2.0 * std::f64::consts::PI * freq / 48_000.0).cos();
     let (mut s1, mut s2) = (0.0f64, 0.0f64);
     for &v in x {
@@ -284,7 +286,7 @@ fn power(x: &[f32], freq: f64) -> f64 {
     (s1 * s1 + s2 * s2 - c * s1 * s2) / (n * n)
 }
 
-fn rms(x: &[f32]) -> f32 {
+pub(crate) fn rms(x: &[f32]) -> f32 {
     (x.iter().map(|v| v * v).sum::<f32>() / x.len().max(1) as f32).sqrt()
 }
 
@@ -490,10 +492,10 @@ fn a_voice_goes_through_the_server() {
     assert!(power(b, 440.0) > 30.0 * power(b, 620.0), "and still the tone");
 }
 
-/// Four speakers on one listener's four slots, each played at the volume of the peer the
-/// server says is on it: all four heard; then 3 muted (gone), 2 at 200% (twice the amplitude),
-/// and 99, on no slot, muted (the control: nothing else changes); the speaking marks from the
-/// slots, and a server level for a peer on none.
+/// Four speakers on one listener's four slots, each played at the volume of the peer on it as
+/// its packets' CSRC says (no `{"slots"}` sent): all four heard; then 3 muted (gone), 2 at 200%
+/// (twice the amplitude), and 99, on no slot, muted (the control: nothing else changes); the
+/// speaking marks from the slots, and a server level for a peer on none.
 #[test]
 fn each_slot_plays_at_its_peers_volume() {
     let freqs = [300.0, 500.0, 700.0, 900.0];
@@ -507,7 +509,6 @@ fn each_slot_plays_at_its_peers_volume() {
         net.engine(i).set_send(1);
     }
     assert!(net.run_until(30_000, |n| n.hub.channels() == 5 && rms(n.tail(10, 200)) > 0.2), "the four within 30 s");
-    net.hub.say(10, r#"{"slots":[[0,1],[1,2],[2,3],[3,4]]}"#);
     net.run(1200);
     let before = net.tail(10, 1000).to_vec();
     for f in freqs {
