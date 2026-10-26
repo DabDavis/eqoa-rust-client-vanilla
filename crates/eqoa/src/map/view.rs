@@ -119,10 +119,23 @@ pub fn waypoint_radius(size: (u32, u32)) -> (f32, f32) {
 }
 
 /// A coach's horseshoe (`markers`), from its middle to an edge, and its
-/// outline's width, in window pixels: 6 and 1 of the frame's lines, a little
-/// smaller than the player's dart.
-pub fn horseshoe_radius(size: (u32, u32)) -> (f32, f32) {
-    (lines(size, 6.0), lines(size, 1.0))
+/// outline's width, in window pixels: 8 and 1 of the frame's lines, about the
+/// player's dart (5 zoomed far out, `compact`, where a world's are many).
+pub fn horseshoe_radius(size: (u32, u32), compact: bool) -> (f32, f32) {
+    (lines(size, if compact { 5.0 } else { 8.0 }), lines(size, 1.0))
+}
+
+/// A coach route's dashes (`markers`), the gaps between them, its line's
+/// half width and its shadow's more, in window pixels: 5, 3.5, 0.7 and 0.7 of
+/// the frame's lines.
+pub fn route_dash(size: (u32, u32)) -> (f32, f32, f32, f32) {
+    (lines(size, 5.0), lines(size, 3.5), lines(size, 0.7), lines(size, 0.7))
+}
+
+/// How far above (or below) its place a town's name sits (`markers`), in
+/// window pixels: clear of a coach's horseshoe there by 2 of the frame's lines.
+pub fn name_gap(size: (u32, u32), compact: bool) -> f32 {
+    horseshoe_radius(size, compact).0 + lines(size, 2.0)
 }
 
 /// How near a marker's middle a pointer must be to be on it (`markers::under`),

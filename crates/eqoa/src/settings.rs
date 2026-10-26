@@ -650,6 +650,10 @@ pub struct ClientOptions {
     /// icon", "also add all coaches to the map"); off, the map shows neither.
     /// The map's own key (X, ○) turns it too.
     pub map_markers: bool,
+    /// Town names on the map (the user, F3 pass 18: "add town names to the
+    /// map too", `map::markers`): the map's own key (T, Select) turns them,
+    /// kept as Map Markers is; on by default.
+    pub map_towns: bool,
     /// Loading Screens: Longer, a long trip (Return Home, a coach, a port of
     /// 200 or more, another world) keeps the loading screen up at least a
     /// second, as a PS2's disc read would (`loading::FAR_HOLD_MS`); Instant,
@@ -733,6 +737,7 @@ impl Default for ClientOptions {
             flora: true,
             environment: true,
             map_markers: true,
+            map_towns: true,
             loading_longer: true,
             output: None,
         }
@@ -826,6 +831,10 @@ impl ClientOptions {
         if !self.map_markers {
             s.push_str("map_markers=off\n");
         }
+        // the map's town names only when off
+        if !self.map_towns {
+            s.push_str("map_towns=off\n");
+        }
         // Loading Screens only when Instant
         if !self.loading_longer {
             s.push_str("loading=instant\n");
@@ -896,6 +905,8 @@ impl ClientOptions {
                 ("environment", "off") => c.environment = false,
                 ("map_markers", "on") => c.map_markers = true,
                 ("map_markers", "off") => c.map_markers = false,
+                ("map_towns", "on") => c.map_towns = true,
+                ("map_towns", "off") => c.map_towns = false,
                 ("loading", "longer") => c.loading_longer = true,
                 ("loading", "instant") => c.loading_longer = false,
                 ("output", v) if !v.is_empty() => c.output = Some(DeviceName::new(v)),
@@ -1175,6 +1186,19 @@ pub fn set_map_markers(on: bool) -> Result<(), String> {
     save_client()
 }
 
+/// Whether the map names the towns.
+pub fn map_towns() -> bool {
+    client().map_towns
+}
+
+/// The map's town names turned (its own key), and kept at once.
+pub fn set_map_towns(on: bool) -> Result<(), String> {
+    let mut c = client();
+    c.map_towns = on;
+    set_client(c);
+    save_client()
+}
+
 /// Whether the game asks to restart into a newer build (Update Notices).
 pub fn update_notices() -> bool {
     client().update_notices
@@ -1231,7 +1255,7 @@ pub fn describe() -> String {
         FrameRate::Display => "the display's",
     };
     format!(
-        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, output device {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, overlapping names {}, art {}, update notices {}, shouts {}, target of target {}, mana bars {}, text {}, mipmaps {}, flora {}, environment {}, map markers {}, loading screens {}; {}",
+        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, output device {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, overlapping names {}, art {}, update notices {}, shouts {}, target of target {}, mana bars {}, text {}, mipmaps {}, flora {}, environment {}, map markers {}, map towns {}, loading screens {}; {}",
         if c.lod { "on" } else { "off" },
         c.brightness,
         c.fog,
@@ -1267,6 +1291,7 @@ pub fn describe() -> String {
         if c.flora { "on" } else { "off" },
         if c.environment { "on" } else { "off" },
         if c.map_markers { "on" } else { "off" },
+        if c.map_towns { "on" } else { "off" },
         if c.loading_longer { "longer" } else { "instant" },
         kept_where()
     )
@@ -1747,7 +1772,7 @@ mod tests {
             "Screen Shake only off, Capture Controller only on"
         );
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, overlapping names hide, art frontiers, update notices on, shouts heard, target of target off, mana bars on, text sharp, mipmaps on, flora on, environment on, map markers on, loading screens longer; kept in the page's storage");
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, overlapping names hide, art frontiers, update notices on, shouts heard, target of target off, mana bars on, text sharp, mipmaps on, flora on, environment on, map markers on, map towns on, loading screens longer; kept in the page's storage");
         testing::reset(true);
         assert!(describe().ends_with("refused: nothing is kept"));
         testing::reset(false);
@@ -1825,6 +1850,11 @@ mod tests {
         for bad in ["map_markers=0", "map_markers="] {
             assert!(ClientOptions::from_text(bad).map_markers, "{bad}: on, the default");
         }
+        // the town names the same way, apart from the markers
+        let towns = ClientOptions { map_towns: false, ..Default::default() };
+        assert_eq!(towns.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nmap_towns=off\n");
+        let back = ClientOptions::from_text(&towns.to_text());
+        assert!(!back.map_towns && back.map_markers, "off read back off, the markers kept on");
     }
 
     /// Capture Controller is one setting for every window: another window's

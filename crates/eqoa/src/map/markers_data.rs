@@ -4,9 +4,10 @@
 // note, its XP-camp guide; their rare creatures and its biome loot tables' items), each at the
 // place go-eqoa-server's tools/gen_camp_teles.py gives it; the coaches are each coachman's
 // spawn, the town go-eqoa-server's coach menus name for it and the towns EQOA-Data's coach map
-// has its coach run to.
+// has its coach run to; the towns are EQOA-Data's, Tunaria's where go-eqoa-server's coach menus
+// put them, and the routes its coach map's.
 
-use super::markers::{Camp, Coach};
+use super::markers::{Camp, Coach, Route, Side, Town};
 
 pub const CAMPS: [Camp; 49] = [
     Camp { name: "Deathfist Citadel (DFC)", place: "Deathfist Citadel", world: 0, at: [21080.5, 19078.3], levels: (29, 34), note: "Deathfist Citadel Zone. One of the best XP camps in the low 30s. Watch for trains and deep pulls.", rare: &[], own: &[], table: "Desert", drops: &["Cleansing Belt", "Puma Hide Boots", "Pyroweave Tunic", "Seeking Rapier"] },
@@ -67,7 +68,7 @@ pub const COACHES: [Coach; 31] = [
     Coach { coachman: "Coachman Brumley", town: "Wyndhaven", world: 0, at: [4710.5, 13202.0], to: &["Surefall Glade", "Murnf", "Qeynos", "Honjour", "Zentar's Keep"] },
     Coach { coachman: "Coachman D'Larik", town: "Fort Seriak", world: 0, at: [21780.6, 8388.4], to: &["Neriak", "Highpass Hold", "Mt. Hatespike"] },
     Coach { coachman: "Coachman Dapkus", town: "Blackwater", world: 0, at: [15151.6, 22665.0], to: &["Gerntar Mines", "Oasis", "Forkwatch"] },
-    Coach { coachman: "Coachman Dilga", town: "", world: 1, at: [8961.9, 7213.7], to: &[] },
+    Coach { coachman: "Coachman Dilga", town: "Oggok", world: 1, at: [8961.9, 7213.7], to: &["Dark Solace", "Kerplunk Outpost"] },
     Coach { coachman: "Coachman Doba", town: "Moradhim", world: 0, at: [15351.6, 9267.1], to: &["Halas", "Rivervale", "Fayspire", "Darvar Manor"] },
     Coach { coachman: "Coachman Droogra", town: "Hazinak (Evil)", world: 0, at: [25128.9, 27156.3], to: &["Oasis", "Grobb"] },
     Coach { coachman: "Coachman Dudley", town: "Halas", world: 0, at: [12971.1, 4683.8], to: &["Moradhim", "Castle Lightwolf"] },
@@ -92,4 +93,95 @@ pub const COACHES: [Coach; 31] = [
     Coach { coachman: "Coachwoman Darva", town: "Darvar Manor", world: 0, at: [13603.2, 14762.7], to: &["Moradhim", "Surefall Glade", "Forkwatch", "Highpass Hold"] },
     Coach { coachman: "Coachwoman Dernia", town: "Oasis", world: 0, at: [21118.3, 25173.3], to: &["Dark Solace", "Hazinak (Good)", "Hazinak (Evil)", "Blackwater", "Muniel's Tea Garden"] },
     Coach { coachman: "Coachwoman Holly", town: "Forkwatch", world: 0, at: [12527.8, 18760.7], to: &["Qeynos", "Blackwater", "Highbourne", "Darvar Manor"] },
+];
+
+/// The towns, the biggest first.
+pub const TOWNS: [Town; 36] = [
+    Town { name: "Qeynos", world: 0, at: [4829.0, 17154.0], side: Side::Good }, // 461 spawns about it
+    Town { name: "Fayspire", world: 0, at: [19473.0, 7038.0], side: Side::Good }, // 426 spawns about it
+    Town { name: "Freeport", world: 0, at: [25270.0, 15710.0], side: Side::Neutral }, // 375 spawns about it
+    Town { name: "Neriak", world: 0, at: [24929.0, 9438.0], side: Side::Evil }, // 276 spawns about it
+    Town { name: "Moradhim", world: 0, at: [15352.0, 9262.0], side: Side::Good }, // 246 spawns about it
+    Town { name: "Arcadin", world: 2, at: [8751.3, 4137.1], side: Side::Good }, // 209 spawns about it
+    Town { name: "Highbourne", world: 0, at: [4854.0, 21477.0], side: Side::Good }, // 195 spawns about it
+    Town { name: "Halas", world: 0, at: [12963.0, 4689.0], side: Side::Good }, // 180 spawns about it
+    Town { name: "Oggok", world: 1, at: [8961.9, 7213.7], side: Side::Evil }, // 165 spawns about it
+    Town { name: "Highpass Hold", world: 0, at: [16773.0, 15363.0], side: Side::Neutral }, // 163 spawns about it
+    Town { name: "Grobb", world: 0, at: [25257.0, 31226.0], side: Side::Evil }, // 135 spawns about it
+    Town { name: "Klik'Anon", world: 0, at: [23460.0, 6488.0], side: Side::Neutral }, // 130 spawns about it
+    Town { name: "Tethelin", world: 0, at: [18421.0, 7488.0], side: Side::Good }, // 119 spawns about it
+    Town { name: "Rivervale", world: 0, at: [18339.0, 11350.0], side: Side::Good }, // 118 spawns about it
+    Town { name: "Muniel's Tea Garden", world: 0, at: [23374.0, 19638.0], side: Side::Neutral }, // 114 spawns about it
+    Town { name: "Bobble-by-Water", world: 0, at: [24634.0, 11861.0], side: Side::Good }, // 92 spawns about it
+    Town { name: "Hazinak (Evil)", world: 0, at: [25130.0, 27159.0], side: Side::Evil }, // 92 spawns about it
+    Town { name: "Zentar's Keep", world: 0, at: [5496.0, 6457.0], side: Side::Evil }, // 86 spawns about it
+    Town { name: "Surefall Glade", world: 0, at: [9060.0, 12978.0], side: Side::Good }, // 84 spawns about it
+    Town { name: "Stone of Morathals (Evil)", world: 2, at: [6847.5, 10980.8], side: Side::Evil }, // 82 spawns about it
+    Town { name: "Hazinak (Good)", world: 0, at: [24885.0, 27594.0], side: Side::Good }, // 76 spawns about it
+    Town { name: "Darvar Manor", world: 0, at: [13606.0, 14766.0], side: Side::Neutral }, // 69 spawns about it
+    Town { name: "Honjour", world: 0, at: [9804.0, 14991.0], side: Side::Evil }, // 69 spawns about it
+    Town { name: "East Plateau", world: 2, at: [8085.3, 2143.6], side: Side::Evil }, // 63 spawns about it
+    Town { name: "Oasis", world: 0, at: [21120.0, 25167.0], side: Side::Neutral }, // 62 spawns about it
+    Town { name: "Forkwatch", world: 0, at: [12538.0, 18774.0], side: Side::Good }, // 60 spawns about it
+    Town { name: "Stone of Morathals (Good)", world: 2, at: [7235.8, 10661.0], side: Side::Good }, // 60 spawns about it
+    Town { name: "Wyndhaven", world: 0, at: [4715.0, 13211.0], side: Side::Neutral }, // 54 spawns about it
+    Town { name: "Gerntar Mines", world: 0, at: [13038.0, 27506.0], side: Side::Good }, // 53 spawns about it
+    Town { name: "Mt. Hatespike", world: 0, at: [13764.0, 11395.0], side: Side::Evil }, // 50 spawns about it
+    Town { name: "Murnf", world: 0, at: [8929.0, 10516.0], side: Side::Good }, // 50 spawns about it
+    Town { name: "Dark Solace", world: 0, at: [12665.0, 21109.0], side: Side::Evil }, // 47 spawns about it
+    Town { name: "Blackwater", world: 0, at: [15147.0, 22660.0], side: Side::Good }, // 46 spawns about it
+    Town { name: "Castle Lightwolf", world: 0, at: [9281.0, 6504.0], side: Side::Good }, // 43 spawns about it
+    Town { name: "Fort Seriak", world: 0, at: [21776.0, 8390.0], side: Side::Evil }, // 40 spawns about it
+    Town { name: "Kerplunk Outpost", world: 0, at: [14815.0, 29246.0], side: Side::Evil }, // 36 spawns about it
+];
+
+/// The coach routes, each pair of towns once.
+pub const ROUTES: [Route; 47] = [
+    Route { from: "Arcadin", to: "Stone of Morathals (Good)", world: 2, a: [8751.3, 4137.1], b: [7235.8, 10661.0] },
+    Route { from: "Blackwater", to: "Forkwatch", world: 0, a: [15151.6, 22665.0], b: [12527.8, 18760.7] },
+    Route { from: "Blackwater", to: "Gerntar Mines", world: 0, a: [15151.6, 22665.0], b: [13027.1, 27501.6] },
+    Route { from: "Blackwater", to: "Oasis", world: 0, a: [15151.6, 22665.0], b: [21118.3, 25173.3] },
+    Route { from: "Bobble-by-Water", to: "Freeport", world: 0, a: [24640.8, 11864.5], b: [25273.7, 15719.1] },
+    Route { from: "Bobble-by-Water", to: "Klik'Anon", world: 0, a: [24640.8, 11864.5], b: [23463.6, 6489.4] },
+    Route { from: "Bobble-by-Water", to: "Rivervale", world: 0, a: [24640.8, 11864.5], b: [18334.8, 11357.8] },
+    Route { from: "Castle Lightwolf", to: "Halas", world: 0, a: [9281.4, 6494.6], b: [12971.1, 4683.8] },
+    Route { from: "Castle Lightwolf", to: "Murnf", world: 0, a: [9281.4, 6494.6], b: [8936.8, 10506.5] },
+    Route { from: "Dark Solace", to: "Highpass Hold", world: 0, a: [12539.3, 21182.0], b: [16780.8, 15356.2] },
+    Route { from: "Dark Solace", to: "Honjour", world: 0, a: [12539.3, 21182.0], b: [9805.1, 14990.3] },
+    Route { from: "Dark Solace", to: "Kerplunk Outpost", world: 0, a: [12539.3, 21182.0], b: [14815.0, 29246.0] },
+    Route { from: "Dark Solace", to: "Oasis", world: 0, a: [12539.3, 21182.0], b: [21118.3, 25173.3] },
+    Route { from: "Darvar Manor", to: "Forkwatch", world: 0, a: [13603.2, 14762.7], b: [12527.8, 18760.7] },
+    Route { from: "Darvar Manor", to: "Highpass Hold", world: 0, a: [13603.2, 14762.7], b: [16780.8, 15356.2] },
+    Route { from: "Darvar Manor", to: "Moradhim", world: 0, a: [13603.2, 14762.7], b: [15351.6, 9267.1] },
+    Route { from: "Darvar Manor", to: "Surefall Glade", world: 0, a: [13603.2, 14762.7], b: [9136.3, 12737.3] },
+    Route { from: "East Plateau", to: "Stone of Morathals (Evil)", world: 2, a: [8085.3, 2143.6], b: [6847.5, 10980.8] },
+    Route { from: "Fayspire", to: "Klik'Anon", world: 0, a: [19482.3, 7043.9], b: [23463.6, 6489.4] },
+    Route { from: "Fayspire", to: "Moradhim", world: 0, a: [19482.3, 7043.9], b: [15351.6, 9267.1] },
+    Route { from: "Fayspire", to: "Rivervale", world: 0, a: [19482.3, 7043.9], b: [18334.8, 11357.8] },
+    Route { from: "Fayspire", to: "Tethelin", world: 0, a: [19482.3, 7043.9], b: [18425.7, 7494.7] },
+    Route { from: "Forkwatch", to: "Highbourne", world: 0, a: [12527.8, 18760.7], b: [4858.6, 21458.7] },
+    Route { from: "Forkwatch", to: "Qeynos", world: 0, a: [12527.8, 18760.7], b: [4813.4, 17143.5] },
+    Route { from: "Fort Seriak", to: "Highpass Hold", world: 0, a: [21780.6, 8388.4], b: [16780.8, 15356.2] },
+    Route { from: "Fort Seriak", to: "Mt. Hatespike", world: 0, a: [21780.6, 8388.4], b: [13758.4, 11398.1] },
+    Route { from: "Fort Seriak", to: "Neriak", world: 0, a: [21780.6, 8388.4], b: [24925.4, 9429.4] },
+    Route { from: "Freeport", to: "Highpass Hold", world: 0, a: [25273.7, 15719.1], b: [16780.8, 15356.2] },
+    Route { from: "Freeport", to: "Muniel's Tea Garden", world: 0, a: [25273.7, 15719.1], b: [23369.9, 19636.2] },
+    Route { from: "Freeport", to: "Neriak", world: 0, a: [25273.7, 15719.1], b: [24925.4, 9429.4] },
+    Route { from: "Grobb", to: "Hazinak (Evil)", world: 0, a: [25223.0, 31175.3], b: [25128.9, 27156.3] },
+    Route { from: "Grobb", to: "Kerplunk Outpost", world: 0, a: [25223.0, 31175.3], b: [14815.0, 29246.0] },
+    Route { from: "Halas", to: "Moradhim", world: 0, a: [12971.1, 4683.8], b: [15351.6, 9267.1] },
+    Route { from: "Hazinak (Evil)", to: "Oasis", world: 0, a: [25128.9, 27156.3], b: [21118.3, 25173.3] },
+    Route { from: "Hazinak (Good)", to: "Oasis", world: 0, a: [24875.4, 27606.8], b: [21118.3, 25173.3] },
+    Route { from: "Highbourne", to: "Qeynos", world: 0, a: [4858.6, 21458.7], b: [4813.4, 17143.5] },
+    Route { from: "Highpass Hold", to: "Rivervale", world: 0, a: [16780.8, 15356.2], b: [18334.8, 11357.8] },
+    Route { from: "Honjour", to: "Mt. Hatespike", world: 0, a: [9805.1, 14990.3], b: [13758.4, 11398.1] },
+    Route { from: "Honjour", to: "Wyndhaven", world: 0, a: [9805.1, 14990.3], b: [4710.5, 13202.0] },
+    Route { from: "Klik'Anon", to: "Neriak", world: 0, a: [23463.6, 6489.4], b: [24925.4, 9429.4] },
+    Route { from: "Moradhim", to: "Rivervale", world: 0, a: [15351.6, 9267.1], b: [18334.8, 11357.8] },
+    Route { from: "Muniel's Tea Garden", to: "Oasis", world: 0, a: [23369.9, 19636.2], b: [21118.3, 25173.3] },
+    Route { from: "Murnf", to: "Wyndhaven", world: 0, a: [8936.8, 10506.5], b: [4710.5, 13202.0] },
+    Route { from: "Qeynos", to: "Surefall Glade", world: 0, a: [4813.4, 17143.5], b: [9136.3, 12737.3] },
+    Route { from: "Qeynos", to: "Wyndhaven", world: 0, a: [4813.4, 17143.5], b: [4710.5, 13202.0] },
+    Route { from: "Surefall Glade", to: "Wyndhaven", world: 0, a: [9136.3, 12737.3], b: [4710.5, 13202.0] },
+    Route { from: "Wyndhaven", to: "Zentar's Keep", world: 0, a: [4710.5, 13202.0], b: [5500.7, 6453.6] },
 ];

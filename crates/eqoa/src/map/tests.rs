@@ -510,3 +510,20 @@ fn the_builder_keeps_the_stable_signs_horseshoe() {
     let im = b.icon.take().expect("kept");
     assert_eq!((im.width, im.height), (2, 2));
 }
+
+/// T (Select on a pad) hides the towns' names and shows them again, kept,
+/// apart from the markers; the map says so.
+#[test]
+fn t_turns_the_town_names() {
+    crate::settings::testing::reset(false);
+    let mut m = up((1280, 720));
+    assert_eq!(keyboard("t"), Some((key::SELECT, Hold::Once)));
+    assert!(crate::settings::map_towns(), "on at first");
+    m.keyboard_key("t", true, false);
+    assert!(!crate::settings::map_towns() && crate::settings::map_markers(), "hidden, the markers kept");
+    assert!(m.describe().contains("town names hidden"), "{}", m.describe());
+    m.keyboard_key("t", true, true);
+    assert!(!crate::settings::map_towns(), "a repeat is not another press");
+    assert!(m.key(key::SELECT, true));
+    assert!(crate::settings::map_towns(), "Select: shown again");
+}

@@ -253,6 +253,7 @@ impl Map {
             key::CROSS if down => self.follow = true,
             key::SQUARE if down => self.square(),
             key::CIRCLE if down => self.toggle_markers(),
+            key::SELECT if down => self.toggle_towns(),
             key::R1 if down => self.steps -= 1,
             key::L1 if down => self.steps += 1,
             key::UP => hold(&mut self.held, 0),
@@ -415,6 +416,15 @@ impl Map {
         }
         self.pinned = None;
         crate::say(&format!("map: markers {}", if on { "shown" } else { "hidden" }));
+    }
+
+    /// The towns' names shown or hidden (T, Select), and kept.
+    fn toggle_towns(&mut self) {
+        let on = !crate::settings::map_towns();
+        if let Err(e) = crate::settings::set_map_towns(on) {
+            crate::say(&format!("map: town names {}, not kept: {e}", if on { "shown" } else { "hidden" }));
+        }
+        crate::say(&format!("map: town names {}", if on { "shown" } else { "hidden" }));
     }
 
     /// The marker whose card shows: the one a finger tapped, else the one
@@ -877,18 +887,30 @@ impl Map {
                 &fallback
             }
         };
+        // where the chrome will go, for what keeps clear of it
+        let footprint = chrome::footprint(&l.assets.raster(ui), vui, &c);
         // the names, then the group and the player over them, then the rest
         chrome::names(&mut l.assets.raster(ui), vui, &c);
-        // the markers (`markers`): the coaches' horseshoes, then the camps'
-        // badges over them, under the group and the player
+        // the markers (`markers`): the coach routes, the coaches' horseshoes,
+        // then the camps' badges over them, under the group and the player
         if crate::settings::map_markers() {
             let (lo, hi) = ([-40.0, -40.0], [size.0 as f32 + 40.0, size.1 as f32 + 40.0]);
+            let (on, off, half, shade) = view::route_dash(size);
+            let mut pieces = Vec::new();
+            for r in markers::routes_of(w.index) {
+                let lit = r.of(card);
+                let (a, b) = (v.to_window(size, r.a), v.to_window(size, r.b));
+                for (p, q) in markers::dashes(a, b, [lo[0], lo[1], hi[0], hi[1]], on, if lit { 0.0 } else { off }) {
+                    pieces.push((f(p), f(q), lit));
+                }
+            }
+            markers::draw_routes(ui, white, &pieces, half * k, shade * k);
             let shown: Vec<(markers::Marker, [f32; 2])> = markers::of_world(w.index)
                 .map(|m| (m, v.to_window(size, m.at())))
                 .filter(|(_, p)| p[0] >= lo[0] && p[1] >= lo[1] && p[0] <= hi[0] && p[1] <= hi[1])
                 .map(|(m, p)| (m, f(p)))
                 .collect();
-            let (r, o) = view::horseshoe_radius(size);
+            let (r, o) = view::horseshoe_radius(size, v.scale > markers::COMPACT_FROM);
             for &(m, p) in &shown {
                 if matches!(m, markers::Marker::Coach(_)) {
                     markers::draw_horseshoe(ui, white, icon, p, r * k, o * k);
@@ -896,6 +918,38 @@ impl Map {
             }
             let camps: Vec<(markers::Marker, [f32; 2])> = shown.iter().copied().filter(|(m, _)| matches!(m, markers::Marker::Camp(_))).collect();
             markers::draw_badges(ui, &l.assets, vui, white, font, &camps, v.scale);
+        }
+        // the towns' names over them, the biggest first, clear of the
+        // player's arrow, the chrome and the map's own names (a town the map
+        // names itself is left to it)
+        if let (true, Some((h, fo))) = (crate::settings::map_towns(), font) {
+            let t = markers::name_scale(v.scale);
+            let pad = [3.0 * t, 1.0 * t];
+            let mut obstacles: Vec<[f32; 4]> = c
+                .names
+                .iter()
+                .map(|(p, n)| {
+                    let w = ui.fonts[fo].string_width(&vi::ui::wide(n)).max(0) as f32;
+                    [p[0] - w / 2.0, p[1] - h / 2.0, p[0] + w / 2.0, p[1] + h / 2.0]
+                })
+                .collect();
+            obstacles.extend_from_slice(&footprint);
+            if let Some((p, _)) = cx.player {
+                let at = f(v.to_window(size, [p[0], p[2]]));
+                let (r, o) = view::marker_radius(size);
+                let e = (r + o) * k * 1.25;
+                obstacles.push([at[0] - e, at[1] - e, at[0] + e, at[1] + e]);
+            }
+            let cands: Vec<(usize, [f32; 2], [f32; 2])> = markers::towns_of(w.index)
+                .filter(|(_, town)| !c.names.iter().any(|(_, n)| markers::same_name(n, town.name)))
+                .map(|(i, town)| {
+                    let width = ui.fonts[fo].string_width(&vi::ui::wide(town.name)).max(0) as f32 * t;
+                    (i, f(v.to_window(size, town.at)), [width + pad[0] * 2.0, h * t + pad[1] * 2.0])
+                })
+                .collect();
+            let gap = view::name_gap(size, v.scale > markers::COMPACT_FROM) * k;
+            let placed = markers::place_names(&cands, gap, &obstacles, [c.corners[0][0], c.corners[0][1], c.corners[1][0], c.corners[1][1]]);
+            markers::draw_towns(ui, white, fo, &placed, t, pad);
         }
         // the group's members, their compass colours (1 green, 2 blue, 3 cyan, the rest yellow)
         for (pos, index) in &cx.group {
@@ -940,8 +994,11 @@ impl Map {
             }
         }
         // the card of the marker under the pointer, over the rest but the chrome
+        // (between the chrome's title and its legend)
         if let Some(m) = card {
-            markers::draw_card(ui, &l.assets, vui, white, m, f(v.to_window(size, m.at())), c.corners);
+            let band = chrome::clear_band(&footprint, c.corners);
+            let win = [[c.corners[0][0], band[0]], [c.corners[1][0], band[1]]];
+            markers::draw_card(ui, &l.assets, vui, white, m, f(v.to_window(size, m.at())), win);
         }
         let mut r = l.assets.raster(ui);
         self.buttons = chrome::draw(&mut r, vui, &c);
@@ -973,6 +1030,9 @@ impl Map {
         let mut waypoints: String = self.waypoints.iter().map(|(w, p)| format!(", a waypoint in world {w} at ({:.0}, {:.0})", p[0], p[1])).collect();
         if !crate::settings::map_markers() {
             waypoints.push_str(", markers hidden");
+        }
+        if !crate::settings::map_towns() {
+            waypoints.push_str(", town names hidden");
         }
         match &self.world {
             Some(w) => format!("{}{}{waypoints}", w.builder.describe(), if self.open { ", up" } else { "" }),
@@ -1017,8 +1077,10 @@ fn wanted_tiles(cells: &cells::Cells, v: View, size: (u32, u32)) -> Vec<usize> {
 /// each press and repeat, `Press::Held` while it is down.
 pub fn keyboard(name: &str) -> Option<(i32, Hold)> {
     Some(match name {
-        // X is the map's ○: the markers shown or hidden
+        // X is the map's ○: the markers shown or hidden; T its Select: the
+        // towns' names
         "x" => (key::CIRCLE, Hold::Once),
+        "t" => (key::SELECT, Hold::Once),
         "escape" | "backspace" | "m" => (key::TRIANGLE, Hold::Once),
         "space" | "enter" | "home" => (key::CROSS, Hold::Once),
         // Q is the keyboard's □ (`binds`' "talk" row): the waypoint

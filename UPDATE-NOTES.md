@@ -5,6 +5,21 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · XP camps, coaches, routes and towns on the map
+- The map (M) marks the popular XP camps with a red XP badge and every coach with the
+  horseshoe the stables wear (the one on Freeport's stable sign, read from your own disc).
+  Point at one, with the mouse, a tap, or the pad's middle cross once the map is panned,
+  for its card: a camp's levels, the guide's note, the rare creatures near it and notable
+  drops; a coach's town, its coachman and the towns it runs to.
+- Click a marker, or tap it a second time, to put your waypoint on it.
+- The coach routes are dashed lines between the towns they join; the coach you point at
+  has its own drawn bright.
+- The towns' names are on the map too, blue for good, red for evil, cream for neutral,
+  the bigger town's first where they crowd, smaller as you zoom out.
+- X (○ on a pad) hides or shows the markers and routes, and so does Options > Extended >
+  World > Map Markers; T (Select) the town names. The camps, routes and towns are from
+  EQOA-Data's map guide.
+
 ## 2026-10-26 · Target of Target above the target
 - Target of Target (Options > Extended > UI) now sits just above the target's bar, with the
   health and power of whoever your target is targeting under it, as a group member's are:

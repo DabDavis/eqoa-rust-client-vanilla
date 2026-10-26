@@ -15,8 +15,17 @@
 //! goes on it; a click puts it there at once), and the one under the pad's
 //! middle cross once the map is panned. Map Markers (Extended's World page,
 //! and the map's own X or ○) hides them all.
+//!
+//! Under them the coach routes (the user: "add coach routes as lines on the
+//! map too"), EQOA-Data's coach map: a line between the two towns each joins
+//! (a coach's place, else the town's), dashed, the hovered or tapped coach's
+//! own drawn whole and brighter; hidden with the markers. Over them the towns'
+//! names ("add town names to the map too", EQOA-Data's towns), on a plate in
+//! their side's colour, smaller zoomed out, the bigger town's first where
+//! they crowd, clear of the player's arrow and of the map's own names (a town
+//! the map names itself is left to it); the map's T or Select hides them.
 
-use super::markers_data::{CAMPS, COACHES};
+use super::markers_data::{CAMPS, COACHES, ROUTES, TOWNS};
 use super::view::{self, View};
 
 /// An XP camp, as `markers_data` lists it.
@@ -54,6 +63,48 @@ pub struct Coach {
     pub at: [f32; 2],
     /// the towns it runs to
     pub to: &'static [&'static str],
+}
+
+/// A town's side, as EQOA-Data gives it: its name's colour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    Good,
+    Evil,
+    Neutral,
+}
+
+/// A town, as `markers_data` lists it: the biggest first (by the spawns
+/// about it), the order names give way in where they crowd.
+#[derive(Clone, Copy, Debug)]
+pub struct Town {
+    pub name: &'static str,
+    pub world: i32,
+    pub at: [f32; 2],
+    pub side: Side,
+}
+
+/// A coach route, as `markers_data` lists it: the two towns it joins, each
+/// at its coach's place (the town's where it has none), of one world.
+#[derive(Clone, Copy, Debug)]
+pub struct Route {
+    pub from: &'static str,
+    pub to: &'static str,
+    pub world: i32,
+    pub a: [f32; 2],
+    pub b: [f32; 2],
+}
+
+impl Route {
+    /// Whether it is marker `m`'s: a coach of either of its towns.
+    pub fn of(&self, m: Option<Marker>) -> bool {
+        match m {
+            Some(Marker::Coach(i)) => {
+                let c = &COACHES[i];
+                c.world == self.world && !c.town.is_empty() && (c.town == self.from || c.town == self.to)
+            }
+            _ => false,
+        }
+    }
 }
 
 /// A marker on the map.
@@ -161,6 +212,95 @@ pub fn of_world(world: i32) -> impl Iterator<Item = Marker> {
     coaches.chain(camps)
 }
 
+/// The coach routes of world `world`.
+pub fn routes_of(world: i32) -> impl Iterator<Item = &'static Route> {
+    ROUTES.iter().filter(move |r| r.world == world)
+}
+
+/// The towns of world `world` with their indices, the biggest first.
+pub fn towns_of(world: i32) -> impl Iterator<Item = (usize, &'static Town)> {
+    TOWNS.iter().enumerate().filter(move |(_, t)| t.world == world)
+}
+
+/// Whether the map's own name `area` names town `town` (Hazinak (Good) is
+/// Hazinak's), case aside.
+pub fn same_name(area: &str, town: &str) -> bool {
+    let base = town.split(" (").next().unwrap_or(town);
+    area.eq_ignore_ascii_case(town) || area.eq_ignore_ascii_case(base)
+}
+
+/// Segment `a`..`b` (window points) cut to `clip` (x0, y0, x1, y1) in
+/// dashes `on` long with `off` between, counted from `a` so that they keep
+/// their places on the ground as the map pans; one piece when `off` is 0.
+pub fn dashes(a: [f32; 2], b: [f32; 2], clip: [f32; 4], on: f32, off: f32) -> Vec<([f32; 2], [f32; 2])> {
+    let d = [b[0] - a[0], b[1] - a[1]];
+    let len = d[0].hypot(d[1]);
+    if len < 1e-3 {
+        return Vec::new();
+    }
+    // the part inside (Liang-Barsky)
+    let (mut t0, mut t1) = (0.0f32, 1.0f32);
+    for (p, q) in [(-d[0], a[0] - clip[0]), (d[0], clip[2] - a[0]), (-d[1], a[1] - clip[1]), (d[1], clip[3] - a[1])] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return Vec::new();
+            }
+        } else if p < 0.0 {
+            t0 = t0.max(q / p);
+        } else {
+            t1 = t1.min(q / p);
+        }
+    }
+    if t0 >= t1 {
+        return Vec::new();
+    }
+    let at = |s: f32| [a[0] + d[0] * s / len, a[1] + d[1] * s / len];
+    let (s0, s1) = (t0 * len, t1 * len);
+    if off <= 0.0 {
+        return vec![(at(s0), at(s1))];
+    }
+    let period = on + off;
+    let mut out = Vec::new();
+    let mut s = (s0 / period).floor() * period;
+    while s < s1 {
+        let (from, to) = (s.max(s0), (s + on).min(s1));
+        if from < to {
+            out.push((at(from), at(to)));
+        }
+        s += period;
+    }
+    out
+}
+
+/// How big the towns' names are drawn at a zoom of `scale` (world units a
+/// window pixel): the map's own names' size in close (to 2), two thirds of
+/// it with a whole world in view (30 and out).
+pub fn name_scale(scale: f32) -> f32 {
+    let t = ((scale / 2.0).max(1.0).log2() / 15f32.log2()).min(1.0);
+    1.0 - 0.35 * t
+}
+
+/// Where the towns' names go: each candidate (its index, its frame point,
+/// its plate's size) above its point by `gap`, else below it, in the
+/// candidates' order (the biggest town's first); one that would cross an
+/// obstacle (the player's arrow, the chrome, the map's own names) or a name
+/// placed already, or leave `bounds` (the window), either way is left out.
+pub fn place_names(cands: &[(usize, [f32; 2], [f32; 2])], gap: f32, obstacles: &[[f32; 4]], bounds: [f32; 4]) -> Vec<(usize, [f32; 4])> {
+    let cross = |a: &[f32; 4], b: &[f32; 4]| a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+    let mut placed: Vec<(usize, [f32; 4])> = Vec::new();
+    for &(i, p, [w, h]) in cands {
+        let x0 = p[0] - w / 2.0;
+        let above = [x0, p[1] - gap - h, x0 + w, p[1] - gap];
+        let below = [x0, p[1] + gap, x0 + w, p[1] + gap + h];
+        let inside = |r: &[f32; 4]| r[0] >= bounds[0] && r[1] >= bounds[1] && r[2] <= bounds[2] && r[3] <= bounds[3];
+        let free = |r: &[f32; 4]| inside(r) && !obstacles.iter().any(|o| cross(r, o)) && !placed.iter().any(|(_, q)| cross(r, q));
+        if let Some(r) = [above, below].into_iter().find(|r| free(r)) {
+            placed.push((i, r));
+        }
+    }
+    placed
+}
+
 /// The marker under window pixel `s` of view `v` in a `size` window, of world
 /// `world`: the nearest within reach of its middle (`view::marker_reach`, a
 /// finger's miss more), none when none is.
@@ -252,12 +392,25 @@ use vi::ui::Raster as _;
 const OUTLINE: [f32; 4] = [0.0, 0.0, 0.0, 0.85];
 const BOARD: [f32; 4] = [0.42, 0.42, 0.4, 1.0];
 const BRONZE: [f32; 4] = [0.86, 0.52, 0.2, 1.0];
+/// The routes: pale gold, dashed, on a soft shadow; a hovered coach's whole
+/// and brighter.
+const ROUTE: [f32; 4] = [0.98, 0.9, 0.62, 0.8];
+const ROUTE_LIT: [f32; 4] = [1.0, 0.84, 0.32, 1.0];
+const ROUTE_SHADE: [f32; 4] = [0.0, 0.0, 0.0, 0.45];
+/// The towns' names by side, on a dark plate.
+const GOOD: [f32; 4] = [0.74, 0.87, 1.0, 1.0];
+const EVIL: [f32; 4] = [1.0, 0.68, 0.6, 1.0];
+const NEUTRAL: [f32; 4] = [1.0, 0.95, 0.82, 1.0];
+const PLATE: [f32; 4] = [0.02, 0.03, 0.05, 0.6];
 /// The card's backing (under the game's panel art, which a library without
 /// SUPPORT's atlas, `mapshot`'s, lacks) and its widest line, frame pixels.
 const CARD_BACK: [f32; 4] = [0.05, 0.06, 0.08, 0.9];
-const CARD_WIDTH: i32 = 250;
-/// How far in the map's camp names show: world units a window pixel.
-pub const NAMES_FROM: f32 = 3.5;
+const CARD_WIDTH: i32 = 290;
+/// How far in the map's camp names show, and how far out the markers are
+/// drawn small (a red mark, a smaller horseshoe) so a whole world's do not
+/// crowd it: world units a window pixel.
+pub const NAMES_FROM: f32 = 2.0;
+pub const COMPACT_FROM: f32 = 12.0;
 
 fn fill(ui: &mut Ui, white: usize, pos: [[f32; 2]; 4], color: [f32; 4]) {
     ui.push(Quad { tex: white, blend: 3, pos, uv: [[0.5, 0.5]; 4], color, clip: None });
@@ -265,6 +418,50 @@ fn fill(ui: &mut Ui, white: usize, pos: [[f32; 2]; 4], color: [f32; 4]) {
 
 fn rect(ui: &mut Ui, white: usize, r: [f32; 4], color: [f32; 4]) {
     fill(ui, white, [[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]], color);
+}
+
+/// A line from `a` to `b` (frame points), `half` of its width each side.
+fn segment(ui: &mut Ui, white: usize, a: [f32; 2], b: [f32; 2], half: f32, color: [f32; 4]) {
+    let d = [b[0] - a[0], b[1] - a[1]];
+    let l = d[0].hypot(d[1]).max(1e-6);
+    let n = [-d[1] / l * half, d[0] / l * half];
+    fill(ui, white, [[a[0] + n[0], a[1] + n[1]], [b[0] + n[0], b[1] + n[1]], [b[0] - n[0], b[1] - n[1]], [a[0] - n[0], a[1] - n[1]]], color);
+}
+
+/// The routes' pieces (frame points, and whether each is the hovered
+/// coach's), `half` their width each side and `o` their shadow's more: the
+/// shadows first, so none falls on a piece beside it.
+pub fn draw_routes(ui: &mut Ui, white: usize, pieces: &[([f32; 2], [f32; 2], bool)], half: f32, o: f32) {
+    let grow = |a: [f32; 2], b: [f32; 2], by: f32| {
+        let d = [b[0] - a[0], b[1] - a[1]];
+        let l = d[0].hypot(d[1]).max(1e-6);
+        let e = [d[0] / l * by, d[1] / l * by];
+        ([a[0] - e[0], a[1] - e[1]], [b[0] + e[0], b[1] + e[1]])
+    };
+    for &(a, b, lit) in pieces {
+        let (a, b) = grow(a, b, o);
+        segment(ui, white, a, b, if lit { half * 1.4 } else { half } + o, ROUTE_SHADE);
+    }
+    for &(a, b, lit) in pieces {
+        segment(ui, white, a, b, if lit { half * 1.4 } else { half }, if lit { ROUTE_LIT } else { ROUTE });
+    }
+}
+
+/// The towns' names where `place_names` put them (frame rects), in font
+/// `font` scaled `t`, `pad` frame pixels inside their plates.
+pub fn draw_towns(ui: &mut Ui, white: usize, font: usize, placed: &[(usize, [f32; 4])], t: f32, pad: [f32; 2]) {
+    for &(_, r) in placed {
+        rect(ui, white, r, PLATE);
+    }
+    for &(i, r) in placed {
+        let town = &TOWNS[i];
+        let color = match town.side {
+            Side::Good => GOOD,
+            Side::Evil => EVIL,
+            Side::Neutral => NEUTRAL,
+        };
+        ui.text_scaled(font, r[0] + pad[0], r[1] + pad[1], t, color, &vi::ui::wide(town.name));
+    }
 }
 
 /// A coach at frame point `p`, `r` frame pixels from its middle to an edge
@@ -302,6 +499,14 @@ fn horseshoe_arc() -> impl Iterator<Item = (f32, f32)> {
 pub fn draw_badges(ui: &mut Ui, assets: &crate::ui::UiAssets, vui: &vi::ui::Vui, white: usize, font: Option<(f32, usize)>, camps: &[(Marker, [f32; 2])], scale: f32) {
     let label = vi::ui::wide("XP");
     let (h, tw) = font.map_or((14.0, 20.0), |(h, fo)| (h, ui.fonts[fo].string_width(&label) as f32));
+    if scale > COMPACT_FROM {
+        // far out: a small red mark each, no letters
+        for &(_, p) in camps {
+            rect(ui, white, [p[0] - 4.5, p[1] - 4.5, p[0] + 4.5, p[1] + 4.5], OUTLINE);
+            rect(ui, white, [p[0] - 3.5, p[1] - 3.5, p[0] + 3.5, p[1] + 3.5], BADGE);
+        }
+        return;
+    }
     let (hw, hh) = (tw / 2.0 + 4.0, h / 2.0);
     for &(_, p) in camps {
         rect(ui, white, [p[0] - hw - 1.5, p[1] - hh - 1.5, p[0] + hw + 1.5, p[1] + hh + 1.5], OUTLINE);
@@ -329,7 +534,8 @@ pub fn draw_card(ui: &mut Ui, assets: &crate::ui::UiAssets, vui: &vi::ui::Vui, w
         let width = lines.iter().map(|(l, _)| r.string_width(&vi::ui::wide(l))).max().unwrap_or(0);
         (lines, r.point_size() + 3, width)
     };
-    let (pad, gap, edge) = (8.0, 16.0, 8.0);
+    // clear of the marker (an XP badge's half width and more)
+    let (pad, gap, edge) = (8.0, 26.0, 8.0);
     let (w, h) = (width as f32 + pad * 2.0, lines.len() as f32 * line as f32 + pad * 2.0 - 3.0);
     // right of the marker, else left of it; down from its middle, held inside
     let mut x = p[0] + gap;
@@ -374,9 +580,101 @@ fn decode_png(b: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
 mod tests {
     use super::*;
 
+    /// The towns are where the coach menus put them, each name once in its
+    /// world, the biggest first (Qeynos before Kerplunk Outpost); Oggok is
+    /// Rathe's (Frontiers' Tunaria has no zone where the sheet puts it), at
+    /// Coachman Dilga; Odus's three by its fit, on Odus's ground. The routes
+    /// join each pair once, end at the coach where the town has one (Freeport
+    /// at Ronks) else at the town (Kerplunk Outpost), and every route a
+    /// Tunaria coach's card names is drawn; the control: Oggok's, out of
+    /// Rathe into Tunaria, is not.
+    #[test]
+    fn the_towns_and_routes_are_where_they_belong() {
+        let town = |n: &str| TOWNS.iter().find(|t| t.name == n).unwrap_or_else(|| panic!("{n}"));
+        assert_eq!((town("Freeport").world, town("Freeport").at, town("Freeport").side), (0, [25270.0, 15710.0], Side::Neutral));
+        assert_eq!((town("Neriak").side, town("Fort Seriak").side, town("Klik'Anon").side), (Side::Evil, Side::Evil, Side::Neutral));
+        let dilga = COACHES.iter().find(|c| c.coachman == "Coachman Dilga").unwrap();
+        assert_eq!((town("Oggok").world, town("Oggok").at), (1, dilga.at));
+        for n in ["Arcadin", "East Plateau", "Stone of Morathals (Good)", "Stone of Morathals (Evil)"] {
+            let t = town(n);
+            assert!(t.world == 2 && (0.0..16000.0).contains(&t.at[0]) && (0.0..16000.0).contains(&t.at[1]), "{n} on Odus: {t:?}");
+        }
+        for (i, a) in TOWNS.iter().enumerate() {
+            assert!(!TOWNS[..i].iter().any(|b| b.name == a.name), "{} once", a.name);
+            if a.world == 0 {
+                assert!((0.0..26000.0).contains(&a.at[0]) && (0.0..34000.0).contains(&a.at[1]), "{} in Tunaria's grid", a.name);
+            }
+        }
+        let rank = |n: &str| TOWNS.iter().position(|t| t.name == n).unwrap();
+        assert!(rank("Qeynos") < rank("Freeport") && rank("Freeport") < rank("Kerplunk Outpost"), "the biggest first");
+        for (i, r) in ROUTES.iter().enumerate() {
+            assert!(r.from < r.to, "{r:?} in order");
+            assert!(!ROUTES[..i].iter().any(|q| (q.from, q.to) == (r.from, r.to)), "{r:?} once");
+            for (n, at) in [(r.from, r.a), (r.to, r.b)] {
+                let want = COACHES.iter().find(|c| c.town == n && c.world == r.world).map_or_else(|| town(n).at, |c| c.at);
+                assert_eq!(at, want, "{r:?}: {n} at its coach, else the town");
+            }
+        }
+        let route = |a: &str, b: &str| ROUTES.iter().find(|r| (r.from, r.to) == (a.min(b), a.max(b)));
+        let ronks = COACHES.iter().find(|c| c.coachman == "Coachman Ronks").unwrap();
+        assert_eq!(route("Freeport", "Neriak").map(|r| r.a), Some(ronks.at));
+        assert_eq!(route("Grobb", "Kerplunk Outpost").map(|r| r.b), Some(town("Kerplunk Outpost").at));
+        for c in COACHES.iter().filter(|c| c.world == 0) {
+            for t in c.to {
+                assert!(route(c.town, t).is_some(), "{} to {t}: its card's route drawn", c.town);
+            }
+        }
+        assert!(route("Dark Solace", "Oggok").is_none(), "the control: Oggok's are out of Rathe");
+        assert_eq!(routes_of(0).filter(|r| r.of(Some(Marker::Coach(COACHES.iter().position(|c| c.coachman == "Coachman Ronks").unwrap())))).count(), 4, "Ronks's four");
+        assert_eq!(routes_of(0).filter(|r| r.of(Some(Marker::Camp(0)))).count(), 0, "a camp has none");
+    }
+
+    /// A route's dashes lie inside the window on its line, `on` long and
+    /// `on + off` apart, counted from its start, so that panning the map
+    /// carries them with the ground; lit, one piece. The controls: a route
+    /// wholly outside has none, and one along the window's edge outside too.
+    #[test]
+    fn a_route_is_dashed_inside_the_window() {
+        let clip = [0.0, 0.0, 200.0, 100.0];
+        let d = dashes([-100.0, 50.0], [300.0, 50.0], clip, 8.0, 4.0);
+        assert!(!d.is_empty());
+        for (a, b) in &d {
+            assert!(a[1] == 50.0 && b[1] == 50.0 && a[0] >= 0.0 && b[0] <= 200.0 && b[0] - a[0] <= 8.0 + 1e-3, "{a:?} {b:?}");
+            assert!(((a[0] + 100.0) % 12.0).min(12.0 - (a[0] + 100.0) % 12.0) < 1e-3 || a[0] == 0.0, "from the start: {a:?}");
+        }
+        let total: f32 = d.iter().map(|(a, b)| b[0] - a[0]).sum();
+        assert!((total - 200.0 * 8.0 / 12.0).abs() <= 8.0, "two thirds of it: {total}");
+        let panned = dashes([-95.0, 50.0], [305.0, 50.0], clip, 8.0, 4.0);
+        assert!(panned.iter().all(|(a, b)| d.iter().any(|(c, e)| (a[0] - c[0] - 5.0).abs() < 1e-3 || (b[0] - e[0] - 5.0).abs() < 1e-3 || a[0] == 0.0 || b[0] == 200.0)), "carried 5 along");
+        assert_eq!(dashes([-100.0, 50.0], [300.0, 50.0], clip, 8.0, 0.0), vec![([0.0, 50.0], [200.0, 50.0])], "lit: whole");
+        assert!(dashes([-100.0, 150.0], [300.0, 150.0], clip, 8.0, 4.0).is_empty(), "the control: below the window");
+        assert!(dashes([250.0, -10.0], [250.0, 90.0], clip, 8.0, 4.0).is_empty(), "the control: right of it");
+    }
+
+    /// A town's name goes above its place, else below; the second at one
+    /// place takes the other side, a third none (the bigger towns' first);
+    /// the player's arrow above a place sends its name below, and one both
+    /// ways leaves it out. The control: with nothing there, above.
+    #[test]
+    fn a_town_name_gives_way() {
+        let bounds = [0.0, 0.0, 640.0, 448.0];
+        let c = |i| (i, [320.0, 200.0], [60.0, 14.0]);
+        let above = [290.0, 176.0, 350.0, 190.0];
+        let below = [290.0, 210.0, 350.0, 224.0];
+        assert_eq!(place_names(&[c(0)], 10.0, &[], bounds), vec![(0, above)], "the control: above");
+        assert_eq!(place_names(&[c(0), c(1), c(2)], 10.0, &[], bounds), vec![(0, above), (1, below)], "crowded: the first two");
+        let arrow = [312.0, 180.0, 328.0, 196.0];
+        assert_eq!(place_names(&[c(0)], 10.0, &[arrow], bounds), vec![(0, below)], "clear of the arrow");
+        assert_eq!(place_names(&[c(0)], 10.0, &[arrow, [312.0, 205.0, 328.0, 215.0]], bounds), vec![], "no room");
+        assert_eq!(place_names(&[(0, [-200.0, 200.0], [60.0, 14.0])], 10.0, &[], bounds), vec![], "off the window");
+        assert_eq!(place_names(&[(0, [320.0, 12.0], [60.0, 14.0])], 10.0, &[], bounds), vec![(0, [290.0, 22.0, 350.0, 36.0])], "at the top: below, not cut");
+        assert!(name_scale(1.0) == 1.0 && name_scale(2.0) == 1.0 && (name_scale(30.0) - 0.65).abs() < 1e-4 && name_scale(8.0) < name_scale(4.0));
+        assert!(same_name("Hazinak", "Hazinak (Good)") && same_name("freeport", "Freeport") && !same_name("Freeport Gate", "Freeport"));
+    }
+
     /// Every marker is in its world and on its ground: Tunaria's inside its
     /// zones' grid (2,000 x 34,000), each camp's levels in order, each coach
-    /// with a town but Rathe's Coachman Dilga, and every coach's town on
+    /// with a town and a route (Rathe's Coachman Dilga Oggok's), and every coach's town on
     /// another's route (the network is whole). The control: a coach of
     /// Tunaria put at Odus's places would be outside the grid.
     #[test]
@@ -397,7 +695,7 @@ mod tests {
                     assert!(grid(c.at), "{} at {:?}", c.coachman, c.at);
                     assert!(!c.town.is_empty() && !c.to.is_empty(), "{}", c.coachman);
                 }
-                1 => assert_eq!((c.coachman, c.town), ("Coachman Dilga", ""), "Rathe's one coach"),
+                1 => assert_eq!((c.coachman, c.town, c.to), ("Coachman Dilga", "Oggok", &["Dark Solace", "Kerplunk Outpost"][..]), "Rathe's one coach, Oggok's"),
                 w => panic!("{} in world {w}", c.coachman),
             }
             for t in c.to {
