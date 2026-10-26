@@ -10,7 +10,7 @@ current.
 - Vanilla: nothing that changes the game's picture or play beyond what README "Vanilla" keeps
   (widescreen, the untethered frame rate, the mouse and the touch screen, the keyboard with WASD and
   the Controls page, 1,000 lines of chat, no green backdrop behind the start menu's windows, the
-  Extended options, the map (its XP camps, coaches, routes and town names), the updater, the problem and crash reports, the 2002 disc's art on F9, Hide UI
+  Extended options, the map (its XP camps, coaches, routes and town names) and the minimap, the updater, the problem and crash reports, the 2002 disc's art on F9, Hide UI
   on H, Target of Target, names from farther and smaller zoomed out (and every one in a crowd, Overlapping Names Show), Ignore Shouts kept, Update Notices, Text
   Sharp or Smooth, Loading Screens Longer or Instant, Mana Bars from a server that sends others' power). A
   new client-side addition is the user's call: ask first.

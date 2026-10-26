@@ -493,6 +493,15 @@ pub fn shot_with(
                         None => eprintln!("mouse {step}: not on screen"),
                     }
                 }
+                // the wheel over the minimap: its zoom, as the window's (`mini_wheel`)
+                let at = [mouse.cursor.0 as f32, mouse.cursor.1 as f32];
+                if let (Some(n), Some(p)) = (step.strip_prefix("wheel ").and_then(|n| n.trim().parse::<f32>().ok()), play.as_mut())
+                    && p.map.mini_contains(at)
+                {
+                    p.map.mini_wheel(n);
+                    eprintln!("mouse {step}: the minimap's zoom, {} units a frame pixel", p.map.mini.scale);
+                    continue;
+                }
                 let click = mouse.play(&step, (w, h), Instant::now());
                 if let (Some(c), Some(p), Some(vp)) = (click, play.as_mut(), last_view) {
                     let mode = p.mode;
@@ -504,6 +513,12 @@ pub fn shot_with(
                     eprintln!("mouse {step}: {:?} on {id:?}", c);
                     p.click(id, !matches!(c, crate::mouse::Click::Target(..)));
                 }
+            }
+            // the scripted pointer over the minimap: a mark's tooltip, as the window's
+            if !mouse_script.is_empty()
+                && let Some(p) = play.as_mut()
+            {
+                p.map.mini_hover(Some([mouse.cursor.0 as f32, mouse.cursor.1 as f32]));
             }
             // the pointer as a window holds it for a drag (`mouse::Grab`)
             let look_free = !play.as_ref().is_some_and(|p| p.is_dead()) && play.as_ref().is_none_or(|p| p.look_free());
@@ -1133,7 +1148,13 @@ pub fn shot_with(
     renderer.curve.set(crate::settings::curve(crate::settings::client().brightness));
     render::ui::set_text_filter(crate::settings::client().text);
     render::set_mipmaps(crate::settings::client().mipmaps);
-    let mut rgba = render::capture_with_sky(&device, &queue, &mut renderer, w, h, loading.as_ref().map_or(&view, |l| &l.0), &refs, particles, sky);
+    // the minimap between the names and the HUD, as the window's frame has it
+    let mini = play.as_ref();
+    let mut rgba = render::capture_around(&device, &queue, &mut renderer, w, h, loading.as_ref().map_or(&view, |l| &l.0), &refs, particles, sky, |enc, tv, depth| {
+        if let Some(p) = mini {
+            p.map.draw_mini(&device, enc, tv, depth, (w, h));
+        }
+    });
     // the map up covers the frame: the picture is the map's
     if let Some(p) = play.as_ref().filter(|p| p.map.open) {
         rgba = crate::map::tool::capture(&p.map, &device, &queue, (w, h))?;
@@ -4091,6 +4112,7 @@ impl ApplicationHandler for App {
                 self.grab_pointer(false);
                 if let Some(p) = self.play.as_mut() {
                     p.map.let_go();
+                    p.map.mini_hover(None);
                 }
             }
             WindowEvent::MouseInput { state, button, .. } if matches!(button, MouseButton::Left | MouseButton::Right) => {
@@ -4133,6 +4155,10 @@ impl ApplicationHandler for App {
                 if let Some(p) = self.play.as_mut().filter(|p| p.map.open) {
                     p.map.mouse_moved([position.x as f32, position.y as f32]);
                 }
+                // the minimap's tooltips (`map::mini`)
+                if let Some(p) = self.play.as_mut() {
+                    p.map.mini_hover(Some([position.x as f32, position.y as f32]));
+                }
                 self.mouse.moved(position.x, position.y);
                 // a drag begun: the pointer taken, within the press's
                 // gesture; a confined cursor put back to the middle
@@ -4161,8 +4187,12 @@ impl ApplicationHandler for App {
                     MouseScrollDelta::LineDelta(_, y) => (y, y.clamp(-1.0, 1.0)),
                     MouseScrollDelta::PixelDelta(p) => (p.y as f32 / 40.0, p.y as f32 / 100.0),
                 };
+                let at = [self.cursor.0 as f32, self.cursor.1 as f32];
                 if let Some(p) = self.play.as_mut().filter(|p| p.map.open) {
-                    p.map.wheel(steps, Some([self.cursor.0 as f32, self.cursor.1 as f32]));
+                    p.map.wheel(steps, Some(at));
+                } else if let Some(p) = self.play.as_mut().filter(|p| p.map.mini_contains(at)) {
+                    // over the minimap: its zoom, not the camera's
+                    p.map.mini_wheel(steps);
                 } else if self.walker.is_some() {
                     self.mouse.wheel(d, steps);
                 } else if let Camera::Orbit { zoom, .. } = &mut self.camera {
@@ -4666,7 +4696,15 @@ impl ApplicationHandler for App {
                     g.renderer.draw_billboards(&g.device, &g.queue, &mut enc, st, &g.depth, v, p, &self.batches, &textures);
                 }
                 g.renderer.curve.apply(&g.queue, &mut enc, &target);
-                g.renderer.draw_text(&g.device, &mut enc, &target, &g.depth, (g.config.width, g.config.height));
+                // the names, then the minimap (`map::mini`: over the names,
+                // under the HUD and its windows), then the HUD
+                let size = (g.config.width, g.config.height);
+                let play = self.play.as_ref();
+                g.renderer.draw_text_around(&g.device, &mut enc, &target, &g.depth, size, |enc| {
+                    if let Some(p) = play {
+                        p.map.draw_mini(&g.device, enc, &target, &g.depth, size);
+                    }
+                });
                 if let Some(p) = &self.play {
                     p.map.draw(&g.device, &mut enc, &target, &g.depth, (g.config.width, g.config.height));
                 }

@@ -3704,6 +3704,11 @@ impl Play {
                     self.assist_target();
                     return true;
                 }
+                // the minimap: the map opened, as the compass opens it
+                Some(crate::hud::Pick::Minimap) => {
+                    self.map.show();
+                    return true;
+                }
                 Some(crate::hud::Pick::Me) => self.self_id32(),
                 Some(crate::hud::Pick::Member(id)) => Some(id),
                 Some(crate::hud::Pick::Pet) => (self.pet_id != u32::MAX).then_some(self.pet_id),
@@ -6751,6 +6756,52 @@ impl Play {
             vui: self.hud.as_ref().map(|h| &h.0),
         };
         self.map.frame(&cx);
+        // the minimap where the quick menus are, not under Hide UI
+        if self.minimap_up() && !crate::hideui::hidden() {
+            let mv = self.mini_view();
+            self.map.mini_frame(&cx, &mv);
+        } else {
+            self.map.mini_off();
+        }
+    }
+
+    /// Whether the minimap is up (`map::mini`): Extended's Minimap on, in
+    /// play where the HUD's quick menus are (no window up, no player
+    /// search), the HUD made, the map not up and no loading screen.
+    pub fn minimap_up(&self) -> bool {
+        crate::settings::client().minimap && (self.mode == 0 || self.mode == 30 || self.mode == 38) && !self.search.open && !self.map.open && !self.loading.up() && self.hud.is_some()
+    }
+
+    /// What the minimap shows of the entities: every creature and player in
+    /// the scene but the player and the group (the minimap draws those as
+    /// the map does) and corpses, in its name's colour (`plates`), and the
+    /// target.
+    fn mini_view(&self) -> crate::map::mini::MiniView {
+        let me = self.self_id32();
+        let group: Vec<u32> = self.group.members[..self.group.count()].iter().map(|m| m.id).collect();
+        let dots = self
+            .entities
+            .slots
+            .iter()
+            .flatten()
+            .filter(|e| Some(e.id) != me && !group.contains(&e.id) && e.p18 & 2 == 0 && self.in_scene(e))
+            .filter_map(|e| {
+                let c = e.creature.as_ref()?;
+                let color = if c.p256 < 2 { 0 } else if c.p299 & 1 != 0 { 2 } else { 1 };
+                Some(([e.actor_pos[0], e.actor_pos[2]], NAME_COLORS[color]))
+            })
+            .collect();
+        let target = self.actor_pos(self.target).filter(|_| Some(self.target) != me).map(|p| [p[0], p[2]]);
+        crate::map::mini::MiniView { dots, target, marks: self.mini_marks() }
+    }
+
+    /// The marks on the minimap (`map::mini::Mark`: a kind, a world, a place
+    /// and a tooltip), every source's: the map's XP camps and coach stops,
+    /// the quests' to take and steps to do. Each source appends its own here;
+    /// the minimap draws what it is given (the quests' over the rest, on its
+    /// rim while farther).
+    fn mini_marks(&self) -> Vec<crate::map::mini::Mark> {
+        Vec::new()
     }
 
     /// Builds the HUD on the viewer's device: the 2D layer, UI.CSF's and
@@ -6912,6 +6963,7 @@ impl Play {
             camera: walker.eye.position.to_array(),
             time_ms,
             waypoint: self.map.waypoint(self.player.world as i32),
+            minimap: self.minimap_up(),
         };
         let now = self.session.now();
         let dt = ((time_ms - self.hud_last).clamp(0, 250)) as f32 / 1000.0;
