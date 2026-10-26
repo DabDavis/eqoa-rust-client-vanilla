@@ -113,6 +113,18 @@ One build is published, **dev**: rebuilt from `master` on every push, for Linux
 Each build replaces the one before, so only the newest can be downloaded; the
 release page's update notes (`UPDATE-NOTES.md`) say what each build changed.
 
+The program's icon is a drawn disc of its own (`icon_art.rs`: no game art; the
+Windows `.exe` carries it in its resources, made by `build.rs` from the same
+drawing, and the pages have it as `web/disc.svg`) until it has read the
+player's disc image; from then on it is the game's own memory card icon, the
+3D head a PS2's browser showed for the save, drawn from SUPPORT's
+`VIMemCardIconData` on the player's disc (`saveicon.rs`) and kept as
+`saveicon.png` in the config directory, so the next start with that disc opens
+with it (`icon.rs`: the window under Windows and X11, the Dock on a Mac;
+Wayland shows a program's icon only through a desktop entry, for which the
+Linux archive carries `eqoa.png`). `eqoa icon <size> <out.png> [save]` writes
+either.
+
 It is the `eqoa` program, in an archive with its README and licence, or on its
 own (`eqoa-vanilla-linux-x86_64`, `eqoa-vanilla-windows-x86_64.exe`,
 `eqoa-vanilla-macos`: on Linux and macOS `chmod +x` it after the download). You

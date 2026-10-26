@@ -142,6 +142,11 @@ jobs:
             cp target/release/eqoa "dist/$name/"
             chmod +x "dist/$name/eqoa"
             cp release/README.txt LICENSE "dist/$name/"
+            # Linux: the program's icon, the drawn disc, for a desktop entry of
+            # the player's own (Wayland shows a program's icon only through one)
+            if [ "${{ matrix.os }}" = linux ]; then
+              target/release/eqoa icon 256 "dist/$name/eqoa.png" || echo "no eqoa.png: the archive goes without it"
+            fi
             tar -C dist -czf "out/$name.tar.gz" "$name"
             cp target/release/eqoa "out/$name"
           fi

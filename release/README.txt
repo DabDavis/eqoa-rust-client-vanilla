@@ -30,6 +30,12 @@ EQOA_CHAR=<name> for a character other than the first) goes straight into the
 world. A server on other ports: EQOA_AUTH_PORT and EQOA_GAME_PORT (9735 and
 10070 by default), EQOA_NEWS_PORT (7000).
 
+The program's icon is a drawn disc until it has read your disc image; from then
+on it is the game's own memory card icon, drawn from your disc (kept as
+saveicon.png beside your options, for the next start). On Linux, eqoa.png in
+this archive is the drawn disc, for a desktop entry of your own (Wayland shows a
+program's icon only through one).
+
 The game's options, your keys, the server and the disc image's place (disc.opt,
 a text file holding its path) are kept in eqoa-rs in the config directory:
 ~/.config/eqoa-rs (Linux), ~/Library/Application Support/eqoa-rs (macOS),
