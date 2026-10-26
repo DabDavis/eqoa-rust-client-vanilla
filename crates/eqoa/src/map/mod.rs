@@ -24,10 +24,20 @@
 //! shows it as a dot on its rim the way it shows the group (`hud`'s
 //! `draw_patch`), at any distance; reached (within `ARRIVE`) it goes. Kept
 //! per world in this window's `waypoints.opt` (`settings::waypoints`).
+//!
+//! The markers (`markers`, F3 pass 18, the user's): EQOA-Data's XP camps, a
+//! red badge with "XP", and every coach, the horseshoe the game's stable signs
+//! carry, each with a card of what it is (a camp's levels, the guide's note,
+//! rare creatures and drops; a coach's town, coachman and route) under the
+//! mouse, under a finger that tapped it (tapped again, the waypoint goes on
+//! it; a click puts it there at once) or under the pad's middle cross. X (○ on
+//! a pad) shows or hides them, as Extended's Map Markers does.
 
 pub mod build;
 pub mod cells;
 pub mod chrome;
+pub mod markers;
+mod markers_data;
 pub mod picture;
 pub mod store;
 // natively (a page has nothing to call it; it compiles there as main.rs's
@@ -194,6 +204,14 @@ pub struct Map {
     /// the settings at the first use (`read_waypoints`)
     waypoints: BTreeMap<i32, [f32; 2]>,
     waypoints_read: bool,
+    /// the marker whose card a finger tapped up (`click`), and whether the
+    /// mouse is over the map (its cursor's card); `hover_world`, a world
+    /// point taken as the pointer's (`mapshot`'s `EQOA_MAP_HOVER`)
+    pinned: Option<markers::Marker>,
+    pointer_seen: bool,
+    pub hover_world: Option<[f32; 2]>,
+    /// the coaches' horseshoe, off the disc (`find_icon`)
+    icon: markers::Icon,
     /// the build's time a frame, open or not, in place of the usual
     /// (`EQOA_MAP_BUDGET` in ms, `mapshot`'s measurements)
     pub budget: Option<Duration>,
@@ -234,6 +252,7 @@ impl Map {
             key::TRIANGLE | key::START if down => self.close(),
             key::CROSS if down => self.follow = true,
             key::SQUARE if down => self.square(),
+            key::CIRCLE if down => self.toggle_markers(),
             key::R1 if down => self.steps -= 1,
             key::L1 if down => self.steps += 1,
             key::UP => hold(&mut self.held, 0),
@@ -270,6 +289,7 @@ impl Map {
     pub fn mouse_moved(&mut self, at: [f32; 2]) {
         let d = [at[0] - self.cursor[0], at[1] - self.cursor[1]];
         self.cursor = at;
+        self.pointer_seen = true;
         if let Some(p) = self.press.as_mut() {
             if p.dragged {
                 self.drag(d);
@@ -286,6 +306,7 @@ impl Map {
     pub fn let_go(&mut self) {
         self.press = None;
         self.held = [false; 6];
+        self.pointer_seen = false;
     }
 
     /// The wheel's `lines` (up positive: in) about window pixel `at` (the
@@ -308,6 +329,10 @@ impl Map {
     /// positive: `touch.rs`'s, a tenth closer a line, so the map follows the
     /// fingers).
     pub fn touch(&mut self, dx: f32, dy: f32, pinch: f32) {
+        if dx != 0.0 || dy != 0.0 || pinch != 0.0 {
+            // a finger, no mouse: no cursor's card
+            self.pointer_seen = false;
+        }
         if dx != 0.0 || dy != 0.0 {
             self.drag([dx, dy]);
         }
@@ -361,12 +386,113 @@ impl Map {
                 return true;
             }
         }
+        // a marker: a tap shows its card, a click (or a second tap) puts the
+        // waypoint on it
+        if let Some(m) = crate::settings::map_markers().then(|| markers::under(world, v, size, s, finger)).flatten() {
+            if finger && self.pinned != Some(m) {
+                self.pinned = Some(m);
+                return true;
+            }
+            self.pinned = None;
+            self.set_waypoint(world, Some(m.at()));
+            return true;
+        }
+        self.pinned = None;
         let at = v.to_world(size, s);
         if at[0] < extent[0] || at[0] > extent[2] || at[1] < extent[1] || at[1] > extent[3] {
             return false;
         }
         self.set_waypoint(world, Some(at));
         true
+    }
+
+    /// ○ (X on a keyboard): the markers shown or hidden, kept (Extended's
+    /// Map Markers).
+    fn toggle_markers(&mut self) {
+        let on = !crate::settings::map_markers();
+        if let Err(e) = crate::settings::set_map_markers(on) {
+            crate::say(&format!("map: markers {}, not kept: {e}", if on { "shown" } else { "hidden" }));
+        }
+        self.pinned = None;
+        crate::say(&format!("map: markers {}", if on { "shown" } else { "hidden" }));
+    }
+
+    /// The marker whose card shows: the one a finger tapped, else the one
+    /// under the mouse (not while it drags the map), else, for a pad, the
+    /// one under the middle cross once the map is panned; none while the
+    /// markers are hidden.
+    fn card_marker(&self, keyboard: bool) -> Option<markers::Marker> {
+        let (true, Some(v), Some(w)) = (crate::settings::map_markers(), self.view, self.world.as_ref()) else { return None };
+        let size = self.size;
+        if let Some(m) = self.pinned.filter(|m| m.world() == w.index) {
+            return Some(m);
+        }
+        if let Some(p) = self.hover_world {
+            return markers::under(w.index, v, size, v.to_window(size, p), false);
+        }
+        if self.pointer_seen
+            && !self.press.is_some_and(|p| p.dragged)
+            && let Some(m) = markers::under(w.index, v, size, self.cursor, false)
+        {
+            return Some(m);
+        }
+        if !self.follow && !keyboard {
+            return markers::under(w.index, v, size, [size.0 as f32 / 2.0, size.1 as f32 / 2.0], false);
+        }
+        None
+    }
+
+    /// The coaches' horseshoe: the map's cache first (`ICON_FILE` under
+    /// "icons", kept from an earlier run), else off the disc: a file of the
+    /// library holding it (Freeport's zones round the player), a zone the
+    /// builder reads, or, Tunaria's map drawn and still none, the sign's zone
+    /// read once for it (`Builder::peek`); then onto the layer. Off the 2002
+    /// disc's Tunaria none is read; the drawn horseshoe stands in meanwhile.
+    fn find_icon(&mut self, cx: &Context) {
+        let icon = &mut self.icon;
+        if icon.image.is_none() && icon.store.is_none() && !icon.answered {
+            icon.store = store::open("icons");
+            match icon.store.as_mut() {
+                Some(s) => s.get(markers::ICON_FILE),
+                None => icon.answered = true,
+            }
+        }
+        if let Some(s) = icon.store.as_mut() {
+            let mut got = Vec::new();
+            while let Some(g) = s.poll() {
+                got.push(g);
+            }
+            for g in got {
+                if let store::Got::File(name, bytes) = g
+                    && name == markers::ICON_FILE
+                {
+                    icon.cached(bytes);
+                }
+            }
+        }
+        if icon.image.is_none()
+            && icon.answered
+            && let Some((c, s)) = cx.lib.surface(markers::ICON)
+            && let Some(im) = s.decode(&c.data)
+        {
+            icon.take(&im, "off the disc, out of a zone in play");
+        }
+        if let Some(w) = self.world.as_mut() {
+            let tunaria = w.name.eq_ignore_ascii_case("TUNARIA.ESF") && w.era == esf::Era::Frontiers;
+            w.builder.want_icon(icon.image.is_none() && tunaria);
+            if let Some(im) = w.builder.icon.take() {
+                icon.take(&im, "off the disc, out of a zone the map read");
+            }
+            if icon.image.is_none() && icon.answered && tunaria && !icon.peeked && w.builder.done() {
+                icon.peeked = true;
+                if let Some(zi) = w.builder.cells.at(markers::ICON_AT[0], markers::ICON_AT[1]).and_then(|c| w.builder.cells.zone_at[c]) {
+                    w.builder.peek(zi);
+                }
+            }
+        }
+        if let (Some((iw, ih, px)), None, Some(l)) = (icon.image.as_ref(), icon.tex, self.layers.as_mut()) {
+            icon.tex = Some(l.ui.add_texture(cx.device, cx.queue, *iw, *ih, px));
+        }
     }
 
     /// □ (Q on a keyboard): the waypoint at the map's middle, once the map
@@ -453,6 +579,7 @@ impl Map {
             // their textures go with them, the world's pictures among them
             self.layers = None;
             self.world = None;
+            self.icon.tex = None;
         }
         self.layers(cx);
         if r.world {
@@ -477,6 +604,8 @@ impl Map {
         if let Some(b) = budget {
             w.builder.step(cx.lib, &build::Gpu { device: cx.device, queue: cx.queue }, focus, b);
         }
+        self.find_icon(cx);
+        let Some(w) = self.world.as_mut() else { return };
         let progress = w.builder.progress();
         if w.builder.done() && self.reported != Some(progress) {
             crate::say(&format!("{} in {:.1} s ({:.2} s of it working, the longest frame's {:.1} ms)", w.builder.describe(), w.builder.stats.took.unwrap_or_default().as_secs_f64(), w.builder.stats.busy.as_secs_f64(), w.builder.stats.worst.as_secs_f64() * 1e3));
@@ -646,6 +775,8 @@ impl Map {
     /// This frame's quads: the overview and the tiles; the grid, the
     /// group and the marker; the chrome (`chrome::draw`).
     fn compose(&mut self, cx: &Context) {
+        let card = self.card_marker(cx.keyboard);
+        let icon = self.icon.tex;
         let (Some(w), Some(v), Some(l)) = (self.world.as_ref(), self.view, self.layers.as_mut()) else { return };
         let size = cx.size;
         let cells = &w.builder.cells;
@@ -748,6 +879,24 @@ impl Map {
         };
         // the names, then the group and the player over them, then the rest
         chrome::names(&mut l.assets.raster(ui), vui, &c);
+        // the markers (`markers`): the coaches' horseshoes, then the camps'
+        // badges over them, under the group and the player
+        if crate::settings::map_markers() {
+            let (lo, hi) = ([-40.0, -40.0], [size.0 as f32 + 40.0, size.1 as f32 + 40.0]);
+            let shown: Vec<(markers::Marker, [f32; 2])> = markers::of_world(w.index)
+                .map(|m| (m, v.to_window(size, m.at())))
+                .filter(|(_, p)| p[0] >= lo[0] && p[1] >= lo[1] && p[0] <= hi[0] && p[1] <= hi[1])
+                .map(|(m, p)| (m, f(p)))
+                .collect();
+            let (r, o) = view::horseshoe_radius(size);
+            for &(m, p) in &shown {
+                if matches!(m, markers::Marker::Coach(_)) {
+                    markers::draw_horseshoe(ui, white, icon, p, r * k, o * k);
+                }
+            }
+            let camps: Vec<(markers::Marker, [f32; 2])> = shown.iter().copied().filter(|(m, _)| matches!(m, markers::Marker::Camp(_))).collect();
+            markers::draw_badges(ui, &l.assets, vui, white, font, &camps, v.scale);
+        }
         // the group's members, their compass colours (1 green, 2 blue, 3 cyan, the rest yellow)
         for (pos, index) in &cx.group {
             let p = v.to_window(size, [pos[0], pos[2]]);
@@ -790,6 +939,10 @@ impl Map {
                 ui.push(Quad { tex: white, blend: 3, pos: d, uv: [[0.5, 0.5]; 4], color, clip: None });
             }
         }
+        // the card of the marker under the pointer, over the rest but the chrome
+        if let Some(m) = card {
+            markers::draw_card(ui, &l.assets, vui, white, m, f(v.to_window(size, m.at())), c.corners);
+        }
         let mut r = l.assets.raster(ui);
         self.buttons = chrome::draw(&mut r, vui, &c);
         self.glyphs = r.glyphs;
@@ -817,7 +970,10 @@ impl Map {
 
     /// The map's state (a shot's last lines, a report).
     pub fn describe(&self) -> String {
-        let waypoints: String = self.waypoints.iter().map(|(w, p)| format!(", a waypoint in world {w} at ({:.0}, {:.0})", p[0], p[1])).collect();
+        let mut waypoints: String = self.waypoints.iter().map(|(w, p)| format!(", a waypoint in world {w} at ({:.0}, {:.0})", p[0], p[1])).collect();
+        if !crate::settings::map_markers() {
+            waypoints.push_str(", markers hidden");
+        }
         match &self.world {
             Some(w) => format!("{}{}{waypoints}", w.builder.describe(), if self.open { ", up" } else { "" }),
             None => format!("map: no world{waypoints}"),
@@ -861,6 +1017,8 @@ fn wanted_tiles(cells: &cells::Cells, v: View, size: (u32, u32)) -> Vec<usize> {
 /// each press and repeat, `Press::Held` while it is down.
 pub fn keyboard(name: &str) -> Option<(i32, Hold)> {
     Some(match name {
+        // X is the map's ○: the markers shown or hidden
+        "x" => (key::CIRCLE, Hold::Once),
         "escape" | "backspace" | "m" => (key::TRIANGLE, Hold::Once),
         "space" | "enter" | "home" => (key::CROSS, Hold::Once),
         // Q is the keyboard's □ (`binds`' "talk" row): the waypoint

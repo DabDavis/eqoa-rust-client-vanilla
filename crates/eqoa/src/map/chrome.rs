@@ -14,10 +14,10 @@ use vi::ui::{Raster, Vui, wide};
 /// the pad's keys they press.
 pub const BUTTONS: [(&str, i32); 4] = [("Close", key::TRIANGLE), ("+", key::R1), ("-", key::L1), ("Center", key::CROSS)];
 
-/// The legend for the pad: the inline glyphs (△ 65, ✕ 66, □ 67, L1 185,
-/// R1 187) and what each does.
-const PAD_LEGEND: [(i32, &str); 7] = [(65, "Close"), (66, "Center"), (67, "Waypoint"), (185, ""), (187, "Zoom"), (-1, "Sticks, drag, pinch: pan and zoom"), (-1, "Tap: waypoint")];
-const KEY_LEGEND: [&str; 5] = ["M Close", "Space Center", "+ - or wheel Zoom", "Arrows, WASD or drag Pan", "Click or Q Waypoint"];
+/// The legend for the pad: the inline glyphs (△ 65, ✕ 66, □ 67, ○ 68, L1
+/// 185, R1 187) and what each does.
+const PAD_LEGEND: [(i32, &str); 8] = [(65, "Close"), (66, "Center"), (67, "Waypoint"), (68, "Markers"), (185, ""), (187, "Zoom"), (-1, "Sticks, drag, pinch: pan and zoom"), (-1, "Tap: waypoint")];
+const KEY_LEGEND: [&str; 6] = ["M Close", "Space Center", "+ - or wheel Zoom", "Arrows, WASD or drag Pan", "Click or Q Waypoint", "X Markers"];
 
 pub const NAME: [f32; 4] = [1.0, 0.97, 0.85, 1.0];
 const PANEL: i32 = 61;

@@ -118,6 +118,20 @@ pub fn waypoint_radius(size: (u32, u32)) -> (f32, f32) {
     (lines(size, 4.5), lines(size, 1.0))
 }
 
+/// A coach's horseshoe (`markers`), from its middle to an edge, and its
+/// outline's width, in window pixels: 6 and 1 of the frame's lines, a little
+/// smaller than the player's dart.
+pub fn horseshoe_radius(size: (u32, u32)) -> (f32, f32) {
+    (lines(size, 6.0), lines(size, 1.0))
+}
+
+/// How near a marker's middle a pointer must be to be on it (`markers::under`),
+/// in window pixels: 10 of the frame's lines (an XP badge's half width), and a
+/// finger's miss more (`pointer::FINGER` frame pixels) for a tap.
+pub fn marker_reach(size: (u32, u32), finger: bool) -> f32 {
+    lines(size, 10.0) + if finger { lines(size, crate::pointer::FINGER) } else { 0.0 }
+}
+
 /// How near the waypoint a click must be to clear it, in window pixels:
 /// twice its diamond, and a finger's miss more (`pointer::FINGER` frame
 /// pixels) for a tap.

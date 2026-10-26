@@ -143,6 +143,9 @@ enum Job {
     Idle,
     /// a zone's record asked of the source
     Read { zi: usize },
+    /// a zone's record asked of the source for what it carries (`peek`), not
+    /// to draw
+    Peek { zi: usize },
     Make(Box<Making>),
     /// drawn, the picture coming back
     Shot { zi: usize },
@@ -190,6 +193,11 @@ pub struct Builder {
     pub stats: Stats,
     /// `trace()`, asked once
     trace: bool,
+    /// the stable sign's horseshoe (`markers::ICON`) out of a zone read here,
+    /// while the map wants it (`want_icon`); `peek` a zone to read for it
+    pub icon: Option<esf::Image>,
+    want_icon: bool,
+    peek: Option<usize>,
 }
 
 impl Builder {
@@ -204,7 +212,33 @@ impl Builder {
             s.list();
         }
         let zones = (0..n).map(|z| if cells.cell_of[z].is_none() { Zone::Failed } else if listed { Zone::Missing } else { Zone::Unknown }).collect();
-        Builder { world, cells, zones, store, listed, source, job: Job::Idle, renderer: None, uploaded: HashSet::new(), shot: None, cells_out: Vec::new(), tiles_out: Vec::new(), tiles_asked: BTreeSet::new(), started: None, stats: Stats::default(), trace: trace() }
+        Builder { world, cells, zones, store, listed, source, job: Job::Idle, renderer: None, uploaded: HashSet::new(), shot: None, cells_out: Vec::new(), tiles_out: Vec::new(), tiles_asked: BTreeSet::new(), started: None, stats: Stats::default(), trace: trace(), icon: None, want_icon: false, peek: None }
+    }
+
+    /// Whether the zones read from now on are looked through for the stable
+    /// sign's horseshoe (`icon`).
+    pub fn want_icon(&mut self, on: bool) {
+        self.want_icon = on;
+    }
+
+    /// Zone `zi` read once more, for what it carries (the horseshoe), not
+    /// drawn: once the build is idle. Whether it can be (a source to read it).
+    pub fn peek(&mut self, zi: usize) -> bool {
+        if self.source.is_none() || zi >= self.zones.len() {
+            return false;
+        }
+        self.peek = Some(zi);
+        true
+    }
+
+    /// The horseshoe out of `c`, a zone's records, while it is wanted.
+    pub(super) fn look_for_icon(&mut self, c: &Container) {
+        if !self.want_icon || self.icon.is_some() {
+            return;
+        }
+        if let Some(im) = c.surfaces.iter().find(|s| s.dict_id == super::markers::ICON).and_then(|s| s.decode(&c.data)) {
+            self.icon = Some(im);
+        }
     }
 
     /// Whether every zone is on the map (or has nothing to draw).
@@ -234,7 +268,7 @@ impl Builder {
     /// as far as time allows.
     /// `focus` (x, z) is where the next zone is chosen nearest to.
     pub fn step(&mut self, lib: &Library, g: &Gpu, focus: [f32; 2], budget: Duration) {
-        if self.done() && self.tiles_asked.is_empty() && matches!(self.job, Job::Idle) {
+        if self.done() && self.tiles_asked.is_empty() && matches!(self.job, Job::Idle) && self.peek.is_none() {
             return;
         }
         let t0 = Instant::now();
@@ -266,6 +300,7 @@ impl Builder {
         match &self.job {
             Job::Idle => "choosing",
             Job::Read { .. } => "reading",
+            Job::Peek { .. } => "peeking",
             Job::Make(m) if m.piece.is_none() => "building",
             Job::Make(_) => "texture or upload",
             Job::Shot { .. } => "picture",
@@ -349,8 +384,20 @@ impl Builder {
     fn advance(&mut self, lib: &Library, g: &Gpu, focus: [f32; 2]) -> bool {
         match std::mem::replace(&mut self.job, Job::Idle) {
             Job::Idle => {
+                if let Some(zi) = self.peek.take() {
+                    if let Some((zf, _)) = lib.zone(self.world, zi) {
+                        self.look_for_icon(lib.file(zf));
+                        return true;
+                    }
+                    if let (Some(src), Some((off, len))) = (self.source.as_mut(), lib.zone_range(self.world, zi)) {
+                        src.request(zi, off, len);
+                        self.job = Job::Peek { zi };
+                    }
+                    return true;
+                }
                 let Some(zi) = self.next_zone(lib, focus) else { return false };
                 if let Some((zf, z)) = lib.zone(self.world, zi) {
+                    self.look_for_icon(lib.file(zf));
                     self.job = Job::Make(Making::new(zi, None, z, lib.file(zf)));
                     return true;
                 }
@@ -376,6 +423,7 @@ impl Builder {
                 match r {
                     Ok(bytes) if bytes.len() >= 12 && u16::from_le_bytes([bytes[0], bytes[1]]) == esf::zone::ZONE => {
                         let c = Container::parse_records(bytes);
+                        self.look_for_icon(&c);
                         match c.roots.first().copied() {
                             Some(z) => {
                                 let m = Making::new(zi, None, z, &c);
@@ -388,6 +436,25 @@ impl Builder {
                         crate::say(&format!("map: zone {zi} would not read"));
                         self.zones[zi] = Zone::Failed;
                     }
+                }
+                true
+            }
+            Job::Peek { zi } => {
+                let Some(src) = self.source.as_mut() else { return false };
+                let Some((got, r)) = src.poll() else {
+                    self.job = Job::Peek { zi };
+                    return false;
+                };
+                if got != zi {
+                    self.job = Job::Peek { zi };
+                    return true;
+                }
+                match r {
+                    Ok(bytes) if bytes.len() >= 12 && u16::from_le_bytes([bytes[0], bytes[1]]) == esf::zone::ZONE => {
+                        let c = Container::parse_records(bytes);
+                        self.look_for_icon(&c);
+                    }
+                    _ => crate::say(&format!("map: zone {zi} would not read for what it carries")),
                 }
                 true
             }
