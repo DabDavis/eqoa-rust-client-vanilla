@@ -304,7 +304,7 @@ pub struct Session {
     /// whole and not yet taken (`take_voice_signals`), the parts of those
     /// still coming, and this client's next message number.
     pub voice_offer: bool,
-    voice_asked: Option<bool>,
+    voice_asked: Option<u32>,
     pub voice_ice: Vec<crate::voice::WireIce>,
     pub voice_ttl: u32,
     pub voice_peers: Vec<crate::voice::WirePeer>,
@@ -509,30 +509,37 @@ impl Session {
         self.send(&w.data);
     }
 
-    /// Voice Chat: a server that offered group voice ([`crate::voice::OP_VOICE`])
-    /// is told whether this client has it on (`want`), at once and whenever
-    /// that changes; one that made no offer is told nothing. Off, the
+    /// Voice Chat and Guild Voice: a server that offered voice
+    /// ([`crate::voice::OP_VOICE`]) is told this client's flags
+    /// ([`crate::voice::FLAG_ON`], [`crate::voice::FLAG_GUILD`]), at once and
+    /// whenever they change; one that made no offer is told nothing. Off, the
     /// members, servers and signals it sent are forgotten.
-    pub fn agree_voice(&mut self, want: bool) {
-        if !want {
+    pub fn agree_voice(&mut self, flags: u32) {
+        let flags = if flags & crate::voice::FLAG_ON == 0 { 0 } else { flags & (crate::voice::FLAG_ON | crate::voice::FLAG_GUILD) };
+        if flags == 0 {
             self.voice_peers.clear();
             self.voice_ice.clear();
             self.voice_in.clear();
             self.voice_parts.clear();
         }
-        if !self.voice_offer || self.voice_asked == Some(want) {
+        if !self.voice_offer || self.voice_asked == Some(flags) {
             return;
         }
-        self.voice_asked = Some(want);
+        self.voice_asked = Some(flags);
         let mut w = Writer::op(crate::voice::OP_VOICE);
-        w.u32(want as u32);
+        w.u32(flags);
         self.send(&w.data);
+    }
+
+    /// Whether this session told the server it has voice on.
+    fn voice_on(&self) -> bool {
+        self.voice_asked.is_some_and(|f| f & crate::voice::FLAG_ON != 0)
     }
 
     /// A WebRTC signal to group member `peer` ([`crate::voice::OP_VOICE_SIGNAL`],
     /// in parts as long as it takes), when this session has voice on.
     pub fn send_voice_signal(&mut self, peer: u32, kind: u8, text: &str) {
-        if self.voice_asked != Some(true) {
+        if !self.voice_on() {
             return;
         }
         self.voice_seq = self.voice_seq.wrapping_add(1);
@@ -809,7 +816,7 @@ impl Session {
             }
             crate::voice::OP_VOICE_CONFIG => {
                 if let Some((ice, ttl)) = crate::voice::decode_config(&mut r)
-                    && self.voice_asked == Some(true)
+                    && self.voice_on()
                 {
                     self.voice_ice = ice;
                     self.voice_ttl = ttl;
@@ -817,14 +824,14 @@ impl Session {
             }
             crate::voice::OP_VOICE_PEERS => {
                 if let Some(peers) = crate::voice::decode_peers(&mut r)
-                    && self.voice_asked == Some(true)
+                    && self.voice_on()
                 {
                     self.voice_peers = peers;
                 }
             }
             crate::voice::OP_VOICE_SIGNAL => {
                 if let Some((peer, seq, kind, part, parts, chunk)) = crate::voice::decode_signal(&mut r)
-                    && self.voice_asked == Some(true)
+                    && self.voice_on()
                     && let Some(whole) = self.voice_parts.take(peer, seq, kind, part, parts, chunk)
                 {
                     // a bounded queue: a flood is let go, not kept
@@ -1605,7 +1612,7 @@ mod tests {
             let m = s.record.replace(Vec::new()).unwrap_or_default();
             m.into_iter().map(|(_, d)| d).filter(|d| d.len() >= 2 && d[1] == 0x7E && (6..=9).contains(&d[0])).collect()
         };
-        s.agree_voice(true);
+        s.agree_voice(FLAG_ON);
         s.send_voice_signal(9, KIND_OFFER, "v=0");
         assert_eq!(ours(&mut s), Vec::<Vec<u8>>::new(), "no offer: nothing told, nothing signalled");
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x06, 0x7E, 1, 0, 0, 0]);
@@ -1614,11 +1621,17 @@ mod tests {
         let ice = vec![WireIce { url: "turn:104.156.237.19:3479?transport=udp".into(), username: "1:2".into(), credential: "x".into() }];
         deliver(&mut s, drdp::TYPE_GUARANTEED, encode_config(&ice, 600));
         assert!(s.voice_ice.is_empty(), "taken before voice was on");
-        s.agree_voice(true);
-        s.agree_voice(true);
+        s.agree_voice(FLAG_ON);
+        s.agree_voice(FLAG_ON);
         assert_eq!(ours(&mut s), vec![vec![0x06, 0x7E, 1, 0, 0, 0]], "told once");
+        s.agree_voice(FLAG_ON | FLAG_GUILD);
+        assert_eq!(ours(&mut s), vec![vec![0x06, 0x7E, 3, 0, 0, 0]], "and the guild's channel");
+        s.agree_voice(FLAG_GUILD);
+        assert_eq!(ours(&mut s), vec![vec![0x06, 0x7E, 0, 0, 0, 0]], "the guild's alone is off");
+        s.agree_voice(FLAG_ON);
+        assert_eq!(ours(&mut s), vec![vec![0x06, 0x7E, 1, 0, 0, 0]]);
         deliver(&mut s, drdp::TYPE_GUARANTEED, encode_config(&ice, 600));
-        let peers = vec![WirePeer { peer: 9, name: "Jibrish".into(), offerer: true }];
+        let peers = vec![WirePeer { peer: 9, name: "Jibrish".into(), offerer: true, channels: CHANNEL_GROUP }];
         deliver(&mut s, drdp::TYPE_GUARANTEED, encode_peers(&peers));
         assert_eq!((s.voice_ice.clone(), s.voice_ttl, s.voice_peers.clone()), (ice.clone(), 600, peers.clone()));
 
@@ -1640,7 +1653,7 @@ mod tests {
         assert_eq!(s.take_voice_signals(), vec![(9, KIND_ANSWER, sdp.clone())]);
         assert!(s.take_voice_signals().is_empty(), "taken once");
 
-        s.agree_voice(false);
+        s.agree_voice(0);
         assert_eq!(ours(&mut s), vec![vec![0x06, 0x7E, 0, 0, 0, 0]], "and off");
         assert!(s.voice_peers.is_empty() && s.voice_ice.is_empty(), "off: forgotten");
         deliver(&mut s, drdp::TYPE_GUARANTEED, encode_peers(&peers));
@@ -1650,7 +1663,7 @@ mod tests {
 
         deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
         assert!(!s.voice_offer, "a new connection, no offer yet");
-        s.agree_voice(true);
+        s.agree_voice(FLAG_ON);
         assert_eq!(ours(&mut s), Vec::<Vec<u8>>::new(), "and nothing told");
     }
 

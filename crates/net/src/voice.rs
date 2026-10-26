@@ -9,13 +9,16 @@
 //! On the wire, beside the opcode: integers little-endian, a string a u16 byte
 //! length and its UTF-8.
 //! - [`OP_VOICE`]: the server's offer, a u32 1, once the player is in the
-//!   world; the client's answer, a u32 1 (on) or 0 (off), at once after the
-//!   offer and whenever the option changes.
+//!   world; the client's answer, u32 flags ([`FLAG_ON`] voice on, [`FLAG_GUILD`]
+//!   in its guild's voice channel; 0 off), at once after the offer and
+//!   whenever the options change.
 //! - [`OP_VOICE_CONFIG`]: a u8 count, each { url, username, credential }, then
 //!   a u32 time to live in seconds (sent again before it runs out).
-//! - [`OP_VOICE_PEERS`]: a u8 count, each { u32 peer, name, u8 offerer }: the
-//!   other members with voice on, each by its voice id; `offerer` 1 when THIS
-//!   client makes the offer to that one. The whole set each time.
+//! - [`OP_VOICE_PEERS`]: a u8 count, each { u32 peer, name, u8 offerer, u8
+//!   channels }: the other members with voice on, each by its voice id;
+//!   `offerer` 1 when THIS client makes the offer to that one; `channels` what
+//!   joins the two ([`CHANNEL_GROUP`] a groupmate, [`CHANNEL_GUILD`] both in
+//!   their guild's channel: one connection a pair). The whole set each time.
 //! - [`OP_VOICE_SIGNAL`], both ways: u32 peer (to, or from), u32 seq (the
 //!   sender's message number), u8 kind (1 offer, 2 answer, 3 an ICE candidate,
 //!   4 bye), u16 part, u16 parts, then a chunk of the message's text (at most
@@ -37,6 +40,15 @@ pub const CHUNK: usize = 900;
 const MAX_PARTS: u16 = 64;
 const MAX_PENDING: usize = 32;
 
+/// [`OP_VOICE`]'s answer: voice on, and in the guild's voice channel (alone
+/// it means nothing).
+pub const FLAG_ON: u32 = 1;
+pub const FLAG_GUILD: u32 = 2;
+/// [`OP_VOICE_PEERS`]'s channels: a groupmate, and one in the guild's voice
+/// channel with this player.
+pub const CHANNEL_GROUP: u8 = 1;
+pub const CHANNEL_GUILD: u8 = 2;
+
 /// A signal's kinds (the `kind` byte).
 pub const KIND_OFFER: u8 = 1;
 pub const KIND_ANSWER: u8 = 2;
@@ -51,12 +63,14 @@ pub struct WireIce {
     pub credential: String,
 }
 
-/// A group member with voice on, as [`OP_VOICE_PEERS`] names it.
+/// A member with voice on, as [`OP_VOICE_PEERS`] names it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WirePeer {
     pub peer: u32,
     pub name: String,
     pub offerer: bool,
+    /// [`CHANNEL_GROUP`], [`CHANNEL_GUILD`] or both
+    pub channels: u8,
 }
 
 /// A string: a u16 byte length and the UTF-8 (cut at a character's end to
@@ -104,7 +118,7 @@ pub fn encode_peers(peers: &[WirePeer]) -> Vec<u8> {
     for p in peers.iter().take(255) {
         w.u32(p.peer);
         put_str(&mut w, &p.name);
-        w.u8(p.offerer as u8);
+        w.u8(p.offerer as u8).u8(p.channels);
     }
     w.data
 }
@@ -116,7 +130,8 @@ pub fn decode_peers(r: &mut Reader) -> Option<Vec<WirePeer>> {
         .map(|_| {
             let peer = r.u32();
             let name = get_str(r);
-            WirePeer { peer, name, offerer: r.u8() != 0 }
+            let offerer = r.u8() != 0;
+            WirePeer { peer, name, offerer, channels: r.u8() }
         })
         .collect();
     (!r.error).then_some(peers)
@@ -247,9 +262,12 @@ mod tests {
         assert_eq!(decode_config(&mut body(&m)), Some((ice.clone(), 86400)));
         assert_eq!(decode_config(&mut body(&m[..m.len() - 1])), None, "cut short");
 
-        let peers = vec![WirePeer { peer: 9, name: "Jibrish".into(), offerer: true }, WirePeer { peer: 12, name: "Dabsha".into(), offerer: false }];
+        let peers = vec![
+            WirePeer { peer: 9, name: "Jibrish".into(), offerer: true, channels: CHANNEL_GROUP },
+            WirePeer { peer: 12, name: "Dabsha".into(), offerer: false, channels: CHANNEL_GROUP | CHANNEL_GUILD },
+        ];
         let m = encode_peers(&peers);
-        assert_eq!(m, [&[0x08, 0x7E, 2, 9, 0, 0, 0, 7, 0][..], b"Jibrish", &[1, 12, 0, 0, 0, 6, 0], b"Dabsha", &[0]].concat());
+        assert_eq!(m, [&[0x08, 0x7E, 2, 9, 0, 0, 0, 7, 0][..], b"Jibrish", &[1, 1, 12, 0, 0, 0, 6, 0], b"Dabsha", &[0, 3]].concat());
         assert_eq!(decode_peers(&mut body(&m)), Some(peers));
         assert_eq!(decode_peers(&mut body(&m[..m.len() - 2])), None, "cut short");
         assert_eq!(decode_peers(&mut body(&encode_peers(&[]))), Some(Vec::new()), "the empty set");
