@@ -5,6 +5,12 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · The browser remembers your disc images properly
+- In a browser, "Remember my disc images" now also keeps a disc you chose before
+  ticking it: ticking it opens the picker so you choose the disc once more, and that one
+  is kept. On your next visit, press Start and allow the browser to read it when it asks,
+  and the game starts with your remembered disc.
+
 ## 2026-10-26 · A waypoint of your own on the map
 - The map has a waypoint of your own: click or tap a spot on the map (M) to put a
   magenta marker there, and click it again to take it away. With a controller, pan the
