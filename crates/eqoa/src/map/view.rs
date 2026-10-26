@@ -111,6 +111,20 @@ pub fn member_radius(size: (u32, u32)) -> (f32, f32) {
     (lines(size, 2.5), lines(size, 0.5))
 }
 
+/// The waypoint's diamond (`Map::click`), from its middle to a corner, and
+/// its outline's width, in window pixels: 4.5 and 1 of the frame's lines,
+/// between a member's dot and the player's dart.
+pub fn waypoint_radius(size: (u32, u32)) -> (f32, f32) {
+    (lines(size, 4.5), lines(size, 1.0))
+}
+
+/// How near the waypoint a click must be to clear it, in window pixels:
+/// twice its diamond, and a finger's miss more (`pointer::FINGER` frame
+/// pixels) for a tap.
+pub fn waypoint_reach(size: (u32, u32), finger: bool) -> f32 {
+    waypoint_radius(size).0 * 2.0 + if finger { lines(size, crate::pointer::FINGER) } else { 0.0 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

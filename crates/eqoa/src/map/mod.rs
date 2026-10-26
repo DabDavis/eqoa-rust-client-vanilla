@@ -14,6 +14,16 @@
 //! finger drags it and two pinch it. There is no pad combination to open it
 //! yet (jib's "TBD"): a pad reaches it by M on a keyboard, or by a click or
 //! a tap on the HUD's compass, which opens it too (the touch screen's way).
+//!
+//! A waypoint (F3 20261026-000207, a player's suggestion; the user's choice:
+//! personal, any server, nothing sent): a click or a tap on the map puts a
+//! magenta diamond there, one a world, and a click on it takes it away; □
+//! (Q on a keyboard) puts it at the map's middle once the map is panned off
+//! the player (a cross marks the middle for a pad), and takes it away while
+//! the map follows the player or when it is at the middle. The HUD's compass
+//! shows it as a dot on its rim the way it shows the group (`hud`'s
+//! `draw_patch`), at any distance; reached (within `ARRIVE`) it goes. Kept
+//! per world in this window's `waypoints.opt` (`settings::waypoints`).
 
 pub mod build;
 pub mod cells;
@@ -70,6 +80,12 @@ const NOT_DRAWN: [f32; 4] = [0.17, 0.18, 0.21, 1.0];
 const GRID: [f32; 4] = [1.0, 1.0, 1.0, 0.12];
 const MARKER: [f32; 4] = [1.0, 0.86, 0.2, 1.0];
 const OUTLINE: [f32; 4] = [0.0, 0.0, 0.0, 0.85];
+/// The waypoint's colour on the map and on the compass: magenta, which no
+/// group member's (green, blue, cyan, yellow) nor the player's marker is.
+pub const WAYPOINT: [f32; 4] = [1.0, 0.3, 0.85, 1.0];
+/// How near the waypoint the player must come (world units, about two
+/// seconds' run) for it to be reached and taken away.
+pub const ARRIVE: f32 = 15.0;
 
 /// CLIENT's part: `gWorldInfo`'s grid bounds and world names, by world.
 #[derive(Clone, Copy, Debug, Default)]
@@ -174,6 +190,10 @@ pub struct Map {
     steps: i32,
     /// the last frame's line for the log
     reported: Option<(usize, usize)>,
+    /// the waypoints by `gWorldInfo` index, (x, z) (`click`); read out of
+    /// the settings at the first use (`read_waypoints`)
+    waypoints: BTreeMap<i32, [f32; 2]>,
+    waypoints_read: bool,
     /// the build's time a frame, open or not, in place of the usual
     /// (`EQOA_MAP_BUDGET` in ms, `mapshot`'s measurements)
     pub budget: Option<Duration>,
@@ -213,6 +233,7 @@ impl Map {
         match k {
             key::TRIANGLE | key::START if down => self.close(),
             key::CROSS if down => self.follow = true,
+            key::SQUARE if down => self.square(),
             key::R1 if down => self.steps -= 1,
             key::L1 if down => self.steps += 1,
             key::UP => hold(&mut self.held, 0),
@@ -313,7 +334,7 @@ impl Map {
 
     /// What a pointer at frame point `f` presses on the map's chrome: a
     /// button's key, the pad glyph's (a finger may miss by a little);
-    /// nothing on the map itself (a drag pans it).
+    /// nothing on the map itself (a drag pans it, a click is `click`'s).
     pub fn point(&self, f: [f32; 2], finger: bool) -> Vec<i32> {
         let slop = if finger { pointer::FINGER } else { 0.0 };
         let on = |r: [i32; 4], s: f32| f[0] >= r[0] as f32 - s && f[0] < r[2] as f32 + s && f[1] >= r[1] as f32 - s && f[1] < r[3] as f32 + s;
@@ -321,6 +342,93 @@ impl Map {
         match self.glyphs.at(f, slop).or_else(|| button(0.0)).or_else(|| button(slop)) {
             Some(k) => vec![k],
             None => Vec::new(),
+        }
+    }
+
+    /// A click or a tap at window pixel `s` on the map itself (not on its
+    /// chrome: `point` found nothing there): on the waypoint (within
+    /// `view::waypoint_reach`, a finger's miss more) it takes it away, else
+    /// it puts this world's waypoint there, on the world's ground. Whether
+    /// it did either.
+    pub fn click(&mut self, s: [f32; 2], finger: bool) -> bool {
+        let (true, Some(v), Some(w)) = (self.open, self.view, self.world.as_ref()) else { return false };
+        let (world, extent, size) = (w.index, w.builder.cells.extent(), self.size);
+        self.read_waypoints();
+        if let Some(at) = self.waypoints.get(&world) {
+            let p = v.to_window(size, *at);
+            if (p[0] - s[0]).hypot(p[1] - s[1]) <= view::waypoint_reach(size, finger) {
+                self.set_waypoint(world, None);
+                return true;
+            }
+        }
+        let at = v.to_world(size, s);
+        if at[0] < extent[0] || at[0] > extent[2] || at[1] < extent[1] || at[1] > extent[3] {
+            return false;
+        }
+        self.set_waypoint(world, Some(at));
+        true
+    }
+
+    /// □ (Q on a keyboard): the waypoint at the map's middle, once the map
+    /// is panned off the player; taken away while the map follows the
+    /// player (its middle is the player, where a waypoint is already
+    /// reached) or when it is at the middle.
+    fn square(&mut self) {
+        let (Some(v), Some(w)) = (self.view, self.world.as_ref()) else { return };
+        let (world, size) = (w.index, self.size);
+        self.read_waypoints();
+        let middle = [size.0 as f32 / 2.0, size.1 as f32 / 2.0];
+        let at_middle = self.waypoints.get(&world).is_some_and(|at| {
+            let p = v.to_window(size, *at);
+            (p[0] - middle[0]).hypot(p[1] - middle[1]) <= view::waypoint_reach(size, false)
+        });
+        if self.waypoints.contains_key(&world) && (self.follow || at_middle) {
+            self.set_waypoint(world, None);
+        } else if !self.follow {
+            self.set_waypoint(world, Some(v.center));
+        }
+    }
+
+    /// The waypoint of world `world` (`gWorldInfo`'s index), (x, z), when
+    /// one is set: the compass's dot.
+    pub fn waypoint(&self, world: i32) -> Option<[f32; 2]> {
+        self.waypoints.get(&world).copied()
+    }
+
+    /// The waypoints out of the settings, the first time they are wanted.
+    fn read_waypoints(&mut self) {
+        if !self.waypoints_read {
+            self.waypoints_read = true;
+            self.waypoints = crate::settings::waypoints().into_iter().collect();
+        }
+    }
+
+    /// World `world`'s waypoint put at `at` (none: taken away), and kept.
+    fn set_waypoint(&mut self, world: i32, at: Option<[f32; 2]>) {
+        self.read_waypoints();
+        match at {
+            Some(p) => {
+                self.waypoints.insert(world, p);
+                crate::say(&format!("map: waypoint at ({:.0}, {:.0}) in world {world}", p[0], p[1]));
+            }
+            None => {
+                if self.waypoints.remove(&world).is_none() {
+                    return;
+                }
+                crate::say(&format!("map: waypoint in world {world} taken away"));
+            }
+        }
+        let list: Vec<(i32, [f32; 2])> = self.waypoints.iter().map(|(&w, &p)| (w, p)).collect();
+        crate::settings::save_waypoints(&list);
+    }
+
+    /// The waypoint of the world the player is in taken away once the player
+    /// comes within `ARRIVE` of it.
+    fn arrive(&mut self, player: Option<([f32; 3], f32)>, world: i32) {
+        let (Some((p, _)), Some(at)) = (player, self.waypoints.get(&world).copied()) else { return };
+        if (p[0] - at[0]).hypot(p[2] - at[1]) <= ARRIVE {
+            crate::say("map: waypoint reached");
+            self.set_waypoint(world, None);
         }
     }
 
@@ -335,6 +443,8 @@ impl Map {
     pub fn frame(&mut self, cx: &Context) {
         self.frame += 1;
         self.size = cx.size;
+        self.read_waypoints();
+        self.arrive(cx.player, cx.world);
         let name = cx.lib.files.get(WORLD_FILE).map(|f| f.0.clone()).unwrap_or_default();
         let era = cx.lib.era_of(WORLD_FILE);
         let r = renew(self.layers.as_ref().map(|l| l.view), cx.lib.view(), self.world.as_ref().map(|w| (w.name.as_str(), w.era)), &name, era);
@@ -601,6 +711,13 @@ impl Map {
                 names.push((f(mid), n));
             }
         }
+        // the waypoint's distance under its diamond, while the player is in its world
+        let waypoint = self.waypoints.get(&w.index).copied();
+        if let (Some(at), Some((p, _)), true) = (waypoint, cx.player, cx.world == w.index) {
+            let s = v.to_window(size, at);
+            let r = view::waypoint_radius(size).0;
+            names.push((f([s[0], s[1] + r * 2.8]), format!("{:.0} away", (p[0] - at[0]).hypot(p[2] - at[1]))));
+        }
         let world_name = self.names.names.get(w.index.max(0) as usize).copied().flatten().and_then(|n| word(n as i32)).unwrap_or_else(|| title_case(w.name.split('.').next().unwrap_or("")));
         let area = cx.player.and_then(|(p, _)| {
             let (c, r) = ((p[0] / CELL) as i32, (p[2] / CELL) as i32);
@@ -644,6 +761,26 @@ impl Map {
             solid(&mut *ui, [p[0] - r - o, p[1] - r - o, p[0] + r + o, p[1] + r + o], OUTLINE);
             solid(&mut *ui, [p[0] - r, p[1] - r, p[0] + r, p[1] + r], color);
         }
+        // the waypoint, a diamond (`click`), under the player's marker
+        if let Some(at) = waypoint {
+            let p = v.to_window(size, at);
+            let (r, o) = view::waypoint_radius(size);
+            for (rr, color) in [(r + o * 1.5, OUTLINE), (r, WAYPOINT)] {
+                let d = [[p[0], p[1] - rr], [p[0] + rr, p[1]], [p[0], p[1] + rr], [p[0] - rr, p[1]]].map(f);
+                ui.push(Quad { tex: white, blend: 3, pos: d, uv: [[0.5, 0.5]; 4], color, clip: None });
+            }
+        }
+        // the middle, where □ puts the waypoint, once the map is panned off
+        // the player (for a pad: a mouse or a finger points at the place)
+        if !self.follow && !cx.keyboard {
+            let m = [size.0 as f32 / 2.0, size.1 as f32 / 2.0];
+            let (r, o) = view::waypoint_radius(size);
+            let (arm, half) = (r * 1.4, o * 0.75);
+            for (grow, color) in [(o, OUTLINE), (0.0, chrome::NAME)] {
+                solid(&mut *ui, [m[0] - arm - grow, m[1] - half - grow, m[0] + arm + grow, m[1] + half + grow], color);
+                solid(&mut *ui, [m[0] - half - grow, m[1] - arm - grow, m[0] + half + grow, m[1] + arm + grow], color);
+            }
+        }
         // the player: the HUD's size at every zoom (`view::marker_radius`)
         if let Some((p, h)) = cx.player {
             let at = v.to_window(size, [p[0], p[2]]);
@@ -680,9 +817,10 @@ impl Map {
 
     /// The map's state (a shot's last lines, a report).
     pub fn describe(&self) -> String {
+        let waypoints: String = self.waypoints.iter().map(|(w, p)| format!(", a waypoint in world {w} at ({:.0}, {:.0})", p[0], p[1])).collect();
         match &self.world {
-            Some(w) => format!("{}{}", w.builder.describe(), if self.open { ", up" } else { "" }),
-            None => "map: no world".into(),
+            Some(w) => format!("{}{}{waypoints}", w.builder.describe(), if self.open { ", up" } else { "" }),
+            None => format!("map: no world{waypoints}"),
         }
     }
 }
@@ -725,6 +863,8 @@ pub fn keyboard(name: &str) -> Option<(i32, Hold)> {
     Some(match name {
         "escape" | "backspace" | "m" => (key::TRIANGLE, Hold::Once),
         "space" | "enter" | "home" => (key::CROSS, Hold::Once),
+        // Q is the keyboard's □ (`binds`' "talk" row): the waypoint
+        "q" => (key::SQUARE, Hold::Once),
         "+" | "=" | "pageup" => (key::R1, Hold::Step),
         "-" | "_" | "pagedown" => (key::L1, Hold::Step),
         "up" | "w" => (key::UP, Hold::Held),
@@ -821,3 +961,29 @@ fn source(lib: &esf::Library) -> Option<Box<dyn crate::stream::ZoneSource>> {
 
 #[cfg(test)]
 mod tests;
+
+/// A map without a GPU for the tests here and beside it (`play`'s pointer).
+#[cfg(test)]
+pub mod testing {
+    use super::*;
+
+    /// Tunaria's layout: a zone a 2,000 square, x 2,000..28,000, z 0..34,000.
+    pub fn tunaria() -> Vec<[f32; 4]> {
+        (0..17).flat_map(|r| (1..14).map(move |c| [c as f32 * CELL, r as f32 * CELL, (c + 1) as f32 * CELL, (r + 1) as f32 * CELL])).collect()
+    }
+
+    pub const FREEPORT: [f32; 2] = [25300.0, 15200.0];
+
+    /// A map up over Tunaria (`gWorldInfo` 0) in a `size` window, its view
+    /// made on the player at Freeport.
+    pub fn up(size: (u32, u32)) -> Map {
+        let mut m = Map {
+            world: Some(World { name: "TUNARIA.ESF".into(), era: esf::Era::Frontiers, index: 0, builder: Builder::new(WORLD_FILE, &tunaria(), None, None), overview: None, tiles: BTreeMap::new(), made: Instant::now(), view: None }),
+            size,
+            ..Default::default()
+        };
+        m.show();
+        m.steer(size, 0.0, [0.0; 4], Some(FREEPORT));
+        m
+    }
+}
