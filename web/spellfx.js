@@ -45,6 +45,7 @@ const state = {
   byId: new Map(),
   visuals: [], // every visual on the disc, in its order
   spell: null, // the spell picked
+  checked: new Set(), // the spells ticked for one pick together (many share a visual), by id
   visual: '', // the visual tried last (the pick)
   playing: '', // what plays now
   disc: null, // the disc image (a File)
@@ -86,7 +87,8 @@ function drawSpells() {
   list.replaceChildren();
   const shown = state.spells.filter(spellMatches).sort((a, b) => a.level - b.level || a.name.localeCompare(b.name));
   const needing = state.spells.filter((x) => x.standin).length;
-  $('spells-count').textContent = state.spells.length ? `${shown.length} of ${needing}` : '';
+  $('spells-count').textContent = state.spells.length ? `${shown.length} of ${needing}${state.checked.size ? ` · ${state.checked.size} ticked` : ''}` : '';
+  $('clear-checked').hidden = !state.checked.size;
   if (!shown.length) {
     list.append(el('li', 'empty', !state.spells.length ? 'No spells yet.' : needing ? 'No spell matches.' : 'Every spell has its visual now: thank you!'));
     return;
@@ -95,6 +97,18 @@ function drawSpells() {
     const li = el('li');
     li.dataset.id = s.id;
     if (state.spell && state.spell.id === s.id) li.classList.add('on');
+    // a tick: this spell goes in the pick too (one visual for every ticked spell)
+    const box = el('input', 'pickbox');
+    box.type = 'checkbox';
+    box.checked = state.checked.has(s.id);
+    box.setAttribute('aria-label', `Include ${s.name} in my pick`);
+    box.addEventListener('change', () => {
+      if (box.checked) state.checked.add(s.id);
+      else state.checked.delete(s.id);
+      drawSpells();
+      drawPick();
+    });
+    li.append(box);
     const b = el('button');
     b.type = 'button';
     const top = el('div');
@@ -261,42 +275,87 @@ $('again').addEventListener('click', () => state.started && post({ type: 'fxview
 $('aim').addEventListener('change', () => { if (state.playing) play(state.playing); });
 
 // ---- the form
-function drawPick() {
-  const s = state.spell;
-  $('pick-spell').textContent = s ? `${s.name} (level ${s.level}${s.classes.length ? ', ' + s.classes.map((c) => CLASSES[c] || c).join(', ') : ''})` : 'pick one on the left';
-  $('pick-visual').textContent = state.visual ? `${state.visual}${s && s.visual === state.visual ? ' (what it plays now)' : ''}` : 'try one from the list';
-  $('send').disabled = !(s && state.visual);
-  $('send').textContent = s && state.visual ? `This visual is ${s.name}'s` : 'Send my pick';
+// the spells a pick is for: the ticked ones, else the one picked
+function pickSpells() {
+  if (state.checked.size) return [...state.checked].map((id) => state.byId.get(id)).filter(Boolean);
+  return state.spell ? [state.spell] : [];
 }
+
+function drawPick() {
+  const for_ = pickSpells();
+  if (for_.length > 1) {
+    const names = for_.map((x) => x.name);
+    $('pick-spell').textContent = `${for_.length} spells: ${names.slice(0, 6).join(', ')}${names.length > 6 ? ` and ${names.length - 6} more` : ''}`;
+  } else {
+    const one = for_[0];
+    $('pick-spell').textContent = one ? `${one.name} (level ${one.level}${one.classes.length ? ', ' + one.classes.map((c) => CLASSES[c] || c).join(', ') : ''})` : 'pick one on the left, or tick several';
+  }
+  $('pick-visual').textContent = state.visual ? `${state.visual}${for_.length === 1 && for_[0].visual === state.visual ? ' (what it plays now)' : ''}` : 'try one from the list';
+  $('send').disabled = !(for_.length && state.visual);
+  $('send').textContent = !(for_.length && state.visual) ? 'Send my pick' : for_.length > 1 ? `This visual is these ${for_.length} spells'` : `This visual is ${for_[0].name}'s`;
+}
+
+$('clear-checked').addEventListener('click', () => {
+  state.checked.clear();
+  drawSpells();
+  drawPick();
+});
 
 $('who').value = store.get('spellfxName');
 $('suggest').addEventListener('submit', async (ev) => {
   ev.preventDefault();
-  const s = state.spell;
-  if (!s || !state.visual) return;
+  const for_ = pickSpells();
+  if (!for_.length || !state.visual) return;
   const name = $('who').value.trim().slice(0, 32);
   if (name) store.set('spellfxName', name);
   else store.drop('spellfxName');
-  const body = { spell: s.id, visual: state.visual, name, note: $('note').value.trim().slice(0, 200) };
+  const note = $('note').value.trim().slice(0, 200);
+  const visual = state.visual;
   $('send').disabled = true;
   $('sent').className = 'note';
   $('sent').textContent = 'Sending…';
-  try {
-    const r = await fetch(API + '/suggest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    let answer = {};
-    try { answer = await r.json(); } catch { /* not JSON */ }
-    if (!r.ok || !answer.ok) throw new Error(answer.error || `${r.status} ${r.statusText}`);
-    $('sent').className = 'note ok';
-    const n = Number(answer.count);
-    $('sent').textContent = `Thanks! ${state.visual} for ${s.name} is sent` + (Number.isFinite(n) && n > 0 ? ` (${n} pick${n === 1 ? '' : 's'} for it so far).` : '.') + ' Send another for the same spell and it replaces this one.';
-    $('note').value = '';
-  } catch (e) {
-    $('sent').className = 'note warn';
-    $('sent').textContent = `Not sent: ${e.message || e}`;
-  } finally {
-    $('send').disabled = !(state.spell && state.visual);
-    $('sent').scrollIntoView({ block: 'nearest' });
+  // one suggestion a spell, as the server takes them; the first refusal stops the rest
+  let done = 0;
+  let count = NaN;
+  let failed = null; // the spell refused, and why
+  let why = '';
+  for (const s of for_) {
+    try {
+      const r = await fetch(API + '/suggest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ spell: s.id, visual, name, note }) });
+      let answer = {};
+      try { answer = await r.json(); } catch { /* not JSON */ }
+      if (!r.ok || !answer.ok) throw new Error(answer.error || `${r.status} ${r.statusText}`);
+      done++;
+      count = Number(answer.count);
+      if (for_.length > 1) $('sent').textContent = `Sending… ${done} of ${for_.length}`;
+    } catch (e) {
+      failed = s;
+      why = String(e.message || e);
+      break;
+    }
   }
+  if (!failed) {
+    $('sent').className = 'note ok';
+    if (for_.length > 1) {
+      $('sent').textContent = `Thanks! ${visual} is sent for all ${for_.length} spells. Send another for any of them and it replaces this one.`;
+      state.checked.clear();
+      drawSpells();
+    } else {
+      $('sent').textContent = `Thanks! ${visual} for ${for_[0].name} is sent` + (Number.isFinite(count) && count > 0 ? ` (${count} pick${count === 1 ? '' : 's'} for it so far).` : '.') + ' Send another for the same spell and it replaces this one.';
+    }
+    $('note').value = '';
+  } else {
+    $('sent').className = 'note warn';
+    $('sent').textContent = done ? `Sent for ${done} of ${for_.length} spells; ${failed.name} was not sent: ${why}`
+      : for_.length > 1 ? `Not sent (${failed.name}): ${why}` : `Not sent: ${why}`;
+    if (done && for_.length > 1) {
+      // the ones sent come off the ticks; the rest stay for another try
+      for (const s of for_.slice(0, done)) state.checked.delete(s.id);
+      drawSpells();
+    }
+  }
+  drawPick();
+  $('sent').scrollIntoView({ block: 'nearest' });
 });
 
 // ---- the disc: picked here, or the one remembered (the game's page and

@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · One visual for several spells
+- On the Help match spell visuals page, tick the spells that share a visual (a spell
+  line's ranks often do), pick the visual once, and send: it goes for every ticked spell.
+  Clear ticks starts over; with nothing ticked the page works as before.
+
 ## 2026-10-26 · An icon of its own
 - The game has an icon of its own now: a disc, on the program and its window. Once it
   has read your disc image it shows the game's own memory card icon instead, the head a

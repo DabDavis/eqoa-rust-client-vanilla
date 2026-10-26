@@ -33,6 +33,9 @@
   button:focus-visible, .list button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .list { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 0; list-style: none; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
   .list li + li { border-top: 1px solid var(--line); }
+  .list li:has(> input.pickbox) { display: flex; align-items: flex-start; }
+  .list li > input.pickbox { flex: none; margin: 10px 0 0 8px; width: 16px; height: 16px; accent-color: var(--accent); }
+  .list li:has(> input.pickbox) > button { flex: 1; min-width: 0; }
   .list li > button { display: block; width: 100%; text-align: left; background: none; border: 0; border-radius: 0; padding: 7px 10px; font-weight: 400; }
   .list li > button:hover { background: var(--raised); }
   .list li.on > button { background: var(--sel); }
@@ -89,6 +92,7 @@
     <div class="filters">
       <select id="class" aria-label="Class"><option value="">Every class</option></select>
       <input id="spell-search" type="search" placeholder="Search spells" aria-label="Search spells" spellcheck="false">
+      <button type="button" id="clear-checked" class="small" hidden>Clear ticks</button>
     </div>
     <ul class="list" id="spells"><li class="empty">Loading the spells…</li></ul>
   </section>
