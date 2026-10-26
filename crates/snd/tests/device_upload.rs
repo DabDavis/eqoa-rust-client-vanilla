@@ -51,11 +51,11 @@ fn make(d: &mut SoundDevice<Ee>, adpcm: &[u8]) -> i32 {
 }
 
 /// Whether sound `i` is uploaded, and whether its SPU RAM holds `want`.
-fn held(d: &SoundDevice<Ee>, l: &Local, i: i32, want: &[u8]) -> (bool, bool) {
+fn held(d: &SoundDevice<Ee>, ram: &[u8], i: i32, want: &[u8]) -> (bool, bool) {
     let Some(Some(s)) = d.sounds.get(i as usize) else { panic!("sound {i} gone") };
     let Kind::Wave(w) = &s.kind else { panic!("sound {i} is not a wave") };
     let at = w.spu_addr as usize;
-    (w.cached != 0, l.drv.io.spu.ram()[at..at + want.len()] == *want)
+    (w.cached != 0, ram[at..at + want.len()] == *want)
 }
 
 /// Wave A (128 KB, two DMAs) is let go once its upload has begun and wave B
@@ -80,9 +80,9 @@ fn a_sound_let_go_mid_upload_does_not_mark_the_next() {
         for _ in 0..30 {
             frame(&mut d, &mut l);
         }
-        assert_eq!(held(&d, &l, ib, &b), (true, true), "let A go {let_go}: B uploaded, its own bytes in place");
+        assert_eq!(held(&d, l.drv.io.spu.ram(), ib, &b), (true, true), "let A go {let_go}: B uploaded, its own bytes in place");
         if !let_go {
-            assert_eq!(held(&d, &l, ia, &a), (true, true), "control: A uploaded too");
+            assert_eq!(held(&d, l.drv.io.spu.ram(), ia, &a), (true, true), "control: A uploaded too");
         }
     }
 }
@@ -109,4 +109,184 @@ fn a_wave_with_no_ram_keeps_no_slot_and_writes_nothing() {
     assert!(l.drv.io.spu.ram()[..0x6000] == mark[..], "nothing written at SPU address 0");
     let (free, largest) = d.spu_free();
     assert_eq!((free, largest), (snd::device::SPU_POOL - 0x40000 - 6 * 0x40000, free), "the pool's accounting");
+}
+
+/// The output's link (`AudioLink`) as the device meets it while the IOP
+/// is busy: the device keeps its packet (`busy`), and a DMA lands at once.
+struct Held {
+    drv: Driver,
+    pcm: Vec<i16>,
+    busy: bool,
+}
+
+impl Link for Held {
+    fn call(&mut self, fno: u32, packet: &[u32; 128]) -> [u32; 128] {
+        assert!(!self.busy, "a packet sent over a busy IOP");
+        self.drv.call(fno, packet, &mut self.pcm)
+    }
+    fn dma(&mut self, addr: u32, data: &[u8]) {
+        self.drv.io.dma(addr, data);
+    }
+    fn busy(&mut self) -> bool {
+        self.busy
+    }
+}
+
+/// A game frame over `Held`: the game's own commands first (a sound started
+/// and stopped, as a fight's are), then `Process`, then 1,600 samples.
+fn held_frame(d: &mut SoundDevice<Ee>, l: &mut Held, other: i32) {
+    let h = d.play(other, 0, 0);
+    assert!(h >= 0, "the other sound plays");
+    d.stop(h);
+    d.process(l);
+    l.drv.run(1600, &mut l.pcm);
+    l.pcm.clear();
+}
+
+/// F3 20261025-225337 (crunchy again with the first race fixed): a 128 KB
+/// wave goes as two 64 KB blocks through the IOP's one buffer, each DMA'd in
+/// then copied out by a command in the next packet. While the IOP was busy
+/// (a BGM stop or start waiting for its vblank) two packets were kept, the
+/// game's commands ahead of the copy, and the console's guard (a copy that
+/// OPENS the packet) let the second block into the buffer before the first
+/// one's copy was sent: the copy then put the second block's bytes in the
+/// first block's place, and the wave was marked uploaded. Now the upload
+/// waits for the copy to be sent. The control: the IOP never busy, the
+/// same frames, the same commands.
+#[test]
+fn a_copy_kept_in_the_packet_is_not_overwritten() {
+    for busy in [false, true] {
+        let mut l = Held { drv: Driver::new(Box::new(snd::NoDisc)), pcm: Vec::new(), busy: false };
+        let mut d = SoundDevice::new(1);
+        assert_eq!(d.init(&mut l), 0);
+        // the other sound, uploaded before
+        let other = make(&mut d, &wave(64, 0x33));
+        d.flush(&mut l);
+        // A: its first block 0xaa, its second 0xbb
+        let mut a = wave(8192, 0xaa);
+        for b in 4096..8192 {
+            for k in 2..16 {
+                a[b * 16 + k] = 0xbb;
+            }
+        }
+        let ia = make(&mut d, &a);
+        held_frame(&mut d, &mut l, other); // the upload begins
+        held_frame(&mut d, &mut l, other); // the first block into the IOP's buffer
+        l.busy = busy;
+        held_frame(&mut d, &mut l, other); // its copy queued, the packet kept
+        held_frame(&mut d, &mut l, other); // the console sent the second block in now
+        l.busy = false;
+        for _ in 0..8 {
+            held_frame(&mut d, &mut l, other);
+        }
+        assert_eq!(held(&d, l.drv.io.spu.ram(), ia, &a), (true, true), "busy {busy}: A uploaded, each block in its place");
+        assert_eq!(d.check_ram(l.drv.io.spu.ram(), false).map(|c| c.differ), Some(vec![]), "busy {busy}: the report's check agrees");
+        assert_eq!(d.flushes_refused > 0, busy, "busy {busy}: packets kept back");
+        assert_eq!(d.uploads_held > 0, busy, "busy {busy}: the second block held back");
+    }
+}
+
+/// The report's check of every uploaded sound's RAM (`check_ram`): all as
+/// uploaded after a flush; a byte of one wave's RAM overwritten, that wave
+/// alone named; an XM's sample bank compared too; and nothing compared while
+/// a copy is still to be sent (a busy IOP), when a sound marked uploaded may
+/// not be in place yet. The race above, unfixed, shows as a difference here.
+#[test]
+fn the_ram_check_names_a_sound_overwritten() {
+    let (mut d, mut l) = device();
+    let (a, b) = (wave(256, 0x21), wave(512, 0x43));
+    let (ia, ib) = (make(&mut d, &a), make(&mut d, &b));
+    let ix = d.create_xm(1.0, 0.0, vec![0u8; 0x400], vec![0x65u8; 0x3000]);
+    assert!(ix >= 0);
+    d.flush(&mut l);
+    let ram = |l: &Local| l.drv.io.spu.ram().to_vec();
+    let c = d.check_ram(&ram(&l), false).unwrap();
+    assert_eq!((c.checked, c.differ.clone()), (3, vec![]), "every sound as uploaded");
+    // one byte of B overwritten
+    let Some(Some(snd::device::Sound { kind: Kind::Wave(w), .. })) = d.sounds.get(ib as usize) else { panic!() };
+    let at = w.spu_addr + 100;
+    l.drv.io.spu.write(at, &[0xee]);
+    let c = d.check_ram(&ram(&l), false).unwrap();
+    assert_eq!(c.differ, vec![ib as usize], "B alone");
+    assert!(!c.differ.contains(&(ia as usize)), "control: A untouched");
+    // the XM's bank
+    let Some(Some(snd::device::Sound { kind: Kind::Xm(x), .. })) = d.sounds.get(ix as usize) else { panic!() };
+    l.drv.io.spu.write(x.spu_addr + 0x2fff, &[0x00]);
+    assert_eq!(d.check_ram(&ram(&l), false).unwrap().differ, vec![ib as usize, ix as usize]);
+    assert_eq!(d.check_ram(&ram(&l), true), None, "not while the IOP is busy");
+}
+
+/// A packet kept back while the IOP is busy fills (a busy fight's sounds
+/// started and stopped), and a command that does not fit is dropped, as on
+/// the console. The copy of an upload's last block was one of them: the wave
+/// was marked uploaded and played whatever its RAM held. Now the step waits
+/// for room. The control: the IOP never busy, the same commands.
+#[test]
+fn a_full_packet_does_not_lose_a_copy() {
+    for busy in [false, true] {
+        let mut l = Held { drv: Driver::new(Box::new(snd::NoDisc)), pcm: Vec::new(), busy: false };
+        let mut d = SoundDevice::new(1);
+        assert_eq!(d.init(&mut l), 0);
+        let other = make(&mut d, &wave(64, 0x33));
+        d.flush(&mut l);
+        let a = wave(1024, 0x7e);
+        let ia = make(&mut d, &a);
+        held_frame(&mut d, &mut l, other); // the upload begins
+        held_frame(&mut d, &mut l, other); // its one block into the IOP's buffer
+        l.busy = busy;
+        // a frame's worth of sounds, more than a packet holds: thirteen
+        // starts fit (121 words), and a pitch (5) leaves no room for a copy
+        for _ in 0..20 {
+            let h = d.play(other, 0, 0);
+            d.stop(h);
+        }
+        let h = d.play(other, 0, 0);
+        d.set_pitch(h, 4096);
+        held_frame(&mut d, &mut l, other); // the copy would be queued now
+        d.stop(h);
+        l.busy = false;
+        for _ in 0..6 {
+            held_frame(&mut d, &mut l, other);
+        }
+        assert_eq!(held(&d, l.drv.io.spu.ram(), ia, &a), (true, true), "busy {busy}: A uploaded, its bytes in place");
+        assert_eq!(d.check_ram(l.drv.io.spu.ram(), false).map(|c| c.differ), Some(vec![]));
+    }
+}
+
+/// A stop that finds the packet full (no stop in it yet to merge into) was
+/// dropped, as the console drops it: the device let its channel go and the
+/// voice played on with no sound to stop it, a looped one for good, over
+/// whatever its RAM came to hold. It now heads the next packet. The control:
+/// the same stop with room for it.
+#[test]
+fn a_stop_that_finds_the_packet_full_still_stops() {
+    for full in [false, true] {
+        let (mut d, mut l) = device();
+        // a looped wave: its first block starts the loop, its last repeats it
+        let mut lp = wave(64, 0x5d);
+        lp[1] = 4;
+        lp[63 * 16 + 1] = 3;
+        let looped = d.create_wave(1, 64, 22050, 1.0, 0.0, 1, &lp);
+        let other = make(&mut d, &wave(64, 0x33));
+        d.flush(&mut l);
+        let h = d.play(looped, 0, 0);
+        assert!(h >= 0);
+        frame(&mut d, &mut l);
+        frame(&mut d, &mut l);
+        assert_ne!(d.status[4] & 1, 0, "the loop plays on channel 0");
+        if full {
+            // thirteen starts (121 words) and a pitch (5): no room for a stop
+            for _ in 0..13 {
+                d.play(other, 0, 0);
+            }
+            let p = d.play(other, 0, 0);
+            d.set_pitch(p, 4096);
+        }
+        d.stop(h);
+        for _ in 0..6 {
+            frame(&mut d, &mut l);
+        }
+        assert_eq!(d.status[4] & 1, 0, "full {full}: the loop stopped");
+        assert_eq!(d.stops_dropped > 0, full, "full {full}: the stop found no room");
+    }
 }

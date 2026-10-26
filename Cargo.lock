@@ -2258,6 +2258,7 @@ dependencies = [
 name = "snd"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
  "esf",
  "iso",
  "vi",
