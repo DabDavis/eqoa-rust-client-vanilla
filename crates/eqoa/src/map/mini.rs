@@ -38,6 +38,11 @@ use render::wgpu;
 /// stays over.
 pub const FRAME: [i32; 4] = [474, 50, 586, 162];
 
+/// The quick menu's name plate in the HUD's frame (`hudmenu::HudMenu`'s
+/// title bar, placed as `FRAME` is): a tooltip left of the minimap keeps
+/// below it, as the HUD draws over the minimap's pass.
+pub const PLATE: [i32; 4] = [430, 25, 592, 44];
+
 /// The frame art's border (`vi::ui::frame_sets`' first, a window's), the
 /// pictures inside it.
 pub const INSET: i32 = 6;
@@ -471,10 +476,13 @@ impl Map {
                 let h = vui.font_height(&r);
                 let w = lines.iter().map(|(l, _)| vui.string_width(&r, l)).max().unwrap_or(0) as f32 + 12.0;
                 let (lh, hgt) = (h - 2, ((h - 2) * lines.len() as i32 + 8) as f32);
-                // left of the frame, level with the mark, kept in the window
+                // left of the frame, level with the mark, below the name
+                // plate (the HUD's pass, after this one, would cover it), in
+                // the window
                 let (corner, at) = (f([0.0, 0.0]), f([outer[0], q[1]]));
+                let (plate, bottom) = (f([0.0, window_rect(size, PLATE)[3]])[1] + 1.0, f([0.0, size.1 as f32])[1]);
                 let x0 = (at[0] - 4.0 - w).max(corner[0]);
-                let y0 = (at[1] - hgt / 2.0).max(corner[1]);
+                let y0 = (at[1] - hgt / 2.0).min(bottom - hgt).max(plate);
                 let from = r.ui.quads.len();
                 r.ui.quads.push(Quad { tex: white, blend: 3, pos: corners([x0, y0, x0 + w, y0 + hgt]), uv: [[0.5, 0.5]; 4], color: [0.0, 0.0, 0.0, 0.78], clip: None });
                 for (k, (l, c)) in lines.iter().enumerate() {
@@ -516,11 +524,11 @@ pub fn dot_radius(size: (u32, u32)) -> (f32, f32) {
     (1.2 * line, 0.4 * line)
 }
 
-/// A camp's or a coach stop's half-width on the minimap, window pixels: 2.2
-/// of the frame's lines, a dot's and a little more.
+/// A camp's or a coach stop's half-width on the minimap, window pixels: 2.6
+/// of the frame's lines, twice a dot's and more.
 pub fn mark_radius(size: (u32, u32)) -> f32 {
     let line = window_from_frame(size, [0.0, 1.0])[1] - window_from_frame(size, [0.0, 0.0])[1];
-    2.2 * line
+    2.6 * line
 }
 
 #[cfg(test)]
@@ -534,7 +542,7 @@ mod tests {
     #[test]
     fn the_minimap_fits_under_the_name_plate_beside_the_icons() {
         // the quick menu's title bar: at (430, 25), 162 across, its art 19 high
-        let plate = [430, 25, 592, 44];
+        let plate = PLATE;
         let column_x = 589;
         assert!(FRAME[1] > plate[3], "below the name plate");
         assert!(FRAME[2] < column_x, "left of the column of icons");
