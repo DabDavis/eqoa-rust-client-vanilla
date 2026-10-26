@@ -298,6 +298,7 @@ impl Shared {
 /// ends with the `Audio`.
 fn wall_clock(s: Arc<Mutex<Shared>>) {
     std::thread::spawn(move || {
+        let mut wav = WavOut::open();
         loop {
             std::thread::sleep(Duration::from_millis(10));
             if Arc::strong_count(&s) == 1 {
@@ -308,10 +309,60 @@ fn wall_clock(s: Arc<Mutex<Shared>>) {
             let due = from + (at.elapsed().as_secs_f64() * 48000.0) as u64;
             let n = due.saturating_sub(g.drv.now);
             g.pump(n);
+            if let Some(w) = wav.as_mut() {
+                w.write(&g.pcm);
+            }
             g.pcm.clear();
             g.handed = Some((Instant::now(), g.drv.now));
         }
     });
+}
+
+/// `EQOA_WAV=<path>`: what the driver mixes on the wall clock (a silent run,
+/// `EQOA_AUDIO=0`) written to a WAV as it comes, 48 kHz stereo, its sizes
+/// kept right after every write so a run killed leaves a file that plays: for
+/// a test to measure a scripted run's sound (F3 20261026-075325: the clipped
+/// samples of a busy fight's, before and after a change).
+struct WavOut {
+    f: std::fs::File,
+    bytes: u32,
+}
+
+impl WavOut {
+    fn open() -> Option<WavOut> {
+        use std::io::Write;
+        let path = std::env::var_os("EQOA_WAV")?;
+        let mut f = std::fs::File::create(&path).map_err(|e| crate::say(&format!("EQOA_WAV: {e}"))).ok()?;
+        let mut h = Vec::with_capacity(44);
+        h.extend(b"RIFF");
+        h.extend(36u32.to_le_bytes());
+        h.extend(b"WAVEfmt ");
+        h.extend(16u32.to_le_bytes());
+        h.extend(1u16.to_le_bytes());
+        h.extend(2u16.to_le_bytes());
+        h.extend(48000u32.to_le_bytes());
+        h.extend((48000u32 * 4).to_le_bytes());
+        h.extend(4u16.to_le_bytes());
+        h.extend(16u16.to_le_bytes());
+        h.extend(b"data");
+        h.extend(0u32.to_le_bytes());
+        f.write_all(&h).ok()?;
+        Some(WavOut { f, bytes: 0 })
+    }
+
+    fn write(&mut self, pcm: &[i16]) {
+        use std::io::{Seek, SeekFrom, Write};
+        if pcm.is_empty() {
+            return;
+        }
+        let data: Vec<u8> = pcm.iter().flat_map(|s| s.to_le_bytes()).collect();
+        let _ = self.f.write_all(&data);
+        self.bytes = self.bytes.saturating_add(data.len() as u32);
+        for (at, v) in [(4u64, 36 + self.bytes), (40, self.bytes)] {
+            let _ = self.f.seek(SeekFrom::Start(at)).and_then(|_| self.f.write_all(&v.to_le_bytes()));
+        }
+        let _ = self.f.seek(SeekFrom::End(0));
+    }
 }
 
 /// How long a stream may go without calling back before it counts as gone

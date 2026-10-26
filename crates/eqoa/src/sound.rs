@@ -178,6 +178,9 @@ impl Strays {
                     self.frames[k] = self.frames[k].saturating_add(1);
                     if self.frames[k] == STRAY_FRAMES {
                         self.times += 1;
+                        // when, for a report: a stop or a module's stop the
+                        // device sent and SNDDRV never had
+                        crate::say(&format!("sound: voice {v} of core {c} plays on with no sound to stop it"));
                     }
                 } else {
                     self.frames[k] = 0;
@@ -248,7 +251,7 @@ impl Sound {
         };
         let lasting = |c: usize| (0..24).filter(|&v| self.strays.frames[c * 24 + v] >= STRAY_FRAMES).fold(0u32, |m, v| m | 1 << v);
         format!(
-            "{}; sounds' RAM: {ram}; voices playing on with no sound {:06x} {:06x} ({} times since the start); packets up to {} words of 127, kept back {}, upload steps held {}, commands that found the packet full {} (stops sent next {})",
+            "{}; sounds' RAM: {ram}; voices playing on with no sound {:06x} {:06x} ({} times since the start); packets up to {} words of 127, kept back {}, upload steps held {}, commands that found the packet full {}{} (stops sent next {}, volumes and pitches next {}); sets held between the game's frames {}",
             self.describe_play(st, t, free, largest, pool),
             lasting(0),
             lasting(1),
@@ -257,7 +260,10 @@ impl Sound {
             self.dev.flushes_refused,
             self.dev.uploads_held,
             self.dev.cmds_dropped,
-            self.dev.stops_dropped
+            dropped_kinds(&self.dev.dropped_by_id),
+            self.dev.stops_dropped,
+            self.dev.sets_kept,
+            self.dev.held_sets
         )
     }
 
@@ -831,6 +837,18 @@ impl Sound {
             self.track.p24 = -1;
         }
     }
+}
+
+/// The commands a full packet dropped, by kind (`SoundDevice::dropped_by_id`),
+/// as the sound line says them: none, or ": 12 volume, 3 play".
+fn dropped_kinds(by_id: &[u32; 16]) -> String {
+    const NAMES: [&str; 16] = ["init", "upload", "play", "frame", "stop", "pitch", "volume", "relocation", "xm play", "xm stop", "xm volume", "xm pitch", "free", "bgm play", "bgm stop", "bgm volume"];
+    let mut kinds: Vec<(u32, &str)> = by_id.iter().zip(NAMES).filter(|(n, _)| **n != 0).map(|(&n, k)| (n, k)).collect();
+    kinds.sort_by(|a, b| b.0.cmp(&a.0));
+    if kinds.is_empty() {
+        return String::new();
+    }
+    format!(": {}", kinds.iter().map(|(n, k)| format!("{n} {k}")).collect::<Vec<_>>().join(", "))
 }
 
 pub struct Sink<'a>(&'a mut Sound);

@@ -5,6 +5,18 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · Sound at 60 frames a second
+- At Frame Rate 60 (or the display's) a busy moment lost sound commands: a sound could
+  start at full volume however far away it was, or not start at all, and an ambient
+  track that should have stopped could go on playing over the sounds after it. In a
+  40-second test in the rain with a bard's songs, the last build lost 698 of them at
+  60 frames a second; this one lost a handful, as the PS2's own 30 a second does.
+- The few a very busy moment still has no room for (the PS2 loses those too) now go a
+  frame later instead of never: a sound's volume, pan and pitch, and a track's stop.
+- If the sound turns crunchy again, press F3 while it is: the report now says which
+  kinds of sound commands were lost, and the log says when a voice played on with
+  nothing left to stop it.
+
 ## 2026-10-26 · Quest markers and the tracker on Sandstorm too
 - On a server that sends no quest markers or tracker of its own (Sandstorm), the game now
   makes its own from a guide built in: the quests of levels 1 to 20 of every home city's

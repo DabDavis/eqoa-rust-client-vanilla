@@ -2,6 +2,8 @@
 //! sounds garbled until a restart): a sound let go while its upload is in
 //! flight, and a wave that finds no SPU RAM. Synthetic waves, no disc.
 
+mod common;
+
 use snd::device::{Kind, Link, SoundDevice};
 use snd::Driver;
 use vi::fpu::Ee;
@@ -288,6 +290,78 @@ fn a_stop_that_finds_the_packet_full_still_stops() {
             frame(&mut d, &mut l);
         }
         assert_eq!(d.status[4] & 1, 0, "full {full}: the loop stopped");
+        assert_eq!(d.stops_dropped > 0, full, "full {full}: the stop found no room");
+    }
+}
+
+/// A volume and a pitch that find the packet full were dropped, as the
+/// console drops them: a sound just started then played its whole life at
+/// the full volume and the pitch it started with. They now go in the next
+/// packet: the voice's volume and pitch are the ones set, a frame late. The
+/// control: the same sets with room for them, at once.
+#[test]
+fn a_set_that_finds_the_packet_full_goes_in_the_next() {
+    // the left volume and the pitch of voice `ch` on the first core
+    let regs = |l: &Local, ch: u16| (l.drv.io.sd_get_param(ch << 1), l.drv.io.sd_get_param((ch << 1) | 0x200));
+    for full in [false, true] {
+        let (mut d, mut l) = device();
+        let w = make(&mut d, &wave(64, 0x33));
+        d.flush(&mut l);
+        if full {
+            // thirteen starts (117 words): the fourteenth fits, its sets do not
+            for _ in 0..13 {
+                d.play(w, 0, 0);
+            }
+        }
+        let p = d.play(w, 0, 0);
+        assert!(p >= 0);
+        d.set_volume(p, 0.25);
+        d.set_pitch(p, 2048);
+        let ch = if full { 13 } else { 0 };
+        assert_eq!(d.sets_kept > 0, full, "full {full}: the sets found no room");
+        frame(&mut d, &mut l);
+        frame(&mut d, &mut l);
+        let base = ((22050i32 << 12) / 48000) as u16;
+        assert_eq!(regs(&l, ch), ((0.25f32 * 16383.0) as u16, base / 2), "full {full}: the voice has the volume and pitch set");
+    }
+}
+
+/// An ambient track's stop that finds the packet full was dropped, as the
+/// console drops it: SNDDRV's player went on with the module, repeating, on
+/// the channels the device had let go and gave the next sounds, its notes
+/// keyed over theirs for good. It now heads the next packet, and the player
+/// stops. The control: the same stop with room for it. AMBTRACK.ESF's first
+/// module, off the disc.
+#[test]
+fn an_ambient_tracks_stop_that_finds_the_packet_full_still_stops() {
+    let Some(mut disc) = common::disc() else { return };
+    let amb = esf::Container::open(disc.read("DATA/AMBTRACK.ESF").unwrap()).unwrap();
+    let (_, xms) = esf::sound::all(&amb);
+    let x = xms.into_iter().next().expect("a module");
+    let playing = |d: &SoundDevice<Ee>| (0..8).any(|j| d.status[8 + 2 * j] != 0 || d.status[9 + 2 * j] != 0);
+    for full in [false, true] {
+        let (mut d, mut l) = device();
+        let ix = d.create_xm(x.volume, x.pan, x.module.clone(), x.samples.clone());
+        d.set_repeat(ix, 1);
+        let other = make(&mut d, &wave(64, 0x33));
+        d.flush(&mut l);
+        let h = d.play(ix, 0, 0);
+        assert!(h >= 0, "the track starts: {h}");
+        for _ in 0..4 {
+            frame(&mut d, &mut l);
+        }
+        assert!(playing(&d), "the player has the module");
+        if full {
+            // thirteen starts and a fourteenth (126 words): no room for its stop
+            for _ in 0..14 {
+                d.play(other, 0, 0);
+            }
+        }
+        d.stop(h);
+        for _ in 0..6 {
+            frame(&mut d, &mut l);
+        }
+        assert!(!playing(&d), "full {full}: the player stopped the module");
         assert_eq!(d.stops_dropped > 0, full, "full {full}: the stop found no room");
     }
 }
