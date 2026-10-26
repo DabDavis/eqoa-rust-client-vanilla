@@ -149,6 +149,7 @@ mod update;
 #[cfg(not(target_arch = "wasm32"))]
 mod updatewnd;
 mod viewer;
+mod voice;
 mod wndlist;
 mod walker;
 mod weather;

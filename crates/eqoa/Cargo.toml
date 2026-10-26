@@ -22,6 +22,10 @@ pollster = "1.0.1"
 glam = "0.34.1"
 png = "0.18.1"
 cpal = "0.16"
+# Voice (`voice`): a locked room's H and the demo's group channel (SHA-256,
+# also the updater's download check), and the demo's JSON.
+sha2 = "0.10.9"
+serde_json.workspace = true
 
 # The gamepads natively (SDL's layout, force feedback); a page reads the
 # Gamepad API itself (`padmap`, `web::pad`).
@@ -35,7 +39,8 @@ rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] 
 # release and to the report server (rustls on ring, Mozilla's roots built in),
 # and a download held to the SHA-256 its manifest names.
 ureq = { version = "3.4.2", default-features = false, features = ["rustls"] }
-sha2 = "0.10.9"
+# The voice demo's WebSocket (`voice::demo`), on the same rustls and roots.
+tungstenite = { version = "0.30.0", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
 
 # The log's pipe (`report`): stderr duplicated and replaced.
 [target.'cfg(unix)'.dependencies]
