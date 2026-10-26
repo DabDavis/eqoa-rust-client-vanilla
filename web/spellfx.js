@@ -77,7 +77,8 @@ function spellMatches(s) {
   if (!s.standin) return false;
   const q = $('spell-search').value.trim().toLowerCase();
   if (!q) return true;
-  return s.name.toLowerCase().includes(q) || (s.line || '').toLowerCase().includes(q) || (q.length >= 3 && s.visual.toLowerCase().includes(q));
+  return s.name.toLowerCase().includes(q) || (s.line || '').toLowerCase().includes(q) || (q.length >= 3 && s.visual.toLowerCase().includes(q))
+    || (s.got || '').toLowerCase().includes(q) || (s.master || '').toLowerCase().includes(q);
 }
 
 function drawSpells() {
@@ -99,6 +100,8 @@ function drawSpells() {
     const top = el('div');
     top.append(el('span', 'name', s.name));
     top.append(el('span', 'tag ' + (s.standin ? 'stand' : 'known'), s.standin ? (s.kind ? `stand-in · ${s.kind}` : 'stand-in') : 'known'));
+    // a spell no class gets by level: a mastery, an epic, a master class's (the server's `got`, `master`)
+    if (s.got) top.append(el('span', 'tag got', s.master ? `${s.got} · ${s.master}` : s.got));
     b.append(top);
     b.append(el('div', 'meta', `Level ${s.level} · ${s.classes.map((c) => SHORT[c] || c).join(', ') || 'no class'} · plays ${s.visual || 'nothing'}`));
     if (s.line) b.append(el('div', 'line', s.line));

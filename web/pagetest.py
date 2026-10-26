@@ -68,7 +68,7 @@ SPELLFX_SPELLS = [
     {"id": 3, "name": "Test Ward", "level": 5, "classes": [9], "line": "Self, Increase AC by 5, 30min", "harmful": False,
      "target": "Self", "cast": 3.0, "visual": "0x33333333", "standin": True, "kind": "buff"},
     {"id": 4, "name": "Test Tap", "level": 8, "classes": [11], "line": "Target, Drain HP by 30", "harmful": True,
-     "target": "Target", "cast": 2.5, "visual": "0x44444444", "standin": True, "kind": "damage"},
+     "target": "Target", "cast": 2.5, "visual": "0x44444444", "standin": True, "kind": "damage", "got": "master class", "master": "Lich"},
 ]
 SPELLFX_API = "/eqoa/account/api/spellfx"
 
@@ -682,6 +682,11 @@ async def tests(a, site, base, page):
     check("every class shows them all (control)", await page.js(ids) == "[2,3,4]", str(await page.js(ids)))
     await page.js("document.getElementById('spell-search').value = 'tap'; document.getElementById('spell-search').dispatchEvent(new Event('input')); true")
     check("a search finds a spell by its name", await page.until(f"{ids} === '[4]'", 3) is True)
+    tagged = await page.js("document.querySelector('#spells li[data-id=\"4\"] .tag.got') && document.querySelector('#spells li[data-id=\"4\"] .tag.got').textContent")
+    check("a master class's spell says so", tagged == "master class · Lich", str(tagged))
+    await page.js("document.getElementById('spell-search').value = 'lich'; document.getElementById('spell-search').dispatchEvent(new Event('input')); true")
+    check("a search finds it by its master class", await page.until(f"{ids} === '[4]'", 3) is True)
+    check("a spell got by level carries no such tag (control)", await page.js("!document.querySelector('.tag.got') || document.querySelectorAll('.tag.got').length === 1") is True)
     await page.js("document.getElementById('spell-search').value = ''; document.getElementById('spell-search').dispatchEvent(new Event('input')); true")
     await page.until(f"{ids} === '[2,3,4]'", 3)
     sendable = "!document.getElementById('send').disabled"

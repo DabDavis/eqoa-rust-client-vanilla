@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · Masteries, epics and master-class spells to match
+- The Help match spell visuals page now lists the class masteries, the level 60 epics and
+  the master classes' spells too, each tagged as such; search "epic", "mastery" or a master
+  class's name (Lich, Sorcerer...) to find them.
+
 ## 2026-10-26 · An even pulse at 30 frames a second, and the spell list shrinks as visuals are set
 - With Frame Rate set to 30, the pointer beside a list's selection (the who list, the
   menus) pulses evenly again, and the HUD no longer skips a beat every few seconds: the
