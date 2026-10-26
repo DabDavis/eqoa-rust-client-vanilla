@@ -16,6 +16,9 @@
 //! eqoa shot <file> [model | zone <n>] <out.png> [camera]   one view, offscreen
 //! eqoa listen <world> <x> <z> <seconds> <out.wav> [hour] [walk]   the world's sound there, offline
 //! eqoa mapshot <world> <out.png> [x z [heading [scale [secs]]]]   the map (M) built as in play, drawn
+//! eqoa fxview [visual [secs]]   a human casting a spell visual at another, again and again, as
+//!                               0x00B1 plays it (the GM panel's preview; `fxview`); with an
+//!                               out.png after the visual, `[ms,...] [secs]`: drawn at those times
 //! eqoa rumble                   each controller the game would read rumbles a moment, as the game
 //!                               rumbles one (the large motor, then the small)
 //!                               (walk: the human walks forward, its footsteps with it;
@@ -113,6 +116,7 @@ mod wholist;
 mod zones;
 mod flora;
 mod fx;
+mod fxview;
 mod particles;
 mod patcher;
 mod play;
@@ -432,6 +436,41 @@ fn run(args: &[String]) -> Result<()> {
             } else {
                 let (lib, src) = source(file, rest)?;
                 viewer::run(lib, src)?;
+            }
+        }
+        // `eqoa fxview [visual] [cast seconds]`: the GM panel's spell-visual
+        // preview in a window; `eqoa fxview <visual> <out.png> [ms,...]
+        // [cast seconds]` drawn at those times
+        Some("fxview") => {
+            let usage = "usage: eqoa fxview [visual [cast seconds]] | eqoa fxview <visual> <out.png> [ms,ms,...] [cast seconds]";
+            let rest = &args[1..];
+            let effect = match rest.first() {
+                Some(v) => Some(fxview::parse_visual(v).ok_or(usage)?),
+                None => None,
+            };
+            let secs = |s: Option<&String>| -> Result<i32> {
+                let s: f32 = match s {
+                    Some(s) => s.parse()?,
+                    None => fxview::CAST_MS as f32 / 1000.0,
+                };
+                Ok((s * 1000.0) as i32)
+            };
+            let lib = fxview::library_off(&mut disc(None)?)?;
+            // `EQOA_FX_AIM=caster|human|dummy`: what the cast lands on (a dummy)
+            let aim = std::env::var("EQOA_FX_AIM").ok().and_then(|a| fxview::Aim::parse(&a));
+            match rest.get(1).filter(|a| a.ends_with(".png")) {
+                Some(out) => {
+                    let times: Vec<i64> = match rest.get(2) {
+                        Some(t) => t.split(',').map(|t| t.trim().parse()).collect::<std::result::Result<_, _>>()?,
+                        None => vec![1500],
+                    };
+                    let camera = std::env::var("EQOA_FX_CAMERA").ok().and_then(|v| {
+                        let n: Vec<f32> = v.split(',').filter_map(|t| t.trim().parse().ok()).collect();
+                        (n.len() == 3).then(|| fxview::Orbit { yaw: n[0], pitch: n[1], zoom: n[2] })
+                    });
+                    fxview::shots(lib, effect, secs(rest.get(3))?, aim, &times, out, camera)?;
+                }
+                None => fxview::run(lib, effect, secs(rest.get(1))?, aim, None)?,
             }
         }
         Some("listen") => {
