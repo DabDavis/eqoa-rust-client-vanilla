@@ -419,3 +419,111 @@ fn reaching_the_waypoint_takes_it_away() {
     m.arrive(Some(([at[0] + ARRIVE - 1.0, 50.0, at[1]], 0.0)), 0);
     assert_eq!(m.waypoint(0), None, "reached");
 }
+
+/// The markers answer the pointer: the mouse over Coachman Ronks's horseshoe
+/// shows its card and off every marker none; a finger's tap shows the card and
+/// puts no waypoint, a second tap puts the waypoint on the coach, a click on a
+/// camp at once; the pad's middle cross over a marker shows its card once the
+/// map is panned (with a keyboard in use, not). Hidden (○, X on a keyboard)
+/// they answer nothing: the control, a click a little off the coach puts the
+/// waypoint there, where shown it went on the coach.
+#[test]
+fn the_markers_answer_the_pointer() {
+    use super::markers::Marker;
+    use super::markers_data::{CAMPS, COACHES};
+    crate::settings::testing::reset(false);
+    let size = (1280, 720);
+    let mut m = up(size);
+    let v = m.view.unwrap();
+    let ronks = COACHES.iter().position(|c| c.coachman == "Coachman Ronks").unwrap();
+    let at = COACHES[ronks].at;
+    let p = v.to_window(size, at);
+    m.mouse_moved(p);
+    assert_eq!(m.card_marker(true), Some(Marker::Coach(ronks)), "the mouse over it");
+    let empty = [40.0, 680.0];
+    assert_eq!(markers::under(0, v, size, empty, true), None, "a corner with no marker");
+    m.mouse_moved(empty);
+    assert_eq!(m.card_marker(true), None, "off every marker");
+    m.let_go();
+    // a finger: the card, then the waypoint
+    assert!(m.click([p[0] + 3.0, p[1]], true));
+    assert_eq!((m.waypoint(0), m.card_marker(false)), (None, Some(Marker::Coach(ronks))), "a tap shows its card");
+    assert!(m.click(p, true));
+    assert_eq!(m.waypoint(0), Some(at), "tapped again: the waypoint on the coach");
+    assert_eq!(m.card_marker(false), None, "and the card goes");
+    // a click on a camp in view: the waypoint on it at once
+    let nasehir = CAMPS.iter().position(|c| c.place == "Northern Ro's Nasehir, the first camp").unwrap();
+    let q = v.to_window(size, CAMPS[nasehir].at);
+    assert!((0.0..1280.0).contains(&q[0]) && (0.0..720.0).contains(&q[1]), "in the opening view: {q:?}");
+    assert!(m.click([q[0] - 2.0, q[1] + 2.0], false));
+    assert_eq!(m.waypoint(0), Some(CAMPS[nasehir].at));
+    // the pad's cross, the map panned onto Ronks
+    m.follow = false;
+    m.view = Some(View { center: at, ..v });
+    assert_eq!(m.card_marker(false), Some(Marker::Coach(ronks)), "the pad's cross on it");
+    assert_eq!(m.card_marker(true), None, "with a keyboard in use, its mouse decides");
+    m.view = Some(v);
+    m.follow = true;
+    // hidden: X is ○
+    assert_eq!(keyboard("x"), Some((key::CIRCLE, Hold::Once)));
+    assert!(m.key(key::CIRCLE, true));
+    assert!(!crate::settings::map_markers(), "hidden, and kept");
+    m.mouse_moved(p);
+    assert_eq!(m.card_marker(true), None, "hidden: no card");
+    m.click([p[0] + 5.0, p[1]], false);
+    let put = m.waypoint(0).unwrap();
+    assert!(near(put, v.to_world(size, [p[0] + 5.0, p[1]]), 1e-3) && !near(put, at, 1.0), "the control: put where clicked, {put:?}");
+    m.key(key::CIRCLE, true);
+    assert!(crate::settings::map_markers(), "shown again");
+}
+
+/// The horseshoe comes off the disc once: the builder keeps it out of a zone
+/// it reads while it is wanted, and not when it is not (the control).
+#[test]
+fn the_builder_keeps_the_stable_signs_horseshoe() {
+    let mut b = build::Builder::new(WORLD_FILE, &tunaria(), None, None);
+    let zone = |with: bool| {
+        // a zone's records with one surface: the sign's horseshoe, or another
+        let id = if with { markers::ICON } else { 0x1234_5678 };
+        let mut body = Vec::new();
+        for v in [id, 2, 2, 1, 1, 1] {
+            body.extend_from_slice(&v.to_le_bytes());
+        }
+        body.extend_from_slice(&[255, 255, 255, 255]);
+        body.extend_from_slice(&2i32.to_le_bytes());
+        body.extend_from_slice(&[0, 0, 0, 0]);
+        let mut rec = Vec::new();
+        rec.extend_from_slice(&0x1000u16.to_le_bytes());
+        rec.extend_from_slice(&[0, 0]);
+        rec.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        rec.extend_from_slice(&0u32.to_le_bytes());
+        rec.extend_from_slice(&body);
+        esf::Container::parse_records(rec)
+    };
+    b.want_icon(false);
+    b.look_for_icon(&zone(true));
+    assert!(b.icon.is_none(), "the control: not wanted, not kept");
+    b.want_icon(true);
+    b.look_for_icon(&zone(false));
+    assert!(b.icon.is_none(), "another surface");
+    b.look_for_icon(&zone(true));
+    let im = b.icon.take().expect("kept");
+    assert_eq!((im.width, im.height), (2, 2));
+}
+
+/// T (Select on a pad) hides the towns' names and shows them again, kept,
+/// apart from the markers; the map says so.
+#[test]
+fn t_turns_the_town_names() {
+    crate::settings::testing::reset(false);
+    let mut m = up((1280, 720));
+    assert_eq!(keyboard("t"), Some((key::SELECT, Hold::Once)));
+    assert!(crate::settings::map_towns(), "on at first");
+    m.keyboard_key("t", true, false);
+    assert!(!crate::settings::map_towns() && crate::settings::map_markers(), "hidden, the markers kept");
+    assert!(m.describe().contains("town names hidden"), "{}", m.describe());
+    m.keyboard_key("t", true, true);
+    assert!(!crate::settings::map_towns(), "a repeat is not another press");
+    assert!(m.key(key::SELECT, true));
+    assert!(crate::settings::map_towns(), "Select: shown again");
+}
