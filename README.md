@@ -592,6 +592,25 @@ the disc its test (`fxview::tests`) finds a visual that moves its caster and
 shows particles and sees it cast again once nothing of it is left. Nothing
 changes for a player who opens the game's page.
 
+`spellfx.html` beside it is the community page that matches spells to their
+visuals (`web/spellfx.js`; the user, 2026-10-26: "our community effort to help
+match the spell fx to the correct spells", "a form that any player can fill
+out ... no sign in gates"): every spell the server knows (go-eqoa-server's
+account service, `GET /eqoa/account/api/spellfx/spells`), filtered by class, by
+a search and by "still on a stand-in visual", and every visual on the player's
+own disc, which the preview reads and lists (`fxview::visuals`, the
+`started` message); a spell picked plays what it plays now as its own cast
+(its cast time; a harmful one at the dummy), a visual tried plays as that
+spell's, and "This visual is <spell>'s" sends the pick with an optional name
+and note (`POST .../suggest`; a pick for the same spell from the same place
+replaces the last; GMs compare and accept them in the GM panel). The preview
+is the build's own copy of `fxview.html`, framed on this origin and handed the
+disc image as a File (`fxview-disc`); the image is never sent. A disc
+remembered on the game's page is remembered here too (`web/discstore.js`, the
+handles in IndexedDB both pages read). The lists scroll in their own boxes
+beside the preview, which never moves away; on a phone it is held at the top.
+`web/pagetest.py`'s spellfx checks hold the page's half to a stand-in server.
+
 The page asks only for the player's disc image (the gate; the relay and the
 offline viewer are folded under "Server and viewer"); Start runs the game from
 its boot on the canvas, as natively: the loading screens, the licence, the title,

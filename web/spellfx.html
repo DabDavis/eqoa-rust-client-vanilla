@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EQOA · Help match spell visuals</title>
+<style>
+  :root { color-scheme: dark; --bg: #0b0d10; --panel: #151a20; --raised: #1c232b; --line: #2a323c; --text: #e6e9ee; --dim: #9aa4b1; --accent: #d9a441; --bad: #e0745f; --good: #79c08a; --sel: rgba(217, 164, 65, 0.16); }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; }
+  a { color: var(--accent); }
+  header.top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  header.top h1 { margin: 0; font-size: 19px; }
+  header.top p { margin: 0; color: var(--dim); font-size: 13px; flex: 1 1 420px; }
+  header.top .back { font-size: 13px; }
+  /* the lists beside the preview, each scrolling in its own box: the preview never moves away */
+  main.layout { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(260px, 1.1fr) minmax(230px, 0.8fr) minmax(360px, 1.35fr); gap: 12px; padding: 12px 16px; }
+  .col { min-height: 0; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+  .col.work { overflow: auto; }
+  h2 { margin: 0; font-size: 15px; display: flex; align-items: baseline; gap: 8px; }
+  h2 .count { color: var(--dim); font-weight: 400; font-size: 12px; }
+  .filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .filters select, .filters input[type=search] { flex: 1 1 140px; }
+  .filters label.check { flex: 1 1 100%; display: flex; gap: 6px; align-items: center; color: var(--dim); font-size: 12px; }
+  label.check { display: flex; gap: 6px; align-items: center; }
+  input, select, textarea { box-sizing: border-box; padding: 7px 9px; background: #0e1217; color: var(--text); border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+  input[type=checkbox] { width: auto; padding: 0; }
+  textarea { width: 100%; resize: vertical; min-height: 40px; }
+  button { padding: 7px 11px; font: inherit; font-weight: 600; border-radius: 6px; border: 1px solid var(--line); background: var(--raised); color: var(--text); cursor: pointer; }
+  button.primary { background: var(--accent); color: #1a1406; border-color: var(--accent); }
+  button:disabled { opacity: 0.45; cursor: default; }
+  button:focus-visible, .list button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .list { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 0; list-style: none; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+  .list li + li { border-top: 1px solid var(--line); }
+  .list li > button { display: block; width: 100%; text-align: left; background: none; border: 0; border-radius: 0; padding: 7px 10px; font-weight: 400; }
+  .list li > button:hover { background: var(--raised); }
+  .list li.on > button { background: var(--sel); }
+  .list .name { font-weight: 600; }
+  .list .meta { color: var(--dim); font-size: 12px; }
+  .list .line { color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .list .empty { padding: 14px 10px; color: var(--dim); font-size: 13px; }
+  .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; }
+  .tag { display: inline-block; padding: 0 6px; border-radius: 9px; font-size: 11px; border: 1px solid var(--line); color: var(--dim); margin-left: 4px; }
+  .tag.known { color: var(--good); border-color: var(--good); }
+  .tag.stand { color: var(--accent); border-color: var(--accent); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .card p { margin: 0; color: var(--dim); font-size: 13px; }
+  .note { color: var(--dim); font-size: 12px; }
+  .warn { color: var(--bad); }
+  .ok { color: var(--good); }
+  .stage { display: flex; flex-direction: column; gap: 6px; }
+  .stage iframe { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; border-radius: 8px; background: #05070a; }
+  .stage .controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .stage .controls select { flex: 1 1 160px; }
+  .stage .caption { color: var(--dim); font-size: 12px; min-height: 1.3em; overflow-wrap: anywhere; }
+  .pick { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 13px; }
+  .pick .k { color: var(--dim); }
+  label.field { display: block; color: var(--dim); font-size: 12px; margin: 2px 0 -4px; }
+  #who { width: 100%; }
+  .discline { display: flex; gap: 8px; align-items: center; color: var(--dim); font-size: 12px; }
+  .discline button { padding: 2px 8px; font-size: 12px; font-weight: 500; }
+  #status { padding: 0 16px 8px; color: var(--dim); font-size: 12px; min-height: 1.2em; }
+  [hidden] { display: none !important; }
+  @media (max-width: 1000px) {
+    html, body { height: auto; }
+    body { display: block; }
+    main.layout { display: flex; flex-direction: column; }
+    /* the preview held at the top while the lists scroll under it */
+    .col.work { display: contents; }
+    .stage { position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 6px 0; order: -2; }
+    .stage iframe { aspect-ratio: auto; height: 34vh; }
+    #disc { order: -3; }
+    #suggest { order: -1; }
+    .list { max-height: 60vh; }
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>Help match spell visuals</h1>
+  <p>Many spells on eqoaclassic still play a stand-in visual. Pick a spell, try visuals off your own <i>Frontiers</i> disc, and send the one that spell really had. GMs compare everyone's picks and set the right one.</p>
+  <a class="back" href="./">Back to the game</a>
+</header>
+<main class="layout">
+  <section class="col spells" aria-label="Spells">
+    <h2>Spells <span class="count" id="spells-count"></span></h2>
+    <div class="filters">
+      <select id="class" aria-label="Class"><option value="">Every class</option></select>
+      <input id="spell-search" type="search" placeholder="Search spells" aria-label="Search spells" spellcheck="false">
+      <label class="check"><input id="unknown" type="checkbox"> Only spells still on a stand-in visual</label>
+    </div>
+    <ul class="list" id="spells"><li class="empty">Loading the spells…</li></ul>
+  </section>
+  <section class="col visuals" aria-label="Visuals">
+    <h2>Visuals <span class="count" id="visuals-count"></span></h2>
+    <div class="filters">
+      <input id="visual-search" type="search" placeholder="Search by DictID or spell" aria-label="Search visuals" spellcheck="false">
+    </div>
+    <ul class="list" id="visuals"><li class="empty">Choose your disc image to list its visuals.</li></ul>
+  </section>
+  <section class="col work" aria-label="Preview and your pick">
+    <div class="card" id="disc">
+      <p>The visuals are read off your own <i>Frontiers</i> disc image (SLUS-20744). It stays on your computer: nothing of it is uploaded.</p>
+      <input id="iso" type="file" accept=".iso,.bin,.img" aria-label="Disc image">
+      <button type="button" id="iso-again" hidden></button>
+      <label class="check note" id="remember-row" hidden><input id="remember" type="checkbox"> Remember my disc image in this browser (as on the game's page)</label>
+      <div class="note" id="disc-what"></div>
+    </div>
+    <div class="stage" id="stage">
+      <iframe id="preview" title="Spell visual preview"></iframe>
+      <div class="controls">
+        <button type="button" id="prev" title="The visual before (in the list)">◀</button>
+        <button type="button" id="again" title="Cast it again">Again</button>
+        <button type="button" id="next" title="The next visual (in the list)">▶</button>
+        <select id="aim" aria-label="What the cast lands on">
+          <option value="auto">Lands on: by the spell</option>
+          <option value="dummy">Lands on: a training dummy</option>
+          <option value="human">Lands on: a second human</option>
+          <option value="caster">Lands on: the caster</option>
+        </select>
+      </div>
+      <div class="caption" id="caption">Choose your disc image to see the visuals.</div>
+      <div class="discline" id="disc-line" hidden><span id="disc-name"></span><button type="button" id="disc-change">Change</button></div>
+    </div>
+    <form class="card" id="suggest">
+      <h2>Your pick</h2>
+      <div class="pick">
+        <span class="k">Spell</span><span id="pick-spell">pick one on the left</span>
+        <span class="k">Visual</span><span id="pick-visual">try one from the list</span>
+      </div>
+      <label class="field" for="who">Your name (optional)</label>
+      <input id="who" maxlength="32" autocomplete="nickname" placeholder="as you'd like to be credited">
+      <label class="field" for="note">Note (optional)</label>
+      <textarea id="note" rows="2" maxlength="200" placeholder="how you remember it: the sound, a video, a screenshot…"></textarea>
+      <button type="submit" class="primary" id="send" disabled>Send my pick</button>
+      <div class="note" id="sent" role="status"></div>
+    </form>
+  </section>
+</main>
+<div id="status" role="status"></div>
+<script type="module" src="./spellfx.js"></script>
+</body>
+</html>

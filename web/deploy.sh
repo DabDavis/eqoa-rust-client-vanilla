@@ -15,10 +15,10 @@ DEST="${EQOA_WEB_DEST:?set EQOA_WEB_DEST to user@host:/path/ (rsync syntax)}"
 DEST="${DEST%/}/"
 BUILD="$(sed -n 's/.*"build":"\([0-9a-f]*\)".*/\1/p' version.json 2>/dev/null)"
 [ -n "$BUILD" ] && [ -d "v/$BUILD" ] || { echo "no build in web/dist: run web/build.sh" >&2; exit 1; }
-for f in "v/$BUILD"/*.js "v/$BUILD"/*.wasm index.html fxview.html; do gzip -9 -k -f "$f"; done
+for f in "v/$BUILD"/*.js "v/$BUILD"/*.wasm "v/$BUILD"/*.html index.html fxview.html spellfx.html; do gzip -9 -k -f "$f"; done
 rsync -aR "v/$BUILD/" "$DEST"
-# the game's page, and the GM panel's spell-visual preview beside it
-rsync -a index.html index.html.gz fxview.html fxview.html.gz "$DEST"
+# the game's page, the GM panel's spell-visual preview and the community page beside it
+rsync -a index.html index.html.gz fxview.html fxview.html.gz spellfx.html spellfx.html.gz "$DEST"
 rsync -a version.json "$DEST"
 echo "published build $BUILD to $DEST"
 

@@ -6,6 +6,7 @@
 // local server. Reports, notices and what goes wrong are report.js's
 // (window.eqoaReport).
 import init, { boot, view, client_state, want_shot, crash_test, disc_id, disc_2002, update_notices, hidden_tick } from './eqoa.js';
+import { canRemember, keptHandle, keepHandle, forgetHandle } from './discstore.js';
 
 const $ = (id) => document.getElementById(id);
 // the client's own graphics line ("graphics: <adapter> (<backend>)"), for reports
@@ -567,7 +568,6 @@ window.eqoaAsk2002 = () => {
 // or deleted is said so and forgotten. Unticked (the default), or in a
 // browser without the picker, the inputs are the browser's own, as before.
 
-const canRemember = typeof window.showOpenFilePicker === 'function' && typeof indexedDB !== 'undefined';
 // per input: where its handle is kept, and its picker's own memory of a folder
 const discInputs = { iso: { key: 'disc', id: 'eqoa-disc' }, iso2002: { key: 'disc2002', id: 'eqoa-disc-2002' } };
 // what is kept, read once at the start: { handle, name } by key
@@ -578,33 +578,7 @@ const rememberOn = () => canRemember && $('remember').checked;
 // by disc, and the picker's last error; names only, never where a file is
 const rememberLog = { query: {}, request: {}, error: '' };
 
-function handleStore(mode, fn) {
-  return new Promise((done) => {
-    let open;
-    try {
-      open = indexedDB.open('eqoa-discs', 1);
-    } catch {
-      return done(null);
-    }
-    open.onupgradeneeded = () => open.result.createObjectStore('handles');
-    open.onerror = () => done(null);
-    open.onsuccess = () => {
-      const db = open.result;
-      try {
-        const tx = db.transaction('handles', mode);
-        const q = fn(tx.objectStore('handles'));
-        tx.oncomplete = () => { db.close(); done(q.result === undefined ? null : q.result); };
-        tx.onerror = tx.onabort = () => { db.close(); done(null); };
-      } catch {
-        db.close();
-        done(null);
-      }
-    };
-  });
-}
-const keptHandle = (key) => handleStore('readonly', (s) => s.get(key));
-const keepHandle = (key, value) => handleStore('readwrite', (s) => s.put(value, key));
-const forgetHandle = (key) => handleStore('readwrite', (s) => s.delete(key));
+// keptHandle, keepHandle, forgetHandle: discstore.js (the community page reads them too)
 
 // the file put in its input as if picked there (its change handler names it)
 function putFile(name, file, again) {
