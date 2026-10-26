@@ -11,15 +11,17 @@ use crate::pointer::key;
 use vi::ui::{Raster, Vui, wide};
 
 /// The buttons, right to left from the top right corner: their words and
-/// the pad's keys they press.
-pub const BUTTONS: [(&str, i32); 4] = [("Close", key::TRIANGLE), ("+", key::R1), ("-", key::L1), ("Center", key::CROSS)];
+/// the pad's keys they press (Suggest, L3's: a community marker, `community`).
+pub const BUTTONS: [(&str, i32); 5] = [("Close", key::TRIANGLE), ("+", key::R1), ("-", key::L1), ("Center", key::CROSS), ("Suggest", key::L3)];
 
 /// The legend for the pad: the inline glyphs (△ 65, ✕ 66, □ 67, ○ 68, L1
-/// 185, R1 187) and what each does.
-const PAD_LEGEND: [(i32, &str); 9] = [(65, "Close"), (66, "Center"), (67, "Waypoint"), (68, "Markers"), (189, "Towns"), (185, ""), (187, "Zoom"), (-1, "Sticks, drag, pinch: pan and zoom"), (-1, "Tap: waypoint")];
-const KEY_LEGEND: [&str; 7] = ["M Close", "Space Center", "+ - or wheel Zoom", "Arrows, WASD or drag Pan", "Click or Q Waypoint", "X Markers", "T Towns"];
+/// 185, R1 187, L3 214) and what each does.
+const PAD_LEGEND: [(i32, &str); 10] = [(65, "Close"), (66, "Center"), (67, "Waypoint"), (68, "Markers"), (189, "Towns"), (214, "Suggest"), (185, ""), (187, "Zoom"), (-1, "Sticks, drag, pinch: pan and zoom"), (-1, "Tap: waypoint")];
+const KEY_LEGEND: [&str; 8] = ["M Close", "Space Center", "+ - or wheel Zoom", "Arrows, WASD or drag Pan", "Click or Q Waypoint", "X Markers", "T Towns", "N Suggest"];
 
 pub const NAME: [f32; 4] = [1.0, 0.97, 0.85, 1.0];
+/// The community list's answer under the title: the game's gold words.
+const NOTICE: [f32; 4] = [1.0, 0.82, 0.25, 1.0];
 /// A button's words while what it shows is hidden.
 const DIM: [f32; 4] = [0.55, 0.53, 0.48, 1.0];
 const PANEL: i32 = 61;
@@ -42,6 +44,9 @@ pub struct Chrome {
     /// panned), as words, under the title (F3 20261026-090726, a player's
     /// ask: "X, Y coordinates of cursor position displayed on map")
     pub pointer: Option<String>,
+    /// what the community's list answered a suggestion, for a while
+    /// (`community::Community::notice_now`), under the title in gold
+    pub notice: Option<String>,
 }
 
 /// A panel the size of `w` x `h` at `at` (VIWndGoto's).
@@ -162,12 +167,13 @@ pub fn draw(r: &mut dyn Raster, vui: &Vui, c: &Chrome) -> Vec<Button> {
     panel(vui, r, [tl[0] + m, y], tw + 12, line);
     vui.draw_string_ex(r, &s, tl[0] + m + 6, y + 3, NAME, true);
     let mut y = y;
-    for words in [c.progress.map(|(done, of)| format!("Drawing the map: {done} of {of} areas")), c.pointer.clone()].into_iter().flatten() {
+    let lines = [c.progress.map(|(done, of)| format!("Drawing the map: {done} of {of} areas")), c.pointer.clone()].into_iter().flatten().map(|w| (w, NAME));
+    for (words, color) in lines.chain(c.notice.clone().map(|n| (n, NOTICE))) {
         let s = wide(&words);
         let tw = r.string_width(&s).max(0);
         y += line + 4;
         panel(vui, r, [tl[0] + m, y], tw + 12, line);
-        vui.draw_string_ex(r, &s, tl[0] + m + 6, y + 3, NAME, true);
+        vui.draw_string_ex(r, &s, tl[0] + m + 6, y + 3, color, true);
     }
     // the legend: its pieces (a glyph or none, and words) in lines that fit
     let mut pieces: Vec<(i32, &str)> = if c.keyboard { KEY_LEGEND.iter().map(|s| (-1, *s)).collect() } else { PAD_LEGEND.to_vec() };
@@ -253,14 +259,14 @@ mod tests {
         assert!(foot.iter().all(|p| p[2] <= 640 - 8 + 6), "each line inside the window: {foot:?}");
         assert!(hits.iter().all(|h| h.0[0] >= 0 && h.0[2] <= 640), "{hits:?}");
         let mut w = Panels::default();
-        draw(&mut w, &v, &Chrome { corners: [[-300.0, 0.0], [940.0, 448.0]], ..chrome(false) });
+        draw(&mut w, &v, &Chrome { corners: [[-400.0, 0.0], [1040.0, 448.0]], ..chrome(false) });
         let one: Vec<&[i32; 4]> = w.0.iter().filter(|p| p[1] > 380).collect();
         assert_eq!(one.len(), 1, "a wide window's one line");
         assert!(one[0][2] - one[0][0] > 640 - 16, "the control: wider than the narrow window");
     }
 
     fn chrome(keyboard: bool) -> Chrome {
-        Chrome { corners: [[-106.0, 0.0], [746.0, 448.0]], title: "Tunaria: Freeport (North)".into(), names: Vec::new(), keyboard, progress: Some((3, 175)), quests: None, pointer: None }
+        Chrome { corners: [[-106.0, 0.0], [746.0, 448.0]], title: "Tunaria: Freeport (North)".into(), names: Vec::new(), keyboard, progress: Some((3, 175)), quests: None, pointer: None, notice: None }
     }
 
     /// The chrome's footprint covers its title (top left), its buttons (top
@@ -305,6 +311,21 @@ mod tests {
         // a finger's slop reaches a button just missed
         assert_eq!(map.point([close[2] as f32 + 3.0, mid(close)[1]], true), vec![key::TRIANGLE]);
         assert!(map.point([close[2] as f32 + 3.0, mid(close)[1]], false).is_empty());
+    }
+
+    /// What the community's list answered goes under the title, the
+    /// pointer's place too, and the chrome's footprint has it; the legend
+    /// names the Suggest key (N, a pad's L3). The control: no notice, no
+    /// line there.
+    #[test]
+    fn the_notice_goes_under_the_title() {
+        let with = Chrome { notice: Some("Sent for a GM's approval.".into()), pointer: Some("x 1, z 2".into()), ..chrome(true) };
+        let rects = footprint(&NullRaster, &vui(), &with);
+        let without = footprint(&NullRaster, &vui(), &Chrome { pointer: Some("x 1, z 2".into()), ..chrome(true) });
+        let low = |rs: &[[f32; 4]]| rs.iter().filter(|r| r[0] < 0.0 && r[1] < 224.0).map(|r| r[3]).fold(0.0, f32::max);
+        assert!(low(&rects) > low(&without) + 10.0, "a line more under the title: {} {}", low(&rects), low(&without));
+        assert!(KEY_LEGEND.contains(&"N Suggest") && PAD_LEGEND.contains(&(214, "Suggest")));
+        assert!(BUTTONS.contains(&("Suggest", key::L3)));
     }
 
     /// While a server offers quest marks the chrome has their button, R3's

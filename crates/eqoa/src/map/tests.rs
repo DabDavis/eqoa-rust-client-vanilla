@@ -599,3 +599,102 @@ fn the_map_names_the_place_under_the_pointer() {
     assert!(m.pointer_world(false).is_some(), "a pad's cross on a panned map");
     assert_eq!(m.pointer_world(true), None, "the control: a keyboard has no cross");
 }
+
+/// The community's markers answer the pointer as the camps and coaches do:
+/// the mouse over a pin's head shows its card, never another world's pin at
+/// the same place (the control: that one alone, no card); a finger's tap
+/// shows the card and a second tap puts the waypoint on the spot; the pad's
+/// cross over it once the map is panned; the map says how many it has.
+/// Hidden with the markers (X) they answer nothing: the control, a click on
+/// a pin then puts the waypoint where clicked.
+#[test]
+fn the_community_markers_answer_the_pointer() {
+    use super::community::{Kind, Mark};
+    crate::settings::testing::reset(false);
+    let size = (1280, 720);
+    let mut m = up(size);
+    let v = m.view.unwrap();
+    // a spot in an empty corner (no camp or coach near: `the_markers_answer_the_pointer`)
+    let at = v.to_world(size, [60.0, 650.0]);
+    let mark = |world: i32, id: i64| Mark { id, world, at, name: "Hidden cave".into(), note: "Behind the falls".into(), kind: Kind::Landmark };
+    m.community.marks = vec![mark(1, 1), mark(0, 2)];
+    let r = m.pin_size(v);
+    let head = community::head(v.to_window(size, at), r);
+    m.mouse_moved(head);
+    assert_eq!(m.card_community(true), Some(1), "world 0's pin");
+    assert!(m.describe().contains(", 2 community markers"), "{}", m.describe());
+    m.mouse_moved([640.0, 100.0]);
+    assert_eq!(m.card_community(true), None, "off it");
+    m.community.marks = vec![mark(1, 1)];
+    m.mouse_moved(head);
+    assert_eq!(m.card_community(true), None, "the control: another world's alone");
+    m.community.marks = vec![mark(1, 1), mark(0, 2)];
+    m.let_go();
+    // a finger: the card, then the waypoint on the spot
+    assert!(m.click([head[0] + 3.0, head[1]], true));
+    assert_eq!((m.waypoint(0), m.card_community(false)), (None, Some(1)), "a tap shows its card");
+    assert!(m.click(head, true));
+    assert_eq!((m.waypoint(0), m.community.pinned), (Some(at), None), "tapped again: the waypoint on it");
+    m.set_waypoint(0, None);
+    // the pad's cross on it, the map panned there
+    m.follow = false;
+    m.view = Some(View { center: at, ..v });
+    assert_eq!(m.card_community(false), Some(1), "the pad's cross");
+    assert_eq!(m.card_community(true), None, "with a keyboard in use, its mouse decides");
+    m.view = Some(v);
+    m.follow = true;
+    // hidden with the markers
+    assert!(m.key(key::CIRCLE, true));
+    m.mouse_moved(head);
+    assert_eq!(m.card_community(true), None, "hidden: no card");
+    m.click(head, false);
+    let put = m.waypoint(0).unwrap();
+    assert!(near(put, v.to_world(size, head), 1e-3) && !near(put, at, 1.0), "the control: put where clicked, {put:?}");
+    m.key(key::CIRCLE, true);
+}
+
+/// N (L3, the Suggest button) asks to suggest a spot of the map's world, once:
+/// the map's middle with no pointer and the map following the player; the
+/// place under the mouse; not a mouse on the chrome's buttons (Suggest's
+/// own: the middle then); this world's waypoint over all; a pad's cross once
+/// the map is panned. The control: a map with no view asks nothing.
+#[test]
+fn n_suggests_a_spot() {
+    crate::settings::testing::reset(false);
+    assert_eq!(keyboard("n"), Some((key::L3, Hold::Once)));
+    let size = (1280, 720);
+    let mut m = up(size);
+    let v = m.view.unwrap();
+    m.keyboard = true;
+    assert!(m.key(key::L3, true));
+    assert_eq!(m.take_suggest(), Some(community::Spot { world: 0, at: v.center }), "the middle");
+    assert_eq!(m.take_suggest(), None, "once");
+    m.mouse_moved([300.0, 200.0]);
+    m.key(key::L3, true);
+    let s = m.take_suggest().unwrap();
+    assert!(near(s.at, v.to_world(size, [300.0, 200.0]), 1e-3), "under the mouse: {s:?}");
+    m.buttons = vec![([600, 10, 640, 30], key::L3)];
+    m.mouse_moved(render::ui::window_from_frame(size, [620.0, 20.0]));
+    m.key(key::L3, true);
+    assert_eq!(m.take_suggest().unwrap().at, v.center, "the button's own pointer: the middle");
+    m.buttons.clear();
+    // the waypoint over the mouse's place
+    assert!(m.click([40.0, 680.0], false));
+    let w = m.waypoint(0).unwrap();
+    m.mouse_moved([300.0, 200.0]);
+    m.key(key::L3, true);
+    assert_eq!(m.take_suggest().unwrap().at, w, "the waypoint");
+    m.set_waypoint(0, None);
+    // a pad's cross, the map panned
+    m.let_go();
+    m.keyboard = false;
+    m.follow = false;
+    let there = [v.center[0] + 500.0, v.center[1] - 300.0];
+    m.view = Some(View { center: there, ..v });
+    m.key(key::L3, true);
+    assert!(near(m.take_suggest().unwrap().at, there, 1e-3), "the pad's cross");
+    let mut none = Map::default();
+    none.show();
+    none.key(key::L3, true);
+    assert_eq!(none.take_suggest(), None, "the control: no view");
+}

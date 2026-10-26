@@ -5,6 +5,16 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-26 · Community markers on the map
+- The map shows places other players suggested and a GM accepted: a pin each, coloured by what it
+  marks (a landmark, a camp, a quest's place, a merchant, a way to travel, a danger), its name
+  beside it when you zoom in, and what it is when you point at it. X hides them with the other
+  markers. The list comes from eqoaclassic.com whichever server you play on, and is kept for a
+  start with no connection.
+- Suggest one of your own: put your waypoint on the spot (a click on the map), or point at it, and
+  press N (L3 on a controller, or the map's Suggest button). Type its name, then a note if you
+  like; Enter sends it for a GM's approval, Escape sends nothing. The map says when it went.
+
 ## 2026-10-26 · A controller that turns up mid-game
 - On Windows the game no longer stops when a controller turns up while it runs (Steam can make
   one as a window comes to the front, and two pads made it likelier): until Windows has finished

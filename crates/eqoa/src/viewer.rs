@@ -752,18 +752,26 @@ pub fn shot_with(
                 // `EQOA_CS_TEXT`: the CS request's text, into its editor.
                 p.support_script_step();
                 // `EQOA_EDIT_TEXT`: typed into the edit box, a character a frame
-                // once it is up, then Enter; the same into the quick-chat
-                // editor's own (`EQOA_QUICK_TEXT`, each `|`-separated piece
-                // into the next one that opens).
+                // once it is up, then Enter, each `|`-separated piece into the
+                // next box that opens (a community marker's name, then its
+                // note); the same into the quick-chat editor's own
+                // (`EQOA_QUICK_TEXT`, each piece into the next one that opens).
                 if p.mode == 2
                     && let Ok(text) = std::env::var("EQOA_EDIT_TEXT")
                 {
-                    let k = p.edit_typed;
+                    let mut k = p.edit_typed;
                     p.edit_typed += 1;
-                    match text.chars().nth(k) {
-                        Some(c) => p.edit_key(c as i32, true),
-                        None if k == text.chars().count() => p.edit_key(13, true),
-                        None => {}
+                    for piece in text.split('|') {
+                        let n = piece.chars().count();
+                        if k < n {
+                            p.edit_key(piece.chars().nth(k).unwrap_or(' ') as i32, true);
+                            break;
+                        }
+                        if k == n {
+                            p.edit_key(13, true);
+                            break;
+                        }
+                        k -= n + 1;
                     }
                 }
                 if let Ok(text) = std::env::var("EQOA_QUICK_TEXT") {

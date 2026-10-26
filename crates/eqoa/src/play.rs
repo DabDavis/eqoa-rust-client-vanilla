@@ -20,6 +20,8 @@ mod support;
 mod voiceplay;
 #[path = "voicewndplay.rs"]
 mod voicewndplay;
+#[path = "mapsuggest.rs"]
+mod mapsuggest;
 
 use crate::walker::{Placing, Spawn, Walker};
 use esf::Library;
@@ -5541,7 +5543,8 @@ impl Play {
             match self.edit.key(vui, r, key, now, &mut cues) {
                 crate::editbox::EditUp::Done(purpose) => self.edit_done(purpose),
                 crate::editbox::EditUp::Cancel => {
-                    if !self.voice_edit_done(self.edit.purpose, false) {
+                    let purpose = self.edit.purpose;
+                    if !self.map_edit_done(purpose, false) && !self.voice_edit_done(purpose, false) {
                         self.mode = if self.who_tell.take().is_some() { 35 } else { 0 };
                     }
                 }
@@ -5553,6 +5556,10 @@ impl Play {
 
     /// 259: the edit box's text to where it was for.
     fn edit_done(&mut self, purpose: u32) {
+        // a community marker's name and note (`mapsuggest`)
+        if self.map_edit_done(purpose, true) {
+            return;
+        }
         // the voice window's fields (`voicewndplay`)
         if self.voice_edit_done(purpose, true) {
             return;
@@ -6840,6 +6847,9 @@ impl Play {
         if self.map.open && (self.mode != 0 || self.is_dead()) {
             self.map.close();
         }
+        // a community marker the map asked to suggest: the edit box for its
+        // name (`mapsuggest`)
+        self.take_map_suggest();
         let now = self.session.now();
         self.guide_frame(walker, now);
         let guide_on = self.guide_on(now);
