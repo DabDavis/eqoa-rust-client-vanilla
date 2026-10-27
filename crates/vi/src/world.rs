@@ -35,6 +35,12 @@ pub struct Node<M: Model> {
 
 #[derive(Clone, Debug, Default)]
 pub struct Room {
+    /// `m_flags` as the record gives it: bit 0 a room open to the sky, which
+    /// `VIWorld::RenderByPortals` draws by the frustum (the whole world), where
+    /// it draws a closed room alone with what its portals show.
+    pub flags: u32,
+    /// How many portals lead out of it.
+    pub portals: i32,
     /// The DictID of the room's own sprite (`m_p28`), and what it resolved to.
     pub sprite_id: u32,
     pub sprite: Option<usize>,
@@ -547,8 +553,13 @@ impl<M: Model> World<M> {
         if let Some(rooms) = c.child(base, 0x3230) {
             for &r in &c.node(rooms).children {
                 if c.node(r).ty == 0x3240 {
+                    // `ParseZoneRoom`: the sprite, a word, the flags, the box
+                    // from version 2, then the portals' count
                     let d = c.body(r);
-                    zone.rooms.push(Room { sprite_id: rd_i(d, 0) as u32, stamp20: -1, stamp24: -1, ..Default::default() });
+                    let at = if c.node(r).version >= 2 { 36 } else { 12 };
+                    let portals = if d.len() >= at + 4 { rd_i(d, at) } else { 0 };
+                    let flags = if d.len() >= 12 { rd_i(d, 8) as u32 } else { 0 };
+                    zone.rooms.push(Room { flags, portals, sprite_id: rd_i(d, 0) as u32, stamp20: -1, stamp24: -1, ..Default::default() });
                 }
             }
         }

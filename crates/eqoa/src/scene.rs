@@ -72,10 +72,39 @@ pub fn zone(lib: &Library, file: usize, zone: esf::NodeId, index: usize) -> Scen
 /// distinct sprite. With `animate`, HSprite placements are held out (in
 /// `Scene::hsprites`) to be drawn posed.
 pub fn zones(lib: &Library, file: usize, list: &[esf::NodeId], name: &str, animate: bool) -> Scene {
+    build(lib, file, list, name, animate, Of::All)
+}
+
+/// The actors of one room of `zone` and no terrain (what `VIZone::RenderRoom`
+/// draws of a room), one upload per distinct sprite among them.
+pub fn room(lib: &Library, file: usize, zone: esf::NodeId, room: i32) -> Scene {
+    build(lib, file, &[zone], &format!("room {room}"), false, Of::Room(room))
+}
+
+/// The terrain patches of `zone` whose DictID `keep` takes, and no actors: a
+/// room's own sprite, which is one of them (`VIZone::RenderRoom`).
+pub fn patches(lib: &Library, file: usize, zone: esf::NodeId, keep: &dyn Fn(i32) -> bool) -> Scene {
+    build(lib, file, &[zone], "terrain", false, Of::Patches(keep))
+}
+
+/// What a scene is made of.
+#[derive(Clone, Copy)]
+enum Of<'a> {
+    All,
+    Room(i32),
+    Patches(&'a dyn Fn(i32) -> bool),
+}
+
+fn build(lib: &Library, file: usize, list: &[esf::NodeId], name: &str, animate: bool, of: Of) -> Scene {
     let c = lib.file(file);
     let mut parts = Vec::new();
     for &zone in list {
-        if let Some(t) = lib.build_terrain(file, zone) {
+        let t = match of {
+            Of::All => lib.build_terrain(file, zone),
+            Of::Patches(keep) => lib.build_terrain_where(file, zone, keep),
+            Of::Room(_) => None,
+        };
+        if let Some(t) = t {
             parts.push((t, vec![render::IDENTITY]));
         }
     }
@@ -90,6 +119,11 @@ pub fn zones(lib: &Library, file: usize, list: &[esf::NodeId], name: &str, anima
                 let l = lit.remove(&(a.room, a.slot));
                 (a, l)
             })
+        })
+        .filter(|(a, _)| match of {
+            Of::All => true,
+            Of::Room(r) => a.room == r,
+            Of::Patches(_) => false,
         })
         .collect();
     let mut by_sprite: BTreeMap<i32, Vec<(Mat, [f32; 4])>> = BTreeMap::new();

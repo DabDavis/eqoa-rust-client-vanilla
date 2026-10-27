@@ -546,9 +546,20 @@ impl Library {
 
     /// Builds a zone's terrain into one model.
     pub fn build_terrain(&self, file: usize, zone: NodeId) -> Option<crate::Model> {
+        self.build_terrain_where(file, zone, |_| true)
+    }
+
+    /// Builds the zone's terrain patches whose DictID `keep` takes into one
+    /// model, None when it takes none. A room's own sprite (`VIZoneRoom`'s
+    /// `m_p28`) is a patch of its zone's: what `VIZone::RenderRoom` draws of
+    /// the room before its actors.
+    pub fn build_terrain_where(&self, file: usize, zone: NodeId, keep: impl Fn(i32) -> bool) -> Option<crate::Model> {
         let c = self.file(file);
-        crate::mesh::build_terrain(c, &c.terrain_patches(zone), &c.pre_translations(zone), &|d| {
-            self.lookup(d).map(|r| (self.file(r.file), r.node))
-        })
+        let id = |p: NodeId| c.child(p, crate::types::SUBSPRITE_HDR).and_then(|h| c.body(h).get(..4)).map_or(0, |b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+        let patches: Vec<NodeId> = c.terrain_patches(zone).into_iter().filter(|&p| keep(id(p))).collect();
+        if patches.is_empty() {
+            return None;
+        }
+        crate::mesh::build_terrain(c, &patches, &c.pre_translations(zone), &|d| self.lookup(d).map(|r| (self.file(r.file), r.node)))
     }
 }
