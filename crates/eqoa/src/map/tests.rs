@@ -230,7 +230,8 @@ fn the_keyboard_works_the_map() {
     m.keyboard_key("y", true, false);
     assert!(m.open, "the control: Y is not the map's");
     assert_eq!(keyboard("y"), None);
-    assert_eq!(keyboard("q"), Some((key::SQUARE, Hold::Once)), "Q is the keyboard's □: the waypoint");
+    assert_eq!(keyboard("q"), Some((key::SQUARE, Hold::Held)), "Q is the keyboard's □: the waypoint, held the group's");
+    assert_eq!(keyboard("g"), Some((KEY_GROUP, Hold::Once)), "G: the group's waypoint");
     m.keyboard_key("escape", true, false);
     assert!(!m.open);
 }
@@ -339,16 +340,24 @@ fn a_click_puts_the_waypoint_and_one_on_it_takes_it_away() {
     assert_eq!(shut.waypoint(0), None);
 }
 
+/// A press of □ and its release.
+fn tap(m: &mut Map) {
+    m.key(key::SQUARE, true);
+    m.key(key::SQUARE, false);
+}
+
 /// □ (Q) puts the waypoint at the map's middle once the map is panned off
 /// the player, takes it away at the middle, and takes it away wherever it
-/// is while the map follows the player. The control: following the player
-/// with none, □ puts nothing (the middle is the player, already there).
+/// is while the map follows the player; it acts as it is let go (held, it is
+/// the group's: `square_held_is_the_groups`). The control: following the
+/// player with none, □ puts nothing (the middle is the player, already
+/// there).
 #[test]
 fn square_puts_it_at_the_middle_once_panned() {
     crate::settings::testing::reset(false);
     let size = (1280, 720);
     let mut m = up(size);
-    m.key(key::SQUARE, true);
+    tap(&mut m);
     assert_eq!(m.waypoint(0), None, "the control: following, none put");
     m.mouse_button(false, true, [640.0, 360.0]);
     m.mouse_moved([540.0, 300.0]);
@@ -357,14 +366,239 @@ fn square_puts_it_at_the_middle_once_panned() {
     let middle = m.view.unwrap().center;
     assert_ne!(middle, FREEPORT, "panned");
     m.keyboard_key("q", true, false);
-    assert_eq!(m.waypoint(0), Some(middle), "Q at the middle");
-    m.key(key::SQUARE, true);
+    assert_eq!(m.waypoint(0), None, "pressed: nothing yet");
+    m.keyboard_key("q", false, false);
+    assert_eq!(m.waypoint(0), Some(middle), "Q at the middle, as it is let go");
+    tap(&mut m);
     assert_eq!(m.waypoint(0), None, "□ at the middle takes it away");
-    m.key(key::SQUARE, true);
+    tap(&mut m);
     m.key(key::CROSS, true);
     m.steer(size, 0.0, [0.0; 4], Some(FREEPORT));
-    m.key(key::SQUARE, true);
+    tap(&mut m);
     assert_eq!(m.waypoint(0), None, "following the player: taken away wherever it was");
+}
+
+/// F3 20261026-231048 (Liav's): while the map follows the player, □ puts
+/// the waypoint on the target's spot and a second □ takes it away there;
+/// once the map is panned, the middle is □'s spot, the target or not (what
+/// the player chose on the map first); with the target out of view □ is as
+/// it was. G (the group's at once) takes the same spots. The control: the
+/// same □ with no target takes the waypoint away.
+#[test]
+fn the_target_is_squares_spot_while_following() {
+    crate::settings::testing::reset(false);
+    let size = (1280, 720);
+    let mut m = up(size);
+    let merchant = [25475.9, 15704.6];
+    m.target = Some(merchant);
+    tap(&mut m);
+    assert_eq!(m.waypoint(0), Some(merchant), "on the target");
+    tap(&mut m);
+    assert_eq!(m.waypoint(0), None, "on it already: taken away");
+    tap(&mut m);
+    m.key(KEY_GROUP, true);
+    assert_eq!(m.take_group_ask(), Some(community::Spot { world: 0, at: merchant }), "G: the target's spot");
+    // another world mapped than the player's: no target on it
+    m.player_world = 2;
+    assert_eq!(m.target_spot(), None);
+    m.player_world = 0;
+    // panned: the middle
+    m.follow = false;
+    let there = [21000.0, 12000.0];
+    m.view = Some(View { center: there, ..m.view.unwrap() });
+    tap(&mut m);
+    assert_eq!(m.waypoint(0), Some(there), "panned: the middle, not the target");
+    m.key(KEY_GROUP, true);
+    assert_eq!(m.take_group_ask(), Some(community::Spot { world: 0, at: there }), "G panned: the middle");
+    // following again, the target out of view: as it was
+    m.follow = true;
+    m.view = Some(View { center: FREEPORT, ..m.view.unwrap() });
+    m.target = None;
+    tap(&mut m);
+    assert_eq!(m.waypoint(0), None, "the control: no target, taken away");
+    m.key(KEY_GROUP, true);
+    assert_eq!(m.take_group_ask(), Some(community::Spot { world: 0, at: FREEPORT }), "G, no target: the player's own place");
+}
+
+/// □ held `group_waypoint::HOLD` seconds of the clock asks the group to be
+/// told of □'s spot, once, the same in seconds at 30 frames a second and at
+/// 165 (by the clock, not the frames); a repeat while it is down is nothing,
+/// and its release is nothing. The control: let go before the hold it is
+/// □'s own waypoint, and the group is asked nothing.
+#[test]
+fn square_held_is_the_groups() {
+    crate::settings::testing::reset(false);
+    let size = (1280, 720);
+    for hz in [30u32, 165] {
+        let mut m = up(size);
+        let dt = 1.0 / hz as f32;
+        m.key(key::SQUARE, true);
+        let (mut asked, mut frames) = (None, 0);
+        while asked.is_none() && frames < 1000 {
+            m.key(key::SQUARE, true);
+            m.hold(dt);
+            frames += 1;
+            asked = m.take_group_ask();
+        }
+        let secs = frames as f32 * dt;
+        assert!(secs >= group_waypoint::HOLD - 1e-4 && secs < group_waypoint::HOLD + dt * 1.5, "{hz} Hz: {secs} s");
+        assert_eq!(asked, Some(community::Spot { world: 0, at: FREEPORT }), "following, no target: the player's own place");
+        m.hold(dt);
+        m.key(key::SQUARE, false);
+        assert_eq!((m.take_group_ask(), m.waypoint(0)), (None, None), "asked once; the release nothing");
+    }
+    // the control: panned, let go a little before the hold
+    let mut m = up(size);
+    m.follow = false;
+    m.key(key::SQUARE, true);
+    m.hold(group_waypoint::HOLD - 0.05);
+    m.key(key::SQUARE, false);
+    assert_eq!((m.take_group_ask(), m.waypoint(0)), (None, Some(FREEPORT)), "□'s own waypoint at the middle");
+    // a map closed while □ is down forgets it
+    m.key(key::SQUARE, true);
+    m.close();
+    m.show();
+    m.hold(group_waypoint::HOLD * 2.0);
+    assert_eq!(m.take_group_ask(), None, "closed: the hold forgotten");
+}
+
+/// A click with Shift held asks the group to be told of the spot under it
+/// (a coach's own spot on its horseshoe), and leaves the player's waypoint
+/// be; a finger held still asks the same (`long_press`), but not on the
+/// chrome's buttons; off the world's edge nothing. The control: the same
+/// click without Shift puts the player's own.
+#[test]
+fn shift_and_a_click_or_a_finger_held_tell_the_group() {
+    use super::markers_data::COACHES;
+    crate::settings::testing::reset(false);
+    let size = (1280, 720);
+    let mut m = up(size);
+    let v = m.view.unwrap();
+    m.shift = true;
+    assert!(m.click([900.0, 300.0], false));
+    let asked = m.take_group_ask().expect("asked");
+    assert!(near(asked.at, v.to_world(size, [900.0, 300.0]), 1e-3) && asked.world == 0, "{asked:?}");
+    assert_eq!(m.waypoint(0), None, "the player's own left be");
+    let ronks = COACHES.iter().position(|c| c.coachman == "Coachman Ronks").unwrap();
+    let p = v.to_window(size, COACHES[ronks].at);
+    assert!(m.click([p[0] + 2.0, p[1]], false));
+    assert_eq!(m.take_group_ask().map(|s| s.at), Some(COACHES[ronks].at), "the coach's own spot");
+    m.shift = false;
+    assert!(m.click([900.0, 300.0], false));
+    assert_eq!(m.take_group_ask(), None, "the control: no Shift");
+    assert!(m.waypoint(0).is_some(), "the control: the player's own");
+    // a finger held still, on a corner with no marker
+    assert!(m.long_press([40.0, 680.0]));
+    assert!(near(m.take_group_ask().unwrap().at, v.to_world(size, [40.0, 680.0]), 1e-3));
+    m.buttons = vec![([600, 10, 640, 30], key::TRIANGLE)];
+    assert!(!m.long_press(render::ui::window_from_frame(size, [620.0, 20.0])), "on a button");
+    assert_eq!(m.take_group_ask(), None);
+    let mut far = up(size);
+    far.view = Some(View { center: [2000.0, 0.0], scale: 10.0 });
+    far.shift = true;
+    assert!(!far.click([10.0, 10.0], false), "past the world's edge");
+    assert_eq!(far.take_group_ask(), None);
+}
+
+/// The group's waypoint goes once the player reaches it, but only after
+/// being away from it (the sender's own, put where they stand, stays until
+/// they leave and come back); a click on its diamond takes it away; □
+/// following the player takes the player's own first, then the group's.
+/// The controls: just outside `ARRIVE` it stays; in another world it stays.
+#[test]
+fn the_groups_waypoint_goes_when_reached_or_taken_away() {
+    use group_waypoint::GroupMark;
+    crate::settings::testing::reset(false);
+    let size = (1280, 720);
+    let mut m = up(size);
+    let at = [20000.0, 14000.0];
+    let mark = || GroupMark { world: 0, at, from: "Bob".into() };
+    let player = |x: f32| Some(([x, 50.0, at[1]], 0.0));
+    m.set_group_waypoint(mark());
+    m.arrive(player(at[0] + 3.0), 0);
+    assert!(m.group_mark().is_some(), "put where the player stands: stays");
+    m.arrive(player(at[0] + ARRIVE + 1.0), 0);
+    assert!(m.group_mark().is_some(), "the control: just outside");
+    m.arrive(player(at[0] + 3.0), 1);
+    assert!(m.group_mark().is_some(), "the control: in another world");
+    m.arrive(player(at[0] + 3.0), 0);
+    assert_eq!(m.group_mark(), None, "away, then back: reached");
+    // a click on it
+    m.set_group_waypoint(mark());
+    let p = m.view.unwrap().to_window(size, at);
+    assert!(m.click([p[0] + 1.0, p[1]], false));
+    assert_eq!((m.group_mark(), m.waypoint(0)), (None, None), "taken away, none put");
+    // □ following: the player's own first, then the group's
+    m.set_group_waypoint(mark());
+    m.click([900.0, 300.0], false);
+    tap(&mut m);
+    assert!(m.waypoint(0).is_none() && m.group_mark().is_some(), "the player's own first");
+    tap(&mut m);
+    assert_eq!(m.group_mark(), None, "then the group's");
+    assert!(!m.describe().contains("group's waypoint"), "{}", m.describe());
+    m.set_group_waypoint(mark());
+    assert!(m.describe().contains("the group's waypoint from Bob in world 0 at (20000, 14000)"), "{}", m.describe());
+    // gone with its sender
+    m.keep_group_waypoint(true, |n| n == "Bob");
+    assert!(m.group_mark().is_some(), "the control: Bob in the group");
+    m.keep_group_waypoint(true, |n| n == "Dairine");
+    assert_eq!(m.group_mark(), None, "Bob out of it");
+}
+
+/// Suggest takes the spot the player chose last (`suggest`): a waypoint put
+/// since the map opened over the pointer; the pointer over the target; the
+/// target, while the map follows the player, over a waypoint from before,
+/// saying it is the target's (`take_suggest_target`); a waypoint from before
+/// over the middle. The control: no target, the waypoint from before.
+#[test]
+fn suggest_takes_the_spot_chosen_last() {
+    crate::settings::testing::reset(false);
+    let size = (1280, 720);
+    let mut m = up(size);
+    let v = m.view.unwrap();
+    let merchant = [25475.9, 15704.6];
+    m.target = Some(merchant);
+    assert!(m.click([40.0, 680.0], false));
+    let w = m.waypoint(0).unwrap();
+    m.mouse_moved([300.0, 200.0]);
+    m.key(key::L3, true);
+    assert_eq!((m.take_suggest().map(|s| s.at), m.take_suggest_target()), (Some(w), false), "this time's waypoint");
+    // opened again: the waypoint is from before
+    m.close();
+    m.show();
+    m.mouse_moved([300.0, 200.0]);
+    m.key(key::L3, true);
+    let s = m.take_suggest().unwrap();
+    assert!(near(s.at, v.to_world(size, [300.0, 200.0]), 1e-3) && !m.take_suggest_target(), "the pointer over the target");
+    m.let_go();
+    m.key(key::L3, true);
+    assert_eq!((m.take_suggest().map(|s| s.at), m.take_suggest_target()), (Some(merchant), true), "the target over the old waypoint");
+    m.target = None;
+    m.key(key::L3, true);
+    assert_eq!((m.take_suggest().map(|s| s.at), m.take_suggest_target()), (Some(w), false), "the control: no target, the old waypoint");
+    m.set_waypoint(0, None);
+    m.key(key::L3, true);
+    assert_eq!(m.take_suggest().map(|s| s.at), Some(v.center), "nothing chosen: the middle");
+}
+
+/// The group's line names worlds as the map's title does (`gWorldInfo`'s
+/// word, else the mapped world's file) and reads them back in any case;
+/// the area named when the map has one. The control: a world it cannot
+/// name is none.
+#[test]
+fn the_groups_line_names_the_world() {
+    let mut m = up((1280, 720));
+    let words = vi::strtab::StringTable::parse(b"English\r\nTunaria\r\nOdus").unwrap();
+    m.names.names[0] = Some(2);
+    m.names.names[2] = Some(3);
+    assert_eq!(m.world_title(2, Some(&words)).as_deref(), Some("Odus"));
+    assert_eq!(m.world_named("odus", Some(&words)), Some(2));
+    assert_eq!(m.world_named("TUNARIA", Some(&words)), Some(0));
+    assert_eq!(m.world_named("Tunaria", None), Some(0), "no words: the mapped world's file");
+    assert_eq!(m.world_named("Faydwer", Some(&words)), None, "the control");
+    let line = m.group_line(community::Spot { world: 2, at: [1234.4, -5.0] }, Some(&words)).unwrap();
+    assert_eq!(line, "Waypoint in Odus at x 1234, z -5");
+    assert_eq!(m.group_line(community::Spot { world: 4, at: [1.0, 2.0] }, Some(&words)), None, "a world with no name");
 }
 
 /// The waypoints are kept as they change, a line a world, this window's own

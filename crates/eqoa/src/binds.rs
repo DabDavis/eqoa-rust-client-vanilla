@@ -127,6 +127,7 @@ pub const ROWS: &[Row] = &[
     row("map", "{421}", &["m"], Pad::None, "Again, or Escape, closes it."),
     row("map_in", "{421}: zoom in", &["=", "+"], Pad::None, ""),
     row("map_out", "{421}: zoom out", &["-", "_"], Pad::None, ""),
+    row("map_group_waypoint", "{421}: group waypoint", &["g"], Pad::None, "On the map, in a group: a waypoint for every member, said in the group's chat, where |s puts yours, else where you stand. Also |s held, or Shift+click."),
     row("group_invite", "Group: {86}", &["f5"], Pad::None, "Invites the target."),
     row("group_remove", "Group: {516}", &["f6"], Pad::None, "Takes the target out of the group."),
     row("group_disband", "Group: {529}", &["f7"], Pad::None, ""),
@@ -773,7 +774,7 @@ mod tests {
         for n in &names {
             assert!(default_row(n).is_some(), "{n:?} is in the dispatch and in no row");
         }
-        for n in ["escape", "backspace", "m", "space", "enter", "home", "+", "=", "pageup", "-", "_", "pagedown", "up", "w", "down", "s", "left", "a", "right", "d"] {
+        for n in ["escape", "backspace", "m", "space", "enter", "home", "+", "=", "pageup", "-", "_", "pagedown", "up", "w", "down", "s", "left", "a", "right", "d", "q", "g"] {
             assert!(crate::map::keyboard(n).is_some(), "{n} is the map's");
             assert!(default_row(n).is_some(), "the map's {n:?} is a row's");
         }
@@ -904,11 +905,11 @@ mod tests {
         assert_eq!(t.bind_key(clear, "q"), Moved::Swapped(talk));
         assert_eq!((t.key(clear), t.key(talk)), (Some("q"), Some("")), "Talk left with no key");
         assert_eq!(t.alias("q"), Alias::Button(bit::TRIANGLE));
-        assert_eq!(t.bind_key(clear, "g"), Moved::Freed(Some("q".into())));
-        assert_eq!((t.alias("g"), t.alias("q")), (Alias::Button(bit::TRIANGLE), Alias::Nothing));
+        assert_eq!(t.bind_key(clear, "v"), Moved::Freed(Some("q".into())));
+        assert_eq!((t.alias("v"), t.alias("q")), (Alias::Button(bit::TRIANGLE), Alias::Nothing));
         // from a key, onto another row's: that row takes the key it left
         assert_eq!(t.bind_key(clear, "e"), Moved::Swapped(use_));
-        assert_eq!(t.key(use_), Some("g"));
+        assert_eq!(t.key(use_), Some("v"));
         // a stick's row has keys; no row without keys or a button exists to refuse
         assert!(ROWS.iter().all(|r| !r.keys.is_empty() || matches!(r.pad, Pad::Button(_))));
     }

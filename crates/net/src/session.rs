@@ -46,6 +46,9 @@ impl Datagrams for Udp {
 pub const VERSION: u32 = 18;
 /// The expansion flags a retail Frontiers disc sends.
 pub const EXPANSION_FLAGS: u32 = 3;
+/// The group's chat lines' colour (0x069E: CLIENT's dispatcher adds them in
+/// (.5, .5, 1)).
+pub const GROUP_CHAT: [f32; 4] = [0.5, 0.5, 1.0, 1.0];
 /// go-eqoa-server's own, no retail message: what a client keeps in view, how
 /// many entity slots (`entity`) and how far, two u32s after the opcode, both
 /// ways. The server offers the most it fills and the farthest it looks once
@@ -338,9 +341,15 @@ pub enum Event {
     /// 0x00D9: the player's +0x2C.
     PlayerP2C(i32),
     /// A line for the chat log, in its colour (RGBA 0..1): 0x0A7A white,
-    /// 0x0A7B its own colour, 0x069E blue, 0x0758 (narrow) white, 0x00CE
-    /// (an error: "Tell Failed", an unknown command) red.
+    /// 0x0A7B its own colour, 0x0758 (narrow) white, 0x00CE (an error: "Tell
+    /// Failed", an unknown command) red.
     Chat(String, [f32; 4]),
+    /// 0x069E, the group's chat: a line for the chat log in `GROUP_CHAT`'s
+    /// blue, "<Name> tells the group: <text>" as the servers word it, and the
+    /// u32 before it (the sender's id as the server knows it; CLIENT reads
+    /// it and lets it go). Its own event, so what reads the group's lines
+    /// (the client's group waypoint) never takes another channel's.
+    GroupChat { from: u32, text: String },
     /// A state channel's full value (0x00-0x17 entities, 0x42 stats...).
     State { channel: u8, data: Vec<u8> },
     /// The ability list (each carries the list's token, `m_p2BB60`, which
@@ -1124,8 +1133,8 @@ impl Session {
                 ev.push(Event::Chat(text, [cr as f32 / 255.0, cg as f32 / 255.0, cb as f32 / 255.0, 1.0]));
             }
             0x069E => {
-                r.u32();
-                ev.push(Event::Chat(r.wide(1024), [0.5, 0.5, 1.0, 1.0]));
+                let from = r.u32();
+                ev.push(Event::GroupChat { from, text: r.wide(1024) });
             }
             0x0758 => ev.push(Event::Chat(String::from_utf8_lossy(&r.string(512)).into_owned(), [1.0; 4])),
             0x00B3 => {
@@ -1449,6 +1458,26 @@ mod tests {
         assert!(matches!(&ev[..], [Event::Chat(t, c)] if t == "Tell Failed" && *c == [1.0, 0.25, 0.25, 1.0]), "{ev:?}");
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, wide(0x0A7A, "hi"));
         assert!(matches!(&ev[..], [Event::Chat(t, c)] if t == "hi" && *c == [1.0; 4]), "{ev:?}");
+    }
+
+    // 0x069E, the group's chat (a u32, then the line), is its own event: what
+    // reads the group's lines never takes another channel's. The control: the
+    // same words on 0x0A7A are a plain chat line.
+    #[test]
+    fn a_group_line_is_its_own_event() {
+        let text = "Dairine tells the group: Waypoint in Tunaria at x 1, z 2";
+        let mut v = 0x069Eu16.to_le_bytes().to_vec();
+        v.extend(0x0001_4F51u32.to_le_bytes());
+        v.extend((text.encode_utf16().count() as u32).to_le_bytes());
+        v.extend(text.encode_utf16().flat_map(|c| c.to_le_bytes()));
+        let mut s = session();
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, v);
+        assert!(matches!(&ev[..], [Event::GroupChat { from: 0x0001_4F51, text: t }] if t == text), "{ev:?}");
+        let mut w = 0x0A7Au16.to_le_bytes().to_vec();
+        w.extend((text.encode_utf16().count() as u32).to_le_bytes());
+        w.extend(text.encode_utf16().flat_map(|c| c.to_le_bytes()));
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, w);
+        assert!(matches!(&ev[..], [Event::Chat(t, _)] if t == text), "the control: {ev:?}");
     }
 
     /// 0x0013 (`SetTime`) sets both clocks at the local timer's now, and the

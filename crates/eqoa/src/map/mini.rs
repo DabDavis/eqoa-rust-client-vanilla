@@ -13,7 +13,8 @@
 //! - the group in its compass colours;
 //! - the creatures and players in view, in their names' colours;
 //! - the target, ringed;
-//! - the waypoint, on the rim while it is farther than the minimap shows;
+//! - the waypoint, on the rim while it is farther than the minimap shows, and
+//!   the group's (`group_waypoint`, orange) the same way;
 //! - the map's XP camps and coaches (`markers`, with Map Markers on), as the
 //!   map marks them, smaller: not its coach routes (a line between two towns
 //!   thousands of units apart crosses 600 units of picture saying nothing of
@@ -367,6 +368,7 @@ impl Map {
         };
         let frame = self.frame;
         let waypoint = self.waypoints.get(&cx.world).copied();
+        let group_waypoint = self.group_waypoint(cx.world);
         let (Some(w), Some(l)) = (self.world.as_mut(), self.layers.as_mut()) else {
             self.mini.wanted.clear();
             return;
@@ -493,13 +495,15 @@ impl Map {
                 square_dot(ui, white, cut, f(q), r / px_line, o / px_line, super::member_color(*index));
             }
         }
-        // the waypoint, on the rim while it is farther than the minimap shows
-        if let Some(at) = waypoint {
+        // the waypoints, on the rim while farther than the minimap shows: the
+        // group's (`group_waypoint`) under the player's own
+        for (at, color) in [(group_waypoint, super::group_waypoint::COLOR), (waypoint, WAYPOINT)] {
+            let Some(at) = at else { continue };
             let (r, o) = view::waypoint_radius(size);
             let (r, o) = (r * 0.8, o);
             let edge = [inside[0] + r + o, inside[1] + r + o, inside[2] - r - o, inside[3] - r - o];
             let q = to_rim(mid, to_px(at), edge);
-            for (rr, color) in [(r + o * 1.5, OUTLINE), (r, WAYPOINT)] {
+            for (rr, color) in [(r + o * 1.5, OUTLINE), (r, color)] {
                 plain(ui, white, diamond(q, rr).map(f), color, cut);
             }
         }

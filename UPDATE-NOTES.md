@@ -42,6 +42,30 @@ is put on the page by `.github/workflows/notes.yml`.
   straight ahead.
 - Creatures you can only see because the window is wide can still be picked.
 
+## 2026-10-27 · A waypoint for your whole group
+- On the map, hold □ (or Q) for a moment to put a waypoint for your whole group. Everyone in
+  your group playing this client sees it on their map, minimap and compass, in orange, with
+  your name under it on the map. A quick press of □ still puts your own magenta waypoint.
+- On a keyboard G does it at once, or hold Shift and click a spot; on a touch screen hold your
+  finger on the spot. G can be moved on the Controls page.
+- It goes where □ would put yours: the middle of the map once you have moved the map, else on
+  your target, else where you stand, to call the group to you.
+- It reaches your group as a line in the group's chat, so it works on any server and a player
+  on a PS2 reads it too: "Dairine tells the group: Waypoint in Tunaria at x 24611, z 15502 near
+  Freeport". One every few seconds.
+- The group's waypoint goes when you reach it, when the one who put it leaves the group or you
+  do, or when you click it on the map. A newer one replaces it.
+
+## 2026-10-27 · Waypoints and map suggestions on your target
+- With someone targeted and in view (a merchant, a quest giver, a creature), □ (Q) on the map
+  puts your waypoint right on them; press it again to take it away. A white ring shows your
+  target on the map.
+- Suggest (N, or L3 on a controller) takes your target's spot too, with their name already
+  typed in for you to keep or change.
+- What you choose on the map still comes first: once you move the map, □ goes in its middle,
+  and Suggest takes the spot you point at or a waypoint you just put. With no target, both
+  work as before.
+
 ## 2026-10-27 · No more creatures fighting you while lying dead
 - A creature or a pet could come into view lying on the ground as if dead, then run after
   you and fight like that. It happened where many look alike, in a camp of one kind: when

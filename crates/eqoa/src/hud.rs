@@ -55,6 +55,9 @@ pub struct HudState {
     /// The map's waypoint in this world (x, z): a dot on the compass's rim
     /// at any distance, the client's own (`map::Map::click`).
     pub waypoint: Option<[f32; 2]>,
+    /// The group's waypoint in this world (`map::group_waypoint`), the same
+    /// way in its own colour.
+    pub group_waypoint: Option<[f32; 2]>,
     /// The minimap is up (`map::mini`, drawn by the map's own layer under
     /// the HUD): its place noted for a pointer, which opens the map there.
     pub minimap: bool,
@@ -490,7 +493,8 @@ impl Hud {
     /// index's colour (1 green, 2 blue, 3 cyan, the rest yellow); the
     /// target's is off for the last 150 ms of every 1.5 s, counted from the
     /// first call with the art. The map's waypoint goes on the rim the same
-    /// way, magenta, at any distance (`waypoint_point`).
+    /// way, magenta, at any distance (`waypoint_point`), and the group's
+    /// waypoint in its orange under it.
     fn draw_patch(&mut self, ui: &mut UiRaster, s: &HudState) {
         let Some(tex) = ui.assets.surface(icon_id("Patch_Art")) else { return };
         let start = *self.patch_start.get_or_insert(s.time_ms);
@@ -521,7 +525,8 @@ impl Hud {
                 clip: None,
             });
         }
-        if let Some(p) = s.waypoint.map(|w| waypoint_point(s.heading, s.camera, w)) {
+        for (w, color) in [(s.group_waypoint, crate::map::group_waypoint::COLOR), (s.waypoint, crate::map::WAYPOINT)] {
+            let Some(p) = w.map(|w| waypoint_point(s.heading, s.camera, w)) else { continue };
             let (hx, hy) = ((size[0] >> 1) as f32, (size[1] >> 1) as f32);
             let (u0, v0) = (uv[0] / tex_size, uv[1] / tex_size);
             let (u1, v1) = ((uv[0] + size[0] as f32) / tex_size, (uv[1] + size[1] as f32) / tex_size);
@@ -530,7 +535,7 @@ impl Hud {
                 blend: 0,
                 pos: [[p[0] - hx, p[1] - hy], [p[0] + hx, p[1] - hy], [p[0] + hx, p[1] + hy], [p[0] - hx, p[1] + hy]],
                 uv: [[u0, v0], [u1, v0], [u1, v1], [u0, v1]],
-                color: crate::map::WAYPOINT,
+                color,
                 clip: None,
             });
         }

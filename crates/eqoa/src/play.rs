@@ -18,6 +18,8 @@ mod mail;
 mod support;
 #[path = "mapsuggest.rs"]
 mod mapsuggest;
+#[path = "groupmark.rs"]
+mod groupmark;
 
 use crate::walker::{Placing, Spawn, Walker};
 use esf::Library;
@@ -2378,6 +2380,8 @@ impl Play {
                     self.disconnected = Some(r);
                 }
                 Event::Chat(text, color) => self.server_line(text, color),
+                // the group's chat: the group's waypoint read too (`groupmark`)
+                Event::GroupChat { text, .. } => self.group_line(text),
                 // CastingCombat (0x00B1) and Msg0776: an effect to play; one
                 // the player cast itself (0x0776) it has already played.
                 Event::Opcode { op, data } => {
@@ -6871,8 +6875,11 @@ impl Play {
             self.map.close();
         }
         // a community marker the map asked to suggest: the edit box for its
-        // name (`mapsuggest`)
+        // name (`mapsuggest`); the group's waypoint asked, said to the group,
+        // and kept while its sender is in the group (`groupmark`)
         self.take_map_suggest();
+        self.take_map_group_waypoint();
+        self.keep_group_waypoint();
         let now = self.session.now();
         self.guide_frame(walker, now);
         let guide_on = self.guide_on(now);
@@ -6900,6 +6907,8 @@ impl Play {
             world: self.player.world as i32,
             origin,
             group,
+            in_group: self.group.in_group && self.group.count() > 0,
+            target: self.actor_pos(self.target).filter(|_| Some(self.target) != me).map(|t| [t[0], t[2]]),
             sticks,
             keyboard: self.keyboard,
             words: self.words.as_ref(),
@@ -7205,6 +7214,7 @@ impl Play {
             camera: walker.eye.position.to_array(),
             time_ms,
             waypoint: self.map.waypoint(self.player.world as i32),
+            group_waypoint: self.map.group_waypoint(self.player.world as i32),
             minimap: self.minimap_up(),
             tracker: self.tracker_quests(),
             stats_box: self.stats_box_view(),
