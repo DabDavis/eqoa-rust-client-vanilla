@@ -435,7 +435,17 @@ in the densest place found, a dust storm in zone 16 (3 volumes, 1,330
 fans), most of it the EE's arithmetic placing four corners a fan
 (`Matrix44::apply`, now four lanes at a time: it was 1.4 ms); in a page on
 WebGL2, 0.25 ms at the local server's docks (2 volumes, 75 fans, 5 boids).
-`EQOA_FX=0` (`?nofx`) leaves them out, for comparing.
+`EQOA_FX=0` (`?nofx`) leaves them out, for comparing. On the GPU
+(`fx::bench::fans_cover`, `EQOA_FX_SPOT=<world>,<x>,<y>,<z>,<hour>`: a spot's
+fans laid on a 1000x1000 screen from a camera 3.3 behind at 15 degrees, the
+ground hiding what is under it, then drawn over the ground's depth): at
+Klick'Anon after midnight (F3 crashes 20261026-233805/6: two 50 x 3.7 x 50
+night-fog boxes of 150 puffs each, 298 fans, which is no cap) 1.0 to 1.9
+screens of fragments, the deepest pixel under 40 puffs, 0.10 ms on the RX 580
+(1.3 whole-screen blended layers); Odus's same pair at most 3.7 screens, 0.19
+ms; the dust storm's 1,325 fans 1.8 screens. The console draws the same fans
+(`VIEffectVolume`'s counts, fades and hours; `VIRFan` drops only the back face
+and what lies wholly outside a clip plane), into a 640x448 frame.
 
 ### The game's frame at any display rate
 
