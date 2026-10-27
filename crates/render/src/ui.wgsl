@@ -35,9 +35,13 @@ fn vs_main(v: VsIn) -> VsOut {
 // always the quad's, and one inside it is the one it was. A rectangle of no
 // width (a solid fill's single uv) keeps the texel at its uv.
 fn own(i: VsOut) -> vec2<f32> {
+    return keep(i.uv, i.rect);
+}
+
+fn keep(uv: vec2<f32>, rect: vec4<f32>) -> vec2<f32> {
     let half = vec2<f32>(0.5) / vec2<f32>(textureDimensions(tex));
-    let lo = i.rect.xy + half;
-    return clamp(i.uv, lo, max(i.rect.zw - half, lo));
+    let lo = rect.xy + half;
+    return clamp(uv, lo, max(rect.zw - half, lo));
 }
 
 @fragment
@@ -99,6 +103,60 @@ fn fs_smooth(i: VsOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_smooth_tested(i: VsOut) -> @location(0) vec4<f32> {
     let c = textureSample(tex, samp, i.uv) * i.color;
+    if (c.a < 0.5) {
+        discard;
+    }
+    return c;
+}
+
+// The other textures' quad under the options' HUD Sharp (`HudFilter`): the
+// fonts' Sharp, kept to the quad's own texels (`keep`: an atlas packs its
+// cells edge to edge, and a mix past a cell's edge would take its
+// neighbour's). Along an axis the quad's rectangle is less than a texel
+// across (a solid fill's single uv), the texel the nearest takes there,
+// whole.
+fn art_sharp(i: VsOut) -> vec2<f32> {
+    let size = vec2<f32>(textureDimensions(tex));
+    let s = keep(sharp(i), i.rect);
+    let thin = (i.rect.zw - i.rect.xy) * size < vec2<f32>(1.0);
+    return select(s, (floor(s * size) + 0.5) / size, thin);
+}
+
+// The texel at `p`, wrapped as the layer's repeat wraps it.
+fn texel_at(p: vec2<i32>, size: vec2<i32>) -> vec4<f32> {
+    return textureLoad(tex, ((p % size) + size) % size, 0);
+}
+
+// The texels round `uv` mixed as the filter mixes them, each one's colour
+// weighted by its alpha: a clear texel gives an edge's mix its clearness and
+// none of its colour. The game's art keeps whatever colour its clear texels
+// have (a font's are its ink's, `ui::pack`), and a clear black one mixed in
+// as it is darkened the edge beside it. Where all four are clear, their
+// colours mixed as they are (only an added blend reads them).
+fn mix_clear(uv: vec2<f32>) -> vec4<f32> {
+    let size = vec2<i32>(textureDimensions(tex));
+    let t = uv * vec2<f32>(size) - 0.5;
+    let p = vec2<i32>(floor(t));
+    let f = t - floor(t);
+    let a = texel_at(p, size);
+    let b = texel_at(p + vec2<i32>(1, 0), size);
+    let c = texel_at(p + vec2<i32>(0, 1), size);
+    let d = texel_at(p + vec2<i32>(1, 1), size);
+    let pre = mix(mix(vec4<f32>(a.rgb * a.a, a.a), vec4<f32>(b.rgb * b.a, b.a), f.x), mix(vec4<f32>(c.rgb * c.a, c.a), vec4<f32>(d.rgb * d.a, d.a), f.x), f.y);
+    if (pre.a <= 0.0) {
+        return vec4<f32>(mix(mix(a.rgb, b.rgb, f.x), mix(c.rgb, d.rgb, f.x), f.y), 0.0);
+    }
+    return vec4<f32>(pre.rgb / pre.a, pre.a);
+}
+
+@fragment
+fn fs_art_sharp(i: VsOut) -> @location(0) vec4<f32> {
+    return mix_clear(art_sharp(i)) * i.color;
+}
+
+@fragment
+fn fs_art_sharp_tested(i: VsOut) -> @location(0) vec4<f32> {
+    let c = mix_clear(art_sharp(i)) * i.color;
     if (c.a < 0.5) {
         discard;
     }

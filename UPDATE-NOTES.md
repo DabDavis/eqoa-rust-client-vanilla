@@ -5,6 +5,20 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-27 · Render Scale, and a sharper HUD and textures if you want them
+- Options > Extended > Video > Render Scale: x2 or x4 draws the whole picture two or four
+  times larger and shrinks it to fit your window, which smooths jagged edges, leaves, fences
+  and thin things. x1, the default, is as before. x4 needs a good graphics card, and on a big
+  window it draws at the most your card allows (the page tells you when it does).
+- Options > Extended > UI > HUD: Sharp draws the HUD's and the windows' art with every pixel
+  the same size at any window size, the way Text: Sharp draws the letters. Nearest, the
+  default, is the game's look.
+- Options > Extended > World > Textures: Crisp draws the world's walls, props, characters
+  and plants sharp, each pixel of their textures a flat square. The ground, the sky, water
+  and glows stay smooth, so roads still blend into grass and snow. Smooth, the default, is
+  the game's look.
+- Text (Sharp or Smooth) is on the UI page now, beside HUD.
+
 ## 2026-10-27 · The map, the minimap and the extra bars are gone
 - This client keeps to the game: the additions it never had are taken out. Gone are the map
   (M) with its waypoints, group waypoints, XP camps, coaches, routes and community markers, the

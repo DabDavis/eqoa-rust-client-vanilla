@@ -21,26 +21,35 @@
 //!   slider, `settings::curve`), Frame Rate (30, 60 or the display's,
 //!   `settings::frame_due`), VSync (natively: a frame shown only at the
 //!   display's refresh, or at once; `settings::vsync`, the surface's present
-//!   mode in `viewer`), Loading Screens (Longer: a long trip's loading screen
-//!   up at least a second, as a PS2's disc read keeps it; Instant: down as
-//!   soon as the place is in, `loading::Screen::hold_far`) and Text (Sharp or
-//!   Smooth: the game's font scaled to the window with even strokes, or
-//!   filtered as the PS2 filters it, `render::ui::TextFilter`);
+//!   mode in `viewer`), Render Scale (x1, the game's picture at the window's
+//!   size; x2 or x4: the whole frame drawn that many times larger each way
+//!   and averaged down, `render::scale`, at less where the window is too
+//!   large for it, which beside Back it then says) and Loading Screens
+//!   (Longer: a long trip's loading screen up at least a second, as a PS2's
+//!   disc read keeps it; Instant: down as soon as the place is in,
+//!   `loading::Screen::hold_far`);
 //! - World (the user's, 2026-10-25): Fog (a slider: the game's distance fog
 //!   and far plane in the middle, off at the left, thicker to the right,
 //!   `fog`), Mipmaps (On, the game's: the textures' mip levels sampled by
 //!   depth as the GS samples them, `render::gs_lod_k`; Off: the base level
-//!   alone, `render::set_mipmaps`), Flora (On, the game's: the plants it
+//!   alone, `render::set_mipmaps`), Textures (Smooth, the game's: the GS's
+//!   filter; Crisp: the solid textures' colour as flat texels, the ground,
+//!   the sky, what blends or scrolls and the alpha kept smooth,
+//!   `render::set_crisp`), Flora (On, the game's: the plants it
 //!   grows round the camera, `flora`; Off: none), Environment (On, the
 //!   game's: the effect volumes, ground fog, dust, leaves, light shafts and
 //!   flocks, `fx`; Off: none) and Art (Frontiers' or the 2002 disc's, `era`,
 //!   as F9 swaps it: drawn as it moves, the 2002 disc asked for the first
 //!   time);
 //! - UI: Ability Bars (the game's 2, or 3 or 4: the HUD's quick menus and
-//!   the spell book's slots, `hudmenu`) and Update Notices (one setting for
+//!   the spell book's slots, `hudmenu`), Update Notices (one setting for
 //!   every window: off, the game never asks to restart into a newer build,
 //!   which starts the next time the game does; `update::asks`, and a page's
-//!   Reload notice, `web/main.js`);
+//!   Reload notice, `web/main.js`), Text (Sharp or Smooth: the game's font
+//!   scaled to the window with even strokes, or filtered as the PS2 filters
+//!   it, `render::ui::TextFilter`) and HUD (Nearest, the game's, or Sharp:
+//!   the 2D layer's other textures scaled with every texel as wide as every
+//!   other, `render::ui::HudFilter`);
 //! - Controller: Controller Focus (which controllers this window reads:
 //!   Auto, Window, Pad 1 to 4 or Off, `input::pick`, kept for each window of
 //!   the client open, `multibox`; what it reads now is said beside Back) and
@@ -606,6 +615,19 @@ impl WndOptions {
                     30 => c.text = c.text.other(),
                     // Loading Screens: the next long trip's (`loading`)
                     38 => c.loading_longer = !c.loading_longer,
+                    // Render Scale: the frame from the next one (`viewer`,
+                    // `render::scale`), round 1, 2 and 4
+                    39 => {
+                        let all = crate::settings::RENDER_SCALES;
+                        let at = all.iter().position(|&k| k == c.render_scale).unwrap_or(0);
+                        c.render_scale = all[(at + if d < 0 { all.len() - 1 } else { 1 }) % all.len()];
+                    }
+                    // HUD: every texture of the 2D layer but the fonts from
+                    // the next frame (`viewer`, `render::ui::set_hud_filter`)
+                    40 => c.hud = c.hud.other(),
+                    // Textures: the world's from the next frame (`viewer`,
+                    // `render::set_crisp`)
+                    41 => c.crisp = !c.crisp,
                     // Mipmaps: every texture's levels from the next frame
                     // (`viewer`, `render::set_mipmaps`)
                     35 => c.mipmaps = !c.mipmaps,
@@ -1026,6 +1048,10 @@ impl WndOptions {
         match CATEGORIES[c].note {
             Note::Reads => Some(crate::input::reads()),
             Note::Server => self.server_note.clone().filter(|_| matches!(self.item, 23 | 24)),
+            Note::Scale => {
+                let asked = crate::settings::client().render_scale as u32;
+                scale_note(asked, render::scale::would_draw(asked)).filter(|_| self.item == 39)
+            }
             Note::Output if cfg!(target_arch = "wasm32") => None,
             Note::Output => Some(match crate::audio::playing() {
                 Some(d) => format!("Plays on {d}"),
@@ -1045,7 +1071,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 25] = [
+const EXTENDED_ITEMS: [(i32, &str); 28] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1071,6 +1097,9 @@ const EXTENDED_ITEMS: [(i32, &str); 25] = [
     (36, "Flora"),
     (37, "Environment"),
     (38, "Loading Screens"),
+    (39, "Render Scale"),
+    (40, "HUD"),
+    (41, "Textures"),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1082,6 +1111,9 @@ enum Note {
     /// what this server gives (`WndOptions::server_note`), while NPC/PC
     /// Display or Distance is chosen
     Server,
+    /// the scale the frame is drawn at, while Render Scale is chosen and the
+    /// window is too large for the one asked (`render::scale::fit`)
+    Scale,
     /// where the sound plays now (`audio::playing`), natively
     Output,
 }
@@ -1097,9 +1129,9 @@ struct Category {
 /// Extended's categories, in its menu's order (the user's: "Extended, then
 /// Video, UI, Controller, etc."), each a page of `PAGE_MOST` rows at most.
 const CATEGORIES: [Category; 7] = [
-    Category { name: "Video", items: VIDEO, note: Note::None },
-    Category { name: "World", items: &[20, 35, 36, 37, 25], note: Note::None },
-    Category { name: "UI", items: &[22, 29], note: Note::None },
+    Category { name: "Video", items: VIDEO, note: Note::Scale },
+    Category { name: "World", items: &[20, 35, 41, 36, 37, 25], note: Note::None },
+    Category { name: "UI", items: &[22, 29, 30, 40], note: Note::None },
     Category { name: "Controller", items: &[16, 19], note: Note::Reads },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
     Category { name: "Characters", items: &[12, 23, 24, 27, 34], note: Note::Server },
@@ -1108,12 +1140,12 @@ const CATEGORIES: [Category; 7] = [
 
 /// Video's rows: natively Display first (F3 20261024-201507: full screen was
 /// F11's alone); a page's full screen is the browser's. Fog and Mipmaps went
-/// to World with Art (the user's, 2026-10-25); Loading Screens and Text came
-/// from UI.
+/// to World with Art (the user's, 2026-10-25); Loading Screens came from UI,
+/// and Text went back to UI beside HUD when Render Scale came (2026-10-27).
 #[cfg(not(target_arch = "wasm32"))]
-const VIDEO: &[i32] = &[33, 13, 14, 26, 38, 30];
+const VIDEO: &[i32] = &[33, 13, 14, 26, 39, 38];
 #[cfg(target_arch = "wasm32")]
-const VIDEO: &[i32] = &[13, 14, 26, 38, 30];
+const VIDEO: &[i32] = &[13, 14, 26, 39, 38];
 
 /// Sound's rows: natively Output Device after Sound in Background; a page
 /// plays where the browser does.
@@ -1189,6 +1221,12 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         36 => on_off(c.flora),
         37 => on_off(c.environment),
         38 => wide(if c.loading_longer { "Longer" } else { "Instant" }),
+        39 => wide(&format!("x{}", c.render_scale)),
+        40 => wide(match c.hud {
+            render::ui::HudFilter::Nearest => "Nearest",
+            render::ui::HudFilter::Sharp => "Sharp",
+        }),
+        41 => wide(if c.crisp { "Crisp" } else { "Smooth" }),
         30 => wide(match c.text {
             render::ui::TextFilter::Sharp => "Sharp",
             render::ui::TextFilter::Smooth => "Smooth",
@@ -1197,6 +1235,13 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         33 => wide(if crate::display::full() { "Full Screen" } else { "Window" }),
         _ => return None,
     })
+}
+
+/// What Video's page says beside Back while Render Scale is chosen: the
+/// scale the frame is drawn at, when that is less than the one asked (the
+/// window too large for it, `render::scale::fit`).
+fn scale_note(asked: u32, drawn: u32) -> Option<String> {
+    (drawn < asked).then(|| format!("Drawn at x{drawn} at this size"))
 }
 
 /// Output Device's value for the system's default ("System Default" is too
@@ -1420,7 +1465,7 @@ mod tests {
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(cues.is_empty(), "left and right are nothing on the categories: {cues:?}");
         assert_eq!(settings::client(), settings::ClientOptions::default());
-        // Video: Display, Brightness, Frame Rate, VSync
+        // Video: Display, Brightness, Frame Rate, VSync, Render Scale, Loading Screens
         press(&mut w, &mut o, key::CROSS, &mut cues);
         assert_eq!((w.page, w.cat, w.row, w.item), (3, Some(0), 0, 33), "Video, on Display");
         assert_eq!(cues.last(), Some(&8));
@@ -1458,6 +1503,19 @@ mod tests {
         assert!(settings::vsync(), "and back: two values");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.item, 39, "Render Scale");
+        assert_eq!((settings::client().render_scale, value_text(&vui, 39)), (1, Some(wide("x1"))), "x1, the game's picture as drawn");
+        for want in [2, 4, 1] {
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
+            assert_eq!((settings::client().render_scale, cues.last()), (want, Some(&11)), "round 1, 2 and 4");
+        }
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert_eq!((settings::client().render_scale, value_text(&vui, 39)), (4, Some(wide("x4"))), "and the other way");
+        assert_eq!(w.page_note(0), None, "drawn at the scale asked: nothing said");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert_eq!(settings::client().render_scale, 1);
+        press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!(w.item, 38, "Loading Screens");
         assert!(settings::loading_longer(), "Longer, the default: a long trip's screen held");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
@@ -1465,17 +1523,10 @@ mod tests {
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(settings::loading_longer(), "and back: two values");
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!(w.item, 30, "Text");
-        assert_eq!(settings::client().text, render::ui::TextFilter::Sharp, "Sharp, the default");
-        press(&mut w, &mut o, key::RIGHT, &mut cues);
-        assert_eq!((settings::client().text, cues.last()), (render::ui::TextFilter::Smooth, Some(&11)), "Smooth");
-        press(&mut w, &mut o, key::LEFT, &mut cues);
-        assert_eq!(settings::client().text, render::ui::TextFilter::Sharp, "and back: two values");
-        press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!((w.row, cues.last()), (5, Some(&9)), "Video's last row (six, a page's most)");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!((w.page, w.cat, w.cat_sel, w.item), (3, None, 0, -1), "back to the categories, Video still lit");
-        // World: Fog, Mipmaps, Flora, Environment, Art
+        // World: Fog, Mipmaps, Textures, Flora, Environment, Art
         press(&mut w, &mut o, key::DOWN, &mut cues);
         press(&mut w, &mut o, key::CROSS, &mut cues);
         assert_eq!((w.cat, w.item), (Some(1), 20), "World, Fog");
@@ -1502,6 +1553,13 @@ mod tests {
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(settings::client().mipmaps, "and back: two values");
         press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.item, 41, "Textures");
+        assert_eq!((settings::client().crisp, value_text(&vui, 41)), (false, Some(wide("Smooth"))), "Smooth, the game's: off by default");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::client().crisp, value_text(&vui, 41), cues.last()), (true, Some(wide("Crisp")), Some(&11)), "Crisp");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(!settings::client().crisp, "and back: two values");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!(w.item, 36, "Flora");
         assert!(settings::client().flora, "on: the game's");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
@@ -1523,10 +1581,10 @@ mod tests {
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert_eq!(settings::art(), esf::Era::Frontiers, "and back: two values");
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (4, Some(&9)), "World's last row");
+        assert_eq!((w.row, cues.last()), (5, Some(&9)), "World's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!((w.page, w.cat, w.cat_sel, w.item), (3, None, 1, -1), "back to the categories, World still lit");
-        // UI: Ability Bars, Update Notices
+        // UI: Ability Bars, Update Notices, Text, HUD
         press(&mut w, &mut o, key::DOWN, &mut cues);
         press(&mut w, &mut o, key::CROSS, &mut cues);
         assert_eq!((w.cat, w.item), (Some(2), 22), "UI, Ability Bars");
@@ -1547,7 +1605,21 @@ mod tests {
         assert!(settings::update_notices(), "and back: two values");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (1, Some(&9)), "UI's last row");
+        assert_eq!(w.item, 30, "Text, back on UI since Render Scale took its place on Video");
+        assert_eq!(settings::client().text, render::ui::TextFilter::Sharp, "Sharp, the default");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::client().text, cues.last()), (render::ui::TextFilter::Smooth, Some(&11)), "Smooth");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert_eq!(settings::client().text, render::ui::TextFilter::Sharp, "and back: two values");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.item, 40, "HUD");
+        assert_eq!((settings::client().hud, value_text(&vui, 40)), (render::ui::HudFilter::Nearest, Some(wide("Nearest"))), "Nearest, the game's: off by default");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::client().hud, value_text(&vui, 40), cues.last()), (render::ui::HudFilter::Sharp, Some(wide("Sharp")), Some(&11)), "Sharp");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert_eq!(settings::client().hud, render::ui::HudFilter::Nearest, "and back: two values");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (3, Some(&9)), "UI's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         // Controller: Controller Focus, Capture Controller
         press(&mut w, &mut o, key::DOWN, &mut cues);
@@ -1736,6 +1808,17 @@ mod tests {
         assert_eq!(kept, "lod=on\nbrightness=4\ncamera_distance=11\ncamera_turn=125\nfog=4\n");
         assert_eq!(GameOptions::from_card(&testing::kept("game.opt").unwrap()).unwrap().auto_attack, 1);
         testing::reset(false);
+    }
+
+    /// Video's note while Render Scale is chosen: the scale the frame is
+    /// drawn at only when it is less than the one asked; the control, drawn
+    /// as asked (or nothing asked), says nothing.
+    #[test]
+    fn render_scale_says_when_it_is_drawn_at_less() {
+        assert_eq!(scale_note(4, 3), Some("Drawn at x3 at this size".to_string()));
+        assert_eq!(scale_note(2, 1), Some("Drawn at x1 at this size".to_string()));
+        assert_eq!(scale_note(4, 4), None);
+        assert_eq!(scale_note(1, 1), None);
     }
 
     /// Output Device goes round the system default and the devices the
@@ -2061,7 +2144,8 @@ mod tests {
         assert_eq!(CATEGORIES[by_name("Controller")].note, Note::Reads);
         assert_eq!(CATEGORIES[by_name("Characters")].note, Note::Server);
         assert_eq!(CATEGORIES[by_name("Sound")].note, Note::Output);
-        assert!(CATEGORIES.iter().filter(|c| c.note != Note::None).count() == 3, "the three notes only");
+        assert_eq!(CATEGORIES[by_name("Video")].note, Note::Scale);
+        assert!(CATEGORIES.iter().filter(|c| c.note != Note::None).count() == 4, "the four notes only");
         w.cat_sel = by_name("Characters") as i32;
         w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
         w.draw(&vui, &mut r, &o, &mut ups);

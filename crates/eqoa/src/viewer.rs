@@ -1118,10 +1118,14 @@ pub fn shot_with(
     let textures = render::library_textures(lib);
     let particles = billboard_view.filter(|_| loading.is_none()).map(|(v, p)| (v, p, batches.as_slice(), &textures as &render::Textures));
     let sky = sky_billboards.as_ref().filter(|_| loading.is_none()).map(|(v, p, b)| (*v, *p, b.as_slice(), &textures as &render::Textures));
-    // the options' Brightness and Text (kept only under `$EQOA_CONFIG` for a shot)
+    // the options' Brightness, Render Scale, Text, HUD, Mipmaps and Textures
+    // (kept only under `$EQOA_CONFIG` for a shot)
     renderer.curve.set(crate::settings::curve(crate::settings::client().brightness));
+    renderer.scale.set(crate::settings::client().render_scale as u32);
     render::ui::set_text_filter(crate::settings::client().text);
+    render::ui::set_hud_filter(crate::settings::client().hud);
     render::set_mipmaps(crate::settings::client().mipmaps);
+    render::set_crisp(crate::settings::client().crisp);
     let rgba = render::capture_with_sky(&device, &queue, &mut renderer, w, h, loading.as_ref().map_or(&view, |l| &l.0), &refs, particles, sky);
     let mut enc = png::Encoder::new(std::io::BufWriter::new(std::fs::File::create(out)?), w, h);
     enc.set_color(png::ColorType::Rgba);
@@ -3017,30 +3021,36 @@ impl App {
             (None, None) => return,
         };
         let mut enc = g.device.create_command_encoder(&Default::default());
-        // the options' Text, every font drawn this frame
+        // the options' Text and HUD, every texture of the 2D layer drawn this
+        // frame, and its Render Scale: the frame drawn that much larger
         render::ui::set_text_filter(crate::settings::client().text);
+        render::ui::set_hud_filter(crate::settings::client().hud);
         render::set_mipmaps(crate::settings::client().mipmaps);
+        render::set_crisp(crate::settings::client().crisp);
+        g.renderer.scale.set(crate::settings::client().render_scale as u32);
+        let f = g.renderer.scale.targets(&g.device, &target, &g.depth, size);
         // the frame cleared black (`SetClearColor(0, 0, 0, 1)`), with CLIENT's
         // loading screen's gears in its corner while it is up
         let gears: Vec<render::Draw> = host.gears().into_iter().map(render::Draw::Model).collect();
         let view = if gears.is_empty() { render::View { clear: Vec3::ZERO, ..render::View::daylight(glam::Mat4::IDENTITY) } } else { crate::loading::view(size) };
-        g.renderer.draw(&g.queue, &mut enc, &target, &g.depth, &view, &gears);
+        g.renderer.draw(&g.queue, &mut enc, &f.color, &f.depth, &view, &gears);
         // a window's 3D (character select's preview, creation's model): the
         // 2D made before it under it, the rest over it
         let split = g.renderer.ui.as_ref().and_then(|u| u.split.map(|s| (s, u.quads.len())));
         match (split, host.pre.scene()) {
             (Some((s, n)), Some(scene)) => {
-                g.renderer.draw_ui(&g.device, &mut enc, &target, &g.depth, size, 0..s);
+                g.renderer.draw_ui(&g.device, &mut enc, &f.color, &f.depth, f.size, 0..s);
                 // the pixels a 2D quad over the viewport covers: a plate over it hides all of it
-                let [x, y, w, h] = crate::pregame::stage::viewport_pixels(size, scene.viewport);
+                let [x, y, w, h] = crate::pregame::stage::viewport_pixels(f.size, scene.viewport);
                 if w > 0 && h > 0 {
                     let draws: Vec<render::Draw> = scene.models.iter().map(|&m| render::Draw::Model(m)).collect();
-                    g.renderer.draw_viewport(&g.queue, &mut enc, &target, &g.depth, &scene.view, &draws, [x, y, w, h]);
+                    g.renderer.draw_viewport(&g.queue, &mut enc, &f.color, &f.depth, &scene.view, &draws, [x, y, w, h]);
                 }
-                g.renderer.draw_ui(&g.device, &mut enc, &target, &g.depth, size, s..n);
+                g.renderer.draw_ui(&g.device, &mut enc, &f.color, &f.depth, f.size, s..n);
             }
-            _ => g.renderer.draw_text(&g.device, &mut enc, &target, &g.depth, size),
+            _ => g.renderer.draw_text(&g.device, &mut enc, &f.color, &f.depth, f.size),
         }
+        g.renderer.scale.resolve(&mut enc, &target);
         g.queue.submit([enc.finish()]);
         #[cfg(not(target_arch = "wasm32"))]
         report_shot(g, frame.as_ref());
@@ -4929,34 +4939,42 @@ impl ApplicationHandler for App {
                 };
                 // the options' Brightness: the scene through its curve (none
                 // at the default), the labels and the HUD after it as drawn;
-                // and its Text, every font drawn this frame
+                // its Text and HUD, every texture of the 2D layer drawn this
+                // frame; its Mipmaps and Textures, the world's; and its Render
+                // Scale: the whole frame drawn that much larger, and averaged
+                // into the window's at the end
                 g.renderer.curve.set(crate::settings::curve(crate::settings::client().brightness));
                 render::ui::set_text_filter(crate::settings::client().text);
+                render::ui::set_hud_filter(crate::settings::client().hud);
                 render::set_mipmaps(crate::settings::client().mipmaps);
-                let scene = g.renderer.curve.scene_target(&g.device, (g.config.width, g.config.height));
-                let st = scene.as_ref().unwrap_or(&target);
-                g.renderer.draw(&g.queue, &mut enc, st, &g.depth, loading.as_ref().map_or(&view, |l| &l.0), &refs);
+                render::set_crisp(crate::settings::client().crisp);
+                g.renderer.scale.set(crate::settings::client().render_scale as u32);
+                let f = g.renderer.scale.targets(&g.device, &target, &g.depth, (g.config.width, g.config.height));
+                let scene = g.renderer.curve.scene_target(&g.device, f.size);
+                let st = scene.as_ref().unwrap_or(&f.color);
+                g.renderer.draw(&g.queue, &mut enc, st, &f.depth, loading.as_ref().map_or(&view, |l| &l.0), &refs);
                 let textures = render::library_textures(&self.lib);
                 // under the loading screen no sky, volumes or particles
                 let bb_view = bb_view.filter(|_| loading.is_none());
                 if let Some((v, p)) = bb_view {
                     let mut rot = v;
                     rot.w_axis = glam::Vec4::W;
-                    g.renderer.draw_sky_billboards(&g.device, &g.queue, &mut enc, st, &g.depth, rot, p, &self.sky_batches, &textures);
+                    g.renderer.draw_sky_billboards(&g.device, &g.queue, &mut enc, st, &f.depth, rot, p, &self.sky_batches, &textures);
                 }
                 // the effect volumes' fans, then the particles over them,
                 // all in the scene (the Brightness curve takes them too)
                 if loading.is_none() {
-                    g.renderer.draw_fans(&g.queue, &mut enc, st, &g.depth, &view);
+                    g.renderer.draw_fans(&g.queue, &mut enc, st, &f.depth, &view);
                     // the name plates where VIScene::Render draws them: the
                     // particles and the rest after, over them
-                    g.renderer.draw_plates(&g.device, &mut enc, st, &g.depth, (g.config.width, g.config.height));
+                    g.renderer.draw_plates(&g.device, &mut enc, st, &f.depth, f.size);
                 }
                 if let Some((v, p)) = bb_view {
-                    g.renderer.draw_billboards(&g.device, &g.queue, &mut enc, st, &g.depth, v, p, &self.batches, &textures);
+                    g.renderer.draw_billboards(&g.device, &g.queue, &mut enc, st, &f.depth, v, p, &self.batches, &textures);
                 }
-                g.renderer.curve.apply(&g.queue, &mut enc, &target);
-                g.renderer.draw_text(&g.device, &mut enc, &target, &g.depth, (g.config.width, g.config.height));
+                g.renderer.curve.apply(&g.queue, &mut enc, &f.color);
+                g.renderer.draw_text(&g.device, &mut enc, &f.color, &f.depth, f.size);
+                g.renderer.scale.resolve(&mut enc, &target);
                 mark(&mut self.perf, 11);
                 let sent = g.queue.submit([enc.finish()]);
                 #[cfg(not(target_arch = "wasm32"))]

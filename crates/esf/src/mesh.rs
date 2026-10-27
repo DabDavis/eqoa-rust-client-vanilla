@@ -305,6 +305,10 @@ pub struct Model {
     /// distance (`m_levels[i].m_dist`), in level order. Its batches carry their
     /// level ([`Batch::lod`]), and one level is drawn at a time.
     pub lod_dists: Vec<f32>,
+    /// A zone's terrain patches ([`build_terrain`]): the ground, its first
+    /// layer a picture of it painted at about a texel a unit (roads, grass,
+    /// snow and the edges between them), its others the detail tiled over it.
+    pub terrain: bool,
 }
 
 /// A model listed out of a container.
@@ -503,6 +507,7 @@ pub fn build_terrain<'a>(c: &'a Container, patches: &[NodeId], pre: &[[f32; 3]],
     for &ss in patches {
         add_sprite(&mut m, &mut keys, c, ss, |p| p, pre, resolve, None);
     }
+    m.terrain = true;
     finish(m)
 }
 

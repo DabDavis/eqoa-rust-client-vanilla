@@ -16,6 +16,7 @@ pub mod billboard;
 pub mod curve;
 pub mod fans;
 pub mod overlay;
+pub mod scale;
 pub mod text;
 pub mod ui;
 
@@ -80,6 +81,22 @@ pub fn mipmaps() -> bool {
     MIPMAPS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Whether the world's solid textures are drawn crisp (Options > Extended >
+/// World > Textures: Crisp; Smooth, the game's, by default): a texel's own
+/// colour across it, mixed with the next only over the pixel its edge falls
+/// in, where the GS's bilinear filter mixes it across its whole width
+/// (shader.wgsl's `crisp`). Only where a layer may be (`texels`), and only
+/// its colour: what the filter is needed for keeps it.
+static CRISP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_crisp(on: bool) {
+    CRISP.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn crisp() -> bool {
+    CRISP.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// K for a pass the game makes in code (`DEFAULT_LOD_BIAS`), or the base
 /// level's with the mip levels off.
 pub fn effects_lod_k() -> f32 {
@@ -110,6 +127,8 @@ struct FrameUniform {
     sun_dir: [f32; 4],
     /// rgb, and w = the time in seconds (for UV scrolling).
     sun: [f32; 4],
+    /// rgb, and w = 1 when the solid textures are drawn crisp (`crisp`;
+    /// never the sky's).
     ambient: [f32; 4],
     /// rgb, and w = 1 when fog is on.
     fog_color: [f32; 4],
@@ -130,6 +149,22 @@ struct LayerUniform {
     /// scroll, v' = u·m1 + v·m4 + m7 + scroll.
     uv0: [f32; 4],
     uv1: [f32; 4],
+    /// x: the texture's mip levels, y: 1 when its colour may be drawn crisp
+    /// (`texels`).
+    texels: [f32; 4],
+}
+
+/// A layer's `LayerUniform::texels`: its texture's `levels` (0: none), and
+/// whether the options' Textures Crisp may take its colour. A solid layer
+/// may (opaque or alpha-tested: walls, props, bodies, plants); what the
+/// filter draws properly keeps it: a blended layer (glows, glass, water's
+/// sheen: its colour is mixed over what is behind), a scrolling one (water,
+/// lava, falls), and the ground (`terrain`: each patch's picture, painted at
+/// about a texel a unit, its roads, grass and snow blended into each other
+/// by the filter; crisp, every edge between them was a staircase of texels).
+fn texels(levels: u32, blend: usize, uv_rate: [f32; 2], terrain: bool) -> [f32; 4] {
+    let solid = levels > 0 && blend == 0 && uv_rate == [0.0, 0.0] && !terrain;
+    [levels as f32, solid as i32 as f32, 0.0, 0.0]
 }
 
 /// One layer's pass over a batch.
@@ -144,6 +179,8 @@ struct Pass {
     /// The UV mapping the pass was made with (`uv0`, `uv1` and the sampler),
     /// which another pass of the batch can be given (`set_layer`).
     made: UvMapping,
+    /// on the ground's patches (`texels`)
+    terrain: bool,
 }
 
 /// A layer's UV mapping: the transform and scroll (`LayerUniform::uv0`,
@@ -386,9 +423,11 @@ pub struct Renderer {
     /// The last `draw`'s models and draw calls (`EQOA_PERF`).
     pub drawn: std::cell::Cell<(u32, u32)>,
     /// Groups' materials by texture (its key), sampler and uniform bytes.
-    materials: std::collections::HashMap<(u64, usize, [u32; 16]), wgpu::BindGroup>,
+    materials: std::collections::HashMap<(u64, usize, [u32; 20]), wgpu::BindGroup>,
     /// The palette every group's models draw with: theirs is never set.
     identity_palette: wgpu::BindGroup,
+    /// The options' Render Scale (`scale`): 1 until set.
+    pub scale: scale::Scale,
     /// The options' Brightness over the scene (`curve`): none until set.
     pub curve: curve::Curve,
 }
@@ -626,6 +665,7 @@ impl Renderer {
             drawn: Default::default(),
             materials: Default::default(),
             identity_palette,
+            scale: scale::Scale::new(format),
             curve: curve::Curve::new(format),
         }
     }
@@ -705,7 +745,7 @@ impl Renderer {
             let mut passes = Vec::new();
             for l in layers_of(b) {
                 let view = self.texture(device, queue, l.texture, textures);
-                let (blend, mut base, si) = layer_state(l, view.is_some());
+                let (blend, mut base, si) = layer_state(l, view.as_ref(), m.terrain);
                 base.flags[3] = flora as i32 as f32;
                 let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("layer"),
@@ -725,7 +765,7 @@ impl Renderer {
                         wgpu::BindGroupEntry { binding: 2, resource: uniform.as_entire_binding() },
                     ],
                 });
-                passes.push(Pass { blend, bg, uniform, base, texture: l.texture, sampler: si, made: (base.uv0, base.uv1, si) });
+                passes.push(Pass { blend, bg, uniform, base, texture: l.texture, sampler: si, made: (base.uv0, base.uv1, si), terrain: m.terrain });
             }
             let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("indices"),
@@ -795,11 +835,13 @@ impl Renderer {
             p.texture = texture;
             p.sampler = si;
             p.base.flags[0] = view.is_some() as i32 as f32;
+            p.base.texels[0] = view.as_ref().map_or(0, |v| v.texture().mip_level_count()) as f32;
         }
         p.blend = blend.min(4);
         p.base.flags[1] = (p.blend != 0) as i32 as f32;
         p.base.tint = rgba;
         (p.base.uv0, p.base.uv1) = (uv0, uv1);
+        p.base.texels = texels(p.base.texels[0] as u32, p.blend, [uv1[2], uv1[3]], p.terrain);
         queue.write_buffer(&p.uniform, 0, bytemuck::bytes_of(&p.base));
     }
 
@@ -962,7 +1004,7 @@ impl Renderer {
             eye: view.eye.extend(mipmaps() as i32 as f32).to_array(),
             sun_dir: view.sun_dir.normalize().extend(0.0).to_array(),
             sun: view.sun.extend(self.scroll_time.unwrap_or_else(|| self.start.elapsed().as_secs_f32())).to_array(),
-            ambient: view.ambient.extend(0.0).to_array(),
+            ambient: view.ambient.extend(crisp() as i32 as f32).to_array(),
             fog_color: match view.fog {
                 Some((_, _, c)) => c.extend(1.0).to_array(),
                 None => [0.0; 4],
@@ -983,7 +1025,7 @@ impl Renderer {
         queue.write_buffer(&self.frame_buf, 0, bytemuck::bytes_of(&uniform));
         if let Some(vp) = view.sky_view_proj {
             // the sky's view has no translation: its eye is the origin
-            let sky = FrameUniform { view_proj: vp.to_cols_array_2d(), eye: [0.0, 0.0, 0.0, uniform.eye[3]], ..uniform };
+            let sky = FrameUniform { view_proj: vp.to_cols_array_2d(), eye: [0.0, 0.0, 0.0, uniform.eye[3]], ambient: [uniform.ambient[0], uniform.ambient[1], uniform.ambient[2], 0.0], ..uniform };
             queue.write_buffer(&self.sky_frame_buf, 0, bytemuck::bytes_of(&sky));
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1130,9 +1172,9 @@ impl Renderer {
 
     /// The shared bind group of a layer (cached by texture, sampler and
     /// uniform), and its blend mode.
-    fn material(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, l: &esf::Layer, textures: &Textures) -> Material {
+    fn material(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, l: &esf::Layer, textures: &Textures, terrain: bool) -> Material {
         let view = self.texture(device, queue, l.texture, textures);
-        let (blend, base, si) = layer_state(l, view.is_some());
+        let (blend, base, si) = layer_state(l, view.as_ref(), terrain);
         let key = (textures.key(l.texture), si, bytemuck::cast(base));
         if let Some(bg) = self.materials.get(&key) {
             return Material { blend, bg: bg.clone() };
@@ -1190,7 +1232,7 @@ impl Renderer {
                 let first = first_index + part_indices.len() as u32;
                 // rebased here: WebGL2 has no base vertex
                 part_indices.extend(b.indices.iter().map(|&i| i + base));
-                let passes = layers_of(b).iter().map(|l| self.material(device, queue, l, textures)).collect();
+                let passes = layers_of(b).iter().map(|l| self.material(device, queue, l, textures, p.model.terrain)).collect();
                 batches.push((first..first_index + part_indices.len() as u32, passes));
             }
             let lights: Vec<[f32; 4]> = (0..p.instances.len()).map(|k| p.statics.get(k).copied().unwrap_or([0.0, 0.0, 0.0, 1.0])).collect();
@@ -1321,8 +1363,10 @@ fn layers_of(b: &esf::Batch) -> &[esf::Layer] {
 }
 
 /// A layer's blend mode, uniform and sampler (0 repeat, 1 clamp, 2 mirror),
-/// `textured` if its texture resolved.
-fn layer_state(l: &esf::Layer, textured: bool) -> (usize, LayerUniform, usize) {
+/// its texture `view` if it resolved, on the ground's patches if `terrain`.
+fn layer_state(l: &esf::Layer, view: Option<&wgpu::TextureView>, terrain: bool) -> (usize, LayerUniform, usize) {
+    let textured = view.is_some();
+    let levels = view.map_or(0, |v| v.texture().mip_level_count());
     let blend = (l.blend.clamp(0, 4)) as usize;
     let k = l.uv_coeffs();
     // The layer colour reaches the GS as c/255 × 128 and modulates by /128:
@@ -1333,6 +1377,7 @@ fn layer_state(l: &esf::Layer, textured: bool) -> (usize, LayerUniform, usize) {
         flags: [textured as i32 as f32, (blend != 0) as i32 as f32, gs_lod_k(l.lod_bias), 0.0],
         uv0: [k[0], k[1], k[2], k[3]],
         uv1: [k[4], k[5], l.uv_rate[0], l.uv_rate[1]],
+        texels: texels(levels, blend, l.uv_rate, terrain),
     };
     let si = match l.wrap {
         1 | 2 => 1,
@@ -1465,20 +1510,23 @@ pub fn capture_with_sky(
     let depth = depth_view(device, w, h);
     let mut enc = device.create_command_encoder(&Default::default());
     let tv = target.create_view(&Default::default());
-    // the scene into the Brightness curve's texture when one is set
-    let scene = renderer.curve.scene_target(device, (w, h));
-    let st = scene.as_ref().unwrap_or(&tv);
-    renderer.draw(queue, &mut enc, st, &depth, view, items);
+    // the frame at the Render Scale's size (the target's own at 1), the scene
+    // into the Brightness curve's texture when one is set
+    let f = renderer.scale.targets(device, &tv, &depth, (w, h));
+    let scene = renderer.curve.scene_target(device, f.size);
+    let st = scene.as_ref().unwrap_or(&f.color);
+    renderer.draw(queue, &mut enc, st, &f.depth, view, items);
     if let Some((v, p, batches, textures)) = sky {
-        renderer.draw_sky_billboards(device, queue, &mut enc, st, &depth, v, p, batches, textures);
+        renderer.draw_sky_billboards(device, queue, &mut enc, st, &f.depth, v, p, batches, textures);
     }
-    renderer.draw_fans(queue, &mut enc, st, &depth, view);
-    renderer.draw_plates(device, &mut enc, st, &depth, (w, h));
+    renderer.draw_fans(queue, &mut enc, st, &f.depth, view);
+    renderer.draw_plates(device, &mut enc, st, &f.depth, f.size);
     if let Some((v, p, batches, textures)) = particles {
-        renderer.draw_billboards(device, queue, &mut enc, st, &depth, v, p, batches, textures);
+        renderer.draw_billboards(device, queue, &mut enc, st, &f.depth, v, p, batches, textures);
     }
-    renderer.curve.apply(queue, &mut enc, &tv);
-    renderer.draw_text(device, &mut enc, &tv, &depth, (w, h));
+    renderer.curve.apply(queue, &mut enc, &f.color);
+    renderer.draw_text(device, &mut enc, &f.color, &f.depth, f.size);
+    renderer.scale.resolve(&mut enc, &tv);
     enc.copy_texture_to_buffer(
         target.as_image_copy(),
         wgpu::TexelCopyBufferInfo {

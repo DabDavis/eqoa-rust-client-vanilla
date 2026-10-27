@@ -180,6 +180,37 @@ pub(crate) fn pack(font: &esf::font::Font, width: u32) -> (Vec<u8>, u32, HashMap
     (atlas, ah, glyphs)
 }
 
+/// How the 2D layer's other textures (the HUD, the windows, the pregame's
+/// pictures: every one but the fonts', `TextFilter`) are drawn scaled to the
+/// target. The GS samples them at the nearest texel (the blit material's
+/// filters), one texel to a pixel on the PS2's 640x448; at a scale that is
+/// not whole the nearest texel makes some texels a pixel wider than the rest
+/// (at 1080p, 2.41 pixels a texel: two pixels or three).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum HudFilter {
+    /// The nearest texel, as the GS takes it: the game's.
+    #[default]
+    Nearest,
+    /// The fonts' Sharp (`TextFilter::Sharp`, `ui.wgsl`'s `sharp`): every
+    /// texel as wide as every other, its own colour across it and the next
+    /// one's mixed in only round its edge, kept to the quad's own texels as
+    /// the nearest texel is (an atlas packs its cells edge to edge), and a
+    /// clear texel mixed in by its clearness alone, not its colour (`ui.wgsl`'s
+    /// `mix_clear`: the art's clear texels are often black). At a whole
+    /// scale, the nearest texel.
+    Sharp,
+}
+
+impl HudFilter {
+    /// The other one (the options' HUD turned over).
+    pub fn other(self) -> HudFilter {
+        match self {
+            HudFilter::Nearest => HudFilter::Sharp,
+            HudFilter::Sharp => HudFilter::Nearest,
+        }
+    }
+}
+
 impl TextFilter {
     /// The other one (the options' Text turned over).
     pub fn other(self) -> TextFilter {
@@ -227,6 +258,22 @@ pub fn text_filter() -> TextFilter {
     match TEXT_FILTER.load(Ordering::Relaxed) {
         1 => TextFilter::Smooth,
         _ => TextFilter::Sharp,
+    }
+}
+
+/// The other textures' filter (`HudFilter`): 0 Nearest, 1 Sharp.
+static HUD_FILTER: AtomicU8 = AtomicU8::new(0);
+
+/// Sets how every layer's textures but the fonts are drawn from now on (the
+/// options' HUD).
+pub fn set_hud_filter(f: HudFilter) {
+    HUD_FILTER.store(f as u8, Ordering::Relaxed);
+}
+
+pub fn hud_filter() -> HudFilter {
+    match HUD_FILTER.load(Ordering::Relaxed) {
+        1 => HudFilter::Sharp,
+        _ => HudFilter::Nearest,
     }
 }
 
@@ -498,9 +545,11 @@ pub struct Quad {
 
 struct Texture {
     bg: wgpu::BindGroup,
-    /// A font's: the same texture through the filtering sampler, which its
-    /// quads take under either `TextFilter`.
-    filtered: Option<wgpu::BindGroup>,
+    /// The same texture through the filtering sampler, which a font's quads
+    /// take under either `TextFilter` and the others' under `HudFilter::Sharp`.
+    filtered: wgpu::BindGroup,
+    /// A font's (`add_font`).
+    font: bool,
     width: u32,
     height: u32,
 }
@@ -533,12 +582,14 @@ impl Font {
 pub struct Ui {
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
-    /// The fonts' (`Texture::filtered`): linear.
+    /// `Texture::filtered`'s: linear.
     filtering: wgpu::Sampler,
     pipelines: Vec<wgpu::RenderPipeline>,
     /// A font's quads by blend mode, under `TextFilter::Sharp` and `Smooth`.
     sharp: Vec<wgpu::RenderPipeline>,
     smooth: Vec<wgpu::RenderPipeline>,
+    /// The other textures' quads by blend mode under `HudFilter::Sharp`.
+    art_sharp: Vec<wgpu::RenderPipeline>,
     textures: Vec<Texture>,
     pub fonts: Vec<Font>,
     pub quads: Vec<Quad>,
@@ -609,7 +660,8 @@ impl Ui {
         });
         let shader = device.create_shader_module(wgpu::include_wgsl!("ui.wgsl"));
         let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("ui"), bind_group_layouts: &[Some(&layout)], immediate_size: 0 });
-        // A font's (`Texture::filtered`): its quads mix texels (`TextFilter`).
+        // `Texture::filtered`'s: a font's quads mix texels (`TextFilter`), and
+        // the others' under the HUD's Sharp (`HudFilter`).
         let filtering = device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::Repeat,
             address_mode_v: wgpu::AddressMode::Repeat,
@@ -659,7 +711,8 @@ impl Ui {
         let pipelines = set("ui", "fs_tested", "fs_main");
         let sharp = set("ui sharp text", "fs_sharp_tested", "fs_sharp");
         let smooth = set("ui smooth text", "fs_smooth_tested", "fs_smooth");
-        Ui { layout, sampler, filtering, pipelines, sharp, smooth, textures: Vec::new(), fonts: Vec::new(), quads: Vec::new(), viewport: None, anchor: Anchor::Middle, vertical: Vertical::Middle, side: 0.0, top: 0.0, sided: Vec::new(), risen: Vec::new(), opaque: Vec::new(), kept: Vec::new(), split: None, serial: LAYERS.fetch_add(1, Ordering::Relaxed) }
+        let art_sharp = set("ui sharp", "fs_art_sharp_tested", "fs_art_sharp");
+        Ui { layout, sampler, filtering, pipelines, sharp, smooth, art_sharp, textures: Vec::new(), fonts: Vec::new(), quads: Vec::new(), viewport: None, anchor: Anchor::Middle, vertical: Vertical::Middle, side: 0.0, top: 0.0, sided: Vec::new(), risen: Vec::new(), opaque: Vec::new(), kept: Vec::new(), split: None, serial: LAYERS.fetch_add(1, Ordering::Relaxed) }
     }
 
     /// A new frame's quads, for a `size` target: none yet, and those made
@@ -719,7 +772,7 @@ impl Ui {
         self.add_texture_as(device, queue, width, height, rgba, false)
     }
 
-    /// `add_texture`, a font's (`font`) with its filtered binding too.
+    /// `add_texture`, a font's if `font`.
     fn add_texture_as(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32, rgba: &[u8], font: bool) -> usize {
         let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
         let tex = device.create_texture(&wgpu::TextureDescriptor {
@@ -744,8 +797,8 @@ impl Ui {
                 ],
             })
         };
-        let (bg, filtered) = (bind(&self.sampler), font.then(|| bind(&self.filtering)));
-        self.textures.push(Texture { bg, filtered, width, height });
+        let (bg, filtered) = (bind(&self.sampler), bind(&self.filtering));
+        self.textures.push(Texture { bg, filtered, font, width, height });
         self.textures.len() - 1
     }
 
@@ -856,13 +909,20 @@ impl Ui {
         let quads = &self.quads[range];
         let (tw, th) = (size.0 as f32, size.1 as f32);
         let (ox, oy, sx, sy) = frame(size);
+        let hud = hud_filter();
         let mut v = Vec::with_capacity(quads.len() * 6);
         for q in quads {
             let rect = q.uv.iter().fold([f32::MAX, f32::MAX, f32::MIN, f32::MIN], |r, t| [r[0].min(t[0]), r[1].min(t[1]), r[2].max(t[0]), r[3].max(t[1])]);
             // a font's quad as its filter draws it (`ringed`), with no bias:
-            // that picks a nearest texel, and a font's mixes are its filter's
+            // that picks a nearest texel, and a font's mixes are its filter's;
+            // under the HUD's Sharp the others' with none either, a whole
+            // scale's pixel centres then on their texels' (the nearest texel)
             let t = &self.textures[q.tex];
-            let (q, bias) = if t.filtered.is_some() { (ringed(q, t.width, t.height), 0.0) } else { (*q, SAMPLE_BIAS) };
+            let (q, bias) = match (t.font, hud) {
+                (true, _) => (ringed(q, t.width, t.height), 0.0),
+                (false, HudFilter::Sharp) => (*q, 0.0),
+                (false, HudFilter::Nearest) => (*q, SAMPLE_BIAS),
+            };
             let p = |i: usize| Vertex {
                 pos: [(ox + (q.pos[i][0] - bias) * sx) / tw * 2.0 - 1.0, 1.0 - (oy + (q.pos[i][1] - bias) * sy) / th * 2.0],
                 uv: q.uv[i],
@@ -890,12 +950,13 @@ impl Ui {
                 continue;
             }
             pass.set_scissor_rect(a, b, c - a, d - b);
-            // a font's quads through its filter, the rest the nearest texel
+            // a font's quads through its filter, the rest through the HUD's
             let t = &self.textures[tex];
-            let (pipelines, bg) = match (&t.filtered, text_filter()) {
-                (Some(f), TextFilter::Sharp) => (&self.sharp, f),
-                (Some(f), TextFilter::Smooth) => (&self.smooth, f),
-                (None, _) => (&self.pipelines, &t.bg),
+            let (pipelines, bg) = match (t.font, text_filter(), hud) {
+                (true, TextFilter::Sharp, _) => (&self.sharp, &t.filtered),
+                (true, TextFilter::Smooth, _) => (&self.smooth, &t.filtered),
+                (false, _, HudFilter::Sharp) => (&self.art_sharp, &t.filtered),
+                (false, _, HudFilter::Nearest) => (&self.pipelines, &t.bg),
             };
             pass.set_pipeline(&pipelines[blend.min(4) as usize]);
             pass.set_bind_group(0, bg, &[]);
