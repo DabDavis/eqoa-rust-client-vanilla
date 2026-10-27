@@ -2873,6 +2873,9 @@ impl App {
         let _ = writeln!(o, "options, extended: {}", crate::settings::describe());
         let _ = writeln!(o, "keys and buttons: {}", crate::settings::with_binds(|b| b.describe()));
         let _ = writeln!(o, "the server's patch: {}", crate::servers::report_line(self.booted.as_ref().and_then(|s| s.server.as_deref())));
+        // the memory: the process's, the machine's and the graphics device's,
+        // and the run's every 10 minutes (`mem`)
+        let _ = writeln!(o, "{}", crate::mem::describe());
         // the game's link through the relay (a page's): quiet, or gone
         #[cfg(target_arch = "wasm32")]
         let _ = writeln!(o, "{}", crate::web::relay::describe());
@@ -3114,7 +3117,7 @@ impl App {
         // The page's picture of this frame, if it asked, and the report's
         // state of the client (`report`): which of the game's screens.
         crate::report::frame_drawn();
-        crate::report::note_state(|| format!("pregame: {}\nsurface {}x{} {:?}\n{}\noptions, extended: {}\nkeys and buttons: {}\nthe server's patch: {}", host.pre.describe(), size.0, size.1, g.config.format, self.arrival.describe(Instant::now()), crate::settings::describe(), crate::settings::with_binds(|b| b.describe()), crate::servers::report_line(host.pre.shared.server.as_deref())));
+        crate::report::note_state(|| format!("pregame: {}\nsurface {}x{} {:?}\n{}\noptions, extended: {}\nkeys and buttons: {}\nthe server's patch: {}\n{}", host.pre.describe(), size.0, size.1, g.config.format, self.arrival.describe(Instant::now()), crate::settings::describe(), crate::settings::with_binds(|b| b.describe()), crate::servers::report_line(host.pre.shared.server.as_deref()), crate::mem::describe()));
         match done {
             crate::pregame::host::Done::Stay => {}
             crate::pregame::host::Done::Quit => el.exit(),
@@ -4583,6 +4586,8 @@ impl ApplicationHandler for App {
                 if let Some(g) = &self.gfx {
                     crate::icon::poll(&g.window);
                 }
+                // the memory a report carries, taken when it is due (`mem`)
+                crate::mem::tick(self.gfx.as_ref().map(|g| &g.device));
                 // Sound in Background (the Extended page): off, this window
                 // is heard only while it is the one in front (has the focus:
                 // a minimised window has not; one merely covered by another
