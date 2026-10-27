@@ -641,7 +641,14 @@ renderer asks for nothing WebGL2 lacks, and the adapter there is the canvas's
 own, so the device is made on the page's canvas before the event loop). A
 page on WebGL2 draws 30 frames a second (`web::frame_due`: an animation frame
 before the next is due is skipped whole, the game's clocks seeing longer
-frames; the options' Frame Rate, or `?uncapped`, lifts it). The
+frames; the options' Frame Rate, or `?uncapped`, lifts it). A browser
+drawing without the graphics card (a software renderer, by WebGL's unmasked
+renderer, WebGPU's adapter info or the client's adapter: SwiftShader, llvmpipe,
+softpipe, lavapipe, a "Software" renderer, or Windows' WARP, "Microsoft Basic
+Render Driver", F3 20261027-003944) is told so: on the gate's card with its
+browser's steps, in a notice once, and on the status line in the world
+(`web/main.js` `noteSoftware`, `web/pagetest.py` "software"); natively the log
+says so (`gpustart::software`). The
 player picks their own disc image in the page; it is read there a slice at a
 time (`File.slice`), never uploaded, and nothing from it is served. With
 "Remember my disc images in this browser" ticked (Chromium-based browsers,

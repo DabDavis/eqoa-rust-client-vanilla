@@ -5,6 +5,16 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-27 · The page says when your browser is not using the graphics card
+- In the browser, if the game is being drawn without your graphics card (in software, as
+  Windows' "Microsoft Basic Render Driver" does), the page now says so: on the start card, in
+  a message at the top you can dismiss, and beside the frame rate in the corner while you
+  play. The game runs slowly that way, whatever the settings. To fix it, turn on the
+  browser's graphics acceleration (Chrome or Edge: Settings > System > "Use graphics
+  acceleration when available", then relaunch the browser) and update your graphics card's
+  driver.
+- The program does the same check, and says so in its log, which a problem report carries.
+
 ## 2026-10-27 · Network Setup: Done takes you back to the title
 - On the title's Network Setup, finishing the server's address (Enter, or Done) now keeps it
   and goes straight back to the title, ready for Play. Before, the page stayed open and only

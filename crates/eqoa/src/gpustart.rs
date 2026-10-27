@@ -131,6 +131,16 @@ pub fn step(what: &str) {
     eprintln!("graphics: {what}");
 }
 
+/// Whether the adapter named `name` draws without the graphics card: a CPU
+/// device by the driver's word (`cpu`), or one named as a software renderer
+/// (Mesa's llvmpipe, lavapipe and softpipe, SwiftShader, a "Software
+/// Renderer", Windows' WARP: "Microsoft Basic Render Driver"). The page's
+/// list is the same (`web/main.js`'s SOFTWARE, F3 20261027-003944).
+pub fn software(name: &str, cpu: bool) -> bool {
+    let n = name.to_ascii_lowercase();
+    cpu || ["llvmpipe", "lavapipe", "softpipe", "swiftshader", "software", "basic render driver"].iter().any(|s| n.contains(s))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,6 +162,19 @@ mod tests {
         assert_eq!(choose(None, None), (None, false));
         // a Mac has no other API
         assert_eq!(fallback(Backends::METAL), None);
+    }
+
+    /// The software renderers are told by name or by the driver's device
+    /// type; the control: graphics cards are not.
+    #[test]
+    fn a_software_adapter_is_told_apart() {
+        for n in ["llvmpipe (LLVM 15.0.7, 256 bits)", "Microsoft Basic Render Driver", "SwiftShader Device (Subzero)", "Apple Software Renderer"] {
+            assert!(software(n, false), "{n}");
+        }
+        assert!(software("Some Adapter", true), "a CPU device by its type");
+        for n in ["AMD Radeon RX 6600 (RADV NAVI23)", "NVIDIA GeForce RTX 3060", "Intel(R) UHD Graphics 630", "Apple M1"] {
+            assert!(!software(n, false), "the control: {n}");
+        }
     }
 
     #[test]

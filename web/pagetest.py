@@ -52,6 +52,11 @@ version.json under it:
             from the preview, not while typing; the game's page links it (the
             preview and the disc's visuals are drive's: a visual list is
             handed over as the preview sends it)
+  software  a browser drawing without the graphics card (a stand-in: no
+            WebGPU, WebGL2 naming Windows' Microsoft Basic Render Driver; then
+            the client's graphics line naming it) is told so on the card's
+            line, in a notice (once) and on the status line in the world; a
+            graphics card is not
 
 Each check has its negative control. Needs the `websockets` package.
 
@@ -810,6 +815,54 @@ async def tests(a, site, base, page):
     await page.js("window.eqoaWantText(false); true")
     check("the box gone, the focus is the canvas's again", await page.js("document.activeElement && document.activeElement.id") == "eqoa")
     check("and a touch puts no keyboard up any more", await page.js(touch_up) != "eqoatyped")
+
+    # ---- software: a browser drawing without the graphics card is told so
+    # once, on the card's line, in a notice and on the status line in the
+    # world (F3 20261027-003944: Windows' Microsoft Basic Render Driver,
+    # which the card's check missed). Stand-ins, before the page loads: no
+    # WebGPU and a renderer's name from WebGL2; then the client's own
+    # graphics line as that player's client sent it.
+    warp = "ANGLE (Microsoft, Microsoft Basic Render Driver (0x0000008C) Direct3D11 vs_5_0 ps_5_0, D3D11)"
+    card = "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 (0x00002504) Direct3D11 vs_5_0 ps_5_0, D3D11)"
+    gfx = "document.getElementById('gfx-state').textContent"
+    soft = f"{notices}.includes('software-graphics')"
+    told = "(document.querySelector('#notices .notice[data-key=software-graphics] .text') || {}).textContent || ''"
+    status = "document.getElementById('status').textContent"
+
+    async def probed(renderer):
+        """The page opened on a stand-in renderer: the card's line once its
+        check is done."""
+        stub = await page.call("Page.addScriptToEvaluateOnNewDocument", source=f"""
+            Object.defineProperty(Navigator.prototype, 'gpu', {{ configurable: true, get: () => undefined }});
+            const get = WebGL2RenderingContext.prototype.getParameter;
+            WebGL2RenderingContext.prototype.getParameter = function (p) {{
+              return p === 0x9246 || p === 0x1F01 ? {json.dumps(renderer)} : get.call(this, p);
+            }};""")
+        try:
+            await page.open(base + q)
+            return await page.until(f"!{gfx}.startsWith('Checking') && {gfx}", 10) or ""
+        finally:
+            await page.call("Page.removeScriptToEvaluateOnNewDocument", identifier=stub["identifier"])
+
+    line = await probed(warp)
+    check("the page's probe on Basic Render Driver: the card says so", line.startswith("Graphics: WebGL2, drawn without the graphics card"), line)
+    text = await page.until(told, 5) or ""
+    check("and a notice says what to do", "without the graphics card" in text and "Use graphics acceleration when available" in text and "driver" in text, text)
+    help_ = await page.js("document.getElementById('gfx-help').textContent") or ""
+    check("the card's steps are acceleration's", "chrome://settings/system" in help_ and "chrome://flags" not in help_, help_)
+    line = await probed(card)
+    check("on a graphics card: WebGL2's line, no notice (control)", line.startswith("Graphics: WebGL2. It works") and not await page.js(soft), line)
+    await page.js(f"document.body.classList.add('playing'); eqoaStatus({json.dumps('graphics: ' + card + ' (Gl)')}); eqoaStatus('booted · 60 fps · 300 MB'); true")
+    check("nor from the client's adapter on one (control)", not await page.js(soft) and await page.js(status) == "booted · 60 fps · 300 MB", str(await page.js(status)))
+    await page.js(f"eqoaStatus({json.dumps('graphics: ' + warp + ' (Gl)')}); eqoaStatus('booted · 27 fps · 300 MB'); true")
+    check("the client's adapter on Basic Render Driver: the notice", bool(await page.until(soft, 5)))
+    check("the card's line (the report's graphics fact) says so", (await page.js(gfx) or "").startswith("Graphics: WebGL2, drawn without the graphics card"), str(await page.js(gfx)))
+    check("and the status line in the world", await page.js(status) == "booted · 27 fps · 300 MB · drawn without the graphics card", str(await page.js(status)))
+    await page.js("[...document.querySelectorAll('#notices .notice[data-key=software-graphics] button')].find(b => b.textContent === 'Dismiss').click()")
+    await page.js(f"eqoaStatus({json.dumps('graphics: ' + warp + ' (Gl)')}); eqoaStatus('booted · 27 fps · 300 MB'); true")
+    await asyncio.sleep(0.3)
+    check("dismissed, it is not raised again", not await page.js(soft) and "drawn without" in (await page.js(status) or ""))
+    await page.js("document.body.classList.remove('playing'); true")
 
     errors = [l for l in page.lines if l.startswith("EXCEPTION") and "crash_test" not in l and "unreachable" not in l and "a test rejection" not in l]
     check("no exception in the page beyond the crash test's", not errors, "; ".join(errors[:3]))

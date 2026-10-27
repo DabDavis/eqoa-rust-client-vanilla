@@ -3945,6 +3945,9 @@ impl ApplicationHandler for App {
         {
             let info = adapter.get_info();
             crate::gpustart::step(&format!("{} ({:?}, driver {} {}): asking for its device", info.name, info.backend, info.driver, info.driver_info));
+            if crate::gpustart::software(&info.name, info.device_type == wgpu::DeviceType::Cpu) {
+                crate::gpustart::step(&format!("{} draws without the graphics card (software): the game will be slow; the graphics card's driver may need installing or updating", info.name));
+            }
         }
         let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).expect("device");
         let size = window.inner_size();

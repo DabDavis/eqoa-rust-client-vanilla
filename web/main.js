@@ -11,9 +11,21 @@ import { canRemember, keptHandle, keepHandle, forgetHandle } from './discstore.j
 const $ = (id) => document.getElementById(id);
 // the client's own graphics line ("graphics: <adapter> (<backend>)"), for reports
 let clientGraphics = '';
+// a software renderer's name, as WebGL's unmasked renderer, WebGPU's adapter
+// info or the client's adapter names it: SwiftShader, Mesa's llvmpipe,
+// softpipe and lavapipe, "Software Rasterizer"/"Software Renderer", and
+// Windows' WARP, "Microsoft Basic Render Driver" (F3 20261027-003944: a
+// steady 27 fps, never told why). gpustart.rs keeps the same list natively.
+const SOFTWARE = /swiftshader|llvmpipe|softpipe|lavapipe|software|basic render driver/i;
+let software = false; // the browser draws without the graphics card (noteSoftware)
+let softwareTold = false; // its notice was raised (once a page)
 const status = (t) => {
-  $('status').textContent = t;
-  if (t.startsWith('graphics: ')) clientGraphics = t.slice(10);
+  if (t.startsWith('graphics: ')) {
+    clientGraphics = t.slice(10);
+    if (SOFTWARE.test(clientGraphics)) noteSoftware(/\(Gl\)$/.test(clientGraphics) ? 'WebGL2' : 'WebGPU');
+  }
+  // in the world the status line keeps saying it
+  $('status').textContent = software && t && document.body.classList.contains('playing') ? `${t} · drawn without the graphics card` : t;
 };
 window.eqoaStatus = status;
 // report.js's, when it loaded (it is a module of its own, before this one)
@@ -519,13 +531,15 @@ async function checkGraphics() {
     try { adapter = await navigator.gpu.requestAdapter(); } catch { /* none */ }
   }
   const info = adapter && adapter.info || {};
-  if (adapter && !(info.architecture === 'swiftshader' || adapter.isFallbackAdapter || info.isFallbackAdapter)) {
-    say('ok', 'Graphics: WebGPU' + (info.vendor ? ', on ' + info.vendor.toUpperCase() : '') + '. The fastest path.');
+  const fallback = info.architecture === 'swiftshader' || adapter && adapter.isFallbackAdapter || info.isFallbackAdapter
+    || SOFTWARE.test([info.vendor, info.architecture, info.device, info.description].join(' '));
+  if (adapter && !fallback) {
+    // a line the client's adapter may yet correct (noteSoftware)
+    if (!software) say('ok', 'Graphics: WebGPU' + (info.vendor ? ', on ' + info.vendor.toUpperCase() : '') + '. The fastest path.');
     return;
   }
   if (adapter) {
-    say('meh', 'Graphics: WebGPU, but drawn in software (no GPU). It will be slow.');
-    gfxHelp(b, 'The browser is not using the graphics card.');
+    noteSoftware('WebGPU');
     return;
   }
   let renderer = '';
@@ -534,13 +548,51 @@ async function checkGraphics() {
     const ext = gl && gl.getExtension('WEBGL_debug_renderer_info');
     renderer = gl ? String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER)) : '';
   } catch { /* no WebGL2 either: the client says so when it starts */ }
-  if (/swiftshader|llvmpipe|softpipe|software/i.test(renderer)) {
-    say('meh', 'Graphics: WebGL2, drawn in software (no GPU). It will be slow.');
-    gfxHelp(b, 'The browser is not using the graphics card.');
+  if (SOFTWARE.test(renderer)) {
+    noteSoftware('WebGL2');
     return;
   }
+  if (software) return;
   say('meh', 'Graphics: WebGL2. It works, but costs about twice the CPU of WebGPU.');
   gfxHelp(b, 'WebGPU is not available here.');
+}
+
+// What the player can do about a browser drawing without the graphics card,
+// in a few words for the notice: its graphics acceleration on, as its
+// browser names it, and the graphics card's driver brought up to date.
+function softwareFix(b) {
+  if (b.chromium) return 'Turn on graphics acceleration (Chrome or Edge: Settings > System > "Use graphics acceleration when available", then relaunch; chrome://gpu shows whether it is on) and update the graphics card\'s driver.';
+  if (b.firefox) return 'Turn on hardware acceleration (Settings > General > Performance: untick "Use recommended performance settings", tick "Use hardware acceleration when available", then restart Firefox) and update the graphics card\'s driver.';
+  return 'Turn on the browser\'s graphics acceleration in its settings, restart it, and update the graphics card\'s driver.';
+}
+
+// The browser draws without the graphics card, through `api` ('WebGPU' or
+// 'WebGL2'), as the page's probe or the client's adapter found: the card's
+// line says so with the steps, the status line in the world from its next
+// update (status), and a notice once a page.
+function noteSoftware(api) {
+  software = true;
+  const b = browser();
+  const state = $('gfx-state');
+  state.className = 'state meh';
+  state.textContent = `Graphics: ${api}, drawn without the graphics card (software). The game will be slow.`;
+  const help = $('gfx-help');
+  if (b.chromium) {
+    help.replaceChildren(
+      el('p', { textContent: 'The browser is not using the graphics card. To turn graphics acceleration on:' }),
+      el('ol', {},
+        el('li', {}, 'Open this and turn on "Use graphics acceleration when available":', flag('chrome://settings/system')),
+        el('li', { textContent: 'Relaunch the browser, then reload this page.' }),
+        el('li', {}, 'Still not on? This page says why:', flag('chrome://gpu')),
+        el('li', { textContent: 'Update the graphics card\'s driver.' })));
+  } else {
+    help.replaceChildren(el('p', { textContent: 'The browser is not using the graphics card. ' + softwareFix(b) }));
+  }
+  if (softwareTold) return;
+  softwareTold = true;
+  const text = `The browser is drawing without the graphics card, so the game will be slow. ${softwareFix(b)}`;
+  if (report) report.notice('software-graphics', '', text, [['Dismiss', () => report.notice('software-graphics')]]);
+  else console.warn(text);
 }
 
 // ---- the disc image: which disc it is, by the program it starts
