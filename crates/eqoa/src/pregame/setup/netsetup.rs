@@ -9,11 +9,13 @@
 //! titled with the menu's own word (1635), the server's row with its
 //! address in a frame, the legend, the game's sounds; X on the row opens
 //! the edit box (`editbox`, `VIWndEdit`: the soft keyboard with a pad, the
-//! compact face with a keyboard) on the address. Done keeps what was typed
-//! (`settings::set_server`, server.opt) and a blank clears it; what is
-//! neither a host name nor an IPv4 address is refused in the game's message
-//! box. Triangle closes the page. Its words are the client's own, English:
-//! WORDS.TXT has none for it.
+//! compact face with a keyboard) on the address. Done (Enter, R2, the soft
+//! keyboard's Done, a click or a tap on the legend's) keeps what was typed
+//! (`settings::set_server`, server.opt), a blank clearing it, and closes the
+//! page back to the title, as a submit; what is neither a host name nor an
+//! IPv4 address is refused in the game's message box, the page staying.
+//! Triangle closes the page, keeping what it had. Its words are the client's
+//! own, English: WORDS.TXT has none for it.
 
 use crate::editbox::{EditBox, EditUp};
 use crate::pointer::{Hits, key, rows_rect};
@@ -53,7 +55,7 @@ pub enum NetUp {
     None,
     /// closed (Triangle)
     Close,
-    /// a new address kept, or none (blank)
+    /// Done: a new address kept, or none (blank), and the page closed
     Kept(Option<String>),
 }
 
@@ -219,6 +221,11 @@ mod tests {
     }
 
     fn typed(n: &mut NetSetup, v: &Vui, r: &mut NullRaster, s: &str) -> NetUp {
+        typed_then(n, v, r, s, 13)
+    }
+
+    /// X on the row, the address typed over the old, then `done`.
+    fn typed_then(n: &mut NetSetup, v: &Vui, r: &mut NullRaster, s: &str, done: i32) -> NetUp {
         let mut cues = Vec::new();
         assert_eq!(n.key(v, r, key::CROSS, 0, &mut cues), NetUp::None);
         assert!(n.editing, "X opens the edit box");
@@ -228,16 +235,21 @@ mod tests {
         for ch in s.chars() {
             n.key(v, r, ch as i32, 0, &mut cues);
         }
-        n.key(v, r, 13, 0, &mut cues)
+        n.key(v, r, done, 0, &mut cues)
     }
 
-    /// Typing an address keeps it; a blank clears; a bad one is refused in
-    /// the box and the old one stays; Triangle closes.
+    /// Typing an address and Done keeps it, the page's submit (`Kept`: the
+    /// title closes the page): Done by Enter, or by R2, which a click or a
+    /// tap on the legend's Done presses (F3 20261026-202044); a blank
+    /// clears; a bad one is refused in the box and the old one stays, no
+    /// submit; Triangle closes.
     #[test]
     fn an_address_is_kept_a_blank_clears_and_a_bad_one_is_refused() {
         let (mut n, v, mut r) = page();
         assert_eq!(typed(&mut n, &v, &mut r, "eqoa.example.com"), NetUp::Kept(Some("eqoa.example.com".into())));
         assert_eq!(n.address, "eqoa.example.com");
+        assert!(!n.editing, "the edit box closed with it");
+        assert_eq!(typed_then(&mut n, &v, &mut r, "192.0.2.7", key::R2), NetUp::Kept(Some("192.0.2.7".into())), "R2: the legend's Done");
         assert_eq!(typed(&mut n, &v, &mut r, ""), NetUp::Kept(None), "blank: none");
         assert_eq!(typed(&mut n, &v, &mut r, "300.1.1.1"), NetUp::None, "refused");
         assert!(n.message.visible, "said in the box");
@@ -246,13 +258,16 @@ mod tests {
         n.key(&v, &mut r, 13, 0, &mut cues);
         assert!(!n.message.visible, "Enter closes the box");
         assert_eq!(n.key(&v, &mut r, key::TRIANGLE, 0, &mut cues), NetUp::Close);
-        // the control: Escape in the edit box cancels it, keeping nothing
-        let (mut m, v, mut r) = page();
-        m.key(&v, &mut r, key::CROSS, 0, &mut cues);
-        m.key(&v, &mut r, b'x' as i32, 0, &mut cues);
-        assert_eq!(m.key(&v, &mut r, 27, 0, &mut cues), NetUp::None);
-        assert!(!m.editing);
-        assert_eq!(m.address, "192.0.2.1");
+        // the control: Escape in the edit box, or triangle, cancels it,
+        // keeping nothing and closing nothing
+        for cancel in [27, key::TRIANGLE] {
+            let (mut m, v, mut r) = page();
+            m.key(&v, &mut r, key::CROSS, 0, &mut cues);
+            m.key(&v, &mut r, b'x' as i32, 0, &mut cues);
+            assert_eq!(m.key(&v, &mut r, cancel, 0, &mut cues), NetUp::None);
+            assert!(!m.editing);
+            assert_eq!(m.address, "192.0.2.1");
+        }
     }
 
     /// A pointer: the row opens the edit box (X), Back closes (Triangle).

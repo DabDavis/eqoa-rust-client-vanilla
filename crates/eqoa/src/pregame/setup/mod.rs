@@ -301,11 +301,16 @@ impl Setup {
                             self.net_visible = false;
                             self.focus = Some(Focus::Title);
                         }
+                        // Done is the page's submit: the address kept, and
+                        // back to the title (F3 20261026-202044: only
+                        // Triangle left the page)
                         netsetup::NetUp::Kept(addr) => {
                             if let Err(e) = crate::settings::set_server(addr.as_deref().unwrap_or("")) {
                                 crate::say(&format!("the server's address was not kept: {e}"));
                             }
                             cx.shared.server = addr;
+                            self.net_visible = false;
+                            self.focus = Some(Focus::Title);
                         }
                         netsetup::NetUp::None => {}
                     }
@@ -712,11 +717,70 @@ mod tests {
         run.press(13);
         assert_eq!(run.shared.server.as_deref(), Some("eqoa.example.com"));
         assert_eq!(crate::settings::server().as_deref(), Some("eqoa.example.com"), "kept in server.opt");
-        run.press(key::TRIANGLE);
-        assert_eq!(run.s.focus, Some(Focus::Title));
+        assert_eq!(run.s.focus, Some(Focus::Title), "Done: back at the title");
         run.press(17);
         run.press(13);
         assert!(matches!(run.frames(30).as_slice(), [Next::Station]));
+        crate::settings::testing::reset(false);
+    }
+
+    /// Done in Network Setup's edit box is the page's submit (F3
+    /// 20261026-202044: "there isn't a proper submission. You need to press
+    /// triangle"): the address kept (server.opt and the session's) and the
+    /// title back with the keys, a blank keeping none the same way. The
+    /// controls: a refused address keeps the page, its message box up and
+    /// the address as it was (the box closed, the page still has the keys,
+    /// and Triangle goes back); Escape in the edit box cancels it, the page
+    /// staying.
+    #[test]
+    fn done_in_network_setup_keeps_the_address_and_goes_back() {
+        let mut run = Run::new(Some("192.0.2.1"));
+        run.s.state = 2;
+        run.s.focus = None;
+        run.frames(32);
+        assert_eq!(run.s.focus, Some(Focus::Title));
+        run.press(18);
+        // the title's Network Setup (its choice stays there), X on its row,
+        // the address typed over the old one, then `done`
+        let submit = |run: &mut Run, typed: &str, done: i32| {
+            run.press(13);
+            assert_eq!(run.s.focus, Some(Focus::NetSetup), "the page");
+            run.press(13);
+            assert!(run.s.typing(), "the edit box");
+            for _ in 0..20 {
+                run.press(8);
+            }
+            for ch in typed.chars() {
+                run.press(ch as i32);
+            }
+            run.press(done);
+        };
+        submit(&mut run, "eqoa.example.com", 13);
+        assert_eq!((run.s.focus, run.s.net_visible, run.s.typing()), (Some(Focus::Title), false, false), "Enter: kept, and back at the title");
+        assert_eq!(run.shared.server.as_deref(), Some("eqoa.example.com"));
+        assert_eq!(crate::settings::server().as_deref(), Some("eqoa.example.com"), "kept in server.opt");
+
+        // refused: the page stays, nothing kept
+        submit(&mut run, "300.1.1.1", 13);
+        assert_eq!((run.s.focus, run.s.net_visible), (Some(Focus::NetSetup), true), "the control: a refused address keeps the page");
+        assert_eq!(run.shared.server.as_deref(), Some("eqoa.example.com"));
+        run.press(13);
+        assert_eq!(run.s.focus, Some(Focus::NetSetup), "the box closed, the page still up");
+        run.press(key::TRIANGLE);
+        assert_eq!(run.s.focus, Some(Focus::Title), "Triangle goes back");
+
+        // a blank, by R2 (a click on the legend's Done): none kept, back too
+        submit(&mut run, "", key::R2);
+        assert_eq!((run.s.focus, run.s.net_visible), (Some(Focus::Title), false));
+        assert_eq!((run.shared.server.as_deref(), crate::settings::server()), (None, None));
+
+        // the control: Escape in the edit box cancels, the page staying
+        run.press(13);
+        run.press(13);
+        run.press(b'x' as i32);
+        run.press(27);
+        assert_eq!((run.s.focus, run.s.typing()), (Some(Focus::NetSetup), false), "the control: cancelled, the page up");
+        assert_eq!(run.shared.server, None);
         crate::settings::testing::reset(false);
     }
 

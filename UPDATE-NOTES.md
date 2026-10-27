@@ -5,6 +5,15 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-27 · Network Setup: Done takes you back to the title
+- On the title's Network Setup, finishing the server's address (Enter, or Done) now keeps it
+  and goes straight back to the title, ready for Play. Before, the page stayed open and only
+  △ (Escape) left it. An address that is not a server address is still refused with a
+  message, and the page stays so you can fix it.
+- The small edit box you get when typing on a keyboard: its Done and Cancel can now be
+  clicked before you are in the world too (Network Setup, Station's login, a new
+  character's name), as they already could in the world.
+
 ## 2026-10-27 · Tab picks targets as on a PS2 in a wide window
 - In a window wider than a TV's 4:3 (most monitors), Tab (R1 on a controller) now picks the
   next target in the same order a PS2 does: creatures in front of you and close come first,

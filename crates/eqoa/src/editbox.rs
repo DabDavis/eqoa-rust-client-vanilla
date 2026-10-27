@@ -434,6 +434,19 @@ impl EditBox {
             return None;
         }
         if !soft {
+            // the compact face's legend under the text: R2's Done, then
+            // triangle's Cancel, each glyph with its word (a window in play
+            // has the HUD's glyph notes too; the title's and Station's only
+            // this)
+            let (lx, ly) = (x - self.pos[0], self.pos[1] + rows * 17 + 28);
+            if (ly - 2..ly + 24).contains(&y) {
+                if (16..116).contains(&lx) {
+                    return Some(Some(143));
+                }
+                if (121..231).contains(&lx) {
+                    return Some(Some(132));
+                }
+            }
             return Some(None);
         }
         // the keys: 26-pixel cells 27 apart
@@ -804,8 +817,10 @@ mod tests {
 
     /// A pointer on the soft keyboard: a key puts the cursor there and
     /// presses it, an empty cell or the gap between keys nothing, the
-    /// legend its keys (Space's left out where spaces are not allowed),
-    /// the compact face nothing, off the box `None`.
+    /// legend its keys (Space's left out where spaces are not allowed);
+    /// on the compact face its legend's two (Done, Cancel: Network Setup's
+    /// submit with a mouse, F3 20261026-202044) and nothing on the text;
+    /// off the box `None`.
     #[test]
     fn a_pointer_presses_the_key_or_legend_under_it() {
         let mut e = EditBox::default();
@@ -822,7 +837,12 @@ mod tests {
         e.allow_spaces = false;
         assert_eq!(e.point_with(legend(3), true), Some(Some(132)), "no Space row: triangle moves up");
         let text = [(e.pos[0] + 100) as f32, (e.pos[1] + 20) as f32];
-        assert_eq!(e.point_with(text, false), Some(None), "the compact face: on the box, no key");
+        assert_eq!(e.point_with(text, false), Some(None), "the compact face: on the text, no key");
+        let (cx, cy) = (e.pos[0], e.pos[1] + e.rows * 17 + 36);
+        let compact = |dx: i32| [(cx + dx) as f32, cy as f32];
+        assert_eq!(e.point_with(compact(60), false), Some(Some(143)), "the compact face's Done: R2");
+        assert_eq!(e.point_with(compact(150), false), Some(Some(132)), "its Cancel: triangle");
+        assert_eq!(e.point_with(compact(300), false), Some(None), "past its legend, no key");
         assert_eq!(e.point_with(at(7, 1), false), None, "the compact face is shorter: no keys there");
         assert_eq!(e.point_with([(lx - 345) as f32, at(0, 0)[1]], true), None, "left of the box");
     }
