@@ -15,13 +15,13 @@ is put on the page by `.github/workflows/notes.yml`.
   driver.
 - The program does the same check, and says so in its log, which a problem report carries.
 
-## 2026-10-27 · Network Setup: Done takes you back to the title
-- On the title's Network Setup, finishing the server's address (Enter, or Done) now keeps it
-  and goes straight back to the title, ready for Play. Before, the page stayed open and only
-  △ (Escape) left it. An address that is not a server address is still refused with a
-  message, and the page stays so you can fix it.
-- The small edit box you get when typing on a keyboard: its Done and Cancel can now be
-  clicked before you are in the world too (Network Setup, Station's login, a new
+## 2026-10-27 · Network Setup: finishing the address takes you back to the title
+- On the title's Network Setup, finishing the server's address (Enter, or R2's End) now
+  keeps it and goes straight back to the title, ready for Play. Before, the page stayed open
+  and only △ (Escape) left it. An address that is not a server address is still refused
+  with a message, and the page stays so you can fix it.
+- The small edit box you get when typing on a keyboard: its End and Cancel can now be
+  clicked or tapped before you are in the world too (Network Setup, Station's login, a new
   character's name), as they already could in the world.
 
 ## 2026-10-27 · Tab picks targets as on a PS2 in a wide window
