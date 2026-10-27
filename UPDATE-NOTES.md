@@ -5,6 +5,13 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-27 · No more creatures fighting you while lying dead
+- A creature or a pet could come into view lying on the ground as if dead, then run after
+  you and fight like that. It happened where many look alike, in a camp of one kind: when
+  one came into sight just as a corpse of its kind went out of it, the game gave it the
+  corpse's body. Each creature that comes into view now gets a body of its own, standing,
+  as on a PS2.
+
 ## 2026-10-26 · Play on a phone or a tablet from the first screen
 - On a phone or a tablet you can now play from the very first screen: tap your way through
   the licence, the title, Station's login, the server list and character select and

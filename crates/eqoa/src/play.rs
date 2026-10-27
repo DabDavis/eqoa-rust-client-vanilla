@@ -39,6 +39,9 @@ pub const UPDATE_RATE: u32 = 100;
 
 /// One drawn entity: its model as a CSprite, animated on its own clock.
 struct Puppet {
+    /// The entity it was made for: another one in its slot is made anew
+    /// (`redo`).
+    id: u32,
     model: u32,
     look: Option<vi::cust::Look>,
     sprite: Option<CSprite<Ee>>,
@@ -865,7 +868,7 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                         dress(&mut model, &vi::cust::apply_look_with(cs, look, helm_worn, |id| lib.surface(id as i32).is_some(), &crate::s2::get().cust()));
                     }
                     let gpu = g.renderer.upload(g.device, g.queue, &model, &[render::IDENTITY], &textures);
-                    Some(Puppet { model: e.model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era })
+                    Some(Puppet { id: e.id, model: e.model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era })
                 })
 }
 
@@ -951,22 +954,26 @@ fn attach(lib: &Library, g: &mut Gpu, cs: &CSprite<Ee>, c: &net::entity::Creatur
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Redo {
     Keep,
-    /// A new model or look: the creature made anew (`SetActorSprite`, then
-    /// every item and the whole look).
+    /// Another entity, or a new model or look: the creature made anew
+    /// (`SetActorSprite`, then every item and the whole look).
     Build,
     /// The same sprite, a hand's item changed: the items attached again
     /// (`DetachItem`, `AttachItem`), the sprite kept mid-animation.
     Items,
 }
 
-/// `Apply`'s tests, from what a puppet was made with (its model and look)
-/// and holds (`held_items`), and what its entity is now. An item is attached
-/// again when its model changes (`SetItem` and `Apply` test the item's
-/// DictID), not when only its type does.
-fn redo(was: (u32, Option<vi::cust::Look>, Held), now: (u32, Option<vi::cust::Look>, Held)) -> Redo {
-    if (was.0, was.1) != (now.0, now.1) {
+/// `Apply`'s tests, from what a puppet was made for (its entity's id) and
+/// with (its model and look) and holds (`held_items`), and what its slot's
+/// entity is now. Another entity in the slot is made anew whatever it looks
+/// like: for a new id `ChannelEntity` deletes the old `VIEntity`, its actor
+/// and sprite with it, and creates the new one, whose sprite is new, alive
+/// and not yet seen (`m_p2A8`). An item is attached again when its model
+/// changes (`SetItem` and `Apply` test the item's DictID), not when only its
+/// type does.
+fn redo(was: (u32, u32, Option<vi::cust::Look>, Held), now: (u32, u32, Option<vi::cust::Look>, Held)) -> Redo {
+    if (was.0, was.1, was.2) != (now.0, now.1, now.2) {
         Redo::Build
-    } else if was.2 != now.2 {
+    } else if was.3 != now.3 {
         Redo::Items
     } else {
         Redo::Keep
@@ -977,7 +984,7 @@ fn redo(was: (u32, Option<vi::cust::Look>, Held), now: (u32, Option<vi::cust::Lo
 /// it is now, dressed in `look`. The puppet it replaced, when it was made
 /// anew.
 fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64) -> Option<Option<Puppet>> {
-    let r = p.as_ref().map_or(Redo::Build, |p| redo((p.model, p.look, p.held), (e.model, look, held_by(p.sprite.as_ref(), e.creature.as_ref()))));
+    let r = p.as_ref().map_or(Redo::Build, |p| redo((p.id, p.model, p.look, p.held), (e.id, e.model, look, held_by(p.sprite.as_ref(), e.creature.as_ref()))));
     // the art swapped (F9) since it was built: made anew in the art now
     let r = if p.as_ref().is_some_and(|p| p.era != lib.view_for(e.model as i32)) { Redo::Build } else { r };
     match r {
@@ -1776,7 +1783,7 @@ mod held {
         human.item_nodes[..3].copy_from_slice(&[18, 27, 28]);
         let mut c = net::entity::Creature { item_types: [1, 11], ..Default::default() };
         c.items = [0xF4DD991A, 0, 0];
-        let state = |cs: &CSprite<Ee>, c: &net::entity::Creature, model: u32| (model, Some(look_of(c)), held_items(cs, c));
+        let state = |cs: &CSprite<Ee>, c: &net::entity::Creature, model: u32| (100001, model, Some(look_of(c)), held_items(cs, c));
         let was = state(&human, &c, 0xC698D870);
         assert_eq!(redo(was, was), Redo::Keep);
 
@@ -1800,7 +1807,28 @@ mod held {
 
         let by_model_and_look = |a: (u32, Option<vi::cust::Look>), b: (u32, Option<vi::cust::Look>)| if a != b { Redo::Build } else { Redo::Keep };
         let now = state(&human, &swapped, 0xC698D870);
-        assert_eq!(by_model_and_look((was.0, was.1), (now.0, now.1)), Redo::Keep, "the control: by the model and look alone the old weapon stays");
+        assert_eq!(by_model_and_look((was.1, was.2), (now.1, now.2)), Redo::Keep, "the control: by the model and look alone the old weapon stays");
+    }
+
+    /// Another entity in a slot is made anew though it looks just like the
+    /// one before it, as `ChannelEntity` makes a new `VIEntity` for a new id:
+    /// a corpse's slot taken by a creature of its body (a camp's next spawn,
+    /// a caster's new pet) left it the corpse's dead sprite, and it ran and
+    /// fought lying on the ground. The same entity again is kept. The
+    /// control: going by the model, look and items alone, as the client did
+    /// before, keeps the corpse's sprite.
+    #[test]
+    fn another_entity_in_the_slot_is_made_anew() {
+        let c = net::entity::Creature::default();
+        let body = |id: u32| (id, 0xC698D870, Some(look_of(&c)), [None; 3]);
+        assert_eq!(redo(body(100412), body(100412)), Redo::Keep);
+        assert_eq!(redo(body(100412), body(100437)), Redo::Build);
+        let mut armed = body(100437);
+        armed.3[0] = Some((0xF4DD991A, 18));
+        assert_eq!(redo(body(100412), armed), Redo::Build, "a new entity holding something is made anew, not only its items attached");
+
+        let by_looks = |a: (u32, u32, Option<vi::cust::Look>, Held), b: (u32, u32, Option<vi::cust::Look>, Held)| redo((0, a.1, a.2, a.3), (0, b.1, b.2, b.3));
+        assert_eq!(by_looks(body(100412), body(100437)), Redo::Keep, "the control: by its looks alone the corpse's sprite stays");
     }
 }
 
