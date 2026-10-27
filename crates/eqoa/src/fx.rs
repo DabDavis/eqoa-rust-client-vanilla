@@ -803,14 +803,20 @@ mod tests {
     /// The disc's TUNARIA.ESF round Neriak, with what a walk there needs:
     /// the zones round (x, z) read and the collision world made.
     pub(super) fn neriak(x: f32, z: f32) -> Option<(Library, World<Ee>)> {
+        world_at("TUNARIA.ESF", x, z)
+    }
+
+    /// A world off the disc with the zones round (x, z) read and its
+    /// collision world made.
+    pub(super) fn world_at(file: &str, x: f32, z: f32) -> Option<(Library, World<Ee>)> {
         let iso_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
         if !iso_path.exists() {
             eprintln!("SKIP: no run/eqoa.iso");
             return None;
         }
         let mut lib = Library::new();
-        let w = lib.add("TUNARIA.ESF", crate::stream::open_file(&iso_path, "TUNARIA.ESF").unwrap());
-        let mut src = crate::stream::FileZones::open(&iso_path, "TUNARIA.ESF").unwrap();
+        let w = lib.add(file, crate::stream::open_file(&iso_path, file).unwrap());
+        let mut src = crate::stream::FileZones::open(&iso_path, file).unwrap();
         crate::stream::fill(&mut lib, w, x, z, &mut src);
         let world = World::load(&lib, w).unwrap();
         Some((lib, world))
@@ -961,5 +967,303 @@ mod bench {
             }
             eprintln!("at ({x}, {z}): {:.3} ms a frame; {}", best, fx.describe());
         }
+    }
+
+    /// Sutherland-Hodgman: the part of a convex polygon where `d >= 0`.
+    fn clip<P: Copy>(poly: &[P], d: impl Fn(&P) -> f32, lerp: impl Fn(&P, &P, f32) -> P) -> Vec<P> {
+        let mut out = Vec::with_capacity(poly.len() + 2);
+        for (i, a) in poly.iter().enumerate() {
+            let b = &poly[(i + 1) % poly.len()];
+            let (da, db) = (d(a), d(b));
+            if da >= 0.0 {
+                out.push(*a);
+            }
+            if (da >= 0.0) != (db >= 0.0) {
+                out.push(lerp(a, b, da / (da - db)));
+            }
+        }
+        out
+    }
+
+    /// What fans put on a `w` x `h` screen through `rel` (the view-projection
+    /// with the eye at the origin, as `draw_fans` draws them), the ground
+    /// (`ground` below the eye) hiding what is under it: the fragments (each
+    /// quad's area, its part over the ground, on the screen), and how many
+    /// quads cover each sample of a grid every `step` pixels.
+    pub(super) fn cover<'a>(quads: impl Iterator<Item = &'a Quad>, rel: Mat4, ground: f32, (w, h): (f32, f32), step: usize) -> (f64, Vec<u16>) {
+        let (gw, gh) = ((w as usize).div_ceil(step), (h as usize).div_ceil(step));
+        let mut depth = vec![0u16; gw * gh];
+        let mut fragments = 0.0;
+        for q in quads {
+            let poly: Vec<Vec3> = q.corners.iter().map(|&c| Vec3::from(c)).collect();
+            let poly = clip(&poly, |p| p.y - ground, |a, b, t| a.lerp(*b, t));
+            let poly: Vec<glam::Vec4> = poly.iter().map(|p| rel * p.extend(1.0)).collect();
+            // DirectX depth: the near plane is z = 0
+            let poly = clip(&poly, |c| c.z, |a, b, t| a.lerp(*b, t));
+            let mut poly: Vec<glam::Vec2> = poly.iter().map(|c| glam::Vec2::new((c.x / c.w * 0.5 + 0.5) * w, (0.5 - c.y / c.w * 0.5) * h)).collect();
+            for (axis, lo, hi) in [(0, 0.0, w), (1, 0.0, h)] {
+                poly = clip(&poly, |p| p[axis] - lo, |a, b, t| a.lerp(*b, t));
+                poly = clip(&poly, |p| hi - p[axis], |a, b, t| a.lerp(*b, t));
+            }
+            if poly.len() < 3 {
+                continue;
+            }
+            let n = poly.len();
+            let twice: f32 = (0..n).map(|i| poly[i].perp_dot(poly[(i + 1) % n])).sum();
+            fragments += (twice * 0.5).abs() as f64;
+            let sign = twice.signum();
+            let lo = poly.iter().fold(glam::Vec2::splat(f32::MAX), |a, p| a.min(*p));
+            let hi = poly.iter().fold(glam::Vec2::splat(f32::MIN), |a, p| a.max(*p));
+            let (x0, x1) = ((lo.x as usize) / step, ((hi.x as usize) / step).min(gw - 1));
+            let (y0, y1) = ((lo.y as usize) / step, ((hi.y as usize) / step).min(gh - 1));
+            for gy in y0..=y1 {
+                for gx in x0..=x1 {
+                    let s = glam::Vec2::new((gx * step) as f32 + step as f32 * 0.5, (gy * step) as f32 + step as f32 * 0.5);
+                    if (0..n).all(|i| (poly[(i + 1) % n] - poly[i]).perp_dot(s - poly[i]) * sign >= 0.0) {
+                        depth[gy * gw + gx] += 1;
+                    }
+                }
+            }
+        }
+        (fragments, depth)
+    }
+
+    /// The cover's own check: one quad filling the view's lower half (the
+    /// ground hiding none of it), seen from in front, is half the screen's
+    /// fragments and one deep on the samples there; behind the eye, none.
+    /// The control: the same quad under the ground puts nothing on it.
+    #[test]
+    fn the_cover_counts_what_is_seen() {
+        let proj = glam::camera::rh::proj::directx::perspective(90f32.to_radians(), 1.0, 0.3, 1000.0);
+        let rel = proj * glam::camera::rh::view::look_to_mat4(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y);
+        let at = |z: f32, y0: f32, y1: f32| Quad { corners: [[-z.abs(), y1, z], [z.abs(), y1, z], [z.abs(), y0, z], [-z.abs(), y0, z]], ..Default::default() };
+        let (f, d) = cover([at(-10.0, -10.0, 0.0)].iter(), rel, -100.0, (100.0, 100.0), 10);
+        assert!((f - 5000.0).abs() < 1.0, "{f}");
+        assert_eq!(d.iter().filter(|&&k| k == 1).count(), 50);
+        let (f, _) = cover([at(10.0, -10.0, 0.0)].iter(), rel, -100.0, (100.0, 100.0), 10);
+        assert_eq!(f, 0.0, "behind the eye");
+        let (f, d) = cover([at(-10.0, -10.0, 0.0)].iter(), rel, 0.5, (100.0, 100.0), 10);
+        assert_eq!((f, d.iter().map(|&k| k as u32).sum::<u32>()), (0.0, 0), "the control: under the ground");
+    }
+
+    /// `cargo test --release -p eqoa fx::bench::fans_cover -- --ignored
+    /// --nocapture` (`EQOA_FX_SPOT=<world>,<x>,<y>,<z>,<hour>`, else the
+    /// two F3 spots of 2026-10-26 with 298 fans, Klick'Anon's and Odus'):
+    /// the volumes drawn round a player standing there, and what their fans
+    /// put on a 1000x1000 screen for a camera close behind (3.3 off at 15
+    /// degrees, the Klick'Anon report's) looking each of eight ways, the
+    /// ground hiding what is under it: the fragments, as screens, and the
+    /// deepest sample. Then the fans pass on this machine's GPU over that
+    /// screen, the ground in its depth, against a whole screen of one
+    /// blended layer.
+    #[test]
+    #[ignore]
+    fn fans_cover() {
+        let spots: Vec<(String, [f32; 3], f32)> = match std::env::var("EQOA_FX_SPOT") {
+            Ok(s) => {
+                let v: Vec<&str> = s.split(',').collect();
+                let n = |i: usize| v[i].trim().parse::<f32>().unwrap();
+                vec![(v[0].to_string(), [n(1), n(2), n(3)], n(4))]
+            }
+            Err(_) => vec![("TUNARIA.ESF".into(), [23331.03, 54.13, 6503.17], 0.04), ("ODUS.ESF".into(), [8927.07, 48.07, 7123.74], 12.73)],
+        };
+        let (w, h) = (1000.0, 1000.0);
+        for (file, at, hour) in spots {
+            let Some((lib, world)) = tests::world_at(&file, at[0], at[2]) else { return };
+            let spot = Vec3::from(at);
+            let mut worst: Option<(f64, Vec<Run>, Mat4, Vec3)> = None;
+            for k in 0..8 {
+                let yaw = k as f32 * std::f32::consts::FRAC_PI_4;
+                let fwd = Vec3::new(yaw.sin(), 0.0, yaw.cos());
+                let (pitch, dist) = (0.2618f32, 3.33);
+                let target = spot + Vec3::Y * 1.5;
+                let eye = target - fwd * dist * pitch.cos() + Vec3::Y * dist * pitch.sin();
+                let dir = (target - eye).normalize();
+                let proj = crate::walker::projection_to(w / h, 3000.0);
+                let view = glam::camera::rh::view::look_to_mat4(eye, dir, Vec3::Y);
+                let cam = camera(Vect3::of(eye.x, eye.y, eye.z), Vect3::of(dir.x, dir.y, dir.z));
+                let mut fx = Fx::new();
+                fx.stream(eye, &world, &lib);
+                let mut t = 0;
+                // three seconds at 60 a second: every puff alive
+                while t < 3000 {
+                    fx.frame(&world, &lib, &cam, proj * view, eye, t, hour);
+                    t += 16;
+                }
+                if k == 0 {
+                    eprintln!("{file} at {at:?}, hour {hour}: {}", fx.describe());
+                    let (mut host, zones, cards, rand, draw) = fx.scene(&lib, F::new(hour));
+                    let planes = crate::particles::frustum(proj * view);
+                    for inst in zones.values_mut().flatten() {
+                        let actor = &world.actors[inst.actor];
+                        let d = (inst.bound.0 - eye).length();
+                        if d > 160.0 || !rastered(actor.flags, &actor.location, inst.bound, &cam.position, &planes) {
+                            continue;
+                        }
+                        draw.fans.clear();
+                        draw.sprites.clear();
+                        inst.vs.raster(&cam, &Matrix44::mul(&inst.m, &cam.view), t, cards, rand, &mut host, draw);
+                        let v = &inst.vs.volume;
+                        let s = [v.bbox.max.x.0 - v.bbox.min.x.0, v.bbox.max.y.0 - v.bbox.min.y.0, v.bbox.max.z.0 - v.bbox.min.z.0];
+                        eprintln!(
+                            "  {:6} {:4.1}x{:4.1}x{:4.1} density {:.2} seen {:5.1} hours {:5.2}-{:5.2}: {:5.1} off, fade {:.2}, hours {:.2}, {} fans",
+                            type_name(v.ty), s[0], s[1], s[2], v.density.0, v.p30.0, v.p34.0, v.p38.0, d, v.fade.0, v.day_night.0, draw.fans.len()
+                        );
+                    }
+                }
+                let rel = (proj * view) * Mat4::from_translation(eye);
+                let ground = spot.y - eye.y;
+                let (fragments, depth) = cover(fx.runs.iter().flat_map(|r| &r.quads), rel, ground, (w, h), 4);
+                let screens = fragments / (w * h) as f64;
+                let deep = depth.iter().copied().max().unwrap_or(0);
+                let mut sorted = depth.clone();
+                sorted.sort_unstable();
+                let p = |q: f64| sorted[((sorted.len() - 1) as f64 * q) as usize];
+                eprintln!("  looking {:3.0} deg: {} fans, {:.2} screens of fragments; samples covered {:.0}%, median {}, 90% {}, deepest {}", yaw.to_degrees(), fx.stats.fans, screens, 100.0 * depth.iter().filter(|&&d| d > 0).count() as f64 / depth.len() as f64, p(0.5), p(0.9), deep);
+                if worst.as_ref().is_none_or(|w| fragments > w.0) {
+                    worst = Some((fragments, fx.runs.clone(), proj * view, eye));
+                }
+            }
+            if let Some((fragments, runs, vp, eye)) = worst {
+                gpu_time(&lib, &runs, vp, eye, spot.y - eye.y, fragments, (w as u32, h as u32));
+            }
+        }
+    }
+
+    /// The fans pass timed on this machine's GPU: `runs` drawn over a
+    /// `size` target whose depth holds the ground (`ground` below the eye),
+    /// 200 passes in one submission, against 200 passes of one whole-screen
+    /// blended quad.
+    fn gpu_time(lib: &Library, runs: &[Run], view_proj: Mat4, eye: Vec3, ground: f32, fragments: f64, (w, h): (u32, u32)) {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+            eprintln!("SKIP the GPU: no adapter");
+            return;
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let mut renderer = render::Renderer::new(&device, &queue, render::TARGET_FORMAT);
+        let tex = |format, usage| {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: None,
+                    size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default())
+        };
+        let target = tex(render::TARGET_FORMAT, wgpu::TextureUsages::RENDER_ATTACHMENT);
+        let depth = tex(render::DEPTH_FORMAT, wgpu::TextureUsages::RENDER_ATTACHMENT);
+        // the ground into the depth: a plane under the eye
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(
+                "@group(0) @binding(0) var<uniform> m: mat4x4<f32>;\n@vertex fn vs(@location(0) p: vec3<f32>) -> @builtin(position) vec4<f32> { return m * vec4<f32>(p, 1.0); }\n@fragment fn fs() -> @location(0) vec4<f32> { return vec4<f32>(0.1, 0.1, 0.1, 1.0); }".into(),
+            ),
+        });
+        let rel = view_proj * Mat4::from_translation(eye);
+        use wgpu::util::DeviceExt;
+        let bytes = |f: &[f32]| f.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+        let ubuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: &bytes(&rel.to_cols_array()), usage: wgpu::BufferUsages::UNIFORM });
+        let r = 4000.0f32;
+        let plane: Vec<f32> = [[-r, -r], [r, -r], [r, r], [-r, -r], [r, r], [-r, r]].iter().flat_map(|[x, z]| [*x, ground, *z]).collect();
+        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: &bytes(&plane), usage: wgpu::BufferUsages::VERTEX });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: None,
+            layout: None,
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout { array_stride: 12, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x3] })],
+            },
+            primitive: Default::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: render::DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState { format: render::TARGET_FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: ubuf.as_entire_binding() }],
+        });
+        let view = render::View { eye, fog: Some((20.0, 200.0, Vec3::splat(0.2))), ..render::View::daylight(view_proj) };
+        let textures = render::library_textures(lib);
+        let ground_pass = |enc: &mut wgpu::CommandEncoder| {
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth,
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.set_vertex_buffer(0, vbuf.slice(..));
+            pass.draw(0..6, 0..1);
+        };
+        let time = |renderer: &mut render::Renderer, runs: &[Run]| {
+            renderer.set_fans(&device, &queue, runs, eye, &textures);
+            let mut best = f64::MAX;
+            for _ in 0..4 {
+                let mut enc = device.create_command_encoder(&Default::default());
+                ground_pass(&mut enc);
+                queue.submit([enc.finish()]);
+                device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).unwrap();
+                let mut enc = device.create_command_encoder(&Default::default());
+                for _ in 0..200 {
+                    renderer.draw_fans(&queue, &mut enc, &target, &depth, &view);
+                }
+                let start = std::time::Instant::now();
+                queue.submit([enc.finish()]);
+                device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).unwrap();
+                best = best.min(start.elapsed().as_secs_f64() * 1000.0 / 200.0);
+            }
+            best
+        };
+        let fans = time(&mut renderer, runs);
+        // one blended quad over the whole screen, just past the near plane
+        let inv = rel.inverse();
+        let corner = |x: f32, y: f32| {
+            let p = inv * glam::Vec4::new(x, y, 0.01, 1.0);
+            (p.truncate() / p.w).to_array()
+        };
+        let screen = Quad { corners: [corner(-1.0, 1.0), corner(1.0, 1.0), corner(1.0, -1.0), corner(-1.0, -1.0)], uvs: [[0.0; 2]; 4], color: [1.0, 1.0, 1.0, 0.5], normal: [0.0, 1.0, 0.0] };
+        let one = time(&mut renderer, &[Run { texture: runs.first().map_or(0, |r| r.texture), blend: 3, zwrite: false, quads: vec![screen] }]);
+        eprintln!(
+            "  the GPU ({}): the fans pass {:.3} ms ({:.2} screens of fragments counted), one whole-screen blended layer {:.3} ms: the pass is {:.1} such layers",
+            adapter.get_info().name,
+            fans,
+            fragments / (w * h) as f64,
+            one,
+            fans / one
+        );
     }
 }
