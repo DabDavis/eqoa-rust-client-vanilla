@@ -5,6 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>EQOA</title>
 <link rel="icon" type="image/svg+xml" href="./disc.svg">
+<!-- the page as an installed app (main.js "installing"): opened from the Home Screen or the apps, full screen -->
+<link rel="manifest" href="./manifest.json">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
 <style>
   :root { color-scheme: dark; --bg: #0b0d10; --panel: #151a20; --raised: #1c232b; --line: #2a323c; --text: #e6e9ee; --dim: #9aa4b1; --accent: #d9a441; --bad: #e0745f; --good: #79c08a; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, sans-serif; overflow: hidden; }
@@ -58,6 +64,9 @@
   #rp-pic { display: block; box-sizing: border-box; max-width: 100%; max-height: 26vh; margin-top: 8px; border: 1px solid var(--line); border-radius: 6px; }
   pre.crash { margin: 0 0 6px; padding: 8px 10px; max-height: 160px; overflow: auto; background: #0e1217; border: 1px solid var(--line); border-radius: 6px; font: 12px/1.4 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
   .ok a { color: var(--good); }
+  #install .row { margin-top: 10px; }
+  #install .note { color: var(--text); }
+  #install-go { flex: 0 1 auto; }
 </style>
 </head>
 <body>
@@ -95,6 +104,10 @@
     </details>
     <div class="error" id="gate-error"></div>
     <div class="row"><button type="submit" id="go" class="primary">Start</button></div>
+    <div id="install" hidden>
+      <div class="row"><button type="button" id="install-go" hidden>Install EQOA as an app</button></div>
+      <div class="note" id="install-what"></div>
+    </div>
     <div class="row end"><a class="link" href="./spellfx.html" target="_blank" rel="noopener">Help match spell visuals</a><a class="link" href="/eqoa/reports/board" target="_blank" rel="noopener">Bug reports board</a><button type="button" class="link" id="report-gate">Report a problem (F3)</button></div>
   </form>
 

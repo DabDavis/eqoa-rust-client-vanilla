@@ -52,6 +52,20 @@ version.json under it:
             from the preview, not while typing; the game's page links it (the
             preview and the disc's visuals are drive's: a visual list is
             handed over as the preview sends it)
+  fullscreen  Start puts the page full screen in its click where it can stay
+            so: a computer whose browser keeps Escape for the game (Keyboard
+            Lock), Escape locked; a touch device, where a touch on the game
+            puts it back once it is left, not while an edit box has the
+            keyboard (the touch puts that up). Not without Keyboard Lock (a
+            stand-in), not with another window of the game open, not on an
+            iPhone; a computer's left stays left at a click
+  install   the page names its build's manifest, Chromium finds nothing in
+            the way of installing it (a page without one: errors), the icons
+            are PNGs in the build; the card's button (a stand-in offer) asks
+            the browser's prompt, and says what came of it, a report too; a
+            browser that has not offered it: nothing on a computer, its menu
+            on a phone (Firefox's named), the Home Screen on an iPhone; none
+            of it started as the app
   software  a browser drawing without the graphics card (a stand-in: no
             WebGPU, WebGL2 naming Windows' Microsoft Basic Render Driver; then
             the client's graphics line naming it) is told so on the card's
@@ -63,7 +77,7 @@ Each check has its negative control. Needs the `websockets` package.
     web/build.sh && web/pagetest.py --iso run/eqoa.iso
     web/pagetest.py --serve --http-port 8794   # the site alone, for drive.py --base
 """
-import argparse, asyncio, functools, http.server, json, os, shutil, socketserver, subprocess, sys, tempfile, threading, time, urllib.request
+import argparse, asyncio, functools, http.server, json, os, re, shutil, socketserver, subprocess, sys, tempfile, threading, time, urllib.request
 from pathlib import Path
 
 import websockets
@@ -828,6 +842,150 @@ async def tests(a, site, base, page):
     await page.js("window.eqoaWantText(false); true")
     check("the box gone, the focus is the canvas's again", await page.js("document.activeElement && document.activeElement.id") == "eqoa")
     check("and a touch puts no keyboard up any more", await page.js(touch_up) != "eqoatyped")
+
+    # ---- fullscreen: Start puts the page full screen in its own click on a
+    # computer whose browser keeps Escape for the page (Keyboard Lock) and on
+    # a touch device (CDP's touch emulation: its pointer coarse), where a touch
+    # on the game puts it back once it is left, but not while an edit box has
+    # the keyboard; not where Escape would end it (no Keyboard Lock: a
+    # stand-in), not with another window of the game open (multiboxing), not
+    # on an iPhone. F11 stays the browser's: Chromium takes it before the page
+    # in any full screen (checked headed, through X: README "In a browser").
+    fs = "!!document.fullscreenElement"
+    fsfact = "(eqoaReport.facts().find((l) => l.startsWith('full screen:')) || '')"
+    # the browser's own install offer kept from the page, so the card shows
+    # what these checks put there (a stand-in offer is not trusted)
+    quiet = await page.call("Page.addScriptToEvaluateOnNewDocument", source="addEventListener('beforeinstallprompt', (e) => { if (e.isTrusted) e.stopImmediatePropagation(); }, true);")
+
+    async def start():
+        """Start pressed in a click's activation, the disc picked: whether the
+        page went full screen."""
+        await page.open(base + q)
+        await page.pick(a.iso)
+        await page.gesture("document.getElementById('go').click(); true")
+        return bool(await page.until(fs, 3))
+
+    async def tap():
+        await page.call("Input.dispatchTouchEvent", type="touchStart", touchPoints=[{"x": 300, "y": 300, "id": 1}])
+        await page.call("Input.dispatchTouchEvent", type="touchEnd", touchPoints=[])
+
+    async def leave():
+        await page.js("document.exitFullscreen().then(() => true, () => true)")
+        return bool(await page.until(f"!{fs}", 3))
+
+    check("a computer whose browser keeps Escape for the page: Start goes full screen", await start())
+    said = await page.until(f"{fsfact}.includes('Escape the game')", 3)
+    check("Escape locked to the game there", bool(said), str(await page.js(fsfact)))
+    nolock = await page.call("Page.addScriptToEvaluateOnNewDocument", source="Object.defineProperty(Navigator.prototype, 'keyboard', { configurable: true, get: () => undefined });")
+    try:
+        check("one whose browser can't (Firefox, Safari: a stand-in): no full screen (control)", not await start())
+    finally:
+        await page.call("Page.removeScriptToEvaluateOnNewDocument", identifier=nolock["identifier"])
+    await page.open(base + q)
+    other = devtools("new?" + base, "PUT")
+    try:
+        devtools(f"activate/{a.target_id}")
+        both = await page.until("eqoaWindows.live.length === 2 && document.visibilityState === 'visible'", 5)
+        await page.pick(a.iso)
+        await page.gesture("document.getElementById('go').click(); true")
+        went = await page.until(fs, 2)
+        check("another window of the game open (multiboxing): no full screen", bool(both) and not went, f"{both} {await page.js(fsfact)}")
+    finally:
+        devtools(f"close/{other['id']}")
+        devtools(f"activate/{a.target_id}")
+    await page.call("Emulation.setUserAgentOverride", userAgent="Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1")
+    try:
+        check("an iPhone: none (iOS lets no page there)", not await start())
+        what = await page.js("document.getElementById('install').hidden ? '' : document.getElementById('install-what').textContent")
+        check("its card says how: the Home Screen app", "Add to Home Screen" in (what or ""), str(what))
+    finally:
+        await page.call("Emulation.setUserAgentOverride", userAgent=ua)
+
+    await page.call("Emulation.setTouchEmulationEnabled", enabled=True, maxTouchPoints=5)
+    try:
+        check("a touch device: Start goes full screen", await start())
+        playing = await page.until("document.body.classList.contains('playing')", 60)
+        left = await leave()
+        await tap()
+        check("left, a touch on the game puts it back", bool(playing) and left and bool(await page.until(fs, 3)), f"playing {playing}, left {left}")
+        await page.js("eqoaWantText(true); true")
+        await leave()
+        await tap()
+        await asyncio.sleep(0.5)
+        check("not while an edit box has the keyboard (control): the touch puts it up", not await page.js(fs) and await page.js("document.activeElement && document.activeElement.id") == "eqoatyped")
+        await page.js("eqoaWantText(false); true")
+    finally:
+        await page.call("Emulation.setTouchEmulationEnabled", enabled=False)
+    check("a computer: Start goes full screen", await start())
+    playing = await page.until("document.body.classList.contains('playing')", 60)
+    await leave()
+    await page.call("Input.dispatchMouseEvent", type="mousePressed", x=300, y=300, button="left", clickCount=1)
+    await page.call("Input.dispatchMouseEvent", type="mouseReleased", x=300, y=300, button="left", clickCount=1)
+    await asyncio.sleep(0.5)
+    check("left, it stays left at a click on the game (control: a computer's is the player's)", bool(playing) and not await page.js(fs))
+
+    # ---- install: the build is an app a browser can install (its manifest,
+    # the drawn disc's icons); the card's button asks a Chromium-based
+    # browser's own prompt (a stand-in offer: the real one comes when the
+    # browser's rules say), elsewhere the card says which menu has it, and
+    # started as the app it says nothing
+    await page.open(base + q)
+    man = await page.call("Page.getAppManifest") or {}
+    parsed = json.loads(man.get("data") or "{}")
+    check("the page names its build's manifest, which parses", re.search(r"/v/[0-9a-f]{12}/manifest\.json$", man.get("url", "")) is not None and not man.get("errors") and parsed.get("display") == "fullscreen",
+          json.dumps(man.get("errors")) + " " + man.get("url", ""))
+    installable = ((await page.call("Page.getInstallabilityErrors")) or {}).get("installabilityErrors")
+    check("Chromium can install it: no installability error", installable == [], json.dumps(installable))
+    await page.call("Page.navigate", url=base + "spellfx.html")
+    await page.until("document.readyState === 'complete'", 10)
+    bare = ((await page.call("Page.getInstallabilityErrors")) or {}).get("installabilityErrors")
+    check("a page with no manifest can't be (control)", bool(bare), json.dumps(bare))
+    build = json.loads((HERE / "dist" / "version.json").read_text())["build"]
+    made = [i for i in ("icon-192.png", "icon-512.png", "icon-maskable-512.png", "apple-touch-icon.png") if (HERE / "dist" / "v" / build / i).read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"]
+    check("its icons are in the build, PNGs", len(made) == 4 and f'href="./v/{build}/apple-touch-icon.png"' in (HERE / "dist" / "index.html").read_text(), str(made))
+
+    card = "JSON.stringify([!document.getElementById('install').hidden, !document.getElementById('install-go').hidden, document.getElementById('install-what').textContent])"
+    offer = """(() => { const e = new Event('beforeinstallprompt');
+      e.prompt = () => { window.__prompted = (window.__prompted || 0) + 1; return Promise.resolve(); };
+      e.userChoice = Promise.resolve({ outcome: %s }); dispatchEvent(e); return true; })()"""
+    appfact = "(eqoaReport.facts().find((l) => l.startsWith('app:')) || '')"
+    await page.open(base + q)
+    shown = json.loads(await page.js(card))
+    check("a computer's browser that has not offered it: nothing on the card (control)", shown[:2] == [False, False], str(shown))
+    await page.js(offer % "'accepted'")
+    shown = json.loads(await page.js(card))
+    check("one that offers it: the button", shown[:2] == [True, True] and "full screen" in shown[2], str(shown))
+    await page.gesture("document.getElementById('install-go').click(); true")
+    said = await page.until(f"{card}.includes('Installed:')", 3)
+    check("pressed, the browser's own prompt; accepted, the card says so and the button goes", await page.js("window.__prompted") == 1 and bool(said) and not json.loads(await page.js(card))[1], str(await page.js(card)))
+    check("and a report says so", await page.js(appfact) == "app: accepted", str(await page.js(appfact)))
+    await page.open(base + q)
+    await page.js(offer % "'dismissed'")
+    await page.gesture("document.getElementById('install-go').click(); true")
+    await asyncio.sleep(0.3)
+    shown = json.loads(await page.js(card))
+    check("dismissed, the button goes (on a computer the card says nothing more)", shown[:2] == [False, False], str(shown))
+    await page.call("Emulation.setTouchEmulationEnabled", enabled=True, maxTouchPoints=5)
+    try:
+        await page.open(base + q)
+        shown = json.loads(await page.js(card))
+        check("a phone's browser that has not offered it: its menu", shown[:2] == [True, False] and "Install app or Add to Home screen" in shown[2], str(shown))
+        await page.call("Emulation.setUserAgentOverride", userAgent="Mozilla/5.0 (Android 14; Mobile; rv:131.0) Gecko/131.0 Firefox/131.0")
+        await page.open(base + q)
+        shown = json.loads(await page.js(card))
+        check("Firefox on a phone: Firefox's menu", shown[:2] == [True, False] and "Firefox" in shown[2], str(shown))
+    finally:
+        await page.call("Emulation.setUserAgentOverride", userAgent=ua)
+        await page.call("Emulation.setTouchEmulationEnabled", enabled=False)
+    standalone = await page.call("Page.addScriptToEvaluateOnNewDocument", source="Object.defineProperty(Navigator.prototype, 'standalone', { configurable: true, get: () => true });")
+    try:
+        await page.open(base + q)
+        await page.js(offer % "'accepted'")
+        shown = json.loads(await page.js(card))
+        check("started as the installed app: nothing on the card, offered or not", not shown[0] and await page.js(appfact) == "app: started as the installed app", f"{shown} {await page.js(appfact)}")
+    finally:
+        await page.call("Page.removeScriptToEvaluateOnNewDocument", identifier=standalone["identifier"])
+    await page.call("Page.removeScriptToEvaluateOnNewDocument", identifier=quiet["identifier"])
 
     # ---- software: a browser drawing without the graphics card is told so
     # once, on the card's line, in a notice and on the status line in the

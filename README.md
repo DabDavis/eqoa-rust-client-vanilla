@@ -87,6 +87,13 @@ or a browser (each described where it lives below):
 - **Each window where it was**: natively a window opens with the size, place,
   monitor and maximized or full-screen state (F11, Alt+Enter or Video's Display) it last had, each of
   several windows its own.
+- **Full screen in a browser, and the page as an app**: Start puts the page full
+  screen (a phone's or a tablet's in any browser that lets a page, iOS's none, and again
+  at a touch once it is left; a computer's in a Chromium-based browser, which keeps Escape the
+  game's; not while multiboxing), and F11 stays the browser's own, to a window and
+  back. The page installs as an app (the card's button, or the browser's menu; on an
+  iPhone, whose browsers let no page go full screen, Add to Home Screen), started full
+  screen with none of the browser round it.
 - **The 2002 art** (F9, or the Extended page's Art): the game drawn as
   EverQuest Online Adventures looked before Frontiers, out of the player's own
   USA disc of 2002 (SLUS-20470) beside the Frontiers one: every race's body,
@@ -785,19 +792,58 @@ module that would not unpack on the Frontiers disc (unpacked once more past the 
 copy first), a file of the page that did not load, no sound, a failed world change.
 `web/pagetest.py` checks the page's half against a stand-in for the report server: the
 update paths, a report and its scrubbing, a crash, a tab that died while it was shown, a
-page whose build is gone, the disc line. Each check has its control. `drive.py --scale`
+page whose build is gone, the disc line, the full screen and the install. Each check has its control. `drive.py --scale`
 is the display's own scale: at Windows' 125% and 150%, on WebGPU and on WebGL2, the HUD
 draws as at 100% and the canvas holds the device's pixels.
 
-F11 is the browser's own full screen. The canvas cancels every key it is given
-(winit's listener calls `preventDefault`), which kept F11 from the browser, so the
-page catches F11 on its way down and leaves it to the browser (`web/main.js`); the
-canvas follows the window's size, and the HUD its shape. Natively Alt+Enter toggles
-full screen as well; in a page it is the game's Enter, and the Extended page's Display is
-not there. Checked with
-`drive.py --headed` on an Xvfb with a window manager, F11 pressed through X (the
-page 1192x609, then the screen's 1600x900, then back, the canvas's buffer each
-time), and with `--resize` (the game at 60 fps after each new size).
+Start (and View) put the page full screen in their own click (`web/main.js` "full
+screen"; the user, 2026-10-27: "the browser build should force full screen, mobile
+players cant figure it out", then "still allow f11 to non fullscreen"): the whole page,
+not the canvas, so the notices, the report dialog and the phone keyboard's input stay
+on it. On a phone or a tablet (a coarse pointer, `eqoaTouchFirst`) in any browser that
+lets a page; one left (the back gesture, another app) comes back at the next touch on
+the game, but not while an edit box has the keyboard (that touch puts it up). On a
+computer only where Escape stays the game's: a browser ends a page's full screen on
+Escape, and Chromium-based ones let the page keep it (Keyboard Lock: a tap is the
+game's, held about a second and a half it ends the full screen, as the browser says on
+entering; the game sees the held key's repeats), so Firefox's and Safari's stays F11's
+alone, as before; and not with another window of the game open in the browser
+(multiboxing: the windows side by side). A full screen asked for uses the click's
+activation up, so Start with a remembered disc the browser must ask for first asks for
+the disc and leaves the full screen to the submit, which gets it while the activation
+lasts. F11 stays the browser's own: in a window its full screen, in any full screen (the
+page's too) back to a window, Chromium taking F11 there before the page sees it. The
+canvas cancels every key it is given (winit's listener calls `preventDefault`), which
+kept F11 from the browser, so the page catches F11 on its way down and leaves it to the
+browser; the canvas follows the window's size, and the HUD its shape. iOS lets no page
+on an iPhone go full screen (none in Safari 27's beta either), and an iPad's Safari ends
+one at the first key typed ("Typing is not allowed in full screen websites"): there the
+card says how to install the page instead. Natively Alt+Enter toggles full screen as
+well; in a page it is the game's Enter, and the Extended page's Display is not there.
+Checked headed on an Xvfb with a window manager, keys pressed through X (Chromium 154,
+the game booted on SwiftShader): Start full screen with Escape locked, an Escape tap
+reaching the canvas with the full screen kept, F11 to a window, to the browser's own
+full screen and back, the canvas never seeing F11; before that, `drive.py --headed`
+with F11 through X (the page 1192x609, then the screen's 1600x900, then back, the
+canvas's buffer each time), and `--resize` (the game at 60 fps after each new size).
+`web/pagetest.py` "fullscreen" holds the page's half. A report's `full screen:` line
+says which rule held and what the browser answered.
+
+The page installs as an app (the user, 2026-10-27: "we can add the install app feature
+for each"): each build carries `manifest.json` (`display: fullscreen`, its `start_url`
+and `scope` the page beside `v/`) and the program's drawn disc as PNG icons
+(`tools/webicons`, made by `build.sh` off `icon_art.rs`: 192 and 512, a maskable 512
+inside the circle every launcher's mask keeps, and iOS's opaque `apple-touch-icon.png`).
+Started from the Home Screen or the apps it is full screen with none of the browser
+round it, and its storage is the app's, so the modules unpacked off the disc stay
+(Safari clears a site's after a week unused, not a Home Screen app's); it draws no
+faster, the engine being the browser's. No service worker: Chromium 154 finds nothing in
+the way of installing it without one (`Page.getInstallabilityErrors`). Chromium-based
+browsers offer the install once the page has been used a little (`beforeinstallprompt`),
+and the card's "Install EQOA as an app" asks for it; elsewhere the card says which menu
+has it (iOS's Share menu, Firefox's on Android, any phone browser's, Safari's File > Add
+to Dock on a Mac), and started as the app it says nothing (`web/pagetest.py`
+"install"; a report's `app:` line).
 
 The page takes `?relay=` and `?server=` (an IPv4 address; by default the
 page's own host, as the relay resolves it), `?webgl` for WebGL2 where

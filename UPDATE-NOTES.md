@@ -5,6 +5,21 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-27 · Full screen in the browser, and the page as an app
+- In a browser the game now goes full screen as soon as you press Start: on an Android phone
+  or tablet, and on a computer in Chrome, Edge or another Chromium-based browser. Escape is
+  still the game's key there: tap it as always, and hold it to leave full screen. F11 still
+  switches to a window and back.
+- On Android, if you leave full screen (the back gesture, another app), your next touch on
+  the game puts it back.
+- With another window of the game open (multiboxing), Start leaves your windows as they are.
+- The page can be installed as an app. In Chrome and Edge an "Install EQOA as an app" button
+  shows under Start once you have used the page a little; on an iPhone or iPad choose Add to
+  Home Screen in the browser's Share menu (iPhones let no web page go full screen, so this
+  is the way there). Started from your Home Screen or your apps it is full screen with none
+  of the browser round it, and it keeps the game files it unpacks from your disc between
+  visits, so it starts quicker.
+
 ## 2026-10-27 · Running and turning at the PS2's own speed, at any frame rate
 - Running, walking, turning and swimming now go exactly as fast as on a PS2, whatever your
   display's frame rate. Before, the higher the frame rate the faster you went: at 165 frames

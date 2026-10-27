@@ -1,0 +1,10 @@
+[package]
+name = "webicons"
+description = "The browser page's app icons, from the program's drawn disc (web/build.sh)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+png = "0.18.1"

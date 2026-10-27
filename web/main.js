@@ -75,14 +75,6 @@ for (const ev of ['pointerdown', 'keydown']) {
   addEventListener(ev, () => { if (audio && audio.ctx.state === 'suspended') audio.ctx.resume().catch(() => {}); });
 }
 
-// F11 is the browser's own full screen. The canvas cancels every key it is
-// given (winit's listener), so F11 is kept from it, caught on its way down
-// before the canvas sees it, and left to the browser; the canvas follows the
-// window's new size.
-for (const ev of ['keydown', 'keyup']) {
-  addEventListener(ev, (e) => { if (e.key === 'F11') e.stopImmediatePropagation(); }, true);
-}
-
 // The mouse look asks for the pointer through winit, which drops the promise
 // a browser answers requestPointerLock with. One refused (asked again too soon
 // after the player let go of it with Escape, or a page not in front) is the
@@ -213,6 +205,7 @@ $('gate').addEventListener('submit', async (ev) => {
   startAudio(); // in the gesture itself, before anything is awaited
   const file = $('iso').files[0];
   if (!file) return error('gate', 'Pick your disc image first.');
+  fullScreen(); // in the gesture too
   keepFields();
   started = true;
   busy(true);
@@ -243,6 +236,7 @@ window.eqoaBooted = () => {
 $('view').addEventListener('click', async () => {
   const file = $('iso').files[0];
   if (!file) return error('gate', 'Pick your disc image first.');
+  fullScreen();
   keepFields();
   started = true;
   busy(true);
@@ -864,9 +858,160 @@ if (canRemember) {
     if ($('iso').files.length || !rememberOn() || !remembered.disc) return; // the form's own way
     ev.preventDefault();
     startAudio(); // in the gesture itself, as the form's submit does
+    // not full screen yet: a full screen asked for uses the click's activation
+    // up, and the browser's ask for the disc needs it; the submit asks for
+    // full screen once the disc is in, if the activation lasted
     takeAgain('iso').then((ok) => { if (ok) $('gate').requestSubmit(); });
   });
 }
+
+// ---- full screen (the user, 2026-10-27: "the browser build should force
+// full screen, mobile players cant figure it out", and "still allow f11 to
+// non fullscreen"). Start and View put the whole page full screen in their
+// own click (the page, not the canvas: the notices, the report dialog and the
+// phone keyboard's input stay on it), where it can stay so:
+// - on a phone or a tablet (`eqoaTouchFirst`), in any browser that lets a
+//   page. One left (the back gesture, another app) comes back at the next
+//   touch on the game, but not while an edit box has the keyboard (that touch
+//   puts it up);
+// - on a computer only where Escape stays the game's (its windows, its
+//   menus): a browser ends a page's full screen on Escape, but Chromium-based
+//   ones let the page keep it (Keyboard Lock; held, it still ends it, as the
+//   browser says on entering). Firefox's and Safari's full screen stays F11's
+//   alone, as before. Not with another window of the game open in this
+//   browser either: multiboxing, the windows side by side.
+// F11 stays the browser's: in a window its own full screen, in any full
+// screen (the page's too) back to a window (Chromium takes it before the
+// page there). The canvas cancels every key it is given (winit's listener),
+// so F11 is kept from it, caught on its way down, and left to the browser.
+// iOS lets no page on an iPhone go full screen, and an iPad's Safari ends
+// one at the first key typed ("Typing is not allowed in full screen
+// websites"): there the app off the Home Screen is full screen (`installWhat`).
+
+const full = { said: 'not asked' }; // what the page last asked or heard, for a report
+// Escape can stay the game's in a page's full screen
+const keepsEscape = !!(navigator.keyboard && typeof navigator.keyboard.lock === 'function');
+// full screen already: the page's, the browser's own (F11), or an installed app's
+const shownFull = () => !!document.fullscreenElement || matchMedia('(display-mode: fullscreen)').matches;
+// a browser and a device where the page puts itself full screen
+const canFull = () => !!document.fullscreenEnabled && !onIOS && (window.eqoaTouchFirst() || keepsEscape);
+// another window of the game is open in this browser (the places multibox.rs reads)
+const multiboxing = () => windows.live.some((n) => n !== windows.place);
+
+function fullScreen() {
+  if (!canFull() || shownFull()) return;
+  if (!window.eqoaTouchFirst() && multiboxing()) {
+    full.said = 'not asked: another window of the game is open';
+    return;
+  }
+  full.said = 'asked';
+  let asked;
+  try {
+    asked = document.documentElement.requestFullscreen({ navigationUI: 'hide' });
+  } catch (e) {
+    asked = Promise.reject(e);
+  }
+  Promise.resolve(asked).catch((e) => {
+    full.said = `refused (${e && e.message ? e.message : e})`;
+    console.log(`full screen ${full.said}`);
+  });
+}
+
+document.addEventListener('fullscreenchange', () => {
+  const on = !!document.fullscreenElement;
+  full.said = on ? 'on' : 'left';
+  if (!keepsEscape) return;
+  if (!on) {
+    navigator.keyboard.unlock();
+    return;
+  }
+  navigator.keyboard.lock(['Escape']).then(
+    () => { if (document.fullscreenElement) full.said = 'on, Escape the game’s'; },
+    (e) => { full.said = `on, Escape not kept (${e && e.message ? e.message : e})`; });
+});
+
+for (const ev of ['keydown', 'keyup']) {
+  addEventListener(ev, (e) => { if (e.key === 'F11') e.stopImmediatePropagation(); }, true);
+}
+
+$('eqoa').addEventListener('pointerup', (e) => {
+  if (e.pointerType !== 'mouse' && started && !wantText && window.eqoaTouchFirst()) fullScreen();
+});
+
+// For a report.
+function fullFacts() {
+  const where = !document.fullscreenEnabled ? 'the browser lets no page'
+    : onIOS ? 'none on iOS (the Home Screen app is)'
+    : window.eqoaTouchFirst() ? 'from Start, and again at a touch'
+    : keepsEscape ? 'from Start, Escape the game’s'
+    : 'F11’s alone (Escape would end the page’s)';
+  const now = document.fullscreenElement ? 'the page’s' : shownFull() ? 'the browser’s or the app’s' : 'a window';
+  return `${where}; now ${now}; last: ${full.said}`;
+}
+
+// ---- installing the page as an app (the user, 2026-10-27: "we can add the
+// install app feature for each"). The build's manifest (manifest.json: this
+// page, full screen, the drawn disc's icons) lets a browser install the
+// page: started from the Home Screen or the apps it is full screen, with
+// nothing of the browser round it, and its storage is the app's (the
+// modules unpacked off the disc stay: Safari clears a site's after a week
+// unused, not a Home Screen app's). It draws no faster: the engine is the
+// browser's. Chromium-based browsers offer the install themselves once the
+// page has been used a little (`beforeinstallprompt`): the card's button asks
+// for it. The others keep it in a menu, and the card says which: iOS's Share
+// menu (an iPhone's only full screen), Firefox's on Android, any phone
+// browser's, Safari's File menu on a Mac. Started as the app, the card says
+// nothing of it.
+
+const install = { prompt: null, said: '' };
+// started as an installed app (judged as the page opens: a browser's F11 full
+// screen, entered later, is the same display mode)
+const asApp = navigator.standalone === true || matchMedia('(display-mode: fullscreen), (display-mode: standalone), (display-mode: minimal-ui)').matches;
+
+function installWhat() {
+  const b = browser();
+  let text = '';
+  if (install.said === 'accepted' || install.said === 'installed') {
+    text = 'Installed: start EQOA from your Home Screen or your apps from now on.';
+  } else if (install.prompt) {
+    text = 'Then it starts from your Home Screen or your apps, full screen, with nothing of the browser round it.';
+  } else if (onIOS) {
+    text = 'For full screen on an iPhone or iPad, install it: in the browser’s Share menu choose Add to Home Screen, then start EQOA from your Home Screen.';
+  } else if (window.eqoaTouchFirst()) {
+    text = b.firefox
+      ? 'To install it as an app (full screen, from your Home Screen), choose Install in Firefox’s menu.'
+      : 'To install it as an app (full screen, from your Home Screen), choose Install app or Add to Home screen in the browser’s menu.';
+  } else if (b.safari) {
+    text = 'To install it as an app, choose File > Add to Dock in Safari.';
+  }
+  $('install-go').hidden = !install.prompt;
+  $('install-what').textContent = text;
+  $('install').hidden = asApp || !text;
+}
+
+addEventListener('beforeinstallprompt', (e) => {
+  install.prompt = e;
+  if (!install.said) install.said = 'offered';
+  installWhat();
+});
+addEventListener('appinstalled', () => {
+  install.prompt = null;
+  install.said = 'installed';
+  installWhat();
+});
+$('install-go').addEventListener('click', async () => {
+  const p = install.prompt;
+  if (!p) return;
+  install.prompt = null;
+  try {
+    await p.prompt();
+    install.said = (await p.userChoice).outcome; // 'accepted' or 'dismissed'
+  } catch (e) {
+    install.said = `failed (${e && e.message ? e.message : e})`;
+  }
+  installWhat();
+});
+installWhat();
 
 // ---- updates: this page is one build (web/build.sh puts each in
 // v/<build>/, kept as it is for good), and version.json beside the page names
@@ -997,6 +1142,8 @@ if (report) {
     `disc: ${discLine || ($('iso').files.length ? 'picked, not identified' : 'none picked')}`,
     `2002 disc: ${disc2002Line || ($('iso2002').files.length ? 'picked, not identified' : 'none picked')}`,
     `remember: ${rememberFacts()}`,
+    `full screen: ${fullFacts()}`,
+    `app: ${asApp ? 'started as the installed app' : install.said || (install.prompt ? 'offered' : 'not offered')}`,
     `panel: ${$('gate').hidden ? 'none (the game)' : 'gate'}, status: ${$('status').textContent}`,
     `relay ${$('relay').value || '-'}, server ${$('server').value || '(this host)'}`,
     `sound: ${JSON.stringify(window.eqoaAudio.stats())}`,

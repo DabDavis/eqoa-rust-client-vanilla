@@ -200,6 +200,12 @@ current.
   `build.sh`'s copy list). Its notices are `web/report.js`'s: the client raises them through
   `web::problem` (a part gone: dismiss it or send a report) and `web::crash` (the client stopped:
   the crash report). `web/pagetest.py` checks the page's half.
+  The page puts itself full screen at Start (`main.js` "full screen", README "In a browser"): on a
+  touch device but iOS's (there the Home Screen app is), on a computer only where Keyboard Lock keeps
+  Escape the game's, never while multiboxing; F11 stays the browser's. A full screen asked for uses
+  the click's activation up: ask for it after anything else that click needs (asked first, it broke
+  Start with a remembered disc the browser had to ask for).
+  It installs as an app (`web/manifest.json`, the icons `tools/webicons` draws off `icon_art.rs`).
 - Reports (the user, 2026-10-23: the bug reports back from eqoa-rs, in the page and natively, crash
   reports too): `report.rs` natively, `web/report.js` in a page, both to reportd on eqoaclassic
   (`/eqoa/reports`, board `/eqoa/reports/board`). Nothing is sent unless the player presses Send,
