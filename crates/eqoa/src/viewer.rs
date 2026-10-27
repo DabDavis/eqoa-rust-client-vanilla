@@ -1583,10 +1583,14 @@ fn page_hidden() -> bool {
     false
 }
 
-/// `EQOA_PERF=1` (in a page, `?perf`): each frame's CPU time by phase,
-/// summed over five seconds and printed; `EQOA_QUIT=<s>` ends the run after
-/// that many seconds.
+/// Each frame's CPU time in the world by phase, summed over five seconds:
+/// printed under `EQOA_PERF=1` (in a page, `?perf`; `EQOA_QUIT=<s>` ends the
+/// run after that many seconds), and always kept for a report, with the
+/// time from one frame to the next (`describe`: a "stuck at 30 fps" report,
+/// F3 20261027-004220, could not say whether the CPU or the GPU was short).
 struct Perf {
+    /// printed every five seconds
+    print: bool,
     since: Instant,
     mark: Instant,
     frames: u32,
@@ -1595,6 +1599,78 @@ struct Perf {
     total: [f64; Perf::NAMES.len()],
     /// the last frame's models and draw calls
     drawn: (u32, u32),
+    /// the frames the Frame Rate skipped since `since` (a page's animation
+    /// frames not drawn)
+    skipped: u32,
+    /// from each frame's start to the next's since `since`, ms
+    gaps: Vec<f32>,
+    /// the last frame's start; none after a pause (the pregame, a hidden
+    /// window), and the next frame then starts the five seconds again
+    last_start: Option<Instant>,
+    /// the last five seconds whole
+    last: Option<PerfSpan>,
+}
+
+/// A span of frames as `Perf` keeps it.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct PerfSpan {
+    /// its length, s
+    span: f64,
+    frames: u32,
+    skipped: u32,
+    /// seconds per phase
+    cpu: [f64; Perf::NAMES.len()],
+    /// the longest frame, s
+    worst: f64,
+    drawn: (u32, u32),
+    /// from one frame's start to the next's, ms, sorted
+    gaps: Vec<f32>,
+    /// the time between frames asked, ms: the Frame Rate's, else the
+    /// display's refresh
+    asked: f64,
+}
+
+impl PerfSpan {
+    /// The line a report carries: the frames a second (and those the Frame
+    /// Rate skipped), the time from one to the next, the share later than a
+    /// frame and a half of the time asked (a refresh missed), and the CPU a
+    /// frame by phase. A frame's CPU over the time asked says the CPU is
+    /// short; under it with frames late, the GPU (or the browser) held them.
+    fn line(&self) -> String {
+        if self.frames == 0 {
+            return "frames in the world: none drawn yet".into();
+        }
+        let n = self.frames as f64;
+        let cpu: f64 = self.cpu.iter().sum();
+        let phases: Vec<String> = Perf::NAMES.iter().zip(&self.cpu).filter(|(_, t)| **t * 1e3 / n >= 0.005).map(|(name, t)| format!("{name} {:.2}", t * 1e3 / n)).collect();
+        let skipped = if self.skipped > 0 { format!(" ({:.1} a second skipped by the Frame Rate)", self.skipped as f64 / self.span) } else { String::new() };
+        let gaps = match self.gaps.len() {
+            0 => String::new(),
+            len => {
+                let q = |p: f64| self.gaps[((len - 1) as f64 * p).round() as usize];
+                let late = self.gaps.iter().filter(|&&g| g as f64 > self.asked * 1.5).count();
+                format!(
+                    "; from one to the next {:.1} ms (median), {:.1} (90%), {:.1} (99%), {:.1} (longest), {:.0}% later than 1.5 times the {:.1} ms asked",
+                    q(0.5),
+                    q(0.9),
+                    q(0.99),
+                    self.gaps[len - 1],
+                    100.0 * late as f64 / len as f64,
+                    self.asked
+                )
+            }
+        };
+        format!(
+            "frames in the world, the last {:.1} s: {:.1} drawn a second{skipped}, {} models in {} draws{gaps}; the cpu {:.2} ms a frame (worst {:.1}): {}",
+            self.span,
+            n / self.span,
+            self.drawn.0,
+            self.drawn.1,
+            cpu * 1e3 / n,
+            self.worst * 1e3,
+            phases.join(", ")
+        )
+    }
 }
 
 impl Perf {
@@ -1603,19 +1679,43 @@ impl Perf {
         "gpu wait", "volumes", "flora",
     ];
 
+    /// Always made; printed under `EQOA_PERF` (`?perf`).
     fn from_env() -> Option<Perf> {
         #[cfg(target_arch = "wasm32")]
         let on = crate::web::page_flag("perf");
         #[cfg(not(target_arch = "wasm32"))]
         let on = std::env::var_os("EQOA_PERF").is_some();
-        on.then(|| {
-            let now = Instant::now();
-            Perf { since: now, mark: now, frames: 0, worst: 0.0, total: [0.0; Perf::NAMES.len()], drawn: (0, 0) }
-        })
+        Some(Perf::new(on))
+    }
+
+    fn new(print: bool) -> Perf {
+        let now = Instant::now();
+        Perf { print, since: now, mark: now, frames: 0, worst: 0.0, total: [0.0; Perf::NAMES.len()], drawn: (0, 0), skipped: 0, gaps: Vec::new(), last_start: None, last: None }
+    }
+
+    /// Five seconds begun again at `now` (what was kept of the last whole
+    /// five stays).
+    fn restart(&mut self, now: Instant) {
+        *self = Perf { since: now, mark: now, last_start: self.last_start, last: self.last.take(), ..Perf::new(self.print) };
     }
 
     fn begin(&mut self) {
-        self.mark = Instant::now();
+        let now = Instant::now();
+        if self.last_start.is_none() {
+            self.restart(now);
+        }
+        self.mark = now;
+    }
+
+    /// A frame not drawn in the world (the pregame's, a hidden window's):
+    /// the next one drawn starts the five seconds again.
+    fn away(&mut self) {
+        self.last_start = None;
+    }
+
+    /// A frame the Frame Rate skipped.
+    fn skip(&mut self) {
+        self.skipped += 1;
     }
 
     /// The time since the last mark goes to phase `i`.
@@ -1625,31 +1725,54 @@ impl Perf {
         self.mark = now;
     }
 
+    /// The span so far.
+    fn span(&self) -> PerfSpan {
+        let mut gaps = self.gaps.clone();
+        gaps.sort_unstable_by(f32::total_cmp);
+        let asked = match crate::settings::frame_rate().gap_ms() {
+            0.0 => crate::settings::display_gap(),
+            g => g,
+        };
+        PerfSpan { span: self.since.elapsed().as_secs_f64(), frames: self.frames, skipped: self.skipped, cpu: self.total, worst: self.worst, drawn: self.drawn, gaps, asked }
+    }
+
     fn end(&mut self, frame_start: Instant) {
         self.frames += 1;
         self.worst = self.worst.max(frame_start.elapsed().as_secs_f64());
+        if let Some(prev) = self.last_start.replace(frame_start) {
+            self.gaps.push(frame_start.duration_since(prev).as_secs_f32() * 1000.0);
+        }
         let span = self.since.elapsed().as_secs_f64();
         if span < 5.0 {
             return;
         }
-        let n = self.frames as f64;
-        let cpu: f64 = self.total.iter().sum();
-        let phases: Vec<String> = Perf::NAMES
-            .iter()
-            .zip(&self.total)
-            .filter(|(_, t)| **t * 1e3 / n >= 0.005)
-            .map(|(name, t)| format!("{name} {:.2}", t * 1e3 / n))
-            .collect();
-        crate::say(&format!(
-            "perf: {:.1} fps, cpu {:.2} ms/frame (worst {:.1}), {} models in {} draws: {}",
-            n / span,
-            cpu * 1e3 / n,
-            self.worst * 1e3,
-            self.drawn.0,
-            self.drawn.1,
-            phases.join(", ")
-        ));
-        *self = Perf { since: Instant::now(), mark: Instant::now(), frames: 0, worst: 0.0, total: [0.0; Perf::NAMES.len()], drawn: (0, 0) };
+        let s = self.span();
+        if self.print {
+            let n = self.frames as f64;
+            let cpu: f64 = self.total.iter().sum();
+            let phases: Vec<String> = Perf::NAMES
+                .iter()
+                .zip(&self.total)
+                .filter(|(_, t)| **t * 1e3 / n >= 0.005)
+                .map(|(name, t)| format!("{name} {:.2}", t * 1e3 / n))
+                .collect();
+            crate::say(&format!(
+                "perf: {:.1} fps, cpu {:.2} ms/frame (worst {:.1}), {} models in {} draws: {}",
+                n / span,
+                cpu * 1e3 / n,
+                self.worst * 1e3,
+                self.drawn.0,
+                self.drawn.1,
+                phases.join(", ")
+            ));
+        }
+        self.last = Some(s);
+        self.restart(Instant::now());
+    }
+
+    /// The report's line: the last five seconds whole, else those so far.
+    fn describe(&self) -> String {
+        self.last.clone().unwrap_or_else(|| self.span()).line()
     }
 }
 
@@ -2730,6 +2853,10 @@ impl App {
         use std::fmt::Write;
         let mut o = String::new();
         let _ = writeln!(o, "frames {}, clock {:.1} s", FRAMES.load(std::sync::atomic::Ordering::Relaxed), self.clock.elapsed().as_secs_f64());
+        // how fast the last seconds in the world went, and the CPU's share
+        if let Some(p) = &self.perf {
+            let _ = writeln!(o, "{}", p.describe());
+        }
         if let Some(g) = &self.gfx {
             let _ = writeln!(o, "surface {}x{} {:?}, {}", g.config.width, g.config.height, g.config.format, if g.window.fullscreen().is_some() { "full screen" } else { "a window" });
         }
@@ -4470,6 +4597,9 @@ impl ApplicationHandler for App {
                 // longer frames rather than fewer ticks.
                 #[cfg(target_arch = "wasm32")]
                 if !crate::web::frame_due() {
+                    if let Some(p) = &mut self.perf {
+                        p.skip();
+                    }
                     // the sound is still fed (`Sound::feed`)
                     if let Some(s) = self.sound.as_mut() {
                         s.feed();
@@ -4484,6 +4614,9 @@ impl ApplicationHandler for App {
                 // (`about_to_wait` sleeps until it is due)
                 #[cfg(not(target_arch = "wasm32"))]
                 if !crate::settings::frame_due() {
+                    if let Some(p) = &mut self.perf {
+                        p.skip();
+                    }
                     return;
                 }
                 // and while the window gives nothing to draw on, at
@@ -4521,6 +4654,9 @@ impl ApplicationHandler for App {
                     if self.quit_at.is_some_and(|q| self.clock.elapsed().as_secs_f64() >= q) {
                         el.exit();
                         return;
+                    }
+                    if let Some(p) = &mut self.perf {
+                        p.away();
                     }
                     self.host_frame(el, game_frame);
                     return;
@@ -4802,6 +4938,9 @@ impl ApplicationHandler for App {
                     Ok(f) => f,
                     Err(()) => {
                         self.hidden_until = hidden_gap();
+                        if let Some(p) = &mut self.perf {
+                            p.away();
+                        }
                         return;
                     }
                 };
@@ -4974,6 +5113,59 @@ impl ApplicationHandler for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A report's frames line (F3 20261027-004220: "stuck at 30fps"): 30
+    /// drawn a second, every one 33.3 ms after the last where 16.7 were
+    /// asked, so all late, and 6 ms of CPU a frame by phase: the CPU was not
+    /// what was short. The control: frames on time say none are late.
+    #[test]
+    fn the_reports_frames_line_says_what_was_short() {
+        let mut cpu = [0.0; Perf::NAMES.len()];
+        cpu[1] = 150.0 * 0.004;
+        cpu[12] = 150.0 * 0.002;
+        let s = PerfSpan { span: 5.0, frames: 150, skipped: 0, cpu, worst: 0.0081, drawn: (900, 1800), gaps: vec![33.3; 149], asked: 1000.0 / 60.0 };
+        let line = s.line();
+        eprintln!("{line}");
+        for want in ["30.0 drawn a second", "900 models in 1800 draws", "33.3 ms (median)", "33.3 (longest)", "100% later than 1.5 times the 16.7 ms asked", "the cpu 6.00 ms a frame (worst 8.1): walk 4.00, submit 2.00"] {
+            assert!(line.contains(want), "{want:?} in {line}");
+        }
+        let on_time = PerfSpan { gaps: vec![16.7; 299], frames: 300, ..s.clone() }.line();
+        assert!(on_time.contains("0% later") && on_time.contains("60.0 drawn a second"), "{on_time}");
+        let skipping = PerfSpan { skipped: 150, ..s }.line();
+        assert!(skipping.contains("(30.0 a second skipped by the Frame Rate)"), "{skipping}");
+        assert_eq!(PerfSpan::default().line(), "frames in the world: none drawn yet");
+    }
+
+    /// The time from one frame to the next counts only frames drawn in the
+    /// world one after another: a pause (the pregame, a hidden window)
+    /// starts the span again, its length no frame's. The control: without
+    /// the pause marked, the two seconds count as a frame's.
+    #[test]
+    fn a_pause_starts_the_frames_again() {
+        let t0 = Instant::now();
+        let ms = |k: u64| t0 + std::time::Duration::from_millis(k);
+        let frames = |away: bool| {
+            let mut p = Perf::new(false);
+            for k in 0..3 {
+                p.begin();
+                p.end(ms(k * 33));
+            }
+            if away {
+                p.away();
+            }
+            p.begin();
+            p.end(ms(2000));
+            p.begin();
+            p.end(ms(2033));
+            p.span()
+        };
+        let s = frames(true);
+        assert_eq!((s.frames, s.gaps.len()), (2, 1));
+        assert!((s.gaps[0] - 33.0).abs() < 0.5, "{:?}", s.gaps);
+        let s = frames(false);
+        assert_eq!(s.frames, 5);
+        assert!(s.gaps.iter().any(|&g| g > 1900.0), "the control: the pause counted as a frame's: {:?}", s.gaps);
+    }
 
     /// VSync's present mode: on, Fifo whatever is offered; off, Immediate,
     /// else Mailbox, else Fifo (every surface has it). The control: the

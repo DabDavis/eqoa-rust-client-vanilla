@@ -1137,6 +1137,12 @@ pub fn vsync() -> bool {
     cfg!(target_arch = "wasm32") || client().vsync
 }
 
+/// The display's refresh, in ms (`set_display_refresh`; a page's is taken
+/// as 60 Hz).
+pub fn display_gap() -> f64 {
+    DISPLAY_GAP.with(|g| g.get())
+}
+
 /// The display's refresh as the window's monitor reports it (mHz; 60 Hz when
 /// it reports none), the gap the loop keeps with VSync off and Frame Rate the
 /// display's.
