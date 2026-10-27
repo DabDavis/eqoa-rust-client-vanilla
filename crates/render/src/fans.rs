@@ -227,7 +227,7 @@ impl Renderer {
     /// Draws the fans `set_fans` set, over what is already in `target` and
     /// `depth`, under `view`'s lights and fog, if `view` is the one they were
     /// made for (its eye theirs): a fan faces the camera it was made for, so
-    /// another view of the same frame (a map's, say) does not draw them.
+    /// another view of the same frame does not draw them.
     pub fn draw_fans(&mut self, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, depth: &wgpu::TextureView, view: &View) {
         let Some(f) = self.fans.as_mut().filter(|f| !f.pending.is_empty() && f.eye == view.eye) else { return };
         let Some((buf, _)) = &f.instances else { return };

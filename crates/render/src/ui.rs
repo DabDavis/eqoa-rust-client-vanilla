@@ -91,7 +91,7 @@ pub fn window_from_frame(size: (u32, u32), p: [f32; 2]) -> [f32; 2] {
 pub const SAMPLE_BIAS: f32 = 1.0 / 32.0;
 
 /// How the game's fonts are drawn scaled to the target: every 2D layer's
-/// (the HUD, the windows, the pregame, the map) and the labels' and name
+/// (the HUD, the windows, the pregame) and the labels' and name
 /// plates' (`text`). The game's fonts hold whole texels only (ArialUI white
 /// or clear, Arial with a grey edge as well), two texels to a stroke, drawn
 /// one texel to a pixel on the PS2's 640x448 and softened by the TV.
@@ -780,20 +780,14 @@ impl Ui {
     /// pixel apart, alpha-blended in `color` (`'?'` for a character the
     /// font lacks; nothing when it lacks that too).
     pub fn text(&mut self, font: usize, x: i32, y: i32, color: [f32; 4], s: &[u16]) {
-        self.text_scaled(font, x as f32, y as f32, 1.0, color, s);
-    }
-
-    /// `text` drawn `scale` times its size from (x, y): its glyphs, their
-    /// widths and the pixel between them all scaled (1 is `text` exactly).
-    pub fn text_scaled(&mut self, font: usize, x: f32, y: f32, scale: f32, color: [f32; 4], s: &[u16]) {
         let f = &self.fonts[font];
-        let (tex, h) = (f.tex, f.height as f32 * scale);
-        let mut x0 = x;
-        let y0 = y;
+        let (tex, h) = (f.tex, f.height as f32);
+        let mut x0 = x as f32;
+        let y0 = y as f32;
         let mut quads = Vec::new();
         for &c in s {
             let Some(&(w, uv)) = f.find(c) else { return };
-            let x1 = x0 + w as f32 * scale;
+            let x1 = x0 + w as f32;
             quads.push(Quad {
                 tex,
                 blend: 3,
@@ -802,7 +796,7 @@ impl Ui {
                 color,
                 clip: None,
             });
-            x0 = x1 + scale;
+            x0 = x1 + 1.0;
         }
         for q in quads {
             self.push(q);

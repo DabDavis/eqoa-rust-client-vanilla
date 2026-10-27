@@ -552,15 +552,6 @@ impl Container {
         build(self, id, &|d| self.lookup(d).map(|n| (self, n)))
     }
 
-    /// Some of a zone's terrain patches ([`Container::terrain_patches`]) built
-    /// into one model, offset by the zone's pre-translations, with DictIDs
-    /// resolved inside this container only: a zone's own record holds every
-    /// palette and texture its terrain names (all six worlds), so it builds
-    /// alone, a few patches at a time (the client's map).
-    pub fn build_terrain(&self, patches: &[NodeId], pre: &[[f32; 3]]) -> Option<Model> {
-        build_terrain(self, patches, pre, &|d| self.lookup(d).map(|n| (self, n)))
-    }
-
     /// Every sprite that can be drawn as an object: the resource directory's
     /// sprites, or failing that, every sprite in the file (not descending into
     /// a sprite — its parts are not models of their own).

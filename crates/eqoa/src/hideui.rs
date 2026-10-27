@@ -4,15 +4,15 @@
 //! the floating damage numbers and the target's selection rings, while the
 //! world, the characters and the spell effects stay. Its key is the Controls
 //! page's row (H, `binds::ROWS`), and a controller's button can be put on it
-//! as on the map's. Again, it shows them.
+//! as on any row of the client's keys. Again, it shows them.
 //!
 //! Only what is drawn goes: the windows go on stepping and the chat box takes
 //! its lines as before (`viewer` drops the frame's quads, plates and labels
 //! after `Play::hud` made them, `Play::draw_rings` the rings), and a pointer
 //! finds none of the HUD's buttons. Nobody is stuck with it: any window
 //! coming up shows them again for good (`frame`, `Play::wants_ui`: a mode of
-//! the game's, the map, the player search, the target's details, a line
-//! typed, a death, the update's question or the report's dialog), and the
+//! the game's, the player search, the target's details, a line typed, a
+//! death, the update's question or the report's dialog), and the
 //! loading screen is never hidden. Kept for the window's session only: a
 //! new world entry (`Play::new`) and a fresh start show them.
 

@@ -6,9 +6,9 @@
 //! the windows' legends for the keyboard: which key is ✕, △, □, ○, R1 and
 //! R3 there. ✕ on a row's key or button waits for the key or the button to
 //! put there (Escape, or the button on △, gives up); a row of the client's
-//! keys (the map, the targets, F9's art...) takes a button too, which then
-//! does what its key does and leaves the game's use it had (F3 20261024-145732:
-//! the map on R3). Defaults puts every one back. The changes apply at once;
+//! keys (the targets, F9's art, Hide UI...) takes a button too, which then
+//! does what its key does and leaves the game's use it had (F3
+//! 20261024-145732). Defaults puts every one back. The changes apply at once;
 //! Save Changes keeps them (`keys.opt`) and Triangle on the menu puts them
 //! back, as the window does with the rest.
 //!
@@ -527,11 +527,11 @@ mod tests {
         page.key(key::CROSS, true, 0, &mut cues);
         assert_eq!((page.capture, cues.last()), (None, Some(&9)), "walk forward's stick");
         assert_eq!(page.note.as_deref(), Some("The sticks stay sticks."));
-        page.row = binds::row_named("map").unwrap() as i32;
+        page.row = binds::row_named("hide_ui").unwrap() as i32;
         page.col = 0;
         page.key(key::CROSS, true, 0, &mut cues);
         page.capture_key(&vui, "f2", &mut cues);
-        assert_eq!(page.note.as_deref(), Some("(null): F2. M does nothing now."));
+        assert_eq!(page.note.as_deref(), Some("Hide UI: F2. H does nothing now."));
         // △'s row, which the game gives no key, takes one; Talk's, given it,
         // is left with none
         page.row = binds::row_named("clear_target").unwrap() as i32;
@@ -547,8 +547,8 @@ mod tests {
         testing::reset(false);
     }
 
-    /// F3 20261024-145732 (the map on R3): a row of the client's keys takes
-    /// a button in its controller's cell; the field it came from is said to
+    /// F3 20261024-145732 (a key of the client's on R3): a row of the client's
+    /// keys takes a button in its controller's cell; the field it came from is said to
     /// have none; moved on to another button, the field that button drove
     /// takes R3 back; a field given the row's button gives the row its own,
     /// here none.
@@ -558,25 +558,25 @@ mod tests {
         testing::reset(false);
         let vui = vui();
         let mut cues = Vec::new();
-        let (map, chat) = (binds::row_named("map").unwrap(), binds::row_named("chat").unwrap());
+        let (hide, chat) = (binds::row_named("hide_ui").unwrap(), binds::row_named("chat").unwrap());
         let bit = |b: u16| binds::bit_index(b).unwrap();
-        let mut page = ControlsPage { row: map as i32, col: 1, ..Default::default() };
+        let mut page = ControlsPage { row: hide as i32, col: 1, ..Default::default() };
         page.key(key::CROSS, true, 0, &mut cues);
         assert_eq!(page.capture, Some(Column::Pad));
         page.capture_button(&vui, bit(crate::input::bit::R3), &mut cues);
         let b = settings::binds();
-        assert_eq!((b.row_button(map), b.button(bit(crate::input::bit::R3))), (Some(bit(crate::input::bit::R3)), binds::NO_BUTTON));
-        assert_eq!(page.note.as_deref(), Some("(null): |(. (null) has no button now."));
+        assert_eq!((b.row_button(hide), b.button(bit(crate::input::bit::R3))), (Some(bit(crate::input::bit::R3)), binds::NO_BUTTON));
+        assert_eq!(page.note.as_deref(), Some("Hide UI: |(. (null) has no button now."));
         page.key(key::CROSS, true, 0, &mut cues);
         page.capture_button(&vui, bit(crate::input::bit::L3), &mut cues);
-        assert_eq!(page.note.as_deref(), Some("(null): |9. Autorun: |(."));
-        // the chat line's own cell takes L3 off the map, and had no button to
+        assert_eq!(page.note.as_deref(), Some("Hide UI: |9. Autorun: |(."));
+        // the chat line's own cell takes L3 off Hide UI, and had no button to
         // give it: R3 is Autorun's now
         page.row = chat as i32;
         page.key(key::CROSS, true, 0, &mut cues);
         page.capture_button(&vui, bit(crate::input::bit::L3), &mut cues);
-        assert_eq!(page.note.as_deref(), Some("(null): |9. (null) has no button now."));
-        assert_eq!(settings::binds().row_button(map), None);
+        assert_eq!(page.note.as_deref(), Some("(null): |9. Hide UI has no button now."));
+        assert_eq!(settings::binds().row_button(hide), None);
         // the control
         page.row = binds::row_named("walk_forward").unwrap() as i32;
         page.key(key::CROSS, true, 0, &mut cues);

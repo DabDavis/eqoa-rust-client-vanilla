@@ -226,63 +226,6 @@ pub fn save_login(user: &str, password: &str, on: bool) -> bool {
     }
 }
 
-// ---- the map's waypoints (`map::Map::click`) ------------------------------------------
-
-/// The map's waypoints as this window keeps them (`waypoints.opt`, window n's
-/// `waypoints-<n>.opt`): a line a world, `<world> <x> <z>`, its `gWorldInfo`
-/// index and the point on its ground. The client's own (the game has no
-/// map), kept the moment one is set or cleared and never sent anywhere; a
-/// line that does not read is left out.
-pub fn waypoints() -> Vec<(i32, [f32; 2])> {
-    let Some(b) = store::read(&own_file("waypoints", place())) else { return Vec::new() };
-    String::from_utf8_lossy(&b)
-        .lines()
-        .filter_map(|l| {
-            let mut it = l.split_whitespace();
-            let world = it.next()?.parse().ok()?;
-            let (x, z): (f32, f32) = (it.next()?.parse().ok()?, it.next()?.parse().ok()?);
-            (it.next().is_none() && x.is_finite() && z.is_finite()).then_some((world, [x, z]))
-        })
-        .collect()
-}
-
-/// Keeps this window's waypoints (`waypoints`): whether they were kept.
-pub fn save_waypoints(w: &[(i32, [f32; 2])]) -> bool {
-    let text: String = w.iter().map(|(world, p)| format!("{world} {} {}\n", p[0], p[1])).collect();
-    match store::write(&own_file("waypoints", place()), text.as_bytes()) {
-        Ok(()) => true,
-        Err(e) => {
-            crate::say(&format!("the map's waypoint was not kept: {e}"));
-            false
-        }
-    }
-}
-
-// ---- the quest guide's record (`questguide`) --------------------------------------------
-
-/// The quest guide's file: what it keeps of each character (the quests it
-/// finished, its home city, the kills seen), one line a character
-/// (`questguide::Kept`). One file for every window, as a character is the same
-/// in any of them: read again before each write, so another window's lines
-/// stay.
-const QUEST_GUIDE_FILE: &str = "questguide.opt";
-
-/// The quest guide's file as text (empty when there is none).
-pub fn quest_guide() -> String {
-    store::read(QUEST_GUIDE_FILE).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default()
-}
-
-/// Keeps the quest guide's file: whether it was kept.
-pub fn save_quest_guide(text: &str) -> bool {
-    match store::write(QUEST_GUIDE_FILE, text.as_bytes()) {
-        Ok(()) => true,
-        Err(e) => {
-            crate::say(&format!("the quest guide's record was not kept: {e}"));
-            false
-        }
-    }
-}
-
 // ---- game.opt's home shard (`VIGameOptions::m_homeShard`) ---------------------------
 
 /// `m_homeShard[64]` at +0x98: the server list's last pick, UTF-16.
@@ -647,36 +590,6 @@ pub struct ClientOptions {
     /// next time the game does (`update`'s check before the title, as ever).
     /// A page's Reload notice the same (`web/main.js`).
     pub update_notices: bool,
-    /// Target of Target (a player's request, the user's option, off by
-    /// default): the target's bar shows whom the target is targeting, as its
-    /// channel says (`Play::target_of_target`)
-    pub target_of_target: bool,
-    /// Mana Bars (a player's request, the user's option, on by default):
-    /// a power gauge under the health of each group member, the target and
-    /// the target of target, from a server that sends others' power
-    /// (`net::session::OP_POWER_BARS`; the game shows only the player's
-    /// own); none where none is sent (Sandstorm).
-    pub mana_bars: bool,
-    /// Minimap (the user's ask, on by default): the map's pictures round the
-    /// player under the quick menus' name plate (`map::mini`); off, none.
-    pub minimap: bool,
-    /// Stats Box (the user, 2026-10-26: "make your stats show on the screen
-    /// in a box like the mini map ... a toggle off by default"): the
-    /// player's stats in a box on the HUD, an effect's raise or cut marked
-    /// (`statbox`); off by default. B turns it too (`binds`' "stats_box").
-    pub stats_box: bool,
-    /// Quest Markers (the user's ask, on by default): the map's "!" at each
-    /// giver of a quest the player may take and "?" where a step of its
-    /// quests is to be done, from a server that sends them
-    /// (`net::session::OP_QUEST_MARKERS`: go-eqoa-server), else the client's
-    /// own guide's (`questguide`: Sandstorm sends no such thing).
-    pub quest_markers: bool,
-    /// Quest Tracker (the user's ask, on by default): the HUD's list of the
-    /// quests under way under the minimap, each step's objectives counted
-    /// ("Bat Eye 0/3"), from a server that sends them
-    /// (`net::session::OP_QUEST_PROGRESS`: go-eqoa-server), else the guide's;
-    /// off, none.
-    pub quest_tracker: bool,
     /// Mipmaps: on, the textures' mip levels sampled as the GS samples them
     /// (`render::gs_lod_k`: the level by depth, blended), which is how the
     /// game is drawn; off, every texel off the base level, sharper and
@@ -689,16 +602,6 @@ pub struct ClientOptions {
     /// dust, falling leaves, light shafts, the flocks of birds: `fx`), as the
     /// game draws them; off, none.
     pub environment: bool,
-    /// Map Markers: on, the map (M) marks EQOA-Data's XP camps and every
-    /// coach (`map::markers`), each with a card of what it is under the
-    /// pointer (the user, F3 pass 18: "mark popular xp camps on map with an XP
-    /// icon", "also add all coaches to the map"); off, the map shows neither.
-    /// The map's own key (X, ○) turns it too.
-    pub map_markers: bool,
-    /// Town names on the map (the user, F3 pass 18: "add town names to the
-    /// map too", `map::markers`): the map's own key (T, Select) turns them,
-    /// kept as Map Markers is; on by default.
-    pub map_towns: bool,
     /// Loading Screens: Longer, a long trip (Return Home, a coach, a port of
     /// 200 or more, another world) keeps the loading screen up at least a
     /// second, as a PS2's disc read would (`loading::FAR_HOLD_MS`); Instant,
@@ -775,18 +678,10 @@ impl Default for ClientOptions {
             vsync: true,
             shouts: true,
             update_notices: true,
-            target_of_target: false,
-            mana_bars: true,
-            minimap: true,
-            stats_box: false,
-            quest_markers: true,
-            quest_tracker: true,
             text: render::ui::TextFilter::Sharp,
             mipmaps: true,
             flora: true,
             environment: true,
-            map_markers: true,
-            map_towns: true,
             loading_longer: true,
             output: None,
         }
@@ -801,9 +696,8 @@ impl ClientOptions {
     /// only when off, Ability Bars, NPC/PC Display, NPC/PC Distance and
     /// Name Distance only when not the game's, Overlapping Names only when
     /// Show, Art only when it is the 2002 disc's, VSync, Shouts and Update
-    /// Notices only when off, Target of Target only when on, Mana Bars only
-    /// when off, Stats Box only when on, Text only when
-    /// Smooth, and Output Device only when a device is chosen (by its name).
+    /// Notices only when off, Text only when Smooth, and Output Device only
+    /// when a device is chosen (by its name).
     pub fn to_text(self) -> String {
         let mut s = format!("lod={}\nbrightness={}\ncamera_distance={}\n", if self.lod { "on" } else { "off" }, self.brightness, self.camera_distance);
         if let Some(r) = self.frame_rate {
@@ -854,29 +748,6 @@ impl ClientOptions {
         if !self.update_notices {
             s.push_str("update_notices=off\n");
         }
-        // Target of Target only when on
-        if self.target_of_target {
-            s.push_str("target_of_target=on\n");
-        }
-        // Mana Bars only when off
-        if !self.mana_bars {
-            s.push_str("mana_bars=off\n");
-        }
-        // Minimap only when off
-        if !self.minimap {
-            s.push_str("minimap=off\n");
-        }
-        // Stats Box only when on
-        if self.stats_box {
-            s.push_str("stats_box=on\n");
-        }
-        // Quest Markers and Quest Tracker only when off
-        if !self.quest_markers {
-            s.push_str("quest_markers=off\n");
-        }
-        if !self.quest_tracker {
-            s.push_str("quest_tracker=off\n");
-        }
         if self.text == render::ui::TextFilter::Smooth {
             s.push_str("text=smooth\n");
         }
@@ -890,14 +761,6 @@ impl ClientOptions {
         }
         if !self.environment {
             s.push_str("environment=off\n");
-        }
-        // Map Markers only when off
-        if !self.map_markers {
-            s.push_str("map_markers=off\n");
-        }
-        // the map's town names only when off
-        if !self.map_towns {
-            s.push_str("map_towns=off\n");
         }
         // Loading Screens only when Instant
         if !self.loading_longer {
@@ -955,18 +818,6 @@ impl ClientOptions {
                 ("update_notices", "off") => c.update_notices = false,
                 ("overlapping_names", "show") => c.overlapping_names = true,
                 ("overlapping_names", "hide") => c.overlapping_names = false,
-                ("target_of_target", "on") => c.target_of_target = true,
-                ("target_of_target", "off") => c.target_of_target = false,
-                ("mana_bars", "on") => c.mana_bars = true,
-                ("mana_bars", "off") => c.mana_bars = false,
-                ("minimap", "on") => c.minimap = true,
-                ("minimap", "off") => c.minimap = false,
-                ("stats_box", "on") => c.stats_box = true,
-                ("stats_box", "off") => c.stats_box = false,
-                ("quest_markers", "on") => c.quest_markers = true,
-                ("quest_markers", "off") => c.quest_markers = false,
-                ("quest_tracker", "on") => c.quest_tracker = true,
-                ("quest_tracker", "off") => c.quest_tracker = false,
                 ("text", "sharp") => c.text = render::ui::TextFilter::Sharp,
                 ("text", "smooth") => c.text = render::ui::TextFilter::Smooth,
                 ("mipmaps", "on") => c.mipmaps = true,
@@ -975,10 +826,6 @@ impl ClientOptions {
                 ("flora", "off") => c.flora = false,
                 ("environment", "on") => c.environment = true,
                 ("environment", "off") => c.environment = false,
-                ("map_markers", "on") => c.map_markers = true,
-                ("map_markers", "off") => c.map_markers = false,
-                ("map_towns", "on") => c.map_towns = true,
-                ("map_towns", "off") => c.map_towns = false,
                 ("loading", "longer") => c.loading_longer = true,
                 ("loading", "instant") => c.loading_longer = false,
                 ("output", v) if !v.is_empty() => c.output = Some(DeviceName::new(v)),
@@ -1250,70 +1097,6 @@ pub fn set_shouts(heard: bool) -> Result<(), String> {
     save_client()
 }
 
-/// Whether the map marks the XP camps and the coaches (Map Markers).
-pub fn map_markers() -> bool {
-    client().map_markers
-}
-
-/// Map Markers turned (the map's own key), and kept at once, as the waypoints
-/// are.
-pub fn set_map_markers(on: bool) -> Result<(), String> {
-    let mut c = client();
-    c.map_markers = on;
-    set_client(c);
-    save_client()
-}
-
-/// Whether the map names the towns.
-pub fn map_towns() -> bool {
-    client().map_towns
-}
-
-/// The map's town names turned (its own key), and kept at once.
-pub fn set_map_towns(on: bool) -> Result<(), String> {
-    let mut c = client();
-    c.map_towns = on;
-    set_client(c);
-    save_client()
-}
-
-/// Whether the map shows the quest marks a server sends (Quest Markers).
-pub fn quest_markers() -> bool {
-    client().quest_markers
-}
-
-/// Quest Markers turned (the map's own key), and kept at once, as Map
-/// Markers is.
-pub fn set_quest_markers(on: bool) -> Result<(), String> {
-    let mut c = client();
-    c.quest_markers = on;
-    set_client(c);
-    save_client()
-}
-
-/// Minimap turned (its key, N: `binds`' "minimap"), and kept at once, as
-/// the map's own keys keep theirs.
-pub fn set_minimap(on: bool) -> Result<(), String> {
-    let mut c = client();
-    c.minimap = on;
-    set_client(c);
-    save_client()
-}
-
-/// Whether the Stats Box is up where it could be (`statbox`).
-pub fn stats_box() -> bool {
-    client().stats_box
-}
-
-/// Stats Box turned (its key, B: `binds`' "stats_box"), and kept at once, as
-/// Minimap's key keeps it.
-pub fn set_stats_box(on: bool) -> Result<(), String> {
-    let mut c = client();
-    c.stats_box = on;
-    set_client(c);
-    save_client()
-}
-
 /// Whether the game asks to restart into a newer build (Update Notices).
 pub fn update_notices() -> bool {
     client().update_notices
@@ -1370,7 +1153,7 @@ pub fn describe() -> String {
         FrameRate::Display => "the display's",
     };
     format!(
-        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, output device {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, overlapping names {}, art {}, update notices {}, shouts {}, target of target {}, mana bars {}, minimap {}, stats box {}, quest markers {}, quest tracker {}, text {}, mipmaps {}, flora {}, environment {}, map markers {}, map towns {}, loading screens {}; {}",
+        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, output device {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, overlapping names {}, art {}, update notices {}, shouts {}, text {}, mipmaps {}, flora {}, environment {}, loading screens {}; {}",
         if c.lod { "on" } else { "off" },
         c.brightness,
         c.fog,
@@ -1396,12 +1179,6 @@ pub fn describe() -> String {
         },
         if c.update_notices { "on" } else { "off" },
         if c.shouts { "heard" } else { "ignored (kept)" },
-        if c.target_of_target { "on" } else { "off" },
-        if c.mana_bars { "on" } else { "off" },
-        if c.minimap { "on" } else { "off" },
-        if c.stats_box { "on" } else { "off" },
-        if c.quest_markers { "on" } else { "off" },
-        if c.quest_tracker { "on" } else { "off" },
         match c.text {
             render::ui::TextFilter::Sharp => "sharp",
             render::ui::TextFilter::Smooth => "smooth",
@@ -1409,8 +1186,6 @@ pub fn describe() -> String {
         if c.mipmaps { "on" } else { "off" },
         if c.flora { "on" } else { "off" },
         if c.environment { "on" } else { "off" },
-        if c.map_markers { "on" } else { "off" },
-        if c.map_towns { "on" } else { "off" },
         if c.loading_longer { "longer" } else { "instant" },
         kept_where()
     )
@@ -1868,11 +1643,6 @@ mod tests {
             let c = ClientOptions::from_text(bad);
             assert!(c.shouts && c.update_notices, "{bad}: on, the defaults");
         }
-        assert_eq!(ClientOptions { target_of_target: true, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\ntarget_of_target=on\n", "Target of Target only when on");
-        assert!(ClientOptions::from_text("target_of_target=on").target_of_target && !ClientOptions::from_text("target_of_target=off").target_of_target);
-        for bad in ["target_of_target=yes", "target_of_target=1"] {
-            assert!(!ClientOptions::from_text(bad).target_of_target, "{bad}: off, the default");
-        }
         assert_eq!(ClientOptions { overlapping_names: true, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\noverlapping_names=show\n", "Overlapping Names only when Show");
         assert!(ClientOptions::from_text("overlapping_names=show").overlapping_names && !ClientOptions::from_text("overlapping_names=hide").overlapping_names);
         for bad in ["overlapping_names=on", "overlapping_names=1", "overlapping_names=all"] {
@@ -1891,7 +1661,7 @@ mod tests {
             "Screen Shake only off, Capture Controller only on"
         );
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, overlapping names hide, art frontiers, update notices on, shouts heard, target of target off, mana bars on, minimap on, stats box off, quest markers on, quest tracker on, text sharp, mipmaps on, flora on, environment on, map markers on, map towns on, loading screens longer; kept in the page's storage");
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, overlapping names hide, art frontiers, update notices on, shouts heard, text sharp, mipmaps on, flora on, environment on, loading screens longer; kept in the page's storage");
         testing::reset(true);
         assert!(describe().ends_with("refused: nothing is kept"));
         testing::reset(false);
@@ -1925,71 +1695,6 @@ mod tests {
         }
     }
 
-    /// Quest Markers, on by default, kept only when off; anything but on or
-    /// off leaves it on.
-    #[test]
-    fn quest_markers_kept_only_when_off() {
-        assert!(ClientOptions::default().quest_markers, "on by default");
-        assert_eq!(ClientOptions { quest_markers: false, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nquest_markers=off\n");
-        assert!(!ClientOptions::from_text("quest_markers=off").quest_markers);
-        assert!(ClientOptions::from_text("quest_markers=on") == ClientOptions::default());
-        for bad in ["quest_markers=0", "quest_markers=no", "quest_markers="] {
-            assert!(ClientOptions::from_text(bad).quest_markers, "{bad}: on, the default");
-        }
-    }
-
-    /// Quest Tracker, on by default, kept only when off, apart from Quest
-    /// Markers; anything but on or off leaves it on.
-    #[test]
-    fn quest_tracker_kept_only_when_off() {
-        assert!(ClientOptions::default().quest_tracker, "on by default");
-        assert_eq!(ClientOptions { quest_tracker: false, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nquest_tracker=off\n");
-        let off = ClientOptions::from_text("quest_tracker=off");
-        assert!(!off.quest_tracker && off.quest_markers, "the tracker off, the marks kept");
-        for bad in ["quest_tracker=0", "quest_tracker="] {
-            assert!(ClientOptions::from_text(bad).quest_tracker, "{bad}: on, the default");
-        }
-    }
-
-    /// Mana Bars, on by default, kept only when off; anything but on or off
-    /// leaves it on.
-    #[test]
-    fn minimap_kept_only_when_off() {
-        assert!(ClientOptions::default().minimap, "on by default");
-        assert_eq!(ClientOptions { minimap: false, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nminimap=off\n");
-        assert!(!ClientOptions::from_text("minimap=off").minimap);
-        assert!(ClientOptions::from_text("minimap=on") == ClientOptions::default());
-        for bad in ["minimap=0", "minimap=no", "minimap="] {
-            assert!(ClientOptions::from_text(bad).minimap, "{bad}: on, the default");
-        }
-    }
-
-    /// Stats Box, off by default, kept only when on, apart from Minimap;
-    /// anything but on or off leaves it off. The control: Minimap's own line
-    /// does not turn it.
-    #[test]
-    fn stats_box_kept_only_when_on() {
-        assert!(!ClientOptions::default().stats_box, "off by default");
-        assert_eq!(ClientOptions { stats_box: true, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nstats_box=on\n");
-        let on = ClientOptions::from_text("stats_box=on");
-        assert!(on.stats_box && on.minimap, "the box on, the minimap kept");
-        assert!(ClientOptions::from_text("stats_box=off") == ClientOptions::default());
-        for bad in ["stats_box=1", "stats_box=yes", "stats_box=", "minimap=on"] {
-            assert!(!ClientOptions::from_text(bad).stats_box, "{bad}: off, the default");
-        }
-    }
-
-    #[test]
-    fn mana_bars_kept_only_when_off() {
-        assert!(ClientOptions::default().mana_bars, "on by default");
-        assert_eq!(ClientOptions { mana_bars: false, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nmana_bars=off\n");
-        assert!(!ClientOptions::from_text("mana_bars=off").mana_bars);
-        assert!(ClientOptions::from_text("mana_bars=on") == ClientOptions::default());
-        for bad in ["mana_bars=0", "mana_bars=no", "mana_bars="] {
-            assert!(ClientOptions::from_text(bad).mana_bars, "{bad}: on, the default");
-        }
-    }
-
     /// Flora and Environment, on by default, each kept only when off;
     /// anything but on or off leaves it on, and one never moves the other.
     #[test]
@@ -2014,30 +1719,27 @@ mod tests {
     /// back no more. The control: the lines beside them are read.
     #[test]
     fn options_with_the_voice_lines_still_load() {
-        let c = ClientOptions::from_text("voice=ptt\nvoice_demo=on\nvoice_volume=15\nmap_markers=off\nloading=instant\n");
-        assert!(!c.map_markers && !c.loading_longer, "the lines beside them read");
+        let c = ClientOptions::from_text("voice=ptt\nvoice_demo=on\nvoice_volume=15\nflora=off\nloading=instant\n");
+        assert!(!c.flora && !c.loading_longer, "the lines beside them read");
         let text = c.to_text();
         assert!(!text.contains("voice"), "{text}");
-        assert!(text.contains("map_markers=off\n") && text.contains("loading=instant\n"), "{text}");
+        assert!(text.contains("flora=off\n") && text.contains("loading=instant\n"), "{text}");
     }
 
-    /// Map Markers is on unless chosen off, kept only when off; a value not
-    /// understood leaves it on. The control: off read back off.
+    /// The options kept by a build with the map, the minimap, the Stats Box,
+    /// others' mana bars, Target of Target and the quests' marks and tracker
+    /// (all gone) still load: their lines are left out and written back no
+    /// more. The control: the lines beside them are read.
     #[test]
-    fn map_markers_kept_only_when_off() {
-        assert!(ClientOptions::default().map_markers, "on");
-        let off = ClientOptions { map_markers: false, ..Default::default() };
-        assert_eq!(off.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nmap_markers=off\n");
-        assert!(!ClientOptions::from_text(&off.to_text()).map_markers, "the control: off read back off");
-        assert!(ClientOptions::from_text("map_markers=on").map_markers);
-        for bad in ["map_markers=0", "map_markers="] {
-            assert!(ClientOptions::from_text(bad).map_markers, "{bad}: on, the default");
+    fn options_with_the_lines_of_rows_gone_still_load() {
+        let old = "target_of_target=on\nmana_bars=off\nminimap=off\nstats_box=on\nquest_markers=off\nquest_tracker=off\nmap_markers=off\nmap_towns=off\nflora=off\nloading=instant\n";
+        let c = ClientOptions::from_text(old);
+        assert_eq!(c, ClientOptions { flora: false, loading_longer: false, ..Default::default() }, "the lines beside them read");
+        let text = c.to_text();
+        for gone in ["target_of_target", "mana_bars", "minimap", "stats_box", "quest_", "map_"] {
+            assert!(!text.contains(gone), "{gone}: {text}");
         }
-        // the town names the same way, apart from the markers
-        let towns = ClientOptions { map_towns: false, ..Default::default() };
-        assert_eq!(towns.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nmap_towns=off\n");
-        let back = ClientOptions::from_text(&towns.to_text());
-        assert!(!back.map_towns && back.map_markers, "off read back off, the markers kept on");
+        assert!(text.contains("flora=off\n") && text.contains("loading=instant\n"), "{text}");
     }
 
     /// Capture Controller is one setting for every window: another window's
