@@ -5,6 +5,17 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-27 · The map, the minimap and the extra bars are gone
+- This client keeps to the game: the additions it never had are taken out. Gone are the map
+  (M) with its waypoints, group waypoints, XP camps, coaches, routes and community markers, the
+  minimap (N), the quest markers, the quest tracker and the quest guide behind them, the Stats
+  Box (B), the power bars under your group, your target and its target, and the Target of
+  Target bar.
+- What a computer adds stays: widescreen, any frame rate, the mouse, the touch screen, the
+  keyboard and the Controls page, controllers, several windows at once and the Extended options.
+- F still targets whomever your target is targeting: it is the game's Assist Target.
+- Your options, keys and buttons stay as you left them.
+
 ## 2026-10-27 · Multiboxing: a window in the back keeps its frame rate
 - On Windows, the game now asks Windows not to slow it down while its window is not in
   front (Windows 11 slows programs in the back to save power), so the box you are not
