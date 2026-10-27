@@ -208,12 +208,14 @@ struct Watch {
     taken: Option<Instant>,
     gpu_taken: Option<Instant>,
     logged: Option<Instant>,
-    /// the run's list: its first, and its last `KEPT`
+    /// the run's list: its first, and its last `KEPT` (whether any between
+    /// were let go)
     first: Option<Sample>,
     list: std::collections::VecDeque<Sample>,
+    dropped: bool,
 }
 
-static WATCH: Mutex<Watch> = Mutex::new(Watch { start: None, last: None, taken: None, gpu_taken: None, logged: None, first: None, list: std::collections::VecDeque::new() });
+static WATCH: Mutex<Watch> = Mutex::new(Watch { start: None, last: None, taken: None, gpu_taken: None, logged: None, first: None, list: std::collections::VecDeque::new(), dropped: false });
 
 fn lock() -> std::sync::MutexGuard<'static, Watch> {
     WATCH.lock().unwrap_or_else(|e| e.into_inner())
@@ -248,6 +250,7 @@ impl Watch {
             self.list.push_back(s.clone());
             while self.list.len() > KEPT {
                 self.list.pop_front();
+                self.dropped = true;
             }
         }
         Some(s)
@@ -259,11 +262,13 @@ impl Watch {
         let mut o = format!("memory: {} (taken {ago} s ago, at {})", last.line(), clock(last.at));
         if let Some(f) = &self.first {
             let mut all = vec![f.short()];
-            if self.list.len() == KEPT {
+            if self.dropped {
                 all.push("…".to_string());
             }
             all.extend(self.list.iter().map(Sample::short));
-            o += &format!("\nmemory over the run, every {} min (time, own MB, graphics MB): {}", log_every().as_secs() / 60, all.join(" · "));
+            let every = log_every().as_secs();
+            let every = if every % 60 == 0 { format!("{} min", every / 60) } else { format!("{every} s") };
+            o += &format!("\nmemory over the run, every {every} (time, own MB, graphics MB): {}", all.join(" · "));
         }
         o
     }
@@ -478,6 +483,7 @@ mod tests {
         let g = Graphics { buffers: 10, buffer_bytes: 5 << 20, texture_bytes: 1 << 20, bind_groups: 7, allocator: Some(al) };
         let line = Sample { at: Duration::from_secs(60), graphics: Some(g.clone()), ..Default::default() }.line();
         assert_eq!(line, "graphics 10 buffers (5 MB), textures 1 MB, 7 bind groups; allocator 96 MB in 2 blocks (largest 64 MB, 32 MB), 6 MB used by 4: vertices 5 MB (2), ui 1 MB (1)");
+        assert!(!line.contains("(at "), "the control: a report of the sample's own moment says no time");
         // a report from a minute before says when it was
         let later = Sample { at: Duration::from_secs(70), graphics: Some(g), ..Default::default() }.line();
         assert!(later.contains("; allocator (at 0:01:00) 96 MB"), "{later}");
@@ -489,13 +495,22 @@ mod tests {
     #[test]
     fn the_runs_list_keeps_its_first_and_its_last() {
         let t0 = Instant::now();
-        let mut w = Watch { start: Some(t0), last: None, taken: None, gpu_taken: None, logged: None, first: None, list: Default::default() };
+        let mut w = Watch { start: Some(t0), last: None, taken: None, gpu_taken: None, logged: None, first: None, list: Default::default(), dropped: false };
         let every = Duration::from_secs(600);
         let mut logged = 0;
-        for i in 0..(KEPT as u64 + 5) * 60 {
+        let step = |w: &mut Watch, i: u64| {
             let at = Duration::from_secs(i * 10);
             let s = Sample { at, process: Some(Process { resident: i, peak: None, own: i << 20, own_peak: None }), ..Default::default() };
-            logged += w.keep(s, t0 + at, every).is_some() as usize;
+            w.keep(s, t0 + at, every).is_some() as usize
+        };
+        // the list full and nothing let go: no mark of a gap
+        for i in 0..=KEPT as u64 * 60 {
+            logged += step(&mut w, i);
+        }
+        assert_eq!((w.list.len(), w.dropped), (KEPT, false));
+        assert!(!w.describe(t0).contains('…'), "{}", w.describe(t0));
+        for i in KEPT as u64 * 60 + 1..(KEPT as u64 + 5) * 60 {
+            logged += step(&mut w, i);
         }
         assert_eq!(logged, KEPT + 5, "one a period, the first at the start");
         assert_eq!(w.first.as_ref().unwrap().at, Duration::ZERO);
