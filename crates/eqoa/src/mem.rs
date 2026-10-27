@@ -221,11 +221,12 @@ fn lock() -> std::sync::MutexGuard<'static, Watch> {
     WATCH.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// How often the log's line comes.
+/// How often the log's line comes (never more often than the figures are
+/// taken).
 fn log_every() -> Duration {
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(s) = std::env::var("EQOA_MEM_EVERY").ok().and_then(|v| v.trim().parse::<u64>().ok()).filter(|&s| s > 0) {
-        return Duration::from_secs(s);
+    if let Some(s) = std::env::var("EQOA_MEM_EVERY").ok().and_then(|v| v.trim().parse::<u64>().ok()) {
+        return Duration::from_secs(s).max(EVERY);
     }
     LOG_EVERY
 }
