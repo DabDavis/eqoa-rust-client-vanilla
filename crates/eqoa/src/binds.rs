@@ -127,7 +127,7 @@ pub const ROWS: &[Row] = &[
     row("map", "{421}", &["m"], Pad::None, "Again, or Escape, closes it."),
     row("map_in", "{421}: zoom in", &["=", "+"], Pad::None, ""),
     row("map_out", "{421}: zoom out", &["-", "_"], Pad::None, ""),
-    row("map_group_waypoint", "{421}: group waypoint", &["g"], Pad::None, "On the map in a group: a waypoint for every member, said in the group's chat, where |s puts yours (else where you stand). |s held, or Shift and a click, does it too."),
+    row("map_group_waypoint", "{421}: group waypoint", &["g"], Pad::None, "On the map, in a group: a waypoint for every member, said in the group's chat, where |s puts yours, else where you stand. Also |s held, or Shift+click."),
     row("group_invite", "Group: {86}", &["f5"], Pad::None, "Invites the target."),
     row("group_remove", "Group: {516}", &["f6"], Pad::None, "Takes the target out of the group."),
     row("group_disband", "Group: {529}", &["f7"], Pad::None, ""),
