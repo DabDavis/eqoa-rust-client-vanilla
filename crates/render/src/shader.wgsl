@@ -37,23 +37,13 @@
 // (the strip programs' 1/Q, interpolated as the GS does: per pixel) and K
 // the layer's (`gs_lod_k`), the base magnified at 0 or under; with the
 // options' Mipmaps off (`eye.w` 0), the base always.
-//
-// The options' Textures Crisp (`ambient.w` 1, never the sky's frame) takes a
-// solid layer's colour (`texels.y`: not the ground, not blended, not
-// scrolling; `render::texels`) from the same levels "sharp bilinear", as the
-// 2D layer's Sharp takes a font's (ui.wgsl): within a texel its own colour,
-// mixed with the next only over the pixel the texel's edge falls in, so a
-// magnified texel is a flat square with a soft edge where the GS's filter
-// mixes it across its whole width. Where a texel spans a pixel or less it
-// is filtered as ever, and the alpha always is: the levels still keep the
-// distance from aliasing, and a cut-out's edge and a blend stay smooth.
 
 struct Frame {
     view_proj: mat4x4<f32>,
     eye: vec4<f32>,      // the camera, in the world; w: 1 mip levels on
     sun_dir: vec4<f32>,
     sun: vec4<f32>,      // w: time in seconds
-    ambient: vec4<f32>,  // w: 1 the solid textures crisp
+    ambient: vec4<f32>,
     fog_color: vec4<f32>,  // w: on
     fog: vec4<f32>,        // near, far
     point: vec4<f32>,      // the point light: xyz, range (0: none)
@@ -66,7 +56,6 @@ struct Layer {
     flags: vec4<f32>,    // x: textured, y: blended, z: the GS's K (levels), w: flora
     uv0: vec4<f32>,      // m0, m1, m3, m4
     uv1: vec4<f32>,      // m6, m7, scroll rate u, v
-    texels: vec4<f32>,   // x: the texture's mip levels, y: 1 its colour may be crisp
 };
 @group(1) @binding(0) var tex: texture_2d<f32>;
 @group(1) @binding(1) var samp: sampler;
@@ -175,35 +164,6 @@ fn vs_main(v: VsIn) -> VsOut {
     return o;
 }
 
-// Crisp at one level: the texel coordinate moved to its texel's centre,
-// but within half a pixel of the texel's edge, where it runs on to the edge
-// (`k` the pixels a texel spans across and down, from `d`, the uv a pixel
-// spans): a flat texel and a pixel's blend at each edge. At a pixel or less
-// a texel (`k` 1), the coordinate as it was: the filter's.
-fn crisp_at(uv: vec2<f32>, level: f32, d: vec2<f32>) -> vec3<f32> {
-    let size = vec2<f32>(textureDimensions(tex, i32(level)));
-    let t = uv * size;
-    let k = max(vec2<f32>(1.0) / max(d * size, vec2<f32>(1e-6)), vec2<f32>(1.0));
-    let c = fract(t) - 0.5;
-    let r = vec2<f32>(0.5) - vec2<f32>(0.5) / k;
-    let at = (floor(t) + 0.5 + (c - clamp(c, -r, r)) * k) / size;
-    return textureSampleLevel(tex, samp, at, level).rgb;
-}
-
-// Crisp at the GS's level `lod`: each of the two levels it falls between, and
-// blended between them as TEX1's trilinear blends them; the base at 0 or
-// under, the last level past it.
-fn crisp(uv: vec2<f32>, lod: f32, d: vec2<f32>) -> vec3<f32> {
-    let last = max(layer.texels.x - 1.0, 0.0);
-    let l = clamp(lod, 0.0, last);
-    let l0 = floor(l);
-    let a = crisp_at(uv, l0, d);
-    if (l == l0) {
-        return a;
-    }
-    return mix(a, crisp_at(uv, l0 + 1.0, d), l - l0);
-}
-
 @fragment
 fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
     var texel = vec4<f32>(1.0);
@@ -213,11 +173,6 @@ fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
             lod = log2(max(i.depth, 1e-6)) + layer.flags.z;
         }
         texel = textureSampleLevel(tex, samp, i.uv, lod);
-        // the texels a pixel spans, read in uniform control flow
-        let d = vec2<f32>(abs(dpdx(i.uv.x)) + abs(dpdy(i.uv.x)), abs(dpdx(i.uv.y)) + abs(dpdy(i.uv.y)));
-        if (frame.ambient.w > 0.5 && layer.texels.y > 0.5) {
-            texel = vec4<f32>(crisp(i.uv, lod, d), texel.a);
-        }
     }
     let alpha = texel.a * layer.tint.a * i.fade;
     if (layer.flags.y < 0.5 && alpha < 0.5) {

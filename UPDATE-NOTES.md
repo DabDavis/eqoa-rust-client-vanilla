@@ -5,6 +5,13 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-27 · A sharp HUD by default, and the world's textures smooth again
+- The HUD's and the windows' art is drawn sharp now unless you choose otherwise, every pixel
+  the same size at any window size, as the text already was. Options > Extended > UI > HUD
+  puts back the game's own look (Nearest).
+- Options > Extended > World > Textures is gone: the world's textures are drawn smooth, as
+  the game draws them. Crisp did not suit them.
+
 ## 2026-10-27 · Render Scale, and a sharper HUD and textures if you want them
 - Options > Extended > Video > Render Scale: x2 or x4 draws the whole picture two or four
   times larger and shrinks it to fit your window, which smooths jagged edges, leaves, fences

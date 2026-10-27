@@ -32,10 +32,7 @@
 //!   and far plane in the middle, off at the left, thicker to the right,
 //!   `fog`), Mipmaps (On, the game's: the textures' mip levels sampled by
 //!   depth as the GS samples them, `render::gs_lod_k`; Off: the base level
-//!   alone, `render::set_mipmaps`), Textures (Smooth, the game's: the GS's
-//!   filter; Crisp: the solid textures' colour as flat texels, the ground,
-//!   the sky, what blends or scrolls and the alpha kept smooth,
-//!   `render::set_crisp`), Flora (On, the game's: the plants it
+//!   alone, `render::set_mipmaps`), Flora (On, the game's: the plants it
 //!   grows round the camera, `flora`; Off: none), Environment (On, the
 //!   game's: the effect volumes, ground fog, dust, leaves, light shafts and
 //!   flocks, `fx`; Off: none) and Art (Frontiers' or the 2002 disc's, `era`,
@@ -47,9 +44,10 @@
 //!   which starts the next time the game does; `update::asks`, and a page's
 //!   Reload notice, `web/main.js`), Text (Sharp or Smooth: the game's font
 //!   scaled to the window with even strokes, or filtered as the PS2 filters
-//!   it, `render::ui::TextFilter`) and HUD (Nearest, the game's, or Sharp:
-//!   the 2D layer's other textures scaled with every texel as wide as every
-//!   other, `render::ui::HudFilter`);
+//!   it, `render::ui::TextFilter`) and HUD (Sharp, the default: the 2D
+//!   layer's other textures scaled with every texel as wide as every other,
+//!   as Text's Sharp draws a font; or Nearest, the game's,
+//!   `render::ui::HudFilter`);
 //! - Controller: Controller Focus (which controllers this window reads:
 //!   Auto, Window, Pad 1 to 4 or Off, `input::pick`, kept for each window of
 //!   the client open, `multibox`; what it reads now is said beside Back) and
@@ -625,9 +623,6 @@ impl WndOptions {
                     // HUD: every texture of the 2D layer but the fonts from
                     // the next frame (`viewer`, `render::ui::set_hud_filter`)
                     40 => c.hud = c.hud.other(),
-                    // Textures: the world's from the next frame (`viewer`,
-                    // `render::set_crisp`)
-                    41 => c.crisp = !c.crisp,
                     // Mipmaps: every texture's levels from the next frame
                     // (`viewer`, `render::set_mipmaps`)
                     35 => c.mipmaps = !c.mipmaps,
@@ -1071,7 +1066,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 28] = [
+const EXTENDED_ITEMS: [(i32, &str); 27] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1099,7 +1094,6 @@ const EXTENDED_ITEMS: [(i32, &str); 28] = [
     (38, "Loading Screens"),
     (39, "Render Scale"),
     (40, "HUD"),
-    (41, "Textures"),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1130,7 +1124,7 @@ struct Category {
 /// Video, UI, Controller, etc."), each a page of `PAGE_MOST` rows at most.
 const CATEGORIES: [Category; 7] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale },
-    Category { name: "World", items: &[20, 35, 41, 36, 37, 25], note: Note::None },
+    Category { name: "World", items: &[20, 35, 36, 37, 25], note: Note::None },
     Category { name: "UI", items: &[22, 29, 30, 40], note: Note::None },
     Category { name: "Controller", items: &[16, 19], note: Note::Reads },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
@@ -1226,7 +1220,6 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
             render::ui::HudFilter::Nearest => "Nearest",
             render::ui::HudFilter::Sharp => "Sharp",
         }),
-        41 => wide(if c.crisp { "Crisp" } else { "Smooth" }),
         30 => wide(match c.text {
             render::ui::TextFilter::Sharp => "Sharp",
             render::ui::TextFilter::Smooth => "Smooth",
@@ -1526,7 +1519,7 @@ mod tests {
         assert_eq!((w.row, cues.last()), (5, Some(&9)), "Video's last row (six, a page's most)");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!((w.page, w.cat, w.cat_sel, w.item), (3, None, 0, -1), "back to the categories, Video still lit");
-        // World: Fog, Mipmaps, Textures, Flora, Environment, Art
+        // World: Fog, Mipmaps, Flora, Environment, Art
         press(&mut w, &mut o, key::DOWN, &mut cues);
         press(&mut w, &mut o, key::CROSS, &mut cues);
         assert_eq!((w.cat, w.item), (Some(1), 20), "World, Fog");
@@ -1553,13 +1546,6 @@ mod tests {
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(settings::client().mipmaps, "and back: two values");
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!(w.item, 41, "Textures");
-        assert_eq!((settings::client().crisp, value_text(&vui, 41)), (false, Some(wide("Smooth"))), "Smooth, the game's: off by default");
-        press(&mut w, &mut o, key::RIGHT, &mut cues);
-        assert_eq!((settings::client().crisp, value_text(&vui, 41), cues.last()), (true, Some(wide("Crisp")), Some(&11)), "Crisp");
-        press(&mut w, &mut o, key::LEFT, &mut cues);
-        assert!(!settings::client().crisp, "and back: two values");
-        press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!(w.item, 36, "Flora");
         assert!(settings::client().flora, "on: the game's");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
@@ -1581,7 +1567,7 @@ mod tests {
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert_eq!(settings::art(), esf::Era::Frontiers, "and back: two values");
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (5, Some(&9)), "World's last row");
+        assert_eq!((w.row, cues.last()), (4, Some(&9)), "World's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!((w.page, w.cat, w.cat_sel, w.item), (3, None, 1, -1), "back to the categories, World still lit");
         // UI: Ability Bars, Update Notices, Text, HUD
@@ -1613,11 +1599,11 @@ mod tests {
         assert_eq!(settings::client().text, render::ui::TextFilter::Sharp, "and back: two values");
         press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!(w.item, 40, "HUD");
-        assert_eq!((settings::client().hud, value_text(&vui, 40)), (render::ui::HudFilter::Nearest, Some(wide("Nearest"))), "Nearest, the game's: off by default");
+        assert_eq!((settings::client().hud, value_text(&vui, 40)), (render::ui::HudFilter::Sharp, Some(wide("Sharp"))), "Sharp, the default, as Text's");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
-        assert_eq!((settings::client().hud, value_text(&vui, 40), cues.last()), (render::ui::HudFilter::Sharp, Some(wide("Sharp")), Some(&11)), "Sharp");
+        assert_eq!((settings::client().hud, value_text(&vui, 40), cues.last()), (render::ui::HudFilter::Nearest, Some(wide("Nearest")), Some(&11)), "Nearest, the game's");
         press(&mut w, &mut o, key::LEFT, &mut cues);
-        assert_eq!(settings::client().hud, render::ui::HudFilter::Nearest, "and back: two values");
+        assert_eq!(settings::client().hud, render::ui::HudFilter::Sharp, "and back: two values");
         press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!((w.row, cues.last()), (3, Some(&9)), "UI's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);

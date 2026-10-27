@@ -13,7 +13,9 @@ use render::ui::{self, HudFilter, Quad, TextFilter, Ui};
 use render::{Renderer, View};
 use std::sync::Mutex;
 
-/// The filters are the process's: one test sets them at a time.
+/// The filters are the process's: one test sets them at a time, and makes
+/// its device while it holds them (on GL, five tests' contexts made at once
+/// hung the run now and then).
 static FILTER: Mutex<()> = Mutex::new(());
 
 fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
@@ -88,8 +90,8 @@ fn columns(row: &[u8]) -> Vec<f32> {
 /// column falls.
 #[test]
 fn sharp_draws_every_texel_as_wide_as_every_other() {
-    let Some((device, queue)) = device() else { return };
     let _one = FILTER.lock().unwrap_or_else(|e| e.into_inner());
+    let Some((device, queue)) = device() else { return };
     let size = (1920, 1080);
     let sharp = columns(&row(&striped(&device, &queue, size, HudFilter::Sharp), size, 303.0, 110.5));
     assert_eq!(sharp.len(), 8, "eight white columns ({sharp:?})");
@@ -106,8 +108,8 @@ fn sharp_draws_every_texel_as_wide_as_every_other() {
 /// whole quad pixel for pixel. The control: at 2.25 it is not.
 #[test]
 fn sharp_is_the_nearest_texel_at_a_whole_scale() {
-    let Some((device, queue)) = device() else { return };
     let _one = FILTER.lock().unwrap_or_else(|e| e.into_inner());
+    let Some((device, queue)) = device() else { return };
     let size = (1280, 960);
     assert!(striped(&device, &queue, size, HudFilter::Sharp) == striped(&device, &queue, size, HudFilter::Nearest), "every pixel the nearest texel's");
     let size = (1920, 1080);
@@ -122,8 +124,8 @@ fn sharp_is_the_nearest_texel_at_a_whole_scale() {
 /// the black.
 #[test]
 fn sharp_keeps_a_quad_to_its_cell_and_a_fill_to_its_texel() {
-    let Some((device, queue)) = device() else { return };
     let _one = FILTER.lock().unwrap_or_else(|e| e.into_inner());
+    let Some((device, queue)) = device() else { return };
     // white in columns 1..15, black at 0 and 15
     let rgba: Vec<u8> = (0..16 * 21).flat_map(|i| if (1..15).contains(&(i % 16)) { [255; 4] } else { [0, 0, 0, 255] }).collect();
     let size = (1918, 1078);
@@ -159,8 +161,8 @@ fn sharp_keeps_a_quad_to_its_cell_and_a_fill_to_its_texel() {
 /// The control: Nearest has no mixes at all.
 #[test]
 fn sharp_mixes_a_clear_texel_in_by_its_clearness_alone() {
-    let Some((device, queue)) = device() else { return };
     let _one = FILTER.lock().unwrap_or_else(|e| e.into_inner());
+    let Some((device, queue)) = device() else { return };
     let rgba: Vec<u8> = (0..16 * 21).flat_map(|i| if i % 16 % 4 < 2 { [255, 0, 0, 255] } else { [0, 0, 0, 0] }).collect();
     let size = (1920, 1080);
     let white = glam::Vec3::ONE;
@@ -181,8 +183,8 @@ fn sharp_mixes_a_clear_texel_in_by_its_clearness_alone() {
 /// under both, where the surface beside it is not.
 #[test]
 fn a_font_is_texts_whatever_the_huds() {
-    let Some((device, queue)) = device() else { return };
     let _one = FILTER.lock().unwrap_or_else(|e| e.into_inner());
+    let Some((device, queue)) = device() else { return };
     let size = (1920, 1080);
     let draw = |f| drawn(&device, &queue, size, f, &stripes(), glam::Vec3::ZERO, |tex| vec![quad(tex, 303.0, 0.0, 16.0)], true);
     let (sharp, nearest) = (draw(HudFilter::Sharp), draw(HudFilter::Nearest));

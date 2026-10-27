@@ -621,17 +621,11 @@ pub struct ClientOptions {
     /// (`render::scale::fit`).
     pub render_scale: u8,
     /// HUD: how the 2D layer's textures other than the fonts are drawn scaled
-    /// to the window (`render::ui::HudFilter`): Nearest, as the GS samples
-    /// them, or Sharp, every texel as wide as every other, as Text's Sharp
-    /// draws a font (the user, 2026-10-27: "add the sharp textures fix like
-    /// sharp font"; off by default).
+    /// to the window (`render::ui::HudFilter`): Sharp, every texel as wide as
+    /// every other, as Text's Sharp draws a font, by default (the user,
+    /// 2026-10-27: "add the sharp textures fix like sharp font", then "have
+    /// HUD and Text crisp on by default"); or Nearest, as the GS samples them.
     pub hud: render::ui::HudFilter,
-    /// Textures: Smooth, the GS's filter; or Crisp, the world's solid
-    /// textures' colour drawn as flat texels (`render::set_crisp`), the ground,
-    /// the sky, what blends or scrolls and every texture's alpha keeping the
-    /// filter (the user, 2026-10-27: "if we can use selective crisp, blur the
-    /// textures that need it to render properly"; off by default).
-    pub crisp: bool,
     /// Output Device, natively (F3 20261024-201433: the game played into
     /// the system's default output, a television, while the player listened
     /// elsewhere): none, the system's default, followed when it changes; or
@@ -706,8 +700,7 @@ impl Default for ClientOptions {
             environment: true,
             loading_longer: true,
             render_scale: 1,
-            hud: render::ui::HudFilter::Nearest,
-            crisp: false,
+            hud: render::ui::HudFilter::Sharp,
             output: None,
         }
     }
@@ -722,8 +715,8 @@ impl ClientOptions {
     /// Name Distance only when not the game's, Overlapping Names only when
     /// Show, Art only when it is the 2002 disc's, VSync, Shouts and Update
     /// Notices only when off, Text only when Smooth, Render Scale only above
-    /// 1, HUD only when Sharp, Textures only when Crisp, and Output Device
-    /// only when a device is chosen (by its name).
+    /// 1, HUD only when Nearest, and Output Device only when a device is
+    /// chosen (by its name).
     pub fn to_text(self) -> String {
         let mut s = format!("lod={}\nbrightness={}\ncamera_distance={}\n", if self.lod { "on" } else { "off" }, self.brightness, self.camera_distance);
         if let Some(r) = self.frame_rate {
@@ -792,15 +785,12 @@ impl ClientOptions {
         if !self.loading_longer {
             s.push_str("loading=instant\n");
         }
-        // Render Scale only above 1, HUD only when Sharp, Textures only when Crisp
+        // Render Scale only above 1, HUD only when Nearest
         if self.render_scale != 1 {
             s.push_str(&format!("render_scale={}\n", self.render_scale));
         }
-        if self.hud == render::ui::HudFilter::Sharp {
-            s.push_str("hud=sharp\n");
-        }
-        if self.crisp {
-            s.push_str("textures=crisp\n");
+        if self.hud == render::ui::HudFilter::Nearest {
+            s.push_str("hud=nearest\n");
         }
         if let Some(d) = self.output {
             s.push_str(&format!("output={}\n", d.as_str()));
@@ -871,8 +861,6 @@ impl ClientOptions {
                 }
                 ("hud", "nearest") => c.hud = render::ui::HudFilter::Nearest,
                 ("hud", "sharp") => c.hud = render::ui::HudFilter::Sharp,
-                ("textures", "smooth") => c.crisp = false,
-                ("textures", "crisp") => c.crisp = true,
                 ("output", v) if !v.is_empty() => c.output = Some(DeviceName::new(v)),
                 ("ability_bars", v) => {
                     if let Some(n) = v.parse::<u8>().ok().filter(|&n| (ABILITY_BARS_GAME as i32..=crate::hudmenu::MAX_BARS).contains(&(n as i32))) {
@@ -1198,7 +1186,7 @@ pub fn describe() -> String {
         FrameRate::Display => "the display's",
     };
     format!(
-        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, render scale x{}{}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, output device {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, overlapping names {}, art {}, update notices {}, shouts {}, text {}, hud {}, mipmaps {}, textures {}, flora {}, environment {}, loading screens {}; {}",
+        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, render scale x{}{}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, output device {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, overlapping names {}, art {}, update notices {}, shouts {}, text {}, hud {}, mipmaps {}, flora {}, environment {}, loading screens {}; {}",
         if c.lod { "on" } else { "off" },
         c.brightness,
         c.fog,
@@ -1238,7 +1226,6 @@ pub fn describe() -> String {
             render::ui::HudFilter::Sharp => "sharp",
         },
         if c.mipmaps { "on" } else { "off" },
-        if c.crisp { "crisp" } else { "smooth" },
         if c.flora { "on" } else { "off" },
         if c.environment { "on" } else { "off" },
         if c.loading_longer { "longer" } else { "instant" },
@@ -1716,7 +1703,7 @@ mod tests {
             "Screen Shake only off, Capture Controller only on"
         );
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, render scale x1, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, overlapping names hide, art frontiers, update notices on, shouts heard, text sharp, hud nearest, mipmaps on, textures smooth, flora on, environment on, loading screens longer; kept in the page's storage");
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, render scale x1, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, overlapping names hide, art frontiers, update notices on, shouts heard, text sharp, hud sharp, mipmaps on, flora on, environment on, loading screens longer; kept in the page's storage");
         testing::reset(true);
         assert!(describe().ends_with("refused: nothing is kept"));
         testing::reset(false);
@@ -1770,32 +1757,44 @@ mod tests {
     }
 
     /// Render Scale, x1 by default, kept only above 1 and only as one of its
-    /// steps; HUD, Nearest by default, kept only when Sharp; Textures, Smooth
-    /// by default, kept only when Crisp; none moves another, and anything
-    /// else leaves each at its default.
+    /// steps; HUD, Sharp by default (as Text), kept only when Nearest; a file
+    /// from the build that wrote `hud=sharp` reads the same; neither moves the
+    /// other, and anything else leaves each at its default.
     #[test]
-    fn render_scale_hud_and_textures_kept_only_off_their_defaults() {
+    fn render_scale_and_hud_kept_only_off_their_defaults() {
         use render::ui::HudFilter;
         let d = ClientOptions::default();
-        assert_eq!((d.render_scale, d.hud, d.crisp), (1, HudFilter::Nearest, false), "the game's picture, off by default");
+        assert_eq!((d.render_scale, d.hud, d.text), (1, HudFilter::Sharp, render::ui::TextFilter::Sharp), "x1; the HUD Sharp, as the text");
         let head = "lod=on\nbrightness=5\ncamera_distance=11\n";
         assert_eq!(d.to_text(), head, "none written at their defaults");
         assert_eq!(ClientOptions { render_scale: 2, ..d }.to_text(), format!("{head}render_scale=2\n"));
         assert_eq!(ClientOptions { render_scale: 4, ..d }.to_text(), format!("{head}render_scale=4\n"));
-        assert_eq!(ClientOptions { hud: HudFilter::Sharp, ..d }.to_text(), format!("{head}hud=sharp\n"));
-        assert_eq!(ClientOptions { crisp: true, ..d }.to_text(), format!("{head}textures=crisp\n"));
+        assert_eq!(ClientOptions { hud: HudFilter::Nearest, ..d }.to_text(), format!("{head}hud=nearest\n"));
         for k in [1, 2, 4] {
             assert_eq!(ClientOptions::from_text(&format!("render_scale={k}")).render_scale, k);
         }
-        let c = ClientOptions::from_text("render_scale=4\nhud=sharp\ntextures=crisp\n");
-        assert_eq!((c.render_scale, c.hud, c.crisp), (4, HudFilter::Sharp, true));
+        let c = ClientOptions::from_text("render_scale=4\nhud=nearest\n");
+        assert_eq!((c.render_scale, c.hud), (4, HudFilter::Nearest));
         assert_eq!(ClientOptions::from_text(&c.to_text()), c, "round trip");
-        let c = ClientOptions::from_text("hud=sharp");
-        assert_eq!((c.render_scale, c.hud, c.crisp), (1, HudFilter::Sharp, false), "HUD alone");
-        assert_eq!(ClientOptions::from_text("hud=nearest\ntextures=smooth\nrender_scale=1"), d);
-        for bad in ["render_scale=3", "render_scale=8", "render_scale=0", "render_scale=x2", "hud=smooth", "textures=nearest", "textures=", "hud="] {
+        let c = ClientOptions::from_text("hud=nearest");
+        assert_eq!((c.render_scale, c.hud), (1, HudFilter::Nearest), "HUD alone");
+        assert_eq!(ClientOptions::from_text("hud=sharp\nrender_scale=1"), d, "the earlier build's hud=sharp: the default");
+        for bad in ["render_scale=3", "render_scale=8", "render_scale=0", "render_scale=x2", "hud=smooth", "hud="] {
             assert_eq!(ClientOptions::from_text(bad), d, "{bad}: the defaults");
         }
+    }
+
+    /// The options kept by the build with Textures' Crisp (gone the same day:
+    /// the user, "world textures cant render proper without smooth. so only
+    /// use for UI, Text") still load: the line is left out and written back
+    /// no more. The control: the lines beside it are read.
+    #[test]
+    fn options_with_textures_crisp_still_load() {
+        let c = ClientOptions::from_text("textures=crisp\nhud=nearest\nrender_scale=2\n");
+        assert_eq!((c.render_scale, c.hud), (2, render::ui::HudFilter::Nearest), "the lines beside it read");
+        let text = c.to_text();
+        assert!(!text.contains("textures"), "{text}");
+        assert!(text.contains("render_scale=2\n") && text.contains("hud=nearest\n"), "{text}");
     }
 
     /// The options kept by a build with voice chat (voice chat was only a

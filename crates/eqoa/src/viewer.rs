@@ -1118,14 +1118,13 @@ pub fn shot_with(
     let textures = render::library_textures(lib);
     let particles = billboard_view.filter(|_| loading.is_none()).map(|(v, p)| (v, p, batches.as_slice(), &textures as &render::Textures));
     let sky = sky_billboards.as_ref().filter(|_| loading.is_none()).map(|(v, p, b)| (*v, *p, b.as_slice(), &textures as &render::Textures));
-    // the options' Brightness, Render Scale, Text, HUD, Mipmaps and Textures
-    // (kept only under `$EQOA_CONFIG` for a shot)
+    // the options' Brightness, Render Scale, Text, HUD and Mipmaps (kept only
+    // under `$EQOA_CONFIG` for a shot)
     renderer.curve.set(crate::settings::curve(crate::settings::client().brightness));
     renderer.scale.set(crate::settings::client().render_scale as u32);
     render::ui::set_text_filter(crate::settings::client().text);
     render::ui::set_hud_filter(crate::settings::client().hud);
     render::set_mipmaps(crate::settings::client().mipmaps);
-    render::set_crisp(crate::settings::client().crisp);
     let rgba = render::capture_with_sky(&device, &queue, &mut renderer, w, h, loading.as_ref().map_or(&view, |l| &l.0), &refs, particles, sky);
     let mut enc = png::Encoder::new(std::io::BufWriter::new(std::fs::File::create(out)?), w, h);
     enc.set_color(png::ColorType::Rgba);
@@ -3026,7 +3025,6 @@ impl App {
         render::ui::set_text_filter(crate::settings::client().text);
         render::ui::set_hud_filter(crate::settings::client().hud);
         render::set_mipmaps(crate::settings::client().mipmaps);
-        render::set_crisp(crate::settings::client().crisp);
         g.renderer.scale.set(crate::settings::client().render_scale as u32);
         let f = g.renderer.scale.targets(&g.device, &target, &g.depth, size);
         // the frame cleared black (`SetClearColor(0, 0, 0, 1)`), with CLIENT's
@@ -4940,14 +4938,13 @@ impl ApplicationHandler for App {
                 // the options' Brightness: the scene through its curve (none
                 // at the default), the labels and the HUD after it as drawn;
                 // its Text and HUD, every texture of the 2D layer drawn this
-                // frame; its Mipmaps and Textures, the world's; and its Render
-                // Scale: the whole frame drawn that much larger, and averaged
-                // into the window's at the end
+                // frame; its Mipmaps, the world's; and its Render Scale: the
+                // whole frame drawn that much larger, and averaged into the
+                // window's at the end
                 g.renderer.curve.set(crate::settings::curve(crate::settings::client().brightness));
                 render::ui::set_text_filter(crate::settings::client().text);
                 render::ui::set_hud_filter(crate::settings::client().hud);
                 render::set_mipmaps(crate::settings::client().mipmaps);
-                render::set_crisp(crate::settings::client().crisp);
                 g.renderer.scale.set(crate::settings::client().render_scale as u32);
                 let f = g.renderer.scale.targets(&g.device, &target, &g.depth, (g.config.width, g.config.height));
                 let scene = g.renderer.curve.scene_target(&g.device, f.size);
