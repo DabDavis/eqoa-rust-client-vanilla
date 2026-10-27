@@ -5,6 +5,15 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-27 · Running and turning at the PS2's own speed, at any frame rate
+- Running, walking, turning and swimming now go exactly as fast as on a PS2, whatever your
+  display's frame rate. Before, the higher the frame rate the faster you went: at 165 frames
+  a second you ran about 5% faster and turned 6% faster than a PS2 player, and the speed
+  also shifted a little with where you stood and which way you faced.
+- It is as smooth as before: the game still draws every frame your display shows. Only the
+  movement underneath keeps the PS2's own 30 steps a second, and your character is drawn
+  on the way between them, on the controls you hold that moment.
+
 ## 2026-10-27 · Character select shows your race's set alone, and your volume from the start
 - Character select and creation draw your race's own set and nothing past it, as the PS2 does:
   the other races' sets no longer show in the distance behind your character, and with them

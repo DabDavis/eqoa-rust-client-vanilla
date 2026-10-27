@@ -139,7 +139,9 @@ current.
 - The game runs 30 frames a second; the client draws at the display's rate. What the game counts in frames
   (the HUD and every window, `KeyFlash`, `TextScroll`, the rings' easing, the death camera, the shake) steps
   on `frames.rs`'s clock (`game_frame`, `Play::hud`), never once a frame drawn; a new frame-counted thing
-  goes there, with a test at 30 and 165 Hz. What moves by the clock runs every frame drawn.
+  goes there, with a test at 30 and 165 Hz. What moves by the clock runs every frame drawn, but
+  the walk: its integrator's speed grows as its step shrinks, so it keeps the console's own frames
+  (33.37 ms) and is drawn on its way to the next (`walker.rs`, `Kept`); never step it a frame drawn.
 - Input (README "the pad", "the mouse and the touch screen"): the pad is the game's own path
   (`vi::pad` held to oracle ops 50-52; `input.rs` libpad on the host, `PadKeys`, `Play::set_key`,
   `controls.rs` UpdateControls). Headless: `EQOA_PAD` (`start@2500;stick l 0 -1@1500+2000`),
