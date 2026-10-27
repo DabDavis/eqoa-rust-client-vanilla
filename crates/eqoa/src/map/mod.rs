@@ -25,6 +25,34 @@
 //! `draw_patch`), at any distance; reached (within `ARRIVE`) it goes. Kept
 //! per world in this window's `waypoints.opt` (`settings::waypoints`).
 //!
+//! The target (F3 20261026-231048, Liav's: "Submitting a waypoint with an
+//! NPC targeted uses the NPC's coordinates for the waypoint. No target uses
+//! your own coordinates. May cause confusion though?"; the user's choice:
+//! both, □'s waypoint and Suggest's spot): while the map follows the player,
+//! □ puts the waypoint on the target's spot (whoever is targeted and in view,
+//! a merchant, a quest giver, a creature, another player; never the player)
+//! and takes it away there, and a white ring marks the target on the map. A
+//! target out of view (in no entity slot) leaves □ as it was. So that nothing
+//! moves under the player, what they chose on the map comes first: once the
+//! map is panned □ goes on its middle as before, the target or not. Suggest
+//! takes, in order (`suggest`): a waypoint put since the map was opened; the
+//! place the mouse points at once it has moved over the map (the pad's cross
+//! once panned); the target, its name already typed into the edit box, so
+//! the player sees whose spot it is (`take_suggest_target`); a waypoint from
+//! before (Liav's report had one 13,000 units off); the map's middle, the
+//! player's own place while it follows.
+//!
+//! The group's waypoint (`group_waypoint`, F3 20261026-212034, a player's
+//! "Long-press square on map to set a group waypoint"; the user's choice:
+//! over the group's chat): □ held `HOLD` (Q held), G, a click with Shift held
+//! or a finger held still on the map asks Play to tell the group
+//! (`take_group_ask`): □ held and G at □'s spot (the middle once panned, else
+//! the target, else the player's own place: come to me), a click or a finger
+//! at the spot under it (a marker's own spot on one). It is drawn orange under
+//! the personal one with its sender's name, on the minimap and the compass
+//! too, one at a time; a click on it (or □ where the personal one would go)
+//! takes it away, as reaching it does.
+//!
 //! The markers (`markers`, F3 pass 18, the user's): EQOA-Data's XP camps, a
 //! red badge with "XP", and every coach, the horseshoe the game's stable signs
 //! carry, each with a card of what it is (a camp's levels, the guide's note,
@@ -55,6 +83,7 @@ pub mod build;
 pub mod cells;
 pub mod chrome;
 pub mod community;
+pub mod group_waypoint;
 pub mod markers;
 mod markers_data;
 // the minimap, in play under the quick menus (`mini`)
@@ -163,6 +192,11 @@ pub struct Context<'a> {
     pub origin: [f32; 2],
     /// the group's other members: their place and index (the compass's colours)
     pub group: Vec<([f32; 3], usize)>,
+    /// in a group (the legend names the group's waypoint then)
+    pub in_group: bool,
+    /// the target's place (x, z) in the player's world while it is in view,
+    /// never the player's own (□ and Suggest take it, the map rings it)
+    pub target: Option<[f32; 2]>,
     /// the pad's sticks (rx, ry, lx, ly), the map's while it is up
     pub sticks: [f32; 4],
     /// a keyboard is in use (the legend names its keys, else the pad's)
@@ -262,16 +296,50 @@ pub struct Map {
     pub community: community::Community,
     /// a keyboard was in use last frame (a pad's cross is not then)
     keyboard: bool,
+    /// the personal waypoint was put while the map is up this time (Suggest
+    /// takes it first, `suggest`)
+    waypoint_fresh: bool,
+    /// the target's place and the player's world, as the last frame had them
+    /// (`Context::target`, `Context::world`): □'s spot and Suggest's
+    target: Option<[f32; 2]>,
+    player_world: i32,
+    /// Suggest's spot was the target's (Play types its name into the box)
+    suggest_target: bool,
+    /// □ held: for how long (seconds, by the clock) and whether its long
+    /// press has gone (`hold`)
+    square_hold: Option<(f32, bool)>,
+    /// Shift is held (the viewer's): a click puts the group's waypoint
+    pub shift: bool,
+    /// the group's waypoint, and the spot the player asked the group to be
+    /// told of (`take_group_ask`)
+    group_mark: Option<group_waypoint::GroupMark>,
+    group_ask: Option<community::Spot>,
+    /// the player has been farther than `ARRIVE` from the group's waypoint
+    /// since it came: only then is it reached (the sender's own, put where
+    /// they stand, would go at once)
+    group_armed: bool,
+    /// when the player last told the group of one (the session's clock, ms;
+    /// `group_wait`)
+    group_told: Option<u32>,
 }
+
+/// G on a keyboard while the map is up (`keyboard`): the group's waypoint at
+/// □'s spot at once. No pad key has it; □ held is the pad's.
+pub const KEY_GROUP: i32 = 0x7E31_0001;
 
 impl Map {
     /// Opens the map on the player's area (the view it was last left at, or
-    /// the opening one, centred on the player).
+    /// the opening one, centred on the player). The mouse points at nothing
+    /// until it moves over the map, and no waypoint is this time's yet
+    /// (Suggest's spot, `suggest`).
     pub fn show(&mut self) {
         self.open = true;
         self.follow = true;
         self.held = [false; 6];
         self.press = None;
+        self.pointer_seen = false;
+        self.waypoint_fresh = false;
+        self.square_hold = None;
     }
 
     /// Closes the map; its tiles leave the GPU (they come back from the
@@ -280,6 +348,7 @@ impl Map {
         self.open = false;
         self.held = [false; 6];
         self.press = None;
+        self.square_hold = None;
         let tiles = self.world.as_mut().map(|w| std::mem::take(&mut w.tiles)).unwrap_or_default();
         if let Some(l) = self.layers.as_mut() {
             for (t, _) in tiles.into_values() {
@@ -298,7 +367,8 @@ impl Map {
         match k {
             key::TRIANGLE | key::START if down => self.close(),
             key::CROSS if down => self.follow = true,
-            key::SQUARE if down => self.square(),
+            key::SQUARE => self.square_key(down),
+            KEY_GROUP if down => self.group_square(),
             key::CIRCLE if down => self.toggle_markers(),
             key::R3 if down => self.toggle_quests(),
             key::SELECT if down => self.toggle_towns(),
@@ -352,11 +422,13 @@ impl Map {
         }
     }
 
-    /// The pointer left, or the window lost the focus.
+    /// The pointer left, or the window lost the focus (□ let go with it: no
+    /// release comes for it).
     pub fn let_go(&mut self) {
         self.press = None;
         self.held = [false; 6];
         self.pointer_seen = false;
+        self.square_hold = None;
     }
 
     /// The wheel's `lines` (up positive: in) about window pixel `at` (the
@@ -423,16 +495,29 @@ impl Map {
     /// A click or a tap at window pixel `s` on the map itself (not on its
     /// chrome: `point` found nothing there): on the waypoint (within
     /// `view::waypoint_reach`, a finger's miss more) it takes it away, else
-    /// it puts this world's waypoint there, on the world's ground. Whether
-    /// it did either.
+    /// on the group's it takes that away, else it puts this world's waypoint
+    /// there, on the world's ground. With Shift held it asks the group to be
+    /// told of the spot under it instead (`spot_under`). Whether it did any.
     pub fn click(&mut self, s: [f32; 2], finger: bool) -> bool {
         let (true, Some(v), Some(w)) = (self.open, self.view, self.world.as_ref()) else { return false };
         let (world, extent, size) = (w.index, w.builder.cells.extent(), self.size);
+        if self.shift && !finger {
+            let Some(at) = self.spot_under(s, finger) else { return false };
+            self.ask_group(world, at);
+            return true;
+        }
         self.read_waypoints();
         if let Some(at) = self.waypoints.get(&world) {
             let p = v.to_window(size, *at);
             if (p[0] - s[0]).hypot(p[1] - s[1]) <= view::waypoint_reach(size, finger) {
                 self.set_waypoint(world, None);
+                return true;
+            }
+        }
+        if let Some(g) = self.group_mark.as_ref().filter(|g| g.world == world) {
+            let p = v.to_window(size, g.at);
+            if (p[0] - s[0]).hypot(p[1] - s[1]) <= view::waypoint_reach(size, finger) {
+                self.clear_group_waypoint("taken away");
                 return true;
             }
         }
@@ -482,6 +567,143 @@ impl Map {
         }
         self.set_waypoint(world, Some(at));
         true
+    }
+
+    /// The spot a click or a tap at window pixel `s` names, as `click` puts
+    /// the waypoint: a quest mark's, a community marker's or a camp's or
+    /// coach's under it (those two while the markers show), else the
+    /// ground's within the world's edge; none past it.
+    fn spot_under(&self, s: [f32; 2], finger: bool) -> Option<[f32; 2]> {
+        let (Some(v), Some(w)) = (self.view, self.world.as_ref()) else { return None };
+        let (world, extent, size) = (w.index, w.builder.cells.extent(), self.size);
+        let reach = view::marker_reach(size, finger);
+        if let Some(i) = self.quests.under(world, v, size, s, reach) {
+            return Some([self.quests.marks[i].x, self.quests.marks[i].z]);
+        }
+        if crate::settings::map_markers() {
+            if let Some(i) = self.community.under(world, v, size, s, reach, self.pin_size(v)) {
+                return Some(self.community.marks[i].at);
+            }
+            if let Some(m) = markers::under(world, v, size, s, finger) {
+                return Some(m.at());
+            }
+        }
+        let at = v.to_world(size, s);
+        (at[0] >= extent[0] && at[0] <= extent[2] && at[1] >= extent[1] && at[1] <= extent[3]).then_some(at)
+    }
+
+    /// A finger held still on the map at window pixel `s` (`touch`'s long
+    /// press, not on the chrome): the group asked to be told of the spot
+    /// under it, as a click with Shift held asks. Whether it asked.
+    pub fn long_press(&mut self, s: [f32; 2]) -> bool {
+        let (true, Some(w)) = (self.open, self.world.as_ref()) else { return false };
+        let world = w.index;
+        let f = frame_from_window(self.size, s);
+        if !self.point(f, true).is_empty() {
+            return false;
+        }
+        let Some(at) = self.spot_under(s, true) else { return false };
+        self.ask_group(world, at);
+        true
+    }
+
+    /// The group to be told of a spot (Play's, `take_group_ask`).
+    fn ask_group(&mut self, world: i32, at: [f32; 2]) {
+        self.group_ask = Some(community::Spot { world, at });
+    }
+
+    /// The spot the player asked the group to be told of, once: Play says it
+    /// in the group's chat (`play::groupmark`).
+    pub fn take_group_ask(&mut self) -> Option<community::Spot> {
+        self.group_ask.take()
+    }
+
+    /// A line under the map's title for a few seconds (the community list's
+    /// answers' place).
+    pub fn notice(&mut self, line: &str) {
+        self.community.notice(line);
+    }
+
+    /// How long (ms) before the player may tell the group of another
+    /// waypoint, `group_waypoint::EVERY_MS` after the last (`now` the
+    /// session's clock); none when they may.
+    pub fn group_wait(&self, now: u32) -> Option<u32> {
+        let gone = now.wrapping_sub(self.group_told?);
+        (gone < group_waypoint::EVERY_MS).then(|| group_waypoint::EVERY_MS - gone)
+    }
+
+    /// The player told the group of a waypoint at `now` (`group_wait`).
+    pub fn group_told(&mut self, now: u32) {
+        self.group_told = Some(now);
+    }
+
+    /// The group's waypoint now (`group_waypoint`): another, or the first.
+    pub fn set_group_waypoint(&mut self, mark: group_waypoint::GroupMark) {
+        crate::say(&format!("map: the group's waypoint at ({:.0}, {:.0}) in world {}, from {}", mark.at[0], mark.at[1], mark.world, mark.from));
+        self.group_mark = Some(mark);
+        self.group_armed = false;
+    }
+
+    /// The group's waypoint gone (`why`, for the log).
+    pub fn clear_group_waypoint(&mut self, why: &str) {
+        if let Some(g) = self.group_mark.take() {
+            crate::say(&format!("map: the group's waypoint from {} {why}", g.from));
+        }
+    }
+
+    /// The group's waypoint and who put it.
+    pub fn group_mark(&self) -> Option<&group_waypoint::GroupMark> {
+        self.group_mark.as_ref()
+    }
+
+    /// The group's waypoint in world `world` (x, z): the compass's dot.
+    pub fn group_waypoint(&self, world: i32) -> Option<[f32; 2]> {
+        self.group_mark.as_ref().filter(|g| g.world == world).map(|g| g.at)
+    }
+
+    /// The group's waypoint kept while the player is in a group and its
+    /// sender is a member of it (`is_member`, by name): gone when either is
+    /// no longer so.
+    pub fn keep_group_waypoint(&mut self, in_group: bool, is_member: impl Fn(&str) -> bool) {
+        if self.group_mark.as_ref().is_some_and(|g| !in_group || !is_member(&g.from)) {
+            self.clear_group_waypoint(if in_group { "went: its sender left the group" } else { "went: out of the group" });
+        }
+    }
+
+    /// World `world`'s name as the map's title has it: `gWorldInfo`'s word,
+    /// else, for the world mapped (one past CLIENT's six), its file's.
+    pub fn world_title(&self, world: i32, words: Option<&vi::strtab::StringTable>) -> Option<String> {
+        let word = self.names.names.get(usize::try_from(world).ok()?).copied().flatten();
+        if let Some(n) = word.and_then(|n| words.map(|t| t.get(n as i32, 0).to_string())).filter(|s| s != "(null)" && !s.is_empty()) {
+            return Some(n);
+        }
+        let w = self.world.as_ref().filter(|w| w.index == world)?;
+        Some(title_case(w.name.split('.').next().unwrap_or(""))).filter(|s| !s.is_empty())
+    }
+
+    /// The world a name names (`world_title`'s, in any case): one of
+    /// CLIENT's six, else the world mapped.
+    pub fn world_named(&self, name: &str, words: Option<&vi::strtab::StringTable>) -> Option<i32> {
+        let mut worlds: Vec<i32> = (0..6).collect();
+        if let Some(w) = self.world.as_ref().filter(|w| !(0..6).contains(&w.index)) {
+            worlds.push(w.index);
+        }
+        worlds.into_iter().find(|&i| self.world_title(i, words).is_some_and(|t| t.eq_ignore_ascii_case(name)))
+    }
+
+    /// The area a spot is in: its cell's name, as the map's names and title
+    /// have it (`cells::name`), when there is one.
+    pub fn area_of(&self, spot: community::Spot, words: Option<&vi::strtab::StringTable>) -> Option<String> {
+        let bounds = self.names.bounds.get(usize::try_from(spot.world).ok()?).copied().flatten();
+        let n = cells::name(spot.world, bounds, (spot.at[0] / CELL) as i32, (spot.at[1] / CELL) as i32)?;
+        words.map(|t| t.get(n as i32, 0).to_string()).filter(|s| s != "(null)" && !s.is_empty())
+    }
+
+    /// What the group is told of `spot` (`group_waypoint::line`): none for a
+    /// world the map cannot name.
+    pub fn group_line(&self, spot: community::Spot, words: Option<&vi::strtab::StringTable>) -> Option<String> {
+        let world = self.world_title(spot.world, words)?;
+        Some(group_waypoint::line(&world, spot.at, self.area_of(spot, words).as_deref()))
     }
 
     /// ○ (X on a keyboard): the markers shown or hidden, kept (Extended's
@@ -678,18 +900,31 @@ impl Map {
     }
 
     /// L3 (N on a keyboard, the Suggest button): a spot of this world asked
-    /// to be suggested to the community's list (`community`): this world's
-    /// waypoint, else the place under the pointer (not a pointer on the
+    /// to be suggested to the community's list (`community`), the one the
+    /// player chose last: this world's waypoint put since the map was
+    /// opened; else the place under the pointer (not a pointer on the
     /// chrome: the button's own) or under a pad's cross once the map is
-    /// panned (`pointer_world`), else the map's middle. Play takes it
-    /// (`take_suggest`) and asks its name.
+    /// panned (`pointer_world`); else, while the map follows the player, the
+    /// target's spot (`target_spot`); else a waypoint from before; else the
+    /// map's middle. Play takes it (`take_suggest`) and asks its name, the
+    /// target's already typed when the spot is the target's
+    /// (`take_suggest_target`).
     fn suggest(&mut self) {
         let (Some(v), Some(w)) = (self.view, self.world.as_ref()) else { return };
         let world = w.index;
         self.read_waypoints();
+        let waypoint = self.waypoints.get(&world).copied();
         let pointer = if self.on_chrome() { None } else { self.pointer_world(self.keyboard) };
-        let at = self.waypoints.get(&world).copied().or(pointer).unwrap_or(v.center);
+        let target = self.target_spot().filter(|_| self.follow);
+        let at = waypoint.filter(|_| self.waypoint_fresh).or(pointer).or(target).or(waypoint).unwrap_or(v.center);
+        self.suggest_target = target.is_some_and(|t| (t[0] - at[0]).hypot(t[1] - at[1]) < 0.5);
         self.community.ask(community::Spot { world, at });
+    }
+
+    /// Whether the spot the map last asked to suggest is the target's
+    /// (Play types the target's name into the box), once.
+    pub fn take_suggest_target(&mut self) -> bool {
+        std::mem::take(&mut self.suggest_target)
     }
 
     /// Whether the mouse is over the chrome's buttons (`point`'s).
@@ -726,24 +961,99 @@ impl Map {
         self.follow = on;
     }
 
-    /// □ (Q on a keyboard): the waypoint at the map's middle, once the map
-    /// is panned off the player; taken away while the map follows the
-    /// player (its middle is the player, where a waypoint is already
-    /// reached) or when it is at the middle.
+    /// □ pressed or let go (Q on a keyboard, held as it is: `keyboard`): let
+    /// go before `group_waypoint::HOLD` it is □'s waypoint (`square`); held
+    /// that long, the group's (`hold`, by the clock), and its release
+    /// nothing. A repeat while it is down is nothing.
+    fn square_key(&mut self, down: bool) {
+        match (down, self.square_hold) {
+            (true, None) => self.square_hold = Some((0.0, false)),
+            (true, Some(_)) => {}
+            (false, Some((_, false))) => {
+                self.square_hold = None;
+                self.square();
+            }
+            (false, _) => self.square_hold = None,
+        }
+    }
+
+    /// □ held on by `dt` seconds of the clock (every frame drawn while the
+    /// map is up): at `group_waypoint::HOLD` the group's waypoint, once.
+    fn hold(&mut self, dt: f32) {
+        let Some((held, false)) = self.square_hold else { return };
+        let held = held + dt.max(0.0);
+        let long = held >= group_waypoint::HOLD;
+        self.square_hold = Some((held, long));
+        if long {
+            self.group_square();
+        }
+    }
+
+    /// □ (Q on a keyboard), the spot chosen on the map first: once the map
+    /// is panned off the player, the waypoint at its middle (taken away when
+    /// it is there, or the group's there taken away); while the map follows
+    /// the player, on the target's spot while one is in view (taken away when
+    /// it is there already), else taken away (the middle is the player,
+    /// where a waypoint is already reached), the group's when there is no
+    /// waypoint of the player's own.
     fn square(&mut self) {
         let (Some(v), Some(w)) = (self.view, self.world.as_ref()) else { return };
         let (world, size) = (w.index, self.size);
         self.read_waypoints();
-        let middle = [size.0 as f32 / 2.0, size.1 as f32 / 2.0];
-        let at_middle = self.waypoints.get(&world).is_some_and(|at| {
-            let p = v.to_window(size, *at);
-            (p[0] - middle[0]).hypot(p[1] - middle[1]) <= view::waypoint_reach(size, false)
-        });
-        if self.waypoints.contains_key(&world) && (self.follow || at_middle) {
+        let reach = view::waypoint_reach(size, false);
+        let near = |a: [f32; 2], b: [f32; 2]| {
+            let (p, q) = (v.to_window(size, a), v.to_window(size, b));
+            (p[0] - q[0]).hypot(p[1] - q[1]) <= reach
+        };
+        let mine = self.waypoints.get(&world).copied();
+        let group = self.group_waypoint(world);
+        if !self.follow {
+            if mine.is_some_and(|m| near(m, v.center)) {
+                self.set_waypoint(world, None);
+            } else if group.is_some_and(|g| near(g, v.center)) {
+                self.clear_group_waypoint("taken away");
+            } else {
+                self.set_waypoint(world, Some(v.center));
+            }
+        } else if let Some(t) = self.target_spot() {
+            let at = if mine.is_some_and(|m| near(m, t)) { None } else { Some(t) };
+            self.set_waypoint(world, at);
+        } else if mine.is_some() {
             self.set_waypoint(world, None);
-        } else if !self.follow {
-            self.set_waypoint(world, Some(v.center));
+        } else if group.is_some() {
+            self.clear_group_waypoint("taken away");
         }
+    }
+
+    /// □ held (`hold`) or G: the group asked to be told of □'s spot (Play's,
+    /// `take_group_ask`): the map's middle once it is panned, else the
+    /// target's spot, else the player's own place (the middle while the map
+    /// follows the player: come to me).
+    fn group_square(&mut self) {
+        let (Some(v), Some(w)) = (self.view, self.world.as_ref()) else { return };
+        let world = w.index;
+        let at = if self.follow { self.target_spot().unwrap_or(v.center) } else { v.center };
+        self.ask_group(world, at);
+    }
+
+    /// The target's place (x, z) while it is in view in the player's world
+    /// and that is the world mapped (the last frame's, `Context::target`).
+    fn target_spot(&self) -> Option<[f32; 2]> {
+        let w = self.world.as_ref()?;
+        self.target.filter(|_| w.index == self.player_world)
+    }
+
+    /// The target's place as the map has it, for a test beside it
+    /// (`play::groupmark`).
+    #[cfg(test)]
+    pub fn target_for_test(&mut self, at: Option<[f32; 2]>) {
+        self.target = at;
+    }
+
+    /// □ held on by `dt` seconds (`hold`), for a test beside it.
+    #[cfg(test)]
+    pub fn hold_for_test(&mut self, dt: f32) {
+        self.hold(dt);
     }
 
     /// The waypoint of world `world` (`gWorldInfo`'s index), (x, z), when
@@ -760,9 +1070,11 @@ impl Map {
         }
     }
 
-    /// World `world`'s waypoint put at `at` (none: taken away), and kept.
+    /// World `world`'s waypoint put at `at` (none: taken away), and kept;
+    /// put, it is this time's (`suggest`).
     fn set_waypoint(&mut self, world: i32, at: Option<[f32; 2]>) {
         self.read_waypoints();
+        self.waypoint_fresh = at.is_some();
         match at {
             Some(p) => {
                 self.waypoints.insert(world, p);
@@ -780,10 +1092,20 @@ impl Map {
     }
 
     /// The waypoint of the world the player is in taken away once the player
-    /// comes within `ARRIVE` of it.
+    /// comes within `ARRIVE` of it; the group's too, once the player has been
+    /// farther than that from it since it came (`group_armed`).
     fn arrive(&mut self, player: Option<([f32; 3], f32)>, world: i32) {
-        let (Some((p, _)), Some(at)) = (player, self.waypoints.get(&world).copied()) else { return };
-        if (p[0] - at[0]).hypot(p[2] - at[1]) <= ARRIVE {
+        let Some((p, _)) = player else { return };
+        let near = |at: [f32; 2]| (p[0] - at[0]).hypot(p[2] - at[1]) <= ARRIVE;
+        if let Some(at) = self.group_waypoint(world) {
+            if !near(at) {
+                self.group_armed = true;
+            } else if self.group_armed {
+                self.clear_group_waypoint("reached");
+            }
+        }
+        let Some(at) = self.waypoints.get(&world).copied() else { return };
+        if near(at) {
             crate::say("map: waypoint reached");
             self.set_waypoint(world, None);
         }
@@ -801,6 +1123,11 @@ impl Map {
         self.frame += 1;
         self.size = cx.size;
         self.keyboard = cx.keyboard;
+        self.target = cx.target;
+        self.player_world = cx.world;
+        if self.open {
+            self.hold(cx.dt);
+        }
         self.quests.set(cx.quest_marks.unwrap_or_default());
         self.community.frame(self.open);
         self.read_waypoints();
@@ -1018,7 +1345,9 @@ impl Map {
         let shared = if quest.is_none() { self.card_community(cx.keyboard).filter(|_| card.is_none() || card != self.pinned) } else { None };
         let pointer = self.pointer_world(cx.keyboard).map(|p| format!("x {:.0}, z {:.0}", p[0], p[1]));
         let icon = self.icon.tex;
+        let target = self.target_spot();
         let (Some(w), Some(v), Some(l)) = (self.world.as_ref(), self.view, self.layers.as_mut()) else { return };
+        let group_mark = self.group_mark.as_ref().filter(|g| g.world == w.index);
         let size = cx.size;
         let cells = &w.builder.cells;
         let extent = cells.extent();
@@ -1090,6 +1419,13 @@ impl Map {
             let r = view::waypoint_radius(size).0;
             names.push((f([s[0], s[1] + r * 2.8]), format!("{:.0} away", (p[0] - at[0]).hypot(p[2] - at[1]))));
         }
+        // the group's, with whose it is (`group_waypoint`)
+        if let (Some(g), Some((p, _)), true) = (group_mark, cx.player, cx.world == w.index) {
+            let s = v.to_window(size, g.at);
+            let r = view::waypoint_radius(size).0;
+            let from = g.from.trim_end_matches(['\0', ' ']);
+            names.push((f([s[0], s[1] + r * 2.8]), format!("{from}: {:.0} away", (p[0] - g.at[0]).hypot(p[2] - g.at[1]))));
+        }
         let world_name = self.names.names.get(w.index.max(0) as usize).copied().flatten().and_then(|n| word(n as i32)).unwrap_or_else(|| title_case(w.name.split('.').next().unwrap_or("")));
         let area = cx.player.and_then(|(p, _)| {
             let (c, r) = ((p[0] / CELL) as i32, (p[2] / CELL) as i32);
@@ -1112,6 +1448,7 @@ impl Map {
             quests: cx.quest_marks.map(|_| crate::settings::quest_markers()),
             pointer,
             notice: self.community.notice_now().map(str::to_string),
+            group: cx.in_group,
         };
         let fallback;
         let vui = match cx.vui {
@@ -1257,11 +1594,26 @@ impl Map {
             solid(&mut *ui, [p[0] - r - o, p[1] - r - o, p[0] + r + o, p[1] + r + o], OUTLINE);
             solid(&mut *ui, [p[0] - r, p[1] - r, p[0] + r, p[1] + r], color);
         }
-        // the waypoint, a diamond (`click`), under the player's marker
-        if let Some(at) = waypoint {
+        // the target (`Context::target`, □'s and Suggest's spot while the map
+        // follows the player): a white ring round it, as the minimap rings it
+        if let Some(t) = target {
+            let p = v.to_window(size, t);
+            let (r, o) = view::member_radius(size);
+            let (rr, th) = (r * 2.4, o.max(1.0));
+            for (grow, color) in [(o, OUTLINE), (0.0, [1.0; 4])] {
+                let (a, t) = (rr + grow, th + grow * 2.0);
+                for e in [[p[0] - a, p[1] - a, p[0] + a, p[1] - a + t], [p[0] - a, p[1] + a - t, p[0] + a, p[1] + a], [p[0] - a, p[1] - a, p[0] - a + t, p[1] + a], [p[0] + a - t, p[1] - a, p[0] + a, p[1] + a]] {
+                    solid(&mut *ui, e, color);
+                }
+            }
+        }
+        // the waypoints, diamonds (`click`), under the player's marker: the
+        // group's (`group_waypoint`) under the player's own
+        for (at, color) in [(group_mark.map(|g| g.at), group_waypoint::COLOR), (waypoint, WAYPOINT)] {
+            let Some(at) = at else { continue };
             let p = v.to_window(size, at);
             let (r, o) = view::waypoint_radius(size);
-            for (rr, color) in [(r + o * 1.5, OUTLINE), (r, WAYPOINT)] {
+            for (rr, color) in [(r + o * 1.5, OUTLINE), (r, color)] {
                 let d = [[p[0], p[1] - rr], [p[0] + rr, p[1]], [p[0], p[1] + rr], [p[0] - rr, p[1]]].map(f);
                 ui.push(Quad { tex: white, blend: 3, pos: d, uv: [[0.5, 0.5]; 4], color, clip: None });
             }
@@ -1326,6 +1678,9 @@ impl Map {
     /// The map's state (a shot's last lines, a report).
     pub fn describe(&self) -> String {
         let mut waypoints: String = self.waypoints.iter().map(|(w, p)| format!(", a waypoint in world {w} at ({:.0}, {:.0})", p[0], p[1])).collect();
+        if let Some(g) = &self.group_mark {
+            waypoints.push_str(&format!(", the group's waypoint from {} in world {} at ({:.0}, {:.0})", g.from, g.world, g.at[0], g.at[1]));
+        }
         if !crate::settings::map_markers() {
             waypoints.push_str(", markers hidden");
         }
@@ -1387,8 +1742,11 @@ pub fn keyboard(name: &str) -> Option<(i32, Hold)> {
         "t" => (key::SELECT, Hold::Once),
         "escape" | "backspace" | "m" => (key::TRIANGLE, Hold::Once),
         "space" | "enter" | "home" => (key::CROSS, Hold::Once),
-        // Q is the keyboard's □ (`binds`' "talk" row): the waypoint
-        "q" => (key::SQUARE, Hold::Once),
+        // Q is the keyboard's □ (`binds`' "talk" row): the waypoint, held
+        // the group's (its release counts, `Map::square_key`)
+        "q" => (key::SQUARE, Hold::Held),
+        // G: the group's waypoint at once (`binds`' "map_group_waypoint" row)
+        "g" => (KEY_GROUP, Hold::Once),
         // J (the journal's letter) is R3: the quest marks shown or hidden
         "j" => (key::R3, Hold::Once),
         // N is L3: a community marker suggested (`community`)

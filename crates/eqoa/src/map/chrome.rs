@@ -18,6 +18,12 @@ pub const BUTTONS: [(&str, i32); 5] = [("Close", key::TRIANGLE), ("+", key::R1),
 /// 185, R1 187, L3 214) and what each does.
 const PAD_LEGEND: [(i32, &str); 10] = [(65, "Close"), (66, "Center"), (67, "Waypoint"), (68, "Markers"), (189, "Towns"), (214, "Suggest"), (185, ""), (187, "Zoom"), (-1, "Sticks, drag, pinch: pan and zoom"), (-1, "Tap: waypoint")];
 const KEY_LEGEND: [&str; 8] = ["M Close", "Space Center", "+ - or wheel Zoom", "Arrows, WASD or drag Pan", "Click or Q Waypoint", "X Markers", "T Towns", "N Suggest"];
+/// In a group, the legend's words for the waypoint keys, the group's beside
+/// the player's own (`group_waypoint`): □ held, a finger held, G or a click
+/// with Shift.
+const PAD_LEGEND_GROUP: (i32, &str) = (67, "Waypoint, held: the group's");
+const TAP_LEGEND_GROUP: &str = "Tap: waypoint, hold: the group's";
+const KEY_LEGEND_GROUP: &str = "G, Q held or Shift+click Group waypoint";
 
 pub const NAME: [f32; 4] = [1.0, 0.97, 0.85, 1.0];
 /// The community list's answer under the title: the game's gold words.
@@ -47,6 +53,8 @@ pub struct Chrome {
     /// what the community's list answered a suggestion, for a while
     /// (`community::Community::notice_now`), under the title in gold
     pub notice: Option<String>,
+    /// in a group: the legend names the group's waypoint (`group_waypoint`)
+    pub group: bool,
 }
 
 /// A panel the size of `w` x `h` at `at` (VIWndGoto's).
@@ -177,6 +185,21 @@ pub fn draw(r: &mut dyn Raster, vui: &Vui, c: &Chrome) -> Vec<Button> {
     }
     // the legend: its pieces (a glyph or none, and words) in lines that fit
     let mut pieces: Vec<(i32, &str)> = if c.keyboard { KEY_LEGEND.iter().map(|s| (-1, *s)).collect() } else { PAD_LEGEND.to_vec() };
+    if c.group {
+        // the group's waypoint beside the player's own
+        if c.keyboard {
+            let at = pieces.iter().position(|p| p.1.ends_with("Waypoint")).map_or(pieces.len(), |i| i + 1);
+            pieces.insert(at, (-1, KEY_LEGEND_GROUP));
+        } else {
+            for p in &mut pieces {
+                if *p == PAD_LEGEND[2] {
+                    *p = PAD_LEGEND_GROUP;
+                } else if p.1 == "Tap: waypoint" {
+                    p.1 = TAP_LEGEND_GROUP;
+                }
+            }
+        }
+    }
     if c.quests.is_some() {
         // after the towns' key (R3's glyph, 215, inline)
         let at = pieces.iter().position(|p| p.1.ends_with("Towns")).map_or(pieces.len(), |i| i + 1);
@@ -266,7 +289,7 @@ mod tests {
     }
 
     fn chrome(keyboard: bool) -> Chrome {
-        Chrome { corners: [[-106.0, 0.0], [746.0, 448.0]], title: "Tunaria: Freeport (North)".into(), names: Vec::new(), keyboard, progress: Some((3, 175)), quests: None, pointer: None, notice: None }
+        Chrome { corners: [[-106.0, 0.0], [746.0, 448.0]], title: "Tunaria: Freeport (North)".into(), names: Vec::new(), keyboard, progress: Some((3, 175)), quests: None, pointer: None, notice: None, group: false }
     }
 
     /// The chrome's footprint covers its title (top left), its buttons (top
@@ -342,5 +365,51 @@ mod tests {
             map.buttons.clear();
         }
         assert!(draw(&mut NullRaster, &vui(), &chrome(true)).iter().all(|h| h.1 != key::R3), "no marks, no button");
+    }
+
+    /// In a group the legend names the group's waypoint beside the player's
+    /// own: a keyboard's G, Q held or Shift and a click, a pad's □ held and a
+    /// finger held on the map. The control: out of a group, none of it.
+    #[test]
+    fn in_a_group_the_legend_names_the_groups_waypoint() {
+        #[derive(Default)]
+        struct Words(Vec<String>);
+        impl crate::ui::Layout for Words {}
+        impl Raster for Words {
+            fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+            fn stretch_blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+            fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+            fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+            fn draw_string(&mut self, _: [i32; 2], _: [f32; 4], s: &[u16]) {
+                self.0.push(String::from_utf16_lossy(s));
+            }
+            fn draw_centered_string(&mut self, _: [i32; 2], _: [f32; 4], s: &[u16], _: u32) {
+                self.0.push(String::from_utf16_lossy(s));
+            }
+            fn string_width(&self, s: &[u16]) -> i32 {
+                s.len() as i32 * 12
+            }
+            fn point_size(&self) -> i32 {
+                16
+            }
+            fn viewport(&self) -> [i32; 4] {
+                [0, 0, 640, 448]
+            }
+            fn set_viewport(&mut self, _: [i32; 4]) {}
+        }
+        let said = |keyboard: bool, group: bool| {
+            let mut r = Words::default();
+            draw(&mut r, &vui(), &Chrome { group, ..chrome(keyboard) });
+            r.0
+        };
+        let keys = said(true, true);
+        assert!(keys.iter().any(|s| s == KEY_LEGEND_GROUP) && keys.iter().any(|s| s == "Click or Q Waypoint"), "{keys:?}");
+        let pad = said(false, true);
+        assert!(pad.iter().any(|s| s == PAD_LEGEND_GROUP.1) && pad.iter().any(|s| s == TAP_LEGEND_GROUP), "{pad:?}");
+        for keyboard in [true, false] {
+            let alone = said(keyboard, false);
+            assert!(alone.iter().any(|s| s.contains("aypoint")), "the control drew its legend: {alone:?}");
+            assert!(!alone.iter().any(|s| s.contains("group's") || s.contains("Group waypoint")), "out of a group: {alone:?}");
+        }
     }
 }

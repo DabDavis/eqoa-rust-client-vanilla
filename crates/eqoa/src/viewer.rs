@@ -470,6 +470,12 @@ pub fn shot_with(
                     }
                 }
             }
+            touch.holds = play.as_ref().is_some_and(|p| p.map.open);
+            for at in touch.take_holds(Instant::now()) {
+                if let Some(p) = play.as_mut().filter(|p| p.map.open) {
+                    eprintln!("touch long press at ({:.0}, {:.0}): {}", at[0], at[1], p.map.long_press(at));
+                }
+            }
             for c in touch.take_clicks() {
                 if let (Some(p), Some(vp)) = (play.as_mut(), last_view) {
                     let mode = p.mode;
@@ -4123,6 +4129,10 @@ impl ApplicationHandler for App {
             // item took it, asking as Settings… does (`macos`)
             WindowEvent::ModifiersChanged(m) => {
                 self.alt_held = m.state().alt_key();
+                // Shift and a click on the map: the group's waypoint (`map`)
+                if let Some(p) = self.play.as_mut() {
+                    p.map.shift = m.state().shift_key();
+                }
                 #[cfg(target_os = "macos")]
                 {
                     self.super_held = m.state().super_key();
@@ -4581,6 +4591,13 @@ impl ApplicationHandler for App {
                 for c in self.touch.take_clicks() {
                     self.click(c, true);
                 }
+                // a finger held still on the map: the group's waypoint (`map`)
+                for at in self.touch.take_holds(Instant::now()) {
+                    if let Some(p) = self.play.as_mut().filter(|p| p.map.open) {
+                        p.map.long_press(at);
+                    }
+                }
+                self.touch.holds = self.play.as_ref().is_some_and(|p| p.map.open);
                 self.touch.window = self.play.as_ref().is_some_and(|p| p.window_up() || p.map.open);
                 self.touch.dpad = self.play.as_mut().is_some_and(|p| p.quick_dpad());
                 mark(&mut self.perf, 0);

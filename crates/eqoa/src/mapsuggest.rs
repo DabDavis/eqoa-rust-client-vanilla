@@ -18,13 +18,17 @@ const TOO_SHORT: &str = "A marker needs a name of 2 to 40 letters: nothing was s
 
 impl Play {
     /// The map's spot to suggest, if it asked for one: the map put away, the
-    /// edit box up for the marker's name.
+    /// edit box up for the marker's name; the spot the target's (F3
+    /// 20261026-231048: a merchant, a quest giver), its name already typed
+    /// there, as the game's own boxes take the target's name (`open_edit`),
+    /// so the player sees whose spot goes.
     pub(super) fn take_map_suggest(&mut self) {
         let Some(spot) = self.map.take_suggest() else { return };
+        let target = self.map.take_suggest_target();
         let follow = self.map.following();
         self.map.close();
         self.map.community.draft = Some(Draft { spot, name: None, follow });
-        self.open_edit(community::NAME_PURPOSE, community::NAME_MAX, -1, false);
+        self.open_edit(community::NAME_PURPOSE, community::NAME_MAX, -1, target);
         self.edit.title = crate::ui::wide(NAME_TITLE);
     }
 
@@ -142,6 +146,52 @@ mod tests {
         assert_eq!((v["world"].as_i64(), v["name"].as_str(), v["note"].as_str()), (Some(0), Some("Hidden cave"), Some("Behind the falls")));
         assert!((v["x"].as_f64().unwrap() as f32 - spot[0]).abs() < 0.01 && (v["z"].as_f64().unwrap() as f32 - spot[1]).abs() < 0.01, "the waypoint's spot: {v}");
         assert_eq!(v["client"].as_str(), Some(community::client().as_str()));
+    }
+
+    /// N with a merchant targeted and the map following the player (F3
+    /// 20261026-231048, Liav's): the merchant's spot is suggested over a
+    /// waypoint from before (the map opened since), its name already typed in
+    /// the box, and Enter sends it as it stands. The control: the map panned,
+    /// the pad's cross is the spot and the box starts empty.
+    #[test]
+    fn the_target_is_suggested_with_its_name() {
+        crate::settings::testing::reset(false);
+        let (base, asked) = serve(|r| match r.path.as_str() {
+            "/mapmarks/suggest" => (200, Vec::new(), r#"{"ok":true,"id":14}"#.into()),
+            _ => (200, Vec::new(), r#"{"version":"1","marks":[]}"#.into()),
+        });
+        let mut p = play(&base);
+        // a waypoint from before: put, the map put away and opened again
+        assert!(p.map.click([40.0, 680.0], false));
+        p.map.close();
+        p.map.show();
+        let merchant = [25475.9, 15704.6];
+        let creature = net::entity::Creature { name: "Merchant Ravnous".into(), ..Default::default() };
+        p.entities.slots[0] = Some(net::entity::Entity { id: 0xEA01, creature: Some(creature), ..Default::default() });
+        p.target = 0xEA01;
+        p.map.target_for_test(Some(merchant));
+        assert!(p.map.key(key::L3, true));
+        p.take_map_suggest();
+        assert_eq!(p.map.community.draft.as_ref().map(|d| d.spot.at), Some(merchant), "the merchant's spot, not the old waypoint's");
+        assert_eq!(String::from_utf16_lossy(&p.edit.text), "Merchant Ravnous", "its name typed");
+        p.edit_key(13, true);
+        p.run_edit(&vui(), &NullRaster);
+        type_in(&mut p, "", true);
+        assert!(until(5.0, || {
+            p.map.community.frame(true);
+            p.map.community.notice_now() == Some(community::SENT)
+        }));
+        let sent = suggestions(&asked);
+        let v: serde_json::Value = serde_json::from_str(&sent[0].body).unwrap();
+        assert_eq!(v["name"].as_str(), Some("Merchant Ravnous"));
+        assert!((v["x"].as_f64().unwrap() as f32 - merchant[0]).abs() < 0.01 && (v["z"].as_f64().unwrap() as f32 - merchant[1]).abs() < 0.01, "{v}");
+        // the control: panned, the pad's cross; nothing typed
+        p.map.follow_for_test(false);
+        assert!(p.map.key(key::L3, true));
+        p.take_map_suggest();
+        let spot = p.map.community.draft.as_ref().map(|d| d.spot.at).unwrap();
+        assert!((spot[0] - merchant[0]).abs() > 1.0 || (spot[1] - merchant[1]).abs() > 1.0, "the cross, not the merchant: {spot:?}");
+        assert!(p.edit.text.is_empty(), "nothing typed");
     }
 
     /// Escape at the name, or at the note, sends nothing and brings the map
