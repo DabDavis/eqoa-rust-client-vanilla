@@ -153,7 +153,7 @@ mod tests {
         assert!(p.map.key(crate::map::KEY_GROUP, true));
         p.take_map_group_waypoint();
         assert!(said(&mut p).is_empty(), "the control: out of a group, nothing said");
-        assert_eq!(p.map.group_mark(), None);
+        assert_eq!((p.map.group_mark(), p.map.community.notice_now()), (None, Some(NOT_GROUPED)), "the map says why");
         grouped(&mut p);
         let middle = p.map.following().then(|| crate::map::testing::FREEPORT).unwrap();
         p.map.key(crate::map::KEY_GROUP, true);
@@ -164,10 +164,12 @@ mod tests {
         let modes: Vec<u8> = sent.iter().filter(|(_, m)| m.get(..2) == Some(&[0x0E, 0x00])).map(|(_, m)| m[2]).collect();
         assert_eq!(modes, vec![2, 0], "the group's channel for the line, say put back");
         assert_eq!(p.map.group_mark(), Some(&GroupMark { world: 0, at: group_waypoint::rounded(middle), from: "Dairine".into() }), "the player's own, at once");
+        assert_eq!(p.map.community.notice_now(), Some("Your group was told: x 25300, z 15200"));
         // too soon: nothing more
         p.map.key(crate::map::KEY_GROUP, true);
         p.take_map_group_waypoint();
         assert!(said(&mut p).is_empty(), "within five seconds");
+        assert_eq!(p.map.community.notice_now(), Some(WAIT));
         // the clock past the wait: another goes
         p.map.group_told(p.session.now().wrapping_sub(group_waypoint::EVERY_MS));
         p.map.key(crate::map::KEY_GROUP, true);
