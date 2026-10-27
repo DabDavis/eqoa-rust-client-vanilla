@@ -3083,7 +3083,19 @@ impl Play {
     /// left out. `group` (L1): the player, the group's other members, the
     /// pet, in turn. Changing between the two starts each from its first;
     /// then 0x0010 with the token and the choice.
-    pub fn cycle_target(&mut self, group: bool, eye: glam::Vec3, dir: glam::Vec3, view_proj: glam::Mat4) {
+    ///
+    /// How far off the centre line a creature is (its x after the divide)
+    /// is measured through `game`, the game's own camera (`m_viewProj`: 55
+    /// degrees and 10/7 across a 4:3 picture, `walker.view(4/3)`), as
+    /// `TargetCentre` measures; what is in view (`m_frustum.Cull`) is the
+    /// view as drawn, `view_proj` (a wider window's sides, a narrower one's
+    /// top and bottom: a creature the player sees can be cycled to). A wider
+    /// window draws a creature's x at 4/3 over its aspect of the game's
+    /// (Hor+, `walker::projection_to`), so measured as drawn the side's
+    /// penalty, x squared, was 0.53 of the console's at 1707x932 and a
+    /// creature off to the side came before one ahead (F3 20261026-154639);
+    /// a narrower one draws it at the game's (Vert+).
+    pub fn cycle_target(&mut self, group: bool, eye: glam::Vec3, dir: glam::Vec3, game: glam::Mat4, view_proj: glam::Mat4) {
         let me = self.self_id32();
         let members: Vec<u32> = self.group.members[..self.group.count()].iter().map(|m| m.id).collect();
         let mut cand: Vec<(f32, u32)> = Vec::new();
@@ -3122,7 +3134,10 @@ impl Play {
             if e.p18 & 1 == 0 || d2 >= 40000.0 {
                 continue;
             }
-            let x = h.x / h.w;
+            // the game's camera's x; read only past 5 away and not near,
+            // which is in view, in front of both (their w is the depth)
+            let g = game * pos.extend(1.0);
+            let x = g.x / g.w;
             let score = if near {
                 0.0
             } else if d2 < 25.0 {
@@ -3157,11 +3172,22 @@ impl Play {
         self.last_group = group;
     }
 
+    /// `cycle_target` from `walker`'s camera in a window `aspect` wide:
+    /// measured through the game's camera (`walker.view(4/3)`), in view as
+    /// drawn (`walker.view(aspect)`).
+    pub fn cycle_target_from(&mut self, group: bool, walker: &Walker, aspect: f32) {
+        let (drawn, view) = walker.view(aspect);
+        let (game, _) = walker.view(4.0 / 3.0);
+        let dir = glam::Vec3::from(walker.eye.direction.to_array());
+        self.cycle_target(group, walker.eye_position(), dir, game * view, drawn * view);
+    }
+
     /// `VIWndGame::OnKeyDown`'s L1 and R1 in play (` and Tab on the
-    /// keyboard): the cycle (`CycleTarget`), and the hold begun (`m_p03C`,
-    /// `m_p040`): still held 300 ms on, the manual camera (`manual_frame`).
-    pub fn target_key(&mut self, group: bool, eye: glam::Vec3, dir: glam::Vec3, view_proj: glam::Mat4) {
-        self.cycle_target(group, eye, dir, view_proj);
+    /// keyboard): the cycle (`CycleTarget`, from `walker`'s camera in a
+    /// window `aspect` wide), and the hold begun (`m_p03C`, `m_p040`): still
+    /// held 300 ms on, the manual camera (`manual_frame`).
+    pub fn target_key(&mut self, group: bool, walker: &Walker, aspect: f32) {
+        self.cycle_target_from(group, walker, aspect);
         self.aim_hold = true;
         self.aim_at = self.session.now();
     }
@@ -4548,11 +4574,7 @@ impl Play {
             134 => self.attack_press(),
             133 => self.interact_with_target(),
             132 => self.clear_target(),
-            140 | 142 => {
-                let (proj, v) = walker.view(aspect);
-                let dir = glam::Vec3::from(walker.eye.direction.to_array());
-                self.target_key(key == 140, walker.eye_position(), dir, proj * v);
-            }
+            140 | 142 => self.target_key(key == 140, walker, aspect),
             136 => self.hud_key(H::Left),
             137 => self.hud_key(H::Right),
             138 => self.hud_key(H::Up),
@@ -8006,9 +8028,9 @@ mod commands {
         p.entities.slots[1] = Some(creature(0x0010_1076, 0, [0.0, 0.0, -10.0], "Ice Statue"));
         let proj = glam::camera::rh::proj::directx::perspective(45f32.to_radians(), 4.0 / 3.0, 0.3, 6000.0);
         let vp = proj * glam::camera::rh::view::look_to_mat4(glam::Vec3::ZERO, glam::Vec3::NEG_Z, glam::Vec3::Y);
-        p.cycle_target(false, glam::Vec3::ZERO, glam::Vec3::NEG_Z, vp);
+        p.cycle_target(false, glam::Vec3::ZERO, glam::Vec3::NEG_Z, vp, vp);
         assert_eq!(p.target, 0x0010_1076, "R1: the statue");
-        p.cycle_target(false, glam::Vec3::ZERO, glam::Vec3::NEG_Z, vp);
+        p.cycle_target(false, glam::Vec3::ZERO, glam::Vec3::NEG_Z, vp, vp);
         assert_eq!(p.target, 0x0010_1076, "R1 again: still the only one with an actor");
         // a click a unit up its upright
         let c = vp * glam::Vec4::new(0.0, 1.0, -10.0, 1.0);
@@ -8017,6 +8039,63 @@ mod commands {
         assert_eq!(p.actor_pos(0x0010_1076), Some([0.0, 0.0, -10.0]));
         assert_eq!(p.slot4_of(1), None, "no body, no slot 4");
         assert_eq!(p.actor_pos(0x0020_0001), None, "the control: another world's has no actor here");
+    }
+
+    /// R1 and Tab in a window wider than 4:3 go in the console's order (F3
+    /// 20261026-154639, jib at 1707x932: "a *slightly* higher preference to
+    /// targeting mobs in front of you and close"). How far off the middle a
+    /// creature is counts as the game's camera measures it
+    /// (`walker.view(4/3)`); the window's projection draws its x at 4/3 over
+    /// the aspect of that (0.73 at jib's shape, x squared 0.53), and at the
+    /// game's in a window narrower than 4:3. From a camera at the origin
+    /// looking along -z: A, 40 ahead (0.28), then B, 13 away and 5 to the
+    /// side (0.405), then C, past the 4:3 picture's side, which only the
+    /// wide window shows (1.63: still cycled to); in a narrower window A and
+    /// B, C out of its sides. The control: x measured as drawn, B came first
+    /// (0.257), the order before.
+    #[test]
+    fn tab_goes_by_the_games_camera_in_a_wide_window() {
+        let mut p = play();
+        let creature = |id: u32, at: [f32; 3]| net::entity::Entity {
+            id,
+            kind: 130,
+            p18: 1,
+            p19: 1,
+            pos: at,
+            actor_pos: at,
+            creature: Some(net::entity::Creature { name: format!("{id:x}"), ..Default::default() }),
+            ..Default::default()
+        };
+        let (a, b, c) = (0x0010_0001, 0x0010_0002, 0x0010_0003);
+        let b_at = [5.0, 0.0, -12.0];
+        p.entities.slots[0] = Some(creature(b, b_at));
+        p.entities.slots[1] = Some(creature(a, [0.0, 0.0, -40.0]));
+        p.entities.slots[2] = Some(creature(c, [17.85, 0.0, -20.0]));
+        let view = glam::camera::rh::view::look_to_mat4(glam::Vec3::ZERO, glam::Vec3::NEG_Z, glam::Vec3::Y);
+        let aspect = 1707.0 / 932.0;
+        let game = crate::walker::projection_to(4.0 / 3.0, 6000.0) * view;
+        let wide = crate::walker::projection_to(aspect, 6000.0) * view;
+        let tall = crate::walker::projection_to(540.0 / 960.0, 6000.0) * view;
+        // the scale: Hor+ draws x at 4/3 over the aspect, Vert+ at the game's
+        let x = |m: glam::Mat4| {
+            let h = m * glam::Vec3::from(b_at).extend(1.0);
+            h.x / h.w
+        };
+        assert!((x(wide) - x(game) * (4.0 / 3.0) / aspect).abs() < 1e-6, "{} against {}", x(wide), x(game));
+        assert!((x(tall) - x(game)).abs() < 1e-6, "{} against {}", x(tall), x(game));
+        // four presses from no target
+        let order = |p: &mut Play, game: glam::Mat4, drawn: glam::Mat4| -> Vec<u32> {
+            p.target = u32::MAX;
+            (0..4)
+                .map(|_| {
+                    p.cycle_target(false, glam::Vec3::ZERO, glam::Vec3::NEG_Z, game, drawn);
+                    p.target
+                })
+                .collect()
+        };
+        assert_eq!(order(&mut p, game, wide), [a, b, c, a], "measured by the game's camera, in view as drawn");
+        assert_eq!(order(&mut p, game, tall), [a, b, a, b], "narrower than 4:3: C out of view");
+        assert_eq!(order(&mut p, wide, wide), [b, a, c, b], "the control: measured as drawn, B first");
     }
 
     fn grouped(p: &mut Play, ids: &[u32]) {

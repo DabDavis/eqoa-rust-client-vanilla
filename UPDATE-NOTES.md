@@ -5,6 +5,14 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-27 · Tab picks targets as on a PS2 in a wide window
+- In a window wider than a TV's 4:3 (most monitors), Tab (R1 on a controller) now picks the
+  next target in the same order a PS2 does: creatures in front of you and close come first,
+  and ones off to the side later. Before, the wider the window, the less being off to the
+  side counted, so a creature near the edge of the screen was often picked before one
+  straight ahead.
+- Creatures you can only see because the window is wide can still be picked.
+
 ## 2026-10-27 · No more creatures fighting you while lying dead
 - A creature or a pet could come into view lying on the ground as if dead, then run after
   you and fight like that. It happened where many look alike, in a camp of one kind: when

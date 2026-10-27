@@ -636,9 +636,7 @@ pub fn shot_with(
                     crate::hideui::toggle();
                 }
                 if t == at && tab {
-                    let (proj, v) = walker.view(aspect);
-                    let dir = Vec3::from(walker.eye.direction.to_array());
-                    p.cycle_target(false, walker.eye_position(), dir, proj * v);
+                    p.cycle_target_from(false, &walker, aspect);
                 }
                 // `EQOA_BOX=text|option|...`: a dialog box then; `EQOA_BOX_KEYS`
                 // (u, d, e, x) pressed one a frame after it.
@@ -3613,9 +3611,7 @@ impl App {
                     if !event.repeat
                         && let (Some(w), Some(g)) = (self.walker.as_ref(), self.gfx.as_ref())
                     {
-                        let (proj, v) = w.view(g.config.width as f32 / g.config.height as f32);
-                        let dir = Vec3::from(w.eye.direction.to_array());
-                        p.target_key(true, w.eye_position(), dir, proj * v);
+                        p.target_key(true, w, g.config.width as f32 / g.config.height as f32);
                     }
                     return;
                 }
@@ -3811,9 +3807,7 @@ impl App {
             && p.mode == 0
         {
             if !event.repeat {
-                let (proj, v) = w.view(g.config.width as f32 / g.config.height as f32);
-                let dir = Vec3::from(w.eye.direction.to_array());
-                p.target_key(false, w.eye_position(), dir, proj * v);
+                p.target_key(false, w, g.config.width as f32 / g.config.height as f32);
             }
             return;
         }
