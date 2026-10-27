@@ -301,6 +301,19 @@ async def tests(a, site, base, page):
     # ---- update
     first = site.first
     check("the page is its build", await page.open(base + q) == first, str(await page.js("window.eqoaBuild")))
+
+    # ---- iOS: its pickers grey a disc image out under the inputs' accept
+    # (every browser there is WebKit), so the page drops it there (main.js
+    # `onIOS`); the control, a desktop page keeps it
+    accepts = "document.getElementById('iso').accept + '|' + document.getElementById('iso2002').accept"
+    check("a desktop page's disc inputs keep their filter (control)", await page.js(accepts) == ".iso,.bin,.img|.iso,.bin,.img")
+    ua = await page.js("navigator.userAgent")
+    await page.call("Emulation.setUserAgentOverride", userAgent="Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/131.0.6778.73 Mobile/15E148 Safari/604.1")
+    await page.open(base + q)
+    check("on an iPhone they take any file", await page.js(accepts) == "|", str(await page.js(accepts)))
+    await page.call("Emulation.setUserAgentOverride", userAgent=ua)
+    await page.open(base + q)
+    check("and back on the desktop, filtered again", await page.js(accepts) == ".iso,.bin,.img|.iso,.bin,.img")
     await page.stay()
     latest = await page.js("eqoaCheckUpdate()")
     await asyncio.sleep(0.5)

@@ -572,6 +572,14 @@ $('iso').addEventListener('change', async () => {
   }
 });
 
+// iOS turns an input's `accept` into file types and knows none for a disc
+// image's .iso, .bin or .img, so its picker greys the image out in every
+// browser there (all of them WebKit; Chrome on an iPhone, 2026-10-27: "it
+// doesn't let you select the ISO"). The disc is judged here anyway (SYSTEM.CNF,
+// `disc_id`), so on iOS the inputs take any file.
+const onIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+if (onIOS) for (const id of ['iso', 'iso2002']) $(id).removeAttribute('accept');
+
 // ---- the 2002 disc: EverQuest Online Adventures (USA), SLUS-20470, whose
 // art F9 swaps in (crates/eqoa/src/era.rs). Optional, judged by the client's
 // rules as it is picked (web::disc_2002) and held by the client; picked on

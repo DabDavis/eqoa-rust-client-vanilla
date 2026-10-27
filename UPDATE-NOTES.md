@@ -5,6 +5,15 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-27 · Character select shows your race's set alone, and your volume from the start
+- Character select and creation draw your race's own set and nothing past it, as the PS2 does:
+  the other races' sets no longer show in the distance behind your character, and with them
+  gone the screen draws much faster.
+- Your Fx and Music Volume are used from the very first sound: the loading pictures, the
+  agreement and the title no longer play at full volume before your settings take hold.
+- In a browser on an iPhone or iPad, the disc image can be chosen: iOS greyed it out, as it
+  knows no file type for a disc image. The page still checks that it is the right disc.
+
 ## 2026-10-27 · Updates with two windows open, and lighter fireballs
 - An update now goes through while another window of the game is still open on the version
   before. On Windows a running program can't be replaced, and the copy the last update set
