@@ -14,7 +14,9 @@
 <style>
   :root { color-scheme: dark; --bg: #0b0d10; --panel: #151a20; --raised: #1c232b; --line: #2a323c; --text: #e6e9ee; --dim: #9aa4b1; --accent: #d9a441; --bad: #e0745f; --good: #79c08a; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, sans-serif; overflow: hidden; }
-  canvas#eqoa { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; outline: none; touch-action: none; }
+  /* the visible area (dvh): a phone browser's 100vh is the height with its toolbars hidden, which put the
+     bottom of the game (the touch pad's lowest buttons) under them; 100vh where dvh is unknown */
+  canvas#eqoa { position: fixed; inset: 0; width: 100vw; height: 100vh; height: 100dvh; display: block; outline: none; touch-action: none; }
   #panel { position: fixed; inset: 0; display: grid; place-items: center; padding: 16px; overflow: auto; }
   .card { width: min(460px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 20px; box-sizing: border-box; }
   h1 { margin: 0 0 4px; font-size: 22px; letter-spacing: .02em; }
@@ -55,7 +57,7 @@
   .notice .text { flex: 1 1 260px; min-width: 0; overflow-wrap: anywhere; white-space: pre-line; max-height: 45vh; overflow-y: auto; }
   .notice button { flex: 0 0 auto; padding: 6px 10px; font-weight: 500; }
   .modal { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 16px; overflow: auto; background: #0008; }
-  .modal .card { max-height: calc(100vh - 32px); overflow: hidden auto; }
+  .modal .card { max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); overflow: hidden auto; }
   textarea { width: 100%; box-sizing: border-box; padding: 9px 10px; background: #0e1217; color: var(--text); border: 1px solid var(--line); border-radius: 6px; font: inherit; resize: vertical; }
   label.check { display: flex; gap: 8px; align-items: center; color: var(--text); }
   label.check input { width: auto; }

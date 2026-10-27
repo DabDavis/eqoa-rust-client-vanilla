@@ -5,6 +5,19 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-27 · The touch controls laid out as a PS4 controller
+- On a phone or tablet held sideways the on-screen controller is now laid out like a
+  PS4 controller, with two sticks: the left one walks and the right one turns the camera.
+  The d-pad sits above the left stick and the face buttons above the right one, L1/L2 and
+  R1/R2 above those, Select and Start at the top in the middle, and L3 and R3 just above
+  their sticks. Each stick starts where your thumb lands near it.
+- Held upright, the same controller sits along the bottom of the screen.
+- Every button now fits on the screen. In a phone's browser the bottom of the game used to
+  sit under the browser's toolbar, which cut off the lowest buttons.
+- All the buttons stay on every screen, Station's login and the windows over the game
+  among them. Over a window they are drawn a little fainter, and a tap anywhere off them
+  still goes to the window.
+
 ## 2026-10-27 · Full screen in the browser, and the page as an app
 - In a browser the game now goes full screen as soon as you press Start: on an Android phone
   or tablet, and on a computer in Chrome, Edge or another Chromium-based browser. Escape is

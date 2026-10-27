@@ -416,7 +416,6 @@ pub fn shot_with(
             };
             let mut sticks = controls.axes();
             touch.window = play.as_ref().is_some_and(|p| p.window_up());
-            touch.dpad = play.as_mut().is_some_and(|p| p.quick_dpad());
             for (_, id, phase, at) in touch_script.iter().filter(|e| e.0 == t) {
                 touch.touch(*id, *phase, *at, Instant::now(), (w, h));
             }
@@ -2961,11 +2960,11 @@ impl App {
     /// come), then the world entered once they are in.
     fn host_frame(&mut self, el: &ActiveEventLoop, game_frame: bool) {
         // the touch screen's pad over the game's screens as over a window of
-        // the world's: only its face buttons are the pad's, and a tap off
-        // them is a click for the screen (`Host::click`, as the mouse's); its
-        // drags scroll nothing (no screen before the world takes the wheel)
+        // the world's: every button the pad's, a stick only inside its ring,
+        // and a tap off them a click for the screen (`Host::click`, as the
+        // mouse's); its drags scroll nothing (no screen before the world
+        // takes the wheel)
         self.touch.window = true;
-        self.touch.dpad = false;
         let taps = self.touch.take_clicks();
         let _ = self.touch.take_look();
         if let (Some(h), Some(g)) = (self.host.as_mut(), self.gfx.as_ref()) {
@@ -4618,7 +4617,6 @@ impl ApplicationHandler for App {
                     self.click(c, true);
                 }
                 self.touch.window = self.play.as_ref().is_some_and(|p| p.window_up());
-                self.touch.dpad = self.play.as_mut().is_some_and(|p| p.quick_dpad());
                 mark(&mut self.perf, 0);
                 self.grab_pointer(true);
                 let sticks = self.sticks();

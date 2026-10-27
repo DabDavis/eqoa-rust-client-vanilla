@@ -3160,7 +3160,8 @@ impl Play {
     }
 
     /// A window is up: neither play nor the manual camera, which keeps play's
-    /// HUD (and the touch screen's whole pad).
+    /// HUD (and the touch screen's pad as play has it: drawn at its
+    /// brightest, a stick taking a finger anywhere in its zone).
     pub fn window_up(&self) -> bool {
         self.mode != 0 && self.mode != 38
     }
@@ -5870,8 +5871,9 @@ impl Play {
         self.mode == 13 && self.items.typing()
     }
 
-    /// A quick-chat menu (not its editor) has the keys: the touch screen's
-    /// pad keeps its d-pad, to hold a direction.
+    /// A quick-chat menu (not its editor) has the keys: a direction is held
+    /// there to edit its choice, so the wheel and a finger's drag step
+    /// nothing (`window_wheel`).
     pub fn quick_dpad(&mut self) -> bool {
         self.mode == 30 && self.quick.menu_has_keys()
     }
