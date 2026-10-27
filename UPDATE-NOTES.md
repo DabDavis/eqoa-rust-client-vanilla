@@ -5,6 +5,15 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-27 · Updates with two windows open, and lighter fireballs
+- An update now goes through while another window of the game is still open on the version
+  before. On Windows a running program can't be replaced, and the copy the last update set
+  aside was still running in that window, so every look for an update failed ("Access is
+  denied") until every window was closed. If yours has said it could not update, close every
+  window of the game once and start it again.
+- Where the Lavastorm throws its fireballs (round Klick'Anon), each frame takes a little less
+  of your computer: the client made 31 new buffers a frame for them, and now keeps its own.
+
 ## 2026-10-27 · A sharp HUD by default, and the world's textures smooth again
 - The HUD's and the windows' art is drawn sharp now unless you choose otherwise, every pixel
   the same size at any window size, as the text already was. Options > Extended > UI > HUD
