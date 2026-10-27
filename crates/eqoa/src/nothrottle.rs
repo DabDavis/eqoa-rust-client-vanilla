@@ -12,9 +12,9 @@
 //!   does (the usual fix for multiboxing on Windows 11); a Windows that
 //!   knows no timers' part (before 11 22H2) is asked for the speed alone;
 //! - macOS: an activity, user-initiated and latency-critical, begun and
-//!   never ended, so App Nap and timer coalescing leave the process alone
-//!   (and the Mac does not sleep of idleness under a session, as a PS2 does
-//!   not).
+//!   never ended, so App Nap and timer coalescing leave the process alone;
+//!   the one that allows idle sleep, so a Mac left with the game open still
+//!   sleeps by itself.
 //!
 //! Each says in the log what it got. A page has neither: its browser
 //! decides (on Windows 11 Task Manager's Efficiency mode, or the power mode,
@@ -56,8 +56,8 @@ fn windows() {
 #[cfg(target_os = "macos")]
 fn macos() {
     use objc2_foundation::{NSActivityOptions, NSProcessInfo, NSString};
-    let activity = NSProcessInfo::processInfo().beginActivityWithOptions_reason(NSActivityOptions::UserInitiated | NSActivityOptions::LatencyCritical, &NSString::from_str("a game window"));
+    let activity = NSProcessInfo::processInfo().beginActivityWithOptions_reason(NSActivityOptions::UserInitiatedAllowingIdleSystemSleep | NSActivityOptions::LatencyCritical, &NSString::from_str("a game window"));
     // held for the process's life: the activity ends only with it
     std::mem::forget(activity);
-    crate::say("pace: macOS told the game is user-initiated and latency-critical: no App Nap or timer coalescing for a window in the back");
+    crate::say("pace: macOS told the game is user-initiated (idle sleep allowed) and latency-critical: no App Nap or timer coalescing for a window in the back");
 }

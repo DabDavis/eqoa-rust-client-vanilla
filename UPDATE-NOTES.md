@@ -9,8 +9,7 @@ is put on the page by `.github/workflows/notes.yml`.
 - On Windows, the game now asks Windows not to slow it down while its window is not in
   front (Windows 11 slows programs in the back to save power), so the box you are not
   playing keeps its frame rate. On a Mac it asks macOS not to put it to sleep in the back
-  (App Nap) or bunch up its timers; while the game is open the Mac also does not go to
-  sleep by itself (the screen still can), as a console would not in the middle of a session.
+  (App Nap) or bunch up its timers.
 - In a browser, the browser decides how fast a window in the back runs: on Windows 11,
   Task Manager's Efficiency mode (the green leaf) on the browser, or a power-saving power
   mode, can slow it.
