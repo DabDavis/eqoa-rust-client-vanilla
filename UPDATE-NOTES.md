@@ -5,6 +5,17 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-27 · Multiboxing: a window in the back keeps its frame rate
+- On Windows, the game now asks Windows not to slow it down while its window is not in
+  front (Windows 11 slows programs in the back to save power), so the box you are not
+  playing keeps its frame rate. On a Mac it asks macOS not to put it to sleep in the back
+  (App Nap) or bunch up its timers; while the game is open the Mac also does not go to
+  sleep by itself (the screen still can), as a console would not in the middle of a session.
+- In a browser, the browser decides how fast a window in the back runs: on Windows 11,
+  Task Manager's Efficiency mode (the green leaf) on the browser, or a power-saving power
+  mode, can slow it.
+- A problem report now says how fast each window drew while it was in the back.
+
 ## 2026-10-27 · The page says when your browser is not using the graphics card
 - In the browser, if the game is being drawn without your graphics card (in software, as
   Windows' "Microsoft Basic Render Driver" does), the page now says so: on the start card, in

@@ -146,6 +146,8 @@ mod stream;
 mod gpulost;
 #[cfg(not(target_arch = "wasm32"))]
 mod gpustart;
+#[cfg(not(target_arch = "wasm32"))]
+mod nothrottle;
 mod report;
 mod ui;
 mod update;
@@ -610,6 +612,8 @@ fn boot(image: Option<&str>, server: Option<String>) -> Result<()> {
     {
         report::start();
         gpulost::begin();
+        // a window in the back kept at its pace by the system too (multiboxing)
+        nothrottle::keep_pace();
     }
     // a newer build on the release, asked for while the boot's pictures show
     #[cfg(not(target_arch = "wasm32"))]

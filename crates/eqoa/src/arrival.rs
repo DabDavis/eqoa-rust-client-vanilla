@@ -13,6 +13,15 @@
 //! winit sends a focus's synthetic presses just before `Focused(true)` on
 //! Windows (both come out of WM_SETFOCUS, the keys first) and just after it
 //! on X11, so a key counts as down at the focus within `NEAR` either side.
+//!
+//! The line also says how fast the window drew in its last stretch in the
+//! back (from leaving the front to coming back, `BEHIND_AT_LEAST` or more), a
+//! window still in the back says it once `SAY_BEHIND` in (a report from the
+//! window in front carries the other windows' focus lines), and a report's
+//! state says it of the window as it is (`describe`): a tester multiboxing,
+//! "background window has low fps, but focus is good" (2026-10-27), and the
+//! reports' focus lines showed a window in the back drawing late, with
+//! nothing to say how fast.
 
 use std::time::Duration;
 use web_time::Instant;
@@ -26,6 +35,14 @@ const NEAR: Duration = Duration::from_millis(250);
 
 /// The most keys named as down at a focus.
 const MOST_KEYS: usize = 6;
+
+/// The shortest stretch in the back whose frame rate is said (an Alt+Tab
+/// and back is too short to measure one).
+const BEHIND_AT_LEAST: Duration = Duration::from_secs(1);
+
+/// How long into a stretch in the back a window says how fast it draws
+/// there, once a stretch.
+const SAY_BEHIND: Duration = Duration::from_secs(10);
 
 /// A window's coming to the front, until it is said.
 #[derive(Debug, Default)]
@@ -44,6 +61,15 @@ pub struct Arrival {
     /// before it came to the front that was
     drawn: Option<Instant>,
     before: Option<Duration>,
+    /// in front: from `Focused(true)` to `Focused(false)`
+    front: bool,
+    /// the stretch in the back under way: since the window left the front,
+    /// the frames drawn since, and whether it was said (`SAY_BEHIND`)
+    back: Option<(Instant, u32, bool)>,
+    /// the stretch in the back this focus ended (for the line), and the last
+    /// one ended (for `describe`): how long, and the frames drawn in it
+    ended: Option<(Duration, u32)>,
+    behind: Option<(Duration, u32)>,
 }
 
 /// A duration as the line says it.
@@ -51,12 +77,21 @@ fn ms(d: Duration) -> String {
     format!("{} ms", d.as_millis())
 }
 
+/// A stretch in the back as the lines say it: how long, and how fast the
+/// window drew there.
+fn stretch(d: Duration, frames: u32) -> String {
+    let s = d.as_secs_f64();
+    format!("{s:.1} s in the back at {:.0} frames a second", if s > 0.0 { frames as f64 / s } else { 0.0 })
+}
+
 impl Arrival {
     /// `Focused(true)`: from now, until said.
     pub fn focused(&mut self, now: Instant) {
         let early = std::mem::take(&mut self.early);
         let drawn = self.drawn;
-        *self = Arrival { at: Some(now), drawn, before: drawn.map(|t| now.saturating_duration_since(t)), ..Default::default() };
+        let ended = self.back.map(|(since, n, _)| (now.saturating_duration_since(since), n));
+        let behind = ended.filter(|e| e.0 >= BEHIND_AT_LEAST).or(self.behind);
+        *self = Arrival { at: Some(now), drawn, before: drawn.map(|t| now.saturating_duration_since(t)), front: true, ended, behind, ..Default::default() };
         for (t, k) in early {
             if now.duration_since(t) <= NEAR {
                 self.held_key(t, &k);
@@ -81,9 +116,20 @@ impl Arrival {
         }
     }
 
-    /// A frame begun: the line, once nothing was pressed for `QUIET`.
+    /// A frame begun: the line, once nothing was pressed for `QUIET`; in
+    /// the back, `SAY_BEHIND` into a stretch, how fast it draws there.
     pub fn frame(&mut self, now: Instant) -> Option<String> {
         self.drawn = Some(now);
+        if !self.front
+            && let Some((since, n, said)) = &mut self.back
+        {
+            *n += 1;
+            let d = now.saturating_duration_since(*since);
+            if !*said && d >= SAY_BEHIND {
+                *said = true;
+                return Some(format!("focus: not in front: {}", stretch(d, *n)));
+            }
+        }
         let at = self.at?;
         if self.first_frame.is_none() {
             self.first_frame = Some(now.duration_since(at));
@@ -102,16 +148,41 @@ impl Arrival {
         Some(self.say(now, Some(what)))
     }
 
-    /// `Focused(false)` before a press or `QUIET`: the line.
+    /// `Focused(false)`: a stretch in the back begins; before a press or
+    /// `QUIET`, the line.
     pub fn lost(&mut self, now: Instant) -> Option<String> {
+        if self.front {
+            self.front = false;
+            self.back = Some((now, 0, false));
+        }
         self.at?;
         let line = self.say(now, None);
         Some(format!("{line} (left the front)"))
     }
 
+    /// The window as a report's state says it: in front, with its last
+    /// stretch in the back, or in the back since when and how fast it draws
+    /// there.
+    pub fn describe(&self, now: Instant) -> String {
+        match (self.front, self.back) {
+            (false, Some((since, n, _))) => {
+                let d = now.saturating_duration_since(since);
+                format!("focus: not in front: {}{}", stretch(d, n), self.drawn.map_or(String::new(), |t| format!(", its last frame {} ago", ms(now.saturating_duration_since(t)))))
+            }
+            (false, None) => "focus: not in front yet".to_string(),
+            (true, _) => match self.behind {
+                Some((d, n)) => format!("focus: in front; before that, {}", stretch(d, n)),
+                None => "focus: in front, not in the back yet".to_string(),
+            },
+        }
+    }
+
     fn say(&mut self, now: Instant, press: Option<&str>) -> String {
         let at = self.at.take().unwrap_or(now);
         let mut s = String::from("focus: in front; ");
+        if let Some((d, n)) = self.ended.take().filter(|e| e.0 >= BEHIND_AT_LEAST) {
+            s += &format!("{}, ", stretch(d, n));
+        }
         if let Some(d) = self.before {
             s += &format!("its last frame {} before, ", ms(d));
         }
@@ -197,6 +268,45 @@ mod tests {
         let mut b = Arrival::default();
         b.focused(at(t0, 0));
         assert_eq!(b.lost(at(t0, 5)).as_deref(), Some("focus: in front; no frame drawn; no press in 5 ms (left the front)"), "the control");
+    }
+
+    /// How fast a window drew in the back (a multibox's other window: "if
+    /// multibox, background window has low fps, but focus is good",
+    /// 2026-10-27): its stretch there, from leaving the front to coming back,
+    /// said 10 s into it, at the focus and in a report's state (`describe`);
+    /// a stretch under a second (an Alt+Tab and back) is not said, and the
+    /// state keeps the last one that was. The control: the frames drawn in
+    /// front do not count (with them the rate would be 46).
+    #[test]
+    fn a_window_says_how_fast_it_drew_in_the_back() {
+        let t0 = Instant::now();
+        let mut a = Arrival::default();
+        assert_eq!(a.describe(at(t0, 0)), "focus: not in front yet");
+        a.focused(at(t0, 0));
+        assert_eq!(a.describe(at(t0, 10)), "focus: in front, not in the back yet");
+        // in front at 60 a second
+        for k in 1..60 {
+            a.frame(at(t0, k * 16));
+        }
+        a.lost(at(t0, 1000));
+        // 11 s in the back at 40 a second, said once 10 s in
+        let said: Vec<String> = (1..=440).filter_map(|k| a.frame(at(t0, 1000 + k * 25))).collect();
+        assert_eq!(said, ["focus: not in front: 10.0 s in the back at 40 frames a second"]);
+        assert_eq!(a.describe(at(t0, 12025)), "focus: not in front: 11.0 s in the back at 40 frames a second, its last frame 25 ms ago");
+        a.focused(at(t0, 12025));
+        assert_eq!(a.frame(at(t0, 12035)), None);
+        assert_eq!(
+            a.press(at(t0, 12125), "the controller's cross").as_deref(),
+            Some("focus: in front; 11.0 s in the back at 40 frames a second, its last frame 25 ms before, its first frame 10 ms after; the first press 100 ms after: the controller's cross")
+        );
+        assert_eq!(a.describe(at(t0, 13000)), "focus: in front; before that, 11.0 s in the back at 40 frames a second");
+        // an Alt+Tab and back: too short to say
+        a.lost(at(t0, 13000));
+        a.frame(at(t0, 13100));
+        a.focused(at(t0, 13500));
+        assert_eq!(a.lost(at(t0, 13600)).as_deref(), Some("focus: in front; its last frame 400 ms before, no frame drawn; no press in 100 ms (left the front)"));
+        a.focused(at(t0, 13700));
+        assert_eq!(a.describe(at(t0, 13800)), "focus: in front; before that, 11.0 s in the back at 40 frames a second", "the last one said kept");
     }
 
     /// A named key by its name; a character's key never by its character

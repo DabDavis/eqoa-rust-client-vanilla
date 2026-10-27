@@ -51,7 +51,7 @@ libc = "0.2.191"
 # winit makes, its action on an object of a class of its own. The versions
 # another dependency already brings.
 objc2 = "0.6.5"
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSData"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSData", "NSProcessInfo"] }
 # ... and the Dock's picture (`icon`): the program's, as an image of a PNG
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSMenu", "NSMenuItem", "NSResponder", "NSImage"] }
 # A PlayStation controller's motors over IOKit (`hidpad::mac`): gilrs reads
@@ -61,7 +61,7 @@ objc2-core-foundation = { version = "0.3.2", default-features = false, features 
 objc2-io-kit = { version = "0.3.2", default-features = false, features = ["std", "libc", "hid"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_HumanInterfaceDevice", "Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_UI_Input_XboxController"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_HumanInterfaceDevice", "Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_Input_XboxController"] }
 
 # The browser build (`web/build.sh`): the page hands over the player's disc
 # image and the login; sockets go through a WebSocket relay; wgpu falls back

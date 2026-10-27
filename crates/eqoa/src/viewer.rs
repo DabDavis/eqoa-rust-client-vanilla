@@ -2733,6 +2733,9 @@ impl App {
         if let Some(g) = &self.gfx {
             let _ = writeln!(o, "surface {}x{} {:?}, {}", g.config.width, g.config.height, g.config.format, if g.window.fullscreen().is_some() { "full screen" } else { "a window" });
         }
+        // in front or not, and how fast it drew in its last stretch in the
+        // back (`arrival`: a multibox's window in the back drawing slowly)
+        let _ = writeln!(o, "{}", self.arrival.describe(Instant::now()));
         let _ = writeln!(o, "files: {}", self.lib.files.iter().map(|f| f.0.as_str()).collect::<Vec<_>>().join(", "));
         let _ = writeln!(o, "options, extended: {}", crate::settings::describe());
         let _ = writeln!(o, "keys and buttons: {}", crate::settings::with_binds(|b| b.describe()));
@@ -2978,7 +2981,7 @@ impl App {
         // The page's picture of this frame, if it asked, and the report's
         // state of the client (`report`): which of the game's screens.
         crate::report::frame_drawn();
-        crate::report::note_state(|| format!("pregame: {}\nsurface {}x{} {:?}\noptions, extended: {}\nkeys and buttons: {}\nthe server's patch: {}", host.pre.describe(), size.0, size.1, g.config.format, crate::settings::describe(), crate::settings::with_binds(|b| b.describe()), crate::servers::report_line(host.pre.shared.server.as_deref())));
+        crate::report::note_state(|| format!("pregame: {}\nsurface {}x{} {:?}\n{}\noptions, extended: {}\nkeys and buttons: {}\nthe server's patch: {}", host.pre.describe(), size.0, size.1, g.config.format, self.arrival.describe(Instant::now()), crate::settings::describe(), crate::settings::with_binds(|b| b.describe()), crate::servers::report_line(host.pre.shared.server.as_deref())));
         match done {
             crate::pregame::host::Done::Stay => {}
             crate::pregame::host::Done::Quit => el.exit(),
