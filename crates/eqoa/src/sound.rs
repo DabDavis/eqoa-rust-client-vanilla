@@ -196,10 +196,17 @@ thread_local! {
     static MADE: std::cell::RefCell<Option<Sound>> = const { std::cell::RefCell::new(None) };
 }
 
-/// The sound the viewer starts the world with: one made for it (`give`),
-/// else a new one on the disc image at `iso_path`.
+/// The sound the viewer starts the game with: one made for it (`give`),
+/// else a new one on the disc image at `iso_path`; with the options' Fx and
+/// Music Volume on it from the start. The game sets them only once the
+/// title's card check has passed (`VIWndSplash::Draw`), the card being where
+/// a PS2 keeps them, so the loading pictures, the licence and the agreement
+/// played at full volume; this client has them before its first sound (F3
+/// 20261027-133042).
 pub fn make(iso_path: &std::path::Path) -> Option<Sound> {
-    MADE.with(|m| m.borrow_mut().take()).or_else(|| Sound::new(iso_path))
+    let mut s = MADE.with(|m| m.borrow_mut().take()).or_else(|| Sound::new(iso_path))?;
+    s.set_option_volumes(&crate::settings::game_options());
+    Some(s)
 }
 
 /// Leaves a sound for the viewer (`make`).
@@ -209,6 +216,13 @@ pub fn give(s: Sound) {
 }
 
 impl Sound {
+    /// The options' Fx and Music Volume on the two sound classes, as the
+    /// game sets them (class 0 the effects, class 1 the music).
+    pub fn set_option_volumes(&mut self, o: &crate::options::GameOptions) {
+        self.dev.set_sound_class_volume(0, o.fx_volume.0);
+        self.dev.set_sound_class_volume(1, o.music_volume.0);
+    }
+
     /// The device on a fresh audio output, with AMBTRACK.ESF for the tracks.
     pub fn new(iso_path: &std::path::Path) -> Option<Sound> {
         let disc = iso::Iso::open(iso_path).ok()?;
@@ -909,6 +923,24 @@ mod tests {
         assert_eq!(s.times, 2, "a new run starts again from nothing");
         s.look(playing, held);
         assert_eq!(s.times, 4);
+    }
+
+    /// The options' volumes go on the classes as the game sets them (Fx on
+    /// class 0, the effects; Music on class 1); the control, the device's own
+    /// from its `Init`, both full, which is what a sound made before the
+    /// title's card check had (F3 20261027-133042).
+    #[test]
+    fn the_options_volumes_go_on_their_classes() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        if !path.exists() {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        }
+        let mut s = Sound::offline(&path).unwrap();
+        assert_eq!((s.dev.sound_class_volume(0), s.dev.sound_class_volume(1)), (1.0, 1.0), "the device's own");
+        let o = crate::options::GameOptions { fx_volume: F::new(0.3), music_volume: F::ZERO, ..Default::default() };
+        s.set_option_volumes(&o);
+        assert_eq!((s.dev.sound_class_volume(0), s.dev.sound_class_volume(1)), (0.3, 0.0));
     }
 
     /// The ambience at a spot of `world`, three seconds of it at `hour`, with
