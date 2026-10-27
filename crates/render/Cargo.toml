@@ -9,7 +9,10 @@ license.workspace = true
 bytemuck = { version = "1.25.2", features = ["derive"] }
 esf.workspace = true
 glam = "0.34.1"
-wgpu = "30.0.1"
+# `counters`: the device counts its buffers and bind groups and the bytes
+# under its buffers and textures, which a report's memory line reads (the
+# client's `mem`): an atomic add as one is made or let go, nothing a frame.
+wgpu = { version = "30.0.1", features = ["counters"] }
 web-time.workspace = true
 
 [dev-dependencies]

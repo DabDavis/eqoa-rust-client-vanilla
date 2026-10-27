@@ -44,8 +44,9 @@ sha2 = "0.10.9"
 libc = "0.2.191"
 
 # Windows' Xbox controllers through XInput (`xinput`), which answers a window
-# that is not in front, as Windows.Gaming.Input (gilrs's) does not; and the
-# terminal a program run from one writes to (`attach_console`).
+# that is not in front, as Windows.Gaming.Input (gilrs's) does not; the
+# terminal a program run from one writes to (`attach_console`); and the
+# process's and the machine's memory a report carries (`mem`).
 [target.'cfg(target_os = "macos")'.dependencies]
 # The app menu's Settings… with ⌘, (`macos`): one item added to the menu
 # winit makes, its action on an object of a class of its own. The versions
@@ -61,7 +62,7 @@ objc2-core-foundation = { version = "0.3.2", default-features = false, features 
 objc2-io-kit = { version = "0.3.2", default-features = false, features = ["std", "libc", "hid"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_HumanInterfaceDevice", "Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_UI_Input_XboxController"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_HumanInterfaceDevice", "Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_UI_Input_XboxController"] }
 
 # The browser build (`web/build.sh`): the page hands over the player's disc
 # image and the login; sockets go through a WebSocket relay; wgpu falls back

@@ -104,6 +104,8 @@ mod loading;
 mod lod;
 mod loot;
 mod map;
+// the memory a report and the log carry (F3 crash 20261026-220031)
+mod mem;
 mod merchant;
 mod modules;
 mod mouse;

@@ -718,7 +718,19 @@ mod native {
         let tail: Vec<String> = lines[lines.len().saturating_sub(LOG_LINES)..].iter().map(|l| l.chars().take(LOG_LINE_MAX).collect()).collect();
         // it stopped about when its log was last written, not now
         let at = std::fs::metadata(prev).and_then(|m| m.modified()).unwrap_or_else(|_| SystemTime::now());
-        write_crash_in(&dir.join("crashes"), &format!("The run of {run} ended without closing: killed, or stopped by a fault no panic caught (its log's last line is the last it wrote)."), Some((run, &tail, &state)), at, of);
+        write_crash_in(&dir.join("crashes"), &unclosed_detail(run, &lines), Some((run, &tail, &state)), at, of);
+    }
+
+    /// What a crash report says of a run that did not close: out of memory
+    /// when its log ends with Rust's abort for an allocation refused (F3
+    /// crash 20261026-220031, eleven hours in: "memory allocation of 229376
+    /// bytes failed"), the memory its state last noted then the one to read.
+    pub(super) fn unclosed_detail(run: &str, lines: &[&str]) -> String {
+        let last = lines.iter().rev().map(|l| l.trim()).find(|l| !l.is_empty()).unwrap_or("");
+        if last.starts_with("memory allocation of ") && last.ends_with(" failed") {
+            return format!("The run of {run} ran out of memory: \"{last}\", Rust's abort when the system refuses an allocation (the machine's memory and page file full, or the program grown past them: the memory below, and over the run, tell which).");
+        }
+        format!("The run of {run} ended without closing: killed, or stopped by a fault no panic caught (its log's last line is the last it wrote).")
     }
 
     /// The crash reports waiting, oldest first.
@@ -1495,6 +1507,21 @@ mod tests {
         native::ended_without_closing_for_test(&dir, &prev);
         assert!(crash("20261025-205606").unwrap().contains("[client, as last noted]\nframes 536108"), "the old state, left in place, is taken");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A run whose log ends with Rust's abort for an allocation refused is
+    /// said to have run out of memory (F3 crash 20261026-220031); the
+    /// controls: the same line before others, and a log that just stops, are
+    /// a run that ended without closing.
+    #[test]
+    fn a_run_out_of_memory_says_so() {
+        use native::unclosed_detail;
+        let oom = ["[eqoa] run 20261026-100442, dev-83bb416 (dev), windows x86_64, window 1", "chat: Mrboojanlezx: lfg", "memory allocation of 229376 bytes failed", ""];
+        let d = unclosed_detail("20261026-100442", &oom);
+        assert!(d.starts_with("The run of 20261026-100442 ran out of memory: \"memory allocation of 229376 bytes failed\""), "{d}");
+        let before = ["[eqoa] run 1", "memory allocation of 229376 bytes failed", "chat: after it"];
+        assert!(unclosed_detail("1", &before).contains("ended without closing"), "the control: not the last line");
+        assert!(unclosed_detail("1", &oom[..2]).contains("ended without closing"), "the control: a log that just stops");
     }
 
     /// A report carries the other windows' arrivals and controllers out of
