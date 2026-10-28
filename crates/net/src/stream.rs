@@ -100,6 +100,11 @@ impl Writer {
         self.data.extend(v.to_le_bytes());
         self
     }
+    /// `WriteU64`: eight bytes, little end first.
+    pub fn u64(&mut self, v: u64) -> &mut Self {
+        self.data.extend(v.to_le_bytes());
+        self
+    }
     pub fn bytes(&mut self, v: &[u8]) -> &mut Self {
         self.data.extend(v);
         self

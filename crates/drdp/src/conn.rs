@@ -106,6 +106,23 @@ pub struct Connection {
     pub channels: Option<Vec<StateChannel>>,
 }
 
+/// `connection_get_cstat_label`: the eleven counters' names, in the order
+/// `cstat` keeps them (`connection_get_cstat_max` is their count). CLIENT's
+/// `VINetStats` writes them out for 0x07E1.
+pub const CSTAT_LABELS: [&str; 11] = [
+    "discarded (old)",
+    "discarded (no memory was available to process message)",
+    "discarded (corrupt)",
+    "discarded (crc)",
+    "out of sequence",
+    "recv",
+    "sent",
+    "guaranteed recv (duplicates)",
+    "guaranteed recv",
+    "state recv (duplicates)",
+    "state recv",
+];
+
 /// `segment_body_t`.
 #[derive(Debug, Default)]
 struct Body {

@@ -304,6 +304,35 @@ pub struct Session {
     /// test's view of what was sent and when, before the transport's own
     /// flow decides when it leaves. None in play.
     pub record: Option<Vec<(u8, Vec<u8>)>>,
+    /// 0x0790's probe (`m_p4F0F0`, `m_p4F0F8`, `m_p4F100`, `m_p4F108`),
+    /// clear from `Connect` on.
+    pub probe: Probe,
+}
+
+/// 0x0790's probe: `Msg0790` keeps an endpoint, a token and eight more
+/// bytes; `Msg0790Done`, before each of the frame's flushes, sends 0x0992
+/// (the token and the bytes) outside any connection to that endpoint, at
+/// most once a connection timeout (a second at most), for as long as the
+/// session lasts; and `Msg0993` answers the token coming back (a DRDP type
+/// 0xF8: a datagram outside any connection) with 0x0791 on the game
+/// connection. No server we know sends 0x0790 (none in Sandstorm's
+/// captures, none in go-eqoa-server).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Probe {
+    /// `m_p4F0F0`: the endpoint 0x0992 goes to; -1 none (`Connect`'s)
+    pub endpoint: i64,
+    /// `m_p4F0F8`: the token
+    pub token: u32,
+    /// `m_p4F100`: the eight bytes after it
+    pub data: u64,
+    /// `m_p4F108`: when 0x0992 last went, on `timer`'s clock; -1 never
+    pub last: i64,
+}
+
+impl Default for Probe {
+    fn default() -> Self {
+        Probe { endpoint: -1, token: 0, data: 0, last: -1 }
+    }
 }
 
 /// Where the DRDP clock (`Session::now`) starts: the wall clock's
@@ -368,6 +397,7 @@ impl Session {
             clock_a: SyncTime::default(),
             clock_b: SyncTime::default(),
             record: None,
+            probe: Probe::default(),
         };
         let dst = address_to_endpoint(server.0, server.1, PORT_LEADER);
         let sys = s.drdp.system_endpoint;
@@ -605,6 +635,8 @@ impl Session {
     /// The flush `pump` ends with, and the sends: what was sent goes out now
     /// (Quit's logout, before the client leaves).
     pub fn flush(&mut self) {
+        // TickNet and Process: Msg0790Done, then drdp_flush
+        self.msg_0790_done();
         self.drdp.flush();
         for p in std::mem::take(&mut self.drdp.outbox) {
             if self.debug {
@@ -664,8 +696,57 @@ impl Session {
                 ev.push(Event::Disconnected(reason));
             }
             ty if ty < drdp::TYPE_STATE_CHANNELS => ev.push(Event::State { channel: ty, data: m.data }),
+            // ProcessMessageF8: a datagram outside any connection (drdp
+            // port 0xffff) comes as type 0xF8; its 0x0993 answers the probe
+            0xF8 => self.process_f8(&m),
             _ => {}
         }
+    }
+
+    /// `ProcessMessageF8` and `Msg0993`: the probe's token coming back is
+    /// answered with 0x0791 and the token, on the game connection.
+    fn process_f8(&mut self, m: &drdp::Message) {
+        let mut r = Reader::new(&m.data);
+        if r.u16() == 0x0993 {
+            let token = r.u32();
+            if token == self.probe.token {
+                let mut w = Writer::op(0x0791);
+                w.u32(token);
+                self.send(&w.data);
+            }
+        }
+    }
+
+    /// `Msg0790Done`: with a probe set and a game connection, 0x0992 (the
+    /// token, the eight bytes) to the probe's endpoint outside any
+    /// connection (`VINetSendTo`: `drdp_send_addr` to the endpoint's
+    /// address, its drdp port unused), when the connection's timeout (a
+    /// second at most) has gone by since the last, on the game's clock.
+    fn msg_0790_done(&mut self) {
+        let Some(c) = self.conn.filter(|&c| self.drdp.conns.contains(c)) else { return };
+        let timeout = (self.drdp.conns[c].timeout as i64).min(1000);
+        let now = self.timer();
+        if self.probe.endpoint != -1 && now >= self.probe.last + timeout {
+            let mut w = Writer::op(0x0992);
+            w.u32(self.probe.token).u64(self.probe.data);
+            let (to, _) = drdp::endpoint_to_address(self.probe.endpoint as u64);
+            self.drdp.send_addr(&[to], &w.data);
+            self.probe.last = now;
+        }
+    }
+
+    /// `Msg07E0`: 0x07E1, the game connection's eleven counters as text
+    /// (`VINetStats`: "%I: %s\n" each, the count as a signed 64-bit
+    /// number), then whatever followed 0x07E0, on the game connection. Both
+    /// Sandstorm and go-eqoa-server send 0x07E0 once a session, and a PS2
+    /// answers (`pcaps/ps2_sandstorm.pcap`).
+    fn msg_07e0(&mut self, rest: &[u8]) {
+        let Some(c) = self.conn.filter(|&c| self.drdp.conns.contains(c)) else { return };
+        let cstat = self.drdp.conns[c].cstat;
+        let text: String = cstat.iter().zip(drdp::CSTAT_LABELS).map(|(&n, label)| format!("{}: {label}\n", n as i64)).collect();
+        let mut w = Writer::op(0x07E1);
+        w.wide(&text).bytes(rest);
+        self.send(&w.data);
     }
 
     /// `ProcessMessage`: one opcode.
@@ -674,6 +755,15 @@ impl Session {
         let op = r.u16();
         match op {
             0x0000 => ev.push(Event::Version(r.u32())),
+            0x07E0 => self.msg_07e0(&m.data[2.min(m.data.len())..]),
+            0x0790 => {
+                // Msg0790: the probe, sent at once if due
+                let endpoint = r.u64() as i64;
+                let token = r.u32();
+                let data = r.u64();
+                self.probe = Probe { endpoint, token, data, last: -1 };
+                self.msg_0790_done();
+            }
             0x07D1 => {
                 self.expansion = r.u32();
                 ev.push(Event::Expansion(self.expansion));
@@ -1300,6 +1390,90 @@ mod tests {
             let ev = deliver(&mut s, drdp::TYPE_DISCONNECT, vec![byte]);
             assert!(matches!(ev[..], [Event::Disconnected(r)] if r == reason), "{byte}: {ev:?}");
         }
+    }
+
+    // 0x07E0 is answered with 0x07E1: the game connection's eleven counters
+    // as VINetStats writes them, then what followed 0x07E0. The counters of
+    // the PS2's own answer in pcaps/ps2_sandstorm.pcap (packet 115, 512
+    // bytes after the opcode, a count of 254 characters) give that answer's
+    // text exactly. Controls: trailing bytes are echoed after the text, and
+    // with no game connection nothing is sent.
+    #[test]
+    fn stats_are_answered_as_a_ps2_answers_them() {
+        let mut s = session();
+        s.record = Some(Vec::new());
+        let c = s.conn.unwrap();
+        s.drdp.conns[c].cstat = [0, 0, 0, 0, 0, 62, 19, 148, 290, 24, 56];
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xE0, 0x07]);
+        let sent = s.record.take().unwrap();
+        assert_eq!(sent.len(), 1, "{sent:02x?}");
+        let (ty, d) = &sent[0];
+        assert_eq!(*ty, drdp::TYPE_GUARANTEED);
+        assert_eq!(d[..2], [0xE1, 0x07]);
+        assert_eq!(d.len() - 2, 512, "the capture's payload size");
+        let text = "0: discarded (old)\n0: discarded (no memory was available to process message)\n0: discarded (corrupt)\n0: discarded (crc)\n0: out of sequence\n62: recv\n19: sent\n148: guaranteed recv (duplicates)\n290: guaranteed recv\n24: state recv (duplicates)\n56: state recv\n";
+        assert_eq!(d[2..6], 254u32.to_le_bytes(), "the capture's count");
+        let wide: Vec<u8> = text.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        assert_eq!(d[6..], wide[..]);
+
+        // control: what followed the opcode comes after the text
+        s.record = Some(Vec::new());
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xE0, 0x07, 1, 2, 3]);
+        let sent = s.record.take().unwrap();
+        assert_eq!(sent[0].1[sent[0].1.len() - 3..], [1, 2, 3]);
+        assert_eq!(sent[0].1.len(), 2 + 512 + 3);
+
+        // control: no game connection, nothing sent
+        let mut s = session();
+        s.conn = None;
+        s.record = Some(Vec::new());
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xE0, 0x07]);
+        assert_eq!(s.record.unwrap(), []);
+    }
+
+    // 0x0790's probe: 0x0992 (the token, the eight bytes) outside any
+    // connection to the endpoint 0x0790 names, at once and then no more
+    // often than the connection's timeout (a second); 0x0993 coming back
+    // as a type 0xF8 with the token is answered with 0x0791 on the game
+    // connection. Controls: no probe, no 0x0992; a second flush within the
+    // timeout sends none; a wrong token is not answered.
+    #[test]
+    fn a_probe_is_sent_and_its_echo_answered() {
+        let mut s = session();
+        // the game's clock well on, as it is in play
+        s.start -= std::time::Duration::from_secs(20);
+        s.drdp.outbox.clear();
+        s.msg_0790_done();
+        assert!(s.drdp.outbox.is_empty(), "control: no probe, no 0x0992");
+
+        let endpoint = address_to_endpoint([10, 0, 0, 9], 5555, 0x1234);
+        let mut w = Writer::op(0x0790);
+        w.u64(endpoint).u32(0xAABB_CCDD).u64(0x1122_3344_5566_7788);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, w.data);
+        assert_eq!(s.probe.endpoint, endpoint as i64);
+        let probes: Vec<_> = s.drdp.outbox.drain(..).collect();
+        assert_eq!(probes.len(), 1, "sent at once: {probes:02x?}");
+        assert_eq!(probes[0].to, drdp::Addr { ip: [10, 0, 0, 9], port: 5555 });
+        let mut want = vec![0xff, 0xff, 0x92, 0x09];
+        want.extend(0xAABB_CCDDu32.to_le_bytes());
+        want.extend(0x1122_3344_5566_7788u64.to_le_bytes());
+        assert_eq!(probes[0].data, want, "drdp port 0xffff, no CRC");
+
+        s.msg_0790_done();
+        assert!(s.drdp.outbox.is_empty(), "control: not again within the timeout");
+        s.start -= std::time::Duration::from_millis(1100);
+        s.msg_0790_done();
+        assert_eq!(s.drdp.outbox.drain(..).count(), 1, "again a timeout on");
+
+        s.record = Some(Vec::new());
+        let mut w = Writer::op(0x0993);
+        w.u32(0x1234_5678);
+        deliver(&mut s, 0xF8, w.data);
+        assert_eq!(s.record.as_deref(), Some(&[][..]), "control: a wrong token");
+        let mut w = Writer::op(0x0993);
+        w.u32(0xAABB_CCDD);
+        deliver(&mut s, 0xF8, w.data);
+        assert_eq!(s.record.unwrap(), [(drdp::TYPE_GUARANTEED, vec![0x91, 0x07, 0xDD, 0xCC, 0xBB, 0xAA])]);
     }
 
     /// Every datagram sent, kept.

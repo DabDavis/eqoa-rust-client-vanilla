@@ -120,7 +120,15 @@ pub struct Play {
     /// The entity slots and view distance last told the server
     /// (`agree_entity_view`).
     view_sent: Option<(usize, u16)>,
-    last_send: u32,
+    /// `m_p07570`: when the last 0x40 went, on the game's clock
+    /// (`Session::timer`); -1 none yet (`Connect`'s).
+    last_send: i64,
+    /// `m_p07578`: the 0x40's interval in the game's clock's ticks (983.04
+    /// a second): 100 (101.7 ms), or what 0x07B2 sets. The PS2 keeps it for
+    /// the program's run; here a login starts at 100 again (no server we
+    /// know sends 0x07B2: none in Sandstorm's captures, none in
+    /// go-eqoa-server).
+    send_interval: u32,
     puppets: Vec<Option<Puppet>>,
     /// The sounds the client asked for this frame (`PlaySound`, `PlayCue`).
     pub cues: Vec<crate::sound::Cue>,
@@ -1841,7 +1849,7 @@ impl Play {
         crate::hideui::show();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: 0, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default() };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -2160,6 +2168,10 @@ impl Play {
                 }
                 // ShowMsg(590): the other's buddy list is full
                 Event::Opcode { op: 0x03D7, .. } => self.show_word(590),
+                // ShowMsg(591): "Add buddy failed: Your buddy's buddy list
+                // is full."
+                Event::Opcode { op: 0x03D8, .. } => self.show_word(591),
+                Event::Opcode { op: 0x07B2, data } => self.msg_07b2(&data),
                 Event::Opcode { op: 0x076F, data } => self.buddy_request(&data),
                 Event::Opcode { op: 0x0770, data } => {
                     // Msg0770: word 557 with the name
@@ -2542,7 +2554,8 @@ impl Play {
             e.extrapolated = game_ms;
         }
         self.entities.extrapolate(self_id, now, UPDATE_RATE);
-        self.position_due(&walker.cam.walk.committed, now);
+        let clock = self.session.timer();
+        self.position_due(&walker.cam.walk.committed, clock);
         let me = self.self_id32();
         // the far characters' turns, by how many were far the last frame
         let every = far_pose_every(self.far_last);
@@ -3444,20 +3457,21 @@ impl Play {
         for token in std::mem::take(&mut self.arrival) {
             self.session.answer_teleport(token);
         }
-        let now = self.session.now();
-        self.send_position(&walker.cam.walk.committed, now);
+        let clock = self.session.timer();
+        self.send_position(&walker.cam.walk.committed, clock);
     }
 
-    /// `SendPosition`, at the update rate (`m_p07578`, 100 ms), and none
+    /// `SendPosition`, every `m_p07578` ticks of the game's clock (100, or
+    /// 0x07B2's: `send_interval`), the first at once, and none
     /// while a move of the server's is not done (`arrival`): the PS2's
     /// frame stops in `Respawn` until it stands at the arrival, where this
     /// client went on walking the world it was leaving, and sent the new
     /// world's number with the old world's place (Sandstorm answered that
     /// with 0x07D2, "This character has been modified by a customer service
     /// representative").
-    fn position_due(&mut self, walk: &vi::walk::WalkPhysics<Ee>, now: u32) {
-        if self.session.self_id.is_some() && self.arrival.is_empty() && now.wrapping_sub(self.last_send) >= UPDATE_RATE {
-            self.send_position(walk, now);
+    fn position_due(&mut self, walk: &vi::walk::WalkPhysics<Ee>, clock: i64) {
+        if self.session.self_id.is_some() && self.arrival.is_empty() && (self.last_send == -1 || clock - self.last_send >= i64::from(self.send_interval)) {
+            self.send_position(walk, clock);
         }
     }
 
@@ -3471,9 +3485,16 @@ impl Play {
         self.session.flush();
     }
 
+    /// 0x07B2: the 0x40's interval (`m_p07578`), a raw u32.
+    fn msg_07b2(&mut self, data: &[u8]) {
+        if let Some(b) = data.get(..4) {
+            self.send_interval = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+        }
+    }
+
     /// `SendPosition`'s 0x40: the committed walk state, the attack held and
     /// the target.
-    fn send_position(&mut self, walk: &vi::walk::WalkPhysics<Ee>, now: u32) {
+    fn send_position(&mut self, walk: &vi::walk::WalkPhysics<Ee>, now: i64) {
         self.last_send = now;
         if watching(&self.player.name) {
             eprintln!("[sent] {now} pos {:.2?} vel {:.2?} heading {:.3} loco {} flags {:#x} mode {}", walk.position.to_array(), walk.velocity.to_array(), walk.angles.x.0, walk.loco_state, walk.flags, self.mode);
@@ -7548,6 +7569,33 @@ mod commands {
         assert_eq!(also.cam.walk.phys.position.y.0, floor - 2.0, "a dump's SetLocation as it is");
     }
 
+    /// `SendPosition` every `m_p07578` ticks of the game's clock: 100 until
+    /// 0x07B2 sets another, the first at once (`m_p07570` -1 from
+    /// `Connect`). Controls: one tick short of the interval sends nothing,
+    /// and a 0x07B2 cut short leaves the interval as it was.
+    #[test]
+    fn the_0x40_goes_every_interval_0x07b2_sets() {
+        let mut p = play();
+        p.session.record = Some(Vec::new());
+        let walk = vi::walk::WalkPhysics::<Ee>::default();
+        let sent = |p: &mut Play, clock: i64| {
+            p.position_due(&walk, clock);
+            std::mem::take(p.session.record.as_mut().unwrap()).iter().filter(|m| m.0 == 0x40).count()
+        };
+        assert_eq!(p.send_interval, 100, "the constructor's");
+        assert_eq!(sent(&mut p, 5), 1, "the first at once");
+        assert_eq!(sent(&mut p, 104), 0, "control: a tick short");
+        assert_eq!(sent(&mut p, 105), 1, "100 ticks on");
+        p.msg_07b2(&250u32.to_le_bytes());
+        assert_eq!(p.send_interval, 250);
+        assert_eq!(sent(&mut p, 354), 0, "a tick short of 250");
+        assert_eq!(sent(&mut p, 355), 1, "250 on");
+        p.msg_07b2(&[1, 0, 0]);
+        assert_eq!(p.send_interval, 250, "control: cut short, unchanged");
+        p.msg_07b2(&0u32.to_le_bytes());
+        assert_eq!((sent(&mut p, 355), sent(&mut p, 355)), (1, 1), "0: every frame");
+    }
+
     /// `Msg00B2` answers its token once `Respawn` is done, and no 0x40 goes
     /// out until then: within a world (a far port) and across worlds
     /// (Tunaria's Freeport to Odus), the answer is handed on with the first
@@ -7586,10 +7634,12 @@ mod commands {
             crate::stream::fill(&mut lib, w, b.0, b.1, &mut src);
             let tunaria = || vi::world::World::load(&lib, w).unwrap();
             let mut walker = Walker::arrive(tunaria(), Spawn::ground(a.0, a.1, 0.0));
-            let mut now = 1000u32;
+            // the game's clock (`Session::timer`), which the arrival's 0x40
+            // reads too: a frame's never behind it
+            let mut now = 0i64;
             let mut tick = |p: &mut Play, walker: &Walker, n: u32| {
                 for _ in 0..n {
-                    now += UPDATE_RATE;
+                    now = now.max(p.session.timer()) + i64::from(p.send_interval);
                     p.position_due(&walker.cam.walk.committed, now);
                 }
             };

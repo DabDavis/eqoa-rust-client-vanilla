@@ -35,7 +35,7 @@ use list::{Arena, cmp_u32_wrap, insert_sorted, remove};
 use std::collections::BTreeMap;
 use vi::fpu::Model;
 
-pub use conn::{Connection, StateChannel};
+pub use conn::{CSTAT_LABELS, Connection, StateChannel};
 pub use endpoint::Endpoint;
 pub use route::Route;
 
