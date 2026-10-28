@@ -456,6 +456,7 @@ pub fn shot_with(
                 let keys = console.poll(report, true, false, dead);
                 if let Some(p) = play.as_mut() {
                     p.pad_mode(console.mode());
+                    p.fishing_pad(console.sticks());
                     for (k, down) in keys {
                         eprintln!("pad key {k} {}", if down { "down" } else { "up" });
                         p.set_key(k, down, &mut walker, aspect);
@@ -2514,6 +2515,7 @@ impl App {
         let aspect = self.gfx.as_ref().map_or(4.0 / 3.0, |g| g.config.width as f32 / g.config.height as f32);
         if let (Some(p), Some(w)) = (self.play.as_mut(), self.walker.as_mut()) {
             p.pad_mode(self.console.mode());
+            p.fishing_pad(self.console.sticks());
             for (k, down) in keys {
                 p.set_key(k, down, w, aspect);
             }
@@ -3480,6 +3482,52 @@ impl App {
                 && !(down && event.repeat)
             {
                 p.mail_key(k, down);
+            }
+            return;
+        }
+        // The fishing window (mode 36): Space casts and throws (X),
+        // Escape leaves (triangle), Enter its chat line, C held the chat
+        // box's history with the arrows' up and down, the codes the game's
+        // keyboard gives `VIWndFishing::OnKeyDown` (32, 27, 13, 67, 19, 20);
+        // E the catch list's pick (X), as in the other windows; while the
+        // chat line is up it takes the keyboard.
+        if let Some(p) = self.play.as_mut()
+            && p.typing.is_none()
+            && p.fishing_owns()
+        {
+            let down = event.state == ElementState::Pressed;
+            if p.fishing_typing() {
+                let named = match &event.logical_key {
+                    Key::Named(NamedKey::Backspace) => Some(8),
+                    Key::Named(NamedKey::Escape) => Some(27),
+                    Key::Named(NamedKey::Enter) => Some(13),
+                    Key::Named(NamedKey::ArrowLeft) => Some(17),
+                    Key::Named(NamedKey::ArrowRight) => Some(18),
+                    _ => None,
+                };
+                if let Some(k) = named {
+                    p.fishing_key(k, down);
+                } else if down && let Some(t) = &event.text {
+                    for c in t.chars().filter(|c| c.is_ascii() && !c.is_ascii_control()) {
+                        p.fishing_key(c as i32, true);
+                    }
+                }
+                return;
+            }
+            let k = match &event.logical_key {
+                Key::Named(NamedKey::Space) => Some(32),
+                Key::Named(NamedKey::Escape) => Some(27),
+                Key::Named(NamedKey::Enter) => Some(13),
+                Key::Named(NamedKey::ArrowUp) => Some(19),
+                Key::Named(NamedKey::ArrowDown) => Some(20),
+                Key::Character(c) if c.eq_ignore_ascii_case("c") => Some(99),
+                Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(134),
+                _ => None,
+            };
+            if let Some(k) = k
+                && !(down && event.repeat)
+            {
+                p.fishing_key(k, down);
             }
             return;
         }
