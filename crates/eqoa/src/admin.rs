@@ -180,7 +180,9 @@ impl Part {
         self.enabled != 0
     }
 
-    /// `Reset` (from `ResetWorld`): `m_p0C` cleared.
+    /// `Reset` (from `ResetWorld`): `m_p0C` cleared. Nothing calls it here:
+    /// a new `Play` a session starts clear.
+    #[allow(dead_code)]
     pub fn reset(&mut self) {
         self.p0c = 0;
     }

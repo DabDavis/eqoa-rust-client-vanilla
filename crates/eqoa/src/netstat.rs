@@ -51,7 +51,9 @@ impl NetStat {
 /// pixels on from the frame's; row 1 a dot per bit of each history (the
 /// sends right to left from bit 64, which `dsllv` takes as bit 0, the
 /// receives left to right from bit 0, past the middle); rows 2..6 copy row 1
-/// and row 7 row 0.
+/// and row 7 row 0. Drawn by nothing, as on the console: `CreateTexture`
+/// has no caller in CLIENT, so the meter's material stays -1.
+#[allow(dead_code)]
 pub fn meter(sent: u64, recv: u64, phase: i32) -> [[u8; 128]; 8] {
     let mut rows = [[0u8; 128]; 8];
     for i in 0..8 {
