@@ -92,6 +92,9 @@ pub struct Walker {
     /// The walk on the console's frames (`frame_with`); None before the
     /// first frame.
     kept: Option<Kept>,
+    /// The walk put back this frame (`rewind`), not yet kept again
+    /// (`keep_left`).
+    rewound: bool,
 }
 
 /// The console's frame: two fields of NTSC video (59.94 Hz), 33.37 ms. The
@@ -200,7 +203,7 @@ impl Walker {
         cam.set_orbit_distance(dist);
         cam.set_orbit_angle_behind();
         let eye = cam.process(&mut scene);
-        Walker { cam, scene, eye, sprite: None, anims: AnimScene::default(), rand: Rand(1), shake: 0, reach: Default::default(), kept: None }
+        Walker { cam, scene, eye, sprite: None, anims: AnimScene::default(), rand: Rand(1), shake: 0, reach: Default::default(), kept: None, rewound: false }
     }
 
     /// `Respawn`'s placing: the character stood at `pos` (on the ground
@@ -349,8 +352,17 @@ impl Walker {
     /// with the directions it steers by made again from it. A walk moved
     /// since the last frame drawn (a place given, the loading screen's hold,
     /// the first frame) is not put back: the console frames begin where it
-    /// stands.
-    fn rewind(&mut self) {
+    /// stands. Once a frame: the mouse's look calls it before it turns the
+    /// body (`mouse::set_heading`, `pitch_body`), so the turn is made on the
+    /// kept frame, as a control, and the console frames step on from it; a
+    /// turn made on the walk as drawn would read as a walk moved, and with
+    /// the console frames begun again every frame drawn none was ever
+    /// stepped (F3 20261028-130331: the run slid on at its speed with the
+    /// keys let go, and from a stand never got up to it).
+    pub fn rewind(&mut self) {
+        if std::mem::replace(&mut self.rewound, true) {
+            return;
+        }
         let w = &mut self.cam.walk;
         match &self.kept {
             Some(k) if same(&w.phys, &k.left.0) && same(&w.committed, &k.left.1) => {
@@ -460,6 +472,7 @@ impl Walker {
         let landed = old & ON_FLOOR == 0 && new & ON_FLOOR != 0 && new & SUBMERGED == 0 && old & SUBMERGED == 0;
         w.parm118 = if landed { 16 } else { 0 };
         k.left = (w.phys, w.committed);
+        self.rewound = false;
     }
 
 
@@ -1326,5 +1339,63 @@ pub(crate) mod tests {
         assert!(d < 2.2, "the stall goes on {d}");
         let c = run(false).unwrap();
         assert!(c > 15.0, "the control: drawn through, {c}");
+    }
+    /// The right button steering a run with the mouse on the move (camera
+    /// mode 3: the look turns the body every frame drawn,
+    /// `mouse::look_held`, as `Viewer::sticks` calls it), at 144 frames a
+    /// second: from a stand the run gets up to the stick's pace, and let go
+    /// of it stops as the stick's run stops. The look turns the walk as the
+    /// last console frame left it (`rewind` first). The control: the look
+    /// made on the walk as drawn, as until 2026-10-28, read as a walk moved
+    /// whenever the mouse moved, so the console frames began again every
+    /// frame drawn and none was stepped: the velocity stayed as it was when
+    /// the mouse began to move, the run from a stand crept (F3
+    /// 20261028-130331, 022421) and the run let go of slid on at its pace
+    /// (054552). With the mouse still the look changes nothing and both
+    /// step alike.
+    #[test]
+    fn a_run_steered_by_the_mouse_keeps_the_consoles_frames() {
+        let go = Controls { fwd: 1.0, ..Default::default() }.axes();
+        let Some(base) = open_ground() else { return };
+        let t0 = base.scene.time;
+        let moved = |a: Vect3<Ee>, b: Vect3<Ee>| ((b.x.0 - a.x.0).powi(2) + (b.z.0 - a.z.0).powi(2)).sqrt();
+        // 144 frames a second: the stick on from frame `on` to frame 288 and
+        // the button held from frame `held` on (`None`: never), the mouse a
+        // pixel a frame; the pace over the run's last second, and the ground
+        // covered from frame 288 to the end (one second on)
+        let run = |on: u64, held: Option<u64>, fixed: bool| -> (f32, f32) {
+            let mut w = open_ground().unwrap();
+            crate::camstyle::set_style(&mut w.cam, 3, None, &mut w.scene);
+            let mut path = Vec::new();
+            for k in 1..=432 {
+                let now = drawn_at(t0, 144.0, 0.0, k);
+                let steer = held.is_some_and(|h| k >= h);
+                if steer {
+                    if fixed {
+                        w.rewind();
+                    }
+                    let dx = if k % 2 == 0 { 1.0 } else { -1.0 };
+                    crate::mouse::look_held(&mut w.cam, [false, true], dx, 0.0, false, 1.0 / 144.0, held.is_some_and(|h| k > h));
+                }
+                let c = crate::controls::Client { steer, ..Default::default() };
+                w.frame_with(if (on..=288).contains(&k) { go } else { [0.0; 4] }, now, &c, true);
+                path.push((now, w.cam.walk.phys.position));
+            }
+            (speed(&path[144..288]), moved(path[287].1, path[431].1))
+        };
+        let stick = run(1, None, true);
+        let from_a_stand = (run(11, Some(1), true), run(11, Some(1), false));
+        let while_running = (run(1, Some(216), true), run(1, Some(216), false));
+        eprintln!("(pace, stop): the stick alone {stick:?}; the button from a stand {from_a_stand:?}; the button while running {while_running:?}");
+        assert!(stick.0 > 8.0 && stick.1 < 3.0, "the stick's run: {stick:?}");
+        for (case, (fixed, control)) in [("from a stand", from_a_stand), ("while running", while_running)] {
+            assert!((fixed.0 / stick.0 - 1.0).abs() < 0.005, "{case}: the pace {fixed:?}, the stick's {stick:?}");
+            assert!((fixed.1 - stick.1).abs() < 0.1, "{case}: the stop {fixed:?}, the stick's {stick:?}");
+            if case == "from a stand" {
+                assert!(control.0 < 0.7 * stick.0, "the control, {case}: it creeps, {control:?}");
+            } else {
+                assert!(control.1 > 6.0, "the control, {case}: it slides on, {control:?}");
+            }
+        }
     }
 }

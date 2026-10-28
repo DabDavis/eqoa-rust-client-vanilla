@@ -519,6 +519,9 @@ pub fn shot_with(
                 let frame_s = frame_ms as f32 / 1000.0;
                 // the keys' and the pad's sticks are in `sticks` already
                 mouse.moving = crate::mouse::moving(&sticks, &[0.0; 4], play.as_ref().is_some_and(|p| p.autorun));
+                // the look turns the walk as the last console frame left it
+                // (`Walker::rewind`)
+                walker.rewind();
                 let (look, zoom) = mouse.look(&mut walker, inverted, frame_s);
                 if let Some(p) = play.as_mut() {
                     p.wheel_style(&mut walker, zoom, &mut mouse.back);
@@ -2574,7 +2577,12 @@ impl App {
         // the left button steers while the player moves (`Mouse::moving`)
         self.mouse.moving = crate::mouse::moving(&a, &pad, self.play.as_ref().is_some_and(|p| p.autorun));
         let ((look, zoom), feel) = match self.walker.as_mut() {
-            Some(w) if free => (self.mouse.look(w, inverted, self.frame_s), crate::mouse::look(w, tx, ty, pinch, inverted, self.frame_s)),
+            Some(w) if free => {
+                // the looks turn the walk as the last console frame left it
+                // (`Walker::rewind`), so the frame's walk steps on from them
+                w.rewind();
+                (self.mouse.look(w, inverted, self.frame_s), crate::mouse::look(w, tx, ty, pinch, inverted, self.frame_s))
+            }
             // the manual camera (L1 or R1 held): the mouse's and a finger's
             // drags look with it (the client's, `mouse::aim`); the wheel is
             // nothing
