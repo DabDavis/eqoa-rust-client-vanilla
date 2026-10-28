@@ -320,9 +320,11 @@ pub struct Play {
     /// The camera: the race cameras (CLIENT's, when its image was read), the
     /// preset the start menu's framing put aside (`m_camPreset`) and the
     /// style's (`m_camSaved`), whether the world was entered (`m_p2BD50`),
-    /// and whether a preset was saved, and what the start menu last asked
-    /// of it (`OpenStartMenu`'s ApplyRaceCamera: true; `CloseStartMenu`'s
-    /// ApplyDefaultCamera: false), done with the next frame.
+    /// and whether a preset was saved, and what the start menu has asked of
+    /// it since, in the order asked (`OpenStartMenu`'s ApplyRaceCamera: true;
+    /// `CloseStartMenu`'s ApplyDefaultCamera: false), done with the next
+    /// frame (`start_menu_camera`), or at once by a message that moves the
+    /// camera after it (`set_mode_0`).
     pub race_cams: Option<[Vec<crate::camstyle::RaceCamera>; 2]>,
     /// The personal light (`SetPersonalLight(actor, 20, (1, 0.69, 0.36))`).
     pub light: vi::tod::PersonalLight<vi::fpu::Ee>,
@@ -330,7 +332,7 @@ pub struct Play {
     cam_saved: crate::camstyle::Preset,
     cam_entered: bool,
     race_framed: bool,
-    race_frame_due: Option<bool>,
+    race_frame_due: Vec<bool>,
     /// The weapon trails (`VITrailFx`'s pool) and this frame's strips.
     trails: vi::trail::Trails<Ee>,
     pub trail_strips: Vec<render::billboard::Strips>,
@@ -1855,7 +1857,7 @@ impl Play {
         crate::hideui::show();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, send_interval: 100, entity_updates: (0, 0), puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: None, death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, send_interval: 100, entity_updates: (0, 0), puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default() };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -2748,25 +2750,8 @@ impl Play {
         // and its Screen Shake: off, the spell effects' shake ended before
         // the camera applies it
         crate::camstyle::screen_shake(&mut walker.cam, crate::settings::screen_shake());
-        // Every OpenStartMenu frames (a return from the spell book or the
-        // trainer too) and every CloseStartMenu restores, an entry's window
-        // included (its message closes the menu first), so the windows open
-        // from it are drawn over the play camera. A preset is applied only
-        // once one was saved (no race table, none).
-        match self.race_frame_due.take() {
-            Some(true) => {
-                if let Some(p) = crate::camstyle::apply_race(&mut walker.cam, rc, &mut walker.scene) {
-                    self.cam_preset = p;
-                    self.race_framed = true;
-                    self.locks = (false, false);
-                }
-            }
-            Some(false) if self.race_framed => {
-                crate::camstyle::apply(&mut walker.cam, &self.cam_preset);
-                self.locks = (true, true);
-            }
-            _ => {}
-        }
+        // what the start menu asked of the camera since the last frame
+        self.start_menu_camera(&mut walker.cam, &mut walker.scene);
         // DeathCamera: the eye swung round the body, the fade at 4 s; a step
         // a frame of the game's (it rises and turns by a constant a frame),
         // the eye it left kept between them
@@ -3460,13 +3445,23 @@ impl Play {
     /// when the loading screen comes down (`loading_step`), and the token
     /// waits for it (`arrival`). With no self (`m_selfId` -1) nothing
     /// moves, and a move into a world the table lacks cannot be made: both
-    /// are answered at once, as the PS2 answers whatever happens.
+    /// are answered at once, as the PS2 answers whatever happens. First, as
+    /// `Msg00B2` begins, the camera's shake and its manual camera end at
+    /// once; then, before `Respawn`, `SetMode(0)` over whatever window is up
+    /// (`set_mode_0`): the start menu closed and the play camera put back,
+    /// so that `Respawn` sets the follow orbit down behind the player at the
+    /// arrival, not the start menu's framing of the character.
     fn msg_00b2(&mut self, walker: &mut Walker, world: u8, pos: [f32; 3], hpr: [f32; 3], token: u32, now: i64) {
-        if self.session.self_id.is_some() && self.teleport(walker, world, pos, hpr, now) {
-            self.arrival.push(token);
-        } else {
-            self.session.answer_teleport(token);
+        walker.cam.effect.reset();
+        walker.cam.effect.end_manual(F::ZERO);
+        if self.session.self_id.is_some() {
+            self.set_mode_0(walker);
+            if self.teleport(walker, world, pos, hpr, now) {
+                self.arrival.push(token);
+                return;
+            }
         }
+        self.session.answer_teleport(token);
     }
 
     /// `Respawn` done (the loading screen down): each move's token answered,
@@ -4099,15 +4094,16 @@ impl Play {
     }
 
     /// `Msg005E`: the player died. The death pose, its spells ended, the
-    /// cue, back to play with autorun, the follow and auto-attack off, every
-    /// invitation refused (3), and `ResetCamera`: the death camera from where
-    /// the camera is.
+    /// cue, back to play (`SetMode(0)`: out of the start menu with the play
+    /// camera put back, `set_mode_0`) with autorun, the follow and
+    /// auto-attack off, every invitation refused (3), and `ResetCamera`: the
+    /// death camera from where the camera is.
     fn msg_005e(&mut self, walker: &mut Walker) {
         if let Some(cs) = walker.sprite.as_mut() {
             cs.set_death(true, false, &walker.anims, &mut self.spell_rand, None);
             self.dead_casters.push(crate::spells::SELF);
         }
-        self.mode = 0;
+        self.set_mode_0(walker);
         self.cues.push(crate::sound::Cue::Named("death", 0.4));
         // m_p2BB40, m_p2BB48: no cast walks the body
         self.cast_window = (0, 0);
@@ -4715,15 +4711,23 @@ impl Play {
         (st, loc)
     }
 
-    /// `OpenStartMenu(a)` (done with the next HUD frame): the table for the
-    /// bank and expansion, mode 13, auto-attack off, the main menu shown
-    /// (`a` resets it).
+    /// `OpenStartMenu(a)` (done with the next HUD frame): `SetMode(0)` first
+    /// (out of a start menu already up by `CloseStartMenu(0)`, its play camera
+    /// put back before the character is framed again, so a framing is never
+    /// what is saved to put back), the table for the bank and expansion, mode
+    /// 13, auto-attack off, the main menu shown and the item menu down
+    /// (`ShowMain`; `a` resets it), and the character framed
+    /// (`ApplyRaceCamera`, `start_menu_camera`).
     pub fn open_start_menu(&mut self, reset: bool) {
         if self.start.is_some() {
+            if self.mode == 13 {
+                self.close_start_menu(0);
+            }
             self.start_open = Some(reset);
             self.mode = 13;
             self.auto_attack = false;
-            self.race_frame_due = Some(true);
+            self.items.visible = false;
+            self.race_frame_due.push(true);
         }
     }
 
@@ -4784,13 +4788,63 @@ impl Play {
         }
     }
 
-    /// `CloseStartMenu(mode)`.
+    /// `CloseStartMenu(mode)`: the play camera put back
+    /// (`ApplyDefaultCamera`, `start_menu_camera`), `mode`, and the menu down
+    /// (an open not shown yet is not shown: the game's is shown at once).
     fn close_start_menu(&mut self, mode: i32) {
-        self.race_frame_due = Some(false);
+        self.race_frame_due.push(false);
         self.mode = mode;
+        self.start_open = None;
         if let Some(s) = self.start.as_mut() {
             s.menu.visible = false;
         }
+    }
+
+    /// What the start menu asked of the camera since it was last looked at,
+    /// done in the order asked (`race_frame_due`), as the game does each at
+    /// once: `ApplyRaceCamera` (the camera saved, then the character framed
+    /// in orbit mode 1 by the race's record, the walk and the camera held)
+    /// and `ApplyDefaultCamera` (the camera saved put back, both let go). So
+    /// every OpenStartMenu frames (a return from the spell book or the
+    /// trainer too) and every CloseStartMenu restores, an entry's window
+    /// included (its message closes the menu first), the windows opened from
+    /// it drawn over the play camera; a menu opened and closed between two
+    /// frames leaves the camera as it was. A preset is applied only once one
+    /// was saved (no race table, none).
+    fn start_menu_camera<S: vi::scene::Scene<Ee>>(&mut self, cam: &mut WalkCamera<Ee>, scene: &mut S) {
+        let rc = self.race_camera();
+        for frame in std::mem::take(&mut self.race_frame_due) {
+            if frame {
+                if let Some(p) = crate::camstyle::apply_race(cam, rc, scene) {
+                    self.cam_preset = p;
+                    self.race_framed = true;
+                    self.locks = (false, false);
+                }
+            } else if self.race_framed {
+                crate::camstyle::apply(cam, &self.cam_preset);
+                self.locks = (true, true);
+            }
+        }
+    }
+
+    /// `VIWndGame::SetMode(0)` as a message calls it over whatever is up (a
+    /// server's move, a death): back to play, the windows going with the
+    /// mode, and out of the start menu (13) by `CloseStartMenu(0)`, whose
+    /// `ApplyDefaultCamera` puts the play camera back now, before the message
+    /// moves the camera itself (`Respawn`: behind the player at the
+    /// arrival); then `UpdateMode`'s play: the walk and the camera let go.
+    /// With the mode set to 0 alone, the menu stayed drawn over play taking
+    /// no keys, the character framed (orbit mode 1) and the walk held, and
+    /// Start then saved that framing as the camera to put back: closed, the
+    /// camera orbited on its own round a player who walked and turned under
+    /// it (F3 20261028-021802, a coach taken with the inventory up).
+    fn set_mode_0(&mut self, walker: &mut Walker) {
+        if self.mode == 13 {
+            self.close_start_menu(0);
+        }
+        self.start_menu_camera(&mut walker.cam, &mut walker.scene);
+        self.mode = 0;
+        self.locks = (true, true);
     }
 
     /// The start menu's waiting work, with the raster: the open, then each
@@ -7797,6 +7851,191 @@ mod commands {
             assert!(!p.loading());
             assert_eq!(there.cam.walk.committed.position, before);
             assert_eq!(sent(&mut p), [answer(4)]);
+        });
+    }
+
+    /// A coach taken with the start menu's inventory up (F3 20261028-021802,
+    /// Liav's: "your camera becomes detached from your character"):
+    /// `Msg00B2`'s `SetMode(0)` closes the start menu before `Respawn`
+    /// (`CloseStartMenu(0)`'s `ApplyDefaultCamera`: the play camera put back,
+    /// the walk and the camera let go), so after the coach's two moves the
+    /// camera is the follow orbit (mode 3) behind the player at the distance
+    /// it had, the menu down; opened again, the menu frames the character
+    /// with its item menu down, and closed it puts the follow orbit back.
+    /// Across worlds (a boat) the walk built there takes the follow orbit; a
+    /// death with the menu up closes it the same way. Opened again over
+    /// itself the menu is closed first, and opened and closed between two
+    /// frames it leaves the camera as it was. The controls: the move as the
+    /// client made it (`Respawn` alone, the mode set to 0 and the menu left
+    /// up) leaves the framing (orbit mode 1) on in play under the menu, the
+    /// walk held, and the menu opened and closed again puts the framing back
+    /// as the play camera (the camera orbiting on its own round a player who
+    /// walks and turns under it); a boat taken so carries the framing; a
+    /// framing saved over the framing puts a framing back; and the close
+    /// alone puts back the camera the open before saved.
+    #[test]
+    fn a_coach_taken_with_the_inventory_up_leaves_the_camera_behind_the_player() {
+        let iso = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let client = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/client.bin");
+        let Some(img) = std::fs::read(&client).ok().and_then(crate::client_image::ClientImage::from_bytes) else {
+            eprintln!("SKIP: no run/client.bin");
+            return;
+        };
+        if !iso.exists() {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        }
+        crate::s2::with_rules(crate::s2::Rules::retail(), || {
+            let (a, b) = ((25275.115f32, 15766.627f32), (23533.45f32, 18890.77f32));
+            let mut lib = Library::new();
+            let w = lib.add("TUNARIA.ESF", crate::stream::open_file(&iso, "TUNARIA.ESF").unwrap());
+            let mut src = crate::stream::FileZones::open(&iso, "TUNARIA.ESF").unwrap();
+            crate::stream::fill(&mut lib, w, a.0, a.1, &mut src);
+            crate::stream::fill(&mut lib, w, b.0, b.1, &mut src);
+            let tunaria = || vi::world::World::load(&lib, w).unwrap();
+            let at_a = [a.0, crate::walker::ground(&mut tunaria(), a.0, a.1).unwrap() + 1.0, a.1];
+            let at_b = [b.0, crate::walker::ground(&mut tunaria(), b.0, b.1).unwrap() + 1.0, b.1];
+            let odus = [7338.18f32, 54.21, 11124.25];
+            // in play at Freeport: the first entry's follow orbit
+            // (`ToggleCameraStyle`), zoomed out to 8
+            let in_play = || {
+                let mut p = play();
+                p.client_data(&img);
+                let mut walker = Walker::arrive(tunaria(), Spawn::ground(a.0, a.1, 0.5));
+                p.loading_step(&mut walker, true);
+                let rc = p.race_camera();
+                p.cam_saved = crate::camstyle::toggle(&mut walker.cam, false, rc, &mut walker.scene);
+                p.cam_entered = true;
+                walker.cam.set_orbit_distance(F::new(8.0));
+                walker.eye = walker.cam.process(&mut walker.scene);
+                (p, walker)
+            };
+            // what the frame's end does with the camera
+            let frame_end = |p: &mut Play, walker: &mut Walker| p.start_menu_camera(&mut walker.cam, &mut walker.scene);
+            // the start menu up (its HUD frame showing it, its frame's end
+            // framing the character), then its inventory (`ShowItems`)
+            let inventory_up = |p: &mut Play, walker: &mut Walker| {
+                p.open_start_menu(true);
+                if p.start_open.take().is_some() {
+                    p.start.as_mut().unwrap().menu.visible = true;
+                }
+                frame_end(p, walker);
+                p.items.visible = true;
+            };
+            let menu_up = |p: &Play| p.start.as_ref().is_some_and(|s| s.menu.visible);
+            // the follow orbit's angle off straight behind the walk's heading
+            let off_behind = |walker: &Walker| {
+                let c = &walker.cam;
+                let d = (c.cur.orbit.x.0 - c.walk.committed.angles.x.0 - std::f32::consts::PI).rem_euclid(std::f32::consts::TAU);
+                d.min(std::f32::consts::TAU - d)
+            };
+            // the far hold of each move past (FAR_HOLD_MS ago)
+            let ago = |p: &Play| p.session.now() as i64 - crate::loading::FAR_HOLD_MS;
+            // a coach: two moves, each come down before the next
+            let hops = [(at_b, 2.0f32), (at_a, 4.0)];
+
+            let (mut p, mut walker) = in_play();
+            inventory_up(&mut p, &mut walker);
+            assert_eq!((walker.cam.camera_mode, p.locks, menu_up(&p)), (1, (false, false), true), "the character framed, the walk and the camera held");
+            for (k, (to, heading)) in hops.into_iter().enumerate() {
+                let since = ago(&p);
+                p.msg_00b2(&mut walker, 0, to, [heading, 0.0, 0.0], k as u32, since);
+                p.loading_step(&mut walker, true);
+                frame_end(&mut p, &mut walker);
+                assert!(!p.loading());
+                assert_eq!((walker.cam.camera_mode, walker.cam.cur.dist.0), (3, 8.0), "move {k}: the follow orbit, at the 8 it had");
+                assert!(off_behind(&walker) < 1e-3, "move {k}: behind the player at the arrival, {} off", off_behind(&walker));
+            }
+            assert_eq!((p.mode, menu_up(&p), p.start_open, p.locks), (0, false, None, (true, true)), "the menu down, the walk and the camera let go");
+            let c = p.control_client();
+            assert!(c.move_ok && c.look_ok);
+            // opened again: framed, its item menu down; closed: the follow orbit
+            p.open_start_menu(true);
+            assert!(!p.items.visible, "ShowMain: the item menu down");
+            frame_end(&mut p, &mut walker);
+            assert_eq!(walker.cam.camera_mode, 1, "framed");
+            p.close_start_menu(0);
+            frame_end(&mut p, &mut walker);
+            assert_eq!((walker.cam.camera_mode, walker.cam.cur.dist.0, p.locks), (3, 8.0, (true, true)), "the follow orbit put back");
+            // opened again over itself: closed first, so what is put back is
+            // still the follow orbit
+            for _ in 0..2 {
+                p.open_start_menu(true);
+                frame_end(&mut p, &mut walker);
+            }
+            assert_eq!(walker.cam.camera_mode, 1);
+            p.close_start_menu(0);
+            frame_end(&mut p, &mut walker);
+            assert_eq!(walker.cam.camera_mode, 3, "the follow orbit, not the framing");
+            // zoomed in to 5 since the last open; the control: the close
+            // alone (the open's ask overwritten by it, as the client kept
+            // one) puts back the camera the open before saved, at 8
+            walker.cam.set_orbit_distance(F::new(5.0));
+            p.race_frame_due.push(false);
+            frame_end(&mut p, &mut walker);
+            assert_eq!(walker.cam.cur.dist.0, 8.0, "the control: the camera of the open before");
+            // opened and closed between two frames: the camera as it was
+            walker.cam.set_orbit_distance(F::new(5.0));
+            p.open_start_menu(true);
+            p.close_start_menu(0);
+            frame_end(&mut p, &mut walker);
+            assert_eq!((walker.cam.camera_mode, walker.cam.cur.dist.0, p.start_open), (3, 5.0, None), "as it was, the open not shown");
+
+            // the control: the move as the client made it, `Respawn` alone
+            let (mut q, mut w2) = in_play();
+            inventory_up(&mut q, &mut w2);
+            for (to, heading) in hops {
+                let since = ago(&q);
+                q.teleport(&mut w2, 0, to, [heading, 0.0, 0.0], since);
+                q.loading_step(&mut w2, true);
+                frame_end(&mut q, &mut w2);
+            }
+            assert_eq!((w2.cam.camera_mode, q.mode, menu_up(&q)), (1, 0, true), "the control: the framing on in play, under the menu");
+            assert!(!q.control_client().move_ok, "the control: the walk held");
+            // Start in play, and the menu closed again
+            q.open_start_menu(true);
+            frame_end(&mut q, &mut w2);
+            q.close_start_menu(0);
+            frame_end(&mut q, &mut w2);
+            assert_eq!(w2.cam.camera_mode, 1, "the control: the framing put back as the play camera");
+            // the control: a framing saved over the framing puts a framing back
+            let (mut q, mut w2) = in_play();
+            q.open_start_menu(true);
+            frame_end(&mut q, &mut w2);
+            q.race_frame_due.push(true);
+            frame_end(&mut q, &mut w2);
+            q.close_start_menu(0);
+            frame_end(&mut q, &mut w2);
+            assert_eq!(w2.cam.camera_mode, 1, "the control: the framing put back");
+
+            // a boat into Odus with the menu up: the walk built there (on
+            // Tunaria's geometry: the camera is the test) takes the follow
+            // orbit; taken as the client took it, the framing
+            for msg in [true, false] {
+                let (mut p, mut walker) = in_play();
+                inventory_up(&mut p, &mut walker);
+                let since = ago(&p);
+                if msg {
+                    p.msg_00b2(&mut walker, 2, odus, [1.0, 0.0, 0.0], 9, since);
+                } else {
+                    p.teleport(&mut walker, 2, odus, [1.0, 0.0, 0.0], since);
+                }
+                let (file, spawn) = p.take_world_change().expect("a world change");
+                assert_eq!(file, "ODUS.ESF");
+                let mut there = Walker::arrive(tunaria(), spawn);
+                p.world_entered(&mut there);
+                frame_end(&mut p, &mut there);
+                let want = if msg { (3, 8.0) } else { (1, walker.cam.cur.dist.0) };
+                assert_eq!((there.cam.camera_mode, there.cam.cur.dist.0), want, "{}", if msg { "the follow orbit carried" } else { "the control: the framing carried" });
+            }
+
+            // a death with the menu up: closed, the play camera put back for
+            // the death camera to start from
+            let (mut p, mut walker) = in_play();
+            inventory_up(&mut p, &mut walker);
+            p.msg_005e(&mut walker);
+            assert_eq!((walker.cam.camera_mode, walker.cam.cur.dist.0, p.mode, menu_up(&p)), (3, 8.0, 0, false));
+            assert!(p.death.is_some());
         });
     }
 
