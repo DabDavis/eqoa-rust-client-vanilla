@@ -36,6 +36,12 @@ fn hour(start: Instant) -> f32 {
 /// `VIClient::UpdateTimeOfDay` keeps it (`Session::time_of_day`: 0x0013's
 /// clock B on the local timer); else, before the server set it, `hour`'s.
 pub fn game_hour(play: Option<&crate::play::Play>, start: Instant) -> f32 {
+    // the GM's day-night entry stopped `UpdateTimeOfDay` (`adminplay`)
+    if std::env::var_os("EQOA_HOUR").is_none()
+        && let Some(h) = play.and_then(|p| p.frozen_hour())
+    {
+        return h;
+    }
     if std::env::var_os("EQOA_HOUR").is_none()
         && let Some(h) = play.and_then(|p| p.session.time_of_day())
     {

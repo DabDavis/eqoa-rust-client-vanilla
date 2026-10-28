@@ -831,7 +831,13 @@ pub struct StartData {
     /// without its first entry ("TEST"), as `OpenStartMenu` leaves it while
     /// `m_p382E8` is not enabled
     tables: [usize; 4],
+    /// the same four tables whole, TEST first, as `OpenStartMenu` leaves
+    /// them while the GM's channel is enabled (`adminplay`)
+    tables_test: [usize; 4],
     pub bounds: [Option<[i32; 4]>; 6],
+    /// `gWorldInfo`'s name words (`m_nameWord`, +0x08): the GM's Goto
+    /// window's and DISPLAY POS's
+    pub world_words: [i32; 6],
     /// the item menus' slot counts: gItemMenu4, gItemMenu3, gInvMenu,
     /// gEquipMenu (the item menu's tabs A, B, C, D)
     pub item_counts: [i32; 4],
@@ -852,7 +858,9 @@ impl StartData {
         // (entries, count) of gStartItems, X, Bank, BankX
         let roots = [(0x00CCFFF0, 0x00CD0130), (0x00CCFD40, 0x00CCFE80), (0x00CD0138, 0x00CD0298), (0x00CCFE88, 0x00CCFFE8)];
         let tables = roots.map(|(e, c)| menus.table(img, e + 32, img.i32_at(c) - 1));
+        let tables_test = roots.map(|(e, c)| menus.table(img, e, img.i32_at(c)));
         let bounds = std::array::from_fn(|w| crate::client_image::world_bounds(img, w as i32));
+        let world_words = std::array::from_fn(|w| img.i32_at(0x00CF3738 + 0x20 * w as u32 + 8) & 0xFFFF);
         let menu = StartMenu::new(tables[0]);
         // gEquipMenu is set up by vimenudefs.cpp's static initialiser (its
         // icon is a hashed name), so the image holds no count: 40 there
@@ -862,7 +870,7 @@ impl StartData {
         let slot_words = (0..23u32).map(|k| (img.i32_at(0x00CDF6F8 + 8 * k), img.i32_at(0x00CDF6FC + 8 * k) as i64)).collect();
         let buddy_menu = menus.def(img, 0x00CD03B0);
         let ignore_menu = menus.def(img, 0x00CD0340);
-        StartData { menus, tables, bounds, item_counts, attack_words, slot_words, buddy_menu, ignore_menu, menu }
+        StartData { menus, tables, tables_test, bounds, world_words, item_counts, attack_words, slot_words, buddy_menu, ignore_menu, menu }
     }
 
     /// `OpenStartMenu`'s table: the bank's when a banker is in range, the
@@ -870,6 +878,16 @@ impl StartData {
     pub fn pick(&mut self, bank: bool, expansion: u32) {
         let k = bank as usize * 2 + (expansion & 2 != 0) as usize;
         self.menu.main.menu = self.tables[k];
+    }
+
+    /// `pick`, with the first entry (TEST) kept when `test`
+    /// (`VIClientPart382E8::IsEnabled()` not 0).
+    pub fn pick_test(&mut self, bank: bool, expansion: u32, test: bool) {
+        self.pick(bank, expansion);
+        if test {
+            let k = bank as usize * 2 + (expansion & 2 != 0) as usize;
+            self.menu.main.menu = self.tables_test[k];
+        }
     }
 }
 
@@ -1041,6 +1059,46 @@ mod tests {
             assert!(sm.point([18.0 + 40.0, 56.0 + 27.0 + 10.0], &menus), "side {side}");
             assert_eq!(sm.main.sel, 1);
         }
+    }
+
+    /// `OpenStartMenu` while the GM's channel is enabled (`pick_test`) out
+    /// of the player's CLIENT image (SKIPs without it): each table keeps its
+    /// first entry, TEST (word 143), whose menus reach the GM's commands
+    /// (KILL 0xA1010000, TRIGGER 0xA2010000) and the TEST menu's own
+    /// entries (Goto Zone 0x05091006, Flora 0x05091008); the control,
+    /// disabled, reaches none of them. And `gWorldInfo`'s name words.
+    #[test]
+    fn the_test_entry_while_the_gm_channel_is_on() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/client.bin");
+        let Some(img) = std::fs::read(&path).ok().and_then(crate::client_image::ClientImage::from_bytes) else {
+            eprintln!("SKIP: no run/client.bin");
+            return;
+        };
+        let mut d = StartData::from_image(&img);
+        fn reach(menus: &Menus, m: usize, out: &mut Vec<u32>, depth: usize) {
+            for e in &menus.list[m].entries {
+                out.push(e.msg);
+                if let Some(s) = e.sub.filter(|_| depth < 8) {
+                    reach(menus, s, out, depth + 1);
+                }
+            }
+        }
+        let gm = [0xA101_0000, 0xA201_0000, 0x0509_1006, 0x0509_1008];
+        for (bank, x) in [(false, 0), (false, 2), (true, 0), (true, 2)] {
+            d.pick_test(bank, x, false);
+            let plain = d.menus.list[d.menu.main.menu].entries.len();
+            let mut msgs = Vec::new();
+            reach(&d.menus, d.menu.main.menu, &mut msgs, 0);
+            assert!(gm.iter().all(|m| !msgs.contains(m)), "the control: no TEST, no GM entries");
+            d.pick_test(bank, x, true);
+            let m = &d.menus.list[d.menu.main.menu];
+            assert_eq!((m.entries[0].word, m.entries.len()), (143, plain + 1), "TEST first");
+            assert_eq!(m.entries.last().unwrap().word, 423, "Quit last");
+            let mut msgs = Vec::new();
+            reach(&d.menus, d.menu.main.menu, &mut msgs, 0);
+            assert!(gm.iter().all(|m| msgs.contains(m)), "the GM's entries reached");
+        }
+        assert_eq!(d.world_words, [1043, 1044, 1440, 1462, 1463, 1784]);
     }
 
     /// The start tables out of the player's CLIENT image (SKIPs without
