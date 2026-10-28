@@ -417,7 +417,12 @@ every console frame bit for bit as a console at 29.97 frames a second does, at
 60, 165 and 240 Hz and with frames 1.5 ms early or late; the run drawn moves every
 frame and is as straight as the console's own frames to within a float step
 (1.95 mm at x 22000); a place given between frames, a landing, the camera's
-no-turn flag and a stall each have theirs, each with its control. `Process` runs
+no-turn flag and a stall each have theirs, each with its control. The mouse's
+look, which turns the body at once (the client's own), is made on the kept frame
+(`Walker::rewind` first, once a frame), as a control: made on the frame drawn it
+read as a place given, and while the mouse moved no console frame was stepped
+(the run from a stand crept, a run let go of slid on, slopes sank it and floated
+it). `Process` runs
 twice a console frame (the frame, and the one ahead again when the controls
 change), so the walk costs about what it did at 144-165 Hz, half at 240 and up to
 twice at 60 (0.1 ms a frame more). What it counts in frames runs on a clock of the game's frames,

@@ -5,6 +5,19 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-28 · Steering with the mouse runs as the stick does; coaches with the menu open
+- Steering with the mouse (the right button held, or either button in first person) keeps your
+  run as it is with the keys or a controller again. Since yesterday's update, a mouse that moved
+  held your speed at what it was when the mouse began to move: from a stand you only crept
+  forward until the mouse stopped, a run you let go of slid on, and on slopes your character sank
+  into the ground going up and floated over it going down.
+- A coach, a boat or a port that moves you while the start menu or the inventory is open now
+  closes it first and gives you your own camera back, as on the PS2. The camera had stayed in the
+  menu's close-up of your character, and after opening and closing the menu again it sat at one
+  angle round you instead of following behind you. Dying with the menu open is fixed the same way.
+- Problem reports (F3) now say how the connection to the server is doing, so a report from a
+  world where no one else shows up tells whether the server still hears you.
+
 ## 2026-10-28 · GMs see their server's names for the TRIGGER entries
 - For GMs only, on a server that names its triggers (eqoaclassic): TEST, Programming, TRIGGER
   now shows each trigger's name where the PS2 shows eight lines all called TRIGGER. A trigger
