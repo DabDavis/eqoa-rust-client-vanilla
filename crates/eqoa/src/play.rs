@@ -7936,10 +7936,10 @@ mod commands {
                 p.msg_00b2(&mut walker, 0, to, [heading, 0.0, 0.0], k as u32, since);
                 p.loading_step(&mut walker, true);
                 frame_end(&mut p, &mut walker);
+                assert!(!p.loading());
+                assert_eq!((walker.cam.camera_mode, walker.cam.cur.dist.0), (3, 8.0), "move {k}: the follow orbit, at the 8 it had");
+                assert!(off_behind(&walker) < 1e-3, "move {k}: behind the player at the arrival, {} off", off_behind(&walker));
             }
-            assert!(!p.loading());
-            assert_eq!((walker.cam.camera_mode, walker.cam.cur.dist.0), (3, 8.0), "the follow orbit, at the 8 it had");
-            assert!(off_behind(&walker) < 1e-3, "behind the player at the arrival: {} off", off_behind(&walker));
             assert_eq!((p.mode, menu_up(&p), p.start_open, p.locks), (0, false, None, (true, true)), "the menu down, the walk and the camera let go");
             let c = p.control_client();
             assert!(c.move_ok && c.look_ok);
