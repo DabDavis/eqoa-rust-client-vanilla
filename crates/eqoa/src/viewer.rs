@@ -985,9 +985,11 @@ pub fn shot_with(
         let mut g = renderer.upload(&device, &queue, &body, &[model], &textures);
         renderer.set_palette(&queue, &g, &palette);
         crate::play::place_body(&mut g, &walker, model);
-        if let Some(p) = play.as_mut().filter(|p| p.has_self()) {
-            p.place_self(&walker, model, &palette, &renderer, &queue);
-            g.visible = false;
+        if let Some(p) = play.as_mut() {
+            if p.has_self() {
+                p.place_self(&walker, model, &palette, &renderer, &queue);
+            }
+            g.visible &= crate::play::plain_body_shown(Some(&*p));
         }
         gpu.push(g);
         // the trial's projectiles where the last frame left them
@@ -4805,9 +4807,15 @@ impl ApplicationHandler for App {
                         crate::play::place_body(body, w, m);
                     }
                     // Dressed as the server says: the plain body gives way.
-                    if let Some(p) = play.as_mut().filter(|p| p.has_self()) {
-                        p.place_self(w, m, &palette, &g.renderer, &g.queue);
-                        if let Some(body) = g.models.get_mut(body_at) {
+                    // In play it never shows (`play::plain_body_shown`): the
+                    // player is drawn once the server's entity for it comes
+                    if let Some(p) = play.as_mut() {
+                        if p.has_self() {
+                            p.place_self(w, m, &palette, &g.renderer, &g.queue);
+                        }
+                        if let Some(body) = g.models.get_mut(body_at)
+                            && !crate::play::plain_body_shown(Some(&*p))
+                        {
                             body.visible = false;
                         }
                     }

@@ -1029,6 +1029,17 @@ fn skins_shown(c: Option<&net::entity::Creature>) -> bool {
     c.is_none_or(|c| c.flags262 & 1 == 0)
 }
 
+/// Whether the walker's plain body (the human the walk is built on) is drawn:
+/// only with no server (a walk of the world alone). In play the player is
+/// the server's entity for it, dressed (`Play::place_self`), as CLIENT's
+/// player is its `VIEntity`'s sprite, which there is none of before the
+/// entity's first update: the plain human had shown in its place between
+/// the world entry and that update, or a world change and the next (F3
+/// 20261028-231959, a gnome drawn a human first).
+pub fn plain_body_shown(play: Option<&Play>) -> bool {
+    play.is_none()
+}
+
 /// The walker's body as the game rasters the player's actor: hidden past its
 /// off distance from the camera (`VIScene::RasterActor`), and of an LOD body
 /// the level its centre's distance picks (`VILODSprite::Raster`), both from
@@ -7520,6 +7531,20 @@ mod commands {
         let mut s = Session::connect_with(Box::new(Nowhere), ([127, 0, 0, 1], 5000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
         s.self_id = Some(0x100);
         Play::new(s, Player::default(), dump)
+    }
+
+    /// The plain human body is drawn only for a walk with no server: in play
+    /// the player is the server's entity for it, so between the world entry
+    /// and that entity's first update nothing stands in for it (F3
+    /// 20261028-231959: a gnome was drawn a human first), and once it has
+    /// come the dressed body is drawn (`has_self`). The control: with no
+    /// play the plain body is the walk's character.
+    #[test]
+    fn the_plain_body_is_never_drawn_in_play() {
+        assert!(plain_body_shown(None), "the control: a walk with no server draws it");
+        let p = play();
+        assert!(!p.has_self(), "no entity for the player yet");
+        assert!(!plain_body_shown(Some(&p)), "in play, before the player's entity, no plain body");
     }
 
     /// The cast window as the console keeps it (longs): a cast at `now`
