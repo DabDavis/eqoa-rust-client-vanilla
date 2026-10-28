@@ -1314,4 +1314,52 @@ mod tests {
         assert!(env_alone(&mut w, 25505.0, 15721.95, 0.0), "under the deck there is water");
         assert!(env_alone(&mut w, 25400.0, 15816.95, std::f32::consts::PI / 2.0), "past the post there is water");
     }
+
+    /// The window steps on the game's frames (`frames.rs`): drawn on the
+    /// HUD's clock, its frame opens in seven of them (0.15 a draw, 233 ms)
+    /// and a cast left alone throws itself full at its 2,500th tick (2.54
+    /// s), at a 165 Hz display as at 30. The control: drawn every frame of a
+    /// 165 Hz display it opened in 42 ms.
+    #[test]
+    fn the_window_keeps_the_consoles_time_at_any_rate() {
+        let run = |hz: f64, gated: bool| -> (f64, f64) {
+            let (vui, mut r) = (vui(), NullRaster);
+            let base = [0; 29];
+            let inv = gear(Some(1000), true);
+            let mut part = Part { state: state::WAITING, ..Default::default() };
+            let mut w = FishingWnd::default();
+            let (mut cues, mut out) = (Vec::new(), Vec::new());
+            w.focus(&mut cues);
+            let mut clock = crate::frames::Frames::default();
+            let (mut opened, mut threw) = (None, None);
+            let mut k = 0.0;
+            while threw.is_none() && k < 2000.0 {
+                let t = k * 1000.0 / hz;
+                k += 1.0;
+                if !clock.due(t) && gated {
+                    continue;
+                }
+                // the tick clock: 983.04 a second
+                let now = (t * 0.98304) as i64;
+                if t == 0.0 {
+                    w.cast(now);
+                }
+                w.draw(&vui, &mut r, &mut part, &info(&vui, &inv, &base), &|_| 0, now, t as i64, F::ZERO, &mut cues, &mut out);
+                if opened.is_none() && w.window.is_open() {
+                    opened = Some(t);
+                }
+                if out.contains(&FishOut::Splash) {
+                    threw = Some(t);
+                }
+            }
+            (opened.unwrap_or(-1.0), threw.unwrap_or(-1.0))
+        };
+        for hz in [30.0, 60.0, 144.0, 165.0] {
+            let (open, throw) = run(hz, true);
+            assert!((open - 200.0).abs() <= 1000.0 / 30.0 + 1.0, "{hz} Hz: open at {open} ms");
+            assert!((throw - 2543.1).abs() <= 1000.0 / 30.0 + 1.0, "{hz} Hz: thrown at {throw} ms");
+        }
+        let (open, _) = run(165.0, false);
+        assert!(open < 50.0, "the control: every display frame, open at {open} ms");
+    }
 }
