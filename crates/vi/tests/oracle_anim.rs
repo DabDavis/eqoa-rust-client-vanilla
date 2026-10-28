@@ -1,17 +1,17 @@
 //! The animation system against the decomp compiled for the host, bit for bit
-//! (`Ieee`): the human (0x70D898C6) is parsed from CHAR.ESF here, the same data
-//! is handed to eqoa-port's oracle, which builds a real VICSprite in a bare
-//! VIScene through the guest's API, and a script of (time, locomotion, LOD)
-//! steps runs on both: SetLocomotion -> SetAnimation (priorities, 250 ms blends,
-//! freezes, the two-layer sync) and VIHSprite::Process (play timing, the blend,
-//! the hierarchy). Every node's world matrix is compared at every step.
+//! (`Ieee`): a character is parsed from CHAR.ESF here, the same data is handed
+//! to eqoa-port's oracle, which builds a real VICSprite in a bare VIScene
+//! through the guest's API, and a script of (time, locomotion, LOD) steps runs
+//! on both: SetLocomotion -> SetAnimation (priorities, 250 ms blends, freezes,
+//! the two-layer sync, the fidget) and VIHSprite::Process (play timing, the
+//! blend, the hierarchy). Every node's world matrix is compared at every step.
 #![allow(clippy::field_reassign_with_default)]
 
 mod common;
 
 use common::*;
 use vi::character::{AnimCache, load_csprite};
-use vi::csprite::Rand;
+use vi::csprite::{CSprite, Rand};
 use vi::fpu::{F, Ieee};
 use vi::geom::Matrix44;
 use vi::hsprite::{AnimScene, Frames};
@@ -23,27 +23,29 @@ fn push_f(b: &mut Vec<u8>, v: F<Ieee>) {
     b.extend_from_slice(&v.0.to_le_bytes());
 }
 
-#[test]
-fn character_animation_matches() {
-    let Some(mut o) = Oracle::open() else { return };
+/// CHAR.ESF's character `id` as `ParseCSpriteObj` sets it up, its first fidget
+/// pinned at `anim_time` (SetDefaults draws it from rand, which the oracle's
+/// libc does not share); None without the disc.
+fn character(id: u32, anim_time: i64) -> Option<(AnimScene<Ieee>, CSprite<Ieee>, Rand)> {
     let iso_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
     if !iso_path.exists() {
         eprintln!("SKIP: no disc");
-        return;
+        return None;
     }
     let mut iso = iso::Iso::open(iso_path).unwrap();
     let mut lib = esf::Library::new();
     lib.add("CHAR.ESF", esf::Container::open(iso.read("CHAR.ESF").unwrap()).unwrap());
-    let r = lib.lookup(0x70D898C6u32 as i32).unwrap();
+    let r = lib.lookup(id as i32).unwrap();
     let mut sc = AnimScene::<Ieee>::default();
     let mut cache = AnimCache::new();
     let mut rand = Rand(1);
-    let mut cs = load_csprite(&lib, r, &mut sc, &mut cache, &mut rand).expect("human");
-    // The first fidget, pinned on both sides (SetDefaults draws it from rand).
-    let anim_time = 30_000;
+    let mut cs = load_csprite(&lib, r, &mut sc, &mut cache, &mut rand).expect("the character");
     cs.anim_time = anim_time;
+    Some((sc, cs, rand))
+}
 
-    // The data, as the oracle reads it.
+/// The character and the script, as the oracle reads them.
+fn scenario(sc: &AnimScene<Ieee>, cs: &CSprite<Ieee>, script: &[(i32, i32, i32)]) -> Vec<u8> {
     let mut b = Vec::new();
     push_i(&mut b, 0);
     let map = &sc.ref_maps[cs.h.ref_map];
@@ -120,7 +122,64 @@ fn character_animation_matches() {
         push_f(&mut b, e.weight);
         push_i(&mut b, e.sync);
     }
-    push_i(&mut b, anim_time as i32);
+    push_i(&mut b, cs.anim_time as i32);
+    push_i(&mut b, script.len() as i32);
+    for &(t, l, lod) in script {
+        push_i(&mut b, t);
+        push_i(&mut b, l);
+        push_i(&mut b, lod);
+    }
+    b
+}
+
+/// The decomp's state after step `k` of the oracle's result: the layers
+/// (anim, play), the handle, the action and the sequence, then every node's
+/// world matrix.
+fn theirs(res: &[u8], k: usize, nn: usize) -> ([i32; 7], Vec<Matrix44<Ieee>>) {
+    let off = 4 + k * (28 + nn * 64);
+    let st = std::array::from_fn(|i| i32::from_le_bytes(res[off + i * 4..off + i * 4 + 4].try_into().unwrap()));
+    (st, (0..nn).map(|j| from_bytes::<Matrix44<Ieee>>(&res[off + 28 + j * 64..])).collect())
+}
+
+/// The script on our side (SetDefaultEntries/Priorities/Defaults already ran
+/// in load_csprite, as they do in ParseCSpriteObj), each step against the
+/// decomp's: the layers' (anim, play) after every step, or the first
+/// difference.
+fn replay(sc: &mut AnimScene<Ieee>, cs: &mut CSprite<Ieee>, rand: &mut Rand, script: &[(i32, i32, i32)], res: &[u8]) -> Result<Vec<[(i32, i32); 2]>, String> {
+    let nn = cs.h.nodes.len();
+    let mut layers = Vec::new();
+    for (k, &(t, loco, lod)) in script.iter().enumerate() {
+        sc.time = t as i64;
+        let handle = if loco >= 2000 {
+            cs.set_death(true, loco == 2001, sc, rand, None);
+            -2
+        } else if loco >= 1000 {
+            cs.set_action(loco - 1000, sc, rand)
+        } else {
+            cs.set_locomotion(loco, sc, rand);
+            -2
+        };
+        cs.h.process(lod, sc);
+        let (st, nodes) = theirs(res, k, nn);
+        let ours = [cs.cur[0].anim, cs.cur[0].play, cs.cur[1].anim, cs.cur[1].play, handle, cs.action, cs.action_seq];
+        if ours != st {
+            return Err(format!("step {k} (t {t}, loco {loco}): layers (anim, play), handle, action, sequence: ours {ours:?}, theirs {st:?}"));
+        }
+        for (j, theirs) in nodes.iter().enumerate() {
+            if let Some((o2, a, b2)) = first_diff(&cs.h.nodes[j].world, theirs) {
+                return Err(format!("step {k} (t {t}, loco {loco}, lod {lod}) node {j}: +0x{o2:02X} ours {a:08X} theirs {b2:08X}"));
+            }
+        }
+        layers.push([(ours[0], ours[1]), (ours[2], ours[3])]);
+    }
+    Ok(layers)
+}
+
+#[test]
+fn character_animation_matches() {
+    let Some(mut o) = Oracle::open() else { return };
+    // the human; its first fidget out of the script's reach
+    let Some((mut sc, mut cs, mut rand)) = character(0x70D898C6, 30_000) else { return };
 
     // The script: 14 s in 32 ms ticks; locomotion changes, some mid-blend.
     let mut script: Vec<(i32, i32, i32)> = Vec::new();
@@ -161,51 +220,14 @@ fn character_animation_matches() {
         };
         script.push((t, loco, lod));
     }
-    push_i(&mut b, script.len() as i32);
-    for &(t, l, lod) in &script {
-        push_i(&mut b, t);
-        push_i(&mut b, l);
-        push_i(&mut b, lod);
-    }
-    let res = o.call(500, &b);
+    let res = o.call(500, &scenario(&sc, &cs, &script));
     assert_eq!(i32::from_le_bytes(res[0..4].try_into().unwrap()), 0, "oracle build failed");
 
-    // The same on our side: SetDefaultEntries/Priorities/Defaults already ran
-    // in load_csprite, as they do in ParseCSpriteObj.
     let nn = cs.h.nodes.len();
-    let step = 28 + nn * 64;
-    let mut changes = 0;
-    let mut actions = 0;
+    let layers = replay(&mut sc, &mut cs, &mut rand, &script, &res).unwrap_or_else(|e| panic!("{e}"));
     let mut last = [(0, 0); 2];
-    for (k, &(t, loco, lod)) in script.iter().enumerate() {
-        sc.time = t as i64;
-        let handle = if loco >= 2000 {
-            cs.set_death(true, loco == 2001, &sc, &mut rand, None);
-            -2
-        } else if loco >= 1000 {
-            actions += 1;
-            cs.set_action(loco - 1000, &sc, &mut rand)
-        } else {
-            cs.set_locomotion(loco, &sc, &mut rand);
-            -2
-        };
-        cs.h.process(lod, &sc);
-        let off = 4 + k * step;
-        let st: Vec<i32> = (0..7).map(|i| i32::from_le_bytes(res[off + i * 4..off + i * 4 + 4].try_into().unwrap())).collect();
-        let ours = [cs.cur[0].anim, cs.cur[0].play, cs.cur[1].anim, cs.cur[1].play, handle, cs.action, cs.action_seq];
-        assert_eq!(ours.to_vec(), st, "step {k} (t {t}, loco {loco}): layers (anim, play), handle, action, sequence");
-        let now = [(ours[0], ours[1]), (ours[2], ours[3])];
-        if now != last {
-            changes += 1;
-            last = now;
-        }
-        for j in 0..nn {
-            let theirs = from_bytes::<Matrix44<Ieee>>(&res[off + 28 + j * 64..]);
-            if let Some((o2, a, b2)) = first_diff(&cs.h.nodes[j].world, &theirs) {
-                panic!("step {k} (t {t}, loco {loco}, lod {lod}) node {j}: +0x{o2:02X} ours {a:08X} theirs {b2:08X}");
-            }
-        }
-    }
+    let changes = layers.iter().filter(|&&now| std::mem::replace(&mut last, now) != now).count();
+    let actions = script.iter().filter(|s| (1000..2000).contains(&s.1)).count();
     eprintln!("{} steps x {nn} nodes equal; {changes} layer changes, {actions} actions", script.len());
     assert!(changes >= 6);
     assert_eq!(actions, 6);
@@ -213,8 +235,74 @@ fn character_animation_matches() {
     // upper body over the legs' swim, the swing as the swim's own action.
     let at = |t: i32| script.iter().position(|s| s.0 == t).unwrap();
     for (t, want) in [(9504, [34, 13]), (10528, [44, 44]), (11520, [34, 12])] {
-        let off = 4 + at(t) * step;
-        let cur = [0, 2].map(|i| i32::from_le_bytes(res[off + i * 4..off + i * 4 + 4].try_into().unwrap()));
-        assert_eq!(cur, want, "t {t}: the decomp's layers");
+        let (st, _) = theirs(&res, at(t), nn);
+        assert_eq!([st[0], st[2]], want, "t {t}: the decomp's layers");
     }
+}
+
+/// A character whose only clip is played once: Delwin Stitchfinger's body
+/// (0xD7741560, CHAR.ESF 141, the halfling Sandstorm sends for him in
+/// Bobble-by-Water). Its play list has one entry, idle, played once (sync 1);
+/// its clip lies on the ground, gets up and falls back down, and every other
+/// entry is SetDefaultEntries' copy of it. So idle holds the clip's last frame,
+/// lying, and each fidget (SetAnimation's 0 -> 15 once m_animTime has passed,
+/// every 20 to 40 s) plays it again, then idle's own entry once more after it
+/// (F3 20261027-203555: "dropping over dead without dying over and over"). The
+/// decomp does exactly that, node for node: it is the console's own. The
+/// control: a port that never fidgets (its m_animTime out of reach) holds the
+/// last frame, and parts from the decomp at the fidget.
+#[test]
+fn a_play_once_idle_plays_again_at_each_fidget() {
+    let Some(mut o) = Oracle::open() else { return };
+    let fidget = 4_000;
+    let Some((mut sc, mut cs, mut rand)) = character(0xD7741560, fidget) else { return };
+    // the body: a halfling's skeleton of two layers, every entry the one clip
+    assert_eq!((cs.race, cs.skel_type), (7, 1));
+    let clip = cs.entries[0].animation;
+    assert!(clip[0] >= 0 && clip[1] >= 0);
+    assert!(cs.entries.iter().all(|e| e.animation == clip || e.animation == [-1, -1]), "every entry is idle's clip");
+    assert_eq!(cs.entries[0].sync, 1, "idle is played once");
+    assert_eq!(sc.anims[clip[0] as usize].num_frames, 16);
+
+    // 12 s standing (locomotion 0, as UpdateCreatures asks of an NPC in state
+    // 0) in 32 ms steps
+    let script: Vec<(i32, i32, i32)> = (0..375).map(|k| (k * 32, 0, -1)).collect();
+    let data = scenario(&sc, &cs, &script);
+    let res = o.call(500, &data);
+    assert_eq!(i32::from_le_bytes(res[0..4].try_into().unwrap()), 0, "oracle build failed");
+    let nn = cs.h.nodes.len();
+
+    // The control: never fidgeting, the port parts from the decomp at the
+    // fidget's step and not before.
+    let (mut sc2, mut cs2, mut rand2) = character(0xD7741560, i32::MAX as i64).unwrap();
+    let err = replay(&mut sc2, &mut cs2, &mut rand2, &script, &res).expect_err("the control must part from the decomp");
+    let first = script.iter().position(|s| s.0 as i64 > fidget).unwrap();
+    assert!(err.starts_with(&format!("step {first} ")), "the control parts at the fidget (step {first}): {err}");
+
+    let layers = replay(&mut sc, &mut cs, &mut rand, &script, &res).unwrap_or_else(|e| panic!("{e}"));
+    // The decomp's plays on the lower body: idle's, the fidget's (from the
+    // first step past m_animTime), idle's again; each a new play of the clip.
+    let mut runs: Vec<(usize, (i32, i32))> = Vec::new();
+    for (k, l) in layers.iter().enumerate() {
+        if runs.last().map(|r| r.1) != Some(l[0]) {
+            runs.push((k, l[0]));
+        }
+    }
+    let anims: Vec<i32> = runs.iter().map(|r| r.1.0).collect();
+    assert_eq!(anims, [0, 15, 0], "idle, the fidget, idle: {runs:?}");
+    assert_eq!(runs[1].0, first, "the fidget from the first step past m_animTime");
+    let plays: std::collections::HashSet<i32> = runs.iter().map(|r| r.1.1).collect();
+    assert_eq!(plays.len(), 3, "three plays: {runs:?}");
+    // Lying, up, lying again: the body's highest node in the decomp's pose.
+    let top = |k: usize| theirs(&res, k, nn).1.iter().map(|m| m.m[3].y.0).fold(f32::MIN, f32::max);
+    let before = top(first - 1);
+    let during = (runs[1].0..runs[2].0).map(top).fold(f32::MIN, f32::max);
+    let again = (runs[2].0..script.len()).map(top).fold(f32::MIN, f32::max);
+    let end = top(script.len() - 1);
+    eprintln!(
+        "{} steps x {nn} nodes equal; plays {runs:?}; highest node: lying {before:.3} before the fidget, {during:.3} in it, {again:.3} in idle's after it, {end:.3} at the end",
+        script.len()
+    );
+    assert!(before < 0.5 && end < 0.5, "lying before the fidget and at the end");
+    assert!(during > 1.0 && again > 1.0, "up in each replay");
 }
