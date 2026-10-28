@@ -902,7 +902,6 @@ impl SplashFx {
     }
 
     /// How many particles are live.
-    #[cfg(test)]
     pub fn count(&self) -> usize {
         self.sys.particle_count(self.emitter)
     }
@@ -1361,5 +1360,24 @@ mod tests {
         }
         let (open, _) = run(165.0, false);
         assert!(open < 50.0, "the control: every display frame, open at {open} ms");
+    }
+
+    /// The splash's texture (`FindTyped(0x2B6BF329, 1)`) is SPELLFX.CSF's,
+    /// which play's library holds from the start (`main.rs`'s
+    /// `world_library`), so the splash is made; the control: none of the
+    /// other resident files, nor the world, has it.
+    #[test]
+    fn the_splash_texture_is_spellfxs() {
+        let iso = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        if !iso.exists() {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        }
+        let mut disc = iso::Iso::open(&iso).unwrap();
+        for f in ["CHAR.ESF", "ITEM.ESF", "UI.CSF", "ITEMICON.ESF", "SPELLFX.CSF", "FX.CSF", "ADDART.CSF", "TUNARIA.ESF"] {
+            let mut lib = esf::Library::new();
+            lib.add(f, crate::stream::open_file(&iso, f).unwrap_or_else(|_| esf::Container::open(disc.read(f).unwrap()).unwrap()));
+            assert_eq!(lib.surface(SPLASH_TEXTURE as i32).is_some(), f == "SPELLFX.CSF", "{f}");
+        }
     }
 }

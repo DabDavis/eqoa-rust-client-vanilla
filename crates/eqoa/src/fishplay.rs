@@ -27,6 +27,8 @@ pub struct Fishing {
     /// with no texture for it)
     splash: Option<SplashFx>,
     splash_tried: bool,
+    /// the splash was emitting the frame before (its trace)
+    splash_was: bool,
     /// the mode the last HUD frame saw (the window's focus lost)
     was_up: bool,
 }
@@ -264,12 +266,18 @@ impl Play {
             eprintln!("play: the cast lands {} (power {}, quality {})", at.map_or_else(|| "off the water".to_string(), |v| format!("on the water at {:.2?}", v.to_array())), self.fish.wnd.power, self.fish.wnd.quality);
             if let (Some(at), Some(s)) = (self.fish.wnd.water(at, have), self.fish.splash.as_mut()) {
                 s.place(at);
+            } else if !have {
+                eprintln!("play: no splash (no surface {:#010x} in the library)", crate::fishing::SPLASH_TEXTURE);
             }
         }
         let Some(s) = self.fish.splash.as_mut() else { return };
         if self.fish.wnd.emitting {
             s.update();
         }
+        if self.fish.splash_was && !self.fish.wnd.emitting {
+            eprintln!("play: the splash's half second over, {} particles live", s.count());
+        }
+        self.fish.splash_was = self.fish.wnd.emitting;
         let batches = s.render(game_ms);
         if let Some(sp) = self.spells.as_mut() {
             sp.batches.extend(batches);
