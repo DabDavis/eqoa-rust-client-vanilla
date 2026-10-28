@@ -5,6 +5,20 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-28 · Shadows under the characters, fishing, and the GM's TEST menu
+- Every character near the camera now has a shadow under its feet, as on the PS2: a soft dark
+  patch on the ground, and on docks, counters and steps, fading where the ground falls away.
+  Options, Extended, World, Shadows turns them off.
+- Fishing works as on the PS2 on a server that offers it (none of ours does yet): the Fishing
+  window, its power meter (✕ or the left stick to cast and throw), the catch list (Take All,
+  one item, Leave All), its messages, and the splash on the water.
+- On a server that gives your account the game's GM channel, the start menu shows TEST first,
+  as a GM's PS2 did, with its Buff PC and Goto windows. Every other player sees no change.
+- A full buddy list on the other side now says so ("Add buddy failed: Your buddy's buddy list
+  is full."), and the game answers the server's connection check and its other housekeeping
+  as a PS2 does. Your position goes to the server at the PS2's own rate (every 101.7 ms; it
+  was 100).
+
 ## 2026-10-28 · You can run again after casting a spell
 - Since about 00:55 UTC this morning, casting a spell left you walking, unable to run, until
   you logged in again: you walk while you cast, and the game thought the cast never ended. The
