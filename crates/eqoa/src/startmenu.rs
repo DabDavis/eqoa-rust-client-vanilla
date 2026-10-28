@@ -378,9 +378,9 @@ impl MainMenu {
         let black = [0.0, 0.0, 0.0, 1.0];
         let white = [1.0; 4];
         let word = |id: i32| wide(vui.words.get(id, vui.language));
-        // a label set at run time (the server's trigger names), fitted
-        // between the bar's caps; else the entry's word
-        let inside = BAR_WIDTH - vui.entry(141).uv1[0] - vui.entry(142).uv1[0];
+        // a label set at run time (the server's trigger names), fitted to
+        // the bar's width, as the game's own words take it; else the
+        // entry's word
         let mut pos = [18, 56];
         let mut i = 0;
         let mut row = self.top;
@@ -388,7 +388,7 @@ impl MainMenu {
             let sel = self.x34 && row == self.sel;
             let e = &menu.entries[row as usize];
             let (text, dim) = match menus.labels.get(&(e.msg, e.id)) {
-                Some(l) => (fit_label(vui, r, &l.text, &l.tail, inside), l.dim),
+                Some(l) => (fit_label(vui, r, &l.text, &l.tail, BAR_WIDTH), l.dim),
                 None => (word(e.word), false),
             };
             let color = match (sel, dim) {
@@ -627,11 +627,13 @@ const DIM: [f32; 4] = [100.0 / 255.0, 100.0 / 255.0, 100.0 / 255.0, 1.0];
 /// greyed to the same contrast.
 const DIM_LIT: [f32; 4] = [75.0 / 255.0, 95.0 / 255.0, 108.0 / 255.0, 1.0];
 
-/// A run-time label (`Menus::labels`) fitted to `w`, the bar between its
-/// caps: the text and its tail when they fit; else the text cut short,
-/// "..." and the tail whole. The game's own words were written to fit its
-/// bars (it draws a word centred, uncut); a name the server sends need not
-/// be, and drawn whole it would run off the bar and out of the picture.
+/// A run-time label (`Menus::labels`) fitted to `w`, the bar's width: the
+/// text and its tail when they fit; else the text cut short, "..." and the
+/// tail whole. The game draws its own words centred and uncut, and they take
+/// the bar's whole width, caps and all (TEST's "Summon Player" and "Remove 1
+/// Debt" edge to edge, "Remove All Debt" a little past); a name the server
+/// sends gets that room and no more, where drawn whole it could run off the
+/// bar and out of the picture.
 pub fn fit_label(vui: &Vui, r: &dyn Raster, text: &[u16], tail: &[u16], w: i32) -> Vec<u16> {
     let whole = [text, tail].concat();
     if vui.string_width(r, &whole) <= w {
@@ -1136,12 +1138,17 @@ mod tests {
     /// The bars' texts and colours of a TEST-menu-like menu of the eight
     /// TRIGGER entries (word 507, `Do2`'s message, ids 0 to 7) with `labels`
     /// (id, text, tail, dim): the seven bars drawn, top to bottom (centred on
-    /// the bar, x 18 + 70), the first selected.
-    fn trigger_bars(labels: &[(i32, &str, &str, bool)]) -> Vec<(String, [f32; 4])> {
-        let mut vui = posts::vui();
+    /// the bar, x 18 + 70), the first selected. The bar's caps (141, 142)
+    /// are `caps` wide.
+    fn trigger_bars(caps: i32, labels: &[(i32, &str, &str, bool)]) -> Vec<(String, [f32; 4])> {
+        let mut atlas = vec![vi::ui::UiTexEntry::default(); 252];
+        for id in [141, 142] {
+            atlas[id] = vi::ui::UiTexEntry { x00: id as i32, row: 1, uv1: [caps, 26], ..Default::default() };
+        }
         let mut words: Vec<String> = (1..507).map(|n| format!("word {n}")).collect();
         words.push("TRIGGER".into());
-        vui.words = vi::strtab::StringTable::parse(words.join("\n").as_bytes()).unwrap();
+        let words = vi::strtab::StringTable::parse(words.join("\n").as_bytes()).unwrap();
+        let vui = Vui::new(words, Default::default(), atlas);
         let mut menus = Menus::default();
         let entries = (0..8).map(|i| crate::client_image::MenuEntry { word: 507, msg: crate::admin::TRIGGER_ENTRY, id: i, ..Default::default() }).collect();
         let m = menus.push(Menu { x00: -1, x04: -1, entries });
@@ -1165,16 +1172,16 @@ mod tests {
     /// The server's names on the TRIGGER bars (`Menus::labels`): a named
     /// entry shows its name and tail, an unnamed one the game's word; a name
     /// too long for the bar is cut, "..." after it and its tail whole, and
-    /// no cut runs past the bar between its caps (17 characters here). The
-    /// control: with no labels every bar says TRIGGER, the first selected.
+    /// no cut runs past the bar (17 characters here). The control: with no
+    /// labels every bar says TRIGGER, the first selected.
     #[test]
     fn a_named_trigger_shows_its_name_on_its_bar() {
-        let bars = trigger_bars(&[]);
+        let bars = trigger_bars(0, &[]);
         let texts: Vec<_> = bars.iter().map(|b| b.0.as_str()).collect();
         assert_eq!(texts, vec!["TRIGGER"; 7], "the control: the game's word");
         let colors: Vec<_> = bars.iter().map(|b| b.1).collect();
         assert_eq!(colors, [LIT, BLACK, BLACK, BLACK, BLACK, BLACK, BLACK], "the control: the first selected");
-        let bars = trigger_bars(&[(0, "Invasion", "", false), (2, "Zombies", " *", false), (3, "Moradhim Earth Elemental Invasion", "", false), (6, "Stop everything now", " *", false)]);
+        let bars = trigger_bars(0, &[(0, "Invasion", "", false), (2, "Zombies", " *", false), (3, "Moradhim Earth Elemental Invasion", "", false), (6, "Stop everything now", " *", false)]);
         let texts: Vec<_> = bars.iter().map(|b| b.0.as_str()).collect();
         assert_eq!(texts, ["Invasion", "TRIGGER", "Zombies *", "Moradhim Earth...", "TRIGGER", "TRIGGER", "Stop everyth... *"]);
         assert!(texts.iter().all(|s| s.encode_utf16().count() * 8 <= BAR_WIDTH as usize), "{texts:?}");
@@ -1186,13 +1193,26 @@ mod tests {
     /// unnamed bar is never dimmed.
     #[test]
     fn an_off_trigger_is_drawn_dimmed() {
-        let off = trigger_bars(&[(0, "Fireworks", "", true), (1, "Holiday fireworks", "", true), (2, "Fair", "", false)]);
+        let off = trigger_bars(0, &[(0, "Fireworks", "", true), (1, "Holiday fireworks", "", true), (2, "Fair", "", false)]);
         assert_eq!(off[0], ("Fireworks".into(), DIM_LIT), "off and selected");
         assert_eq!(off[1], ("Holiday fireworks".into(), DIM), "off: the whole name, dimmed");
         assert_eq!(off[2], ("Fair".into(), BLACK), "the control: an on trigger");
         assert_eq!(off[3], ("TRIGGER".into(), BLACK), "the control: unnamed, never dimmed");
-        let on = trigger_bars(&[(0, "Fireworks", "", false), (1, "Holiday fireworks", "", false)]);
+        let on = trigger_bars(0, &[(0, "Fireworks", "", false), (1, "Holiday fireworks", "", false)]);
         assert_eq!((on[0].1, on[1].1), (LIT, BLACK), "the control: the same bars on");
+    }
+
+    /// A name takes the bar's whole width, caps and all, as the game's own
+    /// words do: with caps 20 wide each side (the room between them 100, 12
+    /// characters here), a 17-character name and one with the star are drawn
+    /// whole. The control: an 18-character name, past the bar's 140, is cut
+    /// to it.
+    #[test]
+    fn a_name_takes_the_bars_whole_width() {
+        let bars = trigger_bars(20, &[(0, "Holiday fireworks", "", false), (1, "Merchant fair", " *", false), (2, "Holiday fireworks!", "", false)]);
+        let texts: Vec<_> = bars.iter().map(|b| b.0.as_str()).collect();
+        assert_eq!(texts[..3], ["Holiday fireworks", "Merchant fair *", "Holiday firewo..."]);
+        assert!(texts.iter().all(|s| s.encode_utf16().count() * 8 <= BAR_WIDTH as usize), "nothing past the bar: {texts:?}");
     }
 
     /// `fit_label`: whole when it fits; else cut on a character before a
