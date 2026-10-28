@@ -8,7 +8,10 @@ is put on the page by `.github/workflows/notes.yml`.
 ## 2026-10-28 · Shadows under the characters, fishing, and the GM's TEST menu
 - Every character near the camera now has a shadow under its feet, as on the PS2: a soft dark
   patch on the ground, and on docks, counters and steps, fading where the ground falls away.
-  Options, Extended, World, Shadows turns them off.
+  Inside a building, as on the PS2, only the characters you could see through its doorways
+  and openings cast one. Options, Extended, World, Shadows turns them off.
+- Spell lightning and weapon trails are drawn over the spells' sparks and the shadows, and
+  under the rain and snow, in the PS2's order (they were drawn under the sparks).
 - Fishing works as on the PS2 on a server that offers it (none of ours does yet): the Fishing
   window, its power meter (✕ or the left stick to cast and throw), the catch list (Take All,
   one item, Leave All), its messages, and the splash on the water.
