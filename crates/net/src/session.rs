@@ -306,6 +306,21 @@ pub struct Session {
     pub record: Option<Vec<(u8, Vec<u8>)>>,
 }
 
+/// Where the DRDP clock (`Session::now`) starts: the wall clock's
+/// milliseconds, their low 30 bits. As the whole u32 the clock passed 2^31
+/// at 2026-10-28 00:54:06 UTC, and the loading screen's gears, an animation
+/// begun at 0 on it, stopped every client entering the world; it would have
+/// wrapped at 2026-11-21 21:25:29.7 UTC, and every timer on it that
+/// subtracts as an i64 (the loading screen's, the alarm's, the windows')
+/// would have stalled in a session across that moment. From here it stays
+/// below 2^31 for 12 days of a session and never wraps, as the console's,
+/// which is its own clock since boot. The low 16 bits, the client's drdp
+/// port (`drdp_create_addr`), are the wall clock's as before, and the
+/// instance (the clock at creation) keeps 30 of its bits.
+pub fn clock_base(wall_ms: u128) -> u32 {
+    (wall_ms % (1 << 30)) as u32
+}
+
 fn ipv4(a: &SocketAddr) -> [u8; 4] {
     match a {
         SocketAddr::V4(v) => v.ip().octets(),
@@ -331,7 +346,7 @@ impl Session {
     /// `connect` over any datagram carrier: `local` is the address the
     /// server will see the client at (a relay's own, through one).
     pub fn connect_with(socket: Box<dyn Datagrams>, local: ([u8; 4], u16), server: ([u8; 4], u16), user: &str, token: [u8; 32]) -> Option<Self> {
-        let base = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u32).unwrap_or(1);
+        let base = clock_base(SystemTime::now().duration_since(UNIX_EPOCH).map_or(1, |d| d.as_millis()));
         let mut drdp = Drdp::<Ee>::create_client(Addr { ip: local.0, port: local.1 }, base);
         drdp.set_port_udp(local.1);
         let mut s = Session {
@@ -1070,6 +1085,24 @@ pub fn hour_of(clock: &SyncTime, now: i64) -> Option<vi::fpu::F<Ee>> {
 
 #[cfg(test)]
 mod tests {
+    /// The DRDP clock starts low: the wall clock at 2026-10-28 00:58 UTC,
+    /// past 2^31 as a u32, starts it below 2^30, so 12 days of a session
+    /// stay below 2^31 and it never wraps, its low 16 bits (the drdp port)
+    /// the wall clock's as before; any wall clock does. The control: the
+    /// whole u32 started past 2^31.
+    #[test]
+    fn the_clock_starts_below_2_pow_30() {
+        let today: u128 = 1_793_149_080_000;
+        let b = super::clock_base(today);
+        assert!(b < 1 << 30, "{b}");
+        assert_eq!(b & 0xFFFF, today as u32 & 0xFFFF, "the port's bits");
+        assert!(b + 12 * 24 * 3_600_000 < 1 << 31, "12 days");
+        assert!(today as u32 >= 1 << 31, "the control: the u32 itself");
+        for wall in [0u128, 1, (1 << 30) - 1, 1 << 30, 1 << 31, (1 << 32) - 1, 1 << 32, u64::MAX as u128, u128::MAX] {
+            assert!(super::clock_base(wall) < 1 << 30, "{wall}");
+        }
+    }
+
     /// `VISyncTime` as visynctime.cpp has it: the first reading taken as it
     /// is and read forward on the local clock; a later one blended in over
     /// 60,000 of it (half the difference halfway, all of it after), never

@@ -5,6 +5,13 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-28 · The game's clock can no longer run out mid-session
+- The game's network clock now starts from a small number each time you log in, so it can
+  never reach the size that stopped the loading screen this morning, and it no longer runs
+  out on November 21 (it would have frozen the loading screen, the alarm and some windows'
+  timing for anyone playing at that moment, until they logged in again). Nothing changes in
+  how the game plays.
+
 ## 2026-10-28 · Entering the world no longer closes the game
 - Since about 00:55 UTC on October 28 the game closed itself as you entered the world, on
   every server, at the loading screen. Its turning gears were timed by a clock that counts
