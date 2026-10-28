@@ -200,13 +200,26 @@ pub fn quality(power: i32) -> i32 {
     }
 }
 
+/// How `FindWater` decided.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Landing {
+    /// something between the rod and the end (the first ray)
+    Blocked,
+    /// no water (or slime) surface under the end (the environment ray)
+    NoWater,
+    /// something solid under the end above the surface
+    Solid,
+    /// on the water, there
+    Water(Vect3<Ee>),
+}
+
 /// `FindWater(actor, pos, hpr, scene, out)`: where a line cast from `pos`
 /// ten units along the heading `hpr.x` lands. Nothing may be in the way from
 /// one above `pos` to one above the end; an environment ray (water or
 /// slime, `VITransEnvRay` mask 3) from one above the end to ten below must
 /// cross a surface, and a ray down the same line must hit nothing solid
-/// before it. The surface's point, or None.
-pub fn find_water(sc: &mut World<Ee>, actor: i32, pos: Vect3<Ee>, hpr: Vect3<Ee>) -> Option<Vect3<Ee>> {
+/// before it.
+pub fn landing(sc: &mut World<Ee>, actor: i32, pos: Vect3<Ee>, hpr: Vect3<Ee>) -> Landing {
     let mut start = pos;
     start.y += F::ONE;
     let mut out = pos;
@@ -221,21 +234,29 @@ pub fn find_water(sc: &mut World<Ee>, actor: i32, pos: Vect3<Ee>, hpr: Vect3<Ee>
     let mut ray = CollRay::default();
     ray.init(start, a);
     if sc.collide_ray(&mut ray, &mut filter) {
-        return None;
+        return Landing::Blocked;
     }
     if !sc.collide_env(&mut env) {
-        return None;
+        return Landing::NoWater;
     }
     let t = env.hit_time;
     let at = env.hit_point();
     ray.init(a, b);
     if !sc.collide_ray(&mut ray, &mut filter) {
-        return Some(at);
+        return Landing::Water(at);
     }
     if ray.hit_time < t {
-        return None;
+        return Landing::Solid;
     }
-    Some(at)
+    Landing::Water(at)
+}
+
+/// `FindWater`'s answer: the surface's point, or None.
+pub fn find_water(sc: &mut World<Ee>, actor: i32, pos: Vect3<Ee>, hpr: Vect3<Ee>) -> Option<Vect3<Ee>> {
+    match landing(sc, actor, pos, hpr) {
+        Landing::Water(at) => Some(at),
+        _ => None,
+    }
 }
 
 /// What the window asks of the client.
@@ -528,7 +549,7 @@ impl FishingWnd {
     }
 
     /// `Rename`: the edit box, one line of 127 characters round (320, 224),
-    /// takes the keys (its text kept from the last).
+    /// takes the keys (empty: `SetMaxLength` makes its buffer anew).
     fn rename(&mut self, chat: Option<&mut WndChat>, now_ms: i64) {
         self.chat_off(chat);
         self.edit.set_rows(1);
@@ -884,5 +905,413 @@ impl SplashFx {
     #[cfg(test)]
     pub fn count(&self) -> usize {
         self.sys.particle_count(self.emitter)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pointer::testing::{NullRaster, vui};
+    use net::dump::Item;
+
+    fn record(id: i64, quantity: i64, key: u32, name: &str) -> NetItem {
+        let item = Item { id, max_stack: 50, name: name.into(), wear_slot: -1, rent: 1, icon: 100 + id, ..Default::default() };
+        NetItem { quantity, equip_slot: -1, quick_slot: -1, inv_index: key, item, ..Default::default() }
+    }
+
+    /// A worn pole (wear 20 in equipment slot 14, `hp` hit points) and a
+    /// worn bait (wear 21 in 15), each when asked for.
+    fn gear(pole: Option<i64>, bait: bool) -> ItemList {
+        let mut l = ItemList::default();
+        if let Some(hp) = pole {
+            let mut p = record(1806, 1, 1, "Fishing Pole");
+            p.item.wear_slot = WEAR_POLE;
+            p.equip_slot = EQUIP_POLE;
+            p.cur_hp = hp;
+            l.items.push(p);
+        }
+        if bait {
+            let mut b = record(1807, 20, 2, "can of worms");
+            b.item.wear_slot = WEAR_BAIT;
+            b.equip_slot = 15;
+            l.items.push(b);
+        }
+        l
+    }
+
+    fn info<'a>(vui: &'a Vui, inv: &'a ItemList, base: &'a [i32; 29]) -> Info<'a> {
+        Info { words: &vui.words, inv, hp: [0; 4], base, class: 0, level: 1, attack_words: &[] }
+    }
+
+    /// Every 0x0F01, byte for byte: the opcode (0x0F01 little-endian), the
+    /// sub-op, then Cast's quality and Keep's key and count as raw words
+    /// (`WriteU32`). The control: a seven-bit (zigzag) quality, as the
+    /// client writes most numbers, is not what goes.
+    #[test]
+    fn the_messages_to_the_server() {
+        assert_eq!(cast_msg(5), vec![0x01, 0x0F, 1, 5, 0, 0, 0]);
+        assert_eq!(cast_msg(0), vec![0x01, 0x0F, 1, 0, 0, 0, 0]);
+        assert_eq!(sub_msg(2), vec![0x01, 0x0F, 2], "Cancel");
+        assert_eq!(sub_msg(3), vec![0x01, 0x0F, 3], "Reel");
+        assert_eq!(sub_msg(4), vec![0x01, 0x0F, 4], "Pull");
+        assert_eq!(keep_msg(0x0102_0304, 3), vec![0x01, 0x0F, 5, 4, 3, 2, 1, 3, 0, 0, 0]);
+        let mut w = Writer::op(OP_OUT);
+        w.u8(1).signed(15);
+        assert_ne!(w.data, cast_msg(15), "the control: zigzag is another message");
+    }
+
+    /// `Cast(quality)` checks the pole and the bait: none worn (1464), no
+    /// bait (1465), a pole of no hit points (1466) send nothing and leave
+    /// the state; with both, word 1433 for a perfect cast (0), 1432 for any
+    /// other, the cast sent, state 2. The control: the same item carried but
+    /// not worn (equipment slot -1) is no pole.
+    #[test]
+    fn a_cast_needs_a_worn_pole_and_bait() {
+        let mut p = Part { state: state::WAITING, ..Default::default() };
+        assert_eq!(p.cast(&gear(None, true), 0), (1464, None));
+        assert_eq!(p.cast(&gear(Some(1000), false), 0), (1465, None));
+        assert_eq!(p.cast(&gear(Some(0), true), 0), (1466, None));
+        assert_eq!(p.state, state::WAITING);
+        let mut carried = gear(Some(1000), true);
+        carried.items[0].equip_slot = -1;
+        assert_eq!(p.cast(&carried, 0), (1464, None), "the control: carried, not worn");
+        assert_eq!(p.cast(&gear(Some(1000), true), 0), (1433, Some(cast_msg(0))));
+        assert_eq!(p.state, state::CAST);
+        assert_eq!(p.cast(&gear(Some(1), true), 15), (1432, Some(cast_msg(15))));
+    }
+
+    /// `Keep` sends the record's key (`GetSlotId`, not the slot) and goes to
+    /// 4, and does nothing more until the server answers; the control: a
+    /// second Keep while keeping sends nothing.
+    #[test]
+    fn keeping_one_waits_for_the_answer() {
+        let mut p = Part { state: state::CAUGHT, catch: ItemList { p04: 0, items: vec![record(1329, 3, 40, "grass carp"), record(1223, 1, 41, "soup")] } };
+        assert_eq!(p.keep(1, 1), Some(keep_msg(41, 1)));
+        assert_eq!(p.state, state::KEEPING);
+        assert_eq!(p.keep(0, 3), None, "the control: one at a time");
+    }
+
+    /// `Splash`'s thresholds, unsigned: 56..63 a perfect cast (0), 41..78 a
+    /// fair one (5), else 15, at each edge. The control: the same tests
+    /// signed would make every power under 56 perfect.
+    #[test]
+    fn the_casts_quality_by_power() {
+        let want = [(0, 15), (40, 15), (41, 5), (55, 5), (56, 0), (63, 0), (64, 5), (78, 5), (79, 15), (120, 15)];
+        for (power, q) in want {
+            assert_eq!(quality(power), q, "power {power}");
+        }
+        let signed = |p: i32| if p - 56 < 8 { 0 } else if p - 41 < 38 { 5 } else { 15 };
+        assert_ne!(signed(40), quality(40), "the control: signed, 40 is perfect");
+    }
+
+    /// `Tick` at its boundaries, on the tick clock (983.04 a second): the
+    /// meter stays full to 500, falls from 501 (119) to 1500 (0), rises from
+    /// 1501 to 2499 (119), where a release throws (the power then is the
+    /// cast's); at 2500 it throws itself full. From the throw: nothing to
+    /// 1000, the splash 1001..1500 (on water), the cast over past 2500. The
+    /// controls: a release while it falls throws nothing (and is
+    /// forgotten), and so does the stick pushed only to -0.25.
+    #[test]
+    fn the_meter_and_the_splash_at_their_boundaries() {
+        let still = F::<Ee>::ZERO;
+        let mut w = FishingWnd::default();
+        w.cast(1000);
+        let at = |w: &mut FishingWnd, dt: i64| {
+            let threw = w.tick(1000 + dt, still);
+            (w.power, threw)
+        };
+        assert_eq!(at(&mut w, 500), (120, false));
+        assert_eq!(at(&mut w, 501), (119, false));
+        assert_eq!(at(&mut w, 1000), (60, false));
+        w.release = true;
+        assert_eq!(at(&mut w, 1500), (0, false), "the control: a release while it falls");
+        assert!(!w.release, "and it is forgotten");
+        assert_eq!(at(&mut w, 1501), (0, false));
+        assert_eq!(at(&mut w, 2000), (60, false));
+        assert_eq!(at(&mut w, 2499), (119, false));
+        assert!(!w.tick(1000 + 2200, F::new(-0.25)), "the control: -0.25 is not past it");
+        assert_eq!(w.tick(1000 + 2200, F::new(-0.26)), true, "the stick pushed forward throws");
+        // 0.7 x 120 chopped, as the EE's multiply leaves it: 83 (the
+        // control: the host's IEEE rounding would make it 84)
+        assert_eq!((w.power, w.quality, w.splash_time), (83, 15, 3200));
+        assert_eq!((700.0f32 / 1000.0 * 120.0) as i32, 84, "the control: IEEE");
+        // thrown: the meter holds, the splash after 1000 on water only
+        w.water(Some(Vect3::of(1.0, 2.0, 3.0)), true);
+        for (d, emit, casting) in [(1000, false, true), (1001, true, true), (1500, true, true), (1501, false, true), (2500, false, true), (2501, false, false)] {
+            w.tick(3200 + d, still);
+            assert_eq!((w.emitting, w.casting), (emit, casting), "{d} after the throw");
+        }
+        // full at the top: thrown itself at 2500, a power of 120
+        let mut v = FishingWnd::default();
+        v.cast(0);
+        assert!(!v.tick(2499, still));
+        assert!(v.tick(2500, still));
+        assert_eq!((v.power, v.quality), (120, 15));
+        // a release in the rising part: thrown at that power
+        let mut u = FishingWnd::default();
+        u.cast(0);
+        u.tick(2058, still);
+        u.release = true;
+        assert!(u.tick(2059, still));
+        assert_eq!((u.power, u.quality), (67, 5));
+        // off the water: no splash however long
+        let mut o = FishingWnd::default();
+        o.cast(0);
+        assert!(o.tick(2500, still));
+        o.water(None, true);
+        o.tick(3800, still);
+        assert!(!o.emitting && !o.hit);
+    }
+
+    /// The catch list (`FillBait`) out of a real catch (0x0F02 7's bytes,
+    /// as `VIItemList::Read` reads them): "TAKE ALL" (118) on top, a stack
+    /// with its count (type 5), one alone (1), "LEAVE ALL" (119), then
+    /// empty rows to 42; no catch, "Empty" (641) alone. The selected item is
+    /// described (`DescribeItem`); the heading row, nothing.
+    #[test]
+    fn the_catch_list_from_a_catch() {
+        let mut w = Writer::default();
+        w.u8(7).signed(2).u32(2);
+        for (id, n, key, name) in [(1329i64, 3i64, 10u32, "grass carp"), (1223, 1, 11, "sondereel fish soup")] {
+            w.signed(n).signed(0).signed(0).signed(-1).signed(-1).u32(key);
+            for v in [id, 0, 0, 7000 + id, 0, -1, 0, 0, 1, 0, 0, 0, 0, 1, 50, 0, 0, 0x7FFF, 0x3FF, 0, 0, 0, 0] {
+                w.signed(v);
+            }
+            w.wide(name).wide("").signed(0);
+        }
+        let Some(Recv::Loot(catch)) = read_0f02(&w.data) else { panic!("not read") };
+        let vui = vui();
+        let base = [0; 29];
+        let inv = ItemList::default();
+        let mut f = FishingWnd::default();
+        f.fill_bait(&catch, &info(&vui, &inv, &base), &|it| it.item.icon as i32);
+        let rows: Vec<_> = f.list.items[..5].iter().map(|r| (r.flags, r.icon, r.word, r.number)).collect();
+        assert_eq!(rows, vec![(2, -1, 118, 0), (5, 8329, -1, 3), (1, 8223, -1, 1), (2, -1, 119, 0), (0, -1, -1, 0)]);
+        assert!(f.list.items[4..].iter().all(|r| r.flags == 0) && f.list.items.len() == ROWS);
+        assert!(f.desc.is_empty(), "the heading: nothing to describe");
+        f.list.sel = 2;
+        f.fill_bait(&catch, &info(&vui, &inv, &base), &|it| it.item.icon as i32);
+        assert_eq!(String::from_utf16_lossy(&f.desc), "sondereel fish soup");
+        f.fill_bait(&ItemList::default(), &info(&vui, &inv, &base), &|_| 0);
+        assert_eq!((f.list.items[0].word, f.list.items[1].flags), (641, 0), "the control: no catch, Empty alone");
+    }
+
+    /// The catch list's keys: Enter on the top row Reels (3), on an item
+    /// Keeps it (5, its key and count), on the row after them Pulls (4);
+    /// each with sound 13. Escape (△) is the window's: with the catch up
+    /// (state 3) Pull, else Cancel (2). The control: ✕ with no list is the
+    /// cast, and sends nothing.
+    #[test]
+    fn the_catch_lists_rows_and_the_back_key() {
+        let (vui, r) = (vui(), NullRaster);
+        let mut part = Part { state: state::CAUGHT, catch: ItemList { p04: 0, items: vec![record(1329, 3, 40, "grass carp"), record(1223, 1, 41, "soup")] } };
+        let mut w = FishingWnd::default();
+        let mut cues = Vec::new();
+        w.open_bait(None, 0, &mut cues);
+        let press = |w: &mut FishingWnd, part: &mut Part, cues: &mut Vec<i32>, sel: i32, key: i32| {
+            w.list.sel = sel;
+            let mut out = Vec::new();
+            w.key(&vui, &r, part, None, key, true, 0, 0, cues, &mut out);
+            out
+        };
+        assert_eq!(press(&mut w, &mut part, &mut cues, 0, 134), vec![FishOut::Send(sub_msg(3))]);
+        assert_eq!(press(&mut w, &mut part, &mut cues, 1, 13), vec![FishOut::Send(keep_msg(40, 3))]);
+        part.state = state::CAUGHT;
+        assert_eq!(press(&mut w, &mut part, &mut cues, 3, 134), vec![FishOut::Send(sub_msg(4))]);
+        assert_eq!(press(&mut w, &mut part, &mut cues, 4, 134), vec![], "past the rows: nothing");
+        assert_eq!(press(&mut w, &mut part, &mut cues, 0, 132), vec![FishOut::Send(sub_msg(4))], "△ with the catch up");
+        part.state = state::WAITING;
+        assert_eq!(press(&mut w, &mut part, &mut cues, 0, 27), vec![FishOut::Send(sub_msg(2))], "Escape: Cancel");
+        assert_eq!(cues, vec![15, 13, 13, 13, 13, 8, 8]);
+        w.close_bait();
+        assert_eq!(press(&mut w, &mut part, &mut cues, 0, 134), vec![], "the control: ✕ casts");
+        assert!(w.casting && w.power == 120);
+    }
+
+    /// The window through a pointer: with the catch up, a click selects the
+    /// list's row where it was drawn and a second one picks it; with the
+    /// edit box up its own; with neither nothing (the legend's glyphs are
+    /// the HUD's). The control: before a draw has noted the rows, a click
+    /// finds none.
+    #[test]
+    fn a_pointer_on_the_catch() {
+        use crate::pointer::{MOVED, key};
+        let (vui, mut r) = (vui(), NullRaster);
+        let base = [0; 29];
+        let inv = gear(Some(1000), true);
+        let mut part = Part { state: state::CAUGHT, catch: ItemList { p04: 0, items: vec![record(1329, 3, 40, "grass carp")] } };
+        let mut w = FishingWnd::default();
+        let mut cues = Vec::new();
+        w.focus(&mut cues);
+        w.open_bait(None, 0, &mut cues);
+        let row = |i: i32| [10.0 + 57.0, 58.0 + 44.0 * i as f32 + 22.0];
+        assert!(w.point(row(1)).is_empty(), "the control: nothing drawn yet");
+        let mut out = Vec::new();
+        w.draw(&vui, &mut r, &mut part, &info(&vui, &inv, &base), &|_| 1, 0, 0, F::ZERO, &mut cues, &mut out);
+        assert_eq!(w.point(row(1)), vec![MOVED]);
+        assert_eq!(w.list.sel, 1);
+        assert_eq!(w.point(row(1)), vec![key::CROSS]);
+        assert!(w.point(row(3)).is_empty(), "past LEAVE ALL: no row");
+        w.close_bait();
+        assert!(w.point(row(1)).is_empty(), "no list, no rows");
+    }
+
+    /// `Rename`: Enter (or R3) opens the edit box (not with the catch up),
+    /// what it is given typed, and its Done sends the line (`ChatLine`);
+    /// the next opens empty. The controls: with the catch up
+    /// (state 3) Enter opens nothing, and the box's Cancel sends nothing.
+    #[test]
+    fn the_chat_line() {
+        let (vui, r) = (vui(), NullRaster);
+        let mut part = Part { state: state::WAITING, ..Default::default() };
+        let mut w = FishingWnd::default();
+        let mut cues = Vec::new();
+        let mut out = Vec::new();
+        for k in [13, 'h' as i32, 'i' as i32, 13] {
+            w.key(&vui, &r, &mut part, None, k, true, 0, 0, &mut cues, &mut out);
+        }
+        assert_eq!(out, vec![FishOut::ChatLine("hi".into())]);
+        assert!(!w.edit_visible);
+        out.clear();
+        w.key(&vui, &r, &mut part, None, 147, true, 0, 0, &mut cues, &mut out);
+        assert!(w.edit_visible && w.edit.text.is_empty(), "R3: the box, empty again");
+        w.key(&vui, &r, &mut part, None, 27, true, 0, 0, &mut cues, &mut out);
+        assert!(out.is_empty() && !w.edit_visible, "the control: cancelled, nothing said");
+        part.state = state::CAUGHT;
+        w.key(&vui, &r, &mut part, None, 13, true, 0, 0, &mut cues, &mut out);
+        assert!(!w.edit_visible, "the control: not with the catch up");
+    }
+
+    /// C (or R2) held scrolls the chat box (`ChatOn`): its up and down go to
+    /// the box while held, and letting go ends the scroll and lets the
+    /// arrow go. The control: up and down without C held do nothing to it.
+    #[test]
+    fn c_held_scrolls_the_chat_box() {
+        let (vui, r) = (vui(), NullRaster);
+        let mut chat = WndChat::new();
+        for i in 0..8 {
+            chat.text.add_text(&wide(&format!("line {i}")), [1.0; 4], 0, |s| s.len() as i32 * 8);
+        }
+        let mut part = Part { state: state::WAITING, ..Default::default() };
+        let mut w = FishingWnd::default();
+        let (mut cues, mut out) = (Vec::new(), Vec::new());
+        w.key(&vui, &r, &mut part, Some(&mut chat), 19, true, 0, 0, &mut cues, &mut out);
+        assert!(chat.cues.is_empty(), "the control: not scrolling");
+        w.key(&vui, &r, &mut part, Some(&mut chat), 99, true, 0, 0, &mut cues, &mut out);
+        assert!(w.chat_on);
+        w.key(&vui, &r, &mut part, Some(&mut chat), 19, true, 0, 0, &mut cues, &mut out);
+        assert_eq!((chat.cues.clone(), w.chat_key), (vec![11], 19), "a line up");
+        w.key(&vui, &r, &mut part, Some(&mut chat), 99, false, 0, 0, &mut cues, &mut out);
+        assert!(!w.chat_on && w.chat_key == 0);
+    }
+
+    /// The message box: a line shows 5,000 ticks (5.09 s) on VITimer's
+    /// clock, then goes; the control: at 4,999 it is still up.
+    #[test]
+    fn a_message_lasts_five_thousand_ticks() {
+        let (vui, mut r) = (vui(), NullRaster);
+        let base = [0; 29];
+        let inv = ItemList::default();
+        let mut part = Part::default();
+        let mut w = FishingWnd::default();
+        let mut cues = Vec::new();
+        w.focus(&mut cues);
+        w.set_text(&wide("Let's go fishing!"), 100);
+        let mut out = Vec::new();
+        let mut draw = |w: &mut FishingWnd, now: i64| w.draw(&vui, &mut r, &mut part, &info(&vui, &inv, &base), &|_| 0, now, 0, F::ZERO, &mut cues, &mut out);
+        draw(&mut w, 100 + 4999);
+        assert_eq!(w.text, wide("Let's go fishing!"), "the control: still up");
+        assert_eq!(w.win3.title.chars(), wide("Let's go fishing!"), "on the box's bar");
+        draw(&mut w, 100 + 5000);
+        assert!(w.text.is_empty() && w.text_end == 0);
+    }
+
+    /// The meter's power rows: `power` of them up from 264, blue at the top
+    /// to white at the bottom at 0.7; none at 0 (`if (m_power)`).
+    #[test]
+    fn the_meters_ramp() {
+        let rows = meter_rows(120);
+        assert_eq!((rows.len(), rows[0].0, rows[119].0), (120, 144, 263));
+        assert!(rows[0].1[0] < 0.01 && rows[0].1[2] == 1.0, "blue at the top");
+        assert!(rows[119].1[0] > 0.99 && rows[119].1.iter().all(|&c| c > 0.69), "white at the bottom");
+        assert!(rows.windows(2).all(|w| w[0].1[0] < w[1].1[0]), "lighter down");
+        assert_eq!(meter_rows(1), vec![(263, [0.5, 0.5, 1.0, 0.7])]);
+    }
+
+    /// `LoadTargetEffect`'s definition: its texture, blend 1, the fountain's
+    /// attributes and the 32-step ramp from (0.8, 0.8, 1) to white. An
+    /// emitter on it placed and updated a second at 30 frames makes about
+    /// a hundred particles; the control: not updated, none.
+    #[test]
+    fn the_splash() {
+        let d = splash_definition();
+        assert_eq!((d.texture, d.blend, d.zwrite, d.ztest, d.tex_config), (SPLASH_TEXTURE, 1, false, true, 1));
+        let a = &d.attrs;
+        assert_eq!((a.birthrate.0, a.lifespan.0, a.start_size.0, a.end_size.0, a.gravity.0), (100.0, 0.8, 0.2, 0.2, -5.0));
+        assert_eq!((a.nozzle_axis.y.0, a.nozzle_hpr_var.x.0, a.nozzle_hpr_var_set), (1.0, 0.39, 1));
+        assert_eq!((a.gradient[0].r.0, a.gradient[0].b.0), (0.8, 1.0));
+        assert!((a.gradient[31].r.0 - 0.99375).abs() < 1e-6 && a.gradient[16].g.0 == 0.9);
+        let mut sys = vi::particle::System::<Ee>::new(0, 2000);
+        let id = sys.add_definition(d);
+        let e = sys.create_emitter(id);
+        let mut fx = SplashFx { sys, rand: vi::csprite::Rand(1), emitter: e };
+        fx.place(Vect3::of(10.0, 51.32, 20.0));
+        let mut n = 0;
+        for k in 1..=30 {
+            fx.render(k * 33);
+            fx.update();
+            n = n.max(fx.count());
+        }
+        assert!((70..=110).contains(&n), "{n} particles live");
+        let mut quiet = SplashFx { sys: vi::particle::System::new(0, 2000), rand: vi::csprite::Rand(1), emitter: 0 };
+        let d2 = quiet.sys.add_definition(splash_definition());
+        quiet.emitter = quiet.sys.create_emitter(d2);
+        quiet.render(500);
+        assert_eq!(quiet.count(), 0, "the control: no births without Update");
+    }
+
+    /// `FindWater` on the real Freeport docks (TUNARIA.ESF round the dock
+    /// Ltcomdata stands on), every one of its outcomes: on the planks over
+    /// the sea at (25400, 15816.95) a cast lands on the water (y 51.32,
+    /// the sea's surface: water just under it, not just over) in eleven of
+    /// sixteen headings; at the pier's foot (25330, 15771.95) a cast inland
+    /// is blocked by the first ray; out over the planks at (25505, 15721.95)
+    /// the water under the end is under the deck (solid first); on the roof
+    /// at (25340, 15721.95) there is no water at all. The controls: where it
+    /// says solid or blocked, the environment ray alone does find the water,
+    /// so it is the solid and the first ray that refuse it.
+    #[test]
+    fn find_water_on_freeports_docks() {
+        let (x, z) = (25330.0f32, 15721.95f32);
+        let Some(mut w) = crate::walker::tests::tunaria_round(x, z) else { return };
+        let mut at = |w: &mut World<Ee>, px: f32, pz: f32| -> Vec<Landing> {
+            let y = crate::walker::ground(w, px, pz).expect("ground");
+            (0..16).map(|k| landing(w, -1, Vect3::of(px, y, pz), Vect3::of(k as f32 * std::f32::consts::PI / 8.0, 0.0, 0.0))).collect()
+        };
+        let code = |l: &[Landing]| -> String {
+            l.iter().map(|l| match l { Landing::Blocked => 'B', Landing::NoWater => '-', Landing::Solid => 'S', Landing::Water(_) => 'W' }).collect()
+        };
+        let planks = at(&mut w, 25400.0, 15816.95);
+        assert_eq!(code(&planks), "WWWWBWSSSSWWWWWW");
+        let Landing::Water(p) = planks[0] else { unreachable!() };
+        assert!((p.y.0 - 51.32).abs() < 0.01, "{p:?}");
+        assert_eq!(w.env_flags(&Vect3::of(p.x.0, p.y.0 - 0.05, p.z.0)) & 1, 1, "water under the surface");
+        assert_eq!(w.env_flags(&Vect3::of(p.x.0, p.y.0 + 0.05, p.z.0)) & 1, 0, "not over it");
+        assert_eq!(code(&at(&mut w, 25330.0, 15771.95)), "WWWWWWWWBBBBBBBW");
+        assert_eq!(code(&at(&mut w, 25505.0, 15721.95)), "SBWSSSSSSSSSSSSS");
+        assert_eq!(code(&at(&mut w, 25340.0, 15721.95)), "-----BBBBB------");
+        // the controls: the environment ray alone at a solid and a blocked end
+        let env_alone = |w: &mut World<Ee>, px: f32, pz: f32, h: f32| {
+            let y = crate::walker::ground(w, px, pz).unwrap();
+            let mut d = Vect3::<Ee>::default();
+            d.hpr(F::new(h), F::ZERO, F::ZERO);
+            let mut end = Vect3::<Ee>::of(px, y, pz);
+            end.add_scaled(&d, F::new(10.0));
+            let mut env = EnvRay::default();
+            env.init(Vect3::new(end.x, end.y + F::ONE, end.z), Vect3::new(end.x, end.y - F::new(10.0), end.z), 3);
+            w.collide_env(&mut env)
+        };
+        assert!(env_alone(&mut w, 25505.0, 15721.95, 0.0), "under the deck there is water");
+        assert!(env_alone(&mut w, 25400.0, 15816.95, std::f32::consts::PI / 2.0), "past the post there is water");
     }
 }

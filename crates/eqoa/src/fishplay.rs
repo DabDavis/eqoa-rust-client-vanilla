@@ -281,8 +281,6 @@ impl Play {
 mod tests {
     use super::*;
     use net::dump::{Item, ItemList, NetItem};
-    #[allow(unused_imports)]
-    use ItemList as _;
     use net::session::{Player, Session};
 
     /// Play on a session nothing answers (as `play`'s own tests make it),
@@ -338,5 +336,110 @@ mod tests {
         }
         // the control: cut short, nothing
         assert!(crate::fishing::read_0f02(&b[..b.len() - 3]).is_none());
+    }
+
+    fn op(p: &mut Play, data: &[u8]) -> bool {
+        p.fishing_opcode(crate::fishing::OP_IN, data)
+    }
+
+    fn says(p: &Play) -> String {
+        String::from_utf16_lossy(&p.fish.wnd.text)
+    }
+
+    /// A session as the server drives it (`Recv0F02`'s ten cases): Start
+    /// opens the window from play (mode 36, sound 15, "Let's go fishing!",
+    /// state 1); the catch (7) opens the list (state 3); a caught item (4)
+    /// goes into the inventory, unequipped, and off the line; 6 closes the
+    /// list (state 1); 8, 9 and 10 their words (state 1), 10's twice with a
+    /// broken pole worn; 5 and 3 the state; Stop (2) closes it (mode 0,
+    /// state 0, the catch gone). The controls: a sub-op with no case, an
+    /// empty message and a Caught for a slot the line does not hold change
+    /// nothing; another opcode is not fishing's.
+    #[test]
+    fn a_session_from_start_to_stop() {
+        let mut p = play();
+        assert!(op(&mut p, &[1]));
+        assert_eq!((p.mode, p.fish.part.state, says(&p)), (36, 1, "(word 1431)".into()));
+        assert!(matches!(p.cues.last(), Some(crate::sound::Cue::Ui(15))));
+        let catch = loot_bytes(&[(1329, 3, "grass carp"), (1223, 1, "sondereel fish soup")]);
+        assert!(op(&mut p, &catch));
+        assert_eq!((p.fish.part.state, p.fish.part.catch.items.len(), p.fish.wnd.list_visible, says(&p)), (3, 2, true, "(word 1434)".into()));
+        // Caught(0): the carp in, the soup left on the line
+        assert!(op(&mut p, &[4, 0, 0, 0, 0, 3, 0, 0, 0]));
+        let inv: Vec<_> = p.dump.inventory.items.iter().map(|i| (i.item.id, i.quantity, i.equip_slot)).collect();
+        assert_eq!(inv, vec![(1329, 3, -1)]);
+        assert_eq!(p.fish.part.catch.items.len(), 1);
+        // the controls: a slot the line does not hold, a sub-op with no case
+        assert!(op(&mut p, &[4, 5, 0, 0, 0, 1, 0, 0, 0]));
+        assert!(op(&mut p, &[11]));
+        assert!(op(&mut p, &[]));
+        assert_eq!((p.dump.inventory.items.len(), p.fish.part.catch.items.len(), p.fish.part.state), (1, 1, 3));
+        assert!(op(&mut p, &[6]));
+        assert_eq!((p.fish.part.state, p.fish.wnd.list_visible), (1, false));
+        for (b, w) in [(8u8, 1435), (9, 1436), (10, 1437)] {
+            let lines = p.chat.len();
+            assert!(op(&mut p, &[b]));
+            assert_eq!((p.fish.part.state, says(&p), p.chat.len()), (1, format!("(word {w})"), lines), "sub-op {b}");
+        }
+        // a worn pole of no hit points: 10 says it in the chat box too
+        let mut pole = record(1806, 1, 9, 1, "Fishing Pole");
+        pole.item.wear_slot = 20;
+        pole.equip_slot = 14;
+        p.dump.inventory.items.push(pole);
+        assert!(op(&mut p, &[10]));
+        assert_eq!(p.chat.back().map(|l| l.0.as_str()), Some("(word 1437)"));
+        assert!(op(&mut p, &[5]));
+        assert_eq!(p.fish.part.state, 3);
+        assert!(op(&mut p, &[3]));
+        assert_eq!(p.fish.part.state, 1);
+        assert!(op(&mut p, &[2]));
+        assert_eq!((p.mode, p.fish.part.state, p.fish.part.catch.items.len()), (0, 0, 0));
+        assert!(!p.fishing_opcode(0x0F01, &[1]), "the control: not fishing's opcode");
+        assert!(sent(&mut p).is_empty(), "nothing asked of the server");
+    }
+
+    /// `OpenFishing` from another window (not `IsLootable`): the session is
+    /// cancelled (0x0F01 2) and the mode left as it was; Msg00B2 cancels a
+    /// session going. The controls: from play it opens and sends nothing,
+    /// and with no session Msg00B2 sends nothing.
+    #[test]
+    fn a_start_from_another_window_or_a_move_cancels() {
+        let mut p = play();
+        p.mode = 13;
+        assert!(op(&mut p, &[1]));
+        assert_eq!((p.mode, p.fish.part.state), (13, 1));
+        assert_eq!(sent(&mut p), vec![vec![0x01, 0x0F, 2]]);
+        p.fishing_respawn();
+        assert_eq!(sent(&mut p), vec![vec![0x01, 0x0F, 2]], "Msg00B2 with a session");
+        let mut q = play();
+        assert!(op(&mut q, &[1]));
+        assert_eq!(q.mode, 36);
+        assert!(sent(&mut q).is_empty(), "the control: from play");
+        q.fish.part.state = 0;
+        q.fishing_respawn();
+        assert!(sent(&mut q).is_empty(), "the control: no session");
+    }
+
+    /// The window's keys reach it in mode 36 only (`window_key`), and a
+    /// mode left (Msg00B2's `SetMode(0)`) forgets the chat box's scroll as
+    /// the focus going does; the control: the window keeps its keys for its
+    /// own frame.
+    #[test]
+    fn the_window_has_the_keys_in_its_mode() {
+        let mut p = play();
+        assert!(op(&mut p, &[1]));
+        assert!(p.window_key(134, true), "the window's");
+        assert_eq!(p.fish.keys, vec![(134, true)], "the control: kept for its frame");
+        p.fish.wnd.chat_on = true;
+        p.fish.was_up = true;
+        p.mode = 0;
+        assert!(!p.fishing_owns());
+        p.fish.keys.clear();
+        // run_fishing's first lines, without a HUD: the focus lost
+        let up = owns(p.mode);
+        if p.fish.was_up && !up {
+            p.fish.wnd.blur();
+        }
+        assert!(!p.fish.wnd.chat_on);
     }
 }
