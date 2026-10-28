@@ -2688,6 +2688,7 @@ impl Play {
         // Extrapolate: each actor where the entity is drawn
         self.place_actors(walker, lib);
         self.spells_frame(walker, lib, game_ms, sound);
+        self.fishing_frame(walker, lib, game_ms);
         self.draw_projectiles(walker, lib, &mut g);
         // the player's own swing, on its walker's pose
         if let (Some(p), Some(cs)) = (self.self_puppet.as_mut(), walker.sprite.as_mut()) {
@@ -7004,7 +7005,7 @@ impl Play {
             self.run_guild(vui, &mut r);
             self.run_mail(vui, &mut r);
             self.run_support(vui, &mut r);
-            self.run_fishing(vui, &mut r);
+            self.run_fishing(vui, &mut r, walker);
             self.run_admin(vui, &mut r);
             self.run_edit(vui, &r);
             if self.mode == 2 {

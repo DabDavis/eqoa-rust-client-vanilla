@@ -99,6 +99,7 @@ mod itemmenu;
 mod classmastery;
 mod cs;
 mod faction;
+mod fishing;
 mod loading;
 mod lod;
 mod loot;

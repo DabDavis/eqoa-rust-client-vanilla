@@ -397,6 +397,36 @@ impl Info<'_> {
         d
     }
 
+    /// `DescribeItem(dst, size, item)` (0x00C06C50): a record the caller
+    /// holds (the fishing window's catch), as `DescribeLootItem` writes a
+    /// corpse's but with the flags' words on the record's own nonzero
+    /// fields (`m_noTrade`, `m_lore`), where the corpse's ask `> 0`.
+    pub fn describe_item(&self, it: &NetItem) -> String {
+        let it = &it.item;
+        let mut d = it.name.clone();
+        if it.p4c != 0 || it.wear_slot != -1 {
+            d += "\n";
+            self.mask(&mut d, 289, it.race_mask, &RACE_SHORT);
+            d += "\n";
+            self.mask(&mut d, 288, it.class_mask, &CLASS_SHORT);
+            d += "\n";
+            self.level(&mut d, it.level_req);
+        }
+        if it.no_trade != 0 || it.rent == 0 || it.lore != 0 {
+            d += "\n";
+        }
+        if it.no_trade != 0 {
+            d += &format!("{} ", self.w(553));
+        }
+        if it.rent == 0 {
+            d += &format!("{} ", self.w(554));
+        }
+        if it.lore != 0 {
+            d += self.w(555);
+        }
+        d
+    }
+
     /// `DescribeInvItem(i, flags)` over a record, and `DescribeMerchantItem`
     /// (`merchant`: the hit points as the maximum alone, never the stack or
     /// the charges' flag). `flags & 1`: the blank line after the name, the
