@@ -7355,14 +7355,17 @@ impl Play {
             let Some(e) = e else { continue };
             if Some(e.id) == me {
                 if self.self_shown {
-                    out.extend(crate::shadows::walker_caster(walker, lib, self.self_model));
+                    let actor = self.self_actor.map(|a| a.actor).filter(|&a| a < walker.scene.actors.len());
+                    let off = self.self_puppet.as_ref().map_or(crate::lod::OFF_DIST, |p| crate::lod::off_dist(&p.gpu.lod_dists));
+                    out.extend(crate::shadows::walker_caster(walker, lib, self.self_model).map(|c| c.on(actor, off)));
                 }
                 continue;
             }
             let Some(p) = self.puppets[slot].as_ref().filter(|p| p.shown) else { continue };
             let Some(cs) = p.sprite.as_ref() else { continue };
-            let bound = self.actors[slot].and_then(|a| walker.scene.actors.get(a.actor)).map(|a| a.bound);
-            out.push(crate::shadows::Caster::of(p.actor_m, cs, &p.centre, bound));
+            let actor = self.actors[slot].filter(|a| a.id == e.id).map(|a| a.actor).filter(|&a| a < walker.scene.actors.len());
+            let bound = actor.map(|a| walker.scene.actors[a].bound);
+            out.push(crate::shadows::Caster::of(p.actor_m, cs, &p.centre, bound).on(actor, crate::lod::off_dist(&p.gpu.lod_dists)));
         }
         out
     }

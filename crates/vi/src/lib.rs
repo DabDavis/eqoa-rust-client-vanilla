@@ -18,6 +18,7 @@
 
 pub mod camera;
 pub mod character;
+pub mod clipstack;
 pub mod coll;
 pub mod creature;
 pub mod effect;

@@ -11,6 +11,7 @@
 //! its capsule, so a walk stops at a creature as it does at a wall.
 
 use crate::character::{AnimCache, load_hsprite};
+use crate::clipstack::{Camera, ClipStack};
 use crate::coll::{CollRay, CollSphere, EnvRay};
 use crate::hsprite::{AnimScene, HSprite};
 use crate::collide::{Capsule, Collide, CollBuffer, cull_ray_sphere, cull_sphere};
@@ -33,14 +34,31 @@ pub struct Node<M: Model> {
     pub back: u32,
 }
 
+/// `VIZonePortal`: a polygon into another room of the zone (`m_destRoom`), its
+/// plane (`CalcPortalPlane`, facing the side a camera must be on to see
+/// through it), and `m_p1C`'s bit 0, set while the walk draws the room behind
+/// it so a cycle of rooms cannot recurse.
 #[derive(Clone, Debug, Default)]
-pub struct Room {
+pub struct Portal<M: Model> {
+    pub dest: i32,
+    pub verts: Vec<Vect3<M>>,
+    pub plane: Plane<M>,
+    pub open: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Room<M: Model> {
     /// `m_flags` as the record gives it: bit 0 a room open to the sky, which
     /// `VIWorld::RenderByPortals` draws by the frustum (the whole world), where
     /// it draws a closed room alone with what its portals show.
     pub flags: u32,
     /// How many portals lead out of it.
     pub portals: i32,
+    /// `m_bbox`, the record's from version 2 (zero before).
+    pub bbox: BBox<M>,
+    /// `m_portals`, as `ParseZoneRoom` builds them (`DestRoom`, `Begin`,
+    /// `Vertex`, `End`).
+    pub portal_list: Vec<Portal<M>>,
     /// The DictID of the room's own sprite (`m_p28`), and what it resolved to.
     pub sprite_id: u32,
     pub sprite: Option<usize>,
@@ -65,7 +83,7 @@ pub struct Zone<M: Model> {
     /// (room, environment flags) per leaf.
     pub leaves: Vec<(i32, u32)>,
     pub pretrans: Vec<Vect3<M>>,
-    pub rooms: Vec<Room>,
+    pub rooms: Vec<Room<M>>,
     /// The radial flora's tables (`VIZoneRadialFlora`, `ParseZoneFlora`).
     pub flora: ZoneFlora<M>,
 }
@@ -322,6 +340,65 @@ fn v3<M: Model>(d: &[u8], o: usize) -> Vect3<M> {
     Vect3::of(rd_f(d, o), rd_f(d, o + 4), rd_f(d, o + 8))
 }
 
+/// `ParseZoneRoom`'s portals, after the room's portal count at `at` and its
+/// vertex count: per portal its vertex count, the room it leads into (a word
+/// more before version 2), then its vertices; each one's plane made as `End`
+/// makes it. A record cut short keeps the portals read whole.
+fn read_portals<M: Model>(d: &[u8], at: usize, version: i16) -> Vec<Portal<M>> {
+    let mut out = Vec::new();
+    if d.len() < at + 8 {
+        return out;
+    }
+    let n = rd_i(d, at).max(0) as usize;
+    let mut o = at + 8;
+    for _ in 0..n {
+        if d.len() < o + 8 {
+            break;
+        }
+        let (k, dest) = (rd_i(d, o).max(0) as usize, rd_i(d, o + 4));
+        o += if version < 2 { 12 } else { 8 };
+        if d.len() < o + k * 12 {
+            break;
+        }
+        let verts: Vec<Vect3<M>> = (0..k).map(|j| v3(d, o + j * 12)).collect();
+        o += k * 12;
+        let plane = portal_plane(&verts);
+        out.push(Portal { dest, verts, plane, open: false });
+    }
+    out
+}
+
+/// `VIZoneRoom::CalcPortalPlane`: Newell's method over the ring, the
+/// centroid summed in the same loop; the distance is the normal dotted into
+/// the average vertex, negated. A degenerate ring (`Normalize` 0) gets d 0
+/// and the normal `Normalize` left.
+fn portal_plane<M: Model>(v: &[Vect3<M>]) -> Plane<M> {
+    let mut p = Plane::<M>::default();
+    let Some(&last_v) = v.last() else { return p };
+    let mut sum = Vect3::<M>::default();
+    let mut prev = last_v;
+    for &c in v {
+        let last = prev;
+        prev = c;
+        p.n.x = p.n.x + (prev.y - last.y) * (prev.z + last.z);
+        p.n.y = p.n.y + (prev.z - last.z) * (prev.x + last.x);
+        p.n.z = p.n.z + (prev.x - last.x) * (prev.y + last.y);
+        sum.x = sum.x + prev.x;
+        sum.y = sum.y + prev.y;
+        sum.z = sum.z + prev.z;
+    }
+    if p.n.normalize() == 0 {
+        p.d = F::ZERO;
+    } else {
+        let k = F::ONE / F::new(v.len() as f32);
+        sum.x = sum.x * k;
+        sum.y = sum.y * k;
+        sum.z = sum.z * k;
+        p.d = -(p.n.x * sum.x + p.n.y * sum.y + p.n.z * sum.z);
+    }
+    p
+}
+
 fn read_tree<M: Model>(c: &Container, id: NodeId, leaf_words: usize) -> (Vec<Node<M>>, Vec<(i32, u32)>) {
     let d = c.body(id);
     let (nn, nl) = (rd_i(d, 0) as usize, rd_i(d, 4) as usize);
@@ -556,10 +633,13 @@ impl<M: Model> World<M> {
                     // `ParseZoneRoom`: the sprite, a word, the flags, the box
                     // from version 2, then the portals' count
                     let d = c.body(r);
-                    let at = if c.node(r).version >= 2 { 36 } else { 12 };
+                    let version = c.node(r).version;
+                    let at = if version >= 2 { 36 } else { 12 };
                     let portals = if d.len() >= at + 4 { rd_i(d, at) } else { 0 };
                     let flags = if d.len() >= 12 { rd_i(d, 8) as u32 } else { 0 };
-                    zone.rooms.push(Room { flags, portals, sprite_id: rd_i(d, 0) as u32, stamp20: -1, stamp24: -1, ..Default::default() });
+                    let bbox = if version >= 2 && d.len() >= 36 { BBox { min: v3(d, 12), max: v3(d, 24) } } else { BBox::default() };
+                    let portal_list = read_portals(d, at, version);
+                    zone.rooms.push(Room { flags, portals, bbox, portal_list, sprite_id: rd_i(d, 0) as u32, stamp20: -1, stamp24: -1, ..Default::default() });
                 }
             }
         }
@@ -1913,6 +1993,260 @@ struct QueryVars<M: Model> {
 
 /// `InsertActor`'s choice at a node, and the query's: the bound sphere alone
 /// when it is clear of the plane, else the eight corners.
+/// `VISceneRendVars`, what `VIScene::Render`'s visibility walk carries as far
+/// as `RasterActor`: the camera and the clip stack, the view distance
+/// (`cam.m_far`, 500 at most), the walk stamp (`m_stamp`: the world tree's
+/// state at `RenderByVolume`), `m_p28` (the world walked by the frustum this
+/// pass already: a portal hands it to `RenderByFrustum` once), the eye the
+/// distances go by, an actor's off distance (`RasterActor`'s
+/// `m_sprites.Value(m_p60)->m_offDist`; None: not one asked for), and the
+/// actors rastered so far, in order.
+struct Rend<'a, M: Model> {
+    cam: &'a Camera<M>,
+    eye: Vect3<M>,
+    clip: ClipStack<M>,
+    view_dist: F<M>,
+    stamp: i32,
+    frustum_done: bool,
+    off: &'a dyn Fn(usize) -> Option<F<M>>,
+    out: Vec<usize>,
+}
+
+/// A BSP node's sides as the clip volume's points `verts` reach them: in
+/// front where one is past the plane, behind where one is not.
+fn volume_sides<M: Model>(pl: &Plane<M>, verts: &[Vect3<M>]) -> (bool, bool) {
+    let (mut front, mut back) = (false, false);
+    for p in verts {
+        if F::ZERO < pl.distance(p) {
+            front = true;
+        } else {
+            back = true;
+        }
+    }
+    (front, back)
+}
+
+impl<M: Model> World<M> {
+    /// `VIScene::Render`'s walk (`RenderByPortals`: the scene's own mode, not
+    /// `RenderByFrustum`'s) as far as `RasterActor`: the actors it rasters this
+    /// pass, in its order. From the camera's room: an outdoor room (bit 0)
+    /// walks the world by the frustum (`RenderByFrustum`: the world BSP and each
+    /// zone's by the clip volume's points, `RenderLeaf` taking only outdoor
+    /// rooms), an indoor one draws itself under the frustum (`PushFrustum`);
+    /// each room drawn (`RenderRoom`) is culled by its box against the clip
+    /// stack's top, draws through each portal the camera is in front of
+    /// (`RenderThroughPortals`: the portal clipped by the top, the room behind
+    /// it under the volume the clipped portal makes, `PushPortal`; an outdoor
+    /// room behind it the whole world by the frustum, once), then rasters its
+    /// actors when its box is within the view distance of `eye`. `RasterActor`
+    /// passes an actor rastered already this pass (`m_p80`), hidden or a proxy
+    /// (`m_p40 & 5`), further than its off distance from `eye`, or outside the
+    /// top (`CullByTop` of its bound), and stamps the rest. The camera's place
+    /// decides the rooms and the portals; `eye` the distances (the client's
+    /// `lod::eye`, the game's camera at its own ceiling).
+    pub fn raster_actors(&mut self, cam: &Camera<M>, eye: &Vect3<M>, off: &dyn Fn(usize) -> Option<F<M>>) -> Vec<usize> {
+        let d = cam.far;
+        let view_dist = if f(500.0) < d { f(500.0) } else { d };
+        let mut v = Rend { cam, eye: *eye, clip: ClipStack::new(), view_dist, stamp: 0, frustum_done: false, off, out: Vec::new() };
+        self.render_by_portals(&mut v);
+        // `Render`'s `m_stamp++` after the passes
+        self.stamp += 1;
+        v.out
+    }
+
+    /// `VIWorld::IsEmpty`.
+    fn is_empty(&self) -> bool {
+        self.nodes.is_empty() && self.leaves.is_empty()
+    }
+
+    /// `VIWorld::RenderByPortals`.
+    fn render_by_portals(&mut self, v: &mut Rend<M>) {
+        if self.is_empty() {
+            return;
+        }
+        let Some((zone, leaf)) = self.find_leaf(&v.cam.position) else { return };
+        let Some(room) = usize::try_from(self.zones[zone].leaves[leaf].0).ok().filter(|&r| r < self.zones[zone].rooms.len()) else { return };
+        if self.zones[zone].rooms[room].flags & 1 != 0 {
+            self.render_by_frustum(v);
+        } else {
+            v.clip.push_frustum(v.cam);
+            self.render_room(zone, room, v);
+            v.clip.pop();
+        }
+    }
+
+    /// `VIWorld::RenderByFrustum`.
+    fn render_by_frustum(&mut self, v: &mut Rend<M>) {
+        v.frustum_done = true;
+        if self.is_empty() {
+            return;
+        }
+        v.clip.push_frustum(v.cam);
+        v.stamp = self.state;
+        let root = if self.nodes.is_empty() { LEAF } else { 0 };
+        self.render_world_volume(root, v);
+        self.state += 1;
+        v.clip.pop();
+    }
+
+    /// `VIWorld::RenderByVolume(node)`: down the world BSP to the sides the
+    /// clip volume's points reach, the side away from the camera first.
+    fn render_world_volume(&mut self, node: u32, v: &mut Rend<M>) {
+        let mut node = node;
+        if node & 0xF000_0000 != 0 {
+            if node & LEAF != 0 {
+                let Some(&z) = self.leaves.get((node & 0x0FFF_FFFF) as usize) else { return };
+                self.render_zone_volume(z as usize, v);
+                return;
+            }
+            node &= 0x0FFF_FFFF;
+        }
+        let Some(n) = self.nodes.get(node as usize).cloned() else { return };
+        let (front, back) = volume_sides(&n.plane, v.clip.top().0);
+        if n.plane.distance(&v.cam.position) < F::ZERO {
+            if front {
+                self.render_world_volume(n.front, v);
+            }
+            if back {
+                self.render_world_volume(n.back, v);
+            }
+        } else {
+            if back {
+                self.render_world_volume(n.back, v);
+            }
+            if front {
+                self.render_world_volume(n.front, v);
+            }
+        }
+    }
+
+    /// `VIZone::RenderByVolume(v, zone)`: an unloaded zone (no tree, no
+    /// rooms) has nothing to walk.
+    fn render_zone_volume(&mut self, z: usize, v: &mut Rend<M>) {
+        if z >= self.zones.len() || self.zones[z].leaves.is_empty() {
+            return;
+        }
+        let root = if self.zones[z].nodes.is_empty() { LEAF } else { 0 };
+        self.render_zone_node(z, root, v);
+    }
+
+    /// `VIZone::RenderByVolume(node)`.
+    fn render_zone_node(&mut self, z: usize, node: u32, v: &mut Rend<M>) {
+        let mut node = node;
+        if node & 0xF000_0000 != 0 {
+            if node & LEAF != 0 {
+                self.render_leaf(z, (node & 0x0FFF_FFFF) as usize, v);
+                return;
+            }
+            node &= 0x0FFF_FFFF;
+        }
+        let Some(n) = self.zones[z].nodes.get(node as usize).cloned() else { return };
+        let (front, back) = volume_sides(&n.plane, v.clip.top().0);
+        if n.plane.distance(&v.cam.position) < F::ZERO {
+            if front {
+                self.render_zone_node(z, n.front, v);
+            }
+            if back {
+                self.render_zone_node(z, n.back, v);
+            }
+        } else {
+            if back {
+                self.render_zone_node(z, n.back, v);
+            }
+            if front {
+                self.render_zone_node(z, n.front, v);
+            }
+        }
+    }
+
+    /// `VIZone::RenderLeaf`: the leaf's room, once a walk (`m_p20`), and in
+    /// the portals' mode only an outdoor one (an indoor room is reached
+    /// through the portals).
+    fn render_leaf(&mut self, z: usize, leaf: usize, v: &mut Rend<M>) {
+        let Some(&(room, _)) = self.zones[z].leaves.get(leaf) else { return };
+        let Some(r) = usize::try_from(room).ok().filter(|&r| r < self.zones[z].rooms.len()) else { return };
+        if self.zones[z].rooms[r].stamp20 != v.stamp {
+            self.zones[z].rooms[r].stamp20 = v.stamp;
+            if self.zones[z].rooms[r].flags & 1 != 0 {
+                self.render_room(z, r, v);
+            }
+        }
+    }
+
+    /// `VIZone::RenderRoom`, as far as its actors (its own sprite is drawn
+    /// only: nothing here).
+    fn render_room(&mut self, z: usize, r: usize, v: &mut Rend<M>) {
+        if v.clip.cull_bbox(&self.zones[z].rooms[r].bbox) {
+            return;
+        }
+        self.render_through_portals(z, r, v);
+        if self.zones[z].rooms[r].bbox.distance_squared(&v.eye) < v.view_dist * v.view_dist {
+            let room = &self.zones[z].rooms[r];
+            let list: Vec<usize> = room.actors.iter().chain(room.moving.iter()).copied().collect();
+            for a in list {
+                self.raster_actor(a, v);
+            }
+        }
+    }
+
+    /// `VIZone::RenderThroughPortals`.
+    fn render_through_portals(&mut self, z: usize, r: usize, v: &mut Rend<M>) {
+        for i in 0..self.zones[z].rooms[r].portal_list.len() {
+            let p = &self.zones[z].rooms[r].portal_list[i];
+            if p.open {
+                continue;
+            }
+            let d = p.plane.distance(&v.cam.position);
+            if d < F::ZERO {
+                continue;
+            }
+            let inside = d < f(0.02);
+            let dest = p.dest;
+            let clipped = if inside {
+                None
+            } else {
+                match v.clip.clip_by_top(&p.verts) {
+                    Some(out) => Some(out),
+                    None => continue,
+                }
+            };
+            let Some(dr) = usize::try_from(dest).ok().filter(|&d| d < self.zones[z].rooms.len()) else { continue };
+            if self.zones[z].rooms[dr].flags & 1 == 0 {
+                if let Some(out) = &clipped {
+                    v.clip.push_portal(v.cam, out);
+                }
+                self.zones[z].rooms[r].portal_list[i].open = true;
+                self.render_room(z, dr, v);
+                if clipped.is_some() {
+                    v.clip.pop();
+                }
+                self.zones[z].rooms[r].portal_list[i].open = false;
+            } else if !v.frustum_done {
+                self.render_by_frustum(v);
+            }
+        }
+    }
+
+    /// `VIScene::RasterActor`'s tests, as far as its stamp.
+    fn raster_actor(&mut self, i: usize, v: &mut Rend<M>) {
+        let Some(a) = self.actors.get(i) else { return };
+        if a.stamp80 == self.stamp || a.flags & 5 != 0 {
+            return;
+        }
+        let Some(off) = (v.off)(i) else { return };
+        let (dx, dy, dz) = (a.location.x - v.eye.x, a.location.y - v.eye.y, a.location.z - v.eye.z);
+        let d2 = dx * dx + dy * dy + dz * dz;
+        if !(d2 < off * off) {
+            return;
+        }
+        if v.clip.cull_sphere(&a.bound) {
+            return;
+        }
+        self.actors[i].stamp80 = self.stamp;
+        v.out.push(i);
+    }
+}
+
 fn split<M: Model>(pl: &Plane<M>, b: &Sphere<M>, corners: &[Vect3<M>; 8]) -> (bool, bool) {
     let d = pl.distance(&b.c);
     if b.r < d {
