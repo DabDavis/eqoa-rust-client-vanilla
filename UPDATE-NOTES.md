@@ -5,6 +5,13 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-28 · You can run again after casting a spell
+- Since about 00:55 UTC this morning, casting a spell left you walking, unable to run, until
+  you logged in again: you walk while you cast, and the game thought the cast never ended. The
+  clock change below already cured it; the cast's timing is now kept the way the PS2 keeps it,
+  so no clock can bring it back.
+- Dying now ends the slowed walk of a spell you were casting, as on the PS2.
+
 ## 2026-10-28 · The game's clock can no longer run out mid-session
 - The game's network clock now starts from a small number each time you log in, so it can
   never reach the size that stopped the loading screen this morning, and it no longer runs

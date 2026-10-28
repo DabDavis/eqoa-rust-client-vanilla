@@ -187,8 +187,9 @@ pub struct Play {
     following: bool,
     follow_id: u32,
     /// `m_p2BB40` .. `m_p2BB48`: the player's own cast (`CastingCombat`),
-    /// on the session's clock; the walk walks through it.
-    cast_window: (u32, u32),
+    /// on the session's clock; the walk walks through it (`cast_window`,
+    /// `casting`).
+    cast_window: (i64, i64),
     /// `m_p06DC8`: 0x00FC's byte, the player held in place.
     rooted: bool,
     /// `m_p06DC0` and `m_p06DC4`: movement and the camera allowed
@@ -510,6 +511,29 @@ pub fn mode_locks(mode: i32) -> (bool, bool) {
         36 => (false, true),
         _ => (false, false),
     }
+}
+
+/// `CastingCombat`'s cast window (`m_p2BB40`, `m_p2BB48`, longs, 0 at the
+/// world's entry and at a death): a cast of the player's own of `time` ms
+/// at `now` begins it, its end this cast's or a later one still running,
+/// compared as the console compares longs. It was ported as wrapping u32
+/// differences, which agree with that only within 2^31 of each other: from
+/// 2026-10-28 00:54 UTC, the session's clock past 2^31 (`net::session::
+/// clock_base`), the first cast measured its end against the window's 0 the
+/// wrong way and kept 0, and the window never closed: walking only, no run,
+/// until the next login (a player's report, the same morning).
+fn cast_window(old: (i64, i64), now: i64, time: i32) -> (i64, i64) {
+    let mut end = i64::from(time) + now;
+    if end < old.1 {
+        end = old.1;
+    }
+    (now, end)
+}
+
+/// Whether `now` is in the cast window: `UpdateGame`'s `!(now < m_p2BB40) &&
+/// now < m_p2BB48`, through which the walk walks.
+fn casting(w: (i64, i64), now: i64) -> bool {
+    !(now < w.0) && now < w.1
 }
 
 fn far_pose_every(far: u32) -> u32 {
@@ -2346,12 +2370,7 @@ impl Play {
                         // CastingCombat: a cast of the player's own stamps the
                         // cast window, through which the walk walks
                         if op == 0x00B1 && Some(c.caster) == self.self_id32() {
-                            let now = self.session.now();
-                            let mut end = now.wrapping_add(c.time as u32);
-                            if (end.wrapping_sub(self.cast_window.1) as i32) < 0 {
-                                end = self.cast_window.1;
-                            }
-                            self.cast_window = (now, end);
+                            self.cast_window = cast_window(self.cast_window, self.session.now() as i64, c.time);
                         }
                         if !(op == 0x0776 && Some(c.caster) == self.self_id32()) {
                             self.casts.push(c);
@@ -4008,6 +4027,8 @@ impl Play {
         }
         self.mode = 0;
         self.cues.push(crate::sound::Cue::Named("death", 0.4));
+        // m_p2BB40, m_p2BB48: no cast walks the body
+        self.cast_window = (0, 0);
         self.autorun = false;
         self.following = false;
         self.auto_attack = false;
@@ -4252,7 +4273,7 @@ impl Play {
             swung: now.wrapping_sub(self.swung) < 1000,
             target,
             autorun: self.autorun,
-            casting: now.wrapping_sub(a) as i32 >= 0 && (now.wrapping_sub(b) as i32) < 0,
+            casting: casting((a, b), now as i64),
             // the window's (`mode_locks`) and the client's other holds (the
             // start menu's framing, the manual camera, a server's search)
             move_ok: self.locks.0 && mode_locks(self.mode).0,
@@ -7313,6 +7334,49 @@ mod commands {
         let mut s = Session::connect_with(Box::new(Nowhere), ([127, 0, 0, 1], 5000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
         s.self_id = Some(0x100);
         Play::new(s, Player::default(), dump)
+    }
+
+    /// The cast window as the console keeps it (longs): a cast at `now`
+    /// walks the body for its time and then lets it run; a shorter cast in a
+    /// longer one keeps the longer's end. A player's report of 2026-10-28
+    /// ("it makes you walk while casting, but it wont let them run after"):
+    /// on the session's clock past 2^31 (from 00:54 UTC) the u32 port kept
+    /// the window open for good after the first cast; this holds on any
+    /// clock. The control: that port, on that clock, never lets go.
+    #[test]
+    fn a_cast_walks_for_its_time_on_any_clock() {
+        for now in [1_000i64, (1 << 31) - 500, (1 << 31) + 232_000, (1 << 32) - 900, 1 << 40] {
+            let w = cast_window((0, 0), now, 1500);
+            assert!(casting(w, now) && casting(w, now + 1499), "{now}: walking through the cast");
+            assert!(!casting(w, now + 1500) && !casting(w, now - 1), "{now}: running after it, and before");
+            let longer = cast_window(cast_window((0, 0), now, 5000), now + 100, 1000);
+            assert_eq!(longer.1, now + 5000, "{now}: the longer cast's end kept");
+        }
+        // the control: the u32 port, the session's clock at 00:58 UTC
+        let old = |w: (u32, u32), now: u32, time: i32| {
+            let mut end = now.wrapping_add(time as u32);
+            if (end.wrapping_sub(w.1) as i32) < 0 {
+                end = w.1;
+            }
+            (now, end)
+        };
+        let old_casting = |w: (u32, u32), now: u32| now.wrapping_sub(w.0) as i32 >= 0 && (now.wrapping_sub(w.1) as i32) < 0;
+        let now = 2_147_717_568u32;
+        assert!(old_casting(old((0, 0), now, 1500), now + 60_000), "the u32 port: walking still, a minute on");
+        assert!(!old_casting(old((0, 0), 1_000, 1500), 61_000), "and below 2^31 it let go");
+    }
+
+    /// What `UpdateControls` reads: walking only through the player's own
+    /// cast, on the session's clock. The control: no cast, no walk.
+    #[test]
+    fn the_walk_walks_only_through_the_players_cast() {
+        let mut p = play();
+        let now = p.session.now() as i64;
+        assert!(!p.control_client().casting, "the control: no cast yet");
+        p.cast_window = cast_window(p.cast_window, now, 60_000);
+        assert!(p.control_client().casting, "a cast a minute long: walking");
+        p.cast_window = cast_window((0, 0), now - 10_000, 1500);
+        assert!(!p.control_client().casting, "a cast over: running");
     }
 
     /// GetSwing takes `m_player`'s level, which 0x0020 writes: a warrior who
