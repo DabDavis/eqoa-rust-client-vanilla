@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-28 · No stand-in when you enter the world
+- When you enter the world or change worlds, a human man no longer stands in for your character
+  for a moment before your own appears: the game draws you once the server has described you, as
+  the PS2 does.
+
 ## 2026-10-28 · Steering with the mouse runs as the stick does; coaches with the menu open
 - Steering with the mouse (the right button held, or either button in first person) keeps your
   run as it is with the keys or a controller again. Since yesterday's update, a mouse that moved
