@@ -41,6 +41,7 @@ pub mod tod;
 pub mod trail;
 pub mod atmosphere;
 pub mod selfstate;
+pub mod shadow;
 pub mod spell;
 pub mod strtab;
 pub mod swing;

@@ -279,6 +279,12 @@ impl<M: Model> BBox<M> {
     pub fn intersects(&self, b: &BBox<M>) -> bool {
         !(self.min.x > b.max.x || self.max.x < b.min.x || self.min.y > b.max.y || self.max.y < b.min.y || self.min.z > b.max.z || self.max.z < b.min.z)
     }
+
+    /// `CullIntersect(const VISphere &)`: the sphere clear of the box past
+    /// one of its six faces (the faces in the decomp's order).
+    pub fn cull_intersect(&self, s: &Sphere<M>) -> bool {
+        s.r < self.min.x - s.c.x || s.r < self.min.y - s.c.y || s.r < self.min.z - s.c.z || s.r < s.c.x - self.max.x || s.r < s.c.y - self.max.y || s.r < s.c.z - self.max.z
+    }
 }
 
 #[repr(C)]

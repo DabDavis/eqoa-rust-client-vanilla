@@ -188,6 +188,14 @@ impl<M: Model> Matrix44<M> {
 
     /// `Invert`: Gauss-Jordan with partial pivoting; `None` when singular.
     pub fn invert(a: &Self) -> Option<Self> {
+        let (o, ok) = Self::invert_partial(a);
+        ok.then_some(o)
+    }
+
+    /// `Invert` as it leaves `this`: the inverse and true, or at a zero pivot
+    /// false and the rows as far as they got (a caller that ignores the
+    /// return, `VIScene::RenderShadow`, goes on with them).
+    pub fn invert_partial(a: &Self) -> (Self, bool) {
         let mut w = *a;
         let mut o = Self::identity();
         for i in 0..4 {
@@ -203,7 +211,7 @@ impl<M: Model> Matrix44<M> {
                 }
             }
             if p == F::ZERO {
-                return None;
+                return (o, false);
             }
             w.m.swap(i, row);
             o.m.swap(i, row);
@@ -219,7 +227,7 @@ impl<M: Model> Matrix44<M> {
                 }
             }
         }
-        Some(o)
+        (o, true)
     }
 
     /// `ConvertTo(VIQuat &, float &scale, VIVect3 &t)`.
