@@ -378,12 +378,20 @@ impl MainMenu {
         let black = [0.0, 0.0, 0.0, 1.0];
         let white = [1.0; 4];
         let word = |id: i32| wide(vui.words.get(id, vui.language));
+        // a label set at run time (the server's trigger names), fitted
+        // between the bar's caps; else the entry's word
+        let inside = BAR_WIDTH - vui.entry(141).uv1[0] - vui.entry(142).uv1[0];
         let mut pos = [18, 56];
         let mut i = 0;
         let mut row = self.top;
         while row < count {
             let sel = self.x34 && row == self.sel;
-            vui.blit_bar3(r, &word(menu.entries[row as usize].word), if sel { lit } else { black }, pos, 141, 142, 150, 140, 0, 1.0, 0, false);
+            let e = &menu.entries[row as usize];
+            let text = match menus.labels.get(&(e.msg, e.id)) {
+                Some((label, tail)) => fit_label(vui, r, label, tail, inside),
+                None => word(e.word),
+            };
+            vui.blit_bar3(r, &text, if sel { lit } else { black }, pos, 141, 142, 150, BAR_WIDTH, 0, 1.0, 0, false);
             if sel {
                 let (a, b) = (vui.entry(85), vui.entry(150));
                 let p = [pos[0], pos[1] + b.uv1[1] / 2 - a.uv1[1] / 2 - 3];
@@ -599,6 +607,40 @@ impl MainMenu {
         self.lines[0].copy_from_slice(&flat[..32]);
         self.lines[1].copy_from_slice(&flat[32..]);
     }
+}
+
+/// A bar's width (`OnDrawSelf`'s `BlitBar3(..., 140, ...)`).
+const BAR_WIDTH: i32 = 140;
+
+/// A run-time label (`Menus::labels`) fitted to `w`, the bar between its
+/// caps: the text and its tail when they fit; else the text cut short,
+/// "..." and the tail whole. The game's own words were written to fit its
+/// bars (it draws a word centred, uncut); a name the server sends need not
+/// be, and drawn whole it would run off the bar and out of the picture.
+pub fn fit_label(vui: &Vui, r: &dyn Raster, text: &[u16], tail: &[u16], w: i32) -> Vec<u16> {
+    let whole = [text, tail].concat();
+    if vui.string_width(r, &whole) <= w {
+        return whole;
+    }
+    let dots = wide("...");
+    let mut n = text.len();
+    while n > 0 {
+        n -= 1;
+        // never between a surrogate pair's halves
+        if (0xDC00..0xE000).contains(&text[n]) {
+            continue;
+        }
+        // no space before the dots
+        let mut k = n;
+        while k > 0 && text[k - 1] == b' ' as u16 {
+            k -= 1;
+        }
+        let cut = [&text[..k], &dots[..], tail].concat();
+        if vui.string_width(r, &cut) <= w {
+            return cut;
+        }
+    }
+    [&dots[..], tail].concat()
 }
 
 /// `VIFont::DrawString` in the font's colour (here passed).
@@ -1046,6 +1088,87 @@ mod tests {
         let mut whole = Wide(0, Anchor::Frame, Vec::new());
         vui.blit_studded_horz(&mut whole, [-1, BOTTOM_RAIL], 40, 41, 177, 1, 0, 1.0, 0);
         assert!(whole.2.iter().all(|b| b.1[1] + b.2[1] == 331), "the control: the rail's 18 rows reach 331");
+    }
+
+    /// A raster that notes each centred string (where, what), a character
+    /// 8 pixels wide.
+    #[derive(Default)]
+    struct Texts(Vec<([i32; 2], String)>);
+
+    impl Raster for Texts {
+        fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn stretch_blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+        fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+        fn draw_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16]) {}
+        fn draw_centered_string(&mut self, at: [i32; 2], _: [f32; 4], s: &[u16], _: u32) {
+            self.0.push((at, String::from_utf16_lossy(s)));
+        }
+        fn string_width(&self, s: &[u16]) -> i32 {
+            s.len() as i32 * 8
+        }
+        fn point_size(&self) -> i32 {
+            16
+        }
+        fn viewport(&self) -> [i32; 4] {
+            [0, 0, 639, 447]
+        }
+        fn set_viewport(&mut self, _: [i32; 4]) {}
+    }
+
+    impl Layout for Texts {}
+
+    /// The bars' texts of a TEST-menu-like menu of the eight TRIGGER
+    /// entries (word 507, `Do2`'s message, ids 0 to 7) with `labels`: the
+    /// seven bars drawn, top to bottom (centred on the bar, x 18 + 70).
+    fn trigger_bars(labels: &[(i32, &str, &str)]) -> Vec<String> {
+        let mut vui = posts::vui();
+        let mut words: Vec<String> = (1..507).map(|n| format!("word {n}")).collect();
+        words.push("TRIGGER".into());
+        vui.words = vi::strtab::StringTable::parse(words.join("\n").as_bytes()).unwrap();
+        let mut menus = Menus::default();
+        let entries = (0..8).map(|i| crate::client_image::MenuEntry { word: 507, msg: crate::admin::TRIGGER_ENTRY, id: i, ..Default::default() }).collect();
+        let m = menus.push(Menu { x00: -1, x04: -1, entries });
+        for (id, label, tail) in labels {
+            menus.labels.insert((crate::admin::TRIGGER_ENTRY, *id), (wide(label), wide(tail)));
+        }
+        let loc = Location { world: 0, pos: [0.0; 3], cols: 1, rows: 1, cell: 1.0, origin: [0.0; 3], bounds: None };
+        let mut sm = StartMenu::new(m);
+        sm.visible = true;
+        let mut r = Texts::default();
+        sm.show_main(&vui, &r, true, 0, &loc);
+        sm.draw(&vui, &mut r, &menus, 16, &Stats::default(), &mut Vec::new());
+        r.0.into_iter().filter(|(at, _)| at[0] == 18 + BAR_WIDTH / 2).map(|(_, s)| s).collect()
+    }
+
+    /// The server's names on the TRIGGER bars (`Menus::labels`): a named
+    /// entry shows its name and tail, an unnamed one the game's word; a name
+    /// too long for the bar is cut, "..." after it and its tail whole, and
+    /// no cut runs past the bar between its caps (17 characters here). The
+    /// control: with no labels every bar says TRIGGER.
+    #[test]
+    fn a_named_trigger_shows_its_name_on_its_bar() {
+        let bars = trigger_bars(&[]);
+        assert_eq!(bars, vec!["TRIGGER"; 7], "the control: the game's word");
+        let bars = trigger_bars(&[(0, "Invasion", ""), (2, "Zombies", " (running)"), (3, "Moradhim Earth Elemental Invasion", " (off)"), (6, "Stop everything now", "")]);
+        assert_eq!(bars, ["Invasion", "TRIGGER", "Zombies (running)", "Moradhim... (off)", "TRIGGER", "TRIGGER", "Stop everythin..."]);
+        assert!(bars.iter().all(|s| s.encode_utf16().count() * 8 <= BAR_WIDTH as usize), "{bars:?}");
+    }
+
+    /// `fit_label`: whole when it fits; else cut on a character before a
+    /// space, never inside a surrogate pair, the tail kept whole; nothing of
+    /// the text when even one character and the tail are too wide.
+    #[test]
+    fn a_label_is_cut_to_its_bar() {
+        let vui = posts::vui();
+        let r = Texts::default();
+        let fit = |t: &str, tail: &str, w| String::from_utf16_lossy(&fit_label(&vui, &r, &wide(t), &wide(tail), w));
+        assert_eq!(fit("Zombies", "", 56), "Zombies", "the control: 7 characters in 56 pixels");
+        assert_eq!(fit("Zombies!", "", 56), "Zomb...");
+        assert_eq!(fit("Big wave", " (off)", 96), "Big... (off)", "no space before the dots");
+        // cut between the pair's halves "ab" and the high half would fit 48
+        assert_eq!(fit("ab\u{1F600}cdef", "", 48), "ab...", "the pair dropped whole");
+        assert_eq!(fit("Zombies", " (running)", 80), "... (running)");
     }
 
     /// A pointer meets the bars at their place in the picture, in a wide

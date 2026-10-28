@@ -5,6 +5,13 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-28 · GMs see their server's names for the TRIGGER entries
+- For GMs only, on a server that names its triggers (eqoaclassic): TEST, Programming, TRIGGER
+  now shows each trigger's name where the PS2 shows eight lines all called TRIGGER, with
+  "(off)" after one that is switched off and "(running)" after one that is going on now. A
+  line with no trigger still says TRIGGER. Picking a line fires it as before. Every other
+  player, and every other server, sees no change.
+
 ## 2026-10-28 · Goto Zone lands on the ground; fishing on eqoaclassic
 - The GM's Goto Zone (TEST, Navigation) now sets you down on the ground of the square you pick,
   as the PS2 does. It left you under the ground there, and you fell.

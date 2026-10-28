@@ -1875,6 +1875,8 @@ impl Play {
     pub fn client_data(&mut self, img: &crate::client_image::ClientImage) {
         self.start = Some(crate::startmenu::StartData::from_image(img));
         self.race_cams = Some(crate::camstyle::race_cameras(img));
+        // the server's trigger names, if they came before the menus
+        self.trigger_labels();
     }
 
     /// CLIENT's and SUPPORT's data, taken up as each image comes

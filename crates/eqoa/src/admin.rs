@@ -20,6 +20,68 @@ pub const OP_ADMIN: u16 = 0x0701;
 pub const OP_ADMIN2: u16 = 0x0702;
 /// The server's message to the channel.
 pub const OP_ADMIN_IN: u16 = 0x0700;
+/// go-eqoa-server's own, no retail message: the GM's trigger names, sent to
+/// a client that answered its offer (`net::session::OP_GM_TRIGGERS`) and
+/// again whenever they change ([`read_triggers`]).
+pub const OP_TRIGGER_NAMES: u16 = 0x7E08;
+/// The TRIGGER entries' message (TEST, Programming: eight entries, ids 0 to
+/// 7, each `Do2`'s 0x0702 with its id).
+pub const TRIGGER_ENTRY: u32 = 0xA201_0000;
+/// How many TRIGGER entries the TEST menu has.
+pub const TRIGGERS: usize = 8;
+/// The longest name the server sends, in bytes.
+pub const TRIGGER_NAME_MAX: usize = 32;
+
+/// A trigger the server named for a TRIGGER entry.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Trigger {
+    pub name: String,
+    /// it fires (bit 0 of its flags)
+    pub on: bool,
+    /// a run of it is going on now (bit 1)
+    pub running: bool,
+}
+
+impl Trigger {
+    /// What its entry shows after the name: " (off)", " (running)", both
+    /// as " (off, running)", or nothing.
+    pub fn tail(&self) -> &'static str {
+        match (self.on, self.running) {
+            (true, false) => "",
+            (false, false) => " (off)",
+            (true, true) => " (running)",
+            (false, true) => " (off, running)",
+        }
+    }
+}
+
+/// 0x7E08's body: a u8 count, then each trigger's u8 entry (0 to 7, the
+/// TRIGGER line from the top), u8 flags (bit 0 on, bit 1 running) and name
+/// (a u8 byte count, then UTF-8; cut to [`TRIGGER_NAME_MAX`] bytes on a
+/// character's edge). The whole set: an entry it leaves out has no trigger.
+/// An entry past 7 is skipped; a message cut short is `None`, and changes
+/// nothing.
+pub fn read_triggers(data: &[u8]) -> Option<[Option<Trigger>; TRIGGERS]> {
+    let mut r = net::stream::Reader::new(data);
+    let mut out: [Option<Trigger>; TRIGGERS] = Default::default();
+    for _ in 0..r.u8() {
+        let (entry, flags) = (r.u8() as usize, r.u8());
+        let n = r.u8() as usize;
+        let bytes = r.bytes(n);
+        if r.error {
+            return None;
+        }
+        let mut name = String::from_utf8_lossy(bytes).into_owned();
+        if name.len() > TRIGGER_NAME_MAX {
+            let cut = (0..=TRIGGER_NAME_MAX).rev().find(|&i| name.is_char_boundary(i)).unwrap_or(0);
+            name.truncate(cut);
+        }
+        if let Some(slot) = out.get_mut(entry) {
+            *slot = Some(Trigger { name, on: flags & 1 != 0, running: flags & 2 != 0 });
+        }
+    }
+    (!r.error).then_some(out)
+}
 
 /// `IsCommand`: a 0xA1xx0000 id.
 pub fn is_command(id: u32) -> bool {
@@ -513,5 +575,55 @@ mod tests {
         assert_eq!(p.enabled, 0, "an unknown sub-op leaves the flag");
         assert_eq!(Part::answer(true), vec![1, 7, 48]);
         assert_eq!(Part::answer(false), vec![1, 7, 49]);
+    }
+
+    /// 0x7E08's body as go-eqoa-server writes it: a count, then each
+    /// trigger's entry, flags and name (a u8 byte count, UTF-8).
+    fn names(list: &[(u8, u8, &str)]) -> Vec<u8> {
+        let mut m = vec![list.len() as u8];
+        for (entry, flags, name) in list {
+            m.extend([*entry, *flags, name.len() as u8]);
+            m.extend(name.as_bytes());
+        }
+        m
+    }
+
+    /// `read_triggers`: each named entry at its line, its flags read; an
+    /// entry left out has none (the whole set each time); an entry past 7
+    /// is skipped while the rest are read; a name past 32 bytes cut on a
+    /// character's edge. The controls: a message cut short, in a name or
+    /// before one, reads as nothing; an empty set reads as no triggers.
+    #[test]
+    fn trigger_names_are_read_whole() {
+        let t = read_triggers(&names(&[(0, 1, "Elemental Invasion"), (2, 0, "Zombies"), (7, 3, "Stop all")])).unwrap();
+        assert_eq!(t[0], Some(Trigger { name: "Elemental Invasion".into(), on: true, running: false }));
+        assert_eq!(t[2], Some(Trigger { name: "Zombies".into(), on: false, running: false }));
+        assert_eq!(t[7], Some(Trigger { name: "Stop all".into(), on: true, running: true }));
+        assert!([1, 3, 4, 5, 6].iter().all(|&i| t[i].is_none()), "entries left out have none");
+        let t = read_triggers(&names(&[(9, 1, "Nowhere"), (1, 1, "One")])).unwrap();
+        assert_eq!(t.iter().flatten().count(), 1, "the entry past 7 skipped");
+        assert_eq!(t[1].as_ref().unwrap().name, "One", "and the rest read");
+        // eleven three-byte characters, 33 bytes: byte 32 is inside the
+        // eleventh, so the cut falls back to the tenth's end
+        let long = "€".repeat(11);
+        let t = read_triggers(&names(&[(4, 1, &long)])).unwrap();
+        assert_eq!(t[4].as_ref().unwrap().name, "€".repeat(10), "cut on a character's edge");
+        let t = read_triggers(&names(&[(4, 1, &"x".repeat(32))])).unwrap();
+        assert_eq!(t[4].as_ref().unwrap().name.len(), 32, "the control: 32 bytes kept whole");
+        let whole = names(&[(0, 1, "Elemental Invasion"), (1, 1, "Zombies")]);
+        assert_eq!(read_triggers(&whole[..whole.len() - 1]), None, "the control: a name cut short");
+        assert_eq!(read_triggers(&whole[..1 + 3 + 18 + 2]), None, "the control: cut short before a name");
+        assert_eq!(read_triggers(&[]), None, "the control: nothing at all");
+        assert_eq!(read_triggers(&[0]), Some(Default::default()), "no triggers");
+    }
+
+    /// What an entry shows after its name, by its flags.
+    #[test]
+    fn a_triggers_tail_says_off_and_running() {
+        let t = |on, running| Trigger { name: String::new(), on, running }.tail();
+        assert_eq!(t(true, false), "", "on and idle: the name alone");
+        assert_eq!(t(false, false), " (off)");
+        assert_eq!(t(true, true), " (running)");
+        assert_eq!(t(false, true), " (off, running)");
     }
 }

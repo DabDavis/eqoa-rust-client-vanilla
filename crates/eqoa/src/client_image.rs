@@ -109,6 +109,11 @@ pub struct Menu {
 pub struct Menus {
     pub list: Vec<Menu>,
     by_va: HashMap<u32, usize>,
+    /// What an entry shows in place of its word, by the entry's message and
+    /// id, set at run time (the server's names for the TRIGGER entries,
+    /// `adminplay`): the text, and a tail kept whole when the text is cut
+    /// to the bar (`startmenu::fit_label`).
+    pub labels: HashMap<(u32, i32), (Vec<u16>, Vec<u16>)>,
 }
 
 impl Menus {

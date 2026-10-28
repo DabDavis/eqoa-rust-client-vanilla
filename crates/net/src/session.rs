@@ -54,6 +54,12 @@ pub const EXPANSION_FLAGS: u32 = 3;
 /// for it (its dispatcher has no default), so a PS2 ignores the offer, and
 /// nothing is sent to a server that made none.
 pub const OP_ENTITY_VIEW: u16 = 0x7E00;
+/// go-eqoa-server's own, no retail message either: the GM's trigger names, a
+/// u32 after the opcode, both ways. The server offers them (1) to a GM's
+/// client beside the GM channel's 0x0700 35; this client answers 1 at once
+/// and is then sent the names (0x7E08, `admin::read_triggers`) whenever they
+/// change. A PS2 ignores the offer, as it ignores [`OP_ENTITY_VIEW`]'s.
+pub const OP_GM_TRIGGERS: u16 = 0x7E07;
 
 #[derive(Clone, Debug)]
 pub struct Shard {
@@ -773,6 +779,12 @@ impl Session {
                 let view = r.u32();
                 if !r.error {
                     self.entity_view_offer = Some((slots, view));
+                }
+            }
+            // the trigger names offered: taken (the TEST menu shows them)
+            OP_GM_TRIGGERS => {
+                if r.u32() != 0 && !r.error {
+                    self.send_op_int(OP_GM_TRIGGERS, 1);
                 }
             }
             0x0013 => {
@@ -1630,6 +1642,37 @@ mod tests {
         assert_eq!(s.entity_view_offer, Some((204, 1000)), "0x7E00's offer still taken");
         s.send_entity_view(24, 100);
         assert_eq!(answers(&mut s), [(251, vec![0x00, 0x7E, 24, 0, 0, 0, 100, 0, 0, 0])], "the control: 0x7E00's answer");
+    }
+
+    // go-eqoa-server's offer of the GM's trigger names (0x7E07) is answered
+    // with 1 at once, every time it comes, and its names (0x7E08) are passed
+    // on for the TEST menu with nothing answered. The controls: an offer cut
+    // short and an offer of 0 are not answered.
+    #[test]
+    fn the_trigger_names_offer_is_answered() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&0x7E)).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        answers(&mut s);
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x07, 0x7E, 1, 0, 0]);
+        assert!(ev.is_empty(), "{ev:?}");
+        assert_eq!(answers(&mut s), [], "the control: an offer cut short");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x07, 0x7E, 0, 0, 0, 0]);
+        assert_eq!(answers(&mut s), [], "the control: an offer of 0");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x07, 0x7E, 1, 0, 0, 0]);
+        assert!(ev.is_empty(), "the offer is the session's: {ev:?}");
+        assert_eq!(answers(&mut s), [(251, vec![0x07, 0x7E, 1, 0, 0, 0])]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x07, 0x7E, 1, 0, 0, 0]);
+        assert_eq!(answers(&mut s), [(251, vec![0x07, 0x7E, 1, 0, 0, 0])], "again for another offer");
+        let names = vec![0x08, 0x7E, 1, 2, 1, 3, b'O', b'n', b'e'];
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, names);
+        assert!(matches!(&ev[..], [Event::Opcode { op: 0x7E08, data }] if data[..] == [1, 2, 1, 3, b'O', b'n', b'e']), "{ev:?}");
+        assert_eq!(answers(&mut s), [], "the names answered nothing");
     }
 
     // Msg000D's world entry is ONE datagram, as every PS2 capture's is: 0x0014,
