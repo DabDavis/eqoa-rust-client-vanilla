@@ -5,6 +5,13 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-28 · Entering the world no longer closes the game
+- Since about 00:55 UTC on October 28 the game closed itself as you entered the world, on
+  every server, at the loading screen. Its turning gears were timed by a clock that counts
+  milliseconds from the computer's date, and that count passed a size the gears' animation
+  could not hold. The gears now keep a clock of their own, and no animation can step outside
+  its frames any more, whatever its clock says.
+
 ## 2026-10-28 · Character select smooth at Render Scale x2 and x4, and HUD Nearest by default
 - With Render Scale at x2 or x4 (Options, Extended, Video), character select and the other
   screens before the world are smooth again. The HUD's Sharp filter (Extended, UI, HUD), which

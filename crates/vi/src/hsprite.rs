@@ -65,6 +65,26 @@ impl<M: Model> Anim<M> {
             Frames::Pack(v) => unpack(&v[i]),
         }
     }
+
+    /// Frame `f` of the node whose frames begin at `first`. One before the
+    /// clip's first or past its last is the clip's nearest end: a play's
+    /// clock gone back, or a step past `i32` that wrapped (F3 crashes
+    /// 20261028, every player at the loading screen: its gears were posed on
+    /// the DRDP clock, wall-clock milliseconds as a u32, and their first step
+    /// from the load's 0 passed 2^31 at 00:54 UTC, negative as
+    /// `ProcessPlayTiming`'s int, and the frame with it). The console reads
+    /// whatever lies there; the client takes no frame off the clip's.
+    fn node_frame(&self, first: i32, f: i32) -> Frame<M> {
+        let len = match &self.frames {
+            Frames::Full(v) => v.len(),
+            Frames::Pack(v) => v.len(),
+        };
+        if len == 0 {
+            return Frame::default();
+        }
+        let f = f.clamp(0, (self.num_frames - 1).max(0));
+        self.frame((i64::from(first) + i64::from(f)).clamp(0, len as i64 - 1) as usize)
+    }
 }
 
 /// The packed walker's dequantisation: `(float)s * (1.0f/32767.0f)` and
@@ -687,8 +707,8 @@ impl<M: Model> HSprite<M> {
                 if lod < self.nodes[ni].lod {
                     let (a, b);
                     if e.a != 2 {
-                        a = an.frame((e.first_frame + fa) as usize);
-                        b = an.frame((e.first_frame + fb) as usize);
+                        a = an.node_frame(e.first_frame, fa);
+                        b = an.node_frame(e.first_frame, fb);
                         if e.a == 1 {
                             let pe = self.play_nodes.get_mut(pn);
                             pe.a = 2;
@@ -818,4 +838,47 @@ impl<M: Model> HSprite<M> {
 /// `VIHashRefID`: h = h*131 + c.
 pub fn hash_ref_id(s: &str) -> i32 {
     crate::hash::hash_resource_id(s) as i32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fpu::Ee;
+
+    /// A clip of 60 frames on one node, frame k at x = k, played forward at
+    /// 30 frames a second.
+    fn clip() -> AnimScene<Ee> {
+        let frames = (0..60).map(|k| Frame { trans: Vect3::new(F::new(k as f32), F::ZERO, F::ZERO), ..Frame::default() }).collect();
+        let anim = Anim { num_nodes: 1, num_frames: 60, play_rate: F::new(30.0), play_speed: F::ONE, playback_type: LOOP, nodes: vec![(7, 0)], frames: Frames::Full(frames), triggers: Vec::new() };
+        AnimScene { time: 0, anims: vec![anim], ref_maps: vec![HashMap::from([(7, 0)])] }
+    }
+
+    /// The frame node 0 is posed at, a play begun at 0 and posed at `t`.
+    fn posed_at(t: i64) -> f32 {
+        let mut sc = clip();
+        let mut h = HSprite::<Ee>::new(0);
+        h.add_root();
+        h.add_play(0, LOOP, F::ONE, &sc);
+        sc.time = t;
+        h.process(-1, &sc);
+        h.nodes[0].frame.trans.x.0
+    }
+
+    /// F3 crashes 20261028 (every player, at the loading screen): a play
+    /// begun at 0 and posed at the DRDP clock's 2,147,717,568 ms steps
+    /// -2,147,249,728 ms as an int, to frame -51, and the pose read before
+    /// the clip's frames and panicked. It poses at the clip's nearest end
+    /// now, as at every clock round 2^31. The control: an ordinary step
+    /// poses the frame it comes to.
+    #[test]
+    fn a_step_off_the_clip_poses_its_nearest_end() {
+        assert_eq!(posed_at(1000), 30.0, "the control: a second in, frame 30");
+        assert_eq!(posed_at(2_147_717_568), 0.0, "frame -51: the first");
+        // any clock: two of the clip's frames, the step's fraction leaning
+        // at most a frame past them
+        for t in [i32::MAX as i64, 1 << 31, (1 << 31) + 1, 3_000_000_000, (1 << 32) - 1, 1 << 40, -5000] {
+            let x = posed_at(t);
+            assert!((-1.0..60.0).contains(&x), "{t}: {x}");
+        }
+    }
 }

@@ -140,6 +140,12 @@ pub struct Gears {
     hs: HSprite<Ee>,
     anims: AnimScene<Ee>,
     pub parts: Vec<(i32, esf::Model)>,
+    /// the clock at the first pose: the clip turns from there, whatever
+    /// the clock counts from (F3 crashes 20261028: posed on the DRDP clock,
+    /// wall-clock milliseconds as a u32, the gears' first step from the
+    /// load's 0 passed 2^31 at 00:54 UTC and every loading screen stopped the
+    /// client)
+    start: Option<i64>,
 }
 
 impl Gears {
@@ -150,15 +156,21 @@ impl Gears {
         let mut cache = vi::character::AnimCache::new();
         let (hs, attach) = vi::character::load_hsprite(lib, r, &mut anims, &mut cache)?;
         let parts: Vec<(i32, esf::Model)> = attach.iter().filter_map(|&(sid, node)| Some((node, lib.build_model(lib.lookup(sid)?)?))).collect();
-        (!parts.is_empty()).then_some(Gears { hs, anims, parts })
+        (!parts.is_empty()).then_some(Gears { hs, anims, parts, start: None })
     }
 
     /// `scene.SetTime(now)`, then the sprite's `Raster` under the
     /// model-view: each part's transform at `now` ms (the node's world
-    /// matrix times the centre transform), in the eye's space.
+    /// matrix times the centre transform), in the eye's space. The scene's
+    /// time is `now` since the first pose (`start`), begun again should the
+    /// clock go back.
     pub fn pose(&mut self, now: i64) -> Vec<Matrix44<Ee>> {
         let mv = model_view();
-        self.anims.time = now;
+        let start = match self.start {
+            Some(s) if s <= now => s,
+            _ => *self.start.insert(now),
+        };
+        self.anims.time = now - start;
         let lod = self.hs.calc_lod_level_index(&mv);
         self.hs.process(lod, &self.anims);
         let centre = self.hs.calc_trans_about_center(&mv, &self.anims);
@@ -542,5 +554,16 @@ mod tests {
         }
         // control: they turn, so a still pose would not pass for the clip
         assert!(firsts.iter().any(|p| (p[0] - firsts[0][0]).abs() > 0.01), "{firsts:?}");
+        // F3 crashes 20261028: the DRDP clock (wall-clock milliseconds as a
+        // u32) past 2^31 at the first pose stopped the client; the gears
+        // turn the same from any clock, and through one that goes back
+        for base in [0i64, 2_147_717_568, (1 << 32) - 1000] {
+            let mut g = Gears::load(&lib).unwrap();
+            let turned: Vec<[f32; 3]> = (0..4000i64).step_by(250).map(|ms| at(&g.pose(base + ms)[0], g.parts[0].1.pos[0])).collect();
+            assert_eq!(turned, firsts, "from {base}");
+        }
+        let mut g = Gears::load(&lib).unwrap();
+        g.pose(2_147_717_568);
+        assert_eq!(g.pose(500).len(), 2, "a clock gone back");
     }
 }
