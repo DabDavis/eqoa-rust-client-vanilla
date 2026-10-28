@@ -3527,6 +3527,13 @@ impl Play {
     /// Whether the move is under way (the loading screen up until it is
     /// done): not into a world the table lacks.
     pub fn teleport(&mut self, walker: &mut Walker, world: u8, pos: [f32; 3], hpr: [f32; 3], now: i64) -> bool {
+        self.teleport_as(walker, world, pos, hpr, now, Placing::Respawn)
+    }
+
+    /// `teleport`, the floor found as `placing` says: `Respawn`'s casts (the
+    /// server's moves) or `MoveTo`'s (the GM's Goto: from 300 above to 300
+    /// below), at the arrival and again once the zones there are in.
+    pub fn teleport_as(&mut self, walker: &mut Walker, world: u8, pos: [f32; 3], hpr: [f32; 3], now: i64, placing: Placing) -> bool {
         self.mode = 0;
         self.autorun = false;
         self.following = false;
@@ -3536,9 +3543,12 @@ impl Play {
             match crate::s2::get().world_file(world as i64) {
                 Some(f) => {
                     eprintln!("play: teleport to world {world} ({f}) at {pos:?}");
-                    // Respawn's casts at the arrival
-                    self.world_change = Some((f.to_string(), Spawn { pos, heading: hpr[0], placing: Placing::Respawn }));
-                    self.loading.begin(pos, hpr[0], true, true, now);
+                    // Respawn's (or MoveTo's) casts at the arrival
+                    self.world_change = Some((f.to_string(), Spawn { pos, heading: hpr[0], placing }));
+                    self.loading.begin(pos, hpr[0], true, placing == Placing::Respawn, now);
+                    if placing == Placing::MoveTo {
+                        self.loading.move_to();
+                    }
                     self.loading.hold_far();
                     // black until the new world is entered (`world_entered`),
                     // the old one not shown while it loads
@@ -3557,10 +3567,17 @@ impl Play {
         } else {
             eprintln!("play: teleport to {pos:?}");
             let far = crate::loading::far(walker_at(walker), pos);
-            walker.relocate(pos, hpr[0]);
+            if placing == Placing::MoveTo {
+                walker.move_to(pos, hpr[0]);
+            } else {
+                walker.relocate(pos, hpr[0]);
+            }
             self.player.pos = pos;
             // EnterWorld: StreamFillCache there under the loading screen
-            self.loading.begin(pos, hpr[0], false, true, now);
+            self.loading.begin(pos, hpr[0], false, placing == Placing::Respawn, now);
+            if placing == Placing::MoveTo {
+                self.loading.move_to();
+            }
             if far {
                 self.loading.hold_far();
             }
@@ -3609,7 +3626,9 @@ impl Play {
         let now = self.session.now() as i64;
         if let Some(w) = self.loading.end(settled, now) {
             crate::say(&format!("loading screen down: the zones round {:?} in after {} ms{}", w.at.map(|v| v.round()), now - w.since, if settled { "" } else { " (the cap)" }));
-            if w.respawn {
+            if w.move_to {
+                walker.move_to(w.at, w.heading);
+            } else if w.respawn {
                 walker.relocate(w.at, w.heading);
             }
             // a move of the server's done: its answer, and the 0x40 from here

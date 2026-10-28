@@ -189,6 +189,9 @@ pub struct Wait {
     /// zones are in (`Play::loading_step`); a dump's (`Msg000D`'s
     /// `SetLocation`) and world entry's stand as given
     pub respawn: bool,
+    /// the move is the GM's Goto (`MoveTo`): its floor cast again, from 300
+    /// above to 300 below, once the zones are in (`Screen::move_to`)
+    pub move_to: bool,
     /// the session's clock when it went up
     pub since: i64,
     /// where the walk is held meanwhile: where it was put (the move's
@@ -218,7 +221,7 @@ impl Screen {
     pub fn begin(&mut self, at: [f32; 3], heading: f32, entering: bool, respawn: bool, now: i64) {
         let up = self.wait.is_some();
         let since = self.wait.map_or(now, |w| w.since);
-        self.wait = Some(Wait { at, heading, entering: entering || self.wait.is_some_and(|w| w.entering), respawn, since, held: None });
+        self.wait = Some(Wait { at, heading, entering: entering || self.wait.is_some_and(|w| w.entering), respawn, move_to: false, since, held: None });
         #[cfg(target_arch = "wasm32")]
         let hold = crate::web::page_value("loadinghold");
         #[cfg(not(target_arch = "wasm32"))]
@@ -243,6 +246,14 @@ impl Screen {
     pub fn hold_far(&mut self) {
         if crate::settings::loading_longer() {
             self.hold_at_least(FAR_HOLD_MS);
+        }
+    }
+
+    /// The move it waits for is `MoveTo`'s (the GM's Goto): its floor is cast
+    /// as `MoveTo` casts, once the zones are in.
+    pub fn move_to(&mut self) {
+        if let Some(w) = self.wait.as_mut() {
+            w.move_to = true;
         }
     }
 
@@ -449,6 +460,31 @@ mod tests {
         let (_, near) = frame_at((640, 480), glam::Vec3::new(0.0, 0.0, 0.1));
         let (_, far) = frame_at((640, 480), glam::Vec3::new(0.0, 0.0, 900.0));
         assert!(near.abs() < 1e-6 && (far - 1.0).abs() < 1e-6, "{near} {far}");
+    }
+
+    /// A Goto's wait (`move_to`) says so at its end, for its floor to be cast
+    /// as `MoveTo` casts once the zones are in, a world change's too; the
+    /// controls: a teleport's wait does not, nor a second move's while it is
+    /// up (the second move's own).
+    #[test]
+    fn a_goto_waits_to_cast_its_floor_as_move_to_does() {
+        let mut s = Screen::default();
+        s.begin([1.0, 24.0, 3.0], 0.0, false, false, 1000);
+        s.move_to();
+        assert_eq!(s.end(true, 1100).map(|w| (w.move_to, w.respawn)), Some((true, false)));
+        s.begin([1.0, 24.0, 3.0], 0.0, true, false, 1200);
+        s.move_to();
+        s.entered();
+        assert_eq!(s.end(true, 1300).map(|w| w.move_to), Some(true), "into another world");
+        s.begin([1.0, 2.0, 3.0], 0.0, false, true, 1400);
+        assert_eq!(s.end(true, 1500).map(|w| (w.move_to, w.respawn)), Some((false, true)), "a teleport's");
+        s.begin([1.0, 24.0, 3.0], 0.0, false, false, 1600);
+        s.move_to();
+        s.begin([9.0, 2.0, 9.0], 0.0, false, true, 1650);
+        assert_eq!(s.end(true, 1700).map(|w| w.move_to), Some(false), "the second move's own");
+        // with no wait up, nothing to mark
+        s.move_to();
+        assert!(!s.up());
     }
 
     /// The wait: up at a move, held while another world is read, down once

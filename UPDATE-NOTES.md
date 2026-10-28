@@ -5,6 +5,13 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-28 · Goto Zone lands on the ground; fishing on eqoaclassic
+- The GM's Goto Zone (TEST, Navigation) now sets you down on the ground of the square you pick,
+  as the PS2 does. It left you under the ground there, and you fell.
+- Fishing now works on eqoaclassic: buy a Fishing Pole from a Pole Merchant and a can of worms
+  from the Tacklemaster beside him (Freeport's docks, the Oasis, Hazinak and more), wear both,
+  face the water and say /fish (or use a weapon set that holds the pole).
+
 ## 2026-10-28 · Shadows under the characters, fishing, and the GM's TEST menu
 - Every character near the camera now has a shadow under its feet, as on the PS2: a soft dark
   patch on the ground, and on docks, counters and steps, fading where the ground falls away.

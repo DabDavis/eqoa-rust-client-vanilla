@@ -53,6 +53,10 @@ pub enum Placing {
     /// 0x00B2's: `Respawn`'s casts round the server's place
     /// (`arrival_floor`).
     Respawn,
+    /// The GM's Goto (`VIClient::MoveTo`): a cast from 300 above the place
+    /// to 300 below (`move_to_floor`), the place a grid square's centre at
+    /// the world's own height.
+    MoveTo,
 }
 
 /// Where a walk begins: the place, the heading, and how the place is stood
@@ -180,6 +184,7 @@ impl Walker {
             Placing::Ground => ground(&mut scene, x, z).unwrap_or(0.0),
             Placing::AsGiven => y,
             Placing::Respawn => arrival_floor(&mut scene, spawn.pos, -1).unwrap_or(y),
+            Placing::MoveTo => move_to_floor(&mut scene, spawn.pos, -1).unwrap_or(y),
         };
         let mut cam = WalkCamera::<Ee>::default();
         let pos = Vect3::of(x, y, z);
@@ -203,6 +208,14 @@ impl Walker {
     /// `heading`, the camera set behind.
     pub fn relocate(&mut self, pos: [f32; 3], heading: f32) {
         let y = arrival_floor(&mut self.scene, pos, self.cam.walk.parm64).unwrap_or(pos[1]);
+        self.place([pos[0], y, pos[2]], heading);
+    }
+
+    /// `MoveTo`'s placing: the character stood on the ground its cast finds
+    /// within 300 of `pos` (else at the height given, the zones there not
+    /// read yet), facing `heading`, the camera set behind.
+    pub fn move_to(&mut self, pos: [f32; 3], heading: f32) {
+        let y = move_to_floor(&mut self.scene, pos, self.cam.walk.parm64).unwrap_or(pos[1]);
         self.place([pos[0], y, pos[2]], heading);
     }
 
@@ -668,6 +681,21 @@ pub fn arrival_floor(w: &mut World<Ee>, pos: [f32; 3], actor: i32) -> Option<f32
     w.collide_sphere(&mut s, &mut f).then(|| (s.hit_point().y - F::new(0.2)).0)
 }
 
+/// `VIClient::MoveTo`'s floor (CLIENT 0x00BD53A0, the GM's Goto): a 0.1
+/// sphere cast from 300 above the place to 300 below, the place put 0.2 under
+/// where it hits (its second `Collide` repeats the first: its sphere is not
+/// set again). The console casts after `EnterWorld` has streamed the zones
+/// round the place in; nothing there (a far move's zones not read yet) is
+/// None, and the caller keeps the place's height and casts again once they
+/// are (`Play::loading_step`).
+pub fn move_to_floor(w: &mut World<Ee>, pos: [f32; 3], actor: i32) -> Option<f32> {
+    let y = F::<Ee>::new(pos[1]);
+    let mut s = CollSphere::<Ee>::default();
+    s.init(Vect3::new(F::new(pos[0]), y + F::new(300.0), F::new(pos[2])), Vect3::new(F::new(pos[0]), y - F::new(300.0), F::new(pos[2])), F::new(0.1));
+    let mut f = Filter::new(FilterKind::Scene, actor);
+    w.collide_sphere(&mut s, &mut f).then(|| (s.hit_point().y - F::new(0.2)).0)
+}
+
 pub fn ground(w: &mut World<Ee>, x: f32, z: f32) -> Option<f32> {
     let mut s = CollSphere::<Ee>::default();
     s.init(Vect3::of(x, 2000.0, z), Vect3::of(x, -2000.0, z), F::new(0.001));
@@ -956,6 +984,41 @@ pub(crate) mod tests {
                 } else {
                     assert!((at - y).abs() < 1.0, "{what}, {placing:?}: stands at {at}, logged out at {y}");
                 }
+            }
+        }
+    }
+
+    /// The GM's Goto (`MoveTo`) onto Tunaria's plains west of Freeport: grid
+    /// square (11, 8)'s centre, (23000, 17000), is at the grid's own height
+    /// (0, the ground there at 53.6), and `MoveTo`'s cast from
+    /// 300 above it finds the ground, where the walk then stands. The control
+    /// is `Respawn`'s cast (3 above to 3 below), the Goto's arrival until
+    /// 2026-10-28: nothing within 3, the walk left under the ground, where it
+    /// fell (to -70 in 3 s; the user: "the goto zone aways spawns too low and
+    /// you fall").
+    #[test]
+    fn goto_stands_on_the_ground_of_the_square() {
+        let (x, z) = (23000.0f32, 17000.0f32);
+        let Some(mut probe) = tunaria_round(x, z) else { return };
+        let c = probe.grid.as_ref().expect("Tunaria's grid").center(11, 8);
+        let pos = [c.x.0, c.y.0, c.z.0];
+        assert_eq!((pos[0], pos[2]), (x, z), "the square's centre");
+        let floor = move_to_floor(&mut probe, pos, -1).expect("MoveTo's cast finds the ground");
+        assert!(floor > pos[1] + 10.0, "the ground {floor} is well over the centre's height {}", pos[1]);
+        assert_eq!(arrival_floor(&mut probe, pos, -1), None, "the control's cast finds nothing within 3");
+        for placing in [Placing::MoveTo, Placing::Respawn] {
+            let Some(world) = tunaria_round(x, z) else { return };
+            let mut w = Walker::arrive(world, Spawn { pos, heading: 0.0, placing });
+            let t0 = w.scene.time;
+            for i in 1..=90 {
+                w.frame(Controls::default(), t0 + i * 33);
+            }
+            let at = w.cam.walk.phys.position.y.0;
+            eprintln!("{placing:?}: the square's centre at {}, the ground at {floor}, stands at {at} after 3 s", pos[1]);
+            if placing == Placing::MoveTo {
+                assert!((at - floor).abs() < 1.0, "MoveTo stands on the ground: {at}, the ground {floor}");
+            } else {
+                assert!(at < floor - 10.0, "the control is left under the ground: {at}");
             }
         }
     }

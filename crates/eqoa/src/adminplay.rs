@@ -12,8 +12,8 @@ use crate::admin::{Out, Part, Recv};
 use crate::buffpc::{BuffPc, BuffUp};
 use crate::gotownd::{Goto, GotoUp, Worlds};
 use crate::netstat::{ChannelRec, NetStat};
-use crate::walker::Walker;
-use vi::fpu::{Ee, F};
+use crate::walker::{Placing, Walker};
+use vi::fpu::Ee;
 
 /// `VIClientPart382E8`, its windows, and the `VIClient` fields the TEST
 /// menu's own entries toggle.
@@ -329,15 +329,16 @@ impl Play {
         if let Some((world, a, b)) = self.admin.go.take()
             && let Some(g) = walker.scene.grid.as_ref()
         {
-            // GetWorldGridCenter on the world the client is in, then MoveTo
+            // GetWorldGridCenter on the world the client is in, then MoveTo:
+            // EnterWorld at the square's centre, then the ground within 300
+            // of it, cast once the zones there are in (a far square's are not
+            // yet: the first cast met nothing and left the walk at the
+            // centre's height, under the ground, where it fell)
             let c = g.center(a, b);
-            let mut pos = [c.x.0, c.y.0, c.z.0];
-            if world as i64 == self.player.world {
-                pos[1] = move_to_floor(&mut walker.scene, pos, walker.cam.walk.parm64).unwrap_or(pos[1]);
-            }
+            let pos = [c.x.0, c.y.0, c.z.0];
             eprintln!("gm: MoveTo world {world} at {pos:?}");
             let now = self.session.now() as i64;
-            self.teleport(walker, world as u8, pos, [0.0; 3], now);
+            self.teleport_as(walker, world as u8, pos, [0.0; 3], now, Placing::MoveTo);
             self.admin.fast = false;
         }
         self.admin.position_lines.clear();
@@ -443,19 +444,6 @@ impl Play {
             r.draw_string(*at, POSITION_COLOR, line);
         }
     }
-}
-
-/// `MoveTo`'s ground: a sphere of 0.1 cast from 300 above to 300 below (the
-/// second `Collide` repeats the first: its sphere is not set again), the hit
-/// 0.2 under; none without a hit.
-fn move_to_floor(w: &mut vi::world::World<Ee>, pos: [f32; 3], actor: i32) -> Option<f32> {
-    use vi::coll::CollSphere;
-    use vi::vect::Vect3;
-    let y = F::<Ee>::new(pos[1]);
-    let mut s = CollSphere::<Ee>::default();
-    s.init(Vect3::new(F::new(pos[0]), y + F::new(300.0), F::new(pos[2])), Vect3::new(F::new(pos[0]), y - F::new(300.0), F::new(pos[2])), F::new(0.1));
-    let mut f = vi::scene::Filter::new(vi::scene::FilterKind::Scene, actor);
-    w.collide_sphere(&mut s, &mut f).then(|| (s.hit_point().y - F::new(0.2)).0)
 }
 
 #[cfg(test)]
@@ -583,5 +571,41 @@ mod tests {
         assert_eq!((p.mode, p.admin.go), (0, Some((0, 1, 1))));
         // the control: an id neither the part nor TEST has goes on to DoAction
         assert!(!p.admin_action(0x0B0E_0008, 0));
+    }
+
+    /// The Goto window's square through `Play` (`admin_frame`, `teleport_as`,
+    /// the loading screen's end): square (11, 8) on Tunaria's plains, the walk
+    /// standing at the square's centre's height (under the ground) as a far
+    /// move's would before the zones there come, stands on the ground once the
+    /// screen comes down. The control is the server's move (`teleport`,
+    /// `Respawn`'s cast), which leaves it there.
+    #[test]
+    fn a_goto_lands_on_the_ground_once_the_zones_are_in() {
+        use crate::walker::{Placing, Spawn, Walker};
+        for goto in [true, false] {
+            let Some(world) = crate::walker::tests::tunaria_round(23000.0, 17000.0) else { return };
+            let c = world.grid.as_ref().unwrap().center(11, 8);
+            let pos = [c.x.0, c.y.0, c.z.0];
+            let mut w = Walker::arrive(world, Spawn { pos, heading: 0.0, placing: Placing::AsGiven });
+            let mut p = play();
+            p.player.world = 0;
+            if goto {
+                p.admin.go = Some((0, 11, 8));
+                p.admin_frame(&mut w);
+            } else {
+                let now = p.session.now() as i64;
+                p.teleport(&mut w, 0, pos, [0.0; 3], now);
+            }
+            let ground = crate::walker::move_to_floor(&mut w.scene, pos, -1).unwrap();
+            p.loading_step(&mut w, true);
+            let at = w.cam.walk.phys.position.y.0;
+            eprintln!("goto {goto}: the centre at {}, the ground at {ground}, stands at {at}", pos[1]);
+            if goto {
+                assert!((at - ground).abs() < 0.5, "the Goto stands on the ground: {at}");
+            } else {
+                assert!((at - pos[1]).abs() < 0.5, "the control stays at the centre's height: {at}");
+            }
+            assert!(!p.loading(), "the screen is down");
+        }
     }
 }
