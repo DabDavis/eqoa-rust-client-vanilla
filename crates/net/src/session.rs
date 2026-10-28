@@ -588,6 +588,21 @@ impl Session {
         (self.start.elapsed().as_micros() as i64).saturating_mul(98_304) / 100_000_000
     }
 
+    /// The game connection as a report's trace gives it: the datagrams sent,
+    /// the connection's own counters (`VINetStats`' eleven, those not 0), and
+    /// how far the server has acknowledged the 0x40 (state channel 0x40, sent
+    /// to and acknowledged to): what tells a server that has the player's
+    /// 0x40s but leaves the player out of its world from a link that stopped.
+    pub fn net_line(&self) -> String {
+        let Some(c) = self.conn.filter(|&c| self.drdp.conns.contains(c)) else {
+            return format!("net: {} datagrams sent, no game connection", self.packets_sent);
+        };
+        let k = &self.drdp.conns[c];
+        let counts: Vec<String> = k.cstat.iter().zip(drdp::CSTAT_LABELS).filter(|(n, _)| **n != 0).map(|(n, label)| format!("{n} {label}")).collect();
+        let own = k.channels.as_ref().and_then(|v| v.get(0x40)).map_or("; no 0x40 sent".to_string(), |ch| format!("; the 0x40 sent to {}, acknowledged to {}", ch.tx.wrapping_sub(1), ch.tx_ack));
+        format!("net: {} datagrams sent; the game connection: {}{own}", self.packets_sent, counts.join(", "))
+    }
+
     /// `VIClient::UpdateTimeOfDay`: the hour, clock B (0x0013's second
     /// reading, blended forward on the local timer) modulo 3,600,000 of its
     /// units as 24 hours, as `VIScene::SetTimeOfDay` clamps it; none until
@@ -1402,6 +1417,24 @@ mod tests {
             let ev = deliver(&mut s, drdp::TYPE_DISCONNECT, vec![byte]);
             assert!(matches!(ev[..], [Event::Disconnected(r)] if r == reason), "{byte}: {ev:?}");
         }
+    }
+
+    // A report's net line: the datagrams sent, the game connection's counters
+    // not 0, and the 0x40 channel sent to and acknowledged to (a 0x40 sent and
+    // flushed is sent to 1, acknowledged to 0 until the server's ack; none
+    // before the first). The control: with no game connection, it says so.
+    #[test]
+    fn the_net_line_says_how_far_the_0x40_is_acknowledged() {
+        let mut s = session();
+        let before = s.net_line();
+        assert!(before.ends_with("; no 0x40 sent"), "{before}");
+        s.send_state(0x40, &[1, 2, 3]);
+        s.flush();
+        let line = s.net_line();
+        assert!(line.starts_with(&format!("net: {} datagrams sent; the game connection: ", s.packets_sent)), "{line}");
+        assert!(line.contains(" sent") && line.contains("the 0x40 sent to 1, acknowledged to 0"), "{line}");
+        s.conn = None;
+        assert_eq!(s.net_line(), format!("net: {} datagrams sent, no game connection", s.packets_sent));
     }
 
     // 0x07E0 is answered with 0x07E1: the game connection's eleven counters
