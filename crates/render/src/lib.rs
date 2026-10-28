@@ -384,9 +384,16 @@ pub struct Renderer {
     /// What is drawn over the scene with Z off (`set_overlay`), made at the
     /// first.
     overlay: Option<overlay::Overlay>,
-    /// Strips (lightning) drawn with the next particles, before them, as
-    /// the spell effects draw theirs before `VIParticleSystem::Render`.
+    /// Strips drawn after the particles and the shadows, in the order given:
+    /// the spell effects' lightning (`VISpellEffectSystem::Process`), then the
+    /// weapon trails (`VITrailFxRender`), as `VIScene::Render` draws them after
+    /// `VIParticleSystem::Render` and `RenderShadows` and before the weather
+    /// (`draw_billboards_and_shadows`, `draw_queued_strips`).
     pub strips: Vec<billboard::Strips>,
+    /// How many of the batches `draw_billboards_and_shadows` is handed are
+    /// the particle system's: the shadows and the strips go after them, the
+    /// rest (the weather's) after those. Set for each frame.
+    pub particles_end: usize,
     /// The last `draw`'s models and draw calls (`EQOA_PERF`).
     pub drawn: std::cell::Cell<(u32, u32)>,
     /// Groups' materials by texture (its key), sampler and uniform bytes.
@@ -630,6 +637,7 @@ impl Renderer {
             shadows: None,
             overlay: None,
             strips: Vec::new(),
+            particles_end: 0,
             drawn: Default::default(),
             materials: Default::default(),
             identity_palette,

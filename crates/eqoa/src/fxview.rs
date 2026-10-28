@@ -585,7 +585,8 @@ impl Stage {
     }
 
     /// The frame drawn into `target`: the two and the projectiles, then the
-    /// lightning and the particles over them.
+    /// particles and the lightning over them (`VIScene::Render`'s
+    /// particle system, then the spell effects).
     #[allow(clippy::too_many_arguments)]
     pub fn draw(&mut self, r: &mut Renderer, device: &wgpu::Device, queue: &wgpu::Queue, enc: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, depth: &wgpu::TextureView, aspect: f32) {
         let (view, v, p) = self.view(aspect);
@@ -593,6 +594,7 @@ impl Stage {
         r.draw(queue, enc, target, depth, &view, &self.draws());
         let textures = render::library_textures(&self.lib);
         r.draw_billboards(device, queue, enc, target, depth, v, p, &self.spells.batches, &textures);
+        r.draw_queued_strips(device, queue, enc, target, depth, v, p, &textures);
     }
 }
 

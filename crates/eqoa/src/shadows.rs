@@ -130,9 +130,6 @@ pub struct Shadows {
     queued: usize,
     drawn: usize,
     tris: usize,
-    /// The batches before the weather's (`viewer`): the shadows are drawn
-    /// after them.
-    pub particles_end: usize,
 }
 
 impl Shadows {
@@ -180,7 +177,7 @@ impl Shadows {
         let k = render::shadow::z_bias_reciprocal(vi::shadow::Z_BIAS, GAME_NEAR, far);
         let bias = render::shadow::Bias { clip_z: proj.w_axis.z, k, behind: self.eye.distance(self.game_eye) };
         let texture = self.texture.unwrap_or(0);
-        renderer.set_shadows(device, queue, texture, &self.verts, self.eye, bias, self.particles_end, &render::library_textures(lib));
+        renderer.set_shadows(device, queue, texture, &self.verts, self.eye, bias, &render::library_textures(lib));
     }
 
     /// Lets go of what was drawn (Shadows turned off).
@@ -189,7 +186,7 @@ impl Shadows {
         self.queued = 0;
         self.drawn = 0;
         self.tris = 0;
-        renderer.set_shadows(device, queue, 0, &[], self.eye, render::shadow::Bias::default(), 0, &render::library_textures(lib));
+        renderer.set_shadows(device, queue, 0, &[], self.eye, render::shadow::Bias::default(), &render::library_textures(lib));
     }
 
     pub fn describe(&self) -> String {

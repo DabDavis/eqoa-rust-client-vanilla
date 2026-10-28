@@ -1283,7 +1283,7 @@ mod tests {
     fn find_water_on_freeports_docks() {
         let (x, z) = (25330.0f32, 15721.95f32);
         let Some(mut w) = crate::walker::tests::tunaria_round(x, z) else { return };
-        let mut at = |w: &mut World<Ee>, px: f32, pz: f32| -> Vec<Landing> {
+        let at = |w: &mut World<Ee>, px: f32, pz: f32| -> Vec<Landing> {
             let y = crate::walker::ground(w, px, pz).expect("ground");
             (0..16).map(|k| landing(w, -1, Vect3::of(px, y, pz), Vect3::of(k as f32 * std::f32::consts::PI / 8.0, 0.0, 0.0))).collect()
         };

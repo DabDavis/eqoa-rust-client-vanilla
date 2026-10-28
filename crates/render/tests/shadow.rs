@@ -64,7 +64,7 @@ fn middle(g: &Gpu, r: &mut Renderer, tris: Option<&[Vertex]>, bias: Bias, eye: V
     let tex = |id: i32| (id == 5).then(|| esf::Image { width: 1, height: 1, rgba: vec![0, 0, 0, 255], alpha: false });
     r.set_fans(&g.device, &g.queue, &ground(), eye, &tex);
     if let Some(t) = tris {
-        r.set_shadows(&g.device, &g.queue, 5, t, EYE, bias, 0, &tex);
+        r.set_shadows(&g.device, &g.queue, 5, t, EYE, bias, &tex);
     }
     let px = render::capture_with_sky(&g.device, &g.queue, r, 8, 8, &view, &[], Some((v, p, &[], &tex)), None);
     let at = (4 * 8 + 4) * 4;
@@ -98,10 +98,10 @@ fn a_shadow_is_drawn_nearer_by_its_bias_on_its_up_face() {
     // set empty, or for another eye: not drawn
     close(middle(&g, &mut r, Some(&[]), bias, EYE), white, "set empty");
     // a texture no file has (the cache keeps 5 by its id): none
-    r.set_shadows(&g.device, &g.queue, 6, &shadow(GROUND + 0.04, true), EYE, bias, 0, &|_: i32| None::<esf::Image>);
+    r.set_shadows(&g.device, &g.queue, 6, &shadow(GROUND + 0.04, true), EYE, bias, &|_: i32| None::<esf::Image>);
     close(middle(&g, &mut r, None, bias, EYE), white, "no texture: none");
     let other = EYE + Vec3::new(0.0, 0.0, 0.5);
     let tex = |id: i32| (id == 5).then(|| esf::Image { width: 1, height: 1, rgba: vec![0, 0, 0, 255], alpha: false });
-    r.set_shadows(&g.device, &g.queue, 5, &shadow(GROUND + 0.04, true), EYE, bias, 0, &tex);
+    r.set_shadows(&g.device, &g.queue, 5, &shadow(GROUND + 0.04, true), EYE, bias, &tex);
     close(middle(&g, &mut r, None, bias, other), white, "set for another eye");
 }

@@ -239,10 +239,10 @@ impl Renderer {
         self.billboards(device, queue, encoder, target, depth, view, proj, batches, textures, Slot::World);
     }
 
-    /// The world's billboards after the shadows (`VIScene::Render`: the
-    /// weather after `RenderShadows`), as `draw_billboards` draws them but
-    /// through a buffer of their own and with no strips (`draw_billboards`
-    /// has drawn those).
+    /// The world's billboards after the shadows and the strips
+    /// (`VIScene::Render`: the weather after `RenderShadows`, the spell
+    /// effects and the trails), as `draw_billboards` draws them but through a
+    /// buffer of their own.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_late_billboards(
         &mut self,
@@ -279,11 +279,11 @@ impl Renderer {
         self.billboards(device, queue, encoder, target, depth, view, proj, batches, textures, Slot::Sky);
     }
 
-    /// The billboards, after any strips; `far` puts them at the far plane
-    /// with Z off. The strips are the world's (the lightning, the weapon
-    /// trails), drawn by the world's call alone: the sky's comes first and
-    /// its view has no translation, so taken there they went where nothing
-    /// is (F3 20261026-041245: no spell's bolt was ever seen in the world).
+    /// The billboards; `far` puts them at the far plane with Z off. The
+    /// strips are not drawn here: the sky's view has no translation, so taken
+    /// there they went where nothing is (F3 20261026-041245: no spell's bolt
+    /// was ever seen in the world), and the world's are drawn after the
+    /// particles and the shadows (`draw_queued_strips`).
     #[allow(clippy::too_many_arguments)]
     fn billboards(
         &mut self,
@@ -299,12 +299,6 @@ impl Renderer {
         slot: Slot,
     ) {
         let far = matches!(slot, Slot::Sky);
-        if matches!(slot, Slot::World) {
-            let strips = std::mem::take(&mut self.strips);
-            if !strips.is_empty() {
-                self.draw_strips(device, queue, encoder, target, depth, view, proj, &strips, textures);
-            }
-        }
         let mut verts: Vec<Vert> = Vec::new();
         let mut draws = Vec::new();
         for b in batches.iter().filter(|b| !b.quads.is_empty()) {
@@ -321,6 +315,26 @@ impl Renderer {
             draws.push((key, b.texture, start, verts.len() as u32));
         }
         self.draw_verts(device, queue, encoder, target, depth, view, proj, &verts, &draws, textures, slot);
+    }
+
+    /// The strips queued for this frame (`strips`: the spell lightning, then
+    /// the weapon trails), drawn and let go.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_queued_strips(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        view: Mat4,
+        proj: Mat4,
+        textures: &Textures,
+    ) {
+        let strips = std::mem::take(&mut self.strips);
+        if !strips.is_empty() {
+            self.draw_strips(device, queue, encoder, target, depth, view, proj, &strips, textures);
+        }
     }
 
     /// Triangle strips (lightning), over what `draw` drew, in the order given.

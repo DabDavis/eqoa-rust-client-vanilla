@@ -85,8 +85,6 @@ pub(crate) struct Shadows {
     count: u32,
     eye: glam::Vec3,
     bias: Bias,
-    /// how many of the frame's billboard batches come before them
-    after: usize,
 }
 
 impl Shadows {
@@ -173,7 +171,7 @@ impl Shadows {
             multiview_mask: None,
             cache: None,
         });
-        Shadows { pipeline, tex_layout, sampler, frame_buf, frame_bg, verts: None, group: None, count: 0, eye: glam::Vec3::ZERO, bias: Bias::default(), after: 0 }
+        Shadows { pipeline, tex_layout, sampler, frame_buf, frame_bg, verts: None, group: None, count: 0, eye: glam::Vec3::ZERO, bias: Bias::default() }
     }
 }
 
@@ -192,11 +190,10 @@ impl Renderer {
     /// The shadows `draw_shadows` draws from now on: `verts` three a
     /// triangle, relative to `eye`, textured by `texture` (a DictID; none in
     /// `textures`: nothing is drawn), nearer the camera by `bias`, after the
-    /// first `after` of the frame's
-    /// billboard batches (`draw_billboards_and_shadows`). Empty: nothing at
-    /// all.
+    /// particle system's billboard batches (`particles_end`,
+    /// `draw_billboards_and_shadows`). Empty: nothing at all.
     #[allow(clippy::too_many_arguments)]
-    pub fn set_shadows(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, texture: i32, verts: &[Vertex], eye: glam::Vec3, bias: Bias, after: usize, textures: &Textures) {
+    pub fn set_shadows(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, texture: i32, verts: &[Vertex], eye: glam::Vec3, bias: Bias, textures: &Textures) {
         if verts.is_empty() {
             if let Some(s) = self.shadows.as_mut() {
                 s.count = 0;
@@ -237,14 +234,13 @@ impl Renderer {
         s.count = verts.len() as u32;
         s.eye = eye;
         s.bias = bias;
-        s.after = after;
     }
 
-    /// `draw_billboards`, with the shadows `set_shadows` set for `view`
-    /// between the batches they follow and the rest (the weather's, through
-    /// `draw_late_billboards`), as `VIScene::Render` draws `RenderShadows`
-    /// after `VIParticleSystem::Render` and the weather after both; with
-    /// none, `draw_billboards` alone, as before there were shadows.
+    /// `VIScene::Render`'s tail: the particle system's batches (the first
+    /// `particles_end`), the shadows `set_shadows` set for `view`
+    /// (`RenderShadows`), the strips (`draw_queued_strips`: the spell
+    /// effects' lightning, then `VITrailFxRender`'s trails), then the rest of
+    /// the batches, the weather's (`draw_late_billboards`).
     #[allow(clippy::too_many_arguments)]
     pub fn draw_billboards_and_shadows(
         &mut self,
@@ -259,13 +255,10 @@ impl Renderer {
         textures: &Textures,
         view: &View,
     ) {
-        if !self.shadows_pending(view) {
-            self.draw_billboards(device, queue, encoder, target, depth, v, p, batches, textures);
-            return;
-        }
-        let k = self.shadows.as_ref().map_or(batches.len(), |s| s.after.min(batches.len()));
+        let k = self.particles_end.min(batches.len());
         self.draw_billboards(device, queue, encoder, target, depth, v, p, &batches[..k], textures);
         self.draw_shadows(queue, encoder, target, depth, view);
+        self.draw_queued_strips(device, queue, encoder, target, depth, v, p, textures);
         self.draw_late_billboards(device, queue, encoder, target, depth, v, p, &batches[k..], textures);
     }
 

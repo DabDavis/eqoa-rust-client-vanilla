@@ -288,7 +288,7 @@ impl Play {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use net::dump::{Item, ItemList, NetItem};
+    use net::dump::{Item, NetItem};
     use net::session::{Player, Session};
 
     /// Play on a session nothing answers (as `play`'s own tests make it),

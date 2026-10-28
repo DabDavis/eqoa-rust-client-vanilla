@@ -1038,7 +1038,7 @@ pub fn shot_with(
         let mut frame = lit(proj, v, shot_hour, Some((shot_eye, &walker.scene)), Some(&mut weather));
         frame.0.point = point;
         let (sky_bb, world_bb) = weather.render(&walker.eye);
-        let particles_end = batches.len();
+        renderer.particles_end = batches.len();
         batches.extend(world_bb);
         let mut rot = v;
         rot.w_axis = glam::Vec4::W;
@@ -1074,7 +1074,6 @@ pub fn shot_with(
                 None => crate::shadows::walker_caster(&mut walker, lib, None).into_iter().collect(),
             };
             let mut sh = crate::shadows::Shadows::new();
-            sh.particles_end = particles_end;
             sh.frame(&mut walker.scene, lib, &casters, &shot_lod_eye, view.view_proj, view.eye);
             sh.upload(&mut renderer, &device, &queue, lib, &proj);
             eprintln!("{}", sh.describe());
@@ -4872,12 +4871,12 @@ impl ApplicationHandler for App {
                     // which these are, before the weather's; none with the
                     // options' Shadows off or under the loading screen
                     mark(perf, 8);
+                    g.renderer.particles_end = batches.len();
                     if crate::settings::client().shadows && !loading {
                         let casters = match play.as_ref() {
                             Some(p) => p.shadow_casters(w, lib),
                             None => crate::shadows::walker_caster(w, lib, None).into_iter().collect(),
                         };
-                        shadows.particles_end = batches.len();
                         shadows.frame(&mut w.scene, lib, &casters, &crate::lod::eye(&w.cam, &w.eye.position), proj * v, lights.0.eye);
                         shadows.upload(&mut g.renderer, &g.device, &g.queue, lib, &proj);
                     } else {
