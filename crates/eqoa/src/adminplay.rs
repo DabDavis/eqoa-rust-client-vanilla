@@ -63,12 +63,14 @@ impl Default for Admin {
 }
 
 /// The TRIGGER entries' labels on `menus` (keyed by `Do2`'s message and the
-/// entry's id): a named one's name and tail, the rest their word.
+/// entry's id): a named one's name and tail, dimmed when it is off; the rest
+/// their word.
 pub fn set_trigger_labels(menus: &mut crate::client_image::Menus, triggers: &[Option<crate::admin::Trigger>]) {
     menus.labels.retain(|k, _| k.0 != crate::admin::TRIGGER_ENTRY);
     for (i, t) in triggers.iter().enumerate() {
         if let Some(t) = t {
-            menus.labels.insert((crate::admin::TRIGGER_ENTRY, i as i32), (crate::ui::wide(&t.name), crate::ui::wide(t.tail())));
+            let label = crate::client_image::Label { text: crate::ui::wide(&t.name), tail: crate::ui::wide(t.tail()), dim: !t.on };
+            menus.labels.insert((crate::admin::TRIGGER_ENTRY, i as i32), label);
         }
     }
 }
@@ -121,7 +123,8 @@ impl Play {
         if op == crate::admin::OP_TRIGGER_NAMES {
             match crate::admin::read_triggers(data) {
                 Some(t) => {
-                    let named: Vec<String> = t.iter().enumerate().filter_map(|(i, t)| t.as_ref().map(|t| format!("{} {}{}", i + 1, t.name, t.tail()))).collect();
+                    let state = |t: &crate::admin::Trigger| [(!t.on, " (off)"), (t.running, " (running)")].iter().filter(|s| s.0).map(|s| s.1).collect::<String>();
+                    let named: Vec<String> = t.iter().enumerate().filter_map(|(i, t)| t.as_ref().map(|t| format!("{} {}{}", i + 1, t.name, state(t)))).collect();
                     eprintln!("gm: trigger names: {}", if named.is_empty() { "none".into() } else { named.join(", ") });
                     self.admin.triggers = t;
                     self.trigger_labels();
@@ -665,7 +668,7 @@ mod tests {
         let mut p = play();
         assert!(p.admin_opcode(0x7E08, &names(&[(0, 1, "Invasion"), (2, 3, "Zombies")])));
         assert_eq!(p.admin.triggers[0].as_ref().map(|t| t.name.as_str()), Some("Invasion"));
-        assert_eq!(p.admin.triggers[2].as_ref().map(|t| t.tail()), Some(" (running)"));
+        assert_eq!(p.admin.triggers[2].as_ref().map(|t| t.tail()), Some(" *"));
         assert!(p.start.is_none(), "no menus here: nothing to label");
         p.trigger_labels();
         assert!(p.admin_opcode(0x7E08, &names(&[(2, 1, "Zombies")])));
@@ -675,15 +678,17 @@ mod tests {
         assert_eq!(p.admin.triggers, before, "the control: a set cut short changes nothing");
         assert!(!p.admin_opcode(0x7E09, &[0]), "the control: not the channel's");
 
+        use crate::client_image::Label;
+        let label = |text: &str, tail: &str, dim| Label { text: crate::ui::wide(text), tail: crate::ui::wide(tail), dim };
         let mut menus = crate::client_image::Menus::default();
-        menus.labels.insert((0xA101_0000, 0), (crate::ui::wide("KILL!"), Vec::new()));
-        super::set_trigger_labels(&mut menus, &[Some(crate::admin::Trigger { name: "Invasion".into(), on: false, running: false }), None]);
-        assert_eq!(menus.labels.get(&(TRIGGER_ENTRY, 0)), Some(&(crate::ui::wide("Invasion"), crate::ui::wide(" (off)"))));
+        menus.labels.insert((0xA101_0000, 0), label("KILL!", "", false));
+        super::set_trigger_labels(&mut menus, &[Some(crate::admin::Trigger { name: "Invasion".into(), on: false, running: true }), None]);
+        assert_eq!(menus.labels.get(&(TRIGGER_ENTRY, 0)), Some(&label("Invasion", " *", true)), "off: dimmed; running: the star");
         assert_eq!(menus.labels.len(), 2, "one trigger's label, and another entry's left alone");
         super::set_trigger_labels(&mut menus, &[None, Some(crate::admin::Trigger { name: "Two".into(), on: true, running: false })]);
         assert!(!menus.labels.contains_key(&(TRIGGER_ENTRY, 0)), "a trigger taken away loses its label");
-        assert_eq!(menus.labels.get(&(TRIGGER_ENTRY, 1)), Some(&(crate::ui::wide("Two"), Vec::new())));
-        assert_eq!(menus.labels.get(&(0xA101_0000, 0)).map(|l| l.0.len()), Some(5), "the control: KILL's left alone");
+        assert_eq!(menus.labels.get(&(TRIGGER_ENTRY, 1)), Some(&label("Two", "", false)), "the control: on and idle, plain");
+        assert_eq!(menus.labels.get(&(0xA101_0000, 0)), Some(&label("KILL!", "", false)), "the control: KILL's left alone");
     }
 
     /// The labels' keys are the TRIGGER entries the TEST menu reaches out
@@ -707,7 +712,7 @@ mod tests {
             for e in &m.entries {
                 let label = d.menus.labels.get(&(e.msg, e.id));
                 if e.msg == crate::admin::TRIGGER_ENTRY {
-                    assert_eq!(label.map(|l| String::from_utf16_lossy(&l.0)), Some(format!("T{}", e.id)));
+                    assert_eq!(label.map(|l| String::from_utf16_lossy(&l.text)), Some(format!("T{}", e.id)));
                 } else {
                     assert!(label.is_none(), "the control: {:08X} {} has none", e.msg, e.id);
                 }

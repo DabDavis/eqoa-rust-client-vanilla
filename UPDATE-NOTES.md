@@ -7,8 +7,8 @@ is put on the page by `.github/workflows/notes.yml`.
 
 ## 2026-10-28 · GMs see their server's names for the TRIGGER entries
 - For GMs only, on a server that names its triggers (eqoaclassic): TEST, Programming, TRIGGER
-  now shows each trigger's name where the PS2 shows eight lines all called TRIGGER, with
-  "(off)" after one that is switched off and "(running)" after one that is going on now. A
+  now shows each trigger's name where the PS2 shows eight lines all called TRIGGER. A trigger
+  that is switched off is greyed out, and one that is going on now has a * after its name. A
   line with no trigger still says TRIGGER. Picking a line fires it as before. Every other
   player, and every other server, sees no change.
 

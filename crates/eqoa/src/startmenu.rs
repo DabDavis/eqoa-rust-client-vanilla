@@ -387,11 +387,17 @@ impl MainMenu {
         while row < count {
             let sel = self.x34 && row == self.sel;
             let e = &menu.entries[row as usize];
-            let text = match menus.labels.get(&(e.msg, e.id)) {
-                Some((label, tail)) => fit_label(vui, r, label, tail, inside),
-                None => word(e.word),
+            let (text, dim) = match menus.labels.get(&(e.msg, e.id)) {
+                Some(l) => (fit_label(vui, r, &l.text, &l.tail, inside), l.dim),
+                None => (word(e.word), false),
             };
-            vui.blit_bar3(r, &text, if sel { lit } else { black }, pos, 141, 142, 150, BAR_WIDTH, 0, 1.0, 0, false);
+            let color = match (sel, dim) {
+                (true, false) => lit,
+                (false, false) => black,
+                (true, true) => DIM_LIT,
+                (false, true) => DIM,
+            };
+            vui.blit_bar3(r, &text, color, pos, 141, 142, 150, BAR_WIDTH, 0, 1.0, 0, false);
             if sel {
                 let (a, b) = (vui.entry(85), vui.entry(150));
                 let p = [pos[0], pos[1] + b.uv1[1] / 2 - a.uv1[1] / 2 - 3];
@@ -611,6 +617,15 @@ impl MainMenu {
 
 /// A bar's width (`OnDrawSelf`'s `BlitBar3(..., 140, ...)`).
 const BAR_WIDTH: i32 = 140;
+
+/// A dimmed label's text (`Label::dim`: a choice that does nothing now, a
+/// trigger switched off), not the game's: on the bar's beige stone (about
+/// 160, 150, 130) a grey at about a 2.5:1 contrast, where the game's black
+/// is 8:1 and its selected teal (10, 50, 70) 5:1.
+const DIM: [f32; 4] = [100.0 / 255.0, 100.0 / 255.0, 100.0 / 255.0, 1.0];
+/// A dimmed label's text when its bar is selected: the selected teal
+/// greyed to the same contrast.
+const DIM_LIT: [f32; 4] = [75.0 / 255.0, 95.0 / 255.0, 108.0 / 255.0, 1.0];
 
 /// A run-time label (`Menus::labels`) fitted to `w`, the bar between its
 /// caps: the text and its tail when they fit; else the text cut short,
@@ -1090,10 +1105,10 @@ mod tests {
         assert!(whole.2.iter().all(|b| b.1[1] + b.2[1] == 331), "the control: the rail's 18 rows reach 331");
     }
 
-    /// A raster that notes each centred string (where, what), a character
-    /// 8 pixels wide.
+    /// A raster that notes each centred string (where, its colour, what), a
+    /// character 8 pixels wide.
     #[derive(Default)]
-    struct Texts(Vec<([i32; 2], String)>);
+    struct Texts(Vec<([i32; 2], [f32; 4], String)>);
 
     impl Raster for Texts {
         fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
@@ -1101,8 +1116,8 @@ mod tests {
         fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
         fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
         fn draw_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16]) {}
-        fn draw_centered_string(&mut self, at: [i32; 2], _: [f32; 4], s: &[u16], _: u32) {
-            self.0.push((at, String::from_utf16_lossy(s)));
+        fn draw_centered_string(&mut self, at: [i32; 2], c: [f32; 4], s: &[u16], _: u32) {
+            self.0.push((at, c, String::from_utf16_lossy(s)));
         }
         fn string_width(&self, s: &[u16]) -> i32 {
             s.len() as i32 * 8
@@ -1118,10 +1133,11 @@ mod tests {
 
     impl Layout for Texts {}
 
-    /// The bars' texts of a TEST-menu-like menu of the eight TRIGGER
-    /// entries (word 507, `Do2`'s message, ids 0 to 7) with `labels`: the
-    /// seven bars drawn, top to bottom (centred on the bar, x 18 + 70).
-    fn trigger_bars(labels: &[(i32, &str, &str)]) -> Vec<String> {
+    /// The bars' texts and colours of a TEST-menu-like menu of the eight
+    /// TRIGGER entries (word 507, `Do2`'s message, ids 0 to 7) with `labels`
+    /// (id, text, tail, dim): the seven bars drawn, top to bottom (centred on
+    /// the bar, x 18 + 70), the first selected.
+    fn trigger_bars(labels: &[(i32, &str, &str, bool)]) -> Vec<(String, [f32; 4])> {
         let mut vui = posts::vui();
         let mut words: Vec<String> = (1..507).map(|n| format!("word {n}")).collect();
         words.push("TRIGGER".into());
@@ -1129,8 +1145,8 @@ mod tests {
         let mut menus = Menus::default();
         let entries = (0..8).map(|i| crate::client_image::MenuEntry { word: 507, msg: crate::admin::TRIGGER_ENTRY, id: i, ..Default::default() }).collect();
         let m = menus.push(Menu { x00: -1, x04: -1, entries });
-        for (id, label, tail) in labels {
-            menus.labels.insert((crate::admin::TRIGGER_ENTRY, *id), (wide(label), wide(tail)));
+        for (id, text, tail, dim) in labels {
+            menus.labels.insert((crate::admin::TRIGGER_ENTRY, *id), crate::client_image::Label { text: wide(text), tail: wide(tail), dim: *dim });
         }
         let loc = Location { world: 0, pos: [0.0; 3], cols: 1, rows: 1, cell: 1.0, origin: [0.0; 3], bounds: None };
         let mut sm = StartMenu::new(m);
@@ -1138,21 +1154,45 @@ mod tests {
         let mut r = Texts::default();
         sm.show_main(&vui, &r, true, 0, &loc);
         sm.draw(&vui, &mut r, &menus, 16, &Stats::default(), &mut Vec::new());
-        r.0.into_iter().filter(|(at, _)| at[0] == 18 + BAR_WIDTH / 2).map(|(_, s)| s).collect()
+        r.0.into_iter().filter(|(at, ..)| at[0] == 18 + BAR_WIDTH / 2).map(|(_, c, s)| (s, c)).collect()
     }
+
+    /// The bars' colours as `OnDrawSelf` gives them: the selected teal, and
+    /// black.
+    const LIT: [f32; 4] = [10.0 / 255.0, 50.0 / 255.0, 70.0 / 255.0, 1.0];
+    const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 
     /// The server's names on the TRIGGER bars (`Menus::labels`): a named
     /// entry shows its name and tail, an unnamed one the game's word; a name
     /// too long for the bar is cut, "..." after it and its tail whole, and
     /// no cut runs past the bar between its caps (17 characters here). The
-    /// control: with no labels every bar says TRIGGER.
+    /// control: with no labels every bar says TRIGGER, the first selected.
     #[test]
     fn a_named_trigger_shows_its_name_on_its_bar() {
         let bars = trigger_bars(&[]);
-        assert_eq!(bars, vec!["TRIGGER"; 7], "the control: the game's word");
-        let bars = trigger_bars(&[(0, "Invasion", ""), (2, "Zombies", " (running)"), (3, "Moradhim Earth Elemental Invasion", " (off)"), (6, "Stop everything now", "")]);
-        assert_eq!(bars, ["Invasion", "TRIGGER", "Zombies (running)", "Moradhim... (off)", "TRIGGER", "TRIGGER", "Stop everythin..."]);
-        assert!(bars.iter().all(|s| s.encode_utf16().count() * 8 <= BAR_WIDTH as usize), "{bars:?}");
+        let texts: Vec<_> = bars.iter().map(|b| b.0.as_str()).collect();
+        assert_eq!(texts, vec!["TRIGGER"; 7], "the control: the game's word");
+        let colors: Vec<_> = bars.iter().map(|b| b.1).collect();
+        assert_eq!(colors, [LIT, BLACK, BLACK, BLACK, BLACK, BLACK, BLACK], "the control: the first selected");
+        let bars = trigger_bars(&[(0, "Invasion", "", false), (2, "Zombies", " *", false), (3, "Moradhim Earth Elemental Invasion", "", false), (6, "Stop everything now", " *", false)]);
+        let texts: Vec<_> = bars.iter().map(|b| b.0.as_str()).collect();
+        assert_eq!(texts, ["Invasion", "TRIGGER", "Zombies *", "Moradhim Earth...", "TRIGGER", "TRIGGER", "Stop everyth... *"]);
+        assert!(texts.iter().all(|s| s.encode_utf16().count() * 8 <= BAR_WIDTH as usize), "{texts:?}");
+    }
+
+    /// A trigger switched off (`Label::dim`) is drawn in the dim grey, and
+    /// selected in the dim teal; its name is not cut for a tail. The
+    /// controls: the same bars on, in black and in the selected teal; an
+    /// unnamed bar is never dimmed.
+    #[test]
+    fn an_off_trigger_is_drawn_dimmed() {
+        let off = trigger_bars(&[(0, "Fireworks", "", true), (1, "Holiday fireworks", "", true), (2, "Fair", "", false)]);
+        assert_eq!(off[0], ("Fireworks".into(), DIM_LIT), "off and selected");
+        assert_eq!(off[1], ("Holiday fireworks".into(), DIM), "off: the whole name, dimmed");
+        assert_eq!(off[2], ("Fair".into(), BLACK), "the control: an on trigger");
+        assert_eq!(off[3], ("TRIGGER".into(), BLACK), "the control: unnamed, never dimmed");
+        let on = trigger_bars(&[(0, "Fireworks", "", false), (1, "Holiday fireworks", "", false)]);
+        assert_eq!((on[0].1, on[1].1), (LIT, BLACK), "the control: the same bars on");
     }
 
     /// `fit_label`: whole when it fits; else cut on a character before a

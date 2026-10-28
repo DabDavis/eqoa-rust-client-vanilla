@@ -43,15 +43,10 @@ pub struct Trigger {
 }
 
 impl Trigger {
-    /// What its entry shows after the name: " (off)", " (running)", both
-    /// as " (off, running)", or nothing.
+    /// What its entry shows after the name: " *" while it runs, else
+    /// nothing (one switched off is drawn dimmed instead: `Label::dim`).
     pub fn tail(&self) -> &'static str {
-        match (self.on, self.running) {
-            (true, false) => "",
-            (false, false) => " (off)",
-            (true, true) => " (running)",
-            (false, true) => " (off, running)",
-        }
+        if self.running { " *" } else { "" }
     }
 }
 
@@ -617,13 +612,15 @@ mod tests {
         assert_eq!(read_triggers(&[0]), Some(Default::default()), "no triggers");
     }
 
-    /// What an entry shows after its name, by its flags.
+    /// What an entry shows after its name: " *" while it runs, whether it
+    /// is on or off (off is the label's dimming, not a tail). The control:
+    /// idle, on or off, nothing.
     #[test]
-    fn a_triggers_tail_says_off_and_running() {
+    fn a_running_triggers_tail_is_a_star() {
         let t = |on, running| Trigger { name: String::new(), on, running }.tail();
-        assert_eq!(t(true, false), "", "on and idle: the name alone");
-        assert_eq!(t(false, false), " (off)");
-        assert_eq!(t(true, true), " (running)");
-        assert_eq!(t(false, true), " (off, running)");
+        assert_eq!(t(true, true), " *");
+        assert_eq!(t(false, true), " *");
+        assert_eq!(t(true, false), "", "the control: on and idle, the name alone");
+        assert_eq!(t(false, false), "", "the control: off and idle, no tail either");
     }
 }
