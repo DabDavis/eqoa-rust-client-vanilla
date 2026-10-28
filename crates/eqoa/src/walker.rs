@@ -1398,4 +1398,99 @@ pub(crate) mod tests {
             }
         }
     }
+
+    /// The floor the walk's own probe finds under (x, z) from `y` down
+    /// `reach` (a 0.001 sphere, `VIWalkFloorFilter`): the topmost.
+    fn floor_under(w: &mut World<Ee>, x: f32, z: f32, y: f32, reach: f32) -> Option<f32> {
+        let mut s = CollSphere::<Ee>::default();
+        s.init(Vect3::of(x, y, z), Vect3::of(x, y - reach, z), F::new(0.001));
+        let mut f = Filter::new(FilterKind::WalkFloor, -1);
+        w.collide_sphere(&mut s, &mut f).then(|| s.hit_point().y.0)
+    }
+
+    /// A run steered by the mouse over Freeport's slopes (camera mode 3, the
+    /// right button held, the mouse a pixel a frame either way, at 75 frames
+    /// a second, jib's rate) is drawn on the ground under it all the way, as
+    /// the console's own frames stand on it, and runs: up jib's slope
+    /// south-west of the docks from a stand (F3 20261028-150758: "it phases
+    /// characters into slopes, forces them to walk"), and down the side of
+    /// the mound by the harbour with the button taken while running (022842:
+    /// "you sink through it sometimes into the ground partially or float in
+    /// the air as you move around it"). Drawn between two console frames on
+    /// a straight line, the feet are within a few centimetres of the ground
+    /// (2 cm here; 3 mm in 99 frames of 100 round Freeport). The control: the
+    /// look made on the walk as drawn, as until c752913: the console frames
+    /// begun again every frame drawn, only the place, the facing and the
+    /// height offset were drawn on, and the rest of the walk stayed as it
+    /// was when the mouse began to move: its speed, its locomotion and the
+    /// floor it stood on. Each look-ahead's `Move` took the whole climb since
+    /// that floor as one step and smoothed it (`m_heightOffset -= rise`,
+    /// held at -0.6): the body ran 0.6 under the slope, standing (locomotion
+    /// 0); going down, the step-down test failed against that floor and each
+    /// look-ahead fell from rest: it floated over the slope, more than a
+    /// metre by the mound's foot.
+    #[test]
+    fn a_run_steered_by_the_mouse_keeps_to_the_ground_of_a_slope() {
+        let go = Controls { fwd: 1.0, ..Default::default() }.axes();
+        // From 12 back of (x, z) along `heading`, 3.5 s, the button held from
+        // frame `held` on, drawn at `hz`: the feet against the floor under
+        // them at worst both ways (none within 3 under: 3 over) and the frames
+        // drawn running (locomotion 3), from the hold's second second on.
+        let run = |(x, y, z): (f32, f32, f32), heading: f32, held: u64, hz: f64, fixed: bool| -> Option<(f32, f32, usize, usize)> {
+            let mut fw = Vect3::<Ee>::default();
+            fw.hpr(F::new(heading), F::ZERO, F::ZERO);
+            let (sx, sz) = (x - fw.x.0 * 12.0, z - fw.z.0 * 12.0);
+            let mut world = tunaria_round(sx, sz)?;
+            let sy = floor_under(&mut world, sx, sz, y + 2.0, 8.0)?;
+            let mut w = Walker::arrive(world, Spawn { pos: [sx, sy, sz], heading, placing: Placing::AsGiven });
+            crate::camstyle::set_style(&mut w.cam, 3, None, &mut w.scene);
+            let t0 = w.scene.time;
+            let (mut sunk, mut over, mut running, mut late) = (0.0f32, 0.0f32, 0, 0);
+            for k in 1.. {
+                let now = drawn_at(t0, hz, 0.0, k);
+                if now - t0 > 3500 {
+                    break;
+                }
+                let steer = k >= held;
+                if steer {
+                    if fixed {
+                        w.rewind();
+                    }
+                    let dx = if k % 2 == 0 { 1.0 } else { -1.0 };
+                    crate::mouse::look_held(&mut w.cam, [false, true], dx, 0.0, false, 1.0 / hz as f32, k > held);
+                }
+                w.frame_with(go, now, &crate::controls::Client { steer, ..Default::default() }, true);
+                if !steer {
+                    continue;
+                }
+                let feet = w.cam.walk.phys.smooth_location();
+                let e = floor_under(&mut w.scene, feet.x.0, feet.z.0, feet.y.0 + 1.2, 4.2).map_or(3.0, |g| feet.y.0 - g);
+                (sunk, over) = (sunk.min(e), over.max(e));
+                if drawn_at(t0, hz, 0.0, held) + 1000 <= now {
+                    late += 1;
+                    running += (w.cam.walk.phys.loco_state == 3) as usize;
+                }
+            }
+            Some((sunk, over, running, late))
+        };
+        let up = ((25291.62f32, 55.656654f32, 15822.053f32), 3.0 * std::f32::consts::FRAC_PI_2, 1);
+        let down = ((25429.738f32, 58.026684f32, 15730.957f32), std::f32::consts::PI, 75);
+        let Some(console) = run(up.0, up.1, up.2, 1000.0 / CONSOLE_FRAME_MS, true) else { return };
+        for (case, (at, heading, held)) in [("up jib's slope from a stand", up), ("down the mound while running", down)] {
+            let fixed = run(at, heading, held, 75.0, true).unwrap();
+            let control = run(at, heading, held, 75.0, false).unwrap();
+            eprintln!("{case}: (most sunk, most over, frames running of): {fixed:?}, the control {control:?}");
+            assert!(fixed.0 > -0.05 && fixed.1 < 0.05, "{case}: the feet off the ground by {fixed:?}");
+            assert!(fixed.2 * 10 >= fixed.3 * 9, "{case}: running on {} of {} frames", fixed.2, fixed.3);
+            if held == 1 {
+                assert!(control.0 < -0.5 && control.2 == 0, "the control, {case}: under the slope and standing, {control:?}");
+            } else {
+                assert!(control.1 > 1.0, "the control, {case}: over the slope, {control:?}");
+            }
+        }
+        // the console's own frames stand on that ground (drawn at its rate,
+        // each frame drawn is one)
+        eprintln!("up jib's slope at the console's rate: {console:?}");
+        assert!(console.0 > -0.002 && console.1 < 0.002, "the console's frames off the ground by {console:?}");
+    }
 }
