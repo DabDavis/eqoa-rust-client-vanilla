@@ -439,9 +439,22 @@ impl Default for SellWnd {
     }
 }
 
-/// `InMinutes`: the GM channel's flag (`VIClientPart382E8::IsEnabled`),
-/// which a player's client never sets: durations are in hours.
-const IN_MINUTES: bool = false;
+thread_local! {
+    /// `InMinutes`: the GM channel's flag (`VIClientPart382E8::IsEnabled() >
+    /// 0`), kept here by `adminplay` each HUD frame; a player's never has
+    /// it: durations are in hours.
+    static IN_MINUTES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `InMinutes`.
+fn in_minutes() -> bool {
+    IN_MINUTES.with(|c| c.get())
+}
+
+/// The GM channel's flag, for `InMinutes`.
+pub fn set_in_minutes(on: bool) {
+    IN_MINUTES.with(|c| c.set(on));
+}
 
 impl SellWnd {
     /// The focus from outside (295): the windows reset, the form down.
@@ -491,7 +504,7 @@ impl SellWnd {
             cues.push(13);
             self.price = it.item.value as i32;
             self.buyout = self.price.wrapping_mul(2);
-            self.duration = if IN_MINUTES { 2 } else { 720 };
+            self.duration = if in_minutes() { 2 } else { 720 };
             self.field = 1;
             self.selling = true;
             self.sell.close(true);
@@ -509,7 +522,7 @@ impl SellWnd {
             match bank.items.get(self.bank.sel.max(0) as usize).filter(|it| can_sell(it)) {
                 Some(it) => {
                     let w = |id: i32| vui.words.get(id, vui.language).to_string();
-                    let text = format!("{}: {}\n{}: {} {}\n{}: {} {}\n{}", w(1723), it.item.name, w(1789), self.price, w(479), w(1726), if IN_MINUTES { self.duration } else { self.duration / 60 }, w(if IN_MINUTES { 1724 } else { 1725 }), w(1790));
+                    let text = format!("{}: {}\n{}: {} {}\n{}: {} {}\n{}", w(1723), it.item.name, w(1789), self.price, w(479), w(1726), if in_minutes() { self.duration } else { self.duration / 60 }, w(if in_minutes() { 1724 } else { 1725 }), w(1790));
                     self.mbox.prompt(&wide(&text), 1, 0, 0, now);
                     self.mbox.pos = [175, 115];
                     self.child = SellChild::MBox;
@@ -541,7 +554,7 @@ impl SellWnd {
             }
             3 => {
                 e.set_max_length(5);
-                e.title = wide(&format!("{} {}", w(1726), w(if IN_MINUTES { 1687 } else { 1691 })));
+                e.title = wide(&format!("{} {}", w(1726), w(if in_minutes() { 1687 } else { 1691 })));
             }
             _ => return,
         }
@@ -556,7 +569,7 @@ impl SellWnd {
         match self.field {
             1 => self.price = v,
             2 => self.buyout = v,
-            3 => self.duration = if IN_MINUTES { v } else { v.wrapping_mul(60) },
+            3 => self.duration = if in_minutes() { v } else { v.wrapping_mul(60) },
             _ => {}
         }
         self.child = SellChild::Form;
@@ -735,15 +748,15 @@ impl SellWnd {
         let cols = [40, 180, 240];
         self.price = self.price.max(it.item.value as i32).min(999_999_999);
         self.buyout = self.buyout.max(self.price).min(999_999_999);
-        self.duration = if IN_MINUTES { self.duration.clamp(2, 4320) } else { self.duration.clamp(720, 4320) };
+        self.duration = if in_minutes() { self.duration.clamp(2, 4320) } else { self.duration.clamp(720, 4320) };
         let w = |id: i32| wide(vui.words.get(id, vui.language));
         let s = &self.sell;
         let f = self.field;
         Self::draw_row(s, vui, r, 1, Some(&w(1723)), cols[0], Some(&wide(&it.item.name)), cols[1], None, cols[2], f == 0, true);
         Self::draw_row(s, vui, r, 2, Some(&w(1685)), cols[0], Some(&wide(&self.price.to_string())), cols[1], None, cols[2], f == 1, true);
         Self::draw_row(s, vui, r, 3, Some(&w(1686)), cols[0], Some(&wide(&self.buyout.to_string())), cols[1], None, cols[2], f == 2, true);
-        let unit = w(if IN_MINUTES { 1724 } else { 1725 });
-        let d = if IN_MINUTES { self.duration } else { self.duration / 60 };
+        let unit = w(if in_minutes() { 1724 } else { 1725 });
+        let d = if in_minutes() { self.duration } else { self.duration / 60 };
         Self::draw_row(s, vui, r, 4, Some(&w(1726)), cols[0], Some(&wide(&d.to_string())), cols[1], Some(&unit), cols[2], f == 3, true);
         let ok = wide(&format!("{}*", vui.words.get(218, vui.language)));
         Self::draw_row(s, vui, r, 5, Some(&ok), cols[0], None, cols[1], None, cols[2], f == 4, true);
@@ -937,6 +950,38 @@ mod tests {
         };
         assert_eq!(select(Rules::retail()), (false, 0, vec![9], vec![SellOut::CannotSell]));
         assert_eq!(select(sandstorm()), (true, 300, vec![13], vec![]));
+    }
+
+    /// `InMinutes` (the GM channel's flag, `adminplay`): the form starts at
+    /// 2 minutes and keeps them, held to 2..4320; the control, a player's:
+    /// 720 minutes shown as 12 hours, typed hours made minutes.
+    #[test]
+    fn the_gm_sells_in_minutes() {
+        use crate::pointer::testing::{NullRaster, vui};
+        let (vui, mut r) = (vui(), NullRaster);
+        let mut bank = ItemList::default();
+        let mut it = NetItem { quantity: 1, equip_slot: -1, quick_slot: -1, ..Default::default() };
+        it.item.rent = 1;
+        it.item.value = 50;
+        bank.items.push(it);
+        let mut form = |gm: bool| {
+            set_in_minutes(gm);
+            let (mut cues, mut out) = (Vec::new(), Vec::new());
+            let mut s = SellWnd::default();
+            s.focus(&vui, &r);
+            s.key(&vui, &r, &bank, 134, true, 0, &mut cues, &mut out);
+            let start = s.duration;
+            s.field = 3;
+            s.edit.set_text(&wide("1"));
+            s.take_text();
+            let typed = s.duration;
+            s.duration = 1;
+            s.draw_sell(&vui, &mut r, &bank);
+            set_in_minutes(false);
+            (start, typed, s.duration)
+        };
+        assert_eq!(form(true), (2, 1, 2), "minutes: 2 to start, 1 typed is 1, held at 2");
+        assert_eq!(form(false), (720, 60, 720), "hours: 12 to start, 1 typed is 60, held at 720");
     }
 
     /// The bank's rows take a click, a second asks for the form; with the

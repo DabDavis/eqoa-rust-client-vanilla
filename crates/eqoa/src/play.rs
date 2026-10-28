@@ -754,6 +754,9 @@ impl Play {
                     // SendD4On / SendD4Off: the summons or resurrection taken or refused
                     Some(crate::dialog::BoxAnswer::Yes(2, _)) => self.session.send_op_byte(0x00D4, 1),
                     Some(crate::dialog::BoxAnswer::No(2, _)) => self.session.send_op_byte(0x00D4, 0),
+                    // PromptWithName's: Send0701a / Send0701b (`adminplay`)
+                    Some(crate::dialog::BoxAnswer::Yes(3, _)) => self.admin_answer(true),
+                    Some(crate::dialog::BoxAnswer::No(3, _)) => self.admin_answer(false),
                     Some(crate::dialog::BoxAnswer::Yes(0, 0xA010000)) => self.do_action(0xA010000, 0),
                     Some(crate::dialog::BoxAnswer::Yes(0, 0xB051007)) => self.session.send(&crate::guild::Cmds::bare(2)),
                     Some(crate::dialog::BoxAnswer::Yes(0, 0xB051008)) => self.session.send(&crate::guild::Cmds::bare(3)),
@@ -2323,6 +2326,8 @@ impl Play {
                     self.dump.player.p30 = self.stats.p30;
                 }
                 Event::State { channel: 0x43, data } => net::dump::read_effects(&mut self.effects, &data),
+                // Channel44: the server-load channels (`adminplay`)
+                Event::State { channel: channel @ 0x44..=0x6B, data } => self.admin_channel44(channel, &data),
                 Event::State { channel, data } if let Some(slot) = net::entity::slot_of_channel(channel) => {
                     let self_id = self.session.self_id;
                     let skel = self.puppets[slot].as_ref().and_then(|p| p.sprite.as_ref()).map_or(0, |s| s.skel_type);
@@ -2530,10 +2535,15 @@ impl Play {
         // other actors, its own passed over); any other is carried along its
         // velocity since it was last moved (ExtrapolateMove).
         let me = self.self_id32();
+        let walks = self.admin.walks();
         for (slot, e) in self.entities.slots.iter_mut().enumerate() {
             let Some(e) = e else { continue };
             let Some(c) = &e.creature else { continue };
             if Some(e.id) == me {
+                continue;
+            }
+            // `if (m_p2BD48) c->Walk()`: TEST's Extrapolate (`adminplay`)
+            if !walks {
                 continue;
             }
             if c.p255 != 0
@@ -2554,6 +2564,7 @@ impl Play {
             e.extrapolated = game_ms;
         }
         self.entities.extrapolate(self_id, now, UPDATE_RATE);
+        self.admin_hold_glide();
         let clock = self.session.timer();
         self.position_due(&walker.cam.walk.committed, clock);
         let me = self.self_id32();
@@ -2777,6 +2788,8 @@ impl Play {
         if game_frame {
             self.presses.frame_end();
         }
+        // the GM's move (MoveToGrid) and DrawPosition's lines (`adminplay`)
+        self.admin_frame(walker);
         new_model
     }
 
@@ -3501,6 +3514,7 @@ impl Play {
         }
         let msg = vi::selfstate::encode(self.player.world as u8, walk, self.auto_attack as u8, self.target);
         self.session.send_state(0x40, &msg);
+        self.admin_apply_simulation();
     }
 
     /// Msg00B2's `Respawn`: back to play, then Respawn at `pos` in `world`. A
@@ -3989,6 +4003,10 @@ impl Play {
             "/alarm" => self.alarm_command(&rest),
             "/time" => self.do_action(0x0B0E_0008, 0),
             "/follow" => self.do_action(0x0B0E_0007, 0),
+            // DoText while the GM's channel is on, else nothing (`adminplay`)
+            "/create" => self.admin_slash(0xA111_1000, &rest),
+            "/mastery" => self.admin_slash(0xA136_0000, &rest),
+            "/tradelvl" => self.admin_slash(0xA137_0000, &rest),
             "/r" | "/reply" => {
                 if !self.reply_name.is_empty() {
                     let line = format!("/t {} {}", self.reply_name, rest);
@@ -4756,6 +4774,8 @@ impl Play {
         // OpenStartMenu: the bank's tables when the bank has the auction
         // (GetBank()->GetP78CC())
         let bank_tables = self.dump.bank.p78cc;
+        // and its first entry, TEST, while the GM's channel is enabled
+        let test = self.admin.part.test_entry();
         let mut actions = Vec::new();
         let Some(s) = self.start.as_mut() else { return actions };
         let attack_words = s.attack_words.clone();
@@ -4781,7 +4801,7 @@ impl Play {
         };
         let mut outs = Vec::new();
         if let Some(reset) = self.start_open.take() {
-            s.pick(bank_tables, expansion);
+            s.pick_test(bank_tables, expansion, test);
             s.menu.visible = true;
             s.menu.show_main(vui, r, reset, now, loc);
         }
@@ -5535,6 +5555,11 @@ impl Play {
                     }
                 }
                 0x0B0E_000A => self.alarm_command(&text),
+                // 259: a GM command's text, to DoText (`adminplay`)
+                p if crate::admin::is_command(p) => {
+                    let t = self.edit.text.clone();
+                    self.admin_text(p, &t);
+                }
                 0x0B0B_1002 => {
                     // the report asks first (word 1472)
                     let w = self.words.as_ref().map_or_else(Vec::new, |w| crate::ui::wide(w.get(1472, 0)));
@@ -5571,6 +5596,10 @@ impl Play {
     /// `VIClient::DoAction`: what an entry's message does (the menus'
     /// commands; those that open a window not ported say so).
     pub fn do_action(&mut self, id: u32, arg: i32) {
+        // VIClientPart382E8's ids first, and the TEST menu's own (`adminplay`)
+        if self.admin_action(id, arg) {
+            return;
+        }
         let target = self.target;
         match id {
             // VIBankControl::IsCommand / Do: the auction search
