@@ -299,6 +299,8 @@ impl<M: Model> CSprite<M> {
                         e[i] = e[0];
                         e[i].sync = 1;
                     }
+                    // and it borrows no sound (the decomp's -1, none)
+                    e[i].sound = [0, 0];
                 }
                 7 | 34 | 56 | 57 | 59 | 60 | 61 | 63 | 64 => {
                     e[i] = e[0];
@@ -567,6 +569,23 @@ mod tests {
     /// `AttachItem` attaches only to a sprite whose `m_flags & 1` is set, and
     /// only where the slot names a node: a sprite with the flag clear holds
     /// nothing however many nodes it names.
+    #[test]
+    fn entry_65_borrows_no_sound() {
+        // `SetDefaultEntries` fills an empty entry 65 from 41 at half weight
+        // (or from idle) and then sets both its sounds to none; the control:
+        // entry 1, filled from idle, keeps idle's sounds
+        let mut cs = CSprite::<Ee>::new(HSprite::new(0), 1, 0, 0, F::ONE, false);
+        cs.entries[0].animation = [3, 3];
+        cs.entries[0].sound = [0x1234, 0x5678];
+        cs.entries[41].animation = [5, 5];
+        cs.entries[41].sound = [0x9ABC, 0x9ABD];
+        cs.set_default_entries();
+        assert_eq!(cs.entries[65].animation, [5, 5], "from 41");
+        assert_eq!(cs.entries[65].weight, F::new(0.5), "at half weight");
+        assert_eq!(cs.entries[65].sound, [0, 0], "no sound");
+        assert_eq!(cs.entries[1].sound, [0x1234, 0x5678], "the control: entry 1 keeps idle's sounds");
+    }
+
     #[test]
     fn attach_item_needs_the_flag_and_a_node() {
         let mut cs = CSprite::<Ee>::new(HSprite::new(0), 2, 9, 0, F::ONE, false);
