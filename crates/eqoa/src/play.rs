@@ -7292,6 +7292,30 @@ impl Play {
         self.self_puppet.is_some()
     }
 
+    /// The characters `VIScene::RasterActor` rasters this frame, as
+    /// `RenderShadow` reads them (`shadows`), in their slots' order: each
+    /// creature drawn (`Puppet::shown`, its actor's bound off the walker's
+    /// world), and the player in its slot while its own actor is shown
+    /// (`self_shown`: not in first person), on its walker's pose.
+    pub fn shadow_casters(&self, walker: &mut Walker, lib: &Library) -> Vec<crate::shadows::Caster> {
+        let me = self.self_id32();
+        let mut out = Vec::new();
+        for (slot, e) in self.entities.slots.iter().enumerate() {
+            let Some(e) = e else { continue };
+            if Some(e.id) == me {
+                if self.self_shown {
+                    out.extend(crate::shadows::walker_caster(walker, lib, self.self_model));
+                }
+                continue;
+            }
+            let Some(p) = self.puppets[slot].as_ref().filter(|p| p.shown) else { continue };
+            let Some(cs) = p.sprite.as_ref() else { continue };
+            let bound = self.actors[slot].and_then(|a| walker.scene.actors.get(a.actor)).map(|a| a.bound);
+            out.push(crate::shadows::Caster::of(p.actor_m, cs, &p.centre, bound));
+        }
+        out
+    }
+
     /// Places the dressed player with the walker's pose: the body at its
     /// model matrix and palette (its LOD level and off distance as
     /// `place_body` takes them), the attachments on the walker's nodes.

@@ -17,6 +17,7 @@ pub mod curve;
 pub mod fans;
 pub mod overlay;
 pub mod scale;
+pub mod shadow;
 pub mod text;
 pub mod ui;
 
@@ -378,6 +379,8 @@ pub struct Renderer {
     billboards: Option<billboard::Billboards>,
     /// The immediate-mode fans' (`set_fans`), made at the first fan.
     fans: Option<fans::Fans>,
+    /// The characters' blob shadows' (`set_shadows`), made at the first.
+    shadows: Option<shadow::Shadows>,
     /// What is drawn over the scene with Z off (`set_overlay`), made at the
     /// first.
     overlay: Option<overlay::Overlay>,
@@ -624,6 +627,7 @@ impl Renderer {
             ui: None,
             billboards: None,
             fans: None,
+            shadows: None,
             overlay: None,
             strips: Vec::new(),
             drawn: Default::default(),
@@ -1481,7 +1485,7 @@ pub fn capture_with_sky(
     renderer.draw_fans(queue, &mut enc, st, &f.depth, view);
     renderer.draw_plates(device, &mut enc, st, &f.depth, f.size);
     if let Some((v, p, batches, textures)) = particles {
-        renderer.draw_billboards(device, queue, &mut enc, st, &f.depth, v, p, batches, textures);
+        renderer.draw_billboards_and_shadows(device, queue, &mut enc, st, &f.depth, v, p, batches, textures, view);
     }
     renderer.curve.apply(queue, &mut enc, &f.color);
     renderer.draw_text(device, &mut enc, &f.color, &f.depth, f.size);

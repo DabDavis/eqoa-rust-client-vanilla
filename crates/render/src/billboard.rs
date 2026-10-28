@@ -106,7 +106,7 @@ pub(crate) struct Billboards {
     pipelines: std::collections::HashMap<(usize, bool, bool), wgpu::RenderPipeline>,
     sampler: wgpu::Sampler,
     /// what each of a frame's draws keeps from frame to frame (`Slot`)
-    slots: [Option<Kept>; 3],
+    slots: [Option<Kept>; 4],
     /// a texture's bind group by its key (`Textures::key`; none: white),
     /// made once: the renderer's textures are never let go
     groups: std::collections::HashMap<Option<u64>, wgpu::BindGroup>,
@@ -126,6 +126,9 @@ enum Slot {
     Strips = 1,
     /// the world's billboards (particles, rain, snow, fireballs)
     World = 2,
+    /// the world's billboards drawn after the shadows (the weather's,
+    /// `draw_late_billboards`)
+    Late = 3,
 }
 
 /// A slot's vertex buffer (grown, never shrunk) and its two frame
@@ -177,7 +180,7 @@ impl Billboards {
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
-        Billboards { shader, frame_layout, tex_layout, layout, pipelines: Default::default(), sampler, slots: [None, None, None], groups: Default::default() }
+        Billboards { shader, frame_layout, tex_layout, layout, pipelines: Default::default(), sampler, slots: [None, None, None, None], groups: Default::default() }
     }
 
     fn pipeline(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat, key: (usize, bool, bool)) -> &wgpu::RenderPipeline {
@@ -233,7 +236,27 @@ impl Renderer {
         batches: &[Batch],
         textures: &Textures,
     ) {
-        self.billboards(device, queue, encoder, target, depth, view, proj, batches, textures, false);
+        self.billboards(device, queue, encoder, target, depth, view, proj, batches, textures, Slot::World);
+    }
+
+    /// The world's billboards after the shadows (`VIScene::Render`: the
+    /// weather after `RenderShadows`), as `draw_billboards` draws them but
+    /// through a buffer of their own and with no strips (`draw_billboards`
+    /// has drawn those).
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_late_billboards(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        view: Mat4,
+        proj: Mat4,
+        batches: &[Batch],
+        textures: &Textures,
+    ) {
+        self.billboards(device, queue, encoder, target, depth, view, proj, batches, textures, Slot::Late);
     }
 
     /// Billboards that belong to the sky (`VIAtmosphere::RenderStars`: the
@@ -253,7 +276,7 @@ impl Renderer {
         batches: &[Batch],
         textures: &Textures,
     ) {
-        self.billboards(device, queue, encoder, target, depth, view, proj, batches, textures, true);
+        self.billboards(device, queue, encoder, target, depth, view, proj, batches, textures, Slot::Sky);
     }
 
     /// The billboards, after any strips; `far` puts them at the far plane
@@ -273,9 +296,10 @@ impl Renderer {
         proj: Mat4,
         batches: &[Batch],
         textures: &Textures,
-        far: bool,
+        slot: Slot,
     ) {
-        if !far {
+        let far = matches!(slot, Slot::Sky);
+        if matches!(slot, Slot::World) {
             let strips = std::mem::take(&mut self.strips);
             if !strips.is_empty() {
                 self.draw_strips(device, queue, encoder, target, depth, view, proj, &strips, textures);
@@ -296,7 +320,6 @@ impl Renderer {
             let key = if far { (b.blend.min(4), true, false) } else { (b.blend.min(4), b.ztest, b.zwrite) };
             draws.push((key, b.texture, start, verts.len() as u32));
         }
-        let slot = if far { Slot::Sky } else { Slot::World };
         self.draw_verts(device, queue, encoder, target, depth, view, proj, &verts, &draws, textures, slot);
     }
 

@@ -598,6 +598,10 @@ pub struct ClientOptions {
     /// Flora: on, the radial flora the game grows round the camera out of
     /// each zone's tables (`vi::flora`, `flora`), as it is drawn; off, none.
     pub flora: bool,
+    /// Shadows: on, the characters' blob shadows as the game draws them
+    /// (`vi::shadow`, `shadows`: within 50 of the eye, on the ground and the
+    /// props under each); off, none.
+    pub shadows: bool,
     /// Environment: on, the effect volumes placed in the world (ground fog,
     /// dust, falling leaves, light shafts, the flocks of birds: `fx`), as the
     /// game draws them; off, none.
@@ -699,6 +703,7 @@ impl Default for ClientOptions {
             text: render::ui::TextFilter::Sharp,
             mipmaps: true,
             flora: true,
+            shadows: true,
             environment: true,
             loading_longer: true,
             render_scale: 1,
@@ -780,6 +785,10 @@ impl ClientOptions {
         if !self.flora {
             s.push_str("flora=off\n");
         }
+        // Shadows only when off
+        if !self.shadows {
+            s.push_str("shadows=off\n");
+        }
         if !self.environment {
             s.push_str("environment=off\n");
         }
@@ -852,6 +861,8 @@ impl ClientOptions {
                 ("mipmaps", "off") => c.mipmaps = false,
                 ("flora", "on") => c.flora = true,
                 ("flora", "off") => c.flora = false,
+                ("shadows", "on") => c.shadows = true,
+                ("shadows", "off") => c.shadows = false,
                 ("environment", "on") => c.environment = true,
                 ("environment", "off") => c.environment = false,
                 ("loading", "longer") => c.loading_longer = true,
@@ -1188,7 +1199,7 @@ pub fn describe() -> String {
         FrameRate::Display => "the display's",
     };
     format!(
-        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, render scale x{}{}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, output device {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, overlapping names {}, art {}, update notices {}, shouts {}, text {}, hud {}, mipmaps {}, flora {}, environment {}, loading screens {}; {}",
+        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, render scale x{}{}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, output device {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, overlapping names {}, art {}, update notices {}, shouts {}, text {}, hud {}, mipmaps {}, flora {}, shadows {}, environment {}, loading screens {}; {}",
         if c.lod { "on" } else { "off" },
         c.brightness,
         c.fog,
@@ -1229,6 +1240,7 @@ pub fn describe() -> String {
         },
         if c.mipmaps { "on" } else { "off" },
         if c.flora { "on" } else { "off" },
+        if c.shadows { "on" } else { "off" },
         if c.environment { "on" } else { "off" },
         if c.loading_longer { "longer" } else { "instant" },
         kept_where()
@@ -1705,7 +1717,7 @@ mod tests {
             "Screen Shake only off, Capture Controller only on"
         );
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, render scale x1, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, overlapping names hide, art frontiers, update notices on, shouts heard, text sharp, hud nearest, mipmaps on, flora on, environment on, loading screens longer; kept in the page's storage");
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, render scale x1, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, overlapping names hide, art frontiers, update notices on, shouts heard, text sharp, hud nearest, mipmaps on, flora on, shadows on, environment on, loading screens longer; kept in the page's storage");
         testing::reset(true);
         assert!(describe().ends_with("refused: nothing is kept"));
         testing::reset(false);
@@ -1737,6 +1749,24 @@ mod tests {
         for bad in ["mipmaps=0", "mipmaps=no", "mipmaps="] {
             assert!(ClientOptions::from_text(bad).mipmaps, "{bad}: on, the default");
         }
+    }
+
+    /// Shadows, on by default (the game's), kept only when off; anything
+    /// but on or off leaves it on.
+    #[test]
+    fn shadows_kept_only_when_off() {
+        let d = ClientOptions::default();
+        assert!(d.shadows, "on, the game's");
+        assert_eq!(ClientOptions { shadows: false, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nshadows=off\n");
+        assert!(!d.to_text().contains("shadows"), "the default not written");
+        let c = ClientOptions::from_text("shadows=off");
+        assert!(!c.shadows && c.flora && c.environment, "Shadows alone");
+        assert!(ClientOptions::from_text("shadows=on") == d);
+        for bad in ["shadows=0", "shadows=", "shadow=off"] {
+            assert!(ClientOptions::from_text(bad).shadows, "{bad}: on, the default");
+        }
+        // the control: Flora off is not Shadows off
+        assert!(ClientOptions::from_text("flora=off").shadows);
     }
 
     /// Flora and Environment, on by default, each kept only when off;
