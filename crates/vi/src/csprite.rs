@@ -401,7 +401,9 @@ impl<M: Model> CSprite<M> {
                     continue;
                 }
                 let nf = sc.anims[self.h.plays.get(p).anim].num_frames;
-                self.h.set_play_frame(p, F::from_int(nf - 1), sc);
+                if nf > 0 {
+                    self.h.set_play_frame(p, F::from_int(nf - 1), sc);
+                }
             }
         }
     }
@@ -435,7 +437,7 @@ impl<M: Model> CSprite<M> {
     }
 
     fn prio(&self, id: i32, layer: usize) -> i32 {
-        self.entries[id as usize].priority[layer]
+        self.entries[id.clamp(0, 65) as usize].priority[layer]
     }
 
     /// `SetAnimation(id, layer)`: 1 when a new play started, 0 when the
@@ -525,22 +527,36 @@ impl<M: Model> CSprite<M> {
         }
         if self.prev[layer].play == -1 {
             self.prev[layer] = self.cur[layer];
-            let e = self.entries[id as usize];
-            if self.cur[layer].play != -1 {
-                self.h.stop_playback(self.cur[layer].play, sc);
-                if self.skel_type == 1 && layer == 0 && self.cur[1].anim == id {
-                    self.cur[0].anim = id;
-                    self.cur[0].sync = e.sync;
-                    self.cur[0].play = self.h.add_interpolated_play_with_sync(e.animation[0] as usize, self.cur[1].play, 250, sc);
+            let e = self.entries[id.clamp(0, 65) as usize];
+            let a_idx = if self.skel_type == 1 && layer == 0 && self.cur[1].anim == id {
+                e.animation[0]
+            } else {
+                e.animation[layer]
+            };
+            if a_idx >= 0 && (a_idx as usize) < sc.anims.len() {
+                if self.cur[layer].play != -1 {
+                    self.h.stop_playback(self.cur[layer].play, sc);
+                    if self.skel_type == 1 && layer == 0 && self.cur[1].anim == id {
+                        self.cur[0].anim = id;
+                        self.cur[0].sync = e.sync;
+                        self.cur[0].play = self.h.add_interpolated_play_with_sync(a_idx as usize, self.cur[1].play, 250, sc);
+                    } else {
+                        self.cur[layer].anim = id;
+                        self.cur[layer].sync = e.sync;
+                        self.cur[layer].play = self.h.add_interpolated_play(a_idx as usize, e.sync, e.weight, 250, sc);
+                    }
                 } else {
                     self.cur[layer].anim = id;
                     self.cur[layer].sync = e.sync;
-                    self.cur[layer].play = self.h.add_interpolated_play(e.animation[layer] as usize, e.sync, e.weight, 250, sc);
+                    self.cur[layer].play = self.h.add_play(a_idx as usize, e.sync, e.weight, sc);
                 }
             } else {
+                if self.cur[layer].play != -1 {
+                    self.h.stop_playback(self.cur[layer].play, sc);
+                }
                 self.cur[layer].anim = id;
                 self.cur[layer].sync = e.sync;
-                self.cur[layer].play = self.h.add_play(e.animation[layer] as usize, e.sync, e.weight, sc);
+                self.cur[layer].play = -1;
             }
         }
         // The layer's sound and particle triggers are re-armed.
