@@ -5,6 +5,18 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-28 · Character select smooth at Render Scale x2 and x4, and HUD Nearest by default
+- With Render Scale at x2 or x4 (Options, Extended, Video), character select and the other
+  screens before the world are smooth again. The HUD's Sharp filter (Extended, UI, HUD), which
+  draws the menus' art, did far more work for each pixel than it needed, and those screens
+  are covered in that art from edge to edge: at the larger scales a browser could fall below
+  30 frames a second there while Freeport, crowds and all, kept up. Sharp now does about a
+  quarter of the work and looks exactly as before; the start menu's windows and the HUD in
+  the world are lighter with it too.
+- HUD is back to Nearest by default, the PS2's own way of drawing the menus' and the HUD's
+  art, which costs the least to draw. Sharp is still on that row for anyone who wants every
+  texel of that art drawn evenly at any window size (if you had chosen it, choose it again).
+
 ## 2026-10-27 · The touch controls laid out as a PS4 controller
 - On a phone or tablet held sideways the on-screen controller is now laid out like a
   PS4 controller, with two sticks: the left one walks and the right one turns the camera.

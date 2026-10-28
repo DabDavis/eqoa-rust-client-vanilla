@@ -122,9 +122,19 @@ fn art_sharp(i: VsOut) -> vec2<f32> {
     return select(s, (floor(s * size) + 0.5) / size, thin);
 }
 
-// The texel at `p`, wrapped as the layer's repeat wraps it.
-fn texel_at(p: vec2<i32>, size: vec2<i32>) -> vec4<f32> {
-    return textureLoad(tex, ((p % size) + size) % size, 0);
+// The column and row `p` (whole numbers) wrapped into a texture `n` texels
+// across and down, as the layer's repeat wraps them: `p - n * floor(p / n)`,
+// a quotient the division's rounding left a step short or over put back. In
+// floats, once a pixel: an integer `%` is no one instruction of a GPU's but
+// dozens (more in a page, whose compiler guards each), and the four texels
+// took sixteen a pixel; the pregame's screens are this filter's from edge to
+// edge, and the Render Scale draws them four or sixteen times over (F3
+// 20261027-213115: character select at x2 fell to 26 fps in a page; at x4
+// on an RX 580 its frame took 19 ms with them and 10 without, Freeport's 9).
+// GL's `%` (a page's WebGL2) is undefined below 0, too.
+fn wrap(p: vec2<f32>, n: vec2<f32>) -> vec2<f32> {
+    let w = p - n * floor(p / n);
+    return select(select(w, w - n, w >= n), w + n, w < vec2<f32>(0.0));
 }
 
 // The texels round `uv` mixed as the filter mixes them, each one's colour
@@ -134,14 +144,18 @@ fn texel_at(p: vec2<i32>, size: vec2<i32>) -> vec4<f32> {
 // as it is darkened the edge beside it. Where all four are clear, their
 // colours mixed as they are (only an added blend reads them).
 fn mix_clear(uv: vec2<f32>) -> vec4<f32> {
-    let size = vec2<i32>(textureDimensions(tex));
-    let t = uv * vec2<f32>(size) - 0.5;
-    let p = vec2<i32>(floor(t));
+    let n = vec2<f32>(textureDimensions(tex));
+    let t = uv * n - 0.5;
     let f = t - floor(t);
-    let a = texel_at(p, size);
-    let b = texel_at(p + vec2<i32>(1, 0), size);
-    let c = texel_at(p + vec2<i32>(0, 1), size);
-    let d = texel_at(p + vec2<i32>(1, 1), size);
+    // the four texels' columns and rows, the second past the first, wrapped
+    let p0 = wrap(floor(t), n);
+    let p1 = select(p0 + 1.0, vec2<f32>(0.0), p0 + 1.0 >= n);
+    let i0 = vec2<i32>(p0);
+    let i1 = vec2<i32>(p1);
+    let a = textureLoad(tex, i0, 0);
+    let b = textureLoad(tex, vec2<i32>(i1.x, i0.y), 0);
+    let c = textureLoad(tex, vec2<i32>(i0.x, i1.y), 0);
+    let d = textureLoad(tex, i1, 0);
     let pre = mix(mix(vec4<f32>(a.rgb * a.a, a.a), vec4<f32>(b.rgb * b.a, b.a), f.x), mix(vec4<f32>(c.rgb * c.a, c.a), vec4<f32>(d.rgb * d.a, d.a), f.x), f.y);
     if (pre.a <= 0.0) {
         return vec4<f32>(mix(mix(a.rgb, b.rgb, f.x), mix(c.rgb, d.rgb, f.x), f.y), 0.0);

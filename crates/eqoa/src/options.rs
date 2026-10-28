@@ -44,9 +44,9 @@
 //!   which starts the next time the game does; `update::asks`, and a page's
 //!   Reload notice, `web/main.js`), Text (Sharp or Smooth: the game's font
 //!   scaled to the window with even strokes, or filtered as the PS2 filters
-//!   it, `render::ui::TextFilter`) and HUD (Sharp, the default: the 2D
-//!   layer's other textures scaled with every texel as wide as every other,
-//!   as Text's Sharp draws a font; or Nearest, the game's,
+//!   it, `render::ui::TextFilter`) and HUD (Nearest, the game's and the
+//!   default; or Sharp: the 2D layer's other textures scaled with every texel
+//!   as wide as every other, as Text's Sharp draws a font, at a cost,
 //!   `render::ui::HudFilter`);
 //! - Controller: Controller Focus (which controllers this window reads:
 //!   Auto, Window, Pad 1 to 4 or Off, `input::pick`, kept for each window of
@@ -1599,11 +1599,11 @@ mod tests {
         assert_eq!(settings::client().text, render::ui::TextFilter::Sharp, "and back: two values");
         press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!(w.item, 40, "HUD");
-        assert_eq!((settings::client().hud, value_text(&vui, 40)), (render::ui::HudFilter::Sharp, Some(wide("Sharp"))), "Sharp, the default, as Text's");
+        assert_eq!((settings::client().hud, value_text(&vui, 40)), (render::ui::HudFilter::Nearest, Some(wide("Nearest"))), "Nearest, the game's and the default");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
-        assert_eq!((settings::client().hud, value_text(&vui, 40), cues.last()), (render::ui::HudFilter::Nearest, Some(wide("Nearest")), Some(&11)), "Nearest, the game's");
+        assert_eq!((settings::client().hud, value_text(&vui, 40), cues.last()), (render::ui::HudFilter::Sharp, Some(wide("Sharp")), Some(&11)), "Sharp");
         press(&mut w, &mut o, key::LEFT, &mut cues);
-        assert_eq!(settings::client().hud, render::ui::HudFilter::Sharp, "and back: two values");
+        assert_eq!(settings::client().hud, render::ui::HudFilter::Nearest, "and back: two values");
         press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!((w.row, cues.last()), (3, Some(&9)), "UI's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);

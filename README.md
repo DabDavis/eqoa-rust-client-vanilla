@@ -39,7 +39,7 @@ or a browser (each described where it lives below):
   screen, as F11 and Alt+Enter toggle it; Brightness, Frame Rate, VSync, Render
   Scale: x1, x2 or x4, Loading Screens: Longer or Instant), World (Fog, Mipmaps,
   Flora, Environment, Art), UI (Ability Bars, Update Notices, Text: Sharp or
-  Smooth, HUD: Sharp or Nearest), Controller (Controller
+  Smooth, HUD: Nearest or Sharp), Controller (Controller
   Focus, Capture Controller), Camera (Distance, Turn Speed, Screen Shake),
   Characters (Level of Detail, NPC/PC Display and Distance, Name Distance,
   Overlapping Names) and Sound (Sound in Background, Output Device: the system's
@@ -50,10 +50,11 @@ or a browser (each described where it lives below):
   four times the window's size each way and averages it down, which smooths
   every edge, leaf and fence and changes nothing else (the game's texture
   levels go by distance, not by pixels), at the most the graphics card allows
-  where the window is too large (Video's page says so); HUD Sharp, on by
-  default as Text's Sharp is, draws the windows' and the HUD's art with every
-  texel as wide as every other at any window size (Nearest, the game's
-  sampling, makes some a pixel wider than others). The world's textures stay as
+  where the window is too large (Video's page says so); HUD Sharp (off unless
+  chosen: the default is Nearest, the game's sampling, as Sharp costs more to
+  draw: the user, 2026-10-28) draws the windows' and the HUD's art with every
+  texel as wide as every other at any window size (Nearest makes some a pixel
+  wider than others). The world's textures stay as
   the game filters them: a crisp filter for them was tried and taken out the
   same day (the user: "world textures cant render proper without smooth. so
   only use for UI, Text").

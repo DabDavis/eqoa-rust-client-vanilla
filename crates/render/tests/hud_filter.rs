@@ -116,6 +116,41 @@ fn sharp_is_the_nearest_texel_at_a_whole_scale() {
     assert!(striped(&device, &queue, size, HudFilter::Sharp) != striped(&device, &queue, size, HudFilter::Nearest), "the control");
 }
 
+/// The layer's repeat under Sharp: a quad tiling a texture past its edges,
+/// below 0 as past 1 (u -1 to 1.5 and v -10/21 to 1, each from a texel's
+/// edge as an atlas's cell starts, a texel a frame pixel). Where a frame
+/// pixel is whole pixels across (1280x960, two; the frame is drawn 4:3, so
+/// 2.14 down) Sharp is the nearest texel, which Nearest's sampler wraps
+/// itself, so a texture that changes column by column is drawn pixel for
+/// pixel as Nearest draws it; where it is whole pixels down (1280x896, two),
+/// one that changes row by row (ui.wgsl's `wrap`; GL's integer `%`, which it
+/// had, is undefined below 0). The control: left of u 0, and above v 0, the
+/// quad shows each column and each row, where a wrap that clamped would show
+/// the first all along.
+#[test]
+fn sharp_wraps_as_the_layers_repeat_does() {
+    let _one = FILTER.lock().unwrap_or_else(|e| e.into_inner());
+    let Some((device, queue)) = device() else { return };
+    let tiled = |tex: usize| vec![Quad { tex, blend: 3, pos: [[303.0, 100.0], [343.0, 100.0], [343.0, 131.0], [303.0, 131.0]], uv: [[-1.0, -10.0 / 21.0], [1.5, -10.0 / 21.0], [1.5, 1.0], [-1.0, 1.0]], color: [1.0; 4], clip: None }];
+    for (size, across) in [((1280, 960), true), ((1280, 896), false)] {
+        // red by column, or by row, the other way alike
+        let rgba: Vec<u8> = (0..16 * 21).map(|i| if across { i % 16 } else { i / 16 }).flat_map(|k| [(k * 12) as u8, 255 - (k * 12) as u8, 128, 255]).collect();
+        let sharp = drawn(&device, &queue, size, HudFilter::Sharp, &rgba, glam::Vec3::ZERO, tiled, false);
+        let nearest = drawn(&device, &queue, size, HudFilter::Nearest, &rgba, glam::Vec3::ZERO, tiled, false);
+        assert!(sharp == nearest, "{size:?}: the nearest texel, wrapped as the sampler wraps it");
+        // the 16 columns left of u 0, or the 10 whole rows above v 0
+        let at: Vec<[f32; 2]> = if across { (0..16).map(|c| [303.5 + c as f32, 115.5]).collect() } else { (0..10).map(|r| [320.5, 100.5 + r as f32]).collect() };
+        let reds: std::collections::BTreeSet<u8> = at
+            .iter()
+            .map(|&f| {
+                let p = ui::window_from_frame(size, f);
+                sharp[(p[1] as usize * size.0 as usize + p[0] as usize) * 4]
+            })
+            .collect();
+        assert_eq!(reds.len(), at.len(), "{size:?}: the control, every one of them ({reds:?})");
+    }
+}
+
 /// A cell of an atlas with a black column on each side of it, its quad (16
 /// texels over 15.5 frame pixels at 1918x1078, its edges anywhere on a
 /// pixel) mirrored as a sprite sailing right is: under Sharp no pixel of it

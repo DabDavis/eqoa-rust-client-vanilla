@@ -621,10 +621,12 @@ pub struct ClientOptions {
     /// (`render::scale::fit`).
     pub render_scale: u8,
     /// HUD: how the 2D layer's textures other than the fonts are drawn scaled
-    /// to the window (`render::ui::HudFilter`): Sharp, every texel as wide as
-    /// every other, as Text's Sharp draws a font, by default (the user,
-    /// 2026-10-27: "add the sharp textures fix like sharp font", then "have
-    /// HUD and Text crisp on by default"); or Nearest, as the GS samples them.
+    /// to the window (`render::ui::HudFilter`): Nearest, as the GS samples
+    /// them, by default (the user, 2026-10-28: "make nearest the default ...
+    /// since there is a cost": the pregame's screens are this art from edge to
+    /// edge, F3 20261027-213115); or Sharp, every texel as wide as every other,
+    /// as Text's Sharp draws a font (the user, 2026-10-27: "add the sharp
+    /// textures fix like sharp font").
     pub hud: render::ui::HudFilter,
     /// Output Device, natively (F3 20261024-201433: the game played into
     /// the system's default output, a television, while the player listened
@@ -700,7 +702,7 @@ impl Default for ClientOptions {
             environment: true,
             loading_longer: true,
             render_scale: 1,
-            hud: render::ui::HudFilter::Sharp,
+            hud: render::ui::HudFilter::Nearest,
             output: None,
         }
     }
@@ -785,12 +787,12 @@ impl ClientOptions {
         if !self.loading_longer {
             s.push_str("loading=instant\n");
         }
-        // Render Scale only above 1, HUD only when Nearest
+        // Render Scale only above 1, HUD only when Sharp
         if self.render_scale != 1 {
             s.push_str(&format!("render_scale={}\n", self.render_scale));
         }
-        if self.hud == render::ui::HudFilter::Nearest {
-            s.push_str("hud=nearest\n");
+        if self.hud == render::ui::HudFilter::Sharp {
+            s.push_str("hud=sharp\n");
         }
         if let Some(d) = self.output {
             s.push_str(&format!("output={}\n", d.as_str()));
@@ -1703,7 +1705,7 @@ mod tests {
             "Screen Shake only off, Capture Controller only on"
         );
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, render scale x1, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, overlapping names hide, art frontiers, update notices on, shouts heard, text sharp, hud sharp, mipmaps on, flora on, environment on, loading screens longer; kept in the page's storage");
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, render scale x1, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, overlapping names hide, art frontiers, update notices on, shouts heard, text sharp, hud nearest, mipmaps on, flora on, environment on, loading screens longer; kept in the page's storage");
         testing::reset(true);
         assert!(describe().ends_with("refused: nothing is kept"));
         testing::reset(false);
@@ -1757,28 +1759,29 @@ mod tests {
     }
 
     /// Render Scale, x1 by default, kept only above 1 and only as one of its
-    /// steps; HUD, Sharp by default (as Text), kept only when Nearest; a file
-    /// from the build that wrote `hud=sharp` reads the same; neither moves the
+    /// steps; HUD, Nearest by default (since 2026-10-28; Sharp the day
+    /// before), kept only when Sharp, and a file from the builds that wrote
+    /// `hud=nearest` (Sharp their default) reads the same; neither moves the
     /// other, and anything else leaves each at its default.
     #[test]
     fn render_scale_and_hud_kept_only_off_their_defaults() {
         use render::ui::HudFilter;
         let d = ClientOptions::default();
-        assert_eq!((d.render_scale, d.hud, d.text), (1, HudFilter::Sharp, render::ui::TextFilter::Sharp), "x1; the HUD Sharp, as the text");
+        assert_eq!((d.render_scale, d.hud, d.text), (1, HudFilter::Nearest, render::ui::TextFilter::Sharp), "x1; the HUD Nearest, the game's");
         let head = "lod=on\nbrightness=5\ncamera_distance=11\n";
         assert_eq!(d.to_text(), head, "none written at their defaults");
         assert_eq!(ClientOptions { render_scale: 2, ..d }.to_text(), format!("{head}render_scale=2\n"));
         assert_eq!(ClientOptions { render_scale: 4, ..d }.to_text(), format!("{head}render_scale=4\n"));
-        assert_eq!(ClientOptions { hud: HudFilter::Nearest, ..d }.to_text(), format!("{head}hud=nearest\n"));
+        assert_eq!(ClientOptions { hud: HudFilter::Sharp, ..d }.to_text(), format!("{head}hud=sharp\n"));
         for k in [1, 2, 4] {
             assert_eq!(ClientOptions::from_text(&format!("render_scale={k}")).render_scale, k);
         }
-        let c = ClientOptions::from_text("render_scale=4\nhud=nearest\n");
-        assert_eq!((c.render_scale, c.hud), (4, HudFilter::Nearest));
+        let c = ClientOptions::from_text("render_scale=4\nhud=sharp\n");
+        assert_eq!((c.render_scale, c.hud), (4, HudFilter::Sharp));
         assert_eq!(ClientOptions::from_text(&c.to_text()), c, "round trip");
-        let c = ClientOptions::from_text("hud=nearest");
-        assert_eq!((c.render_scale, c.hud), (1, HudFilter::Nearest), "HUD alone");
-        assert_eq!(ClientOptions::from_text("hud=sharp\nrender_scale=1"), d, "the earlier build's hud=sharp: the default");
+        let c = ClientOptions::from_text("hud=sharp");
+        assert_eq!((c.render_scale, c.hud), (1, HudFilter::Sharp), "HUD alone");
+        assert_eq!(ClientOptions::from_text("hud=nearest\nrender_scale=1"), d, "the earlier builds' hud=nearest: the default");
         for bad in ["render_scale=3", "render_scale=8", "render_scale=0", "render_scale=x2", "hud=smooth", "hud="] {
             assert_eq!(ClientOptions::from_text(bad), d, "{bad}: the defaults");
         }
@@ -1790,11 +1793,11 @@ mod tests {
     /// no more. The control: the lines beside it are read.
     #[test]
     fn options_with_textures_crisp_still_load() {
-        let c = ClientOptions::from_text("textures=crisp\nhud=nearest\nrender_scale=2\n");
-        assert_eq!((c.render_scale, c.hud), (2, render::ui::HudFilter::Nearest), "the lines beside it read");
+        let c = ClientOptions::from_text("textures=crisp\nhud=sharp\nrender_scale=2\n");
+        assert_eq!((c.render_scale, c.hud), (2, render::ui::HudFilter::Sharp), "the lines beside it read");
         let text = c.to_text();
         assert!(!text.contains("textures"), "{text}");
-        assert!(text.contains("render_scale=2\n") && text.contains("hud=nearest\n"), "{text}");
+        assert!(text.contains("render_scale=2\n") && text.contains("hud=sharp\n"), "{text}");
     }
 
     /// The options kept by a build with voice chat (voice chat was only a
