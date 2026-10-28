@@ -124,6 +124,8 @@ pub struct Shadows {
     /// this frame's vertices, three a triangle, relative to `eye`
     verts: Vec<render::shadow::Vertex>,
     eye: Vec3,
+    /// where the queue measured from (`lod::eye`: the game's camera)
+    game_eye: Vec3,
     /// how many were queued and drawn, and their triangles (`describe`)
     queued: usize,
     drawn: usize,
@@ -145,6 +147,7 @@ impl Shadows {
     pub fn frame(&mut self, world: &mut World<Ee>, lib: &Library, casters: &[Caster], eye: &Vect3<Ee>, view_proj: Mat4, rel: Vec3) {
         self.verts.clear();
         self.eye = rel;
+        self.game_eye = Vec3::new(eye.x.0, eye.y.0, eye.z.0);
         let id = vi::hash::hash_resource_id(TEXTURE) as i32;
         self.texture = lib.surface(id).is_some().then_some(id);
         let q = queue(casters, eye, &crate::particles::frustum(view_proj));
@@ -170,10 +173,12 @@ impl Shadows {
     }
 
     /// The frame's shadows to the GPU, nearer the camera by `SetZBias(15)`
-    /// under `proj`; none: nothing is drawn.
+    /// under `proj` as the game's camera pulls them (from the queue's eye,
+    /// which the view's is that far behind); none: nothing is drawn.
     pub fn upload(&self, renderer: &mut render::Renderer, device: &wgpu::Device, queue: &wgpu::Queue, lib: &Library, proj: &Mat4) {
         let far = proj.w_axis.z / (proj.z_axis.z + 1.0);
-        let bias = render::shadow::z_bias_clip(proj, render::shadow::z_bias_reciprocal(vi::shadow::Z_BIAS, GAME_NEAR, far));
+        let k = render::shadow::z_bias_reciprocal(vi::shadow::Z_BIAS, GAME_NEAR, far);
+        let bias = render::shadow::Bias { clip_z: proj.w_axis.z, k, behind: self.eye.distance(self.game_eye) };
         let texture = self.texture.unwrap_or(0);
         renderer.set_shadows(device, queue, texture, &self.verts, self.eye, bias, self.particles_end, &render::library_textures(lib));
     }
@@ -184,7 +189,7 @@ impl Shadows {
         self.queued = 0;
         self.drawn = 0;
         self.tris = 0;
-        renderer.set_shadows(device, queue, 0, &[], self.eye, 0.0, 0, &render::library_textures(lib));
+        renderer.set_shadows(device, queue, 0, &[], self.eye, render::shadow::Bias::default(), 0, &render::library_textures(lib));
     }
 
     pub fn describe(&self) -> String {

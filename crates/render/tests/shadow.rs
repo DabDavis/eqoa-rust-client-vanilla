@@ -4,7 +4,9 @@
 //! is drawn over it, darkening it by its alpha (blend 3: the black texel at
 //! 0.65 leaves 35% of the white), because `SetZBias(15)` draws it nearer the
 //! camera; with no bias it is hidden under the ground (the control for the
-//! bias). Its triangles face as `RenderShadow` hands them (the query's
+//! bias). A shadow 0.05 under is drawn from the eye's own camera (pulled
+//! 0.30 at 10) but not when the eye is 8 behind the game's camera (the
+//! client's zoom): the game's camera, 2 from the ground, pulls it 0.014. Its triangles face as `RenderShadow` hands them (the query's
 //! up-facing winding): the same triangle wound the other way, seen from
 //! above, is culled (the control for the face). Nothing set, nothing drawn;
 //! set for another eye, not drawn. Needs a graphics adapter (any backend);
@@ -12,7 +14,7 @@
 
 use glam::{Mat4, Vec3};
 use render::fans::{Quad, Run};
-use render::shadow::{Vertex, z_bias_clip, z_bias_reciprocal};
+use render::shadow::{Bias, Vertex, z_bias_reciprocal};
 use render::{Renderer, View};
 
 struct Gpu {
@@ -43,18 +45,19 @@ fn ground() -> Vec<Run> {
     vec![Run { texture: 0, blend: 0, zwrite: true, quads: vec![q] }]
 }
 
-/// A shadow triangle at `y` round the point the middle pixel sees, wound as
-/// the query keeps one facing up (`VIPlane`'s normal (c - b) x (b - a) up:
-/// (xa, za), (xb, za), (xa, zb)), or the other way.
+/// A shadow triangle at `y` round the point the middle pixel sees (x 25000,
+/// z 15002), a shadow's size, wound as the query keeps one facing up
+/// (`VIPlane`'s normal (c - b) x (b - a) up: (xa, za), (xb, za), (xa, zb)),
+/// or the other way.
 fn shadow(y: f32, up: bool) -> Vec<Vertex> {
     let v = |x: f32, z: f32| Vertex { at: [x - EYE.x, y - EYE.y, z - EYE.z], uv: [0.5, 0.5], alpha: 0.65 };
-    let (a, b, c) = (v(24990.0, 14990.0), v(25030.0, 14990.0), v(24990.0, 15030.0));
+    let (a, b, c) = (v(24999.0, 15001.0), v(25001.5, 15001.0), v(24999.0, 15003.5));
     if up { vec![a, b, c] } else { vec![a, c, b] }
 }
 
 /// The middle pixel of an 8x8 frame: the ground, then `tris` (none: not set)
 /// at `bias`, under the view at `eye`.
-fn middle(g: &Gpu, r: &mut Renderer, tris: Option<&[Vertex]>, bias: f32, eye: Vec3) -> [f32; 3] {
+fn middle(g: &Gpu, r: &mut Renderer, tris: Option<&[Vertex]>, bias: Bias, eye: Vec3) -> [f32; 3] {
     let v = glam::camera::rh::view::look_at_mat4(eye, eye + Vec3::new(0.0, -10.0, 2.0), Vec3::Y);
     let p: Mat4 = glam::camera::rh::proj::directx::perspective(1.0, 1.0, 0.5, 1000.0);
     let view = View { eye, ..View::daylight(p * v) };
@@ -77,7 +80,7 @@ fn a_shadow_is_drawn_nearer_by_its_bias_on_its_up_face() {
     let Some(g) = gpu() else { return };
     let mut r = Renderer::new(&g.device, &g.queue, render::TARGET_FORMAT);
     let p: Mat4 = glam::camera::rh::proj::directx::perspective(1.0, 1.0, 0.5, 1000.0);
-    let bias = z_bias_clip(&p, z_bias_reciprocal(15, 0.1, 1000.0));
+    let bias = Bias { clip_z: p.w_axis.z, k: z_bias_reciprocal(15, 0.1, 1000.0), behind: 0.0 };
     let white = 255.0;
     let shaded = white * (1.0 - 0.65);
     close(middle(&g, &mut r, None, bias, EYE), white, "nothing set: the ground");
@@ -85,7 +88,9 @@ fn a_shadow_is_drawn_nearer_by_its_bias_on_its_up_face() {
     close(middle(&g, &mut r, Some(&shadow(GROUND + 0.04, true)), bias, EYE), shaded, "lifted 0.04");
     // under the ground: drawn only nearer by the bias
     close(middle(&g, &mut r, Some(&shadow(GROUND - 0.02, true)), bias, EYE), shaded, "0.02 under, biased");
-    close(middle(&g, &mut r, Some(&shadow(GROUND - 0.02, true)), 0.0, EYE), white, "the control: 0.02 under, no bias: hidden");
+    close(middle(&g, &mut r, Some(&shadow(GROUND - 0.02, true)), Bias::default(), EYE), white, "the control: 0.02 under, no bias: hidden");
+    close(middle(&g, &mut r, Some(&shadow(GROUND - 0.05, true)), bias, EYE), shaded, "0.05 under, from the eye's own camera: drawn");
+    close(middle(&g, &mut r, Some(&shadow(GROUND - 0.05, true)), Bias { behind: 8.0, ..bias }, EYE), white, "0.05 under, the game's camera 8 nearer: hidden");
     // past what the bias reaches at ten units (about 0.3), hidden
     close(middle(&g, &mut r, Some(&shadow(GROUND - 1.0, true)), bias, EYE), white, "a unit under: hidden");
     // wound the other way, seen from above: culled

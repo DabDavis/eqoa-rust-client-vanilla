@@ -5,8 +5,11 @@
 //! mode 3 (`(Cs - Cd) As + Cd`), LOD bias 1.0, Z tested and not written, no
 //! dither, wrap mode 3 (`ConstructTextPass` makes it CLAMP on both axes);
 //! fogged as the raster's fog says (the fan's PRIM has FGE). `SetZBias(15)`
-//! moves its fragments nearer the camera by a constant in the GS's screen Z
-//! (the shader's per-w clip z). A fan's winding parity is fixed (`VIRFan`),
+//! moves its fragments nearer the camera by a constant in the GS's screen Z,
+//! a shift of 1/w (`Bias`): from the game's camera, which the client's zoom
+//! past the game's ceiling only moves back (`lod::eye`, `Bias::behind`), so
+//! the shadow is pulled as far as the console pulled it at its farthest. A
+//! fan's winding parity is fixed (`VIRFan`),
 //! so its triangle (0, 1, 2) is judged as a strip's first: esf draws that one
 //! as (0, 2, 1) for `FRONT_FACE`, so here the other winding is the front.
 //! Drawn after the particle system's billboards and before the weather's, as
@@ -30,12 +33,41 @@ pub struct Vertex {
     pub alpha: f32,
 }
 
+/// How `SetZBias` draws a shadow nearer the camera (`shadow.wgsl`). The GS
+/// adds a constant to its screen Z after the divide by w, which is a shift
+/// `k` of 1/w for the game's camera (`z_bias_reciprocal`); `behind` is how far
+/// this view's eye is behind the game's camera along the view (`lod::eye`: 0
+/// within the game's ceiling), the pull then the one the game's camera, that
+/// much nearer, makes at its own depth; `clip_z` is the projection's
+/// `w_axis.z` (glam's [0, 1] perspective: depth = -z_axis.z + w_axis.z / w),
+/// which turns a change of 1/w into clip z. All zero: no bias.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Bias {
+    pub clip_z: f32,
+    pub k: f32,
+    pub behind: f32,
+}
+
+impl Bias {
+    /// The depth a fragment `w` deep is drawn at (`shadow.wgsl`'s): `w` less
+    /// the pull the game's camera makes at its depth, `w - behind`. With
+    /// `behind` 0 that is 1/w larger by `k`, the GS's constant offset.
+    pub fn drawn_at(&self, w: f32) -> f32 {
+        if w <= 1e-4 {
+            return w;
+        }
+        let wg = (w - self.behind).max(0.0);
+        (w - self.k * wg * wg / (1.0 + self.k * wg)).max(1e-4)
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct FrameU {
     view_proj: [[f32; 4]; 4],
     fog_color: [f32; 4],
     fog: [f32; 4],
+    bias: [f32; 4],
 }
 
 pub(crate) struct Shadows {
@@ -52,7 +84,7 @@ pub(crate) struct Shadows {
     /// this Z bias
     count: u32,
     eye: glam::Vec3,
-    bias: f32,
+    bias: Bias,
     /// how many of the frame's billboard batches come before them
     after: usize,
 }
@@ -141,7 +173,7 @@ impl Shadows {
             multiview_mask: None,
             cache: None,
         });
-        Shadows { pipeline, tex_layout, sampler, frame_buf, frame_bg, verts: None, group: None, count: 0, eye: glam::Vec3::ZERO, bias: 0.0, after: 0 }
+        Shadows { pipeline, tex_layout, sampler, frame_buf, frame_bg, verts: None, group: None, count: 0, eye: glam::Vec3::ZERO, bias: Bias::default(), after: 0 }
     }
 }
 
@@ -156,22 +188,15 @@ pub fn z_bias_reciprocal(z: i32, near: f32, far: f32) -> f32 {
     (bias * (f - n) / (half * 2.0 * f * n)) as f32
 }
 
-/// The clip z to add per unit of w for a shift `k` of 1/w under `proj`, a
-/// perspective with a [0, 1] depth range (glam's `perspective`: depth =
-/// -z_axis.z + w_axis.z / w).
-pub fn z_bias_clip(proj: &glam::Mat4, k: f32) -> f32 {
-    proj.w_axis.z * k
-}
-
 impl Renderer {
     /// The shadows `draw_shadows` draws from now on: `verts` three a
     /// triangle, relative to `eye`, textured by `texture` (a DictID; none in
-    /// `textures`: nothing is drawn), nearer the camera by `bias` of clip z
-    /// per w (`z_bias_clip`), after the first `after` of the frame's
+    /// `textures`: nothing is drawn), nearer the camera by `bias`, after the
+    /// first `after` of the frame's
     /// billboard batches (`draw_billboards_and_shadows`). Empty: nothing at
     /// all.
     #[allow(clippy::too_many_arguments)]
-    pub fn set_shadows(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, texture: i32, verts: &[Vertex], eye: glam::Vec3, bias: f32, after: usize, textures: &Textures) {
+    pub fn set_shadows(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, texture: i32, verts: &[Vertex], eye: glam::Vec3, bias: Bias, after: usize, textures: &Textures) {
         if verts.is_empty() {
             if let Some(s) = self.shadows.as_mut() {
                 s.count = 0;
@@ -264,8 +289,9 @@ impl Renderer {
             fog_color: view.fog.map_or([0.0; 4], |(_, _, c)| c.extend(1.0).to_array()),
             fog: {
                 let [n, fa] = view.fog.map_or([0.0, 1.0], |(n, fa, _)| [n, fa.max(n + 1e-3)]);
-                [n, fa, k, s.bias]
+                [n, fa, k, 0.0]
             },
+            bias: [s.bias.clip_z, s.bias.k, s.bias.behind, 0.0],
         };
         queue.write_buffer(&s.frame_buf, 0, bytemuck::bytes_of(&u));
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -299,29 +325,32 @@ mod tests {
 
     /// The Z bias as the GS has it: 15 x 166 = 2490 of the screen Z's
     /// [16, 2^23] over the camera's [0.1, 900] is 2.968e-3 of 1/w, which
-    /// draws a fragment 5 deep 0.073 nearer, 20 deep 1.12, 50 deep 6.46; and
-    /// through a [0, 1] perspective its clip z per w moves the depth by the
-    /// same shift of 1/w. The control: no bias, no shift.
+    /// draws a fragment 5 deep 0.073 nearer, 20 deep 1.12, 50 deep 6.46. With
+    /// the eye behind the game's camera (the client's zoom), the pull is the
+    /// one the game's camera makes at its own depth: 0.19 at the game's 8,
+    /// whatever the zoom. The controls: no bias, no pull; the zoom's eye
+    /// taken as the game's (behind 0), 6.46 at 50.
     #[test]
-    fn the_z_bias_is_a_shift_of_the_reciprocal_depth() {
+    fn the_z_bias_is_a_shift_of_the_reciprocal_depth_from_the_games_camera() {
         let k = z_bias_reciprocal(15, 0.1, 900.0);
         assert!((k - 2.968e-3).abs() < 2e-6, "{k}");
+        let game = Bias { clip_z: -0.3, k, behind: 0.0 };
         for (w, nearer) in [(5.0f32, 0.0731f32), (20.0, 1.1207), (50.0, 6.4611)] {
-            let w2 = 1.0 / (1.0 / w + k);
-            assert!((w - w2 - nearer).abs() < 1e-3, "{w}: {}", w - w2);
+            assert!((w - game.drawn_at(w) - nearer).abs() < 1e-3, "{w}: {}", w - game.drawn_at(w));
+            // the same as 1/w larger by k
+            assert!((1.0 / game.drawn_at(w) - (1.0 / w + k)).abs() < 1e-6);
         }
         assert_eq!(z_bias_reciprocal(0, 0.1, 900.0), 0.0);
         assert_eq!(z_bias_reciprocal(-3, 0.1, 900.0), 0.0);
-        let proj = glam::camera::rh::proj::directx::perspective(55f32.to_radians(), 1.5, 0.3, 900.0);
-        let depth = |w: f32, b: f32| {
-            let c = proj * glam::Vec4::new(0.0, 0.0, -w, 1.0);
-            (c.z + b * c.w) / c.w
-        };
-        let b = z_bias_clip(&proj, k);
-        for w in [2.0f32, 10.0, 40.0] {
-            let w2 = 1.0 / (1.0 / w + k);
-            assert!((depth(w, b) - depth(w2, 0.0)).abs() < 1e-6, "{w}: {} {}", depth(w, b), depth(w2, 0.0));
-            assert!(depth(w, b) < depth(w, 0.0), "nearer");
-        }
+        assert_eq!(Bias::default().drawn_at(12.0), 12.0, "the control: no bias");
+        // zoomed out to 50 from the game's 8: the game's pull at 8
+        let zoomed = Bias { behind: 42.0, ..game };
+        let at8 = 8.0 - game.drawn_at(8.0);
+        assert!((at8 - 0.1855).abs() < 1e-3, "{at8}");
+        assert!((50.0 - zoomed.drawn_at(50.0) - at8).abs() < 1e-4, "{}", 50.0 - zoomed.drawn_at(50.0));
+        assert!(50.0 - game.drawn_at(50.0) > 6.0, "the control: from the zoom's eye, 6.46");
+        // nearer the eye than the game's camera: no pull; behind the eye: none
+        assert_eq!(zoomed.drawn_at(30.0), 30.0);
+        assert_eq!(game.drawn_at(-1.0), -1.0);
     }
 }
