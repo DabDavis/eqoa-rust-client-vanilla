@@ -35,7 +35,8 @@
 //!   alone, `render::set_mipmaps`), Flora (On, the game's: the plants it
 //!   grows round the camera, `flora`; Off: none), Environment (On, the
 //!   game's: the effect volumes, ground fog, dust, leaves, light shafts and
-//!   flocks, `fx`; Off: none) and Art (Frontiers' or the 2002 disc's, `era`,
+//!   flocks, `fx`; Off: none), Shadows (On, the game's: the characters' blob
+//!   shadows, `shadows`; Off: none) and Art (Frontiers' or the 2002 disc's, `era`,
 //!   as F9 swaps it: drawn as it moves, the 2002 disc asked for the first
 //!   time);
 //! - UI: Ability Bars (the game's 2, or 3 or 4: the HUD's quick menus and
@@ -630,6 +631,8 @@ impl WndOptions {
                     36 => c.flora = !c.flora,
                     // Environment: the effect volumes from the next frame (`viewer`, `fx`)
                     37 => c.environment = !c.environment,
+                    // Shadows: drawn or not from the next frame (`viewer`, `shadows`)
+                    46 => c.shadows = !c.shadows,
                     // Output Device: the sound opened there from the next
                     // frame (`audio::retarget`)
                     32 => step_output(&mut c, &crate::audio::outputs().listed.map(|l| l.1).unwrap_or_default(), d),
@@ -1066,7 +1069,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 27] = [
+const EXTENDED_ITEMS: [(i32, &str); 28] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1094,6 +1097,7 @@ const EXTENDED_ITEMS: [(i32, &str); 27] = [
     (38, "Loading Screens"),
     (39, "Render Scale"),
     (40, "HUD"),
+    (46, "Shadows"),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1124,7 +1128,7 @@ struct Category {
 /// Video, UI, Controller, etc."), each a page of `PAGE_MOST` rows at most.
 const CATEGORIES: [Category; 7] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale },
-    Category { name: "World", items: &[20, 35, 36, 37, 25], note: Note::None },
+    Category { name: "World", items: &[20, 35, 36, 37, 46, 25], note: Note::None },
     Category { name: "UI", items: &[22, 29, 30, 40], note: Note::None },
     Category { name: "Controller", items: &[16, 19], note: Note::Reads },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
@@ -1214,6 +1218,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         35 => on_off(c.mipmaps),
         36 => on_off(c.flora),
         37 => on_off(c.environment),
+        46 => on_off(c.shadows),
         38 => wide(if c.loading_longer { "Longer" } else { "Instant" }),
         39 => wide(&format!("x{}", c.render_scale)),
         40 => wide(match c.hud {
@@ -1519,7 +1524,7 @@ mod tests {
         assert_eq!((w.row, cues.last()), (5, Some(&9)), "Video's last row (six, a page's most)");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!((w.page, w.cat, w.cat_sel, w.item), (3, None, 0, -1), "back to the categories, Video still lit");
-        // World: Fog, Mipmaps, Flora, Environment, Art
+        // World: Fog, Mipmaps, Flora, Environment, Shadows, Art
         press(&mut w, &mut o, key::DOWN, &mut cues);
         press(&mut w, &mut o, key::CROSS, &mut cues);
         assert_eq!((w.cat, w.item), (Some(1), 20), "World, Fog");
@@ -1560,6 +1565,13 @@ mod tests {
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(settings::client().environment, "and back: two values");
         press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.item, 46, "Shadows");
+        assert!(settings::client().shadows, "on: the game's");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::client().shadows, settings::client().environment, settings::client().flora, cues.last()), (false, true, true, Some(&11)), "off, the others still on");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(settings::client().shadows, "and back: two values");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!(w.item, 25, "Art, on World since 2026-10-25");
         assert_eq!(settings::art(), esf::Era::Frontiers, "Frontiers', the disc the game runs off");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
@@ -1567,7 +1579,7 @@ mod tests {
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert_eq!(settings::art(), esf::Era::Frontiers, "and back: two values");
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (4, Some(&9)), "World's last row");
+        assert_eq!((w.row, cues.last()), (5, Some(&9)), "World's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!((w.page, w.cat, w.cat_sel, w.item), (3, None, 1, -1), "back to the categories, World still lit");
         // UI: Ability Bars, Update Notices, Text, HUD

@@ -138,6 +138,7 @@ mod pregame;
 mod rings;
 mod scene;
 mod servers;
+mod shadows;
 mod sky;
 mod spelling;
 mod touch;

@@ -1038,6 +1038,7 @@ pub fn shot_with(
         let mut frame = lit(proj, v, shot_hour, Some((shot_eye, &walker.scene)), Some(&mut weather));
         frame.0.point = point;
         let (sky_bb, world_bb) = weather.render(&walker.eye);
+        let particles_end = batches.len();
         batches.extend(world_bb);
         let mut rot = v;
         rot.w_axis = glam::Vec4::W;
@@ -1064,6 +1065,19 @@ pub fn shot_with(
             let drawn = fl.frame(&mut walker.scene, &vi::vect::Vect3::of(shot_eye.x, shot_eye.y, shot_eye.z), view.view_proj);
             fl.upload(&mut renderer, &device, &queue, lib, &walker.scene, &drawn);
             eprintln!("{}", fl.describe());
+        }
+        // the characters' blob shadows at the shot's camera (`shadows`),
+        // after the particle system's batches
+        if crate::settings::client().shadows {
+            let casters = match play.as_ref() {
+                Some(p) => p.shadow_casters(&mut walker, lib),
+                None => crate::shadows::walker_caster(&mut walker, lib, None).into_iter().collect(),
+            };
+            let mut sh = crate::shadows::Shadows::new();
+            sh.particles_end = particles_end;
+            sh.frame(&mut walker.scene, lib, &casters, &shot_lod_eye, view.view_proj, view.eye);
+            sh.upload(&mut renderer, &device, &queue, lib, &proj);
+            eprintln!("{}", sh.describe());
         }
         streamed = Some(streamer);
         if let Some(p) = &mut play {
@@ -1637,9 +1651,9 @@ impl PerfSpan {
 }
 
 impl Perf {
-    const NAMES: [&str; 16] = [
+    const NAMES: [&str; 17] = [
         "stream", "walk", "play", "pose", "zones", "sound", "weather", "particles", "lights", "acquire", "hud", "encode", "submit",
-        "gpu wait", "volumes", "flora",
+        "gpu wait", "volumes", "flora", "shadows",
     ];
 
     /// Always made; printed under `EQOA_PERF` (`?perf`).
@@ -1767,6 +1781,8 @@ struct App {
     fx: Option<crate::fx::Fx>,
     /// The radial flora round the walk (`flora.rs`).
     flora: Option<crate::flora::Flora>,
+    /// The characters' blob shadows (`shadows.rs`).
+    shadows: crate::shadows::Shadows,
     /// The sky and the weather (made once, kept across worlds as the
     /// scene's is), and this frame's sky billboards.
     weather: Option<crate::weather::Weather>,
@@ -1955,6 +1971,7 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         batches: Vec::new(),
         fx: None,
         flora: None,
+        shadows: Default::default(),
         weather: None,
         sky_batches: Vec::new(),
         body_at: 0,
@@ -4697,6 +4714,7 @@ impl ApplicationHandler for App {
                 let batches = &mut self.batches;
                 let fx = &mut self.fx;
                 let flora = &mut self.flora;
+                let shadows = &mut self.shadows;
                 let weather = &mut self.weather;
                 let sky_batches = &mut self.sky_batches;
                 let mut bb_view = None;
@@ -4849,6 +4867,23 @@ impl ApplicationHandler for App {
                     if let Some(p) = play.as_mut() {
                         lights.0.point = p.point_light(w, now, hour_now, weather.as_ref());
                     }
+                    // the characters' blob shadows (`VIScene::RenderShadows`,
+                    // `shadows`): drawn after the particle system's batches,
+                    // which these are, before the weather's; none with the
+                    // options' Shadows off or under the loading screen
+                    mark(perf, 8);
+                    if crate::settings::client().shadows && !loading {
+                        let casters = match play.as_ref() {
+                            Some(p) => p.shadow_casters(w, lib),
+                            None => crate::shadows::walker_caster(w, lib, None).into_iter().collect(),
+                        };
+                        shadows.particles_end = batches.len();
+                        shadows.frame(&mut w.scene, lib, &casters, &crate::lod::eye(&w.cam, &w.eye.position), proj * v, lights.0.eye);
+                        shadows.upload(&mut g.renderer, &g.device, &g.queue, lib, &proj);
+                    } else {
+                        shadows.clear(&mut g.renderer, &g.device, &g.queue, lib);
+                    }
+                    mark(perf, 16);
                     if let Some(wx) = weather.as_mut() {
                         let (sky, world) = wx.render(&w.eye);
                         *sky_batches = sky;
@@ -5019,7 +5054,7 @@ impl ApplicationHandler for App {
                     g.renderer.draw_plates(&g.device, &mut enc, st, &f.depth, f.size);
                 }
                 if let Some((v, p)) = bb_view {
-                    g.renderer.draw_billboards(&g.device, &g.queue, &mut enc, st, &f.depth, v, p, &self.batches, &textures);
+                    g.renderer.draw_billboards_and_shadows(&g.device, &g.queue, &mut enc, st, &f.depth, v, p, &self.batches, &textures, &view);
                 }
                 g.renderer.curve.apply(&g.queue, &mut enc, &f.color);
                 g.renderer.draw_text(&g.device, &mut enc, &f.color, &f.depth, f.size);

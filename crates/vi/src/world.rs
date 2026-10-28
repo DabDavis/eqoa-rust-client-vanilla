@@ -1469,7 +1469,20 @@ impl<M: Model> World<M> {
     /// the actors are left out: the game only stamps them, with the pass's
     /// stamp, which the pass then moves on.
     pub fn query_intersection(&mut self, bb: &BBox<M>, tl: &mut QueryTriList<M>) {
-        let v = QueryVars { bbox: *bb, corners: bb.store(), sphere: Sphere::from_bbox(bb), stamp: self.state };
+        let v = QueryVars { bbox: *bb, corners: bb.store(), sphere: Sphere::from_bbox(bb), stamp: self.state, actors: false };
+        let root = if self.nodes.is_empty() { LEAF } else { 0 };
+        self.query_world(root, &v, tl);
+        self.state += 1;
+        self.stamp += 1;
+    }
+
+    /// `VIScene::QueryIntersection` under a default `VIActorFilter`, which
+    /// filters no actor (`FilterActor` is `actor == -1`): the rooms' own
+    /// geometry and every actor's in the box (`QueryIntersectionActor`), as
+    /// `RenderShadow` queries it. A character's sprite has none
+    /// (`VICSprite::QueryIntersection`), so the placed props are what it adds.
+    pub fn query_intersection_actors(&mut self, bb: &BBox<M>, tl: &mut QueryTriList<M>) {
+        let v = QueryVars { bbox: *bb, corners: bb.store(), sphere: Sphere::from_bbox(bb), stamp: self.state, actors: true };
         let root = if self.nodes.is_empty() { LEAF } else { 0 };
         self.query_world(root, &v, tl);
         self.state += 1;
@@ -1526,6 +1539,18 @@ impl<M: Model> World<M> {
                             self.query_sprite(sprite, &Matrix44::identity(), &v.bbox, tl);
                         }
                     }
+                    // QueryIntersectionRoom's actor list, each under its own
+                    // stamp (the flora's filter takes none of them)
+                    if v.actors {
+                        for k in 0..self.zones[z].rooms[room].actors.len() {
+                            let a = self.zones[z].rooms[room].actors[k];
+                            self.query_actor(a, v, tl);
+                        }
+                        for k in 0..self.zones[z].rooms[room].moving.len() {
+                            let a = self.zones[z].rooms[room].moving[k];
+                            self.query_actor(a, v, tl);
+                        }
+                    }
                 }
                 return;
             }
@@ -1539,6 +1564,25 @@ impl<M: Model> World<M> {
         if back {
             self.query_zone_node(z, n.back, v, tl);
         }
+    }
+
+    /// `VIScene::QueryIntersectionActor` under the default filter: an actor
+    /// already met this pass or a proxy (`m_p40 & 4`; not the collision's
+    /// 0x10) passed over, stamped, culled by the box (`CullIntersect` with its
+    /// bound), then its sprite's own query under its transform.
+    fn query_actor(&mut self, i: usize, v: &QueryVars<M>, tl: &mut QueryTriList<M>) {
+        let a = &self.actors[i];
+        if a.stamp80 == self.stamp || a.flags & 4 != 0 {
+            return;
+        }
+        self.actors[i].stamp80 = self.stamp;
+        let a = &self.actors[i];
+        if v.bbox.cull_intersect(&a.bound) {
+            return;
+        }
+        let Some(sprite) = a.sprite else { return };
+        let m = a.object_to_world;
+        self.query_sprite(sprite, &m, &v.bbox, tl);
     }
 
     /// Each sprite's `QueryIntersection(b, l, m, sc)`: a simple sprite its
@@ -1596,6 +1640,29 @@ impl<M: Model> World<M> {
                 }
             }
         }
+    }
+
+    /// [`World::query_intersection_actors`] by brute force: `query_brute`'s
+    /// rooms, then every actor any room of `zones` holds, once each, through
+    /// `QueryIntersectionActor`'s tests. For testing the walk, as `query_brute`.
+    pub fn query_brute_actors(&mut self, bb: &BBox<M>, tl: &mut QueryTriList<M>, zones: &[usize]) {
+        self.query_brute(bb, tl, zones);
+        let v = QueryVars { bbox: *bb, corners: bb.store(), sphere: Sphere::from_bbox(bb), stamp: self.state, actors: true };
+        self.stamp += 1;
+        for &z in zones {
+            if !self.zones[z].pretrans.is_empty() {
+                let pt = self.zones[z].pretrans.clone();
+                self.collide.set_pretranslations(&pt);
+            }
+            for room in 0..self.zones[z].rooms.len() {
+                let r = &self.zones[z].rooms[room];
+                let all: Vec<usize> = r.actors.iter().chain(r.moving.iter()).copied().collect();
+                for a in all {
+                    self.query_actor(a, &v, tl);
+                }
+            }
+        }
+        self.stamp += 1;
     }
 
     /// `VIWorld::FindLeaf` then the zone leaf's flags (`GetEnvFlags`).
@@ -1839,6 +1906,9 @@ struct QueryVars<M: Model> {
     corners: [Vect3<M>; 8],
     sphere: Sphere<M>,
     stamp: i32,
+    /// The filter takes the actors (the shadow's `VIActorFilter`), or none
+    /// (the flora's `VIRadialFloraFilter`).
+    actors: bool,
 }
 
 /// `InsertActor`'s choice at a node, and the query's: the bound sphere alone
