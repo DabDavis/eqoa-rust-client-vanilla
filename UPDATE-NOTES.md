@@ -5,6 +5,17 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-29 · Space loots a corpse as well as opening it
+- In a corpse's window Space now does what the controller's ✕ does there, the button that opened
+  it: on LEAVE ALL it closes the window, on an item it takes that item, and on TAKE ALL it takes
+  everything. It used to do nothing there, so you had to switch to E or Enter.
+
+## 2026-10-29 · A steady camera while you strafe with the mouse held
+- Running while holding a mouse button (the right one, or the left one while you move) and
+  stepping sideways with A or D no longer makes the camera shake from side to side, which blurred
+  the picture at a high frame rate. It now follows you as smoothly as with the keys alone.
+- The same goes for dragging the camera round with a finger on a touch screen while you run.
+
 ## 2026-10-29 · Playing over a phone's hotspot
 - The game connects on networks that give servers IPv6 addresses, as many phone hotspots do: it
   now takes a server's IPv4 address when there is one, and on a network with IPv6 alone it goes
