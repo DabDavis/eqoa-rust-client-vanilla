@@ -12,7 +12,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
-use crate::client_image::Menus;
+use crate::client_image::{Menu, Menus};
 use crate::ui::{Cut, Layout};
 use render::ui::Anchor;
 use vi::ui::{FrameParam, Raster, TextScroll, Vui, Window, wide};
@@ -377,7 +377,9 @@ impl MainMenu {
         let lit = [10.0 / 255.0, 50.0 / 255.0, 70.0 / 255.0, 1.0];
         let black = [0.0, 0.0, 0.0, 1.0];
         let white = [1.0; 4];
-        let word = |id: i32| wide(vui.words.get(id, vui.language));
+        // the live client's words where the table lacks them (Community >
+        // Duel's, `duel::word`)
+        let word = |id: i32| wide(&crate::duel::word(&vui.words, id, vui.language));
         // a label set at run time (the server's trigger names), fitted to
         // the bar's width, as the game's own words take it; else the
         // entry's word
@@ -909,6 +911,8 @@ pub struct StartData {
     pub buddy_menu: usize,
     pub ignore_menu: usize,
     pub menu: StartMenu,
+    /// the live client's Duel menu (`set_duels`), once made
+    duel_menu: Option<usize>,
 }
 
 impl StartData {
@@ -929,7 +933,33 @@ impl StartData {
         let slot_words = (0..23u32).map(|k| (img.i32_at(0x00CDF6F8 + 8 * k), img.i32_at(0x00CDF6FC + 8 * k) as i64)).collect();
         let buddy_menu = menus.def(img, 0x00CD03B0);
         let ignore_menu = menus.def(img, 0x00CD0340);
-        StartData { menus, tables, tables_test, bounds, world_words, item_counts, attack_words, slot_words, buddy_menu, ignore_menu, menu }
+        StartData { menus, tables, tables_test, bounds, world_words, item_counts, attack_words, slot_words, buddy_menu, ignore_menu, menu, duel_menu: None }
+    }
+
+    /// The live client's Community > Duel (its Community menu, 0x013DFFE8,
+    /// has it sixth, after Chat Modes: word 1864, a menu of Invite (word 86,
+    /// `DoAction` 0xAB000001) and Surrender (1865, 0xAB000002)), put in every
+    /// Community menu (title word 420) or taken out. The disc has none; the
+    /// client shows it while the server lets the player duel (`duelplay`).
+    pub fn set_duels(&mut self, on: bool) {
+        use crate::client_image::MenuEntry;
+        let duel = *self.duel_menu.get_or_insert_with(|| {
+            let entry = |word: i32, msg: u32| MenuEntry { word, msg, id: 0, ..Default::default() };
+            self.menus.push(Menu { x00: -1, x04: 1864, entries: vec![entry(86, crate::duel::MSG_INVITE), entry(1865, crate::duel::MSG_SURRENDER)] })
+        });
+        for m in self.menus.list.iter_mut().filter(|m| m.x04 == 420) {
+            let at = m.entries.iter().position(|e| e.sub == Some(duel));
+            match (on, at) {
+                (true, None) => {
+                    let after = m.entries.iter().position(|e| e.word == 530).map_or(m.entries.len().min(5), |k| k + 1);
+                    m.entries.insert(after, MenuEntry { word: 1864, sub: Some(duel), msg: 0, id: 0, ..Default::default() });
+                }
+                (false, Some(k)) => {
+                    m.entries.remove(k);
+                }
+                _ => {}
+            }
+        }
     }
 
     /// `OpenStartMenu`'s table: the bank's when a banker is in range, the

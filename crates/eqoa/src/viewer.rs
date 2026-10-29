@@ -702,6 +702,8 @@ pub fn shot_with(
                             p.bank_key(k, down);
                         } else if p.npcw_owns() {
                             p.npcw_key(k, down);
+                        } else if p.duel_owns() {
+                            p.duel_key(k, down);
                         } else if p.support_owns() {
                             p.support_key(k, down);
                         } else if p.mode == 5 {
@@ -3415,14 +3417,18 @@ impl App {
             return;
         }
         // The corpse, merchant and trade windows (modes 1, 10, 15,
-        // 16): `npcw_key_of`'s keys; the trade's chat line, once Space
-        // has opened it, takes the keyboard as the edit box does.
+        // 16), and the duel's invitation and wager (43, 44, the trade's
+        // copy): `npcw_key_of`'s keys; the trade's and the wager's chat
+        // line, once Space has opened it, takes the keyboard as the edit box
+        // does.
         if let Some(p) = self.play.as_mut()
             && p.typing.is_none()
-            && p.npcw_owns()
+            && (p.npcw_owns() || p.duel_owns())
         {
             let down = event.state == ElementState::Pressed;
-            if p.npcw_typing() {
+            let duel = p.duel_owns();
+            let send = |p: &mut crate::play::Play, k: i32, down: bool| if duel { p.duel_key(k, down) } else { p.npcw_key(k, down) };
+            if (duel && p.duel_typing()) || (!duel && p.npcw_typing()) {
                 let named = match &event.logical_key {
                     Key::Named(NamedKey::Backspace) => Some(8),
                     Key::Named(NamedKey::Escape) => Some(27),
@@ -3432,10 +3438,10 @@ impl App {
                     _ => None,
                 };
                 if let Some(k) = named {
-                    p.npcw_key(k, down);
+                    send(p, k, down);
                 } else if down && let Some(t) = &event.text {
                     for c in t.chars().filter(|c| c.is_ascii() && !c.is_ascii_control()) {
-                        p.npcw_key(c as i32, true);
+                        send(p, c as i32, true);
                     }
                 }
                 return;
@@ -3443,7 +3449,7 @@ impl App {
             if let Some(k) = npcw_key_of(&event.logical_key, p.mode)
                 && !(down && event.repeat)
             {
-                p.npcw_key(k, down);
+                send(p, k, down);
             }
             return;
         }

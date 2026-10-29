@@ -241,6 +241,7 @@ impl DuelWnd {
     }
 
     /// The invitation's time left, in the client's clock's ticks.
+    #[cfg(test)]
     pub fn timer(&self) -> Option<u32> {
         self.invite.as_ref().map(|r| r.timer)
     }
