@@ -4812,6 +4812,19 @@ impl Play {
         }
     }
 
+    /// `VIWndGame::SetMode(0)`, for the one window this client keeps apart
+    /// from the mode: the start menu (its inventory in it) draws and takes
+    /// keys while it is visible, whatever the mode, so it is closed as
+    /// `SetMode(0)` closes it (`CloseStartMenu(0)`); every other window runs
+    /// in its own mode only and goes with the mode put to 0.
+    fn set_mode_zero(&mut self) {
+        if self.mode == 13 || self.start.as_ref().is_some_and(|s| s.menu.visible) {
+            self.close_start_menu(0);
+        } else {
+            self.mode = 0;
+        }
+    }
+
     /// The start menu's waiting work, with the raster: the open, then each
     /// key to the focused menu; 260 from it closes it, 261 is
     /// `VIWndGame::OnMessage`'s mode-13 path.
@@ -4848,6 +4861,9 @@ impl Play {
         if let Some(reset) = self.start_open.take() {
             s.pick(bank_tables, expansion);
             s.menu.visible = true;
+            // ShowMain: the items put away (m_items->SetVisible(false)), so
+            // an inventory the menu was closed over never opens with it
+            self.items.visible = false;
             s.menu.show_main(vui, r, reset, now, loc);
         }
         let mut cues = Vec::new();
