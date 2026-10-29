@@ -21,6 +21,9 @@ is put on the page by `.github/workflows/notes.yml`.
 - Destroying an item now asks 'Destroy item "<its name>"?', so you can see which one you picked,
   and selling one to a merchant asks 'Sell item "<its name>"?' for everything but loot. Both start
   on No.
+- Petitions: opening, answering or deleting a petition the staff have closed now says why under
+  "System is temporarily unavailable. (Code: -8)": the petition may have been addressed, and a new
+  one can be sent if you still need help.
 
 ## 2026-10-29 · One question for all your crash reports, and freezes written down
 - If the game stopped more than once since you last sent its crash reports, the next start now
