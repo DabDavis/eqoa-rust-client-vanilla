@@ -24,7 +24,9 @@ impl Features {
     pub const RACES: u32 = 0x02;
     /// The auction's stacks: a lot's quantity and its prices per item.
     pub const STACKS: u32 = 0x08;
-    /// The duel part's challenge and surrender (VIWndDuel).
+    /// The duel part's challenge and surrender (VIWndDuel; the duel
+    /// window's to read).
+    #[allow(dead_code)]
     pub const DUELS: u32 = 0x10;
 
     /// A server sent the word: the live client's windows, each part gated as

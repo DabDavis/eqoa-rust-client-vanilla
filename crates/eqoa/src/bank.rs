@@ -158,6 +158,7 @@ impl Bank {
     }
 
     /// The menu has the auction's row (`m_auction`).
+    #[cfg(test)]
     pub fn offers_auction(&self) -> bool {
         self.menu.auction
     }

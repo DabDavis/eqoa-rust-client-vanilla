@@ -46,13 +46,13 @@ const RACE_WORDS: [i32; 10] = [183, 185, 186, 187, 188, 189, 191, 192, 193, 190]
 
 /// `GetClass(c)->m_nameStrID` (`viclass.cpp`: 165..179; out of range is
 /// class 0's).
-fn class_word(c: i32) -> i32 {
+pub(crate) fn class_word(c: i32) -> i32 {
     if (0..15).contains(&c) { 165 + c } else { 165 }
 }
 
 /// `GetRace(r)->m_nameStrID` (`virace.cpp`: the ten races, then eleven
 /// empty slots whose name is -1; out of range is race 0's).
-fn race_word(r: i32) -> i32 {
+pub(crate) fn race_word(r: i32) -> i32 {
     match r {
         0..=9 => RACE_WORDS[r as usize],
         10..=20 => -1,

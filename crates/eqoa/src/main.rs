@@ -100,6 +100,8 @@ mod padmap;
 mod spellbook;
 mod infotext;
 mod live;
+mod listbox;
+mod groupsearch;
 mod inventory;
 mod itemmenu;
 mod classmastery;

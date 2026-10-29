@@ -142,6 +142,11 @@ impl Menus {
         k
     }
 
+    /// The menu loaded from the `VIMenuDef` at `va`, if one was.
+    pub fn index_of(&self, va: u32) -> Option<usize> {
+        self.by_va.get(&va).copied()
+    }
+
     /// A menu built at run time (the item menus `UpdateQuickBars` fills).
     pub fn push(&mut self, m: Menu) -> usize {
         self.list.push(m);

@@ -19,8 +19,8 @@ const WEAR_WORDS: [(i32, i64); 28] = [
 ];
 
 /// `GetRace(r)->m_shortStrID` for races 0-9, `GetClass(c)->m_shortStrID`.
-const RACE_SHORT: [i32; 10] = [317, 318, 319, 320, 321, 322, 323, 324, 325, 1191];
-const CLASS_SHORT: [i32; 15] = [303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 1190];
+pub(crate) const RACE_SHORT: [i32; 10] = [317, 318, 319, 320, 321, 322, 323, 324, 325, 1191];
+pub(crate) const CLASS_SHORT: [i32; 15] = [303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 1190];
 
 /// The LAST entry for the id (`FindStatWord`, `FindWearSlotWord`,
 /// `FindAttackWord`: no break).
