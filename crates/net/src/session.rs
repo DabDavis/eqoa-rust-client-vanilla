@@ -77,6 +77,25 @@ pub const OP_ENTITY_VIEW: u16 = 0x7E00;
 /// and is then sent the names (0x7E08, `admin::read_triggers`) whenever they
 /// change. A PS2 ignores the offer, as it ignores [`OP_ENTITY_VIEW`]'s.
 pub const OP_GM_TRIGGERS: u16 = 0x7E07;
+/// go-eqoa-server's own, no retail message either: SOE's live game's look, a
+/// u32 after the opcode, both ways. The server offers it (1) after the
+/// session's first character list; this client answers 1 at once: it reads
+/// the live CLIENT's entity channel ([`crate::entity::LIVE_STATE_SIZE`]
+/// bytes, a colour per held item, armour slot and robe) and its 0x002C
+/// record ([`LIVE_GEAR_SIZE`] raw bytes). A PS2 ignores the offer; Sandstorm
+/// never makes one, so its channels and lists stay the disc's.
+pub const OP_LIVE_LOOK: u16 = 0x7E0A;
+/// The server's answer to [`OP_LIVE_LOOK`], a u32: the look in force from it
+/// on (1 the live game's, 0 the disc's). Every character list after it is in
+/// that look (lists are guaranteed messages, in order); a client still
+/// choosing is sent its list again.
+pub const OP_LIVE_LOOK_IN_FORCE: u16 = 0x7E0B;
+/// The raw part of a 0x002C record: the disc's, and the live game's
+/// (`CharacterList`, Corsten's 0x012CC018: no robe tint, six ArmorGroup
+/// variants where the disc's has tints, then the held items', armour slots'
+/// and robe's colours).
+pub const DISC_GEAR_SIZE: usize = 32;
+pub const LIVE_GEAR_SIZE: usize = 71;
 
 #[derive(Clone, Debug)]
 pub struct Shard {
@@ -98,7 +117,9 @@ pub struct Character {
     pub hair_length: i64,
     pub hair_style: i64,
     pub face: i64,
-    /// The 32 raw bytes after the zigzag fields (robe, weapons, armour).
+    /// The raw bytes after the zigzag fields (robe, weapons, armour): the
+    /// disc's [`DISC_GEAR_SIZE`], or the live game's [`LIVE_GEAR_SIZE`] when
+    /// its look is in force.
     pub gear: Vec<u8>,
 }
 
@@ -302,6 +323,11 @@ pub struct Session {
     /// offered on this connection ([`OP_ENTITY_VIEW`]); none from one that
     /// never does (every retail server, Sandstorm's too).
     pub entity_view_offer: Option<(u32, u32)>,
+    /// The live game's look is in force ([`OP_LIVE_LOOK_IN_FORCE`] said so):
+    /// character lists are read as the live CLIENT's, and the entity channels
+    /// of its length too (`entity::Entities::live_look`). Kept for the
+    /// session, as the server keeps it, through the world's connection.
+    pub live_look: bool,
     user: String,
     token: [u8; 32],
     start: Instant,
@@ -421,6 +447,7 @@ impl Session {
             self_id: None,
             expansion: 0,
             entity_view_offer: None,
+            live_look: false,
             user: user.to_string(),
             token,
             start: Instant::now(),
@@ -835,6 +862,18 @@ impl Session {
                     self.send_op_int(OP_GM_TRIGGERS, 1);
                 }
             }
+            // the live game's look offered: taken (this client reads it)
+            OP_LIVE_LOOK => {
+                if r.u32() & 1 != 0 && !r.error {
+                    self.send_op_int(OP_LIVE_LOOK, 1);
+                }
+            }
+            OP_LIVE_LOOK_IN_FORCE => {
+                let v = r.u32();
+                if !r.error {
+                    self.live_look = v & 1 != 0;
+                }
+            }
             0x0013 => {
                 // SetTime: each clock moved to the server's reading at the
                 // local timer's now
@@ -846,7 +885,7 @@ impl Session {
             }
             0x002C if matches!(self.state, State::Shard | State::Characters) => {
                 self.state = State::Characters;
-                ev.push(Event::Characters(read_characters(&mut r)));
+                ev.push(Event::Characters(read_characters(&mut r, self.live_look)));
             }
             0x0012 if self.state == State::Characters => ev.push(Event::RandomName(String::from_utf8_lossy(&r.string(24)).into_owned())),
             0x002E if self.state == State::Characters => ev.push(Event::CreateRefused(269)),
@@ -1147,7 +1186,10 @@ pub fn new_char_message(c: &NewChar) -> Vec<u8> {
     w.data
 }
 
-fn read_characters(r: &mut Reader) -> Vec<Character> {
+/// `CharacterList`: the disc's records, or with `live` the live game's
+/// ([`LIVE_GEAR_SIZE`] raw bytes each).
+fn read_characters(r: &mut Reader, live: bool) -> Vec<Character> {
+    let gear = if live { LIVE_GEAR_SIZE } else { DISC_GEAR_SIZE };
     let n = r.signed().clamp(0, 8) as usize;
     (0..n)
         .map(|_| {
@@ -1156,7 +1198,7 @@ fn read_characters(r: &mut Reader) -> Vec<Character> {
             for v in &mut f {
                 *v = r.signed();
             }
-            let gear = r.bytes(32).to_vec();
+            let gear = r.bytes(gear).to_vec();
             Character {
                 name,
                 server_id: f[0],
@@ -1739,6 +1781,58 @@ mod tests {
         assert_eq!(s.entity_view_offer, Some((204, 1000)), "0x7E00's offer still taken");
         s.send_entity_view(24, 100);
         assert_eq!(answers(&mut s), [(251, vec![0x00, 0x7E, 24, 0, 0, 0, 100, 0, 0, 0])], "the control: 0x7E00's answer");
+    }
+
+    // go-eqoa-server's offer of the live game's look (0x7E0A) is answered
+    // with 1 at once; the server's answer (0x7E0B) decides how the character
+    // lists after it are read: the disc's 32 raw bytes a record until it says
+    // 1, the live game's 71 after, the disc's again after a 0. It is kept
+    // through the world's connection, as the server keeps it for the
+    // session. The control: a list that comes before the server's answer is
+    // the disc's, though this client asked already.
+    #[test]
+    fn live_look_offer_answer_and_lists() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&0x7E)).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        let list = |gear: usize| {
+            let mut w = Writer::op(0x002C);
+            w.signed(1).u32(4).bytes(b"Dyed");
+            for v in [17, 0x70D8_98C6, 13, 3, 42, 1, 2, 3, 2] {
+                w.signed(v);
+            }
+            w.bytes(&vec![0xAB; gear]);
+            w.data
+        };
+        let gear_of = |ev: &[Event]| match ev {
+            [Event::Characters(c)] => c.iter().map(|c| c.gear.len()).collect::<Vec<_>>(),
+            other => panic!("{other:?}"),
+        };
+        answers(&mut s);
+        s.state = State::Shard;
+        assert_eq!(gear_of(&deliver(&mut s, drdp::TYPE_GUARANTEED, list(DISC_GEAR_SIZE))), [32], "a first list: the disc's");
+        assert!(deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x0A, 0x7E, 1, 0, 0, 0]).is_empty());
+        assert_eq!(answers(&mut s), [(251, vec![0x0A, 0x7E, 1, 0, 0, 0])], "the offer answered with 1");
+        assert!(!s.live_look, "not in force until the server says so");
+        assert_eq!(gear_of(&deliver(&mut s, drdp::TYPE_GUARANTEED, list(DISC_GEAR_SIZE))), [32], "the control: a list before the server's answer");
+
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x0B, 0x7E, 1, 0, 0, 0]);
+        assert!(s.live_look);
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, list(LIVE_GEAR_SIZE));
+        assert_eq!(gear_of(&ev), [71], "the live game's list");
+        if let [Event::Characters(c)] = &ev[..] {
+            assert_eq!((c[0].name.as_str(), c[0].level, c[0].face), ("Dyed", 42, 2));
+        }
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert!(s.live_look, "kept through the world's connection");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x0B, 0x7E, 0, 0, 0, 0]);
+        assert!(!s.live_look, "the server went back to the disc's");
+        assert_eq!(answers(&mut s), [], "nothing answered but the offer");
     }
 
     // go-eqoa-server's offer of the GM's trigger names (0x7E07) is answered

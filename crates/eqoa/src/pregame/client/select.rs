@@ -104,6 +104,10 @@ pub fn look_of(c: &CharRecord, helm: bool) -> vi::cust::Look {
         face: c.face as u8,
         robe: if c.robe == -1 { -1 } else { c.robe as i8 },
         robe_tint: c.robe_tint,
+        // the live game's record's colours (`ShowCharacter`'s SetArmorSlot
+        // and SetRobe take them), when the server sent its look
+        armor_color: c.colors.map(|l| l.armor),
+        robe_color: c.colors.map(|l| l.robe),
     }
 }
 

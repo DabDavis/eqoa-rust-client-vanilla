@@ -90,6 +90,10 @@ pub struct CharRecord {
     /// the six armour sets (`m_armor`) and their tints (`m_p59`)
     pub armor: [u8; 6],
     pub tints: [u8; 6],
+    /// The live game's record's colours (go-eqoa-server's live look): its
+    /// held items', armour slots' and robe's, and the slots' ArmorGroup
+    /// variants where the disc's has tints; then no tint is sent.
+    pub colors: Option<net::entity::LiveColors>,
 }
 
 impl CharRecord {
@@ -99,6 +103,9 @@ impl CharRecord {
     pub fn of(c: &net::session::Character) -> Self {
         let g = |i: usize| c.gear.get(i).copied().unwrap_or(0);
         let word = |o: usize| i32::from_le_bytes([g(o), g(o + 1), g(o + 2), g(o + 3)]);
+        if c.gear.len() >= net::session::LIVE_GEAR_SIZE {
+            return CharRecord::of_live(c);
+        }
         CharRecord {
             name: c.name.clone(),
             server_id: c.server_id,
@@ -116,6 +123,41 @@ impl CharRecord {
             attack: [g(17), g(18), g(19)],
             armor: std::array::from_fn(|k| g(20 + k)),
             tints: std::array::from_fn(|k| g(26 + k)),
+            colors: None,
+        }
+    }
+
+    /// The live game's record (its `CharacterList`, Corsten's 0x012CC018):
+    /// the zigzags, then `m_robe`, the three held items, their attack types,
+    /// the armour sets, six ArmorGroup variants, the held items' colours, the
+    /// armour slots' and the robe's (r, g, b, a each); no robe tint.
+    fn of_live(c: &net::session::Character) -> Self {
+        let g = |i: usize| c.gear.get(i).copied().unwrap_or(0);
+        let word = |o: usize| i32::from_le_bytes([g(o), g(o + 1), g(o + 2), g(o + 3)]);
+        let rgba = |o: usize| [g(o), g(o + 1), g(o + 2), g(o + 3)];
+        CharRecord {
+            name: c.name.clone(),
+            server_id: c.server_id,
+            model: c.model as u32,
+            class: c.class as i32,
+            race: c.race as i32,
+            level: c.level as i32,
+            hair_color: c.hair_color as i32,
+            hair_length: c.hair_length as i32,
+            hair_style: c.hair_style as i32,
+            face: c.face as i32,
+            robe: word(0),
+            robe_tint: 0,
+            weapons: [word(4) as u32, word(8) as u32, word(12) as u32],
+            attack: [g(16), g(17), g(18)],
+            armor: std::array::from_fn(|k| g(19 + k)),
+            tints: [0; 6],
+            colors: Some(net::entity::LiveColors {
+                variants: std::array::from_fn(|k| g(25 + k)),
+                items: std::array::from_fn(|k| rgba(31 + 4 * k)),
+                armor: std::array::from_fn(|k| rgba(43 + 4 * k)),
+                robe: rgba(67),
+            }),
         }
     }
 
@@ -862,6 +904,29 @@ mod tests {
         (t.face, t.hair_color) = (3, 7);
         let c = t.character();
         assert_eq!((c.server_id, c.face, c.hair_style, c.hair_length, c.hair_color), (9, 3, 3, 2, 7));
+    }
+
+    /// The live game's record (go-eqoa-server's `entity.LiveGear` for its
+    /// test player: robe 2, the primary 0x11223344 of type 3, sets 4 4 3 2 1 4,
+    /// chest d10000ff, boots 5a5a78ff, robe 008221ff, the primary 0000ffff)
+    /// read as the live CLIENT's `CharacterList` reads it, and dressed with
+    /// its colours on the select screen. The control: the disc's record has
+    /// none, and dresses in its tints.
+    #[test]
+    fn a_live_record_reads_its_colours() {
+        let hex = "020000004433221100000000000000000300000404030201040000000000000000ffffffffffffffffffffd10000ffffffffffffffffffffffffff5a5a78ffffffffff008221ff";
+        let g: Vec<u8> = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect();
+        assert_eq!(g.len(), net::session::LIVE_GEAR_SIZE);
+        let r = CharRecord::of(&character("Tinctoria", 9, g));
+        assert_eq!((r.robe, r.robe_tint, r.weapons, r.attack), (2, 0, [0x11223344, 0, 0], [3, 0, 0]));
+        assert_eq!((r.armor, r.tints), ([4, 4, 3, 2, 1, 4], [0; 6]));
+        let l = r.colors.expect("the live record's colours");
+        assert_eq!(l.armor, [[0xD1, 0, 0, 0xFF], [0xFF; 4], [0xFF; 4], [0xFF; 4], [0x5A, 0x5A, 0x78, 0xFF], [0xFF; 4]]);
+        assert_eq!((l.robe, l.items[0], l.variants), ([0, 0x82, 0x21, 0xFF], [0, 0, 0xFF, 0xFF], [0; 6]));
+        let look = select::look_of(&r, true);
+        assert_eq!((look.armor_color, look.robe_color), (Some(l.armor), Some(l.robe)));
+        let disc = CharRecord::of(&character("Plain", 8, vec![0; net::session::DISC_GEAR_SIZE]));
+        assert!(disc.colors.is_none() && select::look_of(&disc, true).armor_color.is_none(), "the control: the disc's record");
     }
 
     /// Where a box of the client's own may stand (`update`'s question): the

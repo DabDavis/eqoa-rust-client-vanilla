@@ -133,6 +133,21 @@ pub struct Look {
     /// Negative: no robe.
     pub robe: i8,
     pub robe_tint: u8,
+    /// SOE's live game's colours (its channel and 0x002C record carry one per
+    /// armour slot and the robe where the disc's carry a tint): each the
+    /// slot's layer colour, as the live `SetArmorSlot` / `SetRobe` /
+    /// `SetHelm` set it with no ArmorGroup, in place of the tint's. None: the
+    /// tints'.
+    pub armor_color: Option<[[u8; 4]; 6]>,
+    pub robe_color: Option<[u8; 4]>,
+}
+
+impl Look {
+    /// The helm's colour (`SetHelm` colours every layer of its copy): the
+    /// live game's, else its tint's as `SetHelm` reads it.
+    pub fn helm_color(&self, t: &Tables) -> [u8; 4] {
+        self.armor_color.map_or_else(|| t.tint_at_most(self.armor_tint[5]), |a| a[5])
+    }
 }
 
 /// One change to one layer of one palette entry. `texture` None keeps it.
@@ -179,7 +194,8 @@ pub fn apply_look_with<M: Model>(cs: &CSprite<M>, look: &Look, helm_worn: bool, 
             };
             if let Some(tex) = tex {
                 robed[i] = true;
-                out.push(LayerChange { entry, layer, texture: Some(tex), color: Some(t.tint_at_most(look.robe_tint)) });
+                let color = look.robe_color.unwrap_or_else(|| t.tint_at_most(look.robe_tint));
+                out.push(LayerChange { entry, layer, texture: Some(tex), color: Some(color) });
             }
         }
     }
@@ -195,7 +211,8 @@ pub fn apply_look_with<M: Model>(cs: &CSprite<M>, look: &Look, helm_worn: bool, 
         if (set != 0 && tex.is_none()) || robed[i] {
             continue;
         }
-        out.push(LayerChange { entry, layer, texture: tex, color: Some(t.tint(look.armor_tint[i])) });
+        let color = look.armor_color.map_or_else(|| t.tint(look.armor_tint[i]), |a| a[i]);
+        out.push(LayerChange { entry, layer, texture: tex, color: Some(color) });
     }
     // SetHair: every hair slot must exist.
     if (11..16).all(|i| slot(i).0 != -1) {
@@ -305,5 +322,46 @@ mod tests {
         assert_eq!(apply_look(&cs, &look, false, all), apply_look_with(&cs, &look, false, all, &retail));
         assert_eq!(retail.tint_at_most(20), TINTS[14]);
         assert_eq!(ss.tint_at_most(20), ss.tints[20]);
+    }
+
+    /// The live game's colours are the layers' colours, in place of the
+    /// tints' (a robe's too, the helm's by `helm_color`), whatever a patch's
+    /// tables say; textures are the same. A colour equal to a tint's makes
+    /// the very changes that tint makes: an undyed slot the server sends in
+    /// its tint's colour is drawn as before. The control: with no colours,
+    /// the tints'.
+    #[test]
+    fn live_colours_are_the_layers() {
+        let cs = sprite();
+        let all = |_: u32| true;
+        let (retail, ss) = (Tables::retail(), sandstorm());
+        let tinted = Look { armor: [3, 2, 1, 2, 5, 1], armor_tint: [1, 2, 3, 0, 8, 4], robe: 1, robe_tint: 6, ..Default::default() };
+        let mut live = Look { armor_tint: [0; 6], robe_tint: 0, ..tinted };
+        live.armor_color = Some([[0xA5, 5, 1, 255], [1, 2, 3, 255], [4, 5, 6, 255], [7, 8, 9, 255], [10, 11, 12, 255], [13, 14, 15, 255]]);
+        live.robe_color = Some([0x15, 0, 0, 255]);
+        for t in [&retail, &ss] {
+            let a = apply_look_with(&cs, &tinted, false, all, t);
+            let b = apply_look_with(&cs, &live, false, all, t);
+            assert_eq!(a.len(), b.len());
+            for (x, y) in a.iter().zip(&b) {
+                assert_eq!((x.entry, x.layer, x.texture), (y.entry, y.layer, y.texture), "textures as the tints'");
+            }
+            assert_eq!(change(&b, 10).unwrap().color, Some([0x15, 0, 0, 255]), "the robe's slot");
+            assert_eq!(change(&b, 11).unwrap().color, Some([1, 2, 3, 255]), "slot 1's");
+            assert_eq!(change(&b, 14).unwrap().color, Some([10, 11, 12, 255]), "slot 4's");
+            assert_eq!(live.helm_color(t), [13, 14, 15, 255]);
+        }
+        assert_eq!(change(&apply_look(&cs, &tinted, false, all), 11).unwrap().color, Some(TINTS[2]), "the control: the tint's");
+        assert_eq!(tinted.helm_color(&retail), TINTS[4]);
+        // the tints' own colours sent as colours: the same changes
+        let as_colors = Look {
+            armor_tint: [0; 6],
+            robe_tint: 0,
+            armor_color: Some(tinted.armor_tint.map(|i| retail.tint(i))),
+            robe_color: Some(retail.tint_at_most(tinted.robe_tint)),
+            ..tinted
+        };
+        assert_eq!(apply_look(&cs, &as_colors, false, all), apply_look(&cs, &tinted, false, all));
+        assert_eq!(as_colors.helm_color(&retail), tinted.helm_color(&retail));
     }
 }

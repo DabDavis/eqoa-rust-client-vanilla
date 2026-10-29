@@ -5,6 +5,13 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-29 · Dyed armour, on servers that send it
+- Armour, robes and helms can now be any colour, on a server that sends dyes the way the live
+  game did (eqoaclassic, where a game master sets them). Each dyed piece is drawn in its colour on
+  your character, on everyone near you and on the character select screen.
+- Nothing else changes: armour that is not dyed looks exactly as before, and on Sandstorm and every
+  other server the game is as it was.
+
 ## 2026-10-29 · One question for all your crash reports, and freezes written down
 - If the game stopped more than once since you last sent its crash reports, the next start now
   asks about all of them at once and says how many there are. Send sends them all, Delete deletes
