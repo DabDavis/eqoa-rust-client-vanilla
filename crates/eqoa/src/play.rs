@@ -5352,6 +5352,7 @@ impl Play {
                     self.open_start_menu(false);
                 }
                 crate::classmastery::CmUp::Send(m) => self.session.send(&m),
+                crate::classmastery::CmUp::Warn(id) => self.warn(id),
             }
         }
     }
