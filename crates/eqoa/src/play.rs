@@ -1334,10 +1334,12 @@ mod entity_actors {
 
     const SIGNPOST: u32 = 0x6A82352C;
     const HUMAN: u32 = 0x70D898C6;
+    /// Sandstorm's blocker: a box of collision, nothing to draw.
+    const BLOCKER: u32 = 0x6F412342;
 
     /// TUNARIA's zones round Freeport's open ground and CHAR.ESF, and the
-    /// collision world made of them; None without the disc.
-    fn freeport(x: f32, z: f32) -> Option<(Library, World<Ee>)> {
+    /// world's file; None without the disc.
+    fn freeport_lib(x: f32, z: f32) -> Option<(Library, usize)> {
         let iso = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
         if !iso.exists() {
             eprintln!("SKIP: no run/eqoa.iso");
@@ -1348,6 +1350,12 @@ mod entity_actors {
         lib.add("CHAR.ESF", crate::stream::open_file(&iso, "CHAR.ESF").unwrap());
         let mut src = crate::stream::FileZones::open(&iso, "TUNARIA.ESF").unwrap();
         crate::stream::fill(&mut lib, w, x, z, &mut src);
+        Some((lib, w))
+    }
+
+    /// `freeport_lib`, and the collision world made of it.
+    fn freeport(x: f32, z: f32) -> Option<(Library, World<Ee>)> {
+        let (lib, w) = freeport_lib(x, z)?;
         let world = World::load(&lib, w)?;
         Some((lib, world))
     }
@@ -1428,6 +1436,67 @@ mod entity_actors {
         let n = want(&mut w, 9, 0x1234_5678, (x, z), false);
         assert_eq!(place_actor(&mut w, &lib, None, n), (None, false));
         assert_eq!(w.actors.len(), count);
+    }
+
+    /// Sandstorm's blockers (F3 20261028-233048, an unnamed creature where
+    /// the player stood; a quest's gate the players ran past): CHAR.ESF's
+    /// 0x6F412342 is a SimpleSprite with an empty prim buffer and a
+    /// collision buffer, a closed box 5 a side about its origin. With nothing
+    /// to draw no puppet is built for it, and still its entity has its actor
+    /// (`LoadRes` puts any sprite on it), so the player's run at one 6 ahead
+    /// stops at its face (2.5 from its middle) less the walk's sphere (0.6),
+    /// and at one of scale 2 (its face 5 from it) as much sooner. The
+    /// controls: the run with the slot empty goes on past where it stood,
+    /// and so it does past an entity of model 0 (the null sprite, no actor).
+    #[test]
+    fn the_player_stops_at_a_blocker_that_draws_nothing() {
+        let (x, z) = (25275.115f32, 15766.627f32);
+        let Some((lib, file)) = freeport_lib(x, z) else { return };
+        let r = lib.lookup(BLOCKER as i32).expect("CHAR.ESF has it");
+        assert!(lib.build_model(r).is_none(), "nothing to draw");
+        // 1.5 s forward, (model, place, scale) in slot 3 as `place_actors`
+        // makes its actor: the place each frame, the place it began, whether
+        // the entity had an actor
+        let run = |entity: Option<(u32, [f32; 3], f32)>| {
+            let mut w = Walker::arrive(World::load(&lib, file).unwrap(), crate::walker::Spawn::ground(x, z, 0.0));
+            let p0 = w.cam.walk.phys.position.to_array();
+            let mut p = super::commands::play();
+            if let Some((model, at, scale)) = entity {
+                let creature = Some(net::entity::Creature::default());
+                p.entities.slots[3] = Some(net::entity::Entity { id: 0x0135_5d7e, kind: net::entity::TYPE_CREATURE, model, scale, pos: at, actor_pos: at, creature, ..Default::default() });
+            }
+            p.place_actors(&mut w, &lib);
+            let made = p.actors[3].is_some();
+            assert!(p.puppets[3].is_none(), "no puppet: nothing was drawn for it");
+            let t0 = w.scene.time;
+            let mut at = Vec::new();
+            for i in 1..=45 {
+                w.frame(crate::walker::Controls { fwd: 1.0, ..Default::default() }, t0 + i * 33);
+                at.push(w.cam.walk.phys.position.to_array());
+            }
+            (at, p0, made)
+        };
+        let (free, p0, _) = run(None);
+        let end = free[free.len() - 1];
+        let (dx, dz) = (end[0] - p0[0], end[2] - p0[2]);
+        let len = (dx * dx + dz * dz).sqrt();
+        let (ux, uz) = (dx / len, dz / len);
+        assert!(len > 8.0, "the control runs on: {len}");
+        let ahead = |p: [f32; 3]| (p[0] - p0[0]) * ux + (p[2] - p0[2]) * uz;
+        // on the ground the run crosses there (the topmost floor at that spot
+        // is a roof over it)
+        let ground = free.iter().min_by(|a, b| (ahead(**a) - 6.0).abs().total_cmp(&(ahead(**b) - 6.0).abs())).unwrap()[1];
+        let spot = [p0[0] + ux * 6.0, ground, p0[2] + uz * 6.0];
+        let (null, _, made) = run(Some((0, spot, 1.0)));
+        assert!(!made, "model 0: no actor");
+        assert_eq!(null, free, "model 0 is nothing to the run");
+        for (scale, face) in [(1.0f32, 2.5f32), (2.0, 5.0)] {
+            let (blocked, _, made) = run(Some((BLOCKER, spot, scale)));
+            let got = ahead(blocked[blocked.len() - 1]);
+            eprintln!("a blocker of scale {scale} 6 ahead: stopped {got:.3} ahead, its face at {:.1} (free: {:.2})", 6.0 - face, ahead(end));
+            assert!(made, "scale {scale}: its actor");
+            assert!(got < 6.0 - face - 0.5 && got > 6.0 - face - 0.8, "scale {scale}: stopped at its face less the walk's sphere, at {got}");
+        }
     }
 }
 
@@ -2835,27 +2904,34 @@ impl Play {
 
     /// `VIClient::Extrapolate`'s `SetActorPos`/`SetActorHpr` (with
     /// `VIEntity::CreateActor`/`ReleaseActor`) for every entity but the
-    /// player: each one drawn has an actor of its model's sprite at its
-    /// actor's place, turn (a creature with its own walk kept level) and
-    /// scale, its copy dead with its sprite; a creature's is a capsule the
-    /// player's walk stops at. `RefreshCollision`: a creature new, or every
-    /// one after the ignore list changed, collideable unless the list names
-    /// it.
+    /// player: each one has an actor of its model's sprite at its actor's
+    /// place, turn (a creature with its own walk kept level) and scale, its
+    /// copy dead with its sprite; a creature's is a capsule the player's walk
+    /// stops at. `RefreshCollision`: a creature new, or every one after the
+    /// ignore list changed, collideable unless the list names it.
+    ///
+    /// The sprite is the model's whether or not it draws anything:
+    /// `VIClientPart06D00::LoadRes` puts on the actor whatever sprite the
+    /// dictionary has (model 0 is the null sprite, which meets nothing). So
+    /// an entity with no puppet, its model holding nothing to draw, still
+    /// has its actor: Sandstorm's blockers are CHAR.ESF's 0x6F412342, a
+    /// SimpleSprite with an empty prim buffer and a collision buffer, an
+    /// invisible wall (F3 20261028-233048).
     fn place_actors(&mut self, walker: &mut Walker, lib: &Library) {
         self.actors_scene(walker);
         let me = self.self_id32();
         let refresh = std::mem::take(&mut self.refresh_collision);
         for slot in 0..MAX_SLOTS {
             let e = self.entities.slots[slot].as_ref().filter(|e| Some(e.id) != me);
-            let want = match (e, self.puppets[slot].as_ref()) {
-                (Some(e), Some(p)) => {
-                    let level = e.creature.as_ref().is_some_and(|c| c.p255 != 0);
-                    let hpr = if level { [e.actor_hpr[0], 0.0, 0.0] } else { e.actor_hpr };
-                    let dead = p.sprite.as_ref().is_some_and(|cs| cs.dead);
-                    Some(ActorAt { id: e.id, model: p.model, era: p.era, at: v3(e.actor_pos), hpr: v3(hpr), scale: actor_scale(e.scale), dead })
-                }
-                _ => None,
-            };
+            let want = e.filter(|e| e.model != 0).map(|e| {
+                let level = e.creature.as_ref().is_some_and(|c| c.p255 != 0);
+                let hpr = if level { [e.actor_hpr[0], 0.0, 0.0] } else { e.actor_hpr };
+                let (model, era, dead) = match self.puppets[slot].as_ref() {
+                    Some(p) => (p.model, p.era, p.sprite.as_ref().is_some_and(|cs| cs.dead)),
+                    None => (e.model, lib.view_for(e.model as i32), false),
+                };
+                ActorAt { id: e.id, model, era, at: v3(e.actor_pos), hpr: v3(hpr), scale: actor_scale(e.scale), dead }
+            });
             let (a, made) = place_actor(&mut walker.scene, lib, self.actors[slot], want);
             self.actors[slot] = a;
             if let (Some(a), Some(c)) = (a, e.and_then(|e| e.creature.as_ref()))
@@ -7515,7 +7591,7 @@ mod commands {
 
     /// Play on a session nothing answers, the player 0x100, no words (a
     /// word is said as "(word n)").
-    fn play() -> Play {
+    pub(super) fn play() -> Play {
         play_with(Box::default())
     }
 

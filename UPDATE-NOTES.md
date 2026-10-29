@@ -5,6 +5,12 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-29 · Invisible walls stop you again
+- An invisible wall that the server puts up as a creature now stops you, as on the PS2.
+  Sandstorm uses them to keep players out of a place until a quest lets them through, and this
+  client let you walk straight through them: it made a creature solid only once it had a body
+  to draw, and these have none.
+
 ## 2026-10-28 · No stand-in when you enter the world
 - When you enter the world or change worlds, a human man no longer stands in for your character
   for a moment before your own appears: the game draws you once the server has described you, as
