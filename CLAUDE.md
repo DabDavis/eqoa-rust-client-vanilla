@@ -84,6 +84,9 @@ current.
   input made (`input::from_device`: a run with an input script says its presses were not the player's). Nothing invented
   to look like a PS2's; a new field S2 adds is the user's call. The July S2's hello is not sent (our server reads 19 as
   its hard-disk loader's 30 worlds).
+- SOE's live game's look (README "Dyes", `net::session::OP_LIVE_LOOK`): taken whenever a server offers it; the
+  disc's look stays every other server's (Sandstorm never offers it), so a change to the disc's readers is tested on
+  both. `EQOA_LIVE_LOOK=0` keeps the disc's in a test (a PS2's view of the same server).
 - Game-logic floats go through `ee::*`, never host `f32` operators; every compare too.
 - Port from the decomp (`../decomp/src`), not from the Go client: the Go client's
   differences from the original are listed in `../claude-notes/go-client-vs-decomp-audit-20261015.md`.

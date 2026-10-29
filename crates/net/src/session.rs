@@ -862,9 +862,10 @@ impl Session {
                     self.send_op_int(OP_GM_TRIGGERS, 1);
                 }
             }
-            // the live game's look offered: taken (this client reads it)
+            // the live game's look offered: taken (this client reads it),
+            // unless a test's `EQOA_LIVE_LOOK=0` keeps the disc's
             OP_LIVE_LOOK => {
-                if r.u32() & 1 != 0 && !r.error {
+                if r.u32() & 1 != 0 && !r.error && wants_live_look() {
                     self.send_op_int(OP_LIVE_LOOK, 1);
                 }
             }
@@ -1184,6 +1185,13 @@ pub fn new_char_message(c: &NewChar) -> Vec<u8> {
         w.u32(v as u32);
     }
     w.data
+}
+
+/// Whether to take the live game's look when a server offers it: always, but
+/// for a test's `EQOA_LIVE_LOOK=0`, which keeps the disc's (a PS2's view of
+/// the same server).
+fn wants_live_look() -> bool {
+    std::env::var("EQOA_LIVE_LOOK").map_or(true, |v| v != "0")
 }
 
 /// `CharacterList`: the disc's records, or with `live` the live game's
