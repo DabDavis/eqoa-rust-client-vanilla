@@ -5,6 +5,12 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-29 · Playing over a phone's hotspot
+- The game connects on networks that give servers IPv6 addresses, as many phone hotspots do: it
+  now takes a server's IPv4 address when there is one, and on a network with IPv6 alone it goes
+  through the network's own way to IPv4. Before, the server list stopped there with "An address
+  incompatible with the requested protocol was used".
+
 ## 2026-10-26 · A voice chat window
 - Press O (or type /voice in the chat) for the voice chat window: turn voice chat on or off and
   pick Push to Talk or Open Mic, see whether you are connected and how loud your microphone is,

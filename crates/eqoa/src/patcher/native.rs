@@ -15,7 +15,7 @@ pub struct Tcp;
 impl super::Wire for Tcp {
     fn exchange(&mut self, host: &str, port: u16, request: &[u8], piece: &mut dyn FnMut(&[u8]) -> bool) -> Result<(), Error> {
         use std::net::ToSocketAddrs;
-        let addr = (host, port).to_socket_addrs().ok().and_then(|mut a| a.next()).ok_or_else(|| Error::new(3, format!("Cannot resolve server {host}")))?;
+        let addr = (host, port).to_socket_addrs().ok().and_then(net::addr::pick).ok_or_else(|| Error::new(3, format!("Cannot resolve server {host}")))?;
         let mut s = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(10)).map_err(|_| Error::new(5, format!("Could not connect to {host}")))?;
         // sceInetSend: the PS2 does not look at the result
         let _ = s.write_all(request);

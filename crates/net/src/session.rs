@@ -11,6 +11,7 @@
 //! (its DRDP source is the player's own entity id), answered with 0x0014,
 //! 0x00C9 and 0x00CA.
 
+use crate::addr::Nat64;
 use crate::stream::{Reader, Writer};
 use drdp::{Addr, ConnId, Drdp, PORT_LEADER, address_to_endpoint};
 use std::net::{SocketAddr, UdpSocket};
@@ -25,20 +26,36 @@ pub trait Datagrams {
     fn recv_from(&mut self) -> Option<(Vec<u8>, [u8; 4], u16)>;
 }
 
-/// A non-blocking UDP socket.
+/// A non-blocking UDP socket: IPv4, or on a network with IPv6 alone an IPv6
+/// one through the network's gateway to IPv4 (`addr::Nat64`).
 pub struct Udp {
     socket: UdpSocket,
     buf: Vec<u8>,
+    nat64: Option<Nat64>,
 }
 
 impl Datagrams for Udp {
     fn send_to(&mut self, data: &[u8], ip: [u8; 4], port: u16) {
-        let _ = self.socket.send_to(data, SocketAddr::from((ip, port)));
+        let to = match &self.nat64 {
+            Some(n) => n.to_v6(ip, port),
+            None => SocketAddr::from((ip, port)),
+        };
+        let _ = self.socket.send_to(data, to);
     }
 
     fn recv_from(&mut self) -> Option<(Vec<u8>, [u8; 4], u16)> {
-        let (n, p) = self.socket.recv_from(&mut self.buf).ok()?;
-        Some((self.buf[..n].to_vec(), ipv4(&p), p.port()))
+        loop {
+            let (n, p) = self.socket.recv_from(&mut self.buf).ok()?;
+            let ip = match &self.nat64 {
+                // one not from under the gateway's prefix is no server's
+                Some(g) => match g.to_v4(&p) {
+                    Some(ip) => ip,
+                    None => continue,
+                },
+                None => ipv4(&p),
+            };
+            return Some((self.buf[..n].to_vec(), ip, p.port()));
+        }
     }
 }
 
@@ -479,16 +496,23 @@ fn ipv4(a: &SocketAddr) -> [u8; 4] {
 
 impl Session {
     /// `VIClient::Connect`: a DRDP client on a fresh UDP socket, a connection
-    /// to the login endpoint, the hello and 0x0904.
+    /// to the login endpoint, the hello and 0x0904. A server at an IPv6
+    /// address (a name with no IPv4 one, `addr::resolve`) is reached through
+    /// the network's gateway to IPv4, as is every shard after it.
     pub fn connect(server: SocketAddr, user: &str, token: [u8; 32]) -> std::io::Result<Self> {
-        let socket = UdpSocket::bind("0.0.0.0:0")?;
+        let (nat64, server_ip) = match Nat64::of(&server) {
+            Some((n, ip)) => (Some(n), ip),
+            None => (None, ipv4(&server)),
+        };
+        let any = if nat64.is_some() { "[::]:0" } else { "0.0.0.0:0" };
+        let socket = UdpSocket::bind(any)?;
         // The local address as the server will see it: route a probe.
-        let probe = UdpSocket::bind("0.0.0.0:0")?;
+        let probe = UdpSocket::bind(any)?;
         probe.connect(server)?;
         let local = SocketAddr::new(probe.local_addr()?.ip(), socket.local_addr()?.port());
         socket.set_nonblocking(true)?;
-        let udp = Udp { socket, buf: vec![0u8; 65536] };
-        Self::connect_with(Box::new(udp), (ipv4(&local), local.port()), (ipv4(&server), server.port()), user, token)
+        let udp = Udp { socket, buf: vec![0u8; 65536], nat64 };
+        Self::connect_with(Box::new(udp), (ipv4(&local), local.port()), (server_ip, server.port()), user, token)
             .ok_or_else(|| std::io::Error::other("connection_open failed"))
     }
 
@@ -1493,6 +1517,38 @@ pub fn hour_of(clock: &SyncTime, now: i64) -> Option<vi::fpu::F<Ee>> {
 
 #[cfg(test)]
 mod tests {
+
+    /// A session through the gateway to IPv4 (`addr::Nat64`), over real
+    /// sockets on the IPv6 loopback: a server at [::1] is IPv4 0.0.0.1 under
+    /// the prefix ::/96; a datagram to 0.0.0.1 reaches it, and its answer
+    /// comes back as from 0.0.0.1. (Skipped where there is no IPv6 loopback.)
+    #[test]
+    fn a_datagram_goes_through_the_gateway_and_back() {
+        let Ok(server) = UdpSocket::bind("[::1]:0") else { return };
+        let at = server.local_addr().unwrap();
+        let (n, ip) = Nat64::of(&at).unwrap();
+        assert_eq!(ip, [0, 0, 0, 1]);
+        let socket = UdpSocket::bind("[::]:0").unwrap();
+        let port = socket.local_addr().unwrap().port();
+        socket.set_nonblocking(true).unwrap();
+        let mut udp = Udp { socket, buf: vec![0u8; 2048], nat64: Some(n) };
+        udp.send_to(b"hello", ip, at.port());
+        server.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
+        let mut b = [0u8; 16];
+        let (k, from) = server.recv_from(&mut b).unwrap();
+        assert_eq!((&b[..k], from.port()), (&b"hello"[..], port));
+        server.send_to(b"answer", from).unwrap();
+        let mut got = None;
+        for _ in 0..200 {
+            if let Some(d) = udp.recv_from() {
+                got = Some(d);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(got, Some((b"answer".to_vec(), [0, 0, 0, 1], at.port())));
+    }
+
     /// `VISyncTime` as visynctime.cpp has it: the first reading taken as it
     /// is and read forward on the local clock; a later one blended in over
     /// 60,000 of it (half the difference halfway, all of it after), never

@@ -149,7 +149,8 @@ pub fn session(host: &str, port: u16, user: &str, token: [u8; 32]) -> Opening {
         let h = host.to_string();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let r = std::net::ToSocketAddrs::to_socket_addrs(&(h.as_str(), port)).map_err(|e| format!("{h}: {e}")).and_then(|mut a| a.next().ok_or_else(|| format!("{h}: no address")));
+            // its IPv4 address when it has one (`net::addr`)
+            let r = net::addr::resolve(&h, port).map_err(|e| format!("{h}: {e}"));
             let _ = tx.send(r);
         });
         Opening::Resolving { addr: Later::Thread(rx), user: user.to_string(), token }
@@ -258,7 +259,7 @@ mod native {
             let (tx_in, from) = mpsc::channel::<Got>();
             let host = host.to_string();
             std::thread::spawn(move || {
-                let addr = std::net::ToSocketAddrs::to_socket_addrs(&(host.as_str(), port)).ok().and_then(|mut a| a.next());
+                let addr = std::net::ToSocketAddrs::to_socket_addrs(&(host.as_str(), port)).ok().and_then(net::addr::pick);
                 let Some(addr) = addr else {
                     let _ = tx_in.send(Got::Failed(format!("{host}: no address")));
                     return;
