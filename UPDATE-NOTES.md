@@ -5,6 +5,12 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-29 · The who list in CM order on Sandstorm, as on a PS2
+- On Sandstorm the who list now shows players in the server's own order, highest combat masteries
+  first, whenever you open it again or press Update and nobody has come or gone since: Sandstorm's
+  patch keeps the server's order then, as it does on a PS2. The first time you open it, and after
+  L1 or R1 (left or right), it is sorted by the column as before.
+
 ## 2026-10-29 · One question for all your crash reports, and freezes written down
 - If the game stopped more than once since you last sent its crash reports, the next start now
   asks about all of them at once and says how many there are. Send sends them all, Delete deletes

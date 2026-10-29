@@ -17,7 +17,10 @@
 //! there now another player's), the heading sorted by marked before and
 //! after, and the legend the patch's (F3 20261023-185531). Its words and
 //! tables are read out of the patch where its code names them; with none,
-//! or a patch of another shape, the client's own sort above.
+//! or a patch of another shape, the client's own sort above. As on a PS2,
+//! the patch sorts a list only when its count is not the one it last sorted,
+//! so a list sent again with the same count keeps the server's own order
+//! (Sandstorm's: CM count first; `WhoList::patch_get_list`).
 
 #![allow(clippy::too_many_arguments)]
 
@@ -44,6 +47,9 @@ pub struct Who {
     pub list: Vec<WhoRow>,
     pub pending: bool,
     serial: i32,
+    /// one more each list received: a patch's sort (`PatchSort`) tells a new
+    /// list from the one it last saw
+    pub received: u64,
 }
 
 impl Who {
@@ -83,6 +89,7 @@ impl Who {
             self.list.push(WhoRow { race, class, level, name, x1c });
         }
         self.pending = false;
+        self.received += 1;
     }
 }
 
@@ -247,11 +254,17 @@ impl PatchSort {
     /// levels from the highest) and then the names, byte by byte up to the
     /// first that differs, a NUL or `name_bytes`.
     pub fn order(&self, sort: Sort, list: &[WhoRow]) -> Vec<usize> {
+        self.sorted(sort, list, (0..list.len()).collect())
+    }
+
+    /// `order` from the order `v` stands in (S2 sorts its list in place, a
+    /// stable insertion sort, so a list it sorted before is sorted again from
+    /// there).
+    pub fn sorted(&self, sort: Sort, list: &[WhoRow], mut v: Vec<usize>) -> Vec<usize> {
         let name = |e: &WhoRow| {
             let b = e.name.as_bytes();
             b[..b.len().min(self.name_bytes)].iter().copied().take_while(|&c| c != 0).collect::<Vec<u8>>()
         };
-        let mut v: Vec<usize> = (0..list.len()).collect();
         v.sort_by(|&a, &b| {
             let (ea, eb) = (&list[a], &list[b]);
             let by = match sort {
@@ -451,15 +464,54 @@ pub struct WhoList {
     keep: Option<usize>,
     /// the server's patch's own sort, when it has one (`PatchSort`)
     patch: Option<Arc<PatchSort>>,
+    /// The patch's sort as its `GetList` keeps it (S2, FC090): the list in
+    /// the order the sort left it (`patch_order`, for the list `patch_gen`),
+    /// and the count it last sorted (FC008; None when FC004 is 0, so the
+    /// next list is sorted). Kept for the session, as S2's are.
+    patch_order: Vec<usize>,
+    patch_gen: u64,
+    patch_count: Option<usize>,
 }
 
 impl WhoList {
-    /// The rows in the order shown: the patch's sort's, or the client's.
+    /// The rows in the order shown: the patch's sort's (as `patch_get_list`
+    /// last left them), or the client's.
     fn order(&self, vui: &Vui, list: &[WhoRow]) -> Vec<usize> {
         match &self.patch {
+            Some(_) if self.patch_order.len() == list.len() => self.patch_order.clone(),
             Some(p) => p.order(self.sort, list),
             None => order(self.sort, list, &|id: i32| vui.words.get(id, vui.language).to_string()),
         }
+    }
+
+    /// S2's hook on `VIClientPart38334::GetList` (FC090), run wherever the
+    /// game asks for the list (its window's frame and keys): a list of two or
+    /// more rows is sorted in place by the column (FC150) unless its data and
+    /// count are those it last sorted (FC004, FC008); it remembers them. A
+    /// list the server sends again lands in the same buffer the last one
+    /// freed (`Close`'s `VIVector::Clear`, then the same growth), so a list
+    /// of the same count stays in the server's own order (Sandstorm's: CM
+    /// count first) until the count changes or a key moves the column (its
+    /// `OnKeyDown` zeroes FC004). The first list is sorted.
+    fn patch_get_list(&mut self, who: &Who) {
+        let Some(p) = self.patch.clone() else { return };
+        if who.received != self.patch_gen || self.patch_order.len() != who.list.len() {
+            self.patch_gen = who.received;
+            self.patch_order = (0..who.list.len()).collect();
+        }
+        let n = who.list.len();
+        if n < 2 || self.patch_count == Some(n) {
+            return;
+        }
+        self.patch_order = p.sorted(self.sort, &who.list, std::mem::take(&mut self.patch_order));
+        self.patch_count = Some(n);
+    }
+
+    /// The column sorted by, set: with the patch's sort, as its `OnKeyDown`
+    /// does it (FC004 zeroed: the list sorted again at the next look).
+    fn set_sort(&mut self, sort: Sort) {
+        self.sort = sort;
+        self.patch_count = None;
     }
 
     /// A pointer at frame point `p` (`pointer`): with the popup up, its
@@ -492,7 +544,7 @@ impl WhoList {
                 if self.patch.is_none() {
                     self.keep = self.view.get(self.sel.max(0) as usize).copied();
                 }
-                self.sort = sort;
+                self.set_sort(sort);
                 vec![MOVED]
             }
             Some(row) if row == self.sel => vec![key::CROSS],
@@ -531,6 +583,7 @@ impl WhoList {
 
     /// `OnKeyDown`/`OnKeyUp` (the popup's while it is up).
     pub fn key(&mut self, vui: &Vui, r: &dyn Raster, who: &Who, key: i32, down: bool, now: i64, cues: &mut Vec<i32>) -> Option<WhoUp> {
+        self.patch_get_list(who);
         if self.options.visible {
             if !down {
                 return None;
@@ -578,14 +631,15 @@ impl WhoList {
             // the patch's sort (S2's `OnKeyDown`, before the game's, which
             // takes none of these): a column back or on, the selection left
             // where it is in the list
-            k if self.patch.as_ref().is_some_and(|p| p.back.contains(&k)) => self.sort = self.sort.prev(),
-            k if self.patch.as_ref().is_some_and(|p| p.on.contains(&k)) => self.sort = self.sort.next(),
+            k if self.patch.as_ref().is_some_and(|p| p.back.contains(&k)) => self.set_sort(self.sort.prev()),
+            k if self.patch.as_ref().is_some_and(|p| p.on.contains(&k)) => self.set_sort(self.sort.next()),
             // ○ (the client's): the next column's order, the selected row
             // kept selected (with the patch's sort, its place, as the
             // patch's keys keep it)
             135 => {
                 let keep = self.order(vui, &who.list).get(self.sel.max(0) as usize).copied();
-                self.sort = self.sort.next();
+                self.set_sort(self.sort.next());
+                self.patch_get_list(who);
                 if self.patch.is_none()
                     && let Some(at) = keep.and_then(|k| self.order(vui, &who.list).iter().position(|&i| i == k))
                 {
@@ -607,6 +661,7 @@ impl WhoList {
         let n = who.list.len() as i32;
         self.now = now;
         self.hits.clear();
+        self.patch_get_list(who);
         self.view = self.order(vui, &who.list);
         if let Some(at) = self.keep.take().and_then(|k| self.view.iter().position(|&i| i == k)) {
             self.sel = at as i32;
@@ -952,6 +1007,42 @@ mod tests {
     /// just before each heading and past its start; its legend takes four
     /// words. The controls: an image without the patch has no sort, and one
     /// whose race table is built into another register is refused.
+    /// S2's `GetList` sorts a list only when its count is not the one it
+    /// last sorted (FC004/FC008: the buffer and the count; a list the server
+    /// sends again lands in the buffer the last one freed). So the first list
+    /// is sorted by the column, a second of the same count stays in the
+    /// server's own order (Sandstorm's: CM count first, F3 2026-10-29) until a
+    /// key moves the column, and one of another count is sorted. The control:
+    /// the patch's sort run on every list, as before, puts the second in
+    /// name order.
+    #[test]
+    fn a_list_sent_again_with_the_same_count_keeps_the_servers_order() {
+        let p = Arc::new(patch_sort());
+        let mut wl = WhoList { patch: Some(p.clone()), ..Default::default() };
+        let mut who = Who::default();
+        let rows = |names: &[&str]| names.iter().map(|n| row(n, 0, 0, 60)).collect::<Vec<_>>();
+        let shown = |wl: &WhoList, who: &Who| wl.patch_order.iter().map(|&i| who.list[i].name.clone()).collect::<Vec<_>>();
+        who.list = rows(&["Zed", "amy", "Bob"]);
+        who.received = 1;
+        wl.patch_get_list(&who);
+        assert_eq!(shown(&wl, &who), ["Bob", "Zed", "amy"], "the first list, sorted by name (bytes: capitals first)");
+        wl.patch_get_list(&who);
+        assert_eq!(shown(&wl, &who), ["Bob", "Zed", "amy"], "the same list, looked at again");
+        who.list = rows(&["Endo", "Mud", "Abe"]);
+        who.received = 2;
+        wl.patch_get_list(&who);
+        assert_eq!(shown(&wl, &who), ["Endo", "Mud", "Abe"], "sent again with the same count: the server's order");
+        assert_ne!(p.order(Sort::Name, &who.list), vec![0, 1, 2], "the control: sorted every time, the server's order is lost");
+        wl.set_sort(Sort::Level);
+        wl.set_sort(Sort::Name);
+        wl.patch_get_list(&who);
+        assert_eq!(shown(&wl, &who), ["Abe", "Endo", "Mud"], "a key moved the column: sorted again");
+        who.list = rows(&["Endo", "Mud", "Abe", "Cal"]);
+        who.received = 3;
+        wl.patch_get_list(&who);
+        assert_eq!(shown(&wl, &who), ["Abe", "Cal", "Endo", "Mud"], "another count: sorted");
+    }
+
     #[test]
     fn the_patchs_sort_is_read_out_of_the_live_s2() {
         let Some(patch) = crate::searchwnd::testing::live() else { return };
