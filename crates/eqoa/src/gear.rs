@@ -52,23 +52,10 @@ pub struct Gear {
     pub sets: [Set; SETS],
 }
 
-/// The words the live client added where the disc's WORDS.TXT has "UNUSED":
-/// 159 is bare hands, 160 the set name editor's title.
-pub fn live_word(id: i32) -> Option<&'static str> {
-    match id {
-        159 => Some("bare hands"),
-        160 => Some("NAME CONFIGURATION"),
-        _ => None,
-    }
-}
-
-/// Word `id`, the live client's own where the table's is "UNUSED" or empty.
+/// Word `id`, the live client's own where the table's is "UNUSED" or empty
+/// (`livewords`: 159 is bare hands, 160 the set name editor's title).
 pub fn word(words: &vi::strtab::StringTable, id: i32, language: i32) -> String {
-    let w = words.get(id, language);
-    match live_word(id) {
-        Some(live) if w.is_empty() || w.eq_ignore_ascii_case("unused") => live.to_string(),
-        _ => w.to_string(),
-    }
+    crate::livewords::word(words, id, language)
 }
 
 /// `FindInvItemById` (0x012D6B98): the first inventory record with that

@@ -84,6 +84,22 @@ impl StringTable {
         "(null)"
     }
 
+    /// Row `row` (from 1) of column `col` set to `s`, the table grown to the
+    /// row if it ends before it (the rows between left missing): words the
+    /// client puts in itself (`eqoa`'s `livewords`). A column the table has
+    /// not is not made.
+    pub fn set(&mut self, row: i32, col: i32, s: &str) {
+        if row < 1 || col < 0 || col as usize >= self.cols {
+            return;
+        }
+        let r = row as usize - 1;
+        if r >= self.rows {
+            self.rows = r + 1;
+            self.cells.resize(self.rows * self.cols, None);
+        }
+        self.cells[r * self.cols + col as usize] = Some(s.to_string());
+    }
+
     /// Every cell's `from` made `to` (the client's own spelling fixes, not
     /// the game's: `eqoa`'s `spelling`).
     pub fn replace(&mut self, from: &str, to: &str) {
@@ -111,6 +127,23 @@ mod tests {
         assert_eq!(t.get(4, 0), "(null)");
         assert_eq!(t.get(3, 1), "(null)");
         assert_eq!(t.get(1, 2), "(null)");
+    }
+
+    /// `set` grows the table to the row it sets, the rows between missing;
+    /// a row it has is replaced in place; no column is made.
+    #[test]
+    fn set_grows_the_table_to_its_row() {
+        let mut t = StringTable::parse(b"A\tB\nC").unwrap();
+        t.set(5, 1, "E");
+        assert_eq!((t.rows, t.cols), (5, 2));
+        assert_eq!((t.get(1, 0), t.get(1, 1), t.get(2, 0)), ("A", "B", "C"), "the rows it had stay");
+        assert_eq!((t.get(3, 0), t.get(4, 1), t.get(5, 0)), ("(null)", "(null)", "(null)"));
+        assert_eq!(t.get(5, 1), "E");
+        t.set(2, 0, "D");
+        assert_eq!((t.rows, t.get(2, 0)), (5, "D"));
+        t.set(6, 2, "x");
+        t.set(0, 0, "x");
+        assert_eq!((t.rows, t.cols), (5, 2), "no column made, no row 0");
     }
 
     #[test]

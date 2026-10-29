@@ -84,6 +84,12 @@ current.
   input made (`input::from_device`: a run with an input script says its presses were not the player's). Nothing invented
   to look like a PS2's; a new field S2 adds is the user's call. The July S2's hello is not sent (our server reads 19 as
   its hard-disk loader's 30 worlds).
+- SOE's final live client's words are one table, `livewords.rs` (the rows it added, 1840-1889, and the eight it changed
+  in place, read off its `VIStringTable` in Corsten's retail state): `spelling::words` fills the added rows into every
+  WORDS.TXT that lacks them, and a form ported from the live client that pairs with a changed row reads it with
+  `livewords::live` (841 "Ticket #"). A live port's word goes there, never into a table of its own; 1811-1839 are
+  renumbered in the live table and not given. Its mail forms are used only after go-eqoa-server's offer (0x7E0A,
+  `gram::OP_LIVE_MAIL`); with none, the disc's.
 - Game-logic floats go through `ee::*`, never host `f32` operators; every compare too.
 - Port from the decomp (`../decomp/src`), not from the Go client: the Go client's
   differences from the original are listed in `../claude-notes/go-client-vs-decomp-audit-20261015.md`.

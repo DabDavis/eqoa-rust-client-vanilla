@@ -10,12 +10,14 @@ use vi::strtab::StringTable;
 /// Each fix: as the words spell it, as it is shown.
 const FIXES: &[(&str, &str)] = &[("Klick'Anon", "Klik'Anon")];
 
-/// WORDS.TXT read as `StringTable::parse` reads it, with `FIXES` made.
+/// WORDS.TXT read as `StringTable::parse` reads it, with `FIXES` made and
+/// the live client's added rows put in where it lacks them (`livewords`).
 pub fn words(bytes: &[u8]) -> Option<StringTable> {
     let mut t = StringTable::parse(bytes)?;
     for (from, to) in FIXES {
         t.replace(from, to);
     }
+    crate::livewords::fill(&mut t);
     Some(t)
 }
 
@@ -43,7 +45,10 @@ mod tests {
         let Ok(mut iso) = iso::Iso::open(crate::disc_path(None)) else { return };
         let Ok(b) = iso.read("WORDS.TXT") else { return };
         let (disc, fixed) = (StringTable::parse(&b).unwrap(), words(&b).unwrap());
-        assert_eq!((disc.rows, disc.cols), (fixed.rows, fixed.cols));
+        assert_eq!(disc.cols, fixed.cols);
+        // the live client's rows come after the disc's (`livewords::fill`)
+        assert_eq!((disc.rows, fixed.rows), (1815, 1889));
+        assert_eq!(fixed.get(1840, 0), crate::livewords::text(1840).unwrap());
         let mut changed = 0;
         for r in 1..=disc.rows as i32 {
             for c in 0..disc.cols as i32 {

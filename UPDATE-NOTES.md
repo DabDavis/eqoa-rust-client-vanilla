@@ -5,6 +5,28 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-29 · Mail to several players, Reply All, and the live game's warnings
+- On a server that offers it, a letter can go to several players at once: write their names in To
+  with commas or semicolons between them. If a name is nobody's, the letter is not sent and the box
+  names who was not found, so you can put it right. If someone's mailbox is full, or they have too
+  many unread letters from you, the chat says so in red, naming them, and everyone else gets it.
+- On such a server a letter you read shows who it went to, under From, and its options have Reply
+  All between Reply and Delete: it answers the sender and everyone else it went to.
+- On servers that do not offer it (Sandstorm among them), a letter still goes to one player at a time.
+- In your inbox, up from the first letter now goes round to the last, and down from the last to the
+  first.
+- Class Mastery: buying a second Master Class while you have one is now refused at once, with "You
+  cannot possess more than one Master Class at a time." in red, where it used to only warn and then
+  let you ask the server anyway.
+- Destroying an item now asks 'Destroy item "<its name>"?', so you can see which one you picked,
+  and selling one to a merchant asks 'Sell item "<its name>"?' for everything but loot. Both start
+  on No.
+- Petitions: a petition the staff have closed no longer says only "System is temporarily
+  unavailable. (Code: -8)": the live game's explanation follows, that the petition may have been
+  addressed (the box has room for its start, as the live game's had).
+- For GMs: the live game's /rst_mastr, /rst_both, /rem_abil, /banktunar and /servdown are typed in
+  the chat as the live game had them, and work while the server has your GM commands on.
+
 ## 2026-10-29 · The who list in CM order on Sandstorm, as on a PS2
 - On Sandstorm the who list now shows players in the server's own order, highest combat masteries
   first, whenever you open it again or press Update and nobody has come or gone since: Sandstorm's

@@ -5,7 +5,10 @@
 //! an inner 0x0D41 with the same sub-op, then its fields; replies come back
 //! on 0x0D41, a sub-op and a status. Sub-ops: 1 send, 2 the inbox, 3 open a
 //! gram, 4 delete, 5 (in) new mail. `m_state` is the reply waited for (1-4)
-//! and goes negative on a failure.
+//! and goes negative on a failure. A server that offers SOE's final live
+//! client's forms (`OP_LIVE_MAIL`, `Grams::live`) gets those instead: a gram
+//! to several names, the ones unknown or not delivered to named back, the To
+//! line in the reader and its Reply All.
 //!
 //! The windows: `VIWndComposeGram` (`Compose`: To, Subject, the body, Send;
 //! the start menu's Mail > Compose is mode 23, and the reader and the buddy
@@ -97,6 +100,16 @@ impl Header {
 
 /// `VIClientPart2EFD0`: the gram client. What it sends waits in `out`;
 /// the words it shows (`ShowText`) in `shown`.
+///
+/// It speaks the disc's forms unless `live`: then SOE's final live client's
+/// (`c:/eqoa-live-1500`, read off Corsten's retail state where its gram
+/// client is `VIClient+0x30910`), which a server says it takes by offering
+/// it (go-eqoa-server's [`OP_LIVE_MAIL`]; Sandstorm and every server built
+/// for the disc never do, and keep the disc's). The live forms: a send
+/// names several recipients and carries no envelope, an open carries none
+/// either, a send's answer can name the recipients unknown (status 9) or
+/// not delivered to and why (status 4), and an opened gram comes with its
+/// To line. The inbox, delete and new-mail messages are the disc's in both.
 #[derive(Debug)]
 pub struct Grams {
     pub state: i32,
@@ -111,12 +124,107 @@ pub struct Grams {
     pub text: Vec<u16>,
     pub out: Vec<Vec<u8>>,
     pub shown: Vec<i32>,
+    /// the server takes the live client's forms (its offer)
+    pub live: bool,
+    /// live: the gram opened's To line (`m_message`'s `to`, +0xB0)
+    pub to: Vec<u16>,
+    /// live: the last send's names (+0x08, `VIArray<char[24]>`): the ones
+    /// unknown (status 9) or not delivered to (status 4)
+    pub names: Vec<Vec<u8>>,
+    /// live: each name's reason (+0x10), as `RecvSend` keeps it: -2 a full
+    /// mailbox (10), -3 too many unread (11), -5 any other
+    pub codes: Vec<i8>,
+    /// live: someone got the gram (+0x18)
+    pub delivered: bool,
 }
+
+/// go-eqoa-server's own, no retail message: the server takes the live
+/// client's mail forms, a u32 after the opcode, both ways. The server
+/// offers it (1) once the player is in the world; this client answers 1 and
+/// speaks the live forms from then on (`Grams::live`). The server tells the
+/// two by the request itself (a disc request carries the envelope, `06 41 0D
+/// <sub>` after the sub-op, which a live one cannot), so the answer only says
+/// what is coming. A PS2 ignores the offer, as it ignores 0x7E00's.
+pub const OP_LIVE_MAIL: u16 = 0x7E0A;
+
+/// `VIMAIL_RECIPIENTS_LENGTH`: the live compose's To, 512 characters with
+/// its terminator (`m_to`, +0x840; the disc's took 24).
+pub const RECIPIENTS: usize = 512;
 
 impl Default for Grams {
     fn default() -> Self {
-        Grams { state: 0, x08: 0, count: -1, headers: Vec::new(), message: Header::default(), text: Vec::new(), out: Vec::new(), shown: Vec::new() }
+        Grams { state: 0, x08: 0, count: -1, headers: Vec::new(), message: Header::default(), text: Vec::new(), out: Vec::new(), shown: Vec::new(), live: false, to: Vec::new(), names: Vec::new(), codes: Vec::new(), delivered: false }
     }
+}
+
+/// The live client's `ParseRecipients` (0x0133DDD8): the To line to 8-bit
+/// (`str16to8`, 511 characters) and upper case; letters A-Z make a name (23
+/// at most, the rest dropped), a ',' or ';' ends one, an empty one is
+/// dropped and every other character skipped; each name capitalised
+/// (`strlwr(name + 1)`). A name given twice is kept twice, and there is no
+/// cap on how many.
+pub fn parse_recipients(to: &[u16]) -> Vec<Vec<u8>> {
+    let mut names = Vec::new();
+    let mut cur: Vec<u8> = Vec::new();
+    let bytes = crate::admin::str16to8(to);
+    for c in bytes.iter().take(RECIPIENTS - 1).map(|c| c.to_ascii_uppercase()) {
+        match c {
+            b'A'..=b'Z' => {
+                if cur.len() + 1 < 24 {
+                    cur.push(c);
+                }
+            }
+            b',' | b';' => {
+                if !cur.is_empty() {
+                    names.push(std::mem::take(&mut cur));
+                }
+                cur.clear();
+            }
+            _ => {}
+        }
+    }
+    if !cur.is_empty() {
+        names.push(cur);
+    }
+    for n in &mut names {
+        n[1..].make_ascii_lowercase();
+    }
+    names
+}
+
+/// `VIString::strcat16(unsigned short *, size, const char *)`: 8-bit text
+/// onto `out` while it stays under `size` bytes with its terminator, each
+/// byte sign-extended (the shipped overload's plain assignment, `vistring.cpp`).
+pub(crate) fn strcat8(out: &mut Vec<u16>, s: &[u8], size: usize) {
+    for &b in s.iter().take_while(|&&b| b != 0) {
+        if (out.len() + 1) * 2 >= size {
+            break;
+        }
+        out.push(b as i8 as i16 as u16);
+    }
+}
+
+/// `VIString::strcat16(unsigned short *, size, const unsigned short *)`.
+pub(crate) fn strcat16(out: &mut Vec<u16>, s: &[u16], size: usize) {
+    for &c in s.iter().take_while(|&&c| c != 0) {
+        if (out.len() + 1) * 2 >= size {
+            break;
+        }
+        out.push(c);
+    }
+}
+
+/// The live client's `JoinNames` (0x0133DF80): the names joined with ";"
+/// (0x013F7198) into `size` bytes, the terminator counted.
+pub fn join_names(names: &[Vec<u8>], size: usize) -> Vec<u16> {
+    let mut out: Vec<u16> = Vec::new();
+    for (i, n) in names.iter().enumerate() {
+        if i > 0 {
+            strcat8(&mut out, b";", size);
+        }
+        strcat8(&mut out, n, size);
+    }
+    out
 }
 
 /// The request: the 0x0D01 envelope with `sub`, then the inner 0x0D41 with
@@ -152,13 +260,21 @@ impl Grams {
     }
 
     /// Sub-op 3: the row is copied to `m_message` (its text emptied) if it is
-    /// listed, and the id asked for either way.
+    /// listed, and the id asked for either way. Live (`RequestMessage`,
+    /// 0x012F4F78): `03, zz id`, no envelope.
     pub fn request_message(&mut self, id: u32) {
         if let Some(h) = self.headers.iter().take(self.count.max(0) as usize).find(|h| h.id == id) {
             self.message = h.clone();
             self.text.clear();
+            self.to.clear();
         }
-        let mut w = request(3);
+        let mut w = if self.live {
+            let mut w = Writer::op(0x0D01);
+            w.u8(3);
+            w
+        } else {
+            request(3)
+        };
         w.signed(id as i32 as i64);
         self.out.push(w.data);
         self.state = 2;
@@ -185,6 +301,34 @@ impl Grams {
         let mut w = request(1);
         w.string(to).wide(&String::from_utf16_lossy(subject)).wide(&String::from_utf16_lossy(text));
         self.out.push(w.data);
+    }
+
+    /// The live sub-op 1 (`SendGram`, 0x012F5390): no envelope, a zigzag
+    /// count of names and each 8-bit, then the subject and the text (wide).
+    pub fn send_gram_live(&mut self, names: &[Vec<u8>], subject: &[u16], text: &[u16]) {
+        self.state = 3;
+        let mut w = Writer::op(0x0D01);
+        w.u8(1).signed(names.len() as i64);
+        for n in names {
+            w.string(n);
+        }
+        w.wide(&String::from_utf16_lossy(subject)).wide(&String::from_utf16_lossy(text));
+        self.out.push(w.data);
+    }
+
+    /// The names of a live answer (a zigzag count, then each
+    /// `ReadString(char *, 24)`); a count below 0 keeps none.
+    fn read_names(r: &mut Reader) -> Vec<Vec<u8>> {
+        let n = r.signed();
+        let mut names = Vec::new();
+        for _ in 0..n.clamp(0, 4096) {
+            let s = r.string(24);
+            if r.error {
+                break;
+            }
+            names.push(s);
+        }
+        names
     }
 
     /// `Recv0D41`: the reply's sub-op picks the handler, which takes it only
@@ -241,12 +385,58 @@ impl Grams {
                 h.read = 1;
             }
         }
+        // live (0x012F55D8): the To line first, then the text, each in 1,024
+        // bytes
+        if self.live {
+            self.to = wide(&r.wide(512));
+        }
         self.text = wide(&r.wide(512));
+    }
+
+    /// The live `RecvSend` (0x012F56D0, its table 0x013ED750): the names,
+    /// the codes and the delivered flag emptied, then by status: 1 sent (the
+    /// window says so), 9 some names unknown (sent to none), 4 some not
+    /// delivered to, each with its reason (10, 11 or another, kept as -2,
+    /// -3, -5) and whether anyone got it, 12 the mail system busy, any other
+    /// (10 and 11 too, the disc's whole-send ones) an unknown error.
+    fn recv_send_live(&mut self, r: &mut Reader) {
+        self.names.clear();
+        self.codes.clear();
+        self.delivered = false;
+        self.state = match r.u8() {
+            1 => 0,
+            9 => {
+                self.names = Self::read_names(r);
+                -1
+            }
+            4 => {
+                self.names = Self::read_names(r);
+                let m = r.signed();
+                for _ in 0..m.clamp(0, 4096) {
+                    let c = r.u8();
+                    if r.error {
+                        break;
+                    }
+                    self.codes.push(match c {
+                        10 => -2,
+                        11 => -3,
+                        _ => -5,
+                    });
+                }
+                self.delivered = r.u8() != 0;
+                -9
+            }
+            12 => -4,
+            _ => -5,
+        };
     }
 
     fn recv_send(&mut self, r: &mut Reader) {
         if self.state != 3 {
             return;
+        }
+        if self.live {
+            return self.recv_send_live(r);
         }
         self.state = match r.u8() {
             1 => {
@@ -582,6 +772,36 @@ pub struct Compose {
     hits: Hits,
     time: i64,
     busy: bool,
+    /// the live client's window (`Grams::live`, as each key and frame find
+    /// it): a To of several names, the live answers' boxes and lines
+    live: bool,
+    /// what the window puts in the chat (`ShowText`, `AddText`): its
+    /// owner's to add
+    pub said: Vec<(String, [f32; 4])>,
+}
+
+/// `AddText`'s red (1, .25, .25, 1), as the game's warnings are.
+const RED: [f32; 4] = [1.0, 0.25, 0.25, 1.0];
+/// `ShowText`'s white.
+const WHITE: [f32; 4] = [1.0; 4];
+
+/// A live form's word (`livewords::live`: the live client's rows where the
+/// table lacks them, its text for a row it changed).
+fn live_word(vui: &Vui, id: i32) -> String {
+    crate::livewords::live(&vui.words, id, vui.language)
+}
+
+/// The live window's names joined with ", " after `start`, in `size` bytes
+/// (`strcat16`), for the unknown recipients' box and the undelivered lines.
+fn names_line(start: &[u16], names: &[&Vec<u8>], size: usize) -> Vec<u16> {
+    let mut s: Vec<u16> = start.iter().copied().take(size / 2 - 1).collect();
+    for (i, n) in names.iter().enumerate() {
+        if i > 0 {
+            strcat8(&mut s, b", ", size);
+        }
+        strcat8(&mut s, n, size);
+    }
+    s
 }
 
 impl Compose {
@@ -589,7 +809,12 @@ impl Compose {
         let mut mbox = MBox::default();
         mbox.kind = 1;
         mbox.pos = [100, 100];
-        Compose { reply, visible: false, sel: 0, to: Vec::new(), subject: Vec::new(), body: Vec::new(), x7b4: 0, window: Window::default(), status: Window::default(), edit: EditBox::default(), editing: false, message: Message::default(), mbox, mbox_up: false, dots: Dots::default(), hits: Hits::default(), time: 0, busy: false }
+        Compose { reply, visible: false, sel: 0, to: Vec::new(), subject: Vec::new(), body: Vec::new(), x7b4: 0, window: Window::default(), status: Window::default(), edit: EditBox::default(), editing: false, message: Message::default(), mbox, mbox_up: false, dots: Dots::default(), hits: Hits::default(), time: 0, busy: false, live: false, said: Vec::new() }
+    }
+
+    /// `m_to`'s size in characters: the live client's 512, the disc's 24.
+    fn to_size(&self) -> usize {
+        if self.live { RECIPIENTS } else { 24 }
     }
 
     /// A pointer at frame point `p`, where the keys go: the editor's soft
@@ -638,7 +863,7 @@ impl Compose {
     }
 
     pub fn set_to(&mut self, s: &[u16]) {
-        self.to = capped(s, 24);
+        self.to = capped(s, self.to_size());
     }
 
     pub fn set_subject(&mut self, s: &[u16]) {
@@ -654,6 +879,7 @@ impl Compose {
     }
 
     pub fn key(&mut self, vui: &Vui, r: &mut dyn Raster, grams: &mut Grams, key: i32, down: bool, now: i64, cues: &mut Vec<i32>) -> Option<ComposeUp> {
+        self.live = grams.live;
         if self.editing {
             if !down {
                 self.edit.key_up(key);
@@ -663,7 +889,7 @@ impl Compose {
                 // 259: TakeText (the cursor stays), then 260
                 EditUp::Done(_) => {
                     match self.sel {
-                        0 => self.to = capped(&self.edit.text, 24),
+                        0 => self.to = capped(&self.edit.text, self.to_size()),
                         1 => self.subject = capped(&self.edit.text, 64),
                         2 => self.body = capped(&self.edit.text, 512),
                         _ => {}
@@ -733,12 +959,15 @@ impl Compose {
         None
     }
 
+    /// `Select`; the live one (0x0133D8D0) edits a To of 512 and a body of
+    /// 511 (the disc's 24 and 512), and sends to every name `ParseRecipients`
+    /// finds, none found refused as an empty To is.
     fn select(&mut self, grams: &mut Grams, now: i64) -> Option<ComposeUp> {
         let center = self.window.center;
         match self.sel {
             0 => {
-                let t = self.to.clone();
-                edit_field(&mut self.edit, 1, false, 24, center, &t, now);
+                let (t, size) = (self.to.clone(), self.to_size());
+                edit_field(&mut self.edit, 1, false, size, center, &t, now);
                 self.editing = true;
             }
             1 => {
@@ -748,7 +977,7 @@ impl Compose {
             }
             2 => {
                 let t = self.body.clone();
-                edit_field(&mut self.edit, 4, true, 512, center, &t, now);
+                edit_field(&mut self.edit, 4, true, if self.live { 511 } else { 512 }, center, &t, now);
                 self.editing = true;
             }
             _ => {
@@ -758,6 +987,14 @@ impl Compose {
                     return Some(ComposeUp::Warn(1808));
                 } else if self.body.is_empty() {
                     return Some(ComposeUp::Warn(873));
+                }
+                if self.live {
+                    let names = parse_recipients(&self.to);
+                    if names.is_empty() {
+                        return Some(ComposeUp::Warn(1632));
+                    }
+                    grams.send_gram_live(&names, &self.subject, &self.body);
+                    return None;
                 }
                 // str16to8 into 24 bytes, then CapitalizeName
                 let mut to: Vec<u8> = self.to.iter().take(23).map(|&c| if c < 256 { c as u8 } else { b'?' }).collect();
@@ -777,8 +1014,40 @@ impl Compose {
         ComposeUp::Close
     }
 
-    /// `OnDrawSelf`, then the editor, the message and the box over it.
+    /// The live state -9 (`OnDrawSelf`, 0x0133CF70), all in red: 839 when
+    /// anyone got it, then 1870 and ":\n", then a line for each reason a
+    /// name has, in the order {-2, -3, -5} (0x013F6FF8) with its word {891,
+    /// 892, 893} (0x013F7000): its names, ", " between, then " (<word>)";
+    /// each line in 512 bytes.
+    fn undelivered(&mut self, vui: &Vui, grams: &Grams) {
+        if grams.delivered {
+            self.said.push((word(vui, 839), RED));
+        }
+        let mut head = Vec::new();
+        strcat16(&mut head, &wide(&live_word(vui, 1870)), 512);
+        strcat8(&mut head, b":\n", 512);
+        self.said.push((String::from_utf16_lossy(&head), RED));
+        for (code, id) in [(-2i8, 891), (-3, 892), (-5, 893)] {
+            // codes[i] for each name (the game reads past a short array)
+            let names: Vec<&Vec<u8>> = grams.names.iter().enumerate().filter(|(i, _)| grams.codes.get(*i) == Some(&code)).map(|(_, n)| n).collect();
+            if names.is_empty() {
+                continue;
+            }
+            let mut s = names_line(&[], &names, 512);
+            strcat8(&mut s, b" (", 512);
+            strcat16(&mut s, &wide(&word(vui, id)), 512);
+            strcat8(&mut s, b")", 512);
+            self.said.push((String::from_utf16_lossy(&s), RED));
+        }
+    }
+
+    /// `OnDrawSelf`, then the editor, the message and the box over it. The
+    /// live one (0x0133C7E0, its states 0x013F7020) shows a send's answer
+    /// its own way: sent says 839 itself, the unknown names in the box (890
+    /// and the names), the undelivered ones as red lines and then closes,
+    /// and -2 and -3 are no state of its.
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, grams: &Grams, now: i64, cues: &mut Vec<i32>) -> Option<ComposeUp> {
+        self.live = grams.live;
         self.dots.step();
         let c = |on: bool| UI_COLORS[on as usize];
         crate::ui::window_backdrop(vui, r, 641);
@@ -818,6 +1087,26 @@ impl Compose {
             1 => draw_status(vui, r, &mut self.status, &self.dots.line(vui, 844)),
             2 => draw_status(vui, r, &mut self.status, &self.dots.line(vui, 845)),
             4 => draw_status(vui, r, &mut self.status, &self.dots.line(vui, 887)),
+            -1 if self.live => {
+                if self.x7b4 == 1 {
+                    self.x7b4 = -1;
+                    let mut start = Vec::new();
+                    strcat16(&mut start, &wide(&live_word(vui, 890)), 512);
+                    strcat8(&mut start, b": ", 512);
+                    let s = names_line(&start, &grams.names.iter().collect::<Vec<_>>(), 512);
+                    let t = wide(&word(vui, 889));
+                    self.message.setup(vui, r, &t, &s, PROMPT_OK, [320, 180], 300);
+                }
+            }
+            -2 | -3 if self.live => {}
+            -9 if self.live => {
+                if self.x7b4 == 1 {
+                    self.x7b4 = 0;
+                    self.undelivered(vui, grams);
+                    cues.push(8);
+                    up = Some(ComposeUp::Sent);
+                }
+            }
             -1 => fail(self, vui, r, 890, -1),
             -2 => fail(self, vui, r, 891, -2),
             -3 => fail(self, vui, r, 892, -3),
@@ -826,6 +1115,10 @@ impl Compose {
             -5 => fail(self, vui, r, 893, -3),
             0 if self.x7b4 != 0 => {
                 self.x7b4 = 0;
+                if self.live {
+                    // ShowText(839): the live window says it, not RecvSend
+                    self.said.push((word(vui, 839), WHITE));
+                }
                 cues.push(8);
                 up = Some(ComposeUp::Sent);
             }
@@ -855,14 +1148,23 @@ pub enum ReadUp {
 
 /// `VIWndReadGram`: one gram, From/Subject/Received over its text in one
 /// box, scrolled seven rows at a time; Enter offers Reply (its own compose,
-/// addressed back with "Re: " before the subject) and Delete.
+/// addressed back with "Re: " before the subject) and Delete. The live one
+/// (with `Grams::live`) shows the gram's To line under From and offers
+/// Reply All between them.
 pub struct Read {
     pub visible: bool,
     pub from: Vec<u16>,
     pub subject: Vec<u16>,
     pub date: Vec<u16>,
     pub text: Vec<u16>,
+    /// live: the To line (+0x191C, 512)
+    pub to: Vec<u16>,
     pub id: u32,
+    /// the player's own name (`GetPlayer()+4`), which Reply All puts the
+    /// sender in place of
+    pub me: Vec<u8>,
+    /// the live window (set before its focus)
+    pub live: bool,
     full: Vec<u16>,
     dirty: bool,
     rows: i32,
@@ -879,7 +1181,7 @@ pub struct Read {
 
 impl Default for Read {
     fn default() -> Self {
-        Read { visible: false, from: Vec::new(), subject: Vec::new(), date: Vec::new(), text: Vec::new(), id: 0, full: Vec::new(), dirty: true, rows: 0, top: 0, deleting: 0, window: Window::default(), status: Window::default(), options: OptionList::default(), message: Message::default(), compose: Compose::new(true), keys: KeyFlash::default(), dots: Dots::default() }
+        Read { visible: false, from: Vec::new(), subject: Vec::new(), date: Vec::new(), text: Vec::new(), to: Vec::new(), id: 0, me: Vec::new(), live: false, full: Vec::new(), dirty: true, rows: 0, top: 0, deleting: 0, window: Window::default(), status: Window::default(), options: OptionList::default(), message: Message::default(), compose: Compose::new(true), keys: KeyFlash::default(), dots: Dots::default() }
     }
 }
 
@@ -887,6 +1189,40 @@ impl Read {
     pub fn set_from(&mut self, s: &[u16]) {
         self.from = capped(s, 24);
         self.dirty = true;
+    }
+
+    /// The live `SetTo` (0x01398270): 1,024 bytes.
+    pub fn set_to(&mut self, s: &[u16]) {
+        self.to = capped(s, RECIPIENTS);
+        self.dirty = true;
+    }
+
+    /// `StartReply(to)` (live 0x01397CF0; the disc's Reply inline): the
+    /// compose shown with the focus (its 295), then Refresh, To, the subject
+    /// "Re: <subject>" in 64 characters and an empty body.
+    fn start_reply(&mut self, vui: &Vui, r: &mut dyn Raster, to: &[u16]) {
+        self.compose.live = self.live;
+        self.compose.visible = true;
+        self.compose.focus(vui, r);
+        let s: Vec<u16> = wide(&format!("{}: {}", word(vui, 936), String::from_utf16_lossy(&self.subject)));
+        self.compose.refresh();
+        self.compose.set_to(to);
+        self.compose.set_subject(&s);
+        self.compose.set_body(&[]);
+    }
+
+    /// Reply All (live `OnMessage`, 0x0139804C): the gram's To line parsed
+    /// as the compose parses one, the first name that is the player's own
+    /// (`strcasecmp`) made the sender's, or the sender added at the end
+    /// when none is; joined with ";" in 1,024 bytes.
+    pub fn reply_all_to(&self) -> Vec<u16> {
+        let mut names = parse_recipients(&self.to);
+        let from = crate::admin::str16to8(&self.from).into_iter().take(23).collect::<Vec<u8>>();
+        match names.iter().position(|n| n.eq_ignore_ascii_case(&self.me)) {
+            Some(i) => names[i] = from,
+            None => names.push(from),
+        }
+        join_names(&names, 2 * RECIPIENTS)
     }
 
     pub fn set_subject(&mut self, s: &[u16]) {
@@ -905,13 +1241,14 @@ impl Read {
     }
 
     /// 295 (the focus from the inbox): the window, its option list (Reply,
-    /// Delete) and the status window; every child hidden.
+    /// Delete; the live one's Reply, Reply All, Delete, 0x01397E1C) and the
+    /// status window; every child hidden.
     pub fn focus(&mut self, vui: &Vui, r: &dyn Raster) {
         self.window.close(true);
         self.window.init(vui, r, [320, 180], 440, 10, 0);
         self.window.set_title(Some(&wide(&word(vui, 935))));
         self.window.open(false);
-        let lines = vec![wide(&word(vui, 534)), wide(&word(vui, 986))];
+        let lines = if self.live { vec![wide(&word(vui, 534)), wide(&live_word(vui, 1871)), wide(&word(vui, 986))] } else { vec![wide(&word(vui, 534)), wide(&word(vui, 986))] };
         self.options.setup(vui, r, &wide(&word(vui, 422)), lines, [320, 180], 256);
         self.status.init(vui, r, [320, 180], 375, 4, 0);
         self.status.set_title(Some(&wide(&word(vui, 271))));
@@ -977,17 +1314,15 @@ impl Read {
             if let Some((line, enter)) = self.options.key(key, now, cues)
                 && enter
             {
-                match line {
-                    1 => grams.delete_message(self.id),
-                    0 => {
-                        self.compose.visible = true;
-                        self.compose.focus(vui, r);
-                        let s: Vec<u16> = wide(&format!("{}: {}", word(vui, 936), String::from_utf16_lossy(&self.subject)));
-                        self.compose.refresh();
+                match (line, self.live) {
+                    (1, false) | (2, true) => grams.delete_message(self.id),
+                    (0, _) => {
                         let from = self.from.clone();
-                        self.compose.set_to(&from);
-                        self.compose.set_subject(&s);
-                        self.compose.set_body(&[]);
+                        self.start_reply(vui, r, &from);
+                    }
+                    (1, true) => {
+                        let to = self.reply_all_to();
+                        self.start_reply(vui, r, &to);
                     }
                     _ => {}
                 }
@@ -1021,17 +1356,18 @@ impl Read {
         self.window.draw(vui, r);
         let w = self.window.size[0];
         if self.dirty {
+            let from = format!("{}: {}\n", word(vui, 882), String::from_utf16_lossy(&self.from));
+            // live (0x01397730): the To line under From, in 2,480 bytes
+            let (to, size) = if self.live { (format!("{}: {}\n", word(vui, 881), String::from_utf16_lossy(&self.to)), 2480) } else { (String::new(), 2048) };
             let s = format!(
-                "{}: {}\n{}: {}\n{}: {}\n\n{}",
-                word(vui, 882),
-                String::from_utf16_lossy(&self.from),
+                "{from}{to}{}: {}\n{}: {}\n\n{}",
                 word(vui, 883),
                 String::from_utf16_lossy(&self.subject),
                 word(vui, 884),
                 String::from_utf16_lossy(&self.date),
                 String::from_utf16_lossy(&self.text)
             );
-            self.full = wide(&s).into_iter().take(1023).collect();
+            self.full = wide(&s).into_iter().take(size / 2 - 1).collect();
             self.rows = self.window.count_lines(vui, r, &self.full, 360);
             self.top = 0;
             self.dirty = false;
@@ -1268,6 +1604,11 @@ impl Inbox {
                 self.open = false;
                 let text = grams.text.clone();
                 self.read.set_text(&text);
+                // live (0x013610B8): its To line too
+                self.read.live = grams.live;
+                if grams.live {
+                    self.read.set_to(&grams.to);
+                }
                 self.read.visible = true;
                 self.read.focus(vui, r);
             }
@@ -1279,24 +1620,40 @@ impl Inbox {
             }
         } else {
             if self.flash.pulse(138) {
-                if self.sel > 0 {
-                    self.sel -= 1;
-                    self.window.reset_tick_pulse(now);
-                    cues.push(11);
-                } else {
-                    cues.push(9);
-                }
+                self.prev(grams.count, now, cues);
             }
             if self.flash.pulse(139) {
-                if self.sel < grams.count - 1 {
-                    self.sel += 1;
-                    self.window.reset_tick_pulse(now);
-                    cues.push(11);
-                } else {
-                    cues.push(9);
-                }
+                self.next(grams.count, now, cues);
             }
         }
+    }
+
+    /// The live `Prev` (0x01361618): up a row, or from the top round to
+    /// the last (the first with none listed) and the key's repeat let go
+    /// (`VIKeyFlash::Reset`); the tick restarted and sound 11 either way.
+    /// The disc's stopped at the top, with sound 9.
+    fn prev(&mut self, count: i32, now: i64, cues: &mut Vec<i32>) {
+        if self.sel > 0 {
+            self.sel -= 1;
+        } else {
+            self.sel = (count - 1).max(0);
+            self.flash.reset();
+        }
+        self.window.reset_tick_pulse(now);
+        cues.push(11);
+    }
+
+    /// The live `Next` (0x01361590): down a row, or from the last round to
+    /// the first, as `prev`.
+    fn next(&mut self, count: i32, now: i64, cues: &mut Vec<i32>) {
+        if self.sel < count - 1 {
+            self.sel += 1;
+        } else {
+            self.sel = 0;
+            self.flash.reset();
+        }
+        self.window.reset_tick_pulse(now);
+        cues.push(11);
     }
 }
 
@@ -1509,5 +1866,311 @@ mod tests {
         assert_eq!(ib.point([310.0, 179.0]), vec![key::CROSS]);
         assert_eq!(ib.read.options.sel, 1);
         assert_eq!(ib.point([10.0, 10.0]), vec![key::TRIANGLE], "off it: closed");
+    }
+
+    /// The disc's mail words (the other rows numbered), unfilled: the live
+    /// rows (1870, 1871) and the live 890 come from `livewords`.
+    fn mail_vui() -> Vui {
+        let mut lines: Vec<String> = (1..=1814).map(|i| format!("w{i}")).collect();
+        for (id, s) in [(422, "Options"), (534, "Reply"), (839, "Your mail has been sent."), (881, "To"), (882, "From"), (883, "Subject"), (884, "Received"), (889, "Send Failed"), (890, "Unknown recipient."), (891, "Recipient's mailbox is full."), (892, "Recipient has too many unread messages from you."), (893, "Unknown error."), (936, "Re"), (986, "Delete")] {
+            lines[id - 1] = s.into();
+        }
+        Vui::new(vi::strtab::StringTable::parse(lines.join("\r\n").as_bytes()).unwrap(), Default::default(), Vec::new())
+    }
+
+    fn live() -> Grams {
+        Grams { live: true, ..Default::default() }
+    }
+
+    /// 0x0D41 sub-op 1 as a live server writes it: the status, then for 9
+    /// and 4 the names, for 4 the codes and the delivered byte.
+    fn send_answer(status: u8, names: &[&str], codes: &[u8], delivered: u8) -> Vec<u8> {
+        let mut w = Writer::default();
+        w.u8(1).u8(status);
+        if status == 9 || status == 4 {
+            w.signed(names.len() as i64);
+            for n in names {
+                w.string(n.as_bytes());
+            }
+        }
+        if status == 4 {
+            w.signed(codes.len() as i64);
+            for &c in codes {
+                w.u8(c);
+            }
+            w.u8(delivered);
+        }
+        w.data
+    }
+
+    /// The live forms (`SendGram` 0x012F5390, `RequestMessage` 0x012F4F78):
+    /// a send carries no envelope, a zigzag count and the names 8-bit; an
+    /// open no envelope; the inbox and delete keep theirs, as the live
+    /// client's do. A disc request has 06 41 0D after its sub-op, which a
+    /// live one cannot (the server's rule). The control: `live` off sends
+    /// the disc's (`requests_are_the_envelope_and_the_blob`).
+    #[test]
+    fn live_requests_drop_the_envelope() {
+        let mut g = live();
+        g.request_message(5);
+        assert_eq!(g.out[0], [0x01, 0x0D, 3, 10]);
+        g.send_gram_live(&[b"Ann".to_vec(), b"Bob".to_vec()], &wide("Hi"), &wide("yo"));
+        assert_eq!(g.out[1], [0x01, 0x0D, 1, 4, 3, 0, 0, 0, b'A', b'n', b'n', 3, 0, 0, 0, b'B', b'o', b'b', 2, 0, 0, 0, b'H', 0, b'i', 0, 2, 0, 0, 0, b'y', 0, b'o', 0]);
+        assert_eq!(g.state, 3);
+        g.request_inbox();
+        g.delete_message(7);
+        assert_eq!(g.out[2], [0x01, 0x0D, 2, 6, 0x41, 0x0D, 2], "the inbox keeps its envelope");
+        assert_eq!(g.out[3], [0x01, 0x0D, 4, 6, 0x41, 0x0D, 4, 14], "and so does delete");
+        for m in &g.out[..2] {
+            assert_ne!(m.get(3..6), Some(&[0x06, 0x41, 0x0D][..]), "no envelope for the server to find");
+        }
+        let mut d = Grams::default();
+        d.request_message(5);
+        assert_eq!(d.out[0][3..6], [0x06, 0x41, 0x0D], "the control: the disc's has it");
+    }
+
+    /// The live `RecvSend` (0x012F56D0): 1 sent, nothing shown (the window
+    /// says it); 9 the unknown names; 4 the names not delivered to, each
+    /// reason kept as -2 (10), -3 (11) or -5 (any other), and whether anyone
+    /// got it; 12 busy; any other an unknown error, 10 and 11 too. Each
+    /// answer empties the last one's names first. The control: the disc's
+    /// 10 is a state of its own.
+    #[test]
+    fn live_send_answers() {
+        let mut g = live();
+        let send = |g: &mut Grams| g.send_gram_live(&[b"A".to_vec()], &wide("s"), &wide("b"));
+        send(&mut g);
+        g.recv(&send_answer(9, &["Ann", "Cy"], &[], 0));
+        assert_eq!((g.state, g.names.clone()), (-1, vec![b"Ann".to_vec(), b"Cy".to_vec()]));
+        send(&mut g);
+        g.recv(&send_answer(4, &["Ann", "Bob", "Cy", "Di"], &[10, 11, 7, 99], 1));
+        assert_eq!((g.state, g.codes.clone(), g.delivered, g.names.len()), (-9, vec![-2, -3, -5, -5], true, 4));
+        send(&mut g);
+        g.recv(&send_answer(1, &[], &[], 0));
+        assert_eq!((g.state, g.names.len(), g.codes.len(), g.delivered), (0, 0, 0, false), "emptied first");
+        assert!(g.shown.is_empty(), "the live RecvSend shows nothing");
+        for (status, state) in [(12u8, -4), (10, -5), (11, -5), (2, -5)] {
+            send(&mut g);
+            g.recv(&send_answer(status, &[], &[], 0));
+            assert_eq!(g.state, state, "status {status}");
+        }
+        g.recv(&send_answer(9, &["Zed"], &[], 0));
+        assert_eq!((g.state, g.names.len()), (-5, 0), "not waited for: ignored");
+        let mut d = Grams::default();
+        d.send_gram(b"A", &[], &[]);
+        d.recv(&[1, 10]);
+        assert_eq!(d.state, -2, "the control: the disc's");
+    }
+
+    /// A live gram opened comes with its To line, read before its text
+    /// (0x012F55D8). The control: the disc's reads the first string as the
+    /// text.
+    #[test]
+    fn a_live_gram_comes_with_its_to_line() {
+        let mut w = Writer::default();
+        w.u8(3).u8(3).signed(12).wide("Ann;Bob").wide("hello");
+        for (mut g, to, text) in [(live(), "Ann;Bob", "hello"), (Grams::default(), "", "Ann;Bob")] {
+            g.request_inbox();
+            g.recv(&inbox_reply(&[header(12, "Bob", "Hi")], 1));
+            g.request_message(12);
+            g.recv(&w.data);
+            assert_eq!((g.to.clone(), g.text.clone(), g.headers[0].read), (wide(to), wide(text), 1), "live {}", g.live);
+        }
+    }
+
+    /// `ParseRecipients` (0x0133DDD8): letters make names (A-Z after upper
+    /// casing, 23 at most), ',' and ';' end them, the rest is skipped;
+    /// capitalised; empty names dropped, one given twice kept twice.
+    #[test]
+    fn recipients_parse_as_the_live_client() {
+        let p = |s: &str| parse_recipients(&wide(s)).into_iter().map(|n| String::from_utf8(n).unwrap()).collect::<Vec<_>>();
+        assert_eq!(p("bob, ANN;;  carl-x;d4e,;"), ["Bob", "Ann", "Carlx", "De"]);
+        assert_eq!(p("Ann;ann"), ["Ann", "Ann"]);
+        assert_eq!(p(" ,;;"), Vec::<String>::new());
+        assert_eq!(p(&"a".repeat(30)), ["A".to_string() + &"a".repeat(22)]);
+        assert_eq!(p("Zo\u{eb} Bo"), ["Zobo"], "a letter past A-Z is skipped, a space too");
+    }
+
+    /// `JoinNames` (0x0133DF80): ";" between, in the bytes given.
+    #[test]
+    fn names_join_with_semicolons() {
+        assert_eq!(join_names(&[b"Ann".to_vec(), b"Bob".to_vec()], 1024), wide("Ann;Bob"));
+        assert_eq!(join_names(&[], 1024), Vec::<u16>::new());
+        let many: Vec<Vec<u8>> = (0..100).map(|_| b"Abcdefghij".to_vec()).collect();
+        assert_eq!(join_names(&many, 1024).len(), 511, "1,024 bytes");
+    }
+
+    /// Reply All (0x0139804C): the sender in the first place that is the
+    /// player's own (any case), else last; an empty To line is the sender
+    /// alone, as Reply.
+    #[test]
+    fn reply_all_puts_the_sender_in_my_place() {
+        let mut rd = Read::default();
+        rd.me = b"Me".to_vec();
+        rd.set_from(&wide("Ann"));
+        let mut to = |s: &str| {
+            rd.set_to(&wide(s));
+            String::from_utf16_lossy(&rd.reply_all_to())
+        };
+        assert_eq!(to("me;Bob;Cy"), "Ann;Bob;Cy");
+        assert_eq!(to("Bob;Me;Me"), "Bob;Ann;Me", "the first only");
+        assert_eq!(to("Bob, Cy"), "Bob;Cy;Ann", "not in it: the sender last");
+        assert_eq!(to(""), "Ann");
+    }
+
+    /// The live compose: a To of several names (512 long), sent to each
+    /// `ParseRecipients` finds; a To with none refused as an empty one. Then
+    /// the answers: the unknown names in the box (the live 890 and ": "),
+    /// the undelivered ones as red lines (839 when anyone got it, 1870 and
+    /// ":\n", each reason's names with its word) and the window closed, a
+    /// sent one 839 said by the window. The control: the disc's window says
+    /// nothing at 0 (its RecvSend did).
+    #[test]
+    fn the_live_compose_sends_to_several_and_shows_what_came_back() {
+        let (vui, mut r) = (mail_vui(), NullRaster);
+        let mut cues = Vec::new();
+        let compose = |g: &mut Grams, to: &str| {
+            let mut c = Compose::new(false);
+            c.visible = true;
+            c.focus(&vui, &NullRaster);
+            c.key(&vui, &mut NullRaster, g, 0, false, 0, &mut Vec::new());
+            c.set_to(&wide(to));
+            c.subject = wide("Hi");
+            c.body = wide("yo");
+            c.sel = 3;
+            c
+        };
+        let mut g = live();
+        let mut c = compose(&mut g, ",;");
+        assert_eq!(c.key(&vui, &mut r, &mut g, 13, true, 0, &mut cues), Some(ComposeUp::Warn(1632)));
+        assert!(g.out.is_empty(), "no name: nothing sent");
+        let long: String = (0..40).map(|i| format!("N{i};")).collect();
+        let mut c = compose(&mut g, &long);
+        assert_eq!(c.to.len(), long.len().min(511), "the live To is 512 long");
+        let mut c2 = compose(&mut g, "ann, Cy;bob");
+        c2.key(&vui, &mut r, &mut g, 13, true, 0, &mut cues);
+        let sent = g.out.pop().unwrap();
+        assert_eq!(sent[..4], [0x01, 0x0D, 1, 6], "three names");
+        c = c2;
+        // sending, then the unknown names: the box
+        c.draw(&vui, &mut r, &g, 0, &mut cues);
+        g.recv(&send_answer(9, &["Cy", "Bob"], &[], 0));
+        assert_eq!(c.draw(&vui, &mut r, &g, 16, &mut cues), None, "the window stays");
+        let (title, text) = c.message.texts();
+        assert_eq!((String::from_utf16_lossy(title), String::from_utf16_lossy(text)), ("Send Failed".into(), "Unknown recipient(s): Cy, Bob".into()));
+        // sent again: some not delivered to
+        c.message.visible = false;
+        c.key(&vui, &mut r, &mut g, 13, true, 0, &mut cues);
+        c.draw(&vui, &mut r, &g, 32, &mut cues);
+        g.recv(&send_answer(4, &["Ann", "Bob", "Cy"], &[10, 50, 10], 1));
+        assert_eq!(c.draw(&vui, &mut r, &g, 48, &mut cues), Some(ComposeUp::Sent), "closed");
+        let said: Vec<(String, [f32; 4])> = std::mem::take(&mut c.said);
+        assert_eq!(
+            said,
+            [
+                ("Your mail has been sent.".to_string(), RED),
+                ("Unable to deliver to the following recipients:\n".to_string(), RED),
+                ("Ann, Cy (Recipient's mailbox is full.)".to_string(), RED),
+                ("Bob (Unknown error.)".to_string(), RED),
+            ]
+        );
+        // sent: the window says so
+        let mut c = compose(&mut g, "Ann");
+        c.key(&vui, &mut r, &mut g, 13, true, 0, &mut cues);
+        c.draw(&vui, &mut r, &g, 64, &mut cues);
+        g.recv(&send_answer(1, &[], &[], 0));
+        assert_eq!(c.draw(&vui, &mut r, &g, 80, &mut cues), Some(ComposeUp::Sent));
+        assert_eq!(c.said, [("Your mail has been sent.".to_string(), WHITE)]);
+        // the control: the disc's
+        let mut d = Grams::default();
+        let mut c = compose(&mut d, "ann");
+        c.key(&vui, &mut r, &mut d, 13, true, 0, &mut cues);
+        assert_eq!(d.out[0][..7], [0x01, 0x0D, 1, 6, 0x41, 0x0D, 1], "one name, the envelope");
+        assert_eq!(d.out[0][7..14], [3, 0, 0, 0, b'A', b'n', b'n']);
+        c.draw(&vui, &mut r, &d, 96, &mut cues);
+        d.recv(&[1, 1]);
+        assert_eq!(c.draw(&vui, &mut r, &d, 112, &mut cues), Some(ComposeUp::Sent));
+        assert!(c.said.is_empty());
+        assert_eq!(d.shown, [839], "RecvSend said it");
+        assert_eq!(compose(&mut d, &long).to.len(), 23, "the disc's To is 24 long");
+    }
+
+    /// The live reader: its text has the To line under From, its options
+    /// are Reply, Reply All and Delete; Reply All opens the reply addressed
+    /// to everyone but the player, and the sender. The control: the disc's
+    /// has no To line and Delete second.
+    #[test]
+    fn the_live_reader_replies_to_all() {
+        let (vui, mut r) = (mail_vui(), NullRaster);
+        let mut cues = Vec::new();
+        let mut g = live();
+        let mut rd = Read { live: true, me: b"Me".to_vec(), ..Default::default() };
+        rd.focus(&vui, &r);
+        rd.set_from(&wide("Ann"));
+        rd.set_to(&wide("Bob;Me"));
+        rd.set_subject(&wide("Plans"));
+        rd.set_text(&wide("hi all"));
+        rd.visible = true;
+        rd.draw(&vui, &mut r, &g, 0, &mut cues);
+        assert!(String::from_utf16_lossy(&rd.full).starts_with("From: Ann\nTo: Bob;Me\nSubject: Plans\nReceived: \n\nhi all"));
+        rd.key(&vui, &mut r, &mut g, 13, true, 0, &mut cues);
+        for k in [139, 134] {
+            rd.key(&vui, &mut r, &mut g, k, true, 0, &mut cues);
+        }
+        assert!(rd.compose.visible, "Reply All: the reply");
+        assert_eq!((String::from_utf16_lossy(&rd.compose.to), String::from_utf16_lossy(&rd.compose.subject)), ("Bob;Ann".into(), "Re: Plans".into()));
+        // Delete is the third
+        rd.compose.visible = false;
+        rd.key(&vui, &mut r, &mut g, 13, true, 0, &mut cues);
+        for k in [139, 139, 134] {
+            rd.key(&vui, &mut r, &mut g, k, true, 0, &mut cues);
+        }
+        assert_eq!(g.out.pop().map(|m| m[2]), Some(4), "deleted");
+        // the control: the disc's reader
+        let mut d = Grams::default();
+        let mut rd = Read { me: b"Me".to_vec(), ..Default::default() };
+        rd.focus(&vui, &r);
+        rd.set_from(&wide("Ann"));
+        rd.set_to(&wide("Bob;Me"));
+        rd.draw(&vui, &mut r, &d, 0, &mut cues);
+        assert!(String::from_utf16_lossy(&rd.full).starts_with("From: Ann\nSubject: "));
+        rd.key(&vui, &mut r, &mut d, 13, true, 0, &mut cues);
+        for k in [139, 134] {
+            rd.key(&vui, &mut r, &mut d, k, true, 0, &mut cues);
+        }
+        assert!(!rd.compose.visible && d.out.pop().map(|m| m[2]) == Some(4), "the disc's second line deletes");
+    }
+
+    /// The live inbox's Next and Prev (0x01361590, 0x01361618) go round:
+    /// from the top to the last row, from the last to the first, the key's
+    /// repeat let go, sound 11 (the disc's stopped there with 9). Between
+    /// the ends they move as before.
+    #[test]
+    fn the_inbox_goes_round() {
+        let (vui, mut r) = (mail_vui(), NullRaster);
+        let mut g = Grams::default();
+        let mut ib = Inbox::default();
+        ib.open(&vui, &r, &mut g);
+        g.state = 0;
+        g.count = 3;
+        g.headers = vec![header(1, "Ann", "a"), header(2, "Bob", "b"), header(3, "Cy", "c")];
+        let mut step = |ib: &mut Inbox, key: u8, now: i64| {
+            let mut cues = Vec::new();
+            ib.flash.press(key);
+            ib.draw(&vui, &mut r, &g, true, now, &mut cues);
+            ib.flash.release(key);
+            (ib.sel, cues)
+        };
+        assert_eq!(step(&mut ib, 138, 0), (2, vec![11]), "up from the top: the last");
+        assert_eq!(step(&mut ib, 138, 16), (1, vec![11]), "up a row");
+        assert_eq!(step(&mut ib, 139, 32), (2, vec![11]));
+        assert_eq!(step(&mut ib, 139, 48), (0, vec![11]), "down from the last: the first");
+        ib.flash.press(139);
+        ib.sel = 2;
+        let mut cues = Vec::new();
+        ib.draw(&vui, &mut r, &g, true, 64, &mut cues);
+        assert_eq!(ib.sel, 0);
+        ib.draw(&vui, &mut r, &g, true, 80, &mut cues);
+        assert_eq!((ib.sel, cues.len()), (0, 1), "the held key let go at the wrap");
     }
 }

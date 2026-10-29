@@ -543,17 +543,19 @@ impl ItemMenu {
         self.show_menu(false, now);
     }
 
-    /// `Use(item, count)`: a worn (916), quick-slotted (917) or no-trade
-    /// (918) item asks first, and here every other item too, with word 915
-    /// ("Destroy item?"): the game copies that one into the box's text and
-    /// never shows it, destroying an ordinary item at once. Asking for every
-    /// item is the client's own, the user's choice (F3 20261023-082704).
+    /// `Use(item, count)` as SOE's final live client has it (0x013738E0):
+    /// every item asks first, in the Yes/No box starting on No: a worn one
+    /// with word 916, a quick-slotted one 917, a no-trade one 918 and any
+    /// other with 1841, 'Destroy item "<name>"?'. The disc's copied 915
+    /// ("Destroy item?") into the box and destroyed an ordinary item at once
+    /// (the client asked with 915 since F3 20261023-082704, the user's
+    /// choice).
     fn use_item(&mut self, item: i32, count: i32, inv: &ItemList, vui: &Vui, waiting: bool, now: i64) {
         let Some(it) = inv.items.get(item.max(0) as usize).filter(|_| item >= 0 && !waiting) else {
             self.show_menu(false, now);
             return;
         };
-        let w = |id: i32| vui.words.get(id, vui.language).to_string();
+        let w = |id: i32| crate::livewords::word(&vui.words, id, vui.language);
         let name = &it.item.name;
         let text = if it.equip_slot != -1 {
             w(916).replacen("%s", name, 1).replacen("%S", name, 1)
@@ -562,7 +564,7 @@ impl ItemMenu {
         } else if it.item.no_trade > 0 {
             w(918)
         } else {
-            w(915)
+            w(1841).replacen("%s", name, 1).replacen("%S", name, 1)
         };
         self.mbox.prompt(&wide(&text), 1, item, count, now);
         self.focus = Focus::MBox;
@@ -1000,12 +1002,11 @@ mod tests {
     /// Destroy asks for every item, in the Yes/No box starting on No, and
     /// only Yes sends 0x003C: a worn item with word 916, a quick-slotted one
     /// with 917 and a NO TRADE one with 918, as the game's `Use` asks
-    /// (`VIWndItemMenu::Use`, byte-exact), and any other item with 915,
-    /// "Destroy item?", which the game copies and never shows: it destroys
-    /// an ordinary item at once. Asking for that one too is the client's own
-    /// (the user's choice, F3 20261023-082704). By keys and by the pointer:
-    /// a click on No keeps it, on Yes destroys it. The control: the game's
-    /// rule, an ordinary item destroyed with no box, fails it.
+    /// (`VIWndItemMenu::Use`, byte-exact), and any other item with the live
+    /// client's 1841 and its name (live 0x01373A24; the table here lacks the
+    /// row, so it is `livewords`'). By keys and by the pointer: a click on No
+    /// keeps it, on Yes destroys it. The control: the disc's rule, an
+    /// ordinary item destroyed with no box, fails it.
     #[test]
     fn destroying_asks_for_every_item() {
         let mut lines = vec![String::new(); 918];
@@ -1042,7 +1043,7 @@ mod tests {
         let press = |m: &mut ItemMenu, k: i32, out: &mut Vec<ItemOut>| {
             m.key(&vui, &mut crate::pointer::testing::NullRaster, k, true, &inv, &info, false, &mut Vec::new(), out);
         };
-        let cases = [(0, "Destroy item?"), (1, "Destroy equipped item \"Fine Sword\"?"), (2, "Destroy prepared item \"Healing Potion\"?"), (3, "Destroy this NO TRADE item?")];
+        let cases = [(0, "Destroy item \"Rusty Dagger\"?"), (1, "Destroy equipped item \"Fine Sword\"?"), (2, "Destroy prepared item \"Healing Potion\"?"), (3, "Destroy this NO TRADE item?")];
         for (k, text) in cases {
             let mut m = menu();
             let mut out = Vec::new();
