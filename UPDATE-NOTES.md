@@ -5,6 +5,15 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-29 · One question for all your crash reports, and no freezes from the music
+- If the game stopped more than once since you last sent its crash reports, the next start now
+  asks about all of them at once and says how many there are. Send sends them all, Delete deletes
+  them all, and Not now keeps them for later. Until now it asked about one at a time, the newest,
+  so the same question came back at every start.
+- The music is now read from the disc ahead of playing it, as the browser version does. A slow
+  disc (a drive waking up, or a busy one) now only makes the music start a little late, where it
+  could hold the whole game up for as long as the read took.
+
 ## 2026-10-29 · Playing over a phone's hotspot
 - The game connects on networks that give servers IPv6 addresses, as many phone hotspots do: it
   now takes a server's IPv4 address when there is one, and on a network with IPv6 alone it goes
