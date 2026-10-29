@@ -209,10 +209,20 @@ pub fn give(s: Sound) {
 }
 
 impl Sound {
-    /// The device on a fresh audio output, with AMBTRACK.ESF for the tracks.
+    /// The device on a fresh audio output, with AMBTRACK.ESF for the tracks;
+    /// natively the music's files read whole on a thread of their own
+    /// (`bgm::read_on_a_thread`), so the driver, under the lock the output's
+    /// callback and the game's thread take, never waits on the disc.
     pub fn new(iso_path: &std::path::Path) -> Option<Sound> {
         let disc = iso::Iso::open(iso_path).ok()?;
-        let audio = Audio::open(Box::new(crate::audio::IsoDisc(disc)));
+        #[cfg(not(target_arch = "wasm32"))]
+        let music: Box<dyn snd::Disc> = {
+            let bgm = crate::bgm::Bgm::new(disc.entries());
+            if crate::bgm::read_on_a_thread(&bgm, crate::bgm::image_reader(iso_path.to_path_buf())) { Box::new(bgm) } else { Box::new(crate::audio::IsoDisc(disc)) }
+        };
+        #[cfg(target_arch = "wasm32")]
+        let music: Box<dyn snd::Disc> = Box::new(crate::audio::IsoDisc(disc));
+        let audio = Audio::open(music);
         eprintln!("{}", audio.describe);
         let mut iso = iso::Iso::open(iso_path).ok()?;
         Self::with(&mut |path| iso.read(path).ok(), audio)

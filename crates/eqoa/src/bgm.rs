@@ -6,9 +6,22 @@
 //! is wanted is read by the page, `take_wanted`, and handed back, `insert`),
 //! and the driver's reads are served from that copy. The three files used
 //! last are kept.
+//!
+//! Natively the same, the files read on a thread of their own
+//! (`read_on_a_thread`): the driver runs under its lock (`audio::Shared`),
+//! which the output's callback takes to mix and the game's thread takes every
+//! frame, so a read of the disc there held both for as long as the disc took
+//! (F3 20261029-025532: two windows freezing at once, a callback once mixing
+//! for 8,363 ms). Now the driver's reads are copies, and a slow disc holds
+//! back only the music's start.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+
+/// Natively, how often the thread looks for files asked for: a BGM starts
+/// this much later at most, past its read.
+#[cfg(not(target_arch = "wasm32"))]
+const LOOK_MS: u64 = 10;
 
 const KEEP: usize = 3;
 
@@ -65,6 +78,63 @@ impl Bgm {
     /// The file's name, for what is said about it.
     pub fn name(&self, lsn: u32) -> String {
         self.0.lock().unwrap().names.iter().find(|(_, v)| v.0 == lsn).map(|(n, _)| n.clone()).unwrap_or_default()
+    }
+}
+
+/// Natively: the files the device asks for (`ready`), each read whole by
+/// `read` (the image's byte offset and the length) on a thread of its own,
+/// said in the log with how long it took, as a page says it, and handed to the cache; one that cannot
+/// be read plays silent, as a failed read does. The thread ends once the
+/// cache has no other holder (the driver's disc gone). False when no thread
+/// could be made (the caller reads the disc as before).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_on_a_thread(bgm: &Bgm, mut read: impl FnMut(u64, usize) -> std::io::Result<Vec<u8>> + Send + 'static) -> bool {
+    let b = bgm.clone();
+    let spawned = std::thread::Builder::new().name("music".into()).spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(LOOK_MS));
+            if Arc::strong_count(&b.0) == 1 {
+                return;
+            }
+            for (lsn, size) in b.take_wanted() {
+                let t = web_time::Instant::now();
+                match read(lsn as u64 * iso::SECTOR, size as usize) {
+                    Ok(bytes) => {
+                        crate::say(&format!("music: {} read ({:.1} MB, {} ms)", b.name(lsn), bytes.len() as f64 / 1048576.0, t.elapsed().as_millis()));
+                        b.insert(lsn, bytes);
+                    }
+                    Err(e) => {
+                        crate::say(&format!("music: {} could not be read ({e})", b.name(lsn)));
+                        b.fail(lsn);
+                    }
+                }
+            }
+        }
+    });
+    match spawned {
+        Ok(_) => true,
+        Err(e) => {
+            crate::say(&format!("music: no thread to read it on ({e}): read by the driver as it plays"));
+            false
+        }
+    }
+}
+
+/// `read_on_a_thread`'s reads off the disc image at `image`, through a
+/// handle of its own.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn image_reader(image: std::path::PathBuf) -> impl FnMut(u64, usize) -> std::io::Result<Vec<u8>> + Send + 'static {
+    let mut file: Option<std::fs::File> = None;
+    move |off, len| {
+        use std::io::{Read, Seek, SeekFrom};
+        let f = match file.as_mut() {
+            Some(f) => f,
+            None => file.insert(std::fs::File::open(&image)?),
+        };
+        f.seek(SeekFrom::Start(off))?;
+        let mut b = vec![0u8; len];
+        f.read_exact(&mut b)?;
+        Ok(b)
     }
 }
 
@@ -187,6 +257,84 @@ mod tests {
         assert_eq!(b.name(lsn), "\\BGM\\BATTLE01.BGM;1");
         b.fail(lsn);
         assert!(b.ready("\\BGM\\BATTLE01.BGM;1"));
+    }
+
+    /// Natively the music's files are read on a thread of their own
+    /// (`read_on_a_thread`): what the driver plays is the disc's, frame for
+    /// frame from the BGM's start for 20 seconds, and a read of the disc
+    /// that takes 400 ms holds none of the driver's calls (the device's
+    /// frame and a mix, each run under the driver's lock as the game's
+    /// thread and the output's callback run them) for even half of it. The
+    /// control: the same slow read made by the driver itself, as natively
+    /// before (`IsoDisc`), holds the call it comes in for all of it. SKIPs
+    /// without the disc.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_native_reader_keeps_the_disc_off_the_drivers_lock() {
+        use std::time::{Duration, Instant};
+        let iso_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(disc) = iso::Iso::open(&iso_path) else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let entries = disc.entries().to_vec();
+        const SLOW: Duration = Duration::from_millis(400);
+        /// The disc, its first read slow.
+        struct Slow(crate::audio::IsoDisc, bool);
+        impl snd::Disc for Slow {
+            fn search(&mut self, name: &str) -> Option<(u32, u32)> {
+                self.0.search(name)
+            }
+            fn read(&mut self, lsn: u32, sectors: u32, buf: &mut [u8]) -> bool {
+                if !std::mem::replace(&mut self.1, true) {
+                    std::thread::sleep(SLOW);
+                }
+                self.0.read(lsn, sectors, buf)
+            }
+        }
+        // the 20 s from the BGM's start, and the longest of the driver's
+        // calls (the device's frame and a mix of a frame's 800 samples)
+        let stream = |disc: Box<dyn snd::Disc>| -> (Vec<i16>, Duration) {
+            let audio = crate::audio::Audio::offline(disc);
+            let mut link = audio.link();
+            let mut dev = SoundDevice::<Ee>::new(1);
+            assert!(dev.init(&mut link) >= 0);
+            dev.play_bgm(0, "bgm\\battle01.bgm");
+            let mut pcm: Vec<i16> = Vec::new();
+            let mut longest = Duration::ZERO;
+            let deadline = Instant::now() + Duration::from_secs(60);
+            let mut frames = 0;
+            while frames < 30 * 45 && Instant::now() < deadline {
+                let t = Instant::now();
+                dev.process(&mut link);
+                pcm.extend(audio.render(800));
+                longest = longest.max(t.elapsed());
+                // while silent, the frames at about the game's pace: the
+                // thread's read is under way
+                if pcm.iter().all(|&s| s == 0) {
+                    std::thread::sleep(Duration::from_millis(2));
+                } else {
+                    frames += 1;
+                }
+            }
+            let start = pcm.iter().position(|&s| s != 0).expect("the BGM plays");
+            assert!(pcm.len() >= start + 2 * 48000 * 20, "20 s of it");
+            (pcm[start..start + 2 * 48000 * 20].to_vec(), longest)
+        };
+        let (on_disc, _) = stream(Box::new(crate::audio::IsoDisc(disc)));
+        let b = Bgm::new(&entries);
+        let mut read = image_reader(iso_path.clone());
+        let slow_read = move |off: u64, len: usize| {
+            std::thread::sleep(SLOW);
+            read(off, len)
+        };
+        assert!(read_on_a_thread(&b, slow_read));
+        let (threaded, longest) = stream(Box::new(b.clone()));
+        assert!(threaded == on_disc, "the thread's copy plays as the disc does");
+        assert!(longest < SLOW / 2, "no call held by the read: the longest {longest:?}");
+        assert!(!b.0.lock().unwrap().missed, "no read came before its file");
+        let (_, held) = stream(Box::new(Slow(crate::audio::IsoDisc(iso::Iso::open(&iso_path).unwrap()), false)));
+        assert!(held >= SLOW, "the control: the driver's own read holds its call ({held:?})");
     }
 
     /// Three files kept, the one used last kept longest.
