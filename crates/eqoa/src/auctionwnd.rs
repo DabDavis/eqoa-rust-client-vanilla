@@ -63,19 +63,22 @@ fn race_word(r: i32) -> i32 {
 /// A picker (states 5..8): its rows and its list's title. Its list scrolls
 /// over the rows past the seven shown (`m_top / (rows - 7)`).
 struct Picker {
-    rows: &'static [i32],
+    rows: Vec<i32>,
     title: i32,
 }
 
 /// The picker of state `s`: 5 the races (`DrawRaces`), 6 the classes
 /// (`DrawClasses`), 7 the wear slots (`DrawTypes`), 8 the attack types
-/// (`DrawSlots`).
+/// (`DrawSlots`). On a server that sends the live client's feature word
+/// without its bit 0x02 (`live`), race 9 and class 14 are left out of their
+/// lists, as the live client builds them (0x01314D98).
 fn picker(s: i32) -> Option<Picker> {
+    let f = crate::live::features();
     match s {
-        5 => Some(Picker { rows: &RACES, title: 1703 }),
-        6 => Some(Picker { rows: &CLASSES, title: 1702 }),
-        7 => Some(Picker { rows: &WEARS, title: 1704 }),
-        8 => Some(Picker { rows: &ATTACKS, title: 1705 }),
+        5 => Some(Picker { rows: RACES.iter().copied().filter(|&r| f.shows_race(r)).collect(), title: 1703 }),
+        6 => Some(Picker { rows: CLASSES.iter().copied().filter(|&c| f.shows_class(c)).collect(), title: 1702 }),
+        7 => Some(Picker { rows: WEARS.to_vec(), title: 1704 }),
+        8 => Some(Picker { rows: ATTACKS.to_vec(), title: 1705 }),
         _ => None,
     }
 }
@@ -1482,6 +1485,30 @@ mod tests {
             };
             assert_eq!(got, rows[row], "field {field}");
         }
+    }
+
+    /// On a server that sends the live client's feature word without bit
+    /// 0x02 (`live`) the race picker has no Ogre (9) and the class picker no
+    /// Alchemist (14), and Enter takes the row's own value; the controls, no
+    /// word (the disc's lists, as on Sandstorm) and the retail word 0x1B,
+    /// have them. The wear slots and attack types never change.
+    #[test]
+    fn the_pickers_leave_ogre_and_alchemist_to_the_feature_word() {
+        let rows = |word| crate::live::with_features(word, || [5, 6, 7, 8].map(|s| picker(s).unwrap().rows));
+        let [races, classes, wears, attacks] = rows(Some(0x10));
+        assert_eq!(races, vec![-1, -2, 6, 2, 4, 1, 8, 3, 7, 0, 5]);
+        assert_eq!(classes, vec![-1, 5, 9, 7, 12, 10, 4, 11, 2, 1, 6, 3, 8, 0, 13]);
+        assert_eq!((wears, attacks), (WEARS.to_vec(), ATTACKS.to_vec()));
+        for word in [None, Some(0x1B)] {
+            let [races, classes, ..] = rows(word);
+            assert_eq!((races, classes), (RACES.to_vec(), CLASSES.to_vec()), "{word:?}");
+        }
+        // the last race row is the Troll (5) without the Ogre, as Enter takes it
+        crate::live::with_features(Some(0x10), || {
+            let mut g = Rig::new();
+            choose(&mut g, 2, 10);
+            assert_eq!(g.w.race, 5);
+        });
     }
 
     /// The search carries what the pickers chose: the class's and race's

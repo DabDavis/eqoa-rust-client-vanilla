@@ -20,13 +20,13 @@ impl Play {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::live::{Features, features};
 
     /// A session that sends nowhere and records what it would (as
     /// `adminplay`'s tests).
-    pub(super) fn play() -> Play {
+    pub(in crate::play) fn play() -> Play {
         struct Nowhere;
         impl net::session::Datagrams for Nowhere {
             fn send_to(&mut self, _: &[u8], _: [u8; 4], _: u16) {}

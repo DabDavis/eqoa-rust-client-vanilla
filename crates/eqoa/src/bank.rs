@@ -157,6 +157,11 @@ impl Bank {
         self.show_menu(vui, r, auction);
     }
 
+    /// The menu has the auction's row (`m_auction`).
+    pub fn offers_auction(&self) -> bool {
+        self.menu.auction
+    }
+
     /// `ShowMenu`.
     fn show_menu(&mut self, vui: &Vui, r: &dyn Raster, auction: bool) {
         self.page = Page::Menu;

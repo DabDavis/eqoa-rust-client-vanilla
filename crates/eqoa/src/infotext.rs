@@ -102,8 +102,12 @@ impl Info<'_> {
     /// space.
     fn mask(&self, d: &mut String, title: i32, mask: i64, short: &[i32]) {
         let bits = short.len();
-        let all = (0..bits).all(|b| mask & (1 << b) != 0);
-        let none = (0..bits).all(|b| mask & (1 << b) == 0);
+        // the live client (`live`) leaves race 9 and class 14 out of both
+        // tests and the list without its feature word's bit 0x02
+        let f = crate::live::features();
+        let shown = |b: usize| if bits == RACE_SHORT.len() { f.shows_race(b as i32) } else { f.shows_class(b as i32) };
+        let all = (0..bits).filter(|&b| shown(b)).all(|b| mask & (1 << b) != 0);
+        let none = (0..bits).filter(|&b| shown(b)).all(|b| mask & (1 << b) == 0);
         *d += self.w(title);
         *d += ": ";
         if all {
@@ -112,7 +116,7 @@ impl Info<'_> {
             *d += self.w(302);
         } else {
             for (b, &w) in short.iter().enumerate() {
-                if (mask >> b) & 1 != 0 {
+                if (mask >> b) & 1 != 0 && shown(b) {
                     *d += self.w(w);
                     *d += " ";
                 }
@@ -916,6 +920,32 @@ mod tests {
         // none of the four (a negative count): nothing
         let odd = Item { name: "Odd".into(), wear_slot: -1, p54: -1, ..Default::default() };
         assert_eq!(info.auction_item(&lot(odd)), "");
+    }
+
+    /// `AddRaceMask`/`AddClassMask` on a server that sends the live client's
+    /// feature word without bit 0x02 (`live`): race 9 and class 14 leave
+    /// both the ALL/NONE tests and the list, so the races but the Ogre are
+    /// ALL and an Ogre alone is NONE. The controls: no word (the disc's, as
+    /// on Sandstorm) and the retail word 0x1B count them.
+    #[test]
+    fn ogre_and_alchemist_by_the_feature_word() {
+        let words = numbered();
+        let (inv, base) = (ItemList::default(), [0; 29]);
+        let info = Info { words: &words, inv: &inv, hp: [0; 4], base: &base, class: 0, level: 0, attack_words: &[] };
+        let masks = |race: i64, class: i64| {
+            let mut d = String::new();
+            info.mask(&mut d, 289, race, &RACE_SHORT);
+            d += "|";
+            info.mask(&mut d, 288, class, &CLASS_SHORT);
+            d
+        };
+        let (no_ogre, ogre, no_alc, alc) = (0x1FF, 0x200, 0x3FFF, 0x4000);
+        let without = crate::live::with_features(Some(0x10), || (masks(no_ogre, no_alc), masks(ogre, alc), masks(0x201, 0x4001)));
+        assert_eq!(without, ("w289: w301|w288: w301".into(), "w289: w302|w288: w302".into(), "w289: w317 |w288: w303 ".into()));
+        for word in [None, Some(0x1B)] {
+            let with = crate::live::with_features(word, || (masks(no_ogre, no_alc), masks(ogre, alc)));
+            assert_eq!(with, ("w289: w317 w318 w319 w320 w321 w322 w323 w324 w325 |w288: w303 w304 w305 w306 w307 w308 w309 w310 w311 w312 w313 w314 w315 w316 ".into(), "w289: w1191 |w288: w1190 ".into()), "{word:?}");
+        }
     }
 
     fn it(wear: i64, p4c: i64, p54: i64) -> NetItem {

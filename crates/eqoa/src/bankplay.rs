@@ -155,7 +155,8 @@ impl Play {
     /// The window's opens, keys, drawing, and what it asks.
     pub(super) fn run_bank(&mut self, vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster) {
         if std::mem::take(&mut self.bank.open) {
-            let auction = self.dump.bank.p78cc;
+            // `m_auction`: the dump's flag, or the live word's bit 0x01 (`live`)
+            let auction = crate::live::features().auction(self.dump.bank.p78cc);
             self.bank.wnd.open(vui, r, auction);
         }
         if let Some(kind) = self.bank.search_open.take() {
@@ -277,5 +278,32 @@ impl Play {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::pointer::testing::{NullRaster, vui};
+
+    /// The bank menu's Auction row: the MemoryDump's flag as the disc has
+    /// it, or, on a server that sends the live client's feature word
+    /// (`live`), its bit 0x01 whatever the dump says (the live dump has no
+    /// flag).
+    #[test]
+    fn the_auction_row_by_the_dump_or_the_feature_word() {
+        let (vui, mut r) = (vui(), NullRaster);
+        let mut row = |word: Option<u32>, flag: bool| {
+            crate::live::with_features(word, || {
+                let mut p = crate::play::liveplay::tests::play();
+                crate::live::set_features(crate::live::Features(word));
+                p.dump.bank.p78cc = flag;
+                p.bank.open = true;
+                p.run_bank(&vui, &mut r);
+                p.bank.wnd.offers_auction()
+            })
+        };
+        assert!(row(None, true) && !row(None, false), "the disc: the dump's flag");
+        assert!(row(Some(0x1B), false), "bit 0x01");
+        assert!(!row(Some(0x10), true), "the control: a word without 0x01");
     }
 }

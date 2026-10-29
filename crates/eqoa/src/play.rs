@@ -5015,8 +5015,9 @@ impl Play {
         let now = self.session.now() as i64;
         let expansion = self.session.expansion;
         // OpenStartMenu: the bank's tables when the bank has the auction
-        // (GetBank()->GetP78CC())
-        let bank_tables = self.dump.bank.p78cc;
+        // (GetBank()->GetP78CC()); the live client's feature word's bit 0x01
+        // when a server sends one (`live`)
+        let bank_tables = crate::live::features().auction(self.dump.bank.p78cc);
         // and its first entry, TEST, while the GM's channel is enabled
         let test = self.admin.part.test_entry();
         let mut actions = Vec::new();
