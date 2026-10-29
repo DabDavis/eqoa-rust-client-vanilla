@@ -24,7 +24,8 @@
 //!   backtrace, the client's state, the log), and a run that ended without
 //!   closing (killed, or stopped by a fault no panic caught) is found by the
 //!   next start in the log it left; the next start offers what is waiting
-//!   (its first window only): Send, Not now or Delete.
+//!   (its first window only), every report in one offer, saying how many:
+//!   Send (each its own, newest first), Not now or Delete.
 
 /// The account name and the password the game sent Station (its API's
 /// logins), taken out of every report.
@@ -679,7 +680,12 @@ mod native {
 
     /// The crash reports waiting, oldest first.
     fn waiting() -> Vec<PathBuf> {
-        let Some(d) = crashes() else { return Vec::new() };
+        crashes().map_or_else(Vec::new, |d| waiting_in(&d))
+    }
+
+    /// The crash reports in the directory `d`, oldest first (their names are
+    /// their runs' start times).
+    pub(super) fn waiting_in(d: &Path) -> Vec<PathBuf> {
         let mut v: Vec<PathBuf> = std::fs::read_dir(d).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "txt")).collect();
         v.sort();
         v
@@ -816,8 +822,12 @@ mod native {
     pub(super) enum Kind {
         /// F3: what happened and a name, with the frame's picture
         Problem,
-        /// a crash report waiting (its file)
-        Crash(PathBuf),
+        /// the crash reports waiting (their files), newest first: one offer
+        /// for them all, as many as there are (a player whose game stopped
+        /// several times was asked once a start, start after start, F3 crash
+        /// 20261028-235209: "this window wont go away. Idk why. Everytime i
+        /// log in this happens")
+        Crash(Vec<PathBuf>),
     }
 
     #[derive(Clone, Copy, Debug, PartialEq)]
@@ -833,8 +843,23 @@ mod native {
     pub(super) enum Status {
         Editing,
         Sending,
-        Sent(String),
-        Failed(String),
+        /// the ids the server gave, one a report
+        Sent(Vec<String>),
+        /// the ids of those sent before one failed (crash reports, newest
+        /// first), and why it failed: the rest wait
+        Failed(Vec<String>, String),
+    }
+
+    /// What a send came to: each report sent (a crash report's file, none
+    /// for a problem's) with its id, and the error that stopped it, if one
+    /// did.
+    #[derive(Clone, Debug, Default, PartialEq)]
+    pub(super) struct Sent {
+        pub(super) sent: Vec<(Option<PathBuf>, String)>,
+        /// crash reports gone before their turn (deleted meanwhile): nothing
+        /// to send, and not waiting any more
+        pub(super) gone: Vec<PathBuf>,
+        pub(super) failed: Option<String>,
     }
 
     pub(super) struct Dialog {
@@ -851,12 +876,13 @@ mod native {
         /// waiting for the frame's picture (shown once it came, or after a
         /// second without one)
         pub(super) shot_wanted: Option<Instant>,
-        result: std::sync::Arc<Mutex<Option<Result<String, String>>>>,
+        pub(super) result: std::sync::Arc<Mutex<Option<Sent>>>,
         /// the buttons, as last drawn (frame pixels): what a click finds
         pub(super) buttons: Vec<([i32; 4], Button)>,
-        /// a crash report's own header: when the game stopped, in which
-        /// version (read once, as the dialog opens)
-        pub(super) stopped: Stopped,
+        /// each crash report's own header, in `Kind::Crash`'s order: when
+        /// the game stopped, in which version (read once, as the dialog
+        /// opens)
+        pub(super) stopped: Vec<Stopped>,
     }
 
     /// What a crash report waiting says of itself: when the game stopped
@@ -905,8 +931,8 @@ mod native {
         pub(super) fn new(kind: Kind) -> Dialog {
             let problem = kind == Kind::Problem;
             let stopped = match &kind {
-                Kind::Crash(f) => stopped(f),
-                Kind::Problem => Stopped::default(),
+                Kind::Crash(files) => files.iter().map(|f| stopped(f)).collect(),
+                Kind::Problem => Vec::new(),
             };
             Dialog {
                 kind,
@@ -1014,44 +1040,85 @@ mod native {
         fn send(&mut self) {
             self.status = Status::Sending;
             let (note, name) = (self.note.trim().to_string(), self.name.replace(['\r', '\n', '\t'], " ").trim().to_string());
-            let body = match &self.kind {
+            let result = self.result.clone();
+            match &self.kind {
                 Kind::Problem => {
                     if let Some(d) = dir() {
                         let _ = std::fs::write(d.join("report-name.txt"), &name);
                     }
-                    ("report", problem_body(&note, &name, self.shot_to_send()))
+                    let body = problem_body(&note, &name, self.shot_to_send());
+                    let _ = std::thread::Builder::new().name("report".into()).spawn(move || {
+                        let r = post("report", body);
+                        crate::say(&match &r {
+                            Ok(id) => format!("report: sent as {id}"),
+                            Err(e) => format!("report: not sent: {e}"),
+                        });
+                        *lock(&result) = Some(match r {
+                            Ok(id) => Sent { sent: vec![(None, id)], ..Default::default() },
+                            Err(e) => Sent { failed: Some(e), ..Default::default() },
+                        });
+                    });
                 }
-                Kind::Crash(f) => ("crash", crash_body(&std::fs::read_to_string(f).unwrap_or_default(), &note)),
-            };
-            let result = self.result.clone();
-            let file = match &self.kind {
-                Kind::Crash(f) => Some(f.clone()),
-                Kind::Problem => None,
-            };
-            let _ = std::thread::Builder::new().name("report".into()).spawn(move || {
-                let r = post(body.0, body.1);
-                if r.is_ok()
-                    && let Some(f) = file
-                {
-                    let _ = std::fs::remove_file(f);
+                Kind::Crash(files) => {
+                    let files = files.clone();
+                    let _ = std::thread::Builder::new().name("report".into()).spawn(move || {
+                        *lock(&result) = Some(send_crashes(&files, &note, post));
+                    });
                 }
-                crate::say(&match &r {
-                    Ok(id) => format!("report: sent as {id}"),
-                    Err(e) => format!("report: not sent: {e}"),
-                });
-                *lock(&result) = Some(r);
-            });
-        }
-
-        /// The send's answer, once it came.
-        fn poll(&mut self) {
-            if let Some(r) = lock(&self.result).take() {
-                self.status = match r {
-                    Ok(id) => Status::Sent(id),
-                    Err(e) => Status::Failed(e),
-                };
             }
         }
+
+        /// The send's answer, once it came: the crash reports it sent (or
+        /// found gone) no longer waiting, so a Send after a failure sends
+        /// only the rest.
+        pub(super) fn poll(&mut self) {
+            let Some(s) = lock(&self.result).take() else { return };
+            if let Kind::Crash(files) = &mut self.kind {
+                let done: Vec<&PathBuf> = s.sent.iter().filter_map(|(f, _)| f.as_ref()).chain(&s.gone).collect();
+                let mut k = 0;
+                while k < files.len() {
+                    if done.contains(&&files[k]) {
+                        files.remove(k);
+                        self.stopped.remove(k);
+                    } else {
+                        k += 1;
+                    }
+                }
+            }
+            let ids = s.sent.into_iter().map(|(_, id)| id).collect();
+            self.status = match s.failed {
+                None => Status::Sent(ids),
+                Some(e) => Status::Failed(ids, e),
+            };
+        }
+    }
+
+    /// The crash reports `files` sent, newest first (as `Kind::Crash` holds
+    /// them), each its own POST through `post` (the server's route and the
+    /// body, its id back) with the player's `note`, each one sent deleted.
+    /// The first that fails stops it: it and those after it are kept, for a
+    /// Send again or the next start. One gone before its turn is skipped.
+    pub(super) fn send_crashes(files: &[PathBuf], note: &str, post: impl Fn(&str, String) -> Result<String, String>) -> Sent {
+        let mut out = Sent::default();
+        for f in files {
+            let Ok(text) = std::fs::read_to_string(f) else {
+                out.gone.push(f.clone());
+                continue;
+            };
+            match post("crash", crash_body(&text, note)) {
+                Ok(id) => {
+                    let _ = std::fs::remove_file(f);
+                    crate::say(&format!("report: sent as {id}"));
+                    out.sent.push((Some(f.clone()), id));
+                }
+                Err(e) => {
+                    crate::say(&format!("report: not sent: {e}"));
+                    out.failed = Some(e);
+                    break;
+                }
+            }
+        }
+        out
     }
 
     /// A key as the dialog takes it (the viewer's, from the window's).
@@ -1099,15 +1166,18 @@ mod native {
         lock(&DIALOG).is_some()
     }
 
-    fn act(d: &mut Option<Dialog>, a: Action) {
+    pub(super) fn act(d: &mut Option<Dialog>, a: Action) {
         let Some(dl) = d.as_mut() else { return };
         match a {
             Action::Stay => {}
             Action::Send => dl.send(),
             Action::Close => *d = None,
+            // every crash report the offer holds (Not now keeps them all)
             Action::Delete => {
-                if let Kind::Crash(f) = &dl.kind {
-                    let _ = std::fs::remove_file(f);
+                if let Kind::Crash(files) = &dl.kind {
+                    for f in files {
+                        let _ = std::fs::remove_file(f);
+                    }
                 }
                 *d = None;
             }
@@ -1174,10 +1244,19 @@ mod native {
         }
     }
 
+    /// The offer of the crash reports waiting in `crashes` (the config
+    /// directory's): one dialog for them all, newest first; none waiting,
+    /// none.
+    pub(super) fn offer_in(crashes: &Path) -> Option<Dialog> {
+        let mut files = waiting_in(crashes);
+        files.reverse();
+        (!files.is_empty()).then(|| Dialog::new(Kind::Crash(files)))
+    }
+
     /// The dialog over the frame, when it is open (and the crash reports
-    /// waiting offered, once, the first time there is a UI to offer them
-    /// on, by the first window: two would offer one): the 2D layer's `r`,
-    /// the game's `vui`.
+    /// waiting offered, all in one, once, the first time there is a UI to
+    /// offer them on, by the first window: two would offer them twice): the
+    /// 2D layer's `r`, the game's `vui`.
     pub fn draw(vui: &Vui, r: &mut dyn Raster) {
         let mut d = lock(&DIALOG);
         if d.is_none() {
@@ -1185,9 +1264,9 @@ mod native {
             if !*offered {
                 *offered = true;
                 if WINDOW.load(Ordering::Relaxed) == 1
-                    && let Some(f) = waiting().into_iter().next_back()
+                    && let Some(c) = crashes()
                 {
-                    *d = Some(Dialog::new(Kind::Crash(f)));
+                    *d = offer_in(&c);
                 }
             }
         }
@@ -1235,16 +1314,21 @@ mod native {
                 "What happened",
                 "The note and the picture go on the public board (eqoaclassic.com/eqoa/reports/board), the rest to the developer only. Your account and password are never sent.",
             ),
-            Kind::Crash(_) => {
+            Kind::Crash(files) => {
                 let (title, intro) = crash_words(&dl.stopped, &version(), SystemTime::now());
                 (
                     title,
                     intro,
                     "What you were doing (optional)",
-                    "It goes to the developer and is not shown anywhere. Your account and password are never sent.",
+                    if files.len() > 1 {
+                        "They go to the developer and are not shown anywhere. Your account and password are never sent."
+                    } else {
+                        "It goes to the developer and is not shown anywhere. Your account and password are never sent."
+                    },
                 )
             }
         };
+        let several = matches!(&dl.kind, Kind::Crash(files) if files.len() > 1);
         // what goes where, top to bottom: (x, y, text, colour)
         let mut lines: Vec<(i32, i32, String, [f32; 4])> = Vec::new();
         let mut y = 0;
@@ -1277,14 +1361,20 @@ mod native {
                 y += h + 2;
             }
         }
+        let left = match &dl.kind {
+            Kind::Crash(files) => files.len(),
+            Kind::Problem => 0,
+        };
         let status = match &dl.status {
             Status::Editing => String::new(),
             Status::Sending => "Sending…".to_string(),
-            Status::Sent(id) => format!("Sent as {id}. Thank you."),
-            Status::Failed(e) => format!("Not sent: {e}. Try again in a moment."),
+            Status::Sent(ids) if ids.len() > 1 => format!("Sent all {} as {}. Thank you.", ids.len(), and_list(ids)),
+            Status::Sent(ids) => format!("Sent as {}. Thank you.", and_list(ids)),
+            Status::Failed(ids, e) if ids.is_empty() => format!("Not sent: {e}. Try again in a moment."),
+            Status::Failed(ids, e) => format!("Sent {} as {}; {left} not sent: {e}. Try again in a moment.", ids.len(), and_list(ids)),
         };
         if !status.is_empty() {
-            let c = if matches!(dl.status, Status::Failed(_)) { [1.0, 0.45, 0.45, 1.0] } else { [0.55, 1.0, 0.55, 1.0] };
+            let c = if matches!(dl.status, Status::Failed(..)) { [1.0, 0.45, 0.45, 1.0] } else { [0.55, 1.0, 0.55, 1.0] };
             for l in wrap(r, &status, tw) {
                 lines.push((tx, y, l, c));
                 y += h;
@@ -1295,6 +1385,7 @@ mod native {
         let labels: Vec<(String, Button)> = match (&dl.kind, sent) {
             (_, true) => vec![("Close (Enter)".into(), Button::Send)],
             (Kind::Problem, false) => vec![("Send (Enter)".into(), Button::Send), ("Close (Esc)".into(), Button::Close)],
+            (Kind::Crash(_), false) if several => vec![("Send all (Enter)".into(), Button::Send), ("Not now (Esc)".into(), Button::Close), ("Delete all (Del)".into(), Button::Delete)],
             (Kind::Crash(_), false) => vec![("Send (Enter)".into(), Button::Send), ("Not now (Esc)".into(), Button::Close), ("Delete (Del)".into(), Button::Delete)],
         };
         let buttons_y = y;
@@ -1376,17 +1467,54 @@ mod native {
     /// update's restart is from before it (F3 crash 20261023-225944, sent
     /// with "no crash, just notified about update": the title said "last
     /// time" and gave the hour its run had started, in UTC).
-    pub(super) fn crash_words(s: &Stopped, this: &str, now: SystemTime) -> (String, String) {
-        let title = match s.at {
-            Some(at) => format!("The game stopped {}", ago(at, now)),
-            None => "The game stopped earlier".to_string(),
+    ///
+    /// Several waiting (newest first) are offered as one: how many times it
+    /// stopped and when the last time was, and which of them were in another
+    /// version, by its versions (newest first, each once).
+    pub(super) fn crash_words(all: &[Stopped], this: &str, now: SystemTime) -> (String, String) {
+        let newest = all.first().cloned().unwrap_or_default();
+        if all.len() <= 1 {
+            let title = match newest.at {
+                Some(at) => format!("The game stopped {}", ago(at, now)),
+                None => "The game stopped earlier".to_string(),
+            };
+            let then = "It wrote a crash report then: sending it helps it get fixed.";
+            let intro = match &newest.version {
+                Some(v) if v != this => format!("That was in an earlier version of the game ({v}). {then}"),
+                _ => then.to_string(),
+            };
+            return (title, intro);
+        }
+        let times = if all.len() == 2 { "twice".to_string() } else { format!("{} times", all.len()) };
+        let title = match newest.at {
+            Some(at) => format!("The game stopped {times}, the last {}", ago(at, now)),
+            None => format!("The game stopped {times}"),
         };
-        let then = "It wrote a crash report then: sending it helps it get fixed.";
-        let intro = match &s.version {
-            Some(v) if v != this => format!("That was in an earlier version of the game ({v}). {then}"),
-            _ => then.to_string(),
+        let other: Vec<&Stopped> = all.iter().filter(|s| s.version.as_deref().is_some_and(|v| v != this)).collect();
+        let mut versions: Vec<String> = Vec::new();
+        for v in other.iter().filter_map(|s| s.version.clone()) {
+            if !versions.contains(&v) {
+                versions.push(v);
+            }
+        }
+        let which = if versions.len() > 1 { "earlier versions" } else { "an earlier version" };
+        let each = "It wrote a crash report each time: sending them helps it get fixed.";
+        let intro = match other.len() {
+            0 => each.to_string(),
+            n if n == all.len() => format!("Those were in {which} of the game ({}). {each}", versions.join(", ")),
+            1 => format!("One of them was in {which} of the game ({}). {each}", versions.join(", ")),
+            n => format!("{n} of them were in {which} of the game ({}). {each}", versions.join(", ")),
         };
         (title, intro)
+    }
+
+    /// "a", "a and b", "a, b and c".
+    pub(super) fn and_list(items: &[String]) -> String {
+        match items {
+            [] => String::new(),
+            [one] => one.clone(),
+            [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+        }
     }
 }
 
@@ -1467,14 +1595,14 @@ mod tests {
         assert_eq!((d.note.as_str(), d.name.as_str()), ("it fell over", "Zedr"));
         assert_eq!(d.key(Key::Delete), Action::Stay, "the control: a problem report has nothing to delete");
         assert_eq!(d.key(Key::Enter), Action::Send);
-        let mut c = Dialog::new(Kind::Crash("crash-20261023-010203.txt".into()));
+        let mut c = Dialog::new(Kind::Crash(vec!["crash-20261023-010203.txt".into()]));
         c.key(Key::Tab);
         assert_eq!(c.field, Field::Note, "a crash report has no name");
         assert_eq!(c.key(Key::Delete), Action::Delete);
         assert_eq!(c.key(Key::Escape), Action::Close);
         c.status = Status::Sending;
         assert_eq!(c.key(Key::Escape), Action::Stay, "nothing while it is sent");
-        c.status = Status::Sent("x".into());
+        c.status = Status::Sent(vec!["x".into()]);
         assert_eq!((c.key(Key::Delete), c.key(Key::Text("a".into())), c.key(Key::Enter)), (Action::Stay, Action::Stay, Action::Close));
     }
 
@@ -1582,8 +1710,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("crash-20261023-093148.txt");
         std::fs::write(&f, "EQOA native client crash report\nversion: dev-e768e44 (dev)\nwhen: 20261023-114119\nplatform: Windows x86_64\n\n--- crash ---\nA panic\n").unwrap();
-        let mut d = Dialog::new(Kind::Crash(f));
-        assert_eq!(d.stopped, Stopped { at: Some(at(1_792_755_679)), version: Some("dev-e768e44".into()) });
+        let mut d = Dialog::new(Kind::Crash(vec![f]));
+        assert_eq!(d.stopped, [Stopped { at: Some(at(1_792_755_679)), version: Some("dev-e768e44".into()) }]);
         let offered = at(1_792_755_679 + 11 * 3600 + 18 * 60 + 25);
         let (title, intro) = crash_words(&d.stopped, "dev-3ff30da", offered);
         assert_eq!(title, "The game stopped 11 hours ago");
@@ -1595,9 +1723,121 @@ mod tests {
         draw_dialog(&mut d, &vui(), &mut w);
         assert!(w.0.iter().any(|l| l.starts_with("The game stopped ") && l.ends_with(" ago")), "{:?}", w.0);
         assert!(w.0.iter().all(|l| !l.contains("last time")), "{:?}", w.0);
-        let none = Dialog::new(Kind::Crash(dir.join("crash-missing.txt")));
-        assert_eq!(none.stopped, Stopped::default());
+        let none = Dialog::new(Kind::Crash(vec![dir.join("crash-missing.txt")]));
+        assert_eq!(none.stopped, [Stopped::default()]);
         assert_eq!(crash_words(&none.stopped, "dev-3ff30da", offered), ("The game stopped earlier".to_string(), "It wrote a crash report then: sending it helps it get fixed.".to_string()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Every crash report waiting is one offer (F3 crash 20261028-235209,
+    /// "this window wont go away. Idk why. Everytime i log in this happens":
+    /// the game had stopped several times that morning, and each start
+    /// offered the newest of the reports kept, start after start): the offer
+    /// holds them all, newest first, and says how many; Not now keeps them
+    /// all and Delete deletes them all; Send sends each in turn, newest
+    /// first, its own POST, and the one that fails is kept with those after
+    /// it, which a Send again sends, and only those. The planted control: the
+    /// oldest report, which an offer of the newest alone never reached, is
+    /// gone after Delete (one report's offer, the old one, leaves it and the
+    /// middle one). The controls: the file beside them that is no crash
+    /// report stays through everything, a problem report's dialog deletes
+    /// nothing, and a report waiting alone reads and asks as it did.
+    #[test]
+    fn every_crash_report_waiting_is_one_offer() {
+        use crate::pointer::testing::vui;
+        use native::{Action, Dialog, Kind, Status, act, crash_words, draw_dialog, offer_in, send_crashes};
+        use std::cell::RefCell;
+        use std::time::{Duration, UNIX_EPOCH};
+        let dir = std::env::temp_dir().join(format!("eqoa-crash-offer-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let plant = || {
+            let crash = |run: &str, when: &str, version: &str| {
+                let f = dir.join(format!("crash-{run}.txt"));
+                std::fs::write(&f, format!("EQOA native client crash report\nversion: {version} (dev)\nwhen: {when}\nplatform: Windows x86_64\n\n--- crash ---\nA panic in {run}\n")).unwrap();
+                f
+            };
+            (crash("20261028-005857", "20261028-005950", "dev-8e8987d"), crash("20261028-063000", "20261028-063205", "dev-8e8987d"), crash("20261028-120000", "20261028-120130", "dev-6504760"))
+        };
+        let other = dir.join("crash-shot.png");
+        std::fs::write(&other, b"not a crash report").unwrap();
+        let (a, b, c) = plant();
+        let all = |f: &[&std::path::PathBuf]| f.iter().all(|f| f.exists());
+        let d = offer_in(&dir).expect("an offer");
+        assert_eq!(d.kind, Kind::Crash(vec![c.clone(), b.clone(), a.clone()]), "all three, newest first");
+        // its words: how many, the last one's time, the versions not this one
+        let at = |s: u64| UNIX_EPOCH + Duration::from_secs(s);
+        let newest = d.stopped[0].at.expect("its time");
+        let (title, intro) = crash_words(&d.stopped, "dev-8e8987d", newest + Duration::from_secs(2 * 3600));
+        assert_eq!(title, "The game stopped 3 times, the last 2 hours ago");
+        assert_eq!(intro, "One of them was in an earlier version of the game (dev-6504760). It wrote a crash report each time: sending them helps it get fixed.");
+        let (_, intro) = crash_words(&d.stopped, "dev-b5ef31c", at(1_900_000_000));
+        assert_eq!(intro, "Those were in earlier versions of the game (dev-6504760, dev-8e8987d). It wrote a crash report each time: sending them helps it get fixed.");
+        assert_eq!(crash_words(&d.stopped[..2], "dev-6504760", newest).0, "The game stopped twice, the last less than a minute ago");
+        let mut d = d;
+        let mut w = Words::default();
+        draw_dialog(&mut d, &vui(), &mut w);
+        assert!(w.0.iter().any(|l| l.starts_with("The game stopped 3 times, the last ")), "{:?}", w.0);
+        assert!(w.0.iter().any(|l| l == "Send all (Enter)") && w.0.iter().any(|l| l == "Delete all (Del)"), "{:?}", w.0);
+        // Not now: all kept
+        act(&mut Some(d), Action::Close);
+        assert!(all(&[&a, &b, &c]), "Not now keeps them all");
+        // Send, the server failing the second: the first gone, the rest kept
+        let posted = RefCell::new(Vec::new());
+        let failing = |route: &str, body: String| {
+            assert_eq!(route, "crash");
+            let mut p = posted.borrow_mut();
+            p.push(["005857", "063000", "120000"].into_iter().find(|r| body.contains(&format!("A panic in 20261028-{r}"))).unwrap_or("?"));
+            assert!(body.contains("note: it stopped as I logged in"), "the note with each");
+            if p.len() == 2 { Err("the report server could not be reached (timed out)".to_string()) } else { Ok(format!("id{}", p.len())) }
+        };
+        let mut d = offer_in(&dir).unwrap();
+        let Kind::Crash(files) = d.kind.clone() else { unreachable!() };
+        let s = send_crashes(&files, "it stopped as I logged in", failing);
+        assert_eq!(*posted.borrow(), ["120000", "063000"], "newest first, stopping at the failure");
+        assert!(!c.exists() && all(&[&b, &a]), "the one sent deleted, the one that failed and the one after it kept");
+        *d.result.lock().unwrap() = Some(s);
+        d.poll();
+        assert_eq!(d.kind, Kind::Crash(vec![b.clone(), a.clone()]), "what is left waits for a Send again");
+        assert_eq!((d.stopped.len(), &d.status), (2, &Status::Failed(vec!["id1".into()], "the report server could not be reached (timed out)".into())));
+        let mut w = Words::default();
+        draw_dialog(&mut d, &vui(), &mut w);
+        assert!(w.0.iter().any(|l| l.starts_with("Sent 1 as id1; 2 not sent: the report server")), "{:?}", w.0);
+        // Send again: only those, newest first
+        posted.borrow_mut().clear();
+        let working = |_: &str, body: String| {
+            let mut p = posted.borrow_mut();
+            p.push(["005857", "063000", "120000"].into_iter().find(|r| body.contains(&format!("A panic in 20261028-{r}"))).unwrap_or("?"));
+            Ok(format!("id{}", p.len() + 1))
+        };
+        let Kind::Crash(files) = d.kind.clone() else { unreachable!() };
+        *d.result.lock().unwrap() = Some(send_crashes(&files, "", working));
+        d.poll();
+        assert_eq!(*posted.borrow(), ["063000", "005857"]);
+        assert_eq!((&d.kind, &d.status), (&Kind::Crash(Vec::new()), &Status::Sent(vec!["id2".into(), "id3".into()])));
+        assert!(!a.exists() && !b.exists() && other.exists(), "all sent and gone; the control kept");
+        let mut w = Words::default();
+        draw_dialog(&mut d, &vui(), &mut w);
+        assert!(w.0.iter().any(|l| l.starts_with("Sent all 2 as id2 and id3.")), "{:?}", w.0);
+        // Delete: every one, the planted oldest too
+        let (a, b, c) = plant();
+        let mut problem = Some(Dialog::new(Kind::Problem));
+        act(&mut problem, Action::Delete);
+        assert!(all(&[&a, &b, &c]), "the control: a problem report's dialog deletes nothing");
+        act(&mut offer_in(&dir), Action::Delete);
+        assert!(!c.exists() && !b.exists(), "the newest and the middle one deleted");
+        assert!(!a.exists(), "the planted control: the oldest, which the offer of one never reached, deleted too");
+        assert!(other.exists(), "the control: no crash report, not deleted");
+        assert!(offer_in(&dir).is_none(), "nothing waits: nothing offered");
+        // the control: one waiting alone reads and asks as before
+        let one = dir.join("crash-20261029-011105.txt");
+        std::fs::write(&one, "EQOA native client crash report\nversion: dev-6504760 (dev)\nwhen: 20261029-011105\n").unwrap();
+        let mut d = offer_in(&dir).unwrap();
+        assert_eq!(d.kind, Kind::Crash(vec![one.clone()]));
+        let mut w = Words::default();
+        draw_dialog(&mut d, &vui(), &mut w);
+        assert!(w.0.iter().any(|l| l == "Send (Enter)") && w.0.iter().any(|l| l == "Delete (Del)") && !w.0.iter().any(|l| l.contains(" times")), "{:?}", w.0);
+        assert_eq!(crash_words(&d.stopped, "dev-6504760", at(1_900_000_000)).1, "It wrote a crash report then: sending it helps it get fixed.");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
