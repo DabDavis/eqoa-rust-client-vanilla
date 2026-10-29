@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-29 · Longer passwords at the login
+- The Station login, the new-account page and the change-password page now take a password of up
+  to 31 characters, the most the login can send. They stopped at 15, so a longer password made on
+  a server's website could not be typed in.
+
 ## 2026-10-29 · A trade no longer opens over your inventory
 - When the other player accepts your trade while you have your inventory (or any other part of the
   Start menu) open, the menu now closes and the trade window opens on its own, as on the PS2. Both

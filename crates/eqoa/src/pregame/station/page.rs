@@ -100,6 +100,14 @@ pub struct Obj {
 }
 
 /// `VIGUIObject`'s tileset frames (`sTilesetFrame`): only Parchment.
+/// A password field's editor, whatever its page's `MaxChars`: the 32 bytes the
+/// login sends it in (`ValidateLogin`'s `des_soe_encrypt(password, 32)`, the
+/// UDP token's AES block pair, `CreateAccount` and `ChangePassword` alike), the
+/// editor counting the NUL as `VIWndEdit` does: 31 characters. The pages every
+/// server ships say 16 (15 characters), where an account made on a server's
+/// web page may have a longer one; more than 31 would be cut in the request.
+pub const PASSWORD_LEN: usize = 32;
+
 const TILESET_FRAME: FrameParam = FrameParam { tl: (44, 0), top: (45, 0), tr: (46, 0), right: (52, 0), br: (50, 0), bottom: (49, 0), bl: (48, 0), left: (47, 0) };
 const TILESET_FILL: i32 = 35;
 
@@ -387,7 +395,13 @@ impl Obj {
                 if (key == 13 || key == 134)
                     && let Some(s) = &self.text
                 {
-                    let max_len = if self.max_chars > 0 { self.max_chars as usize } else { 128 };
+                    let max_len = if self.password {
+                        PASSWORD_LEN
+                    } else if self.max_chars > 0 {
+                        self.max_chars as usize
+                    } else {
+                        128
+                    };
                     out.push(Out::Edit { text: s.clone(), password: self.password, max_len, title: self.label.clone().unwrap_or_default() });
                 }
                 false
@@ -1269,9 +1283,38 @@ mod tests {
         p.select("StationPassword");
         let mut out = Vec::new();
         p.key_down(134, &mut out);
-        assert_eq!(out, vec![Out::Edit { text: String::new(), password: true, max_len: 16, title: String::new() }]);
+        assert_eq!(out, vec![Out::Edit { text: String::new(), password: true, max_len: PASSWORD_LEN, title: String::new() }]);
         p.message(259, Some("hunter2"));
         assert_eq!(p.text("StationPassword"), Some("hunter2"));
+    }
+
+    #[test]
+    fn a_password_field_holds_what_the_login_carries() {
+        // the pages' 16 (15 characters) and a page's 64 (more than the request holds) both edit 31
+        for size in [16, 64] {
+            let src = format!(
+                r#"<PS2GUIPage gridWidth="1" gridHeight="2">
+                <Text name="StationName" val=""><ButtonPos x="0" y="0"/><MaxChars size="{size}"/></Text>
+                <Text name="StationPassword" val=""><ButtonPos x="0" y="1"/><Password mode="true"/><MaxChars size="{size}"/></Text>
+            </PS2GUIPage>"#
+            );
+            let mut p = load(src.as_bytes(), "data/ui/login.xml", &no_words).unwrap();
+            p.select("StationPassword");
+            let mut out = Vec::new();
+            p.key_down(134, &mut out);
+            assert_eq!(out, vec![Out::Edit { text: String::new(), password: true, max_len: PASSWORD_LEN, title: String::new() }]);
+            // the control: a field that is no password keeps its page's limit
+            p.select("StationName");
+            let mut out = Vec::new();
+            p.key_down(134, &mut out);
+            assert_eq!(out, vec![Out::Edit { text: String::new(), password: false, max_len: size as usize, title: String::new() }]);
+        }
+        // the editor at that limit takes 31 characters and refuses a 32nd (the NUL's place)
+        let mut e = crate::editbox::EditBox::default();
+        e.set_max_length(PASSWORD_LEN);
+        let long: Vec<u16> = "abcdefghijklmnopqrstuvwxyz0123456789".encode_utf16().collect();
+        e.set_text(&long);
+        assert_eq!(e.text.len(), 31);
     }
 
     #[test]

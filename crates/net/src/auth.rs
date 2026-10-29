@@ -537,6 +537,28 @@ mod tests {
         assert_ne!(&r[56..64], &[0; 8]);
     }
 
+    /// A password of 31 characters reaches the server whole, in the request
+    /// and in the UDP token (the server reads each to its NUL); the 32 bytes
+    /// hold no more, so a longer one is cut (the page's editor stops at 31).
+    #[test]
+    fn a_31_character_password_goes_whole() {
+        use aes::cipher::{BlockDecrypt, KeyInit, generic_array::GenericArray};
+        let pw = "abcdefghijklmnopqrstuvwxyz01234";
+        assert_eq!(pw.len(), 31);
+        let plain = des_soe_decrypt(&login_request("dab", pw)[48..80]);
+        assert_eq!(&plain[..31], pw.as_bytes());
+        assert_eq!(plain[31], 0, "the NUL the server reads to");
+        let mut t = udp_token(pw);
+        let c = aes::Aes256::new(GenericArray::from_slice(&AES_KEY));
+        for block in t.chunks_mut(16) {
+            c.decrypt_block(GenericArray::from_mut_slice(block));
+        }
+        assert_eq!((&t[..31], t[31]), (pw.as_bytes(), 0));
+        // the control: a 40-character one keeps its first 31
+        let plain = des_soe_decrypt(&login_request("dab", &format!("{pw}567890123"))[48..80]);
+        assert_eq!((&plain[..31], plain[31]), (pw.as_bytes(), 0));
+    }
+
     fn frame(ty: u32, len: usize) -> Vec<u8> {
         let mut b = vec![0u8; len];
         b[0..4].copy_from_slice(&(len as u32).to_be_bytes());
