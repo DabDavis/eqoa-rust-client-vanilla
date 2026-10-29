@@ -1546,15 +1546,17 @@ impl Gfx {
     }
 
     /// The window's texture to draw this frame on (`Ok(None)`: frames are
-    /// drawn offscreen), or `Err` when it gives none: covered (on macOS wgpu
-    /// answers `Occluded` at once while no part of the window can be seen, a
-    /// full-screen window behind another; `covered`, a test's script's),
-    /// timed out, or its surface outdated or lost, which is configured again.
+    /// drawn offscreen), or `Err` when it gives none: covered (`Err(true)`:
+    /// on macOS wgpu answers `Occluded` at once while no part of the window
+    /// can be seen, a full-screen window behind another; `covered`, a test's
+    /// script's), or (`Err(false)`) timed out, or its surface outdated or
+    /// lost, which is configured again: wgpu waits a second for one before it
+    /// says timed out, and a frame that waited so is a stall's (`stall`).
     /// The frame's uploads are submitted all the same: wgpu keeps every
     /// queued write until a submission takes it, and a window left behind
     /// another grew by each frame's until the machine ran out of memory (F3
     /// 20261024-093648: two windows on a Mac).
-    fn acquire(&self, covered: bool) -> Result<Option<wgpu::SurfaceTexture>, ()> {
+    fn acquire(&self, covered: bool) -> Result<Option<wgpu::SurfaceTexture>, bool> {
         let stale = match (&self.surface, covered) {
             (_, true) => None,
             (None, false) => return Ok(None),
@@ -1568,7 +1570,7 @@ impl Gfx {
         if let Some(surface) = stale {
             surface.configure(&self.device, &self.config);
         }
-        Err(())
+        Err(stale.is_none())
     }
 }
 
@@ -1607,6 +1609,9 @@ struct Perf {
     worst: f64,
     /// seconds per phase since `since`
     total: [f64; Perf::NAMES.len()],
+    /// this frame's seconds per phase (from `begin`), for a stall's line
+    /// (`stall`)
+    frame: [f64; Perf::NAMES.len()],
     /// the last frame's models and draw calls
     drawn: (u32, u32),
     /// the frames the Frame Rate skipped since `since` (a page's animation
@@ -1684,9 +1689,9 @@ impl PerfSpan {
 }
 
 impl Perf {
-    const NAMES: [&str; 17] = [
+    const NAMES: [&str; 18] = [
         "stream", "walk", "play", "pose", "zones", "sound", "weather", "particles", "lights", "acquire", "hud", "encode", "submit",
-        "gpu wait", "volumes", "flora", "shadows",
+        "gpu wait", "volumes", "flora", "shadows", "pads",
     ];
 
     /// Always made; printed under `EQOA_PERF` (`?perf`).
@@ -1700,7 +1705,7 @@ impl Perf {
 
     fn new(print: bool) -> Perf {
         let now = Instant::now();
-        Perf { print, since: now, mark: now, frames: 0, worst: 0.0, total: [0.0; Perf::NAMES.len()], drawn: (0, 0), skipped: 0, gaps: Vec::new(), last_start: None, last: None }
+        Perf { print, since: now, mark: now, frames: 0, worst: 0.0, total: [0.0; Perf::NAMES.len()], frame: [0.0; Perf::NAMES.len()], drawn: (0, 0), skipped: 0, gaps: Vec::new(), last_start: None, last: None }
     }
 
     /// Five seconds begun again at `now` (what was kept of the last whole
@@ -1715,6 +1720,7 @@ impl Perf {
             self.restart(now);
         }
         self.mark = now;
+        self.frame = [0.0; Perf::NAMES.len()];
     }
 
     /// A frame not drawn in the world (the pregame's, a hidden window's):
@@ -1731,8 +1737,15 @@ impl Perf {
     /// The time since the last mark goes to phase `i`.
     fn mark(&mut self, i: usize) {
         let now = Instant::now();
-        self.total[i] += (now - self.mark).as_secs_f64();
+        let t = (now - self.mark).as_secs_f64();
+        self.total[i] += t;
+        self.frame[i] += t;
         self.mark = now;
+    }
+
+    /// This frame's phases so far, by name (`stall::Watch::end`).
+    fn frame_phases(&self) -> Vec<(&'static str, f64)> {
+        Perf::NAMES.iter().copied().zip(self.frame).collect()
     }
 
     /// The span so far.
@@ -1858,6 +1871,8 @@ struct App {
     /// the window's coming to the front, said in the log once (`arrival`),
     /// and the controllers' buttons the last frame read (its first press)
     arrival: crate::arrival::Arrival,
+    /// Frames a second or more apart, and where the time went (`stall`).
+    stall: crate::stall::Watch,
     pad_down: u16,
     /// the sticks `UpdateControls` got last frame: the pad's, the keys', the
     /// mouse's and the touch screen's (for a report)
@@ -2028,6 +2043,7 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         keys_edge: Default::default(),
         pad_edge: Default::default(),
         arrival: Default::default(),
+        stall: Default::default(),
         pad_down: 0,
         sticks_used: [0.0; 4],
         mouse: crate::mouse::Mouse::default(),
@@ -2865,6 +2881,10 @@ impl App {
         if let Some(p) = &self.perf {
             let _ = writeln!(o, "{}", p.describe());
         }
+        // the frames a second or more after the last, and the disc's reads
+        // (`stall`)
+        let _ = writeln!(o, "{}", self.stall.describe());
+        let _ = writeln!(o, "{}", crate::stall::disc::describe());
         if let Some(g) = &self.gfx {
             let _ = writeln!(o, "surface {}x{} {:?}, {}", g.config.width, g.config.height, g.config.format, if g.window.fullscreen().is_some() { "full screen" } else { "a window" });
         }
@@ -3070,7 +3090,7 @@ impl App {
         let covered = self.covered_script.iter().any(|&(a, b)| (a..b).contains(&now)) || page_hidden();
         let frame = match g.acquire(covered) {
             Ok(f) => f,
-            Err(()) => {
+            Err(_) => {
                 self.hidden_until = hidden_gap();
                 return;
             }
@@ -4157,12 +4177,35 @@ impl ApplicationHandler for App {
 
     /// The mouse's own motion: the look while it holds the pointer.
     fn device_event(&mut self, _: &ActiveEventLoop, _: winit::event::DeviceId, event: winit::event::DeviceEvent) {
-        if let winit::event::DeviceEvent::MouseMotion { delta } = event {
+        self.stall.enter(Instant::now());
+        let what = if let winit::event::DeviceEvent::MouseMotion { delta } = event {
             self.mouse.motion(delta.0, delta.1);
-        }
+            "the mouse's motion"
+        } else {
+            "a device's event"
+        };
+        self.stall.leave(what, Instant::now());
     }
 
-    fn about_to_wait(&mut self, _el: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+        self.stall.enter(Instant::now());
+        self.turn(el);
+        self.stall.leave("the loop's turn", Instant::now());
+    }
+
+    /// Each window event, its time the client's own when it draws no frame
+    /// (`stall`).
+    fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        let what = crate::stall::event_name(&event);
+        self.stall.enter(Instant::now());
+        self.handle_window_event(el, id, event);
+        self.stall.leave(what, Instant::now());
+    }
+}
+
+impl App {
+    /// `about_to_wait`: the loop's turn, between its events and its wait.
+    fn turn(&mut self, _el: &ActiveEventLoop) {
         self.winplace.flush(false);
         // a model viewer draws on input alone, but not while the 2002 disc's
         // files are coming (`poll_era` takes them on a frame) or a test's F9
@@ -4193,7 +4236,7 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn window_event(&mut self, el: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+    fn handle_window_event(&mut self, el: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         if let Some(g) = &self.gfx {
             self.winplace.event(&g.window, &event);
         }
@@ -4249,6 +4292,9 @@ impl ApplicationHandler for App {
                     crate::settings::set_display_refresh(g.window.current_monitor().and_then(|m| m.refresh_rate_millihertz()));
                 }
             }
+            // minimised (Windows sends a size of nothing): no frame comes, and
+            // the time until one does is no stall
+            WindowEvent::Resized(s) if s.width == 0 || s.height == 0 => self.stall.away(),
             WindowEvent::Resized(s) if s.width > 0 && s.height > 0 => {
                 let Some(g) = &mut self.gfx else { return };
                 let Some(surface) = &g.surface else { return };
@@ -4652,12 +4698,15 @@ impl ApplicationHandler for App {
                     if let Some(p) = &mut self.perf {
                         p.away();
                     }
+                    self.stall.away();
                     self.host_frame(el, game_frame);
                     return;
                 }
                 if let Some(p) = &mut self.perf {
                     p.begin();
                 }
+                // a stall: this frame a second or more after the last (`stall`)
+                self.stall.begin(frame_start, crate::audio::game_waits(), self.play.as_ref().map(|p| p.heard()));
                 if self.quit_at.is_some_and(|q| self.clock.elapsed().as_secs_f64() >= q) {
                     el.exit();
                     return;
@@ -4707,12 +4756,15 @@ impl ApplicationHandler for App {
                 {
                     p.add_from(&w.scene, first);
                 }
+                mark(&mut self.perf, 0);
+                // the controllers (XInput, HID, gilrs) and the windows they
+                // are shared with (`multibox`), and the touch pad's clicks
                 self.poll_pad(el);
                 for c in self.touch.take_clicks() {
                     self.click(c, true);
                 }
                 self.touch.window = self.play.as_ref().is_some_and(|p| p.window_up());
-                mark(&mut self.perf, 0);
+                mark(&mut self.perf, 17);
                 self.grab_pointer(true);
                 let sticks = self.sticks();
                 self.sticks_used = sticks;
@@ -4949,12 +5001,26 @@ impl ApplicationHandler for App {
                     mark(perf, 15);
                     lights
                 });
+                // the stall this frame found, said now that it has read what
+                // the game server sent meanwhile (`stall`)
+                if let Some(line) = self.stall.after_pump(self.play.as_ref().map(|p| p.heard()), Instant::now()) {
+                    crate::say(&line);
+                }
                 let ms = self.clock.elapsed().as_millis() as i64;
                 let covered = self.covered_script.iter().any(|&(a, b)| (a..b).contains(&ms)) || page_hidden();
                 let frame = match g.acquire(covered) {
                     Ok(f) => f,
-                    Err(()) => {
+                    Err(covered) => {
                         self.hidden_until = hidden_gap();
+                        // covered: nothing to draw on, no stall; the surface
+                        // failing (timed out after wgpu's second, outdated,
+                        // lost): the frame ends here, its wait the acquire's
+                        mark(&mut self.perf, 9);
+                        if covered {
+                            self.stall.away();
+                        } else if let Some(p) = &self.perf {
+                            self.stall.end(frame_start, Instant::now(), p.frame_phases(), self.play.as_ref().is_some_and(|p| p.loading()));
+                        }
                         if let Some(p) = &mut self.perf {
                             p.away();
                         }
@@ -5109,7 +5175,9 @@ impl ApplicationHandler for App {
                 mark(&mut self.perf, 13);
                 if let Some(p) = &mut self.perf {
                     p.drawn = g.renderer.drawn.get();
+                    let phases = p.frame_phases();
                     p.end(frame_start);
+                    self.stall.end(frame_start, Instant::now(), phases, self.play.as_ref().is_some_and(|p| p.loading()));
                 }
                 // The page's picture of this frame, if it asked, and the
                 // report's state of the client (`report`).

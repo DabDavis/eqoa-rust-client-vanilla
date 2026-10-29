@@ -5,6 +5,18 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-29 · One question for all your crash reports, and freezes written down
+- If the game stopped more than once since you last sent its crash reports, the next start now
+  asks about all of them at once and says how many there are. Send sends them all, Delete deletes
+  them all, and Not now keeps them for later. Until now it asked about one at a time, the newest,
+  so the same question came back at every start.
+- The music is now read from the disc ahead of playing it, as the browser version does. A slow
+  disc (a drive waking up, or a busy one) now only makes the music start a little late, where it
+  could hold the whole game up for as long as the read took.
+- When the game freezes for a second or more, it now writes down how long, and what it was doing,
+  in its log. A problem report (F3) sent afterwards carries that, and when you play two windows it
+  carries the other window's too, so a report of freezes says what held them up.
+
 ## 2026-10-29 · Space loots a corpse as well as opening it
 - In a corpse's window Space now does what the controller's ✕ does there, the button that opened
   it: on LEAVE ALL it closes the window, on an item it takes that item, and on TAKE ALL it takes

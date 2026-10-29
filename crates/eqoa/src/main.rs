@@ -78,8 +78,8 @@ mod fog;
 mod frames;
 mod group;
 mod guild;
-// the music off a disc read asynchronously: a page's (natively, its tests)
-#[cfg(any(target_arch = "wasm32", test))]
+// the music read whole before it plays: off a page's disc, read
+// asynchronously, and natively on a thread of its own
 mod bgm;
 mod bindpage;
 mod binds;
@@ -144,6 +144,7 @@ mod spelling;
 mod touch;
 mod sound;
 mod spells;
+mod stall;
 mod stream;
 #[cfg(not(target_arch = "wasm32"))]
 mod gpulost;

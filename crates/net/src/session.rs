@@ -309,6 +309,11 @@ pub struct Session {
     /// Datagrams sent so far: `usocket_sendto_addr` draws newlib's `rand()`
     /// twice for each, so a client keeping animation in step draws as many.
     pub packets_sent: u64,
+    /// Datagrams read so far, and when `pump` last read one: what a stall's
+    /// line says of the server (the client's `stall`: still sending while
+    /// the client was held, or gone quiet before).
+    pub datagrams_in: u64,
+    pub last_datagram: Option<Instant>,
     /// `EQOA_NET_DEBUG`: every datagram and message on stderr.
     debug: bool,
     /// `m_p382E4`, the chat mode: the last one 0x000E sent (`GroupChanged`
@@ -421,6 +426,8 @@ impl Session {
             start: Instant::now(),
             base,
             packets_sent: 0,
+            datagrams_in: 0,
+            last_datagram: None,
             debug: std::env::var_os("EQOA_NET_DEBUG").is_some(),
             chat_mode: 0,
             held: Vec::new(),
@@ -642,6 +649,8 @@ impl Session {
         let t = self.now();
         self.drdp.set_time(t);
         while let Some((buf, ip, port)) = self.socket.recv_from() {
+            self.datagrams_in += 1;
+            self.last_datagram = Some(Instant::now());
             let n = buf.len();
             let mut d = ip.to_vec();
             d.extend(port.to_le_bytes());

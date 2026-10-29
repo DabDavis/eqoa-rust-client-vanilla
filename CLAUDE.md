@@ -105,7 +105,8 @@ current.
   runs on the wall clock, silent), or `eqoa listen` to a WAV; the user's speakers are real.
   In a page the driver runs on the game's thread and an AudioWorklet plays what `Audio::feed`
   mixes (`web/sound.js`); the music comes through `bgm.rs` (a BGM read whole before the device may
-  start it, `Disc::ready`/`Link::bgm_ready`, always true natively). Headless: `web/drive.py` passes
+  start it, `Disc::ready`/`Link::bgm_ready`; natively read on a thread of its own, `bgm::read_on_a_thread`:
+  never read the disc under the driver's lock, which the game's thread takes every frame). Headless: `web/drive.py` passes
   `--autoplay-policy=no-user-gesture-required`; `--js T=JSON.stringify(eqoaAudio.stats())` reads the
   worklet's counts (dry counts only after the first frames came).
 - CLIENT and SUPPORT (the start menu, gWorldInfo, the race cameras; the HUD's atlas, the UI sounds'
