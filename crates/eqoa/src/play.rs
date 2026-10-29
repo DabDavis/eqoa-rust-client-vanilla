@@ -4173,6 +4173,12 @@ impl Play {
             "/create" => self.admin_slash(0xA111_1000, &rest),
             "/mastery" => self.admin_slash(0xA136_0000, &rest),
             "/tradelvl" => self.admin_slash(0xA137_0000, &rest),
+            // SOE's final live client's GM commands (its ChatLine, 0x012C88D0)
+            "/servdown" => self.admin_slash(0xA138_0000, &rest),
+            "/banktunar" => self.admin_slash(0xA139_0000, &rest),
+            "/rst_mastr" => self.admin_slash(0xA13A_0000, &rest),
+            "/rst_both" => self.admin_slash(0xA13B_0000, &rest),
+            "/rem_abil" => self.admin_slash(0xA13C_0000, &rest),
             "/r" | "/reply" => {
                 if !self.reply_name.is_empty() {
                     let line = format!("/t {} {}", self.reply_name, rest);

@@ -570,6 +570,34 @@ mod tests {
         assert!(sent(&mut p).is_empty());
     }
 
+    /// SOE's final live client's GM slash commands through `Play`: taken and
+    /// nothing sent while the GM's channel is off (no chat line either);
+    /// with it on, each one's 0x0701 (the rest of the line after the
+    /// command). The control: a slash command no one knows still goes to
+    /// the server as said.
+    #[test]
+    fn the_live_gm_commands() {
+        let mut p = play();
+        let lines = ["/rst_mastr Bob", "/rst_both Bob", "/rem_abil Bob Fireball", "/banktunar 50", "/servdown"];
+        for l in lines {
+            p.chat_line(l);
+        }
+        let said = p.session.record.replace(Vec::new()).unwrap_or_default();
+        assert!(said.is_empty(), "off: nothing, not even the line ({} sent)", said.len());
+        p.admin_opcode(0x0700, &[35, 2]);
+        for l in lines {
+            p.chat_line(l);
+        }
+        let str_ = |sub: u8, s: &[u8]| {
+            let mut v = vec![1, 7, sub, s.len() as u8, 0, 0, 0];
+            v.extend(s);
+            v
+        };
+        assert_eq!(sent(&mut p), vec![str_(57, b"Bob"), str_(58, b"Bob"), str_(59, b"Bob Fireball"), vec![1, 7, 56, 100], vec![1, 7, 101]]);
+        p.chat_line("/nosuch x");
+        assert!(!p.session.record.replace(Vec::new()).unwrap_or_default().is_empty(), "the control: said");
+    }
+
     /// The TEST menu's own entries: Extrapolate and Interpolate flip, the
     /// personal light runs On, Off, Auto, the day-night cycle holds the
     /// hour and lets go, Fast run is 15 and back to the mastery's speed,

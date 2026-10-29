@@ -153,6 +153,16 @@ pub fn send_int(sub: u8, a: i32) -> Vec<u8> {
     m
 }
 
+/// SOE's final live client's `Send56` (0x012AFA88): the sub-op and a zigzag
+/// int (`WriteSigned`), where the disc's `SEND_INT` wrote a raw word.
+pub fn send_signed(sub: u8, v: i32) -> Vec<u8> {
+    let mut m = head(sub);
+    let mut w = net::stream::Writer::default();
+    w.signed(v as i64);
+    m.extend(w.data);
+    m
+}
+
 /// `SEND_INT2`: two raw words.
 pub fn send_int2(sub: u8, a: i32, b: i32) -> Vec<u8> {
     let mut m = send_int(sub, a);
@@ -345,6 +355,18 @@ impl Part {
                 }
             }
             0xA133_0000 => send(send_string(41, &buf)),
+            // SOE's final live client's GM commands (its DoText tree from
+            // 0x012ACEEC, reached by /servdown, /banktunar, /rst_mastr,
+            // /rst_both and /rem_abil): 101 alone; 56 and the number zigzag,
+            // nothing at all for 0; 57, 58, 59 and the text
+            0xA138_0000 => send(send_none(101)),
+            0xA139_0000 => match n() {
+                0 => Vec::new(),
+                v => send(send_signed(56, v)),
+            },
+            0xA13A_0000 => send(send_string(57, &buf)),
+            0xA13B_0000 => send(send_string(58, &buf)),
+            0xA13C_0000 => send(send_string(59, &buf)),
             _ => Vec::new(),
         }
     }
@@ -503,6 +525,26 @@ mod tests {
         // the control: an id DoText has no case for sends nothing
         assert!(p.do_text(0xA113_0000, &name, TARGET).is_empty());
         assert_ne!(p.do_text(0xA117_0000, &name, TARGET), vec![Out::Send(wire(10, Field::Str(b"Ltcomdata")))]);
+    }
+
+    /// SOE's final live client's GM commands (`DoText` 0xA138..0xA13C, its
+    /// senders 0x012AF8C8, 0x012AFA88, 0x012AD940, 0x012ADA20, 0x012ADB00):
+    /// /servdown 101 alone; /banktunar 56 and `atoi` zigzag (`WriteSigned`,
+    /// not the disc's raw word), nothing and no word for 0; /rst_mastr,
+    /// /rst_both, /rem_abil 57, 58, 59 and the text 8-bit. The control: the
+    /// disc's raw word is not what 56 writes.
+    #[test]
+    fn the_live_gm_commands_write_what_the_live_client_writes() {
+        let p = Part::default();
+        let w = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
+        for (id, sub) in [(0xA13A_0000, 57), (0xA13B_0000, 58), (0xA13C_0000, 59)] {
+            assert_eq!(p.do_text(id, &w("Ltcomdata"), TARGET), vec![Out::Send(wire(sub, Field::Str(b"Ltcomdata")))], "{id:#x}");
+        }
+        assert_eq!(p.do_text(0xA138_0000, &w("now"), TARGET), vec![Out::Send(wire(101, Field::None))]);
+        assert_eq!(p.do_text(0xA139_0000, &w("300"), TARGET), vec![Out::Send(vec![1, 7, 56, 0xD8, 0x04])], "zigzag 300");
+        assert_eq!(p.do_text(0xA139_0000, &w("-5 tunar"), TARGET), vec![Out::Send(vec![1, 7, 56, 9])], "zigzag -5");
+        assert!(p.do_text(0xA139_0000, &w("none"), TARGET).is_empty(), "0: nothing, no word");
+        assert_ne!(p.do_text(0xA139_0000, &w("300"), TARGET), vec![Out::Send(wire(56, Field::Int(300)))]);
     }
 
     /// The simulation's three entries: loss clamped to 0..50, latency to

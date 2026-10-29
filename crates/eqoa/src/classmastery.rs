@@ -282,6 +282,30 @@ impl Part {
                     return Some(PartUp::Node);
                 }
             }
+            // SOE's final live client's reset (0x012F7348, a sub-op the
+            // disc's table has no entry for): the token, the points available
+            // and spent, the skills taken away (a `VIPool<int>`, a zigzag
+            // count and zigzag ids) made not owned, the run speed, the stats,
+            // bonuses and flags; no text. go-eqoa-server resets with the
+            // disc's 6 and 3 instead, which every client reads
+            10 => {
+                self.m.p41c = r.u32();
+                self.m.x0c = r.u32() as i32 as i64;
+                self.m.x10 = r.u32() as i32 as i64;
+                let n = r.signed();
+                let ids: Vec<i32> = (0..n.clamp(0, 4096)).map(|_| r.signed() as i32).collect();
+                self.m.speed = r.f32();
+                self.read_stats(&mut r);
+                self.read_bonuses(&mut r);
+                self.read_flags(&mut r);
+                for id in ids {
+                    if let Some(k) = self.find(id) {
+                        self.skills[k].on = false;
+                    }
+                }
+                self.pending = 0;
+                return Some(PartUp::Speed(self.m.speed));
+            }
             _ => {}
         }
         None
@@ -1052,6 +1076,31 @@ mod tests {
         assert_eq!((p.m.x0c, p.m.x10), (3, 4));
         assert_eq!(p.recv(&msg(6, 0x410D5555)), Some(PartUp::Speed(f32::from_bits(0x410D5555))));
         assert_eq!(p.recv(&[4, 1, 0, 0, 0]), None);
+    }
+
+    /// The live reset (sub-op 10, 0x012F7348): the token, the points (no
+    /// notice), each listed skill off, the run speed for `SetSpeed`, the
+    /// stats; the request no longer waited for. The control: a skill not
+    /// listed stays owned.
+    #[test]
+    fn the_live_reset_takes_the_listed_skills_away() {
+        let mut p = Part::default();
+        for (id, on) in [(7, true), (8, true), (9, true)] {
+            p.skills.push(Skill { id, on, ..Default::default() });
+        }
+        p.pending = 2;
+        let mut w = Writer::default();
+        w.u8(10).u32(0x66).u32(12).u32(0);
+        w.signed(2).signed(7).signed(9);
+        w.u32(0x410D5555);
+        for v in 0..36 {
+            w.signed(v);
+        }
+        w.u32(0);
+        assert_eq!(p.recv(&w.data), Some(PartUp::Speed(f32::from_bits(0x410D5555))));
+        assert_eq!((p.m.p41c, p.m.x0c, p.m.x10, p.pending), (0x66, 12, 0, 0));
+        assert_eq!(p.skills.iter().map(|s| s.on).collect::<Vec<_>>(), [false, true, false], "7 and 9 taken away, 8 kept");
+        assert_eq!((p.m.stats[28], p.m.bonuses[6]), (28, 35));
     }
 
     /// A pointer on the list, the category, the points window, a skill's

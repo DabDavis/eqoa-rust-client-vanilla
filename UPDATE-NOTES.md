@@ -24,6 +24,8 @@ is put on the page by `.github/workflows/notes.yml`.
 - Petitions: opening, answering or deleting a petition the staff have closed now says why under
   "System is temporarily unavailable. (Code: -8)": the petition may have been addressed, and a new
   one can be sent if you still need help.
+- For GMs: the live game's /rst_mastr, /rst_both, /rem_abil, /banktunar and /servdown are typed in
+  the chat as the live game had them, and work while the server has your GM commands on.
 
 ## 2026-10-29 · One question for all your crash reports, and freezes written down
 - If the game stopped more than once since you last sent its crash reports, the next start now
