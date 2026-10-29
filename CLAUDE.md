@@ -84,6 +84,10 @@ current.
   input made (`input::from_device`: a run with an input script says its presses were not the player's). Nothing invented
   to look like a PS2's; a new field S2 adds is the user's call. The July S2's hello is not sent (our server reads 19 as
   its hard-disk loader's 30 worlds).
+- SOE's final live client's features (the user's asks, read out of its CLIENT in the Corsten save state): `live.rs` keeps
+  the server's feature word (0x07F5, `live::features()`); each part is gated by it exactly as the live client gates it, and
+  a server that sends no word (Sandstorm, eqoa.live) keeps the disc's behaviour. The live words past the disc's table are
+  `livewords.rs`'.
 - Game-logic floats go through `ee::*`, never host `f32` operators; every compare too.
 - Port from the decomp (`../decomp/src`), not from the Go client: the Go client's
   differences from the original are listed in `../claude-notes/go-client-vs-decomp-audit-20261015.md`.

@@ -1,6 +1,6 @@
 //! SOE's live client's group search, looking for a group or for players
-//! (`../livediff` lane's spec, read out of the live CLIENT in the Corsten
-//! state, CLIENT at 0x012AC400): its window, `VIWndGroupSearch` (live
+//! (read out of its CLIENT, `c:/eqoa-live-1500`, in the Corsten save state,
+//! CLIENT at 0x012AC400; `live`): its window, `VIWndGroupSearch` (live
 //! 0x013623C8..0x01366E18, the game window's mode 42), and its half of
 //! `VIClientPart2EFC8` (live VIClient+0x308F8, 0x012EBD68..0x012ECD38), whose
 //! messages are 0x0801 up (sub 1 the group chat shown or hidden, 2 register,
