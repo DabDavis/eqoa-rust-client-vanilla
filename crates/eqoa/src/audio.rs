@@ -63,6 +63,32 @@ pub fn set_heard(on: bool) {
     }
 }
 
+/// The game's thread's waits for the driver's lock (`Shared`), in µs: their
+/// sum and the longest. The output's callback holds the lock while it mixes,
+/// and the driver it runs reads the disc for the music (natively off a copy
+/// read whole on a thread of its own, `bgm::read_on_a_thread`); a stall's
+/// line says how long the game waited here in its time (`stall`, F3
+/// 20261029-025532: a callback once mixing for 8,363 ms).
+static GAME_WAITED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static GAME_WAIT_MOST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The driver's lock as the game's thread takes it (the sound device's
+/// calls through `AudioLink`, the output's watch, a report's reads), its
+/// wait counted.
+fn game_lock(m: &Mutex<Shared>) -> std::sync::MutexGuard<'_, Shared> {
+    let t = web_time::Instant::now();
+    let g = m.lock().unwrap();
+    let us = t.elapsed().as_micros() as u64;
+    GAME_WAITED.fetch_add(us, Ordering::Relaxed);
+    GAME_WAIT_MOST.fetch_max(us, Ordering::Relaxed);
+    g
+}
+
+/// How long the game's thread has waited for the driver's lock in all.
+pub fn game_waits() -> Duration {
+    Duration::from_micros(GAME_WAITED.load(Ordering::Relaxed))
+}
+
 /// The output's gain wanted now: 1 heard, 0 not.
 fn heard_gain() -> f32 {
     if HEARD.load(Ordering::Relaxed) { 1.0 } else { 0.0 }
@@ -757,7 +783,7 @@ impl Audio {
     fn watch_output(&mut self) {
         let Some(w) = self.watch.as_mut() else { return };
         let now = Instant::now();
-        let called = self.shared.lock().unwrap().called;
+        let called = game_lock(&self.shared).called;
         let want = crate::settings::client().output;
         match w.step(now, called) {
             Step::Keep => {
@@ -783,7 +809,7 @@ impl Audio {
                 self._stream = None;
                 self.on = None;
                 note_playing(None);
-                self.shared.lock().unwrap().wall_from(now);
+                game_lock(&self.shared).wall_from(now);
                 if !std::mem::replace(&mut w.walling, true) {
                     wall_clock(self.shared.clone());
                 }
@@ -823,7 +849,7 @@ impl Audio {
     fn reopen(&mut self, now: Instant, want: Option<DeviceName>, why: &'static str) {
         let Some(w) = self.watch.as_mut() else { return };
         self._stream = None;
-        self.shared.lock().unwrap().wall_from(now);
+        game_lock(&self.shared).wall_from(now);
         if !std::mem::replace(&mut w.walling, true) {
             wall_clock(self.shared.clone());
         }
@@ -860,18 +886,20 @@ impl Audio {
             None => "not listed".to_string(),
         };
         format!(
-            "{}; the system's default {}; outputs {listed}; Output Device {}; output: {}",
+            "{}; the system's default {}; outputs {listed}; Output Device {}; output: {}; the game's waits for the driver up to {:.1} ms ({:.1} s in all)",
             self.describe,
             o.default.as_deref().unwrap_or("not read"),
             crate::settings::client().output.map_or("the system default".to_string(), |d| format!("{:?}", d.as_str())),
-            self.shared.lock().unwrap().out.describe()
+            game_lock(&self.shared).out.describe(),
+            GAME_WAIT_MOST.load(Ordering::Relaxed) as f64 / 1000.0,
+            game_waits().as_secs_f64()
         )
     }
 
     /// The sound device's uploads against the SPU2's RAM (`check_ram`), under
     /// the driver's lock.
     pub fn check_ram<M: vi::Model>(&self, dev: &snd::device::SoundDevice<M>) -> Option<snd::device::RamCheck> {
-        let g = self.shared.lock().unwrap();
+        let g = game_lock(&self.shared);
         dev.check_ram(g.drv.io.spu.ram(), g.drv.busy())
     }
 
@@ -1113,7 +1141,7 @@ impl Audio {
 
     /// What SNDDRV says is playing: the status block's voices and BGM flag.
     pub fn status(&self) -> [u32; 128] {
-        self.shared.lock().unwrap().status
+        game_lock(&self.shared).status
     }
 
     pub fn link(&self) -> AudioLink {
@@ -1131,7 +1159,7 @@ pub struct AudioLink(Arc<Mutex<Shared>>);
 
 impl Link for AudioLink {
     fn call(&mut self, fno: u32, packet: &[u32; 128]) -> [u32; 128] {
-        let mut g = self.0.lock().unwrap();
+        let mut g = game_lock(&self.0);
         g.catch_up();
         #[cfg(not(target_arch = "wasm32"))]
         if g.drv.busy() && g.held() {
@@ -1158,7 +1186,7 @@ impl Link for AudioLink {
         {
             let start = Instant::now();
             loop {
-                let mut g = self.0.lock().unwrap();
+                let mut g = game_lock(&self.0);
                 g.catch_up();
                 if g.drv.busy() && (g.held() || start.elapsed() > DMA_WAIT) {
                     g.run_on();
@@ -1175,7 +1203,7 @@ impl Link for AudioLink {
         // waits for (a second at most), the frames mixed kept for the output
         #[cfg(target_arch = "wasm32")]
         {
-            let mut g = self.0.lock().unwrap();
+            let mut g = game_lock(&self.0);
             for _ in 0..100 {
                 if !g.drv.busy() {
                     break;
@@ -1193,7 +1221,7 @@ impl Link for AudioLink {
     /// `VISoundDevice::Flush` spinning on the game's thread, where the watch
     /// that would put the driver on the wall clock runs.
     fn busy(&mut self) -> bool {
-        let mut g = self.0.lock().unwrap();
+        let mut g = game_lock(&self.0);
         g.catch_up();
         #[cfg(not(target_arch = "wasm32"))]
         if g.drv.busy() && g.held() {
@@ -1203,7 +1231,7 @@ impl Link for AudioLink {
     }
 
     fn bgm_ready(&mut self, path: &str) -> bool {
-        self.0.lock().unwrap().drv.disc_ready(path)
+        game_lock(&self.0).drv.disc_ready(path)
     }
 }
 

@@ -158,6 +158,17 @@ fn clock(d: Duration) -> String {
     format!("{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60)
 }
 
+/// The run's start as the log's `[memory]` lines count it (the first
+/// `tick`), kept apart from `WATCH` so any thread can read it at once.
+static RUN_START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
+/// The moment `t` on the clock the log's `[memory]` lines say ("2:13:05"
+/// into the run), for the other lines a report is read beside them with
+/// (`stall`).
+pub fn clock_at(t: Instant) -> String {
+    RUN_START.get().map_or_else(|| clock(Duration::ZERO), |s| clock(t.saturating_duration_since(*s)))
+}
+
 impl Sample {
     /// The figures in a line.
     pub fn line(&self) -> String {
@@ -282,6 +293,7 @@ pub fn tick(device: Option<&render::wgpu::Device>) {
     let now = Instant::now();
     let mut w = lock();
     let start = *w.start.get_or_insert(now);
+    RUN_START.get_or_init(|| start);
     if w.taken.is_some_and(|t| now.duration_since(t) < EVERY) {
         return;
     }
