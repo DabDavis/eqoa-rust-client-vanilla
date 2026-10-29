@@ -1,9 +1,9 @@
 //! SOE's live client (`c:/eqoa-live-1500`, the CLIENT the servers ran last,
 //! read out of the Corsten and Lostologist save states,
-//! `../claude-notes/live-1500-build-in-retail-savestates-20261015.md`): what
-//! of it more than one of this client's windows reads. Its server feature
-//! word (0x07F5) and the words its windows show that the Frontiers disc's
-//! WORDS.TXT has no row for.
+//! `../claude-notes/live-1500-build-in-retail-savestates-20261015.md`): its
+//! server feature word (0x07F5), which more than one of this client's
+//! windows reads. The words its windows show past the disc's WORDS.TXT are
+//! `livewords`'.
 //!
 //! The disc has no case for 0x07F5: a server that sends none (Sandstorm,
 //! eqoa.live, any PS2's) is played as the disc plays it, and one that sends
@@ -115,81 +115,9 @@ pub fn with_features<T>(word: Option<u32>, f: impl FnOnce() -> T) -> T {
     out
 }
 
-/// The live client's words past the disc's table, by their live ids (rows of
-/// its `VIStringTable`, VIClient+4 at 0x01FAD924 in the Corsten state: 1,890
-/// rows, `GetString` counting from 1), English only, as its second column is
-/// empty for every one of them. 1840-1889 are the rows it added after the
-/// disc's last (the disc's 1811-1814 moved to 1836-1839 and 25 rows came in
-/// before them, which this client does not read). A server's WORDS.TXT that
-/// has a row keeps it (`fill_words`).
-pub const WORDS: &[(i32, &str)] = &[
-    (1840, "You cannot possess more than one Master Class at a time."),
-    (1841, "Destroy item \"%S\"?"),
-    (1842, "Sell item \"%S\"?"),
-    (1843, "Screen Shake"),
-    (1844, "Sort"),
-    (1845, "Search for Group"),
-    (1846, "Search for Player"),
-    (1847, "Your group is full."),
-    (1848, "You are not a group leader."),
-    (1849, "%d players found"),
-    (1850, "%d groups found"),
-    (1851, "Register"),
-    (1852, "Unregister"),
-    (1853, "Quantity"),
-    (1854, "Min. price per"),
-    (1855, "Max. price per"),
-    (1856, "High bid"),
-    (1857, "Buy all now for %d Tunar each"),
-    (1858, "You can only bid the buy-it-now price if you bid on all %d items in the stack."),
-    (1859, "The duel invitation has expired."),
-    (1860, "Your duel invitation has been declined."),
-    (1861, "%s declined your duel invitation."),
-    (1862, "You cannot duel yourself."),
-    (1863, "Invalid target."),
-    (1864, "Duel"),
-    (1865, "Surrender"),
-    (1866, "%s challenges you to a duel."),
-    (1867, "Wager"),
-    (1868, "You"),
-    (1869, "Opponent"),
-    (1870, "Unable to deliver to the following recipients"),
-    (1871, "Reply All"),
-    (1872, "Cancel duel?"),
-    (1873, "Set Quantity"),
-    (1874, "Multiple"),
-    (1875, "CLEAR"),
-    (1876, "You can register or unregister in chat with:"),
-    (1877, "/lfg on"),
-    (1878, "/lfg off"),
-    (1879, "You can set Min and Max Level to a default level range of characters you could hunt with and receive EXP by entering -1."),
-    (1880, "To sort the results page, use |7 and |8 to switch between different columns of results. This will sort those columns as well."),
-    (1881, "It is more polite to send a tell before sending a group invite.  Tell them about where you want to hunt, who is with you already, etc. and then ask if they want to group."),
-    (1882, "Have fun!"),
-    (1883, "%s is in a duel."),
-    (1884, "You cannot enter slash commands in this mode."),
-    (1885, "Your Mastery points have been reset"),
-    (1886, "Your Training points have been reset"),
-    (1887, "Show Pad"),
-    (1888, "You may be seeing this error message because this petition has been addressed.  If further assitance is needed, please submit a new petition.  Thank you."),
-    (1889, "Bogus"),
-];
-
-/// Each of `WORDS` into the row the table lacks (a row past its end, or one
-/// with no first cell), so `get(id, 0)` finds the live client's word; a row
-/// the table has is its own.
-pub fn fill_words(t: &mut vi::strtab::StringTable) {
-    for &(id, s) in WORDS {
-        if !t.has(id, 0) {
-            t.put(id, 0, s);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vi::strtab::StringTable;
 
     /// No word is the disc's rules (the auction by the dump's flag, every
     /// race and class); a word is the live client's, bit by bit.
@@ -223,29 +151,12 @@ mod tests {
         assert!(!features().live());
     }
 
-    /// The live words go where the table has no row, and a row it has stays
-    /// its own (a server's WORDS.TXT that reaches them).
-    #[test]
-    fn live_words_fill_only_missing_rows() {
-        let mut lines = vec!["x"; 1814];
-        lines[1672] = "Search";
-        let mut t = StringTable::parse(lines.join("\r\n").as_bytes()).unwrap();
-        assert_eq!(t.get(1846, 0), "(null)");
-        fill_words(&mut t);
-        assert_eq!((t.get(1846, 0), t.get(1853, 0), t.get(1889, 0)), ("Search for Player", "Quantity", "Bogus"));
-        assert_eq!((t.get(1673, 0), t.get(1814, 0), t.get(1830, 0)), ("Search", "x", "(null)"));
-        let mut lines = vec!["y"; 1850];
-        lines[1845] = "A server's own";
-        let mut t = StringTable::parse(lines.join("\n").as_bytes()).unwrap();
-        fill_words(&mut t);
-        assert_eq!((t.get(1846, 0), t.get(1851, 0)), ("A server's own", "Register"));
-    }
-
-    /// `WORDS` against the live client's own table, read out of the Corsten
-    /// save state (`$EQOA_LIVE_STATE`, default `1.6-savestates/EEEE1FCC.001.p2s`
-    /// beside this repository: PCSX2's old gzip state, EE RAM at offset 228):
-    /// the `VIStringTable` at 0x01FAD924, each row's cell a pointer to its
-    /// UTF-16. Every row 1840..1889 is here, word for word, and row 1890 (the
+    /// `livewords`' rows against the live client's own table, read out of
+    /// the Corsten save state (`$EQOA_LIVE_STATE`, default
+    /// `1.6-savestates/EEEE1FCC.001.p2s` beside this repository: PCSX2's old
+    /// gzip state, EE RAM at offset 228): the `VIStringTable` at 0x01FAD924,
+    /// each row's cell a pointer to its UTF-16. Every row 1840..1889 is
+    /// there, word for word, its second column empty, and row 1890 (the
     /// table's last) is empty. Skipped without the state.
     #[test]
     fn the_words_are_the_live_clients() {
@@ -272,11 +183,9 @@ mod tests {
             }
             String::from_utf16_lossy(&s)
         };
-        assert_eq!(WORDS.len(), 50);
-        for (k, &(id, s)) in WORDS.iter().enumerate() {
-            assert_eq!(id, 1840 + k as i32);
-            assert_eq!(word(id as u32, 0), s, "word {id}");
-            assert_eq!(word(id as u32, 1), "", "word {id}'s second column");
+        for id in 1840..=1889 {
+            assert_eq!(word(id, 0), crate::livewords::text(id as i32).unwrap(), "word {id}");
+            assert_eq!(word(id, 1), "", "word {id}'s second column");
         }
         assert_eq!(word(1890, 0), "");
         // the control: a row the disc has keeps its own number (1673 Search)

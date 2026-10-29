@@ -84,36 +84,20 @@ impl StringTable {
         "(null)"
     }
 
-    /// Whether the table has a cell at `row`, `col` (`get` gives it, not
-    /// "(null)").
-    pub fn has(&self, row: i32, col: i32) -> bool {
-        let r = row - 1;
-        r >= 0 && (r as usize) < self.rows && col >= 0 && (col as usize) < self.cols && self.cells[r as usize * self.cols + col as usize].is_some()
-    }
-
-    /// `s` into the cell at `row`, `col`, the table grown to that row (the
-    /// rows between empty), and to that column; not the game's (the client's
-    /// own rows past a table's end: `eqoa`'s `live`).
-    pub fn put(&mut self, row: i32, col: i32, s: &str) {
-        if row < 1 || col < 0 {
+    /// Row `row` (from 1) of column `col` set to `s`, the table grown to the
+    /// row if it ends before it (the rows between left missing): words the
+    /// client puts in itself (`eqoa`'s `livewords`). A column the table has
+    /// not is not made.
+    pub fn set(&mut self, row: i32, col: i32, s: &str) {
+        if row < 1 || col < 0 || col as usize >= self.cols {
             return;
         }
-        let (row, col) = ((row - 1) as usize, col as usize);
-        if col >= self.cols {
-            let cols = col + 1;
-            let mut cells = vec![None; self.rows * cols];
-            for r in 0..self.rows {
-                for c in 0..self.cols {
-                    cells[r * cols + c] = self.cells[r * self.cols + c].take();
-                }
-            }
-            (self.cells, self.cols) = (cells, cols);
+        let r = row as usize - 1;
+        if r >= self.rows {
+            self.rows = r + 1;
+            self.cells.resize(self.rows * self.cols, None);
         }
-        if row >= self.rows {
-            self.cells.resize((row + 1) * self.cols, None);
-            self.rows = row + 1;
-        }
-        self.cells[row * self.cols + col] = Some(s.to_string());
+        self.cells[r * self.cols + col as usize] = Some(s.to_string());
     }
 
     /// Every cell's `from` made `to` (the client's own spelling fixes, not
@@ -145,6 +129,23 @@ mod tests {
         assert_eq!(t.get(1, 2), "(null)");
     }
 
+    /// `set` grows the table to the row it sets, the rows between missing;
+    /// a row it has is replaced in place; no column is made.
+    #[test]
+    fn set_grows_the_table_to_its_row() {
+        let mut t = StringTable::parse(b"A\tB\nC").unwrap();
+        t.set(5, 1, "E");
+        assert_eq!((t.rows, t.cols), (5, 2));
+        assert_eq!((t.get(1, 0), t.get(1, 1), t.get(2, 0)), ("A", "B", "C"), "the rows it had stay");
+        assert_eq!((t.get(3, 0), t.get(4, 1), t.get(5, 0)), ("(null)", "(null)", "(null)"));
+        assert_eq!(t.get(5, 1), "E");
+        t.set(2, 0, "D");
+        assert_eq!((t.rows, t.get(2, 0)), (5, "D"));
+        t.set(6, 2, "x");
+        t.set(0, 0, "x");
+        assert_eq!((t.rows, t.cols), (5, 2), "no column made, no row 0");
+    }
+
     #[test]
     fn the_byte_order_mark_picks_the_encoding() {
         let le = [0xFF, 0xFE, b'A', 0, b'\t', 0, b'B', 0, b'\n', 0];
@@ -160,23 +161,5 @@ mod tests {
         assert_eq!(StringTable::parse(b"caf\xE9").unwrap().get(1, 0), "caf\u{e9}");
         // A UTF-8 file that does not convert fails, as the game's does.
         assert!(StringTable::parse(b"\xEF\xBB\xBF\xFF").is_none());
-    }
-
-    /// `put` past the end grows the table, the rows between missing, and a
-    /// column past the last keeps every cell where it was; `has` is what
-    /// `get` finds (the control: a missing cell is "(null)" and not had).
-    #[test]
-    fn put_grows_the_table_and_keeps_its_cells() {
-        let mut t = StringTable::parse(b"\xEF\xBB\xBFOne\tUn\r\nTwo\tDeux\r\n").unwrap();
-        assert!(t.has(2, 1) && !t.has(5, 0) && !t.has(0, 0));
-        t.put(5, 0, "Five");
-        assert_eq!((t.rows, t.get(5, 0), t.get(4, 0)), (5, "Five", "(null)"));
-        assert!(t.has(5, 0) && !t.has(4, 0) && !t.has(5, 1));
-        t.put(1, 3, "Eins");
-        assert_eq!(t.cols, 4);
-        assert_eq!((t.get(1, 0), t.get(1, 1), t.get(1, 3), t.get(2, 1), t.get(5, 0)), ("One", "Un", "Eins", "Deux", "Five"));
-        t.put(0, 0, "no row 0");
-        t.put(1, -1, "no column -1");
-        assert_eq!((t.rows, t.cols, t.get(1, 0)), (5, 4, "One"));
     }
 }
