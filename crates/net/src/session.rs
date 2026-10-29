@@ -84,12 +84,12 @@ pub const OP_GM_TRIGGERS: u16 = 0x7E07;
 /// bytes, a colour per held item, armour slot and robe) and its 0x002C
 /// record ([`LIVE_GEAR_SIZE`] raw bytes). A PS2 ignores the offer; Sandstorm
 /// never makes one, so its channels and lists stay the disc's.
-pub const OP_LIVE_LOOK: u16 = 0x7E0A;
+pub const OP_LIVE_LOOK: u16 = 0x7E0C;
 /// The server's answer to [`OP_LIVE_LOOK`], a u32: the look in force from it
 /// on (1 the live game's, 0 the disc's). Every character list after it is in
 /// that look (lists are guaranteed messages, in order); a client still
 /// choosing is sent its list again.
-pub const OP_LIVE_LOOK_IN_FORCE: u16 = 0x7E0B;
+pub const OP_LIVE_LOOK_IN_FORCE: u16 = 0x7E0D;
 /// The raw part of a 0x002C record: the disc's, and the live game's
 /// (`CharacterList`, Corsten's 0x012CC018: no robe tint, six ArmorGroup
 /// variants where the disc's has tints, then the held items', armour slots'
@@ -1791,8 +1791,8 @@ mod tests {
         assert_eq!(answers(&mut s), [(251, vec![0x00, 0x7E, 24, 0, 0, 0, 100, 0, 0, 0])], "the control: 0x7E00's answer");
     }
 
-    // go-eqoa-server's offer of the live game's look (0x7E0A) is answered
-    // with 1 at once; the server's answer (0x7E0B) decides how the character
+    // go-eqoa-server's offer of the live game's look (0x7E0C) is answered
+    // with 1 at once; the server's answer (0x7E0D) decides how the character
     // lists after it are read: the disc's 32 raw bytes a record until it says
     // 1, the live game's 71 after, the disc's again after a 0. It is kept
     // through the world's connection, as the server keeps it for the
@@ -1824,12 +1824,12 @@ mod tests {
         answers(&mut s);
         s.state = State::Shard;
         assert_eq!(gear_of(&deliver(&mut s, drdp::TYPE_GUARANTEED, list(DISC_GEAR_SIZE))), [32], "a first list: the disc's");
-        assert!(deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x0A, 0x7E, 1, 0, 0, 0]).is_empty());
-        assert_eq!(answers(&mut s), [(251, vec![0x0A, 0x7E, 1, 0, 0, 0])], "the offer answered with 1");
+        assert!(deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x0C, 0x7E, 1, 0, 0, 0]).is_empty());
+        assert_eq!(answers(&mut s), [(251, vec![0x0C, 0x7E, 1, 0, 0, 0])], "the offer answered with 1");
         assert!(!s.live_look, "not in force until the server says so");
         assert_eq!(gear_of(&deliver(&mut s, drdp::TYPE_GUARANTEED, list(DISC_GEAR_SIZE))), [32], "the control: a list before the server's answer");
 
-        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x0B, 0x7E, 1, 0, 0, 0]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x0D, 0x7E, 1, 0, 0, 0]);
         assert!(s.live_look);
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, list(LIVE_GEAR_SIZE));
         assert_eq!(gear_of(&ev), [71], "the live game's list");
@@ -1838,7 +1838,7 @@ mod tests {
         }
         deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
         assert!(s.live_look, "kept through the world's connection");
-        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x0B, 0x7E, 0, 0, 0, 0]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x0D, 0x7E, 0, 0, 0, 0]);
         assert!(!s.live_look, "the server went back to the disc's");
         assert_eq!(answers(&mut s), [], "nothing answered but the offer");
     }

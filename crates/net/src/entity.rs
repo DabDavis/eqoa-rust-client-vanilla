@@ -41,7 +41,7 @@ pub fn channel_of_slot(slot: usize) -> Option<u8> {
     }
 }
 
-/// The live game's look (go-eqoa-server's 0x7E0A, [`crate::session::OP_LIVE_LOOK`]):
+/// The live game's look (go-eqoa-server's 0x7E0C, [`crate::session::OP_LIVE_LOOK`]):
 /// SOE's live CLIENT (eqoa-live-1500, in the Corsten and Lostologist save
 /// states) reads a colour (`VIColor32`: r, g, b, a) for each held item, each
 /// armour slot and the robe where the disc's reads a tint, and per armour
