@@ -520,7 +520,13 @@ mod tests {
         }
         let mut s = Session::connect_with(Box::new(Nowhere), ([127, 0, 0, 1], 5000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
         s.self_id = Some(0x100);
+        s.record = Some(Vec::new());
         Play::new(s, Player::default(), Box::default())
+    }
+
+    /// What `p` has sent since the last look.
+    fn sent(p: &mut Play) -> Vec<Vec<u8>> {
+        p.session.record.as_mut().map(std::mem::take).unwrap_or_default().into_iter().map(|(_, d)| d).collect()
     }
 
     /// A corpse record as 0x0018 carries it: the server's key in `m_invIndex`.
@@ -616,6 +622,53 @@ mod tests {
         let mut q = play();
         q.trade_message(TradeMsg::Accepted(0x99));
         assert_eq!(q.mode, 15);
+    }
+
+    /// Space in the corpse's window is ✕ (`viewer::npcw_key_of`), as on the
+    /// pad the attack that opened the corpse (✕, Space on the keyboard) is
+    /// the window's ✕ too: on LEAVE ALL, where the window opens, it leaves
+    /// the corpse (0x0016), on an item takes that item (0x0019, the server's
+    /// key and the count), on TAKE ALL takes everything (0x001A), each row
+    /// chosen as a pointer chooses it. The control: Space as the game's 32
+    /// (what it was until 2026-10-29: `VIWndLoot` takes no 32) sends nothing
+    /// and leaves the window up (F3 20261029-024647).
+    #[test]
+    fn space_takes_from_the_corpse_as_cross_does() {
+        use crate::pointer::testing::{NullRaster, vui};
+        use winit::keyboard::{Key, NamedKey};
+        let (vui, mut r) = (vui(), NullRaster);
+        let space = crate::viewer::npcw_key_of(&Key::Named(NamedKey::Space), 1).unwrap();
+        assert_eq!(space, crate::pointer::key::CROSS);
+        // the corpse's window up on two records, row `row` chosen by the
+        // pointer; Space's key pressed and let go: what was sent
+        let mut press = |key: i32, row: i32| {
+            let mut p = play();
+            p.npcw.corpse = Some(ItemList { p04: 0, items: vec![record(7, 1, 3, 1, "Snake Fang"), record(9, 4, 5, 20, "Snake Scale")] });
+            p.mode = 1;
+            p.npcw.loot_open = true;
+            p.run_npcw(&vui, &mut r);
+            if row != 0 {
+                // the corpse list at (144, 10), its rows 44 high (`loot`'s test)
+                let at = [144.0 + 57.0, 10.0 + 44.0 * row as f32 + 22.0];
+                assert_eq!(p.npcw_point(at), vec![crate::pointer::MOVED], "row {row} chosen");
+            }
+            sent(&mut p);
+            for down in [true, false] {
+                p.npcw_key(key, down);
+                p.run_npcw(&vui, &mut r);
+            }
+            (sent(&mut p), p.mode)
+        };
+        let op = |o: u16| o.to_le_bytes().to_vec();
+        let mut one = op(0x0019);
+        one.extend(5u32.to_le_bytes());
+        one.extend(4u32.to_le_bytes());
+        assert_eq!(press(space, 0).0, vec![op(0x0016)], "LEAVE ALL: the corpse left");
+        assert_eq!(press(space, 2).0, vec![one], "the scales: taken, four of them");
+        assert_eq!(press(space, 3).0, vec![op(0x001A)], "TAKE ALL");
+        for row in [0, 2, 3] {
+            assert_eq!(press(32, row), (vec![], 1), "the control, row {row}: the game's 32 sends nothing, the window stays");
+        }
     }
 
     /// 0x0085 (`LootOptions`): why a corpse did not open, as a line in the

@@ -93,7 +93,7 @@ pub const ROWS: &[Row] = &[
     row("look_down", "Camera down", &["k"], Pad::Stick(true, Dir::Down), "Tilts the camera, or takes the orbit out."),
     row("look_left", "Camera left", &["j"], Pad::Stick(true, Dir::Left), "Orbits the camera, or turns."),
     row("look_right", "Camera right", &["l"], Pad::Stick(true, Dir::Right), "Orbits the camera, or turns."),
-    row("attack", "{1018} (hold)", &["space"], b(bit::CROSS), "With Auto Attack on, a toggle; on a corpse, its loot. In a window |x is {212}, and Space is |( (a trade's {424})."),
+    row("attack", "{1018} (hold)", &["space"], b(bit::CROSS), "With Auto Attack on, a toggle; on a corpse, its loot. In a window |x is {212}; Space is |x too in the corpse's window, and |( in the others (a trade's {424})."),
     row("talk", "Talk (hold: {1403})", &["q"], b(bit::SQUARE), "In a window it is |s, the window's own: a trade's {478}, the who list asked again, the mail's inbox."),
     row("clear_target", "Let the target go", &[], b(bit::TRIANGLE), "The game has no key for it: a key put here presses |t. In a window |t is {217}, Escape or Backspace on the keyboard."),
     row("use", "Quick menu: {120}", &["e"], b(bit::CIRCLE), "In a window E is |x {212}, as Enter is."),

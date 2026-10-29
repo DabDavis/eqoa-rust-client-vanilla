@@ -1289,6 +1289,34 @@ fn report_shot(g: &Gfx, frame: Option<&wgpu::SurfaceTexture>) {
     crate::report::set_shot(t.width(), t.height(), &rgba);
 }
 
+/// The corpse, merchant and trade windows' keys (modes 1, 10, 15, 16) on
+/// the keyboard, as the game's keys and pad buttons: the arrows the d-pad,
+/// Enter or E ✕, Escape or Backspace △, Q □ (a trade's accept, as the
+/// game's 81/113), Space the game's 32 (a trade's chat line, as R3) but in
+/// the corpse's window, where it is ✕: on the pad the attack (✕, Space on
+/// the keyboard) opens a corpse and in its window takes the row chosen
+/// (`VIWndList::OnKeyDown`: LEAVE ALL closes it, an item takes it, TAKE ALL
+/// takes everything), while 32 there is nothing to the game
+/// (`VIWndLoot::OnKeyDown` takes 27, 132 and 134), so the key that opened
+/// it did nothing in it (F3 20261029-024647: "spacebar can open loot, it
+/// should also allow you to close or loot the items as well").
+pub(crate) fn npcw_key_of(key: &Key, mode: i32) -> Option<i32> {
+    use crate::startmenu::keys as K;
+    match key {
+        Key::Named(NamedKey::ArrowUp) => Some(K::UP),
+        Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
+        Key::Named(NamedKey::ArrowLeft) => Some(K::LEFT),
+        Key::Named(NamedKey::ArrowRight) => Some(K::RIGHT),
+        Key::Named(NamedKey::Enter) => Some(K::CROSS),
+        Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
+        Key::Character(c) if c.eq_ignore_ascii_case("q") => Some(113),
+        Key::Named(NamedKey::Space) if mode == 1 => Some(K::CROSS),
+        Key::Named(NamedKey::Space) => Some(32),
+        Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
+        _ => None,
+    }
+}
+
 /// A key as the game's keyboard gives it (`VIKeyboard::Read`): 13 Enter,
 /// 27 Escape, 8 Backspace, 9 Tab, 17-20 the cursor keys (left, right, up,
 /// down), 21-24 Page Up, Page Down, End, Home; a character as itself.
@@ -3367,9 +3395,8 @@ impl App {
             return;
         }
         // The corpse, merchant and trade windows (modes 1, 10, 15,
-        // 16): the arrows, Enter or E (X), Escape (triangle), Q
-        // (accept a trade), Space (the trade's chat line, which then
-        // takes the keyboard as the edit box does).
+        // 16): `npcw_key_of`'s keys; the trade's chat line, once Space
+        // has opened it, takes the keyboard as the edit box does.
         if let Some(p) = self.play.as_mut()
             && p.typing.is_none()
             && p.npcw_owns()
@@ -3393,20 +3420,7 @@ impl App {
                 }
                 return;
             }
-            use crate::startmenu::keys as K;
-            let k = match &event.logical_key {
-                Key::Named(NamedKey::ArrowUp) => Some(K::UP),
-                Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
-                Key::Named(NamedKey::ArrowLeft) => Some(K::LEFT),
-                Key::Named(NamedKey::ArrowRight) => Some(K::RIGHT),
-                Key::Named(NamedKey::Enter) => Some(K::CROSS),
-                Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
-                Key::Character(c) if c.eq_ignore_ascii_case("q") => Some(113),
-                Key::Named(NamedKey::Space) => Some(32),
-                Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
-                _ => None,
-            };
-            if let Some(k) = k
+            if let Some(k) = npcw_key_of(&event.logical_key, p.mode)
                 && !(down && event.repeat)
             {
                 p.npcw_key(k, down);
@@ -5162,6 +5176,30 @@ mod tests {
         let s = frames(false);
         assert_eq!(s.frames, 5);
         assert!(s.gaps.iter().any(|&g| g > 1900.0), "the control: the pause counted as a frame's: {:?}", s.gaps);
+    }
+
+    /// The corpse, merchant and trade windows' keys: Space is ✕ in the
+    /// corpse's window (mode 1), the key that opened it (the attack: ✕ on the
+    /// pad, whose ✕ takes the row there), and the game's 32 in the merchant's
+    /// and the trade's (a trade's chat line, as R3); the rest the same in all
+    /// four: Enter and E ✕, Escape and Backspace △ (27), Q □ (113), the
+    /// arrows the d-pad. The control: Space was 32 in all four.
+    #[test]
+    fn space_is_cross_in_the_corpses_window_alone() {
+        let space = Key::Named(NamedKey::Space);
+        assert_eq!(npcw_key_of(&space, 1), Some(134));
+        for mode in [10, 15, 16] {
+            assert_eq!(npcw_key_of(&space, mode), Some(32), "mode {mode}: the game's 32");
+        }
+        for mode in [1, 10, 15, 16] {
+            let k = |key: Key| npcw_key_of(&key, mode);
+            assert_eq!((k(Key::Named(NamedKey::Enter)), k(Key::Character("e".into())), k(Key::Character("E".into()))), (Some(134), Some(134), Some(134)));
+            assert_eq!((k(Key::Named(NamedKey::Escape)), k(Key::Named(NamedKey::Backspace))), (Some(27), Some(27)));
+            assert_eq!(k(Key::Character("q".into())), Some(113));
+            let arrows = [NamedKey::ArrowUp, NamedKey::ArrowDown, NamedKey::ArrowLeft, NamedKey::ArrowRight].map(|a| k(Key::Named(a)));
+            assert_eq!(arrows, [Some(138), Some(139), Some(136), Some(137)]);
+            assert_eq!(k(Key::Character("w".into())), None);
+        }
     }
 
     /// VSync's present mode: on, Fifo whatever is offered; off, Immediate,
