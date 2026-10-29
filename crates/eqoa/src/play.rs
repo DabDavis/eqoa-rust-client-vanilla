@@ -2092,6 +2092,12 @@ impl Play {
         o
     }
 
+    /// What the game server's datagrams have come to so far, for a stall's
+    /// line (`stall`).
+    pub fn heard(&self) -> crate::stall::Heard {
+        crate::stall::Heard { count: self.session.datagrams_in, last: self.session.last_datagram }
+    }
+
     /// One frame. Returns the player's model when the server has just named
     /// a different one (the caller re-dresses the walker). `game_frame`: one
     /// of the game's frames (`frames.rs`), which what it counts in frames

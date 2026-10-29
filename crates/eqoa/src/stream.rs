@@ -134,7 +134,8 @@ pub fn install_with(lib: &mut Library, file: usize, zi: usize, bytes: Vec<u8>, s
     Ok(())
 }
 
-/// The native source: the world file's extent in the disc image, read at once.
+/// The native source: the world file's extent in the disc image, read at once
+/// (on the game's thread: each read timed, `stall::disc`).
 pub struct FileZones {
     src: esf::Window<std::fs::File>,
     done: VecDeque<(usize, std::io::Result<Vec<u8>>)>,
@@ -152,7 +153,7 @@ impl FileZones {
 impl ZoneSource for FileZones {
     fn request(&mut self, zi: usize, off: u64, len: usize) {
         let mut b = vec![0u8; len];
-        let r = esf::ReadAt::read_at(&mut self.src, off, &mut b).map(|_| b);
+        let r = crate::stall::disc::timed(crate::stall::disc::Read::Zone, || esf::ReadAt::read_at(&mut self.src, off, &mut b)).map(|_| b);
         self.done.push_back((zi, r));
     }
     fn poll(&mut self) -> Option<(usize, std::io::Result<Vec<u8>>)> {
@@ -257,15 +258,17 @@ pub fn open_world(name: &str, x: f32, z: f32) -> Arrival {
     #[cfg(target_arch = "wasm32")]
     let image = crate::disc_path(None);
     let frontiers = std::path::PathBuf::from(crate::disc_path(None));
+    // natively read here, on the game's thread: timed (`stall::disc`)
+    let open = |p: &std::path::Path| crate::stall::disc::timed(crate::stall::disc::Read::World, || open_file(p, name));
     // the 2002 disc's world that does not open is Frontiers' (the game plays on)
-    let (era, opened) = match open_file(std::path::Path::new(&image), name) {
+    let (era, opened) = match open(std::path::Path::new(&image)) {
         Err(e) if era == esf::Era::Y2002 => {
             crate::say(&format!("art: the 2002 disc's {name} did not open ({e}): Frontiers' world"));
-            (esf::Era::Frontiers, open_file(&frontiers, name))
+            (esf::Era::Frontiers, open(&frontiers))
         }
         r => (era, r),
     };
-    let twin = wants_twin(era).then(|| open_file(&frontiers, name).ok()).flatten();
+    let twin = wants_twin(era).then(|| open(&frontiers).ok()).flatten();
     let r = opened.map(|container| Opened { container, zones: Vec::new(), era, twin, twin_zones: Vec::new() }).map_err(|e| e.to_string());
     std::rc::Rc::new(RefCell::new(Some(r)))
 }

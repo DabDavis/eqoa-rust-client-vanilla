@@ -32,9 +32,13 @@ use web_time::Instant;
 /// A frame this long or more after the one before it is a stall.
 pub const STALL: Duration = Duration::from_secs(1);
 
-/// A stall's line comes at most this often; the stalls between are counted
-/// into the next.
+/// A stall's line comes at most this often, and once `SAID_SOON` have come,
+/// at most every `SAY_LATER` (a window held to a frame a second for good
+/// would fill the report's last lines); the stalls between are counted into
+/// the next.
 const SAY_EVERY: Duration = Duration::from_secs(10);
+const SAY_LATER: Duration = Duration::from_secs(60);
+const SAID_SOON: u32 = 20;
 
 /// A phase, a wait or a read this long is named in a stall's line.
 const NAMED: Duration = Duration::from_millis(50);
@@ -54,6 +58,9 @@ struct Frame {
     end: Instant,
     /// its phases, by name, in seconds
     phases: Vec<(&'static str, f64)>,
+    /// drawn under the loading screen (a world entered, its zones read at
+    /// once): a stall there is a load's, said so and kept apart
+    loading: bool,
 }
 
 /// A stall found as a frame begins, said once the frame has read what the
@@ -62,9 +69,11 @@ struct Frame {
 struct Stall {
     /// from the frame before's start to this one's
     gap: Duration,
-    /// the frame before: how long it took, and its phases
+    /// the frame before: how long it took, its phases, and whether it was
+    /// under the loading screen
     frame: Duration,
     phases: Vec<(&'static str, f64)>,
+    loading: bool,
     /// from its end to this one's start, and the client's own handling in
     /// that: its time, its calls, the longest one
     outside: Duration,
@@ -92,7 +101,7 @@ impl Stall {
     /// The line's words after "stall: " (and the state's longest), with the
     /// datagrams that were waiting for this frame, when it read them.
     fn words(&self, waiting: Option<u64>) -> String {
-        let mut s = format!("{} ms from one frame to the next, to {} UTC ({} into the run): ", ms(self.gap), self.utc, self.run);
+        let mut s = format!("{} ms from one frame to the next, to {} UTC ({} into the run){}: ", ms(self.gap), self.utc, self.run, if self.loading { ", under the loading screen" } else { "" });
         // the frame's phases that took a part worth naming, longest first
         let mut phases: Vec<&(&'static str, f64)> = self.phases.iter().filter(|p| p.1 >= NAMED.as_secs_f64()).collect();
         phases.sort_by(|a, b| b.1.total_cmp(&a.1));
@@ -120,8 +129,8 @@ impl Stall {
             s += &format!("; the disc's slowest read meanwhile {} ms ({}{})", ms(d), what.name(), if going { ", still under way" } else { "" });
         }
         match (self.since_heard, waiting) {
-            (Some(since), Some(n)) => s += &format!("; the game server's last datagram {} ms before, {n} waiting", ms(since)),
-            (Some(since), None) => s += &format!("; the game server's last datagram {} ms before", ms(since)),
+            (Some(since), Some(n)) => s += &format!("; the game server's last datagram had come {} ms before the stall's end, and {n} were waiting", ms(since)),
+            (Some(since), None) => s += &format!("; the game server's last datagram had come {} ms before the stall's end", ms(since)),
             (None, _) if self.heard.is_some() => s += "; nothing heard from the game server yet",
             _ => {}
         }
@@ -151,12 +160,16 @@ pub struct Watch {
     waits: Duration,
     /// the stall this frame found, said once it has read the datagrams
     pending: Option<Stall>,
-    /// when the last line was said, and the stalls since not said
+    /// when the last line was said, the lines said, and the stalls since
+    /// not said
     said: Option<Instant>,
+    lines: u32,
     unsaid: u32,
-    /// this run's stalls, and the longest (its length and its words)
+    /// this run's stalls, and the longest (its length and its words), and
+    /// those under the loading screen (counted apart)
     count: u32,
     worst: Option<(Duration, String)>,
+    loading: u32,
 }
 
 impl Watch {
@@ -212,6 +225,7 @@ impl Watch {
                     gap,
                     frame: f.end.saturating_duration_since(f.start),
                     phases: f.phases,
+                    loading: f.loading,
                     outside: now.saturating_duration_since(f.end),
                     own: self.own,
                     calls: self.calls,
@@ -230,9 +244,10 @@ impl Watch {
         self.longest = None;
     }
 
-    /// The frame begun at `start` ends at `end`, its phases as measured.
-    pub fn end(&mut self, start: Instant, end: Instant, phases: Vec<(&'static str, f64)>) {
-        self.last = Some(Frame { start, end, phases });
+    /// The frame begun at `start` ends at `end`, its phases as measured,
+    /// under the loading screen or not.
+    pub fn end(&mut self, start: Instant, end: Instant, phases: Vec<(&'static str, f64)>, loading: bool) {
+        self.last = Some(Frame { start, end, phases, loading });
         self.own = Duration::ZERO;
         self.calls = 0;
         self.longest = None;
@@ -248,15 +263,21 @@ impl Watch {
         let s = self.pending.take()?;
         let waiting = heard.zip(s.heard).map(|(h, before)| h.count.saturating_sub(before.count));
         let words = s.words(waiting);
-        self.count += 1;
-        if self.worst.as_ref().is_none_or(|w| s.gap > w.0) {
-            self.worst = Some((s.gap, words.clone()));
+        if s.loading {
+            self.loading += 1;
+        } else {
+            self.count += 1;
+            if self.worst.as_ref().is_none_or(|w| s.gap > w.0) {
+                self.worst = Some((s.gap, words.clone()));
+            }
         }
-        if self.said.is_some_and(|t| now.saturating_duration_since(t) < SAY_EVERY) {
+        let every = if self.lines >= SAID_SOON { SAY_LATER } else { SAY_EVERY };
+        if self.said.is_some_and(|t| now.saturating_duration_since(t) < every) {
             self.unsaid += 1;
             return None;
         }
         self.said = Some(now);
+        self.lines += 1;
         let more = std::mem::take(&mut self.unsaid);
         Some(match more {
             0 => format!("stall: {words}"),
@@ -264,11 +285,16 @@ impl Watch {
         })
     }
 
-    /// For a report's state: the run's stalls, and the longest.
+    /// For a report's state: the run's stalls, and the longest; those under
+    /// the loading screen counted apart.
     pub fn describe(&self) -> String {
+        let loading = match self.loading {
+            0 => String::new(),
+            n => format!(" ({n} more under the loading screen)"),
+        };
         match &self.worst {
-            None => "stalls (a frame 1 s or more after the one before): none this run".to_string(),
-            Some((_, words)) => format!("stalls (a frame 1 s or more after the one before): {} this run, the longest {words}", self.count),
+            None => format!("stalls (a frame 1 s or more after the one before): none this run{loading}"),
+            Some((_, words)) => format!("stalls (a frame 1 s or more after the one before): {} this run{loading}, the longest {words}", self.count),
         }
     }
 }
@@ -457,7 +483,7 @@ mod tests {
             w.enter(at(t0, t));
             w.begin(at(t0, t), Duration::ZERO, None);
             assert_eq!(w.after_pump(None, at(t0, t + 5)), None);
-            w.end(at(t0, t), at(t0, t + 10), vec![("play", 0.010)]);
+            w.end(at(t0, t), at(t0, t + 10), vec![("play", 0.010)], false);
             w.leave("a redraw", at(t0, t + 11));
             t += 16;
         }
@@ -477,7 +503,7 @@ mod tests {
         w.enter(at(t0, t));
         w.begin(at(t0, t), Duration::ZERO, Some(Heard { count: 1000, last: Some(at(t0, t - 10)) }));
         assert_eq!(w.after_pump(Some(Heard { count: 1001, last: Some(at(t0, t + 2)) }), at(t0, t + 3)), None);
-        w.end(at(t0, t), at(t0, t + 8395), vec![("play", 0.030), ("sound", 8.355), ("hud", 0.010)]);
+        w.end(at(t0, t), at(t0, t + 8395), vec![("play", 0.030), ("sound", 8.355), ("hud", 0.010)], false);
         w.leave("a redraw", at(t0, t + 8396));
         // the next frame: the gap found, said once the datagrams are read
         let next = t + 8412;
@@ -487,9 +513,9 @@ mod tests {
         assert!(line.starts_with("stall: 8412 ms from one frame to the next, to "), "{line}");
         assert!(line.contains("the frame itself took 8395 ms (sound 8355 ms), then 17 ms to the next: 1 ms the client's own (the longest the frame's own call after it, 1 ms), 16 ms no call from the event loop"), "{line}");
         assert!(line.contains("; the game's thread waited 8350 ms for the sound's driver"), "{line}");
-        assert!(line.ends_with("; the game server's last datagram 8402 ms before, 143 waiting"), "{line}");
+        assert!(line.ends_with("; the game server's last datagram had come 8402 ms before the stall's end, and 143 were waiting"), "{line}");
         assert!(!line.contains("play 30"), "a phase under 50 ms is not named: {line}");
-        w.end(at(t0, next), at(t0, next + 10), vec![]);
+        w.end(at(t0, next), at(t0, next + 10), vec![], false);
         w.leave("a redraw", at(t0, next + 11));
         assert!(w.describe().starts_with("stalls (a frame 1 s or more after the one before): 1 this run, the longest 8412 ms from one frame"), "{}", w.describe());
         // the controls: a frame 999 ms after the last is none
@@ -525,7 +551,7 @@ mod tests {
         assert!(line.contains("5016 ms from one frame to the next"), "{line}");
         assert!(line.contains("the frame itself took 10 ms, then 5006 ms to the next: 3 ms the client's own in 4 calls (the longest a key, 2 ms), 5003 ms no call from the event loop"), "{line}");
         assert!(!line.contains("server"), "no game server, nothing said of one: {line}");
-        w.end(at(t0, next), at(t0, next + 10), vec![]);
+        w.end(at(t0, next), at(t0, next + 10), vec![], false);
         w.leave("a redraw", at(t0, next + 11));
         // the control: the loop's turn taking 4 s is the client's own
         let t = frames(&mut w, t0, next + 16, 1);
@@ -563,7 +589,7 @@ mod tests {
             if let Some(l) = w.after_pump(None, at(t0, next + 1)) {
                 said.push(l);
             }
-            w.end(at(t0, next), at(t0, next + 10), vec![]);
+            w.end(at(t0, next), at(t0, next + 10), vec![], false);
             w.leave("a redraw", at(t0, next + 11));
             t = frames(&mut w, t0, next + 16, (pause / 16) as u64);
         }
@@ -571,6 +597,63 @@ mod tests {
         assert!(said[0].starts_with("stall: 1516 ms"), "{said:?}");
         assert!(said[1].ends_with("(and 2 more since the last line said, each 1 s or more)"), "{said:?}");
         assert!(w.describe().contains(": 4 this run, the longest 3016 ms"), "{}", w.describe());
+    }
+
+    /// A window that stalls for good (each frame 11 s after the last) says
+    /// twenty lines, one a stall, then one a minute at most, the rest
+    /// counted into them. The control: the first twenty, 11 s apart, are all
+    /// said.
+    #[test]
+    fn after_twenty_lines_one_a_minute() {
+        let t0 = Instant::now();
+        let mut w = Watch::default();
+        let mut said = Vec::new();
+        for k in 0..30u64 {
+            let t = k * 11_000;
+            w.enter(at(t0, t));
+            w.begin(at(t0, t), Duration::ZERO, None);
+            if let Some(l) = w.after_pump(None, at(t0, t + 1)) {
+                said.push((k, l));
+            }
+            w.end(at(t0, t), at(t0, t + 10), vec![], false);
+            w.leave("a redraw", at(t0, t + 11));
+        }
+        let ks: Vec<u64> = said.iter().map(|s| s.0).collect();
+        assert_eq!(ks, (1..=20).chain([26]).collect::<Vec<u64>>(), "the control: every one of the first twenty");
+        assert!(said[20].1.ends_with("(and 5 more since the last line said, each 1 s or more)"), "{:?}", said[20]);
+        assert!(w.describe().contains(": 29 this run"), "{}", w.describe());
+    }
+
+    /// A stall under the loading screen (a world's zones read at once as it
+    /// is entered) is said so and counted apart: the run's longest is the
+    /// longest of the others, though shorter. The control: the line of one in
+    /// play says nothing of a loading screen.
+    #[test]
+    fn a_stall_under_the_loading_screen_is_kept_apart() {
+        let t0 = Instant::now();
+        let mut w = Watch::default();
+        let t = frames(&mut w, t0, 0, 2);
+        w.enter(at(t0, t));
+        w.begin(at(t0, t), Duration::ZERO, None);
+        assert_eq!(w.after_pump(None, at(t0, t + 1)), None);
+        w.end(at(t0, t), at(t0, t + 6000), vec![("zones", 5.9)], true);
+        w.leave("a redraw", at(t0, t + 6001));
+        let next = t + 6016;
+        w.enter(at(t0, next));
+        w.begin(at(t0, next), Duration::ZERO, None);
+        let line = w.after_pump(None, at(t0, next + 1)).expect("said");
+        assert!(line.contains(" into the run), under the loading screen: the frame itself took 6000 ms (zones 5900 ms)"), "{line}");
+        w.end(at(t0, next), at(t0, next + 10), vec![], false);
+        w.leave("a redraw", at(t0, next + 11));
+        assert_eq!(w.describe(), "stalls (a frame 1 s or more after the one before): none this run (1 more under the loading screen)");
+        // one of 2 s in play, more than 10 s on (said)
+        let t = frames(&mut w, t0, next + 16, 700);
+        let next = t + 2000;
+        w.enter(at(t0, next));
+        w.begin(at(t0, next), Duration::ZERO, None);
+        let line = w.after_pump(None, at(t0, next + 1)).expect("said");
+        assert!(line.starts_with("stall: 2016 ms") && !line.contains("loading"), "the control: {line}");
+        assert!(w.describe().contains(": 1 this run (1 more under the loading screen), the longest 2016 ms"), "{}", w.describe());
     }
 
     /// Frames that stop for a reason of their own (a window minimised, the
