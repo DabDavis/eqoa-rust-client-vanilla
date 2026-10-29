@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-29 · A creature's second body
+- A server can send a creature or a player with a second body to show in place of its own (the
+  live game did, for its upgraded models). This client now shows that body, and bumps into it,
+  as the PS2 does: until now it always showed the first one.
+
 ## 2026-10-29 · Invisible walls stop you again
 - An invisible wall that the server puts up as a creature now stops you, as on the PS2.
   Sandstorm uses them to keep players out of a place until a quest lets them through, and this

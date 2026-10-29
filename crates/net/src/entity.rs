@@ -95,7 +95,16 @@ pub struct Entity {
     /// +0x19 (byte 27): `TargetInRange` refuses a target where it is 0.
     pub p19: u8,
     pub model: u32,
+    /// `m_model2`: when not 0 the body drawn in `m_model`'s place
+    /// (`GetModel`).
     pub model2: u32,
+    /// The body the game draws (the character cache's model): `GetModel()`
+    /// as the actor was made with it, then as `Changed` sets it after each
+    /// update, which is only when it differs from the update's OLD `m_model`
+    /// (`ReadUpdate` keeps `int oldModel = m_model`, not `GetModel()`). So a
+    /// `model2` set is drawn at once, and one cleared to 0 stays drawn until
+    /// `model` itself changes or the entity is made again.
+    pub drawn_model: u32,
     pub scale: f32,
     pub creature: Option<Creature>,
     /// `Extrapolate`: where it was drawn minus where it now is, run down to
@@ -138,7 +147,14 @@ fn wrap(mut a: f32) -> f32 {
 }
 
 impl Entity {
+    /// `VIEntity::GetModel`: `model2` when it is not 0, else `model`.
+    pub fn model(&self) -> u32 {
+        if self.model2 != 0 { self.model2 } else { self.model }
+    }
+
     fn read_update(&mut self, r: &mut Reader) {
+        // ReadUpdate: what `Changed` is handed
+        let (old_world, old_model) = (self.world, self.model);
         for i in 0..3 {
             self.pos[i] = dequantize(r.bytes(3));
         }
@@ -154,6 +170,13 @@ impl Entity {
         self.model = r.u32();
         self.model2 = r.u32();
         self.scale = r.f32();
+        // Changed: another dimension makes the actor again (`OnWorldLoaded`,
+        // `CreateActor` with `GetModel()`); else the body follows `GetModel()`
+        // only when that differs from the old `m_model`
+        let model = self.model();
+        if old_world != self.world || old_model != model {
+            self.drawn_model = model;
+        }
         if self.kind == TYPE_CREATURE {
             let mut c = Creature {
                 velocity: dequantize_vect(r.bytes(3), 21.0),
@@ -344,6 +367,38 @@ mod tests {
         v[1..5].copy_from_slice(&id.to_le_bytes());
         v[5] = TYPE_CREATURE;
         v
+    }
+
+    /// The body drawn (`drawn_model`) as `Changed` keeps it: `GetModel()`
+    /// (`model2` when not 0) when the actor is made, then only where that
+    /// differs from the update's OLD `m_model`. So a `model2` set is drawn at
+    /// once, one cleared stays drawn until the model itself changes, and an
+    /// entity from another dimension is made again (`OnWorldLoaded`). The
+    /// steps where `GetModel()` read afresh would differ are the clears.
+    #[test]
+    fn the_body_drawn_follows_changed() {
+        let (human, elf, rat) = (0x70D8_98C6u32, 0x156B_9CA9u32, 0x1234_5678u32);
+        let state = |model: u32, model2: u32, world: i8| {
+            let mut v = creature(500);
+            v[17] = world as u8;
+            v[28..32].copy_from_slice(&model.to_le_bytes());
+            v[32..36].copy_from_slice(&model2.to_le_bytes());
+            v
+        };
+        let mut e = Entities::default();
+        let mut step = |model, model2, world| {
+            e.channel(3, &state(model, model2, world), Some(7), 0, 100, |_| {});
+            let x = e.slots[3].as_ref().unwrap();
+            (x.model(), x.drawn_model)
+        };
+        assert_eq!(step(human, rat, 0), (rat, rat), "made with GetModel()");
+        assert_eq!(step(human, rat, 0), (rat, rat));
+        assert_eq!(step(human, 0, 0), (human, rat), "model2 cleared: still drawn (the old model is the new GetModel())");
+        assert_eq!(step(elf, 0, 0), (elf, elf), "the model changed");
+        assert_eq!(step(elf, rat, 0), (rat, rat), "model2 set: at once");
+        assert_eq!(step(elf, 0, 0), (elf, rat), "cleared again: still drawn");
+        assert_eq!(step(elf, 0, 2), (elf, elf), "another dimension: made again");
+        assert_eq!(step(0, 0, 2), (0, 0), "model 0: nothing");
     }
 
     /// A slot past the limit is not read (CLIENT's `type < 24` until a server

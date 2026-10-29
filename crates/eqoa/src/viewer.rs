@@ -1116,7 +1116,8 @@ pub fn shot_with(
             eprintln!("play: {}", p.describe());
             for e in p.entities.slots.iter().flatten() {
                 let name = e.creature.as_ref().map(|c| c.name.as_str()).unwrap_or("");
-                eprintln!("  entity {:#x} {name:24} model {:#010x} at ({:.1}, {:.1}, {:.1})", e.id, e.model, e.pos[0], e.pos[1], e.pos[2]);
+                let two = if e.model2 != 0 || e.drawn_model != e.model { format!(" model2 {:#010x} drawn {:#010x}", e.model2, e.drawn_model) } else { String::new() };
+                eprintln!("  entity {:#x} {name:24} model {:#010x}{two} at ({:.1}, {:.1}, {:.1})", e.id, e.model, e.pos[0], e.pos[1], e.pos[2]);
             }
         }
     }

@@ -855,13 +855,13 @@ fn held_items(cs: &CSprite<Ee>, c: &net::entity::Creature) -> Held {
 /// Built in the art its model is drawn in (`esf::Library::view_for`): the
 /// 2002 disc's, whole, for a model that disc has while its art is drawn.
 fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64) -> Option<Puppet> {
-    let era = lib.view_for(e.model as i32);
+    let era = lib.view_for(e.drawn_model as i32);
     lib.with_view(era, || build_puppet_in(lib, g, e, look, slot, game_ms, era))
 }
 
 fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, era: esf::Era) -> Option<Puppet> {
     let textures = render::library_textures(lib);
-    lib.lookup(e.model as i32).and_then(|r| {
+    lib.lookup(e.drawn_model as i32).and_then(|r| {
                     let mut model = lib.build_model(r)?;
                     let mut anims = AnimScene { time: game_ms, ..Default::default() };
                     let mut rand = Rand(slot as u64 + 1);
@@ -878,7 +878,7 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                         dress(&mut model, &vi::cust::apply_look_with(cs, look, helm_worn, |id| lib.surface(id as i32).is_some(), &crate::s2::get().cust()));
                     }
                     let gpu = g.renderer.upload(g.device, g.queue, &model, &[render::IDENTITY], &textures);
-                    Some(Puppet { id: e.id, model: e.model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era })
+                    Some(Puppet { id: e.id, model: e.drawn_model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era })
                 })
 }
 
@@ -994,9 +994,9 @@ fn redo(was: (u32, u32, Option<vi::cust::Look>, Held), now: (u32, u32, Option<vi
 /// it is now, dressed in `look`. The puppet it replaced, when it was made
 /// anew.
 fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64) -> Option<Option<Puppet>> {
-    let r = p.as_ref().map_or(Redo::Build, |p| redo((p.id, p.model, p.look, p.held), (e.id, e.model, look, held_by(p.sprite.as_ref(), e.creature.as_ref()))));
+    let r = p.as_ref().map_or(Redo::Build, |p| redo((p.id, p.model, p.look, p.held), (e.id, e.drawn_model, look, held_by(p.sprite.as_ref(), e.creature.as_ref()))));
     // the art swapped (F9) since it was built: made anew in the art now
-    let r = if p.as_ref().is_some_and(|p| p.era != lib.view_for(e.model as i32)) { Redo::Build } else { r };
+    let r = if p.as_ref().is_some_and(|p| p.era != lib.view_for(e.drawn_model as i32)) { Redo::Build } else { r };
     match r {
         Redo::Keep => None,
         Redo::Build => Some(std::mem::replace(p, build_puppet(lib, g, e, look, slot, game_ms))),
@@ -1438,6 +1438,39 @@ mod entity_actors {
         assert_eq!(w.actors.len(), count);
     }
 
+    /// An entity's actor is of the body the game draws (`GetModel()` as
+    /// `Changed` keeps it), off the channel's own bytes: a signpost sent with
+    /// a blocker's model in `model2` is the blocker; `model2` cleared, still
+    /// the blocker (the old `m_model` equals the new `GetModel()`); the
+    /// model changed, a human. The control: the model's own sprite, which the
+    /// actor had before `model2` was read.
+    #[test]
+    fn an_actor_is_of_the_body_drawn() {
+        let (x, z) = (25275.115f32, 15766.627f32);
+        let Some((lib, world)) = freeport(x, z) else { return };
+        let mut w = Walker::arrive(world, crate::walker::Spawn::ground(x, z, 0.0));
+        let mut p = super::commands::play();
+        let sprite_of = |w: &mut Walker, id: u32| w.scene.find_sprite(&lib, lib.lookup(id as i32).unwrap());
+        let (post, blocker, human) = (sprite_of(&mut w, SIGNPOST), sprite_of(&mut w, BLOCKER), sprite_of(&mut w, HUMAN));
+        assert!(post.is_some() && blocker.is_some() && human.is_some() && post != blocker, "the control: three sprites");
+        let mut send = |p: &mut Play, w: &mut Walker, model: u32, model2: u32| {
+            let mut v = vec![0u8; 162];
+            v[0] = 1;
+            v[1..5].copy_from_slice(&0x0135_5d7eu32.to_le_bytes());
+            v[5] = net::entity::TYPE_CREATURE;
+            v[28..32].copy_from_slice(&model.to_le_bytes());
+            v[32..36].copy_from_slice(&model2.to_le_bytes());
+            let id = p.session.self_id;
+            p.entities.channel(3, &v, id, 0, UPDATE_RATE, |_| {});
+            p.place_actors(w, &lib);
+            p.actors[3].map(|a| w.scene.actors[a.actor].sprite).flatten()
+        };
+        assert_eq!(send(&mut p, &mut w, SIGNPOST, 0), post, "the control: the model's own");
+        assert_eq!(send(&mut p, &mut w, SIGNPOST, BLOCKER), blocker, "model2: drawn in its place");
+        assert_eq!(send(&mut p, &mut w, SIGNPOST, 0), blocker, "model2 cleared: still drawn");
+        assert_eq!(send(&mut p, &mut w, HUMAN, 0), human, "the model changed");
+    }
+
     /// Sandstorm's blockers (F3 20261028-233048, an unnamed creature where
     /// the player stood; a quest's gate the players ran past): CHAR.ESF's
     /// 0x6F412342 is a SimpleSprite with an empty prim buffer and a
@@ -1463,7 +1496,7 @@ mod entity_actors {
             let mut p = super::commands::play();
             if let Some((model, at, scale)) = entity {
                 let creature = Some(net::entity::Creature::default());
-                p.entities.slots[3] = Some(net::entity::Entity { id: 0x0135_5d7e, kind: net::entity::TYPE_CREATURE, model, scale, pos: at, actor_pos: at, creature, ..Default::default() });
+                p.entities.slots[3] = Some(net::entity::Entity { id: 0x0135_5d7e, kind: net::entity::TYPE_CREATURE, model, drawn_model: model, scale, pos: at, actor_pos: at, creature, ..Default::default() });
             }
             p.place_actors(&mut w, &lib);
             let made = p.actors[3].is_some();
@@ -2038,7 +2071,8 @@ impl Play {
         let _ = writeln!(o, "{}; {n} entity updates since the world entry{}", self.session.net_line(), if n > 0 { format!(", the last {} ms ago", now.wrapping_sub(last)) } else { String::new() });
         for e in self.entities.slots.iter().flatten() {
             let name = e.creature.as_ref().map_or("", |c| c.name.as_str());
-            let _ = writeln!(o, "  {:#x} kind {} model {:#x} {name:?} at {:?}", e.id, e.kind, e.model, e.pos);
+            let two = if e.model2 != 0 || e.drawn_model != e.model { format!(" model2 {:#x} drawn {:#x}", e.model2, e.drawn_model) } else { String::new() };
+            let _ = writeln!(o, "  {:#x} kind {} model {:#x}{two} {name:?} at {:?}", e.id, e.kind, e.model, e.pos);
             if let Some(c) = &e.creature {
                 let _ = writeln!(o, "    {}", look_line(c));
                 let _ = writeln!(o, "    {}", move_line(e, c, now));
@@ -2662,18 +2696,20 @@ impl Play {
         let every = far_pose_every(self.far_last);
         let mut far = 0;
         for (slot, entity) in self.entities.slots.iter().enumerate() {
-            let want = entity.as_ref().filter(|e| Some(e.id) != me && e.model != 0);
+            // each one as the game draws it: its `GetModel()` as `Changed`
+            // last set it (`drawn_model`)
+            let want = entity.as_ref().filter(|e| Some(e.id) != me && e.drawn_model != 0);
             if let Some(e) = entity
                 && Some(e.id) == me
-                && e.model != 0
-                && self.self_model != Some(e.model)
+                && e.drawn_model != 0
+                && self.self_model != Some(e.drawn_model)
             {
-                self.self_model = Some(e.model);
-                new_model = Some(e.model);
+                self.self_model = Some(e.drawn_model);
+                new_model = Some(e.drawn_model);
             }
             if let Some(e) = entity
                 && Some(e.id) == me
-                && e.model != 0
+                && e.drawn_model != 0
             {
                 let look = e.creature.as_ref().map(look_of);
                 apply(lib, &mut g, &mut self.self_puppet, e, look, slot, game_ms);
@@ -2889,10 +2925,10 @@ impl Play {
         let c = &walker.cam.walk.committed;
         let (at, hpr) = (c.smooth_location(), Vect3::new(c.angles.x, F::ZERO, F::ZERO));
         let dead = walker.sprite.as_ref().is_some_and(|cs| cs.dead);
-        let want = self.entities.slots.iter().flatten().find(|e| Some(e.id) == me && e.model != 0).map(|e| ActorAt {
+        let want = self.entities.slots.iter().flatten().find(|e| Some(e.id) == me && e.drawn_model != 0).map(|e| ActorAt {
             id: e.id,
-            model: e.model,
-            era: lib.view_for(e.model as i32),
+            model: e.drawn_model,
+            era: lib.view_for(e.drawn_model as i32),
             at,
             hpr,
             scale: actor_scale(e.scale),
@@ -2923,12 +2959,12 @@ impl Play {
         let refresh = std::mem::take(&mut self.refresh_collision);
         for slot in 0..MAX_SLOTS {
             let e = self.entities.slots[slot].as_ref().filter(|e| Some(e.id) != me);
-            let want = e.filter(|e| e.model != 0).map(|e| {
+            let want = e.filter(|e| e.drawn_model != 0).map(|e| {
                 let level = e.creature.as_ref().is_some_and(|c| c.p255 != 0);
                 let hpr = if level { [e.actor_hpr[0], 0.0, 0.0] } else { e.actor_hpr };
                 let (model, era, dead) = match self.puppets[slot].as_ref() {
                     Some(p) => (p.model, p.era, p.sprite.as_ref().is_some_and(|cs| cs.dead)),
-                    None => (e.model, lib.view_for(e.model as i32), false),
+                    None => (e.drawn_model, lib.view_for(e.drawn_model as i32), false),
                 };
                 ActorAt { id: e.id, model, era, at: v3(e.actor_pos), hpr: v3(hpr), scale: actor_scale(e.scale), dead }
             });
