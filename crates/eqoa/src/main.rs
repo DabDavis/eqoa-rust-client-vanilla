@@ -87,6 +87,7 @@ mod blacksmith;
 mod gear;
 mod gram;
 mod hideui;
+mod livewords;
 mod hud;
 mod damage;
 mod display;
