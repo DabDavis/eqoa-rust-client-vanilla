@@ -228,10 +228,11 @@ impl Play {
                     self.bank.state = 1;
                 }
                 BankOut::Auction => {}
-                BankOut::Sell(slot, a, b, c) => {
-                    // VIBankControl::Sell: the bank record's key, state 3
+                BankOut::Sell(slot, n, a, b, c) => {
+                    // VIBankControl::Sell: the bank record's key, the count
+                    // (the live client's quantity), state 3
                     if let Some(it) = self.dump.bank.items.items.get(slot.max(0) as usize).filter(|_| slot >= 0) {
-                        let msg = crate::auction::Auction::sell(self.target, it.inv_index, a, b, c);
+                        let msg = crate::auction::Auction::sell(self.target, it.inv_index, n, a, b, c);
                         self.session.send(&msg);
                         self.bank.state = 3;
                     }
@@ -274,6 +275,10 @@ impl Play {
                 crate::auctionwnd::SearchOut::Close => self.close_auction_search(),
                 crate::auctionwnd::SearchOut::Red(id) => {
                     let text = self.words.as_ref().map_or_else(String::new, |w| w.get(id, 0).to_string());
+                    self.add_chat(text, [1.0, 0.25, 0.25, 1.0]);
+                }
+                crate::auctionwnd::SearchOut::RedCount(id, n) => {
+                    let text = self.words.as_ref().map_or_else(String::new, |w| w.get(id, 0).replacen("%d", &n.to_string(), 1));
                     self.add_chat(text, [1.0, 0.25, 0.25, 1.0]);
                 }
             }

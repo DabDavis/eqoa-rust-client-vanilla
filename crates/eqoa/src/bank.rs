@@ -38,8 +38,8 @@ pub enum BankOut {
     MoveMoney(u8, i32),
     /// 310: the auction page
     Auction,
-    /// `VIBankControl::Sell(slot, price, buyout, duration)`: 0x1205 sub-op 5
-    Sell(i32, i32, i32, i32),
+    /// `VIBankControl::Sell(slot, count, price, buyout, duration)`: 0x1205 sub-op 5
+    Sell(i32, i32, i32, i32, i32),
     /// `AddText(word 1727)` in red: that cannot be auctioned
     CannotSell,
 }
@@ -352,7 +352,7 @@ impl Bank {
                 for o in so {
                     match o {
                         SellOut::Back => self.back(vui, r, out),
-                        SellOut::Sell(slot, a, b, c) => out.push(BankOut::Sell(slot, a, b, c)),
+                        SellOut::Sell(slot, n, a, b, c) => out.push(BankOut::Sell(slot, n, a, b, c)),
                         SellOut::CannotSell => out.push(BankOut::CannotSell),
                     }
                 }
