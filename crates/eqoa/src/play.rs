@@ -1533,26 +1533,37 @@ mod entity_actors {
     }
 }
 
+/// `CycleTarget`'s reach: a creature this far from the camera, squared
+/// (200), or farther is never targeted.
+const CYCLE_REACH2: f32 = 40000.0;
+
 /// What `TargetCentre` reads of a creature with an actor: its id, where it is
 /// measured (a character's slot 4, else its place), its +0x18 bit 0 (the
-/// selectable flag) and whether it is of a player's side (`m_p256` 3).
+/// selectable flag), whether it is of a player's side (`m_p256` 3) and how
+/// far its place is from the camera, squared.
 #[derive(Clone, Copy, Debug)]
 struct Seen {
     id: u32,
     at: [f32; 3],
     selectable: bool,
     side: bool,
+    d2: f32,
 }
 
 /// `TargetCentre`'s choice: of the creatures `seen`, not the player `me`,
 /// not the pet, none of a player's side, the selectable ones in view
-/// (`view_proj`'s frustum: `m_frustum.Cull(pos, 0)`) the one whose place lies
-/// nearest the middle of the picture through `game` (x and y after the
-/// divide), the first of equals; none when there is none.
+/// (`view_proj`'s frustum: `m_frustum.Cull(pos, 0)`) within `CycleTarget`'s
+/// reach the one whose place lies nearest the middle of the picture through
+/// `game` (x and y after the divide), the first of equals; none when there is
+/// none. The reach is not the console's: its `TargetCentre` takes any
+/// distance, the 24 creatures a PS2 keeps reaching 300 (and vanilla's NPC/PC
+/// View Distance 1,000), so the crosshair took what Tab could not, out of
+/// sight too (the user, 2026-10-29: "holding r1 with the crosshair sight lets
+/// players target normally untargetable npcs", then Tab's reach).
 fn centre_choice(seen: &[Seen], me: Option<u32>, pet: u32, game: glam::Mat4, view_proj: glam::Mat4) -> Option<u32> {
     let (mut best, mut best_d) = (None, 999999.0f32);
     for s in seen {
-        if Some(s.id) == me || s.id == pet || s.side || !s.selectable {
+        if Some(s.id) == me || s.id == pet || s.side || !s.selectable || s.d2 >= CYCLE_REACH2 {
             continue;
         }
         let pos = glam::Vec3::from(s.at).extend(1.0);
@@ -3249,7 +3260,7 @@ impl Play {
             if !near && !inside {
                 continue;
             }
-            if e.p18 & 1 == 0 || d2 >= 40000.0 {
+            if e.p18 & 1 == 0 || d2 >= CYCLE_REACH2 {
                 continue;
             }
             // the game's camera's x; read only past 5 away and not near,
@@ -3501,6 +3512,7 @@ impl Play {
     /// the target changed (`DrawReticle(1)`).
     fn target_centre(&mut self, walker: &Walker, view_proj: glam::Mat4) -> bool {
         let (proj, view) = walker.view(4.0 / 3.0);
+        let eye = walker.eye_position();
         let seen: Vec<Seen> = self
             .entities
             .slots
@@ -3509,7 +3521,8 @@ impl Play {
             .filter_map(|(k, e)| {
                 let e = e.as_ref().filter(|e| self.in_scene(e))?;
                 let at = self.slot4_of(k).unwrap_or(e.actor_pos);
-                Some(Seen { id: e.id, at, selectable: e.p18 & 1 != 0, side: e.creature.as_ref().is_some_and(|c| c.p256 == 3) })
+                let d2 = (glam::Vec3::from(e.actor_pos) - eye).length_squared();
+                Some(Seen { id: e.id, at, selectable: e.p18 & 1 != 0, side: e.creature.as_ref().is_some_and(|c| c.p256 == 3), d2 })
             })
             .collect();
         let choice = centre_choice(&seen, self.self_id32(), self.pet_id, proj * view, view_proj);
@@ -8453,13 +8466,14 @@ mod commands {
     /// a player's side, one not selectable and one behind the camera never;
     /// one at the wide window's edge only when nothing else is in view, and
     /// none at all is none. The controls: measured through the 16:9 view as
-    /// drawn, A would be nearer.
+    /// drawn, A would be nearer. Nothing 200 or more from the camera, Tab's
+    /// reach, though nearer the middle (just inside it is the control).
     #[test]
     fn the_target_is_the_creature_nearest_the_middle() {
         let view = glam::camera::rh::view::look_to_mat4(glam::Vec3::ZERO, glam::Vec3::Z, glam::Vec3::Y);
         let game = crate::walker::projection_to(4.0 / 3.0, 6000.0) * view;
         let drawn = crate::walker::projection_to(16.0 / 9.0, 6000.0) * view;
-        let seen = |id: u32, at: [f32; 3]| Seen { id, at, selectable: true, side: false };
+        let seen = |id: u32, at: [f32; 3]| Seen { id, at, selectable: true, side: false, d2: glam::Vec3::from(at).length_squared() };
         let a = seen(1, [0.5, 0.0, 10.0]);
         let b = seen(2, [0.0, 0.3, 10.0]);
         let others = [
@@ -8479,6 +8493,13 @@ mod commands {
         assert_eq!(centre_choice(&others, Some(0x100), 7, game, drawn), None);
         // the control: measured as drawn
         assert_eq!(centre_choice(&[a, b], Some(0x100), 7, drawn, drawn), Some(1));
+        // Tab's reach: dead ahead at 250 is passed over for one off to the
+        // side at 20; just inside 200 it is taken; alone at 250, nothing
+        let far = seen(8, [0.0, 0.0, 250.0]);
+        let side = seen(9, [3.0, 0.0, 20.0]);
+        assert_eq!(centre_choice(&[far, side], Some(0x100), 7, game, drawn), Some(9));
+        assert_eq!(centre_choice(&[seen(8, [0.0, 0.0, 199.0]), side], Some(0x100), 7, game, drawn), Some(8));
+        assert_eq!(centre_choice(&[far], Some(0x100), 7, game, drawn), None);
     }
 
     /// The choice made the target: a change stops the attack and drops the

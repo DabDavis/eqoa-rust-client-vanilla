@@ -5,6 +5,12 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-29 · The aiming crosshair reaches no farther than a tap
+- Holding R1 or L1 (Tab or ` on the keyboard) to aim with the crosshair now targets only what a
+  tap of the same button could: creatures within 200 of the camera. It used to take whatever lay
+  nearest the crosshair however far off, even creatures too far away to be drawn, and with a long
+  NPC/PC View Distance out to 1,000.
+
 ## 2026-10-29 · A creature's second body
 - A server can send a creature or a player with a second body to show in place of its own (the
   live game did, for its upgraded models). This client now shows that body, and bumps into it,
