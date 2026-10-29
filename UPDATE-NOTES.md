@@ -18,7 +18,7 @@ is put on the page by `.github/workflows/notes.yml`.
   the duel off, Space for a chat line. When both accept the duel begins, and the winner takes both
   stakes. The server only takes tunar: an item put in is refused with a line.
 - In a duel you can attack your opponent and their pet as you would a creature, and Tab and R1
-  cycle to their pet.
+  cycle to their pet. An orange mark on the compass points to where the duel began.
 - Your own character is now drawn at the size the server gives it, as everyone else is: on
   eqoaclassic a gnome is a little smaller than before (9 tenths). How you walk and what you bump
   into are as before.
