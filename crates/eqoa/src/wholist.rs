@@ -8,7 +8,7 @@
 //!
 //! Not the game's: the rows' order. The game shows the list as the server
 //! sent it; here it is sorted (`Sort`, F3 20261023-085524 and -090229, the
-//! user's choice), by name from the start, and ○ (C on the keyboard) or a
+//! user's choice), by name each time the list opens, and ○ (C on the keyboard) or a
 //! click on a column's heading sorts it by that column instead.
 //!
 //! A server whose patch sorts the list itself (Sandstorm's S2, `PatchSort`)
@@ -237,6 +237,19 @@ impl PatchSort {
         Some(PatchSort { race_rank, class_rank, name_bytes, back, on, marks, before, after, legend, sort_word })
     }
 
+    /// The legend's sort, alone: its keys and its word, the format after the
+    /// third `%S` (Select, Exit and Update before it). None when the format
+    /// has not four.
+    pub fn sort_legend(&self) -> Option<Vec<u16>> {
+        let at: Vec<usize> = self.legend.windows(2).enumerate().filter(|(_, w)| w == b"%S").map(|(i, _)| i).collect();
+        if at.len() != 4 {
+            return None;
+        }
+        let rest = &self.legend[at[2] + 2..];
+        let start = rest.iter().position(|&c| c != b' ').unwrap_or(rest.len());
+        Some(crate::searchwnd::format(&rest[start..], &[&self.sort_word], 256))
+    }
+
     /// The session's patch's, if it sorts the who list.
     pub fn current() -> Option<Arc<PatchSort>> {
         crate::s2::get().image.as_deref().and_then(PatchSort::read).map(Arc::new)
@@ -442,7 +455,8 @@ pub struct WhoList {
     /// (`HEADING - column`), and when (for a pointer)
     hits: Hits,
     now: i64,
-    /// the column the rows are sorted by (the client's, kept while it runs)
+    /// the column the rows are sorted by (the client's, from the name each
+    /// time the list opens)
     pub sort: Sort,
     /// the rows' order as last drawn (`order`)
     view: Vec<usize>,
@@ -512,7 +526,8 @@ impl WhoList {
     }
     /// `OnMessage` 295 from outside: the window and the status box set up
     /// and titled (730, 271), the popup's three choices (425, 942, 515)
-    /// under 422.
+    /// under 422; the rows sorted by name again (the client's: Update keeps
+    /// the column, a list opened again does not).
     pub fn open(&mut self, vui: &Vui, r: &dyn Raster) {
         let w = |id: i32| wide(vui.words.get(id, vui.language));
         self.window.init(vui, r, [320, 180], 600, 13, 0);
@@ -527,6 +542,8 @@ impl WhoList {
         self.top = 0;
         self.flash.reset();
         self.patch = PatchSort::current();
+        self.sort = Sort::default();
+        self.keep = None;
     }
 
     /// `OnKeyDown`/`OnKeyUp` (the popup's while it is up).
@@ -707,8 +724,74 @@ impl WhoList {
     }
 }
 
+/// What the who list's tests draw with and sort by, for the guild's too:
+/// a raster that records the strings it centres, and a patch's sort stood
+/// in for one read out of an S2.
+#[cfg(test)]
+pub mod testing {
+    use super::PatchSort;
+    use vi::ui::{Raster, wide};
+
+    /// What the patch's sort draws, by place: a recording raster.
+    #[derive(Default)]
+    pub struct Texts(pub Vec<([i32; 2], String)>);
+    impl crate::ui::Layout for Texts {}
+    impl Raster for Texts {
+        fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn stretch_blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+        fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+        fn draw_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16]) {}
+        fn draw_centered_string(&mut self, at: [i32; 2], _: [f32; 4], s: &[u16], _: u32) {
+            self.0.push((at, String::from_utf16_lossy(s)));
+        }
+        fn string_width(&self, s: &[u16]) -> i32 {
+            s.len() as i32 * 8
+        }
+        fn point_size(&self) -> i32 {
+            20
+        }
+        fn viewport(&self) -> [i32; 4] {
+            [0, 0, 640, 448]
+        }
+        fn set_viewport(&mut self, _: [i32; 4]) {}
+    }
+
+    /// The short words of the races and the classes, as the window shows
+    /// them (the test's own spelling of the game's words).
+    pub const RACE_SHORT: [&str; 10] = ["HUM", "ELF", "DELF", "GNO", "DWF", "TRL", "BAR", "HLF", "ERU", "OGR"];
+    pub const CLASS_SHORT: [&str; 15] = ["WAR", "RAN", "PAL", "SK", "MNK", "BRD", "RGE", "DRD", "SHA", "CL", "MAG", "NEC", "ENC", "WIZ", "ALC"];
+
+    /// A patch's sort stood in for a test: ranks from A to Z by the short
+    /// words, its keys, marks, places and legend the test's own.
+    pub fn patch_sort() -> PatchSort {
+        let rank = |words: &[&str]| {
+            let mut order: Vec<usize> = (0..words.len()).collect();
+            order.sort_by_key(|&i| words[i]);
+            let mut r = [words.len() as u8; 16];
+            for (k, &i) in order.iter().enumerate() {
+                r[i] = k as u8;
+            }
+            r
+        };
+        PatchSort {
+            race_rank: rank(&RACE_SHORT),
+            class_rank: rank(&CLASS_SHORT),
+            name_bytes: 29,
+            back: [140, 136],
+            on: [142, 137],
+            marks: [wide("<"), wide(">")],
+            before: [35, 285, 385, 485],
+            after: [102, 352, 464, 564],
+            legend: b"|x%S |t%S |s%S |v|V%S".to_vec(),
+            sort_word: wide("Order"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::testing::*;
     use super::*;
 
     fn reply(serial: i64, names: &[&str]) -> Vec<u8> {
@@ -888,62 +971,6 @@ mod tests {
         assert_eq!(l.sort, Sort::Level);
     }
 
-    /// What the patch's sort draws, by place: a recording raster.
-    #[derive(Default)]
-    struct Texts(Vec<([i32; 2], String)>);
-    impl crate::ui::Layout for Texts {}
-    impl Raster for Texts {
-        fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
-        fn stretch_blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
-        fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
-        fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
-        fn draw_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16]) {}
-        fn draw_centered_string(&mut self, at: [i32; 2], _: [f32; 4], s: &[u16], _: u32) {
-            self.0.push((at, String::from_utf16_lossy(s)));
-        }
-        fn string_width(&self, s: &[u16]) -> i32 {
-            s.len() as i32 * 8
-        }
-        fn point_size(&self) -> i32 {
-            20
-        }
-        fn viewport(&self) -> [i32; 4] {
-            [0, 0, 640, 448]
-        }
-        fn set_viewport(&mut self, _: [i32; 4]) {}
-    }
-
-    /// The short words of the races and the classes, as the window shows
-    /// them (the test's own spelling of the game's words).
-    const RACE_SHORT: [&str; 10] = ["HUM", "ELF", "DELF", "GNO", "DWF", "TRL", "BAR", "HLF", "ERU", "OGR"];
-    const CLASS_SHORT: [&str; 15] = ["WAR", "RAN", "PAL", "SK", "MNK", "BRD", "RGE", "DRD", "SHA", "CL", "MAG", "NEC", "ENC", "WIZ", "ALC"];
-
-    /// A patch's sort stood in for a test: ranks from A to Z by the short
-    /// words, its keys, marks, places and legend the test's own.
-    fn patch_sort() -> PatchSort {
-        let rank = |words: &[&str]| {
-            let mut order: Vec<usize> = (0..words.len()).collect();
-            order.sort_by_key(|&i| words[i]);
-            let mut r = [words.len() as u8; 16];
-            for (k, &i) in order.iter().enumerate() {
-                r[i] = k as u8;
-            }
-            r
-        };
-        PatchSort {
-            race_rank: rank(&RACE_SHORT),
-            class_rank: rank(&CLASS_SHORT),
-            name_bytes: 29,
-            back: [140, 136],
-            on: [142, 137],
-            marks: [wide("<"), wide(">")],
-            before: [35, 285, 385, 485],
-            after: [102, 352, 464, 564],
-            legend: b"|x%S |t%S |s%S |v|V%S".to_vec(),
-            sort_word: wide("Order"),
-        }
-    }
-
     /// Sandstorm's S2 sorts the who list itself: what its hooks use, read out
     /// of the live S2 where its code names it. Its keys are L1 and left one
     /// column back, R1 and right one on; its ranks put the races and the
@@ -981,6 +1008,8 @@ mod tests {
         assert_eq!(art.heads[0][1], marked, "the search window's marks");
         assert_eq!(p.legend.windows(2).filter(|w| w == b"%S").count(), 4);
         assert!(!p.sort_word.is_empty());
+        let sort = p.sort_legend().expect("the guild's roster's legend: the sort alone");
+        assert!(sort.ends_with(&p.sort_word) && sort.len() > p.sort_word.len(), "its keys, then its word");
         assert!(PatchSort::read(&Image::default()).is_none(), "the control: no patch, no sort");
         let compare = img.call_target(img.call_target(img.call_target(CLIENT_BASE + at::GET_LIST).unwrap() + at::SORT).unwrap() + at::COMPARE).unwrap();
         let mut moved = patch.clone();
@@ -1069,6 +1098,50 @@ mod tests {
         // and the patch's keys are nothing to it
         c.key(&vui, &r, &who, 142, true, 0, &mut cues);
         assert_eq!(c.sort, Sort::Level);
+    }
+
+    /// The list opens sorted by name each time, whatever column it was left
+    /// sorted by, the cursor on the top row, the patch's sort's too; the
+    /// control: Update (Q) asks again and keeps the column.
+    #[test]
+    fn the_list_opens_sorted_by_name() {
+        use crate::pointer::testing::{NullRaster, vui};
+        let vui = vui();
+        let mut r = NullRaster;
+        let who = Who { list: vec![row("Zed", 0, 0, 30), row("Amy", 0, 0, 50), row("Bob", 0, 0, 10)], ..Default::default() };
+        let mut cues = Vec::new();
+        for patch in [None, Some(Arc::new(patch_sort()))] {
+            let mut l = WhoList::default();
+            l.open(&vui, &r);
+            l.patch = patch.clone();
+            l.draw(&vui, &mut r, &who, 0, true, &mut cues);
+            l.sel = 1;
+            for _ in 0..3 {
+                l.key(&vui, &r, &who, 135, true, 0, &mut cues);
+            }
+            assert_eq!(l.sort, Sort::Level);
+            // the control: Update keeps it
+            assert!(matches!(l.key(&vui, &r, &who, 113, true, 0, &mut cues), Some(WhoUp::Refresh)));
+            assert_eq!(l.sort, Sort::Level, "Update keeps the column");
+            // Escape, then the list opened again
+            assert!(matches!(l.key(&vui, &r, &who, 27, true, 0, &mut cues), Some(WhoUp::Close)));
+            l.open(&vui, &r);
+            l.patch = patch;
+            l.draw(&vui, &mut r, &who, 1000, true, &mut cues);
+            assert_eq!(l.sort, Sort::Name, "by name again");
+            assert_eq!((l.sel, who.list[l.view[0]].name.as_str()), (0, "Amy"), "Amy on top and selected");
+        }
+    }
+
+    /// The legend's sort alone (the guild's roster's): the format past its
+    /// third `%S`, the spaces before it dropped, with the patch's word. The
+    /// control: a format of another count of words has none.
+    #[test]
+    fn the_patchs_sort_legend_alone() {
+        let mut p = patch_sort();
+        assert_eq!(p.sort_legend(), Some(wide("|v|VOrder")));
+        p.legend = b"|x%S |t%S |v|V%S".to_vec();
+        assert_eq!(p.sort_legend(), None, "the control: three words");
     }
 
     /// With the patch's sort the heading sorted by is drawn between the

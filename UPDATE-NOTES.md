@@ -5,6 +5,15 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-29 · The guild list sorts like the Who list on Sandstorm, and both start by name
+- On a server with Sandstorm's patch, the guild list now sorts the way its Who list does: left and
+  right (or L1 and R1) move the sort to the previous or next column, and arrows mark the column
+  it is sorted by. The legend at the bottom names the keys. As in the Who list, the cursor stays
+  where it was in the list when you sort, so it is on the new first member if it was on the top
+  row. C and a click on a column's heading still sort it too.
+- The Who list and the guild list now open sorted by name every time, whichever column you last
+  sorted them by. Update in the Who list keeps the column you chose.
+
 ## 2026-10-29 · One question for all your crash reports, and freezes written down
 - If the game stopped more than once since you last sent its crash reports, the next start now
   asks about all of them at once and says how many there are. Send sends them all, Delete deletes
