@@ -18,6 +18,9 @@ is put on the page by `.github/workflows/notes.yml`.
 - Class Mastery: buying a second Master Class while you have one is now refused at once, with "You
   cannot possess more than one Master Class at a time." in red, where it used to only warn and then
   let you ask the server anyway.
+- Destroying an item now asks 'Destroy item "<its name>"?', so you can see which one you picked,
+  and selling one to a merchant asks 'Sell item "<its name>"?' for everything but loot. Both start
+  on No.
 
 ## 2026-10-29 · One question for all your crash reports, and freezes written down
 - If the game stopped more than once since you last sent its crash reports, the next start now
