@@ -62,6 +62,13 @@ impl Play {
         &self.duel.part
     }
 
+    /// The compass's duel patch (`DrawPatch`'s tail, live 0x0135E124): the
+    /// duel's centre (sub 8) while it is on and in the player's world.
+    pub(super) fn duel_patch(&self) -> Option<[f32; 3]> {
+        let p = &self.duel.part;
+        (p.running && p.world as i32 == self.world_id()).then_some(p.centre)
+    }
+
     /// The window as the report's trace gives it.
     pub(super) fn duel_window_line(&self) -> String {
         let w = &self.duel.wnd;
@@ -434,6 +441,24 @@ mod tests {
         p.do_action(crate::duel::MSG_INVITE, 0);
         assert!(sent(&mut p).is_empty());
         assert_eq!(p.chat.back(), Some(&("You cannot duel yourself.".to_string(), crate::duel::RED)));
+    }
+
+    /// The compass's duel patch: sub 8's centre while sub 7 has the duel on
+    /// and the player is in its world. The controls: off, or another world,
+    /// none.
+    #[test]
+    fn the_compass_has_the_duels_centre() {
+        let mut p = play();
+        let mut c = Writer::default();
+        c.u32(25274.5f32.to_bits()).u32(54.1f32.to_bits()).u32(15723.0f32.to_bits()).u8(0);
+        p.duel_opcode(0x1502, &down(8, 9, &c.data), None);
+        assert_eq!(p.duel_patch(), None, "the control: the duel not on");
+        let mut w = Writer::default();
+        w.u8(1).u8(1).u32(0x55).u32(u32::MAX);
+        p.duel_opcode(0x1502, &down(7, 9, &w.data), None);
+        assert_eq!(p.duel_patch(), Some([25274.5, 54.1, 15723.0]));
+        p.player.world = 2;
+        assert_eq!(p.duel_patch(), None, "the control: another world");
     }
 
     /// Quit with a duel on surrenders it first (the live `DoAction`'s

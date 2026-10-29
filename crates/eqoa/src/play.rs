@@ -7285,6 +7285,7 @@ impl Play {
             target: self.target,
             camera: walker.eye.position.to_array(),
             time_ms,
+            duel: self.duel_patch(),
         };
         let now = self.session.now();
         let dt = ((time_ms - self.hud_last).clamp(0, 250)) as f32 / 1000.0;
