@@ -1536,6 +1536,57 @@ mod entity_actors {
             assert!(got < 6.0 - face - 0.5 && got > 6.0 - face - 0.8, "scale {scale}: stopped at its face less the walk's sphere, at {got}");
         }
     }
+
+    /// The player's own body is drawn at its entity's scale, as
+    /// `VIEntity::Changed`'s `SetActorScale` scales the player's actor as any
+    /// other's: go-eqoa-server's 0.9 for a gnome makes the walker's actor (the
+    /// body's model matrix, and with it its shadow, its spells' places, its
+    /// trail) 0.9 of a human's 1.0, its scene actor too (`place_self_actor`).
+    /// The walk is the walk control's own (`InitParms`' constants, which
+    /// nothing in CLIENT scales): the same steps over the same ground end bit
+    /// for bit where the 1.0 walk ends. The controls: the body at 1.0 (and
+    /// an entity with no scale, 0, taken as 1 as for any entity).
+    #[test]
+    fn the_players_body_is_drawn_at_its_entitys_scale() {
+        let (x, z) = (25275.115f32, 15766.627f32);
+        let Some((lib, file)) = freeport_lib(x, z) else { return };
+        let human = lib.lookup(HUMAN as i32).expect("CHAR.ESF has it");
+        let walker = || {
+            let mut w = Walker::arrive(World::load(&lib, file).unwrap(), crate::walker::Spawn::ground(x, z, 0.0));
+            w.set_character(&lib, human);
+            w
+        };
+        let (mut small, mut plain) = (walker(), walker());
+        let mut p = super::commands::play();
+        let me = |scale: f32| net::entity::Entity { id: 0x100, kind: net::entity::TYPE_CREATURE, model: HUMAN, drawn_model: HUMAN, scale, creature: Some(net::entity::Creature::default()), ..Default::default() };
+        p.entities.slots[0] = Some(me(0.9));
+        p.place_self_actor(&mut small, &lib);
+        assert_eq!(small.scale.0, 0.9, "the entity's scale");
+        let a = p.self_actor.expect("its scene actor").actor;
+        assert_eq!(small.scene.actors[a].scale.0, 0.9, "its scene actor's");
+        let mut q = super::commands::play();
+        q.entities.slots[0] = Some(me(0.0));
+        q.place_self_actor(&mut plain, &lib);
+        assert_eq!(plain.scale.0, 1.0, "the control: no scale is 1");
+        // the body's model matrix: its axes 0.9 of the plain body's
+        let axis = |m: [[f32; 4]; 4], k: usize| (m[k][0] * m[k][0] + m[k][1] * m[k][1] + m[k][2] * m[k][2]).sqrt();
+        let ((ms, _), (mp, _)) = (small.pose(), plain.pose());
+        for k in 0..3 {
+            let ratio = axis(ms, k) / axis(mp, k);
+            assert!((ratio - 0.9).abs() < 1e-5, "axis {k}: {ratio}");
+        }
+        assert!((axis(walker().actor().to_cols(), 0) - 1.0).abs() < 1e-6, "the control: a walker's own scale is 1");
+        // the walk: the same steps, the same places
+        let t0 = small.scene.time;
+        for i in 1..=45 {
+            let c = crate::walker::Controls { fwd: 1.0, strafe: if i > 20 { 0.5 } else { 0.0 }, ..Default::default() };
+            small.frame(c, t0 + i * 33);
+            plain.frame(c, t0 + i * 33);
+            assert_eq!(small.cam.walk.committed.position.to_array().map(f32::to_bits), plain.cam.walk.committed.position.to_array().map(f32::to_bits), "frame {i}");
+        }
+        let (a0, a1) = (plain.cam.walk.committed.position.to_array(), [x, 0.0, z]);
+        assert!(((a0[0] - a1[0]).powi(2) + (a0[2] - a1[2]).powi(2)).sqrt() > 5.0, "the walk went somewhere");
+    }
 }
 
 /// `CycleTarget`'s reach: a creature this far from the camera, squared
@@ -2879,8 +2930,8 @@ impl Play {
         self.fishing_frame(walker, lib, game_ms);
         self.draw_projectiles(walker, lib, &mut g);
         // the player's own swing, on its walker's pose
+        let actor = walker.actor();
         if let (Some(p), Some(cs)) = (self.self_puppet.as_mut(), walker.sprite.as_mut()) {
-            let actor = Matrix44::transform(&Vect3::new(walker.cam.walk.phys.angles.x, F::ZERO, F::ZERO), F::ONE, &walker.cam.walk.phys.smooth_location());
             let centre = cs.h.calc_trans_about_center(&actor, &walker.anims);
             crate::trails::process(&mut self.trails, &mut p.trail, cs, &p.weapons, &centre, game_ms);
             self.self_at = Some((walker.cam.walk.phys.smooth_location().to_array(), slot_point(cs, 4, &centre)));
@@ -2960,6 +3011,11 @@ impl Play {
     fn place_self_actor(&mut self, walker: &mut Walker, lib: &Library) {
         self.actors_scene(walker);
         let me = self.self_id32();
+        // the body drawn at its entity's scale (`Changed`'s `SetActorScale`):
+        // a gnome's 0.9 where the server sends it
+        if let Some(e) = self.entities.slots.iter().flatten().find(|e| Some(e.id) == me) {
+            walker.scale = actor_scale(e.scale);
+        }
         let c = &walker.cam.walk.committed;
         let (at, hpr) = (c.smooth_location(), Vect3::new(c.angles.x, F::ZERO, F::ZERO));
         let dead = walker.sprite.as_ref().is_some_and(|cs| cs.dead);
@@ -3062,7 +3118,7 @@ impl Play {
         if walker.sprite.as_ref().is_some_and(|cs| !cs.holds_items) {
             attack = [11, 11];
         }
-        let actor = Matrix44::transform(&Vect3::new(walker.cam.walk.phys.angles.x, F::ZERO, F::ZERO), F::ONE, &walker.cam.walk.phys.smooth_location());
+        let actor = walker.actor();
         let has_self = me.is_some_and(|me| self.entities.slots.iter().flatten().any(|e| e.id == me));
         if has_self {
             let anims = &walker.anims;
