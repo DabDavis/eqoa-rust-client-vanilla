@@ -5,6 +5,12 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-29 · A steady camera while you strafe with the mouse held
+- Running while holding a mouse button (the right one, or the left one while you move) and
+  stepping sideways with A or D no longer makes the camera shake from side to side, which blurred
+  the picture at a high frame rate. It now follows you as smoothly as with the keys alone.
+- The same goes for dragging the camera round with a finger on a touch screen while you run.
+
 ## 2026-10-29 · Longer passwords at the login
 - The Station login, the new-account page and the change-password page now take a password of up
   to 31 characters, the most the login can send. They stopped at 15, so a longer password made on

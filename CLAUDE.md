@@ -144,7 +144,9 @@ current.
   the walk: its integrator's speed grows as its step shrinks, so it keeps the console's own frames
   (33.37 ms) and is drawn on its way to the next (`walker.rs`, `Kept`); never step it a frame drawn.
   Anything that writes the walk as a control between frames (the mouse's `set_heading`) calls
-  `Walker::rewind` first, or it reads as a place given and no console frame is stepped.
+  `Walker::rewind` first, or it reads as a place given and no console frame is stepped; a place it
+  gives the follow orbit's camera then (`set_orbit_angle`, round the console frame put back) is moved
+  onto the walk as last drawn (`Walker::camera_as_drawn`), or a sidestep jitters the camera.
 - Input (README "the pad", "the mouse and the touch screen"): the pad is the game's own path
   (`vi::pad` held to oracle ops 50-52; `input.rs` libpad on the host, `PadKeys`, `Play::set_key`,
   `controls.rs` UpdateControls). Headless: `EQOA_PAD` (`start@2500;stick l 0 -1@1500+2000`),

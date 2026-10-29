@@ -422,7 +422,12 @@ look, which turns the body at once (the client's own), is made on the kept frame
 (`Walker::rewind` first, once a frame), as a control: made on the frame drawn it
 read as a place given, and while the mouse moved no console frame was stepped
 (the run from a stand crept, a run let go of slid on, slopes sank it and floated
-it). `Process` runs
+it). The place that look gives the follow orbit's camera (behind the body, or
+round it) is then moved onto the walk as last drawn (`Walker::camera_as_drawn`),
+where the camera's `Process` would find it with the keys alone: left round the
+kept frame, a sidestep put the body drawn off the camera's line, and the camera
+swung 0.7 to 4 degrees round it and back at the console's rate (the eye jumped
+0.2 a frame at 144 Hz, against 0.012 with the keys alone). `Process` runs
 twice a console frame (the frame, and the one ahead again when the controls
 change), so the walk costs about what it did at 144-165 Hz, half at 240 and up to
 twice at 60 (0.1 ms a frame more). What it counts in frames runs on a clock of the game's frames,

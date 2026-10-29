@@ -95,6 +95,11 @@ pub struct Walker {
     /// The walk put back this frame (`rewind`), not yet kept again
     /// (`keep_left`).
     rewound: bool,
+    /// The camera's place as `rewind` found it, and how far the walk was
+    /// put back (the last frame drawn's place less the console frame's, in
+    /// doubles): a place given the camera after that was given round the
+    /// console frame (`camera_as_drawn`).
+    given: Option<(Vect3<Ee>, [f64; 3])>,
 }
 
 /// The console's frame: two fields of NTSC video (59.94 Hz), 33.37 ms. The
@@ -203,7 +208,7 @@ impl Walker {
         cam.set_orbit_distance(dist);
         cam.set_orbit_angle_behind();
         let eye = cam.process(&mut scene);
-        Walker { cam, scene, eye, sprite: None, anims: AnimScene::default(), rand: Rand(1), shake: 0, reach: Default::default(), kept: None, rewound: false }
+        Walker { cam, scene, eye, sprite: None, anims: AnimScene::default(), rand: Rand(1), shake: 0, reach: Default::default(), kept: None, rewound: false, given: None }
     }
 
     /// `Respawn`'s placing: the character stood at `pos` (on the ground
@@ -314,7 +319,8 @@ impl Walker {
     /// through `reach` (the follow orbit's way back out). The walk keeps the
     /// console's frames (`Kept`): `UpdateControls` reads it as the last of
     /// them left it, and it is drawn on the way to the next, where the
-    /// camera's `Process` finds it.
+    /// camera's `Process` finds it. A place given the camera on the walk put
+    /// back is moved onto the walk as last drawn (`camera_as_drawn`).
     pub fn frame_with(&mut self, keys: [f32; 4], now_ms: i64, c: &crate::controls::Client, game_frame: bool) -> crate::controls::Changed {
         self.rewind();
         // UpdateGame sets the run speed and calls InitIntermediate every
@@ -334,6 +340,7 @@ impl Walker {
         let ahead = self.ahead();
         self.scene.time = now_ms;
         self.draw_between(&ahead, now_ms);
+        self.camera_as_drawn();
         let next = self.cam.effect.sample;
         if !game_frame {
             self.cam.effect.sample = self.shake;
@@ -366,11 +373,16 @@ impl Walker {
         let w = &mut self.cam.walk;
         match &self.kept {
             Some(k) if same(&w.phys, &k.left.0) && same(&w.committed, &k.left.1) => {
+                let (l, a) = (&k.left.0, &k.at.0);
+                let d = |u: F<Ee>, v: F<Ee>| u.0 as f64 - v.0 as f64;
+                let back = [d(l.position.x, a.position.x), d(l.position.y, a.position.y) + d(l.height_offset, a.height_offset), d(l.position.z, a.position.z)];
+                self.given = Some((self.cam.cur.camera_pos, back));
                 w.phys = k.at.0;
                 w.committed = k.at.1;
                 w.update_directions();
             }
             _ => {
+                self.given = None;
                 let mut at = w.phys;
                 at.force = Vect3::default();
                 at.torque = Vect3::default();
@@ -454,6 +466,36 @@ impl Walker {
         p.angles.y = on(from.angles.y, to.angles.y);
         let w = &mut self.cam.walk;
         (w.phys, w.committed) = (p, p);
+    }
+
+    /// A place given the follow orbit's camera on the walk put back
+    /// (`set_orbit_angle`, which puts the camera at once at its angle round
+    /// the walk as it stands: the mouse's steer and look, a finger's, the
+    /// wheel's style), moved by however far the walk was put back: onto the
+    /// walk as last drawn, as every such place was given before the walk kept
+    /// the console's frames. The camera's `Process` takes the orbit's angle
+    /// from the way the camera is from the body as drawn now; given round the
+    /// console frame kept, a place was off the body's line by however far the
+    /// body had been drawn on from that frame across it, a part of a console
+    /// frame's way or more, so with a sidestep (A or D steered by the right
+    /// button, or the left on the move) the angle went 0.7 to 4 degrees off
+    /// the body's back and back again at the console's 30 frames a second, the
+    /// eye jumping as much as 0.2 a frame drawn at 144 (F3 20261029-024411:
+    /// "the camera becomes very jittery and as such blurry"), and a finger's
+    /// look while running jumped too. Given round the walk as last drawn,
+    /// `Process` finds the body one frame drawn on, as with the keys alone.
+    fn camera_as_drawn(&mut self) {
+        let Some((found, back)) = self.given.take() else { return };
+        let cam = &mut self.cam;
+        let bits = |v: &Vect3<Ee>| [v.x.bits(), v.y.bits(), v.z.bits()];
+        if cam.camera_mode != 3 || bits(&found) == bits(&cam.cur.camera_pos) {
+            return;
+        }
+        let p = cam.cur.camera_pos;
+        let on = |u: F<Ee>, d: f64| F::new((u.0 as f64 + d) as f32);
+        let moved = Vect3::new(on(p.x, back[0]), on(p.y, back[1]), on(p.z, back[2]));
+        cam.cur.camera_pos = moved;
+        cam.last.camera_pos = moved;
     }
 
     /// After the camera's `Process`, what is kept of the frame drawn. The
@@ -1493,4 +1535,120 @@ pub(crate) mod tests {
         eprintln!("up jib's slope at the console's rate: {console:?}");
         assert!(console.0 > -0.002 && console.1 < 0.002, "the console's frames off the ground by {console:?}");
     }
+
+    /// `frame_with`'s steps as they were until 2026-10-29 (the control): a
+    /// place given the camera on the walk put back left round the console
+    /// frame kept.
+    fn frame_given_round_the_kept_frame(w: &mut Walker, keys: [f32; 4], now: i64, c: &crate::controls::Client) {
+        w.rewind();
+        crate::controls::update_controls(w, keys, c);
+        let dt_s = (now - w.scene.time).clamp(0, 100) as f32 / 1000.0;
+        w.step_kept(now);
+        let ahead = w.ahead();
+        w.scene.time = now;
+        w.draw_between(&ahead, now);
+        w.given = None;
+        w.eye = w.reach.process(&mut w.cam, &mut w.scene, dt_s);
+        w.keep_left();
+    }
+
+    /// A run with a sidestep steered by the mouse (W and A with the left
+    /// button held on the move, which steers as the right does: the walk on
+    /// the body's own axes and the camera put behind the body by the look
+    /// every frame drawn, `mouse::look_held` after `rewind`, as
+    /// `Viewer::sticks` calls them), at 144 frames a second and jib's 91, the
+    /// mouse still or a pixel a frame: the eye moves as evenly as with the
+    /// keys alone (its largest change of pace from one frame drawn to the
+    /// next no larger, the floats' own steps at x 22000 apart) and the camera
+    /// keeps one angle off the body's back (the frame drawn's sidestep, as
+    /// before the walk kept the console's frames); a finger's look while
+    /// running too. The control: the place the look gives left round the
+    /// console frame kept (`frame_with` without `camera_as_drawn`, as until
+    /// 2026-10-29), where the camera's `Process` found the body drawn on
+    /// across it: the angle off the back swung 0.7 to 4 degrees at the
+    /// console's 30 frames a second and the eye jumped 0.2 (F3
+    /// 20261029-024411: "the camera becomes very jittery and as such
+    /// blurry"). The walk keeps the same console frames either way, bit for
+    /// bit, and with the keys alone the camera is the same too.
+    #[test]
+    fn a_sidestep_steered_by_the_mouse_keeps_the_camera_smooth() {
+        use std::f64::consts::{PI, TAU};
+        #[derive(Clone, Copy, Debug)]
+        enum Look {
+            Keys,
+            /// the left button held, the mouse this many pixels a frame
+            Steer(f32),
+            /// a finger's drag in the follow orbit, a pixel a frame
+            Finger,
+        }
+        struct Run {
+            /// the eye's largest change of pace (mm a frame drawn), over the last 2 s
+            jump: f64,
+            /// how far its angle off the body's back swings (degrees), over the last 2 s
+            swing: f64,
+            kept: Vec<WalkPhysics<Ee>>,
+            eyes: Vec<[u32; 3]>,
+        }
+        let go = Controls { fwd: 1.0, strafe: -1.0, ..Default::default() }.axes();
+        let Some(base) = open_ground() else { return };
+        let t0 = base.scene.time;
+        let run = |hz: f64, look: Look, fixed: bool| -> Run {
+            let mut w = open_ground().unwrap();
+            crate::camstyle::set_style(&mut w.cam, 3, None, &mut w.scene);
+            let (mut at, mut off, mut kept, mut eyes) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+            for k in 1..=(hz * 3.0) as u64 {
+                let now = drawn_at(t0, hz, 0.0, k);
+                w.rewind();
+                match look {
+                    Look::Steer(dx) => {
+                        crate::mouse::look_held(&mut w.cam, [true, true], dx, 0.0, false, 1.0 / hz as f32, k > 1);
+                    }
+                    Look::Finger => {
+                        crate::mouse::look_cam(&mut w.cam, 1.0, 0.0, 0.0, false, 1.0 / hz as f32);
+                    }
+                    Look::Keys => {}
+                }
+                let c = crate::controls::Client { steer: matches!(look, Look::Steer(_)), ..Default::default() };
+                if fixed {
+                    w.frame_with(go, now, &c, true);
+                } else {
+                    frame_given_round_the_kept_frame(&mut w, go, now, &c);
+                }
+                let k = w.kept.unwrap();
+                if (kept.len() as i64) < k.frames {
+                    kept.push(k.at.0);
+                }
+                let (e, b) = (w.eye.position, w.cam.walk.phys.position);
+                eyes.push([e.x.bits(), e.y.bits(), e.z.bits()]);
+                if now - t0 >= 1000 {
+                    at.push((e.x.0 as f64, e.z.0 as f64));
+                    let way = (e.x.0 as f64 - b.x.0 as f64).atan2(e.z.0 as f64 - b.z.0 as f64);
+                    let back = w.cam.walk.phys.angles.x.0 as f64 + PI;
+                    off.push(((way - back + PI).rem_euclid(TAU) - PI).to_degrees());
+                }
+            }
+            let jump = at.windows(3).map(|p| (p[2].0 - 2.0 * p[1].0 + p[0].0).hypot(p[2].1 - 2.0 * p[1].1 + p[0].1) * 1000.0).fold(0.0, f64::max);
+            let swing = off.iter().cloned().fold(f64::MIN, f64::max) - off.iter().cloned().fold(f64::MAX, f64::min);
+            Run { jump, swing, kept, eyes }
+        };
+        let same_frames = |a: &Run, b: &Run| a.kept.len() == b.kept.len() && a.kept.iter().zip(&b.kept).all(|(x, y)| same(x, y));
+        let (keys, keys_then) = (run(144.0, Look::Keys, true), run(144.0, Look::Keys, false));
+        assert!(same_frames(&keys, &keys_then) && keys.eyes == keys_then.eyes, "the keys alone: the walk and the camera as before, bit for bit");
+        assert!(keys.kept.len() >= 89, "{} console frames", keys.kept.len());
+        let keys91 = run(91.0, Look::Keys, true);
+        eprintln!("the keys alone: the eye's largest jump {:.2} mm at 144 Hz, {:.2} at 91", keys.jump, keys91.jump);
+        for (hz, look, smooth) in [(144.0, Look::Steer(0.0), keys.jump), (144.0, Look::Steer(1.0), keys.jump), (91.0, Look::Steer(0.0), keys91.jump), (144.0, Look::Finger, keys.jump)] {
+            let (now, then) = (run(hz, look, true), run(hz, look, false));
+            eprintln!("{look:?} at {hz} Hz: the eye's largest jump {:.2} mm, its angle off the back swinging {:.3} degrees; the control {:.2} mm, {:.3} degrees", now.jump, now.swing, then.jump, then.swing);
+            assert!(now.jump < smooth * 1.25, "{look:?} at {hz} Hz: the eye jumps {} mm, with the keys alone {smooth}", now.jump);
+            if let Look::Steer(_) = look {
+                assert!(now.swing < 0.5, "{look:?} at {hz} Hz: the camera swings {} degrees round the body", now.swing);
+                assert!(then.jump > 100.0 && then.swing > 2.5, "the control, {look:?} at {hz} Hz: {} mm, {} degrees", then.jump, then.swing);
+                assert!(same_frames(&now, &then), "{look:?} at {hz} Hz: the walk keeps the same console frames");
+            } else {
+                assert!(then.jump > 50.0, "the control, {look:?}: {} mm", then.jump);
+            }
+        }
+    }
 }
+
