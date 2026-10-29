@@ -15,7 +15,9 @@ current.
   Ignore Shouts kept, Update Notices, Text Sharp or Smooth, Loading Screens Longer or Instant, Render
   Scale x1, x2 or x4 (off unless chosen), HUD Nearest or Sharp (Nearest, the game's, by default: the
   user's of 2026-10-28, "make nearest the default ... since there is a cost"; Sharp was the default
-  on 2026-10-27)).
+  on 2026-10-27), and the live game's duel window on a server that turns duels on (the user's of
+  2026-10-29, "port the duel window to vanilla too": `duel.rs`, `duelwnd.rs`, `duelplay.rs`, read off SOE's
+  final CLIENT in the Corsten save state, README "duels")).
   A new client-side addition is the user's call: ask first. Sharp filtering is for the 2D layer and
   the text only: the world's textures are drawn smooth, as the game filters them (the user,
   2026-10-27, after a Crisp row for them: "world textures cant render proper without smooth. so
@@ -153,7 +155,8 @@ current.
   `controls.rs` UpdateControls). Headless: `EQOA_PAD` (`start@2500;stick l 0 -1@1500+2000`),
   `EQOA_MOUSE` (`click @<name>@ms`, `click X Y@ms`, `rclick`, `wheel N`, `press l|r`, `release l|r`,
   `move DX DY`: a drag past the slop takes the pointer as a window would, `mouse::Grab`), `EQOA_TOUCH=1`,
-  `EQOA_TOUCHES`, `EQOA_TAP=<name|*>@ms`, `EQOA_HIDE_UI=<ms>[;<ms>]` in a playshot; `EQOA_WATCH=<name>` (that creature a frame as drawn, and the player's own 0x40s); `drive.py --gamepad/--mobile/--touch/--mouse`
+  `EQOA_TOUCHES`, `EQOA_TAP=<name|*>@ms`, `EQOA_HIDE_UI=<ms>[;<ms>]` in a playshot; `EQOA_TARGET=<name>@ms[;...]` in a
+  playshot and in `eqoa play` (with `EQOA_PAD`, `EQOA_SAY` and `EQOA_SHOTS` under `EQOA_OFFSCREEN`: two clients' duel); `EQOA_WATCH=<name>` (that creature a frame as drawn, and the player's own 0x40s); `drive.py --gamepad/--mobile/--touch/--mouse`
   in a page; `EQOA_PAD_TRACE=1` / `?padtrace`; `EQOA_GLYPHS=1` prints the button glyphs a frame drew.
   A button pressed and let go between two frames reaches the game (`input::Latch`, every source but XInput):
   a new source keeps its presses through it.

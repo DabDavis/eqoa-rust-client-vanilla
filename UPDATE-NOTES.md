@@ -5,6 +5,24 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-29 · Duels, with the live game's own duel window
+- On a server that has duels (eqoaclassic's), the start menu's Community has a Duel entry, as the
+  live game had near its end: Duel > Invite challenges your target, Duel > Surrender gives up the
+  duel you are in. Quitting during a duel gives it up too.
+- A challenge opens the live game's duel window: who challenges you, their guild, race, class and
+  level, with ✕ to accept and △ to decline (Enter or E, and Escape, on the keyboard). It counts its
+  last ten seconds down; an invitation that comes while another window is up waits until you are
+  back in play.
+- Accepted, both of you get the wager window, the trade window's twin: put tunar on the duel with
+  ✕ on the Tunar box (no more than you carry), □ (Q) to accept, △ to take an accept back or to call
+  the duel off, Space for a chat line. When both accept the duel begins, and the winner takes both
+  stakes. The server only takes tunar: an item put in is refused with a line.
+- In a duel you can attack your opponent and their pet as you would a creature, and Tab and R1
+  cycle to their pet.
+- Your own character is now drawn at the size the server gives it, as everyone else is: on
+  eqoaclassic a gnome is a little smaller than before (9 tenths). How you walk and what you bump
+  into are as before.
+
 ## 2026-10-29 · One question for all your crash reports, and freezes written down
 - If the game stopped more than once since you last sent its crash reports, the next start now
   asks about all of them at once and says how many there are. Send sends them all, Delete deletes

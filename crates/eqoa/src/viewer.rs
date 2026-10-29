@@ -1923,6 +1923,9 @@ struct App {
     /// `EQOA_SAY=<line>@<ms>[;...]`: what a test's script says in the
     /// world's chat line then (ms on `clock`), as a playshot's does.
     say_script: Vec<(i64, String)>,
+    /// `EQOA_TARGET=<name>@<ms>[;...]`: the creature of that name targeted
+    /// then (ms on `clock`), as a playshot's does.
+    target_script: Vec<(i64, String)>,
     /// `EQOA_PLAY_KEYS=<key>@<ms>[;...]`: keys a test's script presses then
     /// (ms on `clock`; a key by its `keys.opt` name), down and up through the
     /// keyboard's dispatch, as a controller's button on a key's row is
@@ -2069,6 +2072,9 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         era_loading: None,
         art_script: std::env::var("EQOA_ART_AT").map(|v| v.split(';').filter_map(|t| t.trim().parse().ok()).collect()).unwrap_or_default(),
         say_script: std::env::var("EQOA_SAY")
+            .map(|v| v.split(';').filter_map(|s| s.rsplit_once('@').and_then(|(l, t)| Some((t.trim().parse().ok()?, l.to_string())))).collect())
+            .unwrap_or_default(),
+        target_script: std::env::var("EQOA_TARGET")
             .map(|v| v.split(';').filter_map(|s| s.rsplit_once('@').and_then(|(l, t)| Some((t.trim().parse().ok()?, l.to_string())))).collect())
             .unwrap_or_default(),
         key_script: std::env::var("EQOA_PLAY_KEYS")
@@ -4806,6 +4812,7 @@ impl App {
                 let console = &mut self.console;
                 let pads = &mut self.pads;
                 let say_script = &mut self.say_script;
+                let target_script = &mut self.target_script;
                 let walk_view = self.walker.as_mut().map(|w| {
                     // UpdateControls, on the sticks and the keyboard's axes,
                     // as the client stands
@@ -4820,6 +4827,11 @@ impl App {
                     if let Some(p) = play {
                         while say_script.first().is_some_and(|s| s.0 <= now) {
                             p.chat_line(&say_script.remove(0).1);
+                        }
+                        while target_script.first().is_some_and(|s| s.0 <= now) {
+                            let name = target_script.remove(0).1;
+                            let found = p.target_by_name(&name);
+                            crate::say(&format!("script: target {name}: {found}"));
                         }
                         let gpu = crate::play::Gpu { renderer: &mut g.renderer, device: &g.device, queue: &g.queue };
                         // The server named the player's model: dress the walker in it.
