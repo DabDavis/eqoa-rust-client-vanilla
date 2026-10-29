@@ -10,12 +10,15 @@ use vi::strtab::StringTable;
 /// Each fix: as the words spell it, as it is shown.
 const FIXES: &[(&str, &str)] = &[("Klick'Anon", "Klik'Anon")];
 
-/// WORDS.TXT read as `StringTable::parse` reads it, with `FIXES` made.
+/// WORDS.TXT read as `StringTable::parse` reads it, with `FIXES` made, and
+/// the live client's words in the rows past its end (`live::fill_words`:
+/// its windows' on a server that sends its feature word).
 pub fn words(bytes: &[u8]) -> Option<StringTable> {
     let mut t = StringTable::parse(bytes)?;
     for (from, to) in FIXES {
         t.replace(from, to);
     }
+    crate::live::fill_words(&mut t);
     Some(t)
 }
 
@@ -43,7 +46,10 @@ mod tests {
         let Ok(mut iso) = iso::Iso::open(crate::disc_path(None)) else { return };
         let Ok(b) = iso.read("WORDS.TXT") else { return };
         let (disc, fixed) = (StringTable::parse(&b).unwrap(), words(&b).unwrap());
-        assert_eq!((disc.rows, disc.cols), (fixed.rows, fixed.cols));
+        // the disc's rows, then the live client's past them (`live`)
+        assert_eq!(disc.cols, fixed.cols);
+        assert_eq!(fixed.rows, crate::live::WORDS.last().unwrap().0 as usize);
+        assert_eq!(fixed.get(1846, 0), "Search for Player");
         let mut changed = 0;
         for r in 1..=disc.rows as i32 {
             for c in 0..disc.cols as i32 {

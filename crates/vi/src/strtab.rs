@@ -84,6 +84,38 @@ impl StringTable {
         "(null)"
     }
 
+    /// Whether the table has a cell at `row`, `col` (`get` gives it, not
+    /// "(null)").
+    pub fn has(&self, row: i32, col: i32) -> bool {
+        let r = row - 1;
+        r >= 0 && (r as usize) < self.rows && col >= 0 && (col as usize) < self.cols && self.cells[r as usize * self.cols + col as usize].is_some()
+    }
+
+    /// `s` into the cell at `row`, `col`, the table grown to that row (the
+    /// rows between empty), and to that column; not the game's (the client's
+    /// own rows past a table's end: `eqoa`'s `live`).
+    pub fn put(&mut self, row: i32, col: i32, s: &str) {
+        if row < 1 || col < 0 {
+            return;
+        }
+        let (row, col) = ((row - 1) as usize, col as usize);
+        if col >= self.cols {
+            let cols = col + 1;
+            let mut cells = vec![None; self.rows * cols];
+            for r in 0..self.rows {
+                for c in 0..self.cols {
+                    cells[r * cols + c] = self.cells[r * self.cols + c].take();
+                }
+            }
+            (self.cells, self.cols) = (cells, cols);
+        }
+        if row >= self.rows {
+            self.cells.resize((row + 1) * self.cols, None);
+            self.rows = row + 1;
+        }
+        self.cells[row * self.cols + col] = Some(s.to_string());
+    }
+
     /// Every cell's `from` made `to` (the client's own spelling fixes, not
     /// the game's: `eqoa`'s `spelling`).
     pub fn replace(&mut self, from: &str, to: &str) {
@@ -128,5 +160,23 @@ mod tests {
         assert_eq!(StringTable::parse(b"caf\xE9").unwrap().get(1, 0), "caf\u{e9}");
         // A UTF-8 file that does not convert fails, as the game's does.
         assert!(StringTable::parse(b"\xEF\xBB\xBF\xFF").is_none());
+    }
+
+    /// `put` past the end grows the table, the rows between missing, and a
+    /// column past the last keeps every cell where it was; `has` is what
+    /// `get` finds (the control: a missing cell is "(null)" and not had).
+    #[test]
+    fn put_grows_the_table_and_keeps_its_cells() {
+        let mut t = StringTable::parse(b"\xEF\xBB\xBFOne\tUn\r\nTwo\tDeux\r\n").unwrap();
+        assert!(t.has(2, 1) && !t.has(5, 0) && !t.has(0, 0));
+        t.put(5, 0, "Five");
+        assert_eq!((t.rows, t.get(5, 0), t.get(4, 0)), (5, "Five", "(null)"));
+        assert!(t.has(5, 0) && !t.has(4, 0) && !t.has(5, 1));
+        t.put(1, 3, "Eins");
+        assert_eq!(t.cols, 4);
+        assert_eq!((t.get(1, 0), t.get(1, 1), t.get(1, 3), t.get(2, 1), t.get(5, 0)), ("One", "Un", "Eins", "Deux", "Five"));
+        t.put(0, 0, "no row 0");
+        t.put(1, -1, "no column -1");
+        assert_eq!((t.rows, t.cols, t.get(1, 0)), (5, 4, "One"));
     }
 }

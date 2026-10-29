@@ -98,6 +98,7 @@ mod input;
 mod padmap;
 mod spellbook;
 mod infotext;
+mod live;
 mod inventory;
 mod itemmenu;
 mod classmastery;
