@@ -20,6 +20,16 @@ const GROUP_MENU: u32 = 0x00CC_ED20;
 /// Search, Register, Unregister and their messages.
 const LIVE_GROUP: [(i32, u32); 3] = [(1673, 0x0209_0000), (1851, 0x020A_0000), (1852, 0x020B_0000)];
 
+/// go-eqoa-server's offer of the live auction form (not retail), a u32 after
+/// the opcode both ways, as its duel window's 0x7E09: it sends 0x07F5 and then
+/// offers (1) once the player is in the world, and the client answers 1 while
+/// its sell form names a quantity (the feature word's bit 0x08: a Sell count
+/// of 1 is one item), else 0 (a count of 1 is the whole bank record, as from
+/// a disc client); again whenever a later 0x07F5 turns the bit on or off. An
+/// offer of 0 is answered by nothing; a server that offers nothing (Sandstorm)
+/// is sent nothing.
+pub const OP_AUCTION_FORM: u16 = 0x7E0B;
+
 /// `VIClientPart2EFC8`'s group search and `VIWndGroupSearch` (`Play::live`).
 #[derive(Default)]
 pub struct LivePlay {
@@ -29,6 +39,10 @@ pub struct LivePlay {
     /// leader's (state 0) or a player's (1)
     open: Option<bool>,
     keys: Vec<(i32, bool)>,
+    /// the server offered the live auction form (`OP_AUCTION_FORM`), and
+    /// what the client last answered
+    form_offered: bool,
+    form_answered: Option<bool>,
 }
 
 /// The Group menu as the live client has it, on a server that sends its
@@ -64,6 +78,14 @@ impl Play {
                         eprintln!("live: the server's feature word {w:#x} (0x07F5)");
                     }
                     crate::live::set_features(crate::live::Features(Some(w)));
+                    self.answer_auction_form();
+                }
+            }
+            OP_AUCTION_FORM => {
+                if let Some(v) = data.first_chunk::<4>().map(|b| u32::from_le_bytes(*b)) {
+                    self.live.form_offered = v != 0;
+                    self.live.form_answered = None;
+                    self.answer_auction_form();
                 }
             }
             0x0840 => {
@@ -75,6 +97,21 @@ impl Play {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// The answer to the auction form's offer (`OP_AUCTION_FORM`): 1 while
+    /// the feature word has bit 0x08, else 0; sent when the server has
+    /// offered and the answer is not the last one sent.
+    fn answer_auction_form(&mut self) {
+        if !self.live.form_offered {
+            return;
+        }
+        let on = crate::live::features().has(crate::live::Features::STACKS);
+        if self.live.form_answered != Some(on) {
+            eprintln!("live: the auction's {} form (0x7E0B {})", if on { "live" } else { "disc's" }, on as u32);
+            self.session.send_op_int(OP_AUCTION_FORM, on as u32);
+            self.live.form_answered = Some(on);
         }
     }
 
@@ -260,6 +297,38 @@ pub(super) mod tests {
         assert_eq!(features(), Features(Some(0x10)));
         let _next = play();
         assert_eq!(features(), Features(None), "a new session is the disc's until a word");
+    }
+
+    /// The auction form's offer (0x7E0B) with the feature word's bit 0x08 is
+    /// answered 1; a later 0x07F5 that turns the bit off is answered 0, one
+    /// that leaves it as it was nothing; an offer of 0 nothing. The
+    /// controls: an offer without the bit is answered 0, and no offer (a
+    /// server like Sandstorm) is sent nothing whatever the word says.
+    #[test]
+    fn the_auction_forms_offer_is_answered_by_bit_0x08() {
+        let offer = |v: u32| v.to_le_bytes();
+        let mut p = play();
+        p.live_opcode(0x07F5, &0x1Bu32.to_le_bytes());
+        p.live_opcode(OP_AUCTION_FORM, &offer(1));
+        assert_eq!(sent(&mut p), vec![vec![0x0B, 0x7E, 1, 0, 0, 0]]);
+        p.live_opcode(0x07F5, &0x13u32.to_le_bytes());
+        assert_eq!(sent(&mut p), vec![vec![0x0B, 0x7E, 0, 0, 0, 0]], "the bit off: the new answer");
+        p.live_opcode(0x07F5, &0x11u32.to_le_bytes());
+        assert!(sent(&mut p).is_empty(), "the answer unchanged: nothing");
+        p.live_opcode(OP_AUCTION_FORM, &offer(0));
+        p.live_opcode(0x07F5, &0x1Bu32.to_le_bytes());
+        assert!(sent(&mut p).is_empty(), "an offer of 0: nothing, and nothing after");
+        // the controls: an offer without the bit (answered 0, then 1 when a
+        // word brings it), and no offer at all
+        let mut p = play();
+        p.live_opcode(0x07F5, &0x10u32.to_le_bytes());
+        p.live_opcode(OP_AUCTION_FORM, &offer(1));
+        assert_eq!(sent(&mut p), vec![vec![0x0B, 0x7E, 0, 0, 0, 0]]);
+        p.live_opcode(0x07F5, &0x18u32.to_le_bytes());
+        assert_eq!(sent(&mut p), vec![vec![0x0B, 0x7E, 1, 0, 0, 0]]);
+        let mut p = play();
+        p.live_opcode(0x07F5, &0x1Bu32.to_le_bytes());
+        assert!(sent(&mut p).is_empty(), "no offer, nothing sent");
     }
 
     /// What the session was handed, in order (the guaranteed channel's).

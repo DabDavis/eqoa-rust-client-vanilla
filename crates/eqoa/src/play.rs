@@ -2230,8 +2230,9 @@ impl Play {
                     self.cues.push(crate::sound::Cue::Ui(1));
                 }
                 Event::Opcode { op: 0x0E02, data } => self.who.recv(&data),
-                // the live client's feature word and group search (`liveplay`)
-                Event::Opcode { op: op @ (0x07F5 | 0x0840), data } => self.live_opcode(op, &data),
+                // the live client's feature word and group search, and the
+                // server's offer of the live auction form (`liveplay`)
+                Event::Opcode { op: op @ (0x07F5 | 0x0840 | 0x7E0B), data } => self.live_opcode(op, &data),
                 // a server's player search (`playersearch`, `s2`): 0x1501
                 // empties the list, a 0x1500 is a player found. The patch's
                 // window keeps them whether it is up or not, as its handler
