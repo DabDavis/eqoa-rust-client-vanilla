@@ -508,7 +508,7 @@ pub fn parse_reply(d: &[u8]) -> Option<Reply> {
 
 /// The whole exchange against `addr` (the auth server, port 9735).
 pub fn login(addr: impl ToSocketAddrs, user: &str, password: &str) -> Result<Login, Error> {
-    let addr = addr.to_socket_addrs()?.next().ok_or_else(|| std::io::Error::other("no address"))?;
+    let addr = crate::addr::pick(addr.to_socket_addrs()?).ok_or_else(|| std::io::Error::other("no address"))?;
     let mut s = TcpStream::connect_timeout(&addr, Duration::from_secs(5))?;
     s.set_read_timeout(Some(Duration::from_secs(10)))?;
     let mut x = Exchange::new(user, password);
