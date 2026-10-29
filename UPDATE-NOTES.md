@@ -5,6 +5,17 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-29 · Mail to several players, Reply All, and the live game's warnings
+- On a server that offers it, a letter can go to several players at once: write their names in To
+  with commas or semicolons between them. If a name is nobody's, the letter is not sent and the box
+  names who was not found, so you can put it right. If someone's mailbox is full, or they have too
+  many unread letters from you, the chat says so in red, naming them, and everyone else gets it.
+- A letter you read shows who it went to, under From, and its options have Reply All between Reply
+  and Delete: it answers the sender and everyone else it went to.
+- In your inbox, up from the first letter goes round to the last, and down from the last to the
+  first.
+- On servers that do not offer it (Sandstorm among them), mail works as before, one player at a time.
+
 ## 2026-10-29 · One question for all your crash reports, and freezes written down
 - If the game stopped more than once since you last sent its crash reports, the next start now
   asks about all of them at once and says how many there are. Send sends them all, Delete deletes

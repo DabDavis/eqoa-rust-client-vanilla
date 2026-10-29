@@ -2253,6 +2253,7 @@ impl Play {
                     self.craft_outs.extend(out);
                 }
                 Event::Opcode { op: 0x0D41, data } => self.mail_recv(&data),
+                Event::Opcode { op: crate::gram::OP_LIVE_MAIL, data } => self.mail_offer(&data),
                 Event::Opcode { op: 0x1402, data } => self.cm_msgs.push(data),
                 Event::Opcode { op: 0x0468, data } => {
                     if let Some(o) = self.guild.recv_0468(&data) {

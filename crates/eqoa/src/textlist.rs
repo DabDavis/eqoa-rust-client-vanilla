@@ -217,6 +217,12 @@ impl Message {
         Some(key::CROSS)
     }
 
+    /// The title and the text it was set up with.
+    #[cfg(test)]
+    pub fn texts(&self) -> (&[u16], &[u16]) {
+        (&self.title, &self.text)
+    }
+
     /// `OnKeyDown`: Some(selection) when it closes.
     pub fn key(&mut self, key: i32, now: i64, cues: &mut Vec<i32>) -> Option<i32> {
         match key {

@@ -94,6 +94,23 @@ impl Play {
         self.mail.grams.recv(data);
     }
 
+    /// go-eqoa-server's offer of the live client's mail forms
+    /// (`gram::OP_LIVE_MAIL`, a u32): taken and answered 1, the forms the
+    /// live ones from then on; 0 back to the disc's. One cut short is not
+    /// taken.
+    pub(super) fn mail_offer(&mut self, data: &[u8]) {
+        let mut r = net::stream::Reader::new(data);
+        let v = r.u32();
+        if r.error {
+            return;
+        }
+        self.mail.grams.live = v != 0;
+        if v != 0 {
+            self.session.send_op_int(crate::gram::OP_LIVE_MAIL, 1);
+        }
+        eprintln!("mail: the live client's forms {} (0x7E0A {v})", if v != 0 { "on" } else { "off" });
+    }
+
     /// The pump's 0xFF: a new connection (`OnConnect`).
     pub(super) fn mail_connect(&mut self) {
         self.mail.grams.on_connect();
@@ -138,6 +155,8 @@ impl Play {
                     self.mail.compose.focus(vui, r);
                 }
                 24 => {
+                    // Reply All's own name (`GetPlayer()+4`)
+                    self.mail.inbox.read.me = self.dump.player.name.as_bytes().to_vec();
                     let m = &mut self.mail;
                     m.inbox.open(vui, r, &mut m.grams);
                 }
@@ -233,5 +252,56 @@ impl Play {
         for id in std::mem::take(&mut self.mail.grams.shown) {
             self.show_word(id);
         }
+        // what the compose windows said (the live answers' lines)
+        let m = &mut self.mail;
+        let said: Vec<(String, [f32; 4])> = [&mut m.compose, &mut m.buddy, &mut m.inbox.read.compose].into_iter().flat_map(|c| std::mem::take(&mut c.said)).collect();
+        for (line, color) in said {
+            self.add_chat(line, color);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::play::Play;
+    use net::session::{Player, Session};
+
+    fn play() -> Play {
+        struct Nowhere;
+        impl net::session::Datagrams for Nowhere {
+            fn send_to(&mut self, _: &[u8], _: [u8; 4], _: u16) {}
+            fn recv_from(&mut self) -> Option<(Vec<u8>, [u8; 4], u16)> {
+                None
+            }
+        }
+        let mut s = Session::connect_with(Box::new(Nowhere), ([127, 0, 0, 1], 5000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        s.self_id = Some(0x100);
+        s.record = Some(Vec::new());
+        Play::new(s, Player::default(), Default::default())
+    }
+
+    /// What the session sent since the last look.
+    fn sent(p: &mut Play) -> Vec<Vec<u8>> {
+        p.session.record.replace(Vec::new()).unwrap_or_default().into_iter().map(|(_, m)| m).collect()
+    }
+
+    /// go-eqoa-server's offer of the live mail forms (0x7E0A): one cut
+    /// short is not taken; 1 is taken and answered 1, and the gram client
+    /// speaks the live forms; 0 goes back to the disc's, unanswered. The
+    /// control: before any offer the forms are the disc's.
+    #[test]
+    fn the_live_mail_offer() {
+        let mut p = play();
+        p.mail.grams.request_message(5);
+        assert_eq!(p.mail.grams.out.pop().unwrap()[3..6], [0x06, 0x41, 0x0D], "no offer: the disc's envelope");
+        p.mail_offer(&[1, 0, 0]);
+        assert!(!p.mail.grams.live && sent(&mut p).is_empty(), "cut short");
+        p.mail_offer(&[1, 0, 0, 0]);
+        assert!(p.mail.grams.live);
+        assert_eq!(sent(&mut p), [vec![0x0A, 0x7E, 1, 0, 0, 0]]);
+        p.mail.grams.request_message(5);
+        assert_eq!(p.mail.grams.out.pop().unwrap(), [0x01, 0x0D, 3, 10], "the live open");
+        p.mail_offer(&[0, 0, 0, 0]);
+        assert!(!p.mail.grams.live && sent(&mut p).is_empty(), "0: the disc's, unanswered");
     }
 }
