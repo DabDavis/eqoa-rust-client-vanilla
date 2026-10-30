@@ -554,7 +554,9 @@ impl Stage {
         // `draw_projectiles`): a GPU model for each flying at once, kept
         let textures = render::library_textures(&self.lib);
         let mut used: HashMap<u32, usize> = HashMap::new();
-        for (id, m) in &self.spells.flying {
+        // and the meshes the effects' animated sprites carry (`Spells::meshes`)
+        let all = self.spells.flying.iter().map(|(id, m)| (id, m, &[][..])).chain(self.spells.meshes.iter().map(|(id, m, p)| (id, m, &p[..])));
+        for (id, m, palette) in all {
             let (model, pool) = self.projectiles.entry(*id).or_insert_with(|| (self.lib.lookup(*id as i32).and_then(|r| self.lib.build_model(r)), Vec::new()));
             let Some(model) = model.as_ref() else { continue };
             let n = used.entry(*id).or_default();
@@ -563,6 +565,9 @@ impl Stage {
             }
             let g = &mut pool[*n];
             r.set_instances(queue, g, &[m.to_cols()]);
+            if !palette.is_empty() {
+                r.set_palette(queue, g, palette);
+            }
             g.visible = true;
             *n += 1;
         }
@@ -571,6 +576,9 @@ impl Stage {
                 g.visible = false;
             }
         }
+        // the bolts lit by the stage's daylight (`view`'s), no light shaft or
+        // leaf here to give the raster a normal (`spells::light_bolts`)
+        crate::spells::light_bolts(&mut self.spells.strips, &View::daylight(Mat4::IDENTITY), Vec3::ZERO);
         r.strips = std::mem::take(&mut self.spells.strips);
     }
 

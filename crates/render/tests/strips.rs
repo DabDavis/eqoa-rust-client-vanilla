@@ -62,7 +62,8 @@ fn the_lightning_is_drawn_through_the_worlds_view_under_a_sky() {
     let Some(g) = gpu() else { return };
     let mut r = Renderer::new(&g.device, &g.queue, render::TARGET_FORMAT);
     let clear = middle(&g, &mut r, Vec::new(), true);
-    // the bolt adds its white (at the GS's 0x80, half) to the clear
+    // the bolt adds its white to the clear (its alpha × 64, which the GS's
+    // blend reads as one: billboard_alpha.rs)
     let lit = |c: [u8; 3]| (0..3).all(|k| c[k] as i32 >= clear[k] as i32 + 100);
     // the controls: no strips, the clear, with or without the sky
     assert_eq!(middle(&g, &mut r, Vec::new(), false), clear, "no strips, no sky");

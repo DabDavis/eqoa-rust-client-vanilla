@@ -356,6 +356,13 @@ pub struct Session {
     /// arrived with the world entry, after it (0x1005, 0x03D5), for the
     /// game to read once it is up.
     pub held: Vec<Event>,
+    /// The state channels' updates that came before the world entry, in
+    /// order: CLIENT's connection keeps every channel whatever the screen,
+    /// but the screens before the world read none of ours, and a server
+    /// sends a channel again only when it changes (its own body, compass
+    /// and bars were left out until then). `route` keeps them, and the
+    /// world entry hands them out right after its `WorldEntry`.
+    early_states: Vec<Event>,
     /// `m_clockA`, `m_clockB`: the server's two clocks (0x0013), synced on
     /// the local timer (`timer`); the time of day is clock B's
     pub clock_a: SyncTime,
@@ -465,6 +472,7 @@ impl Session {
             debug: std::env::var_os("EQOA_NET_DEBUG").is_some(),
             chat_mode: 0,
             held: Vec::new(),
+            early_states: Vec::new(),
             clock_a: SyncTime::default(),
             clock_b: SyncTime::default(),
             record: None,
@@ -768,6 +776,8 @@ impl Session {
                 self.conn = m.connection;
                 self.self_id = None;
                 self.entity_view_offer = None;
+                // the old connection's channels go with it
+                self.early_states.clear();
                 ev.push(Event::Promoted);
             }
             drdp::TYPE_DISCONNECT => {
@@ -783,7 +793,18 @@ impl Session {
                 };
                 ev.push(Event::Disconnected(reason));
             }
-            ty if ty < drdp::TYPE_STATE_CHANNELS => ev.push(Event::State { channel: ty, data: m.data }),
+            ty if ty < drdp::TYPE_STATE_CHANNELS => {
+                let e = Event::State { channel: ty, data: m.data };
+                // before the world entry: kept for it (`early_states`)
+                if matches!(self.state, State::World) {
+                    ev.push(e);
+                } else {
+                    if self.debug {
+                        debug_line(&format!("[net] state {ty:#04x} before the world entry: kept for it"));
+                    }
+                    self.early_states.push(e);
+                }
+            }
             // ProcessMessageF8: a datagram outside any connection (drdp
             // port 0xffff) comes as type 0xF8; its 0x0993 answers the probe
             0xF8 => self.process_f8(&m),
@@ -935,6 +956,8 @@ impl Session {
                     // GroupChanged(m_p382E4): the chat mode kept
                     self.send_op_byte(0x000E, self.chat_mode);
                     ev.push(Event::WorldEntry { self_id: m.src, player, dump: Box::new(dump) });
+                    // the channels that came before it, in order
+                    ev.append(&mut self.early_states);
                 }
                 // SendOpByteByte(201, !m_p502D4, 0), (202, !m_p502D8, 0): the
                 // options' Faction and Loot Messages OFF bits (m_x93, m_x94),
@@ -1912,6 +1935,50 @@ mod tests {
         assert_eq!(answers(&mut s), [(251, vec![0x09, 0x7E, 1, 0, 0, 0])]);
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x09, 0x7E, 1, 0, 0, 0]);
         assert_eq!(answers(&mut s), [(251, vec![0x09, 0x7E, 1, 0, 0, 0])], "again for another offer (each world entry)");
+    }
+
+    // A state channel's update that comes before the world entry (live, a
+    // moment before the dump) is the game's once it is in the world: the
+    // session keeps it and hands it out right after the WorldEntry, in
+    // arrival order. The screens before the world read no channel, and a
+    // server sends one again only when it changes, so a dropped one left the
+    // player's own body, compass and bars out until then (1 playshot in 4 on a
+    // test server). The controls: in the world an update comes out at once,
+    // and a second world entry hands out nothing kept.
+    #[test]
+    fn state_before_the_world_entry_comes_right_after_it() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let states = |ev: &[Event]| -> Vec<(u8, Vec<u8>)> { ev.iter().filter_map(|e| if let Event::State { channel, data } = e { Some((*channel, data.clone())) } else { None }).collect() };
+        let enter = |s: &mut Session| {
+            let mut ev = Vec::new();
+            s.route(drdp::Message { ty: drdp::TYPE_GUARANTEED, data: empty_dump([0.0; 3], 0.0), connection: s.conn, src: 0x1d3d_8fa9, ..Default::default() }, &mut ev);
+            ev
+        };
+        assert!(deliver(&mut s, 0x00, vec![1; 4]).is_empty(), "before the world entry: kept");
+        assert!(deliver(&mut s, 0x42, vec![2; 4]).is_empty());
+        assert!(deliver(&mut s, 0x00, vec![3; 4]).is_empty());
+        let ev = enter(&mut s);
+        assert!(matches!(ev.first(), Some(Event::WorldEntry { self_id: 0x1d3d_8fa9, .. })), "{ev:?}");
+        assert_eq!(ev.len(), 4, "{ev:?}");
+        assert_eq!(states(&ev[1..]), [(0x00, vec![1; 4]), (0x42, vec![2; 4]), (0x00, vec![3; 4])], "right after it, in order");
+        assert_eq!(states(&deliver(&mut s, 0x00, vec![4; 4])), [(0x00, vec![4; 4])], "the control: in the world, at once");
+        let ev = enter(&mut s);
+        assert!(matches!(ev[..], [Event::WorldEntry { .. }]), "the control: a second world entry, nothing kept: {ev:?}");
+    }
+
+    // A new game connection (TYPE_CONNECT: the world resets) forgets the old
+    // one's channels; the control is the test above.
+    #[test]
+    fn a_new_game_connection_forgets_the_kept_states() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        assert!(deliver(&mut s, 0x00, vec![1; 4]).is_empty());
+        let ev = deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert!(matches!(ev[..], [Event::Promoted]), "{ev:?}");
+        let mut ev = Vec::new();
+        s.route(drdp::Message { ty: drdp::TYPE_GUARANTEED, data: empty_dump([0.0; 3], 0.0), connection: s.conn, src: 0x1d3d_8fa9, ..Default::default() }, &mut ev);
+        assert!(matches!(ev[..], [Event::WorldEntry { .. }]), "{ev:?}");
     }
 
     // Msg000D's world entry is ONE datagram, as every PS2 capture's is: 0x0014,

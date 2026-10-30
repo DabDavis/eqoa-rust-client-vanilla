@@ -9,6 +9,9 @@
 //! written only as the material says. Drawn after the world and the sky's
 //! billboards, before the particles: `VIScene::Render` draws the effect
 //! volumes in its deferred actor pass, before name plates and particles.
+//! A run marked `ps2` (the ground fog, with the options' Ground Fog at PS2)
+//! is blended as the GS blends it into the PS2's 16-bit frame (`fog16`),
+//! where the renderer can add its sums up and the target can be copied.
 
 use crate::{DEPTH_FORMAT, Renderer, Textures, View};
 use bytemuck::{Pod, Zeroable};
@@ -26,13 +29,16 @@ pub struct Quad {
 }
 
 /// Consecutive fans under one material: its texture's DictID (0 none:
-/// white), its blend mode (as `billboard::Batch::blend`) and whether it
-/// writes Z.
+/// white), its blend mode (as `billboard::Batch::blend`), whether it
+/// writes Z, and whether it is blended as the PS2's 16-bit frame keeps a
+/// blend (`fog16`: only a run of mode 3 that does not write Z; the others
+/// are drawn as they are).
 #[derive(Clone, Debug, Default)]
 pub struct Run {
     pub texture: i32,
     pub blend: usize,
     pub zwrite: bool,
+    pub ps2: bool,
     pub quads: Vec<Quad>,
 }
 
@@ -63,6 +69,7 @@ type Key = (usize, bool);
 
 pub(crate) struct Fans {
     shader: wgpu::ShaderModule,
+    frame_layout: wgpu::BindGroupLayout,
     tex_layout: wgpu::BindGroupLayout,
     layout: wgpu::PipelineLayout,
     pipelines: HashMap<Key, wgpu::RenderPipeline>,
@@ -73,10 +80,19 @@ pub(crate) struct Fans {
     instances: Option<(wgpu::Buffer, u64)>,
     /// each texture's bind group, by DictID
     groups: HashMap<i32, wgpu::BindGroup>,
-    /// what `draw_fans` draws: each run's key, texture and quads
-    pending: Vec<(Key, i32, std::ops::Range<u32>)>,
+    /// what `draw_fans` draws: each run's key, texture, quads and whether a
+    /// PS2 frame keeps it (`fog16`)
+    pending: Vec<(Key, i32, std::ops::Range<u32>, bool)>,
     /// the eye their corners are relative to
     eye: glam::Vec3,
+    /// the PS2 runs' corners (relative to the eye): the rectangle `fog16`
+    /// copies and draws over
+    ps2_corners: Vec<[f32; 3]>,
+    /// the fans' sums (`fs_sums`, into `fog16`'s two targets), made at the
+    /// first PS2 run, and their colours' spread over those sums (`fs_spread`)
+    sums: Option<wgpu::RenderPipeline>,
+    spread: Option<wgpu::RenderPipeline>,
+    fog16: Option<crate::fog16::Fog16>,
 }
 
 impl Fans {
@@ -127,14 +143,122 @@ impl Fans {
             layout: &frame_layout,
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: frame_buf.as_entire_binding() }],
         });
-        Fans { shader, tex_layout, layout, pipelines: HashMap::new(), sampler, frame_buf, frame_bg, instances: None, groups: HashMap::new(), pending: Vec::new(), eye: glam::Vec3::ZERO }
+        Fans {
+            shader,
+            frame_layout,
+            tex_layout,
+            layout,
+            pipelines: HashMap::new(),
+            sampler,
+            frame_buf,
+            frame_bg,
+            instances: None,
+            groups: HashMap::new(),
+            pending: Vec::new(),
+            eye: glam::Vec3::ZERO,
+            ps2_corners: Vec::new(),
+            sums: None,
+            spread: None,
+            fog16: None,
+        }
+    }
+
+    /// An instance's attributes: its four corners, their UVs two to a
+    /// slot, the colour and the normal.
+    fn vertex_attrs() -> [wgpu::VertexAttribute; 8] {
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Float32x3, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x3]
+    }
+
+    /// The sums' pipeline: the fans as they are drawn, Z tested and not
+    /// written, each adding its alpha, alpha times colour, alpha squared and
+    /// one to `fog16`'s targets.
+    fn sums_pipeline(&mut self, device: &wgpu::Device) {
+        if self.sums.is_some() {
+            return;
+        }
+        let attrs = Self::vertex_attrs();
+        let add = wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add };
+        let blend = Some(wgpu::BlendState { color: add, alpha: add });
+        self.sums = Some(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("fans sums"),
+            layout: Some(&self.layout),
+            vertex: wgpu::VertexState {
+                module: &self.shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout { array_stride: std::mem::size_of::<Inst>() as u64, step_mode: wgpu::VertexStepMode::Instance, attributes: &attrs })],
+            },
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, cull_mode: None, ..Default::default() },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &self.shader,
+                entry_point: Some("fs_sums"),
+                compilation_options: Default::default(),
+                targets: &[
+                    Some(wgpu::ColorTargetState { format: crate::fog16::SUMS_FORMAT, blend, write_mask: wgpu::ColorWrites::ALL }),
+                    Some(wgpu::ColorTargetState { format: crate::fog16::SQUARES_FORMAT, blend, write_mask: wgpu::ColorWrites::ALL }),
+                ],
+            }),
+            multiview_mask: None,
+            cache: None,
+        }));
+    }
+
+    /// The spread's pipeline: the fans again, each adding its alpha times
+    /// its colour's distance from the sums' mean squared to `fog16`'s third
+    /// target, the sums read through `sums_layout`.
+    fn spread_pipeline(&mut self, device: &wgpu::Device, sums_layout: &wgpu::BindGroupLayout) {
+        if self.spread.is_some() {
+            return;
+        }
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("fans spread"),
+            bind_group_layouts: &[Some(&self.frame_layout), Some(&self.tex_layout), Some(sums_layout)],
+            immediate_size: 0,
+        });
+        let attrs = Self::vertex_attrs();
+        let add = wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add };
+        self.spread = Some(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("fans spread"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &self.shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout { array_stride: std::mem::size_of::<Inst>() as u64, step_mode: wgpu::VertexStepMode::Instance, attributes: &attrs })],
+            },
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, cull_mode: None, ..Default::default() },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &self.shader,
+                entry_point: Some("fs_spread"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState { format: crate::fog16::COLOURS_FORMAT, blend: Some(wgpu::BlendState { color: add, alpha: add }), write_mask: wgpu::ColorWrites::ALL })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        }));
     }
 
     fn pipeline(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat, key: Key) {
         let (shader, layout) = (&self.shader, &self.layout);
         self.pipelines.entry(key).or_insert_with(|| {
             let (blend, zwrite) = key;
-            let attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Float32x3, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x3];
+            let attrs = Self::vertex_attrs();
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("fans"),
                 layout: Some(layout),
@@ -177,15 +301,22 @@ impl Renderer {
         if n == 0 {
             if let Some(f) = self.fans.as_mut() {
                 f.pending.clear();
+                f.ps2_corners.clear();
             }
             return;
         }
         let mut inst = Vec::with_capacity(n);
         let mut pending = Vec::new();
+        let mut ps2_corners = Vec::new();
         for r in runs.iter().filter(|r| !r.quads.is_empty()) {
             let start = inst.len() as u32;
             inst.extend(r.quads.iter().map(|q| Inst { c: q.corners, uv: q.uvs, color: q.color, normal: q.normal }));
-            pending.push(((r.blend.min(4), r.zwrite), r.texture, start..inst.len() as u32));
+            // a PS2 frame's blend is ALPHA_1's (Cs - Cd) As + Cd, Z not written
+            let ps2 = r.ps2 && r.blend == 3 && !r.zwrite && self.ps2_sums;
+            if ps2 {
+                ps2_corners.extend(r.quads.iter().flat_map(|q| q.corners));
+            }
+            pending.push(((r.blend.min(4), r.zwrite), r.texture, start..inst.len() as u32, ps2));
         }
         let views: Vec<(i32, Option<wgpu::TextureView>)> = pending.iter().map(|p| (p.1, self.texture(device, queue, p.1, textures))).collect();
         let format = self.format;
@@ -206,6 +337,9 @@ impl Renderer {
         }
         for p in &pending {
             f.pipeline(device, format, p.0);
+            if p.3 {
+                f.sums_pipeline(device);
+            }
         }
         if f.instances.as_ref().is_none_or(|(_, cap)| *cap < n as u64) {
             let cap = (n as u64).next_power_of_two().max(256);
@@ -221,16 +355,41 @@ impl Renderer {
             queue.write_buffer(buf, 0, bytemuck::cast_slice(&inst));
         }
         f.pending = pending;
+        f.ps2_corners = ps2_corners;
         f.eye = eye;
+    }
+
+    /// Whether the fans `set_fans` set read the frame they are drawn over (a
+    /// PS2 run, `fog16`): its target must be one that can be copied, or the
+    /// runs are drawn as they are (`curve::Curve::set_through` makes the
+    /// scene's own texture one).
+    pub fn fans_read_frame(&self) -> bool {
+        self.fans.as_ref().is_some_and(|f| f.pending.iter().any(|p| p.3))
+    }
+
+    /// Whether this renderer adds a PS2 run's sums up (`fog16::supported`,
+    /// told by whoever has the adapter; off until told).
+    pub fn set_ps2_sums(&mut self, on: bool) {
+        self.ps2_sums = on;
+    }
+
+    /// The PS2 runs as the GS draws them exactly, for measuring the sums
+    /// against: each fan alone over the frame the last left, under each
+    /// pixel's own matrix entry (a copy and three passes a fan: slow).
+    pub fn set_ps2_sequential(&mut self, on: bool) {
+        self.ps2_sequential = on;
     }
 
     /// Draws the fans `set_fans` set, over what is already in `target` and
     /// `depth`, under `view`'s lights and fog, if `view` is the one they were
     /// made for (its eye theirs): a fan faces the camera it was made for, so
     /// another view of the same frame does not draw them.
-    pub fn draw_fans(&mut self, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, depth: &wgpu::TextureView, view: &View) {
+    pub fn draw_fans(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, depth: &wgpu::TextureView, view: &View) {
+        let (format, sequential) = (self.format, self.ps2_sequential);
         let Some(f) = self.fans.as_mut().filter(|f| !f.pending.is_empty() && f.eye == view.eye) else { return };
-        let Some((buf, _)) = &f.instances else { return };
+        if f.instances.is_none() {
+            return;
+        }
         let rel = (view.view_proj.as_dmat4() * glam::DMat4::from_translation(view.eye.as_dvec3())).as_mat4();
         let u = FrameU {
             view_proj: rel.to_cols_array_2d(),
@@ -248,6 +407,66 @@ impl Renderer {
             point_color: view.point.map_or([0.0; 4], |(_, _, c)| c.extend(1.0).to_array()),
         };
         queue.write_buffer(&f.frame_buf, 0, bytemuck::bytes_of(&u));
+        // The PS2 runs (`fog16`) where the target can be copied: the runs
+        // before the first drawn as they are, then the PS2 runs' sums and
+        // the GS's steps over them, then the other runs after it. Elsewhere
+        // every run is drawn as it is.
+        let t = target.texture();
+        let copyable = t.usage().contains(wgpu::TextureUsages::COPY_SRC) && t.format() == format && u64::from(t.width()) * u64::from(t.height()) <= crate::fog16::MAX_PIXELS;
+        let first = if copyable { f.pending.iter().position(|p| p.3) } else { None };
+        let size = (t.width(), t.height());
+        let rect = first.and_then(|_| crate::fog16::rect(&f.ps2_corners, rel, size));
+        if rect.is_some() && f.spread.is_none() {
+            let layout = f.fog16.get_or_insert_with(|| crate::fog16::Fog16::new(device, format)).sums_layout().clone();
+            f.spread_pipeline(device, &layout);
+        }
+        let (before, after) = f.pending.split_at(first.unwrap_or(f.pending.len()));
+        let ps2 = first.is_some();
+        Fans::draw_runs(f, encoder, target, depth, before.iter());
+        if let Some(rect) = rect {
+            let runs: Vec<_> = after.iter().filter(|p| p.3).cloned().collect();
+            let (sums, spread, groups, frame_bg) = (f.sums.as_ref().expect("made with the run"), f.spread.as_ref().expect("made above"), &f.groups, &f.frame_bg);
+            let Some((fans_buf, _)) = &f.instances else { return };
+            let fog = f.fog16.as_mut().expect("made above");
+            // the fans twice: their sums, then their colours' spread over them
+            let draw = |pass: &mut wgpu::RenderPass<'_>, second: bool, texture: i32, range: std::ops::Range<u32>| {
+                pass.set_pipeline(if second { spread } else { sums });
+                pass.set_bind_group(0, frame_bg, &[]);
+                pass.set_vertex_buffer(0, fans_buf.slice(..));
+                pass.set_bind_group(1, &groups[&texture], &[]);
+                pass.draw(0..6, range);
+            };
+            if sequential {
+                // each fan alone, over the frame as the last left it
+                let mut j = 0;
+                for (_, texture, range, _) in &runs {
+                    for i in range.clone() {
+                        if let Some(r) = crate::fog16::rect(&f.ps2_corners[4 * j..4 * j + 4], rel, size) {
+                            fog.draw(device, encoder, target, depth, r, true, |pass, second| draw(pass, second, *texture, i..i + 1));
+                        }
+                        j += 1;
+                    }
+                }
+            } else {
+                fog.draw(device, encoder, target, depth, rect, false, |pass, second| {
+                    for (_, texture, range, _) in &runs {
+                        draw(pass, second, *texture, range.clone());
+                    }
+                });
+            }
+        }
+        Fans::draw_runs(f, encoder, target, depth, after.iter().filter(|p| !(ps2 && p.3)));
+    }
+}
+
+impl Fans {
+    /// `runs` over `target`, in one pass, each by its own pipeline.
+    fn draw_runs<'a>(f: &Fans, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, depth: &wgpu::TextureView, runs: impl Iterator<Item = &'a (Key, i32, std::ops::Range<u32>, bool)>) {
+        let mut runs = runs.peekable();
+        if runs.peek().is_none() {
+            return;
+        }
+        let Some((buf, _)) = &f.instances else { return };
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("fans"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -268,7 +487,7 @@ impl Renderer {
         pass.set_bind_group(0, &f.frame_bg, &[]);
         pass.set_vertex_buffer(0, buf.slice(..));
         let mut current = None;
-        for (key, texture, range) in &f.pending {
+        for (key, texture, range, _) in runs {
             if current != Some(*key) {
                 pass.set_pipeline(&f.pipelines[key]);
                 current = Some(*key);

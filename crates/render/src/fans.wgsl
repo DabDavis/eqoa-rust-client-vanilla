@@ -91,12 +91,55 @@ fn vs_main(@builtin(vertex_index) vi: u32, q: Quad) -> VsOut {
     return o;
 }
 
-@fragment
-fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
+// The fan's colour and alpha at a pixel, as the GS takes them to its blend.
+fn shade(i: VsOut) -> vec4<f32> {
     let t = textureSampleLevel(tex, samp, i.uv, log2(max(i.depth, 1e-6)) + frame.fog.z);
     var rgb = t.rgb * i.color.rgb;
     if (frame.fog_color.w > 0.5) {
         rgb = mix(frame.fog_color.rgb, rgb, i.fog);
     }
     return vec4<f32>(rgb, t.a * i.color.a);
+}
+
+@fragment
+fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
+    return shade(i);
+}
+
+// The fans a PS2 frame keeps (`fog16.wgsl`): each adds its alpha a, a times
+// its colour, a squared and one (itself); then, over those sums, a times its
+// colour's distance from their mean squared (`fs_spread`), which
+// `fog16.wgsl` makes into the fans it blends as the GS does.
+struct Sums {
+    @location(0) sums: vec4<f32>,
+    @location(1) squares: vec4<f32>,
+};
+
+@fragment
+fn fs_sums(i: VsOut) -> Sums {
+    let c = shade(i);
+    // a fan whose As is 0 changes nothing on a PS2: not counted
+    if (c.a * 128.0 < 1.0) {
+        discard;
+    }
+    var o: Sums;
+    o.sums = vec4<f32>(c.rgb * c.a, c.a);
+    o.squares = vec4<f32>(c.a * c.a, 1.0, 0.0, 0.0);
+    return o;
+}
+
+// The sums `fs_sums` made: the mean colour each fan's spread is taken from
+// (a sum of squares less the square of the sum would lose it to the float
+// targets' eleven bits).
+@group(2) @binding(0) var sums_made: texture_2d<f32>;
+
+@fragment
+fn fs_spread(i: VsOut) -> @location(0) vec4<f32> {
+    let c = shade(i);
+    if (c.a * 128.0 < 1.0) {
+        discard;
+    }
+    let w = textureLoad(sums_made, vec2<i32>(i.clip.xy), 0);
+    let off = c.rgb - w.rgb / max(w.a, 1e-6);
+    return vec4<f32>(off * off * c.a, 0.0);
 }

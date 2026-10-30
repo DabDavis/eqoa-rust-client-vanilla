@@ -5,6 +5,46 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-30 · Your character there from your first moment in the world
+- Now and then you could come into the world without your own character drawn, and with an empty compass and bars, until something about you changed. The server's first word about you had come a moment before the world itself and was thrown away; it is kept now.
+
+## 2026-10-30 · Ground fog as the PlayStation 2 shows it
+- The low fog that lies over Freeport's streets, Neriak and the rest of the world is now drawn the
+  way the PlayStation 2's picture kept it. The console's screen held only 32 shades of each colour,
+  so each thin layer of fog either changed the picture by a whole shade or not at all: its fog came
+  out as a long, low, dimmer band, where ours was a brighter cloud. That look, with the console's
+  fine dither grain in it, is the new default.
+- If you prefer the brighter fog, Options, Extended, World has a new row, Ground Fog: PS2 (the
+  default) or Exact. Shadows moved from World to Characters to make room for it.
+
+## 2026-10-30 · Master Class ranks can be bought again
+- Class Mastery: buying the next rank of the Master Class you already have no longer stops with
+  "You cannot possess more than one Master Class at a time." Only a second, different Master Class
+  is refused.
+
+## 2026-10-30 · Spell effects' missing shapes
+- Some spell effects carry moving shapes as well as sparkles, and those were never drawn. The
+  warrior's Furious, Frenzied and Desperate Defense now raise their column of yellow-green flame
+  round the warrior, and another effect its two green glowing forms sweeping round the caster, as
+  on a PlayStation 2.
+
+## 2026-10-30 · Spell lightning lit like the world
+- The lightning of spells (a wizard's or a druid's bolt and the like) is lit by the day, the night
+  and your lantern as the PlayStation 2 lights it: in daylight a blue or green bolt comes out paler
+  and brighter, at night it keeps more of its own colour. It had been drawn in its bare colour at
+  every hour. The trails of weapons stay as they were: the game draws them unlit.
+
+## 2026-10-30 · Glowing weapons and spell effects as bright as on a PS2
+- Every particle was drawn at half the strength the PlayStation 2 draws it with: the glow round an
+  epic or magic weapon such as the Sword of Virtue, the sparkles, clouds and flashes of every spell,
+  the fires, smoke and sparkles placed in the world, rain and snow, the stars, and the lightning of
+  spells and the trails of weapons. They now light up as much as on a console: a glowing blade
+  glows again.
+- How it was found: the same character with the Sword of Virtue in hand and Minor Healing cast on
+  it, side by side with the decompiled game's own drawing. The glow came out at about two thirds of
+  the game's, and now matches it; the world's models, the sky's dome, water and the HUD are drawn
+  as before.
+
 ## 2026-10-30 · SOE's final patch features, recovered from the Corsten and Lostologist save states!
 - The game kept changing after the Frontiers disc, and its final client went with SOE's servers: no
   disc ever had it. Two save states made in the live game, Corsten's and Lostologist's, still held it

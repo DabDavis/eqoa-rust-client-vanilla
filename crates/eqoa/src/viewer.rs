@@ -335,6 +335,8 @@ pub fn shot_with(
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))?;
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default()))?;
     let mut renderer = Renderer::new(&device, &queue, render::TARGET_FORMAT);
+    renderer.set_ps2_sums(render::fog16::supported(&adapter));
+    renderer.set_ps2_sequential(fog_sequential());
     renderer.scroll_time = Some(script.as_ref().map_or(0, |s| s.ms) as f32 / 1000.0);
     if let Some(f) = arial(lib) {
         renderer.set_font(&device, &queue, &f);
@@ -365,6 +367,9 @@ pub fn shot_with(
         let tab = std::env::var_os("EQOA_TAB").is_some();
         let mut parts = crate::particles::Particles::new(&walker.scene, 0);
         let mut held_fx: Option<crate::particles::Held> = None;
+        // the last frame's spell bolts and weapon trails, drawn by the shot
+        let mut shot_bolts: Vec<render::billboard::Strips> = Vec::new();
+        let mut shot_trails: Vec<render::billboard::Strips> = Vec::new();
         fx = crate::fx::enabled().then(crate::fx::Fx::new);
         // `EQOA_SPELL=n`: SPELLFX's n-th effect, cast by the character at a
         // stand-in 6 ahead of it at EQOA_AT (offline, no server).
@@ -932,11 +937,11 @@ pub fn shot_with(
                 }
                 sp.frame(&mut bodies, &casts, SELF, Some(&mut walker.cam.effect), t, &walker.eye, lib, None);
                 batches.append(&mut sp.batches);
-                renderer.strips = std::mem::take(&mut sp.strips);
+                shot_bolts = std::mem::take(&mut sp.strips);
             }
             if let Some(sp) = play.as_mut().and_then(|p| p.spells.as_mut()) {
                 batches.append(&mut sp.batches);
-                renderer.strips = std::mem::take(&mut sp.strips);
+                shot_bolts = std::mem::take(&mut sp.strips);
             }
             // the particles of the items in hands (an epic weapon's)
             if let Some(p) = play.as_ref() {
@@ -945,7 +950,7 @@ pub fn shot_with(
             }
             // the weapon trails (VITrailFxRender) after them
             if let Some(p) = play.as_mut() {
-                renderer.strips.append(&mut p.trail_strips);
+                shot_trails = std::mem::take(&mut p.trail_strips);
             }
             // the atmosphere every frame; the last frame's lights and render
             // are the shot's
@@ -996,11 +1001,21 @@ pub fn shot_with(
             g.visible &= crate::play::plain_body_shown(Some(&*p));
         }
         gpu.push(g);
-        // the trial's projectiles where the last frame left them
+        // the trial's projectiles where the last frame left them, and the
+        // meshes its animated sprites carry (`Spells::meshes`)
         if let Some((sp, _, _)) = &trial {
             for (id, m) in &sp.flying {
                 if let Some(model) = lib.lookup(*id as i32).and_then(|r| lib.build_model(r)) {
                     gpu.push(renderer.upload(&device, &queue, &model, &[m.to_cols()], &textures));
+                }
+            }
+            for (id, m, palette) in &sp.meshes {
+                if let Some(model) = lib.lookup(*id as i32).and_then(|r| lib.build_model(r)) {
+                    let g = renderer.upload(&device, &queue, &model, &[m.to_cols()], &textures);
+                    if !palette.is_empty() {
+                        renderer.set_palette(&queue, &g, palette);
+                    }
+                    gpu.push(g);
                 }
             }
         }
@@ -1057,6 +1072,11 @@ pub fn shot_with(
             crate::sky::update(&mut renderer, &device, &queue, &mut gpu, at, f, &textures);
         }
         view = frame.0;
+        // the last frame's bolts lit by the shot's lights, its trails unlit
+        // after them (`spells::light_bolts`)
+        crate::spells::light_bolts(&mut shot_bolts, &view, fx.as_ref().map_or(Vec3::ZERO, |f| f.raster_normal()));
+        renderer.strips = shot_bolts;
+        renderer.strips.append(&mut shot_trails);
         // the volumes as the shot's camera sees them (the walk's clock does
         // not move: nothing steps again)
         if let Some(fx) = fx.as_mut().filter(|_| crate::settings::client().environment) {
@@ -1458,6 +1478,16 @@ fn mark(perf: &mut Option<Perf>, phase: usize) {
 /// Frames drawn so far (the browser page's rate readout).
 pub static FRAMES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
+/// `EQOA_FOG16=sequential` (natively): the ground fog a PS2 frame keeps drawn
+/// a fan at a time, the GS's arithmetic exactly (`render::fog16`'s reference,
+/// to measure its sums against: slow).
+fn fog_sequential() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    return std::env::var("EQOA_FOG16").is_ok_and(|v| v == "sequential");
+    #[cfg(target_arch = "wasm32")]
+    false
+}
+
 /// A surface and device made before the event loop: a browser's, where the
 /// adapter is the canvas's own (WebGL2) and asking for it is asynchronous.
 /// `attrs` puts the window on the same canvas.
@@ -1467,6 +1497,8 @@ pub struct PendingGfx {
     pub config: wgpu::SurfaceConfiguration,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    /// the adapter can add up the ground fog's sums (`render::fog16`)
+    pub ps2_sums: bool,
 }
 
 struct Gfx {
@@ -2979,8 +3011,10 @@ impl App {
     }
 
     /// The renderer on a configured surface (or none: an offscreen target of
-    /// the configuration's size), then the scene.
-    fn attach(&mut self, window: Arc<Window>, surface: Option<wgpu::Surface<'static>>, config: wgpu::SurfaceConfiguration, device: wgpu::Device, queue: wgpu::Queue) {
+    /// the configuration's size), then the scene. `ps2_sums`: the adapter can
+    /// add up the ground fog's sums, so the options' Ground Fog at PS2 blends
+    /// it as a PS2 frame keeps it (`render::fog16`); without, as it is.
+    fn attach(&mut self, window: Arc<Window>, surface: Option<wgpu::Surface<'static>>, config: wgpu::SurfaceConfiguration, device: wgpu::Device, queue: wgpu::Queue, ps2_sums: bool) {
         // in front or not as it opens: a window opened behind another (the
         // system can refuse a program the front) has no `Focused` to say so
         self.pads.focused = window.has_focus();
@@ -2989,6 +3023,11 @@ impl App {
         #[cfg(not(target_arch = "wasm32"))]
         crate::gpulost::watch(&device);
         let mut renderer = Renderer::new(&device, &queue, config.format);
+        renderer.set_ps2_sums(ps2_sums);
+        renderer.set_ps2_sequential(fog_sequential());
+        if !ps2_sums {
+            eprintln!("ground fog: blended as it is (the adapter cannot add up its sums in float textures)");
+        }
         if let Some(f) = arial(&self.lib) {
             renderer.set_font(&device, &queue, &f);
         }
@@ -4109,7 +4148,7 @@ impl ApplicationHandler for App {
         }
         if let Some(p) = self.pending.take() {
             let window = Arc::new(el.create_window(p.attrs).expect("window"));
-            self.attach(window, Some(p.surface), p.config, p.device, p.queue);
+            self.attach(window, Some(p.surface), p.config, p.device, p.queue, p.ps2_sums);
             return;
         }
         // where the player last had it (`winplace`)
@@ -4133,6 +4172,7 @@ impl ApplicationHandler for App {
             #[cfg(not(target_arch = "wasm32"))]
             crate::report::set_gpu(format!("{} ({:?})", info.name, info.backend));
             let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).expect("device");
+            let ps2_sums = render::fog16::supported(&adapter);
             let config = wgpu::SurfaceConfiguration {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                 format: render::TARGET_FORMAT,
@@ -4144,7 +4184,7 @@ impl ApplicationHandler for App {
                 view_formats: Vec::new(),
                 color_space: wgpu::SurfaceColorSpace::Auto,
             };
-            self.attach(window, None, config, device, queue);
+            self.attach(window, None, config, device, queue, ps2_sums);
             return;
         }
         // each step in the log, and a start that dies in the driver tries
@@ -4207,7 +4247,8 @@ impl ApplicationHandler for App {
         surface.configure(&device, &config);
         #[cfg(not(target_arch = "wasm32"))]
         start.done();
-        self.attach(window, Some(surface), config, device, queue);
+        let ps2_sums = render::fog16::supported(&adapter);
+        self.attach(window, Some(surface), config, device, queue, ps2_sums);
         if let Some(g) = self.gfx.as_mut() {
             g.present_modes = offered;
         }
@@ -5001,24 +5042,28 @@ impl App {
                         bb_view = Some((v, proj));
                     }
                     // the spell effects' particles after the world's, their lightning before
+                    let mut bolts = Vec::new();
                     if let Some(sp) = play.as_mut().and_then(|p| p.spells.as_mut()) {
                         batches.append(&mut sp.batches);
-                        g.renderer.strips = std::mem::take(&mut sp.strips);
+                        bolts = std::mem::take(&mut sp.strips);
                     }
                     // the particles of the items in hands (an epic weapon's)
                     if let Some(p) = play.as_ref() {
                         let held = held_fx.get_or_insert_with(|| crate::particles::Held::new(now));
                         batches.extend(held.frame(lib, &p.in_hand(lib, w, m), &w.eye.position, now));
                     }
-                    // the weapon trails (VITrailFxRender) after them
-                    if let Some(p) = play.as_mut() {
-                        g.renderer.strips.append(&mut p.trail_strips);
-                    }
                     mark(perf, 7);
                     let hour_now = game_hour(play.as_ref(), clock);
                     let mut lights = lit(proj, v, hour_now, Some((w.eye_position(), &w.scene)), weather.as_mut());
                     if let Some(p) = play.as_mut() {
                         lights.0.point = p.point_light(w, now, hour_now, weather.as_ref());
+                    }
+                    // the bolts lit by the scene's lights (`spells::light_bolts`),
+                    // the weapon trails (VITrailFxRender) after them unlit
+                    crate::spells::light_bolts(&mut bolts, &lights.0, fx.as_ref().map_or(Vec3::ZERO, |f| f.raster_normal()));
+                    g.renderer.strips = bolts;
+                    if let Some(p) = play.as_mut() {
+                        g.renderer.strips.append(&mut p.trail_strips);
                     }
                     // the characters' blob shadows (`VIScene::RenderShadows`,
                     // `shadows`): drawn after the particle system's batches,
@@ -5211,6 +5256,14 @@ impl App {
                 render::set_mipmaps(crate::settings::client().mipmaps);
                 g.renderer.scale.set(crate::settings::client().render_scale as u32);
                 let f = g.renderer.scale.targets(&g.device, &target, &g.depth, (g.config.width, g.config.height));
+                // the ground fog a PS2 frame keeps reads the frame: a target
+                // that cannot be copied (a page's canvas) draws the scene in
+                // the curve's texture (`render::fog16`)
+                if loading.is_none() {
+                    g.renderer.read_frame_through(&f.color);
+                } else {
+                    g.renderer.curve.set_through(false);
+                }
                 let scene = g.renderer.curve.scene_target(&g.device, f.size);
                 let st = scene.as_ref().unwrap_or(&f.color);
                 g.renderer.draw(&g.queue, &mut enc, st, &f.depth, loading.as_ref().map_or(&view, |l| &l.0), &refs);
@@ -5225,7 +5278,7 @@ impl App {
                 // the effect volumes' fans, then the particles over them,
                 // all in the scene (the Brightness curve takes them too)
                 if loading.is_none() {
-                    g.renderer.draw_fans(&g.queue, &mut enc, st, &f.depth, &view);
+                    g.renderer.draw_fans(&g.device, &g.queue, &mut enc, st, &f.depth, &view);
                     // the name plates where VIScene::Render draws them: the
                     // particles and the rest after, over them
                     g.renderer.draw_plates(&g.device, &mut enc, st, &f.depth, f.size);
