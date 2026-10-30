@@ -999,11 +999,21 @@ pub fn shot_with(
             g.visible &= crate::play::plain_body_shown(Some(&*p));
         }
         gpu.push(g);
-        // the trial's projectiles where the last frame left them
+        // the trial's projectiles where the last frame left them, and the
+        // meshes its animated sprites carry (`Spells::meshes`)
         if let Some((sp, _, _)) = &trial {
             for (id, m) in &sp.flying {
                 if let Some(model) = lib.lookup(*id as i32).and_then(|r| lib.build_model(r)) {
                     gpu.push(renderer.upload(&device, &queue, &model, &[m.to_cols()], &textures));
+                }
+            }
+            for (id, m, palette) in &sp.meshes {
+                if let Some(model) = lib.lookup(*id as i32).and_then(|r| lib.build_model(r)) {
+                    let g = renderer.upload(&device, &queue, &model, &[m.to_cols()], &textures);
+                    if !palette.is_empty() {
+                        renderer.set_palette(&queue, &g, palette);
+                    }
+                    gpu.push(g);
                 }
             }
         }

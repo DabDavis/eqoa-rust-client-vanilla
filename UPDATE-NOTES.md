@@ -5,6 +5,12 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-30 · Spell effects' missing shapes
+- Some spell effects carry moving shapes as well as sparkles, and those were never drawn. The
+  warrior's Furious, Frenzied and Desperate Defense now raise their column of yellow-green flame
+  round the warrior, and another effect its two green glowing forms sweeping round the caster, as
+  on a PlayStation 2.
+
 ## 2026-10-30 · Spell lightning lit like the world
 - The lightning of spells (a wizard's or a druid's bolt and the like) is lit by the day, the night
   and your lantern as the PlayStation 2 lights it: in daylight a blue or green bolt comes out paler

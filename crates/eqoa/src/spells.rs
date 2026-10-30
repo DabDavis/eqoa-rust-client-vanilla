@@ -156,7 +156,10 @@ fn kind(ty: u16) -> i32 {
 /// A sprite an effect names: its type (9 a sound, 4 an animated sprite),
 /// and a sound's radius, volume and wave (`VISoundSprite`); or a hand's
 /// projectile, its model's DictID (`model`). A sound's pan and attenuation
-/// are its actors' own ([`Made`]).
+/// are its actors' own ([`Made`]). An animated sprite (`VIHSprite`) keeps
+/// its record (`hsprite`), and the copy an effect makes of it the play it
+/// was restarted with and when (`restart`: `NewCreateSprite`'s mode, 1
+/// once, 2 looped, 0 its clip's own).
 #[derive(Clone)]
 struct Sprite {
     ty: i32,
@@ -164,6 +167,17 @@ struct Sprite {
     volume: F<Ee>,
     wave: Option<Ref>,
     model: Option<u32>,
+    hsprite: Option<Ref>,
+    restart: Option<(i32, i64)>,
+}
+
+/// An animated sprite an effect made (`NewCreateSprite`'s `CopySprite` of an
+/// HSprite: its own skeleton and plays), and what hangs on it: a mesh on a
+/// node, or a skin over the skeleton (node -1).
+#[derive(Clone)]
+struct Posed {
+    h: vi::hsprite::HSprite<Ee>,
+    attach: Vec<(i32, i32)>,
 }
 
 /// An actor an effect made. One of a sound sprite shows its own copy of it
@@ -234,6 +248,18 @@ pub struct Spells {
     /// the actors made of a model (the projectiles in flight): its DictID and
     /// the actor's transform, in actor order
     pub flying: Vec<(u32, Matrix44<Ee>)>,
+    /// the animated sprites the effects made, posed on the spells' clock (by
+    /// the copy each shows), each record read once (its skeleton, what hangs
+    /// on it and its default clip), with their clips and ref maps
+    posed: HashMap<i32, Posed>,
+    templates: HashMap<Ref, Option<(Posed, usize)>>,
+    anims: AnimScene<Ee>,
+    anim_cache: vi::character::AnimCache,
+    /// this frame's meshes the posed sprites carry (`VIHSprite::Raster`):
+    /// each attachment's DictID, its transform (a node's world under the
+    /// centre transform, or a skin's centre transform) and a skin's palette
+    /// (empty for a mesh on a node)
+    pub meshes: Vec<(u32, Matrix44<Ee>, Vec<[[f32; 4]; 4]>)>,
     pub played: usize,
     /// bolts drawn, all frames
     pub bolts: usize,
@@ -261,6 +287,11 @@ impl Spells {
             batches: Vec::new(),
             strips: Vec::new(),
             flying: Vec::new(),
+            posed: HashMap::new(),
+            templates: HashMap::new(),
+            anims: AnimScene::default(),
+            anim_cache: vi::character::AnimCache::new(),
+            meshes: Vec::new(),
             played: 0,
             bolts: 0,
             rumbles: Vec::new(),
@@ -331,7 +362,7 @@ impl Spells {
     }
 
     pub fn describe(&self) -> String {
-        format!("{} spell effects, {} played, {} particles, {} bolt frames drawn, {} projectiles in flight", self.sys.effects.len(), self.played, self.sys.particle_count(&self.ps), self.bolts, self.flying.len())
+        format!("{} spell effects, {} played, {} particles, {} bolt frames drawn, {} projectiles in flight, {} meshes on {} animated sprites", self.sys.effects.len(), self.played, self.sys.particle_count(&self.ps), self.bolts, self.flying.len(), self.meshes.len(), self.posed.len())
     }
 
     /// An effect's DictID by its place in the files, for trying one out.
@@ -358,6 +389,77 @@ impl Spells {
     /// alive, nothing flying (the preview casts again then, `fxview`).
     pub fn quiet(&self) -> bool {
         self.sys.playing() == 0 && self.sys.particle_count(&self.ps) == 0 && self.flying.is_empty() && self.made.is_empty()
+    }
+
+    /// The animated sprites the effects made, posed for scene time `time`
+    /// (`VIScene::RasterActor`'s `VIHSprite::Raster` for each actor showing
+    /// one): each copy made the first time its actor is drawn, its skeleton
+    /// read off the record (`load_hsprite`) and its plays restarted as its
+    /// effect asked, when it asked (`restart`); then every frame `Process`,
+    /// the centre transform at the actor's transform, and each attachment:
+    /// a mesh at its node's world, a skin at the centre with the skeleton's
+    /// blend matrices. A copy goes with its actor (`ReleaseActor`).
+    fn pose(&mut self, lib: &Library, time: i64) {
+        self.meshes.clear();
+        let shown: std::collections::BTreeSet<i32> = self.made.values().map(|m| m.sprite).collect();
+        self.posed.retain(|k, _| shown.contains(k));
+        for m in self.made.values() {
+            let Some(sp) = self.sprites.get(m.sprite as usize) else { continue };
+            let (Some(r), Some((mode, at))) = (sp.hsprite, sp.restart) else { continue };
+            if !self.posed.contains_key(&m.sprite) {
+                // the record read once (`ParseHSpriteObj`): its skeleton, a
+                // skin attached as `ParseHSpriteAttachments` attaches it
+                // (`AttachSkin`, which `SetBlendMatrices` looks for), its
+                // default clip
+                let (anims, cache) = (&mut self.anims, &mut self.anim_cache);
+                let template = self.templates.entry(r).or_insert_with(|| {
+                    let (mut h, attach) = vi::character::load_hsprite(lib, r, anims, cache)?;
+                    for &(id, node) in &attach {
+                        if node == -1 {
+                            h.attach_skin(id);
+                        }
+                    }
+                    let first = h.plays.iter().next()?;
+                    let anim = h.plays.get(first).anim;
+                    Some((Posed { h, attach }, anim))
+                });
+                let Some((t, anim)) = template.as_ref() else { continue };
+                // the copy's plays as `NewCreateSprite` restarts them, from
+                // when it did: `EraseAllPlay`, then the default clip once,
+                // looped or as the clip says
+                let mut p = t.clone();
+                let plays: Vec<i32> = p.h.plays.iter().collect();
+                for i in plays {
+                    p.h.erase_play(i);
+                }
+                self.anims.time = at;
+                let speed = self.anims.anims[*anim].play_speed;
+                match mode {
+                    1 => p.h.add_play(*anim, 1, speed, &self.anims),
+                    2 => p.h.add_play(*anim, 0, speed, &self.anims),
+                    _ => p.h.add_play_default(*anim, &self.anims),
+                };
+                self.posed.insert(m.sprite, p);
+            }
+            let Some(p) = self.posed.get_mut(&m.sprite) else { continue };
+            self.anims.time = time;
+            p.h.process(-1, &self.anims);
+            let centre = p.h.calc_trans_about_center(&Matrix44::transform(&m.hpr, m.scale, &m.at), &self.anims);
+            let mut palette: Option<Vec<[[f32; 4]; 4]>> = None;
+            for &(id, node) in &p.attach {
+                if node >= 0 {
+                    if let Some(n) = p.h.nodes.get(node as usize) {
+                        self.meshes.push((id as u32, Matrix44::mul(&n.world, &centre), Vec::new()));
+                    }
+                } else {
+                    let pal = palette.get_or_insert_with(|| {
+                        p.h.set_blend_matrices();
+                        p.h.blend.iter().map(|b| b.to_cols()).collect()
+                    });
+                    self.meshes.push((id as u32, centre, pal.clone()));
+                }
+            }
+        }
     }
 
     /// `m_dict.FindTyped(effect, 21)`
@@ -388,6 +490,7 @@ impl Spells {
         self.sys.process(&mut sc, &mut self.ps, &mut self.rand);
         // `RasterActor` draws an actor as its sprite at its transform
         self.flying = self.made.values().filter_map(|m| Some((self.sprites.get(m.sprite as usize)?.model?, Matrix44::transform(&m.hpr, m.scale, &m.at)))).collect();
+        self.pose(lib, time);
         self.batches = crate::particles::render(&mut self.ps, time);
         self.strips = self
             .sys
@@ -553,7 +656,7 @@ fn query_emitters(made: &BTreeMap<i32, Made>, sprites: &[Sprite], eye: &Eye<Ee>)
 
 impl Sprite {
     fn new() -> Sprite {
-        Sprite { ty: 0, radius: F::ONE, volume: F::ONE, wave: None, model: None }
+        Sprite { ty: 0, radius: F::ONE, volume: F::ONE, wave: None, model: None, hsprite: None, restart: None }
     }
 }
 
@@ -575,7 +678,12 @@ fn sprite(lib: &Library, r: Ref) -> Sprite {
             }
             s.wave = c.node(r.node).children.iter().copied().find(|&k| c.node(k).ty == esf::sound::WAVE).map(|node| Ref { file: r.file, node });
         }
-        ty => s.ty = kind(ty),
+        ty => {
+            s.ty = kind(ty);
+            if ty == esf::types::HSPRITE {
+                s.hsprite = Some(r);
+            }
+        }
     }
     s
 }
@@ -730,7 +838,14 @@ impl SpellScene<Ee> for Scene<'_, '_, '_> {
         (self.sprites.len() - 1) as i32
     }
 
-    fn restart_hsprite(&mut self, _sprite: i32, _mode: i32) {}
+    /// `NewCreateSprite` on its copy of an HSprite: `EraseAllPlay`, then its
+    /// default clip played once (mode 1), looped (2) or as the clip says (0),
+    /// from now; the copy is posed from it ([`Spells::pose`]).
+    fn restart_hsprite(&mut self, sprite: i32, mode: i32) {
+        if let Some(s) = self.sprites.get_mut(sprite as usize) {
+            s.restart = Some((mode, self.time));
+        }
+    }
 
     /// On the actor's own copy of its sprite (`GetActorSpritePtr`).
     fn sound_settings(&mut self, actor: i32, pan: bool, attenuation: i32) {
@@ -983,6 +1098,74 @@ mod tests {
         assert!(fly([None, None]).iter().all(Vec::is_empty), "the control must fail");
     }
 
+    /// The animated sprites two effects make (SKIPs without the disc), cast by
+    /// a human at itself: the warrior's Furious Defense (0x1DAEB5B7) makes
+    /// HSprite 0xB72087E1, whose mesh 0x09F69042 hangs on its node 1 and
+    /// grows from a quarter of its size; 0x4DB80385 makes 0xA09C0316 and
+    /// then 0x3BC88851, each a skin over a 45-node skeleton. Each is posed
+    /// while its actor lives, about the caster, and gone with it. The
+    /// controls: a skin's palette is the skeleton's blend matrices (all zero
+    /// unless the skin is attached as `AttachSkin` attaches it), and nothing
+    /// before the effect's sprite event or after its end.
+    #[test]
+    fn an_effects_animated_sprites_are_posed_and_drawn() {
+        let iso_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut disc) = iso::Iso::open(&iso_path) else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let mut lib = Library::new();
+        for f in ["CHAR.ESF", "ITEM.ESF", "SPELLFX.CSF"] {
+            lib.add(f, esf::Container::open(disc.read(f).unwrap()).unwrap());
+        }
+        let run = |effect: u32| -> Vec<Vec<(u32, Matrix44<Ee>, Vec<[[f32; 4]; 4]>)>> {
+            let mut sp = Spells::load(&lib, 0);
+            let mut anims = AnimScene::<Ee>::default();
+            let mut rand = Rand(1);
+            let human = lib.lookup(0x70D8_98C6u32 as i32).expect("the human's CSprite");
+            let mut cs = vi::character::load_csprite(&lib, human, &mut anims, &mut vi::character::AnimCache::new(), &mut rand).expect("a CSprite");
+            let actor = Matrix44::transform(&Vect3::default(), F::ONE, &Vect3::of(100.0, 20.0, 200.0));
+            let mut frames = Vec::new();
+            for t in (0..9000i64).step_by(33) {
+                anims.time = t;
+                cs.h.process(0, &anims);
+                let centre = cs.h.calc_trans_about_center(&actor, &anims);
+                let mut bodies = vec![Body { actor: SELF, sprite: Some((&mut cs, &anims, &mut rand)), transform: actor, centre, attack: [11, 11], projectile: [None; 2] }];
+                let casts = if t == 0 { vec![(Cast { effect, time: 0, caster: 0, target: 0, targets: Vec::new() }, SELF, SELF, Vec::new())] } else { Vec::new() };
+                sp.frame(&mut bodies, &casts, SELF, None, t, &Eye::default(), &lib, None);
+                frames.push(sp.meshes.clone());
+            }
+            assert!(sp.posed.is_empty(), "gone with their actors");
+            frames
+        };
+        let near = |m: &Matrix44<Ee>| (m.m[3].x.0 - 100.0).abs() < 3.0 && (m.m[3].y.0 - 20.0).abs() < 4.0 && (m.m[3].z.0 - 200.0).abs() < 3.0;
+        let scale = |m: &Matrix44<Ee>| (m.m[0].x.0 * m.m[0].x.0 + m.m[0].y.0 * m.m[0].y.0 + m.m[0].z.0 * m.m[0].z.0).sqrt();
+        // Furious Defense: one mesh on a node, no palette, about the caster,
+        // growing while it shows
+        let guard = run(0x1DAE_B5B7);
+        let up: Vec<usize> = (0..guard.len()).filter(|&i| !guard[i].is_empty()).collect();
+        assert!(up.len() > 10 && up[0] > 0, "the guard's column shows, after its event: {up:?}");
+        assert!(guard.last().unwrap().is_empty(), "and goes");
+        for &i in &up {
+            assert_eq!(guard[i].len(), 1);
+            let (id, m, palette) = &guard[i][0];
+            assert!(*id == 0x09F6_9042 && palette.is_empty() && near(m), "frame {i}: {id:#x} at {:?}", m.m[3]);
+        }
+        let first = scale(&guard[up[0]][0].1);
+        let most = up.iter().map(|&i| scale(&guard[i][0].1)).fold(0.0, f32::max);
+        assert!(first < 0.5 && most > 0.9, "it grows: {first} to {most}");
+        // 0x4DB80385: the two skins in turn, each over 45 nodes, posed
+        let spirit = run(0x4DB8_0385);
+        let skins: std::collections::BTreeSet<u32> = spirit.iter().flatten().map(|m| m.0).collect();
+        assert_eq!(skins, [0xEEB8_1B03, 0xF6B0_C0AA].into());
+        for (id, m, palette) in spirit.iter().flatten() {
+            assert!(palette.len() == 45 && near(m), "{id:#x}: {} matrices at {:?}", palette.len(), m.m[3]);
+            // the control: a skin not attached leaves the blend matrices zero
+            assert!(palette.iter().any(|b| b[0][0] != 0.0 || b[1][1] != 0.0), "{id:#x}: a palette of zeros");
+        }
+        assert!(spirit.first().unwrap().is_empty() && spirit.last().unwrap().is_empty(), "the controls: none before, none after");
+    }
+
     /// What `hear` asked of the device, and when: each play's (time, sprite)
     /// and channel (its place in the list, from 1), each stop's (time,
     /// channel), each volume and pan set; `refuse` plays fail first, as with
@@ -1014,7 +1197,7 @@ mod tests {
     }
 
     fn hit_sprite(radius: f32) -> Sprite {
-        Sprite { ty: 9, radius: F::new(radius), volume: F::ONE, wave: Some(Ref { file: 0, node: 0 }), model: None }
+        Sprite { ty: 9, radius: F::new(radius), volume: F::ONE, wave: Some(Ref { file: 0, node: 0 }), model: None, hsprite: None, restart: None }
     }
 
     fn sound_actor(sprite: i32, x: f32, z: f32) -> Made {

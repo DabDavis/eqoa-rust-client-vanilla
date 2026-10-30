@@ -3218,11 +3218,15 @@ impl Play {
     /// One GPU model for each flying at once, kept for the next (as the
     /// boids', `fx.rs`); those not flying are not drawn.
     fn draw_projectiles(&mut self, walker: &Walker, lib: &Library, g: &mut Gpu) {
+        let none: [(u32, Matrix44<Ee>, Vec<[[f32; 4]; 4]>); 0] = [];
         let flying = self.spells.as_ref().map_or(&[][..], |s| &s.flying[..]);
+        // and the meshes the effects' animated sprites carry (`Spells::meshes`)
+        let meshes = self.spells.as_ref().map_or(&none[..], |s| &s.meshes[..]);
         let eye = crate::lod::eye(&walker.cam, &walker.eye.position);
         let textures = render::library_textures(lib);
         let mut used: std::collections::BTreeMap<u32, usize> = Default::default();
-        for (id, m) in flying {
+        let all = flying.iter().map(|(id, m)| (id, m, &[][..])).chain(meshes.iter().map(|(id, m, p)| (id, m, &p[..])));
+        for (id, m, palette) in all {
             if !crate::lod::within(&m.m[3].xyz(), &eye, crate::lod::OFF_DIST) {
                 continue;
             }
@@ -3234,6 +3238,9 @@ impl Play {
             }
             let gpu = &mut pool[*n];
             g.renderer.set_instances(g.queue, gpu, &[m.to_cols()]);
+            if !palette.is_empty() {
+                g.renderer.set_palette(g.queue, gpu, palette);
+            }
             gpu.visible = true;
             *n += 1;
         }
