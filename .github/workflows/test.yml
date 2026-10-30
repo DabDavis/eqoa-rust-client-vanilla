@@ -1,0 +1,57 @@
+name: Test
+
+# The tests of every pull request and every push to a branch other than
+# master (dev.yml runs them on master's pushes, before it builds the
+# release). Nothing is built for players and nothing is released here. The
+# tests that need the disc image, eqoa-port's oracles or a GPU skip without
+# them; the rest must pass.
+
+on:
+  pull_request:
+    # Docs and the browser page are not the program (as dev.yml).
+    paths-ignore:
+      - '**.md'
+      - 'web/**'
+  push:
+    branches-ignore: [ "master" ]
+    paths-ignore:
+      - '**.md'
+      - 'web/**'
+  workflow_dispatch:
+
+concurrency:
+  # A newer push to the same pull request or branch supersedes a run in flight.
+  group: test-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # dev.yml's toolchain.
+  RUST_TOOLCHAIN: 1.99.1
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+
+      # cpal (ALSA) and gilrs (libudev) link these.
+      - name: Install the Linux libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev pkg-config
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: linux
+
+      - name: Test
+        run: cargo test --locked --workspace
