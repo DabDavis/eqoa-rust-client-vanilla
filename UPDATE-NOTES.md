@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-30 · Every branch of your Master Class can be bought
+- Class Mastery: some Master Classes branch into two abilities after the first rank (Spellbinder's
+  Binding Grasp and Mana Flow). Having bought one, the other is no longer refused with "You cannot
+  possess more than one Master Class at a time."
+
 ## 2026-10-30 · Your character there from your first moment in the world
 - Now and then you could come into the world without your own character drawn, and with an empty compass and bars, until something about you changed. The server's first word about you had come a moment before the world itself and was thrown away; it is kept now.
 

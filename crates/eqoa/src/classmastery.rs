@@ -206,35 +206,27 @@ impl Part {
         self.skills.iter().position(|s| s.id == id)
     }
 
-    /// The rank chain of the skill `id` (the ranks below it by `parent`, the
-    /// ranks above it whose `parent` names it), itself included.
-    pub fn line(&self, id: i32) -> Vec<usize> {
-        let Some(k) = self.find(id) else { return Vec::new() };
-        let mut out = vec![k];
+    /// The Master Class the skill at `k` is a rank of: its first rank, down
+    /// `parent` through the Master Class skills. Its ranks can branch (two
+    /// skills naming one parent), each branch the same Master Class.
+    fn master_root(&self, k: usize) -> usize {
         let mut at = k;
-        while let Some(b) = self.skills.iter().position(|s| s.x00 == self.skills[at].parent) {
-            if out.contains(&b) {
+        let mut seen = vec![k];
+        while let Some(b) = self.skills.iter().position(|s| s.master_class() && s.x00 == self.skills[at].parent) {
+            if seen.contains(&b) {
                 break;
             }
-            out.push(b);
+            seen.push(b);
             at = b;
         }
-        at = k;
-        while let Some(b) = self.skills.iter().position(|s| s.parent == self.skills[at].x00) {
-            if out.contains(&b) {
-                break;
-            }
-            out.push(b);
-            at = b;
-        }
-        out
+        at
     }
 
     /// A Master Class owned other than the one the skill `id` is a rank of:
-    /// the next rank of one's own Master Class is not a second one.
+    /// a further rank of one's own Master Class is not a second one.
     pub fn owns_another_master_class(&self, id: i32) -> bool {
-        let line = self.line(id);
-        self.skills.iter().enumerate().any(|(k, s)| s.master_class() && s.on && !line.contains(&k))
+        let root = self.find(id).map(|k| self.master_root(k));
+        self.skills.iter().enumerate().any(|(k, s)| s.master_class() && s.on && Some(self.master_root(k)) != root)
     }
 
     /// `IsKnown(id)`: owned or known.
@@ -1218,8 +1210,9 @@ mod tests {
     /// none owned (one only known, or owned in another category) the box
     /// opens with the disc's warning before the question; a skill of
     /// another category opens its plain question even with a Master Class
-    /// owned, and a higher rank of the Master Class owned opens it too
-    /// (each rank is a skill of category 4, chained by `parent`).
+    /// owned, and a further rank of the Master Class owned opens it too
+    /// (each rank is a skill of category 4, chained by `parent`, and the
+    /// chain can branch).
     #[test]
     fn one_master_class_at_a_time() {
         use crate::pointer::testing::{NullRaster, vui};
@@ -1249,6 +1242,11 @@ mod tests {
         assert_eq!(buy(vec![rank(1, true, 1001), rank(2, true, 1), rank(50, false, 2)], MASTER_CLASS), (None, true, vec![15]), "two ranks owned");
         assert_eq!(buy(vec![rank(1, true, 1001), rank(50, false, 1), rank(3, true, 1003)], MASTER_CLASS), (Some(CmUp::Warn(1840)), false, vec![]), "another owned beside its own");
         assert_eq!(buy(vec![rank(1, true, 1001), rank(50, false, 7)], MASTER_CLASS), (Some(CmUp::Warn(1840)), false, vec![]), "a rank of another");
+        // Ranks branch (Spellbinder's two, Binding Grasp and Mana Flow): with
+        // the first rank and one branch owned, the other branch is the same
+        // Master Class
+        assert_eq!(buy(vec![rank(1, true, 1001), rank(2, true, 1), rank(50, false, 1)], MASTER_CLASS), (None, true, vec![15]), "the other branch");
+        assert_eq!(buy(vec![rank(1, true, 1001), rank(2, true, 1), rank(50, false, 2), rank(3, false, 1)], MASTER_CLASS), (None, true, vec![15]), "beyond a branch");
     }
 
     /// `VICMNode::Read`: the fields, three strings and three lists; a
