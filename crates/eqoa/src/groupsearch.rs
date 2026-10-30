@@ -756,7 +756,9 @@ impl GroupSearch {
         self.main.set_title(Some(&[]));
         self.main.draw(vui, r);
         let active = !self.editing && !self.help_open && self.state < 2;
-        let legend = format!("{}|x{}  |t{}  |s{}  |7|8{}", if active { "" } else { "|-" }, word(212), word(161), word(201), word(1844));
+        // 201 as the live client words it ("Info", the disc's "INFO")
+        let info = crate::livewords::live(&vui.words, 201, vui.language);
+        let legend = format!("{}|x{}  |t{}  |s{info}  |7|8{}", if active { "" } else { "|-" }, word(212), word(161), word(1844));
         self.list.pulse = active;
         let mw = self.main.size[0];
         self.main.text_box(vui, r, &wide(&legend), 40, 13, mw - 40, 1, UI_COLORS[0], 0);
@@ -878,7 +880,7 @@ impl GroupSearch {
     /// Exit under it.
     fn draw_help(&mut self, vui: &Vui, r: &mut dyn Raster) {
         self.help.init(vui, r, [320, 180], 400, 10, 0);
-        self.help.set_title(Some(&wide(vui.words.get(201, vui.language))));
+        self.help.set_title(Some(&wide(&crate::livewords::live(&vui.words, 201, vui.language))));
         self.help.open(false);
         self.help.draw(vui, r);
         let t = if self.help_lines < 8 { -1.0 } else { self.help_scroll as f32 / (self.help_lines - 7) as f32 };
@@ -1222,6 +1224,20 @@ pub(crate) mod tests {
             g.key(134);
             assert_eq!(g.w.state, picker);
         }
+    }
+
+    /// The legend and the help's title say Info as the live client words
+    /// row 201 (the disc's table says "INFO"; `livewords::live`).
+    #[test]
+    fn the_legend_says_info_as_the_live_client() {
+        let mut g = Rig::new(false);
+        let mut lines: Vec<String> = (1..=1814).map(|n| format!("w{n}")).collect();
+        lines[200] = "INFO".into();
+        g.vui = Vui::new(vi::strtab::StringTable::parse(lines.join("\n").as_bytes()).unwrap(), Default::default(), Vec::new());
+        let drawn = g.draw();
+        assert!(drawn.contains(&"Info  ".to_string()) && !drawn.iter().any(|s| s.contains("INFO")), "{drawn:?}");
+        g.key(133);
+        assert!(g.draw().contains(&"Info".to_string()), "the help's title");
     }
 
     /// The race picker ticks races one by one (✕ toggles), ANY is every race

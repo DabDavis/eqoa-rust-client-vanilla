@@ -936,7 +936,9 @@ impl SearchWnd {
         Self::draw_row(&self.list, vui, r, 2, Some(&wd(1728)), Some(&wide(&self.bid.to_string())), cols[0], cols[1], c == 1, true, true);
         Self::draw_row(&self.list, vui, r, 4, Some(&wd(1699)), None, cols[0], lw - 40, c == 2, true, true);
         Self::draw_row(&self.list, vui, r, 5, Some(&wd(1700)), None, cols[0], cols[1], false, false, true);
-        let buy = vui.words.get(if l.quantity == 1 { 1701 } else { 1857 }, vui.language).replacen("%d", &l.p2f8.to_string(), 1);
+        // 1701 as the live client words it ("Buy now", the disc's "Acquire
+        // now": `livewords::live`)
+        let buy = crate::livewords::live(&vui.words, if l.quantity == 1 { 1701 } else { 1857 }, vui.language).replacen("%d", &l.p2f8.to_string(), 1);
         Self::draw_row(&self.list, vui, r, 6, Some(&wide(&buy)), None, cols[0], lw - 40, c == 3, true, true);
         for (cursor, row) in [(0, 1), (1, 2), (2, 4), (3, 6)] {
             self.list_hits.push(rows_rect(&self.list, vui, r, cols[0], row, lw - 40 - cols[0], 1), cursor);
@@ -1666,6 +1668,31 @@ mod tests {
             g.key(134);
             assert_eq!(g.out, vec![SearchOut::Send(Auction::bid_n(5, 300, 20), 4)]);
         });
+    }
+
+    /// The live bid form words a lot of one's buy-out as the live client
+    /// does (row 1701 "Buy now for %d Tunar" where the disc's table says
+    /// "Acquire now ...", `livewords::live`); the control, the disc's form
+    /// on a server with no word, keeps the disc's.
+    #[test]
+    fn the_live_buyout_says_buy_now() {
+        let words = || {
+            let mut lines: Vec<String> = (1..=1814).map(|n| format!("w{n}")).collect();
+            lines[1700] = "Acquire now for %d Tunar".into();
+            vi::strtab::StringTable::parse(lines.join("\n").as_bytes()).unwrap()
+        };
+        let shown = |word| {
+            crate::live::with_features(word, || {
+                let mut g = Rig::new();
+                g.vui = Vui::new(words(), Default::default(), Vec::new());
+                g.page(vec![lot(5, 100)]);
+                g.w.lot = 5;
+                g.w.set_state(4, 0);
+                drawn(&mut g)
+            })
+        };
+        assert!(shown(Some(0x1B)).contains(&"Buy now for 300 Tunar".to_string()));
+        assert!(shown(None).contains(&"Acquire now for 300 Tunar".to_string()));
     }
 
     /// The live bid form without bit 0x08: the quantity row stays (the live
