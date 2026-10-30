@@ -5,10 +5,6 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
-## 2026-10-30 · Master Class abilities can be bought again
-- On Sandstorm, buying a second ability of your Master Class (Faithful's, for one) was refused with "You cannot possess more than one Master Class at a time." The client took every Master Class ability for a Master Class of its own.
-- It now asks the game's own question, with its Master Class warning, as a PS2 does; a server that allows only one Master Class refuses a second one itself.
-
 ## 2026-10-30 · Spell effects' missing shapes
 - Some spell effects carry moving shapes as well as sparkles, and those were never drawn. The
   warrior's Furious, Frenzied and Desperate Defense now raise their column of yellow-green flame

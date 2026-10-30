@@ -70,6 +70,11 @@ pub struct Skill {
 }
 
 impl Skill {
+    /// A Master Class (the live client's `VICMSkill` +0x10).
+    pub fn master_class(&self) -> bool {
+        self.category == MASTER_CLASS
+    }
+
     /// `VICMSkill::Read`.
     fn read(r: &mut Reader) -> Skill {
         Skill {
@@ -391,6 +396,8 @@ pub enum CmUp {
     Close,
     /// a 0x1401 request
     Send(Vec<u8>),
+    /// `AddText(T(word), (1, .25, .25, 1))`: a refusal, red in the chat
+    Warn(i32),
 }
 
 /// The page kinds of the inspector (0 text, 1 stats, 2 adds, 3 removes)
@@ -790,15 +797,14 @@ impl ClassMastery {
                             self.message.setup(vui, r, &w(1665), &w(1666), PROMPT_YESNO, center, 300);
                             cues.push(15);
                         } else if node.x05 != 0 {
-                            // The disc's question, with its warning (1807) for
-                            // a Master Class (category 4). SOE's final client
-                            // refused a second Master Class here (OnKeyDown,
-                            // 0x01338978) by a flag its own record carries
-                            // (+0x10) and no server sends this one: by category
-                            // every Master Class ability is one, so that rule
-                            // refused a class's own abilities on Sandstorm
-                            // (Dankins, 2026-10-30). A server refuses a second
-                            // Master Class itself (eqoaclassic's cmbuy.go).
+                            // SOE's final live client's rule (OnKeyDown,
+                            // 0x01338978): a Master Class while another is
+                            // owned is refused, word 1840 red in the chat, with
+                            // no box, no sound and nothing sent. The disc's
+                            // only warned (1807, as the box below still does)
+                            if node.x10 == MASTER_CLASS && part.skills.iter().any(|s| s.master_class() && s.on) {
+                                return Some(CmUp::Warn(1840));
+                            }
                             let text = if node.x10 == MASTER_CLASS { wide(&format!("{} {}", vui.words.get(1807, vui.language), vui.words.get(1664, vui.language))) } else { w(1664) };
                             self.message.setup(vui, r, &w(1663), &text, PROMPT_YESNO, center, 350);
                             cues.push(15);
@@ -1173,15 +1179,15 @@ mod tests {
         assert!(matches!(c.key(&vui, &mut r, &mut part, key::CROSS, true, 0, &mut cues), Some(CmUp::Send(_))), "Yes: the request");
     }
 
-    /// A Master Class ability (category 4) asks the disc's question with its
-    /// warning, whatever else of category 4 is owned: a class's own abilities
-    /// are bought one after another (Dankins on Sandstorm, 2026-10-30, refused
-    /// by the live client's rule read by category), and a server refuses a
-    /// second Master Class itself. The controls: one only known, or owned in
-    /// another category, asks the same; a skill of another category asks its
-    /// plain question.
+    /// One Master Class at a time (the live client's OnKeyDown, 0x01338978):
+    /// buying a Master Class (category 4) while another is owned is refused
+    /// with word 1840, no box, no sound, nothing sent. The controls: with
+    /// none owned (one only known, or owned in another category) the box
+    /// opens with the disc's warning before the question; a skill of
+    /// another category opens its plain question even with a Master Class
+    /// owned.
     #[test]
-    fn a_master_class_ability_asks_the_discs_question() {
+    fn one_master_class_at_a_time() {
         use crate::pointer::testing::{NullRaster, vui};
         let vui = vui();
         let mc = |id: i32, on: bool, category: u8| Skill { x00: id, on, id, parent: 1000 + id, category, name: wide("S"), ..Default::default() };
@@ -1198,7 +1204,7 @@ mod tests {
             let up = c.key(&vui, &mut NullRaster, &mut part, key::CROSS, true, 0, &mut cues);
             (up, c.message.visible, cues)
         };
-        assert_eq!(buy(vec![mc(1, true, MASTER_CLASS), mc(2, false, 1)], MASTER_CLASS), (None, true, vec![15]), "another of category 4 owned: the box, not a refusal");
+        assert_eq!(buy(vec![mc(1, true, MASTER_CLASS), mc(2, false, 1)], MASTER_CLASS), (Some(CmUp::Warn(1840)), false, vec![]));
         assert_eq!(buy(vec![mc(1, false, MASTER_CLASS)], MASTER_CLASS), (None, true, vec![15]), "only known: the box");
         assert_eq!(buy(vec![mc(1, true, 2)], MASTER_CLASS), (None, true, vec![15]), "owned, another category");
         assert_eq!(buy(vec![mc(1, true, MASTER_CLASS)], 2), (None, true, vec![15]), "not a Master Class");
