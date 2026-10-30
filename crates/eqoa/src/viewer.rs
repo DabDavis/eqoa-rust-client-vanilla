@@ -704,6 +704,8 @@ pub fn shot_with(
                             p.bank_key(k, down);
                         } else if p.npcw_owns() {
                             p.npcw_key(k, down);
+                        } else if p.duel_owns() {
+                            p.duel_key(k, down);
                         } else if p.support_owns() {
                             p.support_key(k, down);
                         } else if p.mode == 5 {
@@ -1923,6 +1925,9 @@ struct App {
     /// `EQOA_SAY=<line>@<ms>[;...]`: what a test's script says in the
     /// world's chat line then (ms on `clock`), as a playshot's does.
     say_script: Vec<(i64, String)>,
+    /// `EQOA_TARGET=<name>@<ms>[;...]`: the creature of that name targeted
+    /// then (ms on `clock`), as a playshot's does.
+    target_script: Vec<(i64, String)>,
     /// `EQOA_PLAY_KEYS=<key>@<ms>[;...]`: keys a test's script presses then
     /// (ms on `clock`; a key by its `keys.opt` name), down and up through the
     /// keyboard's dispatch, as a controller's button on a key's row is
@@ -2069,6 +2074,9 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         era_loading: None,
         art_script: std::env::var("EQOA_ART_AT").map(|v| v.split(';').filter_map(|t| t.trim().parse().ok()).collect()).unwrap_or_default(),
         say_script: std::env::var("EQOA_SAY")
+            .map(|v| v.split(';').filter_map(|s| s.rsplit_once('@').and_then(|(l, t)| Some((t.trim().parse().ok()?, l.to_string())))).collect())
+            .unwrap_or_default(),
+        target_script: std::env::var("EQOA_TARGET")
             .map(|v| v.split(';').filter_map(|s| s.rsplit_once('@').and_then(|(l, t)| Some((t.trim().parse().ok()?, l.to_string())))).collect())
             .unwrap_or_default(),
         key_script: std::env::var("EQOA_PLAY_KEYS")
@@ -3465,14 +3473,18 @@ impl App {
             return;
         }
         // The corpse, merchant and trade windows (modes 1, 10, 15,
-        // 16): `npcw_key_of`'s keys; the trade's chat line, once Space
-        // has opened it, takes the keyboard as the edit box does.
+        // 16), and the duel's invitation and wager (43, 44, the trade's
+        // copy): `npcw_key_of`'s keys; the trade's and the wager's chat
+        // line, once Space has opened it, takes the keyboard as the edit box
+        // does.
         if let Some(p) = self.play.as_mut()
             && p.typing.is_none()
-            && p.npcw_owns()
+            && (p.npcw_owns() || p.duel_owns())
         {
             let down = event.state == ElementState::Pressed;
-            if p.npcw_typing() {
+            let duel = p.duel_owns();
+            let send = |p: &mut crate::play::Play, k: i32, down: bool| if duel { p.duel_key(k, down) } else { p.npcw_key(k, down) };
+            if (duel && p.duel_typing()) || (!duel && p.npcw_typing()) {
                 let named = match &event.logical_key {
                     Key::Named(NamedKey::Backspace) => Some(8),
                     Key::Named(NamedKey::Escape) => Some(27),
@@ -3482,10 +3494,10 @@ impl App {
                     _ => None,
                 };
                 if let Some(k) = named {
-                    p.npcw_key(k, down);
+                    send(p, k, down);
                 } else if down && let Some(t) = &event.text {
                     for c in t.chars().filter(|c| c.is_ascii() && !c.is_ascii_control()) {
-                        p.npcw_key(c as i32, true);
+                        send(p, c as i32, true);
                     }
                 }
                 return;
@@ -3493,7 +3505,7 @@ impl App {
             if let Some(k) = npcw_key_of(&event.logical_key, p.mode)
                 && !(down && event.repeat)
             {
-                p.npcw_key(k, down);
+                send(p, k, down);
             }
             return;
         }
@@ -4850,6 +4862,7 @@ impl App {
                 let console = &mut self.console;
                 let pads = &mut self.pads;
                 let say_script = &mut self.say_script;
+                let target_script = &mut self.target_script;
                 let walk_view = self.walker.as_mut().map(|w| {
                     // UpdateControls, on the sticks and the keyboard's axes,
                     // as the client stands
@@ -4864,6 +4877,11 @@ impl App {
                     if let Some(p) = play {
                         while say_script.first().is_some_and(|s| s.0 <= now) {
                             p.chat_line(&say_script.remove(0).1);
+                        }
+                        while target_script.first().is_some_and(|s| s.0 <= now) {
+                            let name = target_script.remove(0).1;
+                            let found = p.target_by_name(&name);
+                            crate::say(&format!("script: target {name}: {found}"));
                         }
                         let gpu = crate::play::Gpu { renderer: &mut g.renderer, device: &g.device, queue: &g.queue };
                         // The server named the player's model: dress the walker in it.

@@ -42,6 +42,9 @@ pub struct HudState {
     pub group: Vec<MemberState>,
     /// Every member, for `DrawPatch`.
     pub patches: Vec<PatchMember>,
+    /// The live client's duel (0x1502 sub 8): its centre while the duel is on
+    /// and in the player's world, for `DrawPatch`'s orange patch (`duel.rs`).
+    pub duel: Option<[f32; 3]>,
     /// `m_selfId` and `m_target`.
     pub self_id: Option<u32>,
     pub target: u32,
@@ -364,20 +367,8 @@ impl Hud {
         let start = *self.patch_start.get_or_insert(s.time_ms);
         let phase = (s.time_ms - start) % 1500;
         let (uv, size, tex_size) = ([3.0f32, 3.0], [10, 10], 16.0f32);
-        for m in &s.patches {
-            if Some(m.id) == s.self_id || (phase > 1350 && s.target == m.id) {
-                continue;
-            }
-            let Some(at) = m.pos else { continue };
-            let d = [at[0] - s.camera[0], at[1] - s.camera[1], at[2] - s.camera[2]];
-            let Some(p) = patch_point(s.heading, d) else { continue };
+        let mut patch = |p: [f32; 2], color: [f32; 4]| {
             let (hx, hy) = ((size[0] >> 1) as f32, (size[1] >> 1) as f32);
-            let color = match m.index {
-                1 => [0.0, 1.0, 0.0, 1.0],
-                2 => [0.0, 0.0, 1.0, 1.0],
-                3 => [0.0, 1.0, 1.0, 1.0],
-                _ => [1.0, 1.0, 0.0, 1.0],
-            };
             let (u0, v0) = (uv[0] / tex_size, uv[1] / tex_size);
             let (u1, v1) = ((uv[0] + size[0] as f32) / tex_size, (uv[1] + size[1] as f32) / tex_size);
             ui.ui.push(Quad {
@@ -388,6 +379,27 @@ impl Hud {
                 color,
                 clip: None,
             });
+        };
+        for m in &s.patches {
+            if Some(m.id) == s.self_id || (phase > 1350 && s.target == m.id) {
+                continue;
+            }
+            let Some(at) = m.pos else { continue };
+            let d = [at[0] - s.camera[0], at[1] - s.camera[1], at[2] - s.camera[2]];
+            let Some(p) = patch_point(s.heading, d) else { continue };
+            let color = match m.index {
+                1 => [0.0, 1.0, 0.0, 1.0],
+                2 => [0.0, 0.0, 1.0, 1.0],
+                3 => [0.0, 1.0, 1.0, 1.0],
+                _ => [1.0, 1.0, 0.0, 1.0],
+            };
+            patch(p, color);
+        }
+        // the live client's duel, last (eqoa-live-1500's DrawPatch, 0x0135E124):
+        // the duel's centre in orange, at any distance
+        if let Some(c) = s.duel {
+            let d = [c[0] - s.camera[0], c[1] - s.camera[1], c[2] - s.camera[2]];
+            patch(bearing_point(s.heading, d), crate::duel::ORANGE);
         }
     }
 }
@@ -397,11 +409,17 @@ impl Hud {
 /// past 2000. (The game's two wraps, the first testing the heading as read,
 /// move the angle by whole turns.)
 fn patch_point(yaw: f32, d: [f32; 3]) -> Option<[f32; 2]> {
-    use std::f32::consts::PI;
-    let (center, radius) = ([39.0f32, 55.0], 27.0f32);
     if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() > 2000.0 {
         return None;
     }
+    Some(bearing_point(yaw, d))
+}
+
+/// `patch_point` at any distance (the live client's duel patch measures
+/// none).
+fn bearing_point(yaw: f32, d: [f32; 3]) -> [f32; 2] {
+    use std::f32::consts::PI;
+    let (center, radius) = ([39.0f32, 55.0], 27.0f32);
     // HPR with y zeroed
     let h = d[0].atan2(d[2]);
     let mut x = h;
@@ -412,7 +430,7 @@ fn patch_point(yaw: f32, d: [f32; 3]) -> Option<[f32; 2]> {
         x += 2.0 * PI;
     }
     x -= yaw;
-    Some([center[0] - x.sin() * radius, center[1] - x.cos() * radius])
+    [center[0] - x.sin() * radius, center[1] - x.cos() * radius]
 }
 
 /// `DrawGauge`: the frame (`frame`'s art), then `bar`'s art cut to `v` of
@@ -431,7 +449,7 @@ pub fn draw_gauge(vui: &Vui, ui: &mut dyn Raster, bar: i32, frame: i32, at: [i32
 
 #[cfg(test)]
 mod tests {
-    use super::{Hud, HudState, Pick, patch_point};
+    use super::{Hud, HudState, Pick, bearing_point, patch_point};
 
     fn near(a: [f32; 2], b: [f32; 2]) -> bool {
         (a[0] - b[0]).abs() < 1e-3 && (a[1] - b[1]).abs() < 1e-3
@@ -455,6 +473,10 @@ mod tests {
         // 2000 is the edge, measured before y is dropped
         assert!(patch_point(0.0, [0.0, 0.0, 2000.0]).is_some());
         assert!(patch_point(0.0, [0.0, 100.0, 1998.0]).is_none());
+        // the live client's duel patch measures no distance: past the edge
+        // it is where a member would be within it
+        assert!(near(bearing_point(0.0, [100.0, 0.0, 0.0]), [12.0, 55.0]));
+        assert!(near(bearing_point(0.0, [4000.0, 0.0, 0.0]), [12.0, 55.0]));
     }
 
     /// A pointer finds the HUD's pieces where they were drawn: in a 4:3

@@ -22,6 +22,8 @@ mod fishplay;
 mod adminplay;
 #[path = "liveplay.rs"]
 mod liveplay;
+#[path = "duelplay.rs"]
+mod duelplay;
 
 use crate::walker::{Placing, Spawn, Walker};
 use esf::Library;
@@ -468,6 +470,9 @@ pub struct Play {
     support: support::SupportWindows,
     /// fishing: `VIClientPart3FC10` and its window, mode 36 (`fishplay`)
     fish: fishplay::Fishing,
+    /// duels: the live client's duel part and `VIWndDuel`, modes 43 and 44
+    /// (`duelplay`)
+    duel: duelplay::Duel,
     /// the GM's channel, its TEST menu and windows (`adminplay`)
     admin: adminplay::Admin,
     /// the live client's group search, mode 42 (`liveplay`)
@@ -1535,6 +1540,57 @@ mod entity_actors {
             assert!(got < 6.0 - face - 0.5 && got > 6.0 - face - 0.8, "scale {scale}: stopped at its face less the walk's sphere, at {got}");
         }
     }
+
+    /// The player's own body is drawn at its entity's scale, as
+    /// `VIEntity::Changed`'s `SetActorScale` scales the player's actor as any
+    /// other's: go-eqoa-server's 0.9 for a gnome makes the walker's actor (the
+    /// body's model matrix, and with it its shadow, its spells' places, its
+    /// trail) 0.9 of a human's 1.0, its scene actor too (`place_self_actor`).
+    /// The walk is the walk control's own (`InitParms`' constants, which
+    /// nothing in CLIENT scales): the same steps over the same ground end bit
+    /// for bit where the 1.0 walk ends. The controls: the body at 1.0 (and
+    /// an entity with no scale, 0, taken as 1 as for any entity).
+    #[test]
+    fn the_players_body_is_drawn_at_its_entitys_scale() {
+        let (x, z) = (25275.115f32, 15766.627f32);
+        let Some((lib, file)) = freeport_lib(x, z) else { return };
+        let human = lib.lookup(HUMAN as i32).expect("CHAR.ESF has it");
+        let walker = || {
+            let mut w = Walker::arrive(World::load(&lib, file).unwrap(), crate::walker::Spawn::ground(x, z, 0.0));
+            w.set_character(&lib, human);
+            w
+        };
+        let (mut small, mut plain) = (walker(), walker());
+        let mut p = super::commands::play();
+        let me = |scale: f32| net::entity::Entity { id: 0x100, kind: net::entity::TYPE_CREATURE, model: HUMAN, drawn_model: HUMAN, scale, creature: Some(net::entity::Creature::default()), ..Default::default() };
+        p.entities.slots[0] = Some(me(0.9));
+        p.place_self_actor(&mut small, &lib);
+        assert_eq!(small.scale.0, 0.9, "the entity's scale");
+        let a = p.self_actor.expect("its scene actor").actor;
+        assert_eq!(small.scene.actors[a].scale.0, 0.9, "its scene actor's");
+        let mut q = super::commands::play();
+        q.entities.slots[0] = Some(me(0.0));
+        q.place_self_actor(&mut plain, &lib);
+        assert_eq!(plain.scale.0, 1.0, "the control: no scale is 1");
+        // the body's model matrix: its axes 0.9 of the plain body's
+        let axis = |m: [[f32; 4]; 4], k: usize| (m[k][0] * m[k][0] + m[k][1] * m[k][1] + m[k][2] * m[k][2]).sqrt();
+        let ((ms, _), (mp, _)) = (small.pose(), plain.pose());
+        for k in 0..3 {
+            let ratio = axis(ms, k) / axis(mp, k);
+            assert!((ratio - 0.9).abs() < 1e-5, "axis {k}: {ratio}");
+        }
+        assert!((axis(walker().actor().to_cols(), 0) - 1.0).abs() < 1e-6, "the control: a walker's own scale is 1");
+        // the walk: the same steps, the same places
+        let t0 = small.scene.time;
+        for i in 1..=45 {
+            let c = crate::walker::Controls { fwd: 1.0, strafe: if i > 20 { 0.5 } else { 0.0 }, ..Default::default() };
+            small.frame(c, t0 + i * 33);
+            plain.frame(c, t0 + i * 33);
+            assert_eq!(small.cam.walk.committed.position.to_array().map(f32::to_bits), plain.cam.walk.committed.position.to_array().map(f32::to_bits), "frame {i}");
+        }
+        let (a0, a1) = (plain.cam.walk.committed.position.to_array(), [x, 0.0, z]);
+        assert!(((a0[0] - a1[0]).powi(2) + (a0[2] - a1[2]).powi(2)).sqrt() > 5.0, "the walk went somewhere");
+    }
 }
 
 /// `CycleTarget`'s reach: a creature this far from the camera, squared
@@ -1987,7 +2043,7 @@ impl Play {
         crate::live::set_features(Default::default());
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, send_interval: 100, entity_updates: (0, 0), puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, send_interval: 100, entity_updates: (0, 0), puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default() };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -2012,6 +2068,8 @@ impl Play {
         self.race_cams = Some(crate::camstyle::race_cameras(img));
         // the server's trigger names, if they came before the menus
         self.trigger_labels();
+        // and the duel's entry, if the server's feature word came before them
+        self.duel_menu_again();
     }
 
     /// CLIENT's and SUPPORT's data, taken up as each image comes
@@ -2082,6 +2140,11 @@ impl Play {
         if let Some(w) = self.loading.wait {
             let _ = writeln!(o, "loading screen: up {} ms, for the zones round {:?}{}", self.session.now() as i64 - w.since, w.at, if w.entering { ", the world's file first" } else { "" });
         }
+        let d = self.duel_part();
+        if d.features != 0 || d.running || d.set || !d.queue.is_empty() || self.duel_owns() {
+            let wnd = self.duel_window_line();
+            let _ = writeln!(o, "duel: features {:#x}, id {}, on {}, set {}, may fight {:#x} {:#x}, {} waiting, wager {}/{} accepted {}/{}{wnd}", d.features, d.duel_id, d.running, d.set, d.a, d.b, d.queue.len(), d.my_tunar, d.their_tunar, d.my_acc, d.their_acc);
+        }
         let _ = writeln!(o, "entities: {} of {}, drawn to {} (the server's most {:?})", self.entities.slots.iter().flatten().count(), self.entities.limit, crate::settings::entity_view(), self.session.entity_view_offer);
         let now = self.session.now();
         let (n, last) = self.entity_updates;
@@ -2134,6 +2197,13 @@ impl Play {
                 Event::Dialog { text, .. } => self.show_dialog(&text),
                 Event::DialogBox { id, text, options } => self.dialog_box(id, &text, &options),
                 Event::Opcode { op: 0x005E, .. } => self.msg_005e(walker),
+                // the live game's duel (`duelplay`): 0x1502, the feature word
+                Event::Opcode { op: op @ (crate::duel::OP_IN | crate::duel::OP_FEATURES), data } => {
+                    self.duel_opcode(op, &data, Some(walker));
+                }
+                // PumpMessages' connect: the duel part reset (the live
+                // client's)
+                Event::Promoted => self.duel_reset(),
                 Event::Teleport { world, pos, hpr, token } => self.msg_00b2(walker, world, pos, hpr, token, now as i64),
                 // 0x00F8: `m_speed`, then SetSpeed (a speed buff, a snare)
                 Event::Speed(v) => self.set_speed(v),
@@ -2677,6 +2747,8 @@ impl Play {
                 self.alarm_outs(vec![o]);
             }
         }
+        // the duel part's Process: its waiting invitations (`duelplay`)
+        self.duel_tick();
         let self_id = self.session.self_id;
         // UpdateGame: the player's own actor where its walk has taken it,
         // before the other creatures walk
@@ -2868,8 +2940,8 @@ impl Play {
         self.fishing_frame(walker, lib, game_ms);
         self.draw_projectiles(walker, lib, &mut g);
         // the player's own swing, on its walker's pose
+        let actor = walker.actor();
         if let (Some(p), Some(cs)) = (self.self_puppet.as_mut(), walker.sprite.as_mut()) {
-            let actor = Matrix44::transform(&Vect3::new(walker.cam.walk.phys.angles.x, F::ZERO, F::ZERO), F::ONE, &walker.cam.walk.phys.smooth_location());
             let centre = cs.h.calc_trans_about_center(&actor, &walker.anims);
             crate::trails::process(&mut self.trails, &mut p.trail, cs, &p.weapons, &centre, game_ms);
             self.self_at = Some((walker.cam.walk.phys.smooth_location().to_array(), slot_point(cs, 4, &centre)));
@@ -2949,6 +3021,11 @@ impl Play {
     fn place_self_actor(&mut self, walker: &mut Walker, lib: &Library) {
         self.actors_scene(walker);
         let me = self.self_id32();
+        // the body drawn at its entity's scale (`Changed`'s `SetActorScale`):
+        // a gnome's 0.9 where the server sends it
+        if let Some(e) = self.entities.slots.iter().flatten().find(|e| Some(e.id) == me) {
+            walker.scale = actor_scale(e.scale);
+        }
         let c = &walker.cam.walk.committed;
         let (at, hpr) = (c.smooth_location(), Vect3::new(c.angles.x, F::ZERO, F::ZERO));
         let dead = walker.sprite.as_ref().is_some_and(|cs| cs.dead);
@@ -3051,7 +3128,7 @@ impl Play {
         if walker.sprite.as_ref().is_some_and(|cs| !cs.holds_items) {
             attack = [11, 11];
         }
-        let actor = Matrix44::transform(&Vect3::new(walker.cam.walk.phys.angles.x, F::ZERO, F::ZERO), F::ONE, &walker.cam.walk.phys.smooth_location());
+        let actor = walker.actor();
         let has_self = me.is_some_and(|me| self.entities.slots.iter().flatten().any(|e| e.id == me));
         if has_self {
             let anims = &walker.anims;
@@ -3258,7 +3335,9 @@ impl Play {
             }
             let mut dead = false;
             if let Some(c) = &e.creature {
-                if c.p256 == 3 {
+                // a pet (of a player's side) is passed over, but the duel's
+                // (the live client's `IsDueling`)
+                if c.p256 == 3 && !self.is_dueling(e.id) {
                     continue;
                 }
                 dead = c.state == 14;
@@ -3538,7 +3617,8 @@ impl Play {
                 let e = e.as_ref().filter(|e| self.in_scene(e))?;
                 let at = self.slot4_of(k).unwrap_or(e.actor_pos);
                 let d2 = (glam::Vec3::from(e.actor_pos) - eye).length_squared();
-                Some(Seen { id: e.id, at, selectable: e.p18 & 1 != 0, side: e.creature.as_ref().is_some_and(|c| c.p256 == 3), d2 })
+                let side = e.creature.as_ref().is_some_and(|c| c.p256 == 3) && !self.is_dueling(e.id);
+                Some(Seen { id: e.id, at, selectable: e.p18 & 1 != 0, side, d2 })
             })
             .collect();
         let choice = centre_choice(&seen, self.self_id32(), self.pet_id, proj * view, view_proj);
@@ -3985,6 +4065,9 @@ impl Play {
         }
         if self.npcw_owns() {
             return self.npcw_point(f);
+        }
+        if self.duel_owns() {
+            return self.duel_point(f);
         }
         if self.support_owns() {
             return self.support_point(f);
@@ -4563,6 +4646,10 @@ impl Play {
         }
         if self.npcw_owns() {
             self.npcw_key(key, down);
+            return true;
+        }
+        if self.duel_owns() {
+            self.duel_key(key, down);
             return true;
         }
         if self.support_owns() {
@@ -5870,6 +5957,10 @@ impl Play {
         if self.admin_action(id, arg) {
             return;
         }
+        // the live client's duel part (`IsMine`, `Use`): Community > Duel
+        if self.duel_action(id) {
+            return;
+        }
         let target = self.target;
         match id {
             // VIBankControl::IsCommand / Do: the auction search
@@ -5938,7 +6029,11 @@ impl Play {
                 self.session.send_opcode([30, 66, 67, 68][k]);
                 self.emote = Some([56, 57, 60, 61][k]);
             }
-            0x0A01_0000 => self.logout(),
+            // a duel on or set surrendered first (the live client's)
+            0x0A01_0000 => {
+                self.duel_logout();
+                self.logout();
+            }
             0x0B05_2000 => self.session.send_opcode(69),
             // the guild roster: ShowInvite (OpenGuildMenu, mode 21), or word 570
             0x0B05_1001 => {
@@ -6575,7 +6670,9 @@ impl Play {
         }
         let Some(m) = self.entities.slots.iter().flatten().find(|e| Some(e.id) == me) else { return false };
         let (Some(tc), Some(mc)) = (&t.creature, &m.creature) else { return false };
-        if mc.p256 == 2 && (tc.p256 == 2 || tc.p256 == 3) {
+        // a player against a player or a pet: none, but the duel's (the live
+        // client's `IsDueling`)
+        if mc.p256 == 2 && !self.is_dueling(t.id) && (tc.p256 == 2 || tc.p256 == 3) {
             return false;
         }
         if tc.npc_flags & 0x400 != 0 {
@@ -6956,6 +7053,7 @@ impl Play {
             || self.quick_typing()
             || (self.bank_owns() && self.bank_typing())
             || (self.npcw_owns() && self.npcw_typing())
+            || self.duel_typing()
             || (self.support_owns() && self.support_typing())
             || (self.mail_owns() && self.mail_typing())
             || (self.fishing_owns() && self.fishing_typing())
@@ -7220,6 +7318,7 @@ impl Play {
             target: self.target,
             camera: walker.eye.position.to_array(),
             time_ms,
+            duel: self.duel_patch(),
         };
         let now = self.session.now();
         let dt = ((time_ms - self.hud_last).clamp(0, 250)) as f32 / 1000.0;
@@ -7322,6 +7421,7 @@ impl Play {
             self.run_class_mastery(vui, &mut r);
             self.run_factions(vui, &mut r);
             self.run_npcw(vui, &mut r);
+            self.run_duel(vui, &mut r);
             self.run_bank(vui, &mut r);
             self.run_panels(vui, &mut r);
             self.run_guild(vui, &mut r);
@@ -7408,7 +7508,7 @@ impl Play {
             // UpdateQuickBars, then the menu up (the HUD's, in play; L2's
             // menus open over it without `UpdateMode`, so it stays up there;
             // a server's player search hides them while it is up)
-            if (self.mode == 0 || self.mode == 30 || self.mode == 38) && !self.search.open {
+            if (self.mode == 0 || self.mode == 30 || self.mode == 38 || self.mode == 43) && !self.search.open {
                 let bars = self.hud_bars();
                 self.hud_menus.build(&self.abilities, &self.dump.inventory, &self.gear, bars);
                 let abilities = &self.abilities;

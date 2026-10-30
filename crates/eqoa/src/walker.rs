@@ -100,6 +100,12 @@ pub struct Walker {
     /// doubles): a place given the camera after that was given round the
     /// console frame (`camera_as_drawn`).
     given: Option<(Vect3<Ee>, [f64; 3])>,
+    /// The player's actor's scale: its entity's (`m_scale`, the state
+    /// channel's), as `VIEntity::Changed`'s `SetActorScale` gives the player's
+    /// own actor as any other's (play sets it, `place_self_actor`; 1 with no
+    /// server). The body is drawn at it; the walk's collision is the walk
+    /// control's own (`InitParms`' constants, which nothing in CLIENT scales).
+    pub scale: F<Ee>,
 }
 
 /// The console's frame: two fields of NTSC video (59.94 Hz), 33.37 ms. The
@@ -208,7 +214,7 @@ impl Walker {
         cam.set_orbit_distance(dist);
         cam.set_orbit_angle_behind();
         let eye = cam.process(&mut scene);
-        Walker { cam, scene, eye, sprite: None, anims: AnimScene::default(), rand: Rand(1), shake: 0, reach: Default::default(), kept: None, rewound: false, given: None }
+        Walker { cam, scene, eye, sprite: None, anims: AnimScene::default(), rand: Rand(1), shake: 0, reach: Default::default(), kept: None, rewound: false, given: None, scale: F::ONE }
     }
 
     /// `Respawn`'s placing: the character stood at `pos` (on the ground
@@ -266,11 +272,12 @@ impl Walker {
     }
 
     /// The actor's transform: the body's render position, turned to its
-    /// heading (`VIMatrix44::Transform(hpr, 1, pos)`).
-    fn actor(&self) -> Matrix44<Ee> {
+    /// heading, at the actor's scale (`VIMatrix44::Transform(hpr, scale,
+    /// pos)`).
+    pub fn actor(&self) -> Matrix44<Ee> {
         let p = self.cam.walk.phys.smooth_location();
         let hpr = Vect3::new(self.cam.walk.phys.angles.x, F::ZERO, F::ZERO);
-        Matrix44::transform(&hpr, F::ONE, &p)
+        Matrix44::transform(&hpr, self.scale, &p)
     }
 
     /// The character's model matrix and skin palette for this frame:
