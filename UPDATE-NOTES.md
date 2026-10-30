@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-30 · Master Class ranks can be bought again
+- Class Mastery: buying the next rank of the Master Class you already have no longer stops with
+  "You cannot possess more than one Master Class at a time." Only a second, different Master Class
+  is refused.
+
 ## 2026-10-30 · Spell effects' missing shapes
 - Some spell effects carry moving shapes as well as sparkles, and those were never drawn. The
   warrior's Furious, Frenzied and Desperate Defense now raise their column of yellow-green flame
