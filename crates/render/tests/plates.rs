@@ -59,12 +59,12 @@ fn a_textured_particle_that_blends_writes_no_depth() {
     let mut r = Renderer::new(&g.device, &g.queue, render::TARGET_FORMAT);
     let c = CLEAR * 255.0;
     // in front: added red, Z test off, its definition asking to write Z (as
-    // 27 of SPELLFX.CSF's do); behind it: green at half alpha (a blended
-    // layer's alpha is a x 64 of 128)
+    // 27 of SPELLFX.CSF's do); behind it: green at half its alpha
     let front = |texture| batch(texture, 1, false, true, 0.3, [0.25, 0.0, 0.0, 1.0]);
-    let behind = batch(7, 3, true, false, 0.6, [0.0, 1.0, 0.0, 1.0]);
-    // added at the blended alpha (a x 64 of 128): the GS's (Cs - 0) As + Cd
-    let added = [c.x + 0.25 * 255.0 * 0.5, c.y, c.z];
+    let behind = batch(7, 3, true, false, 0.6, [0.0, 1.0, 0.0, 0.5]);
+    // added at the texel's alpha times the particle's (the program's a x 64,
+    // which the GS's blend reads as one: billboard_alpha.rs): (Cs - 0) As + Cd
+    let added = [c.x + 0.25 * 255.0, c.y, c.z];
     let over = |p: [f32; 3]| [p[0] * 0.5, p[1] * 0.5 + 255.0 * 0.5, p[2] * 0.5];
     // textured: no depth written, the one behind blends over it
     close(pixel(&g, &mut r, 8, (4, 4), &[front(7), behind.clone()]), over(added), "textured, blended");
@@ -94,7 +94,7 @@ fn the_plates_go_under_the_particles_and_the_screens_text_over_them() {
     t.plates = vec![Label { at: [0.0, 0.0, 0.5], color: blue, text: "A".into() }];
     t.labels = vec![Label { at: [-0.5, 0.0, 0.0], color: blue, text: "A".into() }];
     // the plate drawn first, the red added over it
-    close(pixel(&g, &mut r, size, (224, 224), std::slice::from_ref(&red)), [0.25 * 255.0 * 0.5, 0.0, 255.0], "plate");
+    close(pixel(&g, &mut r, size, (224, 224), std::slice::from_ref(&red)), [0.25 * 255.0, 0.0, 255.0], "plate");
     // the screen's text over the particle
     close(pixel(&g, &mut r, size, (112, 224), std::slice::from_ref(&red)), [0.0, 0.0, 255.0], "label");
     // the control: with the particle gone, the plate is its own colour

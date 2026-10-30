@@ -419,7 +419,7 @@ impl Renderer {
         // an opaque run alpha-tests at 128 (the TEST of an unblended layer)
         for (i, opaque) in [true, false].into_iter().enumerate() {
             if draws.iter().any(|d| (d.0.0 == 0) == opaque) {
-                let u = FrameU { view: view.to_cols_array_2d(), proj: proj.to_cols_array_2d(), flags: [if opaque { 1.0 } else { 0.5 }, opaque as i32 as f32, far as i32 as f32, crate::effects_lod_k()] };
+                let u = FrameU { view: view.to_cols_array_2d(), proj: proj.to_cols_array_2d(), flags: [opaque as i32 as f32, far as i32 as f32, crate::effects_lod_k(), 0.0] };
                 queue.write_buffer(&kept.frames[i].0, 0, bytemuck::bytes_of(&u));
             }
         }

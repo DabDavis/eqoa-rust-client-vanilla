@@ -5,6 +5,17 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-30 · Glowing weapons and spell effects as bright as on a PS2
+- Every particle was drawn at half the strength the PlayStation 2 draws it with: the glow round an
+  epic or magic weapon such as the Sword of Virtue, the sparkles, clouds and flashes of every spell,
+  the fires, smoke and sparkles placed in the world, rain and snow, the stars, and the lightning of
+  spells and the trails of weapons. They now light up as much as on a console: a glowing blade
+  glows again.
+- How it was found: the same character with the Sword of Virtue in hand and Minor Healing cast on
+  it, side by side with the decompiled game's own drawing. The glow came out at about two thirds of
+  the game's, and now matches it; the world's models, the sky's dome, water and the HUD are drawn
+  as before.
+
 ## 2026-10-30 · SOE's final patch features, recovered from the Corsten and Lostologist save states!
 - The game kept changing after the Frontiers disc, and its final client went with SOE's servers: no
   disc ever had it. Two save states made in the live game, Corsten's and Lostologist's, still held it
