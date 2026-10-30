@@ -626,6 +626,15 @@ impl Fx {
             .collect()
     }
 
+    /// The raster's normal as the volumes leave it (`VIRaster::Normal`):
+    /// (0, 1, 0) once a light shaft or a falling leaf has been drawn, zero
+    /// before; what an immediate-mode strip that sets none is lit by
+    /// (`spells::light_bolts`).
+    pub fn raster_normal(&self) -> Vec3 {
+        let n = self.draw.normal;
+        Vec3::new(n.x.0, n.y.0, n.z.0)
+    }
+
     pub fn describe(&self) -> String {
         let s = self.stats;
         format!(

@@ -5,6 +5,12 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-30 · Spell lightning lit like the world
+- The lightning of spells (a wizard's or a druid's bolt and the like) is lit by the day, the night
+  and your lantern as the PlayStation 2 lights it: in daylight a blue or green bolt comes out paler
+  and brighter, at night it keeps more of its own colour. It had been drawn in its bare colour at
+  every hour. The trails of weapons stay as they were: the game draws them unlit.
+
 ## 2026-10-30 · Glowing weapons and spell effects as bright as on a PS2
 - Every particle was drawn at half the strength the PlayStation 2 draws it with: the glow round an
   epic or magic weapon such as the Sword of Virtue, the sparkles, clouds and flashes of every spell,

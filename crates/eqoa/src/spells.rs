@@ -63,6 +63,48 @@ pub fn hand_attack_types(c: &net::entity::Creature, holds_items: bool) -> [i32; 
     })
 }
 
+/// The spells' bolts as the game draws them. `VILightning::Render` puts its
+/// strips through `VIRaster::BeginTriStrip`, the lit strip program
+/// (`VIRStrip`), while `VIScene::Render` runs the spell effects, before it
+/// turns the lights off for the weapons' trails (`EnableAllLights(0)`,
+/// which leaves the trails their own colour). So each vertex is lit as the
+/// program lights it, min(colour + ambient + sun · max(−N·S, 0) + point ·
+/// (1 − min(|L|/range, 1)) · max(L·N/|L|, 0), 1), alpha the colour's own;
+/// a bolt's colour is one that fades a bright day's ambient toward white.
+/// The bolt sets no normal: N is the raster's, which only the light shafts
+/// and falling leaves set ((0, 1, 0), `VIEffectVolume`), zero before any
+/// (`normal`, `fx::Fx::raster_normal`).
+pub fn light_bolts(strips: &mut [Strips], view: &render::View, normal: glam::Vec3) {
+    let sun = view.sun * (-normal.dot(view.sun_dir)).max(0.0);
+    for s in strips {
+        let colors: Vec<Vec<[f32; 4]>> = s
+            .strips
+            .iter()
+            .enumerate()
+            .map(|(k, strip)| {
+                strip
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (_, p))| {
+                        let c = s.colors.get(k).and_then(|c| c.get(i)).copied().unwrap_or(s.color);
+                        let mut point = glam::Vec3::ZERO;
+                        if let Some((at, range, col)) = view.point.filter(|&(_, r, _)| r > 0.0) {
+                            let l = at - glam::Vec3::from(*p);
+                            let d = l.length();
+                            if d > 0.0 {
+                                point = col * (1.0 - (d / range).min(1.0)) * (l.dot(normal) / d).max(0.0);
+                            }
+                        }
+                        let rgb = (glam::Vec3::new(c[0], c[1], c[2]) + view.ambient + sun + point).clamp(glam::Vec3::ZERO, glam::Vec3::ONE);
+                        [rgb.x, rgb.y, rgb.z, c[3]]
+                    })
+                    .collect()
+            })
+            .collect();
+        s.colors = colors;
+    }
+}
+
 /// `SecondModel`: the projectile `VICreatureEntity::ApplyItems` gives the
 /// second hand's item by its attack type (a bow's arrow, a crossbow's bolt,
 /// a thrown weapon itself), 0 for none.
@@ -730,6 +772,57 @@ impl SpellScene<Ee> for Scene<'_, '_, '_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A bolt (`VILightning::Render`'s strip) lit as the strip program
+    /// lights a vertex: its colour plus the ambient, plus the sun by the
+    /// raster's normal against the sun's way, plus the point light by its
+    /// falloff and the normal, clamped at one, alpha its own. The controls:
+    /// with no normal (no light shaft or leaf drawn yet) the sun and the
+    /// point light add nothing, and a bolt left as it is keeps its colour.
+    #[test]
+    fn a_bolt_is_lit_as_virstrip_lights_a_vertex() {
+        let bolt = || vec![Strips {
+            texture: 0,
+            blend: 1,
+            ztest: true,
+            zwrite: false,
+            color: [0.0, 0.41, 1.0, 1.0],
+            strips: vec![vec![([0.0, 1.0], [0.0, 0.0, 0.0]), ([0.0, 0.0], [0.0, 1.0, 0.0]), ([1.0, 1.0], [4.0, 0.0, 0.0])]],
+            colors: Vec::new(),
+        }];
+        let view = render::View {
+            ambient: glam::Vec3::new(0.3, 0.3, 0.35),
+            sun: glam::Vec3::new(0.5, 0.45, 0.4),
+            // the sun's light travels down and across, 0.6 of it down
+            sun_dir: glam::Vec3::new(0.8, -0.6, 0.0),
+            // a lantern 2 above the first vertex, reaching 8
+            point: Some((glam::Vec3::new(0.0, 2.0, 0.0), 8.0, glam::Vec3::new(0.4, 0.3, 0.2))),
+            ..render::View::daylight(glam::Mat4::IDENTITY)
+        };
+        let up = glam::Vec3::Y;
+        let mut lit = bolt();
+        light_bolts(&mut lit, &view, up);
+        let at = |p: glam::Vec3| {
+            let l = glam::Vec3::new(0.0, 2.0, 0.0) - p;
+            let point = glam::Vec3::new(0.4, 0.3, 0.2) * (1.0 - (l.length() / 8.0).min(1.0)) * (l.dot(up) / l.length()).max(0.0);
+            (glam::Vec3::new(0.0, 0.41, 1.0) + view.ambient + view.sun * 0.6 + point).min(glam::Vec3::ONE)
+        };
+        let c = &lit[0].colors[0];
+        for (i, p) in [glam::Vec3::ZERO, glam::Vec3::Y, glam::Vec3::new(4.0, 0.0, 0.0)].into_iter().enumerate() {
+            let want = at(p);
+            assert!((0..3).all(|k| (c[i][k] - want[k]).abs() < 1e-5), "vertex {i}: {:?}, want {want:?}", c[i]);
+            assert_eq!(c[i][3], 1.0, "the alpha is the colour's");
+        }
+        // the blue is clamped at one; the green reached past its 0.41
+        assert!(c[0][2] == 1.0 && c[0][1] > 0.9, "{:?}", c[0]);
+        // the controls: no normal, the ambient alone; a bolt not lit keeps
+        // its colour (the trails)
+        let mut flat = bolt();
+        light_bolts(&mut flat, &view, glam::Vec3::ZERO);
+        let want = (glam::Vec3::new(0.0, 0.41, 1.0) + view.ambient).min(glam::Vec3::ONE);
+        assert!(flat[0].colors[0].iter().all(|c| (0..3).all(|k| (c[k] - want[k]).abs() < 1e-5)), "{:?}", flat[0].colors[0]);
+        assert!(bolt()[0].colors.is_empty() && lit[0].colors[0][0] != bolt()[0].color, "the control must differ");
+    }
 
     /// An empty hand is 11 (hand to hand), which the swing's play-attack
     /// event (type 15) plays as action 23 or 22; read as 0, as it was, it

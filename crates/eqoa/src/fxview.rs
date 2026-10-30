@@ -571,6 +571,9 @@ impl Stage {
                 g.visible = false;
             }
         }
+        // the bolts lit by the stage's daylight (`view`'s), no light shaft or
+        // leaf here to give the raster a normal (`spells::light_bolts`)
+        crate::spells::light_bolts(&mut self.spells.strips, &View::daylight(Mat4::IDENTITY), Vec3::ZERO);
         r.strips = std::mem::take(&mut self.spells.strips);
     }
 
