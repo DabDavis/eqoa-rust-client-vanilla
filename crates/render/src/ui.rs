@@ -291,6 +291,102 @@ pub fn top(size: (u32, u32)) -> f32 {
     (oy / sy).floor()
 }
 
+/// The client's Fill menus (Extended's Menus: Fill): a frame rectangle (the
+/// start menu's) scaled up by `k` and moved by `at` (frame point p to
+/// `at + k * p`), the largest that fits the target: its top at the target's
+/// top, in the middle across. What is drawn under it is the frame's
+/// (`Ui::push`: the HUD's pieces, which go to a side, are not drawn).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Fill {
+    pub k: f32,
+    pub at: [f32; 2],
+}
+
+impl Fill {
+    /// The fill of frame rectangle `area` (x0, y0, x1, y1) in a `size`
+    /// target; none where it would be no larger than the game draws it.
+    pub fn fit(size: (u32, u32), area: [f32; 4]) -> Option<Fill> {
+        let (ox, oy, sx, sy) = frame(size);
+        // the target in frame pixels, from its top left corner
+        let (w, h) = (size.0 as f32 / sx, size.1 as f32 / sy);
+        let (aw, ah) = (area[2] - area[0], area[3] - area[1]);
+        let k = (w / aw).min(h / ah);
+        if !(k > 1.0) {
+            return None;
+        }
+        Some(Fill { k, at: [-ox / sx + (w - aw * k) / 2.0 - area[0] * k, -oy / sy - area[1] * k] })
+    }
+
+    /// Where frame point `p` is drawn.
+    pub fn apply(&self, p: [f32; 2]) -> [f32; 2] {
+        [self.at[0] + self.k * p[0], self.at[1] + self.k * p[1]]
+    }
+
+    /// The frame point drawn at `p`: `apply` undone (what a pointer meets).
+    pub fn undo(&self, p: [f32; 2]) -> [f32; 2] {
+        [(p[0] - self.at[0]) / self.k, (p[1] - self.at[1]) / self.k]
+    }
+
+    /// A quad as the fill draws it: its corners moved, and its cut (the
+    /// frame's, without one) with them.
+    fn quad(&self, q: &mut Quad) {
+        for p in &mut q.pos {
+            *p = self.apply(*p);
+        }
+        let [x0, y0, x1, y1] = q.clip.unwrap_or([0, 0, SCREEN_W as i32, SCREEN_H as i32]);
+        let (a, b) = (self.apply([x0 as f32, y0 as f32]), self.apply([x1 as f32, y1 as f32]));
+        q.clip = Some([a[0].floor() as i32, a[1].floor() as i32, b[0].ceil() as i32, b[1].ceil() as i32]);
+    }
+}
+
+/// `Ui::push` under a `Fill`: a quad of the frame's placed in the viewport as
+/// on a 4:3 screen, then scaled and moved with the fill (its cut too); none
+/// for a HUD piece (one that goes to a side).
+fn filled(mut q: Quad, viewport: Option<[i32; 4]>, anchor: Anchor, f: Fill) -> Option<Quad> {
+    if anchor.hud() {
+        return None;
+    }
+    place(&mut q, viewport, anchor, 0.0);
+    f.quad(&mut q);
+    Some(q)
+}
+
+/// `Ui::push` while a window's fill is measured (`Ui::fill_drawn`): a quad
+/// of the frame's as on a 4:3 screen, to be scaled at `end`; none for a HUD
+/// piece.
+fn measured(q: Quad, viewport: Option<[i32; 4]>, anchor: Anchor) -> Option<Quad> {
+    filled(q, viewport, anchor, Fill { k: 1.0, at: [0.0, 0.0] })
+}
+
+/// The frame rectangle the quads at `at` cover (each cut to its own cut, or
+/// the frame's), scaled and moved together to fill a `size` target
+/// (`Fill::fit`): how, or none (nothing drawn, or nothing larger).
+fn fill_together(quads: &mut [Quad], at: &[usize], size: (u32, u32)) -> Option<Fill> {
+    let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+    for &i in at {
+        let q = &quads[i];
+        let c = q.clip.map_or([0.0, 0.0, SCREEN_W, SCREEN_H], |c| c.map(|v| v as f32));
+        let (lo, hi) = q.pos.iter().fold(([f32::MAX; 2], [f32::MIN; 2]), |(l, h), p| ([l[0].min(p[0]), l[1].min(p[1])], [h[0].max(p[0]), h[1].max(p[1])]));
+        let r = [lo[0].max(c[0]), lo[1].max(c[1]), hi[0].min(c[2]), hi[1].min(c[3])];
+        if r[0] < r[2] && r[1] < r[3] {
+            b = [b[0].min(r[0]), b[1].min(r[1]), b[2].max(r[2]), b[3].max(r[3])];
+        }
+    }
+    if b[0] >= b[2] {
+        return None;
+    }
+    let mut f = Fill::fit(size, b)?;
+    // in the middle up and down too: a window is not the start menu, whose
+    // band runs off the top of the screen
+    let (_, oy, _, sy) = frame(size);
+    let h = size.1 as f32 / sy;
+    f.at[1] = -oy / sy + (h - (b[3] - b[1]) * f.k) / 2.0 - b[1] * f.k;
+    for &i in at {
+        f.quad(&mut quads[i]);
+    }
+    Some(f)
+}
+
 /// Where the HUD's pieces made now go up a target taller than the frame
 /// (`Ui::vertical`): the game lays its HUD out for a 4:3 picture, and in a
 /// narrower window each piece keeps its distance from the top of the screen
@@ -619,6 +715,17 @@ pub struct Ui {
     pub split: Option<usize>,
     /// This layer's own number (`serial`).
     serial: u64,
+    /// The client's Fill menus while they are up (`Fill`): the quads made
+    /// now scaled with it, the HUD's not drawn. None: as the game draws them.
+    pub fill: Option<Fill>,
+    /// A window's Fill measured off what it draws (`fill_drawn`): the frame's
+    /// quads made now kept as on a 4:3 screen (`auto`, their indices), the
+    /// HUD's not drawn, and at `end` scaled together to fill the target
+    /// (`fill` then says how).
+    pub fill_drawn: bool,
+    auto: Vec<usize>,
+    /// The target this frame's quads are for (`begin`).
+    size: (u32, u32),
 }
 
 /// The layers made so far (`Ui::serial`).
@@ -712,7 +819,7 @@ impl Ui {
         let sharp = set("ui sharp text", "fs_sharp_tested", "fs_sharp");
         let smooth = set("ui smooth text", "fs_smooth_tested", "fs_smooth");
         let art_sharp = set("ui sharp", "fs_art_sharp_tested", "fs_art_sharp");
-        Ui { layout, sampler, filtering, pipelines, sharp, smooth, art_sharp, textures: Vec::new(), fonts: Vec::new(), quads: Vec::new(), viewport: None, anchor: Anchor::Middle, vertical: Vertical::Middle, side: 0.0, top: 0.0, sided: Vec::new(), risen: Vec::new(), opaque: Vec::new(), kept: Vec::new(), split: None, serial: LAYERS.fetch_add(1, Ordering::Relaxed) }
+        Ui { layout, sampler, filtering, pipelines, sharp, smooth, art_sharp, textures: Vec::new(), fonts: Vec::new(), quads: Vec::new(), viewport: None, anchor: Anchor::Middle, vertical: Vertical::Middle, side: 0.0, top: 0.0, sided: Vec::new(), risen: Vec::new(), opaque: Vec::new(), kept: Vec::new(), split: None, serial: LAYERS.fetch_add(1, Ordering::Relaxed), fill: None, fill_drawn: false, auto: Vec::new(), size: (0, 0) }
     }
 
     /// A new frame's quads, for a `size` target: none yet, and those made
@@ -729,6 +836,10 @@ impl Ui {
         self.vertical = Vertical::Middle;
         self.viewport = None;
         self.split = None;
+        self.fill = None;
+        self.fill_drawn = false;
+        self.auto.clear();
+        self.size = size;
     }
 
     /// The 3D goes here: the quads made so far are drawn under it.
@@ -748,6 +859,10 @@ impl Ui {
     /// there (and the piece is not cut by its edge); what no such window
     /// covers, a box's 4:3 place included, stays at the side.
     pub fn end(&mut self) {
+        if self.fill_drawn {
+            self.fill = fill_together(&mut self.quads, &self.auto, self.size);
+            self.auto.clear();
+        }
         settle(&mut self.quads, &self.sided, &self.opaque);
         settle_along(&mut self.quads, &self.risen, &self.opaque, 1);
         self.sided.clear();
@@ -885,6 +1000,19 @@ impl Ui {
     /// A quad, placed in and cut to the current viewport, then moved across
     /// a wider target by `anchor`, or up a taller one by `vertical`.
     pub fn push(&mut self, mut q: Quad) {
+        // Fill: the frame's quads placed as on a 4:3 screen and scaled with
+        // it; the HUD's (each at a side) not drawn
+        if let Some(f) = self.fill {
+            self.quads.extend(filled(q, self.viewport, self.anchor, f));
+            return;
+        }
+        if self.fill_drawn {
+            if let Some(q) = measured(q, self.viewport, self.anchor) {
+                self.auto.push(self.quads.len());
+                self.quads.push(q);
+            }
+            return;
+        }
         place(&mut q, self.viewport, self.anchor, self.side);
         rise(&mut q, self.anchor, self.vertical, self.top);
         note(self.quads.len(), &q, self.anchor, self.side, &mut self.sided, &mut self.opaque);
@@ -969,7 +1097,7 @@ impl Ui {
 
 #[cfg(test)]
 mod tests {
-    use super::{Anchor, Quad, Vertical, note, pack, place, rise, rose, settle, settle_along, side, top, viewport_of};
+    use super::{Anchor, Fill, Quad, Vertical, fill_together, filled, measured, note, pack, place, rise, rose, settle, settle_along, side, top, viewport_of};
 
     /// A glyph `w` wide and 3 tall: every texel ink of colour `c` but its
     /// middle row's first, clear.
@@ -1402,5 +1530,99 @@ mod tests {
         assert_eq!(q[1].pos[0][1], 15.0 - t);
         let kept = (-1.0, 641.0, -1.0, 449.0, 0, Anchor::Frame, Vertical::Middle);
         assert_eq!(risen(t, &[compass, kept])[0].pos[0][1], 15.0 - t);
+    }
+
+    /// Fill: the start menu's rectangle (the picture's width, 325 lines) as
+    /// large as the target takes, its top at the target's top, in the middle
+    /// across: at 1920x1080 by the width, at 2560x1080 by the height; a point
+    /// and its undoing meet.
+    /// The controls: a 4:3 target, and a narrower one, take no fill (no
+    /// larger than the game's).
+    #[test]
+    fn fill_fits_the_menu_to_the_target() {
+        let area = [0.0, 0.0, 640.0, 325.0];
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-3;
+        // 1920x1080: the frame 1440x1080 at x 240, a frame pixel 2.25 wide
+        // and 1080/448 tall (the 640x448 frame on a 4:3 picture)
+        let sy = 1080.0 / 448.0;
+        let f = Fill::fit((1920, 1080), area).expect("a 16:9 target fills");
+        assert!(close(f.k, 1920.0 / 1440.0), "the target's width: {}", f.k);
+        let to_px = |p: [f32; 2]| [240.0 + p[0] * 2.25, p[1] * sy];
+        let (tl, br) = (to_px(f.apply([0.0, 0.0])), to_px(f.apply([640.0, 325.0])));
+        assert!(close(tl[0], 0.0) && close(br[0], 1920.0), "across the whole width: {tl:?} {br:?}");
+        assert!(close(tl[1], 0.0) && br[1] <= 1080.0, "from the top, inside the height: {tl:?} {br:?}");
+        let p = [123.0, 45.0];
+        let back = f.undo(f.apply(p));
+        assert!(close(back[0], p[0]) && close(back[1], p[1]));
+        // 2560x1080: by the height, in the middle across
+        let f = Fill::fit((2560, 1080), area).expect("a 21:9 target fills");
+        let to_px = |p: [f32; 2]| [(2560.0 - 1440.0) / 2.0 + p[0] * 2.25, p[1] * sy];
+        let (tl, br) = (to_px(f.apply([0.0, 0.0])), to_px(f.apply([640.0, 325.0])));
+        assert!(close(tl[1], 0.0) && close(br[1], 1080.0), "the whole height: {tl:?} {br:?}");
+        assert!(close(tl[0], 2560.0 - br[0]) && tl[0] > 0.0, "in the middle: {tl:?} {br:?}");
+        assert_eq!(Fill::fit((1440, 1080), area), None, "the control: 4:3");
+        assert_eq!(Fill::fit((1000, 1080), area), None, "and narrower");
+    }
+
+    /// Under a fill a frame quad (Middle or Frame) is scaled and moved with
+    /// it, its cut (the frame's) too, and placed in its viewport first; a
+    /// HUD piece (at a side) is not drawn. The control: the same quad with
+    /// no fill stays where it was.
+    #[test]
+    fn fill_scales_the_frames_quads_and_leaves_out_the_huds() {
+        let f = Fill { k: 2.0, at: [-100.0, -10.0] };
+        let q = quad(5.0, 25.0);
+        for a in [Anchor::Middle, Anchor::Frame] {
+            let got = filled(q, None, a, f).expect("the frame's");
+            assert_eq!(got.pos[0], [-90.0, 10.0], "{a:?}");
+            assert_eq!(got.pos[2], [-50.0, 30.0], "{a:?}");
+            assert_eq!(got.clip, Some([-100, -10, 1180, 886]), "the frame's cut, scaled: {a:?}");
+        }
+        let v = filled(q, Some([100, 200, 299, 259]), Anchor::Middle, f).unwrap();
+        assert_eq!((v.pos[0], v.clip), ([110.0, 410.0], Some([100, 390, 500, 510])), "in its viewport, then scaled");
+        for a in [Anchor::Left, Anchor::Right, Anchor::Span(0, 640)] {
+            assert!(filled(q, None, a, f).is_none(), "{a:?}: the HUD's, not drawn");
+        }
+        let mut c = q;
+        place(&mut c, None, Anchor::Frame, 0.0);
+        assert_eq!((c.pos, c.clip), (q.pos, None), "the control: no fill, as drawn");
+    }
+
+    /// A window filled off what it draws: the quads' rectangle (each cut to
+    /// its own cut) scaled together as large as the target takes, in its
+    /// middle both ways, at 1920x1080 by the width for a wide, short window;
+    /// a quad outside its cut adds nothing. The controls: a window the
+    /// frame's whole size is no larger (none, the quads as drawn), and
+    /// nothing drawn is none.
+    #[test]
+    fn a_window_fills_off_what_it_draws() {
+        let rect = |x0: f32, y0: f32, x1: f32, y1: f32| Quad { tex: 0, blend: 0, pos: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], uv: [[0.0; 2]; 4], color: [1.0; 4], clip: None };
+        let mut cut = rect(0.0, 0.0, 640.0, 448.0);
+        cut.clip = Some([300, 150, 340, 200]);
+        let mut quads = vec![rect(20.0, 100.0, 620.0, 200.0), rect(40.0, 250.0, 100.0, 300.0), cut];
+        let f = fill_together(&mut quads, &[0, 1, 2], (1920, 1080)).expect("a short window fills");
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-3;
+        // the target in frame pixels: x -106.7 to 746.7, y 0 to 448
+        let (l, r) = (-240.0 / 2.25, (1920.0 - 240.0) / 2.25);
+        assert!(close(f.k, (r - l) / 600.0), "by the width: {}", f.k);
+        assert!(close(quads[0].pos[0][0], l) && close(quads[0].pos[1][0], r), "across: {:?}", quads[0].pos);
+        let (top, bottom) = (quads[0].pos[0][1], quads[1].pos[2][1]);
+        assert!(close(top + bottom, 448.0), "in the middle up and down: {top} {bottom}");
+        let mut whole = vec![rect(-1.0, -1.0, 641.0, 449.0)];
+        assert_eq!(fill_together(&mut whole, &[0], (1920, 1080)), None, "the control: the frame's whole size");
+        assert_eq!(whole[0].pos, rect(-1.0, -1.0, 641.0, 449.0).pos);
+        assert_eq!(fill_together(&mut [], &[], (1920, 1080)), None, "nothing drawn");
+    }
+
+    /// While a window's fill is measured, a frame quad is kept as on a 4:3
+    /// screen (not widened, in its viewport) and a HUD piece is not drawn.
+    #[test]
+    fn a_measured_window_leaves_out_the_hud() {
+        let q = quad(5.0, 25.0);
+        assert_eq!(measured(q, None, Anchor::Middle).map(|m| m.pos), Some(q.pos));
+        assert_eq!(measured(q, Some([100, 200, 299, 259]), Anchor::Frame).map(|m| m.pos[0]), Some([105.0, 210.0]));
+        for a in [Anchor::Left, Anchor::Right, Anchor::Span(0, 640)] {
+            assert!(measured(q, None, a).is_none(), "{a:?}");
+        }
     }
 }

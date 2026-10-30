@@ -532,7 +532,7 @@ impl Walker {
         let eye = Vec3::from(self.eye.position.to_array());
         let dir = Vec3::from(self.eye.direction.to_array());
         let far = crate::fog::far_plane(&self.scene, eye, crate::settings::fog());
-        (projection_to(aspect, far), glam::camera::rh::view::look_to_mat4(eye, dir.normalize_or(Vec3::Z), Vec3::Y))
+        (shifted(projection_to(aspect, far)), glam::camera::rh::view::look_to_mat4(eye, dir.normalize_or(Vec3::Z), Vec3::Y))
     }
 
     /// Where the camera is.
@@ -580,6 +580,41 @@ pub const FRAME_ASPECT: f32 = 10.0 / 7.0;
 #[cfg(test)]
 pub fn projection(aspect: f32) -> Mat4 {
     projection_to(aspect, 6000.0)
+}
+
+thread_local! {
+    /// The picture's shift across the window, in normalised device
+    /// coordinates (x right, y up): Extended's Menus: Fill moves the world's
+    /// view to the middle of its start menu's middle frame (`Play`'s HUD sets
+    /// it, `None` otherwise). The camera is the game's; only where its picture
+    /// lands moves. The thread's own: the HUD sets it where the frame is drawn.
+    static SHIFT: std::cell::Cell<Option<[f32; 2]>> = const { std::cell::Cell::new(None) };
+}
+
+pub fn set_shift(ndc: Option<[f32; 2]>) {
+    SHIFT.with(|s| s.set(ndc));
+}
+
+/// The picture's shift now (`set_shift`).
+pub fn shift() -> Option<[f32; 2]> {
+    SHIFT.with(|s| s.get())
+}
+
+/// The translation that takes a picture drawn through shift `was` to shift
+/// `now` (none when they are the same): what a frame's view, taken before the
+/// HUD set the shift, is corrected by, so the world moves on the frame the
+/// menus do.
+pub fn shift_change(was: Option<[f32; 2]>, now: Option<[f32; 2]>) -> Option<Mat4> {
+    let ([a, b], [c, d]) = (was.unwrap_or([0.0; 2]), now.unwrap_or([0.0; 2]));
+    (was != now).then(|| Mat4::from_translation(Vec3::new(c - a, d - b, 0.0)))
+}
+
+/// `proj` with the picture's shift (`set_shift`) after it.
+fn shifted(proj: Mat4) -> Mat4 {
+    match SHIFT.with(|s| s.get()) {
+        Some([x, y]) => Mat4::from_translation(Vec3::new(x, y, 0.0)) * proj,
+        None => proj,
+    }
 }
 
 /// `projection` ending at `far` (the game's far plane, `fog::far_plane`).
@@ -1657,5 +1692,42 @@ pub(crate) mod tests {
             }
         }
     }
-}
 
+    /// Fill's shift moves the picture across the window and nothing else
+    /// (a point's depth and the camera kept); cleared, the projection is the
+    /// game's again (the control).
+    #[test]
+    fn the_pictures_shift_moves_it_and_nothing_else() {
+        let p = projection_to(16.0 / 9.0, 6000.0);
+        let at = glam::Vec4::new(1.0, 2.0, -10.0, 1.0);
+        let ndc = |m: Mat4| {
+            let c = m * at;
+            c.truncate() / c.w
+        };
+        set_shift(Some([0.25, -0.5]));
+        let (a, b) = (ndc(shifted(p)), ndc(p));
+        set_shift(None);
+        assert!((a.x - b.x - 0.25).abs() < 1e-5 && (a.y - b.y + 0.5).abs() < 1e-5 && (a.z - b.z).abs() < 1e-6, "{a} {b}");
+        assert_eq!(shifted(p), p, "the control: none");
+    }
+
+    /// A view taken through one shift, corrected to another, is the view
+    /// taken through the other: the world moves on the frame the menus do.
+    /// The control: the same shift is no correction.
+    #[test]
+    fn a_view_is_corrected_to_the_shift_the_hud_set() {
+        let p = projection_to(16.0 / 9.0, 6000.0);
+        let at = glam::Vec4::new(1.0, 2.0, -10.0, 1.0);
+        let (was, now) = (Some([0.25, -0.5]), Some([-0.1, 0.3]));
+        set_shift(was);
+        let taken = shifted(p);
+        set_shift(now);
+        let want = shifted(p);
+        set_shift(None);
+        let got = shift_change(was, now).expect("a change") * taken;
+        assert!(((got * at) - (want * at)).abs().max_element() < 1e-5);
+        let none = shift_change(was, None).expect("let go") * taken;
+        assert!(((none * at) - (p * at)).abs().max_element() < 1e-5, "back to the game's");
+        assert_eq!(shift_change(now, now), None, "the control");
+    }
+}

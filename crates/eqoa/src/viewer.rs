@@ -4897,6 +4897,9 @@ impl App {
                 let weather = &mut self.weather;
                 let sky_batches = &mut self.sky_batches;
                 let mut bb_view = None;
+                // Menus: Fill's shift the world's view is taken through
+                // (`walker::set_shift`), corrected below if the HUD changes it
+                let shift_at_view = crate::walker::shift();
                 let play = &mut self.play;
                 let lib = &self.lib;
                 let perf = &mut self.perf;
@@ -5142,7 +5145,7 @@ impl App {
                 };
                 self.hidden_until = None;
                 mark(&mut self.perf, 9);
-                let view = match walk_view {
+                let mut view = match walk_view {
                     Some((v, sky)) => {
                         if let (Some(f), Some(at)) = (sky, self.sky_at) {
                             let textures = render::library_textures(&self.lib);
@@ -5164,6 +5167,16 @@ impl App {
                     let hide = crate::hideui::frame(p.wants_ui() || boxed) && !p.loading_up();
                     if let Some(u) = g.renderer.ui.as_mut() {
                         p.hud(u, w, self.clock.elapsed().as_millis() as i64, view.view_proj, (g.config.width, g.config.height), game_frame);
+                        // the HUD just moved the world's picture (the start
+                        // menu filled or let go, `walker::set_shift`): this
+                        // frame's view too, so the world moves with the menus
+                        // and not a frame after them
+                        if let Some(t) = crate::walker::shift_change(shift_at_view, crate::walker::shift()) {
+                            view.view_proj = t * view.view_proj;
+                            view.sky_view_proj = view.sky_view_proj.map(|m| t * m);
+                            bb_view = bb_view.map(|(v, p)| (v, t * p));
+                            self.last_view = Some(view.view_proj);
+                        }
                         // the HUD's quads (the damage numbers under them) made,
                         // and dropped; the touch pad and the boxes below stay
                         if hide {
