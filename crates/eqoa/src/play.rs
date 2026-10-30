@@ -2197,8 +2197,9 @@ impl Play {
                 Event::Dialog { text, .. } => self.show_dialog(&text),
                 Event::DialogBox { id, text, options } => self.dialog_box(id, &text, &options),
                 Event::Opcode { op: 0x005E, .. } => self.msg_005e(walker),
-                // the live game's duel (`duelplay`): 0x1502, the feature word
-                Event::Opcode { op: op @ (crate::duel::OP_IN | crate::duel::OP_FEATURES), data } => {
+                // the live game's duel (`duelplay`): 0x1502 (the feature word
+                // with `liveplay`'s, below)
+                Event::Opcode { op: op @ crate::duel::OP_IN, data } => {
                     self.duel_opcode(op, &data, Some(walker));
                 }
                 // PumpMessages' connect: the duel part reset (the live
@@ -2301,8 +2302,14 @@ impl Play {
                 }
                 Event::Opcode { op: 0x0E02, data } => self.who.recv(&data),
                 // the live client's feature word and group search, and the
-                // server's offer of the live auction form (`liveplay`)
-                Event::Opcode { op: op @ (0x07F5 | 0x0840 | 0x7E0B), data } => self.live_opcode(op, &data),
+                // server's offer of the live auction form (`liveplay`); the
+                // word goes to the duel part's copy too (`duelplay`)
+                Event::Opcode { op: op @ (0x07F5 | 0x0840 | 0x7E0B), data } => {
+                    if op == crate::duel::OP_FEATURES {
+                        self.duel_opcode(op, &data, Some(walker));
+                    }
+                    self.live_opcode(op, &data);
+                }
                 // a server's player search (`playersearch`, `s2`): 0x1501
                 // empties the list, a 0x1500 is a player found. The patch's
                 // window keeps them whether it is up or not, as its handler
