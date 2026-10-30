@@ -3785,7 +3785,8 @@ impl App {
             }
             // the options, buddy and ignore lists and the guild's
             // roster (modes 34, 17/18, 26, 20/21): arrows, Enter or
-            // E, Escape; C (the windows' ○) the roster's sort
+            // E, Escape; C (the windows' ○) the roster's sort; left and
+            // right the buddy list's
             if p.panel_up() {
                 let k = match &event.logical_key {
                     Key::Named(NamedKey::ArrowUp) => Some(K::UP),

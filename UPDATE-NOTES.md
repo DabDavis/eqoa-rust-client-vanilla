@@ -93,6 +93,16 @@ is put on the page by `.github/workflows/notes.yml`.
   everyone else is: on eqoaclassic a gnome is a little smaller than before (9 tenths). How you walk
   and what you bump into are as before.
 
+## 2026-10-29 · The buddy list sorts
+- The buddy list now opens sorted by name. Left and right (or L1 and R1) sort it by the column
+  before or after (Name, Online, Race, Class, Level, Guild), with arrows either side of the
+  column it is sorted by, as in the Who list on Sandstorm. Clicking a column's heading sorts by it
+  too. Levels go from the lowest, like the other columns go from A to Z.
+- When you sort, the cursor stays where it was in the list, so it is on whoever is now at that
+  place. Message, Mail and Remove act on the buddy you see selected.
+- The rows now sit in a bordered box with a scroll bar down its right side, like the Who list and
+  the guild list. The bar shows where you are when you have more than ten buddies.
+
 ## 2026-10-29 · The who list in CM order on Sandstorm, as on a PS2
 - On Sandstorm the who list now shows players in the server's own order, highest combat masteries
   first, whenever you open it again or press Update and nobody has come or gone since: Sandstorm's
