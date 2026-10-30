@@ -579,7 +579,8 @@ impl WhoList {
     /// `OnMessage` 295 from outside: the window and the status box set up
     /// and titled (730, 271), the popup's three choices (425, 942, 515)
     /// under 422; the rows sorted by name again (the client's: Update keeps
-    /// the column, a list opened again does not).
+    /// the column, a list opened again does not; the patch's sort is done
+    /// again when the column was another).
     pub fn open(&mut self, vui: &Vui, r: &dyn Raster) {
         let w = |id: i32| wide(vui.words.get(id, vui.language));
         self.window.init(vui, r, [320, 180], 600, 13, 0);
@@ -594,7 +595,11 @@ impl WhoList {
         self.top = 0;
         self.flash.reset();
         self.patch = PatchSort::current();
-        self.sort = Sort::default();
+        // a column changed as a key changes it (the patch's sort done again);
+        // by name already, a list sent again keeps the server's order
+        if self.sort != Sort::default() {
+            self.set_sort(Sort::default());
+        }
         self.keep = None;
     }
 
@@ -1199,7 +1204,8 @@ mod tests {
         use crate::pointer::testing::{NullRaster, vui};
         let vui = vui();
         let mut r = NullRaster;
-        let who = Who { list: vec![row("Zed", 0, 0, 30), row("Amy", 0, 0, 50), row("Bob", 0, 0, 10)], ..Default::default() };
+        // by level Bob is on top, by name Amy
+        let who = Who { list: vec![row("Zed", 0, 0, 30), row("Amy", 0, 0, 10), row("Bob", 0, 0, 50)], ..Default::default() };
         let mut cues = Vec::new();
         for patch in [None, Some(Arc::new(patch_sort()))] {
             let mut l = WhoList::default();
