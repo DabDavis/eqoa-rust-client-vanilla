@@ -139,18 +139,27 @@ impl Auction {
         w
     }
 
-    /// `Sell(slot, price, buyout, duration)`: sub-op 5, the banker, the bank
-    /// record's key, a count of 1 and the three numbers.
-    pub fn sell(target: u32, key: u32, a: i32, b: i32, c: i32) -> Vec<u8> {
+    /// `Sell(slot, count, price, buyout, duration)`: sub-op 5, the banker,
+    /// the bank record's key, the count and the three numbers. The disc's
+    /// count is always 1; the live client's is the form's quantity, its
+    /// prices each item's (`live`, the feature word's bit 0x08).
+    pub fn sell(target: u32, key: u32, count: i32, a: i32, b: i32, c: i32) -> Vec<u8> {
         let mut w = Self::op(5);
-        w.u32(target).u32(key).signed(1).signed(a as i64).signed(b as i64).signed(c as i64);
+        w.u32(target).u32(key).signed(count as i64).signed(a as i64).signed(b as i64).signed(c as i64);
         w.data
     }
 
-    /// `Send06(lot, amount)`: a bid (sub-op 6), with a count of 1.
+    /// `Send06(lot, amount)`: a bid (sub-op 6), with a count of 1 (the
+    /// disc's).
     pub fn bid(a: i32, b: i32) -> Vec<u8> {
+        Self::bid_n(a, b, 1)
+    }
+
+    /// The live client's `Send06(lot, count, price)`: the lot, the price of
+    /// each item, then the count of them (live 0x012B0DC8).
+    pub fn bid_n(lot: i32, price: i32, count: i32) -> Vec<u8> {
         let mut w = Self::op(6);
-        w.signed(a as i64).signed(b as i64).signed(1);
+        w.signed(lot as i64).signed(price as i64).signed(count as i64);
         w.data
     }
 
@@ -214,6 +223,13 @@ impl Auction {
     /// `FindBid`: the bank's bid on a lot, its two amounts.
     pub fn find_bid(bank: &Bank, auction: i64) -> Option<(i64, i64)> {
         bank.bids.iter().find(|b| b.auction_id == auction).map(|b| (b.x08, b.x10))
+    }
+
+    /// The live client's `FindBid(lot, &a, &b, &c)` (0x012B1938): the bid's
+    /// price of each item (+0x08), what is in escrow (+0x10) and the count
+    /// bid for (+0x0C).
+    pub fn find_bid3(bank: &Bank, auction: i64) -> Option<(i64, i64, i64)> {
+        bank.bids.iter().find(|b| b.auction_id == auction).map(|b| (b.x08, b.x10, b.x0c))
     }
 
     /// `Recv1206`: the reply's sub-op, over the state and the bank's lots and
@@ -348,10 +364,13 @@ impl Auction {
         let lot = net::dump::read_auction_item(r);
         self.minutes = r.signed();
         let (a, b, c) = (r.signed(), r.signed(), r.signed());
+        // the live client (`live`) stores only the high bids and the floors
+        // (0x012B26B0): its summary reads no leader
+        let first = crate::live::features().live() as usize;
         for (items, cols) in [(&mut self.saved, &mut self.saved_cols), (&mut self.results, &mut self.cols)] {
             if let Some(i) = items.iter().position(|l| l.lot_id == lot.lot_id) {
                 items[i] = lot.clone();
-                for (k, v) in [a, b, c].into_iter().enumerate() {
+                for (k, v) in [a, b, c].into_iter().enumerate().skip(first) {
                     if let Some(x) = cols[k].get_mut(i) {
                         *x = v;
                     }
@@ -364,14 +383,73 @@ impl Auction {
 /// `VIWndAuction::CanSell`: tradeable, not lore, rentable, and its stack
 /// test as the server's patch leaves it (`s2::StackTest`): retail's, not a
 /// stack; Sandstorm's S2 lets a stack go too (its record 3 rewrites the
-/// test, so on its PS2s crafting materials and gems sell).
+/// test, so on its PS2s crafting materials and gems sell). The live client
+/// with its feature word's bit 0x08 (`live`, live 0x0130EDB8) asks only
+/// that it trades and rents: stacks and lore items go.
 pub fn can_sell(it: &NetItem) -> bool {
     can_sell_by(it, crate::s2::get().sell_stack)
 }
 
 /// `can_sell` under a given stack test.
 pub fn can_sell_by(it: &NetItem, stack: crate::s2::StackTest) -> bool {
-    it.item.no_trade == 0 && it.item.lore == 0 && it.item.rent != 0 && stack.passes(it.item.max_stack)
+    if it.item.no_trade != 0 || it.item.rent == 0 {
+        return false;
+    }
+    if crate::live::features().has(crate::live::Features::STACKS) {
+        return true;
+    }
+    it.item.lore == 0 && stack.passes(it.item.max_stack)
+}
+
+/// The sell form's fields as the client in play numbers them: the disc's
+/// (0 the item, 1 the minimum, 2 the maximum, 3 the time, 4 Ok) or, on a
+/// server that sends the live client's feature word (`live`), the live
+/// client's (a quantity at 1, the others one further, 5 Submit), whose
+/// quantity row is there only with the word's bit 0x08 (then the cursor
+/// stops at the quantity; without it, at the minimum).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Fields {
+    live: bool,
+    stacks: bool,
+}
+
+impl Fields {
+    fn now() -> Self {
+        let f = crate::live::features();
+        Fields { live: f.live(), stacks: f.has(crate::live::Features::STACKS) }
+    }
+
+    /// the quantity's field (the live client's alone)
+    fn qty(self) -> Option<i32> {
+        (self.live && self.stacks).then_some(1)
+    }
+
+    fn min(self) -> i32 {
+        1 + self.live as i32
+    }
+
+    fn max(self) -> i32 {
+        self.min() + 1
+    }
+
+    fn time(self) -> i32 {
+        self.min() + 2
+    }
+
+    /// Ok (Submit)
+    fn ok(self) -> i32 {
+        self.min() + 3
+    }
+
+    /// where Select puts the cursor and Prev stops
+    fn first(self) -> i32 {
+        if self.live && !self.stacks { 2 } else { 1 }
+    }
+
+    /// the window's rows (`Init`'s): 9, the live client's 10
+    fn rows(self) -> i32 {
+        9 + self.live as i32
+    }
 }
 
 /// `atoi`: blanks, a sign, the digits.
@@ -391,8 +469,8 @@ pub fn atoi(s: &str) -> i32 {
 pub enum SellOut {
     /// 260 to the bank: back to its menu
     Back,
-    /// `Sell(slot, price, buyout, duration)` confirmed
-    Sell(i32, i32, i32, i32),
+    /// `Sell(slot, count, price, buyout, duration)` confirmed
+    Sell(i32, i32, i32, i32, i32),
     /// `AddText(word 1727)` in red: the item cannot be sold
     CannotSell,
 }
@@ -419,8 +497,10 @@ pub struct SellWnd {
     child: SellChild,
     /// `m_selling`: the form is up
     pub selling: bool,
-    /// `m_field`: 0 the item .. 4 Ok
+    /// `m_field`: 0 the item .. 4 Ok (the live client's 5 Submit, `Fields`)
     pub field: i32,
+    /// `m_qty` (the live client's +0x350): the items of the stack put up
+    pub qty: i32,
     pub price: i32,
     pub buyout: i32,
     /// minutes
@@ -435,7 +515,7 @@ impl Default for SellWnd {
     fn default() -> Self {
         let mut bank = WndList::with_rows([16, 37], 0, 80);
         bank.set_x64(true);
-        SellWnd { bank, edit: EditBox::default(), mbox: MBox::default(), child: SellChild::Form, selling: false, field: 0, price: 0, buyout: 0, duration: 0, window: Window::default(), sell: Window::default(), hits: Hits::default() }
+        SellWnd { bank, edit: EditBox::default(), mbox: MBox::default(), child: SellChild::Form, selling: false, field: 0, qty: 1, price: 0, buyout: 0, duration: 0, window: Window::default(), sell: Window::default(), hits: Hits::default() }
     }
 }
 
@@ -461,7 +541,7 @@ impl SellWnd {
     pub fn focus(&mut self, vui: &Vui, r: &dyn Raster) {
         self.window.init(vui, r, [320, 180], 330, 14, 0);
         self.window.open(true);
-        self.sell.init(vui, r, [320, 180], 600, 9, 0);
+        self.sell.init(vui, r, [320, 180], 600, Fields::now().rows(), 0);
         self.sell.close(true);
         self.selling = false;
         self.field = 0;
@@ -489,7 +569,7 @@ impl SellWnd {
         }
         match self.hits.at(p) {
             Some(f) if f == self.field => vec![key::CROSS],
-            Some(f) if f >= 1 => {
+            Some(f) if f >= Fields::now().first() => {
                 self.field = f;
                 vec![MOVED]
             }
@@ -502,10 +582,11 @@ impl SellWnd {
         let Some(it) = bank.items.get(self.bank.sel.max(0) as usize) else { return };
         if can_sell(it) {
             cues.push(13);
+            self.qty = 1;
             self.price = it.item.value as i32;
             self.buyout = self.price.wrapping_mul(2);
             self.duration = if in_minutes() { 2 } else { 720 };
-            self.field = 1;
+            self.field = Fields::now().first();
             self.selling = true;
             self.sell.close(true);
             self.sell.open(false);
@@ -515,14 +596,17 @@ impl SellWnd {
         }
     }
 
-    /// `Accept`: Ok asks to confirm, another row is edited.
+    /// `Accept`: Ok asks to confirm (the live client's box with the
+    /// quantity, with the feature word's bit 0x08), another row is edited.
     fn accept(&mut self, vui: &Vui, bank: &ItemList, now: i64, cues: &mut Vec<i32>) {
         let mut sound = 13;
-        if self.field == 4 {
+        let f = Fields::now();
+        if self.field == f.ok() {
             match bank.items.get(self.bank.sel.max(0) as usize).filter(|it| can_sell(it)) {
                 Some(it) => {
                     let w = |id: i32| vui.words.get(id, vui.language).to_string();
-                    let text = format!("{}: {}\n{}: {} {}\n{}: {} {}\n{}", w(1723), it.item.name, w(1789), self.price, w(479), w(1726), if in_minutes() { self.duration } else { self.duration / 60 }, w(if in_minutes() { 1724 } else { 1725 }), w(1790));
+                    let qty = if f.qty().is_some() { format!("{}: {}\n", w(1853), self.qty) } else { String::new() };
+                    let text = format!("{}: {}\n{qty}{}: {} {}\n{}: {} {}\n{}", w(1723), it.item.name, w(1789), self.price, w(479), w(1726), if in_minutes() { self.duration } else { self.duration / 60 }, w(if in_minutes() { 1724 } else { 1725 }), w(1790));
                     self.mbox.prompt(&wide(&text), 1, 0, 0, now);
                     self.mbox.pos = [175, 115];
                     self.child = SellChild::MBox;
@@ -543,16 +627,21 @@ impl SellWnd {
         e.set_center([320, 180]);
         e.set_max_length(128);
         let w = |id: i32| vui.words.get(id, vui.language).to_string();
+        let f = Fields::now();
         match self.field {
-            1 => {
+            n if Some(n) == f.qty() => {
+                e.set_max_length(5);
+                e.title = wide(&w(1853));
+            }
+            n if n == f.min() => {
                 e.set_max_length(10);
                 e.title = wide(&w(1715));
             }
-            2 => {
+            n if n == f.max() => {
                 e.set_max_length(10);
                 e.title = wide(&w(1716));
             }
-            3 => {
+            n if n == f.time() => {
                 e.set_max_length(5);
                 e.title = wide(&format!("{} {}", w(1726), w(if in_minutes() { 1687 } else { 1691 })));
             }
@@ -566,10 +655,12 @@ impl SellWnd {
     /// `TakeText`: the editor's number into its row.
     fn take_text(&mut self) {
         let v = atoi(&String::from_utf16_lossy(&self.edit.text));
+        let f = Fields::now();
         match self.field {
-            1 => self.price = v,
-            2 => self.buyout = v,
-            3 => self.duration = if in_minutes() { v } else { v.wrapping_mul(60) },
+            n if Some(n) == f.qty() => self.qty = v,
+            n if n == f.min() => self.price = v,
+            n if n == f.max() => self.buyout = v,
+            n if n == f.time() => self.duration = if in_minutes() { v } else { v.wrapping_mul(60) },
             _ => {}
         }
         self.child = SellChild::Form;
@@ -606,7 +697,7 @@ impl SellWnd {
                     Some(BoxAnswer::Yes(..)) => {
                         let slot = self.bank.sel;
                         if bank.items.get(slot.max(0) as usize).is_some_and(can_sell) {
-                            out.push(SellOut::Sell(slot, self.price, self.buyout, self.duration));
+                            out.push(SellOut::Sell(slot, self.qty, self.price, self.buyout, self.duration));
                             self.selling = false;
                         }
                         self.child = SellChild::Form;
@@ -635,9 +726,10 @@ impl SellWnd {
             match key {
                 13 | 134 => self.accept(vui, bank, now, cues),
                 19 | 138 => {
-                    // Prev
-                    if self.field < 2 {
-                        self.field = 1;
+                    // Prev: to the first field (`Fields::first`)
+                    let first = Fields::now().first();
+                    if self.field <= first {
+                        self.field = first;
                         cues.push(9);
                     } else {
                         self.field -= 1;
@@ -646,9 +738,10 @@ impl SellWnd {
                     self.sell.reset_tick_pulse(now);
                 }
                 20 | 139 => {
-                    // Next
-                    if self.field >= 4 {
-                        self.field = 4;
+                    // Next: to Ok (Submit)
+                    let ok = Fields::now().ok();
+                    if self.field >= ok {
+                        self.field = ok;
                         cues.push(9);
                     } else {
                         self.field += 1;
@@ -739,37 +832,51 @@ impl SellWnd {
 
     /// `DrawSell`: the numbers clamped as they are drawn (the price at least
     /// the item's value, the buyout at least the price, both under a
-    /// billion; 12 hours to 3 days).
+    /// billion; 12 hours to 3 days). On a server that sends the live
+    /// client's feature word (`live`, `Fields`) its form (0x0130D8D0): ten
+    /// rows, the quantity on row 2 (1 to the bank's stack) and the prices
+    /// per item with the word's bit 0x08, row 2 empty without, and the fee
+    /// for each item put up.
     fn draw_sell(&mut self, vui: &Vui, r: &mut dyn Raster, bank: &ItemList) {
         let Some(it) = bank.items.get(self.bank.sel.max(0) as usize) else { return };
-        self.sell.init(vui, r, [320, 180], 475, 9, 0);
+        let f = Fields::now();
+        self.sell.init(vui, r, [320, 180], 475, f.rows(), 0);
         self.sell.set_title(Some(&wide(vui.words.get(1722, vui.language))));
         self.sell.draw(vui, r);
         let cols = [40, 180, 240];
+        if f.live {
+            self.qty = self.qty.max(1).min(it.quantity as i32);
+        }
         self.price = self.price.max(it.item.value as i32).min(999_999_999);
         self.buyout = self.buyout.max(self.price).min(999_999_999);
         self.duration = if in_minutes() { self.duration.clamp(2, 4320) } else { self.duration.clamp(720, 4320) };
         let w = |id: i32| wide(vui.words.get(id, vui.language));
         let s = &self.sell;
-        let f = self.field;
-        Self::draw_row(s, vui, r, 1, Some(&w(1723)), cols[0], Some(&wide(&it.item.name)), cols[1], None, cols[2], f == 0, true);
-        Self::draw_row(s, vui, r, 2, Some(&w(1685)), cols[0], Some(&wide(&self.price.to_string())), cols[1], None, cols[2], f == 1, true);
-        Self::draw_row(s, vui, r, 3, Some(&w(1686)), cols[0], Some(&wide(&self.buyout.to_string())), cols[1], None, cols[2], f == 2, true);
+        let field = self.field;
+        let row = |n: i32| n + 1;
+        Self::draw_row(s, vui, r, 1, Some(&w(1723)), cols[0], Some(&wide(&it.item.name)), cols[1], None, cols[2], field == 0, true);
+        if let Some(q) = f.qty() {
+            Self::draw_row(s, vui, r, row(q), Some(&w(1853)), cols[0], Some(&wide(&self.qty.to_string())), cols[1], None, cols[2], field == q, true);
+        }
+        let (min, max) = if f.qty().is_some() { (1854, 1855) } else { (1685, 1686) };
+        Self::draw_row(s, vui, r, row(f.min()), Some(&w(min)), cols[0], Some(&wide(&self.price.to_string())), cols[1], None, cols[2], field == f.min(), true);
+        Self::draw_row(s, vui, r, row(f.max()), Some(&w(max)), cols[0], Some(&wide(&self.buyout.to_string())), cols[1], None, cols[2], field == f.max(), true);
         let unit = w(if in_minutes() { 1724 } else { 1725 });
         let d = if in_minutes() { self.duration } else { self.duration / 60 };
-        Self::draw_row(s, vui, r, 4, Some(&w(1726)), cols[0], Some(&wide(&d.to_string())), cols[1], Some(&unit), cols[2], f == 3, true);
+        Self::draw_row(s, vui, r, row(f.time()), Some(&w(1726)), cols[0], Some(&wide(&d.to_string())), cols[1], Some(&unit), cols[2], field == f.time(), true);
         let ok = wide(&format!("{}*", vui.words.get(218, vui.language)));
-        Self::draw_row(s, vui, r, 5, Some(&ok), cols[0], None, cols[1], None, cols[2], f == 4, true);
-        // the rows 1..5 are the fields 0..4
-        for field in 0..5 {
-            self.hits.push(rows_rect(s, vui, r, cols[0], field + 1, s.size[0] - 30 - cols[0], 1), field);
+        Self::draw_row(s, vui, r, row(f.ok()), Some(&ok), cols[0], None, cols[1], None, cols[2], field == f.ok(), true);
+        // each field on its row (the item's too, which the keys skip)
+        for n in std::iter::once(0).chain(f.qty()).chain(f.min()..=f.ok()) {
+            self.hits.push(rows_rect(s, vui, r, cols[0], row(n), s.size[0] - 30 - cols[0], 1), n);
         }
-        let fee = (self.price / 100).max(1);
+        let qty = if f.live { self.qty } else { 1 };
+        let fee = (self.price / 100).max(1).wrapping_mul(qty);
         let line = wide(&format!("*{}: {} {}", vui.words.get(1788, vui.language), fee, vui.words.get(479, vui.language)));
         let width = s.size[0] - 30 - cols[0];
-        Self::draw_row(s, vui, r, 7, Some(&line), cols[0], None, width, None, cols[2], false, false);
+        Self::draw_row(s, vui, r, f.rows() - 2, Some(&line), cols[0], None, width, None, cols[2], false, false);
         let legend = wide(&format!("|x{}   |t{}", vui.words.get(212, vui.language), vui.words.get(161, vui.language)));
-        s.text_box(vui, r, &legend, 20, 8, s.size[0] - 40, 1, [1.0, 1.0, 1.0, s.open], 0);
+        s.text_box(vui, r, &legend, 20, f.rows() - 1, s.size[0] - 40, 1, [1.0, 1.0, 1.0, s.open], 0);
     }
 }
 
@@ -896,11 +1003,41 @@ mod tests {
         assert_eq!((a.p78bc, a.p78b8), (77, 0));
     }
 
+    /// 137 (`RecvUpdateLot`): a lot's three columns where a page shows it;
+    /// the live client (`live`) stores the high bid and the floor alone,
+    /// the leader's column kept (0x012B26B0). The control: no word, all
+    /// three.
+    #[test]
+    fn an_updated_lot_keeps_its_leader_on_a_live_server() {
+        let update = |word| {
+            crate::live::with_features(word, || {
+                let mut a = Auction::new();
+                let mut bank = Bank::default();
+                a.search(Query::default());
+                let p = a.page as i64;
+                a.recv(&mut bank, &page(p, &[5]), true, 0);
+                let mut w = Writer::op(0);
+                w.data.clear();
+                w.u8(137);
+                lot_bytes(&mut w, 5);
+                w.signed(40).signed(99).signed(150).signed(151);
+                a.recv(&mut bank, &w.data, true, 0);
+                (a.cols.clone(), a.minutes)
+            })
+        };
+        assert_eq!(update(Some(0x1B)), ([vec![7], vec![150], vec![151]], 40));
+        assert_eq!(update(None), ([vec![99], vec![150], vec![151]], 40));
+    }
+
     #[test]
     fn requests_on_the_wire() {
-        let s = Auction::sell(0x10, 0x20, 100, 200, 720);
+        let s = Auction::sell(0x10, 0x20, 1, 100, 200, 720);
         assert_eq!(s, vec![0x05, 0x12, 5, 0x10, 0, 0, 0, 0x20, 0, 0, 0, 2, 200, 1, 144, 3, 160, 11]);
         assert_eq!(Auction::bid(77, 5), vec![0x05, 0x12, 6, 154, 1, 10, 2]);
+        // the live client's: the count where the disc's 1 is (sell's after
+        // the key, the bid's last), the layout unchanged
+        assert_eq!(Auction::sell(0x10, 0x20, 7, 100, 200, 720)[11], 14);
+        assert_eq!(Auction::bid_n(77, 5, 20), vec![0x05, 0x12, 6, 154, 1, 10, 40]);
         let mut a = Auction::new();
         let r = a.request_ids(&[3, 4]);
         assert_eq!(r, vec![0x05, 0x12, 8, 2, 4, 6, 8]);
@@ -950,6 +1087,164 @@ mod tests {
         };
         assert_eq!(select(Rules::retail()), (false, 0, vec![9], vec![SellOut::CannotSell]));
         assert_eq!(select(sandstorm()), (true, 300, vec![13], vec![]));
+    }
+
+    /// A bank of a gem stack (12 of 20, value 300), a lore sword and a
+    /// no-trade ring.
+    fn stack_bank() -> ItemList {
+        let mut gem = NetItem { quantity: 12, equip_slot: -1, quick_slot: -1, ..Default::default() };
+        gem.item.name = "Gem".into();
+        (gem.item.rent, gem.item.value, gem.item.max_stack) = (1, 300, 20);
+        let mut sword = gem.clone();
+        (sword.quantity, sword.item.max_stack, sword.item.lore, sword.item.name) = (1, 1, 1, "Sword".into());
+        let mut ring = sword.clone();
+        (ring.item.lore, ring.item.no_trade) = (0, 1);
+        let mut bank = ItemList::default();
+        bank.items.extend([gem, sword, ring]);
+        bank
+    }
+
+    /// The live client's CanSell (0x0130EDB8): with the feature word's bit
+    /// 0x08 a stack and a lore item sell, a no-trade one never; without the
+    /// bit (and with no word, the disc's) the stack and the lore item do
+    /// not (the control).
+    #[test]
+    fn stacks_and_lore_sell_with_bit_0x08() {
+        let bank = stack_bank();
+        let sells = |word| crate::live::with_features(word, || bank.items.iter().map(can_sell).collect::<Vec<_>>());
+        assert_eq!(sells(Some(0x1B)), vec![true, true, false]);
+        assert_eq!(sells(Some(0x10)), vec![false, false, false]);
+        assert_eq!(sells(None), vec![false, false, false]);
+    }
+
+    /// The live sell form with bit 0x08 (0x0130E550..0x0130ECB8): Select
+    /// puts the cursor on the quantity (field 1) at 1; the quantity is typed
+    /// in its editor (5 long, word 1853) and held to the stack (12) as it is
+    /// drawn; the prices are each item's (1854, 1855); Prev stops at the
+    /// quantity, Next at Submit (5); the box says the quantity; the sale
+    /// carries it, and the fee is the stack's (each item's, max(1, price /
+    /// 100), times the count).
+    #[test]
+    fn a_stack_is_put_up_by_the_quantity() {
+        use crate::pointer::testing::NullRaster;
+        let vui = Vui::new(numbered(), Default::default(), Vec::new());
+        let r = NullRaster;
+        let bank = stack_bank();
+        crate::live::with_features(Some(0x1B), || {
+            let (mut cues, mut out) = (Vec::new(), Vec::new());
+            let mut s = SellWnd::default();
+            s.focus(&vui, &r);
+            s.key(&vui, &r, &bank, 134, true, 0, &mut cues, &mut out);
+            assert_eq!((s.selling, s.field, s.qty, s.price, s.buyout), (true, 1, 1, 300, 600));
+            // the quantity's editor
+            s.key(&vui, &r, &bank, 134, true, 0, &mut cues, &mut out);
+            assert!(s.typing());
+            assert_eq!(String::from_utf16_lossy(&s.edit.title), "w1853");
+            s.edit.set_text(&wide("50"));
+            s.take_text();
+            let mut d = NullRaster;
+            s.draw_sell(&vui, &mut d, &bank);
+            assert_eq!(s.qty, 12, "held to the stack");
+            // Prev stops at the quantity, Next runs to Submit (5)
+            cues.clear();
+            s.key(&vui, &r, &bank, 138, true, 0, &mut cues, &mut out);
+            assert_eq!((s.field, cues.clone()), (1, vec![9]));
+            for _ in 0..6 {
+                s.key(&vui, &r, &bank, 139, true, 0, &mut cues, &mut out);
+            }
+            assert_eq!(s.field, 5);
+            s.key(&vui, &r, &bank, 134, true, 0, &mut cues, &mut out);
+            assert_eq!(s.child, SellChild::MBox);
+            let text = String::from_utf16_lossy(&s.mbox.text);
+            assert!(text.starts_with("w1723: Gem\nw1853: 12\nw1789: 300 w479\n"), "{text}");
+            // left to Yes, Enter
+            s.key(&vui, &r, &bank, 136, true, 0, &mut cues, &mut out);
+            s.key(&vui, &r, &bank, 134, true, 0, &mut cues, &mut out);
+            assert_eq!(out, vec![SellOut::Sell(0, 12, 300, 600, 720)]);
+        });
+        // the fee line: max(1, 300 / 100) = 3 a gem, 12 of them
+        let mut lines = Rec::default();
+        crate::live::with_features(Some(0x1B), || {
+            let mut s = SellWnd { selling: true, field: 1, qty: 12, price: 300, buyout: 600, duration: 720, ..Default::default() };
+            s.draw_sell(&vui, &mut lines, &bank);
+        });
+        assert!(lines.0.contains(&"*w1788: 36 w479".to_string()), "{:?}", lines.0);
+        assert!(lines.0.contains(&"w1854".to_string()) && lines.0.contains(&"w1855".to_string()));
+    }
+
+    /// With the live client's word but not bit 0x08 the form is the live
+    /// one without its quantity: the cursor starts on the minimum (field 2)
+    /// and Prev stops there, the prices are the disc's words (1685, 1686),
+    /// Submit is field 5 and the box has no quantity; with no word (the
+    /// control) the disc's: the minimum is field 1, Ok field 4.
+    #[test]
+    fn without_bit_0x08_the_form_has_no_quantity() {
+        use crate::pointer::testing::NullRaster;
+        let vui = Vui::new(numbered(), Default::default(), Vec::new());
+        let r = NullRaster;
+        let mut bank = stack_bank();
+        bank.items.truncate(1);
+        bank.items[0].item.max_stack = 1;
+        bank.items[0].quantity = 1;
+        for (word, first, ok) in [(Some(0x10), 2, 5), (None, 1, 4)] {
+            crate::live::with_features(word, || {
+                let (mut cues, mut out) = (Vec::new(), Vec::new());
+                let mut s = SellWnd::default();
+                s.focus(&vui, &r);
+                s.key(&vui, &r, &bank, 134, true, 0, &mut cues, &mut out);
+                assert_eq!(s.field, first, "{word:?}");
+                s.key(&vui, &r, &bank, 138, true, 0, &mut cues, &mut out);
+                assert_eq!(s.field, first, "{word:?}: Prev stops");
+                for _ in 0..6 {
+                    s.key(&vui, &r, &bank, 139, true, 0, &mut cues, &mut out);
+                }
+                assert_eq!(s.field, ok, "{word:?}");
+                let mut lines = Rec::default();
+                s.draw_sell(&vui, &mut lines, &bank);
+                assert!(lines.0.contains(&"w1685".to_string()) && !lines.0.contains(&"w1853".to_string()), "{word:?}: {:?}", lines.0);
+                s.key(&vui, &r, &bank, 134, true, 0, &mut cues, &mut out);
+                let text = String::from_utf16_lossy(&s.mbox.text);
+                assert!(!text.contains("w1853"), "{word:?}: {text}");
+                s.key(&vui, &r, &bank, 136, true, 0, &mut cues, &mut out);
+                s.key(&vui, &r, &bank, 134, true, 0, &mut cues, &mut out);
+                assert_eq!(out, vec![SellOut::Sell(0, 1, 300, 600, 720)], "{word:?}");
+            });
+        }
+    }
+
+    /// Words as `wN` for WORDS.TXT line N.
+    fn numbered() -> vi::strtab::StringTable {
+        let lines: Vec<String> = (1..=2000).map(|n| format!("w{n}")).collect();
+        vi::strtab::StringTable::parse(lines.join("\n").as_bytes()).unwrap()
+    }
+
+    /// A raster that keeps the strings drawn.
+    #[derive(Default)]
+    struct Rec(Vec<String>);
+
+    impl crate::ui::Layout for Rec {}
+
+    impl Raster for Rec {
+        fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn stretch_blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+        fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+        fn draw_string(&mut self, _: [i32; 2], _: [f32; 4], s: &[u16]) {
+            self.0.push(String::from_utf16_lossy(s));
+        }
+        fn draw_centered_string(&mut self, _: [i32; 2], _: [f32; 4], s: &[u16], _: u32) {
+            self.0.push(String::from_utf16_lossy(s));
+        }
+        fn string_width(&self, s: &[u16]) -> i32 {
+            s.len() as i32 * 8
+        }
+        fn point_size(&self) -> i32 {
+            16
+        }
+        fn viewport(&self) -> [i32; 4] {
+            [0, 0, 640, 448]
+        }
+        fn set_viewport(&mut self, _: [i32; 4]) {}
     }
 
     /// `InMinutes` (the GM channel's flag, `adminplay`): the form starts at

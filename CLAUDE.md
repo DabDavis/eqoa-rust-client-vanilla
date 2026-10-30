@@ -90,6 +90,10 @@ current.
   `livewords::live` (841 "Ticket #"). A live port's word goes there, never into a table of its own; 1811-1839 are
   renumbered in the live table and not given. Its mail forms are used only after go-eqoa-server's offer (0x7E0A,
   `gram::OP_LIVE_MAIL`); with none, the disc's.
+- SOE's final live client's features (the user's asks, read out of its CLIENT in the Corsten save state): `live.rs` keeps
+  the server's feature word (0x07F5, `live::features()`); each part is gated by it exactly as the live client gates it, and
+  a server that sends no word (Sandstorm, eqoa.live) keeps the disc's behaviour. Auction stacks answer go-eqoa-server's
+  0x7E0B offer (`liveplay::OP_AUCTION_FORM`: 1 while bit 0x08 is set) so it reads a Sell's count as items.
 - Game-logic floats go through `ee::*`, never host `f32` operators; every compare too.
 - Port from the decomp (`../decomp/src`), not from the Go client: the Go client's
   differences from the original are listed in `../claude-notes/go-client-vs-decomp-audit-20261015.md`.

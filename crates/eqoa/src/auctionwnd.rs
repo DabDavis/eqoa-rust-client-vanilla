@@ -46,13 +46,13 @@ const RACE_WORDS: [i32; 10] = [183, 185, 186, 187, 188, 189, 191, 192, 193, 190]
 
 /// `GetClass(c)->m_nameStrID` (`viclass.cpp`: 165..179; out of range is
 /// class 0's).
-fn class_word(c: i32) -> i32 {
+pub(crate) fn class_word(c: i32) -> i32 {
     if (0..15).contains(&c) { 165 + c } else { 165 }
 }
 
 /// `GetRace(r)->m_nameStrID` (`virace.cpp`: the ten races, then eleven
 /// empty slots whose name is -1; out of range is race 0's).
-fn race_word(r: i32) -> i32 {
+pub(crate) fn race_word(r: i32) -> i32 {
     match r {
         0..=9 => RACE_WORDS[r as usize],
         10..=20 => -1,
@@ -63,19 +63,22 @@ fn race_word(r: i32) -> i32 {
 /// A picker (states 5..8): its rows and its list's title. Its list scrolls
 /// over the rows past the seven shown (`m_top / (rows - 7)`).
 struct Picker {
-    rows: &'static [i32],
+    rows: Vec<i32>,
     title: i32,
 }
 
 /// The picker of state `s`: 5 the races (`DrawRaces`), 6 the classes
 /// (`DrawClasses`), 7 the wear slots (`DrawTypes`), 8 the attack types
-/// (`DrawSlots`).
+/// (`DrawSlots`). On a server that sends the live client's feature word
+/// without its bit 0x02 (`live`), race 9 and class 14 are left out of their
+/// lists, as the live client builds them (0x01314D98).
 fn picker(s: i32) -> Option<Picker> {
+    let f = crate::live::features();
     match s {
-        5 => Some(Picker { rows: &RACES, title: 1703 }),
-        6 => Some(Picker { rows: &CLASSES, title: 1702 }),
-        7 => Some(Picker { rows: &WEARS, title: 1704 }),
-        8 => Some(Picker { rows: &ATTACKS, title: 1705 }),
+        5 => Some(Picker { rows: RACES.iter().copied().filter(|&r| f.shows_race(r)).collect(), title: 1703 }),
+        6 => Some(Picker { rows: CLASSES.iter().copied().filter(|&c| f.shows_class(c)).collect(), title: 1702 }),
+        7 => Some(Picker { rows: WEARS.to_vec(), title: 1704 }),
+        8 => Some(Picker { rows: ATTACKS.to_vec(), title: 1705 }),
         _ => None,
     }
 }
@@ -89,6 +92,9 @@ pub enum SearchOut {
     Close,
     /// `AddText(word)` in red
     Red(i32),
+    /// `AddText` in red of a word whose `%d` is the count (the live
+    /// client's word 1858)
+    RedCount(i32, i64),
 }
 
 /// Which child has the keys.
@@ -138,6 +144,8 @@ pub struct SearchWnd {
     seller: String,
     lot: i32,
     bid: i32,
+    /// `m_bidQty` (the live client's +0x5B4): the items of the lot bid for
+    bid_qty: i32,
     dots: i32,
     ticks: i32,
     menu: WndMenu,
@@ -186,6 +194,7 @@ impl Default for SearchWnd {
             seller: String::new(),
             lot: -1,
             bid: 0,
+            bid_qty: 1,
             dots: 0,
             ticks: 15,
             menu,
@@ -369,6 +378,7 @@ impl SearchWnd {
                 }
                 4 => {
                     self.bid = 0;
+                    self.bid_qty = 1;
                     self.cursor = 0;
                     self.top = 0;
                     reopen(&mut self.list);
@@ -508,7 +518,8 @@ impl SearchWnd {
                 _ => return,
             }
         } else if self.state == 4 {
-            (10, 1698)
+            // the live client's quantity first (`live`, 0x01314230)
+            if crate::live::features().live() && self.cursor == 0 { (10, 1873) } else { (10, 1698) }
         } else {
             return;
         };
@@ -533,7 +544,11 @@ impl SearchWnd {
                 _ => return,
             }
         } else if self.state == 4 {
-            self.bid = atoi(&s);
+            if crate::live::features().live() && self.cursor == 0 {
+                self.bid_qty = atoi(&s);
+            } else {
+                self.bid = atoi(&s);
+            }
         }
         self.child = Child::Own;
         let st = self.state;
@@ -596,11 +611,16 @@ impl SearchWnd {
                 match self.mbox.key(k, cues) {
                     // 268: Confirm (0 bid, 1 buyout), then the page
                     Some(BoxAnswer::Yes(p1, _)) => {
+                        // the live client's (`live`, 0x01314D00): the count
+                        // asked for, and the buy-out the lot's whole stack
+                        let live = crate::live::features().live();
                         match p1 {
+                            0 if live => out.push(SearchOut::Send(Auction::bid_n(self.lot, self.bid, self.bid_qty), 4)),
                             0 => out.push(SearchOut::Send(Auction::bid(self.lot, self.bid), 4)),
                             1 => {
                                 if let Some(l) = self.sel_lot(auction, v) {
-                                    out.push(SearchOut::Send(Auction::bid(self.lot, l.p2f8 as i32), 4));
+                                    let count = if live { l.quantity as i32 } else { 1 };
+                                    out.push(SearchOut::Send(Auction::bid_n(self.lot, l.p2f8 as i32, count), 4));
                                 }
                             }
                             _ => {}
@@ -755,53 +775,63 @@ impl SearchWnd {
                 }
                 _ => {}
             },
-            4 => match key {
-                19 | 138 => {
-                    if self.cursor <= 0 {
-                        cues.push(9);
-                        self.cursor = 0;
-                    } else {
-                        cues.push(11);
-                        self.cursor -= 1;
-                    }
-                    self.list.reset_tick_pulse(now);
-                }
-                20 | 139 => {
-                    if self.cursor >= 2 {
-                        cues.push(9);
-                        self.cursor = 2;
-                    } else {
-                        cues.push(11);
-                        self.cursor += 1;
-                    }
-                    self.list.reset_tick_pulse(now);
-                }
-                27 | 132 => {
-                    cues.push(8);
-                    self.set_state(2, now);
-                }
-                13 | 134 => {
-                    cues.push(13);
-                    let w = |id: i32| vui.words.get(id, vui.language).to_string();
-                    match self.cursor {
-                        0 => self.edit_field(vui, now),
-                        1 | 2 => {
-                            if Self::has_lot(v.bank, self.lot as i64) {
-                                out.push(SearchOut::Red(1775));
-                            } else if let Some(l) = auction.results.get(self.menu.list.sel.max(0) as usize) {
-                                let text = if self.cursor == 1 {
-                                    format!("{}: {}\n{}: {} {}\n{}", w(1723), l.item.name, w(1728), self.bid, w(479), w(1791))
-                                } else {
-                                    format!("{}: {}\n{}: {} {}\n{}", w(1723), l.item.name, w(1697), l.p2f8, w(479), w(1791))
-                                };
-                                self.show_message(&text, self.cursor - 1, now);
-                            }
+            4 => {
+                // the live client's form (`live`): the quantity first, four
+                // rows (0x01310D30)
+                let live = crate::live::features().live();
+                let last = if live { 3 } else { 2 };
+                match key {
+                    19 | 138 => {
+                        if self.cursor <= 0 {
+                            cues.push(9);
+                            self.cursor = 0;
+                        } else {
+                            cues.push(11);
+                            self.cursor -= 1;
                         }
-                        _ => {}
+                        self.list.reset_tick_pulse(now);
                     }
+                    20 | 139 => {
+                        if self.cursor >= last {
+                            cues.push(9);
+                            self.cursor = last;
+                        } else {
+                            cues.push(11);
+                            self.cursor += 1;
+                        }
+                        self.list.reset_tick_pulse(now);
+                    }
+                    27 | 132 => {
+                        cues.push(8);
+                        self.set_state(2, now);
+                    }
+                    13 | 134 if live => {
+                        cues.push(13);
+                        self.live_bid_key(vui, auction, v, now, out);
+                    }
+                    13 | 134 => {
+                        cues.push(13);
+                        let w = |id: i32| vui.words.get(id, vui.language).to_string();
+                        match self.cursor {
+                            0 => self.edit_field(vui, now),
+                            1 | 2 => {
+                                if Self::has_lot(v.bank, self.lot as i64) {
+                                    out.push(SearchOut::Red(1775));
+                                } else if let Some(l) = auction.results.get(self.menu.list.sel.max(0) as usize) {
+                                    let text = if self.cursor == 1 {
+                                        format!("{}: {}\n{}: {} {}\n{}", w(1723), l.item.name, w(1728), self.bid, w(479), w(1791))
+                                    } else {
+                                        format!("{}: {}\n{}: {} {}\n{}", w(1723), l.item.name, w(1697), l.p2f8, w(479), w(1791))
+                                    };
+                                    self.show_message(&text, self.cursor - 1, now);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
-            },
+            }
             // the pickers: up and down stop at the ends (sound 9), Enter takes
             // the row's value into the form's field, Escape leaves it
             5..=8 => {
@@ -849,6 +879,157 @@ impl SearchWnd {
             }
             _ => {}
         }
+    }
+
+    /// The live client's Enter on its bid form (`live`, 0x01310D30 state 4):
+    /// the quantity's and the bid's editors; the proxy bid (not on one's own
+    /// lot, word 1775; the buy-out price only for the lot's whole stack,
+    /// else word 1858 with its count and nothing asked) and the buy-out,
+    /// each asked in a box whose quantity line is there with the feature
+    /// word's bit 0x08 (the buy-out's box says the quantity on the form, as
+    /// the live client's does, though it buys the whole stack).
+    fn live_bid_key(&mut self, vui: &Vui, auction: &Auction, v: &View, now: i64, out: &mut Vec<SearchOut>) {
+        let w = |id: i32| vui.words.get(id, vui.language).to_string();
+        match self.cursor {
+            0 | 1 => self.edit_field(vui, now),
+            c @ (2 | 3) => {
+                if Self::has_lot(v.bank, self.lot as i64) {
+                    out.push(SearchOut::Red(1775));
+                    return;
+                }
+                let Some(l) = auction.results.get(self.menu.list.sel.max(0) as usize) else { return };
+                if c == 2 && self.bid as i64 == l.p2f8 && self.bid_qty as i64 != l.quantity {
+                    out.push(SearchOut::RedCount(1858, l.quantity));
+                    return;
+                }
+                let qty = if crate::live::features().has(crate::live::Features::STACKS) { format!("{}: {}\n", w(1853), self.bid_qty) } else { String::new() };
+                let (word, price) = if c == 2 { (1728, self.bid as i64) } else { (1697, l.p2f8) };
+                let text = format!("{}: {}\n{qty}{}: {} {}\n{}", w(1723), l.item.name, w(word), price, w(479), w(1791));
+                self.show_message(&text, c - 2, now);
+            }
+            _ => {}
+        }
+    }
+
+    /// The live client's `DrawBid` (`live`, 0x01312D10): nine rows titled
+    /// 1695; the quantity (held to the bid's own count, else 1, up to the
+    /// lot's), the proxy bid (from the floor, the lot's minimum or the page's
+    /// third column whichever is higher, to the buy-out), Submit, OR, and
+    /// the buy-out (word 1701 for a lot of one, 1857 each for a stack).
+    fn draw_bid_live(&mut self, vui: &Vui, r: &mut dyn Raster, auction: &Auction, v: &View) {
+        self.list.init(vui, r, [320, 180], 430, 9, 0);
+        let wd = |id: i32| wide(vui.words.get(id, vui.language));
+        if self.list.is_open() || self.list.is_opening() || self.list.is_closing() {
+            self.list.set_title(Some(&wd(1695)));
+            self.list.draw(vui, r);
+        }
+        let cols = [30, 150];
+        let Some(l) = self.sel_lot(auction, v).cloned() else { return };
+        let floor_col = auction.cols[2].get(self.menu.list.sel as usize).copied().unwrap_or(0) as i32;
+        let least = Auction::find_bid3(v.bank, l.lot_id).map_or(1, |b| b.2 as i32);
+        self.bid_qty = self.bid_qty.max(least).min(l.quantity as i32);
+        let floor = (l.p2f4 as i32).max(floor_col);
+        self.bid = self.bid.max(floor).min(l.p2f8 as i32);
+        let lw = self.list.size[0];
+        let c = self.cursor;
+        Self::draw_row(&self.list, vui, r, 1, Some(&wd(1853)), Some(&wide(&self.bid_qty.to_string())), cols[0], cols[1], c == 0, true, true);
+        Self::draw_row(&self.list, vui, r, 2, Some(&wd(1728)), Some(&wide(&self.bid.to_string())), cols[0], cols[1], c == 1, true, true);
+        Self::draw_row(&self.list, vui, r, 4, Some(&wd(1699)), None, cols[0], lw - 40, c == 2, true, true);
+        Self::draw_row(&self.list, vui, r, 5, Some(&wd(1700)), None, cols[0], cols[1], false, false, true);
+        // 1701 as the live client words it ("Buy now", the disc's "Acquire
+        // now": `livewords::live`)
+        let buy = crate::livewords::live(&vui.words, if l.quantity == 1 { 1701 } else { 1857 }, vui.language).replacen("%d", &l.p2f8.to_string(), 1);
+        Self::draw_row(&self.list, vui, r, 6, Some(&wide(&buy)), None, cols[0], lw - 40, c == 3, true, true);
+        for (cursor, row) in [(0, 1), (1, 2), (2, 4), (3, 6)] {
+            self.list_hits.push(rows_rect(&self.list, vui, r, cols[0], row, lw - 40 - cols[0], 1), cursor);
+        }
+        let s = wide(&format!("|x{}   |t{}", vui.words.get(212, vui.language), vui.words.get(161, vui.language)));
+        self.list.text_box(vui, r, &s, 20, 8, lw - 40, 1, UI_COLORS[0], 0);
+    }
+
+    /// The live client's `DrawSummary` (`live`, 0x01313C48): the high bid
+    /// (word 1856, or "no bids"), the minimum next bid (the page's third
+    /// column) while time is left, the time, and the player's bid as its
+    /// count at its price and what is in escrow. Its "(you)" never shows (it
+    /// tests the player's id against -1).
+    fn draw_summary_live(&self, vui: &Vui, r: &mut dyn Raster, auction: &Auction, v: &View) {
+        if v.searching || auction.p7860 != 0 {
+            return;
+        }
+        let sel = self.menu.list.sel;
+        let Some(l) = auction.results.get(sel.max(0) as usize).filter(|_| sel >= 0) else { return };
+        let i = sel as usize;
+        let col = |k: usize| auction.cols[k].get(i).copied().unwrap_or(0);
+        let (high, floor) = (col(1), col(2));
+        let left = l.p2fc - auction.get_minutes(v.now);
+        let w = |id: i32| vui.words.get(id, vui.language).to_string();
+        let mut t = format!("{}\n{}:\n", l.item.name, w(1856));
+        if high == -1 {
+            t += &format!("{}\n", w(1708));
+        } else {
+            t += &format!("{high}\n");
+        }
+        if left > 0 {
+            t += &format!("{}:\n{}\n", w(1710), floor);
+        }
+        t += &Self::format_time(vui, left, true);
+        if let Some((price, escrow, count)) = Auction::find_bid3(v.bank, l.lot_id) {
+            t += &format!("{}:\n{count}@{price}\n{}:\n{escrow}\n", w(1711), w(1712));
+        }
+        let ww = self.window.size[0] - 28;
+        self.window.text_box(vui, r, &wide(&t), 16, 0, ww, 12, [1.0; 4], 3);
+    }
+
+    /// The live client's three-column `DrawRow` (0x01314638): a label, a
+    /// framed middle and a right column, ticked when selected.
+    fn draw_row3(w: &Window, vui: &Vui, r: &mut dyn Raster, row: i32, cells: [&[u16]; 3], x: [i32; 3], sel: bool) {
+        let color = UI_COLORS[sel as usize];
+        w.text_box(vui, r, cells[0], x[0], row, x[1] - x[0], 1, color, 0);
+        w.text_box(vui, r, cells[1], x[1], row, x[2] - x[1], 1, color, 2);
+        w.text_box(vui, r, cells[2], x[2], row, w.size[0] - x[2] - 25, 1, color, 2);
+        if sel {
+            w.tick_r(vui, r, x[0], row, true);
+        }
+    }
+
+    /// The live client's `DrawRankings` (`live`, 0x01312930): the bidders
+    /// in three columns, name, quantity (with the feature word's bit 0x08;
+    /// an empty column without) and bid.
+    fn draw_rankings_live(&mut self, vui: &Vui, r: &mut dyn Raster, auction: &Auction, v: &View) {
+        self.list.init(vui, r, [320, 180], 450, 10, 0);
+        let wd = |id: i32| wide(vui.words.get(id, vui.language));
+        if self.list.is_open() || self.list.is_opening() || self.list.is_closing() {
+            self.list.set_title(Some(&wd(1696)));
+            self.list.draw(vui, r);
+        }
+        if !v.idle || auction.p7860 != 0 {
+            return;
+        }
+        if self.cursor - self.top >= 7 {
+            self.top = self.cursor - 6;
+        } else if self.cursor < self.top {
+            self.top = self.cursor;
+        }
+        let x = [40, 210, 300];
+        let stacks = crate::live::features().has(crate::live::Features::STACKS);
+        let qty_head = if stacks { wd(1853) } else { Vec::new() };
+        Self::draw_row3(&self.list, vui, r, 0, [&wd(509), &qty_head, &wd(1697)], x, false);
+        let n = auction.bidders.len() as i32;
+        let t = if n == 7 { 0.0 } else { self.top as f32 / (n - 7) as f32 };
+        let lw = self.list.size[0];
+        self.list.draw_frame_vscroll(vui, r, 22, 1, lw - 55, 7, t);
+        let mut row = 1;
+        let mut i = self.top;
+        while i < n && row < 8 {
+            let b = &auction.bidders[i as usize];
+            let qty = if stacks { wide(&b.x28.to_string()) } else { Vec::new() };
+            Self::draw_row3(&self.list, vui, r, row, [&wide(&b.name), &qty, &wide(&b.x24.to_string())], x, i == self.cursor);
+            self.list_hits.push(rows_rect(&self.list, vui, r, 22, row, lw - 55, 1), i);
+            i += 1;
+            row += 1;
+        }
+        let s = wide(&format!("|t{}", vui.words.get(161, vui.language)));
+        self.list.text_box(vui, r, &s, 20, 9, lw - 40, 1, UI_COLORS[0], 0);
     }
 
     /// `DrawRow`: a label, a (framed) value, in the window's colours
@@ -959,7 +1140,11 @@ impl SearchWnd {
         self.window.draw(vui, r);
         vui.blit_horz(r, [16, 322], 60, 619, 0, 1.0, 0);
         if (1..=4).contains(&self.state) {
-            self.draw_summary(vui, r, auction, v);
+            if crate::live::features().live() {
+                self.draw_summary_live(vui, r, auction, v);
+            } else {
+                self.draw_summary(vui, r, auction, v);
+            }
         }
         let ww = self.window.size[0];
         let white = [1.0, 1.0, 1.0, 1.0];
@@ -969,9 +1154,12 @@ impl SearchWnd {
         }
         let s = format!("|x{} |t{}", vui.words.get(212, vui.language), vui.words.get(161, vui.language));
         self.window.text_box(vui, r, &wide(&s), 16, 13, ww - 32, 1, white, 1);
+        let live = crate::live::features().live();
         match self.state {
             2 => self.draw_lot(vui, r, auction, v),
+            3 if live => self.draw_rankings_live(vui, r, auction, v),
             3 => self.draw_rankings(vui, r, auction, v),
+            4 if live => self.draw_bid_live(vui, r, auction, v),
             4 => self.draw_bid(vui, r, auction, v),
             5..=8 => self.draw_picker(vui, r, v),
             _ => {}
@@ -1197,6 +1385,7 @@ impl SearchWnd {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auction::Bidder;
     use net::dump::{Bid, Item};
 
     #[derive(Default)]
@@ -1409,6 +1598,176 @@ mod tests {
         let _ = Bid::default();
     }
 
+    /// A stack lot: 20 of them at 100 each, bought out at 300 each.
+    fn stack_lot(id: i64) -> AuctionItem {
+        AuctionItem { quantity: 20, ..lot(id, 100) }
+    }
+
+    /// The live client's bid form (`live`, the feature word with bit 0x08):
+    /// the quantity first (its editor titled 1873), held from the player's
+    /// own bid's count to the lot's as it is drawn; the bid held from the
+    /// floor (the lot's minimum or the page's third column, the higher) to
+    /// the buy-out; four rows, the cursor stopping at the buy-out (3). The
+    /// buy-out price for less than the whole stack is word 1858 with the
+    /// count and nothing asked; a proxy bid's box says the quantity and
+    /// sends it; the buy-out sends the whole stack at the buy-out price.
+    #[test]
+    fn the_live_bid_form_bids_for_a_quantity() {
+        crate::live::with_features(Some(0x1B), || {
+            let mut g = Rig::new();
+            g.vui = Vui::new(numbered_words(), Default::default(), Vec::new());
+            g.page(vec![stack_lot(5)]);
+            g.a.cols[2] = vec![140];
+            g.bank.bids.push(Bid { auction_id: 5, x08: 120, x0c: 3, x10: 360, ..Default::default() });
+            g.w.lot = 5;
+            g.w.set_state(2, 0);
+            g.key(134);
+            assert_eq!((g.w.state, g.w.cursor, g.w.bid_qty, g.w.bid), (4, 0, 1, 0));
+            g.draw();
+            assert_eq!((g.w.bid_qty, g.w.bid), (3, 140), "the count from the player's bid's, the bid from the floor (the page's 140 over the lot's 100)");
+            // the quantity's editor: 50 typed, held to the lot's 20
+            g.key(134);
+            assert!(g.w.typing());
+            assert_eq!(String::from_utf16_lossy(&g.w.edit.title), "w1873");
+            g.w.edit.set_text(&wide("50"));
+            g.w.take_text(0);
+            g.draw();
+            assert_eq!(g.w.bid_qty, 20);
+            // down to the buy-out and one more: 3, sound 9
+            for _ in 0..3 {
+                g.key(139);
+            }
+            g.cues.clear();
+            g.key(139);
+            assert_eq!((g.w.cursor, g.cues.clone()), (3, vec![9]));
+            // the proxy bid at the buy-out for 5 of 20: word 1858 with 20, nothing asked
+            g.w.cursor = 2;
+            g.w.bid = 300;
+            g.w.bid_qty = 5;
+            g.out.clear();
+            g.key(134);
+            assert_eq!((g.out.clone(), g.w.child), (vec![SearchOut::RedCount(1858, 20)], Child::Own));
+            // a proxy bid of 150 for 5: the box says the quantity, Yes sends it
+            g.w.bid = 150;
+            g.key(134);
+            assert_eq!(g.w.child, Child::MBox);
+            assert_eq!(String::from_utf16_lossy(&g.w.mbox.text), "w1723: Sword\nw1853: 5\nw1728: 150 w479\nw1791");
+            g.key(136);
+            g.out.clear();
+            g.key(134);
+            assert_eq!(g.out, vec![SearchOut::Send(Auction::bid_n(5, 150, 5), 4)]);
+            assert_eq!(g.w.state, 1, "the page again");
+            // the buy-out: the whole stack at 300 each
+            g.w.set_state(2, 0);
+            g.key(134);
+            g.w.cursor = 3;
+            g.key(134);
+            assert!(String::from_utf16_lossy(&g.w.mbox.text).contains("w1697: 300 w479"));
+            g.key(136);
+            g.out.clear();
+            g.key(134);
+            assert_eq!(g.out, vec![SearchOut::Send(Auction::bid_n(5, 300, 20), 4)]);
+        });
+    }
+
+    /// The live bid form words a lot of one's buy-out as the live client
+    /// does (row 1701 "Buy now for %d Tunar" where the disc's table says
+    /// "Acquire now ...", `livewords::live`); the control, the disc's form
+    /// on a server with no word, keeps the disc's.
+    #[test]
+    fn the_live_buyout_says_buy_now() {
+        let words = || {
+            let mut lines: Vec<String> = (1..=1814).map(|n| format!("w{n}")).collect();
+            lines[1700] = "Acquire now for %d Tunar".into();
+            vi::strtab::StringTable::parse(lines.join("\n").as_bytes()).unwrap()
+        };
+        let shown = |word| {
+            crate::live::with_features(word, || {
+                let mut g = Rig::new();
+                g.vui = Vui::new(words(), Default::default(), Vec::new());
+                g.page(vec![lot(5, 100)]);
+                g.w.lot = 5;
+                g.w.set_state(4, 0);
+                drawn(&mut g)
+            })
+        };
+        assert!(shown(Some(0x1B)).contains(&"Buy now for 300 Tunar".to_string()));
+        assert!(shown(None).contains(&"Acquire now for 300 Tunar".to_string()));
+    }
+
+    /// The live bid form without bit 0x08: the quantity row stays (the live
+    /// client draws it always) but the boxes have no quantity line; with no
+    /// word (the control, the disc's form) a box sends the disc's count of 1
+    /// and the form has three rows.
+    #[test]
+    fn without_bit_0x08_the_bid_boxes_have_no_quantity() {
+        crate::live::with_features(Some(0x10), || {
+            let mut g = Rig::new();
+            g.vui = Vui::new(numbered_words(), Default::default(), Vec::new());
+            g.page(vec![lot(5, 100)]);
+            g.w.lot = 5;
+            g.w.set_state(4, 0);
+            g.draw();
+            assert_eq!(g.w.bid, 100);
+            assert!(drawn(&mut g).iter().any(|s| s == "w1853"), "the quantity row");
+            g.w.cursor = 2;
+            g.key(134);
+            assert_eq!(String::from_utf16_lossy(&g.w.mbox.text), "w1723: Sword\nw1728: 100 w479\nw1791");
+            g.key(136);
+            g.out.clear();
+            g.key(134);
+            assert_eq!(g.out, vec![SearchOut::Send(Auction::bid_n(5, 100, 1), 4)]);
+        });
+        let mut g = Rig::new();
+        g.page(vec![lot(5, 100)]);
+        g.w.lot = 5;
+        g.w.set_state(4, 0);
+        for _ in 0..4 {
+            g.key(139);
+        }
+        assert_eq!(g.w.cursor, 2, "the disc's form: three rows");
+    }
+
+    /// The live summary and bidders (`live`): "High bid" or "no bids", the
+    /// minimum next bid out of the page's third column, the player's bid as
+    /// count@price; the bidders with their quantity column with bit 0x08,
+    /// an empty one without. The control: the disc's summary says "Current
+    /// Bid" (1707) and the high bid's "(you)" by the leader's column.
+    #[test]
+    fn the_live_summary_and_bidders() {
+        let summary = |word| {
+            crate::live::with_features(word, || {
+                let mut g = Rig::new();
+                g.vui = Vui::new(numbered_words(), Default::default(), Vec::new());
+                g.page(vec![stack_lot(5)]);
+                g.a.cols = [vec![1], vec![130], vec![131]];
+                g.bank.bids.push(Bid { auction_id: 5, x08: 130, x0c: 4, x10: 520, ..Default::default() });
+                g.w.set_state(1, 0);
+                drawn(&mut g)
+            })
+        };
+        let live = summary(Some(0x1B)).join("|");
+        assert!(live.contains("Sword|w1856:|130|w1710:|131|"), "{live}");
+        assert!(live.contains("w1711:|4@130|w1712:|520"), "{live}");
+        let disc = summary(None).join("|");
+        assert!(disc.contains("w1707:|130 w1709|w1710:|131|") && disc.contains("w1711:|130|w1712:|520"), "{disc}");
+        let bidders = |word| {
+            crate::live::with_features(word, || {
+                let mut g = Rig::new();
+                g.vui = Vui::new(numbered_words(), Default::default(), Vec::new());
+                g.page(vec![stack_lot(5)]);
+                g.a.bidders = vec![Bidder { name: "Ann".into(), x24: 150, x28: 7, ..Default::default() }];
+                g.w.set_state(2, 0);
+                g.w.set_state(3, 0);
+                drawn(&mut g).join("|")
+            })
+        };
+        let with = bidders(Some(0x1B));
+        assert!(with.contains("w509|w1853|w1697|") && with.contains("Ann|7|150"), "{with}");
+        let without = bidders(Some(0x10));
+        assert!(without.contains("w509|w1697|") && without.contains("Ann|150") && !without.contains("w1853"), "{without}");
+    }
+
     #[test]
     fn my_lots_asks_for_the_banks_ids() {
         let vui = Vui::new(Default::default(), Default::default(), Vec::new());
@@ -1482,6 +1841,30 @@ mod tests {
             };
             assert_eq!(got, rows[row], "field {field}");
         }
+    }
+
+    /// On a server that sends the live client's feature word without bit
+    /// 0x02 (`live`) the race picker has no Ogre (9) and the class picker no
+    /// Alchemist (14), and Enter takes the row's own value; the controls, no
+    /// word (the disc's lists, as on Sandstorm) and the retail word 0x1B,
+    /// have them. The wear slots and attack types never change.
+    #[test]
+    fn the_pickers_leave_ogre_and_alchemist_to_the_feature_word() {
+        let rows = |word| crate::live::with_features(word, || [5, 6, 7, 8].map(|s| picker(s).unwrap().rows));
+        let [races, classes, wears, attacks] = rows(Some(0x10));
+        assert_eq!(races, vec![-1, -2, 6, 2, 4, 1, 8, 3, 7, 0, 5]);
+        assert_eq!(classes, vec![-1, 5, 9, 7, 12, 10, 4, 11, 2, 1, 6, 3, 8, 0, 13]);
+        assert_eq!((wears, attacks), (WEARS.to_vec(), ATTACKS.to_vec()));
+        for word in [None, Some(0x1B)] {
+            let [races, classes, ..] = rows(word);
+            assert_eq!((races, classes), (RACES.to_vec(), CLASSES.to_vec()), "{word:?}");
+        }
+        // the last race row is the Troll (5) without the Ogre, as Enter takes it
+        crate::live::with_features(Some(0x10), || {
+            let mut g = Rig::new();
+            choose(&mut g, 2, 10);
+            assert_eq!(g.w.race, 5);
+        });
     }
 
     /// The search carries what the pickers chose: the class's and race's

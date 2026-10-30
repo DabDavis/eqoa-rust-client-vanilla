@@ -5,6 +5,24 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-29 · Looking for a group, and auctions of whole stacks, as at the game's end
+On a server that runs them as the game did in its last years (eqoaclassic does; Sandstorm does not,
+and there nothing changes):
+- The Group menu has Search, Register and Unregister again. Register (or typing `/lfg on`) puts you
+  on the list of players looking for a group, Unregister (`/lfg off`) takes you off it. Search opens
+  the window the game had for it: pick any races and classes and a level range (type -1 for the
+  levels you could hunt with), Search, and the players found are listed with their race, class and
+  level, sorted by any column with R1 or Tab and L1. ✕ on a player invites them to your group or
+  sends them a tell; □ shows the window's help. A group's leader looks for players to fill it, a
+  player alone for a group.
+- The Group menu's Show Chat and Hide Chat now tell the server, on every server (they did nothing).
+- At the auction you can put up a whole stack, or part of one: the form asks how many, and the
+  prices are each item's. Bidding asks how many you want, "Buy all now" buys the whole stack at its
+  price each, and the bidders' list shows how many each one asked for. Items with Lore can be put up
+  too.
+- On such a server the Ogre and the Alchemist show in the auction's pickers and in an item's races
+  and classes only when the server has them.
+
 ## 2026-10-29 · Mail to several players, Reply All, and the live game's warnings
 - On a server that offers it, a letter can go to several players at once: write their names in To
   with commas or semicolons between them. If a name is nobody's, the letter is not sent and the box

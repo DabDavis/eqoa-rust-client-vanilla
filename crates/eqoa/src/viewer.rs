@@ -698,6 +698,8 @@ pub fn shot_with(
                     if let Some(k) = k {
                         if p.search_open() {
                             p.search_key(k, down);
+                        } else if p.lfg_owns() {
+                            p.lfg_key(k, down);
                         } else if p.bank_owns() {
                             p.bank_key(k, down);
                         } else if p.npcw_owns() {
@@ -3368,6 +3370,54 @@ impl App {
                 && !(down && event.repeat)
             {
                 p.search_key(k, down);
+            }
+            return;
+        }
+        // The live client's group search (mode 42, `groupsearch`): the
+        // arrows, Enter or E (X), Escape or Backspace (triangle), Q (square:
+        // the help), Tab and ` (R1 and L1: the column sorted by); its edit
+        // takes the keyboard.
+        if let Some(p) = self.play.as_mut()
+            && p.typing.is_none()
+            && p.lfg_owns()
+        {
+            let down = event.state == ElementState::Pressed;
+            if p.lfg_typing() {
+                let named = match &event.logical_key {
+                    Key::Named(NamedKey::Backspace) => Some(8),
+                    Key::Named(NamedKey::Escape) => Some(27),
+                    Key::Named(NamedKey::Enter) => Some(13),
+                    Key::Named(NamedKey::ArrowLeft) => Some(17),
+                    Key::Named(NamedKey::ArrowRight) => Some(18),
+                    _ => None,
+                };
+                if let Some(k) = named {
+                    p.lfg_key(k, down);
+                } else if down && let Some(t) = &event.text {
+                    for c in t.chars().filter(|c| c.is_ascii() && !c.is_ascii_control()) {
+                        p.lfg_key(c as i32, true);
+                    }
+                }
+                return;
+            }
+            use crate::startmenu::keys as K;
+            let k = match &event.logical_key {
+                Key::Named(NamedKey::ArrowUp) => Some(K::UP),
+                Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
+                Key::Named(NamedKey::ArrowLeft) => Some(K::LEFT),
+                Key::Named(NamedKey::ArrowRight) => Some(K::RIGHT),
+                Key::Named(NamedKey::Enter) => Some(K::CROSS),
+                Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
+                Key::Character(c) if c.eq_ignore_ascii_case("q") => Some(133),
+                Key::Character(c) if c.as_str() == "`" || c.as_str() == "~" => Some(140),
+                Key::Named(NamedKey::Tab) => Some(142),
+                Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
+                _ => None,
+            };
+            if let Some(k) = k
+                && !(down && event.repeat)
+            {
+                p.lfg_key(k, down);
             }
             return;
         }
