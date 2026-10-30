@@ -15,6 +15,7 @@
 pub mod billboard;
 pub mod curve;
 pub mod fans;
+pub mod fog16;
 pub mod overlay;
 pub mod scale;
 pub mod shadow;
@@ -379,6 +380,13 @@ pub struct Renderer {
     billboards: Option<billboard::Billboards>,
     /// The immediate-mode fans' (`set_fans`), made at the first fan.
     fans: Option<fans::Fans>,
+    /// Whether a fan run marked `ps2` is drawn as the PS2's 16-bit frame
+    /// keeps it (`fog16`): only where the adapter can add up its sums
+    /// (`set_ps2_sums`, `fog16::supported`); off until told.
+    ps2_sums: bool,
+    /// The PS2 runs drawn a fan at a time, the GS's arithmetic exactly
+    /// (`set_ps2_sequential`): the reference the sums are measured against.
+    ps2_sequential: bool,
     /// The characters' blob shadows' (`set_shadows`), made at the first.
     shadows: Option<shadow::Shadows>,
     /// What is drawn over the scene with Z off (`set_overlay`), made at the
@@ -634,6 +642,8 @@ impl Renderer {
             ui: None,
             billboards: None,
             fans: None,
+            ps2_sums: false,
+            ps2_sequential: false,
             shadows: None,
             overlay: None,
             strips: Vec::new(),
@@ -1429,6 +1439,18 @@ pub fn depth_view(device: &wgpu::Device, w: u32, h: u32) -> wgpu::TextureView {
         .create_view(&Default::default())
 }
 
+impl Renderer {
+    /// Before `curve.scene_target`, for a frame drawn into `color`: where the
+    /// fans set read the frame they are drawn over (`fans_read_frame`, the
+    /// ground fog a PS2 frame keeps) and `color` cannot be copied (a page's
+    /// canvas, a GL window), the scene goes through the curve's texture,
+    /// which can (`curve::Curve::set_through`); otherwise as before.
+    pub fn read_frame_through(&mut self, color: &wgpu::TextureView) {
+        let through = self.fans_read_frame() && !color.texture().usage().contains(wgpu::TextureUsages::COPY_SRC);
+        self.curve.set_through(through);
+    }
+}
+
 /// Renders one frame offscreen and returns it as RGBA8 rows (for `--shot`),
 /// with the particles' billboards (view, projection, batches) if any.
 #[allow(clippy::too_many_arguments)]
@@ -1484,13 +1506,14 @@ pub fn capture_with_sky(
     // the frame at the Render Scale's size (the target's own at 1), the scene
     // into the Brightness curve's texture when one is set
     let f = renderer.scale.targets(device, &tv, &depth, (w, h));
+    renderer.read_frame_through(&f.color);
     let scene = renderer.curve.scene_target(device, f.size);
     let st = scene.as_ref().unwrap_or(&f.color);
     renderer.draw(queue, &mut enc, st, &f.depth, view, items);
     if let Some((v, p, batches, textures)) = sky {
         renderer.draw_sky_billboards(device, queue, &mut enc, st, &f.depth, v, p, batches, textures);
     }
-    renderer.draw_fans(queue, &mut enc, st, &f.depth, view);
+    renderer.draw_fans(device, queue, &mut enc, st, &f.depth, view);
     renderer.draw_plates(device, &mut enc, st, &f.depth, f.size);
     if let Some((v, p, batches, textures)) = particles {
         renderer.draw_billboards_and_shadows(device, queue, &mut enc, st, &f.depth, v, p, batches, textures, view);

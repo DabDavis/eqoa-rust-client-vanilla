@@ -540,7 +540,8 @@ async fn gfx(canvas: web_sys::HtmlCanvasElement) -> Result<viewer::PendingGfx, S
     config.format = config.format.remove_srgb_suffix();
     surface.configure(&device, &config);
     let attrs = winit::window::Window::default_attributes().with_canvas(Some(canvas)).with_title("EQOA");
-    Ok(viewer::PendingGfx { attrs, surface, config, device, queue })
+    let ps2_sums = render::fog16::supported(&adapter);
+    Ok(viewer::PendingGfx { attrs, surface, config, device, queue, ps2_sums })
 }
 
 /// Files every scene loads after its own (main.rs's `SHARED`).

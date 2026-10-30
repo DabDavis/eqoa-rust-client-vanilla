@@ -494,6 +494,9 @@ impl Fx {
         let mut stats = Stats::default();
         let (mut host, zones, cards, rand, draw) = self.scene(lib, F::new(hour));
         let eye_d = eye.as_dvec3();
+        // the options' Ground Fog: the fog's fans as a PS2 frame keeps them
+        // (`render::fog16`), or as they are
+        let ps2_fog = crate::settings::client().ps2_fog;
         for inst in zones.values_mut().flatten() {
             stats.volumes += 1;
             let actor = &world.actors[inst.actor];
@@ -506,6 +509,7 @@ impl Fx {
             draw.fans.clear();
             draw.sprites.clear();
             inst.vs.raster(cam, &modelview, now, cards, rand, &mut host, draw);
+            let ps2 = ps2_fog && inst.vs.volume.ty == vi::effect::FOG;
             for fan in &draw.fans {
                 // the material, or the raster's solid fill (`SetSolidFillUIAVGMaterial`:
                 // untextured, blended, Z written)
@@ -514,9 +518,9 @@ impl Fx {
                     None => (0, 3, true),
                 };
                 let q = quad(fan, &inst.m, eye_d);
-                match runs.last_mut().filter(|r| (r.texture, r.blend, r.zwrite) == (texture, blend, zwrite)) {
+                match runs.last_mut().filter(|r| (r.texture, r.blend, r.zwrite, r.ps2) == (texture, blend, zwrite, ps2)) {
                     Some(r) => r.quads.push(q),
-                    None => runs.push(Run { texture, blend, zwrite, quads: vec![q] }),
+                    None => runs.push(Run { texture, blend, zwrite, ps2, quads: vec![q] }),
                 }
                 stats.fans += 1;
             }
@@ -895,6 +899,32 @@ mod tests {
         assert_eq!(fx.materials.len(), 0, "materials held past their zone");
     }
 
+    /// The options' Ground Fog: at PS2 (the default) the fog's runs go as a
+    /// PS2 frame keeps them (`render::fog16`), Neriak's plaza's every one;
+    /// the dust storm's (another type, blended alike) never. The control: at
+    /// Exact, none.
+    #[test]
+    fn only_the_ground_fog_goes_as_a_ps2_frame_keeps_it() {
+        let ps2 = |x: f32, z: f32, eye: Vec3, on: bool| -> (usize, usize) {
+            let Some((lib, world)) = neriak(x, z) else { return (0, 0) };
+            crate::settings::set_client(crate::settings::ClientOptions { ps2_fog: on, ..crate::settings::client() });
+            let mut fx = Fx::new();
+            run(&mut fx, &lib, &world, eye, Vec3::new(0.0, -0.2, 1.0), 12.0, 30, 2000);
+            (fx.runs.iter().filter(|r| r.ps2).count(), fx.runs.len())
+        };
+        let plaza = |on| ps2(25087.0, 8786.0, Vec3::new(25087.0, 3.0, 8775.0), on);
+        let dust = |on| ps2(19150.0, 4640.0, Vec3::new(19150.0, 57.0, 4640.0), on);
+        let (fog, all) = plaza(true);
+        if all == 0 {
+            return;
+        }
+        assert_eq!(fog, all, "every run of the plaza's fog");
+        let (marked, all) = dust(true);
+        assert!(all > 0 && marked == 0, "the dust's: {marked} of {all}");
+        assert_eq!(plaza(false).0, 0, "the control: Exact, none");
+        crate::settings::set_client(crate::settings::ClientOptions { ps2_fog: true, ..crate::settings::client() });
+    }
+
     /// The hours a volume shows: the fog over Neriak's hill (18:00 to 07:45)
     /// is drawn at 22:00 and not at noon.
     #[test]
@@ -1248,7 +1278,7 @@ mod bench {
                 device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).unwrap();
                 let mut enc = device.create_command_encoder(&Default::default());
                 for _ in 0..200 {
-                    renderer.draw_fans(&queue, &mut enc, &target, &depth, &view);
+                    renderer.draw_fans(&device, &queue, &mut enc, &target, &depth, &view);
                 }
                 let start = std::time::Instant::now();
                 queue.submit([enc.finish()]);
@@ -1265,7 +1295,7 @@ mod bench {
             (p.truncate() / p.w).to_array()
         };
         let screen = Quad { corners: [corner(-1.0, 1.0), corner(1.0, 1.0), corner(1.0, -1.0), corner(-1.0, -1.0)], uvs: [[0.0; 2]; 4], color: [1.0, 1.0, 1.0, 0.5], normal: [0.0, 1.0, 0.0] };
-        let one = time(&mut renderer, &[Run { texture: runs.first().map_or(0, |r| r.texture), blend: 3, zwrite: false, quads: vec![screen] }]);
+        let one = time(&mut renderer, &[Run { texture: runs.first().map_or(0, |r| r.texture), blend: 3, zwrite: false, ps2: false, quads: vec![screen] }]);
         eprintln!(
             "  the GPU ({}): the fans pass {:.3} ms ({:.2} screens of fragments counted), one whole-screen blended layer {:.3} ms: the pass is {:.1} such layers",
             adapter.get_info().name,

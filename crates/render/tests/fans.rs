@@ -73,7 +73,7 @@ fn a_fan_is_lit_modulated_fogged_and_blended_once() {
 
     // a white fan at alpha 0.5, blended (mode 3) once: texel x light, alpha
     // the texel's times the fan's
-    let white = |blend: usize, a: f32| vec![Run { texture: 7, blend, zwrite: false, quads: vec![quad([1.0, 1.0, 1.0, a], [0.0, 1.0, 0.0])] }];
+    let white = |blend: usize, a: f32| vec![Run { texture: 7, blend, zwrite: false, ps2: false, quads: vec![quad([1.0, 1.0, 1.0, a], [0.0, 1.0, 0.0])] }];
     let a = ta * 0.5;
     let once = t * 255.0 * a + c * (1.0 - a);
     let got = pixel(&g, &mut r, &dark, Some(&white(3, 0.5)));
@@ -93,11 +93,11 @@ fn a_fan_is_lit_modulated_fogged_and_blended_once() {
 
     // lit: a black fan facing up under ambient and a sun shining down
     let lit = View { sun: Vec3::splat(0.25), ambient: Vec3::new(0.25, 0.5, 0.75), sun_dir: Vec3::new(0.0, -1.0, 0.0), ..dark };
-    let black = vec![Run { texture: 7, blend: 3, zwrite: false, quads: vec![quad([0.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0])] }];
+    let black = vec![Run { texture: 7, blend: 3, zwrite: false, ps2: false, quads: vec![quad([0.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0])] }];
     let light = (Vec3::new(0.25, 0.5, 0.75) + Vec3::splat(0.25)).min(Vec3::ONE);
     close(pixel(&g, &mut r, &lit, Some(&black)), v3(t * light * 255.0 * ta + c * (1.0 - ta)), "lit");
     // facing down, the sun adds nothing
-    let down = vec![Run { texture: 7, blend: 3, zwrite: false, quads: vec![quad([0.0, 0.0, 0.0, 1.0], [0.0, -1.0, 0.0])] }];
+    let down = vec![Run { texture: 7, blend: 3, zwrite: false, ps2: false, quads: vec![quad([0.0, 0.0, 0.0, 1.0], [0.0, -1.0, 0.0])] }];
     close(pixel(&g, &mut r, &lit, Some(&down)), v3(t * Vec3::new(0.25, 0.5, 0.75) * 255.0 * ta + c * (1.0 - ta)), "facing away");
 
     // fogged before it blends: depth 1 halfway from near 0 to far 2

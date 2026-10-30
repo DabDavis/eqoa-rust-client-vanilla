@@ -606,6 +606,12 @@ pub struct ClientOptions {
     /// dust, falling leaves, light shafts, the flocks of birds: `fx`), as the
     /// game draws them; off, none.
     pub environment: bool,
+    /// Ground Fog: PS2, the effect volumes' fog blended as the GS blends it
+    /// into the PS2's 16-bit frame, dithered and cut to five bits a channel
+    /// (`render::fog16`: a low, dim band, as the game shows it); Exact, blended
+    /// at eight bits a channel (a brighter cloud). PS2 by default, the
+    /// game's look (the user, 2026-10-30, named no default: flip it here).
+    pub ps2_fog: bool,
     /// Loading Screens: Longer, a long trip (Return Home, a coach, a port of
     /// 200 or more, another world) keeps the loading screen up at least a
     /// second, as a PS2's disc read would (`loading::FAR_HOLD_MS`); Instant,
@@ -705,6 +711,7 @@ impl Default for ClientOptions {
             flora: true,
             shadows: true,
             environment: true,
+            ps2_fog: true,
             loading_longer: true,
             render_scale: 1,
             hud: render::ui::HudFilter::Nearest,
@@ -792,6 +799,10 @@ impl ClientOptions {
         if !self.environment {
             s.push_str("environment=off\n");
         }
+        // Ground Fog only when Exact
+        if !self.ps2_fog {
+            s.push_str("ground_fog=exact\n");
+        }
         // Loading Screens only when Instant
         if !self.loading_longer {
             s.push_str("loading=instant\n");
@@ -865,6 +876,8 @@ impl ClientOptions {
                 ("shadows", "off") => c.shadows = false,
                 ("environment", "on") => c.environment = true,
                 ("environment", "off") => c.environment = false,
+                ("ground_fog", "ps2") => c.ps2_fog = true,
+                ("ground_fog", "exact") => c.ps2_fog = false,
                 ("loading", "longer") => c.loading_longer = true,
                 ("loading", "instant") => c.loading_longer = false,
                 ("render_scale", v) => {
@@ -1199,7 +1212,7 @@ pub fn describe() -> String {
         FrameRate::Display => "the display's",
     };
     format!(
-        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, render scale x{}{}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, output device {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, overlapping names {}, art {}, update notices {}, shouts {}, text {}, hud {}, mipmaps {}, flora {}, shadows {}, environment {}, loading screens {}; {}",
+        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, render scale x{}{}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, output device {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, overlapping names {}, art {}, update notices {}, shouts {}, text {}, hud {}, mipmaps {}, flora {}, shadows {}, environment {}, ground fog {}, loading screens {}; {}",
         if c.lod { "on" } else { "off" },
         c.brightness,
         c.fog,
@@ -1242,6 +1255,7 @@ pub fn describe() -> String {
         if c.flora { "on" } else { "off" },
         if c.shadows { "on" } else { "off" },
         if c.environment { "on" } else { "off" },
+        if c.ps2_fog { "ps2" } else { "exact" },
         if c.loading_longer { "longer" } else { "instant" },
         kept_where()
     )
@@ -1717,7 +1731,7 @@ mod tests {
             "Screen Shake only off, Capture Controller only on"
         );
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, render scale x1, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, overlapping names hide, art frontiers, update notices on, shouts heard, text sharp, hud nearest, mipmaps on, flora on, shadows on, environment on, loading screens longer; kept in the page's storage");
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, render scale x1, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, overlapping names hide, art frontiers, update notices on, shouts heard, text sharp, hud nearest, mipmaps on, flora on, shadows on, environment on, ground fog ps2, loading screens longer; kept in the page's storage");
         testing::reset(true);
         assert!(describe().ends_with("refused: nothing is kept"));
         testing::reset(false);
@@ -1767,6 +1781,24 @@ mod tests {
         }
         // the control: Flora off is not Shadows off
         assert!(ClientOptions::from_text("flora=off").shadows);
+    }
+
+    /// Ground Fog, PS2 by default (the game's look), kept only when Exact;
+    /// anything but ps2 or exact leaves it PS2. The control: Environment off
+    /// is not Ground Fog's Exact.
+    #[test]
+    fn ground_fog_kept_only_when_exact() {
+        let d = ClientOptions::default();
+        assert!(d.ps2_fog, "PS2, the game's");
+        assert_eq!(ClientOptions { ps2_fog: false, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nground_fog=exact\n");
+        assert!(!d.to_text().contains("ground_fog"), "the default not written");
+        let c = ClientOptions::from_text("ground_fog=exact");
+        assert!(!c.ps2_fog && c.environment && c.flora, "Ground Fog alone");
+        assert!(ClientOptions::from_text("ground_fog=ps2") == d);
+        for bad in ["ground_fog=off", "ground_fog=", "groundfog=exact", "ground_fog=PS2"] {
+            assert!(ClientOptions::from_text(bad).ps2_fog, "{bad}: PS2, the default");
+        }
+        assert!(ClientOptions::from_text("environment=off").ps2_fog);
     }
 
     /// Flora and Environment, on by default, each kept only when off;

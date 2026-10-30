@@ -5,6 +5,15 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-30 · Ground fog as the PlayStation 2 shows it
+- The low fog that lies over Freeport's streets, Neriak and the rest of the world is now drawn the
+  way the PlayStation 2's picture kept it. The console's screen held only 32 shades of each colour,
+  so each thin layer of fog either changed the picture by a whole shade or not at all: its fog came
+  out as a long, low, dimmer band, where ours was a brighter cloud. That look, with the console's
+  fine dither grain in it, is the new default.
+- If you prefer the brighter fog, Options, Extended, World has a new row, Ground Fog: PS2 (the
+  default) or Exact. Shadows moved from World to Characters to make room for it.
+
 ## 2026-10-30 · Master Class ranks can be bought again
 - Class Mastery: buying the next rank of the Master Class you already have no longer stops with
   "You cannot possess more than one Master Class at a time." Only a second, different Master Class

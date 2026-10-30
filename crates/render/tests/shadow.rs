@@ -42,7 +42,7 @@ const GROUND: f32 = 50.0;
 fn ground() -> Vec<Run> {
     let c = |x: f32, z: f32| [x - EYE.x, GROUND - EYE.y, z - EYE.z];
     let q = Quad { corners: [c(24900.0, 14900.0), c(25100.0, 14900.0), c(25100.0, 15100.0), c(24900.0, 15100.0)], uvs: [[0.5, 0.5]; 4], color: [1.0, 1.0, 1.0, 1.0], normal: [0.0, 1.0, 0.0] };
-    vec![Run { texture: 0, blend: 0, zwrite: true, quads: vec![q] }]
+    vec![Run { texture: 0, blend: 0, zwrite: true, ps2: false, quads: vec![q] }]
 }
 
 /// A shadow triangle at `y` round the point the middle pixel sees (x 25000,

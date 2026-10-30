@@ -335,6 +335,8 @@ pub fn shot_with(
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))?;
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default()))?;
     let mut renderer = Renderer::new(&device, &queue, render::TARGET_FORMAT);
+    renderer.set_ps2_sums(render::fog16::supported(&adapter));
+    renderer.set_ps2_sequential(fog_sequential());
     renderer.scroll_time = Some(script.as_ref().map_or(0, |s| s.ms) as f32 / 1000.0);
     if let Some(f) = arial(lib) {
         renderer.set_font(&device, &queue, &f);
@@ -1476,6 +1478,16 @@ fn mark(perf: &mut Option<Perf>, phase: usize) {
 /// Frames drawn so far (the browser page's rate readout).
 pub static FRAMES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
+/// `EQOA_FOG16=sequential` (natively): the ground fog a PS2 frame keeps drawn
+/// a fan at a time, the GS's arithmetic exactly (`render::fog16`'s reference,
+/// to measure its sums against: slow).
+fn fog_sequential() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    return std::env::var("EQOA_FOG16").is_ok_and(|v| v == "sequential");
+    #[cfg(target_arch = "wasm32")]
+    false
+}
+
 /// A surface and device made before the event loop: a browser's, where the
 /// adapter is the canvas's own (WebGL2) and asking for it is asynchronous.
 /// `attrs` puts the window on the same canvas.
@@ -1485,6 +1497,8 @@ pub struct PendingGfx {
     pub config: wgpu::SurfaceConfiguration,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    /// the adapter can add up the ground fog's sums (`render::fog16`)
+    pub ps2_sums: bool,
 }
 
 struct Gfx {
@@ -2997,8 +3011,10 @@ impl App {
     }
 
     /// The renderer on a configured surface (or none: an offscreen target of
-    /// the configuration's size), then the scene.
-    fn attach(&mut self, window: Arc<Window>, surface: Option<wgpu::Surface<'static>>, config: wgpu::SurfaceConfiguration, device: wgpu::Device, queue: wgpu::Queue) {
+    /// the configuration's size), then the scene. `ps2_sums`: the adapter can
+    /// add up the ground fog's sums, so the options' Ground Fog at PS2 blends
+    /// it as a PS2 frame keeps it (`render::fog16`); without, as it is.
+    fn attach(&mut self, window: Arc<Window>, surface: Option<wgpu::Surface<'static>>, config: wgpu::SurfaceConfiguration, device: wgpu::Device, queue: wgpu::Queue, ps2_sums: bool) {
         // in front or not as it opens: a window opened behind another (the
         // system can refuse a program the front) has no `Focused` to say so
         self.pads.focused = window.has_focus();
@@ -3007,6 +3023,11 @@ impl App {
         #[cfg(not(target_arch = "wasm32"))]
         crate::gpulost::watch(&device);
         let mut renderer = Renderer::new(&device, &queue, config.format);
+        renderer.set_ps2_sums(ps2_sums);
+        renderer.set_ps2_sequential(fog_sequential());
+        if !ps2_sums {
+            eprintln!("ground fog: blended as it is (the adapter cannot add up its sums in float textures)");
+        }
         if let Some(f) = arial(&self.lib) {
             renderer.set_font(&device, &queue, &f);
         }
@@ -4127,7 +4148,7 @@ impl ApplicationHandler for App {
         }
         if let Some(p) = self.pending.take() {
             let window = Arc::new(el.create_window(p.attrs).expect("window"));
-            self.attach(window, Some(p.surface), p.config, p.device, p.queue);
+            self.attach(window, Some(p.surface), p.config, p.device, p.queue, p.ps2_sums);
             return;
         }
         // where the player last had it (`winplace`)
@@ -4151,6 +4172,7 @@ impl ApplicationHandler for App {
             #[cfg(not(target_arch = "wasm32"))]
             crate::report::set_gpu(format!("{} ({:?})", info.name, info.backend));
             let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).expect("device");
+            let ps2_sums = render::fog16::supported(&adapter);
             let config = wgpu::SurfaceConfiguration {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                 format: render::TARGET_FORMAT,
@@ -4162,7 +4184,7 @@ impl ApplicationHandler for App {
                 view_formats: Vec::new(),
                 color_space: wgpu::SurfaceColorSpace::Auto,
             };
-            self.attach(window, None, config, device, queue);
+            self.attach(window, None, config, device, queue, ps2_sums);
             return;
         }
         // each step in the log, and a start that dies in the driver tries
@@ -4225,7 +4247,8 @@ impl ApplicationHandler for App {
         surface.configure(&device, &config);
         #[cfg(not(target_arch = "wasm32"))]
         start.done();
-        self.attach(window, Some(surface), config, device, queue);
+        let ps2_sums = render::fog16::supported(&adapter);
+        self.attach(window, Some(surface), config, device, queue, ps2_sums);
         if let Some(g) = self.gfx.as_mut() {
             g.present_modes = offered;
         }
@@ -5220,6 +5243,14 @@ impl App {
                 render::set_mipmaps(crate::settings::client().mipmaps);
                 g.renderer.scale.set(crate::settings::client().render_scale as u32);
                 let f = g.renderer.scale.targets(&g.device, &target, &g.depth, (g.config.width, g.config.height));
+                // the ground fog a PS2 frame keeps reads the frame: a target
+                // that cannot be copied (a page's canvas) draws the scene in
+                // the curve's texture (`render::fog16`)
+                if loading.is_none() {
+                    g.renderer.read_frame_through(&f.color);
+                } else {
+                    g.renderer.curve.set_through(false);
+                }
                 let scene = g.renderer.curve.scene_target(&g.device, f.size);
                 let st = scene.as_ref().unwrap_or(&f.color);
                 g.renderer.draw(&g.queue, &mut enc, st, &f.depth, loading.as_ref().map_or(&view, |l| &l.0), &refs);
@@ -5234,7 +5265,7 @@ impl App {
                 // the effect volumes' fans, then the particles over them,
                 // all in the scene (the Brightness curve takes them too)
                 if loading.is_none() {
-                    g.renderer.draw_fans(&g.queue, &mut enc, st, &f.depth, &view);
+                    g.renderer.draw_fans(&g.device, &g.queue, &mut enc, st, &f.depth, &view);
                     // the name plates where VIScene::Render draws them: the
                     // particles and the rest after, over them
                     g.renderer.draw_plates(&g.device, &mut enc, st, &f.depth, f.size);
