@@ -135,7 +135,7 @@ const MAX_MS: i64 = 12_000;
 /// armour, brown hair of full length and the second face (`ApplyLook`'s
 /// arguments, as a creature update carries them).
 fn look() -> vi::cust::Look {
-    vi::cust::Look { armor: [1, 1, 1, 1, 1, 0], armor_tint: [0; 6], hair: [3, 3, 2], face: 1, robe: 1, robe_tint: 0 }
+    vi::cust::Look { armor: [1, 1, 1, 1, 1, 0], armor_tint: [0; 6], hair: [3, 3, 2], face: 1, robe: 1, robe_tint: 0, ..Default::default() }
 }
 
 /// The 0x00B1 a server sends for a cast of `effect` taking `cast_ms`, from

@@ -96,7 +96,7 @@ impl Figure {
                 && let Some(h) = vi::cust::helm_with(look.armor[5], &t)
                 && let Some(mut m) = lib.lookup(h as i32).and_then(|r| lib.build_model(r))
             {
-                let tint = t.tint_at_most(look.armor_tint[5]);
+                let tint = look.helm_color(&t);
                 for b in &mut m.batches {
                     for l in &mut b.layers {
                         l.color = tint;

@@ -957,7 +957,7 @@ fn attach(lib: &Library, g: &mut Gpu, cs: &CSprite<Ee>, c: &net::entity::Creatur
         && let Some(h) = vi::cust::helm_with(c.armor[5], &t)
         && let Some(mut m) = lib.lookup(h as i32).and_then(|r| lib.build_model(r))
     {
-        let tint = t.tint_at_most(c.armor_tint[5]);
+        let tint = look_of(c).helm_color(&t);
         for b in &mut m.batches {
             for l in &mut b.layers {
                 l.color = tint;
@@ -1253,7 +1253,17 @@ fn move_line(e: &net::entity::Entity, c: &net::entity::Creature, now: u32) -> St
 }
 
 fn look_of(c: &net::entity::Creature) -> vi::cust::Look {
-    vi::cust::Look { armor: c.armor, armor_tint: c.armor_tint, hair: c.hair, face: c.face, robe: c.robe as i8, robe_tint: c.robe_tint }
+    vi::cust::Look {
+        armor: c.armor,
+        armor_tint: c.armor_tint,
+        hair: c.hair,
+        face: c.face,
+        robe: c.robe as i8,
+        robe_tint: c.robe_tint,
+        // the live game's channel's colours, when the server sends its look
+        armor_color: c.colors.map(|l| l.armor),
+        robe_color: c.colors.map(|l| l.robe),
+    }
 }
 
 /// A creature's look and hands as its channel sent them, raw (a problem
@@ -1262,8 +1272,19 @@ fn look_of(c: &net::entity::Creature) -> vi::cust::Look {
 /// 4 and 5 Sandstorm's own, 128-255 none) rather than leaving it to a picture.
 fn look_line(c: &net::entity::Creature) -> String {
     let hex = |ids: &[u32; 3]| ids.map(|id| format!("{id:#x}")).join(", ");
+    // the live game's look's colours, when the server sent it
+    let colors = c.colors.map_or(String::new(), |l| {
+        let rgba = |c: &[u8; 4]| format!("{:02x}{:02x}{:02x}{:02x}", c[0], c[1], c[2], c[3]);
+        format!(
+            "; live colours armor [{}] robe {} items [{}] variants {:?}",
+            l.armor.iter().map(rgba).collect::<Vec<_>>().join(" "),
+            rgba(&l.robe),
+            l.items.iter().map(rgba).collect::<Vec<_>>().join(" "),
+            l.variants
+        )
+    });
     format!(
-        "look: robe {} tint {}, armor {:?} tints {:?}, hair {:?}, face {}; items [{}] over [{}] types {:?}",
+        "look: robe {} tint {}, armor {:?} tints {:?}, hair {:?}, face {}; items [{}] over [{}] types {:?}{colors}",
         c.robe,
         c.robe_tint,
         c.armor,
@@ -2562,6 +2583,8 @@ impl Play {
                     let scene = &mut walker.scene;
                     let walk = &mut self.walks[slot];
                     let had = self.actors[slot];
+                    // the live game's look, when the server said it is in force
+                    self.entities.live_look = self.session.live_look;
                     self.entities.channel(slot, &data, self_id, now, UPDATE_RATE, |e| {
                         if walk.as_ref().map(|w| w.0) != Some(e.id) {
                             let mut w = WalkControl::<Ee>::default();
