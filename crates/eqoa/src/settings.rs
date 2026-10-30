@@ -632,6 +632,12 @@ pub struct ClientOptions {
     /// as Text's Sharp draws a font (the user, 2026-10-27: "add the sharp
     /// textures fix like sharp font").
     pub hud: render::ui::HudFilter,
+    /// Menus: Game, the start menu the game's 4:3 picture over the world
+    /// (the default); or Fill, scaled up to fill the window, the HUD hidden
+    /// and black round it but for the world's view where the game shows it
+    /// (`render::ui::Fill`; the user, 2026-10-29: "toggling between the 4:3
+    /// and 16:9 menus where the 16:9 menus fill the whole screen").
+    pub menus_fill: bool,
     /// Output Device, natively (F3 20261024-201433: the game played into
     /// the system's default output, a television, while the player listened
     /// elsewhere): none, the system's default, followed when it changes; or
@@ -708,6 +714,7 @@ impl Default for ClientOptions {
             loading_longer: true,
             render_scale: 1,
             hud: render::ui::HudFilter::Nearest,
+            menus_fill: false,
             output: None,
         }
     }
@@ -803,6 +810,10 @@ impl ClientOptions {
         if self.hud == render::ui::HudFilter::Sharp {
             s.push_str("hud=sharp\n");
         }
+        // Menus only when Fill
+        if self.menus_fill {
+            s.push_str("menus=fill\n");
+        }
         if let Some(d) = self.output {
             s.push_str(&format!("output={}\n", d.as_str()));
         }
@@ -874,6 +885,8 @@ impl ClientOptions {
                 }
                 ("hud", "nearest") => c.hud = render::ui::HudFilter::Nearest,
                 ("hud", "sharp") => c.hud = render::ui::HudFilter::Sharp,
+                ("menus", "game") => c.menus_fill = false,
+                ("menus", "fill") => c.menus_fill = true,
                 ("output", v) if !v.is_empty() => c.output = Some(DeviceName::new(v)),
                 ("ability_bars", v) => {
                     if let Some(n) = v.parse::<u8>().ok().filter(|&n| (ABILITY_BARS_GAME as i32..=crate::hudmenu::MAX_BARS).contains(&(n as i32))) {
@@ -1199,7 +1212,7 @@ pub fn describe() -> String {
         FrameRate::Display => "the display's",
     };
     format!(
-        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, render scale x{}{}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, output device {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, overlapping names {}, art {}, update notices {}, shouts {}, text {}, hud {}, mipmaps {}, flora {}, shadows {}, environment {}, loading screens {}; {}",
+        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, render scale x{}{}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, output device {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, overlapping names {}, art {}, update notices {}, shouts {}, text {}, hud {}, menus {}, mipmaps {}, flora {}, shadows {}, environment {}, loading screens {}; {}",
         if c.lod { "on" } else { "off" },
         c.brightness,
         c.fog,
@@ -1238,6 +1251,7 @@ pub fn describe() -> String {
             render::ui::HudFilter::Nearest => "nearest",
             render::ui::HudFilter::Sharp => "sharp",
         },
+        if c.menus_fill { "fill" } else { "game" },
         if c.mipmaps { "on" } else { "off" },
         if c.flora { "on" } else { "off" },
         if c.shadows { "on" } else { "off" },
@@ -1717,7 +1731,7 @@ mod tests {
             "Screen Shake only off, Capture Controller only on"
         );
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, render scale x1, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, overlapping names hide, art frontiers, update notices on, shouts heard, text sharp, hud nearest, mipmaps on, flora on, shadows on, environment on, loading screens longer; kept in the page's storage");
+        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, render scale x1, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, overlapping names hide, art frontiers, update notices on, shouts heard, text sharp, hud nearest, menus game, mipmaps on, flora on, shadows on, environment on, loading screens longer; kept in the page's storage");
         testing::reset(true);
         assert!(describe().ends_with("refused: nothing is kept"));
         testing::reset(false);
@@ -1814,6 +1828,22 @@ mod tests {
         assert_eq!(ClientOptions::from_text("hud=nearest\nrender_scale=1"), d, "the earlier builds' hud=nearest: the default");
         for bad in ["render_scale=3", "render_scale=8", "render_scale=0", "render_scale=x2", "hud=smooth", "hud="] {
             assert_eq!(ClientOptions::from_text(bad), d, "{bad}: the defaults");
+        }
+    }
+
+    /// Menus, Game by default, kept only when Fill (`menus=fill`); `menus=game`
+    /// reads as the default, anything else leaves it there.
+    #[test]
+    fn menus_kept_only_when_fill() {
+        let d = ClientOptions::default();
+        assert!(!d.menus_fill, "Game, the game's 4:3 start menu");
+        let head = "lod=on\nbrightness=5\ncamera_distance=11\n";
+        let fill = ClientOptions { menus_fill: true, ..d };
+        assert_eq!(fill.to_text(), format!("{head}menus=fill\n"));
+        assert_eq!(ClientOptions::from_text(&fill.to_text()), fill, "round trip");
+        assert_eq!(ClientOptions::from_text("menus=game"), d);
+        for bad in ["menus=wide", "menus=", "menus=1"] {
+            assert_eq!(ClientOptions::from_text(bad), d, "{bad}: the default");
         }
     }
 

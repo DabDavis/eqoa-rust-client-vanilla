@@ -721,6 +721,17 @@ impl StartMenu {
         }
     }
 
+    /// `draw` of the menu as it was before an entry put it away this frame
+    /// (it and its bars shown), then put away again: the client's, under
+    /// Extended's Menus: Fill, where the frame between the menu and the
+    /// window it opens would otherwise show the HUD (`Play`'s `handoff`).
+    pub fn draw_held(&mut self, vui: &Vui, r: &mut dyn Layout, menus: &Menus, now: i64, st: &Stats, cues: &mut Vec<i32>) {
+        let shown = (self.visible, self.main.visible);
+        (self.visible, self.main.visible) = (true, true);
+        self.draw(vui, r, menus, now, st, cues);
+        (self.visible, self.main.visible) = shown;
+    }
+
     /// `OnDrawSelf`: the black band, the left and right panels and the
     /// studded frame round the middle; then the main menu.
     ///
@@ -756,6 +767,35 @@ impl StartMenu {
 /// The start menu's middle frame (`StartMenu::draw`): its top and height.
 pub const MIDDLE: [i32; 2] = [37, 294];
 
+/// The start menu's frame rectangle (x0, y0, x1, y1) that Extended's Menus:
+/// Fill scales to fill the window (`render::ui::Fill`): the picture's width,
+/// from its top to the bottom rail's bar.
+pub const FILL_AREA: [f32; 4] = [0.0, 0.0, 640.0, (BOTTOM_RAIL + RAIL_BAR) as f32];
+
+/// Where the game's start menu shows the world (its middle frame, from x 176,
+/// 275 wide, down to the bottom rail's bar), in frame pixels: under Fill the
+/// world shows through the middle frame as scaled, its picture moved
+/// (`fill_moved`), and black past the frame (`fill_mask`).
+pub const VIEW: [f32; 4] = [176.0, MIDDLE[0] as f32, 451.0, (BOTTOM_RAIL + RAIL_BAR) as f32];
+
+/// Under Fill (`render::ui::Fill`), how far the world's picture moves (frame
+/// pixels): the game's view of it (`VIEW`'s middle) to the middle of the
+/// middle frame as scaled. The picture keeps the game's scale; the frame,
+/// larger, shows more of the world round it.
+pub fn fill_moved(fill: &render::ui::Fill) -> [f32; 2] {
+    let [v0, v1, v2, v3] = VIEW;
+    let mid = [(v0 + v2) / 2.0, (v1 + v3) / 2.0];
+    let to = fill.apply(mid);
+    [to[0] - mid[0], to[1] - mid[1]]
+}
+
+/// Fill's black: four rectangles round `view` (x0, y0, x1, y1, where the
+/// world shows) reaching past any window's sides, top and bottom.
+pub fn fill_mask(view: [f32; 4]) -> [[f32; 4]; 4] {
+    let (far, [v0, v1, v2, v3]) = (4000.0, view);
+    [[-far, -far, 640.0 + far, v1], [-far, v3, 640.0 + far, 448.0 + far], [-far, v1, v0, v3], [v2, v1, 640.0 + far, v3]]
+}
+
 /// The start menu's bottom rails' line: the middle frame's bottom edge and
 /// the side panels' rails (atlas 40, 18 rows, its studs 41 and corners 39).
 pub const BOTTOM_RAIL: i32 = 313;
@@ -769,6 +809,14 @@ pub const BOTTOM_RAIL: i32 = 313;
 /// at its bar, the world under it (F3 20261023-084953, the user: "cut off
 /// the rest under the bottom horizontal frame, it will look better").
 pub const RAIL_BAR: i32 = 12;
+
+/// Under Fill, the band's art (`band`) from the bottom rail's bar to the
+/// frame's bottom, scaled with the menu: the window's bottom past the menu
+/// green as the menu's top is (the user, 2026-10-29).
+pub fn fill_band(vui: &Vui, r: &mut dyn Raster) {
+    let y = BOTTOM_RAIL + RAIL_BAR;
+    vui.blit_rect(r, 32, [-1, y], [642, 449 - y], 0, 1.0);
+}
 
 /// The start menu's band (`OnDrawSelf`'s first piece): atlas entry 32 over
 /// the frame's top 48 lines, from x -1 to 641, behind its title. The spell
@@ -985,6 +1033,38 @@ mod tests {
     use super::*;
     use crate::client_image::Menu;
 
+    /// Under Fill the world's picture moves the game's view of it to the
+    /// middle frame's middle as scaled. The control: no scale, no move.
+    #[test]
+    fn fill_moves_the_worlds_view_to_the_frames_middle() {
+        let fill = render::ui::Fill { k: 1.5, at: [-100.0, 0.0] };
+        let [v0, v1, v2, v3] = VIEW;
+        let (a, b) = (fill.apply([v0, v1]), fill.apply([v2, v3]));
+        let mid = [(v0 + v2) / 2.0, (v1 + v3) / 2.0];
+        let moved = fill_moved(&fill);
+        assert_eq!([mid[0] + moved[0], mid[1] + moved[1]], [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0]);
+        assert_eq!(fill_moved(&render::ui::Fill { k: 1.0, at: [0.0, 0.0] }), [0.0, 0.0], "the control");
+    }
+
+    /// Fill's black covers every point of a window outside the world's view
+    /// (here `VIEW`, the game's middle frame), past a 21:9 window's sides and a
+    /// tall one's top and bottom, and none inside it; the control: a point
+    /// just inside the view's edge is left open, one just outside covered.
+    #[test]
+    fn fill_blacks_out_all_but_the_worlds_view() {
+        let mask = fill_mask(VIEW);
+        let covered = |p: [f32; 2]| mask.iter().any(|m| p[0] >= m[0] && p[0] < m[2] && p[1] >= m[1] && p[1] < m[3]);
+        let [v0, v1, v2, v3] = VIEW;
+        assert!(!covered([(v0 + v2) / 2.0, (v1 + v3) / 2.0]), "the view's middle");
+        assert!(!covered([v0 + 0.5, v1 + 0.5]) && !covered([v2 - 0.5, v3 - 0.5]), "its corners");
+        for p in [[v0 - 0.5, v1 + 1.0], [v2 + 0.5, v1 + 1.0], [v0 + 1.0, v1 - 0.5], [v0 + 1.0, v3 + 0.5]] {
+            assert!(covered(p), "just outside: {p:?}");
+        }
+        for p in [[-600.0, 10.0], [1240.0, 400.0], [320.0, -300.0], [320.0, 700.0], [-600.0, -300.0], [100.0, 200.0], [600.0, 200.0]] {
+            assert!(covered(p), "{p:?}");
+        }
+    }
+
     /// `VIKeyFlash::Pulse`: at once, then after 15 frames, then 8, 7, ...
     /// down to every frame; nothing once released.
     #[test]
@@ -1038,6 +1118,23 @@ mod tests {
         fn anchor(&mut self, a: Anchor) {
             self.1 = a;
         }
+    }
+
+    /// `draw_held` draws the menu put away this frame as it was shown (the
+    /// same pieces), then leaves it put away. The control: `draw` of the put
+    /// away menu draws nothing.
+    #[test]
+    fn a_held_menu_is_drawn_as_it_was_and_stays_put_away() {
+        let vui = posts::vui();
+        let (mut sm, menus, shown) = drawn_with(&vui, 0);
+        (sm.visible, sm.main.visible) = (false, false);
+        let mut r = Wide(0, Anchor::Middle, Vec::new());
+        sm.draw(&vui, &mut r, &menus, 32, &Stats::default(), &mut Vec::new());
+        assert!(r.2.is_empty(), "the control: put away, nothing");
+        let mut held = Wide(0, Anchor::Middle, Vec::new());
+        sm.draw_held(&vui, &mut held, &menus, 32, &Stats::default(), &mut Vec::new());
+        assert_eq!(held.2.len(), shown.2.len(), "as it was shown");
+        assert!(!sm.visible && !sm.main.visible, "and put away again");
     }
 
     /// The start menu in a window `side` wider each side: open, drawn once.

@@ -48,7 +48,9 @@
 //!   it, `render::ui::TextFilter`) and HUD (Nearest, the game's and the
 //!   default; or Sharp: the 2D layer's other textures scaled with every texel
 //!   as wide as every other, as Text's Sharp draws a font, at a cost,
-//!   `render::ui::HudFilter`);
+//!   `render::ui::HudFilter`) and Menus (Game, the game's 4:3 start menu and
+//!   the default; or Fill: scaled up to fill the window, the HUD hidden and
+//!   black round it, `render::ui::Fill`);
 //! - Controller: Controller Focus (which controllers this window reads:
 //!   Auto, Window, Pad 1 to 4 or Off, `input::pick`, kept for each window of
 //!   the client open, `multibox`; what it reads now is said beside Back) and
@@ -624,6 +626,9 @@ impl WndOptions {
                     // HUD: every texture of the 2D layer but the fonts from
                     // the next frame (`viewer`, `render::ui::set_hud_filter`)
                     40 => c.hud = c.hud.other(),
+                    // Menus: the start menu from the next frame (`play`,
+                    // `render::ui::Fill`)
+                    47 => c.menus_fill = !c.menus_fill,
                     // Mipmaps: every texture's levels from the next frame
                     // (`viewer`, `render::set_mipmaps`)
                     35 => c.mipmaps = !c.mipmaps,
@@ -1069,7 +1074,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 28] = [
+const EXTENDED_ITEMS: [(i32, &str); 29] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1098,6 +1103,7 @@ const EXTENDED_ITEMS: [(i32, &str); 28] = [
     (39, "Render Scale"),
     (40, "HUD"),
     (46, "Shadows"),
+    (47, "Menus"),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1129,7 +1135,7 @@ struct Category {
 const CATEGORIES: [Category; 7] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale },
     Category { name: "World", items: &[20, 35, 36, 37, 46, 25], note: Note::None },
-    Category { name: "UI", items: &[22, 29, 30, 40], note: Note::None },
+    Category { name: "UI", items: &[22, 29, 30, 40, 47], note: Note::None },
     Category { name: "Controller", items: &[16, 19], note: Note::Reads },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
     Category { name: "Characters", items: &[12, 23, 24, 27, 34], note: Note::Server },
@@ -1221,6 +1227,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         46 => on_off(c.shadows),
         38 => wide(if c.loading_longer { "Longer" } else { "Instant" }),
         39 => wide(&format!("x{}", c.render_scale)),
+        47 => wide(if c.menus_fill { "Fill" } else { "Game" }),
         40 => wide(match c.hud {
             render::ui::HudFilter::Nearest => "Nearest",
             render::ui::HudFilter::Sharp => "Sharp",
@@ -1582,7 +1589,7 @@ mod tests {
         assert_eq!((w.row, cues.last()), (5, Some(&9)), "World's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!((w.page, w.cat, w.cat_sel, w.item), (3, None, 1, -1), "back to the categories, World still lit");
-        // UI: Ability Bars, Update Notices, Text, HUD
+        // UI: Ability Bars, Update Notices, Text, HUD, Menus
         press(&mut w, &mut o, key::DOWN, &mut cues);
         press(&mut w, &mut o, key::CROSS, &mut cues);
         assert_eq!((w.cat, w.item), (Some(2), 22), "UI, Ability Bars");
@@ -1617,7 +1624,14 @@ mod tests {
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert_eq!(settings::client().hud, render::ui::HudFilter::Nearest, "and back: two values");
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (3, Some(&9)), "UI's last row");
+        assert_eq!(w.item, 47, "Menus");
+        assert_eq!((settings::client().menus_fill, value_text(&vui, 47)), (false, Some(wide("Game"))), "Game, the game's and the default");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::client().menus_fill, value_text(&vui, 47), cues.last()), (true, Some(wide("Fill")), Some(&11)), "Fill");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(!settings::client().menus_fill, "and back: two values");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (4, Some(&9)), "UI's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         // Controller: Controller Focus, Capture Controller
         press(&mut w, &mut o, key::DOWN, &mut cues);

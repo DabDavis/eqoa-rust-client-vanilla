@@ -39,12 +39,24 @@ or a browser (each described where it lives below):
   screen, as F11 and Alt+Enter toggle it; Brightness, Frame Rate, VSync, Render
   Scale: x1, x2 or x4, Loading Screens: Longer or Instant), World (Fog, Mipmaps,
   Flora, Environment, Art), UI (Ability Bars, Update Notices, Text: Sharp or
-  Smooth, HUD: Nearest or Sharp), Controller (Controller
+  Smooth, HUD: Nearest or Sharp, Menus: Game or Fill), Controller (Controller
   Focus, Capture Controller), Camera (Distance, Turn Speed, Screen Shake),
   Characters (Level of Detail, NPC/PC Display and Distance, Name Distance,
   Overlapping Names) and Sound (Sound in Background, Output Device: the system's
   default, followed when it changes, or a device by its name), and the rows
   below.
+- **Menus: Fill** (off unless chosen; Game, the game's 4:3 start menu, by
+  default): the start menu, and the inventory over it, scaled up as far as the
+  window takes (its top at the window's top, in the middle across), the HUD
+  hidden while it is up, the band's green under it and black past it; the world
+  shows through the whole of its middle frame at the game's scale, the picture
+  moved so the game's view of the character is in the frame's middle
+  (`render::ui::Fill`, `walker::set_shift`). The windows the start menu opens
+  (the spell book, the recipes, Summary, the quest log, class mastery, the
+  factions, the buddy, guild, ignore and who lists, the options, mail, Support,
+  the auction and group searches; `Play::fills_window`) are scaled to fill it
+  too, measured off what each draws, in the middle, over the game's own green
+  backdrop (`Ui::fill_drawn`).
 - **A render scale and a sharp HUD**: Render Scale (off unless chosen) x2 or
   x4 draws the whole picture, the world and everything over it, two or
   four times the window's size each way and averages it down, which smooths

@@ -430,6 +430,13 @@ pub struct Play {
     /// frame, and keys for whichever is up.
     buddies: crate::social::Buddies,
     buddy_wnd: crate::social::BuddyList,
+    /// Extended's Menus: Fill as the HUD last drew it (`render::ui::Fill`):
+    /// the start menu's scale and place, which a pointer's point is undone
+    /// through; None while the game's 4:3 start menu, or none, is up.
+    fill_shown: Option<render::ui::Fill>,
+    /// The last of the game's frames kept the one before it (`hud`: a
+    /// window's Fill frame that drew nothing), which the next does not.
+    fill_held: bool,
     ignore: crate::social::Ignore,
     ignore_wnd: crate::social::IgnoreList,
     panel_open: bool,
@@ -2064,7 +2071,7 @@ impl Play {
         crate::live::set_features(Default::default());
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, send_interval: 100, entity_updates: (0, 0), puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, send_interval: 100, entity_updates: (0, 0), puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), fill_shown: None, fill_held: false };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -4001,6 +4008,9 @@ impl Play {
         self.keyboard = !finger;
         let (Click::Target(x, y) | Click::Interact(x, y) | Click::Right(x, y)) = c;
         let f = render::ui::frame_from_window(size, [x as f32, y as f32]);
+        // the start menu or a window filling the window (`fill_shown`): the
+        // frame point drawn there
+        let f = self.fill_shown.map_or(f, |fill| fill.undo(f));
         // in play; a server's player search over it is a window
         if self.mode == 0 && !self.search.open {
             // Hide UI (`hideui`): none of the HUD's buttons is there to press
@@ -7092,6 +7102,17 @@ impl Play {
     }
 
     /// The modes whose window takes the start menu's keys.
+    /// A window the start menu opens, which Extended's Menus: Fill scales to
+    /// fill the window: the spell book (5), the recipes and the experiment (6,
+    /// 37), the trainer's Summary (12), the quest log (22), class mastery (40),
+    /// the factions (41), the buddy list and its request (17, 18), the guild
+    /// (20, 21), the ignore list (26), the options (34), the mail's compose and
+    /// inbox (23, 24), Support's (31, 32), the who list (35), the auction
+    /// search (39) and the group search (42).
+    pub fn fills_window(&self) -> bool {
+        matches!(self.mode, 5 | 6 | 12 | 17 | 18 | 20 | 21 | 22 | 23 | 24 | 26 | 31 | 32 | 34 | 35 | 37 | 39 | 40 | 41 | 42)
+    }
+
     pub fn panel_up(&self) -> bool {
         matches!(self.mode, 17 | 18 | 20 | 21 | 26 | 34)
     }
@@ -7258,8 +7279,20 @@ impl Play {
         // the loading screen up or down since the quads kept: made again now
         if step || self.loading.kept != self.loading.up() {
             self.loading.kept = self.loading.up();
+            let was = (self.fill_shown, crate::walker::shift());
             self.draw_hud(ui, walker, time_ms, view_proj, size);
-            ui.keep();
+            // Menus: Fill: a window's frame that drew nothing (the one a
+            // window closes on, the start menu shown on the next) keeps the
+            // last frame's picture, once, so nothing bare comes between them
+            if ui.fill_drawn && ui.fill.is_none() && !self.fill_held {
+                self.fill_held = true;
+                (self.fill_shown, _) = was;
+                crate::walker::set_shift(was.1);
+                ui.again();
+            } else {
+                self.fill_held = false;
+                ui.keep();
+            }
         } else {
             ui.again();
         }
@@ -7274,6 +7307,9 @@ impl Play {
     /// frames).
     fn draw_hud(&mut self, ui: &mut render::ui::Ui, walker: &Walker, time_ms: i64, view_proj: glam::Mat4, size: (u32, u32)) {
         ui.begin(size);
+        // Menus: Fill's, set again below while the start menu fills the window
+        self.fill_shown = None;
+        crate::walker::set_shift(None);
         // LoadingProgress in place of the game's frame: no HUD, no windows
         if self.loading.up() {
             let hud = self.hud.as_ref();
@@ -7371,6 +7407,54 @@ impl Play {
                 Some(crate::damage::Target { pos: e.actor_pos, slot4: puppets.get(k).and_then(|p| p.as_ref()).and_then(|p| p.slot4_at) })
             });
             let mut r = assets.raster(ui);
+            // the start menu's keys and its showing (it draws nothing here),
+            // before anything is drawn: a menu shown or put away this frame
+            // is drawn, or not, with Menus: Fill's scale on this same frame
+            let was_up = self.mode == 13 && self.start.as_ref().is_some_and(|s| s.menu.visible);
+            actions = self.run_start_menu(vui, &mut r, &start_loc);
+            // under Menus: Fill, an entry chosen this frame (its window comes
+            // on the next, with the mode): the menu drawn as it was, filled,
+            // on this one, so no frame of the HUD comes between them
+            let handoff = was_up && crate::settings::client().menus_fill && actions.iter().any(|a| a.0 != 0);
+            // Extended's Menus: Fill: the start menu (and the inventory over
+            // it) scaled up to fill the window, the HUD not drawn; the world
+            // through its whole middle frame as scaled, the picture (at the
+            // game's scale) moved so the game's view of it is in the frame's
+            // middle; black past the frame, and the band's green under the
+            // menu as along its top
+            if crate::settings::client().menus_fill
+                && self.mode == 13
+                && (handoff || self.start.as_ref().is_some_and(|s| s.menu.visible))
+                && let Some(fill) = render::ui::Fill::fit(size, crate::startmenu::FILL_AREA)
+            {
+                let [v0, v1, v2, v3] = crate::startmenu::VIEW;
+                let (a, b) = (fill.apply([v0, v1]), fill.apply([v2, v3]));
+                let frame = [a[0], a[1], b[0], b[1]];
+                let moved = crate::startmenu::fill_moved(&fill);
+                if let Some(tex) = assets.white {
+                    for [x0, y0, x1, y1] in crate::startmenu::fill_mask(frame) {
+                        r.ui.push_whole(render::ui::Quad { tex, blend: 3, pos: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], uv: [[0.5, 0.5]; 4], color: [0.0, 0.0, 0.0, 1.0], clip: None });
+                    }
+                }
+                // the picture moved by `moved` frame pixels: in the window's
+                // own, then as a share of its half-size (y up)
+                let k = render::ui::window_from_frame(size, [1.0, 1.0]);
+                let o = render::ui::window_from_frame(size, [0.0, 0.0]);
+                let px = [moved[0] * (k[0] - o[0]), moved[1] * (k[1] - o[1])];
+                crate::walker::set_shift(Some([px[0] * 2.0 / size.0 as f32, -px[1] * 2.0 / size.1 as f32]));
+                r.ui.fill = Some(fill);
+                self.fill_shown = Some(fill);
+                crate::startmenu::fill_band(vui, &mut r);
+            } else if crate::settings::client().menus_fill && self.fills_window() {
+                // a window the start menu opens: the game's backdrop (the
+                // band's green, `ui::window_backdrop`'s art) over the whole
+                // window, and the window scaled to fill it, measured off what
+                // it draws (`render::ui::Ui::fill_drawn`)
+                let anchor = std::mem::replace(&mut r.ui.anchor, Anchor::Wide);
+                vui.blit_rect(&mut r, 32, [-4000, -4000], [8640, 8448], 0, 1.0);
+                r.ui.anchor = anchor;
+                r.ui.fill_drawn = true;
+            }
             // A window wider than 4:3 has the HUD at its sides (`Anchor`):
             // the frame, the gauges, the group, the effects and the target's
             // bar at the left (`Hud::draw`); the chat box, the quick menus,
@@ -7443,7 +7527,6 @@ impl Play {
                 self.mbox.draw(vui, &mut r, now as i64);
             }
             quick_outs = self.run_quick(vui, &mut r);
-            actions = self.run_start_menu(vui, &mut r, &start_loc);
             self.run_who(vui, &mut r);
             self.run_quests(vui, &mut r);
             self.run_craft(vui, &mut r);
@@ -7486,7 +7569,13 @@ impl Play {
             self.slot_unanswered();
             if let Some(s) = self.start.as_mut() {
                 let mut cues = Vec::new();
-                s.menu.draw(vui, &mut r, &s.menus, now as i64, &start_stats, &mut cues);
+                // the frame an entry is chosen under Fill (`handoff`): drawn as
+                // it was, its bars too, then put away again
+                if handoff {
+                    s.menu.draw_held(vui, &mut r, &s.menus, now as i64, &start_stats, &mut cues);
+                } else {
+                    s.menu.draw(vui, &mut r, &s.menus, now as i64, &start_stats, &mut cues);
+                }
                 if s.menu.visible && self.items.visible {
                     let pl = &self.dump.player;
                     let info = crate::infotext::Info {
@@ -7571,6 +7660,9 @@ impl Play {
                 r.ui.push_whole(render::ui::Quad { tex, blend: 3, pos: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], uv: [[0.5, 0.5]; 4], color: [0.0, 0.0, 0.0, a], clip: None });
             }
             r.ui.end();
+            if r.ui.fill_drawn {
+                self.fill_shown = r.ui.fill;
+            }
             self.hud = Some((vui_o, assets, hud_o));
         }
         self.start_actions(actions);
