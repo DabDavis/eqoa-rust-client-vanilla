@@ -336,8 +336,29 @@ impl CsClient {
     }
 }
 
+/// A failure's text: word 865 and the code, `"%S. (%S: %i)"` in 512 bytes;
+/// for -8, as SOE's final live client has it (its three CS windows,
+/// `VIWndCSInbox::OnDrawSelf` 0x0133FB8C and the request's and reader's
+/// alike), a new line and 1888: the petition has been addressed.
+fn error_text(vui: &Vui, state: i32) -> Vec<u16> {
+    let mut s = format!("{}. ({}: {})", word(vui, 865), word(vui, 819), state);
+    if state == -8 {
+        s.push('\n');
+        s.push_str(&crate::livewords::word(&vui.words, 1888, vui.language));
+    }
+    wide(&s).into_iter().take(255).collect()
+}
+
+/// The inbox's first column header as SOE's final live client has it
+/// (0x0133F354): `"%S"` and its word 841, "Ticket #", which reads the same
+/// as the disc's `"%S #"` and "Ticket" did; with a table of its own 841 the
+/// table's.
+fn ticket_header(vui: &Vui) -> String {
+    crate::livewords::live(&vui.words, 841, vui.language)
+}
+
 /// The status window over a CS window: while it waits, the line with its
-/// dots (title 271); a failure, word 865 and the code (title 1012).
+/// dots (title 271); a failure, `error_text` (title 1012).
 fn draw_status(vui: &Vui, r: &mut dyn Raster, status: &mut Window, state: i32, line: Option<Vec<u16>>) {
     let back = wide(&format!("|t{}", word(vui, 161)));
     let black = UI_COLORS[0];
@@ -350,7 +371,7 @@ fn draw_status(vui: &Vui, r: &mut dyn Raster, status: &mut Window, state: i32, l
             status.text_box(vui, r, &back, 40, 3, w - 60, 1, black, 0);
         }
         None => {
-            let s = wide(&format!("{}. ({}: {})", word(vui, 865), word(vui, 819), state));
+            let s = error_text(vui, state);
             status.set_title(Some(&wide(&word(vui, 1012))));
             status.draw(vui, r);
             let w = status.size[0];
@@ -1456,7 +1477,9 @@ impl Inbox {
         let w = self.window.size[0];
         let x = [58, w - 340];
         let c0 = UI_COLORS[0];
-        self.window.text(vui, r, &wide(&format!("{} #", word(vui, 841))), if self.column != 0 { x[0] } else { x[0] - 12 }, 0, c0, 0);
+        // the live client's header (0x0133F354): "%S" and its 841, "Ticket #"
+        // (the disc's was "%S #" and "Ticket")
+        self.window.text(vui, r, &wide(&ticket_header(vui)), if self.column != 0 { x[0] } else { x[0] - 12 }, 0, c0, 0);
         self.window.text(vui, r, &wide(&word(vui, 842)), if self.column != 1 { x[1] } else { x[1] - 12 }, 0, c0, 0);
         let n = cs.count;
         if self.sel > n - 1 {
@@ -1781,5 +1804,27 @@ mod tests {
         assert_eq!(ib.point(text), vec![key::CROSS], "a reply starts on its text");
         assert_eq!(ib.point(submit), vec![MOVED]);
         assert_eq!(ib.read.request.sel, 3);
+    }
+
+    /// The live -8 (`VIWndCSInbox::OnDrawSelf` 0x0133FB8C and its two
+    /// siblings): the code's line, a new line, then 1888, the petition has
+    /// been addressed (the table here lacks the row: `livewords`'). The
+    /// control: any other failure is the disc's line alone. The inbox's
+    /// header reads "Ticket #" off the disc's 841, "Ticket", and a table's
+    /// own 841 as it is.
+    #[test]
+    fn an_addressed_petition_says_so() {
+        let mut lines: Vec<String> = (1..=1814).map(|i| format!("w{i}")).collect();
+        lines[818] = "Code".into();
+        lines[840] = "Ticket".into();
+        lines[864] = "System is temporarily unavailable".into();
+        let table = |lines: &[String]| Vui::new(vi::strtab::StringTable::parse(lines.join("\r\n").as_bytes()).unwrap(), Default::default(), Vec::new());
+        let vui = table(&lines);
+        assert_eq!(String::from_utf16_lossy(&error_text(&vui, -3)), "System is temporarily unavailable. (Code: -3)");
+        let s = String::from_utf16_lossy(&error_text(&vui, -8));
+        assert_eq!(s, format!("System is temporarily unavailable. (Code: -8)\n{}", crate::livewords::text(1888).unwrap()));
+        assert_eq!(ticket_header(&vui), "Ticket #");
+        lines[840] = "Petition".into();
+        assert_eq!(ticket_header(&table(&lines)), "Petition", "a table's own word");
     }
 }

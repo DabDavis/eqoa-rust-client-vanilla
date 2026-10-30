@@ -414,17 +414,22 @@ impl Merchant {
         }
     }
 
-    /// `Sell(i, n)`: something worn (930), quick-slotted (931) or no-trade
-    /// (932) asks first.
+    /// `Sell(i, n)` as SOE's final live client has it (0x013858A0):
+    /// something worn (930), quick-slotted (931) or no-trade (932) asks
+    /// first, as on the disc, and so does anything but a misc item (loot:
+    /// `IsMisc`), with 1842, 'Sell item "<name>"?'; a misc item sells at
+    /// once. The box starts on No.
     fn sell(&mut self, view: &View, i: i32, n: i32, now: i64, out: &mut Vec<MerchantOut>) {
         let Some(it) = view.info.inv.items.get(i as usize) else { return };
-        let w = |id: i32| view.info.words.get(id, 0).to_string();
+        let w = |id: i32| crate::livewords::word(view.info.words, id, 0);
         let warn = if it.equip_slot != -1 {
             Some(w(930).replacen("%S", &it.item.name, 1).replacen("%s", &it.item.name, 1))
         } else if it.quick_slot >= 0 {
             Some(w(931).replacen("%S", &it.item.name, 1).replacen("%s", &it.item.name, 1))
         } else if it.item.no_trade > 0 {
             Some(w(932))
+        } else if !crate::infotext::is_misc(it) {
+            Some(w(1842).replacen("%S", &it.item.name, 1).replacen("%s", &it.item.name, 1))
         } else {
             None
         };
@@ -678,6 +683,63 @@ mod tests {
         let rest: Vec<_> = wide.2.iter().filter(|b| !added.contains(b)).copied().collect();
         assert_eq!(rest, tv.2);
         assert!(rest.iter().any(|b| b.0 == Middle), "the list and its text are drawn with the frame");
+    }
+
+    /// Selling asks as SOE's final live client does (`Sell`, 0x013858A0):
+    /// anything but a misc item with 1842 and its name (the table here
+    /// lacks the row, so it is `livewords`'), a worn one with the disc's
+    /// 930, each in the Yes/No box starting on No: No keeps it, Yes sells
+    /// it. The control: a misc item (loot) sells at once, as on the disc.
+    #[test]
+    fn selling_asks_for_all_but_loot() {
+        use crate::pointer::testing::NullRaster;
+        let mut lines = vec![String::new(); 932];
+        lines[929] = "Sell equipped item \"%S\"?".into();
+        let words = vi::strtab::StringTable::parse(lines.join("\n").as_bytes()).unwrap();
+        let vui = Vui::new(words, Default::default(), Vec::new());
+        let mut r = NullRaster;
+        let named = |name: &str, f: fn(&mut NetItem)| {
+            let mut it = item(10, 0, 0);
+            it.item.name = name.into();
+            it.item.wear_slot = -1;
+            f(&mut it);
+            it
+        };
+        let inv = ItemList {
+            p04: 0,
+            items: vec![
+                named("Bone Chips", |_| {}),
+                named("Rusty Dagger", |x| x.item.wear_slot = 12),
+                named("Healing Potion", |x| x.item.p4c = 2),
+                named("Fine Sword", |x| x.equip_slot = 2),
+            ],
+        };
+        assert!(crate::infotext::is_misc(&inv.items[0]) && !crate::infotext::is_misc(&inv.items[1]) && !crate::infotext::is_misc(&inv.items[2]));
+        let shop = Shop { id: Some(7), sell_rate: 100, buy_rate: 100, wares: ItemList::default(), greeting: wide("Hello"), pending: false };
+        let base = [0; 29];
+        let info = Info { words: &vui.words, inv: &inv, hp: [0; 4], base: &base, class: 0, level: 1, attack_words: &[] };
+        let (can_use, icon) = (|_: &NetItem| true, |_: &NetItem| 1);
+        let view = View { info: &info, shop: &shop, coin: 0, can_use: &can_use, inv_icon: &icon };
+        let mut cues = Vec::new();
+        let mut m = Merchant::default();
+        m.open(&vui, &mut r, &wide("Hello"));
+        for (i, text) in [(1, "Sell item \"Rusty Dagger\"?"), (2, "Sell item \"Healing Potion\"?"), (3, "Sell equipped item \"Fine Sword\"?")] {
+            let mut out = Vec::new();
+            m.sell(&view, i, 1, 0, &mut out);
+            assert!(out.is_empty() && m.focus == Focus::MBox, "item {i}: the box first");
+            assert_eq!(String::from_utf16_lossy(&m.mbox.text), text);
+            m.key(&vui, &mut r, &view, 134, true, &mut cues, &mut out);
+            assert!(out.is_empty() && m.focus == Focus::List, "item {i}: No keeps it");
+            m.sell(&view, i, 1, 0, &mut out);
+            for k in [136, 134] {
+                m.key(&vui, &mut r, &view, k, true, &mut cues, &mut out);
+            }
+            assert_eq!(out, [MerchantOut::Sell(i, 1)], "item {i}: Yes sells it");
+        }
+        let mut out = Vec::new();
+        m.sell(&view, 0, 1, 0, &mut out);
+        assert_eq!(out, [MerchantOut::Sell(0, 1)], "loot: at once");
+        assert_eq!(m.focus, Focus::List);
     }
 
     /// The menu's Sell is chosen at once by a click; then the list takes

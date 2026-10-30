@@ -305,7 +305,8 @@ pub enum TradeOut {
 /// `VIWndDeposit`: a money amount, nine digits, the one under the cursor
 /// changed with up and down (repeating) and moved with left and right.
 /// Mode 3 is the trade's (word 473, the coin carried); 1 and 2 are the
-/// bank's.
+/// bank's; 4 is a duel's wager (the live client's, `duelwnd`: word 1867,
+/// the coin carried, taken as mode 3 takes it).
 #[derive(Default)]
 pub struct Deposit {
     pub cursor: i32,
@@ -381,11 +382,16 @@ impl Deposit {
     /// The trade's `Select` on the money: carried and banked set, the
     /// digits cleared, the cursor on the last, mode 3, and the focus (295).
     pub fn open(&mut self, vui: &Vui, r: &dyn Raster, carried: i32, banked: i32) {
+        self.open_mode(vui, r, carried, banked, 3);
+    }
+
+    /// `open` in `mode` (the duel's wager's is 4, `Setup(4)`).
+    pub fn open_mode(&mut self, vui: &Vui, r: &dyn Raster, carried: i32, banked: i32, mode: i32) {
         self.carried = carried;
         self.banked = banked;
         self.digits = [0; 9];
         self.cursor = 8;
-        self.setup(3);
+        self.setup(mode);
         self.visible = true;
         self.window.init(vui, r, [320, 224], 300, 7, 1);
         self.window.close(true);
@@ -456,7 +462,7 @@ impl Deposit {
                     Some(DepositUp::Bank(0, v))
                 } else if self.mode == 2 && v <= self.banked {
                     Some(DepositUp::Bank(1, v))
-                } else if self.mode == 3 && v <= self.carried {
+                } else if (self.mode == 3 || self.mode == 4) && v <= self.carried {
                     cues.push(13);
                     Some(DepositUp::Value(v))
                 } else {
@@ -493,10 +499,11 @@ impl Deposit {
             1 => 351,
             2 => 352,
             3 => 473,
+            4 => 1867,
             _ => -1,
         };
         if title >= 0 {
-            let s = word(title);
+            let s = wide(&crate::duel::word(&vui.words, title, vui.language));
             let w = vui.string_width(r, &s) + 20;
             self.window.text_box(vui, r, &s, 20, 1, w, 1, white, 0);
         }
@@ -518,7 +525,7 @@ impl Deposit {
             x += w;
         }
         let mut buf = Vec::new();
-        if self.mode == 1 || self.mode == 3 {
+        if self.mode == 1 || self.mode == 3 || self.mode == 4 {
             let s = word(479);
             let sw = vui.string_width(r, &s) + 20;
             self.window.text_box(vui, r, &s, 20, 4, sw, 1, white, 0);
@@ -1196,6 +1203,26 @@ mod tests {
         d.digits = [0; 9];
         assert_eq!(d.key(134, true, 0, &mut cues), Some(DepositUp::Cancel), "nothing: cancelled, sound 3");
         assert_eq!(cues, vec![13, 3]);
+    }
+
+    /// The duel's wager (`duelwnd`) takes the deposit in mode 4, the live
+    /// client's: the purse its limit (as modes 1 and 3), OK as mode 3's (sound
+    /// 13, the value), past the purse nothing. The control: mode 2 (the
+    /// bank's withdrawal) is measured by the banked sum.
+    #[test]
+    fn the_wager_takes_the_deposit_in_mode_four() {
+        let mut d = Deposit { carried: 300, banked: 5, ..Default::default() };
+        d.setup(4);
+        assert_eq!(d.width, 3, "three digits for 300");
+        d.digits[6] = 2;
+        let mut cues = Vec::new();
+        assert_eq!(d.key(134, true, 0, &mut cues), Some(DepositUp::Value(200)));
+        d.digits[6] = 4;
+        assert_eq!(d.key(134, true, 0, &mut cues), None, "more than the purse");
+        assert_eq!(cues, vec![13]);
+        let mut b = Deposit { carried: 300, banked: 5, ..Default::default() };
+        b.setup(2);
+        assert_eq!(b.width, 1, "the control: the bank's limit");
     }
 
     /// On the list with the focus a click selects a row and a second uses

@@ -27,6 +27,12 @@ use vi::ui::{Raster, UI_COLORS, Vui, Window, wide};
 /// `sCategoryWords`: the five categories' names.
 const CATEGORY_WORDS: [i32; 5] = [1653, 1654, 1655, 511, 1656];
 
+/// The category that is a Master Class (word 1656), as the disc's records
+/// say it. SOE's final live client's records carry a flag of their own for
+/// it (`VICMSkill`/`VICMNode` +0x10, the category moved to +0x11); the
+/// servers here send the disc's records.
+pub const MASTER_CLASS: u8 = 4;
+
 /// `DrawFrame(x, row, width, 1, 0x20)`'s frame and its two side arrows, for
 /// a pointer: the left half is the left key, the right half the right key
 /// (the arrows' sides; `pointer::Hits` ids are the keys).
@@ -64,6 +70,11 @@ pub struct Skill {
 }
 
 impl Skill {
+    /// A Master Class (the live client's `VICMSkill` +0x10).
+    pub fn master_class(&self) -> bool {
+        self.category == MASTER_CLASS
+    }
+
     /// `VICMSkill::Read`.
     fn read(r: &mut Reader) -> Skill {
         Skill {
@@ -271,6 +282,30 @@ impl Part {
                     return Some(PartUp::Node);
                 }
             }
+            // SOE's final live client's reset (0x012F7348, a sub-op the
+            // disc's table has no entry for): the token, the points available
+            // and spent, the skills taken away (a `VIPool<int>`, a zigzag
+            // count and zigzag ids) made not owned, the run speed, the stats,
+            // bonuses and flags; no text. go-eqoa-server resets with the
+            // disc's 6 and 3 instead, which every client reads
+            10 => {
+                self.m.p41c = r.u32();
+                self.m.x0c = r.u32() as i32 as i64;
+                self.m.x10 = r.u32() as i32 as i64;
+                let n = r.signed();
+                let ids: Vec<i32> = (0..n.clamp(0, 4096)).map(|_| r.signed() as i32).collect();
+                self.m.speed = r.f32();
+                self.read_stats(&mut r);
+                self.read_bonuses(&mut r);
+                self.read_flags(&mut r);
+                for id in ids {
+                    if let Some(k) = self.find(id) {
+                        self.skills[k].on = false;
+                    }
+                }
+                self.pending = 0;
+                return Some(PartUp::Speed(self.m.speed));
+            }
             _ => {}
         }
         None
@@ -361,6 +396,8 @@ pub enum CmUp {
     Close,
     /// a 0x1401 request
     Send(Vec<u8>),
+    /// `AddText(T(word), (1, .25, .25, 1))`: a refusal, red in the chat
+    Warn(i32),
 }
 
 /// The page kinds of the inspector (0 text, 1 stats, 2 adds, 3 removes)
@@ -760,7 +797,15 @@ impl ClassMastery {
                             self.message.setup(vui, r, &w(1665), &w(1666), PROMPT_YESNO, center, 300);
                             cues.push(15);
                         } else if node.x05 != 0 {
-                            let text = if node.x10 == 4 { wide(&format!("{} {}", vui.words.get(1807, vui.language), vui.words.get(1664, vui.language))) } else { w(1664) };
+                            // SOE's final live client's rule (OnKeyDown,
+                            // 0x01338978): a Master Class while another is
+                            // owned is refused, word 1840 red in the chat, with
+                            // no box, no sound and nothing sent. The disc's
+                            // only warned (1807, as the box below still does)
+                            if node.x10 == MASTER_CLASS && part.skills.iter().any(|s| s.master_class() && s.on) {
+                                return Some(CmUp::Warn(1840));
+                            }
+                            let text = if node.x10 == MASTER_CLASS { wide(&format!("{} {}", vui.words.get(1807, vui.language), vui.words.get(1664, vui.language))) } else { w(1664) };
                             self.message.setup(vui, r, &w(1663), &text, PROMPT_YESNO, center, 350);
                             cues.push(15);
                         }
@@ -1033,6 +1078,31 @@ mod tests {
         assert_eq!(p.recv(&[4, 1, 0, 0, 0]), None);
     }
 
+    /// The live reset (sub-op 10, 0x012F7348): the token, the points (no
+    /// notice), each listed skill off, the run speed for `SetSpeed`, the
+    /// stats; the request no longer waited for. The control: a skill not
+    /// listed stays owned.
+    #[test]
+    fn the_live_reset_takes_the_listed_skills_away() {
+        let mut p = Part::default();
+        for (id, on) in [(7, true), (8, true), (9, true)] {
+            p.skills.push(Skill { id, on, ..Default::default() });
+        }
+        p.pending = 2;
+        let mut w = Writer::default();
+        w.u8(10).u32(0x66).u32(12).u32(0);
+        w.signed(2).signed(7).signed(9);
+        w.u32(0x410D5555);
+        for v in 0..36 {
+            w.signed(v);
+        }
+        w.u32(0);
+        assert_eq!(p.recv(&w.data), Some(PartUp::Speed(f32::from_bits(0x410D5555))));
+        assert_eq!((p.m.p41c, p.m.x0c, p.m.x10, p.pending), (0x66, 12, 0, 0));
+        assert_eq!(p.skills.iter().map(|s| s.on).collect::<Vec<_>>(), [false, true, false], "7 and 9 taken away, 8 kept");
+        assert_eq!((p.m.stats[28], p.m.bonuses[6]), (28, 35));
+    }
+
     /// A pointer on the list, the category, the points window, a skill's
     /// window and its message, each as their keys; nothing while a request
     /// is answered.
@@ -1107,6 +1177,37 @@ mod tests {
         c.draw(&vui, &mut r, &part, &mut cues);
         assert_eq!(c.point([cx + 60.0, cy]), vec![key::CROSS]);
         assert!(matches!(c.key(&vui, &mut r, &mut part, key::CROSS, true, 0, &mut cues), Some(CmUp::Send(_))), "Yes: the request");
+    }
+
+    /// One Master Class at a time (the live client's OnKeyDown, 0x01338978):
+    /// buying a Master Class (category 4) while another is owned is refused
+    /// with word 1840, no box, no sound, nothing sent. The controls: with
+    /// none owned (one only known, or owned in another category) the box
+    /// opens with the disc's warning before the question; a skill of
+    /// another category opens its plain question even with a Master Class
+    /// owned.
+    #[test]
+    fn one_master_class_at_a_time() {
+        use crate::pointer::testing::{NullRaster, vui};
+        let vui = vui();
+        let mc = |id: i32, on: bool, category: u8| Skill { x00: id, on, id, parent: 1000 + id, category, name: wide("S"), ..Default::default() };
+        // an owned General skill, so the first list (General) has a line
+        // selected and the node opens in the inspector
+        let buy = |mut skills: Vec<Skill>, category: u8| {
+            skills.push(mc(99, true, 0));
+            let mut part = Part { skills, ..Default::default() };
+            part.node = Some(Node { x04: 0, x05: 1, x08: 50, x10: category, text: wide("t"), ..Default::default() });
+            let mut c = ClassMastery::default();
+            c.open(&vui, &NullRaster, &part);
+            assert!(c.show_node(&vui, &mut NullRaster, &part, true));
+            let mut cues = Vec::new();
+            let up = c.key(&vui, &mut NullRaster, &mut part, key::CROSS, true, 0, &mut cues);
+            (up, c.message.visible, cues)
+        };
+        assert_eq!(buy(vec![mc(1, true, MASTER_CLASS), mc(2, false, 1)], MASTER_CLASS), (Some(CmUp::Warn(1840)), false, vec![]));
+        assert_eq!(buy(vec![mc(1, false, MASTER_CLASS)], MASTER_CLASS), (None, true, vec![15]), "only known: the box");
+        assert_eq!(buy(vec![mc(1, true, 2)], MASTER_CLASS), (None, true, vec![15]), "owned, another category");
+        assert_eq!(buy(vec![mc(1, true, MASTER_CLASS)], 2), (None, true, vec![15]), "not a Master Class");
     }
 
     /// `VICMNode::Read`: the fields, three strings and three lists; a

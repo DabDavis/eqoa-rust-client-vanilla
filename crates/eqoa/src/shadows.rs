@@ -87,7 +87,7 @@ impl Caster {
 /// `model`'s sprite in the walker's world when given; None without a
 /// CSprite. The pose is the frame's when the walker has been posed.
 pub fn walker_caster(walker: &mut crate::walker::Walker, lib: &Library, model: Option<u32>) -> Option<Caster> {
-    let actor = Matrix44::transform(&Vect3::new(walker.cam.walk.phys.angles.x, F::ZERO, F::ZERO), F::ONE, &walker.cam.walk.phys.smooth_location());
+    let actor = walker.actor();
     let bound = model.and_then(|m| lib.with_view(lib.view_for(m as i32), || lib.lookup(m as i32))).and_then(|r| walker.scene.find_sprite(lib, r)).map(|s| {
         let b = walker.scene.sprites[s].bsphere;
         Sphere { c: actor.mul_point(&b.c), r: b.r }
