@@ -206,6 +206,37 @@ impl Part {
         self.skills.iter().position(|s| s.id == id)
     }
 
+    /// The rank chain of the skill `id` (the ranks below it by `parent`, the
+    /// ranks above it whose `parent` names it), itself included.
+    pub fn line(&self, id: i32) -> Vec<usize> {
+        let Some(k) = self.find(id) else { return Vec::new() };
+        let mut out = vec![k];
+        let mut at = k;
+        while let Some(b) = self.skills.iter().position(|s| s.x00 == self.skills[at].parent) {
+            if out.contains(&b) {
+                break;
+            }
+            out.push(b);
+            at = b;
+        }
+        at = k;
+        while let Some(b) = self.skills.iter().position(|s| s.parent == self.skills[at].x00) {
+            if out.contains(&b) {
+                break;
+            }
+            out.push(b);
+            at = b;
+        }
+        out
+    }
+
+    /// A Master Class owned other than the one the skill `id` is a rank of:
+    /// the next rank of one's own Master Class is not a second one.
+    pub fn owns_another_master_class(&self, id: i32) -> bool {
+        let line = self.line(id);
+        self.skills.iter().enumerate().any(|(k, s)| s.master_class() && s.on && !line.contains(&k))
+    }
+
     /// `IsKnown(id)`: owned or known.
     pub fn is_known(&self, id: i32) -> bool {
         self.find(id).is_some_and(|k| self.skills[k].known != 0 || self.skills[k].on)
@@ -801,8 +832,10 @@ impl ClassMastery {
                             // 0x01338978): a Master Class while another is
                             // owned is refused, word 1840 red in the chat, with
                             // no box, no sound and nothing sent. The disc's
-                            // only warned (1807, as the box below still does)
-                            if node.x10 == MASTER_CLASS && part.skills.iter().any(|s| s.master_class() && s.on) {
+                            // only warned (1807, as the box below still does).
+                            // A higher rank of the Master Class owned is
+                            // bought as any rank is
+                            if node.x10 == MASTER_CLASS && part.owns_another_master_class(node.x08) {
                                 return Some(CmUp::Warn(1840));
                             }
                             let text = if node.x10 == MASTER_CLASS { wide(&format!("{} {}", vui.words.get(1807, vui.language), vui.words.get(1664, vui.language))) } else { w(1664) };
@@ -1185,7 +1218,8 @@ mod tests {
     /// none owned (one only known, or owned in another category) the box
     /// opens with the disc's warning before the question; a skill of
     /// another category opens its plain question even with a Master Class
-    /// owned.
+    /// owned, and a higher rank of the Master Class owned opens it too
+    /// (each rank is a skill of category 4, chained by `parent`).
     #[test]
     fn one_master_class_at_a_time() {
         use crate::pointer::testing::{NullRaster, vui};
@@ -1208,6 +1242,13 @@ mod tests {
         assert_eq!(buy(vec![mc(1, false, MASTER_CLASS)], MASTER_CLASS), (None, true, vec![15]), "only known: the box");
         assert_eq!(buy(vec![mc(1, true, 2)], MASTER_CLASS), (None, true, vec![15]), "owned, another category");
         assert_eq!(buy(vec![mc(1, true, MASTER_CLASS)], 2), (None, true, vec![15]), "not a Master Class");
+        // The node (id 50) as the next rank of a Master Class: its rank
+        // below (x00 1) owned is the same Master Class, not a second one
+        let rank = |id: i32, on: bool, parent: i32| Skill { parent, ..mc(id, on, MASTER_CLASS) };
+        assert_eq!(buy(vec![rank(1, true, 1001), rank(50, false, 1)], MASTER_CLASS), (None, true, vec![15]), "the next rank");
+        assert_eq!(buy(vec![rank(1, true, 1001), rank(2, true, 1), rank(50, false, 2)], MASTER_CLASS), (None, true, vec![15]), "two ranks owned");
+        assert_eq!(buy(vec![rank(1, true, 1001), rank(50, false, 1), rank(3, true, 1003)], MASTER_CLASS), (Some(CmUp::Warn(1840)), false, vec![]), "another owned beside its own");
+        assert_eq!(buy(vec![rank(1, true, 1001), rank(50, false, 7)], MASTER_CLASS), (Some(CmUp::Warn(1840)), false, vec![]), "a rank of another");
     }
 
     /// `VICMNode::Read`: the fields, three strings and three lists; a
