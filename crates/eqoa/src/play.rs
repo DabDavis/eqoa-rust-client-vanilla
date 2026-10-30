@@ -8115,6 +8115,10 @@ mod commands {
             crate::stream::fill(&mut lib, w, b.0, b.1, &mut src);
             let tunaria = || vi::world::World::load(&lib, w).unwrap();
             let mut walker = Walker::arrive(tunaria(), Spawn::ground(a.0, a.1, 0.0));
+            // the world entry's own screen down first, as in play: a move
+            // while it is up is held from when it went up (`Screen::begin`)
+            p.loading_step(&mut walker, true);
+            assert!(!p.loading());
             // the game's clock (`Session::timer`), which the arrival's 0x40
             // reads too: a frame's never behind it
             let mut now = 0i64;
