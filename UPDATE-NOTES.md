@@ -5,6 +5,9 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-30 · Your character there from your first moment in the world
+- Now and then you could come into the world without your own character drawn, and with an empty compass and bars, until something about you changed. The server's first word about you had come a moment before the world itself and was thrown away; it is kept now.
+
 ## 2026-10-30 · Ground fog as the PlayStation 2 shows it
 - The low fog that lies over Freeport's streets, Neriak and the rest of the world is now drawn the
   way the PlayStation 2's picture kept it. The console's screen held only 32 shades of each colour,
