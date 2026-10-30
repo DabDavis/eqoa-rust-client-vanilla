@@ -144,7 +144,12 @@ or a browser (each described where it lives below):
   words and its rules are Frontiers'.
 - **Sorted lists**: the Who list and the guild's roster by name, or by any
   column with ○ (C on the keyboard) or a click on its heading (the game keeps
-  the server's order).
+  the server's order). The buddy list by name each time it opens, or by the
+  column before with left or L1 and the one after with right or R1, or a click
+  on its heading, as Sandstorm's patch sorts its Who list: the heading sorted by
+  between the game's side arrows, the legend's left and right Sort, levels the
+  lowest first, and a sort leaving the cursor at its place in the list (the game
+  lists buddies by id).
 - **Network Setup** on the title: the address of the server to play on (on a
   PS2 it starts the console's network utility).
 - **Updates**: a downloaded build puts the release's newer one in its place

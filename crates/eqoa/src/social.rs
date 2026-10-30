@@ -9,6 +9,16 @@
 //! incoming buddy request (`ShowRequest`, 45 s to answer). A pointer
 //! (`pointer`) goes to the child with the focus as the keys do: the box's
 //! buttons, the menu's rows (off the menu, it closes), the list's rows.
+//!
+//! Not the game's: the buddy list's order. The game lists the buddies by
+//! id; here they are sorted (`Sort`), by name each time the list opens:
+//! left and L1 sort by the column before, right and R1 by the one after
+//! (round past either end), as Sandstorm's patch sorts its who list, and a
+//! click on a column's heading by that column. The heading sorted by is
+//! between the game's side arrows and the legend has the d-pad's arms and
+//! Sort, as there. A sort leaves the selection at its place in the list
+//! (the buddy there now another). The menu and its box act on the buddy
+//! shown.
 
 #![allow(clippy::too_many_arguments)]
 
@@ -46,7 +56,7 @@ fn list_point(p: [f32; 2], mbox: Option<&mut MBox>, menu: Option<&mut MiniMenu>,
             return k.into_iter().collect();
         }
         let mut keys = Vec::new();
-        if let Some(row) = hits.at(p).filter(|&row| row != sel) {
+        if let Some(row) = hits.at(p).filter(|&row| row >= 0 && row != sel) {
             select(row);
             keys.push(MOVED);
         }
@@ -478,6 +488,67 @@ fn class_short(class: i32) -> Option<i32> {
     [303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 1190].get(usize::try_from(class).ok()?).copied()
 }
 
+/// The column the buddy list is sorted by (the client's own: the game
+/// lists its buddies by id). Names, races, classes and guilds (the last
+/// column, `Buddy::world`) from A to Z as the window spells them, levels
+/// from the lowest, the buddies online first; a tie by name, then by id.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Sort {
+    #[default]
+    Name,
+    Online,
+    Race,
+    Class,
+    Level,
+    Guild,
+}
+
+impl Sort {
+    /// The columns from the left.
+    const ALL: [Sort; 6] = [Sort::Name, Sort::Online, Sort::Race, Sort::Class, Sort::Level, Sort::Guild];
+
+    /// The next column to the right, round to the first.
+    pub fn next(self) -> Sort {
+        Sort::ALL[(self as usize + 1) % Sort::ALL.len()]
+    }
+
+    /// The column to the left, round to the last.
+    pub fn prev(self) -> Sort {
+        Sort::ALL[(self as usize + Sort::ALL.len() - 1) % Sort::ALL.len()]
+    }
+}
+
+/// The columns' headings and where they are drawn (x off the window's left).
+const HEADINGS: [(i32, i32); 6] = [(509, 40), (521, 170), (510, 240), (511, 302), (503, 364), (512, 426)];
+
+/// The hit of a column's heading: `HEADING - column`.
+const HEADING: i32 = -10;
+
+/// The marks either side of the heading sorted by (the game's side arrow,
+/// each pointing at the word, as Sandstorm's who list marks its column), and
+/// their gap from it.
+const MARKS: [&str; 2] = ["|}", "|{"];
+const MARK_GAP: i32 = 3;
+
+/// The buddies in the order shown: their ids, by `sort` (`word` spells a
+/// race's or class's word).
+pub fn order(sort: Sort, buddies: &Buddies, word: &dyn Fn(i32) -> String) -> Vec<i32> {
+    let spelled = |id: Option<i32>| id.map_or_else(String::new, |id| word(id).to_lowercase());
+    let mut v: Vec<&Buddy> = buddies.map.values().collect();
+    v.sort_by(|a, b| {
+        let by = match sort {
+            Sort::Name => std::cmp::Ordering::Equal,
+            Sort::Online => b.online.cmp(&a.online),
+            Sort::Race => spelled(race_short(a.race)).cmp(&spelled(race_short(b.race))),
+            Sort::Class => spelled(class_short(a.class)).cmp(&spelled(class_short(b.class))),
+            Sort::Level => a.level.cmp(&b.level),
+            Sort::Guild => a.world.to_lowercase().cmp(&b.world.to_lowercase()),
+        };
+        by.then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())).then(a.id.cmp(&b.id))
+    });
+    v.into_iter().map(|b| b.id).collect()
+}
+
 /// What the buddy list asks of the game.
 #[derive(Clone, Debug, PartialEq)]
 pub enum BuddyUp {
@@ -507,16 +578,39 @@ pub struct BuddyList {
     pub mbox_visible: bool,
     pub menu: MiniMenu,
     flash: KeyFlash,
-    /// the buddies drawn, by index, and when (for a pointer)
+    /// the buddies drawn, by index, and the headings (`HEADING - column`),
+    /// and when (for a pointer)
     hits: Hits,
     now: i64,
+    /// the column the buddies are sorted by (the client's, from the name
+    /// each time the list opens)
+    pub sort: Sort,
+    /// the buddies' ids in the order shown, as last drawn (`order`)
+    view: Vec<i32>,
+    /// the place in the game's (id) order of the buddy Remove's box asks
+    /// about
+    removing: i32,
 }
 
 impl BuddyList {
     /// A pointer at frame point `p` (`pointer`): the box's buttons (the
     /// request's too), the menu's rows (off the menu it closes), or a buddy
-    /// selected and the selection's menu opened (✕). The keys to press.
+    /// selected and the selection's menu opened (✕); a heading sorts by its
+    /// column (the client's). The keys to press.
     pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        // a heading: the buddies by its column, the selection left at its
+        // place; the column already sorted by is nothing
+        if !self.mbox_visible
+            && !self.menu.visible
+            && let Some(h) = self.hits.at(p).filter(|&h| h <= HEADING)
+        {
+            let sort = Sort::ALL[(HEADING - h) as usize];
+            if sort == self.sort {
+                return Vec::new();
+            }
+            self.sort = sort;
+            return vec![MOVED];
+        }
         let (sel, now) = (self.sel, self.now);
         let (sel_out, window) = (&mut self.sel, &mut self.window);
         let mut select = |row: i32| {
@@ -528,11 +622,18 @@ impl BuddyList {
     }
 
     pub fn new(menu: usize) -> Self {
-        BuddyList { shown: false, sel: 0, top: 0, count: 0, window: Window::default(), mbox: MBox::default(), mbox_visible: false, menu: MiniMenu::titled(menu), flash: KeyFlash::default(), hits: Hits::default(), now: 0 }
+        BuddyList { shown: false, sel: 0, top: 0, count: 0, window: Window::default(), mbox: MBox::default(), mbox_visible: false, menu: MiniMenu::titled(menu), flash: KeyFlash::default(), hits: Hits::default(), now: 0, sort: Sort::default(), view: Vec::new(), removing: 0 }
+    }
+
+    /// The buddy shown at `n` (the game's `GetBuddy(n)`, in the client's
+    /// order as last drawn).
+    fn buddy<'a>(&self, buddies: &'a Buddies, n: i32) -> Option<&'a Buddy> {
+        buddies.map.get(self.view.get(usize::try_from(n).ok()?)?)
     }
 
     /// `OnMessage` 295 then `Close` (`UpdateMode` 18): the window, titled
-    /// 513, opening; shown, the children hidden, the top of the list.
+    /// 513, opening; shown, the children hidden, the top of the list; the
+    /// buddies sorted by name again (the client's).
     pub fn open(&mut self, vui: &Vui, r: &dyn Raster) {
         self.window.init(vui, r, [320, 180], 600, 14, 0);
         self.window.set_title(Some(&wide(vui.words.get(513, vui.language))));
@@ -543,6 +644,7 @@ impl BuddyList {
         self.menu.visible = false;
         self.sel = 0;
         self.top = 0;
+        self.sort = Sort::default();
     }
 
     /// `ShowRequest` (`UpdateMode` 17): the list hidden, the box with words
@@ -568,7 +670,7 @@ impl BuddyList {
         self.mbox_visible = false;
         match a {
             BoxAnswer::Yes(0, _) => Some(BuddyUp::Accept),
-            BoxAnswer::Yes(1, _) => Some(BuddyUp::Remove(self.sel)),
+            BoxAnswer::Yes(1, _) => Some(BuddyUp::Remove(self.removing)),
             BoxAnswer::No(0, _) => Some(BuddyUp::Reject),
             _ => None,
         }
@@ -589,11 +691,14 @@ impl BuddyList {
                     // 261: the mini menu's choice
                     self.menu.visible = false;
                     cues.push(13);
-                    let name = buddies.get(self.sel).map(|b| b.name.clone()).unwrap_or_default();
+                    let shown = self.buddy(buddies, self.sel);
+                    let name = shown.map(|b| b.name.clone()).unwrap_or_default();
                     match msg {
                         0x0B05_0001 => return Some(BuddyUp::Tell(name)),
                         0x0B05_0002 => return Some(BuddyUp::Mail(name)),
                         0x0B05_0003 => {
+                            // RequestBuddy(n) takes its place in the game's order
+                            self.removing = shown.and_then(|b| buddies.map.keys().position(|&id| id == b.id)).map_or(-1, |n| n as i32);
                             self.mbox.prompt(&wide(&words(518)), 1, 1, 0, now);
                             self.mbox_visible = true;
                         }
@@ -619,7 +724,7 @@ impl BuddyList {
                 return Some(BuddyUp::Close);
             }
             13 | 134 => {
-                if let Some(b) = buddies.get(self.sel) {
+                if let Some(b) = self.buddy(buddies, self.sel) {
                     cues.push(13);
                     // ShowMenu(name)
                     self.menu.list.pos = [170, 50];
@@ -633,6 +738,18 @@ impl BuddyList {
             }
             19 | 138 => self.flash.press(138),
             20 | 139 => self.flash.press(139),
+            // the client's sort: left and L1 the column before, right and R1
+            // the one after, the selection left at its place in the list
+            136 | 140 => {
+                self.sort = self.sort.prev();
+                self.window.reset_tick_pulse(now);
+                cues.push(11);
+            }
+            137 | 142 => {
+                self.sort = self.sort.next();
+                self.window.reset_tick_pulse(now);
+                cues.push(11);
+            }
             _ => {}
         }
         None
@@ -670,7 +787,8 @@ impl BuddyList {
     }
 
     /// `OnDrawSelf` while shown: the black band, the window, the Select and
-    /// Exit legend, the column headers and ten rows of name, online, race,
+    /// Exit legend (and the client's left/right Sort), the column headers
+    /// (the one sorted by between its marks) and ten rows of name, online, race,
     /// class, level and world, the selected one blue with the pulsing arrow;
     /// the held arrows repeat. Then the box (its timeout answered here) and
     /// the menu.
@@ -695,6 +813,7 @@ impl BuddyList {
     fn draw_list(&mut self, vui: &Vui, r: &mut dyn Raster, buddies: &Buddies, now: i64, cues: &mut Vec<i32>) {
         let n = buddies.count();
         self.clamp(n);
+        self.view = order(self.sort, buddies, &|id| vui.words.get(id, vui.language).to_string());
         let word = |id: i32| wide(vui.words.get(id, vui.language));
         let black = [0.0, 0.0, 0.0, 1.0];
         let blue = [10.0 / 255.0, 50.0 / 255.0, 70.0 / 255.0, 1.0];
@@ -709,11 +828,27 @@ impl BuddyList {
         p[0] += 100;
         vui.blit(r, 65, [p[0], p[1] - 6]);
         r.draw_string([p[0] + 20, p[1] - 10], black, &word(161));
+        // the client's left and right Sort (the d-pad's arms inline, as the
+        // who list's legend has them on Sandstorm), centred on the words'
+        let half = r.point_size() >> 1;
+        let sort = wide(&format!("|v|V{}", crate::wholist::SORT));
+        self.window.draw_text_internal(vui, r, &sort, p[0] + 100, p[1] - 10 + half, black, 0);
         let y0 = self.window.row_center(vui, r, 0)[1] - 4;
-        for (id, x) in [(509, 40), (521, 170), (510, 240), (511, 302), (503, 364), (512, 426)] {
-            r.draw_string([left + x, y0], black, &word(id));
-        }
         let width = self.window.size[0];
+        // the headings, each a pointer's sort, out to the next; the one
+        // sorted by between its marks (the client's)
+        for (k, (id, x)) in HEADINGS.into_iter().enumerate() {
+            r.draw_string([left + x, y0], black, &word(id));
+            let end = HEADINGS.get(k + 1).map_or(width - 40, |h| h.1);
+            self.hits.push(rows_rect(&self.window, vui, r, x, 0, end - x, 1), HEADING - k as i32);
+        }
+        let (id, x) = HEADINGS[self.sort as usize];
+        let (before, after) = (wide(MARKS[0]), wide(MARKS[1]));
+        let at = left + x;
+        let before_x = at - MARK_GAP - self.window.text_width(vui, r, &before);
+        self.window.draw_text_internal(vui, r, &before, before_x, y0 + half, black, 0);
+        let after_x = at + r.string_width(&word(id)) + MARK_GAP;
+        self.window.draw_text_internal(vui, r, &after, after_x, y0 + half, black, 0);
         for i in 0..10 {
             let k = i + self.top;
             let y = self.window.row_center(vui, r, i + 2)[1] - 10;
@@ -723,7 +858,7 @@ impl BuddyList {
             } else {
                 black
             };
-            let Some(b) = buddies.get(k) else { break };
+            let Some(b) = self.buddy(buddies, k) else { break };
             self.hits.push(rows_rect(&self.window, vui, r, 40, i + 2, width - 80, 1), k);
             r.draw_string([left + 40, y], c, &wide(&b.name));
             r.draw_string([left + 170, y], c, &word(if b.online { 21 } else { 22 }));
@@ -871,7 +1006,8 @@ mod tests {
         assert_eq!(l.sel, 2);
         assert_eq!(l.point(mid(row(&l, 2))), vec![key::CROSS]);
         assert!(l.point(mid(row(&l, 3))).is_empty(), "past the list");
-        assert!(l.point(mid(row(&l, -2))).is_empty(), "the column headers");
+        // the headings' row: Name's (sorted by already) is nothing
+        assert!(l.point(mid(rows_rect(&l.window, &vui, &NullRaster, 40, 0, 130, 1))).is_empty(), "the Name heading");
         // ✕: the member menu; drawn, its rows are used at once
         l.key(&menus, &b, &|_| String::new(), 134, true, 0, &mut cues);
         assert!(l.menu.visible);
@@ -944,4 +1080,183 @@ mod tests {
         assert!(find_button(&mut |p| l.point(p)).is_some());
     }
 
+    /// The buddies for the sort's tests: in id order Zed, amy, Bob, cal.
+    fn four() -> Buddies {
+        let mut b = Buddies::default();
+        for (id, name, race, class, level, online, world) in [(1, "Zed", 1, 5, 30, false, "Tunaria"), (2, "amy", 0, 13, 50, true, "Odus"), (3, "Bob", 2, 14, 30, true, "Tunaria"), (4, "cal", 2, 5, 10, false, "odus")] {
+            b.map.insert(id, Buddy { id, name: name.into(), class, race, level, online, world: world.into() });
+        }
+        b
+    }
+
+    /// The test's own spelling of the game's words.
+    fn spelled(id: i32) -> String {
+        match id {
+            308 => "Bard".into(),
+            316 => "Wizard".into(),
+            317 => "Human".into(),
+            319 => "Dark Elf".into(),
+            318 => "Elf".into(),
+            1190 => "Alchemist".into(),
+            _ => String::new(),
+        }
+    }
+
+    /// The client's sort: names, races, classes and guilds from A to Z,
+    /// case aside (races and classes as the window spells them), levels from
+    /// the lowest, the buddies online first; a tie by name. The control:
+    /// the game's own order is by id.
+    #[test]
+    fn the_buddy_list_sorts_by_a_column() {
+        let b = four();
+        let names = |sort| order(sort, &b, &spelled).into_iter().map(|id| b.map[&id].name.as_str()).collect::<Vec<_>>();
+        assert_eq!(Sort::default(), Sort::Name);
+        assert_eq!(names(Sort::Name), ["amy", "Bob", "cal", "Zed"]);
+        assert_ne!(b.map.values().map(|b| b.name.as_str()).collect::<Vec<_>>(), names(Sort::Name), "the game's order is by id");
+        assert_eq!(names(Sort::Online), ["amy", "Bob", "cal", "Zed"]);
+        // Dark Elf (Bob, cal), Elf, Human
+        assert_eq!(names(Sort::Race), ["Bob", "cal", "Zed", "amy"]);
+        // Alchemist, Bard (cal, Zed), Wizard
+        assert_eq!(names(Sort::Class), ["Bob", "cal", "Zed", "amy"]);
+        // 10, 30 (Bob, Zed), 50
+        assert_eq!(names(Sort::Level), ["cal", "Bob", "Zed", "amy"]);
+        // Odus (amy, cal), Tunaria (Bob, Zed)
+        assert_eq!(names(Sort::Guild), ["amy", "cal", "Bob", "Zed"]);
+        assert_eq!(Sort::ALL.map(Sort::next), [Sort::Online, Sort::Race, Sort::Class, Sort::Level, Sort::Guild, Sort::Name]);
+        assert_eq!(Sort::ALL.map(Sort::prev), [Sort::Guild, Sort::Name, Sort::Online, Sort::Race, Sort::Class, Sort::Level]);
+    }
+
+    /// Left and L1 sort by the column before, right and R1 by the one after,
+    /// round past either end, the selection left at its place in the list
+    /// (the buddy there now another); a heading sorts by its column, the
+    /// same; the menu and Remove's box act on the buddy shown (Remove with
+    /// its place in the game's order); the list opens by name again. The
+    /// control: ○ does nothing to it.
+    #[test]
+    fn the_buddy_lists_keys_sort_it() {
+        use crate::pointer::testing::{NullRaster, mid, vui};
+        let vui = vui();
+        let mut r = NullRaster;
+        let (menus, m) = one_menu();
+        let b = four();
+        let words = |_: i32| String::new();
+        let mut cues = Vec::new();
+        let mut l = BuddyList::new(m);
+        l.open(&vui, &r);
+        let shown = |l: &BuddyList| l.view.iter().map(|id| b.map[id].name.clone()).collect::<Vec<_>>();
+        l.draw(&vui, &mut r, &menus, &b, 0, &mut cues);
+        assert_eq!(shown(&l), ["amy", "Bob", "cal", "Zed"]);
+        l.sel = 1;
+        // left from Name: round to Guild
+        l.key(&menus, &b, &words, 136, true, 0, &mut cues);
+        l.draw(&vui, &mut r, &menus, &b, 16, &mut cues);
+        assert_eq!((l.sort, shown(&l)), (Sort::Guild, vec!["amy".to_string(), "cal".into(), "Bob".into(), "Zed".into()]));
+        assert_eq!((l.sel, l.buddy(&b, l.sel).unwrap().name.as_str()), (1, "cal"), "the place kept, the buddy there another");
+        // L1: Level
+        l.key(&menus, &b, &words, 140, true, 0, &mut cues);
+        l.draw(&vui, &mut r, &menus, &b, 32, &mut cues);
+        assert_eq!((l.sort, shown(&l)), (Sort::Level, vec!["cal".to_string(), "Bob".into(), "Zed".into(), "amy".into()]));
+        // right, R1: Guild, then round to Name
+        l.key(&menus, &b, &words, 137, true, 0, &mut cues);
+        assert_eq!(l.sort, Sort::Guild);
+        l.key(&menus, &b, &words, 142, true, 0, &mut cues);
+        assert_eq!(l.sort, Sort::Name);
+        // the control: ○ is nothing to it
+        l.key(&menus, &b, &words, 135, true, 0, &mut cues);
+        assert_eq!(l.sort, Sort::Name);
+        // the Level heading: x 364 to Guild's 426
+        let level = mid(rows_rect(&l.window, &vui, &NullRaster, 364, 0, 62, 1));
+        l.sel = 2;
+        assert_eq!(l.point(level), vec![MOVED]);
+        l.draw(&vui, &mut r, &menus, &b, 48, &mut cues);
+        assert_eq!((l.sort, l.sel), (Sort::Level, 2));
+        assert!(l.point(level).is_empty(), "the column already sorted by: nothing");
+        // Zed shown third (id 1, first in the game's order): ✕ then Tell
+        assert_eq!(l.buddy(&b, 2).unwrap().name, "Zed");
+        l.key(&menus, &b, &words, 134, true, 0, &mut cues);
+        assert_eq!(l.key(&menus, &b, &words, 134, true, 0, &mut cues), Some(BuddyUp::Tell("Zed".into())));
+        // ✕ then Remove (the menu's third row), and the box's yes
+        l.key(&menus, &b, &words, 134, true, 0, &mut cues);
+        l.draw(&vui, &mut r, &menus, &b, 64, &mut cues);
+        let at = l.menu.list.pos;
+        assert_eq!(l.point([(at[0] + 60) as f32, (at[1] + 48 + 2 * 19) as f32]), vec![key::CROSS]);
+        l.key(&menus, &b, &words, 134, true, 0, &mut cues);
+        assert!(l.mbox_visible, "Remove asks");
+        assert_eq!(l.answered(BoxAnswer::Yes(1, 0)), Some(BuddyUp::Remove(0)), "Zed's place in the game's order");
+        // opened again: by name
+        l.open(&vui, &r);
+        l.draw(&vui, &mut r, &menus, &b, 80, &mut cues);
+        assert_eq!((l.sort, shown(&l)), (Sort::Name, vec!["amy".to_string(), "Bob".into(), "cal".into(), "Zed".into()]));
+    }
+
+    /// The text a raster is handed, with its colour, and where it blits.
+    #[derive(Default)]
+    struct Texts(Vec<([i32; 2], [f32; 4], String)>, Vec<[i32; 2]>);
+    impl crate::ui::Layout for Texts {}
+    impl Raster for Texts {
+        fn blit(&mut self, _: u32, _: u32, at: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {
+            self.1.push(at);
+        }
+        fn stretch_blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+        fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+        fn draw_string(&mut self, at: [i32; 2], c: [f32; 4], s: &[u16]) {
+            self.0.push((at, c, String::from_utf16_lossy(s)));
+        }
+        fn draw_centered_string(&mut self, at: [i32; 2], c: [f32; 4], s: &[u16], _: u32) {
+            self.0.push((at, c, String::from_utf16_lossy(s)));
+        }
+        fn string_width(&self, s: &[u16]) -> i32 {
+            s.len() as i32 * 8
+        }
+        fn point_size(&self) -> i32 {
+            20
+        }
+        fn viewport(&self) -> [i32; 4] {
+            [0, 0, 640, 448]
+        }
+        fn set_viewport(&mut self, _: [i32; 4]) {}
+    }
+
+    /// The legend's sort is the d-pad's left and right arms (drawn as
+    /// icons, never as their codes) and Sort; the heading sorted by is
+    /// between the game's side arrows, a gap from each end of its word, on
+    /// the headings' row. The control: another column, the marks go with it.
+    #[test]
+    fn the_buddy_lists_sort_is_drawn() {
+        use crate::pointer::testing::vui;
+        let vui = vui();
+        let (menus, m) = one_menu();
+        let b = four();
+        let mut cues = Vec::new();
+        let mut l = BuddyList::new(m);
+        l.open(&vui, &Texts::default());
+        let word = |id: i32| vui.words.get(id, vui.language).to_string();
+        let mut t = Texts::default();
+        l.draw(&vui, &mut t, &menus, &b, 0, &mut cues);
+        let left = l.window.top_left()[0];
+        let sort = t.0.iter().find(|(_, _, s)| s == crate::wholist::SORT).unwrap_or_else(|| panic!("{:?}", t.0));
+        // after the arms, Select's and Exit's 100 apart from x 40
+        let arms = l.window.text_width(&vui, &t, &wide("|v|V"));
+        assert!(arms > 0);
+        assert_eq!(sort.0[0], left + 240 + arms, "Sort past the left and right arms");
+        assert!(!t.0.iter().any(|(_, _, s)| s.contains('|')), "no glyph code drawn as text: {:?}", t.0);
+        // the marks: blits a gap before and after the heading's word
+        let marks = |l: &BuddyList, t: &Texts, k: usize| {
+            let (id, x) = HEADINGS[k];
+            let at = left + x;
+            let before = at - MARK_GAP - l.window.text_width(&vui, t, &wide(MARKS[0]));
+            let after = at + t.string_width(&wide(&word(id))) + MARK_GAP;
+            let y = t.0.iter().find(|(p, _, _)| p[0] == at).map(|(p, _, _)| p[1]).expect("the heading");
+            let near = |x: i32| t.1.iter().any(|p| p[0] == x && (p[1] - y).abs() <= 12);
+            (near(before), near(after))
+        };
+        assert_eq!(marks(&l, &t, 0), (true, true), "Name between its marks: {:?}", t.1);
+        assert_eq!(marks(&l, &t, 4), (false, false));
+        l.sort = Sort::Level;
+        let mut t = Texts::default();
+        l.draw(&vui, &mut t, &menus, &b, 16, &mut cues);
+        assert_eq!(marks(&l, &t, 4), (true, true), "Level's now");
+        assert_eq!(marks(&l, &t, 0), (false, false), "and not Name's");
+    }
 }
