@@ -19,6 +19,9 @@
 //! Sort, as there. A sort leaves the selection at its place in the list
 //! (the buddy there now another). The menu and its box act on the buddy
 //! shown.
+//!
+//! Not the game's: the buddy list's rows in a scrolling frame, as the who
+//! list's and the guild's roster's are (`ROWS_FRAME`).
 
 #![allow(clippy::too_many_arguments)]
 
@@ -566,6 +569,12 @@ pub enum BuddyUp {
     Reject,
 }
 
+/// Not the game's: the buddy list's rows in a scrolling frame, as the who
+/// list's and the guild's roster's are (the user, 2026-10-29: "so it matches
+/// the visual style of the other two menus"), at the roster's x (20) and
+/// width (the window's less 50), round window rows 2 to 11.
+const ROWS_FRAME: [i32; 2] = [20, 50];
+
 /// `VIWndBuddy`.
 pub struct BuddyList {
     /// `m_p30`: the list is drawn (not while a request is up)
@@ -789,9 +798,9 @@ impl BuddyList {
     /// `OnDrawSelf` while shown: the black band, the window, the Select and
     /// Exit legend (and the client's left/right Sort), the column headers
     /// (the one sorted by between its marks) and ten rows of name, online, race,
-    /// class, level and world, the selected one blue with the pulsing arrow;
-    /// the held arrows repeat. Then the box (its timeout answered here) and
-    /// the menu.
+    /// class, level and world, the selected one blue with the pulsing arrow
+    /// (in the client's scrolling frame, `ROWS_FRAME`); the held arrows
+    /// repeat. Then the box (its timeout answered here) and the menu.
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, menus: &Menus, buddies: &Buddies, now: i64, cues: &mut Vec<i32>) -> Option<BuddyUp> {
         self.now = now;
         self.hits.clear();
@@ -849,6 +858,11 @@ impl BuddyList {
         self.window.draw_text_internal(vui, r, &before, before_x, y0 + half, black, 0);
         let after_x = at + r.string_width(&word(id)) + MARK_GAP;
         self.window.draw_text_internal(vui, r, &after, after_x, y0 + half, black, 0);
+        // the client's: the ten rows in the scrolling frame the who list and
+        // the guild's roster have (`DrawFrameVScroll`, the guild's place and
+        // width), the thumb at the page shown
+        let t = if n > 10 { self.top as f32 / (n - 10) as f32 } else { 0.0 };
+        self.window.draw_frame_vscroll(vui, r, ROWS_FRAME[0], 2, width - ROWS_FRAME[1], 10, t);
         for i in 0..10 {
             let k = i + self.top;
             let y = self.window.row_center(vui, r, i + 2)[1] - 10;
@@ -1218,6 +1232,36 @@ mod tests {
         fn set_viewport(&mut self, _: [i32; 4]) {}
     }
 
+    /// What a raster is handed to stretch, and where it blits.
+    #[derive(Default)]
+    struct Blits {
+        stretched: Vec<([i32; 2], [i32; 2])>,
+        at: Vec<[i32; 2]>,
+    }
+    impl crate::ui::Layout for Blits {}
+    impl Raster for Blits {
+        fn blit(&mut self, _: u32, _: u32, at: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {
+            self.at.push(at);
+        }
+        fn stretch_blit(&mut self, _: u32, _: u32, at: [i32; 2], size: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {
+            self.stretched.push((at, size));
+        }
+        fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+        fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+        fn draw_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16]) {}
+        fn draw_centered_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16], _: u32) {}
+        fn string_width(&self, s: &[u16]) -> i32 {
+            s.len() as i32 * 8
+        }
+        fn point_size(&self) -> i32 {
+            20
+        }
+        fn viewport(&self) -> [i32; 4] {
+            [0, 0, 640, 448]
+        }
+        fn set_viewport(&mut self, _: [i32; 4]) {}
+    }
+
     /// The legend's sort is the d-pad's left and right arms (drawn as
     /// icons, never as their codes) and Sort; the heading sorted by is
     /// between the game's side arrows, a gap from each end of its word, on
@@ -1258,5 +1302,40 @@ mod tests {
         l.draw(&vui, &mut t, &menus, &b, 16, &mut cues);
         assert_eq!(marks(&l, &t, 4), (true, true), "Level's now");
         assert_eq!(marks(&l, &t, 0), (false, false), "and not Name's");
+    }
+
+    /// The buddy list's ten rows are in the scrolling frame the guild's
+    /// roster has (its x and width), from the first row's top to the last's
+    /// bottom; its thumb moves with the page shown. The control: the frame
+    /// is where `DrawFrameVScroll` puts the roster's, and nothing else is
+    /// stretched over the rows.
+    #[test]
+    fn the_buddy_lists_rows_are_in_a_scrolling_frame() {
+        use crate::pointer::testing::vui;
+        let vui = vui();
+        let (menus, m) = one_menu();
+        let mut b = Buddies::default();
+        for k in 0..15 {
+            b.recv(0x03D5, &buddy(k + 1, &format!("B{k:02}"), true, "W"));
+        }
+        let mut l = BuddyList::new(m);
+        l.open(&vui, &Blits::default());
+        let mut cues = Vec::new();
+        let mut first = Blits::default();
+        l.draw(&vui, &mut first, &menus, &b, 0, &mut cues);
+        let h = vui.font_height(&first) - 4;
+        let left = l.window.top_left()[0];
+        let at = [left + ROWS_FRAME[0] - 4, l.window.row_center(&vui, &first, 2)[1] - 4 - 3];
+        let size = [l.window.size[0] - ROWS_FRAME[1] + 8, 10 * h + 4];
+        assert!(first.stretched.contains(&(at, size)), "the frame round the rows: {at:?} {size:?} in {:?}", first.stretched);
+        assert!(at[1] < l.window.row_center(&vui, &first, 2)[1] && at[1] + size[1] > l.window.row_center(&vui, &first, 11)[1], "rows 2 to 11 inside");
+        // the last page: the thumb lower down its bar
+        l.sel = 14;
+        l.top = 5;
+        let mut last = Blits::default();
+        l.draw(&vui, &mut last, &menus, &b, 16, &mut cues);
+        let bar_x = at[0] + size[0] - 4;
+        let thumb = |r: &Blits| r.at.iter().filter(|p| p[0] == bar_x - 1).map(|p| p[1]).max();
+        assert!(thumb(&last) > thumb(&first), "the thumb down the bar: {:?} {:?}", thumb(&first), thumb(&last));
     }
 }
