@@ -39,7 +39,7 @@ jobs:
           - os: windows
             runner: windows-2022
           - os: macos
-            runner: macos-14
+            runner: macos-15
     runs-on: ${{ matrix.runner }}
     name: build (${{ matrix.os }})
     env:
