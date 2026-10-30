@@ -78,8 +78,8 @@ is put on the page by `.github/workflows/notes.yml`.
   around them. The compass, target and chat box are hidden while the menu is open.
 - The windows the start menu opens fill the screen too: the Who, guild, buddy and ignore lists, the
   quest log, abilities, Summary, tradeskills, class mastery, factions, mail, the auction and group
-  searches, Support and the options. Each one grows as large as your screen allows, over the
-  game's green backdrop.
+  searches and Support. Each one grows as large as your screen allows, over the game's green
+  backdrop. The options stay as they were.
 
 ## 2026-10-29 · The who list in CM order on Sandstorm, as on a PS2
 - On Sandstorm the who list now shows players in the server's own order, highest combat masteries

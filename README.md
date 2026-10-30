@@ -53,7 +53,7 @@ or a browser (each described where it lives below):
   moved so the game's view of the character is in the frame's middle
   (`render::ui::Fill`, `walker::set_shift`). The windows the start menu opens
   (the spell book, the recipes, Summary, the quest log, class mastery, the
-  factions, the buddy, guild, ignore and who lists, the options, mail, Support,
+  factions, the buddy, guild, ignore and who lists, mail, Support,
   the auction and group searches; `Play::fills_window`) are scaled to fill it
   too, measured off what each draws, in the middle, over the game's own green
   backdrop (`Ui::fill_drawn`).
