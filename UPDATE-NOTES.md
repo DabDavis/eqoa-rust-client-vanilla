@@ -5,70 +5,70 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
-## 2026-10-29 · Dyed armour, on servers that send it
-- Armour, robes and helms can now be any colour, on a server that sends dyes the way the live
-  game did (eqoaclassic, where a game master sets them). Each dyed piece is drawn in its colour on
-  your character, on everyone near you and on the character select screen.
-- Nothing else changes: armour that is not dyed looks exactly as before, and on Sandstorm and every
-  other server the game is as it was.
-
-## 2026-10-29 · Duels, with the live game's own duel window
-- On a server that has duels (eqoaclassic's), the start menu's Community has a Duel entry, as the
-  live game had near its end: Duel > Invite challenges your target, Duel > Surrender gives up the
-  duel you are in. Quitting during a duel gives it up too.
-- A challenge opens the live game's duel window: who challenges you, their guild, race, class and
+## 2026-10-30 · SOE's final patch features, recovered from the Corsten and Lostologist save states!
+- The game kept changing after the Frontiers disc, and its final client went with SOE's servers: no
+  disc ever had it. Two save states made in the live game, Corsten's and Lostologist's, still held it
+  in the console's memory, and the features below were read out of it and rebuilt, as they worked
+  when the servers closed. They need a server that runs them (eqoaclassic does); on Sandstorm and
+  other servers nothing changes, except for the lines that say "on every server".
+- **How close is it to SOE's?** Everything you see is SOE's own: each window's layout, text, keys and
+  rules, and every message the client sends and reads, were read instruction by instruction out of
+  that final client and made to do the same. (The rest of this client is checked bit for bit
+  against the decompiled Frontiers disc; the final client has no decompilation, so these were read
+  straight from its machine code.) What SOE's servers did with those messages went with the
+  servers: where the client does not say, eqoaclassic does what we chose to fit what the client
+  expects. That covers who a group search finds, how a stack's items are shared among several
+  bidders, the words a reset says, and duel hits on players being halved.
+- **Duels.** The start menu's Community has a Duel entry: Duel > Invite challenges your target, Duel >
+  Surrender gives up the duel you are in. Quitting during a duel gives it up too.
+- A challenge opens the game's own duel window: who challenges you, their guild, race, class and
   level, with ✕ to accept and △ to decline (Enter or E, and Escape, on the keyboard). It counts its
   last ten seconds down; an invitation that comes while another window is up waits until you are
   back in play.
 - Accepted, both of you get the wager window, the trade window's twin: put tunar on the duel with
   ✕ on the Tunar box (no more than you carry), □ (Q) to accept, △ to take an accept back or to call
   the duel off, Space for a chat line. When both accept the duel begins, and the winner takes both
-  stakes. The server only takes tunar: an item put in is refused with a line.
+  stakes. Only tunar can be wagered: an item put in is refused with a line.
 - In a duel you can attack your opponent and their pet as you would a creature, and Tab and R1
   cycle to their pet. An orange mark on the compass points to where the duel began.
-- Your own character is now drawn at the size the server gives it, as everyone else is: on
-  eqoaclassic a gnome is a little smaller than before (9 tenths). How you walk and what you bump
-  into are as before.
-
-## 2026-10-29 · Looking for a group, and auctions of whole stacks, as at the game's end
-On a server that runs them as the game did in its last years (eqoaclassic does; Sandstorm does not,
-and there nothing changes):
-- The Group menu has Search, Register and Unregister again. Register (or typing `/lfg on`) puts you
-  on the list of players looking for a group, Unregister (`/lfg off`) takes you off it. Search opens
-  the window the game had for it: pick any races and classes and a level range (type -1 for the
-  levels you could hunt with), Search, and the players found are listed with their race, class and
-  level, sorted by any column with R1 or Tab and L1. ✕ on a player invites them to your group or
-  sends them a tell; □ shows the window's help. A group's leader looks for players to fill it, a
-  player alone for a group.
-- The Group menu's Show Chat and Hide Chat now tell the server, on every server (they did nothing).
-- At the auction you can put up a whole stack, or part of one: the form asks how many, and the
-  prices are each item's. Bidding asks how many you want, "Buy all now" buys the whole stack at its
-  price each, and the bidders' list shows how many each one asked for. Items with Lore can be put up
-  too.
-- On such a server the Ogre and the Alchemist show in the auction's pickers and in an item's races
-  and classes only when the server has them.
-
-## 2026-10-29 · Mail to several players, Reply All, and the live game's warnings
-- On a server that offers it, a letter can go to several players at once: write their names in To
+- **Looking for a group.** The Group menu has Search, Register and Unregister. Register (or typing
+  `/lfg on`) puts you on the list of players looking for a group, Unregister (`/lfg off`) takes you
+  off it. Search opens the game's window for it: pick any races and classes and a level range (type
+  -1 for the levels you could hunt with), Search, and the players found are listed with their race,
+  class and level, sorted by any column with R1 or Tab and L1. ✕ on a player invites them to your
+  group or sends them a tell; □ shows the window's help. A group's leader looks for players to fill
+  it, a player alone for a group.
+- **Auctions of stacks.** You can put up a whole stack, or part of one: the form asks how many, and
+  the prices are each item's. Bidding asks how many you want, "Buy all now" buys the whole stack at
+  its price each, and the bidders' list shows how many each one asked for. Items with Lore can be put
+  up too. The Ogre and the Alchemist show in the auction's pickers and in an item's races and
+  classes only when the server has them.
+- **Mail to several players.** A letter can go to several players at once: write their names in To
   with commas or semicolons between them. If a name is nobody's, the letter is not sent and the box
   names who was not found, so you can put it right. If someone's mailbox is full, or they have too
   many unread letters from you, the chat says so in red, naming them, and everyone else gets it.
-- On such a server a letter you read shows who it went to, under From, and its options have Reply
-  All between Reply and Delete: it answers the sender and everyone else it went to.
-- On servers that do not offer it (Sandstorm among them), a letter still goes to one player at a time.
-- In your inbox, up from the first letter now goes round to the last, and down from the last to the
-  first.
-- Class Mastery: buying a second Master Class while you have one is now refused at once, with "You
-  cannot possess more than one Master Class at a time." in red, where it used to only warn and then
-  let you ask the server anyway.
-- Destroying an item now asks 'Destroy item "<its name>"?', so you can see which one you picked,
-  and selling one to a merchant asks 'Sell item "<its name>"?' for everything but loot. Both start
-  on No.
-- Petitions: a petition the staff have closed no longer says only "System is temporarily
-  unavailable. (Code: -8)": the live game's explanation follows, that the petition may have been
-  addressed (the box has room for its start, as the live game's had).
-- For GMs: the live game's /rst_mastr, /rst_both, /rem_abil, /banktunar and /servdown are typed in
-  the chat as the live game had them, and work while the server has your GM commands on.
+- A letter you read shows who it went to, under From, and its options have Reply All between Reply
+  and Delete: it answers the sender and everyone else it went to.
+- **Dyed armour.** Armour, robes and helms can be any colour, sent the way the game did it at its
+  end (on eqoaclassic a game master sets them). Each dyed piece is drawn in its colour on your
+  character, on everyone near you and on the character select screen. Armour that is not dyed looks
+  exactly as before.
+- **On every server, Sandstorm included:** buying a second Master Class while you have one is
+  refused at once, with "You cannot possess more than one Master Class at a time." in red, where it
+  used to only warn and then let you ask the server anyway.
+- On every server: destroying an item asks 'Destroy item "<its name>"?', so you can see which one
+  you picked, and selling one to a merchant asks 'Sell item "<its name>"?' for everything but loot.
+  Both start on No.
+- On every server: a petition the staff have closed no longer says only "System is temporarily
+  unavailable. (Code: -8)": the game's explanation follows, that the petition may have been
+  addressed (the box has room for its start, as the game's had). In your inbox, up from the first
+  letter goes round to the last, and down from the last to the first. The Group menu's Show Chat
+  and Hide Chat now tell the server (they did nothing).
+- For GMs, on every server: the game's /rst_mastr, /rst_both, /rem_abil, /banktunar and /servdown
+  are typed in the chat, and work while the server has your GM commands on.
+- **Also in this build:** your own character is now drawn at the size the server gives it, as
+  everyone else is: on eqoaclassic a gnome is a little smaller than before (9 tenths). How you walk
+  and what you bump into are as before.
 
 ## 2026-10-29 · The who list in CM order on Sandstorm, as on a PS2
 - On Sandstorm the who list now shows players in the server's own order, highest combat masteries
