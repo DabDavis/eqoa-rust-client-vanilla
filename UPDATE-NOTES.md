@@ -5,6 +5,19 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-31 · Glowing weapons shine again
+- Many weapons and things in the world give off a light of their own on a PS2, and this client
+  had been drawing them only as bright as the light around them. The Sword of Virtue's blade,
+  guard and pommel now gleam white and pale blue by day and night, as on a PlayStation 2, and so
+  do Virtus Ferrum and the blades made like it (the Nitefyre Scimitar, Northwind Longsword, Blood
+  Iron Longblade), and a great many glowing staves, wands, totems, rapiers and axes. The same goes
+  for the glowing crystals, lamps and creatures' eyes the world has.
+- Character select now shows what the PlayStation 2 shows there: the white flames on the stage's
+  braziers, their sparks rising, and your weapon's glow (an epic weapon's column of light) in your
+  character's hand.
+- A problem report (F3) now says, for each creature round you, whether the server lets it be
+  targeted: press F3 next to something you cannot target.
+
 ## 2026-10-31 · Sound in a crowd, Sandstorm's boon, walking while casting
 - Sounds no longer cut out in a big fight or a crowd. When many creatures swing, get hit or cast
   at once, the game used to lose the sounds that did not fit its one message a frame to the sound
