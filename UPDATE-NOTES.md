@@ -5,6 +5,22 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-31 · Sound in a crowd, Sandstorm's boon, walking while casting
+- Sounds no longer cut out in a big fight or a crowd. When many creatures swing, get hit or cast
+  at once, the game used to lose the sounds that did not fit its one message a frame to the sound
+  chip (a PS2 does too, about one frame in ten of a 24-creature fight), and with more than the
+  game's 24 creatures shown (NPC/PC Display) many more of them. Every sound now plays.
+- As on a PS2, creatures behind the camera or a wall no longer make their swing, hit and step
+  sounds, and with more than 24 creatures shown only the 24 nearest you are heard.
+- When Sandstorm's boon throws everyone in Freeport into the sky, you fall at once now, as on a
+  PS2. The game kept a second's loading screen for any trip of 200 or more, which held you in the
+  air with nothing sent: to everyone else you hung there, and players thrown up after you landed
+  on you and stood in the air. A long trip that loads a new place (Return Home, a coach to another
+  town) still keeps its second.
+- While casting you walk for exactly as long as on a PS2 (a hair longer than before). A problem
+  report (F3) now says what is keeping you walking and what your character's legs were doing, so
+  send one right when you are stuck walking or your steps stutter.
+
 ## 2026-10-30 · Your character there from your first moment in the world
 - Now and then you could come into the world without your own character drawn, and with an empty compass and bars, until something about you changed. The server's first word about you had come a moment before the world itself and was thrown away; it is kept now.
 
