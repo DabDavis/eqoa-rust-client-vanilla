@@ -3871,7 +3871,9 @@ impl Play {
             }
         } else {
             eprintln!("play: teleport to {pos:?}");
-            let far = crate::loading::far(walker_at(walker), pos);
+            // held only where a PS2 would read zones for it (`needs_read`)
+            let from = walker_at(walker);
+            let far = crate::loading::far(from, pos) && crate::loading::needs_read(&walker.scene.zone_bounds, from, pos);
             if placing == Placing::MoveTo {
                 walker.move_to(pos, hpr[0]);
             } else {
@@ -8097,6 +8099,63 @@ mod commands {
         also.scene = with_b();
         d.loading_step(&mut also, true);
         assert_eq!(also.cam.walk.phys.position.y.0, floor - 2.0, "a dump's SetLocation as it is");
+    }
+
+    /// Sandstorm's boon (F3 pass 25): "A great wind stirs across Freeport.",
+    /// then every player there is moved (0x00B2) 71 up into its sky, all to
+    /// one point. From Freeport's coach, 358 away, a PS2 reads no zone for it
+    /// (the four round the point are in its cache: `loading::needs_read`) and
+    /// shows its loading screen for a moment; here the screen comes down as
+    /// the zones are in, the move is answered with its first 0x40 from the air
+    /// at once, and the walk falls. Held its second, the walk stood in the air
+    /// with nothing sent, and the players the boon moved after it were put on
+    /// it there (their `Respawn` casts meet its capsule). Control: the same
+    /// move from Highpass, 3,871 away, reads them all and is held.
+    #[test]
+    fn the_boons_move_across_freeport_is_not_held() {
+        let iso = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        if !iso.exists() {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        }
+        crate::s2::with_rules(crate::s2::Rules::retail(), || {
+            let (coach, highpass) = ((25273.0f32, 15723.0f32), (23533.45f32, 18890.77f32));
+            let boon = [25619.072f32, 125.0, 15629.557];
+            let mut lib = Library::new();
+            let w = lib.add("TUNARIA.ESF", crate::stream::open_file(&iso, "TUNARIA.ESF").unwrap());
+            let mut src = crate::stream::FileZones::open(&iso, "TUNARIA.ESF").unwrap();
+            crate::stream::fill(&mut lib, w, coach.0, coach.1, &mut src);
+            crate::stream::fill(&mut lib, w, highpass.0, highpass.1, &mut src);
+            let tunaria = || vi::world::World::load(&lib, w).unwrap();
+            let answer = |token: i64| {
+                let mut w = net::stream::Writer::op(0x0049);
+                w.signed(token);
+                (drdp::TYPE_GUARANTEED, w.data)
+            };
+            let mut p = play();
+            p.session.record = Some(Vec::new());
+            let mut walker = Walker::arrive(tunaria(), Spawn::ground(coach.0, coach.1, 0.0));
+            p.loading_step(&mut walker, true);
+            p.session.record.as_mut().unwrap().clear();
+            let now = p.session.now() as i64;
+            p.msg_00b2(&mut walker, 0, boon, [0.0; 3], 7, now);
+            assert!(p.loading(), "up for the move");
+            p.loading_step(&mut walker, true);
+            assert!(!p.loading(), "down as its zones are in: a PS2 reads none");
+            let c = walker.cam.walk.committed.position;
+            assert_eq!([c.x.0, c.y.0, c.z.0], boon, "in the air where the server put it");
+            let at = vi::selfstate::encode(0, &walker.cam.walk.committed, 0, p.target);
+            assert_eq!(std::mem::take(p.session.record.as_mut().unwrap()), [answer(7), (0x40, at)], "answered, and the 0x40 from the air");
+            // control: from Highpass the zones round the point are read, and
+            // the screen stays up its second
+            let mut q = play();
+            let mut from_hp = Walker::arrive(tunaria(), Spawn::ground(highpass.0, highpass.1, 0.0));
+            q.loading_step(&mut from_hp, true);
+            let now = q.session.now() as i64;
+            q.msg_00b2(&mut from_hp, 0, boon, [0.0; 3], 8, now);
+            q.loading_step(&mut from_hp, true);
+            assert!(q.loading(), "control: from Highpass, held");
+        });
     }
 
     /// `SendPosition` every `m_p07578` ticks of the game's clock: 100 until

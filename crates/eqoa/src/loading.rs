@@ -50,7 +50,8 @@ pub const CAP_MS: i64 = 60_000;
 /// jumping from one place to the other (F3 20261025-171303, Return Home:
 /// "even a flash will do so its not so jarring"; the user's choice,
 /// 2026-10-25), unless the player chose Instant (`Screen::hold_far`). The
-/// client's, not the game's; a short hop is as before.
+/// client's, not the game's; a short hop is as before, and so is a far move
+/// in the same world with no zone to read (`needs_read`).
 pub const FAR_MOVE: f32 = 200.0;
 pub const FAR_HOLD_MS: i64 = 1000;
 
@@ -58,6 +59,28 @@ pub const FAR_HOLD_MS: i64 = 1000;
 pub fn far(from: [f32; 3], to: [f32; 3]) -> bool {
     let d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
     (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() >= FAR_MOVE
+}
+
+/// Whether a move in the same world from `from` to `to` has a PS2 read zones
+/// off the disc: `EnterWorld`'s `StreamFillCache` reads the zones within the
+/// inner radius of the arrival measured flat (`stream::fill_set`), and those
+/// within the inner radius of where it stood are in its cache already
+/// (`VIWorld::StreamLeaf` loads inside it and lets go only past the outer).
+/// A far move with nothing to read shows the game's loading screen for a
+/// moment only (eqoa-port: some five frames of it for Sandstorm's boon, the
+/// move 71 up into Freeport's sky), so it is not held (`Screen::hold_far`):
+/// held, the walk stood in the air at the arrival a second with no 0x40
+/// sent, and every player the boon threw there at once stood on the ones held
+/// before them (F3 pass 25).
+pub fn needs_read(bounds: &[vi::geom::BBox<Ee>], from: [f32; 3], to: [f32; 3]) -> bool {
+    let inner = vi::world::STREAM_INNER * vi::world::STREAM_INNER;
+    let (a, b) = (vi::vect::Vect3::<Ee>::of(to[0], 0.0, to[2]), vi::vect::Vect3::<Ee>::of(from[0], from[1], from[2]));
+    bounds.iter().any(|z| {
+        let mut flat = *z;
+        flat.min.y = f(-1e9);
+        flat.max.y = f(1e9);
+        flat.distance_squared(&a).0 < inner && z.distance_squared(&b).0 >= inner
+    })
 }
 
 /// `LoadingProgress`'s 2D half: the logo out of "sheet1", the expansion's
@@ -601,5 +624,35 @@ mod tests {
         let mut g = Gears::load(&lib).unwrap();
         g.pose(2_147_717_568);
         assert_eq!(g.pose(500).len(), 2, "a clock gone back");
+    }
+
+    /// A far move in the same world reads only the zones round the arrival
+    /// (within 900 of it, measured flat) that are not within 900 of where it
+    /// stood (`needs_read`): a row of 1,000-wide zones, a move of 300 within
+    /// the first reads nothing, one of 2,000 reads the zone past the cache,
+    /// and a zone round the arrival exactly 900 from the start counts as
+    /// read. Control: counting nothing as in the cache (the rule before),
+    /// the short far move reads too.
+    #[test]
+    fn a_far_move_reads_only_the_zones_its_start_does_not_hold() {
+        let zone = |x: f32| vi::geom::BBox::<Ee> { min: vi::vect::Vect3::of(x, 0.0, 0.0), max: vi::vect::Vect3::of(x + 1000.0, 100.0, 1000.0) };
+        let row: Vec<_> = (0..6).map(|k| zone(k as f32 * 1000.0)).collect();
+        let start = [500.0, 50.0, 500.0];
+        assert!(!needs_read(&row, start, [800.0, 125.0, 500.0]), "300 on, its zones all in the cache");
+        assert!(needs_read(&row, start, [2500.0, 50.0, 500.0]), "2,000 on: the zone past the cache");
+        // zone 1 begins 900 from x 100, so from there it is not counted in
+        assert!(needs_read(&row, [100.0, 50.0, 500.0], [400.0, 50.0, 500.0]), "900 from the start: read");
+        assert!(!needs_read(&row, [100.1, 50.0, 500.0], [400.0, 50.0, 500.0]), "just inside 900: in");
+        // the zone held under the arrival counts whatever its height
+        let deep = vec![zone(0.0), vi::geom::BBox::<Ee> { min: vi::vect::Vect3::of(1000.0, -5000.0, 0.0), max: vi::vect::Vect3::of(2000.0, -4900.0, 1000.0) }];
+        assert!(needs_read(&deep, start, [1200.0, 50.0, 500.0]), "a zone far below the start, round the arrival on the map");
+        // control: nothing in the cache, as every far move was held before
+        let cached_none = |to: [f32; 3]| row.iter().any(|z| {
+            let mut flat = *z;
+            flat.min.y = f(-1e9);
+            flat.max.y = f(1e9);
+            flat.distance_squared(&vi::vect::Vect3::of(to[0], 0.0, to[2])).0 < 900.0 * 900.0
+        });
+        assert!(cached_none([800.0, 125.0, 500.0]), "control: the short far move held by the rule before");
     }
 }

@@ -613,8 +613,9 @@ pub struct ClientOptions {
     /// game's look (the user, 2026-10-30, named no default: flip it here).
     pub ps2_fog: bool,
     /// Loading Screens: Longer, a long trip (Return Home, a coach, a port of
-    /// 200 or more, another world) keeps the loading screen up at least a
-    /// second, as a PS2's disc read would (`loading::FAR_HOLD_MS`); Instant,
+    /// 200 or more with zones a PS2 would read, another world) keeps the
+    /// loading screen up at least a second, as a PS2's disc read would
+    /// (`loading::FAR_HOLD_MS`, `loading::needs_read`); Instant,
     /// it comes down as soon as the place is in (the user, 2026-10-25: "so
     /// if players want the instant or the longer loading screens").
     pub loading_longer: bool,
