@@ -22,17 +22,27 @@
 //! uploads zeros there).
 //!
 //! More of the same kind (F3 20261025-225337, crunchy again with the first
-//! fixed), where the console loses an upload's command: the packet is 128
-//! words and a busy frame's own sounds fill it, and the console drops what
-//! does not fit, the copy of a block included, so the sound was marked
-//! uploaded with whatever its RAM held; the packet is now sent first to make
-//! room (`idle_transfer`). A block is not sent into the IOP's buffer while
-//! the packet still holds, unsent, the copy of the last one (the console
-//! guards only a copy that opens it, `gSndPacket[1] == 1`), nor a module
-//! while a relocation waits. And a stop that finds the packet full heads the
-//! next one (`stop_channels`): dropped, its voices played on with no sound to
-//! stop them. None of these changes a packet the decomp's device sends where
-//! the console loses nothing (`tests/oracle_snddev.rs`).
+//! fixed), where the console loses an upload's command: a block is not sent
+//! into the IOP's buffer while the copy of the last one is still to be sent
+//! (the console guards only a copy that opens the packet, `gSndPacket[1] ==
+//! 1`), nor a module while a relocation waits.
+//!
+//! And the packet's own limit (F3 pass 25, 2026-10-31: "sound cutting out
+//! when many mobs on screen"): the packet is 128 words, and the console's
+//! SoundCmd drops what does not fit, so in a busy frame (a pack's swings and
+//! hits started at once, each with its volume, pan and pitch: 26 words a
+//! sound) the sounds past the first few never played, a stop let a voice play
+//! on with no sound to stop it, a set left a sound at full volume, a lost copy
+//! marked a sound uploaded with whatever its RAM held, and the ambience's and
+//! the music's volumes went unset. A 24-creature fight (the PS2's own count)
+//! overflows the packet in about one frame in ten. Here what does not fit
+//! waits in a backlog, and it and everything after it go in the packets after
+//! the first, in order (`sound_cmd`, `sound_flush`): sent at once while the
+//! IOP takes them, at the next flush while it is busy. Nothing is dropped but
+//! past `BACKLOG_MAX` (an IOP that never answers). With the console's rule
+//! (`console_drops`) every packet is the decomp's (`tests/oracle_snddev.rs`),
+//! a full frame's included; a frame that fits is the console's either way
+//! (`tests/device_backlog.rs`).
 //!
 //! And one that is the client's own, not the console's (F3 20261026-075325,
 //! crunchy again at Frame Rate 60): the console runs every sound's caller once
@@ -40,16 +50,10 @@
 //! the game's), but a frame drawn between two of the game's runs the callers
 //! that set a playing sound's volume and pan every frame (a creature's loop,
 //! an effect's sound sprites, the rain) again, into the same packet: twice the
-//! console's sets at 60 frames a second, more above it, until the packet was
-//! full and the console's rule dropped the rest, a new sound's volume, pan and
-//! pitch among them (it played at full volume wherever it was). Between two of
-//! the game's frames (`set_between`) a playing sound's volume, pan and pitch
-//! are held and sent once, at the game's frame, so the packets are the
-//! console's at any frame rate (`tests/device_cadence.rs`). Where the console
-//! itself drops one (a busy frame at its own cadence), a volume, pan or pitch
-//! that finds the packet full is held for the next packet the same way, as
-//! the stops are: a sound started then plays a frame at full volume, not its
-//! whole life.
+//! console's sets at 60 frames a second, more above it. Between two of the
+//! game's frames (`set_between`) a playing sound's volume, pan and pitch are
+//! held and sent once, at the game's frame, so the packets are the console's
+//! at any frame rate (`tests/device_cadence.rs`).
 
 use std::marker::PhantomData;
 use vi::Model;
@@ -253,6 +257,10 @@ impl Blocks {
 /// SPU2's own areas below and its last 4 KB.
 pub const SPU_POOL: i32 = 0x1f9fc0;
 
+/// The most words the backlog keeps (`sound_cmd`): 64 packets' worth, far
+/// past the most a frame queues; only an IOP that never answers reaches it.
+pub const BACKLOG_MAX: usize = 64 * 126;
+
 fn round64(size: i32) -> i32 {
     ((size + 63) / 64) * 64
 }
@@ -331,24 +339,31 @@ pub struct SoundDevice<M: Model> {
     /// report's sound line
     pub flushes_refused: u32,
     pub uploads_held: u32,
-    /// commands `sound_cmd` dropped because the packet was full, as the
-    /// console's SoundCmd drops them (a busy frame's sounds), and the stops
-    /// that found it full (`stop_channels`: sent at the head of the next
-    /// packet instead, so not among the dropped)
+    /// what did not fit the packet, in the order it came, as the packet
+    /// holds a command (its id, its argument count, its arguments): the
+    /// packets after it (`sound_flush`), where the console's SoundCmd drops
+    /// it (the header's list)
+    backlog: Vec<u32>,
+    /// the commands that found the packet full and went in a packet after
+    /// it (`sound_cmd`), by their id (99, the test tone, as 0): which kinds
+    /// a busy frame sends late, and how many (the report's sound line);
+    /// `cmds_dropped`, past the backlog's cap (`BACKLOG_MAX`), the ones lost
+    pub cmds_later: u32,
+    pub later_by_id: [u32; 16],
     pub cmds_dropped: u32,
-    pub stops_dropped: u32,
-    /// stops that found the packet full, for the head of the next one: the
-    /// channels', and the XM players' (`stop`), sent first, as `stop` sends
-    /// a module's before its channels'
-    stops_waiting: u64,
-    xm_stops_waiting: Vec<(i32, i32)>,
+    /// the most packets one flush sent (1 where the console's would have
+    /// lost nothing)
+    pub most_packets: u32,
+    /// The console's own rule (`tests/oracle_snddev.rs`, against the decomp):
+    /// a command that does not fit the packet is dropped, no backlog. With it
+    /// every packet is the console's, a full one's too.
+    pub console_drops: bool,
+    /// voices a new sound took from playing ones of its priority or below
+    /// (`allocate_channels`: the 46 all in use; the report's sound line)
+    pub steals: u32,
     /// the most words a packet has held when it was sent (of 127): how near
     /// a frame's commands come to filling it (the report's sound line)
     pub most_words: i32,
-    /// the commands a full packet dropped, by their id (`sound_cmd`; 99,
-    /// the test tone, as 0): which kinds a busy frame loses (the report's
-    /// sound line)
-    pub dropped_by_id: [u32; 16],
     /// a frame drawn between two of the game's (`set_between`), and the
     /// volumes, pans and pitches it held for the game's frame since the
     /// device was made (the report's sound line)
@@ -356,10 +371,6 @@ pub struct SoundDevice<M: Model> {
     /// the frames drawn, counted by `set_between`
     drawn: u32,
     pub held_sets: u32,
-    /// volumes, pans and pitches that found the packet full, held for the
-    /// next one instead of dropped (`keep_volume`, `keep_pitch`; among
-    /// `cmds_dropped`, as the stops are)
-    pub sets_kept: u32,
     _m: PhantomData<M>,
 }
 
@@ -409,16 +420,17 @@ impl<M: Model> SoundDevice<M> {
             failed_creates: [0; 2],
             flushes_refused: 0,
             uploads_held: 0,
+            backlog: Vec::new(),
+            cmds_later: 0,
+            later_by_id: [0; 16],
             cmds_dropped: 0,
-            stops_dropped: 0,
-            stops_waiting: 0,
-            xm_stops_waiting: Vec::new(),
+            most_packets: 0,
+            console_drops: false,
+            steals: 0,
             most_words: 0,
-            dropped_by_id: [0; 16],
             between: false,
             drawn: 0,
             held_sets: 0,
-            sets_kept: 0,
             _m: PhantomData,
         };
         d.bgm_version = bgm_version;
@@ -554,17 +566,6 @@ impl<M: Model> SoundDevice<M> {
         self.send_held();
         self.sound_cmd(3, 0);
         self.sound_flush(link);
-        if (self.stops_waiting != 0 || !self.xm_stops_waiting.is_empty()) && self.packet[0] == 0 {
-            for (lo, hi) in std::mem::take(&mut self.xm_stops_waiting) {
-                self.args[0] = lo;
-                self.args[1] = hi;
-                self.sound_cmd(9, 2);
-            }
-            let mask = std::mem::take(&mut self.stops_waiting);
-            if mask != 0 {
-                self.stop_channels(mask);
-            }
-        }
         self.frame = self.frame.wrapping_add(1);
         // the next commands are the next frame's, until a frame drawn
         // between two of the game's says otherwise
@@ -1021,16 +1022,7 @@ impl<M: Model> SoundDevice<M> {
             let (lo, hi) = ((p.channels & 0xffffff) as i32, (p.channels >> 24) as i32);
             self.args[0] = lo;
             self.args[1] = hi;
-            if !self.sound_cmd(9, 2) {
-                // A departure, as for the channels' stop (`stop_channels`):
-                // dropped, the module plays on in SNDDRV's player on the
-                // channels the device lets go here, over every sound it puts
-                // on them next, for good when it repeats (an ambient track):
-                // its notes keyed over theirs. It heads the next packet
-                // instead. (F3 20261026-075325)
-                self.xm_stops_waiting.push((lo, hi));
-                self.stops_dropped += 1;
-            }
+            self.sound_cmd(9, 2);
         }
         self.stop_channels(p.channels);
         self.channels &= !p.channels;
@@ -1065,24 +1057,15 @@ impl<M: Model> SoundDevice<M> {
                 self.args[0] = first_channel(p.channels);
                 self.args[1] = next_channel(p.channels, self.args[0]);
                 self.args[2] = scaled;
-                self.keep_pitch(pb, 5, 3);
+                self.sound_cmd(5, 3);
             }
             Some(View::Xm { .. }) => {
                 self.args[0] = (p.channels & 0xffffff) as i32;
                 self.args[1] = (p.channels >> 24) as i32;
                 self.args[2] = pitch;
-                self.keep_pitch(pb, 11, 3);
+                self.sound_cmd(11, 3);
             }
             None => {}
-        }
-    }
-    /// A playback's pitch queued; held for the next packet when this one is
-    /// full (`sets_kept`).
-    fn keep_pitch(&mut self, pb: usize, id: u32, argc: i32) {
-        if !self.sound_cmd(id, argc) {
-            let p = &mut self.playbacks[pb];
-            p.held_pitch = Some(p.pitch);
-            self.sets_kept += 1;
         }
     }
 
@@ -1105,7 +1088,7 @@ impl<M: Model> SoundDevice<M> {
                     pan = 0;
                 }
                 self.args[3] = pan;
-                self.keep_volume(pb, 6, 4);
+                self.sound_cmd(6, 4);
             }
             Some(View::Xm { volume, .. }) => {
                 let g = M::mul(M::mul(volume, p.volume), cv);
@@ -1117,18 +1100,9 @@ impl<M: Model> SoundDevice<M> {
                     pan = 0;
                 }
                 self.args[3] = pan;
-                self.keep_volume(pb, 10, 4);
+                self.sound_cmd(10, 4);
             }
             None => {}
-        }
-    }
-    /// A playback's volume and pan queued; held for the next packet when
-    /// this one is full (`sets_kept`).
-    fn keep_volume(&mut self, pb: usize, id: u32, argc: i32) {
-        if !self.sound_cmd(id, argc) {
-            let p = &mut self.playbacks[pb];
-            p.held_volume = Some(p.volume);
-            self.sets_kept += 1;
         }
     }
 
@@ -1213,6 +1187,7 @@ impl<M: Model> SoundDevice<M> {
         self.init_spu_mem();
         self.words = 0;
         self.packet[0] = 0;
+        self.backlog.clear();
         self.sound_cmd(0, 0);
         self.sound_flush(link);
         self.iop_buf = self.status[0];
@@ -1256,6 +1231,7 @@ impl<M: Model> SoundDevice<M> {
                 let next = self.active.get(k + 1).copied();
                 if priority >= self.playbacks[pb].priority {
                     need -= channel_count(self.playbacks[pb].channels);
+                    self.steals += 1;
                     self.stop(self.playbacks[pb].handle);
                     if need <= 0 {
                         break;
@@ -1283,19 +1259,16 @@ impl<M: Model> SoundDevice<M> {
         got
     }
 
-    /// A stop already queued this frame is merged into rather than re-sent.
+    /// A stop already queued is merged into rather than re-sent: the
+    /// packet's first, as the console's `SoundFindCmd` finds it, else the
+    /// backlog's first (`sound_cmd`).
     fn stop_channels(&mut self, mask: u64) {
         if let Some(k) = self.find_cmd(4) {
             self.packet[k] |= (mask & 0xffffff) as u32;
             self.packet[k + 1] |= (mask >> 24) as u32;
-        } else if self.words + 2 + 3 >= 128 {
-            // A departure: the packet is full and the console drops the stop,
-            // leaving its voices playing with no sound to stop them (a looped
-            // one for good, over whatever its RAM comes to hold). It goes at
-            // the head of the next packet instead, ahead of anything started
-            // there on those channels (`process`). (F3 20261025-225337)
-            self.stops_waiting |= mask;
-            self.stops_dropped += 1;
+        } else if let Some(k) = self.find_later(4) {
+            self.backlog[k] |= (mask & 0xffffff) as u32;
+            self.backlog[k + 1] |= (mask >> 24) as u32;
         } else {
             self.args[0] = (mask & 0xffffff) as i32;
             self.args[1] = (mask >> 24) as i32;
@@ -1338,7 +1311,7 @@ impl<M: Model> SoundDevice<M> {
     /// the IOP has not answered the last call, so one may wait inside it),
     /// when what is marked uploaded may not be there yet.
     pub fn check_ram(&self, ram: &[u8], busy: bool) -> Option<RamCheck> {
-        if busy || (self.packet[0] != 0 && self.find_cmd(1).is_some()) {
+        if busy || self.queued(1) {
             return None;
         }
         let mut c = RamCheck::default();
@@ -1418,18 +1391,11 @@ impl<M: Model> SoundDevice<M> {
     /// otherwise the next block of at most 64 KB goes.
     fn idle_transfer(&mut self, link: &mut dyn Link) {
         if self.xfer_dma != 0 {
-            // A departure: the packet fills (a busy frame's sounds started,
-            // stopped, their volumes and pans set, all queued before this
-            // step; or packets kept back while the IOP was busy) and
-            // `sound_cmd` drops what does not fit, as the console's SoundCmd
-            // does: the copy (or relocation) dropped, the sound was marked
-            // uploaded with whatever its RAM held, and played so until it was
-            // let go. The packet is sent first to make room, and while the IOP
-            // is too busy to take it the step waits. (F3 20261025-225337)
-            if self.words + 2 + 3 >= 128 && self.sound_flush(link) < 0 {
-                self.uploads_held += 1;
-                return;
-            }
+            // A full packet no longer loses the copy (or relocation): what
+            // does not fit goes in the packets after it (`sound_cmd`), where
+            // the console's SoundCmd drops it and the sound was marked
+            // uploaded with whatever its RAM held, played so until it was let
+            // go (F3 20261025-225337).
             self.xfer_dma = 0;
             if self.xfer_spu_addr != -1 {
                 self.args[0] = self.xfer_last;
@@ -1484,7 +1450,7 @@ impl<M: Model> SoundDevice<M> {
             // sound's start) where that part belonged, wrong for as long as it
             // was kept. A relocation waiting would apply to the next module's
             // bytes as well as its own. (F3 20261025-225337)
-            if self.packet[0] != 0 && (self.find_cmd(1).is_some() || self.find_cmd(7).is_some()) {
+            if self.queued(1) || self.queued(7) {
                 self.uploads_held += 1;
                 return;
             }
@@ -1520,28 +1486,70 @@ impl<M: Model> SoundDevice<M> {
 
     // ---- the packet ------------------------------------------------------------------
 
-    /// Ship the packet if there is anything in it.
+    /// Ship the packet if there is anything in it, then what waits behind it
+    /// (`backlog`), a packet at a time, while the IOP takes them: with
+    /// nothing behind it the console's one packet. The words sent, -1 when
+    /// the IOP is still busy with the last call (the packet stays, and grows,
+    /// until one can go), -2 with nothing to send.
     fn sound_flush(&mut self, link: &mut dyn Link) -> i32 {
         if link.busy() {
             self.flushes_refused += 1;
             return -1;
         }
-        if self.packet[0] == 0 {
+        if self.packet[0] == 0 && self.backlog.is_empty() {
             return -2;
         }
-        self.most_words = self.most_words.max(self.words);
-        self.status = link.call(0x80f0, &self.packet);
-        self.packet[0] = 0;
-        let n = self.words;
-        self.words = 0;
+        let (mut n, mut packets) = (0, 0);
+        loop {
+            if self.packet[0] != 0 {
+                // a command in the last one waits for a vblank: the rest goes
+                // at the next flush, in order
+                if packets > 0 && link.busy() {
+                    break;
+                }
+                self.most_words = self.most_words.max(self.words);
+                self.status = link.call(0x80f0, &self.packet);
+                self.packet[0] = 0;
+                n += self.words;
+                self.words = 0;
+                packets += 1;
+            }
+            if self.backlog.is_empty() {
+                break;
+            }
+            self.refill();
+        }
+        self.most_packets = self.most_packets.max(packets);
         n
     }
 
-    /// Queues command `id` with `argc` arguments: false when the packet is
-    /// full and it is dropped, as the console's SoundCmd drops it.
-    fn sound_cmd(&mut self, id: u32, argc: i32) -> bool {
+    /// The packet filled from the backlog's head, whole commands while they
+    /// fit, as `sound_cmd` fills it.
+    fn refill(&mut self) {
+        let mut k = 0;
+        while k + 1 < self.backlog.len() {
+            let argc = self.backlog[k + 1] as i32;
+            if self.words + argc + 3 >= 128 {
+                break;
+            }
+            let n = self.words as usize;
+            self.packet[n + 1..n + 3 + argc as usize].copy_from_slice(&self.backlog[k..k + 2 + argc as usize]);
+            self.words += 2 + argc;
+            self.packet[0] += 1;
+            k += 2 + argc as usize;
+        }
+        self.backlog.drain(..k);
+    }
+
+    /// Queues command `id` with `argc` arguments. One that does not fit the
+    /// packet, and every one after it until the backlog is sent, waits in the
+    /// backlog for the packets after it (`sound_flush`), in order: where the
+    /// console's SoundCmd drops it (the header's list). Past `BACKLOG_MAX`
+    /// words (an IOP that never answers) it is dropped after all.
+    fn sound_cmd(&mut self, id: u32, argc: i32) {
+        let kind = if (id as usize) < 16 { id as usize } else { 0 };
         let n = self.words;
-        if n + argc + 3 < 128 {
+        if self.backlog.is_empty() && n + argc + 3 < 128 {
             let n = n as usize;
             self.packet[n + 1] = id;
             self.packet[n + 2] = argc as u32;
@@ -1550,15 +1558,33 @@ impl<M: Model> SoundDevice<M> {
             }
             self.words += 2 + argc;
             self.packet[0] += 1;
-            true
+        } else if !self.console_drops && self.backlog.len() + 2 + argc as usize <= BACKLOG_MAX {
+            self.backlog.push(id);
+            self.backlog.push(argc as u32);
+            self.backlog.extend(self.args[..argc as usize].iter().map(|&a| a as u32));
+            self.cmds_later += 1;
+            self.later_by_id[kind] += 1;
         } else {
             self.cmds_dropped += 1;
-            self.dropped_by_id[if (id as usize) < 16 { id as usize } else { 0 }] += 1;
-            if id == 4 {
-                self.stops_dropped += 1;
-            }
-            false
         }
+    }
+
+    /// Where command `id`'s arguments start in the backlog, its first.
+    fn find_later(&self, id: u32) -> Option<usize> {
+        let mut p = 0;
+        while p + 1 < self.backlog.len() {
+            let argc = self.backlog[p + 1] as usize;
+            if self.backlog[p] == id {
+                return Some(p + 2);
+            }
+            p += 2 + argc;
+        }
+        None
+    }
+
+    /// Whether command `id` is still to send, in the packet or behind it.
+    fn queued(&self, id: u32) -> bool {
+        (self.packet[0] != 0 && self.find_cmd(id).is_some()) || self.find_later(id).is_some()
     }
 
     /// Where a queued command's arguments start, by its id.

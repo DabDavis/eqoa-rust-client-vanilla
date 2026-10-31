@@ -240,7 +240,12 @@ fn scenario(planted: bool) -> Option<Pair> {
     let st = |k: usize| u32::from_le_bytes(r[k * 4..k * 4 + 4].try_into().unwrap());
     let mut drv = Driver::with_addresses(Box::new(Files(files)), st(0), st(2));
     drv.call(0x80f0, &[0; 128], &mut Vec::new());
-    let mut p = Pair { o, dev: SoundDevice::new(1), local: Local { drv, sent: Vec::new(), pcm: Vec::new() }, ops: 0, samples: 0, loud: 0, packets: 0, planted };
+    // the console's drop rule, so a full packet's frame (the crowd's) is the
+    // console's too: the backlog that keeps what it drops is the device's one
+    // departure there, tested in device_upload.rs and device_cadence.rs
+    let mut dev = SoundDevice::new(1);
+    dev.console_drops = true;
+    let mut p = Pair { o, dev, local: Local { drv, sent: Vec::new(), pcm: Vec::new() }, ops: 0, samples: 0, loud: 0, packets: 0, planted };
 
     let mut init = 0u32.to_le_bytes().to_vec();
     init.extend(1i32.to_le_bytes());

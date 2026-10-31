@@ -219,10 +219,10 @@ fn the_ram_check_names_a_sound_overwritten() {
 }
 
 /// A packet kept back while the IOP is busy fills (a busy fight's sounds
-/// started and stopped), and a command that does not fit is dropped, as on
-/// the console. The copy of an upload's last block was one of them: the wave
-/// was marked uploaded and played whatever its RAM held. Now the step waits
-/// for room. The control: the IOP never busy, the same commands.
+/// started and stopped), and the console drops a command that does not fit.
+/// The copy of an upload's last block was one of them: the wave was marked
+/// uploaded and played whatever its RAM held. Now what does not fit goes in
+/// the packets after it. The control: the IOP never busy, the same commands.
 #[test]
 fn a_full_packet_does_not_lose_a_copy() {
     for busy in [false, true] {
@@ -252,15 +252,16 @@ fn a_full_packet_does_not_lose_a_copy() {
         }
         assert_eq!(held(&d, l.drv.io.spu.ram(), ia, &a), (true, true), "busy {busy}: A uploaded, its bytes in place");
         assert_eq!(d.check_ram(l.drv.io.spu.ram(), false).map(|c| c.differ), Some(vec![]));
-        assert!(d.most_words >= 121 && d.cmds_dropped > 0, "the packet filled: {} words, {} dropped", d.most_words, d.cmds_dropped);
+        assert!(d.most_words >= 121 && d.cmds_later > 0, "the packet filled: {} words, {} sent later", d.most_words, d.cmds_later);
+        assert_eq!(d.cmds_dropped, 0, "nothing lost");
     }
 }
 
 /// A stop that finds the packet full (no stop in it yet to merge into) was
 /// dropped, as the console drops it: the device let its channel go and the
 /// voice played on with no sound to stop it, a looped one for good, over
-/// whatever its RAM came to hold. It now heads the next packet. The control:
-/// the same stop with room for it.
+/// whatever its RAM came to hold. It now goes in the packet after it. The
+/// control: the same stop with room for it.
 #[test]
 fn a_stop_that_finds_the_packet_full_still_stops() {
     for full in [false, true] {
@@ -290,15 +291,15 @@ fn a_stop_that_finds_the_packet_full_still_stops() {
             frame(&mut d, &mut l);
         }
         assert_eq!(d.status[4] & 1, 0, "full {full}: the loop stopped");
-        assert_eq!(d.stops_dropped > 0, full, "full {full}: the stop found no room");
+        assert_eq!(d.later_by_id[4] > 0, full, "full {full}: the stop found no room");
     }
 }
 
 /// A volume and a pitch that find the packet full were dropped, as the
 /// console drops them: a sound just started then played its whole life at
-/// the full volume and the pitch it started with. They now go in the next
-/// packet: the voice's volume and pitch are the ones set, a frame late. The
-/// control: the same sets with room for them, at once.
+/// the full volume and the pitch it started with. They now go in the packet
+/// after it, in the same flush: the voice's volume and pitch are the ones
+/// set. The control: the same sets with room for them.
 #[test]
 fn a_set_that_finds_the_packet_full_goes_in_the_next() {
     // the left volume and the pitch of voice `ch` on the first core
@@ -318,7 +319,7 @@ fn a_set_that_finds_the_packet_full_goes_in_the_next() {
         d.set_volume(p, 0.25);
         d.set_pitch(p, 2048);
         let ch = if full { 13 } else { 0 };
-        assert_eq!(d.sets_kept > 0, full, "full {full}: the sets found no room");
+        assert_eq!(d.later_by_id[5] + d.later_by_id[6] > 0, full, "full {full}: the sets found no room");
         frame(&mut d, &mut l);
         frame(&mut d, &mut l);
         let base = ((22050i32 << 12) / 48000) as u16;
@@ -329,9 +330,9 @@ fn a_set_that_finds_the_packet_full_goes_in_the_next() {
 /// An ambient track's stop that finds the packet full was dropped, as the
 /// console drops it: SNDDRV's player went on with the module, repeating, on
 /// the channels the device had let go and gave the next sounds, its notes
-/// keyed over theirs for good. It now heads the next packet, and the player
-/// stops. The control: the same stop with room for it. AMBTRACK.ESF's first
-/// module, off the disc.
+/// keyed over theirs for good. It now goes in the packet after it, and the
+/// player stops. The control: the same stop with room for it. AMBTRACK.ESF's
+/// first module, off the disc.
 #[test]
 fn an_ambient_tracks_stop_that_finds_the_packet_full_still_stops() {
     let Some(mut disc) = common::disc() else { return };
@@ -362,6 +363,6 @@ fn an_ambient_tracks_stop_that_finds_the_packet_full_still_stops() {
             frame(&mut d, &mut l);
         }
         assert!(!playing(&d), "full {full}: the player stopped the module");
-        assert_eq!(d.stops_dropped > 0, full, "full {full}: the stop found no room");
+        assert_eq!(d.later_by_id[9] > 0, full, "full {full}: the stop found no room");
     }
 }
