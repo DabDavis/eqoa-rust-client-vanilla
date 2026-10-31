@@ -79,6 +79,10 @@ pub struct Stage {
     arena: Arena,
     /// the sky's models, drawn through the view's rotation alone
     sky: Vec<GpuModel>,
+    /// the arena's particles (its braziers' flames), made at the first frame
+    particles: Option<crate::particles::Particles>,
+    /// their billboards this frame (`particles_frame`)
+    pub fx: Vec<render::billboard::Batch>,
 }
 
 /// The arena on the GPU, room by room, and the terrain patches no room owns.
@@ -106,7 +110,7 @@ impl Stage {
         let mut cam = WalkCamera::<Ee>::default();
         let eye = cam.init(Vect3::of(0.0, 0.0, 0.0), Vect3::of(0.0, 0.0, 0.0), &mut world);
         let sky = sky(lib, &mut world, &eye, g).unwrap_or_default();
-        Some(Stage { world, cam, eye, arena, sky })
+        Some(Stage { world, cam, eye, arena, sky, particles: None, fx: Vec::new() })
     }
 
     /// The arena and the sky uploaded again in the art drawn now (F9: the
@@ -137,13 +141,8 @@ impl Stage {
     /// viewport's shape) at the walk camera's eye, the 8:00 lights.
     pub fn view(&self) -> render::View {
         let eye = glam::Vec3::from(self.eye.position.to_array());
-        let dir = glam::Vec3::from(self.eye.direction.to_array());
         let sky_proj = glam::camera::rh::proj::directx::perspective(FOV.to_radians(), ASPECT, NEAR, FAR);
-        // `SetFarPlane`: the terrain profiles' far at the eye, where the
-        // arena has a profile grid
-        let far = self.world.grid.as_ref().map_or(FAR, |g| g.far_plane(&self.eye.position).0);
-        let proj = crate::fog::with_far(sky_proj, far);
-        let view = glam::camera::rh::view::look_to_mat4(eye, dir.normalize_or(glam::Vec3::Z), glam::Vec3::Y);
+        let (view, proj) = self.camera();
         let tod = vi::tod::TimeOfDay::<Ee>::new();
         let hour = F::new(HOUR);
         let (amb, sun, dir) = tod.lights(hour, F::ZERO);
@@ -174,6 +173,33 @@ impl Stage {
             v.sky_view_proj = Some(sky_proj * rot);
         }
         v
+    }
+
+    /// The view and the projection `view` composes (the billboards take
+    /// them apart): `m_camera` at the walk camera's eye, its far plane the
+    /// terrain profiles' at the eye (`SetFarPlane`) where the arena has a
+    /// profile grid.
+    pub fn camera(&self) -> (glam::Mat4, glam::Mat4) {
+        let eye = glam::Vec3::from(self.eye.position.to_array());
+        let dir = glam::Vec3::from(self.eye.direction.to_array());
+        let sky_proj = glam::camera::rh::proj::directx::perspective(FOV.to_radians(), ASPECT, NEAR, FAR);
+        let far = self.world.grid.as_ref().map_or(FAR, |g| g.far_plane(&self.eye.position).0);
+        let proj = crate::fog::with_far(sky_proj, far);
+        let view = glam::camera::rh::view::look_to_mat4(eye, dir.normalize_or(glam::Vec3::Z), glam::Vec3::Y);
+        (view, proj)
+    }
+
+    /// The arena's particles one frame at `now` (`VIParticleSprite::Raster`
+    /// for each placed in an actor drawn, then `VIParticleSystem::Render`):
+    /// the flames on its sets' braziers. Those of the room drawn alone
+    /// (`room_alone`) when there is one, as `RenderByPortals` rasters its
+    /// actors alone; with the camera in an open room, all of them.
+    pub fn particles_frame(&mut self, lib: &Library, now: i64) {
+        let (view, proj) = self.camera();
+        let eye = glam::Vec3::from(self.eye.position.to_array());
+        let room = self.room_alone().and_then(|r| self.world.zones.first()?.rooms.get(r)).map(|r| r.actors.clone());
+        let ps = self.particles.get_or_insert_with(|| crate::particles::Particles::new(&self.world, now));
+        self.fx = ps.frame_where(&self.world, lib, eye, proj * view, now, |a| room.as_ref().is_none_or(|r| r.contains(&a)));
     }
 
     /// `room_alone` at the camera's eye.
@@ -372,5 +398,54 @@ mod room_tests {
         let open = open.expect("a spot in an open room");
         assert_eq!(room_alone(&w, &open), None);
         assert_eq!(room_alone(&w, &Vect3::of(5000.0, 1.0, 5000.0)), None, "off the arena");
+    }
+}
+
+#[cfg(test)]
+mod particle_tests {
+    use super::*;
+    use vi::world::SpriteKind;
+
+    /// The arena's particles are those of the room drawn: a set's braziers
+    /// (a particle sprite placed in an actor of its room, alone or a group's
+    /// member) burn when its room is the one drawn alone, as
+    /// `RenderByPortals` rasters a closed room's actors and no other's; a
+    /// room drawn with none of them shows none. The control: every actor
+    /// drawn shows them too. Needs `run/eqoa.iso` (ARENA.CSF).
+    #[test]
+    fn the_arenas_braziers_burn_in_the_room_drawn() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut iso) = iso::Iso::open(&path) else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let mut lib = Library::new();
+        lib.add("ARENA.CSF", esf::Container::open(iso.read("DATA2/ARENA.CSF").unwrap()).unwrap());
+        let world = World::<Ee>::load(&lib, 0).expect("the arena");
+        let burns = |k: usize| match &world.actors[k].sprite.map(|s| &world.sprites[s].kind) {
+            Some(SpriteKind::Particle { def: Some(_), .. }) => true,
+            Some(SpriteKind::Group(m)) => m.iter().any(|&(ms, ..)| matches!(world.sprites[ms].kind, SpriteKind::Particle { def: Some(_), .. })),
+            _ => false,
+        };
+        let rooms = &world.zones[0].rooms;
+        let lit = rooms.iter().position(|r| r.actors.iter().any(|&a| burns(a))).expect("a set with a brazier");
+        let dark = rooms.iter().position(|r| !r.actors.iter().any(|&a| burns(a))).expect("a room without one");
+        let brazier = *rooms[lit].actors.iter().find(|&&a| burns(a)).unwrap();
+        // the camera at the brazier, seeing everything
+        let at = world.actors[brazier].location;
+        let eye = glam::Vec3::new(at.x.0, at.y.0, at.z.0);
+        // a box of 1e5 a side: x and y to [-1, 1], z to [0, 1]
+        let all = glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, 0.5)) * glam::Mat4::from_scale(glam::Vec3::new(1e-5, 1e-5, 0.5e-5));
+        let quads = |room: Option<usize>| {
+            let mut p = crate::particles::Particles::new(&world, 0);
+            let mut out = 0;
+            for t in (33..1500).step_by(33) {
+                out = p.frame_where(&world, &lib, eye, all, t, |a| room.is_none_or(|r| rooms[r].actors.contains(&a))).iter().map(|b| b.quads.len()).sum::<usize>();
+            }
+            out
+        };
+        assert!(quads(Some(lit)) > 0, "the set's braziers burn");
+        assert_eq!(quads(Some(dark)), 0, "a room without one");
+        assert!(quads(None) > 0, "the control: everything drawn");
     }
 }

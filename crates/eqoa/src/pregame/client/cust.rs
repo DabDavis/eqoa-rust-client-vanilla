@@ -168,6 +168,11 @@ impl Cust {
             if let Some(g) = cx.gpu.as_ref() {
                 fig.pose(g, cx.now);
             }
+            // the scene's particles: the arena's braziers
+            if let Some(lib) = cx.lib {
+                st.particles_frame(lib, cx.now);
+                fig.particles_frame(lib, &st.eye.position, cx.now);
+            }
             cx.r.mark_split();
             self.shown = true;
         }
@@ -333,7 +338,8 @@ impl Cust {
         let mut view = st.view();
         let at = glam::Vec3::from(st.eye.position.to_array());
         view.point = Some((at, LIGHT_RANGE, glam::Vec3::from(LIGHT)));
-        Some(Scene { view, viewport: VIEWPORT, models: st.models().chain(f.models()).collect() })
+        let billboards = st.fx.iter().chain(&f.fx).cloned().collect();
+        Some(Scene { view, viewport: VIEWPORT, models: st.models().chain(f.models()).collect(), billboards, camera: st.camera() })
     }
 }
 

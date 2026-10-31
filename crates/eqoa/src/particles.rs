@@ -89,9 +89,19 @@ impl Particles {
     /// everything is rendered. Returns each emitter's billboards with its
     /// material.
     pub fn frame(&mut self, world: &World<Ee>, lib: &Library, eye: Vec3, view_proj: Mat4, time: i64) -> Vec<Batch> {
+        self.frame_where(world, lib, eye, view_proj, time, |_| true)
+    }
+
+    /// `frame` with only the emitters of the actors `drawn` keeps placed and
+    /// updated: those of the room a scene draws alone (character select's
+    /// set, `pregame::stage`), as `RenderByPortals` rasters no other.
+    pub fn frame_where(&mut self, world: &World<Ee>, lib: &Library, eye: Vec3, view_proj: Mat4, time: i64, drawn: impl Fn(usize) -> bool) -> Vec<Batch> {
         let planes = frustum(view_proj);
         for k in 0..self.instances.len() {
             let inst = &self.instances[k];
+            if !drawn(inst.actor) {
+                continue;
+            }
             let act = &world.actors[inst.actor];
             let c = match &inst.member {
                 Some(m) => Matrix44::mul(m, &act.object_to_world),

@@ -236,7 +236,28 @@ impl Renderer {
         batches: &[Batch],
         textures: &Textures,
     ) {
-        self.billboards(device, queue, encoder, target, depth, view, proj, batches, textures, Slot::World);
+        self.billboards(device, queue, encoder, target, depth, view, proj, batches, textures, Slot::World, None);
+    }
+
+    /// `draw_billboards` into the rectangle `rect` of the target (x, y,
+    /// width, height in its pixels), as `draw_viewport` draws a window's 3D:
+    /// the particles of character select's arena and of the items in the
+    /// figure's hands (`VIRaster::Viewport`), `view` and `proj` the window's.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_billboards_viewport(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        view: Mat4,
+        proj: Mat4,
+        batches: &[Batch],
+        textures: &Textures,
+        rect: [u32; 4],
+    ) {
+        self.billboards(device, queue, encoder, target, depth, view, proj, batches, textures, Slot::World, Some(rect));
     }
 
     /// The world's billboards after the shadows and the strips
@@ -256,7 +277,7 @@ impl Renderer {
         batches: &[Batch],
         textures: &Textures,
     ) {
-        self.billboards(device, queue, encoder, target, depth, view, proj, batches, textures, Slot::Late);
+        self.billboards(device, queue, encoder, target, depth, view, proj, batches, textures, Slot::Late, None);
     }
 
     /// Billboards that belong to the sky (`VIAtmosphere::RenderStars`: the
@@ -276,7 +297,7 @@ impl Renderer {
         batches: &[Batch],
         textures: &Textures,
     ) {
-        self.billboards(device, queue, encoder, target, depth, view, proj, batches, textures, Slot::Sky);
+        self.billboards(device, queue, encoder, target, depth, view, proj, batches, textures, Slot::Sky, None);
     }
 
     /// The billboards; `far` puts them at the far plane with Z off. The
@@ -297,6 +318,7 @@ impl Renderer {
         batches: &[Batch],
         textures: &Textures,
         slot: Slot,
+        rect: Option<[u32; 4]>,
     ) {
         let far = matches!(slot, Slot::Sky);
         let mut verts: Vec<Vert> = Vec::new();
@@ -314,7 +336,7 @@ impl Renderer {
             let key = if far { (b.blend.min(4), true, false) } else { (b.blend.min(4), b.ztest, b.zwrite) };
             draws.push((key, b.texture, start, verts.len() as u32));
         }
-        self.draw_verts(device, queue, encoder, target, depth, view, proj, &verts, &draws, textures, slot);
+        self.draw_verts(device, queue, encoder, target, depth, view, proj, &verts, &draws, textures, slot, rect);
     }
 
     /// The strips queued for this frame (`strips`: the spell lightning, then
@@ -365,11 +387,12 @@ impl Renderer {
                 draws.push(((s.blend.min(4), s.ztest, s.zwrite), s.texture, start, verts.len() as u32));
             }
         }
-        self.draw_verts(device, queue, encoder, target, depth, view, proj, &verts, &draws, textures, Slot::Strips);
+        self.draw_verts(device, queue, encoder, target, depth, view, proj, &verts, &draws, textures, Slot::Strips, None);
     }
 
     /// The billboard program over `verts`, a run of them per (pipeline key,
-    /// texture), through `slot`'s kept buffers; the sky's at the far plane.
+    /// texture), through `slot`'s kept buffers; the sky's at the far plane;
+    /// into `rect` of the target when one is given.
     #[allow(clippy::too_many_arguments)]
     fn draw_verts(
         &mut self,
@@ -384,6 +407,7 @@ impl Renderer {
         runs: &[Run],
         textures: &Textures,
         slot: Slot,
+        rect: Option<[u32; 4]>,
     ) {
         if runs.is_empty() || verts.is_empty() {
             return;
@@ -457,6 +481,10 @@ impl Renderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
+        if let Some([x, y, w, h]) = rect {
+            pass.set_viewport(x as f32, y as f32, w as f32, h as f32, 0.0, 1.0);
+            pass.set_scissor_rect(x, y, w, h);
+        }
         pass.set_vertex_buffer(0, kept.verts.slice(..size));
         for (key, start, end, id, _) in &draws {
             pass.set_pipeline(&bb.pipelines[key]);

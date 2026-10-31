@@ -286,6 +286,8 @@ impl MiscPage {
         };
         frame_camera(stage, framing);
         stage.process(now);
+        // the arena's particles: its braziers' flames
+        stage.particles_frame(&cx.res.lib, now);
         // the personal light at the eye: mode 1, its radius ramping to 5
         if env.figure.is_some() {
             let step = if now > env.light_time { (now - env.light_time) as f32 * 0.002 } else { 0.0 };

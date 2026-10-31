@@ -157,6 +157,10 @@ pub struct Scene<'a> {
     pub view: render::View,
     pub viewport: [i32; 4],
     pub models: Vec<&'a render::GpuModel>,
+    /// the particles drawn after them (the arena's and the items' in hand),
+    /// and the view and projection they are drawn under (`Stage::camera`)
+    pub billboards: Vec<render::billboard::Batch>,
+    pub camera: (glam::Mat4, glam::Mat4),
 }
 
 /// What a stage asks of the sound device besides its cues.

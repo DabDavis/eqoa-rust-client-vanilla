@@ -3175,6 +3175,12 @@ impl App {
                 if w > 0 && h > 0 {
                     let draws: Vec<render::Draw> = scene.models.iter().map(|&m| render::Draw::Model(m)).collect();
                     g.renderer.draw_viewport(&g.queue, &mut enc, &f.color, &f.depth, &scene.view, &draws, [x, y, w, h]);
+                    // then its particles (`VIParticleSystem::Render` after the actors)
+                    if !scene.billboards.is_empty() {
+                        let textures = render::library_textures(&host.pre.res.lib);
+                        let (v, p) = scene.camera;
+                        g.renderer.draw_billboards_viewport(&g.device, &g.queue, &mut enc, &f.color, &f.depth, v, p, &scene.billboards, &textures, [x, y, w, h]);
+                    }
                 }
                 g.renderer.draw_ui(&g.device, &mut enc, &f.color, &f.depth, f.size, s..n);
             }

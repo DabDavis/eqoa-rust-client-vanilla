@@ -32,6 +32,12 @@ pub struct Figure {
     /// the actor's place and heading, pitch and roll (`CreateActor(at, hpr, 1.0)`)
     pub at: [f32; 3],
     pub hpr: [f32; 3],
+    /// the centre transform `pose` last placed it under
+    centre: Matrix44<Ee>,
+    /// the particles of the items in its hands, made at the first frame
+    held: Option<crate::particles::Held>,
+    /// their billboards this frame (`particles_frame`)
+    pub fx: Vec<render::billboard::Batch>,
 }
 
 /// `CreateActor`'s sprite: a copy of the parsed one (`VICSprite::Copy`,
@@ -119,7 +125,7 @@ impl Figure {
             }
         }
         let gpu = g.renderer.upload(g.device, g.queue, &built, &[render::IDENTITY], &textures);
-        Some(Figure { model, look, sprite, anims, rand, gpu, attached, items, at, hpr })
+        Some(Figure { model, look, sprite, anims, rand, gpu, attached, items, at, hpr, centre: Matrix44::identity(), held: None, fx: Vec::new() })
     }
 
     /// `VICSprite::SetAction(id)` (23 the select screen's flourish, 0 back
@@ -145,6 +151,7 @@ impl Figure {
                 self.anims.time = now;
                 cs.h.process(0, &self.anims);
                 let m = cs.h.calc_trans_about_center(&actor, &self.anims);
+                self.centre = m;
                 cs.h.set_blend_matrices();
                 for (node, gpu) in &self.attached {
                     if let Some(n) = cs.h.nodes.get(*node as usize) {
@@ -159,6 +166,28 @@ impl Figure {
         if !palette.is_empty() {
             g.renderer.set_palette(g.queue, &self.gpu, &palette);
         }
+    }
+
+    /// The particles of the items in its hands one frame at `now`, for a
+    /// camera at `eye`: each item's particle sprites under its node, as the
+    /// scene rasters an attached item (`VIParticleSprite::Raster`, the copy
+    /// `AttachItem` makes having its own emitters), and the particle system
+    /// rendered. An epic weapon's glow at character select.
+    pub fn particles_frame(&mut self, lib: &Library, eye: &Vect3<Ee>, now: i64) {
+        use crate::particles::{How, InHand};
+        let Some(cs) = self.sprite.as_ref() else { return };
+        let mut hands = Vec::new();
+        lib.with_view(lib.view_for(self.model as i32), || {
+            for (slot, &item) in self.items.iter().enumerate() {
+                let Some(n) = cs.item_node(slot).filter(|_| item != 0).and_then(|node| cs.h.nodes.get(node as usize)) else { continue };
+                let at = Matrix44::mul(&n.world, &self.centre);
+                for (k, e) in crate::particles::item_emitters(lib, item).into_iter().enumerate() {
+                    hands.push(InHand { key: (0, slot, item, k), world: Matrix44::mul(&e.member, &at), def: e.def, how: How::Sprite(e.flags), drawn: true });
+                }
+            }
+        });
+        let held = self.held.get_or_insert_with(|| crate::particles::Held::new(now));
+        self.fx = held.frame(lib, &hands, eye, now);
     }
 
     /// What to draw: the body and what it carries.
@@ -208,6 +237,57 @@ mod tests {
         let mut rand = Rand(1);
         let mut parsed = load_csprite(&lib, r, &mut anims, &mut AnimCache::new(), &mut rand).expect("the sprite");
         assert_eq!(first(&mut parsed, &mut anims, &mut rand), [0, 0], "the parsed sprite only idles");
+    }
+
+    /// The items in a figure's hands carry their particles at character
+    /// select as in the world (`particles_frame`): the Sword of Virtue's
+    /// glow, round the hand that holds it. The control: the same figure with
+    /// nothing in its hands has none. Needs `run/eqoa.iso` (the pregame's
+    /// files, ITEM.CSF among them) and a graphics adapter.
+    #[test]
+    fn a_figures_epic_weapon_glows_at_character_select() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut iso) = iso::Iso::open(&path) else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let _gpu = crate::GPU_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let instance = render::wgpu::Instance::new(render::wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&render::wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("SKIP: no graphics adapter");
+            return;
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let mut renderer = render::Renderer::new(&device, &queue, render::TARGET_FORMAT);
+        let mut lib = Library::new();
+        for f in crate::pregame::client::FILES {
+            if let Some(c) = iso.read(f).ok().and_then(|b| esf::Container::open(b).ok()) {
+                lib.add(*f, c);
+            }
+        }
+        let mut g = Gpu { renderer: &mut renderer, device: &device, queue: &queue };
+        let human = vi::hash::hash_resource_id("HumanMale");
+        let look = vi::cust::Look { hair: [1, 2, 3], face: 1, robe: -1, ..Default::default() };
+        let eye = Vect3::of(0.0, 1.0, 4.0);
+        let glow = |items: [u32; 3], g: &mut Gpu| {
+            let mut fig = Figure::new(&lib, g, human, look, items, [0.0; 3], [0.0; 3], 0).unwrap();
+            let mut hand = [0.0; 3];
+            for t in (33..1500).step_by(33) {
+                fig.pose(g, t);
+                fig.particles_frame(&lib, &eye, t);
+                let cs = fig.sprite.as_ref().unwrap();
+                let n = &cs.h.nodes[cs.item_node(0).unwrap() as usize];
+                let w = Matrix44::mul(&n.world, &fig.centre);
+                hand = [w.m[3].x.0, w.m[3].y.0, w.m[3].z.0];
+            }
+            let quads: Vec<[f32; 3]> = fig.fx.iter().flat_map(|b| b.quads.iter().map(|q| q.center)).collect();
+            (quads, hand)
+        };
+        let (quads, hand) = glow([0x88EC_092D, 0, 0], &mut g);
+        assert!(!quads.is_empty(), "the sword's glow");
+        let near = |c: &[f32; 3]| (0..3).map(|k| (c[k] - hand[k]).powi(2)).sum::<f32>().sqrt() < 3.0;
+        assert!(quads.iter().all(near), "round the hand at {hand:?}: {:?}", quads.iter().find(|c| !near(c)));
+        assert!(glow([0; 3], &mut g).0.is_empty(), "the control: empty hands, no particles");
     }
 
     /// A figure is its model as the art drawn has it (`era`): with the 2002

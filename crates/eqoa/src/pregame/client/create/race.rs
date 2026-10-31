@@ -306,6 +306,8 @@ impl RacePage {
         frame_camera(stage, framing);
         stage.cam.orbit_right(F::<Ee>::new(0.3));
         stage.process(now);
+        // the arena's particles: its braziers' flames
+        stage.particles_frame(&cx.res.lib, now);
         // SetPersonalLightMode(2): none
         if let (Some(f), Some(g)) = (env.figure.as_mut(), cx.gpu.as_ref()) {
             f.pose(g, now);

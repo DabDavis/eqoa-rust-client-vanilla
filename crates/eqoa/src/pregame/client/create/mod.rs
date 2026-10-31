@@ -433,7 +433,7 @@ impl Create {
         let f = self.env.figure.as_ref()?;
         let mut view = stage.view();
         view.point = self.env.point;
-        Some(Scene { view, viewport: VIEWPORT, models: stage.models().chain(f.models()).collect() })
+        Some(Scene { view, viewport: VIEWPORT, models: stage.models().chain(f.models()).collect(), billboards: stage.fx.clone(), camera: stage.camera() })
     }
 }
 
