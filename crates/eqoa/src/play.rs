@@ -1029,6 +1029,63 @@ fn let_go(s: &mut crate::sound::Sound, p: &Option<Puppet>) {
     s.let_go(&cs.sounds(), cs.snd.channel);
 }
 
+/// The creatures whose sounds are made this frame (`VICSprite::Process`'s
+/// half): the `RETAIL_SLOTS` nearest the listener (`walker.eye.position`,
+/// where `CalcVolumeAndPan` measures from), where they are drawn
+/// (`actor_pos`), nearer first, the player's own not among them (its sprite
+/// sounds through the walker). The PS2 has 24 entity slots, the server's 24
+/// nearest, and runs every one's sounds every frame (`UpdateCreatures`);
+/// with more shown (NPC/PC Display, a server's 0x7E00) the device was asked
+/// for every one's within earshot, more than its packet and its 46 voices
+/// were made for, and a crowd's swings, hits and steps went unheard (F3
+/// pass 25: "sound cutting out when many mobs on screen"). At 24 or fewer,
+/// every one, as before.
+fn heard_slots(slots: &[Option<net::entity::Entity>], me: Option<u32>, listener: &Vect3<Ee>) -> Vec<bool> {
+    let mut heard = vec![false; slots.len()];
+    let mut by: Vec<(f32, usize)> = slots
+        .iter()
+        .enumerate()
+        .filter_map(|(k, e)| e.as_ref().filter(|e| Some(e.id) != me).map(|e| (k, e)))
+        .map(|(k, e)| {
+            let d = [e.actor_pos[0] - listener.x.0, e.actor_pos[1] - listener.y.0, e.actor_pos[2] - listener.z.0];
+            (d[0] * d[0] + d[1] * d[1] + d[2] * d[2], k)
+        })
+        .collect();
+    if by.len() > RETAIL_SLOTS {
+        by.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        by.truncate(RETAIL_SLOTS);
+    }
+    for (_, k) in by {
+        heard[k] = true;
+    }
+    heard
+}
+
+/// Of `drawn` ((slot, its actor, its off distance)), the slots whose actor
+/// `VIScene::RasterActor` does not raster under the view `view_proj` from
+/// `at` (`World::raster_actors`, its distances from `eye`, as the shadows'
+/// queue goes by), one with no actor among them.
+fn unrastered(world: &mut vi::world::World<Ee>, drawn: &[(usize, Option<usize>, F<Ee>)], view_proj: glam::Mat4, at: glam::Vec3, eye: &Vect3<Ee>) -> Vec<usize> {
+    let offs: std::collections::HashMap<usize, F<Ee>> = drawn.iter().filter_map(|&(_, a, off)| a.filter(|&a| a < world.actors.len()).map(|a| (a, off))).collect();
+    let cam = crate::shadows::game_camera(view_proj, at);
+    let rastered: std::collections::HashSet<usize> = world.raster_actors(&cam, eye, &|a| offs.get(&a).copied()).into_iter().collect();
+    drawn.iter().filter(|(_, a, _)| !a.is_some_and(|a| rastered.contains(&a))).map(|&(slot, _, _)| slot).collect()
+}
+
+/// A creature not heard this frame (`heard_slots`): its loop stopped, as one
+/// out of earshot is (`VICSprite::Process` with a volume of 0), and its
+/// tripped sound triggers let go unplayed, as a creature in no slot trips
+/// none.
+fn hush(cs: &mut CSprite<Ee>, s: &mut crate::sound::Sound) {
+    if cs.snd.channel != -1 {
+        s.dev.stop(cs.snd.channel);
+        cs.snd.channel = -1;
+    }
+    for i in 0..cs.h.triggers.len() {
+        cs.h.reset_trigger(i);
+    }
+}
+
 /// `ApplyLook`'s `SetVisible`: a creature whose `Flag1` is up (state byte
 /// 154's bit 1, an invisible one: Sandstorm sets it on the caster's own
 /// channel) has its skins hidden (`VIClientPart06D00::Apply`'s
@@ -1398,6 +1455,117 @@ mod entity_actors {
         s.init(Vect3::of(x - 4.0, y + 1.2, z), Vect3::of(x + 4.0, y + 1.2, z), F::new(0.6));
         let mut f = Filter::new(FilterKind::Scene, -1);
         if w.collide_sphere(&mut s, &mut f) { f.hit_actor } else { -2 }
+    }
+
+    /// A creature's sound triggers are kept only where the console trips them
+    /// (F3 pass 25, sound cutting out in a crowd): `VIHSprite::Process` runs
+    /// for the actors `VIScene::RasterActor` rasters, so a creature 10 behind
+    /// the camera on Freeport's open ground is among the unrastered and one
+    /// 10 ahead is not; turned round, the other way about. The controls: a
+    /// slot with no actor counts as unrastered, and one past its off distance
+    /// (8 here) too, ahead or not.
+    #[test]
+    fn a_creature_behind_the_camera_trips_no_sound() {
+        let (x, z) = (25275.115f32, 15766.627f32);
+        let Some((lib, file)) = freeport_lib(x, z) else { return };
+        let mut w = Walker::arrive(World::load(&lib, file).unwrap(), crate::walker::Spawn::ground(x, z, 0.0));
+        let eye = w.eye.position;
+        let dir = w.eye.direction;
+        let (ex, ez) = (eye.x.0, eye.z.0);
+        let (dx, dz) = {
+            let n = (dir.x.0 * dir.x.0 + dir.z.0 * dir.z.0).sqrt();
+            (dir.x.0 / n, dir.z.0 / n)
+        };
+        let ground = |w: &mut Walker, x: f32, z: f32| [x, crate::walker::ground(&mut w.scene, x, z).unwrap(), z];
+        let ahead = ground(&mut w, ex + dx * 10.0, ez + dz * 10.0);
+        let behind = ground(&mut w, ex - dx * 10.0, ez - dz * 10.0);
+        let mut p = super::commands::play();
+        for (slot, id, at) in [(3usize, 0x30u32, ahead), (4, 0x40, behind)] {
+            p.entities.slots[slot] = Some(net::entity::Entity { id, kind: net::entity::TYPE_CREATURE, model: HUMAN, drawn_model: HUMAN, scale: 1.0, pos: at, actor_pos: at, creature: Some(net::entity::Creature::default()), ..Default::default() });
+        }
+        p.place_actors(&mut w, &lib);
+        let (a3, a4) = (p.actors[3].map(|a| a.actor), p.actors[4].map(|a| a.actor));
+        assert!(a3.is_some() && a4.is_some(), "both have their actors");
+        let eye_g = glam::Vec3::new(eye.x.0, eye.y.0, eye.z.0);
+        let view = |d: glam::Vec3| crate::walker::projection_to(4.0 / 3.0, 300.0) * glam::camera::rh::view::look_to_mat4(eye_g, d, glam::Vec3::Y);
+        let forward = glam::Vec3::new(dir.x.0, dir.y.0, dir.z.0);
+        // the same look down, turned round
+        let back = glam::Vec3::new(-dir.x.0, dir.y.0, -dir.z.0);
+        let lod_eye = crate::lod::eye(&w.cam, &w.eye.position);
+        let off = F::<Ee>::new(100.0);
+        let drawn = [(3usize, a3, off), (4, a4, off)];
+        assert_eq!(unrastered(&mut w.scene, &drawn, view(forward), eye_g, &lod_eye), vec![4], "the one behind trips nothing");
+        assert_eq!(unrastered(&mut w.scene, &drawn, view(back), eye_g, &lod_eye), vec![3], "turned round, the other");
+        assert_eq!(unrastered(&mut w.scene, &[(3, None, off)], view(forward), eye_g, &lod_eye), vec![3], "the control: no actor");
+        assert_eq!(unrastered(&mut w.scene, &[(3, a3, F::new(8.0))], view(forward), eye_g, &lod_eye), vec![3], "the control: past its off distance");
+    }
+
+    /// The creatures heard (`heard_slots`): the 24 nearest the listener where
+    /// they are drawn, the player's own never among them. The controls: 24
+    /// and fewer are every one, and a tie keeps the lower slot.
+    #[test]
+    fn the_24_nearest_creatures_are_heard() {
+        let at = |d: f32| net::entity::Entity { id: 1000 + d as u32, kind: net::entity::TYPE_CREATURE, actor_pos: [d, 0.0, 0.0], ..Default::default() };
+        let listener = Vect3::of(0.0, 0.0, 0.0);
+        // 30 creatures 1..30 away in slots 30 down to 1, the player in slot 0
+        let mut slots: Vec<Option<net::entity::Entity>> = vec![None; MAX_SLOTS];
+        slots[0] = Some(net::entity::Entity { id: 0x100, ..at(0.0) });
+        for k in 1..=30 {
+            slots[31 - k] = Some(at(k as f32));
+        }
+        let heard = heard_slots(&slots, Some(0x100), &listener);
+        let who: Vec<usize> = (0..MAX_SLOTS).filter(|&k| heard[k]).collect();
+        assert_eq!(who, (7..=30).collect::<Vec<usize>>(), "the 24 nearest (1 to 24 away: slots 30 down to 7)");
+        assert!(!heard[0], "never the player's own");
+        // 24, then 20: every one
+        for n in [24usize, 20] {
+            let mut few: Vec<Option<net::entity::Entity>> = vec![None; MAX_SLOTS];
+            for k in 0..n {
+                few[k * 3] = Some(at(100.0 + k as f32));
+            }
+            assert_eq!(heard_slots(&few, None, &listener).iter().filter(|&&h| h).count(), n, "{n}: every one");
+        }
+        // a tie at the 24th: the lower slot
+        let mut tie: Vec<Option<net::entity::Entity>> = vec![None; MAX_SLOTS];
+        for k in 0..25 {
+            tie[k] = Some(at(if k < 23 { k as f32 } else { 50.0 }));
+        }
+        let h = heard_slots(&tie, None, &listener);
+        assert!(h[23] && !h[24], "the tie's lower slot");
+    }
+
+    /// A creature past the 24 (`hush`): its loop stopped and its tripped
+    /// triggers let go, unplayed. The control: before it, the loop plays and
+    /// the trigger is tripped.
+    #[test]
+    fn a_creature_not_heard_is_hushed() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Some(mut s) = crate::sound::Sound::offline(&path) else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let Some((lib, _)) = freeport_lib(25275.0, 15766.0) else { return };
+        let r = lib.lookup(HUMAN as i32).expect("CHAR.ESF has it");
+        let mut cs = vi::character::load_csprite(&lib, r, &mut AnimScene::default(), &mut AnimCache::new(), &mut Rand(1)).expect("a CSprite");
+        assert!(!cs.h.triggers.is_empty(), "the human has sound triggers");
+        // a looped wave played as its loop
+        let mut lp = vec![0x35u8; 64 * 16];
+        for b in 0..64 {
+            lp[b * 16] = 0x24;
+            lp[b * 16 + 1] = 0;
+        }
+        lp[1] = 4;
+        lp[63 * 16 + 1] = 3;
+        let w = s.dev.create_wave(1, 64, 22050, 1.0, 0.0, 1, &lp);
+        let mut link = s.audio().link();
+        s.dev.flush(&mut link);
+        let h = s.dev.play(w, 0, 0);
+        assert!(h >= 0 && s.dev.is_playing(h), "the control: the loop plays");
+        cs.snd.channel = h;
+        cs.h.triggers[0].tripped = 1;
+        hush(&mut cs, &mut s);
+        assert!(!s.dev.is_playing(h) && cs.snd.channel == -1, "the loop stopped");
+        assert!(cs.h.triggers.iter().all(|t| t.tripped == 0), "the trips let go");
     }
 
     /// `place_actor` over an entity's time in a slot: made with its first
@@ -2821,6 +2989,8 @@ impl Play {
         let clock = self.session.timer();
         self.position_due(&walker.cam.walk.committed, clock);
         let me = self.self_id32();
+        // the creatures that make their sounds: the PS2's 24 (`heard`)
+        let heard = heard_slots(&self.entities.slots, me, &walker.eye.position);
         // the far characters' turns, by how many were far the last frame
         let every = far_pose_every(self.far_last);
         let mut far = 0;
@@ -2919,9 +3089,14 @@ impl Play {
                             );
                         }
                     }
-                    // VICSprite::Process: the sounds its triggers fired
+                    // VICSprite::Process: the sounds its triggers fired, for the
+                    // 24 heard (`heard_slots`); past them it is quiet
                     if let Some(s) = sound.as_deref_mut() {
-                        cs.process_sounds(&walker.eye.position, &walker.eye.direction, &at, Some(&mut s.sink()));
+                        if heard[slot] {
+                            cs.process_sounds(&walker.eye.position, &walker.eye.direction, &at, Some(&mut s.sink()));
+                        } else {
+                            hush(cs, s);
+                        }
                     }
                     // VIHSprite::Raster's Process at the skeleton's level for
                     // its distance, from the eye the levels go by
@@ -7751,6 +7926,40 @@ impl Play {
 
     pub fn has_self(&self) -> bool {
         self.self_puppet.is_some()
+    }
+
+    /// The creatures' sound triggers as the console trips them: inside
+    /// `VIHSprite::Process`, which it runs for an actor `VIScene::RasterActor`
+    /// rasters (within its off distance, its bound inside the clip volume the
+    /// walk reaches it under: `World::raster_actors`, as the shadows' queue
+    /// takes it, under the drawn view `view_proj` from `at`), and for the
+    /// target (`TrackTarget`'s `CalcSlotWorldTransform`). This client poses
+    /// every creature within its off distance whichever way the camera looks,
+    /// so one behind the camera or a wall tripped the sounds of its swings,
+    /// hits and steps, which a PS2 never plays: the trips of a creature the
+    /// console does not raster are let go here, after the frame that posed it
+    /// (its sounds are made at the next, `process_sounds`). The rarer ways
+    /// the console poses one off screen (a spell effect on it, a damage
+    /// number's first frame, the player's walk brushing it) are not followed.
+    pub fn keep_rastered_trips(&mut self, walker: &mut Walker, view_proj: glam::Mat4, at: glam::Vec3) {
+        let me = self.self_id32();
+        let mut drawn = Vec::new();
+        for (slot, e) in self.entities.slots.iter().enumerate() {
+            let Some(e) = e.as_ref().filter(|e| Some(e.id) != me && e.id != self.target) else { continue };
+            let Some(p) = self.puppets[slot].as_ref().filter(|p| p.sprite.as_ref().is_some_and(|cs| cs.h.triggers.iter().any(|t| t.tripped != 0))) else { continue };
+            let actor = self.actors[slot].filter(|a| a.id == e.id).map(|a| a.actor);
+            drawn.push((slot, actor, F::<Ee>::new(crate::lod::off_dist(&p.gpu.lod_dists))));
+        }
+        if drawn.is_empty() {
+            return;
+        }
+        let eye = crate::lod::eye(&walker.cam, &walker.eye.position);
+        for slot in unrastered(&mut walker.scene, &drawn, view_proj, at, &eye) {
+            let Some(cs) = self.puppets[slot].as_mut().and_then(|p| p.sprite.as_mut()) else { continue };
+            for i in 0..cs.h.triggers.len() {
+                cs.h.reset_trigger(i);
+            }
+        }
     }
 
     /// The characters `VIScene::RasterActor` rasters this frame, as

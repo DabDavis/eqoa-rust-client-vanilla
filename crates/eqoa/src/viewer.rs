@@ -5068,6 +5068,13 @@ impl App {
                     // options' Shadows off or under the loading screen
                     mark(perf, 8);
                     g.renderer.particles_end = batches.len();
+                    // the creatures' sound triggers kept as the console trips
+                    // them, for the ones it rasters (`keep_rastered_trips`)
+                    if let Some(p) = play.as_mut()
+                        && !loading
+                    {
+                        p.keep_rastered_trips(w, proj * v, lights.0.eye);
+                    }
                     if crate::settings::client().shadows && !loading {
                         let casters = match play.as_ref() {
                             Some(p) => p.shadow_casters(w, lib),
