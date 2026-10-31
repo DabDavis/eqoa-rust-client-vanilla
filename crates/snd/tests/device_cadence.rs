@@ -103,7 +103,8 @@ impl Fight {
 /// about 165), the callers run on every one, the game's frame's events in the
 /// frame drawn `event_at` (0 the first; `drawn - 1` the game's frame itself);
 /// between two of the game's frames the device is told so when `hold`. The
-/// packets sent, the output, and the commands dropped.
+/// packets sent, the output, and the commands that found the packet full (sent
+/// in the packets after it, where the console drops them).
 fn run(loops: usize, games: usize, drawn: usize, event_at: usize, hold: bool) -> (Vec<Vec<u32>>, Vec<i16>, u32, [u32; 16]) {
     let (mut d, mut l) = device();
     let mut f = Fight::new(&mut d, &mut l, loops);
@@ -120,28 +121,31 @@ fn run(loops: usize, games: usize, drawn: usize, event_at: usize, hold: bool) ->
         d.process(&mut l);
         l.drv.run(1600, &mut l.pcm);
     }
-    (l.sent, l.pcm, d.cmds_dropped, d.dropped_by_id)
+    (l.sent, l.pcm, d.cmds_later, d.later_by_id)
 }
 
 /// Six loops (the report had seven voices playing, 000f13) fit the packet at
-/// the console's cadence and fill it at Frame Rate 60 and above, where a
-/// full packet drops what comes after: here the events of the game's frame,
-/// a one-shot's start or its volume, pan and pitch (it then played as it
-/// started, at full volume), and a loop's stop and start. With the hold the
-/// packets are the console's at every rate, word for word, and so is the
-/// sound, sample for sample. The control is the same run without it.
+/// the console's cadence and fill it at Frame Rate 60 and above, where the
+/// console's full packet drops what comes after: here the events of the
+/// game's frame, a one-shot's start or its volume, pan and pitch (it then
+/// played as it started, at full volume), and a loop's stop and start. With
+/// the hold the packets are the console's at every rate, word for word, and
+/// so is the sound, sample for sample. The control is the same run without
+/// it: more packets than the console's, each frame's overflow behind its
+/// first (none lost now, so the sound is the console's all the same).
 #[test]
 fn frame_rate_60_sends_the_consoles_packets() {
     let (console, console_pcm, console_drops, _) = run(6, 90, 1, 0, true);
     assert_eq!(console_drops, 0, "the console's cadence fits the packet");
     for drawn in [2, 5] {
-        let (sent, pcm, drops, by_id) = run(6, 90, drawn, drawn - 1, false);
-        assert!(drops > 0, "without the hold, {drawn} frames drawn a game frame fill the packet");
-        assert!(by_id[2] + by_id[5] + by_id[6] > 0, "and drop the frame's events: {by_id:?}");
-        assert_ne!(sent, console, "the control: packets not the console's");
-        assert!(pcm != console_pcm, "nor its sound");
-        let (sent, pcm, drops, _) = run(6, 90, drawn, drawn - 1, true);
-        assert_eq!(drops, 0, "with the hold nothing is dropped at {drawn} frames drawn");
+        let (sent, pcm, later, by_id) = run(6, 90, drawn, drawn - 1, false);
+        assert!(later > 0, "without the hold, {drawn} frames drawn a game frame fill the packet");
+        assert!(by_id[2] + by_id[5] + by_id[6] > 0, "and push the frame's events behind it: {by_id:?}");
+        assert!(sent.len() > console.len(), "the control: more packets than the console's");
+        assert_ne!(sent, console, "nor the console's");
+        assert!(pcm == console_pcm, "but none lost: the console's sound");
+        let (sent, pcm, later, _) = run(6, 90, drawn, drawn - 1, true);
+        assert_eq!(later, 0, "with the hold the packet holds the frame at {drawn} frames drawn");
         assert_eq!(sent.len(), console.len());
         assert!(sent == console, "with the hold the packets are the console's at {drawn} frames drawn");
         assert!(pcm == console_pcm, "and the sound is, sample for sample");
@@ -149,18 +153,18 @@ fn frame_rate_60_sends_the_consoles_packets() {
 }
 
 /// The events of a game's frame in an earlier frame drawn (a trigger tripped
-/// between two of the game's frames): with the hold nothing is dropped and the
-/// sound is the console's, sample for sample (the commands of different voices
-/// in another order in the packet, which SNDDRV runs whole before it mixes).
-/// The control: without the hold the same run drops commands.
+/// between two of the game's frames): with the hold one packet holds the frame
+/// and the sound is the console's, sample for sample (the commands of
+/// different voices in another order in the packet, which SNDDRV runs whole
+/// before it mixes). The control: without the hold the same run overfills it.
 #[test]
 fn events_between_frames_sound_as_the_consoles() {
     let (_, console_pcm, _, _) = run(6, 90, 1, 0, true);
     for drawn in [2, 5] {
-        let (_, _, drops, _) = run(6, 90, drawn, 0, false);
-        assert!(drops > 0, "the control: without the hold {drawn} frames drawn drop commands");
-        let (_, pcm, drops, _) = run(6, 90, drawn, 0, true);
-        assert_eq!(drops, 0, "with the hold none at {drawn}");
+        let (_, _, later, _) = run(6, 90, drawn, 0, false);
+        assert!(later > 0, "the control: without the hold {drawn} frames drawn overfill the packet");
+        let (_, pcm, later, _) = run(6, 90, drawn, 0, true);
+        assert_eq!(later, 0, "with the hold none at {drawn}");
         assert!(pcm == console_pcm, "and the console's sound at {drawn}");
     }
 }
