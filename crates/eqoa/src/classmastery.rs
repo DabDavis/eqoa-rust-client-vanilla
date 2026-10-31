@@ -90,8 +90,8 @@ impl Skill {
     }
 }
 
-/// `VICMNode`: the skill opened (sub-op 9). `id`, `x0c`, `x14` and `xb8`
-/// are read and kept, as the game does, though no window shows them.
+/// `VICMNode`: the skill opened (sub-op 9). `id`, `x14` and `xb8` are read
+/// and kept, as the game does, though no window shows them.
 #[allow(dead_code)]
 #[derive(Clone, Debug, Default)]
 pub struct Node {
@@ -101,6 +101,8 @@ pub struct Node {
     pub x05: u8,
     /// `m_x08`: the skill's id in the list (Send02/Send03's argument)
     pub x08: i32,
+    /// `m_x0C`: the key of the rank below (a list skill's `parent`), which
+    /// the one-Master-Class rule reads (`Part::refuses_master_class`)
     pub x0c: i32,
     pub x10: u8,
     /// `m_x11`: the level required
@@ -222,11 +224,24 @@ impl Part {
         at
     }
 
-    /// A Master Class owned other than the one the skill `id` is a rank of:
-    /// a further rank of one's own Master Class is not a second one.
-    pub fn owns_another_master_class(&self, id: i32) -> bool {
-        let root = self.find(id).map(|k| self.master_root(k));
-        self.skills.iter().enumerate().any(|(k, s)| s.master_class() && s.on && Some(self.master_root(k)) != root)
+    /// Buying the Master Class skill `id`, whose own record (the node) names
+    /// `parent` as the rank below it, is refused for another Master Class
+    /// owned. SOE's final live client refuses only the Master Class itself,
+    /// the skill its records flag (`VICMSkill` +0x10), never a rank after it
+    /// (an ability, bought with the class owned). The disc's records carry no
+    /// flag, so here a skill is a Master Class's first rank when neither the
+    /// node's parent nor the list's names another Master Class skill:
+    /// Sandstorm's list names the class for each ability; go-eqoa-server's
+    /// names none once the class is owned (each ability a line of its own in
+    /// the window) and its node keeps the class. The first rank is refused
+    /// when a Master Class skill owned is not one of its ranks.
+    pub fn refuses_master_class(&self, id: i32, parent: i32) -> bool {
+        let k = self.find(id);
+        let below = |key: i32| self.skills.iter().enumerate().any(|(b, s)| s.master_class() && s.x00 == key && Some(b) != k);
+        if below(parent) || k.is_some_and(|k| below(self.skills[k].parent)) {
+            return false;
+        }
+        self.skills.iter().enumerate().any(|(b, s)| s.master_class() && s.on && Some(b) != k && Some(self.master_root(b)) != k)
     }
 
     /// `IsKnown(id)`: owned or known.
@@ -825,9 +840,9 @@ impl ClassMastery {
                             // owned is refused, word 1840 red in the chat, with
                             // no box, no sound and nothing sent. The disc's
                             // only warned (1807, as the box below still does).
-                            // A higher rank of the Master Class owned is
-                            // bought as any rank is
-                            if node.x10 == MASTER_CLASS && part.owns_another_master_class(node.x08) {
+                            // The ranks after the first, the abilities, are
+                            // bought as any rank is (refuses_master_class)
+                            if node.x10 == MASTER_CLASS && part.refuses_master_class(node.x08, node.x0c) {
                                 return Some(CmUp::Warn(1840));
                             }
                             let text = if node.x10 == MASTER_CLASS { wide(&format!("{} {}", vui.words.get(1807, vui.language), vui.words.get(1664, vui.language))) } else { w(1664) };
@@ -1210,9 +1225,10 @@ mod tests {
     /// none owned (one only known, or owned in another category) the box
     /// opens with the disc's warning before the question; a skill of
     /// another category opens its plain question even with a Master Class
-    /// owned, and a further rank of the Master Class owned opens it too
-    /// (each rank is a skill of category 4, chained by `parent`, and the
-    /// chain can branch).
+    /// owned, and a rank after the first, an ability, opens it too, the live
+    /// client refusing only the Master Class itself (each rank is a skill of
+    /// category 4 whose parent, the list's or the node's, names the rank
+    /// below; the ranks can branch).
     #[test]
     fn one_master_class_at_a_time() {
         use crate::pointer::testing::{NullRaster, vui};
@@ -1220,10 +1236,10 @@ mod tests {
         let mc = |id: i32, on: bool, category: u8| Skill { x00: id, on, id, parent: 1000 + id, category, name: wide("S"), ..Default::default() };
         // an owned General skill, so the first list (General) has a line
         // selected and the node opens in the inspector
-        let buy = |mut skills: Vec<Skill>, category: u8| {
+        let buy_with = |mut skills: Vec<Skill>, category: u8, x0c: i32| {
             skills.push(mc(99, true, 0));
             let mut part = Part { skills, ..Default::default() };
-            part.node = Some(Node { x04: 0, x05: 1, x08: 50, x10: category, text: wide("t"), ..Default::default() });
+            part.node = Some(Node { x04: 0, x05: 1, x08: 50, x0c, x10: category, text: wide("t"), ..Default::default() });
             let mut c = ClassMastery::default();
             c.open(&vui, &NullRaster, &part);
             assert!(c.show_node(&vui, &mut NullRaster, &part, true));
@@ -1231,6 +1247,7 @@ mod tests {
             let up = c.key(&vui, &mut NullRaster, &mut part, key::CROSS, true, 0, &mut cues);
             (up, c.message.visible, cues)
         };
+        let buy = |skills: Vec<Skill>, category: u8| buy_with(skills, category, 0);
         assert_eq!(buy(vec![mc(1, true, MASTER_CLASS), mc(2, false, 1)], MASTER_CLASS), (Some(CmUp::Warn(1840)), false, vec![]));
         assert_eq!(buy(vec![mc(1, false, MASTER_CLASS)], MASTER_CLASS), (None, true, vec![15]), "only known: the box");
         assert_eq!(buy(vec![mc(1, true, 2)], MASTER_CLASS), (None, true, vec![15]), "owned, another category");
@@ -1240,13 +1257,27 @@ mod tests {
         let rank = |id: i32, on: bool, parent: i32| Skill { parent, ..mc(id, on, MASTER_CLASS) };
         assert_eq!(buy(vec![rank(1, true, 1001), rank(50, false, 1)], MASTER_CLASS), (None, true, vec![15]), "the next rank");
         assert_eq!(buy(vec![rank(1, true, 1001), rank(2, true, 1), rank(50, false, 2)], MASTER_CLASS), (None, true, vec![15]), "two ranks owned");
-        assert_eq!(buy(vec![rank(1, true, 1001), rank(50, false, 1), rank(3, true, 1003)], MASTER_CLASS), (Some(CmUp::Warn(1840)), false, vec![]), "another owned beside its own");
+        // an ability of its own class with a second class owned besides (a
+        // state a server's rule never leaves): only the class itself is
+        // refused, so its question opens
+        assert_eq!(buy(vec![rank(1, true, 1001), rank(50, false, 1), rank(3, true, 1003)], MASTER_CLASS), (None, true, vec![15]), "another owned beside its own");
         assert_eq!(buy(vec![rank(1, true, 1001), rank(50, false, 7)], MASTER_CLASS), (Some(CmUp::Warn(1840)), false, vec![]), "a rank of another");
         // Ranks branch (Spellbinder's two, Binding Grasp and Mana Flow): with
         // the first rank and one branch owned, the other branch is the same
         // Master Class
         assert_eq!(buy(vec![rank(1, true, 1001), rank(2, true, 1), rank(50, false, 1)], MASTER_CLASS), (None, true, vec![15]), "the other branch");
         assert_eq!(buy(vec![rank(1, true, 1001), rank(2, true, 1), rank(50, false, 2), rank(3, false, 1)], MASTER_CLASS), (None, true, vec![15]), "beyond a branch");
+        // go-eqoa-server's list once the class is owned: each ability with no
+        // parent (each a line of its own), its node naming the class
+        // (cmListParentsLocked); the control is the same list with the node
+        // naming nothing, a first rank beside one owned
+        assert_eq!(buy_with(vec![rank(1, true, 0), rank(50, false, 0)], MASTER_CLASS, 1), (None, true, vec![15]), "listed alone, the node naming the class");
+        assert_eq!(buy_with(vec![rank(1, true, 0), rank(2, true, 0), rank(50, false, 0)], MASTER_CLASS, 1), (None, true, vec![15]), "a second ability listed alone");
+        assert_eq!(buy(vec![rank(1, true, 0), rank(50, false, 0)], MASTER_CLASS), (Some(CmUp::Warn(1840)), false, vec![]), "the control: a first rank");
+        assert_eq!(buy_with(vec![rank(1, true, 0), rank(50, false, 0)], MASTER_CLASS, 50), (Some(CmUp::Warn(1840)), false, vec![]), "a node naming itself names no rank below");
+        // another Master Class with its abilities under it, as Sandstorm
+        // lists them, beside the class owned and one of its abilities
+        assert_eq!(buy(vec![rank(1, true, 0), rank(2, true, 1), rank(50, false, 0), rank(51, false, 50)], MASTER_CLASS), (Some(CmUp::Warn(1840)), false, vec![]), "another class with its abilities");
     }
 
     /// `VICMNode::Read`: the fields, three strings and three lists; a

@@ -9,6 +9,9 @@ is put on the page by `.github/workflows/notes.yml`.
 - Class Mastery: some Master Classes branch into two abilities after the first rank (Spellbinder's
   Binding Grasp and Mana Flow). Having bought one, the other is no longer refused with "You cannot
   possess more than one Master Class at a time."
+- On eqoaclassic, once you owned a Master Class, none of its abilities could be bought after the
+  Class Mastery window had been closed and opened again (the same refusal); they can now. Buying a
+  second, different Master Class is still refused.
 
 ## 2026-10-31 · Glowing weapons shine again
 - Many weapons and things in the world give off a light of their own on a PS2, and this client
