@@ -9662,13 +9662,15 @@ mod commands {
         let r = p.report([0.0; 3]);
         let lines: Vec<&str> = r.lines().collect();
         let at = lines.iter().position(|l| l.contains("\"Coachman Quicksteed\"")).expect("the coachman's line");
+        assert_eq!(lines.get(at + 1).copied(), Some("    targeting: selectable false, world 0 (the player's 0), byte 27 0, npc flags 0x0"), "first how it may be targeted");
         assert_eq!(
-            lines.get(at + 1).copied(),
+            lines.get(at + 2).copied(),
             Some("    look: robe 255 tint 0, armor [0, 0, 0, 0, 2, 0] tints [255, 255, 255, 255, 255, 255], hair [2, 3, 1], face 3; items [0xbf7e7dcb, 0x0, 0x0] over [0x0, 0x0, 0x0] types [1, 0]")
         );
-        assert!(lines.get(at + 2).is_some_and(|l| l.starts_with("    move: state 0 walking 0, velocity [0.00, 0.00, 0.00], updated ")), "then how it moves: {:?}", lines.get(at + 2));
+        assert!(lines.get(at + 3).is_some_and(|l| l.starts_with("    move: state 0 walking 0, velocity [0.00, 0.00, 0.00], updated ")), "then how it moves: {:?}", lines.get(at + 3));
         let plain = lines.iter().position(|l| l.starts_with("  0x42 kind 129")).expect("the plain entity's line");
-        assert!(!lines.get(plain + 1).is_some_and(|l| l.contains("look:") || l.contains("move:")), "an entity with no creature part has no look or move line");
+        assert!(lines.get(plain + 1).is_some_and(|l| l.starts_with("    targeting: selectable false") && !l.contains("npc flags")), "every entity's targeting, a creature's npc flags alone: {:?}", lines.get(plain + 1));
+        assert!(!lines.get(plain + 2).is_some_and(|l| l.contains("look:") || l.contains("move:")), "an entity with no creature part has no look or move line");
     }
 
     /// A report's move line: the state and velocity the channel last sent,
