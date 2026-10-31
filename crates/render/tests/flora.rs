@@ -14,7 +14,7 @@ use render::{Draw, Renderer, View};
 /// A quad facing the camera at depth 1, filling the view, under one layer:
 /// untextured white, blended (3) or opaque (0).
 fn quad(blend: i32) -> esf::Model {
-    let layer = esf::Layer { flags: 0, texture: 0, wrap: 0, blend, color: [255; 4], uv_transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], lod_bias: 0.8, uv_rate: [0.0; 2] };
+    let layer = esf::Layer { flags: 0, texture: 0, wrap: 0, blend, color: [255; 4], uv_transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], lod_bias: 0.8, uv_rate: [0.0; 2], emissive: [0; 4] };
     let s = 1.5;
     esf::Model {
         pos: vec![[-s, -s, 0.0], [s, -s, 0.0], [s, s, 0.0], [-s, -s, 0.0], [s, s, 0.0], [-s, s, 0.0]],

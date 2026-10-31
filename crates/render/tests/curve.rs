@@ -81,7 +81,7 @@ fn every_level_comes_out_as_the_tables_byte() {
 fn a_shot_through_the_table() {
     let Some((device, queue)) = gpu() else { return };
     let mut r = Renderer::new(&device, &queue, render::TARGET_FORMAT);
-    let layer = esf::Layer { flags: 0, texture: 0, wrap: 0, blend: 0, color: [200, 120, 40, 255], uv_transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], lod_bias: 0.8, uv_rate: [0.0; 2] };
+    let layer = esf::Layer { flags: 0, texture: 0, wrap: 0, blend: 0, color: [200, 120, 40, 255], uv_transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], lod_bias: 0.8, uv_rate: [0.0; 2], emissive: [0; 4] };
     let model = esf::Model {
         pos: vec![[-0.5, -0.5, 0.5], [0.5, -0.5, 0.5], [0.0, 0.5, 0.5]],
         uv: vec![[0.5, 0.5]; 3],

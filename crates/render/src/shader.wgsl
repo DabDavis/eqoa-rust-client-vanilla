@@ -3,12 +3,15 @@
 // material layer, the light per vertex as VU1 computes it (the GS then
 // interpolates the colour):
 //
-//   light = clamp(colour + ambient + sun · max(−N·S, 0) · colour.a · static.a
+//   light = clamp(colour + ambient + emissive + sun · max(−N·S, 0) · colour.a · static.a
 //                 + static.rgb + point · (1 − min(|L|/range, 1)) · max(L·N/|L|, 0), 0, 1)
 //   pixel = texture × layer colour/255 × light
 //
 // where S is the direction the sun's light travels and, on packed geometry,
-// the vertex alpha is a sun-visibility factor. An opaque layer is alpha
+// the vertex alpha is a sun-visibility factor. The emissive is the
+// material's (`VIRaster::UploadPerMaterial` uploads the ambient plus it as
+// the programs' ambient), so an emissive material is lit by day and night
+// alike: the epic weapons' blades, glowing crystals, creatures' eyes. An opaque layer is alpha
 // tested at 128 of 255 (TEST 0x3080B); a blended layer's alpha is the
 // texture's times the layer colour's, and the pipeline blends it. L runs from
 // the vertex to the point light (the personal light; the raster has one).
@@ -25,7 +28,7 @@
 // The radial flora's plants (a layer's flags.w) are `VIRStrip6`'s: no normal
 // and no vertex colour, so
 //
-//   light = min(ambient + sun · 0.15 + point · (1 − min(|L|/range, 1)) · 0.15, 1)
+//   light = min(ambient + emissive + sun · 0.15 + point · (1 − min(|L|/range, 1)) · 0.15, 1)
 //
 // with |L| in the plant's own space (the light goes through the inverse model
 // view: the world distance over the plant's scale), and the vertex alpha is
@@ -56,6 +59,7 @@ struct Layer {
     flags: vec4<f32>,    // x: textured, y: blended, z: the GS's K (levels), w: flora
     uv0: vec4<f32>,      // m0, m1, m3, m4
     uv1: vec4<f32>,      // m6, m7, scroll rate u, v
+    emissive: vec4<f32>, // the material's, added to the ambient
 };
 @group(1) @binding(0) var tex: texture_2d<f32>;
 @group(1) @binding(1) var samp: sampler;
@@ -149,7 +153,8 @@ fn vs_main(v: VsIn) -> VsOut {
             point = frame.point_color.rgb * (1.0 - min(d / frame.point.w, 1.0)) * max(dot(l, n) / d, 0.0);
         }
     }
-    o.light = clamp(v.color.rgb + frame.ambient.rgb + sun + v.static_light.rgb + point, vec3<f32>(0.0), vec3<f32>(1.0));
+    let ambient = frame.ambient.rgb + layer.emissive.rgb;
+    o.light = clamp(v.color.rgb + ambient + sun + v.static_light.rgb + point, vec3<f32>(0.0), vec3<f32>(1.0));
     o.fade = 1.0;
     if (layer.flags.w > 0.5) {
         let k = 0.15;
@@ -158,7 +163,7 @@ fn vs_main(v: VsIn) -> VsOut {
             let d = length((frame.point.xyz - frame.eye.xyz) - rel) / length(v.m0.xyz);
             pt = frame.point_color.rgb * ((1.0 - min(d / frame.point.w, 1.0)) * k);
         }
-        o.light = min(frame.ambient.rgb + frame.sun.rgb * k + pt, vec3<f32>(1.0));
+        o.light = min(ambient + frame.sun.rgb * k + pt, vec3<f32>(1.0));
         o.fade = v.static_light.a;
     }
     return o;

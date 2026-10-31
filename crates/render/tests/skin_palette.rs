@@ -78,7 +78,7 @@ impl TextureSource for White {
 /// unit) with node 66 moved `dx` to the right: the brightness of the pixel
 /// row through it at the origin's column and at `dx`'s.
 fn drawn(device: &wgpu::Device, queue: &wgpu::Queue, r: &mut Renderer, dx: f32) -> (u8, u8) {
-    let layer = esf::Layer { flags: 0, texture: 7, wrap: 0, blend: 0, color: [255; 4], uv_transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], lod_bias: 0.0, uv_rate: [0.0; 2] };
+    let layer = esf::Layer { flags: 0, texture: 7, wrap: 0, blend: 0, color: [255; 4], uv_transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], lod_bias: 0.0, uv_rate: [0.0; 2], emissive: [0; 4] };
     let s = 0.6;
     let model = esf::Model {
         pos: vec![[-s, -s, -2.0], [s, -s, -2.0], [0.0, s, -2.0]],

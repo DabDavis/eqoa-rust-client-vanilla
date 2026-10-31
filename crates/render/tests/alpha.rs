@@ -18,7 +18,7 @@ fn an_alpha_tested_texel_leaves_the_target_opaque() {
     let mut r = Renderer::new(&device, &queue, render::TARGET_FORMAT);
     // a red texel at alpha 200 of 255: past the test (128), not opaque
     let tex = |id: i32| (id == 7).then(|| esf::Image { width: 1, height: 1, rgba: vec![255, 0, 0, 200], alpha: true });
-    let layer = esf::Layer { flags: 0, texture: 7, wrap: 0, blend: 0, color: [255; 4], uv_transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], lod_bias: 0.8, uv_rate: [0.0; 2] };
+    let layer = esf::Layer { flags: 0, texture: 7, wrap: 0, blend: 0, color: [255; 4], uv_transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], lod_bias: 0.8, uv_rate: [0.0; 2], emissive: [0; 4] };
     // one triangle over the whole view (the projection is the identity),
     // facing it, lit white by its colour
     let model = esf::Model {

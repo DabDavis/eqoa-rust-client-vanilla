@@ -199,6 +199,11 @@ pub struct Layer {
     pub lod_bias: f32,
     /// UV scroll, per second (`VIMaterial::Process`).
     pub uv_rate: [f32; 2],
+    /// The material's emissive colour (`SetEmissiveColor`, version 3 and
+    /// later; black before), the same on each of its layers: the strip
+    /// programs light with the ambient plus it (`VIRaster::UploadPerMaterial`),
+    /// so an emissive material stays lit at night (the epic weapons' blades).
+    pub emissive: [u8; 4],
 }
 
 impl Layer {
@@ -234,8 +239,12 @@ pub fn read_material(d: &[u8], body: usize, version: i16) -> Vec<Layer> {
     if version > 1 {
         p += 4; // tessellate
     }
+    let mut emissive = [0; 4];
     if version > 2 {
-        p += 4; // emissive
+        if p + 4 <= d.len() {
+            emissive = [d[p], d[p + 1], d[p + 2], d[p + 3]];
+        }
+        p += 4;
     }
     if !(0..=64).contains(&n) {
         return Vec::new();
@@ -259,7 +268,7 @@ pub fn read_material(d: &[u8], body: usize, version: i16) -> Vec<Layer> {
         let uv_rate = [f32le(d, p + 60), f32le(d, p + 64)];
         // flags, tex, wrap, blend, colour, uv[9], lod, uRate, vRate
         p += 20 + 36 + 12;
-        out.push(Layer { flags, texture, wrap, blend, color, uv_transform, lod_bias, uv_rate });
+        out.push(Layer { flags, texture, wrap, blend, color, uv_transform, lod_bias, uv_rate, emissive });
     }
     out
 }
@@ -594,5 +603,38 @@ impl Container {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A material before version 3 has no emissive (the 2002 art has
+    /// version-2 ones): black, and its layer read as before; the same layer
+    /// as version 3 reads the four bytes after the tessellate flags and is
+    /// itself unmoved.
+    #[test]
+    fn the_emissive_is_version_3s() {
+        let mut d = Vec::new();
+        d.extend(1i32.to_le_bytes());
+        d.extend(0u32.to_le_bytes());
+        for v in [0i32, 0x1234, 0, 3] {
+            d.extend(v.to_le_bytes());
+        }
+        d.extend([10, 20, 30, 40]);
+        for v in [1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.5, 0.25, -0.5] {
+            d.extend(v.to_le_bytes());
+        }
+        let l = read_material(&d, 0, 2);
+        assert_eq!(l.len(), 1);
+        assert_eq!((l[0].texture, l[0].blend, l[0].color, l[0].lod_bias, l[0].uv_rate), (0x1234, 3, [10, 20, 30, 40], 0.5, [0.25, -0.5]));
+        assert_eq!(l[0].emissive, [0; 4]);
+        let mut v3 = d[..8].to_vec();
+        v3.extend([1, 2, 3, 4]);
+        v3.extend(&d[8..]);
+        let l3 = read_material(&v3, 0, 3);
+        assert_eq!(l3[0].emissive, [1, 2, 3, 4]);
+        assert_eq!((l3[0].texture, l3[0].color, l3[0].lod_bias, l3[0].uv_rate), (l[0].texture, l[0].color, l[0].lod_bias, l[0].uv_rate));
     }
 }

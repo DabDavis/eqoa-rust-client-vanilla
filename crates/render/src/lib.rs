@@ -133,6 +133,9 @@ struct LayerUniform {
     /// scroll, v' = u·m1 + v·m4 + m7 + scroll.
     uv0: [f32; 4],
     uv1: [f32; 4],
+    /// The material's emissive colour, which the light adds to the ambient
+    /// (`VIRaster::UploadPerMaterial`).
+    emissive: [f32; 4],
 }
 
 /// One layer's pass over a batch.
@@ -405,7 +408,7 @@ pub struct Renderer {
     /// The last `draw`'s models and draw calls (`EQOA_PERF`).
     pub drawn: std::cell::Cell<(u32, u32)>,
     /// Groups' materials by texture (its key), sampler and uniform bytes.
-    materials: std::collections::HashMap<(u64, usize, [u32; 16]), wgpu::BindGroup>,
+    materials: std::collections::HashMap<(u64, usize, [u32; 20]), wgpu::BindGroup>,
     /// The palette every group's models draw with: theirs is never set.
     identity_palette: wgpu::BindGroup,
     /// The options' Render Scale (`scale`): 1 until set.
@@ -1340,6 +1343,7 @@ const UNTEXTURED: [esf::Layer; 1] = [esf::Layer {
     uv_transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
     lod_bias: 0.8,
     uv_rate: [0.0, 0.0],
+    emissive: [0; 4],
 }];
 
 fn layers_of(b: &esf::Batch) -> &[esf::Layer] {
@@ -1359,6 +1363,8 @@ fn layer_state(l: &esf::Layer, textured: bool) -> (usize, LayerUniform, usize) {
         flags: [textured as i32 as f32, (blend != 0) as i32 as f32, gs_lod_k(l.lod_bias), 0.0],
         uv0: [k[0], k[1], k[2], k[3]],
         uv1: [k[4], k[5], l.uv_rate[0], l.uv_rate[1]],
+        // as UploadPerMaterial converts it: c/255
+        emissive: l.emissive.map(|c| c as f32 / 255.0),
     };
     let si = match l.wrap {
         1 | 2 => 1,

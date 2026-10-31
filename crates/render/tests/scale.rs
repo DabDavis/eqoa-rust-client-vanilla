@@ -131,7 +131,7 @@ fn every_block_comes_out_as_its_average_rounded_half_up() {
 fn a_shot_at_a_scale_is_the_larger_shot_averaged() {
     let Some((device, queue)) = gpu() else { return };
     let mut r = Renderer::new(&device, &queue, render::TARGET_FORMAT);
-    let layer = esf::Layer { flags: 0, texture: 0, wrap: 0, blend: 0, color: [200, 120, 40, 255], uv_transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], lod_bias: 0.8, uv_rate: [0.0; 2] };
+    let layer = esf::Layer { flags: 0, texture: 0, wrap: 0, blend: 0, color: [200, 120, 40, 255], uv_transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], lod_bias: 0.8, uv_rate: [0.0; 2], emissive: [0; 4] };
     let model = esf::Model {
         pos: vec![[-0.7, -0.6, 0.5], [0.55, -0.45, 0.5], [0.1, 0.65, 0.5]],
         uv: vec![[0.5, 0.5]; 3],

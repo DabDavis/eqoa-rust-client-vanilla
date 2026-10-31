@@ -99,7 +99,7 @@ fn layer(g: &Gpu, mode: usize) -> [f32; 3] {
     let (_, _, view) = view();
     let view = View { view_proj: Mat4::IDENTITY, ..view };
     let mut r = Renderer::new(&g.device, &g.queue, render::TARGET_FORMAT);
-    let layer = esf::Layer { flags: 0, texture: 7, wrap: 0, blend: mode as i32, color: [255; 4], uv_transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], lod_bias: 0.8, uv_rate: [0.0; 2] };
+    let layer = esf::Layer { flags: 0, texture: 7, wrap: 0, blend: mode as i32, color: [255; 4], uv_transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], lod_bias: 0.8, uv_rate: [0.0; 2], emissive: [0; 4] };
     let model = esf::Model {
         pos: vec![[-3.0, -3.0, 0.5], [3.0, -3.0, 0.5], [0.0, 3.0, 0.5]],
         uv: vec![[0.5, 0.5]; 3],

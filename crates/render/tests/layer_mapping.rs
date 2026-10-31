@@ -35,6 +35,7 @@ fn drawn(uv: Option<usize>) -> Option<[u8; 3]> {
         uv_transform: [scale, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
         lod_bias: 0.8,
         uv_rate: [0.0; 2],
+        emissive: [0; 4],
     };
     // one triangle over the whole view (the projection is the identity),
     // every corner at u 0.375

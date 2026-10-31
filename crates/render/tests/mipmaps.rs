@@ -32,7 +32,7 @@ impl TextureSource for Levels {
 /// The centre pixel of a square on at depth `d` (a view 90 degrees wide,
 /// the square filling it), its layer's bias `bias`.
 fn at(device: &wgpu::Device, queue: &wgpu::Queue, r: &mut Renderer, d: f32, bias: f32) -> [u8; 3] {
-    let layer = esf::Layer { flags: 0, texture: 7, wrap: 0, blend: 0, color: [255; 4], uv_transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], lod_bias: bias, uv_rate: [0.0; 2] };
+    let layer = esf::Layer { flags: 0, texture: 7, wrap: 0, blend: 0, color: [255; 4], uv_transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], lod_bias: bias, uv_rate: [0.0; 2], emissive: [0; 4] };
     let s = d * 2.0;
     let model = esf::Model {
         pos: vec![[-s, -s, -d], [s, -s, -d], [s, s, -d], [-s, -s, -d], [s, s, -d], [-s, s, -d]],

@@ -637,7 +637,7 @@ mod tests {
     /// layer said.
     #[test]
     fn a_pass_draws_each_layer_over_the_quad() {
-        let layer = |tex: i32, blend: i32| esf::Layer { flags: 0, texture: tex, wrap: 0, blend, color: [0; 4], uv_transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0], lod_bias: 0.8, uv_rate: [0.0; 2] };
+        let layer = |tex: i32, blend: i32| esf::Layer { flags: 0, texture: tex, wrap: 0, blend, color: [0; 4], uv_transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0], lod_bias: 0.8, uv_rate: [0.0; 2], emissive: [0; 4] };
         let model = esf::Model {
             pos: vec![[1.0, 1.0, 0.0], [1.0, -1.0, 0.0], [-1.0, 1.0, 0.0], [-1.0, -1.0, 0.0]],
             uv: vec![[1.0, 0.0], [1.0, 1.0], [0.0, 0.0], [0.0, 1.0]],
