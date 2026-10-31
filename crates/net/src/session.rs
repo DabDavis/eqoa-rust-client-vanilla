@@ -318,6 +318,11 @@ fn debug_line(s: &str) {
     }
 }
 
+/// VITimer's ticks in `us` microseconds: 983.04 a second (`Session::timer`).
+pub fn ticks(us: i64) -> i64 {
+    us.saturating_mul(98_304) / 100_000_000
+}
+
 pub struct Session {
     pub drdp: Drdp<Ee>,
     socket: Box<dyn Datagrams>,
@@ -658,7 +663,7 @@ impl Session {
     /// 983.04 a second (BUSCLK/16 with a compare of 18,750, plus 2), from
     /// the session's start: what the synced clocks are set and read against.
     pub fn timer(&self) -> i64 {
-        (self.start.elapsed().as_micros() as i64).saturating_mul(98_304) / 100_000_000
+        ticks(self.start.elapsed().as_micros() as i64)
     }
 
     /// The game connection as a report's trace gives it: the datagrams sent,
