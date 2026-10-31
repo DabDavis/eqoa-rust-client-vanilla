@@ -206,9 +206,15 @@ pub struct Play {
     following: bool,
     follow_id: u32,
     /// `m_p2BB40` .. `m_p2BB48`: the player's own cast (`CastingCombat`),
-    /// on the session's clock; the walk walks through it (`cast_window`,
-    /// `casting`).
+    /// on `m_p07568`, VITimer's ticks (`Session::timer`), to which the
+    /// console adds the cast's time as it comes; the walk walks through it
+    /// (`cast_window`, `casting`).
     cast_window: (i64, i64),
+    /// The player's own last casts (`CastingCombat`): the tick each came at,
+    /// its time and its effect, oldest first: what a report gives of the
+    /// walk's cast window (F3 20261029-224916, "stuck walking often after
+    /// engaging in combat").
+    own_casts: std::collections::VecDeque<(i64, i32, u32)>,
     /// `m_p06DC8`: 0x00FC's byte, the player held in place.
     rooted: bool,
     /// `m_p06DC0` and `m_p06DC4`: movement and the camera allowed
@@ -2064,7 +2070,7 @@ impl Play {
         crate::live::set_features(Default::default());
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, send_interval: 100, entity_updates: (0, 0), puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, send_interval: 100, entity_updates: (0, 0), puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), own_casts: Default::default(), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default() };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -2127,6 +2133,26 @@ impl Play {
         self.hud.as_ref().map(|h| (&h.0, &h.1))
     }
 
+    /// What a report says of the walk's limits: the run and walk speeds the
+    /// server gave (the dump, 0x00F8, Class Mastery), the holds on it (0x00FC,
+    /// the window's locks, the follow) and the cast window, with the player's
+    /// own last casts (each one's time, how long ago, its effect).
+    fn walk_line(&self) -> String {
+        let now = self.session.timer();
+        let (a, b) = self.cast_window;
+        let window = if casting((a, b), now) { format!("walking, {:.2} s more", (b - now) as f64 / 983.04) } else { "none".into() };
+        let casts: Vec<String> = self.own_casts.iter().map(|&(at, time, fx)| format!("time {time} {:.1} s ago ({fx:#010x})", (now - at) as f64 / 983.04)).collect();
+        format!(
+            "run speed {:.3}, walk speed {:.3}, rooted {}, movement {}, following {}; cast window {window}; the last own casts: {}",
+            self.speed,
+            self.walk_speed,
+            self.rooted,
+            if self.locks.0 { "allowed" } else { "held (a window's mode)" },
+            self.following,
+            if casts.is_empty() { "none".into() } else { casts.join(", ") }
+        )
+    }
+
     /// What a report says of play (`report`): the character, where it is
     /// (`at`, the walker's), the entities round it and what has come of
     /// CLIENT and SUPPORT.
@@ -2142,6 +2168,7 @@ impl Play {
         let _ = writeln!(o, "server's patch: {}", crate::s2::get().describe());
         let target = if self.target == u32::MAX { "none".to_string() } else { format!("{:#x}", self.target) };
         let _ = writeln!(o, "mode {}, target {target}, dead {}, autorun {}, auto-attack {}", self.mode, self.is_dead(), self.autorun, self.auto_attack);
+        let _ = writeln!(o, "walk: {}", self.walk_line());
         let start = match (&self.start, self.modules_taken[0]) {
             (Some(_), _) => "in",
             (None, true) => "CLIENT came but was not read",
@@ -2646,7 +2673,13 @@ impl Play {
                         // CastingCombat: a cast of the player's own stamps the
                         // cast window, through which the walk walks
                         if op == 0x00B1 && Some(c.caster) == self.self_id32() {
-                            self.cast_window = cast_window(self.cast_window, self.session.now() as i64, c.time);
+                            let now = self.session.timer();
+                            self.cast_window = cast_window(self.cast_window, now, c.time);
+                            eprintln!("play: own cast (0x00B1): time {}, effect {:#010x}; walking {:.2} s", c.time, c.effect, (self.cast_window.1 - now) as f64 / 983.04);
+                            if self.own_casts.len() == 4 {
+                                self.own_casts.pop_front();
+                            }
+                            self.own_casts.push_back((now, c.time, c.effect));
                         }
                         if !(op == 0x0776 && Some(c.caster) == self.self_id32()) {
                             self.casts.push(c);
@@ -4636,7 +4669,7 @@ impl Play {
             swung: now.wrapping_sub(self.swung) < 1000,
             target,
             autorun: self.autorun,
-            casting: casting((a, b), now as i64),
+            casting: casting((a, b), self.session.timer()),
             // the window's (`mode_locks`) and the client's other holds (the
             // start menu's framing, the manual camera, a server's search)
             move_ok: self.locks.0 && mode_locks(self.mode).0,
@@ -7895,12 +7928,28 @@ mod commands {
         assert!(!old_casting(old((0, 0), 1_000, 1500), 61_000), "and below 2^31 it let go");
     }
 
+    /// The window is on `m_p07568`, VITimer's 983.04 ticks a second, and the
+    /// console adds the cast's time to it as it comes: a 2000 cast walks the
+    /// body 2.0345 s, not 2 (the client had it on milliseconds, 34 ms short).
+    /// The control: on milliseconds the walk is over by 2.030 s.
+    #[test]
+    fn a_casts_time_is_vitimer_ticks() {
+        let at = |us: i64| net::session::ticks(us);
+        let w = cast_window((0, 0), at(0), 2000);
+        assert!(casting(w, at(2_030_000)), "2.030 s on: 1995 ticks, walking still");
+        assert!(!casting(w, at(2_040_000)), "2.040 s on: 2005 ticks, running");
+        assert_eq!(at(1_000_000), 983, "983.04 ticks a second");
+        let ms = cast_window((0, 0), 0, 2000);
+        assert!(!casting(ms, 2_030), "the control: on milliseconds it is over by 2.030 s");
+    }
+
     /// What `UpdateControls` reads: walking only through the player's own
-    /// cast, on the session's clock. The control: no cast, no walk.
+    /// cast, on the game's clock (VITimer's ticks). The control: no cast, no
+    /// walk.
     #[test]
     fn the_walk_walks_only_through_the_players_cast() {
         let mut p = play();
-        let now = p.session.now() as i64;
+        let now = p.session.timer();
         assert!(!p.control_client().casting, "the control: no cast yet");
         p.cast_window = cast_window(p.cast_window, now, 60_000);
         assert!(p.control_client().casting, "a cast a minute long: walking");

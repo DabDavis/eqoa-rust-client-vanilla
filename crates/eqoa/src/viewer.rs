@@ -2991,6 +2991,7 @@ impl App {
                 c.dist.0,
                 c.flags
             );
+            let _ = writeln!(o, "body's last changes (back from now: locomotion, the layers' animations, speed): {}", w.describe_changes());
             let cam = &w.cam;
             let _ = writeln!(o, "camera: distance {:.2} of {:.2} (chosen {:.2}), pitch {:.3} (default {:.3})", cam.cur.dist.0, cam.max_orbit_distance.0, w.reach.chosen(cam).0, cam.cur.orbit.y.0, cam.def_orbit_pitch.0);
         }
