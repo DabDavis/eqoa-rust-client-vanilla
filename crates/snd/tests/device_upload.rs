@@ -182,13 +182,13 @@ fn a_copy_kept_in_the_packet_is_not_overwritten() {
             held_frame(&mut d, &mut l, other);
         }
         assert_eq!(held(&d, l.drv.io.spu.ram(), ia, &a), (true, true), "busy {busy}: A uploaded, each block in its place");
-        assert_eq!(d.check_ram(l.drv.io.spu.ram(), false).map(|c| c.differ), Some(vec![]), "busy {busy}: the report's check agrees");
+        assert_eq!(d.check_ram(l.drv.io.spu.ram(), false).map(|c| c.differ), Some(vec![]), "busy {busy}: the sound line's check agrees");
         assert_eq!(d.flushes_refused > 0, busy, "busy {busy}: packets kept back");
         assert_eq!(d.uploads_held > 0, busy, "busy {busy}: the second block held back");
     }
 }
 
-/// The report's check of every uploaded sound's RAM (`check_ram`): all as
+/// The sound line's check of every uploaded sound's RAM (`check_ram`): all as
 /// uploaded after a flush; a byte of one wave's RAM overwritten, that wave
 /// alone named; an XM's sample bank compared too; and nothing compared while
 /// a copy is still to be sent (a busy IOP), when a sound marked uploaded may

@@ -115,13 +115,12 @@ pub struct Hud {
 
 /// What a pointer finds on the HUD's left side (`Hud::pick`): the player's
 /// own frame, a group member's bar (its id), the pet's bar. Each is what L1's
-/// cycle targets in turn. And the bug report's button.
+/// cycle targets in turn.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Pick {
     Me,
     Member(u32),
     Pet,
-    Report,
 }
 
 /// Where `DrawGroup` starts the group's bars and `DrawTarget` the target's.
@@ -170,7 +169,7 @@ impl Hud {
     /// keep to the left side (`Anchor`; a menu over them takes them back
     /// under it, `Ui::end`), and in one narrower than 4:3 to its top (the
     /// frame, the compass, the gauges, the group's and the pet's bars) or
-    /// its bottom (the target's bar, the report's button: `Vertical`).
+    /// its bottom (the target's bar: `Vertical`).
     pub fn draw(&mut self, vui: &Vui, ui: &mut UiRaster, s: &HudState) {
         self.update_glow();
         ui.ui.anchor = Anchor::Left;
@@ -222,17 +221,6 @@ impl Hud {
             crate::ui::chat_strip(vui, ui, [p[0] + 2, p[1]], [203, 125]);
         }
         self.draw_target(vui, ui, TARGET_AT, s);
-        self.draw_report(vui, ui, [20, 421]);
-    }
-
-    /// The bug report (F3, `report`) as a button under the target's bar:
-    /// the bar's art, solid as its words are (a tester asked that it not
-    /// fade), with its key and what it does on it.
-    fn draw_report(&mut self, vui: &Vui, ui: &mut UiRaster, at: [i32; 2]) {
-        let label = wide("F3  Report a bug");
-        let w = vui.string_width(ui, &label) + 28;
-        self.note(ui, [at[0], at[1], at[0] + w, at[1] + vui.entry(26).uv1[1]], Pick::Report);
-        vui.blit_bar(ui, &label, [1.0, 1.0, 1.0, 1.0], at, 25, 26, w, 3, 1.0, 0, true);
     }
 
     /// `DrawGroup`: a bar for each other active member, 48 apart: its name,
@@ -483,9 +471,8 @@ mod tests {
     /// window at the game's places; in a 16:9 one out at the left side (106
     /// frame pixels); in one narrower than 4:3 (two side by side, 798x828:
     /// 85 frame pixels above and below the frame) the player's frame up with
-    /// the top and the report's button down with the bottom, where the
-    /// game's places now hold neither (the control). Needs a graphics
-    /// adapter; without one it says so and passes.
+    /// the top, where the game's place no longer holds it (the control).
+    /// Needs a graphics adapter; without one it says so and passes.
     #[test]
     fn a_pointer_finds_the_pieces_where_a_tall_window_put_them() {
         let _gpu = crate::GPU_TEST.lock().unwrap_or_else(|e| e.into_inner());
@@ -493,20 +480,16 @@ mod tests {
             eprintln!("SKIP: no graphics adapter");
             return;
         };
-        // the report's bar art 28 high (the atlas's entry 26)
-        let mut atlas = vec![vi::ui::UiTexEntry::default(); 27];
-        atlas[26].uv1 = [16, 28];
-        let vui = crate::ui::Vui::new(Default::default(), Default::default(), atlas);
+        let vui = crate::ui::Vui::new(Default::default(), Default::default(), vec![vi::ui::UiTexEntry::default(); 27]);
         let assets = crate::ui::UiAssets::default();
-        let (me, report) = ([100.0, 40.0], [30.0, 430.0]);
+        let me = [100.0, 40.0];
         for (size, side, up) in [((640, 480), 0.0, 0.0), ((1280, 720), 106.0, 0.0), ((798, 828), 0.0, 85.0)] {
             ui.begin(size);
             let mut hud = Hud::new();
             hud.draw(&vui, &mut assets.raster(&mut ui), &HudState::default());
             assert_eq!(hud.pick([me[0] - side, me[1] - up]), Some(Pick::Me), "{size:?}");
-            assert_eq!(hud.pick([report[0] - side, report[1] + up]), Some(Pick::Report), "{size:?}");
             if side + up > 0.0 {
-                assert_eq!((hud.pick(me), hud.pick(report)), (None, None), "{size:?}: the game's places");
+                assert_eq!(hud.pick(me), None, "{size:?}: the game's place");
             }
         }
     }

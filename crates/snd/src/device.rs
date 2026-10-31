@@ -330,13 +330,13 @@ pub struct SoundDevice<M: Model> {
     packet: [u32; 128],
     words: i32,
     /// sounds that could not be made since the device was made: no free
-    /// slot of the 128, no SPU RAM (or XM pool) for it (the report's sound
-    /// line)
+    /// slot of the 128, no SPU RAM (or XM pool) for it (the sound
+    /// line, `Sound::describe`)
     pub failed_creates: [u32; 2],
     /// packets kept back because the IOP was still busy with the last call
     /// (`sound_flush`), and blocks of an upload held back because a copy or
     /// relocation for the last one was among them (`idle_transfer`): the
-    /// report's sound line
+    /// sound line
     pub flushes_refused: u32,
     pub uploads_held: u32,
     /// what did not fit the packet, in the order it came, as the packet
@@ -346,7 +346,7 @@ pub struct SoundDevice<M: Model> {
     backlog: Vec<u32>,
     /// the commands that found the packet full and went in a packet after
     /// it (`sound_cmd`), by their id (99, the test tone, as 0): which kinds
-    /// a busy frame sends late, and how many (the report's sound line);
+    /// a busy frame sends late, and how many (the sound line);
     /// `cmds_dropped`, past the backlog's cap (`BACKLOG_MAX`), the ones lost
     pub cmds_later: u32,
     pub later_by_id: [u32; 16],
@@ -359,14 +359,14 @@ pub struct SoundDevice<M: Model> {
     /// every packet is the console's, a full one's too.
     pub console_drops: bool,
     /// voices a new sound took from playing ones of its priority or below
-    /// (`allocate_channels`: the 46 all in use; the report's sound line)
+    /// (`allocate_channels`: the 46 all in use; the sound line)
     pub steals: u32,
     /// the most words a packet has held when it was sent (of 127): how near
-    /// a frame's commands come to filling it (the report's sound line)
+    /// a frame's commands come to filling it (the sound line)
     pub most_words: i32,
     /// a frame drawn between two of the game's (`set_between`), and the
     /// volumes, pans and pitches it held for the game's frame since the
-    /// device was made (the report's sound line)
+    /// device was made (the sound line)
     between: bool,
     /// the frames drawn, counted by `set_between`
     drawn: u32,

@@ -1,8 +1,8 @@
 //! The target's alpha stays 1 wherever a model is drawn: an alpha-tested layer
 //! whose texel passes the test with alpha below 1 writes its colour and leaves
-//! the alpha alone. A page's WebGL2 canvas is composited, and a report's
-//! picture of it taken, with that alpha (F3 20261020-202738: the colour of
-//! every alpha-tested edge wrapped round into a cyan fringe in the picture).
+//! the alpha alone. A page's WebGL2 canvas is composited with that alpha (F3
+//! 20261020-202738: the colour of every alpha-tested edge wrapped round into
+//! a cyan fringe in a picture of it).
 //! Needs a GPU adapter (any backend); without one it says so and passes.
 
 use render::{Draw, Renderer, View};

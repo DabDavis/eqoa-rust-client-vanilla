@@ -57,7 +57,7 @@ impl Play {
         self.duel.part.is_dueling(id)
     }
 
-    /// The duel part, for a look (the report's trace, tests).
+    /// The duel part, for a look (tests).
     pub fn duel_part(&self) -> &Part {
         &self.duel.part
     }
@@ -67,17 +67,6 @@ impl Play {
     pub(super) fn duel_patch(&self) -> Option<[f32; 3]> {
         let p = &self.duel.part;
         (p.running && p.world as i32 == self.world_id()).then_some(p.centre)
-    }
-
-    /// The window as the report's trace gives it.
-    pub(super) fn duel_window_line(&self) -> String {
-        let w = &self.duel.wnd;
-        match (&w.invite, w.wager, w.visible) {
-            (_, _, false) => String::new(),
-            (Some(r), _, true) => format!("; the invitation from {} up, {} ticks left", r.name, r.timer),
-            (None, true, true) => format!("; the wager up, focus {}", w.focus),
-            (None, false, true) => "; the window up, empty".to_string(),
-        }
     }
 
     /// The player's name as a decline carries it.

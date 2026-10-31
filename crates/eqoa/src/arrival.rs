@@ -1,7 +1,6 @@
-//! What a window does as it comes to the front, said in one line of the log
-//! (and so in a problem report, which carries the log's last lines): how
-//! long before it came its last frame was drawn (a window whose frames had
-//! stopped behind another takes the focus late), how long until its first
+//! What a window does as it comes to the front, said in one line of the log:
+//! how long before it came its last frame was drawn (a window whose frames
+//! had stopped behind another takes the focus late), how long until its first
 //! frame, the longest wait between two frames until its first press, that
 //! press (a controller's or a key's) and how long after it came, and the keys
 //! already down as it came, which it does not take (winit's synthetic
@@ -15,13 +14,11 @@
 //! on X11, so a key counts as down at the focus within `NEAR` either side.
 //!
 //! The line also says how fast the window drew in its last stretch in the
-//! back (from leaving the front to coming back, `BEHIND_AT_LEAST` or more), a
-//! window still in the back says it once `SAY_BEHIND` in (a report from the
-//! window in front carries the other windows' focus lines), and a report's
-//! state says it of the window as it is (`describe`): a tester multiboxing,
-//! "background window has low fps, but focus is good" (2026-10-27), and the
-//! reports' focus lines showed a window in the back drawing late, with
-//! nothing to say how fast.
+//! back (from leaving the front to coming back, `BEHIND_AT_LEAST` or more),
+//! and a window still in the back says it once `SAY_BEHIND` in: a tester
+//! multiboxing, "background window has low fps, but focus is good"
+//! (2026-10-27), and the focus lines showed a window in the back drawing
+//! late, with nothing to say how fast.
 
 use std::time::Duration;
 use web_time::Instant;
@@ -66,10 +63,9 @@ pub struct Arrival {
     /// the stretch in the back under way: since the window left the front,
     /// the frames drawn since, and whether it was said (`SAY_BEHIND`)
     back: Option<(Instant, u32, bool)>,
-    /// the stretch in the back this focus ended (for the line), and the last
-    /// one ended (for `describe`): how long, and the frames drawn in it
+    /// the stretch in the back this focus ended (for the line): how long,
+    /// and the frames drawn in it
     ended: Option<(Duration, u32)>,
-    behind: Option<(Duration, u32)>,
 }
 
 /// A duration as the line says it.
@@ -90,8 +86,7 @@ impl Arrival {
         let early = std::mem::take(&mut self.early);
         let drawn = self.drawn;
         let ended = self.back.map(|(since, n, _)| (now.saturating_duration_since(since), n));
-        let behind = ended.filter(|e| e.0 >= BEHIND_AT_LEAST).or(self.behind);
-        *self = Arrival { at: Some(now), drawn, before: drawn.map(|t| now.saturating_duration_since(t)), front: true, ended, behind, ..Default::default() };
+        *self = Arrival { at: Some(now), drawn, before: drawn.map(|t| now.saturating_duration_since(t)), front: true, ended, ..Default::default() };
         for (t, k) in early {
             if now.duration_since(t) <= NEAR {
                 self.held_key(t, &k);
@@ -160,23 +155,6 @@ impl Arrival {
         Some(format!("{line} (left the front)"))
     }
 
-    /// The window as a report's state says it: in front, with its last
-    /// stretch in the back, or in the back since when and how fast it draws
-    /// there.
-    pub fn describe(&self, now: Instant) -> String {
-        match (self.front, self.back) {
-            (false, Some((since, n, _))) => {
-                let d = now.saturating_duration_since(since);
-                format!("focus: not in front: {}{}", stretch(d, n), self.drawn.map_or(String::new(), |t| format!(", its last frame {} ago", ms(now.saturating_duration_since(t)))))
-            }
-            (false, None) => "focus: not in front yet".to_string(),
-            (true, _) => match self.behind {
-                Some((d, n)) => format!("focus: in front; before that, {}", stretch(d, n)),
-                None => "focus: in front, not in the back yet".to_string(),
-            },
-        }
-    }
-
     fn say(&mut self, now: Instant, press: Option<&str>) -> String {
         let at = self.at.take().unwrap_or(now);
         let mut s = String::from("focus: in front; ");
@@ -205,9 +183,9 @@ impl Arrival {
 }
 
 /// A key as the line names it: a named key by its name (Tab, F1, Alt,
-/// Enter), any key that types a character only as that. The log goes out
-/// with a problem report, and the first key typed into a window just
-/// brought to the front can be a password's first letter (Station's login).
+/// Enter), any key that types a character only as that. A player may hand
+/// the log on, and the first key typed into a window just brought to the
+/// front can be a password's first letter (Station's login).
 pub fn key_label(k: &winit::keyboard::Key) -> String {
     use winit::keyboard::Key;
     match k {
@@ -273,17 +251,14 @@ mod tests {
     /// How fast a window drew in the back (a multibox's other window: "if
     /// multibox, background window has low fps, but focus is good",
     /// 2026-10-27): its stretch there, from leaving the front to coming back,
-    /// said 10 s into it, at the focus and in a report's state (`describe`);
-    /// a stretch under a second (an Alt+Tab and back) is not said, and the
-    /// state keeps the last one that was. The control: the frames drawn in
-    /// front do not count (with them the rate would be 46).
+    /// said 10 s into it and at the focus; a stretch under a second (an
+    /// Alt+Tab and back) is not said. The control: the frames drawn in front
+    /// do not count (with them the rate would be 46).
     #[test]
     fn a_window_says_how_fast_it_drew_in_the_back() {
         let t0 = Instant::now();
         let mut a = Arrival::default();
-        assert_eq!(a.describe(at(t0, 0)), "focus: not in front yet");
         a.focused(at(t0, 0));
-        assert_eq!(a.describe(at(t0, 10)), "focus: in front, not in the back yet");
         // in front at 60 a second
         for k in 1..60 {
             a.frame(at(t0, k * 16));
@@ -292,21 +267,17 @@ mod tests {
         // 11 s in the back at 40 a second, said once 10 s in
         let said: Vec<String> = (1..=440).filter_map(|k| a.frame(at(t0, 1000 + k * 25))).collect();
         assert_eq!(said, ["focus: not in front: 10.0 s in the back at 40 frames a second"]);
-        assert_eq!(a.describe(at(t0, 12025)), "focus: not in front: 11.0 s in the back at 40 frames a second, its last frame 25 ms ago");
         a.focused(at(t0, 12025));
         assert_eq!(a.frame(at(t0, 12035)), None);
         assert_eq!(
             a.press(at(t0, 12125), "the controller's cross").as_deref(),
             Some("focus: in front; 11.0 s in the back at 40 frames a second, its last frame 25 ms before, its first frame 10 ms after; the first press 100 ms after: the controller's cross")
         );
-        assert_eq!(a.describe(at(t0, 13000)), "focus: in front; before that, 11.0 s in the back at 40 frames a second");
         // an Alt+Tab and back: too short to say
         a.lost(at(t0, 13000));
         a.frame(at(t0, 13100));
         a.focused(at(t0, 13500));
         assert_eq!(a.lost(at(t0, 13600)).as_deref(), Some("focus: in front; its last frame 400 ms before, no frame drawn; no press in 100 ms (left the front)"));
-        a.focused(at(t0, 13700));
-        assert_eq!(a.describe(at(t0, 13800)), "focus: in front; before that, 11.0 s in the back at 40 frames a second", "the last one said kept");
     }
 
     /// A named key by its name; a character's key never by its character

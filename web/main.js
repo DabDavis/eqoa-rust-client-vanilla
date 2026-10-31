@@ -3,13 +3,13 @@
 // the loading screens, the licence and the title, Station's login screen, the
 // server list, character select and creation, the world). Query parameters
 // override the defaults: ?relay=ws://127.0.0.1:8790&server=203.0.113.10 for a
-// local server. Reports, notices and what goes wrong are report.js's
-// (window.eqoaReport).
-import init, { boot, view, client_state, want_shot, crash_test, disc_id, disc_2002, update_notices, hidden_tick } from './eqoa.js';
+// local server. Notices and what goes wrong are notices.js's
+// (window.eqoaNotices).
+import init, { boot, view, disc_id, disc_2002, update_notices, hidden_tick } from './eqoa.js';
 import { canRemember, keptHandle, keepHandle, forgetHandle } from './discstore.js';
 
 const $ = (id) => document.getElementById(id);
-// the client's own graphics line ("graphics: <adapter> (<backend>)"), for reports
+// the client's own graphics line ("graphics: <adapter> (<backend>)")
 let clientGraphics = '';
 // a software renderer's name, as WebGL's unmasked renderer, WebGPU's adapter
 // info or the client's adapter names it: SwiftShader, Mesa's llvmpipe,
@@ -28,9 +28,9 @@ const status = (t) => {
   $('status').textContent = software && t && document.body.classList.contains('playing') ? `${t} · drawn without the graphics card` : t;
 };
 window.eqoaStatus = status;
-// report.js's, when it loaded (it is a module of its own, before this one)
-const report = window.eqoaReport || null;
-const problem = (key, text) => (report ? report.problem(key, text) : console.warn(text));
+// notices.js's, when it loaded (it is a module of its own, before this one)
+const notices = window.eqoaNotices || null;
+const problem = (key, text) => (notices ? notices.problem(key, text) : console.warn(text));
 
 // ---- sound: an AudioContext at 48 kHz, made on the click that starts a
 // session (a page may only start sound from its user's gesture), playing
@@ -228,9 +228,9 @@ $('gate').addEventListener('submit', async (ev) => {
 window.eqoaBooted = () => {
   show(null);
   $('eqoa').focus();
-  // the status line goes right: the HUD's report button is at the bottom left
+  // the status line goes right, clear of the HUD at the bottom left
   document.body.classList.add('playing');
-  if (report) report.running(true);
+  if (notices) notices.running(true);
 };
 
 $('view').addEventListener('click', async () => {
@@ -244,7 +244,7 @@ $('view').addEventListener('click', async () => {
     show(null);
     $('eqoa').focus();
     await view(file, $('viewargs').value.trim() || 'CHAR.ESF 0x70D898C6');
-    if (report) report.running(true);
+    if (notices) notices.running(true);
   } catch (e) {
     show('gate');
     busy(false);
@@ -537,7 +537,7 @@ function noteSoftware(api) {
   if (softwareTold) return;
   softwareTold = true;
   const text = `The browser is drawing without the graphics card, so the game will be slow. ${softwareFix(b)}`;
-  if (report) report.notice('software-graphics', '', text, [['Dismiss', () => report.notice('software-graphics')]]);
+  if (notices) notices.notice('software-graphics', '', text, [['Dismiss', () => notices.notice('software-graphics')]]);
   else console.warn(text);
 }
 
@@ -545,24 +545,20 @@ function noteSoftware(api) {
 // (web::disc_id), as soon as it is picked, so a disc other than Frontiers
 // is named before a session finds out without its HUD.
 
-let discLine = '';
 $('iso').addEventListener('change', async () => {
   const file = $('iso').files[0];
   const line = $('iso-what');
   line.textContent = '';
   line.className = 'note';
-  discLine = '';
   if (!file) return;
   try {
     await ready;
     const [ok, text] = await disc_id(file);
     line.className = 'note ' + (ok ? 'ok' : 'warn');
     line.textContent = text;
-    discLine = `${text} (${file.size} bytes${$('iso').dataset.again ? ', remembered from the last visit' : ''})`;
   } catch (e) {
     line.className = 'note warn';
     line.textContent = String(e && e.message ? e.message : e);
-    discLine = `${line.textContent} (${file.size} bytes)`;
   }
 });
 
@@ -580,31 +576,27 @@ if (onIOS) for (const id of ['iso', 'iso2002']) $(id).removeAttribute('accept');
 // the gate, or when F9 asks for it in the game. A disc refused is let go of,
 // so the line says what is read.
 
-let disc2002Line = '';
 $('iso2002').addEventListener('change', async () => {
   const file = $('iso2002').files[0] || null;
   const line = $('iso2002-what');
   line.textContent = '';
   line.className = 'note';
-  disc2002Line = '';
   try {
     await ready;
     const [ok, text] = await disc_2002(file);
     if (file) {
       line.className = 'note ' + (ok ? 'ok' : 'warn');
       line.textContent = text;
-      disc2002Line = `${text} (${file.size} bytes)`;
     }
     // in the game the gate is hidden: a refusal is a notice; a disc taken
     // clears F9's ask, and the swap it was pressed for goes on
-    if (report && started) {
-      if (ok || !file) report.notice('disc2002');
-      else report.notice('disc2002', 'bad', text, [['Choose another', () => $('iso2002').click(), true], ['Close', () => report.notice('disc2002')]]);
+    if (notices && started) {
+      if (ok || !file) notices.notice('disc2002');
+      else notices.notice('disc2002', 'bad', text, [['Choose another', () => $('iso2002').click(), true], ['Close', () => notices.notice('disc2002')]]);
     }
   } catch (e) {
     line.className = 'note warn';
     line.textContent = String(e && e.message ? e.message : e);
-    disc2002Line = `${line.textContent} (${file ? file.size : 0} bytes)`;
   }
   if (started) $('eqoa').focus();
 });
@@ -617,14 +609,14 @@ window.eqoaAsk2002 = () => {
   // a 2002 disc remembered from an earlier visit (`remembering`): asked for
   // in this key's activation, the picker only when it cannot be had
   if (rememberOn() && remembered.disc2002) {
-    takeAgain('iso2002').then((ok) => { if (ok && report) report.notice('disc2002'); });
+    takeAgain('iso2002').then((ok) => { if (ok && notices) notices.notice('disc2002'); });
   } else {
     try { $('iso2002').click(); } catch { /* the notice's button does */ }
   }
-  if (report) {
-    report.notice('disc2002', '', 'The 2002 art comes off your own EverQuest Online Adventures (USA) disc image, SLUS-20470: pick it, and F9 swaps the art.', [
+  if (notices) {
+    notices.notice('disc2002', '', 'The 2002 art comes off your own EverQuest Online Adventures (USA) disc image, SLUS-20470: pick it, and F9 swaps the art.', [
       ['Choose the disc', () => $('iso2002').click(), true],
-      ['Not now', () => report.notice('disc2002')],
+      ['Not now', () => notices.notice('disc2002')],
     ]);
   }
 };
@@ -644,10 +636,6 @@ const discInputs = { iso: { key: 'disc', id: 'eqoa-disc' }, iso2002: { key: 'dis
 // what is kept, read once at the start: { handle, name } by key
 const remembered = {};
 const rememberOn = () => canRemember && $('remember').checked;
-// what a report says of it (report.facts' `remember:` line, F3
-// 20261026-014934: "did not actually remember"): the browser's last answers
-// by disc, and the picker's last error; names only, never where a file is
-const rememberLog = { query: {}, request: {}, error: '' };
 
 // keptHandle, keepHandle, forgetHandle: discstore.js (the community page reads them too)
 
@@ -680,7 +668,6 @@ async function takeAgain(name, ask = true) {
     // an old handle, or asked with no activation: as not allowed
     state = `refused (${e && e.name ? e.name : e})`;
   }
-  rememberLog[ask ? 'request' : 'query'][d.key] = state;
   if (state !== 'granted') {
     if (ask) saySoft(name, `The browser did not allow reading ${r.name}: choose it again.`);
     return false;
@@ -733,7 +720,6 @@ function pickRemembered(name) {
     const file = await handle.getFile();
     remembered[d.key] = { handle, name: file.name };
     keepHandle(d.key, remembered[d.key]);
-    rememberLog.error = '';
     putFile(name, file, false);
   });
   const failed = (e) => {
@@ -742,35 +728,15 @@ function pickRemembered(name) {
       if ($(name).files.length && !remembered[d.key]) offerKeep(name);
       return;
     }
-    rememberLog.error = `${e && e.name ? e.name : 'Error'}: ${e && e.message ? e.message : e}`;
     saySoft(name, `The picker did not open (${e && e.message ? e.message : e}): click to choose it again, or untick Remember to use the browser's own.`);
     if ($(name).files.length && !remembered[d.key]) offerKeep(name);
   };
   open(start ? { ...opts, startIn: start } : opts).catch((e) => {
     if (start && !(e && e.name === 'AbortError') && navigator.userActivation && navigator.userActivation.isActive) {
-      const note = `${e && e.name ? e.name : 'Error'} starting where it was`;
-      return open(opts).then(() => { rememberLog.error = `${note} (opened without it)`; }, failed);
+      return open(opts).catch(failed);
     }
     failed(e);
   });
-}
-
-// For a report: what is kept, what the browser said, what is offered.
-function rememberFacts() {
-  if (!canRemember) return 'not in this browser (it has no File System Access picker)';
-  const parts = [$('remember').checked ? 'on' : 'off'];
-  for (const name of Object.keys(discInputs)) {
-    const d = discInputs[name];
-    const r = remembered[d.key];
-    const said = [rememberLog.query[d.key] && `checked: ${rememberLog.query[d.key]}`,
-      rememberLog.request[d.key] && `asked: ${rememberLog.request[d.key]}`].filter(Boolean).join(', ');
-    const row = $(name + '-again-row');
-    parts.push(`${d.key} ${r ? `kept "${r.name}"` : 'not kept'}${said ? ` (${said})` : ''}`
-      + `${row.hidden ? '' : `, offered: "${$(name + '-again').textContent}"`}`
-      + `${$(name).dataset.again ? ', in use from the last visit' : ''}`);
-  }
-  parts.push(`last picker error: ${rememberLog.error || 'none'}`);
-  return parts.join('; ');
 }
 
 if (canRemember) {
@@ -868,8 +834,8 @@ if (canRemember) {
 // ---- full screen (the user, 2026-10-27: "the browser build should force
 // full screen, mobile players cant figure it out", and "still allow f11 to
 // non fullscreen"). Start and View put the whole page full screen in their
-// own click (the page, not the canvas: the notices, the report dialog and the
-// phone keyboard's input stay on it), where it can stay so:
+// own click (the page, not the canvas: the notices and the phone keyboard's
+// input stay on it), where it can stay so:
 // - on a phone or a tablet (`eqoaTouchFirst`), in any browser that lets a
 //   page. One left (the back gesture, another app) comes back at the next
 //   touch on the game, but not while an edit box has the keyboard (that touch
@@ -888,7 +854,6 @@ if (canRemember) {
 // one at the first key typed ("Typing is not allowed in full screen
 // websites"): there the app off the Home Screen is full screen (`installWhat`).
 
-const full = { said: 'not asked' }; // what the page last asked or heard, for a report
 // Escape can stay the game's in a page's full screen
 const keepsEscape = !!(navigator.keyboard && typeof navigator.keyboard.lock === 'function');
 // full screen already: the page's, the browser's own (F11), or an installed app's
@@ -900,34 +865,23 @@ const multiboxing = () => windows.live.some((n) => n !== windows.place);
 
 function fullScreen() {
   if (!canFull() || shownFull()) return;
-  if (!window.eqoaTouchFirst() && multiboxing()) {
-    full.said = 'not asked: another window of the game is open';
-    return;
-  }
-  full.said = 'asked';
+  if (!window.eqoaTouchFirst() && multiboxing()) return;
   let asked;
   try {
     asked = document.documentElement.requestFullscreen({ navigationUI: 'hide' });
   } catch (e) {
     asked = Promise.reject(e);
   }
-  Promise.resolve(asked).catch((e) => {
-    full.said = `refused (${e && e.message ? e.message : e})`;
-    console.log(`full screen ${full.said}`);
-  });
+  Promise.resolve(asked).catch((e) => console.log(`full screen refused (${e && e.message ? e.message : e})`));
 }
 
 document.addEventListener('fullscreenchange', () => {
-  const on = !!document.fullscreenElement;
-  full.said = on ? 'on' : 'left';
   if (!keepsEscape) return;
-  if (!on) {
+  if (!document.fullscreenElement) {
     navigator.keyboard.unlock();
     return;
   }
-  navigator.keyboard.lock(['Escape']).then(
-    () => { if (document.fullscreenElement) full.said = 'on, Escape the game’s'; },
-    (e) => { full.said = `on, Escape not kept (${e && e.message ? e.message : e})`; });
+  navigator.keyboard.lock(['Escape']).catch((e) => console.log(`full screen: Escape not kept (${e && e.message ? e.message : e})`));
 });
 
 for (const ev of ['keydown', 'keyup']) {
@@ -937,17 +891,6 @@ for (const ev of ['keydown', 'keyup']) {
 $('eqoa').addEventListener('pointerup', (e) => {
   if (e.pointerType !== 'mouse' && started && !wantText && window.eqoaTouchFirst()) fullScreen();
 });
-
-// For a report.
-function fullFacts() {
-  const where = !document.fullscreenEnabled ? 'the browser lets no page'
-    : onIOS ? 'none on iOS (the Home Screen app is)'
-    : window.eqoaTouchFirst() ? 'from Start, and again at a touch'
-    : keepsEscape ? 'from Start, Escape the game’s'
-    : 'F11’s alone (Escape would end the page’s)';
-  const now = document.fullscreenElement ? 'the page’s' : shownFull() ? 'the browser’s or the app’s' : 'a window';
-  return `${where}; now ${now}; last: ${full.said}`;
-}
 
 // ---- installing the page as an app (the user, 2026-10-27: "we can add the
 // install app feature for each"). The build's manifest (manifest.json: this
@@ -1084,9 +1027,9 @@ async function checkUpdate(force) {
   } catch {
     return latest; // offline, or the host is down: nothing to say
   }
-  if (!report) return latest;
+  if (!notices) return latest;
   if (!latest || latest === BUILD) {
-    report.notice('update');
+    notices.notice('update');
     return latest;
   }
   const untouched = !started && !$('iso').files.length && !$('iso2002').files.length;
@@ -1102,16 +1045,16 @@ async function checkUpdate(force) {
     return latest;
   }
   if (!noticesOn()) {
-    report.notice('update');
+    notices.notice('update');
     return latest;
   }
   if (!later || later.build !== latest || Date.now() >= later.until) {
     const news = await whatsNew(latest);
-    report.notice('update', '', (started
+    notices.notice('update', '', (started
       ? 'A new version of the client is out. Reloading leaves the game, and you sign in again.'
       : 'A new version of the client is out.') + (news ? `\n\nWhat's new:\n${news}` : ''), [
       ['Reload', () => { session.set('reloadedFor', latest); location.reload(); }, true],
-      ['Later', () => { later = { build: latest, until: Date.now() + LATER_MS }; report.notice('update'); }],
+      ['Later', () => { later = { build: latest, until: Date.now() + LATER_MS }; notices.notice('update'); }],
     ]);
   }
   return latest;
@@ -1126,33 +1069,6 @@ window.eqoaCheckUpdate = () => checkUpdate(true);
 setInterval(checkUpdate, 60000);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkUpdate(); });
 addEventListener('pageshow', (e) => { if (e.persisted) checkUpdate(); });
-
-// ---- reports (report.js): what this page adds to each, and the gate's button
-
-if (report) {
-  report.graphics = () => {
-    if (/\(Gl\)$/.test(clientGraphics)) return 'WebGL2';
-    if (/WebGpu/.test(clientGraphics)) return 'WebGPU';
-    const g = $('gfx-state').textContent;
-    return /WebGPU/.test(g) ? 'WebGPU' : /WebGL2/.test(g) ? 'WebGL2' : '';
-  };
-  report.facts = () => [
-    `update: ${!BUILD ? 'not a built page' : !latest ? 'not asked yet' : latest === BUILD ? 'this is the newest' : `the server has ${latest}`}`,
-    `graphics: ${$('gfx-state').textContent}${clientGraphics ? `; the client's: ${clientGraphics}` : ''}`,
-    `disc: ${discLine || ($('iso').files.length ? 'picked, not identified' : 'none picked')}`,
-    `2002 disc: ${disc2002Line || ($('iso2002').files.length ? 'picked, not identified' : 'none picked')}`,
-    `remember: ${rememberFacts()}`,
-    `full screen: ${fullFacts()}`,
-    `app: ${asApp ? 'started as the installed app' : install.said || (install.prompt ? 'offered' : 'not offered')}`,
-    `panel: ${$('gate').hidden ? 'none (the game)' : 'gate'}, status: ${$('status').textContent}`,
-    `relay ${$('relay').value || '-'}, server ${$('server').value || '(this host)'}`,
-    `sound: ${JSON.stringify(window.eqoaAudio.stats())}`,
-  ];
-}
-$('report-gate').onclick = () => {
-  const e = $('gate-error').textContent.trim();
-  if (report) report.open(e ? `The page said: ${e}` : '');
-};
 
 // ---- a hidden page: no animation frames come, and the browser holds the
 // page's timers back, so the game would stop and the server let its session
@@ -1173,7 +1089,7 @@ function hiddenTicker() {
   }
   ticker.onmessage = () => {
     window.eqoaHiddenTicks++; // for web/pagetest.py
-    try { hidden_tick(); } catch { /* the client stopped: its crash report says so */ }
+    try { hidden_tick(); } catch { /* the client stopped: its notice says so */ }
   };
   const tell = () => ticker.postMessage(document.hidden);
   document.addEventListener('visibilitychange', tell);
@@ -1184,10 +1100,9 @@ checkGraphics();
 const ready = init({ module_or_path: wasmModule });
 ready.then(() => {
   clientReady = true;
-  window.eqoaClient = { state: client_state, wantShot: want_shot, crashTest: crash_test };
   hiddenTicker();
   status('ready');
 }).catch((e) => {
   status('could not load the client: ' + e);
-  problem('load', `The client did not load (${e}). Reload the page; if it keeps happening, send a report.`);
+  problem('load', `The client did not load (${e}). Reload the page.`);
 });

@@ -477,8 +477,7 @@ impl Binds {
         }
     }
 
-    /// What was moved, or that nothing was (said when the keys are read, and
-    /// in a report).
+    /// What was moved, or that nothing was (said when the keys are read).
     pub fn describe(&self) -> String {
         if self.is_default() {
             return "the default layout".into();

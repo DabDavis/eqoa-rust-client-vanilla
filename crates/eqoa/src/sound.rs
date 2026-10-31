@@ -95,7 +95,7 @@ struct SoundTrack {
     p30: F<Ee>,
     state: [TrackState; 2],
     /// the terrain profile the track was last chosen by, and its music
-    /// index (`TRACKS`' row), -1 before: for the sound's line in a report
+    /// index (`TRACKS`' row), -1 before: for the sound's line
     profile: i32,
     music: i32,
 }
@@ -178,7 +178,7 @@ impl Strays {
                     self.frames[k] = self.frames[k].saturating_add(1);
                     if self.frames[k] == STRAY_FRAMES {
                         self.times += 1;
-                        // when, for a report: a stop or a module's stop the
+                        // when: a stop or a module's stop the
                         // device sent and SNDDRV never had
                         crate::say(&format!("sound: voice {v} of core {c} plays on with no sound to stop it"));
                     }

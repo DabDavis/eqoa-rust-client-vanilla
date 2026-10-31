@@ -1044,12 +1044,6 @@ pub fn vsync() -> bool {
     cfg!(target_arch = "wasm32") || client().vsync
 }
 
-/// The display's refresh, in ms (`set_display_refresh`; a page's is taken
-/// as 60 Hz).
-pub fn display_gap() -> f64 {
-    DISPLAY_GAP.with(|g| g.get())
-}
-
 /// The display's refresh as the window's monitor reports it (mHz; 60 Hz when
 /// it reports none), the gap the loop keeps with VSync off and Frame Rate the
 /// display's.
@@ -1201,79 +1195,6 @@ pub fn curve(step: u8) -> Option<[u8; 256]> {
         *v = ((i as f64 / 255.0).powf(e) * 255.0).round() as u8;
     }
     Some(t)
-}
-
-/// The Extended page's settings in a line, and where they are kept (a
-/// report's).
-pub fn describe() -> String {
-    let c = client();
-    let rate = match frame_rate() {
-        FrameRate::Thirty => "30",
-        FrameRate::Sixty => "60",
-        FrameRate::Display => "the display's",
-    };
-    format!(
-        "level of detail {}, brightness {} of {BRIGHTNESS_STEPS}, fog {} of {}{}, frame rate {rate}{}, vsync {}, render scale x{}{}, camera distance {}, camera turn speed {}%, screen shake {}, controller focus {}, capture controller {}, sound in background {}, output device {}, ability bars {}, npc/pc display {}, npc/pc view distance {}, name distance {}, overlapping names {}, art {}, update notices {}, shouts {}, text {}, hud {}, mipmaps {}, flora {}, shadows {}, environment {}, ground fog {}, loading screens {}; {}",
-        if c.lod { "on" } else { "off" },
-        c.brightness,
-        c.fog,
-        crate::fog::STEPS,
-        if c.fog == crate::fog::GAME { " (the game's)" } else if c.fog == 0 { " (off)" } else { "" },
-        if c.frame_rate.is_none() { " (not chosen)" } else { "" },
-        if cfg!(target_arch = "wasm32") { "the browser's" } else if c.vsync { "on" } else { "off" },
-        c.render_scale,
-        match render::scale::would_draw(c.render_scale as u32) {
-            k if k != c.render_scale as u32 => format!(" (drawn at x{k})"),
-            _ => String::new(),
-        },
-        c.camera_distance,
-        c.camera_turn,
-        if c.screen_shake { "on" } else { "off" },
-        focus().key(),
-        if c.capture { "on" } else { "off" },
-        if c.background_sound { "on" } else { "off" },
-        c.output.map_or("the system default".to_string(), |d| format!("{:?}", d.as_str())),
-        c.ability_bars,
-        c.entity_slots,
-        c.entity_view,
-        c.name_distance,
-        if c.overlapping_names { "show" } else { "hide" },
-        match c.art {
-            esf::Era::Frontiers => "frontiers",
-            esf::Era::Y2002 => "2002",
-        },
-        if c.update_notices { "on" } else { "off" },
-        if c.shouts { "heard" } else { "ignored (kept)" },
-        match c.text {
-            render::ui::TextFilter::Sharp => "sharp",
-            render::ui::TextFilter::Smooth => "smooth",
-        },
-        match c.hud {
-            render::ui::HudFilter::Nearest => "nearest",
-            render::ui::HudFilter::Sharp => "sharp",
-        },
-        if c.mipmaps { "on" } else { "off" },
-        if c.flora { "on" } else { "off" },
-        if c.shadows { "on" } else { "off" },
-        if c.environment { "on" } else { "off" },
-        if c.ps2_fog { "ps2" } else { "exact" },
-        if c.loading_longer { "longer" } else { "instant" },
-        kept_where()
-    )
-}
-
-/// Where the settings are kept, for `describe`: a page's storage, or
-/// natively the config directory (the home directory a report takes out),
-/// and whose they are when this window is not the first.
-fn kept_where() -> String {
-    #[cfg(any(target_arch = "wasm32", test))]
-    let at = (if store::available() { "kept in the page's storage" } else { "the page's storage refused: nothing is kept" }).to_string();
-    #[cfg(all(not(target_arch = "wasm32"), not(test)))]
-    let at = store::dir().map_or_else(|| "not kept: no config directory".to_string(), |d| format!("kept in {}", d.display()));
-    match place() {
-        0 => at,
-        me => format!("{at}, as window {}'s own ({}, {})", me + 1, own_file("game", me), own_file("client", me)),
-    }
 }
 
 // ---- the frame cap ---------------------------------------------------------------
@@ -1732,10 +1653,6 @@ mod tests {
             "Screen Shake only off, Capture Controller only on"
         );
         testing::reset(false);
-        assert_eq!(describe(), "level of detail on, brightness 5 of 10, fog 5 of 10 (the game's), frame rate the display's (not chosen), vsync on, render scale x1, camera distance 11, camera turn speed 100%, screen shake on, controller focus auto, capture controller off, sound in background on, output device the system default, ability bars 2, npc/pc display 24, npc/pc view distance 100, name distance 22, overlapping names hide, art frontiers, update notices on, shouts heard, text sharp, hud nearest, mipmaps on, flora on, shadows on, environment on, ground fog ps2, loading screens longer; kept in the page's storage");
-        testing::reset(true);
-        assert!(describe().ends_with("refused: nothing is kept"));
-        testing::reset(false);
         let odd = ClientOptions::from_text("brightness=11\nlod=maybe\nframe_rate=120\ncamera_distance=51\nwhat=ever\nnoise\ncontroller.0=pad1\ncontroller.17=pad1\ncontroller.2=pad5\ncontroller.x=off");
         assert_eq!(odd, ClientOptions::default());
         assert_eq!(ClientOptions::from_text("camera_distance=7").camera_distance, 11);
@@ -2057,7 +1974,6 @@ mod tests {
         set_place(Some(1));
         CLIENT.with(|c| c.set(None));
         assert_eq!((game_options(), client().brightness), (two, 2), "window 2: no sound, its brightness");
-        assert!(describe().ends_with("kept in the page's storage, as window 2's own (game-2.opt, client-2.opt)"));
         testing::reset(false);
     }
 

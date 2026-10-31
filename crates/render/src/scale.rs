@@ -37,8 +37,8 @@ static LAST_MAX: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::ne
 
 /// The scale a frame would be drawn at with `want` asked, at the last
 /// frame's size and limit: `want`, or less where the window is too large for
-/// it (the options' note, said as the row moves, before the next frame; a
-/// report's options line). `want` before any frame is drawn.
+/// it (the options' note, said as the row moves, before the next frame).
+/// `want` before any frame is drawn.
 pub fn would_draw(want: u32) -> u32 {
     use std::sync::atomic::Ordering::Relaxed;
     fit(want, (LAST_W.load(Relaxed), LAST_H.load(Relaxed)), LAST_MAX.load(Relaxed))

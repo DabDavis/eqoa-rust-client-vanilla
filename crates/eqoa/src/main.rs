@@ -113,7 +113,7 @@ mod duelwnd;
 mod loading;
 mod lod;
 mod loot;
-// the memory a report and the log carry (F3 crash 20261026-220031)
+// the memory the log carries (F3 crash 20261026-220031)
 mod mem;
 mod merchant;
 mod modules;
@@ -158,7 +158,8 @@ mod gpulost;
 mod gpustart;
 #[cfg(not(target_arch = "wasm32"))]
 mod nothrottle;
-mod report;
+#[cfg(not(target_arch = "wasm32"))]
+mod logfile;
 mod ui;
 mod update;
 #[cfg(not(target_arch = "wasm32"))]
@@ -198,10 +199,8 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("eqoa: {e}");
-            // the line into the log, and the log closed after it: a run that
-            // ends on an error (no disc image chosen) is not offered as a
-            // crash at the next start
-            report::clean_exit();
+            // the line into the log, and the log closed after it
+            logfile::close();
             ExitCode::FAILURE
         }
     }
@@ -543,8 +542,6 @@ fn run(args: &[String]) -> Result<()> {
             let host = args.get(1).ok_or("usage: eqoa play <host> <user> (password in EQOA_PASSWORD)")?;
             let user = args.get(2).ok_or("usage: eqoa play <host> <user>")?;
             let pass = std::env::var("EQOA_PASSWORD").map_err(|_| "set EQOA_PASSWORD")?;
-            // taken out of a report, as Station's login is
-            report::secret(user, &pass);
             // the options kept in the player's config directory (a playshot
             // keeps them only in `$EQOA_CONFIG`: `settings`)
             if args[0] == "play" {
@@ -593,11 +590,11 @@ fn run(args: &[String]) -> Result<()> {
 /// (`discs::settle`, in the window's event loop).
 fn boot(image: Option<&str>, server: Option<String>) -> Result<()> {
     settings::keep_in_user_dir();
-    // the log a report carries, and the crash reports (`report`); the
-    // program as it starts, for a start again after a lost graphics device
+    // the log (`logfile`); the program as it starts, for a start again
+    // after a lost graphics device
     #[cfg(not(target_arch = "wasm32"))]
     {
-        report::start();
+        logfile::start();
         gpulost::begin();
         // a window in the back kept at its pace by the system too (multiboxing)
         nothrottle::keep_pace();
@@ -614,13 +611,13 @@ fn boot(image: Option<&str>, server: Option<String>) -> Result<()> {
     viewer::run_boot(server)?;
     // the run closed (its log says so); the window closed for the release's
     // build, or for a graphics device lost: the game starts in this one's
-    // place (a device lost again soon after a start: a crash report instead)
+    // place (a device lost again soon after a start: the log says so instead)
     #[cfg(not(target_arch = "wasm32"))]
     {
         if gpulost::lost() && !gpulost::settled() {
-            report::crash(&format!("The graphics device was lost ({}) within 30 s of the game's start: the game did not start again, as it would only lose it again.", gpulost::why()));
+            eprintln!("graphics: the device was lost ({}) within 30 s of the game's start: the game does not start again, as it would only lose it again", gpulost::why());
         }
-        report::clean_exit();
+        logfile::close();
         update::relaunch_if_requested();
         if gpulost::lost() && gpulost::settled() {
             gpulost::relaunch();

@@ -10,8 +10,8 @@
 //! the platform's other API (Windows: DirectX 12 after Vulkan; Linux:
 //! OpenGL). An API that started where the first died is kept (`gpu.opt`), so
 //! the player is not left with every other start dying. `WGPU_BACKEND` set by
-//! hand wins over all of it. Each step goes in the log, so a report says
-//! where a start stopped.
+//! hand wins over all of it. Each step goes in the log, which says where a
+//! start stopped.
 
 use render::wgpu::Backends;
 use std::path::PathBuf;

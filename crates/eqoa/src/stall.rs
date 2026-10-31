@@ -1,7 +1,5 @@
 //! Stalls: a frame drawn a second or more after the one before it. Each is
-//! said in one line of the log (and so in a problem report, and in another
-//! window's report too: `report::other_windows` carries its `stall:` lines),
-//! with where the time went: in the frame, by its longest phases
+//! said in one line of the log, with where the time went: in the frame, by its longest phases
 //! (`viewer::Perf`'s, from stream and pads to gpu wait), or outside it, as the
 //! client's own handling of the window's other events (the longest named) or
 //! with no call from the event loop at all; how long the game's thread waited
@@ -12,8 +10,7 @@
 //! waiting for that frame to read (`net::Session::pump`): a stall of the
 //! client's own leaves the server sending, a network gone quiet is older than
 //! the stall. A line comes at most once in `SAY_EVERY`, the stalls between
-//! counted into the next; a report's state carries the run's count and its
-//! longest (`Watch::describe`).
+//! counted into the next.
 //!
 //! F3 20261029-025532 (Windows, two windows on Sandstorm, two DualSenses on
 //! Bluetooth): "Game keeps freezing on both windows at the same time.
@@ -34,8 +31,7 @@ pub const STALL: Duration = Duration::from_secs(1);
 
 /// A stall's line comes at most this often, and once `SAID_SOON` have come,
 /// at most every `SAY_LATER` (a window held to a frame a second for good
-/// would fill the report's last lines); the stalls between are counted into
-/// the next.
+/// would fill the log); the stalls between are counted into the next.
 const SAY_EVERY: Duration = Duration::from_secs(10);
 const SAY_LATER: Duration = Duration::from_secs(60);
 const SAID_SOON: u32 = 20;
@@ -165,11 +161,6 @@ pub struct Watch {
     said: Option<Instant>,
     lines: u32,
     unsaid: u32,
-    /// this run's stalls, and the longest (its length and its words), and
-    /// those under the loading screen (counted apart)
-    count: u32,
-    worst: Option<(Duration, String)>,
-    loading: u32,
 }
 
 impl Watch {
@@ -258,19 +249,11 @@ impl Watch {
 
     /// After the frame has read the datagrams that came (`heard`, none
     /// without a game server): the stall it found, if any, as its line, when
-    /// one is due (`SAY_EVERY`); counted for the run either way.
+    /// one is due (`SAY_EVERY`).
     pub fn after_pump(&mut self, heard: Option<Heard>, now: Instant) -> Option<String> {
         let s = self.pending.take()?;
         let waiting = heard.zip(s.heard).map(|(h, before)| h.count.saturating_sub(before.count));
         let words = s.words(waiting);
-        if s.loading {
-            self.loading += 1;
-        } else {
-            self.count += 1;
-            if self.worst.as_ref().is_none_or(|w| s.gap > w.0) {
-                self.worst = Some((s.gap, words.clone()));
-            }
-        }
         let every = if self.lines >= SAID_SOON { SAY_LATER } else { SAY_EVERY };
         if self.said.is_some_and(|t| now.saturating_duration_since(t) < every) {
             self.unsaid += 1;
@@ -283,19 +266,6 @@ impl Watch {
             0 => format!("stall: {words}"),
             n => format!("stall: {words} (and {n} more since the last line said, each 1 s or more)"),
         })
-    }
-
-    /// For a report's state: the run's stalls, and the longest; those under
-    /// the loading screen counted apart.
-    pub fn describe(&self) -> String {
-        let loading = match self.loading {
-            0 => String::new(),
-            n => format!(" ({n} more under the loading screen)"),
-        };
-        match &self.worst {
-            None => format!("stalls (a frame 1 s or more after the one before): none this run{loading}"),
-            Some((_, words)) => format!("stalls (a frame 1 s or more after the one before): {} this run{loading}, the longest {words}", self.count),
-        }
     }
 }
 
@@ -332,8 +302,7 @@ pub fn event_name(e: &winit::event::WindowEvent) -> &'static str {
 /// The disc's reads, timed: the music's files (natively read whole on a
 /// thread of their own, `bgm::read_on_a_thread`), the zones the walk streams
 /// in and the worlds a change opens (`stream`, on the game's thread). For a
-/// stall's line (the slowest read in its time, `during`) and a report's
-/// state (each kind's count and slowest, `describe`).
+/// stall's line (the slowest read in its time, `during`).
 pub mod disc {
     use std::collections::VecDeque;
     use std::sync::Mutex;
@@ -356,18 +325,7 @@ pub mod disc {
                 Read::World => "a world",
             }
         }
-
-        /// As the state names their kind.
-        fn kind(self) -> &'static str {
-            match self {
-                Read::Music => "music",
-                Read::Zone => "zones",
-                Read::World => "worlds",
-            }
-        }
     }
-
-    const KINDS: [Read; 3] = [Read::Music, Read::Zone, Read::World];
 
     /// The last reads kept, for `during`.
     const RECENT: usize = 32;
@@ -375,9 +333,6 @@ pub mod disc {
     /// The reads so far.
     #[derive(Debug)]
     pub(crate) struct Reads {
-        /// each kind's count, and its slowest (how long, and when it ended on
-        /// the run's clock)
-        kinds: [(u64, Option<(Duration, String)>); 3],
         /// the last reads: what, when each ended, and how long it took
         recent: VecDeque<(Read, Instant, Duration)>,
         /// reads under way: their number, what, and when each began
@@ -385,11 +340,9 @@ pub mod disc {
         next: u64,
     }
 
-    const NONE_YET: (u64, Option<(Duration, String)>) = (0, None);
-
     impl Reads {
         pub(crate) const fn new() -> Reads {
-            Reads { kinds: [NONE_YET; 3], recent: VecDeque::new(), going: Vec::new(), next: 0 }
+            Reads { recent: VecDeque::new(), going: Vec::new(), next: 0 }
         }
 
         pub(crate) fn began(&mut self, what: Read, at: Instant) -> u64 {
@@ -398,14 +351,9 @@ pub mod disc {
             self.next
         }
 
-        pub(crate) fn ended(&mut self, id: u64, what: Read, start: Instant, end: Instant, clock: String) {
+        pub(crate) fn ended(&mut self, id: u64, what: Read, start: Instant, end: Instant) {
             self.going.retain(|g| g.0 != id);
             let d = end.saturating_duration_since(start);
-            let k = &mut self.kinds[what as usize];
-            k.0 += 1;
-            if k.1.as_ref().is_none_or(|s| d > s.0) {
-                k.1 = Some((d, clock));
-            }
             self.recent.push_back((what, end, d));
             while self.recent.len() > RECENT {
                 self.recent.pop_front();
@@ -418,22 +366,6 @@ pub mod disc {
             let ended = self.recent.iter().filter(|r| r.1 >= from).map(|&(what, _, d)| (what, d, false));
             let going = self.going.iter().map(|&(_, what, at)| (what, now.saturating_duration_since(at), true));
             ended.chain(going).max_by_key(|r| r.1)
-        }
-
-        pub(crate) fn describe(&self, now: Instant) -> String {
-            let mut parts = Vec::new();
-            for what in KINDS {
-                let (n, slowest) = &self.kinds[what as usize];
-                if *n > 0
-                    && let Some((d, at)) = slowest
-                {
-                    parts.push(format!("{} {n} (the slowest {} ms, at {at})", what.kind(), d.as_millis()));
-                }
-            }
-            for &(_, what, at) in &self.going {
-                parts.push(format!("{} under way {} ms", what.name(), now.saturating_duration_since(at).as_millis()));
-            }
-            if parts.is_empty() { "disc reads: none timed yet".to_string() } else { format!("disc reads: {}", parts.join(", ")) }
         }
     }
 
@@ -448,9 +380,7 @@ pub mod disc {
         let start = Instant::now();
         let id = lock().began(what, start);
         let out = f();
-        let end = Instant::now();
-        let clock = crate::mem::clock_at(end);
-        lock().ended(id, what, start, end, clock);
+        lock().ended(id, what, start, Instant::now());
         out
     }
 
@@ -459,11 +389,6 @@ pub mod disc {
         lock().during(from, now)
     }
 
-    /// For a report's state: each kind's reads and the slowest, and any
-    /// under way.
-    pub fn describe() -> String {
-        lock().describe(Instant::now())
-    }
 }
 
 #[cfg(test)]
@@ -517,15 +442,11 @@ mod tests {
         assert!(!line.contains("play 30"), "a phase under 50 ms is not named: {line}");
         w.end(at(t0, next), at(t0, next + 10), vec![], false);
         w.leave("a redraw", at(t0, next + 11));
-        assert!(w.describe().starts_with("stalls (a frame 1 s or more after the one before): 1 this run, the longest 8412 ms from one frame"), "{}", w.describe());
         // the controls: a frame 999 ms after the last is none
         let t = frames(&mut w, t0, next + 16, 5);
         w.enter(at(t0, t + 983));
         w.begin(at(t0, t + 983), Duration::from_millis(8350), None);
         assert_eq!(w.after_pump(None, at(t0, t + 990)), None, "999 ms is no stall");
-        let mut quiet = Watch::default();
-        frames(&mut quiet, t0, 0, 200);
-        assert_eq!(quiet.describe(), "stalls (a frame 1 s or more after the one before): none this run");
     }
 
     /// A stall between two frames says how much of it was the client's own
@@ -560,9 +481,8 @@ mod tests {
         let next = t + 4010;
         w.enter(at(t0, next));
         w.begin(at(t0, next), Duration::ZERO, None);
-        // said 10 s after the last at the earliest: kept for the state
+        // said 10 s after the last at the earliest
         assert_eq!(w.after_pump(None, at(t0, next + 1)), None);
-        assert!(w.describe().contains(": 2 this run, the longest 5016 ms"), "{}", w.describe());
         let mut v = Watch::default();
         let t = frames(&mut v, t0, 0, 1);
         v.enter(at(t0, t));
@@ -596,7 +516,6 @@ mod tests {
         assert_eq!(said.len(), 2, "{said:?}");
         assert!(said[0].starts_with("stall: 1516 ms"), "{said:?}");
         assert!(said[1].ends_with("(and 2 more since the last line said, each 1 s or more)"), "{said:?}");
-        assert!(w.describe().contains(": 4 this run, the longest 3016 ms"), "{}", w.describe());
     }
 
     /// A window that stalls for good (each frame 11 s after the last) says
@@ -621,7 +540,6 @@ mod tests {
         let ks: Vec<u64> = said.iter().map(|s| s.0).collect();
         assert_eq!(ks, (1..=20).chain([26]).collect::<Vec<u64>>(), "the control: every one of the first twenty");
         assert!(said[20].1.ends_with("(and 5 more since the last line said, each 1 s or more)"), "{:?}", said[20]);
-        assert!(w.describe().contains(": 29 this run"), "{}", w.describe());
     }
 
     /// A stall under the loading screen (a world's zones read at once as it
@@ -645,7 +563,6 @@ mod tests {
         assert!(line.contains(" into the run), under the loading screen: the frame itself took 6000 ms (zones 5900 ms)"), "{line}");
         w.end(at(t0, next), at(t0, next + 10), vec![], false);
         w.leave("a redraw", at(t0, next + 11));
-        assert_eq!(w.describe(), "stalls (a frame 1 s or more after the one before): none this run (1 more under the loading screen)");
         // one of 2 s in play, more than 10 s on (said)
         let t = frames(&mut w, t0, next + 16, 700);
         let next = t + 2000;
@@ -653,7 +570,6 @@ mod tests {
         w.begin(at(t0, next), Duration::ZERO, None);
         let line = w.after_pump(None, at(t0, next + 1)).expect("said");
         assert!(line.starts_with("stall: 2016 ms") && !line.contains("loading"), "the control: {line}");
-        assert!(w.describe().contains(": 1 this run (1 more under the loading screen), the longest 2016 ms"), "{}", w.describe());
     }
 
     /// Frames that stop for a reason of their own (a window minimised, the
@@ -677,29 +593,26 @@ mod tests {
     }
 
     /// The disc's reads: the slowest of those that ended in a stretch, or one
-    /// still under way, and each kind's count and slowest for the state. The
-    /// controls: a read that ended before the stretch is not its, and a read
-    /// done is under way no more.
+    /// still under way. The controls: a read that ended before the stretch is
+    /// not its, and a read done is under way no more.
     #[test]
     fn the_discs_slowest_read_in_a_stretch() {
         let t0 = Instant::now();
         let mut r = Reads::new();
-        assert_eq!(r.describe(t0), "disc reads: none timed yet");
         let id = r.began(Read::World, at(t0, 0));
-        r.ended(id, Read::World, at(t0, 0), at(t0, 900), "0:00:01".into());
+        r.ended(id, Read::World, at(t0, 0), at(t0, 900));
         let id = r.began(Read::Zone, at(t0, 1000));
-        r.ended(id, Read::Zone, at(t0, 1000), at(t0, 1040), "0:00:02".into());
+        r.ended(id, Read::Zone, at(t0, 1000), at(t0, 1040));
         assert_eq!(r.during(at(t0, 1020), at(t0, 1050)), Some((Read::Zone, Duration::from_millis(40), false)), "the zone's, begun before it: the world's ended before it");
         assert_eq!(r.during(at(t0, 1041), at(t0, 1050)), None, "the control: nothing ended in it");
         let music = r.began(Read::Music, at(t0, 1100));
         assert_eq!(r.during(at(t0, 950), at(t0, 9400)), Some((Read::Music, Duration::from_millis(8300), true)), "under way, the slowest");
-        r.ended(music, Read::Music, at(t0, 1100), at(t0, 9441), "0:00:10".into());
+        r.ended(music, Read::Music, at(t0, 1100), at(t0, 9441));
         assert_eq!(r.during(at(t0, 950), at(t0, 9500)), Some((Read::Music, Duration::from_millis(8341), false)));
         assert_eq!(r.during(at(t0, 9442), at(t0, 9500)), None, "the control: all ended before it");
-        assert_eq!(r.describe(at(t0, 9500)), "disc reads: music 1 (the slowest 8341 ms, at 0:00:10), zones 1 (the slowest 40 ms, at 0:00:02), worlds 1 (the slowest 900 ms, at 0:00:01)");
         let going = r.began(Read::Zone, at(t0, 9600));
-        assert!(r.describe(at(t0, 9700)).ends_with(", a zone under way 100 ms"), "{}", r.describe(at(t0, 9700)));
-        r.ended(going, Read::Zone, at(t0, 9600), at(t0, 9610), "0:00:10".into());
-        assert!(!r.describe(at(t0, 9700)).contains("under way"), "the control: done");
+        assert_eq!(r.during(at(t0, 9550), at(t0, 9700)), Some((Read::Zone, Duration::from_millis(100), true)), "a zone under way");
+        r.ended(going, Read::Zone, at(t0, 9600), at(t0, 9610));
+        assert_eq!(r.during(at(t0, 9550), at(t0, 9700)), Some((Read::Zone, Duration::from_millis(10), false)), "the control: done");
     }
 }

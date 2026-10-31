@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """pagetest -- the page's own behaviour, in a headless Chromium: updates,
-problem reports, crash reports and what the page catches.
+notices and what the page catches.
 
-Serves a copy of web/dist (build.sh's output) with a stand-in for the report
-server (cmd/reportd's /report and /crash, checked as it checks them, kept in
-memory), then plays deploys against an open page by writing new builds and
-version.json under it:
+Serves a copy of web/dist (build.sh's output), then plays deploys against an
+open page by writing new builds and version.json under it:
 
   update    an untouched page reloads into a new build at once; one with a
             disc picked is told, with what is new in it (the sections of its
@@ -13,12 +11,8 @@ version.json under it:
             (`?later=`) or until a newer build; Reload
             brings the newest; a reload that still brings the old page is a
             problem, not a second reload
-  report    F3 opens the problem dialog; Send posts what reportd takes, the
-            account name and password taken out
-  crash     a panic opens the crash dialog; it posts to /crash, and F3 opens
-            nothing new after it
-  offer     a tab that died while shown is offered next visit; one hidden is
-            not
+  crash     the client stopping (web::crash) is a notice to reload by, and
+            one only
   missing   a page whose build is gone says so in its status line
   hidden    a hidden page's game is ticked at 30 frames a second (tick.js, a
             worker's timer, which a hidden page's own are not), a shown one's
@@ -35,9 +29,8 @@ version.json under it:
             ticked click opens the picker that can be remembered; ticked
             after a pick, that picker opens at once (or a button offers it);
             Start asks the browser for a kept disc in its click; a picker
-            that can't start in the kept folder opens without it; a report
-            says what is remembered (the picker is a stand-in: the real one
-            can't be driven headless)
+            that can't start in the kept folder opens without it (the picker
+            is a stand-in: the real one can't be driven headless)
   typed     while the client says an edit box has the keys, a touch puts
             the focus in the page's input (a phone's own keyboard comes up
             with it), and what is typed there comes to the canvas as key
@@ -62,7 +55,7 @@ version.json under it:
   install   the page names its build's manifest, Chromium finds nothing in
             the way of installing it (a page without one: errors), the icons
             are PNGs in the build; the card's button (a stand-in offer) asks
-            the browser's prompt, and says what came of it, a report too; a
+            the browser's prompt, and says what came of it; a
             browser that has not offered it: nothing on a computer, its menu
             on a phone (Firefox's named), the Home Screen on an iPhone; none
             of it started as the app
@@ -100,7 +93,7 @@ SPELLFX_API = "/eqoa/account/api/spellfx"
 
 
 class Site:
-    """A copy of web/dist to play deploys on, and what was reported."""
+    """A copy of web/dist to play deploys on."""
 
     def __init__(self, dist):
         tmp = Path("~/.cache/eqoa-rs-web").expanduser()
@@ -109,8 +102,6 @@ class Site:
         shutil.copytree(dist, self.root, dirs_exist_ok=True)
         self.first = json.loads((self.root / "version.json").read_text())["build"]
         self.page = (dist / "index.html").read_text()
-        self.posts = []
-        self.keep = None
         # the community page's picks, as its server was sent them
         self.picks = []
 
@@ -166,9 +157,7 @@ class Site:
                 route = self.path.split("?")[0]
                 body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
                 code, answer = 404, {"ok": False, "error": "no such route"}
-                if route in ("/reports/report", "/reports/crash"):
-                    code, answer = site.take(route.rsplit("/", 1)[1], body)
-                elif route == SPELLFX_API + "/suggest":
+                if route == SPELLFX_API + "/suggest":
                     code, answer = site.pick(body)
                 data = json.dumps(answer).encode()
                 self.send_response(code)
@@ -200,29 +189,6 @@ class Site:
             return 400, {"error": "a spell, a visual, a name of 32 and a note of 200 at most"}
         self.picks.append(req)
         return 200, {"ok": True, "count": sum(1 for p in self.picks if p["spell"] == req["spell"])}
-
-    def take(self, kind, body):
-        """reportd's checks on a /report or a /crash (cmd/reportd/main.go)."""
-        try:
-            req = json.loads(body)
-        except ValueError:
-            return 400, {"ok": False, "error": "bad body"}
-        fields = {"report": 512 * 1024, "note": 1000, "version": 64, "platform": 64, "channel": 64}
-        if kind == "report":
-            fields.update(name=64, screenshot=8 * 1024 * 1024)
-        else:
-            fields["report"] = 256 * 1024
-            fields["note"] = 200
-        for k, limit in fields.items():
-            v = req.get(k, "")
-            if not isinstance(v, str) or len(v) > limit:
-                return 400, {"ok": False, "error": f"bad {k}"}
-        if len(req["report"].strip()) < 32:
-            return 400, {"ok": False, "error": "empty report"}
-        self.posts.append((kind, req))
-        if self.keep:
-            (self.keep / f"{len(self.posts):03d}-{kind}.json").write_text(json.dumps(req))
-        return 200, {"ok": True, "id": f"test-{len(self.posts)}"}
 
 
 class Page:
@@ -310,7 +276,7 @@ async def tests(a, site, base, page):
             failed.append(name)
 
     notices = "JSON.stringify([...document.querySelectorAll('#notices .notice')].map(n => n.dataset.key))"
-    q = "?reports=/reports&later=3000"
+    q = "?later=3000"
 
     # ---- update
     first = site.first
@@ -372,52 +338,6 @@ async def tests(a, site, base, page):
     check("a reload that brings the old page is a problem, not a loop", still == "d" * 12 and bool(stale) and await page.stayed())
     site.deploy("e" * 12)
 
-    # ---- report
-    await page.open(base + q)
-    # what the client names when it sends Station a login (web::secret)
-    await page.js("eqoaSecret('tester1', 's3cretpw'); console.log('a line with tester1 and s3cretpw in it')")
-    await page.js("document.getElementById('eqoa').focus()")
-    await page.key("F3", "F3", 114)
-    opened = await page.until("!document.getElementById('report').hidden && document.getElementById('rp-title').textContent", 5)
-    check("F3 opens the problem dialog", opened == "Report a problem", str(opened))
-    await page.js("document.getElementById('rp-note').value = 'the note'; document.getElementById('rp-name').value = 'Tester'; document.getElementById('rp-send').click()")
-    sent = await page.until("document.getElementById('rp-done').textContent.startsWith('Sent as')", 10)
-    kind, req = site.posts[-1] if site.posts else (None, {})
-    report = req.get("report", "")
-    check("Send posts a problem report reportd takes", bool(sent) and kind == "report" and req.get("channel") == "web"
-          and req.get("version", "").startswith("web-") and req.get("note") == "the note" and req.get("name") == "Tester"
-          and 0 < len(req.get("platform", "")) <= 64 and "--- trace ---" in report and "[log]" in report, json.dumps({k: v[:80] for k, v in req.items()}))
-    check("the account name and the password are taken out", "a line with <account> and <password> in it" in report
-          and "tester1" not in report and "s3cretpw" not in report)
-    check("the log ring had them (control)", any("a line with tester1 and s3cretpw" in l for l in page.lines))
-    await page.js("document.getElementById('rp-close').click()")
-    # the picture is the player's to leave out (F3 20261023-083108): its box
-    # unticked, the report goes with none; ticked (the default), with one. A
-    # stand-in client hands over a frame, as the game does when one is drawn.
-    await page.js("window._client = window.eqoaClient; window.eqoaClient = { wantShot() { setTimeout(() => window.eqoaFrameDrawn && window.eqoaFrameDrawn(), 30); } }; eqoaReport.running(true)")
-    shots = []
-    for keep in (False, True):
-        await page.js("document.getElementById('eqoa').focus()")
-        await page.key("F3", "F3", 114)
-        row = await page.until("!document.getElementById('report').hidden && !document.getElementById('rp-shot-row').hidden", 5)
-        n = len(site.posts)
-        await page.js(f"{{ const b = document.getElementById('rp-shot'); b.checked = {'true' if keep else 'false'}; b.dispatchEvent(new Event('change'));"
-                      " document.getElementById('rp-note').value = 'picture test'; document.getElementById('rp-send').click() }")
-        await page.until("document.getElementById('rp-done').textContent.startsWith('Sent as')", 10)
-        kind, req = site.posts[-1] if len(site.posts) > n else (None, {})
-        shots.append((bool(row), kind, req.get("note"), len(req.get("screenshot", ""))))
-        await page.js("document.getElementById('rp-close').click()")
-    await page.js("eqoaReport.running(false); window.eqoaClient = window._client")
-    check("a picture unticked is left out", shots[0][:3] == (True, "report", "picture test") and shots[0][3] == 0, str(shots))
-    check("ticked, the default, it goes (control)", shots[1][:3] == (True, "report", "picture test") and shots[1][3] > 0, str(shots))
-    # the mark a running game keeps for a tab that dies is scrubbed as it is
-    # kept: the next visit may not know what this one signed in with
-    await page.js("console.log('kept tester1 and s3cretpw'); eqoaReport.running(true)")
-    kept = await page.js("localStorage.getItem('eqoa.session') || ''") or ""
-    check("the mark kept has them taken out", "kept <account> and <password>" in kept and "s3cretpw" not in kept, kept[:120])
-    check("the log ring had them when it was kept (control)", any("kept tester1 and s3cretpw" in l for l in page.lines))
-    await page.js("eqoaReport.running(false); localStorage.removeItem('eqoa.session')")
-
     # ---- pointer: the mouse look's pointer lock refused (winit drops the
     # promise the browser answers with) is no problem of the page's (F3
     # 20261023-193535), only a line in the log; a rejection of the page's own
@@ -432,36 +352,17 @@ async def tests(a, site, base, page):
     await page.js("Promise.reject(new Error('a test rejection')); 0")
     check("an unhandled rejection is one (control)", bool(await page.until(f"{notices}.includes('problem:page')", 5)))
 
-    # ---- crash
-    n = len(site.posts)
-    await page.js("try { eqoaClient.crashTest() } catch (e) { window.__trap = String(e) }")
-    title = await page.until("!document.getElementById('report').hidden && document.getElementById('rp-title').textContent", 5)
-    check("a panic opens the crash dialog", title == "The client stopped", str(title))
-    await page.js("document.getElementById('rp-note').value = 'crashed'; document.getElementById('rp-send').click()")
-    await page.until("document.getElementById('rp-done').textContent.startsWith('Sent')", 10)
-    kind, req = site.posts[-1] if len(site.posts) > n else (None, {})
-    check("the crash report goes to /crash with the panic and the log", kind == "crash" and "crash_test: the client stopped on purpose" in req.get("report", "")
-          and "[log]" in req.get("report", "") and req.get("note") == "crashed")
-    await page.js("document.getElementById('rp-close').click()")
-    await page.key("F3", "F3", 114)
-    await asyncio.sleep(0.5)
-    check("after a crash F3 opens no problem report", await page.js("document.getElementById('rp-title').textContent") == "The client stopped")
-
-    # ---- offer: the mark a tab leaves when it dies while shown. The tab
-    # dies for real (its renderer crashed: no pagehide takes the mark away).
-    async def died(hidden):
-        await page.open(base + q)
-        mark = json.dumps({"when": int(time.time() * 1000), "build": "x", "version": "web-x", "hidden": hidden, "state": "s", "log": ["l"]})
-        await page.js(f"localStorage.setItem('eqoa.session', {json.dumps(mark)})")
-        asyncio.ensure_future(page.call("Page.crash")).add_done_callback(lambda f: f.exception())
-        await asyncio.sleep(1.5)
-        await page.open(base + q)
-        await asyncio.sleep(0.5)
-        return await page.js(notices) or ""
-
-    check("a tab that died while shown is offered", "last-session" in await died(False))
-    check("one that was hidden is not (control)", "last-session" not in await died(True))
-    await page.js("localStorage.removeItem('eqoa.session')")
+    # ---- crash: the client stopping (web::crash, window.eqoaCrash) is a
+    # notice with a Reload button; a second (a panic's trap after it) says
+    # nothing more
+    await page.open(base + q)
+    check("no crash notice before one (control)", "crash" not in (await page.js(notices) or ""))
+    await page.js("eqoaCrash(['The client stopped', 'a test panic\\nits second line']); eqoaCrash(['The client stopped', 'its trap']); true")
+    shown = json.loads(await page.js(notices) or "[]")
+    said = await page.js("document.querySelector('#notices .notice[data-key=crash] .text').textContent") or ""
+    buttons = await page.js("JSON.stringify([...document.querySelectorAll('#notices .notice[data-key=crash] button')].map(b => b.textContent))")
+    check("the client stopping is a notice to reload by, one only", shown.count("crash") == 1 and said.startswith("The client stopped: a test panic\n")
+          and "its trap" not in said and "reload the page" in said and buttons == '["Reload"]', f"{shown} {said!r} {buttons}")
 
     # ---- missing: a page naming a build that is not there
     (site.root / "gone.html").write_text(site.page.replace(f"v/{site.first}/", "v/" + "f" * 12 + "/"))
@@ -547,8 +448,6 @@ async def tests(a, site, base, page):
         line = await page.until(f"{what}.className.includes('ok') && {what}.textContent", 15)
         check("the notice's button opens it again and takes the disc", len(page.choosers) > m and bool(line) and "SLUS-20470" in line, str(line))
         await page.call("Page.setInterceptFileChooserDialog", enabled=False)
-        facts = await page.js("eqoaReport.facts().join('\\n')") or ""
-        check("a report names the 2002 disc", "2002 disc: EverQuest Online Adventures (USA), SLUS-20470" in facts, facts[-200:])
 
     # ---- remember: the disc images kept in this browser (main.js
     # `remembering`), with a file of the origin's own storage (OPFS) standing
@@ -637,7 +536,6 @@ async def tests(a, site, base, page):
         return [await (await navigator.storage.getDirectory()).getFileHandle(window.__pickName)];
       };
       return true; })()"""
-    facts_js = "eqoaReport.facts().join('\\n')"
     keep_row = "!document.getElementById('iso-again-row').hidden && document.getElementById('iso-again').textContent"
     # a disc picked the browser's own way, then the box ticked: without an
     # activation the picker can't open, so a button that opens it is offered
@@ -678,9 +576,6 @@ async def tests(a, site, base, page):
     await page.gesture("document.getElementById('go').click()")
     went = await page.until("window.__submitted", 10)
     check("Start asks the browser for the kept disc in its click and starts with it", went == "remembered.iso", str(went))
-    facts = await page.js(facts_js) or ""
-    check("a report says what is remembered and what the browser said",
-          'remember: on; disc kept "remembered.iso" (checked: prompt, asked: granted)' in facts, facts[-300:])
     await page.call("Page.removeScriptToEvaluateOnNewDocument", identifier=hook["identifier"])
     # a picker that can't start in the kept image's folder opens without it
     await page.open(base + q)
@@ -697,12 +592,11 @@ async def tests(a, site, base, page):
     await page.gesture("document.getElementById('iso').click()")
     name = await page.until(f"({picked}) === 'picked-again.iso' && ({picked})", 10)
     starts = await page.js("JSON.stringify(window.__picks.map((p) => p.startIn))")
-    facts = await page.js(facts_js) or ""
     check("a start where the kept image was that fails is tried once more without it",
-          name == "picked-again.iso" and starts == "[true,false]" and "starting where it was (opened without it)" in facts, f"{name} {starts} {facts[-160:]}")
+          name == "picked-again.iso" and starts == "[true,false]", f"{name} {starts}")
     await page.js("document.getElementById('remember').click()")
-    facts = await page.js(facts_js) or ""
-    check("unticked, a report says so (control)", "remember: off; disc not kept" in facts, facts[-200:])
+    await asyncio.sleep(0.3)
+    check("unticked, it is forgotten (control)", await page.js(kept_js) is False)
     await page.js("navigator.storage.getDirectory().then(async (r) => { for (const n of ['remembered.iso', 'picked-again.iso']) await r.removeEntry(n).catch(() => 0); return true; })")
 
     # ---- spellfx: the community page, its server a stand-in (Site.pick)
@@ -852,7 +746,6 @@ async def tests(a, site, base, page):
     # on an iPhone. F11 stays the browser's: Chromium takes it before the page
     # in any full screen (checked headed, through X: README "In a browser").
     fs = "!!document.fullscreenElement"
-    fsfact = "(eqoaReport.facts().find((l) => l.startsWith('full screen:')) || '')"
     # the browser's own install offer kept from the page, so the card shows
     # what these checks put there (a stand-in offer is not trusted)
     quiet = await page.call("Page.addScriptToEvaluateOnNewDocument", source="addEventListener('beforeinstallprompt', (e) => { if (e.isTrusted) e.stopImmediatePropagation(); }, true);")
@@ -873,9 +766,14 @@ async def tests(a, site, base, page):
         await page.js("document.exitFullscreen().then(() => true, () => true)")
         return bool(await page.until(f"!{fs}", 3))
 
-    check("a computer whose browser keeps Escape for the page: Start goes full screen", await start())
-    said = await page.until(f"{fsfact}.includes('Escape the game')", 3)
-    check("Escape locked to the game there", bool(said), str(await page.js(fsfact)))
+    locks = await page.call("Page.addScriptToEvaluateOnNewDocument", source="""{ const k = navigator.keyboard;
+      if (k && k.lock) { const l = k.lock.bind(k); k.lock = (keys) => { window.__locked = JSON.stringify(keys); return l(keys); }; } }""")
+    try:
+        check("a computer whose browser keeps Escape for the page: Start goes full screen", await start())
+        said = await page.until("window.__locked", 3)
+        check("Escape locked to the game there", said == '["Escape"]', str(said))
+    finally:
+        await page.call("Page.removeScriptToEvaluateOnNewDocument", identifier=locks["identifier"])
     nolock = await page.call("Page.addScriptToEvaluateOnNewDocument", source="Object.defineProperty(Navigator.prototype, 'keyboard', { configurable: true, get: () => undefined });")
     try:
         check("one whose browser can't (Firefox, Safari: a stand-in): no full screen (control)", not await start())
@@ -889,7 +787,7 @@ async def tests(a, site, base, page):
         await page.pick(a.iso)
         await page.gesture("document.getElementById('go').click(); true")
         went = await page.until(fs, 2)
-        check("another window of the game open (multiboxing): no full screen", bool(both) and not went, f"{both} {await page.js(fsfact)}")
+        check("another window of the game open (multiboxing): no full screen", bool(both) and not went, str(both))
     finally:
         devtools(f"close/{other['id']}")
         devtools(f"activate/{a.target_id}")
@@ -948,7 +846,6 @@ async def tests(a, site, base, page):
     offer = """(() => { const e = new Event('beforeinstallprompt');
       e.prompt = () => { window.__prompted = (window.__prompted || 0) + 1; return Promise.resolve(); };
       e.userChoice = Promise.resolve({ outcome: %s }); dispatchEvent(e); return true; })()"""
-    appfact = "(eqoaReport.facts().find((l) => l.startsWith('app:')) || '')"
     await page.open(base + q)
     shown = json.loads(await page.js(card))
     check("a computer's browser that has not offered it: nothing on the card (control)", shown[:2] == [False, False], str(shown))
@@ -958,7 +855,6 @@ async def tests(a, site, base, page):
     await page.gesture("document.getElementById('install-go').click(); true")
     said = await page.until(f"{card}.includes('Installed:')", 3)
     check("pressed, the browser's own prompt; accepted, the card says so and the button goes", await page.js("window.__prompted") == 1 and bool(said) and not json.loads(await page.js(card))[1], str(await page.js(card)))
-    check("and a report says so", await page.js(appfact) == "app: accepted", str(await page.js(appfact)))
     await page.open(base + q)
     await page.js(offer % "'dismissed'")
     await page.gesture("document.getElementById('install-go').click(); true")
@@ -982,7 +878,7 @@ async def tests(a, site, base, page):
         await page.open(base + q)
         await page.js(offer % "'accepted'")
         shown = json.loads(await page.js(card))
-        check("started as the installed app: nothing on the card, offered or not", not shown[0] and await page.js(appfact) == "app: started as the installed app", f"{shown} {await page.js(appfact)}")
+        check("started as the installed app: nothing on the card, offered or not", not shown[0], str(shown))
     finally:
         await page.call("Page.removeScriptToEvaluateOnNewDocument", identifier=standalone["identifier"])
     await page.call("Page.removeScriptToEvaluateOnNewDocument", identifier=quiet["identifier"])
@@ -1027,7 +923,7 @@ async def tests(a, site, base, page):
     check("nor from the client's adapter on one (control)", not await page.js(soft) and await page.js(status) == "booted · 60 fps · 300 MB", str(await page.js(status)))
     await page.js(f"eqoaStatus({json.dumps('graphics: ' + warp + ' (Gl)')}); eqoaStatus('booted · 27 fps · 300 MB'); true")
     check("the client's adapter on Basic Render Driver: the notice", bool(await page.until(soft, 5)))
-    check("the card's line (the report's graphics fact) says so", (await page.js(gfx) or "").startswith("Graphics: WebGL2, drawn without the graphics card"), str(await page.js(gfx)))
+    check("the card's line says so", (await page.js(gfx) or "").startswith("Graphics: WebGL2, drawn without the graphics card"), str(await page.js(gfx)))
     check("and the status line in the world", await page.js(status) == "booted · 27 fps · 300 MB · drawn without the graphics card", str(await page.js(status)))
     await page.js("[...document.querySelectorAll('#notices .notice[data-key=software-graphics] button')].find(b => b.textContent === 'Dismiss').click()")
     await page.js(f"eqoaStatus({json.dumps('graphics: ' + warp + ' (Gl)')}); eqoaStatus('booted · 27 fps · 300 MB'); true")
@@ -1035,8 +931,8 @@ async def tests(a, site, base, page):
     check("dismissed, it is not raised again", not await page.js(soft) and "drawn without" in (await page.js(status) or ""))
     await page.js("document.body.classList.remove('playing'); true")
 
-    errors = [l for l in page.lines if l.startswith("EXCEPTION") and "crash_test" not in l and "unreachable" not in l and "a test rejection" not in l]
-    check("no exception in the page beyond the crash test's", not errors, "; ".join(errors[:3]))
+    errors = [l for l in page.lines if l.startswith("EXCEPTION") and "a test rejection" not in l]
+    check("no exception in the page beyond the tests' own", not errors, "; ".join(errors[:3]))
     return failed
 
 
@@ -1045,13 +941,10 @@ async def main(a):
     if not (dist / "version.json").exists():
         sys.exit("no web/dist: run web/build.sh first")
     site = Site(dist)
-    if a.keep:
-        site.keep = Path(a.keep)
-        site.keep.mkdir(parents=True, exist_ok=True)
     httpd = site.serve(a.http_port)
     base = f"http://127.0.0.1:{httpd.server_address[1]}/"
     if a.serve:
-        print(f"serving {site.root} at {base} (reports at {base}reports, kept in memory)", flush=True)
+        print(f"serving {site.root} at {base}", flush=True)
         while True:
             await asyncio.sleep(3600)
     prof = Path(a.profile).expanduser()
@@ -1098,8 +991,7 @@ if __name__ == "__main__":
     ap.add_argument("--iso", default=str(HERE.parent / "run" / "eqoa.iso"))
     ap.add_argument("--other-iso", help="a disc image other than Frontiers, for the disc check's other half")
     ap.add_argument("--iso-2002", help="the EverQuest Online Adventures (USA) disc image, for the 2002 checks")
-    ap.add_argument("--serve", action="store_true", help="only serve the site and the stand-in report server")
-    ap.add_argument("--keep", help="a directory for what the stand-in report server is sent, a JSON file each")
+    ap.add_argument("--serve", action="store_true", help="only serve the site")
     ap.add_argument("--http-port", type=int, default=0)
     ap.add_argument("--port", type=int, default=9335)
     ap.add_argument("--profile", default="~/.cache/eqoa-rs-web/pagetest/profile")

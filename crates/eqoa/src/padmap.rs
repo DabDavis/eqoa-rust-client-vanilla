@@ -256,7 +256,7 @@ impl PadMap {
         how
     }
 
-    /// The pad as `?padtrace` prints it and a report carries it: its id and
+    /// The pad as `?padtrace` prints it: its id and
     /// mapping, how it is read, every axis and every button pressed (an
     /// analog one with its value).
     pub fn describe(&self, pad: &WebPad, b: Browser) -> String {

@@ -10,7 +10,7 @@ current.
 - Vanilla: nothing that changes the game's picture or play beyond what README "Vanilla" keeps
   (widescreen, the untethered frame rate, the mouse and the touch screen, the keyboard with WASD and
   the Controls page, 1,000 lines of chat, no green backdrop behind the start menu's windows, the
-  Extended options, the updater, the problem and crash reports, the 2002 disc's art on F9, Hide UI
+  Extended options, the updater, the 2002 disc's art on F9, Hide UI
   on H, names from farther and smaller zoomed out (and every one in a crowd, Overlapping Names Show),
   Ignore Shouts kept, Update Notices, Text Sharp or Smooth, Loading Screens Longer or Instant, Render
   Scale x1, x2 or x4 (off unless chosen), HUD Nearest or Sharp (Nearest, the game's, by default: the
@@ -219,22 +219,19 @@ current.
 - A build is `web/dist/v/<build>/`, never changed under its name (the host serves it immutable);
   only the page and `version.json` are revalidated, and `web/deploy.sh` publishes them in that
   order, after the build. Every file a page loads must be in its build (a new one goes into
-  `build.sh`'s copy list). Its notices are `web/report.js`'s: the client raises them through
-  `web::problem` (a part gone: dismiss it or send a report) and `web::crash` (the client stopped:
-  the crash report). `web/pagetest.py` checks the page's half.
+  `build.sh`'s copy list). Its notices are `web/notices.js`'s: the client raises them through
+  `web::problem` (a part gone: dismissed) and `web::crash` (the client stopped: Reload).
+  `web/pagetest.py` checks the page's half.
   The page puts itself full screen at Start (`main.js` "full screen", README "In a browser"): on a
   touch device but iOS's (there the Home Screen app is), on a computer only where Keyboard Lock keeps
   Escape the game's, never while multiboxing; F11 stays the browser's. A full screen asked for uses
   the click's activation up: ask for it after anything else that click needs (asked first, it broke
   Start with a remembered disc the browser had to ask for).
   It installs as an app (`web/manifest.json`, the icons `tools/webicons` draws off `icon_art.rs`).
-- Reports (the user, 2026-10-23: the bug reports back from eqoa-rs, in the page and natively, crash
-  reports too): `report.rs` natively, `web/report.js` in a page, both to reportd on eqoaclassic
-  (`/eqoa/reports`, board `/eqoa/reports/board`). Nothing is sent unless the player presses Send,
-  and no telemetry. The account name and password are taken out of everything sent
-  (`report::secret`, called where the game sends Station's login), the home directory too; never
-  log a credential. Test against a reportd of one's own (`EQOA_REPORTS=<base>`, the scripts
-  `EQOA_REPORT_TEST=<note>@<ms>` and `EQOA_CRASH_TEST=<ms>`), never the live board. Natively stderr
-  goes through the log's pipe (`report::start`, `eqoa boot` only): anything that starts another
-  program in this one's place puts it back first (`report::restore_stderr`), or the new one
-  inherits a pipe nothing reads, and its first `eprintln!` panics.
+- No problem or crash reports (taken out 2026-10-31, the user: "lets also remove the F3 report and
+  crash report system from vanilla"; the report server on eqoaclassic was shut down the same day):
+  the client sends no reports of any kind, and no telemetry. The log stays on the player's
+  machine, theirs to hand on: never log a credential. Natively stderr goes through the log's pipe
+  (`logfile::start`, `eqoa boot` only): anything that starts another program in this one's place
+  puts it back first (`logfile::restore_stderr`), or the new one inherits a pipe nothing reads, and
+  its first `eprintln!` panics.

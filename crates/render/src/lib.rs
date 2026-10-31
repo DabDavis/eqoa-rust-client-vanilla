@@ -564,7 +564,7 @@ impl Renderer {
                         // takes the destination's), and it must stay the
                         // clear's 1. A page's WebGL2 canvas is composited
                         // with it (wgpu makes the context with alpha), and
-                        // its picture (a report's) came out with the colour
+                        // a picture of it came out with the colour
                         // of every alpha-tested edge wrapped round: a cyan
                         // fringe where red exceeded alpha.
                         targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: wgpu::ColorWrites::COLOR })],

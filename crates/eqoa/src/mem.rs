@@ -1,4 +1,4 @@
-//! What memory the program holds, for a report and the log: the process's
+//! What memory the program holds, for the log: the process's
 //! (resident and its peak, and what it holds as its own: Windows' commit
 //! charge, a Mac's footprint, Linux's anonymous pages and swap), the
 //! machine's (memory free of all of it, and the commit limit), and the
@@ -13,9 +13,7 @@
 //! 229376 bytes failed"; nothing it sent could tell a leak from a machine
 //! short of memory. Now the figures are taken every 10 s (the allocator's
 //! every minute: its report lists every allocation) on the frame that draws
-//! (`tick`), and every 10 minutes of the run they go into the log and the
-//! run's own list, which every report's state carries (`describe`), a crash's
-//! too, when the chat has long pushed those lines out of the log's last.
+//! (`tick`), and every 10 minutes of the run they go into the log.
 
 use std::sync::Mutex;
 use web_time::{Duration, Instant};
@@ -24,11 +22,9 @@ use web_time::{Duration, Instant};
 const EVERY: Duration = Duration::from_secs(10);
 /// The allocator's report, this often: it copies every allocation's name.
 const GPU_EVERY: Duration = Duration::from_secs(60);
-/// The log's line and the run's list, this often (natively
-/// `EQOA_MEM_EVERY=<seconds>` for a test's run).
+/// The log's line, this often (natively `EQOA_MEM_EVERY=<seconds>` for a
+/// test's run).
 const LOG_EVERY: Duration = Duration::from_secs(600);
-/// The run's list keeps its first and its last this many.
-const KEPT: usize = 24;
 
 /// A size as a reader takes it: "640 KB", "812 MB", "3.1 GB", "16 GB".
 pub fn size(b: u64) -> String {
@@ -163,8 +159,7 @@ fn clock(d: Duration) -> String {
 static RUN_START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
 
 /// The moment `t` on the clock the log's `[memory]` lines say ("2:13:05"
-/// into the run), for the other lines a report is read beside them with
-/// (`stall`).
+/// into the run), for the log's other lines read beside them (`stall`).
 pub fn clock_at(t: Instant) -> String {
     RUN_START.get().map_or_else(|| clock(Duration::ZERO), |s| clock(t.saturating_duration_since(*s)))
 }
@@ -196,37 +191,18 @@ impl Sample {
         }
         if parts.is_empty() { "unknown here".to_string() } else { parts.join("; ") }
     }
-
-    /// The run list's entry: the time, then what is held as the process's
-    /// own (a page's wasm heap) and the allocator's blocks (else the
-    /// device's buffers' and textures' bytes), in MB.
-    fn short(&self) -> String {
-        const MB: u64 = 1 << 20;
-        let own = self.process.map(|p| p.own).or(self.page.map(|p| p.0)).map_or("-".to_string(), |b| (b / MB).to_string());
-        let gpu = self.graphics.as_ref().map_or("-".to_string(), |g| match &g.allocator {
-            Some(a) => (a.reserved / MB).to_string(),
-            None => ((g.buffer_bytes.max(0) + g.texture_bytes.max(0)) as u64 / MB).to_string(),
-        });
-        format!("{} {own} {gpu}", clock(self.at))
-    }
 }
 
-/// The run's figures: the last taken, and the list of those every
-/// `LOG_EVERY`.
+/// The run's figures: the last taken, and when the log last had them.
 struct Watch {
     start: Option<Instant>,
     last: Option<Sample>,
     taken: Option<Instant>,
     gpu_taken: Option<Instant>,
     logged: Option<Instant>,
-    /// the run's list: its first, and its last `KEPT` (whether any between
-    /// were let go)
-    first: Option<Sample>,
-    list: std::collections::VecDeque<Sample>,
-    dropped: bool,
 }
 
-static WATCH: Mutex<Watch> = Mutex::new(Watch { start: None, last: None, taken: None, gpu_taken: None, logged: None, first: None, list: std::collections::VecDeque::new(), dropped: false });
+static WATCH: Mutex<Watch> = Mutex::new(Watch { start: None, last: None, taken: None, gpu_taken: None, logged: None });
 
 fn lock() -> std::sync::MutexGuard<'static, Watch> {
     WATCH.lock().unwrap_or_else(|e| e.into_inner())
@@ -249,40 +225,14 @@ impl Watch {
     }
 
     /// A sample `s` taken at `now`: kept as the last, and, when the log's
-    /// is due, put in the run's list and handed back for the log.
+    /// is due, handed back for the log.
     fn keep(&mut self, s: Sample, now: Instant, every: Duration) -> Option<Sample> {
         self.last = Some(s.clone());
         if !self.log_due(now, every) {
             return None;
         }
         self.logged = Some(now);
-        if self.first.is_none() {
-            self.first = Some(s.clone());
-        } else {
-            self.list.push_back(s.clone());
-            while self.list.len() > KEPT {
-                self.list.pop_front();
-                self.dropped = true;
-            }
-        }
         Some(s)
-    }
-
-    fn describe(&self, now: Instant) -> String {
-        let Some(last) = &self.last else { return "memory: not taken yet".to_string() };
-        let ago = self.taken.map_or(0, |t| now.duration_since(t).as_secs());
-        let mut o = format!("memory: {} (taken {ago} s ago, at {})", last.line(), clock(last.at));
-        if let Some(f) = &self.first {
-            let mut all = vec![f.short()];
-            if self.dropped {
-                all.push("…".to_string());
-            }
-            all.extend(self.list.iter().map(Sample::short));
-            let every = log_every().as_secs();
-            let every = if every % 60 == 0 { format!("{} min", every / 60) } else { format!("{every} s") };
-            o += &format!("\nmemory over the run, every {every} (time, own MB, graphics MB): {}", all.join(" · "));
-        }
-        o
     }
 }
 
@@ -317,11 +267,6 @@ pub fn tick(device: Option<&render::wgpu::Device>) {
     if let Some(s) = logged {
         crate::say(&format!("[memory] {} {}", clock(s.at), s.line()));
     }
-}
-
-/// For a report's state: the figures last taken, and the run's list.
-pub fn describe() -> String {
-    lock().describe(Instant::now())
 }
 
 // ---- the process and the machine, per system --------------------------------
@@ -502,35 +447,23 @@ mod tests {
         assert!(later.contains("; allocator (at 0:01:00) 96 MB"), "{later}");
     }
 
-    /// The run's list keeps its first and its last `KEPT`, one a period
-    /// however often the figures are taken; the control: the samples taken
-    /// between are the last's, never the list's.
+    /// The log has the figures once a period however often they are
+    /// taken, the first at the start; the control: the samples taken between
+    /// are kept as the last, never logged.
     #[test]
-    fn the_runs_list_keeps_its_first_and_its_last() {
+    fn the_log_has_the_figures_once_a_period() {
         let t0 = Instant::now();
-        let mut w = Watch { start: Some(t0), last: None, taken: None, gpu_taken: None, logged: None, first: None, list: Default::default(), dropped: false };
+        let mut w = Watch { start: Some(t0), last: None, taken: None, gpu_taken: None, logged: None };
         let every = Duration::from_secs(600);
-        let mut logged = 0;
-        let step = |w: &mut Watch, i: u64| {
+        let mut logged = Vec::new();
+        for i in 0..5 * 60 {
             let at = Duration::from_secs(i * 10);
             let s = Sample { at, process: Some(Process { resident: i, peak: None, own: i << 20, own_peak: None }), ..Default::default() };
-            w.keep(s, t0 + at, every).is_some() as usize
-        };
-        // the list full and nothing let go: no mark of a gap
-        for i in 0..=KEPT as u64 * 60 {
-            logged += step(&mut w, i);
+            if let Some(l) = w.keep(s, t0 + at, every) {
+                logged.push(l.at.as_secs());
+            }
         }
-        assert_eq!((w.list.len(), w.dropped), (KEPT, false));
-        assert!(!w.describe(t0).contains('…'), "{}", w.describe(t0));
-        for i in KEPT as u64 * 60 + 1..(KEPT as u64 + 5) * 60 {
-            logged += step(&mut w, i);
-        }
-        assert_eq!(logged, KEPT + 5, "one a period, the first at the start");
-        assert_eq!(w.first.as_ref().unwrap().at, Duration::ZERO);
-        assert_eq!(w.list.len(), KEPT);
-        assert_eq!(w.list.back().unwrap().at, Duration::from_secs((KEPT as u64 + 4) * 600));
-        assert_eq!(w.last.as_ref().unwrap().at, Duration::from_secs(((KEPT as u64 + 5) * 60 - 1) * 10), "the control: the last taken is not the list's");
-        let d = w.describe(t0);
-        assert!(d.contains("0:00:00 0 -") && d.contains(" · … · "), "{d}");
+        assert_eq!(logged, [0, 600, 1200, 1800, 2400], "one a period, the first at the start");
+        assert_eq!(w.last.as_ref().unwrap().at, Duration::from_secs((5 * 60 - 1) * 10), "the control: the last taken is not the log's");
     }
 }

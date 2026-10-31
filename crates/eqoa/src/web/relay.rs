@@ -35,7 +35,7 @@ struct Socket {
     _on_close: Closure<dyn FnMut(web_sys::Event)>,
 }
 
-/// The game's `/udp` socket as a report tells it (`describe`): when it
+/// The game's `/udp` socket as the log tells it at its close: when it
 /// opened, when the last datagram came in, and how it closed. Nothing else
 /// says the link went quiet: the game only times out (F3 20261025-211736,
 /// typed commands that never left a link dead for 37 s).
@@ -153,29 +153,6 @@ fn closed(e: Option<&web_sys::CloseEvent>) {
         )
     });
     crate::say(&line);
-}
-
-/// The game's socket for a report: how long it has been open, the last
-/// datagram in, the bytes the page has handed it that the browser has not
-/// sent (a link that stopped carrying anything shows them growing), and its
-/// close.
-pub fn describe() -> String {
-    GAME.with(|g| {
-        let g = g.borrow();
-        let Some(opened) = g.opened else { return "relay: the game's socket not opened".to_string() };
-        let mut s = format!("relay: the game's socket open {:.1} s", ago(opened));
-        match g.last_in {
-            Some(t) => s += &format!(", the last datagram in {:.1} s ago", ago(t)),
-            None => s += ", no datagram in yet",
-        }
-        if let Some(ws) = &g.ws {
-            s += &format!(", {} bytes waiting to go out", ws.buffered_amount());
-        }
-        if let Some((t, code, clean)) = g.closed {
-            s += &format!(", closed {:.1} s ago (code {code}{})", ago(t), if clean { "" } else { ", not cleanly" });
-        }
-        s
-    })
 }
 
 pub fn parse_ip(s: &str) -> Option<[u8; 4]> {

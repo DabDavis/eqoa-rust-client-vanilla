@@ -12,7 +12,7 @@
 //! finds none of the HUD's buttons. Nobody is stuck with it: any window
 //! coming up shows them again for good (`frame`, `Play::wants_ui`: a mode of
 //! the game's, the player search, the target's details, a line typed, a
-//! death, the update's question or the report's dialog), and the
+//! death or the update's question), and the
 //! loading screen is never hidden. Kept for the window's session only: a
 //! new world entry (`Play::new`) and a fresh start show them.
 

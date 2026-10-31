@@ -133,9 +133,6 @@ pub struct Play {
     /// know sends 0x07B2: none in Sandstorm's captures, none in
     /// go-eqoa-server).
     send_interval: u32,
-    /// The entity channels' updates since the world entry, and when the last
-    /// came (the session's clock): a report's trace says them.
-    entity_updates: (u64, u32),
     puppets: Vec<Option<Puppet>>,
     /// The sounds the client asked for this frame (`PlaySound`, `PlayCue`).
     pub cues: Vec<crate::sound::Cue>,
@@ -210,11 +207,6 @@ pub struct Play {
     /// console adds the cast's time as it comes; the walk walks through it
     /// (`cast_window`, `casting`).
     cast_window: (i64, i64),
-    /// The player's own last casts (`CastingCombat`): the tick each came at,
-    /// its time and its effect, oldest first: what a report gives of the
-    /// walk's cast window (F3 20261029-224916, "stuck walking often after
-    /// engaging in combat").
-    own_casts: std::collections::VecDeque<(i64, i32, u32)>,
     /// `m_p06DC8`: 0x00FC's byte, the player held in place.
     rooted: bool,
     /// `m_p06DC0` and `m_p06DC4`: movement and the camera allowed
@@ -1296,25 +1288,6 @@ fn slot_point(cs: &CSprite<Ee>, slot: usize, m: &Matrix44<Ee>) -> Option<[f32; 3
     Some(Matrix44::mul(&n.world, m).mul_point(&Vect3::of(0.0, 0.0, 0.0)).to_array())
 }
 
-/// How a creature moves as its channel last said and as it is drawn now (a
-/// problem report's entity lines): its locomotion state (what it plays,
-/// `SetLocomotion`, when the server does not mark it walking, byte 141:
-/// Sandstorm never does), its velocity (what `ExtrapolateMove` carries it
-/// along between updates), how long ago its last update came, and how far
-/// from that place `Extrapolate`'s glide still draws it. A player pushing
-/// against a wall or another character keeps a running velocity while it
-/// stands (`VIWalkControl::Move` clears it only off the floor), so every
-/// watcher carries it on and pulls it back at each update: a slide this line
-/// tells from a late update.
-fn move_line(e: &net::entity::Entity, c: &net::entity::Creature, now: u32) -> String {
-    let ago = now.wrapping_sub(e.stamp.wrapping_sub(2 * UPDATE_RATE)) as i32;
-    let off = (0..3).map(|i| (e.actor_pos[i] - e.pos[i]).powi(2)).sum::<f32>().sqrt();
-    format!(
-        "move: state {} walking {}, velocity [{:.2}, {:.2}, {:.2}], updated {ago} ms ago, drawn {off:.2} from it",
-        c.state, c.p255, c.velocity[0], c.velocity[1], c.velocity[2]
-    )
-}
-
 fn look_of(c: &net::entity::Creature) -> vi::cust::Look {
     vi::cust::Look {
         armor: c.armor,
@@ -1327,37 +1300,6 @@ fn look_of(c: &net::entity::Creature) -> vi::cust::Look {
         armor_color: c.colors.map(|l| l.armor),
         robe_color: c.colors.map(|l| l.robe),
     }
-}
-
-/// A creature's look and hands as its channel sent them, raw (a problem
-/// report's entity lines): what `ApplyLook` and `ApplyItems` dress it in, so
-/// a report shows whether the server sent a robe (byte 109: 0-127 is one,
-/// 4 and 5 Sandstorm's own, 128-255 none) rather than leaving it to a picture.
-fn look_line(c: &net::entity::Creature) -> String {
-    let hex = |ids: &[u32; 3]| ids.map(|id| format!("{id:#x}")).join(", ");
-    // the live game's look's colours, when the server sent it
-    let colors = c.colors.map_or(String::new(), |l| {
-        let rgba = |c: &[u8; 4]| format!("{:02x}{:02x}{:02x}{:02x}", c[0], c[1], c[2], c[3]);
-        format!(
-            "; live colours armor [{}] robe {} items [{}] variants {:?}",
-            l.armor.iter().map(rgba).collect::<Vec<_>>().join(" "),
-            rgba(&l.robe),
-            l.items.iter().map(rgba).collect::<Vec<_>>().join(" "),
-            l.variants
-        )
-    });
-    format!(
-        "look: robe {} tint {}, armor {:?} tints {:?}, hair {:?}, face {}; items [{}] over [{}] types {:?}{colors}",
-        c.robe,
-        c.robe_tint,
-        c.armor,
-        c.armor_tint,
-        c.hair,
-        c.face,
-        hex(&c.items),
-        hex(&c.items_over),
-        c.item_types
-    )
 }
 
 fn v3(a: [f32; 3]) -> Vect3<Ee> {
@@ -2238,7 +2180,7 @@ impl Play {
         crate::live::set_features(Default::default());
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, send_interval: 100, entity_updates: (0, 0), puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), own_casts: Default::default(), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default() };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -2296,90 +2238,9 @@ impl Play {
     }
 
     /// The HUD's UI once it is built (its fonts and atlas, the layer's
-    /// textures): what the report's dialog draws with.
+    /// textures): what the update's question draws with.
     pub fn ui_parts(&self) -> Option<(&vi::ui::Vui, &crate::ui::UiAssets)> {
         self.hud.as_ref().map(|h| (&h.0, &h.1))
-    }
-
-    /// What a report says of the walk's limits: the run and walk speeds the
-    /// server gave (the dump, 0x00F8, Class Mastery), the holds on it (0x00FC,
-    /// the window's locks, the follow) and the cast window, with the player's
-    /// own last casts (each one's time, how long ago, its effect).
-    fn walk_line(&self) -> String {
-        let now = self.session.timer();
-        let (a, b) = self.cast_window;
-        let window = if casting((a, b), now) { format!("walking, {:.2} s more", (b - now) as f64 / 983.04) } else { "none".into() };
-        let casts: Vec<String> = self.own_casts.iter().map(|&(at, time, fx)| format!("time {time} {:.1} s ago ({fx:#010x})", (now - at) as f64 / 983.04)).collect();
-        format!(
-            "run speed {:.3}, walk speed {:.3}, rooted {}, movement {}, following {}; cast window {window}; the last own casts: {}",
-            self.speed,
-            self.walk_speed,
-            self.rooted,
-            if self.locks.0 { "allowed" } else { "held (a window's mode)" },
-            self.following,
-            if casts.is_empty() { "none".into() } else { casts.join(", ") }
-        )
-    }
-
-    /// What a report says of play (`report`): the character, where it is
-    /// (`at`, the walker's), the entities round it and what has come of
-    /// CLIENT and SUPPORT.
-    pub fn report(&self, at: [f32; 3]) -> String {
-        use std::fmt::Write;
-        let mut o = String::new();
-        let p = &self.player;
-        let _ = writeln!(o, "character: {} (server id {}), level {}, race {}, class {}", p.name, p.server_id, self.dump.player.level, p.race, p.class);
-        // the world's file as the disc's table names it (the dump's path is
-        // the login's, and a teleport into another world does not change it)
-        let file = crate::s2::get().world_file(p.world).unwrap_or_else(|| p.world_path.clone());
-        let _ = writeln!(o, "world {} ({file}), at {at:?}", p.world);
-        let _ = writeln!(o, "server's patch: {}", crate::s2::get().describe());
-        let target = if self.target == u32::MAX { "none".to_string() } else { format!("{:#x}", self.target) };
-        let _ = writeln!(o, "mode {}, target {target}, dead {}, autorun {}, auto-attack {}", self.mode, self.is_dead(), self.autorun, self.auto_attack);
-        let _ = writeln!(o, "walk: {}", self.walk_line());
-        let start = match (&self.start, self.modules_taken[0]) {
-            (Some(_), _) => "in",
-            (None, true) => "CLIENT came but was not read",
-            (None, false) => "waiting for CLIENT",
-        };
-        let hud = match (&self.hud, &self.ui_data, self.modules_taken[1]) {
-            (Some(_), _, _) => "built",
-            (None, Some(_), _) => "its atlas is in, not built yet",
-            (None, None, true) => "SUPPORT came, but no atlas or no TEXTURES.TXT",
-            (None, None, false) => "waiting for SUPPORT",
-        };
-        let _ = writeln!(o, "start menu: {start}; HUD: {hud}");
-        if self.search.open || !self.search.list().is_empty() {
-            let [race, class, min, max] = self.search.filter();
-            let _ = writeln!(o, "player search: {}, race {race} class {class} levels {min}-{max}, {} found", if self.search.open { "open" } else { "closed" }, self.search.list().len());
-        }
-        if let Some(w) = self.loading.wait {
-            let _ = writeln!(o, "loading screen: up {} ms, for the zones round {:?}{}", self.session.now() as i64 - w.since, w.at, if w.entering { ", the world's file first" } else { "" });
-        }
-        let d = self.duel_part();
-        if d.features != 0 || d.running || d.set || !d.queue.is_empty() || self.duel_owns() {
-            let wnd = self.duel_window_line();
-            let _ = writeln!(o, "duel: features {:#x}, id {}, on {}, set {}, may fight {:#x} {:#x}, {} waiting, wager {}/{} accepted {}/{}{wnd}", d.features, d.duel_id, d.running, d.set, d.a, d.b, d.queue.len(), d.my_tunar, d.their_tunar, d.my_acc, d.their_acc);
-        }
-        let _ = writeln!(o, "entities: {} of {}, drawn to {} (the server's most {:?})", self.entities.slots.iter().flatten().count(), self.entities.limit, crate::settings::entity_view(), self.session.entity_view_offer);
-        let now = self.session.now();
-        let (n, last) = self.entity_updates;
-        let _ = writeln!(o, "{}; {n} entity updates since the world entry{}", self.session.net_line(), if n > 0 { format!(", the last {} ms ago", now.wrapping_sub(last)) } else { String::new() });
-        for e in self.entities.slots.iter().flatten() {
-            let name = e.creature.as_ref().map_or("", |c| c.name.as_str());
-            let two = if e.model2 != 0 || e.drawn_model != e.model { format!(" model2 {:#x} drawn {:#x}", e.model2, e.drawn_model) } else { String::new() };
-            let _ = writeln!(o, "  {:#x} kind {} model {:#x}{two} {name:?} at {:?}", e.id, e.kind, e.model, e.pos);
-            // what the game's targeting reads of it (`CycleTarget`,
-            // `TargetCentre`: the byte 26 bit 0, in this world; byte 27 for
-            // `TargetInRange`) and the npc flags □ talks by
-            let npc = e.creature.as_ref().map_or(String::new(), |c| format!(", npc flags {:#x}", c.npc_flags));
-            let _ = writeln!(o, "    targeting: selectable {}{}, world {} (the player's {}), byte 27 {}{npc}", e.p18 & 1 != 0, if e.p18 & 2 != 0 { ", a corpse" } else { "" }, e.world, self.player.world, e.p19);
-            if let Some(c) = &e.creature {
-                let _ = writeln!(o, "    {}", look_line(c));
-                let _ = writeln!(o, "    {}", move_line(e, c, now));
-            }
-        }
-        o
     }
 
     /// What the game server's datagrams have come to so far, for a stall's
@@ -2777,7 +2638,6 @@ impl Play {
                 // Channel44: the server-load channels (`adminplay`)
                 Event::State { channel: channel @ 0x44..=0x6B, data } => self.admin_channel44(channel, &data),
                 Event::State { channel, data } if let Some(slot) = net::entity::slot_of_channel(channel) => {
-                    self.entity_updates = (self.entity_updates.0 + 1, now);
                     let self_id = self.session.self_id;
                     let skel = self.puppets[slot].as_ref().and_then(|p| p.sprite.as_ref()).map_or(0, |s| s.skel_type);
                     let scene = &mut walker.scene;
@@ -2849,10 +2709,6 @@ impl Play {
                             let now = self.session.timer();
                             self.cast_window = cast_window(self.cast_window, now, c.time);
                             eprintln!("play: own cast (0x00B1): time {}, effect {:#010x}; walking {:.2} s", c.time, c.effect, (self.cast_window.1 - now) as f64 / 983.04);
-                            if self.own_casts.len() == 4 {
-                                self.own_casts.pop_front();
-                            }
-                            self.own_casts.push_back((now, c.time, c.effect));
                         }
                         if !(op == 0x0776 && Some(c.caster) == self.self_id32()) {
                             self.casts.push(c);
@@ -4250,11 +4106,6 @@ impl Play {
             // L1's cycle targets each (noted where they were placed)
             let pick = self.hud.as_ref().and_then(|h| h.2.pick(f));
             let id = match pick {
-                // the bug report (`report`)
-                Some(crate::hud::Pick::Report) => {
-                    crate::report::open();
-                    return true;
-                }
                 Some(crate::hud::Pick::Me) => self.self_id32(),
                 Some(crate::hud::Pick::Member(id)) => Some(id),
                 Some(crate::hud::Pick::Pet) => (self.pet_id != u32::MAX).then_some(self.pet_id),
@@ -7602,7 +7453,7 @@ impl Play {
             // window narrower than 4:3 has them at its top and bottom
             // (`Vertical`): the frame, the gauges, the group, the effects, the
             // quick menus and the breath gauge up with the top; the target's
-            // bar, the report's button and the chat box down with the bottom;
+            // bar and the chat box down with the bottom;
             // the target's details, the boxes and the menus in the middle.
             // DrawReticle, before the HUD: ADDART.CSF's AT_Reticle.tga in the
             // middle of the frame (blend 3, no dither), at full on a new
@@ -9599,17 +9450,11 @@ mod commands {
         assert_eq!((sevens(&p), p.dialogs.len()), (0, 1));
     }
 
-    /// A problem report's entity lines carry each creature's look and hands
-    /// as its channel sent them: here Coachman Quicksteed as Sandstorm sent
-    /// him in `pcaps/ps2_sandstorm.pcap` (no robe: byte 109 is 255), so a
-    /// report of a robe on someone shows what the server sent. An entity
-    /// with no creature part has no look line (the control).
     /// The start menu's Location and the compass's group patches go by the
     /// world the client is in (`m_worldId`): after a teleport into Rathe
     /// (`Msg00B2` sets the player's world, the dump keeps the login's) a
-    /// cell is named from Rathe's grid, and a report says RATHE.ESF. The
-    /// control: the dump's world, Tunaria, which named a Rathe cell "Anu
-    /// Village" (F3 20261023-053742).
+    /// cell is named from Rathe's grid. The control: the dump's world,
+    /// Tunaria, which named a Rathe cell "Anu Village" (F3 20261023-053742).
     #[test]
     fn the_location_is_the_world_the_client_is_in() {
         let mut p = play();
@@ -9621,9 +9466,6 @@ mod commands {
         let here = crate::zones::zone(p.world_id(), 1, 1);
         assert_eq!(here, Some(1178), "Rathe's grid");
         assert_ne!(crate::zones::zone(p.dump.player.world as i32, 1, 1), here, "the control: Tunaria's grid names it otherwise");
-        let r = p.report([0.0; 3]);
-        assert!(r.contains("world 1 (RATHE.ESF)"), "{r}");
-        assert!(!r.contains("tunaria.esf"), "the login's path is not the world now");
     }
 
     /// A dead target's bar shows no face: `Process` drops the target info
@@ -9648,45 +9490,6 @@ mod commands {
         p.entities.slots[5] = Some(net::entity::Entity { id: 0x42, kind: 130, p19: 0, ..Default::default() });
         p.drop_dead_target_info();
         assert_eq!(p.target_info, Some(1));
-    }
-
-    #[test]
-    fn a_report_shows_each_creatures_look() {
-        let mut p = play();
-        let mut c = net::entity::Creature { name: "Coachman Quicksteed".into(), robe: 255, hair: [2, 3, 1], face: 3, item_types: [1, 0], ..Default::default() };
-        c.armor = [0, 0, 0, 0, 2, 0];
-        c.armor_tint = [255; 6];
-        c.items = [0xBF7E7DCB, 0, 0];
-        p.entities.slots[15] = Some(net::entity::Entity { id: 0x2B1DE, kind: 130, model: 0x70D898C6, creature: Some(c), ..Default::default() });
-        p.entities.slots[3] = Some(net::entity::Entity { id: 0x42, kind: 129, model: 0x1234, ..Default::default() });
-        let r = p.report([0.0; 3]);
-        let lines: Vec<&str> = r.lines().collect();
-        let at = lines.iter().position(|l| l.contains("\"Coachman Quicksteed\"")).expect("the coachman's line");
-        assert_eq!(lines.get(at + 1).copied(), Some("    targeting: selectable false, world 0 (the player's 0), byte 27 0, npc flags 0x0"), "first how it may be targeted");
-        assert_eq!(
-            lines.get(at + 2).copied(),
-            Some("    look: robe 255 tint 0, armor [0, 0, 0, 0, 2, 0] tints [255, 255, 255, 255, 255, 255], hair [2, 3, 1], face 3; items [0xbf7e7dcb, 0x0, 0x0] over [0x0, 0x0, 0x0] types [1, 0]")
-        );
-        assert!(lines.get(at + 3).is_some_and(|l| l.starts_with("    move: state 0 walking 0, velocity [0.00, 0.00, 0.00], updated ")), "then how it moves: {:?}", lines.get(at + 3));
-        let plain = lines.iter().position(|l| l.starts_with("  0x42 kind 129")).expect("the plain entity's line");
-        assert!(lines.get(plain + 1).is_some_and(|l| l.starts_with("    targeting: selectable false") && !l.contains("npc flags")), "every entity's targeting, a creature's npc flags alone: {:?}", lines.get(plain + 1));
-        assert!(!lines.get(plain + 2).is_some_and(|l| l.contains("look:") || l.contains("move:")), "an entity with no creature part has no look or move line");
-    }
-
-    /// A report's move line: the state and velocity the channel last sent,
-    /// the time since that update (its stamp is the update's time plus the
-    /// glide's two update periods) and how far the glide still draws it from
-    /// where it is. A player shoved against a wall: standing (state 0) with
-    /// a running velocity, drawn 1.5 past where it stands.
-    #[test]
-    fn a_report_says_how_each_creature_moves() {
-        let c = net::entity::Creature { state: 0, velocity: [8.0, 0.0, -3.0], ..Default::default() };
-        let mut e = net::entity::Entity { id: 7, kind: 130, pos: [10.0, 0.0, 20.0], actor_pos: [11.2, 0.0, 20.9], ..Default::default() };
-        e.stamp = 5_000 + 2 * UPDATE_RATE;
-        assert_eq!(move_line(&e, &c, 5_350), "move: state 0 walking 0, velocity [8.00, 0.00, -3.00], updated 350 ms ago, drawn 1.50 from it");
-        // the clock wraps as the session's does
-        e.stamp = 50u32.wrapping_sub(100).wrapping_add(2 * UPDATE_RATE);
-        assert!(move_line(&e, &c, 50).contains("updated 100 ms ago"), "{}", move_line(&e, &c, 50));
     }
 
     /// The chat mode's Guild (`|17`, the start menu's): the guild's channel

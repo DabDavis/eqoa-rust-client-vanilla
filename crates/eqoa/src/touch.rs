@@ -31,8 +31,8 @@
 //! Shown from the first touch (in a page on a touch-first device from the
 //! start); a key or a controller hides it.
 //!
-//! The client's own dialogs over the game (the report's, the update's
-//! question) take a finger as the mouse's pointer: a finger there is a
+//! The client's own dialog over the game (the update's question) takes a
+//! finger as the mouse's pointer: a finger there is a
 //! [`Taps`]', and lifted where it came down it is a click there.
 
 use crate::input::{Report, bit};
@@ -455,7 +455,7 @@ pub fn draw_pad(ui: &mut Ui, device: &render::wgpu::Device, queue: &render::wgpu
 }
 
 /// The fingers where a pointer is taken instead of the pad (the client's
-/// own dialogs: the report's, the update's question): a finger's tap is a click
+/// own dialog: the update's question): a finger's tap is a click
 /// where it came down, at its lift (a mouse's is at its press, but a finger
 /// that moves on is no click, and only the lift can tell). Each finger on
 /// its own, as a looking finger on the pad is (`TouchPad::touch`): one that

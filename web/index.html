@@ -56,16 +56,10 @@
   .notice.bad { border-left-color: var(--bad); }
   .notice .text { flex: 1 1 260px; min-width: 0; overflow-wrap: anywhere; white-space: pre-line; max-height: 45vh; overflow-y: auto; }
   .notice button { flex: 0 0 auto; padding: 6px 10px; font-weight: 500; }
-  .modal { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 16px; overflow: auto; background: #0008; }
-  .modal .card { max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); overflow: hidden auto; }
-  textarea { width: 100%; box-sizing: border-box; padding: 9px 10px; background: #0e1217; color: var(--text); border: 1px solid var(--line); border-radius: 6px; font: inherit; resize: vertical; }
   label.check { display: flex; gap: 8px; align-items: center; color: var(--text); }
   label.check input { width: auto; }
   .row.again { margin-top: 6px; }
   .row.again button { flex: 0 1 auto; text-align: left; overflow-wrap: anywhere; }
-  #rp-pic { display: block; box-sizing: border-box; max-width: 100%; max-height: 26vh; margin-top: 8px; border: 1px solid var(--line); border-radius: 6px; }
-  pre.crash { margin: 0 0 6px; padding: 8px 10px; max-height: 160px; overflow: auto; background: #0e1217; border: 1px solid var(--line); border-radius: 6px; font: 12px/1.4 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
-  .ok a { color: var(--good); }
   #install .row { margin-top: 10px; }
   #install .note { color: var(--text); }
   #install-go { flex: 0 1 auto; }
@@ -110,7 +104,7 @@
       <div class="row"><button type="button" id="install-go" hidden>Install EQOA as an app</button></div>
       <div class="note" id="install-what"></div>
     </div>
-    <div class="row end"><a class="link" href="./spellfx.html" target="_blank" rel="noopener">Help match spell visuals</a><a class="link" href="/eqoa/reports/board" target="_blank" rel="noopener">Bug reports board</a><button type="button" class="link" id="report-gate">Report a problem (F3)</button></div>
+    <div class="row end"><a class="link" href="./spellfx.html" target="_blank" rel="noopener">Help match spell visuals</a></div>
   </form>
 
 </div>
@@ -118,15 +112,15 @@
 <script>
   // The page's own scripts: when one does not load (a cache that kept a page
   // whose files are gone, a deploy caught half way), nothing after it runs.
-  // report.js says so with a way to report it; this says so if it cannot.
+  // notices.js says so; this says so if it cannot.
   addEventListener('error', (e) => {
     const t = e.target;
-    if (t && t.tagName === 'SCRIPT' && !window.eqoaReport) {
+    if (t && t.tagName === 'SCRIPT' && !window.eqoaNotices) {
       document.getElementById('status').textContent = 'The client\u2019s files did not load (' + t.src + '). Reload the page; if it happens again, the site may be in the middle of an update: wait a minute.';
     }
   }, true);
 </script>
-<script type="module" src="./report.js"></script>
+<script type="module" src="./notices.js"></script>
 <script type="module" src="./main.js"></script>
 </body>
 </html>

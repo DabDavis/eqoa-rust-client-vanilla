@@ -106,37 +106,6 @@ pub struct Walker {
     /// server). The body is drawn at it; the walk's collision is the walk
     /// control's own (`InitParms`' constants, which nothing in CLIENT scales).
     pub scale: F<Ee>,
-    /// The body's last changes of locomotion or of either layer's animation,
-    /// as `pose_sounding` leaves them, oldest first (`BODY_CHANGES`): what a
-    /// report gives of the legs (F3 20261030-172342, "a rapid stutter step"
-    /// walking while casting, which no trace could show).
-    pub changes: std::collections::VecDeque<BodyChange>,
-}
-
-/// One change of the body's locomotion or animations (`Walker::changes`):
-/// the scene's clock it was drawn at, the walk's locomotion, the two layers'
-/// animations and the body's speed then.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct BodyChange {
-    pub at: i64,
-    pub loco: i32,
-    pub anim: [i32; 2],
-    pub speed: f32,
-}
-
-/// How many of the body's changes a walker keeps.
-pub const BODY_CHANGES: usize = 16;
-
-/// `c` kept when its locomotion or an animation differs from the last kept
-/// (a speed alone is no change), the oldest let go past `BODY_CHANGES`.
-fn note_change(changes: &mut std::collections::VecDeque<BodyChange>, c: BodyChange) {
-    if changes.back().is_some_and(|b| (b.loco, b.anim) == (c.loco, c.anim)) {
-        return;
-    }
-    if changes.len() == BODY_CHANGES {
-        changes.pop_front();
-    }
-    changes.push_back(c);
 }
 
 /// The console's frame: two fields of NTSC video (59.94 Hz), 33.37 ms. The
@@ -245,7 +214,7 @@ impl Walker {
         cam.set_orbit_distance(dist);
         cam.set_orbit_angle_behind();
         let eye = cam.process(&mut scene);
-        Walker { cam, scene, eye, sprite: None, anims: AnimScene::default(), rand: Rand(1), shake: 0, reach: Default::default(), kept: None, rewound: false, given: None, scale: F::ONE, changes: Default::default() }
+        Walker { cam, scene, eye, sprite: None, anims: AnimScene::default(), rand: Rand(1), shake: 0, reach: Default::default(), kept: None, rewound: false, given: None, scale: F::ONE }
     }
 
     /// `Respawn`'s placing: the character stood at `pos` (on the ground
@@ -325,7 +294,6 @@ impl Walker {
         let Some(cs) = self.sprite.as_mut() else { return (actor.to_cols(), Vec::new()) };
         self.anims.time = self.scene.time;
         self.cam.walk.update_sprite(cs, &self.anims, &mut self.rand);
-        note_change(&mut self.changes, BodyChange { at: self.scene.time, loco: self.cam.walk.committed.loco_state, anim: [cs.cur[0].anim, cs.cur[1].anim], speed: self.cam.walk.phys.velocity.magnitude().0 });
         if sound.is_some() {
             let at = self.cam.walk.phys.smooth_location();
             cs.process_sounds(&self.eye.position, &self.eye.direction, &at, sound);
@@ -570,15 +538,6 @@ impl Walker {
     /// Where the camera is.
     pub fn eye_position(&self) -> Vec3 {
         Vec3::from(self.eye.position.to_array())
-    }
-
-    /// The body's last changes (`changes`) as a report gives them: each
-    /// one's time back from the last frame drawn, its locomotion, the two
-    /// layers' animations and the speed.
-    pub fn describe_changes(&self) -> String {
-        let now = self.scene.time;
-        let parts: Vec<String> = self.changes.iter().map(|c| format!("{:.2} s loco {} {:?} {:.2}", (c.at - now) as f64 / 1000.0, c.loco, c.anim, c.speed)).collect();
-        if parts.is_empty() { "none yet".into() } else { parts.join(" · ") }
     }
 
     pub fn describe(&self) -> String {
@@ -866,27 +825,6 @@ impl AnimatedProps {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-
-    /// A report's record of the legs keeps each change of the locomotion or
-    /// of a layer's animation, the newest 16: a stutter between two of them
-    /// shows as many changes close together. The control: the same state
-    /// drawn again, or at another speed alone, is no change.
-    #[test]
-    fn the_body_keeps_its_last_changes() {
-        let mut ch = std::collections::VecDeque::new();
-        let c = |at: i64, loco: i32, a: i32, speed: f32| BodyChange { at, loco, anim: [a, a], speed };
-        note_change(&mut ch, c(0, 3, 3, 8.85));
-        note_change(&mut ch, c(33, 3, 3, 7.5));
-        assert_eq!(ch.len(), 1, "the control: the same state at another speed is no change");
-        note_change(&mut ch, c(66, 1, 1, 3.8));
-        note_change(&mut ch, c(99, 1, 39, 3.0));
-        assert_eq!(ch.iter().map(|x| x.at).collect::<Vec<_>>(), vec![0, 66, 99], "a locomotion's and an animation's change kept");
-        for k in 0..40 {
-            note_change(&mut ch, c(100 + k, (k % 2) as i32, 0, 3.0));
-        }
-        assert_eq!(ch.len(), BODY_CHANGES, "the newest {BODY_CHANGES} kept");
-        assert_eq!(ch.back().unwrap().at, 139, "the newest last");
-    }
 
     /// The disc's TUNARIA.ESF with the zones round (x, z) read and the
     /// collision world made; None without `run/eqoa.iso`.

@@ -3,8 +3,7 @@
 //! the card, flat, as the PS2's `BASLUS-20744EQONLINE` folder holds it (SS,
 //! S2, ss-art.csf, WORDS.TXT, station.pak, eqahosts.txt, whatever its
 //! manifest names), and `patch.json`, the record of the last patch that
-//! finished (the server, its manifest, when, each file's CRC and size), which
-//! a problem report names. A PS2 has one card folder and patches it over to
+//! finished (the server, its manifest, when, each file's CRC and size). A PS2 has one card folder and patches it over to
 //! play on another server; here each server keeps its own, so changing
 //! servers never takes another's files.
 //!
@@ -164,29 +163,11 @@ impl Record {
         }
         Some(Record { server, manifest, when, files })
     }
-
-    /// The report's line: the server's patch and when.
-    pub fn describe(&self) -> String {
-        let names: Vec<String> = self.files.iter().map(|f| format!("{} ({} bytes, CRC {})", f.name, f.size, f.crc)).collect();
-        format!("patched {} UTC from {}: {}", stamp(self.when), self.manifest, names.join(", "))
-    }
 }
 
 /// The record of the last patch from `host` that finished, if any.
 pub fn record(host: &str) -> Option<Record> {
     Record::from_json(&String::from_utf8_lossy(&file(host, RECORD)?))
-}
-
-/// A problem report's line on the server's patch: what its folder holds, by
-/// the last patch that finished.
-pub fn report_line(host: Option<&str>) -> String {
-    match host {
-        None => "no server".into(),
-        Some(h) => match record(h) {
-            Some(r) => format!("{h}: {}", r.describe()),
-            None => format!("{h}: no patch kept"),
-        },
-    }
 }
 
 /// Writes the record beside the server's files.
@@ -281,6 +262,5 @@ mod tests {
         assert_eq!(Record::from_json(&r.to_json()), Some(r.clone()));
         assert_eq!(Record::from_json("not a record"), None, "the control");
         assert_eq!(stamp(1_792_740_000), "2026-10-23 07:20");
-        assert!(r.describe().contains("S2 (24508 bytes, CRC 789917974)"));
     }
 }

@@ -360,7 +360,7 @@ pub struct Status {
     pub changed: bool,
     /// `run` has returned
     pub done: bool,
-    /// why it failed, for the log and a report
+    /// why it failed, for the log
     pub err: Option<String>,
     /// the patch server never answered (its name or its port): the server's
     /// folder is played as it stands (the client's, not the PS2's)

@@ -1,7 +1,7 @@
 #!/bin/sh
 # The browser client: web/dist/ gets the page (index.html, and beside it the
 # GM panel's preview fxview.html and the community page spellfx.html) and its build,
-# v/<build>/: main.js and report.js, the workers (unpack.js, tick.js), the AudioWorklet
+# v/<build>/: main.js and notices.js, the workers (unpack.js, tick.js), the AudioWorklet
 # (sound.js), the update notes (update-notes.md), the pages' icon (disc.svg), the app's
 # manifest (manifest.json) and icons (tools/webicons: the program's drawn disc as PNGs),
 # eqoa.js and eqoa_bg.wasm (wasm-bindgen 0.2.129, the version
@@ -27,7 +27,7 @@ if [ -n "$OPT" ]; then
     "$OPT" -O2 --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext --enable-mutable-globals \
         --enable-reference-types --enable-multivalue "$STAGE/eqoa_bg.wasm" -o "$STAGE/eqoa_bg.wasm"
 fi
-cp web/main.js web/report.js web/unpack.js web/sound.js web/tick.js web/fxview.js web/discstore.js web/spellfx.js "$STAGE/"
+cp web/main.js web/notices.js web/unpack.js web/sound.js web/tick.js web/fxview.js web/discstore.js web/spellfx.js "$STAGE/"
 # the pages' icon: the program's own drawn disc (crates/eqoa/src/icon_art.rs)
 cp web/disc.svg "$STAGE/"
 # the page as an installed app (main.js "installing"): its manifest, whose start_url and
@@ -48,7 +48,7 @@ BUILD="$( { (cd "$STAGE" && sha256sum -- *); sha256sum < web/index.html; sha256s
 printf '{"build":"%s","commit":"%s"}\n' "$BUILD" "$COMMIT" > "$STAGE/build.json"
 mkdir -p web/dist/v
 mv "$STAGE" "web/dist/v/$BUILD"
-sed -e "s|src=\"\./main\.js\"|src=\"./v/$BUILD/main.js\"|" -e "s|src=\"\./report\.js\"|src=\"./v/$BUILD/report.js\"|" -e "s|href=\"\./disc\.svg\"|href=\"./v/$BUILD/disc.svg\"|" \
+sed -e "s|src=\"\./main\.js\"|src=\"./v/$BUILD/main.js\"|" -e "s|src=\"\./notices\.js\"|src=\"./v/$BUILD/notices.js\"|" -e "s|href=\"\./disc\.svg\"|href=\"./v/$BUILD/disc.svg\"|" \
     -e "s|href=\"\./manifest\.json\"|href=\"./v/$BUILD/manifest.json\"|" -e "s|href=\"\./apple-touch-icon\.png\"|href=\"./v/$BUILD/apple-touch-icon.png\"|" web/index.html > web/dist/index.html
 # the GM panel's spell-visual preview (fxview.js, crates/eqoa/src/fxview.rs),
 # a page of its own beside the game's, on the same build
@@ -56,8 +56,8 @@ sed -e "s|src=\"\./fxview\.js\"|src=\"./v/$BUILD/fxview.js\"|" -e "s|href=\"\./d
 # the community page that matches spells to their visuals, on the same build
 sed -e "s|src=\"\./spellfx\.js\"|src=\"./v/$BUILD/spellfx.js\"|" -e "s|href=\"\./disc\.svg\"|href=\"./v/$BUILD/disc.svg\"|" web/spellfx.html > web/dist/spellfx.html
 # a page that names no build would load files that are not there
-grep -q "src=\"./v/$BUILD/main.js\"" web/dist/index.html && grep -q "src=\"./v/$BUILD/report.js\"" web/dist/index.html \
-    || { echo "web/index.html: its scripts are not ./main.js and ./report.js" >&2; exit 1; }
+grep -q "src=\"./v/$BUILD/main.js\"" web/dist/index.html && grep -q "src=\"./v/$BUILD/notices.js\"" web/dist/index.html \
+    || { echo "web/index.html: its scripts are not ./main.js and ./notices.js" >&2; exit 1; }
 grep -q "href=\"./v/$BUILD/manifest.json\"" web/dist/index.html && grep -q "href=\"./v/$BUILD/apple-touch-icon.png\"" web/dist/index.html \
     || { echo "web/index.html: its manifest and Home Screen icon are not ./manifest.json and ./apple-touch-icon.png" >&2; exit 1; }
 grep -q "src=\"./v/$BUILD/fxview.js\"" web/dist/fxview.html || { echo "web/fxview.html: its script is not ./fxview.js" >&2; exit 1; }

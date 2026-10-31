@@ -108,7 +108,7 @@ pub fn stick_byte(v: f32) -> u8 {
 /// reports 20261020-103355 and -104019, Chrome, a PowerA pad). A DualShock 2
 /// rests in its middle, and PCSX2 leaves its "Analog Deadzone" to the player
 /// (none by default). In a page `?deadzone=<0..0.9>`, natively
-/// `EQOA_DEADZONE`; the problem reports carry the sticks as they came.
+/// `EQOA_DEADZONE`.
 /// A page's default is 0.37, the edge it had through gilrs (0.1 + 0.3 x
 /// 0.9) when those reports were settled: a stick resting at 0.34 there stayed
 /// still and would walk at 0.3.
@@ -567,16 +567,11 @@ pub struct Controller {
     /// the buttons it pressed and let go since the last read, which
     /// `report` (its state now) no longer holds (`Latch`)
     pub between: u16,
-    /// its sticks as they came, before the dead zone (for a report)
-    pub raw: [f32; 4],
     pub rumbles: bool,
     pub label: String,
     source: Source,
     /// its place in the controllers' order: the first controller first
     order: (u8, u64),
-    /// what a problem report says of it beyond its line: a controller read
-    /// over HID, the first report of each ID it sent (`hidpad::FirstReport`)
-    notes: Vec<String>,
 }
 
 /// Where a controller is read, and its motors driven.
@@ -593,26 +588,6 @@ enum Source {
     Hid(u32, Option<gilrs::GamepadId>),
     #[cfg(target_arch = "wasm32")]
     Page(u32),
-}
-
-impl Source {
-    /// How a controller is read, as a report says it.
-    fn how(&self) -> &'static str {
-        match self {
-            #[cfg(windows)]
-            Source::Gilrs(_) => "Windows.Gaming.Input: only by the window in front",
-            #[cfg(target_os = "macos")]
-            Source::Gilrs(_) => "IOKit",
-            #[cfg(all(not(windows), not(target_os = "macos"), not(target_arch = "wasm32")))]
-            Source::Gilrs(_) => "evdev",
-            #[cfg(windows)]
-            Source::XInput(_) => "XInput: in front or behind",
-            #[cfg(windows)]
-            Source::Hid(..) => "HID: in front or behind",
-            #[cfg(target_arch = "wasm32")]
-            Source::Page(_) => "the Gamepad API",
-        }
-    }
 }
 
 /// What a window reads of the connected controllers (`pick`).
@@ -805,9 +780,6 @@ pub struct Gamepads {
     picked: Option<Pick>,
     /// where the motors of the controllers it reads are
     rumble_to: Vec<Source>,
-    /// the sticks of the controllers it reads as they came, before the dead
-    /// zone (for a report)
-    pub raw: [f32; 4],
     /// the buttons the last read gave that no controller it reads held any
     /// more: pressed and let go between two reads (`Latch`)
     pub between: u16,
@@ -818,10 +790,6 @@ pub struct Gamepads {
     /// a gilrs fault stepped over has been said (the log says it once)
     #[cfg(not(target_arch = "wasm32"))]
     gilrs_fault_said: bool,
-    /// each pad as a report gives it: its id, mapping, layout, every axis
-    /// and every button pressed (in a page)
-    #[cfg(target_arch = "wasm32")]
-    pub described: Vec<String>,
 }
 
 impl Default for Gamepads {
@@ -877,14 +845,11 @@ impl Gamepads {
             gone: None,
             picked: None,
             rumble_to: Vec::new(),
-            raw: [0.0; 4],
             between: 0,
             #[cfg(not(target_arch = "wasm32"))]
             gilrs_seen: std::collections::HashMap::new(),
             #[cfg(not(target_arch = "wasm32"))]
             gilrs_fault_said: false,
-            #[cfg(target_arch = "wasm32")]
-            described: Vec::new(),
         }
     }
 
@@ -962,17 +927,6 @@ impl Gamepads {
                 *r.borrow_mut() = says;
             }
         });
-        let listed = list_controllers(
-            &describe(&pick, &pads, &seat, focus, capture && shares_pad(focus, &seat)),
-            &pads.iter().map(|c| (c.name.as_str(), c.label.as_str(), c.source.how(), c.rumbles, c.notes.as_slice())).collect::<Vec<_>>(),
-            &pick,
-            &seat,
-        );
-        if let Ok(mut l) = LISTED.lock()
-            && *l != listed
-        {
-            *l = listed;
-        }
         if self.picked.as_ref() != Some(&pick) {
             crate::say(&describe(&pick, &pads, &seat, focus, capture && shares_pad(focus, &seat)));
             // a controller this window no longer reads is not its to shake
@@ -980,7 +934,6 @@ impl Gamepads {
             self.picked = Some(pick.clone());
         }
         let mut out = Report::default();
-        let mut raw = Report::default();
         let (mut any, mut motors) = (false, false);
         let mut between = 0;
         self.rumble_to.clear();
@@ -991,7 +944,6 @@ impl Gamepads {
         }) {
             out.merge(&c.report);
             between |= c.between;
-            raw.merge(&Report { buttons: 0, sticks: c.raw });
             any = true;
             motors |= c.rumbles;
             if c.rumbles {
@@ -1003,7 +955,6 @@ impl Gamepads {
             any = true;
             motors = pads.iter().any(|c| c.rumbles);
         }
-        self.raw = raw.sticks;
         // what was pressed and let go since the last read (`Latch`): down
         // for this read, as a tap a frame long
         self.between = between & !out.buttons;
@@ -1049,7 +1000,6 @@ impl Gamepads {
             for crate::xinput::Found { index: i, pad: p, ids } in x.read() {
                 xinput_ids.push(ids);
                 let mut report = p.report();
-                let raw = report.sticks;
                 report.rest(self.dead_zone);
                 let name = format!("xinput{i}");
                 if !self.seen.contains(&name) {
@@ -1059,7 +1009,7 @@ impl Gamepads {
                 // XInput says the state at the moment asked, no more (its packet
                 // number says only that something changed): a press let go
                 // between two frames is not seen
-                out.push(Controller { name, report, between: 0, raw, rumbles: true, label: format!("Xbox controller {}", i + 1), source: Source::XInput(i), order: (0, i as u64), notes: Vec::new() });
+                out.push(Controller { name, report, between: 0, rumbles: true, label: format!("Xbox controller {}", i + 1), source: Source::XInput(i), order: (0, i as u64) });
             }
         }
         // the PlayStation controllers read over HID, each with its USB ids:
@@ -1071,14 +1021,12 @@ impl Gamepads {
         if let Some(h) = self.hid.as_mut() {
             for (k, f) in h.read().into_iter().enumerate() {
                 let mut report = f.pad.report();
-                let raw = report.sticks;
                 report.rest(self.dead_zone);
                 if !self.seen.contains(&f.name) {
                     crate::say(&format!("gamepad: a {}{}, read over HID ({})", f.model.label(), if f.bluetooth { " on Bluetooth" } else { "" }, f.name));
                     self.seen.push(f.name.clone());
                 }
-                let notes = f.reports.iter().map(|r| format!("{}{}", if f.bluetooth { "on Bluetooth, " } else { "" }, r.describe())).collect();
-                let c = Controller { name: f.name, report, between: f.between, raw, rumbles: true, label: f.model.label().to_string(), source: Source::Hid(k as u32, None), order: (1, k as u64), notes };
+                let c = Controller { name: f.name, report, between: f.between, rumbles: true, label: f.model.label().to_string(), source: Source::Hid(k as u32, None), order: (1, k as u64) };
                 hid.push((c, f.ids));
             }
         }
@@ -1092,7 +1040,7 @@ impl Gamepads {
             // event is dropped, said once, and the controller read once its
             // Connected comes.
             loop {
-                let ev = match crate::report::caught(|| g.next_event()) {
+                let ev = match crate::logfile::caught(|| g.next_event()) {
                     Ok(Some(ev)) => ev,
                     Ok(None) => break,
                     Err(e) => {
@@ -1173,7 +1121,6 @@ impl Gamepads {
                 let (name, order) = (format!("pad{slot}"), (1, slot));
                 let mut report = report_of(&pad);
                 let between = self.gilrs_seen.get_mut(&id).map_or(0, |l| l.take(report.buttons));
-                let raw = report.sticks;
                 report.rest(self.dead_zone);
                 // a Mac's PlayStation controller rumbles through IOKit
                 // (`hidpad::mac`), gilrs having no force feedback there
@@ -1181,7 +1128,7 @@ impl Gamepads {
                 let rumbles = pad.is_ff_supported() || pad.vendor_id().zip(pad.product_id()).is_some_and(|(v, p)| crate::hidpad::Model::of(v, p).is_some());
                 #[cfg(not(target_os = "macos"))]
                 let rumbles = GILRS_FF && pad.is_ff_supported();
-                out.push(Controller { name, report, between, raw, rumbles, label, source: Source::Gilrs(id), order, notes: Vec::new() });
+                out.push(Controller { name, report, between, rumbles, label, source: Source::Gilrs(id), order });
             }
             // what the ones passed over pressed (read through XInput or HID
             // instead) is not kept for later; a controller gone, forgotten
@@ -1211,7 +1158,6 @@ impl Gamepads {
         let rumbles = !pads.is_empty() && web_can_rumble();
         let mut out = Vec::new();
         let mut traced = Vec::new();
-        let mut described = Vec::new();
         for p in &pads {
             // a pad's reading is kept by its slot, anew when another pad
             // takes the slot
@@ -1229,22 +1175,18 @@ impl Gamepads {
                 crate::say(&format!("gamepad: {} (mapping {:?}, {})", p.id, p.mapping, map.how(p, self.browser)));
                 self.seen.push(p.id.clone());
             }
-            let d = map.describe(p, self.browser);
             if self.trace {
                 // `?padtrace`: a pad as it changes, its axes to 0.05
                 let coarse = format!("{} {:?} {:?}", p.index, p.buttons.iter().map(|b| b.0).collect::<Vec<_>>(), p.axes.iter().map(|v| (v * 20.0).round() as i32).collect::<Vec<_>>());
                 if !self.traced.contains(&coarse) {
-                    crate::say(&format!("[pad] {d}"));
+                    crate::say(&format!("[pad] {}", map.describe(p, self.browser)));
                 }
                 traced.push(coarse);
             }
-            described.push(d);
-            let raw = r.sticks;
             r.rest(self.dead_zone);
-            out.push(Controller { name: format!("pad{}", p.index), report: r, between: 0, raw, rumbles, label: p.id.clone(), source: Source::Page(p.index), order: (1, p.index as u64), notes: Vec::new() });
+            out.push(Controller { name: format!("pad{}", p.index), report: r, between: 0, rumbles, label: p.id.clone(), source: Source::Page(p.index), order: (1, p.index as u64) });
         }
         self.traced = traced;
-        self.described = described;
         out.sort_by_key(|c| c.order);
         out
     }
@@ -1360,53 +1302,6 @@ impl Gamepads {
             }
         }
     }
-}
-
-/// The controllers as this window last polled them (`describe_controllers`).
-static LISTED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
-
-/// The connected controllers as a report lists them (`report`): first what
-/// this window reads (its Controller Focus and the windows open), then a
-/// line each, in their order: its number, what it calls itself, how it is
-/// read and its name there, whether it rumbles, and which window reads it
-/// now. As this window last polled them; empty before it did.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-pub fn describe_controllers() -> Vec<String> {
-    LISTED.lock().map(|l| l.clone()).unwrap_or_default()
-}
-
-/// `describe_controllers`' lines: `window` what this window reads
-/// (`describe`), the other windows open with what each says it reads (a
-/// window's place held by no window the player sees shows here), each pad as
-/// (name, label, how it is read, rumbles, notes), its notes on lines of
-/// their own after it.
-fn list_controllers(window: &str, pads: &[(&str, &str, &str, bool, &[String])], pick: &Pick, seat: &Seat) -> Vec<String> {
-    let mut out = vec![window.to_string()];
-    if !seat.alone() {
-        let others: Vec<String> = seat.others.iter().map(|o| format!("window {} ({}, reads {})", o.place + 1, focus_name(o.focus), o.pad.as_deref().unwrap_or("none"))).collect();
-        out.push(format!("other windows: {}", others.join(", ")));
-    }
-    if pads.is_empty() {
-        out.push("none connected".into());
-    }
-    let me = if seat.alone() { "this window".to_string() } else { format!("this window ({})", seat.place + 1) };
-    for (k, &(name, label, how, rumbles, notes)) in pads.iter().enumerate() {
-        let mut by = Vec::new();
-        if match pick {
-            Pick::All => true,
-            Pick::One(n) => n == name,
-            Pick::Idle | Pick::Nothing => false,
-        } {
-            by.push(me.clone());
-        }
-        let mut others: Vec<usize> = seat.others.iter().filter(|o| o.pad.as_deref() == Some(name)).map(|o| o.place + 1).collect();
-        others.sort_unstable();
-        by.extend(others.into_iter().map(|w| format!("window {w}")));
-        let by = if by.is_empty() { "no window".to_string() } else { by.join(", ") };
-        out.push(format!("controller {}: {label} ({how}; {name}){}, read by {by}", k + 1, if rumbles { ", rumbles" } else { "" }));
-        out.extend(notes.iter().map(|n| format!("controller {} sent: {n}", k + 1)));
-    }
-    out
 }
 
 thread_local! {
@@ -1757,10 +1652,6 @@ mod tests {
         Pick::One(n.to_string())
     }
 
-    /// A report's controllers (`describe_controllers`, F3 20261024-165502
-    /// said only that two controllers did not drive two windows): what this
-    /// window reads, then each controller, how it is read and which windows
-    /// read it; one no window reads says so, as does none connected.
     /// gilrs's reading of a PlayStation controller HID has not read is passed
     /// over for a moment, then kept; one HID could not open is kept at once.
     /// The control: past the moment it is not passed over.
@@ -1770,37 +1661,6 @@ mod tests {
         assert!(wait_for_hid(false, HID_GRACE_MS - 1));
         assert!(!wait_for_hid(false, HID_GRACE_MS), "the control: after the moment, gilrs's");
         assert!(!wait_for_hid(true, 0), "refused: gilrs's at once");
-    }
-
-    #[test]
-    fn a_report_lists_the_controllers_and_who_reads_them() {
-        let sent = ["on Bluetooth, report 0x01, 78 bytes: 01 80 7f 81 80 08 00 00 00 00 00 00".to_string()];
-        let pads = [
-            ("xinput0", "Xbox controller 1", "XInput: in front or behind", true, &[][..]),
-            ("pad3", "DualSense Wireless Controller", "Windows.Gaming.Input: only by the window in front", false, &[][..]),
-            ("hid-054c-0ce6-c5d9d8d5", "DualSense", "HID: in front or behind", false, &sent[..]),
-        ];
-        let two = seat(0, &[(1, Some("xinput0"), Focus::Pad(1))]);
-        let l = list_controllers("controllers: window 1 of 2, Auto: none", &pads, &Pick::Nothing, &two);
-        assert_eq!(
-            l,
-            vec![
-                "controllers: window 1 of 2, Auto: none".to_string(),
-                "other windows: window 2 (Pad 1, reads xinput0)".to_string(),
-                "controller 1: Xbox controller 1 (XInput: in front or behind; xinput0), rumbles, read by window 2".to_string(),
-                "controller 2: DualSense Wireless Controller (Windows.Gaming.Input: only by the window in front; pad3), read by no window".to_string(),
-                "controller 3: DualSense (HID: in front or behind; hid-054c-0ce6-c5d9d8d5), read by no window".to_string(),
-                "controller 3 sent: on Bluetooth, report 0x01, 78 bytes: 01 80 7f 81 80 08 00 00 00 00 00 00".to_string(),
-            ]
-        );
-        let alone = list_controllers("controllers: Auto: every one", &pads, &Pick::All, &Seat::default());
-        assert!(alone[1].ends_with("read by this window") && alone[2].ends_with("read by this window"), "{alone:?}");
-        assert!(!alone.iter().any(|l| l.starts_with("other windows")), "alone: no other windows' line");
-        let mine = list_controllers("x", &pads, &one("pad3"), &two);
-        assert!(mine[2].ends_with("read by window 2") && mine[3].ends_with("read by this window (1)"), "{mine:?}");
-        let three = seat(1, &[(0, Some("xinput0"), Focus::Auto), (2, None, Focus::Auto)]);
-        assert_eq!(list_controllers("x", &[], &Pick::Nothing, &three)[1], "other windows: window 1 (Auto, reads xinput0), window 3 (Auto, reads none)");
-        assert_eq!(list_controllers("x", &[], &Pick::Nothing, &Seat::default())[1], "none connected");
     }
 
     /// Off, Window and a Pad, each as it says; Auto alone reads every one,

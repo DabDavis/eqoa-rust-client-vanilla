@@ -5,6 +5,13 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-10-31 · No more problem or crash reports
+- F3 and the HUD's Report a bug button are gone, as is the offer to send a crash report at the next
+  start after the game stopped: the game sends no reports of any kind. In the browser the gate's
+  Report a problem and its link to the reports board are gone too.
+- The game still keeps its log on your computer: eqoa.log in the game's settings folder, the run
+  before as eqoa.prev.log. When the game stops on a fault, the log says why.
+
 ## 2026-10-31 · Every branch of your Master Class can be bought
 - Class Mastery: some Master Classes branch into two abilities after the first rank (Spellbinder's
   Binding Grasp and Mana Flow). Having bought one, the other is no longer refused with "You cannot

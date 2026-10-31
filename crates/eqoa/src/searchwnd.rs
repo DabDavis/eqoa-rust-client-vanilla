@@ -488,11 +488,6 @@ impl Search {
         }
     }
 
-    /// The players found, in the order shown.
-    pub fn list(&self) -> &[Entry] {
-        &self.list
-    }
-
     /// The search as it stands: the race, the class and the two levels.
     pub fn filter(&self) -> [i32; 4] {
         [self.race, self.class, self.min, self.max]
@@ -973,7 +968,7 @@ mod tests {
         for b in [body(9, 3, 9, "zed", 1), body(0, 14, 10, "amy", 2), body(0, 1, 9, "Bob", 3)] {
             s.found(&b);
         }
-        let names = |s: &Search| s.list().iter().map(|e| String::from_utf16_lossy(&e.name)).collect::<Vec<_>>();
+        let names = |s: &Search| s.list.iter().map(|e| String::from_utf16_lossy(&e.name)).collect::<Vec<_>>();
         assert_eq!(names(&s), ["zed", "amy", "Bob"], "the control: as sent");
         s.sort_list(&a);
         assert_eq!(names(&s), ["Bob", "amy", "zed"], "by name, as the characters compare (capitals first)");
@@ -994,7 +989,7 @@ mod tests {
         assert_eq!(s.sort, 3);
         // 0x1501 empties it
         s.clear();
-        assert!(s.list().is_empty());
+        assert!(s.list.is_empty());
     }
 
     /// The filter's keys as FFA80 has them: up and down along its rows,
@@ -1061,7 +1056,7 @@ mod tests {
         assert!(!s.list_keys && s.cursor == 4, "left: Search");
         assert_eq!(s.key(132), Some(Out::Close));
         s.close();
-        assert!(!s.open && s.list().is_empty());
+        assert!(!s.open && s.list.is_empty());
         // opened again: the race and class as left, the levels the player's
         s.race = 3;
         s.open(60, Arc::new(art()));

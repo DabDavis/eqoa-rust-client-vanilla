@@ -176,7 +176,7 @@ impl Host {
     }
 
     /// The game's UI as the 2D layer draws it, once it is in (the fonts and
-    /// the atlas, the layer's textures): what the report's dialog draws with.
+    /// the atlas, the layer's textures): what the update's question draws with.
     pub fn ui_parts(&self) -> Option<(&vi::ui::Vui, &crate::ui::UiAssets)> {
         Some((self.pre.res.vui()?, self.assets.as_ref()?))
     }

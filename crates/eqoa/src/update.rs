@@ -201,16 +201,6 @@ pub fn line() -> Option<String> {
     None
 }
 
-/// The updater as a report says it: this build, and what the last look at
-/// the release found (put in place, the release's already, or why not), so a
-/// player still on an old build after many starts says why (F3 crash
-/// 20261026-124849 came from dev-ffb50c3 a day and twenty builds later).
-#[cfg(not(target_arch = "wasm32"))]
-pub fn describe() -> String {
-    let this = COMMIT.map_or_else(|| "local".to_string(), |c| format!("dev-{}", &c[..c.len().min(7)]));
-    format!("update: this is {this}; {}", native::found().unwrap_or_else(|| native::off().to_string()))
-}
-
 /// The release's version of a program in place other than this running
 /// one (`watch`): the game offers to restart into it.
 pub fn ready() -> Option<String> {
@@ -684,8 +674,6 @@ mod native {
         /// in it
         ready: Option<String>,
         notes: Option<WhatsNew>,
-        /// what the last look found, for a report (`describe`)
-        found: Option<String>,
     }
 
     static UPDATER: Mutex<Option<Shared>> = Mutex::new(None);
@@ -699,34 +687,6 @@ mod native {
             && let Some(s) = u.as_mut()
         {
             s.state = state;
-        }
-    }
-
-    /// What the last look found, said (`describe`); none before one ended.
-    pub(super) fn found() -> Option<String> {
-        let u = UPDATER.lock().ok()?;
-        let s = u.as_ref()?;
-        Some(s.found.clone().unwrap_or_else(|| format!("looking ({:.0} s)", s.since.elapsed().as_secs_f32())))
-    }
-
-    /// Why this run does not look (no updater was made: `start`).
-    pub(super) fn off() -> &'static str {
-        if CHANNEL.is_none() || COMMIT.is_none() {
-            "a build of its own (no release to follow)"
-        } else if PLATFORM.is_none() {
-            "no release build for this platform"
-        } else if std::env::var_os("EQOA_NO_UPDATE").is_some() {
-            "off (EQOA_NO_UPDATE)"
-        } else {
-            "off for a scripted run"
-        }
-    }
-
-    fn note_found(what: String) {
-        if let Ok(mut u) = UPDATER.lock()
-            && let Some(s) = u.as_mut()
-        {
-            s.found = Some(what);
         }
     }
 
@@ -750,8 +710,7 @@ mod native {
         let base = test.unwrap_or_else(|| RELEASE.to_string());
         let every = super::intervals(std::env::var("EQOA_UPDATE_EVERY").ok().as_deref());
         let state = if updated.is_some() { State::Done } else { State::Checking };
-        let found = updated.as_ref().map(|v| format!("started by the update to {v}"));
-        *UPDATER.lock().unwrap() = Some(Shared { state, since: Instant::now(), exe: exe.clone(), relaunch: false, ready: None, notes: None, found });
+        *UPDATER.lock().unwrap() = Some(Shared { state, since: Instant::now(), exe: exe.clone(), relaunch: false, ready: None, notes: None });
         let spawned = std::thread::Builder::new().name("update".into()).spawn(move || {
             // this program's own bytes, before anything is put in its place
             let own = sha256_file(&exe).ok();
@@ -759,16 +718,13 @@ mod native {
                 let state = match update(&base, &exe, commit, platform, &set) {
                     Ok(Some(version)) => {
                         crate::say(&format!("update: {version} is in place"));
-                        note_found(format!("the start put {version} in place"));
                         State::Staged { version }
                     }
                     Ok(None) => {
-                        note_found("the start found nothing to put in place (the release is this build, or its program is in place)".to_string());
                         State::Done
                     }
                     Err(e) => {
                         crate::say(&format!("update: {e}"));
-                        note_found(format!("the start's look failed: {e}"));
                         State::Done
                     }
                 };
@@ -870,16 +826,13 @@ mod native {
         loop {
             match watch_once(base, exe, commit, platform, own) {
                 Ok(Some(version)) => {
-                    note_found(format!("{version} is in place, for a restart"));
                     offer(base, version);
                     said.clear();
                 }
                 Ok(None) => {
-                    note_found("the release is this build".to_string());
                     said.clear();
                 }
                 Err(e) => {
-                    note_found(format!("the last look failed: {e}"));
                     if e != said {
                         crate::say(&format!("update: {e}"));
                         said = e;
@@ -928,7 +881,7 @@ mod native {
         // stderr as it was before the log's pipe: the new program would
         // inherit a pipe nothing reads any more; and this window's place
         // (multiboxing) let go for it
-        crate::report::restore_stderr();
+        crate::logfile::restore_stderr();
         crate::multibox::leave();
         let mut c = std::process::Command::new(&exe);
         c.args(std::env::args_os().skip(1)).env("EQOA_UPDATED", &version);

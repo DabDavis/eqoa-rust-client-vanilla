@@ -301,8 +301,8 @@ pub fn take(model: Model, bluetooth: bool, data: &[u8], pad: &mut PsPad, latch: 
     Some(p)
 }
 
-/// A report as a controller first sent it, for the log and a problem
-/// report: its ID, the length the read returned, and its first bytes.
+/// A report as a controller first sent it, for the log: its ID, the length
+/// the read returned, and its first bytes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FirstReport {
     pub id: u8,
@@ -321,8 +321,8 @@ impl FirstReport {
         Some(FirstReport { id: *data.first()?, len: data.len(), head: data[..data.len().min(HEAD)].to_vec(), state })
     }
 
-    /// As the log and a problem report say it: `report 0x01, 78 bytes: 01 80
-    /// 7f ..` (and "no state" for one `parse` read nothing in).
+    /// As the log says it: `report 0x01, 78 bytes: 01 80 7f ..` (and "no
+    /// state" for one `parse` read nothing in).
     pub fn describe(&self) -> String {
         let bytes: Vec<String> = self.head.iter().map(|b| format!("{b:02x}")).collect();
         format!("report {:#04x}, {} bytes{}: {}", self.id, self.len, if self.state { "" } else { " (no state)" }, bytes.join(" "))
@@ -977,8 +977,7 @@ mod device {
     }
 
     /// A controller read over HID: its name among the client's windows,
-    /// model, USB ids, state, whether it is on Bluetooth, and the first
-    /// report of each ID it sent (for a problem report).
+    /// model, USB ids, state, and whether it is on Bluetooth.
     pub struct Found {
         pub name: String,
         pub model: Model,
@@ -988,7 +987,6 @@ mod device {
         /// no longer holds (`input::Latch`)
         pub between: u16,
         pub bluetooth: bool,
-        pub reports: Vec<FirstReport>,
     }
 
     /// The PlayStation controllers present, read over HID.
@@ -1078,7 +1076,7 @@ mod device {
                 if d.listed.ids.1 == super::DS4_ADAPTER && d.valid.is_none_or(|t| now.duration_since(t) >= Duration::from_secs(1)) {
                     continue;
                 }
-                out.push(Found { name: name(&d.listed.path, d.listed.ids), model: d.listed.model, ids: d.listed.ids, pad: d.pad, between, bluetooth: d.listed.bluetooth, reports: d.first.clone() });
+                out.push(Found { name: name(&d.listed.path, d.listed.ids), model: d.listed.model, ids: d.listed.ids, pad: d.pad, between, bluetooth: d.listed.bluetooth });
             }
             self.order = out.iter().map(|f| f.name.clone()).collect();
             out
@@ -1351,7 +1349,7 @@ mod tests {
         assert_eq!(parse(Model::DualSense, true, &r).unwrap().report().buttons & bit::UP, bit::UP, "the control: as Bluetooth's");
     }
 
-    /// The first report of each ID as the log and a problem report say it:
+    /// The first report of each ID as the log says it:
     /// its ID, its length, its first twelve bytes, and "no state" where it
     /// held none. The control: a report of no bytes is none.
     #[test]

@@ -1219,7 +1219,7 @@ impl Rules {
         }
     }
 
-    /// One line for the log and a problem report.
+    /// One line for the log.
     pub fn describe(&self) -> String {
         let tints = self.tints.as_ref().map_or(15, |t| self.tint_count_of(t.len()));
         let worlds = self.worlds.as_ref().map_or(6, Vec::len);
