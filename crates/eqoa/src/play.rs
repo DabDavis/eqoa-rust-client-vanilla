@@ -2369,6 +2369,11 @@ impl Play {
             let name = e.creature.as_ref().map_or("", |c| c.name.as_str());
             let two = if e.model2 != 0 || e.drawn_model != e.model { format!(" model2 {:#x} drawn {:#x}", e.model2, e.drawn_model) } else { String::new() };
             let _ = writeln!(o, "  {:#x} kind {} model {:#x}{two} {name:?} at {:?}", e.id, e.kind, e.model, e.pos);
+            // what the game's targeting reads of it (`CycleTarget`,
+            // `TargetCentre`: the byte 26 bit 0, in this world; byte 27 for
+            // `TargetInRange`) and the npc flags □ talks by
+            let npc = e.creature.as_ref().map_or(String::new(), |c| format!(", npc flags {:#x}", c.npc_flags));
+            let _ = writeln!(o, "    targeting: selectable {}{}, world {} (the player's {}), byte 27 {}{npc}", e.p18 & 1 != 0, if e.p18 & 2 != 0 { ", a corpse" } else { "" }, e.world, self.player.world, e.p19);
             if let Some(c) = &e.creature {
                 let _ = writeln!(o, "    {}", look_line(c));
                 let _ = writeln!(o, "    {}", move_line(e, c, now));
