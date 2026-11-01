@@ -142,9 +142,12 @@ or a browser (each described where it lives below):
   effects, the loading pictures, the title, Station's pages and character
   select. Swapped at once, both ways, and kept. Only the art: the game, its
   words and its rules are Frontiers'.
-- **Sorted lists**: the Who list and the guild's roster by name, or by any
-  column with ○ (C on the keyboard) or a click on its heading (the game keeps
-  the server's order).
+- **Sorted lists**: the Who list and the guild's roster by name each time
+  they open, or by any column with ○ (C on the keyboard) or a click on its heading (the game keeps
+  the server's order). On a server whose patch sorts the Who list (Sandstorm's),
+  the guild's roster takes that sort's keys and marks too: L1 and left a column
+  back, R1 and right one on, the column sorted by between the patch's marks, and
+  a sort leaving the cursor at its place in the list as the patch's Who list does.
 - **Network Setup** on the title: the address of the server to play on (on a
   PS2 it starts the console's network utility).
 - **Updates**: a downloaded build puts the release's newer one in its place

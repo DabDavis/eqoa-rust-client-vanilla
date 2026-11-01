@@ -154,6 +154,15 @@ is put on the page by `.github/workflows/notes.yml`.
   everyone else is: on eqoaclassic a gnome is a little smaller than before (9 tenths). How you walk
   and what you bump into are as before.
 
+## 2026-10-29 · The guild list sorts like the Who list on Sandstorm, and both start by name
+- On a server with Sandstorm's patch, the guild list now sorts the way its Who list does: left and
+  right (or L1 and R1) move the sort to the previous or next column, and arrows mark the column
+  it is sorted by. The legend at the bottom names the keys. As in the Who list, the cursor stays
+  where it was in the list when you sort, so it is on the new first member if it was on the top
+  row. C and a click on a column's heading still sort it too.
+- The Who list and the guild list now open sorted by name every time, whichever column you last
+  sorted them by. Update in the Who list keeps the column you chose.
+
 ## 2026-10-29 · The who list in CM order on Sandstorm, as on a PS2
 - On Sandstorm the who list now shows players in the server's own order, highest combat masteries
   first, whenever you open it again or press Update and nobody has come or gone since: Sandstorm's
