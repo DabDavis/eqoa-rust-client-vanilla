@@ -52,11 +52,12 @@ or a browser (each described where it lives below):
   shows through the whole of its middle frame at the game's scale, the picture
   moved so the game's view of the character is in the frame's middle
   (`render::ui::Fill`, `walker::set_shift`). The windows the start menu opens
-  (the spell book, the recipes, Summary, the quest log, class mastery, the
+  (the spell book, the recipes, Summary, the quest log, the
   factions, the buddy, guild, ignore and who lists, mail, Support,
   the auction and group searches; `Play::fills_window`) are scaled to fill it
   too, measured off what each draws, in the middle, over the game's own green
-  backdrop (`Ui::fill_drawn`).
+  backdrop (`Ui::fill_drawn`); the options and Class Mastery stay as the game
+  draws them.
 - **A render scale and a sharp HUD**: Render Scale (off unless chosen) x2 or
   x4 draws the whole picture, the world and everything over it, two or
   four times the window's size each way and averages it down, which smooths

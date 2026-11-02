@@ -7111,14 +7111,13 @@ impl Play {
     /// The modes whose window takes the start menu's keys.
     /// A window the start menu opens, which Extended's Menus: Fill scales to
     /// fill the window: the spell book (5), the recipes and the experiment (6,
-    /// 37), the trainer's Summary (12), the quest log (22), class mastery (40),
-    /// the factions (41), the buddy list and its request (17, 18), the guild
+    /// 37), the trainer's Summary (12), the quest log (22), the factions (41), the buddy list and its request (17, 18), the guild
     /// (20, 21), the ignore list (26), the mail's compose and inbox (23, 24),
     /// Support's (31, 32), the who list (35), the auction search (39) and the
-    /// group search (42). Not the options (34): as the game draws them (the
-    /// user, 2026-10-29: "this one is too much").
+    /// group search (42). Not the options (34) nor class mastery (40): as the
+    /// game draws them (the user, 2026-10-29: "this one is too much").
     pub fn fills_window(&self) -> bool {
-        matches!(self.mode, 5 | 6 | 12 | 17 | 18 | 20 | 21 | 22 | 23 | 24 | 26 | 31 | 32 | 35 | 37 | 39 | 40 | 41 | 42)
+        matches!(self.mode, 5 | 6 | 12 | 17 | 18 | 20 | 21 | 22 | 23 | 24 | 26 | 31 | 32 | 35 | 37 | 39 | 41 | 42)
     }
 
     pub fn panel_up(&self) -> bool {
@@ -9598,13 +9597,13 @@ mod commands {
     /// (the user's: as the game draws them); the start menu itself (13) and
     /// play (0) are not its windows.
     #[test]
-    fn fill_takes_the_start_menus_windows_but_the_options() {
+    fn fill_takes_the_start_menus_windows_but_the_options_and_class_mastery() {
         let mut p = play();
         for m in [35, 18, 22, 5, 20, 39] {
             p.mode = m;
             assert!(p.fills_window(), "mode {m}");
         }
-        for m in [34, 13, 0, 14] {
+        for m in [34, 40, 13, 0, 14] {
             p.mode = m;
             assert!(!p.fills_window(), "mode {m}: not filled");
         }
