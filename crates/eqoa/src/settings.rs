@@ -645,10 +645,26 @@ pub struct ClientOptions {
     /// a device by its name, the default while it is not connected
     /// (`audio::retarget`). Each window its own.
     pub output: Option<DeviceName>,
+    /// Touch Pad Size: the touch screen's pad (`touch`), percent of the
+    /// full pad, which is the most that fits (its rows already meet), down
+    /// to `TOUCH_SIZE_MIN` in `TOUCH_SIZE_STEP`s (a player, 2026-11-02:
+    /// "Is there a way to make the on screen controller size adjustable?").
+    pub touch_size: u8,
 }
 
 /// Render Scale's steps, the first the game's picture as drawn.
 pub const RENDER_SCALES: [u8; 3] = [1, 2, 4];
+
+/// Touch Pad Size's range (percent of the full pad: `touch::layout`)
+/// and its step.
+pub const TOUCH_SIZE_MIN: u8 = (crate::touch::SMALLEST * 100.0) as u8;
+pub const TOUCH_SIZE_MAX: u8 = 100;
+pub const TOUCH_SIZE_STEP: u8 = 5;
+
+/// The touch screen's pad's size now, of the full pad (`touch::layout`).
+pub fn touch_scale() -> f32 {
+    client().touch_size as f32 / 100.0
+}
 
 /// The game's ability bars (with the expansion's second).
 pub const ABILITY_BARS_GAME: u8 = 2;
@@ -717,6 +733,7 @@ impl Default for ClientOptions {
             render_scale: 1,
             hud: render::ui::HudFilter::Nearest,
             output: None,
+            touch_size: TOUCH_SIZE_MAX,
         }
     }
 }
@@ -730,8 +747,9 @@ impl ClientOptions {
     /// Name Distance only when not the game's, Overlapping Names only when
     /// Show, Art only when it is the 2002 disc's, VSync, Shouts and Update
     /// Notices only when off, Text only when Smooth, Render Scale only above
-    /// 1, HUD only when Nearest, and Output Device only when a device is
-    /// chosen (by its name).
+    /// 1, HUD only when Nearest, Output Device only when a device is
+    /// chosen (by its name), and Touch Pad Size only when smaller than
+    /// the full pad.
     pub fn to_text(self) -> String {
         let mut s = format!("lod={}\nbrightness={}\ncamera_distance={}\n", if self.lod { "on" } else { "off" }, self.brightness, self.camera_distance);
         if let Some(r) = self.frame_rate {
@@ -817,6 +835,9 @@ impl ClientOptions {
         }
         if let Some(d) = self.output {
             s.push_str(&format!("output={}\n", d.as_str()));
+        }
+        if self.touch_size != TOUCH_SIZE_MAX {
+            s.push_str(&format!("touch_size={}\n", self.touch_size));
         }
         s
     }
@@ -907,6 +928,11 @@ impl ClientOptions {
                 ("name_distance", v) => {
                     if let Some(d) = v.parse::<u8>().ok().filter(|d| (NAME_DISTANCE_GAME..=NAME_DISTANCE_MAX).contains(d)) {
                         c.name_distance = d;
+                    }
+                }
+                ("touch_size", v) => {
+                    if let Some(t) = v.parse::<u8>().ok().filter(|t| (TOUCH_SIZE_MIN..=TOUCH_SIZE_MAX).contains(t)) {
+                        c.touch_size = t;
                     }
                 }
                 (k, v) if k.starts_with("controller.") => {
@@ -1717,6 +1743,22 @@ mod tests {
             assert!(ClientOptions::from_text(bad).ps2_fog, "{bad}: PS2, the default");
         }
         assert!(ClientOptions::from_text("environment=off").ps2_fog);
+    }
+
+    /// Touch Pad Size: the full pad unless chosen, written only when
+    /// smaller, read back in its range; anything else is the full pad.
+    #[test]
+    fn touch_size_kept_only_when_smaller() {
+        let d = ClientOptions::default();
+        assert_eq!((d.touch_size, TOUCH_SIZE_MIN, TOUCH_SIZE_MAX), (100, 50, 100));
+        assert!(!d.to_text().contains("touch_size"), "the default not written");
+        let c = ClientOptions { touch_size: 70, ..Default::default() };
+        assert_eq!(c.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\ntouch_size=70\n");
+        assert!(ClientOptions::from_text(&c.to_text()) == c);
+        assert_eq!(ClientOptions::from_text("touch_size=50").touch_size, 50);
+        for bad in ["touch_size=49", "touch_size=101", "touch_size=", "touch_size=x", "touch_size=-5", "touchsize=70"] {
+            assert_eq!(ClientOptions::from_text(bad).touch_size, 100, "{bad}: the full pad");
+        }
     }
 
     /// Flora and Environment, on by default, each kept only when off;

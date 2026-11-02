@@ -2,7 +2,8 @@
 //! DictID, "ArialUI" as a packed font, and each call made into quads as
 //! `VIRaster` makes it (a blit's texel rectangle over the surface's size,
 //! mirrored by its flags; a string's glyphs one pixel apart; the viewport
-//! as the GS's offset and scissor).
+//! as the GS's offset and scissor), and drawn or not as VU1's `VIRFan`
+//! draws it (`drawn`: a blit or a fill turned over on one axis is not).
 
 use render::ui::{Anchor, Quad, Ui};
 use render::wgpu;
@@ -282,6 +283,9 @@ impl Layout for UiRaster<'_> {
         self.glyphs.other();
     }
     fn fill_blended(&mut self, color: [f32; 4], c: [[i32; 2]; 4]) {
+        if !drawn(c) {
+            return;
+        }
         let Some(tex) = self.assets.white else { return };
         let pos = c.map(|p| [p[0] as f32, p[1] as f32]);
         self.ui.push(Quad { tex, blend: 3, pos, uv: [[0.5, 0.5]; 4], color, clip: None });
@@ -296,8 +300,37 @@ impl Layout for UiRaster<'_> {
     }
 }
 
+/// Whether VU1's `VIRFan` draws a fan whose corners go round the frame as
+/// `c`'s do: it culls by the winding on the screen with one parity, the 2D
+/// layer's fans included, so a blit or a fill turned over on one axis (a
+/// negative width or height, not both) is drawn on no PS2, while vanilla's
+/// 2D layer drew it (`../claude-notes/vanilla-decomp-ports-20261028.md`).
+/// The case seen: the fishing window's message box, which `VIUIWindow::Init`
+/// sizes (-1, -1), its fill one blit (-25, 23) under the message's bar, a
+/// small dark square in vanilla alone (the user, 2026-11-02: "the fishing
+/// overlay, where it says "You cast your line" etc. has a small black box
+/// underneathe, lets remove that"). A blit mirrored by its flags is its
+/// texels turned, not its corners: drawn.
+fn drawn(c: [[i32; 2]; 4]) -> bool {
+    // twice the signed area, y down: a blit's corners (top left, top right,
+    // bottom right, bottom left) give it positive
+    let twice: i64 = (0..4).map(|k| {
+        let (p, q) = (c[k], c[(k + 1) % 4]);
+        p[0] as i64 * q[1] as i64 - q[0] as i64 * p[1] as i64
+    }).sum();
+    twice >= 0
+}
+
+/// A blit or a stretched blit `size` big, as `drawn` judges its corners.
+fn drawn_size(size: [i32; 2]) -> bool {
+    (size[0] < 0) == (size[1] < 0)
+}
+
 impl Raster for UiRaster<'_> {
     fn blit(&mut self, id: u32, flags: u32, at: [i32; 2], a: [i32; 2], b: [i32; 2], mode: i32, alpha: f32) {
+        if !drawn_size(b) {
+            return;
+        }
         let Some(tex) = self.assets.surface(id) else { return };
         let (w, h) = self.ui.texture_size(tex);
         let (iw, ih) = (1.0 / w as f32, 1.0 / h as f32);
@@ -316,6 +349,9 @@ impl Raster for UiRaster<'_> {
     }
 
     fn stretch_blit(&mut self, id: u32, flags: u32, at: [i32; 2], size: [i32; 2], a: [i32; 2], b: [i32; 2], mode: i32, alpha: f32) {
+        if !drawn_size(size) {
+            return;
+        }
         let Some(tex) = self.assets.surface(id) else { return };
         let (w, h) = self.ui.texture_size(tex);
         let (iw, ih) = (1.0 / w as f32, 1.0 / h as f32);
@@ -334,6 +370,9 @@ impl Raster for UiRaster<'_> {
     }
 
     fn fill_fan(&mut self, color: [f32; 4], c: [[i32; 2]; 4]) {
+        if !drawn(c) {
+            return;
+        }
         let Some(tex) = self.assets.white else { return };
         let pos = c.map(|p| [p[0] as f32, p[1] as f32]);
         // m_solidFillUIMaterial: InitSolidFill's blend 0 (opaque)
@@ -431,6 +470,56 @@ pub(crate) mod tests {
         ui.viewport = Some([430, 25, 600, 50]);
         ui.begin((1920, 1080));
         assert_eq!(ui.viewport, None);
+    }
+
+    /// A blit or a fill turned over on one axis is drawn as `VIRFan` draws
+    /// it, not at all: a negative width alone, a negative height alone, a
+    /// stretched blit's, a fill's and a blended fill's corners the other way
+    /// round. The controls: the same calls the right way round are drawn,
+    /// and so is one turned on both axes (half a turn: the same winding) and
+    /// a blit mirrored by its flags (its texels turned, not its corners).
+    /// Needs a graphics adapter; without one it says so and passes.
+    #[test]
+    fn a_blit_turned_over_is_drawn_as_virfan_draws_it_not_at_all() {
+        let _gpu = crate::GPU_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("SKIP: no graphics adapter");
+            return;
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let mut ui = Ui::new(&device, render::TARGET_FORMAT, render::DEPTH_FORMAT);
+        let mut assets = UiAssets::default();
+        assets.add_white(&mut ui, &device, &queue);
+        let tex = ui.add_texture(&device, &queue, 32, 32, &[255; 32 * 32 * 4]);
+        assets.surfaces.insert(7, tex);
+        let drawn = |ui: &mut Ui, call: &dyn Fn(&mut UiRaster)| {
+            ui.begin((640, 448));
+            call(&mut assets.raster(ui));
+            ui.quads.len()
+        };
+        let fan = |a: [i32; 2], b: [i32; 2]| [a, [b[0], a[1]], b, [a[0], b[1]]];
+        // the fishing message box's fill, and its kin
+        for b in [[-25, 23], [25, -23]] {
+            assert_eq!(drawn(&mut ui, &|r| r.blit(7, 0, [331, 230], [0, 0], b, 3, 0.75)), 0, "a blit {b:?}");
+            assert_eq!(drawn(&mut ui, &|r| r.stretch_blit(7, 0, [331, 230], b, [0, 0], [8, 8], 3, 0.75)), 0, "a stretched blit {b:?}");
+        }
+        assert_eq!(drawn(&mut ui, &|r| r.fill_fan([0.0, 0.0, 0.0, 1.0], fan([20, 10], [10, 30]))), 0, "a fill right to left");
+        assert_eq!(drawn(&mut ui, &|r| r.fill_fan([0.0, 0.0, 0.0, 1.0], fan([10, 30], [20, 10]))), 0, "a fill bottom to top");
+        assert_eq!(drawn(&mut ui, &|r| r.fill_blended([0.0, 0.0, 0.0, 0.5], fan([20, 10], [10, 30]))), 0, "a blended fill right to left");
+        // the controls
+        for b in [[25, 23], [-25, -23]] {
+            assert_eq!(drawn(&mut ui, &|r| r.blit(7, 0, [331, 230], [0, 0], b, 3, 0.75)), 1, "a blit {b:?}");
+            assert_eq!(drawn(&mut ui, &|r| r.stretch_blit(7, 0, [331, 230], b, [0, 0], [8, 8], 3, 0.75)), 1, "a stretched blit {b:?}");
+        }
+        for flags in 1..4 {
+            assert_eq!(drawn(&mut ui, &|r| r.blit(7, flags, [331, 230], [0, 0], [25, 23], 3, 0.75)), 1, "mirrored by flags {flags}");
+        }
+        assert_eq!(drawn(&mut ui, &|r| r.stretch_blit(7, 0, [331, 230], [25, 23], [8, 8], [-8, -8], 3, 0.75)), 1, "its texels turned");
+        assert_eq!(drawn(&mut ui, &|r| r.fill_fan([0.0, 0.0, 0.0, 1.0], fan([10, 10], [20, 30]))), 1, "a fill");
+        assert_eq!(drawn(&mut ui, &|r| r.fill_fan([0.0, 0.0, 0.0, 1.0], fan([20, 30], [10, 10]))), 1, "a fill turned half round");
+        assert_eq!(drawn(&mut ui, &|r| r.fill_blended([0.0, 0.0, 0.0, 0.5], fan([10, 10], [20, 30]))), 1, "a blended fill");
+        assert_eq!(drawn(&mut ui, &|r| r.blit_full(7, 0, [5, 5], 3, 1.0)), 1, "a whole surface");
     }
 
     /// A call a raster was asked: (call, flags, at, size, texels from,

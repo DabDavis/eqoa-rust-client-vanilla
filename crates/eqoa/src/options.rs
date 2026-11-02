@@ -53,8 +53,10 @@
 //!   `render::ui::HudFilter`);
 //! - Controller: Controller Focus (which controllers this window reads:
 //!   Auto, Window, Pad 1 to 4 or Off, `input::pick`, kept for each window of
-//!   the client open, `multibox`; what it reads now is said beside Back) and
-//!   Capture Controller (one setting for every window);
+//!   the client open, `multibox`; what it reads now is said beside Back),
+//!   Capture Controller (one setting for every window) and Touch Pad Size
+//!   (a slider and its number: the touch screen's pad, 50 to 100% of
+//!   the most that fits in fives, `touch::layout`);
 //! - Camera: Camera Distance (a slider: the follow orbit's zoom-out ceiling,
 //!   8 to 50, `camstyle`), Camera Turn Speed (a slider: how fast the stick
 //!   and the keys turn the view, half to three times the game's,
@@ -98,7 +100,7 @@
 
 use crate::bindpage::ControlsPage;
 use crate::pointer::{Hits, key, rows_rect};
-use crate::settings::{BRIGHTNESS_STEPS, CAMERA_MAX, CAMERA_MIN, CAMERA_STEP, ClientOptions, ENTITY_SLOTS_GAME, ENTITY_SLOTS_MAX, ENTITY_SLOTS_STEP, ENTITY_VIEW_GAME, ENTITY_VIEW_MAX, ENTITY_VIEW_STEP, Focus, FrameRate, NAME_DISTANCE_GAME, NAME_DISTANCE_MAX, TURN_MAX, TURN_MIN, TURN_STEP};
+use crate::settings::{BRIGHTNESS_STEPS, CAMERA_MAX, CAMERA_MIN, CAMERA_STEP, ClientOptions, ENTITY_SLOTS_GAME, ENTITY_SLOTS_MAX, ENTITY_SLOTS_STEP, ENTITY_VIEW_GAME, ENTITY_VIEW_MAX, ENTITY_VIEW_STEP, Focus, FrameRate, NAME_DISTANCE_GAME, NAME_DISTANCE_MAX, TOUCH_SIZE_MAX, TOUCH_SIZE_MIN, TOUCH_SIZE_STEP, TURN_MAX, TURN_MIN, TURN_STEP};
 use vi::fpu::{Ee, F};
 use vi::ui::{Raster, UI_COLORS, Vui, Window, wide};
 
@@ -541,7 +543,8 @@ impl WndOptions {
     /// Distance (24) by fifties from the game's 100 to 1000; Art (25) and
     /// VSync (26) turn over, VSync natively only (a page's stays on with
     /// sound 9: the browser paces it); Name Distance (27) by tens from the
-    /// game's 22 to 200 (`step_name_distance`); Text (30) goes between Sharp and
+    /// game's 22 to 200 (`step_name_distance`); Touch Pad Size (48) by
+    /// fives from 50 to 100 as a slider; Text (30) goes between Sharp and
     /// Smooth; Update Notices (29), Overlapping Names (34, Hide and Show),
     /// Mipmaps (35) and Loading Screens (38, Longer and Instant) turn over;
     /// Output Device (32) goes round the system default and the devices
@@ -666,6 +669,9 @@ impl WndOptions {
                         }
                     }
                     20 => slide(&mut c.fog, 0, crate::fog::STEPS, 1),
+                    // Touch Pad Size: the pad drawn and touched at it
+                    // from the next frame (`viewer`, `touch::layout`)
+                    48 => slide(&mut c.touch_size, TOUCH_SIZE_MIN, TOUCH_SIZE_MAX, TOUCH_SIZE_STEP),
                     15 => slide(&mut c.camera_distance, CAMERA_MIN, CAMERA_MAX, CAMERA_STEP),
                     17 => {
                         let t = &mut c.camera_turn;
@@ -1076,7 +1082,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 29] = [
+const EXTENDED_ITEMS: [(i32, &str); 30] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1106,6 +1112,7 @@ const EXTENDED_ITEMS: [(i32, &str); 29] = [
     (40, "HUD"),
     (46, "Shadows"),
     (47, "Ground Fog"),
+    (48, "Touch Pad Size"),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1138,7 +1145,7 @@ const CATEGORIES: [Category; 7] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale },
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None },
     Category { name: "UI", items: &[22, 29, 30, 40], note: Note::None },
-    Category { name: "Controller", items: &[16, 19], note: Note::Reads },
+    Category { name: "Controller", items: &[16, 19, 48], note: Note::Reads },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
     Category { name: "Characters", items: &[12, 23, 24, 27, 34, 46], note: Note::Server },
     Category { name: "Sound", items: SOUND, note: Note::Output },
@@ -1281,6 +1288,7 @@ fn slider_at(item: i32) -> Option<(f32, Option<u16>)> {
         23 => (at(c.entity_slots as f32, ENTITY_SLOTS_GAME as f32, ENTITY_SLOTS_MAX as f32), Some(c.entity_slots as u16)),
         24 => (at(c.entity_view as f32, ENTITY_VIEW_GAME as f32, ENTITY_VIEW_MAX as f32), Some(c.entity_view)),
         27 => name_distance_slider(&c),
+        48 => (at(c.touch_size as f32, TOUCH_SIZE_MIN as f32, TOUCH_SIZE_MAX as f32), Some(c.touch_size as u16)),
         _ => return None,
     })
 }
@@ -1630,7 +1638,7 @@ mod tests {
         press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!((w.row, cues.last()), (3, Some(&9)), "UI's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
-        // Controller: Controller Focus, Capture Controller
+        // Controller: Controller Focus, Capture Controller, Touch Pad Size
         press(&mut w, &mut o, key::DOWN, &mut cues);
         press(&mut w, &mut o, key::CROSS, &mut cues);
         assert_eq!((w.cat, w.item), (Some(3), 16), "Controller, Controller Focus");
@@ -1648,6 +1656,21 @@ mod tests {
         assert!(!settings::capture(), "off: every window on a pad reads it");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         assert!(settings::capture());
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.item, 48, "Touch Pad Size");
+        assert_eq!((settings::client().touch_size, settings::touch_scale(), slider_at(48)), (100, 1.0, Some((1.0, Some(100)))), "the full pad, the most that fits");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::client().touch_size, cues.last()), (100, Some(&9)), "no larger");
+        for _ in 0..11 {
+            press(&mut w, &mut o, key::LEFT, &mut cues);
+        }
+        assert_eq!((settings::client().touch_size, settings::touch_scale()), (50, 0.5), "100 to 50 in 10 steps of 5");
+        assert_eq!(&cues[cues.len() - 2..], &[11, 9], "the last step, then its end");
+        assert_eq!(slider_at(48), Some((0.0, Some(50))));
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::client().touch_size, slider_at(48)), (55, Some((0.1, Some(55)))));
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (2, Some(&9)), "Controller's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         // Camera: Camera Distance, Camera Turn Speed, Screen Shake
         press(&mut w, &mut o, key::DOWN, &mut cues);

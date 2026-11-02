@@ -427,6 +427,7 @@ pub fn shot_with(
             };
             let mut sticks = controls.axes();
             touch.window = play.as_ref().is_some_and(|p| p.window_up());
+            touch.scale = crate::settings::touch_scale();
             for (_, id, phase, at) in touch_script.iter().filter(|e| e.0 == t) {
                 touch.touch(*id, *phase, *at, Instant::now(), (w, h));
             }
@@ -1458,6 +1459,10 @@ struct Gfx {
     /// The present modes the surface offers (none offscreen or in a page),
     /// for VSync to pick from (`present_mode`).
     present_modes: Vec<wgpu::PresentMode>,
+    /// The window's size changed (`resize`): `config` has the new one, and
+    /// the surface and `depth` take it as the next frame drawn begins
+    /// (`apply_size`).
+    resized: bool,
 }
 
 /// The present mode for VSync (`settings::vsync`) out of what the surface
@@ -1489,6 +1494,37 @@ fn title(name: Option<&str>) -> String {
 }
 
 impl Gfx {
+    /// The window's new size (`Resized`), for the next frame drawn to take
+    /// (`apply_size`) rather than at once: configuring the surface sizes a
+    /// page's canvas, which clears it, and a browser says the canvas was
+    /// resized after the animation frame's drawing and before it paints, so
+    /// a canvas configured there was painted empty until a frame was drawn
+    /// on it, a frame or more later (a phone's keyboard, coming up for a
+    /// chat line and going down after it, resizes the page a step a frame
+    /// as it slides: the screen blanked out each time, a player's report of
+    /// 2026-11-02, "whenever I type a msg it blanks out the screen
+    /// briefly"). Until then the canvas shows the last frame drawn,
+    /// stretched to its new size. Natively the same: one configure a frame
+    /// drawn, however many sizes the system sent since.
+    fn resize(&mut self, width: u32, height: u32) {
+        self.config.width = width;
+        self.config.height = height;
+        self.resized = true;
+        self.window.request_redraw();
+    }
+
+    /// A frame about to be drawn: the surface and the depth buffer at the
+    /// window's size, if it changed since the last (`resize`).
+    fn apply_size(&mut self) {
+        if !std::mem::take(&mut self.resized) {
+            return;
+        }
+        if let Some(surface) = &self.surface {
+            surface.configure(&self.device, &self.config);
+        }
+        self.depth = render::depth_view(&self.device, self.config.width, self.config.height);
+    }
+
     /// VSync on the surface as the Extended page has it now: the present mode
     /// picked again and the surface configured when the row moved (a surface
     /// a page or `EQOA_OFFSCREEN` made is left as it is).
@@ -2603,6 +2639,8 @@ impl App {
         }
         match whose {
             Finger::Pad => {
+                // at the size the options give it now (Touch Pad Size)
+                self.touch.scale = crate::settings::touch_scale();
                 self.touch.touch(id, phase, at, Instant::now(), size);
                 if let Some(p) = self.play.as_mut() {
                     p.keyboard = false;
@@ -2767,7 +2805,7 @@ impl App {
         }
         let depth = render::depth_view(&device, config.width, config.height);
         let offscreen = surface.is_none().then(|| offscreen_target(&device, &config));
-        self.gfx = Some(Gfx { window, surface, offscreen, in_flight: None, device, queue, config, depth, renderer, models: Vec::new(), title: "EQOA".into(), present_modes: Vec::new() });
+        self.gfx = Some(Gfx { window, surface, offscreen, in_flight: None, device, queue, config, depth, renderer, models: Vec::new(), title: "EQOA".into(), present_modes: Vec::new(), resized: false });
         // before the world there is nothing to load: the pregame draws
         if self.host.is_some() {
             if let Some(g) = &self.gfx {
@@ -2828,6 +2866,7 @@ impl App {
         // mouse's); its drags scroll nothing (no screen before the world
         // takes the wheel)
         self.touch.window = true;
+        self.touch.scale = crate::settings::touch_scale();
         let taps = self.touch.take_clicks();
         let _ = self.touch.take_look();
         if let (Some(h), Some(g)) = (self.host.as_mut(), self.gfx.as_ref()) {
@@ -4113,14 +4152,14 @@ impl App {
             // minimised (Windows sends a size of nothing): no frame comes, and
             // the time until one does is no stall
             WindowEvent::Resized(s) if s.width == 0 || s.height == 0 => self.stall.away(),
+            // the surface takes the new size as the next frame drawn begins
+            // (`Gfx::resize`: in a page, configured here it was painted blank)
             WindowEvent::Resized(s) if s.width > 0 && s.height > 0 => {
                 let Some(g) = &mut self.gfx else { return };
-                let Some(surface) = &g.surface else { return };
-                g.config.width = s.width;
-                g.config.height = s.height;
-                surface.configure(&g.device, &g.config);
-                g.depth = render::depth_view(&g.device, s.width, s.height);
-                g.window.request_redraw();
+                if g.surface.is_none() {
+                    return;
+                }
+                g.resize(s.width, s.height);
             }
             // F11: full screen (borderless, on the window's monitor) and back,
             // as the Extended page's Display does (`display`); natively
@@ -4449,6 +4488,11 @@ impl App {
                     return;
                 }
                 FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                // a new size since the last frame: the surface takes it now,
+                // in the frame that draws on it (`Gfx::resize`)
+                if let Some(g) = self.gfx.as_mut() {
+                    g.apply_size();
+                }
                 // the 2002 disc's files, read since (`era`)
                 self.poll_era();
                 // Display (the Extended page): what the row asked carried
@@ -4548,6 +4592,7 @@ impl App {
                     self.click(c, true);
                 }
                 self.touch.window = self.play.as_ref().is_some_and(|p| p.window_up());
+                self.touch.scale = crate::settings::touch_scale();
                 mark(&mut self.perf, 17);
                 self.grab_pointer(true);
                 let sticks = self.sticks();

@@ -31,6 +31,11 @@
 //! Shown from the first touch (in a page on a touch-first device from the
 //! start); a key or a controller hides it.
 //!
+//! Its size is the Extended page's Touch Pad Size (`settings`'
+//! `touch_size`, the player's ask of 2026-11-02: "Is there a way to make the
+//! on screen controller size adjustable?"): the whole pad, 50% to 100% of
+//! the most that fits, which is what it was before (`layout`).
+//!
 //! The client's own dialog over the game (the update's question) takes a
 //! finger as the mouse's pointer: a finger there is a
 //! [`Taps`]', and lifted where it came down it is a click there.
@@ -128,71 +133,111 @@ impl Stick {
 /// Where everything goes in a window of a size.
 #[derive(Clone, Debug)]
 pub struct Layout {
-    /// the unit the buttons are sized and spaced in
+    /// the unit the buttons are sized and spaced in (the pad's size of the
+    /// full pad's: `full`)
     pub u: f32,
+    /// the full pad's unit, which a finger's own reaches are measured in (a
+    /// tap's slop, a double tap's spread): a finger is no smaller on a
+    /// smaller pad
+    pub full: f32,
     pub buttons: Vec<Button>,
     /// the left stick (the walk: `Report::sticks` 2 and 3), then the right
     /// one (the camera: 0 and 1)
     pub sticks: [Stick; 2],
 }
 
-/// The controller in a `size` window. Wider than tall, as a DualShock 4 is
-/// held: the unit off the window's height, as the HUD's is (so the
-/// shoulders sit under its compass and bars, which reach 1.2 of the height's
-/// sixth and a half), less where the window is too narrow for the two
-/// sticks to keep apart. Taller than wide, along the bottom: the sticks
-/// lowest, the d-pad and the face buttons over them, the shoulders over
-/// those, and Select, Start, L3 and R3 between the sticks. Each side is the
-/// other's mirror.
-pub fn layout(size: (u32, u32)) -> Layout {
+/// The smallest Touch Pad Size, of the full pad (`layout`).
+pub const SMALLEST: f32 = 0.5;
+
+/// The full pad's unit in a `size` window (`layout`): wider than tall, off
+/// the window's height (a sixth and a half), less where the window is too
+/// narrow for the two sticks to keep apart; taller than wide, off its width,
+/// less where it is too short.
+fn unit(size: (u32, u32)) -> f32 {
     let (w, h) = (size.0.max(1) as f32, size.1.max(1) as f32);
-    // the unit, the shoulders' height, the left side's d-pad (the face
+    if w >= h { (h / 6.5).min(w / 9.6) } else { (w / 6.6).min(h / 10.5) }
+}
+
+/// The controller in a `size` window, at `scale` of its full size (the
+/// options' Touch Pad Size: `SMALLEST` to 1; more is the full pad,
+/// which is the most that fits: grown by 8%, a shoulder meets
+/// the face buttons' top on a phone held wide, and Select or ✕ meets a
+/// stick on one held upright).
+///
+/// The full pad, wider than tall, as a DualShock 4 is held: the unit off
+/// the window's height, as the HUD's is (so the shoulders sit under its
+/// compass and bars, which reach 1.2 of the height's sixth and a half),
+/// less where the window is too narrow for the two sticks to keep apart.
+/// Taller than wide, along the bottom: the sticks lowest, the d-pad and the
+/// face buttons over them, the shoulders over those, and Select, Start, L3
+/// and R3 between the sticks. Each side is the other's mirror.
+///
+/// Smaller, it is the same pad drawn smaller toward where it is held: each
+/// side (its shoulders, its cluster, its stick and, wider than tall, its
+/// L3 or R3) toward its bottom corner, the middle's buttons (Select and
+/// Start, and taller than wide L3 and R3) toward the middle of the edge
+/// they sit by. Each part only shrinks toward a point no nearer any other
+/// part, so nothing meets that did not meet at full size, and nothing
+/// leaves the window or reaches up into the HUD.
+pub fn layout(size: (u32, u32), scale: f32) -> Layout {
+    let (w, h) = (size.0.max(1) as f32, size.1.max(1) as f32);
+    let s = if scale.is_nan() { 1.0 } else { scale.clamp(SMALLEST, 1.0) };
+    let u = unit(size);
+    // the full pad's shoulders' height, the left side's d-pad (the face
     // buttons' mirror) and stick, Select's place (Start's mirror), L3's
-    // (R3's mirror)
-    let (u, shoulders, cluster, stick, select, l3) = if w >= h {
+    // (R3's mirror); and where the middle's buttons shrink toward, and
+    // whether L3 and R3 go with the sides
+    let (shoulders, cluster, stick, select, l3, middle, side_l3) = if w >= h {
         let v = h / 6.5;
-        let u = v.min(w / 9.6);
         let stick = [3.35 * u, h - 1.45 * u];
-        (u, 1.75 * v, [1.75 * u, 3.4 * v], stick, [w / 2.0 - 0.75 * u, 0.62 * u], [stick[0], stick[1] - 1.35 * u])
+        (1.75 * v, [1.75 * u, 3.4 * v], stick, [w / 2.0 - 0.75 * u, 0.62 * u], [stick[0], stick[1] - 1.35 * u], [w / 2.0, 0.0], true)
     } else {
-        let u = (w / 6.6).min(h / 10.5);
-        (u, h - 5.45 * u, [1.5 * u, h - 3.75 * u], [1.5 * u, h - 1.45 * u], [w / 2.0 - 0.5 * u, h - 2.15 * u], [w / 2.0 - 0.5 * u, h - 0.85 * u])
+        (h - 5.45 * u, [1.5 * u, h - 3.75 * u], [1.5 * u, h - 1.45 * u], [w / 2.0 - 0.5 * u, h - 2.15 * u], [w / 2.0 - 0.5 * u, h - 0.85 * u], [w / 2.0, h], false)
     };
     let mirror = |p: [f32; 2]| [w - p[0], p[1]];
+    // a full-size place of the left side, of the middle (left of it), or of
+    // either mirrored, at the pad's size
+    let corner = [0.0, h];
+    let toward = |a: [f32; 2], p: [f32; 2]| if s == 1.0 { p } else { [a[0] + s * (p[0] - a[0]), a[1] + s * (p[1] - a[1])] };
+    let side = |p: [f32; 2]| toward(corner, p);
+    let mid = |p: [f32; 2]| toward(middle, p);
     let mut buttons = Vec::new();
-    let mut put = |bit: u16, at: [f32; 2], r: f32, glyph: i32| buttons.push(Button { bit, at, r, glyph });
+    let mut put = |bit: u16, at: [f32; 2], r: f32, glyph: i32| {
+        buttons.push(Button { bit, at, r: s * r, glyph });
+    };
     // the shoulders, the triggers outermost
     let sr = 0.38 * u;
-    put(bit::L2, [0.75 * u, shoulders], sr, glyph::L2);
-    put(bit::L1, [1.75 * u, shoulders], sr, glyph::L1);
-    put(bit::R1, mirror([1.75 * u, shoulders]), sr, glyph::R1);
-    put(bit::R2, mirror([0.75 * u, shoulders]), sr, glyph::R2);
+    put(bit::L2, side([0.75 * u, shoulders]), sr, glyph::L2);
+    put(bit::L1, side([1.75 * u, shoulders]), sr, glyph::L1);
+    put(bit::R1, mirror(side([1.75 * u, shoulders])), sr, glyph::R1);
+    put(bit::R2, mirror(side([0.75 * u, shoulders])), sr, glyph::R2);
     // the d-pad
     let (ds, dr) = (0.68 * u, 0.36 * u);
     for (b, o, g) in [(bit::UP, [0.0, -ds], glyph::UP), (bit::DOWN, [0.0, ds], glyph::DOWN), (bit::LEFT, [-ds, 0.0], glyph::LEFT), (bit::RIGHT, [ds, 0.0], glyph::RIGHT)] {
-        put(b, [cluster[0] + o[0], cluster[1] + o[1]], dr, g);
+        put(b, side([cluster[0] + o[0], cluster[1] + o[1]]), dr, g);
     }
     // the face buttons
-    let face = mirror(cluster);
     let (fs, fr) = (0.76 * u, 0.4 * u);
-    for (b, o, g) in [(bit::TRIANGLE, [0.0, -fs], glyph::TRIANGLE), (bit::CROSS, [0.0, fs], glyph::CROSS), (bit::SQUARE, [-fs, 0.0], glyph::SQUARE), (bit::CIRCLE, [fs, 0.0], glyph::CIRCLE)] {
-        put(b, [face[0] + o[0], face[1] + o[1]], fr, g);
+    for (b, o, g) in [(bit::TRIANGLE, [0.0, -fs], glyph::TRIANGLE), (bit::CROSS, [0.0, fs], glyph::CROSS), (bit::SQUARE, [fs, 0.0], glyph::SQUARE), (bit::CIRCLE, [-fs, 0.0], glyph::CIRCLE)] {
+        put(b, mirror(side([cluster[0] + o[0], cluster[1] + o[1]])), fr, g);
     }
     // Select and Start, L3 and R3
     let mr = 0.36 * u;
-    put(bit::SELECT, select, mr, glyph::SELECT);
-    put(bit::START, mirror(select), mr, glyph::START);
+    put(bit::SELECT, mid(select), mr, glyph::SELECT);
+    put(bit::START, mirror(mid(select)), mr, glyph::START);
     let tr = 0.3 * u;
+    let l3 = if side_l3 { side(l3) } else { mid(l3) };
     put(bit::L3, l3, tr, glyph::L3);
     put(bit::R3, mirror(l3), tr, glyph::R3);
     // the sticks: in play a finger put down in the lower corner's reach of
     // one is its (up to the window's middle), below the d-pad's and the face
     // buttons' places (a button takes its finger first)
-    let r = 0.95 * u;
+    let stick = side(stick);
+    let r = s * 0.95 * u;
     let top = stick[1] - 1.25 * r;
     let left = Stick { home: stick, r, zone: [0.0, top, (stick[0] + 1.6 * r).min(w / 2.0), h] };
     let right = Stick { home: mirror(stick), r, zone: [(w - stick[0] - 1.6 * r).max(w / 2.0), top, w, h] };
-    Layout { u, buttons, sticks: [left, right] }
+    Layout { u: s * u, full: u, buttons, sticks: [left, right] }
 }
 
 impl Layout {
@@ -213,9 +258,12 @@ fn dist(a: [f32; 2], b: [f32; 2]) -> f32 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
 }
 
-#[derive(Default)]
 pub struct TouchPad {
     fingers: Vec<Finger>,
+    /// its size, of the full pad's (`layout`): the options' Touch Pad
+    /// Size, which the viewer hands it before its fingers and its frames
+    /// (`settings::touch_scale`)
+    pub scale: f32,
     /// drawn, and its fingers read
     pub shown: bool,
     /// shown at least once: from then on it stays a source on the port,
@@ -241,10 +289,34 @@ pub struct TouchPad {
     pub window: bool,
 }
 
+impl Default for TouchPad {
+    /// Hidden, unused, at its full size.
+    fn default() -> Self {
+        TouchPad {
+            fingers: Vec::new(),
+            scale: 1.0,
+            shown: false,
+            used: false,
+            look: [0.0; 2],
+            pinch: 0.0,
+            last_tap: None,
+            clicks: Vec::new(),
+            size: (0, 0),
+            tex: None,
+            window: false,
+        }
+    }
+}
+
 impl TouchPad {
     /// A pad, shown from the start or from the first touch.
     pub fn new(shown: bool) -> Self {
         TouchPad { shown, used: shown, ..Default::default() }
+    }
+
+    /// Where its buttons and sticks are in its window now.
+    fn layout(&self) -> Layout {
+        layout(self.size, self.scale)
     }
 
     /// A finger's event in a `size` window, at window pixels `at`.
@@ -252,7 +324,7 @@ impl TouchPad {
         self.shown = true;
         self.used = true;
         self.size = size;
-        let l = layout(size);
+        let l = self.layout();
         match phase {
             Phase::Started => {
                 let held = |k: usize| self.fingers.iter().any(|f| matches!(f.role, Role::Stick { which, .. } if which == k));
@@ -273,7 +345,7 @@ impl TouchPad {
                 let was = f.at;
                 f.at = at;
                 if let Role::Look { start, moved } = &mut f.role {
-                    if !*moved && dist(*start, at) > 0.12 * l.u {
+                    if !*moved && dist(*start, at) > 0.12 * l.full {
                         *moved = true;
                     }
                     if *moved {
@@ -295,7 +367,7 @@ impl TouchPad {
                 let Some(k) = self.fingers.iter().position(|f| f.id == id) else { return };
                 let f = self.fingers.remove(k);
                 if let (Role::Look { start, moved: false }, Phase::Ended) = (f.role, phase) {
-                    let double = self.last_tap.is_some_and(|(p, t)| now.duration_since(t) < DOUBLE && dist(p, start) < 0.5 * l.u);
+                    let double = self.last_tap.is_some_and(|(p, t)| now.duration_since(t) < DOUBLE && dist(p, start) < 0.5 * l.full);
                     let (x, y) = (start[0] as f64, start[1] as f64);
                     if double {
                         self.last_tap = None;
@@ -313,7 +385,7 @@ impl TouchPad {
     /// pushes.
     pub fn report(&self) -> Report {
         let mut r = Report::default();
-        let l = layout(self.size);
+        let l = self.layout();
         for f in &self.fingers {
             match f.role {
                 Role::Button(b) => r.buttons |= b,
@@ -385,7 +457,7 @@ impl TouchPad {
         if layer != ui.serial() {
             return;
         }
-        let l = layout(size);
+        let l = layout(size, self.scale);
         let held = self.report().buttons;
         let quad = |tex: usize, c: [f32; 2], half: [f32; 2], uv: [f32; 4], color: [f32; 4]| {
             let p = |x: f32, y: f32| render::ui::frame_from_window(size, [x, y]);
@@ -442,7 +514,7 @@ pub fn draw_pad(ui: &mut Ui, device: &render::wgpu::Device, queue: &render::wgpu
     touch.textures(ui, device, queue);
     let mut glyphs: Vec<(i32, Glyph)> = Vec::new();
     if let Some((vui, assets)) = parts {
-        for b in layout(size).buttons {
+        for b in layout(size, touch.scale).buttons {
             let e = vui.entry(b.glyph);
             let Some(tex) = assets.surface(vui.entry_id(&e)) else { continue };
             let (w, h) = ui.texture_size(tex);
@@ -507,9 +579,9 @@ impl Taps {
 }
 
 /// How far (window pixels) a finger may move and still tap: as far as a
-/// looking finger on the pad may before it looks.
+/// looking finger on the pad may before it looks (at any pad size).
 fn tap_slop(size: (u32, u32)) -> f32 {
-    0.12 * layout(size).u
+    0.12 * unit(size)
 }
 
 /// `EQOA_TOUCHES`, for headless runs: `;`-separated finger events at a time
@@ -547,7 +619,7 @@ mod tests {
     #[test]
     fn over_a_window_every_button_is_the_pads_and_a_stick_only_its_ring() {
         let t = Instant::now();
-        let l = layout(SIZE);
+        let l = layout(SIZE, 1.0);
         let at = |bit: u16| l.buttons.iter().find(|b| b.bit == bit).unwrap().at;
         let mut p = TouchPad::new(true);
         p.window = true;
@@ -659,13 +731,18 @@ mod tests {
         (240, 320),
     ];
 
+    /// The Touch Pad Size's steps (`settings`): 50% to 100% in fives.
+    fn sizes() -> impl Iterator<Item = f32> {
+        (10..=20).map(|k| k as f32 / 20.0)
+    }
+
     /// Every shape keeps the whole controller on the screen with nothing
-    /// overlapping: the sixteen buttons and both sticks' rings, each apart
-    /// from every other, all inside the window.
+    /// overlapping, at every size: the sixteen buttons and both sticks'
+    /// rings, each apart from every other, all inside the window.
     #[test]
     fn the_layout_keeps_its_buttons_apart_and_on_the_screen() {
-        for size in SHAPES {
-            let l = layout(size);
+        for (size, s) in SHAPES.into_iter().flat_map(|z| sizes().map(move |s| (z, s))) {
+            let l = layout(size, s);
             let (w, h) = (size.0 as f32, size.1 as f32);
             assert_eq!(l.buttons.len(), 16);
             let all: u16 = l.buttons.iter().fold(0, |m, b| m | b.bit);
@@ -673,9 +750,9 @@ mod tests {
             let mut discs: Vec<(String, [f32; 2], f32)> = l.buttons.iter().map(|b| (bit::name(b.bit).to_string(), b.at, b.r)).collect();
             discs.extend(l.sticks.iter().enumerate().map(|(k, s)| (format!("stick {k}"), s.home, s.r)));
             for (i, (n, at, r)) in discs.iter().enumerate() {
-                assert!(at[0] - r >= 0.0 && at[0] + r <= w && at[1] - r >= 0.0 && at[1] + r <= h, "{size:?}: {n} at {at:?}, {r} round, off the screen");
+                assert!(at[0] - r >= 0.0 && at[0] + r <= w && at[1] - r >= 0.0 && at[1] + r <= h, "{size:?} at {s}: {n} at {at:?}, {r} round, off the screen");
                 for (m, bt, br) in &discs[i + 1..] {
-                    assert!(dist(*at, *bt) >= r + br, "{size:?}: {n} overlaps {m}");
+                    assert!(dist(*at, *bt) >= r + br, "{size:?} at {s}: {n} overlaps {m}");
                 }
             }
         }
@@ -727,13 +804,13 @@ mod tests {
         Ok(())
     }
 
-    /// Every shape's layout is a DualShock 4's (`ds4`). The control: the same
-    /// layouts mirrored left for right are none.
+    /// Every shape's layout is a DualShock 4's (`ds4`), at every size. The
+    /// control: the same layouts mirrored left for right are none.
     #[test]
     fn the_layout_is_a_dualshock_4s() {
-        for size in SHAPES {
-            let l = layout(size);
-            ds4(&l, size).unwrap();
+        for (size, s) in SHAPES.into_iter().flat_map(|z| sizes().map(move |s| (z, s))) {
+            let l = layout(size, s);
+            ds4(&l, size).map_err(|e| format!("{e} at {s}")).unwrap();
             let mut m = l.clone();
             for b in &mut m.buttons {
                 b.at[0] = size.0 as f32 - b.at[0];
@@ -741,8 +818,86 @@ mod tests {
             for s in &mut m.sticks {
                 s.home[0] = size.0 as f32 - s.home[0];
             }
-            assert!(ds4(&m, size).is_err(), "{size:?}: mirrored, still one");
+            assert!(ds4(&m, size).is_err(), "{size:?} at {s}: mirrored, still one");
         }
+    }
+
+    /// A smaller pad is the full one drawn smaller toward where it is held:
+    /// each side's parts toward its bottom corner, Select and Start (and,
+    /// taller than wide, L3 and R3) toward the middle of the edge they are
+    /// by, every disc and ring that much smaller. The full pad is the most
+    /// there is (more is the full pad, and so is a size that is no number),
+    /// half of it the least. The controls: at full size every place is
+    /// where the pad has always put it, and a finger's own reach (the
+    /// slop, a double tap's spread) is the full pad's at any size.
+    #[test]
+    fn a_smaller_pad_is_the_full_one_drawn_toward_where_it_is_held() {
+        for size in SHAPES {
+            let (w, h) = (size.0 as f32, size.1 as f32);
+            let full = layout(size, 1.0);
+            for s in [0.5f32, 0.75, 0.95] {
+                let l = layout(size, s);
+                for (a, b) in full.buttons.iter().zip(&l.buttons) {
+                    assert_eq!(a.bit, b.bit);
+                    let middle = matches!(a.bit, bit::SELECT | bit::START) || (h > w && matches!(a.bit, bit::L3 | bit::R3));
+                    let anchor = if middle {
+                        [w / 2.0, if w >= h { 0.0 } else { h }]
+                    } else if a.at[0] < w / 2.0 {
+                        [0.0, h]
+                    } else {
+                        [w, h]
+                    };
+                    let want = [anchor[0] + s * (a.at[0] - anchor[0]), anchor[1] + s * (a.at[1] - anchor[1])];
+                    assert!(dist(want, b.at) < 1e-3 && (b.r - s * a.r).abs() < 1e-4, "{size:?} at {s}: {} at {:?}, not {want:?}", bit::name(a.bit), b.at);
+                }
+                for (k, anchor) in [[0.0, h], [w, h]].into_iter().enumerate() {
+                    let (a, b) = (full.sticks[k], l.sticks[k]);
+                    let want = [anchor[0] + s * (a.home[0] - anchor[0]), anchor[1] + s * (a.home[1] - anchor[1])];
+                    assert!(dist(want, b.home) < 1e-3 && (b.r - s * a.r).abs() < 1e-4, "{size:?} at {s}: stick {k}");
+                }
+                assert_eq!((l.u, l.full), (s * full.u, full.u), "{size:?} at {s}: a finger's unit the full pad's");
+            }
+            for (s, like) in [(1.5, 1.0), (f32::NAN, 1.0), (0.2, SMALLEST), (0.0, SMALLEST)] {
+                let (a, b) = (layout(size, s), layout(size, like));
+                assert!(a.buttons.iter().zip(&b.buttons).all(|(a, b)| a.at == b.at && a.r == b.r), "{size:?}: {s} is {like}");
+            }
+        }
+        // the full pad where it has always been: a phone either way up
+        let l = layout((2400, 1080), 1.0);
+        let u = 1080.0 / 6.5;
+        let at = |l: &Layout, bit: u16| l.buttons.iter().find(|b| b.bit == bit).unwrap().at;
+        let was = |a: [f32; 2], b: [f32; 2]| assert!(dist(a, b) < 1e-3, "{a:?}, where it was {b:?}");
+        was(at(&l, bit::L2), [0.75 * u, 1.75 * u]);
+        was(at(&l, bit::START), [2400.0 - (1200.0 - 0.75 * u), 0.62 * u]);
+        was(at(&l, bit::SQUARE), [2400.0 - 1.75 * u - 0.76 * u, 3.4 * u]);
+        was(l.sticks[0].home, [3.35 * u, 1080.0 - 1.45 * u]);
+        assert_eq!(l.sticks[0].r, 0.95 * u);
+        let l = layout((1080, 2400), 1.0);
+        let u = 1080.0 / 6.6;
+        was(at(&l, bit::L3), [540.0 - 0.5 * u, 2400.0 - 0.85 * u]);
+        was(at(&l, bit::CIRCLE), [1080.0 - 1.5 * u + 0.76 * u, 2400.0 - 3.75 * u]);
+        assert_eq!(tap_slop((2400, 1080)), 0.12 * (1080.0f32 / 6.5));
+    }
+
+    /// The fingers go by the pad as it is drawn: on a half-size pad ✕ is
+    /// where the half pad has it, and where the full pad's △ was is no
+    /// button (a look). The control: the full pad's △ there.
+    #[test]
+    fn the_fingers_go_by_the_pads_size() {
+        let t = Instant::now();
+        let at = |l: &Layout, bit: u16| l.buttons.iter().find(|b| b.bit == bit).unwrap().at;
+        let (half, full) = (layout(SIZE, 0.5), layout(SIZE, 1.0));
+        let mut p = TouchPad::new(true);
+        p.scale = 0.5;
+        p.touch(1, Phase::Started, at(&half, bit::CROSS), t, SIZE);
+        assert_eq!(p.report().buttons, bit::CROSS);
+        p.touch(1, Phase::Ended, at(&half, bit::CROSS), t, SIZE);
+        p.touch(2, Phase::Started, at(&full, bit::TRIANGLE), t, SIZE);
+        assert_eq!(p.report(), Report::default(), "the full pad's △ is off the half pad");
+        p.touch(2, Phase::Ended, at(&full, bit::TRIANGLE), t, SIZE);
+        p.scale = 1.0;
+        p.touch(3, Phase::Started, at(&full, bit::TRIANGLE), t + Duration::from_secs(1), SIZE);
+        assert_eq!(p.report().buttons, bit::TRIANGLE, "the control");
     }
 
     /// A button is held while its finger is down, and each stick follows its
@@ -751,7 +906,7 @@ mod tests {
     #[test]
     fn a_button_is_held_while_touched_and_each_stick_follows_its_finger() {
         let t = Instant::now();
-        let l = layout(SIZE);
+        let l = layout(SIZE, 1.0);
         let mut p = TouchPad::default();
         let cross = l.buttons.iter().find(|b| b.bit == bit::CROSS).unwrap().at;
         p.touch(1, Phase::Started, cross, t, SIZE);
@@ -786,7 +941,7 @@ mod tests {
     #[test]
     fn hidden_it_lets_go_of_every_finger_but_stays_used() {
         let t = Instant::now();
-        let l = layout(SIZE);
+        let l = layout(SIZE, 1.0);
         let mut p = TouchPad::new(false);
         assert!(!p.used, "never touched: no source");
         let cross = l.buttons.iter().find(|b| b.bit == bit::CROSS).unwrap().at;

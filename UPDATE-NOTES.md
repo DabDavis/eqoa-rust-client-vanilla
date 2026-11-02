@@ -5,6 +5,16 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-02 · A smaller touch pad, no blank screen while typing, fishing's message
+- Options > Extended > Controller has a new row, Touch Pad Size: the touch screen's controller
+  from 100 (its full size, the largest that fits the screen) down to 50, in steps of 5. Smaller,
+  each half of the pad shrinks toward its own bottom corner, and Select and Start toward the middle,
+  so more of the game shows round it.
+- In the browser on a phone or a tablet, the screen no longer blanks out when the keyboard comes up
+  for a chat line or goes away after it, nor when you turn the device or the page goes full screen.
+- Fishing: the small dark square under the fishing messages ("You cast your line" and the rest) is
+  gone, as it never showed on a PlayStation 2.
+
 ## 2026-10-31 · No more problem or crash reports
 - F3 and the HUD's Report a bug button are gone, as is the offer to send a crash report at the next
   start after the game stopped: the game sends no reports of any kind. In the browser the gate's

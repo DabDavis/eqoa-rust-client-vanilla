@@ -1225,6 +1225,38 @@ mod tests {
         assert!(w.text.is_empty() && w.text_end == 0);
     }
 
+    /// The message box (`m_win3`, which `Init` sizes (-1, -1)) draws its
+    /// fill as a blit turned over on one axis, under the message's bar, and
+    /// it is the one blit of the window's that is: so `VIRFan`'s cull, which
+    /// the 2D layer keeps (`ui::drawn`), takes away the small dark square
+    /// under "You cast your line" and nothing else. The control: with no
+    /// message up, no blit of the window's is turned over.
+    #[test]
+    fn the_message_boxs_fill_is_the_one_blit_turned_over() {
+        use crate::pointer::testing::Wide;
+        let vui = vui();
+        let base = [0; 29];
+        let inv = ItemList::default();
+        let mut part = Part::default();
+        let mut w = FishingWnd::default();
+        w.focus(&mut Vec::new());
+        let mut turned = |w: &mut FishingWnd, now: i64| {
+            let mut r = Wide::new(0);
+            w.draw(&vui, &mut r, &mut part, &info(&vui, &inv, &base), &|_| 0, now, 0, F::ZERO, &mut Vec::new(), &mut Vec::new());
+            r.2.into_iter().filter(|(_, _, b)| (b[0] < 0) != (b[1] < 0)).map(|(_, at, b)| (at, b)).collect::<Vec<_>>()
+        };
+        for now in 0..8 {
+            assert_eq!(turned(&mut w, now), vec![], "the control: no message");
+        }
+        w.set_text(&wide("You cast your line."), 100);
+        for now in 100..108 {
+            let t = turned(&mut w, now);
+            assert_eq!(t.len(), 1, "{t:?}");
+            let (at, b) = t[0];
+            assert!(b[0] < 0 && b[1] > 0 && (at[0] - 320).abs() < 16, "the fill under the bar's middle, turned left: {at:?} {b:?}");
+        }
+    }
+
     /// The meter's power rows: `power` of them up from 264, blue at the top
     /// to white at the bottom at 0.7; none at 0 (`if (m_power)`).
     #[test]
