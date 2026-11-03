@@ -158,13 +158,17 @@ pub fn sqrt(a: f32) -> f32 {
 }
 
 /// Four [`mul`]s at once, lane by lane: the same four answers, with SSE2 on
-/// x86_64 (two f64 lanes a register) and one at a time elsewhere.
+/// x86_64 and NEON on aarch64 (two f64 lanes a register on both), one at a
+/// time elsewhere.
 #[inline(always)]
 pub fn mul4(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
     #[cfg(target_arch = "x86_64")]
     // SAFETY: SSE2 is part of the x86_64 baseline.
     return unsafe { simd::mul4(a, b) };
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    // SAFETY: the target has NEON (every aarch64 target the client builds for).
+    return unsafe { neon::mul4(a, b) };
+    #[cfg(not(any(target_arch = "x86_64", all(target_arch = "aarch64", target_feature = "neon"))))]
     [mul(a[0], b[0]), mul(a[1], b[1]), mul(a[2], b[2]), mul(a[3], b[3])]
 }
 
@@ -174,7 +178,10 @@ pub fn add4(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
     #[cfg(target_arch = "x86_64")]
     // SAFETY: SSE2 is part of the x86_64 baseline.
     return unsafe { simd::add4(a, b) };
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    // SAFETY: the target has NEON (every aarch64 target the client builds for).
+    return unsafe { neon::add4(a, b) };
+    #[cfg(not(any(target_arch = "x86_64", all(target_arch = "aarch64", target_feature = "neon"))))]
     [add(a[0], b[0]), add(a[1], b[1]), add(a[2], b[2]), add(a[3], b[3])]
 }
 
@@ -268,6 +275,97 @@ mod simd {
             let b = _mm_and_si128(b, keep4(d));
             let ((a0, a1), (b0, b1)) = (widen(a), widen(b));
             store(chop2(_mm_add_pd(a0, b0)), chop2(_mm_add_pd(a1, b1)))
+        }
+    }
+}
+
+/// `mul`, `add` and their helpers on NEON registers, step for step: phones,
+/// tablets and Apple's Macs. The arithmetic is SSE2's (`simd`), each select a
+/// bit select; the four results narrow into one register and are chopped
+/// there, and `keep` is a shift by a register.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+mod neon {
+    use super::{MIN_NORMAL, OVERFLOW};
+    use std::arch::aarch64::*;
+
+    /// `operand` on four lanes.
+    #[inline(always)]
+    unsafe fn operand4(v: [f32; 4]) -> uint32x4_t {
+        unsafe {
+            let b = vreinterpretq_u32_f32(vld1q_f32(v.as_ptr()));
+            let e = vandq_u32(b, vdupq_n_u32(0x7F80_0000));
+            let sign = vandq_u32(b, vdupq_n_u32(0x8000_0000));
+            let r = vbslq_u32(vceqzq_u32(e), sign, b);
+            vbslq_u32(vceqq_u32(e, vdupq_n_u32(0x7F80_0000)), vorrq_u32(sign, vdupq_n_u32(0x7F7F_FFFF)), r)
+        }
+    }
+
+    /// `chop` on four f64 lanes, two a register (never NaN): the four f32s.
+    /// The range tests compare magnitudes as floats, which order as the
+    /// scalar's bit patterns do for any number; an f64 kept to 24 bits
+    /// narrows exactly, and a tiny or huge one keeps its sign, which is all
+    /// of it the selects use.
+    #[inline(always)]
+    unsafe fn chop4(lo: float64x2_t, hi: float64x2_t) -> uint32x4_t {
+        unsafe {
+            let (least, past) = (vdupq_n_f64(f64::from_bits(MIN_NORMAL)), vdupq_n_f64(f64::from_bits(OVERFLOW)));
+            // each 64-bit mask narrowed to its lane's 32 bits, the four in one register
+            let tiny = vmovn_high_u64(vmovn_u64(vcaltq_f64(lo, least)), vcaltq_f64(hi, least));
+            let huge = vmovn_high_u64(vmovn_u64(vcageq_f64(lo, past)), vcageq_f64(hi, past));
+            let cut = |x: float64x2_t| vreinterpretq_f64_u64(vandq_u64(vreinterpretq_u64_f64(x), vdupq_n_u64(!0x1FFF_FFFF)));
+            let t = vreinterpretq_u32_f32(vcvt_high_f32_f64(vcvt_f32_f64(cut(lo)), cut(hi)));
+            let sign = vandq_u32(t, vdupq_n_u32(0x8000_0000));
+            let r = vbslq_u32(tiny, sign, t);
+            vbslq_u32(huge, vorrq_u32(sign, vdupq_n_u32(0x7F7F_FFFF)), r)
+        }
+    }
+
+    /// The low two lanes and the high two of `v` as f64 pairs.
+    #[inline(always)]
+    unsafe fn widen(v: uint32x4_t) -> (float64x2_t, float64x2_t) {
+        unsafe {
+            let f = vreinterpretq_f32_u32(v);
+            (vcvt_f64_f32(vget_low_f32(f)), vcvt_high_f64_f32(f))
+        }
+    }
+
+    #[inline(always)]
+    unsafe fn store(v: uint32x4_t) -> [f32; 4] {
+        let mut out = [0f32; 4];
+        unsafe { vst1q_f32(out.as_mut_ptr(), vreinterpretq_f32_u32(v)) };
+        out
+    }
+
+    #[inline(always)]
+    pub unsafe fn mul4(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+        unsafe {
+            let ((a0, a1), (b0, b1)) = (widen(operand4(a)), widen(operand4(b)));
+            store(chop4(vmulq_f64(a0, b0), vmulq_f64(a1, b1)))
+        }
+    }
+
+    /// `keep` on four lanes: the shift by compares, then `u32::MAX << s`
+    /// shifted by the register itself (`USHL`; `s` is 0 to 31).
+    #[inline(always)]
+    unsafe fn keep4(d: int32x4_t) -> uint32x4_t {
+        unsafe {
+            let s = vmaxq_s32(vsubq_s32(d, vdupq_n_s32(1)), vdupq_n_s32(0));
+            let s = vbslq_s32(vcgtq_s32(d, vdupq_n_s32(24)), vdupq_n_s32(31), s);
+            vshlq_u32(vdupq_n_u32(u32::MAX), s)
+        }
+    }
+
+    /// `add` on four lanes: `align`, then the exact sum chopped.
+    #[inline(always)]
+    pub unsafe fn add4(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+        unsafe {
+            let (a, b) = (operand4(a), operand4(b));
+            let exp = |v| vreinterpretq_s32_u32(vshrq_n_u32::<23>(vandq_u32(v, vdupq_n_u32(0x7F80_0000))));
+            let d = vsubq_s32(exp(a), exp(b));
+            let a = vandq_u32(a, keep4(vnegq_s32(d)));
+            let b = vandq_u32(b, keep4(d));
+            let ((a0, a1), (b0, b1)) = (widen(a), widen(b));
+            store(chop4(vaddq_f64(a0, b0), vaddq_f64(a1, b1)))
         }
     }
 }

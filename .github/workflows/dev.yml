@@ -77,6 +77,14 @@ jobs:
         if: matrix.os == 'linux'
         run: cargo test --locked --workspace
 
+      # This runner is an Apple silicon Mac: the EE arithmetic's four lanes
+      # are NEON here (SSE2 on Linux's), and ee's tests hold them, and the
+      # one-lane arithmetic under them, to the reference on the machine that
+      # runs them (about 20 s).
+      - name: Test the EE arithmetic (arm64)
+        if: matrix.os == 'macos'
+        run: cargo test --locked --release -p ee
+
       - name: Build
         if: matrix.os != 'macos'
         shell: bash

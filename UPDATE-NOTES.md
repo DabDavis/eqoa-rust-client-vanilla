@@ -5,6 +5,12 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-03 · Lighter work on Apple silicon Macs and on Android
+- On Macs with Apple's own chip (M1 and later) and on Android phones and tablets, the game's sums for
+  placing and turning things (characters' bones as they move, collisions, the camera) now work on four
+  numbers at once, as they already did on Intel and AMD processors, and take up to a third less time.
+  The results are the same to the last bit, so nothing looks or plays any differently.
+
 ## 2026-11-03 · The game on Android
 - The game now runs on Android phones and tablets (Android 8.0 and later) and on Chromebooks:
   download eqoa-vanilla-android.apk from this page and open it to install it (Android asks you to
