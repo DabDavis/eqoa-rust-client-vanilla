@@ -16,7 +16,12 @@ set -e
 cd "$(dirname "$0")/.."
 export TMPDIR="${TMPDIR:-$HOME/.cache/rust-tmp}"
 mkdir -p "$TMPDIR"
-cargo build --release --target wasm32-unknown-unknown -p eqoa
+# with WebAssembly's SIMD (crates/ee: the EE arithmetic four lanes at once, its
+# matrix sums a third less time in Chromium and Firefox), which every browser the page runs in has:
+# Safari since 16.4 and Firefox since 89; main.js tells a browser without. Set for
+# the wasm target alone, so the host's tools (webicons) build as ever.
+CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:+$CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS }-C target-feature=+simd128" \
+    cargo build --release --target wasm32-unknown-unknown -p eqoa
 rm -rf web/dist
 STAGE=web/dist/stage
 mkdir -p "$STAGE"
@@ -25,7 +30,7 @@ OPT="$(command -v wasm-opt || true)"
 [ -z "$OPT" ] && [ -x "$HOME/emsdk/upstream/bin/wasm-opt" ] && OPT="$HOME/emsdk/upstream/bin/wasm-opt"
 if [ -n "$OPT" ]; then
     "$OPT" -O2 --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext --enable-mutable-globals \
-        --enable-reference-types --enable-multivalue "$STAGE/eqoa_bg.wasm" -o "$STAGE/eqoa_bg.wasm"
+        --enable-reference-types --enable-multivalue --enable-simd "$STAGE/eqoa_bg.wasm" -o "$STAGE/eqoa_bg.wasm"
 fi
 cp web/main.js web/notices.js web/unpack.js web/sound.js web/tick.js web/fxview.js web/discstore.js web/spellfx.js "$STAGE/"
 # the pages' icon: the program's own drawn disc (crates/eqoa/src/icon_art.rs)

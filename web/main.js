@@ -139,14 +139,25 @@ window.eqoaRumble = (strong, weak, ms, pads) => {
   }
 };
 
+// The client's wasm is built with WebAssembly's SIMD (web/build.sh: the EE
+// arithmetic four lanes at once). A browser whose WebAssembly has none (Safari
+// before 16.4, so an iPhone or iPad before iOS 16.4, and Firefox before 89)
+// could not compile it: it is told which browsers run the game, not shown a
+// compile error, and the client is not fetched. The probe is
+// wasm-feature-detect's, a function returning an i8x16.popcnt of a splat.
+const SIMD = WebAssembly.validate(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15, 253, 98, 11]));
+const NO_SIMD = 'This browser cannot run the game: its WebAssembly has no SIMD. The game runs in Safari 16.4 or later (on an iPhone or iPad, iOS 16.4 or later) and in a current Chrome, Edge or Firefox.';
+
 // The client's wasm, compiled once: the page runs it, and so does the worker
 // that unpacks CLIENT off the disc (unpack.js), from the same compiled module.
-const wasmModule = fetch(new URL('eqoa_bg.wasm', import.meta.url)).then((r) => {
+const wasmModule = !SIMD ? Promise.reject(new Error(NO_SIMD)) : fetch(new URL('eqoa_bg.wasm', import.meta.url)).then((r) => {
   if (!r.ok) throw new Error(`the client did not load (${r.status})`);
   return (r.headers.get('Content-Type') || '').startsWith('application/wasm')
     ? WebAssembly.compileStreaming(r)
     : r.arrayBuffer().then((b) => WebAssembly.compile(b));
 });
+// (without SIMD, said once, by the client's start at the end)
+if (!SIMD) wasmModule.catch(() => {});
 
 const params = new URLSearchParams(location.search);
 const store = {
@@ -1103,6 +1114,11 @@ ready.then(() => {
   hiddenTicker();
   status('ready');
 }).catch((e) => {
+  if (!SIMD) {
+    status('this browser cannot run the game: no WebAssembly SIMD');
+    problem('simd', NO_SIMD);
+    return;
+  }
   status('could not load the client: ' + e);
   problem('load', `The client did not load (${e}). Reload the page.`);
 });

@@ -1,12 +1,15 @@
 //! Four lanes against one at a time: `mul4` and `add4` (SSE2 on x86_64, NEON
-//! on aarch64) against four calls of `mul` and `add`, which is what they are
-//! on any other machine, alone and in the two shapes the game uses them in
+//! on aarch64, SIMD128 on wasm32 built with it) against four calls of `mul`
+//! and `add`, which is what they are on any other machine, alone and in the two shapes the game uses them in
 //! (`vi`'s `Matrix44::mul` and `Matrix44::apply`), on matrices shaped like the
 //! game's: a rotation with zeros in it, a translation row, w's column 0 0 0 1.
 //! Both give the same bits (checked here on the data timed; the proof is
 //! `tests/reference.rs`).
 //!
 //!   cargo run --release -p ee --example lanes
+//!
+//! (For wasm, build it for wasm32-wasip1, with `-C target-feature=+simd128`
+//! and without, and run it under a WASI runtime or a page's.)
 //!
 //! Each figure is the best of seven runs, in nanoseconds a call.
 
@@ -180,10 +183,13 @@ fn main() {
         "SSE2"
     } else if cfg!(all(target_arch = "aarch64", target_feature = "neon")) {
         "NEON"
+    } else if cfg!(all(target_arch = "wasm32", target_feature = "simd128")) {
+        "SIMD128"
     } else {
         "one lane at a time (no four-lane code for this machine)"
     };
-    println!("{} ({}): four lanes are {path}", std::env::consts::ARCH, std::env::consts::OS);
+    let os = std::env::consts::OS;
+    println!("{}{}: four lanes are {path}", std::env::consts::ARCH, if os.is_empty() { String::new() } else { format!(" ({os})") });
     let rows: [(&str, fn(&[M], &[L]) -> u32, fn(&[M], &[L]) -> u32); 4] = [
         ("mul4", time_mul4::<Four>, time_mul4::<One>),
         ("add4", time_add4::<Four>, time_add4::<One>),

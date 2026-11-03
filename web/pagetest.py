@@ -64,6 +64,10 @@ open page by writing new builds and version.json under it:
             the client's graphics line naming it) is told so on the card's
             line, in a notice (once) and on the status line in the world; a
             graphics card is not
+  simd      a browser whose WebAssembly has no SIMD (a stand-in: the page's
+            probe refused) is told which browsers run the game, on the status
+            line and in a notice with nothing to reload by, and the client is
+            not fetched; with SIMD the client loads and no such notice
 
 Each check has its negative control. Needs the `websockets` package.
 
@@ -930,6 +934,32 @@ async def tests(a, site, base, page):
     await asyncio.sleep(0.3)
     check("dismissed, it is not raised again", not await page.js(soft) and "drawn without" in (await page.js(status) or ""))
     await page.js("document.body.classList.remove('playing'); true")
+
+    # ---- simd: the client is built with WebAssembly's SIMD (build.sh). A
+    # browser whose WebAssembly has none (Safari before 16.4, Firefox before
+    # 89) is told which browsers run the game, not shown a compile error, and
+    # the client is not fetched. A stand-in, before the page loads: validate
+    # refuses the page's probe (a module of 31 bytes) alone.
+    simd_told = "(document.querySelector('#notices .notice[data-key=\"problem:simd\"] .text') || {}).textContent || ''"
+    nosimd = await page.call("Page.addScriptToEvaluateOnNewDocument", source="""
+        { const validate = WebAssembly.validate;
+          WebAssembly.validate = (b) => (b.byteLength === 31 ? false : validate(b)); }""")
+    try:
+        await page.call("Page.navigate", url=base + q)
+        text = await page.until(simd_told, 15) or ""
+        check("a browser without WebAssembly's SIMD is told which browsers run the game", "no SIMD" in text and "Safari 16.4" in text and "Chrome" in text and "Reload" not in text, text)
+        buttons = await page.js("[...document.querySelectorAll('#notices .notice[data-key=\"problem:simd\"] button')].map(b => b.textContent).join()")
+        check("with nothing to reload by", buttons == "Dismiss", str(buttons))
+        line = await page.js(status) or ""
+        check("its status line says so", "no WebAssembly SIMD" in line, line)
+        fetched = await page.js("performance.getEntriesByType('resource').some((e) => e.name.endsWith('eqoa_bg.wasm'))")
+        check("and the client is not fetched", fetched is False, str(fetched))
+    finally:
+        await page.call("Page.removeScriptToEvaluateOnNewDocument", identifier=nosimd["identifier"])
+    opened = await page.open(base + q)
+    keys = await page.js(notices) or ""
+    fetched = await page.js("performance.getEntriesByType('resource').some((e) => e.name.endsWith('eqoa_bg.wasm'))")
+    check("with SIMD the client is fetched and loads, no such notice (control)", bool(opened) and fetched is True and "problem:simd" not in keys, f"{keys} {fetched}")
 
     errors = [l for l in page.lines if l.startswith("EXCEPTION") and "a test rejection" not in l]
     check("no exception in the page beyond the tests' own", not errors, "; ".join(errors[:3]))

@@ -5,6 +5,14 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-03 · Lighter work in the browser
+- In the browser, the game's sums for placing and turning things (characters' bones as they move,
+  collisions, the camera) now work on four numbers at once, as they already do on computers and
+  phones, and take about a third less time. The results are the same to the last bit, so nothing looks
+  or plays any differently.
+- A browser too old for this (Safari before 16.4, so an iPhone or iPad not yet on iOS 16.4, or Firefox
+  before 89) now says so when the page opens, and which browsers run the game.
+
 ## 2026-11-03 · Lighter work on Apple silicon Macs and on Android
 - On Macs with Apple's own chip (M1 and later) and on Android phones and tablets, the game's sums for
   placing and turning things (characters' bones as they move, collisions, the camera) now work on four

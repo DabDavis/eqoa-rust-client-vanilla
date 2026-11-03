@@ -216,23 +216,38 @@ fn pairs() -> u64 {
     std::env::var("EE_PAIRS").ok().and_then(|v| v.parse().ok()).unwrap_or(2_000_000)
 }
 
+/// The threads the sweeps are spread over: the machine's, or one on wasm,
+/// which has none to spawn (the suite runs there too, as WASI programs: the
+/// page's arithmetic).
+fn threads() -> usize {
+    if cfg!(target_family = "wasm") { 1 } else { std::thread::available_parallelism().map_or(4, |n| n.get()) }
+}
+
+/// `work(t)` for each of the `threads()`, side by side (one runs on this
+/// thread); the first failure.
+fn spread(work: impl Fn(usize) -> Result<(), String> + Sync) -> Option<String> {
+    let threads = threads();
+    if threads == 1 {
+        return work(0).err();
+    }
+    let work = &work;
+    std::thread::scope(|s| {
+        let handles: Vec<_> = (0..threads).map(|t| s.spawn(move || work(t))).collect();
+        handles.into_iter().map(|h| h.join().unwrap()).find_map(Result::err)
+    })
+}
+
 /// Runs `pair` for `n` pairs spread over the machine's threads.
 fn sweep(regime: &str, n: u64, pair: Pair) {
-    let threads = std::thread::available_parallelism().map_or(4, |n| n.get()) as u64;
-    let failure = std::thread::scope(|s| {
-        let handles: Vec<_> = (0..threads)
-            .map(|t| {
-                s.spawn(move || {
-                    let mut rng = Rng(0x9E37_79B9_7F4A_7C15 ^ (t + 1).wrapping_mul(0xD1B5_4A32_D192_ED03) ^ regime.len() as u64);
-                    for _ in 0..n / threads {
-                        let (a, b) = pair(&mut rng);
-                        check_pair(f32::from_bits(a), f32::from_bits(b))?;
-                    }
-                    Ok::<(), String>(())
-                })
-            })
-            .collect();
-        handles.into_iter().map(|h| h.join().unwrap()).find_map(Result::err)
+    let threads = threads() as u64;
+    let failure = spread(|t| {
+        let t = t as u64;
+        let mut rng = Rng(0x9E37_79B9_7F4A_7C15 ^ (t + 1).wrapping_mul(0xD1B5_4A32_D192_ED03) ^ regime.len() as u64);
+        for _ in 0..n / threads {
+            let (a, b) = pair(&mut rng);
+            check_pair(f32::from_bits(a), f32::from_bits(b))?;
+        }
+        Ok(())
     });
     if let Some(e) = failure {
         panic!("{regime}: {e}");
@@ -273,22 +288,14 @@ fn chosen() -> Vec<u32> {
 #[test]
 fn chosen_pairs() {
     let v = chosen();
-    let failure = std::thread::scope(|s| {
-        let v = &v;
-        let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
-        let handles: Vec<_> = (0..threads)
-            .map(|t| {
-                s.spawn(move || {
-                    for &a in v.iter().skip(t).step_by(threads) {
-                        for &b in v {
-                            check_pair(f32::from_bits(a), f32::from_bits(b))?;
-                        }
-                    }
-                    Ok::<(), String>(())
-                })
-            })
-            .collect();
-        handles.into_iter().map(|h| h.join().unwrap()).find_map(Result::err)
+    let threads = threads();
+    let failure = spread(|t| {
+        for &a in v.iter().skip(t).step_by(threads) {
+            for &b in &v {
+                check_pair(f32::from_bits(a), f32::from_bits(b))?;
+            }
+        }
+        Ok(())
     });
     if let Some(e) = failure {
         panic!("chosen pairs: {e}");
@@ -370,26 +377,20 @@ fn products_and_quotients_at_the_edges() {
 
 #[test]
 fn unary_over_every_bit_pattern() {
-    let threads = std::thread::available_parallelism().map_or(4, |n| n.get()) as u64;
-    let failure = std::thread::scope(|s| {
-        let handles: Vec<_> = (0..threads)
-            .map(|t| {
-                s.spawn(move || {
-                    let (lo, hi) = ((1u64 << 32) * t / threads, (1u64 << 32) * (t + 1) / threads);
-                    for b in lo..hi {
-                        let x = f32::from_bits(b as u32);
-                        if !same(ee::sqrt(x), reference::sqrt(x)) {
-                            return Err(format!("sqrt({x:e} [{b:08X}]) = {:e}, reference {:e}", ee::sqrt(x), reference::sqrt(x)));
-                        }
-                        if ee::operand(x).to_bits() != reference::operand(x).to_bits() {
-                            return Err(format!("operand([{b:08X}])"));
-                        }
-                    }
-                    Ok(())
-                })
-            })
-            .collect();
-        handles.into_iter().map(|h| h.join().unwrap()).find_map(Result::err)
+    let threads = threads() as u64;
+    let failure = spread(|t| {
+        let t = t as u64;
+        let (lo, hi) = ((1u64 << 32) * t / threads, (1u64 << 32) * (t + 1) / threads);
+        for b in lo..hi {
+            let x = f32::from_bits(b as u32);
+            if !same(ee::sqrt(x), reference::sqrt(x)) {
+                return Err(format!("sqrt({x:e} [{b:08X}]) = {:e}, reference {:e}", ee::sqrt(x), reference::sqrt(x)));
+            }
+            if ee::operand(x).to_bits() != reference::operand(x).to_bits() {
+                return Err(format!("operand([{b:08X}])"));
+            }
+        }
+        Ok(())
     });
     if let Some(e) = failure {
         panic!("{e}");
