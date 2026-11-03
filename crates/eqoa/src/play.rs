@@ -4471,8 +4471,17 @@ impl Play {
             crate::camstyle::set_style(&mut walker.cam, 2, rc, &mut walker.scene);
             walker.eye = walker.cam.process(&mut walker.scene);
         }
+        // `m_camDir = m_camera.m_dir`: unit, as VICamera::CalcAxes keeps
+        // it. The eye's direction is what the camera is handed (`set_camera`:
+        // in the orbits the body less the eye, as long as the camera is far),
+        // and the death camera's ease reads its y as the pitch's sine: from
+        // a follow orbit's eye `1 - y * y` was below 0 and the look NaN until
+        // the ease brought y under 1 (the screen garbage, longer the farther
+        // the camera), then all but straight down, where the look had been.
+        let mut dir = walker.eye.direction;
+        dir.normalize();
         let body = walker.cam.walk.phys.smooth_location().to_array();
-        self.death = Some(crate::death::DeathCam::new(walker.eye.position.to_array(), walker.eye.direction.to_array(), body));
+        self.death = Some(crate::death::DeathCam::new(walker.eye.position.to_array(), dir.to_array(), body));
         self.death_eye = None;
     }
 
@@ -8372,6 +8381,52 @@ mod commands {
             assert_eq!(there.cam.walk.committed.position, before);
             assert_eq!(sent(&mut p), [answer(4)]);
         });
+    }
+
+    /// A death in the follow orbit: the death camera starts from where the
+    /// camera looked (`ResetCamera`'s `m_camDir`, `m_camera.m_dir`, which
+    /// `VICamera::CalcAxes` keeps unit) and looks somewhere every frame, a
+    /// unit direction eased onto the body. The eye's direction is the body
+    /// less the eye (`set_camera`), as long as the camera is far, and the
+    /// ease reads its y as the pitch's sine. The control: a death camera
+    /// started on the direction as the eye has it looks nowhere (NaN) in its
+    /// first frames (2026-11-03: "when you die the screen glitches").
+    #[test]
+    fn a_death_in_the_follow_orbit_looks_from_the_camera_onto_the_body() {
+        let iso = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        if !iso.exists() {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        }
+        let (x, z) = (25275.115f32, 15766.627f32);
+        let mut lib = Library::new();
+        let w = lib.add("TUNARIA.ESF", crate::stream::open_file(&iso, "TUNARIA.ESF").unwrap());
+        let mut src = crate::stream::FileZones::open(&iso, "TUNARIA.ESF").unwrap();
+        crate::stream::fill(&mut lib, w, x, z, &mut src);
+        let mut walker = Walker::arrive(vi::world::World::load(&lib, w).unwrap(), Spawn::ground(x, z, 0.5));
+        let mut p = play();
+        // the follow orbit (the first entry's `ToggleCameraStyle`), 8 out
+        p.cam_saved = crate::camstyle::toggle(&mut walker.cam, false, None, &mut walker.scene);
+        p.cam_entered = true;
+        walker.cam.set_orbit_distance(F::new(8.0));
+        walker.eye = walker.cam.process(&mut walker.scene);
+        assert_eq!(walker.cam.camera_mode, 3);
+        let given = walker.eye.direction;
+        let mut unit = given;
+        unit.normalize();
+        let body = walker.cam.walk.phys.smooth_location().to_array();
+        assert!(given.magnitude().0 > 4.0 && unit.y.0 < 0.0, "the eye looks down at the body from 8 out: {:?}", given.to_array());
+        let frames = |mut d: crate::death::DeathCam| (0..240).map(|_| d.step(body, 1.0 / 30.0).1.to_array()).collect::<Vec<_>>();
+        let raw = frames(crate::death::DeathCam::new(walker.eye.position.to_array(), given.to_array(), body));
+        assert!(raw[..30].iter().any(|d| d.iter().any(|v| v.is_nan())), "the control: on the eye's direction it looks nowhere");
+        p.msg_005e(&mut walker);
+        let looks = frames(p.death.expect("dead"));
+        for (k, d) in looks.iter().enumerate() {
+            let m = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            assert!(d.iter().all(|v| v.is_finite()) && (m - 1.0).abs() < 1e-3, "frame {k}: {d:?}");
+        }
+        let u = unit.to_array();
+        assert!(looks[0].iter().zip(u).all(|(a, b)| (a - b).abs() < 1e-3), "it starts where the camera looked: {:?} against {u:?}", looks[0]);
     }
 
     /// A coach taken with the start menu's inventory up (F3 20261028-021802,
