@@ -5,6 +5,15 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-03 · Dying shows your body again; no stutter step on a light push
+- When you die, the camera now starts where it was and swings round and down onto your body as on a
+  PS2. It used to start pointing nowhere: the screen broke up into garbage (stripes, a smear of
+  ground) for the first moments, longer the further out you had the camera zoomed, then jumped to
+  looking straight down.
+- Pushing the left stick partway, at the point between walking and running, no longer makes your
+  character switch between a walk and a run several times a second. Once you push past that point you
+  run until you ease off a little further back; held still, the stick walks or runs where it did.
+
 ## 2026-11-03 · Lighter work in the browser
 - In the browser, the game's sums for placing and turning things (characters' bones as they move,
   collisions, the camera) now work on four numbers at once, as they already do on computers and

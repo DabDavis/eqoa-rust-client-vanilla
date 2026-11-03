@@ -412,6 +412,7 @@ pub fn shot_with(
         let pad_script = crate::input::Script::from_env();
         let mut console = crate::input::Console::new();
         let mut pad_edge = crate::binds::PadEdge::default();
+        let mut run_hold = crate::input::RunHold::default();
         let mouse_script = crate::mouse::script();
         let mut mouse = crate::mouse::Mouse::default();
         let mut last_view: Option<glam::Mat4> = None;
@@ -554,6 +555,9 @@ pub fn shot_with(
             }
             let mut client = play.as_ref().filter(|p| !p.is_dead()).map(|p| p.control_client()).unwrap_or_default();
             client.steer = look_free && mouse.steer(walker.cam.camera_mode);
+            // a stick that ran runs until it comes back well under the
+            // threshold (`input::RunHold`), as the window's
+            run_hold.apply(&mut sticks);
             let changed = walker.frame_with(sticks, t, &client, game_frame);
             if let Some(p) = play.as_mut() {
                 p.controls_changed(changed);
@@ -1844,6 +1848,9 @@ struct App {
     /// each key pressed was made, and the controllers' buttons a capture took.
     keys_edge: crate::binds::KeyEdge,
     pad_edge: crate::binds::PadEdge,
+    /// The left stick held past the walk's run threshold once past it
+    /// (`input::RunHold`).
+    run_hold: crate::input::RunHold,
     /// the window's coming to the front, said in the log once (`arrival`),
     /// and the controllers' buttons the last frame read (its first press)
     arrival: crate::arrival::Arrival,
@@ -2031,6 +2038,7 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         pad_script: crate::input::Script::from_env(),
         keys_edge: Default::default(),
         pad_edge: Default::default(),
+        run_hold: Default::default(),
         arrival: Default::default(),
         stall: Default::default(),
         pad_down: 0,
@@ -2647,6 +2655,7 @@ impl App {
             p.wheel_style(w, zoom, &mut self.mouse.back);
         }
         if dead {
+            self.run_hold.apply(&mut a);
             return a;
         }
         // both mouse buttons: run forward (`Mouse::running`)
@@ -2661,6 +2670,8 @@ impl App {
                 }
             }
         }
+        // a stick that ran runs until it comes back well under the threshold
+        self.run_hold.apply(&mut a);
         a
     }
 

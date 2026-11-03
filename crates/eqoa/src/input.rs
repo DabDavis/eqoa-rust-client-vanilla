@@ -117,6 +117,56 @@ pub const STICK_DEAD_ZONE: f32 = 0.3;
 #[cfg(target_arch = "wasm32")]
 pub const STICK_DEAD_ZONE: f32 = 0.37;
 
+/// The walk's run threshold on the left stick's magnitude as `ScaleStick`
+/// leaves it (`VIWalkControl::InitParms`' `m_runThreshold`): past it `Move`
+/// runs, at or under it walks.
+const RUN_THRESHOLD: f32 = 0.7;
+
+/// Under this a stick that ran walks again ([`RunHold`]): 0.1 under the
+/// threshold, 5% of a modern stick's travel through the 1.33.
+const RUN_LET_GO: f32 = 0.6;
+
+/// The magnitude a run held is given, past the threshold on the EE's
+/// arithmetic too.
+const RUN_HELD: f32 = 0.71;
+
+/// The host's hold on the walk's run threshold (the client's, as its dead
+/// zone is). The game has none: `Move` runs past 0.7 and walks under it each
+/// frame, and the body's gait goes by the speed that leaves it
+/// (`UpdateLocomotion`: a run past the walk's speed and a tenth of the way to
+/// the run's), so a thumb resting on the threshold, a stick's step or two
+/// either side, runs some frames and walks the rest, the speed settles
+/// between the two, and the body goes from walking to running and back
+/// several times a second: a stutter step (2026-11-03, "you will have to
+/// apply different levels of pressure to find it"; a PS2 does the same on
+/// that input). A DualShock 2's run starts at 79% of its push and a modern
+/// stick's at 60% (its axes scaled by 1.33, as PCSX2's are, so that a
+/// diagonal fills the DualShock 2's square), where a light push comes to
+/// rest. So once the left stick is past the threshold it stays past it, in
+/// its direction, until it comes back under [`RUN_LET_GO`]; a stick held
+/// still runs or walks as before.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RunHold {
+    running: bool,
+}
+
+impl RunHold {
+    /// The sticks `UpdateControls` reads (rx, ry, lx, ly), the left one held
+    /// past the run threshold while it runs.
+    pub fn apply(&mut self, sticks: &mut [f32; 4]) {
+        let (x, y) = (sticks[2], sticks[3]);
+        let m = (x * x + y * y).sqrt();
+        if m > RUN_THRESHOLD {
+            self.running = true;
+        } else if self.running && m >= RUN_LET_GO {
+            sticks[2] = x / m * RUN_HELD;
+            sticks[3] = y / m * RUN_HELD;
+        } else {
+            self.running = false;
+        }
+    }
+}
+
 /// [`STICK_DEAD_ZONE`], or the player's.
 pub fn dead_zone() -> f32 {
     #[cfg(target_arch = "wasm32")]
@@ -1534,6 +1584,51 @@ mod tests {
         }
         assert_eq!(bit::name(bit::CROSS | bit::SQUARE), "cross");
         assert_eq!(bit::name(0), "?");
+    }
+
+    /// A thumb resting on the walk's run threshold, `ScaleStick`'s byte 27
+    /// (walks) with byte 26 (runs) every fifth frame, runs throughout once
+    /// it has crossed, past the walk's own test on the EE's arithmetic, in
+    /// its own direction; it walks again under the let-go, and a stick that
+    /// never crossed walks as it is. The control: the same thumb alone flips
+    /// between running and walking 24 times.
+    #[test]
+    fn a_thumb_on_the_run_threshold_runs_until_it_comes_well_under() {
+        let byte = |b: u8| vi::pad::scale_stick::<Ee>(b).0;
+        let (walks, runs_at) = (byte(27), byte(26));
+        assert!(-walks <= RUN_THRESHOLD && -runs_at > RUN_THRESHOLD, "bytes 27 and 26 straddle the threshold: {walks} {runs_at}");
+        // the walk's own test: `Move` runs past `m_runThreshold`
+        let runs = |s: &[f32; 4]| vi::vect::Vect2::<Ee>::new(F::new(s[3]), F::new(s[2])).magnitude() > F::new(RUN_THRESHOLD);
+        let flips = |v: &[bool]| v.windows(2).filter(|w| w[0] != w[1]).count();
+        let thumb: Vec<[f32; 4]> = (0..60).map(|i| [0.0, 0.0, 0.0, if i % 5 == 3 { runs_at } else { walks }]).collect();
+        let raw: Vec<bool> = thumb.iter().map(runs).collect();
+        assert!(flips(&raw) >= 20, "the control: the thumb alone flips {} times", flips(&raw));
+        let mut hold = RunHold::default();
+        let held: Vec<bool> = thumb
+            .iter()
+            .map(|s| {
+                let mut s = *s;
+                hold.apply(&mut s);
+                assert!(s[2] == 0.0 && s[3] < 0.0, "held straight up: {s:?}");
+                runs(&s)
+            })
+            .collect();
+        assert_eq!((flips(&held), held[..3].iter().any(|&r| r), held[3..].iter().all(|&r| r)), (1, false, true), "walks until it first crosses, then runs: {held:?}");
+        // a diagonal held keeps its direction
+        let mut s = [0.0, 0.0, 0.46, -0.46];
+        hold.apply(&mut s);
+        assert!((s[2] + s[3]).abs() < 1e-6 && runs(&s), "{s:?}");
+        // under the let-go it walks again, and is not held after
+        for y in [byte(36), byte(31)] {
+            let mut s = [0.0, 0.0, 0.0, y];
+            hold.apply(&mut s);
+            assert_eq!((s[3], runs(&s)), (y, false), "byte 36, then 31 (0.65) once let go: as it is");
+        }
+        // a stick that never crossed walks at 0.65
+        let mut fresh = RunHold::default();
+        let mut s = [0.0, 0.0, 0.0, byte(31)];
+        fresh.apply(&mut s);
+        assert!(!runs(&s));
     }
 
     #[test]
