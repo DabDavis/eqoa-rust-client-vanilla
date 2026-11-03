@@ -25,8 +25,11 @@ echo "|---|---|---|"
 echo "| Linux (x86-64) | \`eqoa-vanilla-linux-x86_64.tar.gz\` | \`eqoa-vanilla-linux-x86_64\` |"
 echo "| Windows (x86-64) | \`eqoa-vanilla-windows-x86_64.zip\` | \`eqoa-vanilla-windows-x86_64.exe\` |"
 echo "| macOS (Apple silicon and Intel) | \`eqoa-vanilla-macos.tar.gz\` | \`eqoa-vanilla-macos\` |"
+echo "| Android 8.0 and later (phones, tablets, Chromebooks) | | \`eqoa-vanilla-android.apk\` |"
 echo
 echo "The program alone, on Linux and macOS, needs \`chmod +x\` after the download (a download is not kept runnable)."
+echo
+echo "On Android, open the downloaded \`eqoa-vanilla-android.apk\` to install it (Android asks you to allow installing apps from the browser or the file manager you opened it in). It does not update itself: a newer build installs over the old one the same way, your settings kept. The first time, it asks for your disc image in Android's own file picker, so copy the image to the device first."
 echo
 echo "You need your own *Frontiers* disc image (SLUS-20744) and an account on a server; README.txt in each archive says how to run it, and the repository's README says more. Each push to \`master\` replaces this build: only the newest can be downloaded, and its notes below say what each build changed."
 echo

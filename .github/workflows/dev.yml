@@ -1,9 +1,10 @@
 name: Dev build
 
-# Every push to master builds the client for Linux, Windows and macOS and
-# replaces the one release, `dev`: its tag is moved to the commit and its
-# assets are replaced, and the run's own artifacts are deleted once they are
-# up, so no older build stays downloadable. There are no versioned releases.
+# Every push to master builds the client for Linux, Windows and macOS, and
+# the Android app, and replaces the one release, `dev`: its tag is moved to
+# the commit and its assets are replaced, and the run's own artifacts are
+# deleted once they are up, so no older build stays downloadable. There are no
+# versioned releases.
 
 on:
   push:
@@ -160,8 +161,75 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  # The Android app (android/build.sh, README "Android"): one APK for phones
+  # and tablets (arm64-v8a) and the emulator and Chromebooks (x86_64), built
+  # with the SDK's own tools at the versions given here, and signed with the
+  # project's key (secrets ANDROID_KEYSTORE, the keystore in base64, and
+  # ANDROID_KEYSTORE_PASSWORD): Android installs an APK over an older one only
+  # when both carry the same key. It never updates itself (update.rs), so it
+  # has no line in update.txt.
+  android:
+    runs-on: ubuntu-24.04
+    env:
+      ANDROID_NDK_VERSION: 30.0.16248370
+      ANDROID_BUILD_TOOLS: 37.0.0
+      ANDROID_PLATFORM: android-36
+    steps:
+      # the version code is the commit's place in master's history (build.sh)
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+          rustup target add aarch64-linux-android x86_64-linux-android
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install the SDK's parts
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ANDROID_NDK_VERSION" "build-tools;$ANDROID_BUILD_TOOLS" "platforms;$ANDROID_PLATFORM" > /dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android
+
+      - name: The signing key
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          [ -n "$KEYSTORE" ] && [ -n "$KEYSTORE_PASSWORD" ] || {
+            echo "no ANDROID_KEYSTORE / ANDROID_KEYSTORE_PASSWORD secret: an APK signed with another key would not install over the release's"
+            exit 1
+          }
+          mkdir -p "$RUNNER_TEMP/key"
+          printf '%s' "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/key/eqoa.jks"
+          printf '%s' "$KEYSTORE_PASSWORD" > "$RUNNER_TEMP/key/eqoa.jks.pass"
+          echo "EQOA_ANDROID_KEYSTORE=$RUNNER_TEMP/key/eqoa.jks" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: |
+          mkdir -p out
+          bash android/build.sh --locked --abi arm64-v8a,x86_64 --out out/eqoa-vanilla-android.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: out/eqoa-vanilla-android.apk
+          # deleted by the publish job; a day at most if it never runs
+          retention-days: 1
+          if-no-files-found: error
+
   publish:
-    needs: build
+    needs: [build, android]
     if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-24.04
     env:
@@ -236,7 +304,7 @@ jobs:
   # The run's own copies of the builds would be a second place to download
   # one: gone once the release has them, or the run failed, or was replaced.
   cleanup:
-    needs: [build, publish]
+    needs: [build, android, publish]
     if: always()
     runs-on: ubuntu-24.04
     env:

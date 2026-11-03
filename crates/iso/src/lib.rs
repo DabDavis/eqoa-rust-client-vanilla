@@ -2,7 +2,7 @@
 //!
 //! The game's assets are ESF/CSF containers inside a plain ISO 9660 image, so a
 //! walk of the primary volume descriptor's directory tree names every file on
-//! any region or revision of the disc. Reads are seek-and-read: listing a 3 GB
+//! any region or revision of the disc. Reads are by position: listing a 3 GB
 //! image touches a few kilobytes. Ported from the Blender importer's `iso.py`.
 //!
 //! The bytes come from a [`Source`]: a file natively; in a browser, the
@@ -12,7 +12,7 @@
 
 use std::collections::HashSet;
 use std::fs::File;
-use std::io::{self, Read, Seek, SeekFrom};
+use std::io;
 use std::path::Path;
 
 pub const SECTOR: u64 = 2048;
@@ -68,8 +68,58 @@ impl Source for File {
     }
 
     fn read_at(&mut self, off: u64, buf: &mut [u8]) -> io::Result<()> {
-        self.seek(SeekFrom::Start(off))?;
-        self.read_exact(buf)
+        read_exact_at(self, off, buf)
+    }
+}
+
+/// The disc image's file at `path`, for reading (`read_exact_at`). On
+/// Android a path `/proc/self/fd/<n>` is the descriptor the activity was
+/// handed for the player's pick (Android's document picker opens the file in
+/// another process and passes the descriptor; the path itself cannot be
+/// opened again from here): each opener gets a duplicate of it, which shares
+/// its offset, so every read of the image is by position.
+pub fn open_file(path: impl AsRef<Path>) -> io::Result<File> {
+    #[cfg(target_os = "android")]
+    if let Some(fd) = path.as_ref().to_str().and_then(|p| p.strip_prefix("/proc/self/fd/")).and_then(|n| n.parse::<i32>().ok()) {
+        use std::os::fd::FromRawFd;
+        // SAFETY: the activity's descriptor, open for the run and never
+        // closed here (ManuallyDrop): only its duplicate is owned
+        let held = std::mem::ManuallyDrop::new(unsafe { File::from_raw_fd(fd) });
+        return held.try_clone();
+    }
+    File::open(path)
+}
+
+/// `buf.len()` bytes of `f` from `off`, by position: the file's own offset
+/// is not used, so handles that share one (`open_file`'s duplicates) can
+/// read from several threads at once.
+pub fn read_exact_at(f: &File, off: u64, buf: &mut [u8]) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::FileExt::read_exact_at(f, buf, off)
+    }
+    #[cfg(windows)]
+    {
+        let (mut done, mut at) = (0, off);
+        while done < buf.len() {
+            match std::os::windows::fs::FileExt::seek_read(f, &mut buf[done..], at) {
+                Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()),
+                Ok(n) => {
+                    done += n;
+                    at += n as u64;
+                }
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut f = f;
+        f.seek(SeekFrom::Start(off))?;
+        f.read_exact(buf)
     }
 }
 
@@ -84,7 +134,7 @@ fn u32le(b: &[u8], at: usize) -> u32 {
 
 impl Iso {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, Error> {
-        Self::from_source(File::open(path)?)
+        Self::from_source(open_file(path)?)
     }
 }
 

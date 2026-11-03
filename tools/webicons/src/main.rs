@@ -8,6 +8,13 @@
 //! clear corner black. No game art.
 //!
 //!     cargo run --release -p webicons -- <directory>
+//!
+//! And the Android app's launcher icon (`android/build.sh`): an adaptive
+//! icon's foreground, the disc inside the circle every launcher's mask
+//! keeps, at each density, over the page's background (`android/res`'s
+//! `ic_launcher_background`):
+//!
+//!     cargo run --release -p webicons -- --android <res directory>
 
 use std::path::Path;
 
@@ -73,9 +80,36 @@ fn write(path: &Path, size: u32, rgba: &[u8]) -> Result<(), String> {
     w.write_image_data(rgba).map_err(|e| e.to_string())
 }
 
+/// An adaptive icon's layer is 108 dp across, and a launcher's mask keeps
+/// the circle of the middle 66: the disc a tenth inside it.
+const ADAPTIVE_SHARE: f32 = 66.0 / 108.0 * 0.9;
+
+/// Android's densities, and the layer's 108 dp at each, in pixels.
+const DENSITIES: [(&str, u32); 5] = [("mdpi", 108), ("hdpi", 162), ("xhdpi", 216), ("xxhdpi", 324), ("xxxhdpi", 432)];
+
+/// The Android launcher icon's foreground at every density, under `res`.
+fn android(res: &Path) -> Result<(), String> {
+    for (density, size) in DENSITIES {
+        let dir = res.join(format!("mipmap-{density}"));
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        write(&dir.join("ic_launcher_foreground.png"), size, &tile(size, ADAPTIVE_SHARE, None))?;
+    }
+    Ok(())
+}
+
 fn main() {
-    let Some(dir) = std::env::args().nth(1) else {
-        eprintln!("usage: webicons <directory>");
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let [flag, res] = &args[..]
+        && flag == "--android"
+    {
+        if let Err(e) = android(Path::new(res)) {
+            eprintln!("webicons: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    let Some(dir) = args.first() else {
+        eprintln!("usage: webicons <directory> | webicons --android <res directory>");
         std::process::exit(2);
     };
     for (name, size, share, under) in ICONS {

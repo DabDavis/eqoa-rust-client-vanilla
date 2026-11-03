@@ -3,7 +3,8 @@
 //! terminal it had and to `eqoa.log` in the config directory (the run before
 //! kept as `eqoa.prev.log`; a second window open beside the first,
 //! multiboxing, keeps `eqoa-2.log`, and so on). A panic's message and
-//! backtrace go there too.
+//! backtrace go there too. On Android, where stderr goes nowhere, the
+//! terminal is logcat (`android::Logcat`, tag `eqoa`).
 
 use std::fs::File;
 use std::io::{BufRead, Write};
@@ -152,8 +153,18 @@ pub fn caught<T>(f: impl FnOnce() -> T) -> Result<T, String> {
 }
 
 /// `text` to where stderr went before the pipe (stderr itself without
-/// one).
+/// one); on Android to logcat.
 fn to_terminal(text: &str) {
+    // Android: logcat (stderr goes nowhere there)
+    #[cfg(target_os = "android")]
+    crate::android::logcat(text);
+    #[cfg(not(target_os = "android"))]
+    to_stderr(text);
+}
+
+/// `to_terminal` natively: where stderr went before the pipe.
+#[cfg(not(target_os = "android"))]
+fn to_stderr(text: &str) {
     let t = TERMINAL.load(Ordering::Relaxed);
     if t < 0 {
         eprint!("{text}");
@@ -228,6 +239,13 @@ fn tee() {
     };
     let (done, drained) = mpsc::channel();
     lock(&LOG).drained = Some(drained);
+    // Android: logcat, stderr going nowhere there
+    #[cfg(target_os = "android")]
+    let terminal = {
+        drop(to);
+        terminal_thread(crate::android::Logcat)
+    };
+    #[cfg(not(target_os = "android"))]
     let terminal = to.and_then(|t| terminal_thread(Kept(std::mem::ManuallyDrop::new(t))));
     let _ = std::thread::Builder::new().name("log".into()).spawn(move || {
         let (queue, written) = terminal.unzip();

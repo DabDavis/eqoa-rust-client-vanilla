@@ -48,6 +48,8 @@ pub fn would_draw(want: u32) -> u32 {
 pub struct Scale {
     format: wgpu::TextureFormat,
     want: u32,
+    /// the frame goes into the top of a taller target (`set_into_top`)
+    into_top: bool,
     gpu: Option<Gpu>,
     /// `targets` gave the scale's texture for this frame: `resolve` averages it
     pending: bool,
@@ -84,7 +86,7 @@ pub struct Targets {
 
 impl Scale {
     pub(crate) fn new(format: wgpu::TextureFormat) -> Self {
-        Scale { format, want: 1, gpu: None, pending: false, drawn: 1 }
+        Scale { format, want: 1, into_top: false, gpu: None, pending: false, drawn: 1 }
     }
 
     /// The scale asked: 1 (the frame drawn at the target's size), 2 or 4.
@@ -100,6 +102,14 @@ impl Scale {
 
     pub fn want(&self) -> u32 {
         self.want
+    }
+
+    /// Whether the frame is drawn into the top of a target taller than it
+    /// (an Android phone's keyboard over the rest of the window): the
+    /// scale's texture is drawn into even at 1, and `resolve` lays it in the
+    /// target's top, the rest black.
+    pub fn set_into_top(&mut self, on: bool) {
+        self.into_top = on;
     }
 
     /// The scale the last frame was drawn at: the one asked, or less where
@@ -119,7 +129,7 @@ impl Scale {
         for (at, v) in [(&LAST_W, size.0), (&LAST_H, size.1), (&LAST_MAX, max)] {
             at.store(v, std::sync::atomic::Ordering::Relaxed);
         }
-        if k == 1 {
+        if k == 1 && !self.into_top {
             if let Some(g) = &mut self.gpu {
                 g.frame = None;
             }
@@ -167,6 +177,11 @@ impl Scale {
         });
         pass.set_pipeline(&g.pipeline);
         pass.set_bind_group(0, &f.bind, &[]);
+        // the frame in the target's top (`set_into_top`): each pixel read
+        // where the whole target's would be
+        if self.into_top {
+            pass.set_viewport(0.0, 0.0, f.size.0 as f32, f.size.1 as f32, 0.0, 1.0);
+        }
         pass.draw(0..3, 0..1);
     }
 }

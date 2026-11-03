@@ -580,6 +580,7 @@ dependencies = [
  "gilrs",
  "glam",
  "iso",
+ "jni 0.21.1",
  "js-sys",
  "libc",
  "net",

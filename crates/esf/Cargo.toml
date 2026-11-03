@@ -7,8 +7,9 @@ license.workspace = true
 
 [dependencies]
 flate2.workspace = true
+# a file inside the disc image read by position (`Window`)
+iso.workspace = true
 
 [dev-dependencies]
-iso.workspace = true
 crc32fast.workspace = true
 serde_json.workspace = true

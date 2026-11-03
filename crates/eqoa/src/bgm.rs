@@ -127,14 +127,12 @@ pub fn read_on_a_thread(bgm: &Bgm, mut read: impl FnMut(u64, usize) -> std::io::
 pub fn image_reader(image: std::path::PathBuf) -> impl FnMut(u64, usize) -> std::io::Result<Vec<u8>> + Send + 'static {
     let mut file: Option<std::fs::File> = None;
     move |off, len| {
-        use std::io::{Read, Seek, SeekFrom};
         let f = match file.as_mut() {
             Some(f) => f,
-            None => file.insert(std::fs::File::open(&image)?),
+            None => file.insert(iso::open_file(&image)?),
         };
-        f.seek(SeekFrom::Start(off))?;
         let mut b = vec![0u8; len];
-        f.read_exact(&mut b)?;
+        iso::read_exact_at(f, off, &mut b)?;
         Ok(b)
     }
 }

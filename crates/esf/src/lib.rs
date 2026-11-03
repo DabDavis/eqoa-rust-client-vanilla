@@ -146,7 +146,8 @@ impl ReadAt for Vec<u8> {
 }
 
 /// `len` bytes of `inner` from `base` on, as a file of their own: a file
-/// inside the disc image (its extent at `lba * 2048`).
+/// inside the disc image (its extent at `lba * 2048`), read by position
+/// (`iso::read_exact_at`: a disc image's handles can share an offset).
 pub struct Window<R> {
     pub inner: R,
     pub base: u64,
@@ -159,7 +160,7 @@ impl<R> Window<R> {
     }
 }
 
-impl<R: std::io::Read + std::io::Seek> ReadAt for Window<R> {
+impl ReadAt for Window<std::fs::File> {
     fn len(&self) -> u64 {
         self.len
     }
@@ -167,8 +168,7 @@ impl<R: std::io::Read + std::io::Seek> ReadAt for Window<R> {
         if off.checked_add(buf.len() as u64).is_none_or(|end| end > self.len) {
             return Err(std::io::ErrorKind::UnexpectedEof.into());
         }
-        self.inner.seek(std::io::SeekFrom::Start(self.base + off))?;
-        self.inner.read_exact(buf)
+        iso::read_exact_at(&self.inner, self.base + off, buf)
     }
 }
 

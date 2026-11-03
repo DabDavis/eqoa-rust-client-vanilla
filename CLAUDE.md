@@ -56,6 +56,15 @@ current.
   cmd's `>` nor PowerShell's capture reaches it: capture a command's output with `Start-Process
   -Wait -NoNewWindow -RedirectStandardOutput` (`../claude-notes/multibox-controllers-20261022.md`).
 
+- Android (README "Android"): `android/build.sh` makes the APK (main.rs as the library NativeActivity
+  loads, `--example eqoa-android --features android`; the activity `android/java/.../EqoaActivity.java`,
+  framework only, no Gradle; SDK in `~/Android/Sdk`). Platform code goes through `src/android.rs` (JNI both
+  ways) and `cfg(target_os = "android")`; the activity takes every input event (winit's Android backend
+  takes a controller's sticks for touches), so a new input goes through `android::Event`, into the paths
+  winit's events take (`App::finger`, `App::key_input`). The APK's signing key is
+  `~/.config/eqoa-android/eqoa.jks`: never commit it or anything beside it, and keep it (an update installs
+  only with the same key). Test on the emulator (`-gpu host`, the machine at 10.0.2.2, a debug build's
+  `am start -e EQOA_*` extras).
 - Toolchain: rustup in `~/.cargo`. `/tmp` is a small partition that old session scratchpads fill: building with `TMPDIR` under `~/.cache` avoids it.
 - `run/` is untracked: `run/eqoa.iso` links the Frontiers disc. Never commit game data.
 - A player's disc (`discs.rs`): the game (`eqoa`, `boot`, `eqoa <image>`) takes the named image, `EQOA_ISO`,

@@ -1282,8 +1282,8 @@ pub(crate) fn npcw_key_of(key: &Key, mode: i32) -> Option<i32> {
 /// A key as the game's keyboard gives it (`VIKeyboard::Read`): 13 Enter,
 /// 27 Escape, 8 Backspace, 9 Tab, 17-20 the cursor keys (left, right, up,
 /// down), 21-24 Page Up, Page Down, End, Home; a character as itself.
-fn pregame_key(event: &KeyEvent) -> Option<i32> {
-    Some(match &event.logical_key {
+fn pregame_key(key: &Key) -> Option<i32> {
+    Some(match key {
         Key::Named(NamedKey::Enter) => 13,
         Key::Named(NamedKey::Escape) => 27,
         Key::Named(NamedKey::Backspace) => 8,
@@ -1314,12 +1314,12 @@ fn pregame_key(event: &KeyEvent) -> Option<i32> {
 fn device_keyboard() -> bool {
     #[cfg(target_arch = "wasm32")]
     return crate::web::device_keyboard();
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(target_os = "android")]
+    return crate::android::device_keyboard();
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
     false
 }
 
-/// Whether the touch screen's pad shows from the start: in a page on a
-/// touch-first device (`window.eqoaTouchFirst`), or with `EQOA_TOUCH=1`.
 /// Whether a key pressed before the world is the art's (`era`): F9, or the
 /// key its row was moved onto on the Controls page (`binds`); F9 moved off
 /// is not.
@@ -1340,12 +1340,15 @@ fn ranges_from_env(var: &str) -> Vec<(i64, i64)> {
         .unwrap_or_default()
 }
 
+/// Whether the touch screen's pad shows from the start: in a page on a
+/// touch-first device (`window.eqoaTouchFirst`), on Android, or with
+/// `EQOA_TOUCH=1`.
 fn touch_first() -> bool {
     #[cfg(target_arch = "wasm32")]
     if crate::web::touch_first() {
         return true;
     }
-    std::env::var("EQOA_TOUCH").is_ok_and(|v| v == "1")
+    cfg!(target_os = "android") || std::env::var("EQOA_TOUCH").is_ok_and(|v| v == "1")
 }
 
 /// A key as the keyboard's dispatch takes it (`App::keyboard`): what it reads
@@ -1463,6 +1466,25 @@ struct Gfx {
     /// the surface and `depth` take it as the next frame drawn begins
     /// (`apply_size`).
     resized: bool,
+    /// The window's whole size while the frame is drawn in its top, less
+    /// than the window (Android: above the device's keyboard,
+    /// `fit_keyboard`); None while the frame is the window's size.
+    whole: Option<(u32, u32)>,
+}
+
+/// Android: the activity's side of the window (`App::android`).
+#[cfg(target_os = "android")]
+#[derive(Default)]
+struct AndroidWindow {
+    /// the instance the window's surface was made on, to make it again
+    /// after the background (`App::android_surface`)
+    instance: Option<wgpu::Instance>,
+    /// the disc was asked for (the activity's picker)
+    disc_asked: bool,
+    /// a disc that is not Frontiers, waiting for the player's answer
+    disc_asking: Option<String>,
+    /// while the activity is hidden, the next frame's time (`App::turn`)
+    next_tick: Option<Instant>,
 }
 
 /// The present mode for VSync (`settings::vsync`) out of what the surface
@@ -1509,8 +1531,46 @@ impl Gfx {
     fn resize(&mut self, width: u32, height: u32) {
         self.config.width = width;
         self.config.height = height;
+        self.whole = None;
+        self.renderer.scale.set_into_top(false);
         self.resized = true;
         self.window.request_redraw();
+    }
+
+    /// The surface's configuration: the frame's, at the window's whole size
+    /// (`whole`: the frame drawn in its top).
+    fn surface_config(&self) -> wgpu::SurfaceConfiguration {
+        let mut c = self.config.clone();
+        if let Some((w, h)) = self.whole {
+            c.width = w;
+            c.height = h;
+        }
+        c
+    }
+
+    /// Android: the frame drawn above the device's keyboard while it is up
+    /// (`keyboard` pixels of the window's bottom, `android::keyboard_height`),
+    /// as a page's is when its browser shrinks it for the keyboard: the
+    /// frame the window's width and the height above it (never less than a
+    /// quarter of the window), laid into the window's top (`Scale::set_into_top`),
+    /// the rest black under the keyboard.
+    #[cfg(target_os = "android")]
+    fn fit_keyboard(&mut self, keyboard: u32) {
+        if self.surface.is_none() {
+            return;
+        }
+        let s = self.window.inner_size();
+        let (w, h) = (s.width.max(1), s.height.max(1));
+        let fh = h.saturating_sub(keyboard).max(h / 4).max(1);
+        let whole = (fh != h).then_some((w, h));
+        if (self.config.width, self.config.height) != (w, fh) || self.whole != whole {
+            self.config.width = w;
+            self.config.height = fh;
+            self.whole = whole;
+            self.renderer.scale.set_into_top(whole.is_some());
+            self.resized = true;
+            crate::say(&format!("android: the frame {w}x{fh}{}", if whole.is_some() { format!(", above the device's keyboard ({keyboard} high)") } else { String::new() }));
+        }
     }
 
     /// A frame about to be drawn: the surface and the depth buffer at the
@@ -1520,7 +1580,7 @@ impl Gfx {
             return;
         }
         if let Some(surface) = &self.surface {
-            surface.configure(&self.device, &self.config);
+            surface.configure(&self.device, &self.surface_config());
         }
         self.depth = render::depth_view(&self.device, self.config.width, self.config.height);
     }
@@ -1537,7 +1597,7 @@ impl Gfx {
         let want = present_mode(&self.present_modes, vsync);
         if self.config.present_mode != want {
             self.config.present_mode = want;
-            surface.configure(&self.device, &self.config);
+            surface.configure(&self.device, &self.surface_config());
             crate::settings::set_display_refresh(self.window.current_monitor().and_then(|m| m.refresh_rate_millihertz()));
             eprintln!("present mode {want:?} (vsync {})", if vsync { "on" } else { "off" });
         }
@@ -1577,7 +1637,7 @@ impl Gfx {
         };
         self.queue.submit(std::iter::empty());
         if let Some(surface) = stale {
-            surface.configure(&self.device, &self.config);
+            surface.configure(&self.device, &self.surface_config());
         }
         Err(stale.is_none())
     }
@@ -1595,12 +1655,15 @@ fn hidden_gap() -> Option<Instant> {
     (!page_hidden()).then(|| Instant::now() + HIDDEN_GAP)
 }
 
-/// Whether the window is a page that is hidden (`web::page_hidden`): its
+/// Whether the window is a page that is hidden (`web::page_hidden`), or an
+/// Android activity paused or without its surface (`android::hidden`): its
 /// frames are drawn on nothing, as a covered window's.
 fn page_hidden() -> bool {
     #[cfg(target_arch = "wasm32")]
     return crate::web::page_hidden();
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(target_os = "android")]
+    return crate::android::hidden();
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
     false
 }
 
@@ -1851,6 +1914,9 @@ struct App {
     /// The window's size and place on the desktop, kept between runs
     /// (`winplace`).
     winplace: crate::winplace::Keeper,
+    /// Android: the activity's side of the window (`android`).
+    #[cfg(target_os = "android")]
+    android: AndroidWindow,
     /// The pregame's keys down (the game's codes), let go of when the window
     /// loses the keys (`let_go_keys`).
     host_keys: Vec<i32>,
@@ -1906,6 +1972,16 @@ pub fn run_with_gfx(lib: Library, source: Source, play: Option<crate::play::Play
 }
 
 fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pending: Option<PendingGfx>, host: Option<crate::pregame::host::Host>) -> Result<(), Error> {
+    // Android: the loop the activity's app runs (`android`), woken when the
+    // activity hands something over
+    #[cfg(target_os = "android")]
+    let event_loop = {
+        use winit::platform::android::EventLoopBuilderExtAndroid;
+        let el = EventLoop::builder().with_android_app(crate::android::app()).build()?;
+        crate::android::set_waker(el.create_proxy());
+        el
+    };
+    #[cfg(not(target_os = "android"))]
     let event_loop = EventLoop::new()?;
     let display = event_loop.owned_display_handle();
     // what the library shows: a run begun in the other art turns it at the
@@ -1996,6 +2072,8 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         art_drawn,
         art_chosen: crate::settings::art(),
         winplace: Default::default(),
+        #[cfg(target_os = "android")]
+        android: Default::default(),
     };
     #[cfg(target_arch = "wasm32")]
     {
@@ -2714,6 +2792,8 @@ impl App {
         if on != std::mem::replace(&mut self.typing, on) {
             #[cfg(target_arch = "wasm32")]
             crate::web::want_text(on);
+            #[cfg(target_os = "android")]
+            crate::android::want_text(on);
         }
     }
 
@@ -2805,7 +2885,7 @@ impl App {
         }
         let depth = render::depth_view(&device, config.width, config.height);
         let offscreen = surface.is_none().then(|| offscreen_target(&device, &config));
-        self.gfx = Some(Gfx { window, surface, offscreen, in_flight: None, device, queue, config, depth, renderer, models: Vec::new(), title: "EQOA".into(), present_modes: Vec::new(), resized: false });
+        self.gfx = Some(Gfx { window, surface, offscreen, in_flight: None, device, queue, config, depth, renderer, models: Vec::new(), title: "EQOA".into(), present_modes: Vec::new(), resized: false, whole: None });
         // before the world there is nothing to load: the pregame draws
         if self.host.is_some() {
             if let Some(g) = &self.gfx {
@@ -3888,13 +3968,26 @@ impl ApplicationHandler for App {
         // macOS: the Dock's picture (`icon`), winit setting none
         #[cfg(target_os = "macos")]
         crate::icon::dock_now();
+        // Android: back from the background, the window's surface made again
+        #[cfg(target_os = "android")]
+        if self.gfx.is_some() {
+            self.android_surface();
+            return;
+        }
         if self.gfx.is_some() {
             return;
+        }
+        // Android, with no disc image at hand: the activity's picker, over
+        // the window, whose frames wait for it (`android_disc`)
+        #[cfg(target_os = "android")]
+        if self.host.is_some() && crate::discs::unsettled() && !self.android.disc_asked {
+            self.android.disc_asked = true;
+            crate::android::pick_disc(crate::discs::note().as_deref());
         }
         // natively, the game from its boot with no disc image at hand: the
         // player picks it before the window opens (`discs::settle`), and its
         // CLIENT and SUPPORT start coming off it
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
         if self.host.is_some() && crate::discs::unsettled() {
             match crate::discs::settle() {
                 Ok(iso) => {
@@ -3967,6 +4060,10 @@ impl ApplicationHandler for App {
         #[cfg(not(target_arch = "wasm32"))]
         crate::gpustart::step("making the window's surface");
         let surface = instance.create_surface(window.clone()).expect("surface");
+        #[cfg(target_os = "android")]
+        {
+            self.android.instance = Some(instance.clone());
+        }
         #[cfg(not(target_arch = "wasm32"))]
         crate::gpustart::step("asking for an adapter");
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -4021,6 +4118,25 @@ impl ApplicationHandler for App {
         }
     }
 
+    /// Android: the activity handed something over (`android`).
+    #[cfg(target_os = "android")]
+    fn user_event(&mut self, el: &ActiveEventLoop, _: ()) {
+        self.android_input(el);
+    }
+
+    /// Android: the app went into the back, its window's surface with it:
+    /// let go, and the game's frames run on drawing nothing (`turn`) until
+    /// `resumed` makes it again.
+    #[cfg(target_os = "android")]
+    fn suspended(&mut self, _: &ActiveEventLoop) {
+        if let Some(g) = self.gfx.as_mut()
+            && g.surface.take().is_some()
+        {
+            crate::say("android: in the back, the window's surface let go");
+        }
+        crate::android::set_surface(false);
+    }
+
     /// The loop ends (the window closed, a Quit, the update's restart): the
     /// window's place written if it changed (`winplace`), then its place
     /// among the client's windows let go (`multibox::leave`), before the
@@ -4064,6 +4180,27 @@ impl App {
     /// `about_to_wait`: the loop's turn, between its events and its wait.
     fn turn(&mut self, _el: &ActiveEventLoop) {
         self.winplace.flush(false);
+        // Android: what the activity handed over; and while the activity is
+        // paused or has no surface winit asks for no frame, so the game's
+        // come from here, at the covered window's pace (`HIDDEN_GAP`)
+        #[cfg(target_os = "android")]
+        {
+            self.android_input(_el);
+            if crate::android::hidden()
+                && let Some(id) = self.gfx.as_ref().map(|g| g.window.id())
+            {
+                let now = Instant::now();
+                if self.android.next_tick.is_none_or(|t| now >= t) {
+                    self.android.next_tick = Some(now + HIDDEN_GAP);
+                    self.window_event(_el, id, WindowEvent::RedrawRequested);
+                }
+                if let Some(t) = self.android.next_tick {
+                    _el.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(t));
+                }
+                return;
+            }
+            self.android.next_tick = None;
+        }
         // a model viewer draws on input alone, but not while the 2002 disc's
         // files are coming (`poll_era` takes them on a frame) or a test's F9
         // is due
@@ -4093,6 +4230,283 @@ impl App {
         }
     }
 
+    /// Android: the window's surface made again on the window the activity
+    /// has now (`resumed`, back from the background), at its size.
+    #[cfg(target_os = "android")]
+    fn android_surface(&mut self) {
+        let (Some(g), Some(instance)) = (self.gfx.as_mut(), self.android.instance.as_ref()) else { return };
+        if g.surface.is_some() {
+            return;
+        }
+        match instance.create_surface(g.window.clone()) {
+            Ok(surface) => {
+                let size = g.window.inner_size();
+                g.config.width = size.width.max(1);
+                g.config.height = size.height.max(1);
+                g.whole = None;
+                g.renderer.scale.set_into_top(false);
+                surface.configure(&g.device, &g.surface_config());
+                g.surface = Some(surface);
+                // the depth buffer at the size too (`apply_size`)
+                g.resized = true;
+                crate::android::set_surface(true);
+                crate::say(&format!("android: back in front, the window's surface made again ({}x{})", g.config.width, g.config.height));
+                g.window.request_redraw();
+            }
+            Err(e) => crate::say(&format!("android: no surface on the window again: {e}")),
+        }
+    }
+
+    /// Android: what the activity handed over (`android::take`): a finger
+    /// as winit's touch would be (`finger`), a key as winit's would be
+    /// (`key_input`), the disc picked.
+    #[cfg(target_os = "android")]
+    fn android_input(&mut self, el: &ActiveEventLoop) {
+        use crate::android::Event;
+        for e in crate::android::take() {
+            match e {
+                Event::Touch { id, phase, at } => {
+                    let size = self.gfx.as_ref().map_or((1, 1), |g| (g.config.width, g.config.height));
+                    self.finger(id, phase, at, size);
+                }
+                Event::Key { key, text, down, repeat, soft } => {
+                    crate::android::key_taken(soft);
+                    let k = KeyIn { logical_key: key, state: if down { ElementState::Pressed } else { ElementState::Released }, repeat, text: text.map(Into::into) };
+                    self.key_input(el, k, false);
+                }
+                Event::Disc(Some(path)) => self.android_disc(path),
+                // the player would rather not choose one: the game ends
+                Event::Disc(None) => {
+                    crate::say("disc: none was chosen");
+                    el.exit();
+                }
+                Event::DiscAnswer(yes) => match self.android.disc_asking.take() {
+                    Some(path) if yes => self.android_take_disc(path),
+                    Some(_) => crate::android::pick_disc(None),
+                    None => {}
+                },
+            }
+        }
+    }
+
+    /// Android: the disc picked, judged as a desktop's pick is
+    /// (`discs::judge_file`): Frontiers taken; another PlayStation 2 disc
+    /// asked about; anything else refused, and the picker again.
+    #[cfg(target_os = "android")]
+    fn android_disc(&mut self, path: String) {
+        match crate::discs::judge_file(&path) {
+            crate::discs::Verdict::Take(line) => {
+                crate::say(&format!("disc: {line}"));
+                self.android_take_disc(path);
+            }
+            crate::discs::Verdict::Ask(line) => {
+                crate::say(&line);
+                self.android.disc_asking = Some(path);
+                crate::android::confirm_disc(&format!("{line}\n\nPlay with it anyway?"));
+            }
+            crate::discs::Verdict::Refuse(line) => {
+                crate::say(&line);
+                crate::android::pick_disc(Some(&line));
+            }
+        }
+    }
+
+    /// Android: the disc taken (kept by the activity for the next start),
+    /// its CLIENT and SUPPORT coming off it, and the pregame begun again on
+    /// it, as `resumed` does after a desktop's pick.
+    #[cfg(target_os = "android")]
+    fn android_take_disc(&mut self, path: String) {
+        crate::discs::take(&path);
+        crate::android::keep_disc();
+        crate::modules::load(std::path::Path::new(&path));
+        if let Some(h) = self.host.take() {
+            self.host = Some(crate::pregame::host::Host::new(crate::pregame::Pregame::new(h.pre.shared.server), 0));
+        }
+        if let Some(g) = &self.gfx {
+            g.window.request_redraw();
+        }
+    }
+
+    /// Whether play is over: Quit, answered yes in the start menu
+    /// (`m_p2EC28`), or the server ended the connection (`leave_play`).
+    fn leaving(&self) -> bool {
+        self.play.as_ref().is_some_and(|p| p.quit || p.disconnected.is_some())
+    }
+
+    /// Play over (`leaving`): back to the game's own screens when it was
+    /// booted (`Msg0777Done`), else the window closes.
+    fn leave_play(&mut self, el: &ActiveEventLoop) {
+        match self.booted.take() {
+            // the update's restart (`update`): the window closes for the
+            // program in place
+            Some(_) if crate::update::restarting() => el.exit(),
+            Some(shared) => self.back_to_pregame(shared),
+            None => el.exit(),
+        }
+    }
+
+    /// A key, the keyboard's (`WindowEvent::KeyboardInput`) or one the client
+    /// hands over itself (an Android activity's, `android`), through the
+    /// window's keys in order: play over, a key already down as the window
+    /// came to the front, full screen, the update's question, the pregame,
+    /// play.
+    fn key_input(&mut self, el: &ActiveEventLoop, event: KeyIn, is_synthetic: bool) {
+        let pressed = event.state == ElementState::Pressed;
+        // a key pressed: the first since the window came to the front, or
+        // one already down as it came (`arrival`)
+        if pressed && !event.repeat {
+            let name = crate::arrival::key_label(&event.logical_key);
+            if is_synthetic {
+                self.arrival.held_key(Instant::now(), &name);
+            } else if let Some(line) = self.arrival.press(Instant::now(), &name) {
+                crate::say(&line);
+            }
+        }
+        if self.leaving() {
+            self.leave_play(el);
+            return;
+        }
+        // A key already down as the window comes to the front (winit's
+        // synthetic press, on X11 and Windows; Alt+Tab's Tab among them):
+        // nothing until it is pressed here. Its release comes as any.
+        if is_synthetic && pressed {
+            return;
+        }
+        // macOS: ⌘, (the settings' key) when no menu item took it, asking as
+        // Settings… does (`macos`)
+        #[cfg(target_os = "macos")]
+        if self.super_held && pressed && matches!(&event.logical_key, Key::Character(c) if c == ",") {
+            crate::macos::ask();
+            return;
+        }
+        // F11: full screen (borderless, on the window's monitor) and back,
+        // as the Extended page's Display does (`display`); natively
+        // Alt+Enter too, Windows' own key for it, which the game never sees
+        // (its Enter neither pressed nor let go). A page leaves F11 to the
+        // browser (web/main.js), and its Alt+Enter is the game's Enter.
+        if event.logical_key == Key::Named(NamedKey::F11) && pressed && !event.repeat {
+            self.toggle_full_screen();
+            return;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if event.logical_key == Key::Named(NamedKey::Enter) && ((pressed && self.alt_held) || (!pressed && self.alt_enter_down)) {
+            self.alt_enter_down = pressed;
+            if crate::display::toggles(false, self.alt_enter_down && !event.repeat, self.alt_held) {
+                self.toggle_full_screen();
+            }
+            return;
+        }
+        // The update's question (`update`): its own keys pressed while it is
+        // up; their releases and the rest go on to the game.
+        #[cfg(not(target_arch = "wasm32"))]
+        if pressed && crate::update::offer_shown() && pregame_key(&event.logical_key).is_some_and(crate::update::Offer::takes) {
+            if !event.repeat
+                && let Some(k) = pregame_key(&event.logical_key)
+            {
+                let cues = crate::update::offer_key(k, self.clock.elapsed().as_millis() as i64);
+                self.ui_cues(cues.unwrap_or_default());
+            }
+            return;
+        }
+        // Before the world: the pregame's keys, the game's codes
+        // (`VIKeyboard::Read`'s).
+        if self.host.is_some() {
+            if !device_keyboard() {
+                self.touch.hide();
+            }
+            // F9 (`era`), as the Controls page has it: the art swapped
+            if event.state == ElementState::Pressed && !event.repeat && is_art_key(&event.logical_key) && self.host.as_ref().is_some_and(|h| h.pre.setup.capturing().is_none()) {
+                self.toggle_era();
+                return;
+            }
+            // the title's Options' Controls page waiting for a key: it is
+            // the page's, as play's is
+            let host = self.host.as_mut().unwrap();
+            if host.pre.setup.capturing().is_some()
+                && event.state == ElementState::Pressed
+                && !event.repeat
+                && let Some(name) = crate::binds::name_of(&event.logical_key)
+            {
+                host.pre.setup.capture_key(&name);
+                self.keys_edge.hold_back(&name);
+                return;
+            }
+            if let Some(k) = pregame_key(&event.logical_key) {
+                let down = event.state == ElementState::Pressed;
+                // a held key repeats only where it types
+                let typing = matches!(k, 8 | 32..=126);
+                if !event.repeat || typing {
+                    self.host.as_mut().unwrap().key(k, down);
+                }
+                self.host_keys.retain(|&h| h != k);
+                if down {
+                    self.host_keys.push(k);
+                }
+            }
+            return;
+        }
+        // Escape while the mouse look holds the pointer: it is let go
+        // (as a browser ends its lock on Escape), and nothing more
+        if event.state == ElementState::Pressed && event.logical_key == Key::Named(NamedKey::Escape) && self.mouse.escape() {
+            self.grab_pointer(false);
+            return;
+        }
+        // a keyboard in use (`gKeyboardAttached`): the edit boxes'
+        // compact face, with the options' Soft Keyboard on; the
+        // touch screen's pad goes
+        if event.state == ElementState::Pressed {
+            if !device_keyboard() {
+                self.touch.hide();
+            }
+            if let Some(p) = self.play.as_mut() {
+                p.keyboard = true;
+            }
+        }
+        // The Controls page waiting for a key (`bindpage`): the key
+        // pressed is its, as it is, and nothing else sees it or its
+        // release.
+        if let Some(p) = self.play.as_mut()
+            && p.capturing().is_some()
+            && event.state == ElementState::Pressed
+            && !event.repeat
+            && let Some(name) = crate::binds::name_of(&event.logical_key)
+        {
+            p.capture_key(&name);
+            self.keys_edge.hold_back(&name);
+            return;
+        }
+        // The player's own keys (`binds`, the client's, at the edge):
+        // a key a row was moved onto is that row's default key to all
+        // below, the row's old key nothing; a key given to △'s row
+        // (which the game has no key for) presses △ as the pad's
+        // does; text typed into an edit box is never remapped; a key
+        // lets go as what it was pressed as.
+        let event = match crate::binds::name_of(&event.logical_key) {
+            Some(name) => {
+                use crate::binds::Sent;
+                let typing = self.play.as_mut().is_some_and(|p| p.keyboard_typing());
+                let down = event.state == ElementState::Pressed;
+                match crate::settings::with_binds(|b| self.keys_edge.key(&name, down, event.repeat, typing, b)) {
+                    Some(Sent::Key(to)) if to == name => event,
+                    Some(Sent::Key(to)) => KeyIn { logical_key: crate::binds::key_of(&to), text: None, ..event },
+                    Some(Sent::Button(b)) => {
+                        let aspect = self.gfx.as_ref().map_or(4.0 / 3.0, |g| g.config.width as f32 / g.config.height as f32);
+                        if !event.repeat
+                            && let (Some(p), Some(w), Some(k)) = (self.play.as_mut(), self.walker.as_mut(), crate::binds::pad_key(b))
+                        {
+                            p.set_key(k, down, w, aspect);
+                            p.keyboard = true;
+                        }
+                        return;
+                    }
+                    None => return,
+                }
+            }
+            None => event,
+        };
+        self.keyboard(el, event);
+    }
+
     fn handle_window_event(&mut self, el: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         if let Some(g) = &self.gfx {
             self.winplace.event(&g.window, &event);
@@ -4114,35 +4528,16 @@ impl App {
                 return;
             }
         }
-        // a key pressed: the first since the window came to the front, or
-        // one already down as it came (`arrival`)
-        if let WindowEvent::KeyboardInput { event: e, is_synthetic, .. } = &event
-            && e.state == ElementState::Pressed
-            && !e.repeat
-        {
-            let name = crate::arrival::key_label(&e.logical_key);
-            if *is_synthetic {
-                self.arrival.held_key(Instant::now(), &name);
-            } else if let Some(line) = self.arrival.press(Instant::now(), &name) {
-                crate::say(&line);
-            }
+        // a key: the keyboard's dispatch (`key_input`), which takes the
+        // client's own keys too (an Android activity's, `android`)
+        if let WindowEvent::KeyboardInput { event: e, is_synthetic, .. } = &event {
+            let k = KeyIn::of(e);
+            self.key_input(el, k, *is_synthetic);
+            return;
         }
         match event {
             WindowEvent::CloseRequested => el.exit(),
-            // Quit, answered yes in the start menu (`m_p2EC28`), or the
-            // server ended the connection: back to the game's own screens
-            // when it was booted (`Msg0777Done`), else the window closes.
-            _ if self.play.as_ref().is_some_and(|p| p.quit || p.disconnected.is_some()) => match self.booted.take() {
-                // the update's restart (`update`): the window closes for the
-                // program in place
-                Some(_) if crate::update::restarting() => el.exit(),
-                Some(shared) => self.back_to_pregame(shared),
-                None => el.exit(),
-            },
-            // A key already down as the window comes to the front (winit's
-            // synthetic press, on X11 and Windows; Alt+Tab's Tab among them):
-            // nothing until it is pressed here. Its release comes as any.
-            WindowEvent::KeyboardInput { event, is_synthetic: true, .. } if event.state == ElementState::Pressed => {}
+            _ if self.leaving() => self.leave_play(el),
             // the window on another monitor: its refresh, for VSync off
             WindowEvent::Moved(_) => {
                 if let Some(g) = &self.gfx {
@@ -4175,22 +4570,6 @@ impl App {
                     self.super_held = m.state().super_key();
                 }
             }
-            #[cfg(target_os = "macos")]
-            WindowEvent::KeyboardInput { event, .. } if self.super_held && event.state == ElementState::Pressed && matches!(&event.logical_key, Key::Character(c) if c == ",") => {
-                crate::macos::ask();
-            }
-            WindowEvent::KeyboardInput { event: KeyEvent { logical_key: Key::Named(NamedKey::F11), state: ElementState::Pressed, repeat: false, .. }, .. } => {
-                self.toggle_full_screen();
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            WindowEvent::KeyboardInput { event: KeyEvent { logical_key: Key::Named(NamedKey::Enter), state, repeat, .. }, .. }
-                if (state == ElementState::Pressed && self.alt_held) || (state == ElementState::Released && self.alt_enter_down) =>
-            {
-                self.alt_enter_down = state == ElementState::Pressed;
-                if crate::display::toggles(false, self.alt_enter_down && !repeat, self.alt_held) {
-                    self.toggle_full_screen();
-                }
-            }
             WindowEvent::Touch(t) => {
                 use winit::event::TouchPhase as T;
                 let phase = match t.phase {
@@ -4202,18 +4581,9 @@ impl App {
                 let size = self.gfx.as_ref().map_or((1, 1), |g| (g.config.width, g.config.height));
                 self.finger(t.id, phase, [t.location.x as f32, t.location.y as f32], size);
             }
-            // The update's question (`update`): its own keys pressed while it
-            // is up, and a click on its buttons; their releases and the rest
-            // go on to the game.
-            #[cfg(not(target_arch = "wasm32"))]
-            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed && crate::update::offer_shown() && pregame_key(&event).is_some_and(crate::update::Offer::takes) => {
-                if !event.repeat
-                    && let Some(k) = pregame_key(&event)
-                {
-                    let cues = crate::update::offer_key(k, self.clock.elapsed().as_millis() as i64);
-                    self.ui_cues(cues.unwrap_or_default());
-                }
-            }
+            // The update's question (`update`): a click on its buttons (its
+            // keys are `key_input`'s); their releases and the rest go on to
+            // the game.
             #[cfg(not(target_arch = "wasm32"))]
             WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } if crate::update::offer_shown() && self.offer_click() => {}
             #[cfg(not(target_arch = "wasm32"))]
@@ -4226,109 +4596,12 @@ impl App {
                 };
                 crate::update::offer_wheel(lines, self.clock.elapsed().as_millis() as i64);
             }
-            // Before the world: the pregame's keys, the game's codes
-            // (`VIKeyboard::Read`'s), and its clicks.
-            WindowEvent::KeyboardInput { event, .. } if self.host.is_some() => {
-                if !device_keyboard() {
-                    self.touch.hide();
-                }
-                // F9 (`era`), as the Controls page has it: the art swapped
-                if event.state == ElementState::Pressed && !event.repeat && is_art_key(&event.logical_key) && self.host.as_ref().is_some_and(|h| h.pre.setup.capturing().is_none()) {
-                    self.toggle_era();
-                    return;
-                }
-                // the title's Options' Controls page waiting for a key: it is
-                // the page's, as play's is
-                let host = self.host.as_mut().unwrap();
-                if host.pre.setup.capturing().is_some()
-                    && event.state == ElementState::Pressed
-                    && !event.repeat
-                    && let Some(name) = crate::binds::name_of(&event.logical_key)
-                {
-                    host.pre.setup.capture_key(&name);
-                    self.keys_edge.hold_back(&name);
-                    return;
-                }
-                if let Some(k) = pregame_key(&event) {
-                    let down = event.state == ElementState::Pressed;
-                    // a held key repeats only where it types
-                    let typing = matches!(k, 8 | 32..=126);
-                    if !event.repeat || typing {
-                        self.host.as_mut().unwrap().key(k, down);
-                    }
-                    self.host_keys.retain(|&h| h != k);
-                    if down {
-                        self.host_keys.push(k);
-                    }
-                }
-            }
+            // Before the world: its clicks (its keys are `key_input`'s).
             WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } if self.host.is_some() => {
                 let Some(g) = &self.gfx else { return };
                 let size = (g.config.width, g.config.height);
                 let p = render::ui::frame_from_window(size, [self.cursor.0 as f32, self.cursor.1 as f32]);
                 self.host.as_mut().unwrap().click(p);
-            }
-            WindowEvent::KeyboardInput { event, .. } => {
-                // Escape while the mouse look holds the pointer: it is let go
-                // (as a browser ends its lock on Escape), and nothing more
-                if event.state == ElementState::Pressed && event.logical_key == Key::Named(NamedKey::Escape) && self.mouse.escape() {
-                    self.grab_pointer(false);
-                    return;
-                }
-                // a keyboard in use (`gKeyboardAttached`): the edit boxes'
-                // compact face, with the options' Soft Keyboard on; the
-                // touch screen's pad goes
-                if event.state == ElementState::Pressed {
-                    if !device_keyboard() {
-                        self.touch.hide();
-                    }
-                    if let Some(p) = self.play.as_mut() {
-                        p.keyboard = true;
-                    }
-                }
-                // The Controls page waiting for a key (`bindpage`): the key
-                // pressed is its, as it is, and nothing else sees it or its
-                // release.
-                if let Some(p) = self.play.as_mut()
-                    && p.capturing().is_some()
-                    && event.state == ElementState::Pressed
-                    && !event.repeat
-                    && let Some(name) = crate::binds::name_of(&event.logical_key)
-                {
-                    p.capture_key(&name);
-                    self.keys_edge.hold_back(&name);
-                    return;
-                }
-                // The player's own keys (`binds`, the client's, at the edge):
-                // a key a row was moved onto is that row's default key to all
-                // below, the row's old key nothing; a key given to △'s row
-                // (which the game has no key for) presses △ as the pad's
-                // does; text typed into an edit box is never remapped; a key
-                // lets go as what it was pressed as.
-                let event = match crate::binds::name_of(&event.logical_key) {
-                    Some(name) => {
-                        use crate::binds::Sent;
-                        let typing = self.play.as_mut().is_some_and(|p| p.keyboard_typing());
-                        let down = event.state == ElementState::Pressed;
-                        match crate::settings::with_binds(|b| self.keys_edge.key(&name, down, event.repeat, typing, b)) {
-                            Some(Sent::Key(to)) if to == name => KeyIn::of(&event),
-                            Some(Sent::Key(to)) => KeyIn { logical_key: crate::binds::key_of(&to), text: None, ..KeyIn::of(&event) },
-                            Some(Sent::Button(b)) => {
-                                let aspect = self.gfx.as_ref().map_or(4.0 / 3.0, |g| g.config.width as f32 / g.config.height as f32);
-                                if !event.repeat
-                                    && let (Some(p), Some(w), Some(k)) = (self.play.as_mut(), self.walker.as_mut(), crate::binds::pad_key(b))
-                                {
-                                    p.set_key(k, down, w, aspect);
-                                    p.keyboard = true;
-                                }
-                                return;
-                            }
-                            None => return,
-                        }
-                    }
-                    None => KeyIn::of(&event),
-                };
-                self.keyboard(el, event);
             }
             // Walking, the mouse is `mouse.rs`'s: a drag looks round, the
             // wheel zooms, a click targets and a double or right click talks.
@@ -4487,10 +4760,19 @@ impl App {
                 if self.hidden_until.is_some_and(|at| Instant::now() < at) {
                     return;
                 }
+                // Android: nothing before the disc is picked (the activity's
+                // picker is over the window)
+                #[cfg(target_os = "android")]
+                if self.host.is_some() && crate::discs::unsettled() {
+                    return;
+                }
                 FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 // a new size since the last frame: the surface takes it now,
-                // in the frame that draws on it (`Gfx::resize`)
+                // in the frame that draws on it (`Gfx::resize`); on Android
+                // the frame above the device's keyboard while it is up
                 if let Some(g) = self.gfx.as_mut() {
+                    #[cfg(target_os = "android")]
+                    g.fit_keyboard(crate::android::keyboard_height());
                     g.apply_size();
                 }
                 // the 2002 disc's files, read since (`era`)

@@ -5,6 +5,21 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-03 · The game on Android
+- The game now runs on Android phones and tablets (Android 8.0 and later) and on Chromebooks:
+  download eqoa-vanilla-android.apk from this page and open it to install it (Android asks you to
+  allow installing apps from your browser or file manager). The first time, it asks for your
+  Frontiers disc image in Android's own file picker, so copy the image to the device first; it keeps
+  it for the next time.
+- The touch screen's controller is there from the start, as in the browser on a phone. A controller
+  (Bluetooth or USB) or a keyboard plays as on a computer, and Back is Escape.
+- Tapping one of the game's text boxes (your account, the server's address, a character's name, a
+  chat line) brings up the device's keyboard, and the game moves into the space above it while you
+  type, so you see what you write.
+- Going to the home screen keeps the game going for a while: come back and you are where you were.
+- The app does not update itself: install the newer APK from this page over the old one, and your
+  settings stay. Not on Android yet: a controller's rumble, and the 2002 art (F9).
+
 ## 2026-11-02 · A smaller touch pad, no blank screen while typing, fishing's message
 - Options > Extended > Controller has a new row, Touch Pad Size: the touch screen's controller
   from 100 (its full size, the largest that fits the screen) down to 50, in steps of 5. Smaller,

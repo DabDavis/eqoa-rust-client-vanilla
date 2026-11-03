@@ -81,6 +81,11 @@ pub fn settled() -> bool {
 /// and macOS the same process): after the window closed for it (main's
 /// `boot`), or from the panic hook. Returns when it did not start.
 pub fn relaunch() {
+    // an Android app is the system's process, started by its launcher: the
+    // run ends there instead (`android`)
+    if cfg!(target_os = "android") {
+        return;
+    }
     let Some(exe) = START.lock().ok().and_then(|s| s.as_ref().map(|(_, e)| e.clone())) else { return };
     crate::multibox::leave();
     let mut c = std::process::Command::new(&exe);

@@ -13,6 +13,11 @@
 //! window is made (`viewer`'s `resumed`), where every platform's toolkit
 //! expects a modal dialog; before the loop, a Mac would show it with no
 //! application running.
+//!
+//! On Android the activity keeps the pick (`android`): it opens it again at
+//! the next start and hands it over as `$EQOA_ISO`; with none the player
+//! picks it in Android's own picker over the window, which the window's loop
+//! waits for (`viewer`'s `android_disc`, judged as a desktop's pick is).
 
 /// The disc this client is made for, by the program it starts.
 pub const FRONTIERS: &str = "SLUS_207.44";
@@ -135,7 +140,11 @@ pub fn judge(path: &str, cnf: Result<Option<Vec<u8>>, String>) -> Verdict {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{boot_disc, pick_2002, settle, unsettled};
+pub use native::{boot_disc, pick_2002, unsettled};
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
+pub use native::settle;
+#[cfg(target_os = "android")]
+pub use native::{judge_file, note, take};
 
 /// A page's disc is the image the page hands over (`web`): none to find.
 #[cfg(target_arch = "wasm32")]
@@ -177,7 +186,7 @@ mod native {
     }
 
     /// The image at `path`, judged: opened, and its SYSTEM.CNF read.
-    pub(super) fn judge_file(path: &str) -> Verdict {
+    pub fn judge_file(path: &str) -> Verdict {
         let cnf = iso::Iso::open(path).map_err(|e| reason(&e)).map(|mut d| d.read("SYSTEM.CNF").ok());
         judge(path, cnf)
     }
@@ -190,7 +199,10 @@ mod native {
         if game_mode {
             crate::say("session: Steam's game mode (gamescope): no desktop dialogs, zenity's instead");
         }
-        match start(arg, std::env::var("EQOA_ISO").ok(), crate::settings::disc(), usable) {
+        // on Android the activity keeps the pick, and names it in $EQOA_ISO
+        // (a path of the settings' would be a descriptor of an older run)
+        let kept = if cfg!(target_os = "android") { None } else { crate::settings::disc() };
+        match start(arg, std::env::var("EQOA_ISO").ok(), kept, usable) {
             Start::Ready(p) => {
                 let _ = TAKEN.set(p.clone());
                 Some(p)
@@ -304,6 +316,7 @@ mod native {
 
     /// zenity's file dialog, which Steam's game mode shows (`game_mode`):
     /// the image picked, None when cancelled; Err when zenity did not start.
+    #[cfg(not(target_os = "android"))]
     fn zenity_pick(title: &str, dir: Option<&Path>) -> std::io::Result<Option<PathBuf>> {
         let mut c = std::process::Command::new("zenity");
         c.args(["--file-selection", "--title", title, "--file-filter", "PlayStation 2 disc image | *.iso *.ISO *.bin *.BIN *.img *.IMG", "--file-filter", "All files | *"]);
@@ -329,6 +342,7 @@ mod native {
     /// (`game_mode`) while it is there, else the desktop's (rfd's: on Linux
     /// the portal's), its filters the disc images' and all files', opening
     /// in `dir`; the image picked, or None.
+    #[cfg(not(target_os = "android"))]
     fn file_dialog(title: &str, dir: Option<PathBuf>) -> Option<PathBuf> {
         if game_mode() {
             match zenity_pick(title, dir.as_deref()) {
@@ -353,12 +367,31 @@ mod native {
         ASK.lock().unwrap().is_some()
     }
 
+    /// Android: why the picker asks (the kept pick that cannot be used), if
+    /// it says why.
+    #[cfg(target_os = "android")]
+    pub fn note() -> Option<String> {
+        match &*ASK.lock().unwrap() {
+            Some(Start::Pick { note }) => note.clone(),
+            _ => None,
+        }
+    }
+
+    /// Android: the image the player picked and the game plays (judged by
+    /// `viewer`'s `android_disc`), taken: the boot's question answered.
+    #[cfg(target_os = "android")]
+    pub fn take(path: &str) {
+        *ASK.lock().unwrap() = None;
+        let _ = TAKEN.set(path.to_string());
+    }
+
     /// The boot's question answered, before the window opens: the image the
     /// command line named, or else the player's pick in the desktop's file
     /// dialog, judged (`judge`) until it is one to play with; kept for the
     /// next time and taken. Err when the player cancels the dialog, when no
     /// dialog could open, or when one is needed with no screen to show it on
     /// (`EQOA_OFFSCREEN`).
+    #[cfg(not(target_os = "android"))]
     pub fn settle() -> Result<String, String> {
         const NONE: &str = "no disc image was chosen. The client reads your own EverQuest Online Adventures: Frontiers disc image (SLUS-20744): start it again to choose it, or name it, eqoa /path/to/image.iso";
         let Some(ask) = ASK.lock().unwrap().take() else {
@@ -417,6 +450,7 @@ mod native {
 
     /// The desktop's file dialog: the player's image, or None (cancelled, or
     /// no dialog could open). `note` says why it asks again.
+    #[cfg(not(target_os = "android"))]
     fn pick(note: Option<&str>) -> Option<PathBuf> {
         let title = match note {
             Some(n) => format!("{n} {CHOOSE}"),
@@ -430,6 +464,12 @@ mod native {
     /// The 2002 disc for F9's art (`era`), in the desktop's file dialog,
     /// judged (`era::judge_image`) until it is the USA disc of 2002: its path,
     /// or why there is none (cancelled, no dialog, no screen).
+    #[cfg(target_os = "android")]
+    pub fn pick_2002() -> Result<String, String> {
+        Err("no 2002 disc image: on Android it cannot be chosen yet".into())
+    }
+
+    #[cfg(not(target_os = "android"))]
     pub fn pick_2002() -> Result<String, String> {
         const CHOOSE_2002: &str = "Choose your EverQuest Online Adventures (USA) disc image (SLUS-20470), for its 2002 art";
         let offscreen = std::env::var("EQOA_OFFSCREEN").ok().and_then(|v| v.split_once('x').map(|(w, h)| w.parse::<u32>().is_ok() && h.parse::<u32>().is_ok()));
@@ -464,6 +504,7 @@ mod native {
 
     /// Why a pick was refused: said, and shown in a box the player closes
     /// (on Linux zenity's, when it is there).
+    #[cfg(not(target_os = "android"))]
     fn tell(line: &str) {
         crate::say(line);
         let _ = rfd::MessageDialog::new().set_level(rfd::MessageLevel::Error).set_title(TITLE).set_description(line).set_buttons(rfd::MessageButtons::Ok).show();
@@ -471,6 +512,7 @@ mod native {
 
     /// A question with Yes and No: true for Yes. No box (Linux without
     /// zenity) is a No.
+    #[cfg(not(target_os = "android"))]
     fn confirm(text: &str) -> bool {
         crate::say(text);
         matches!(

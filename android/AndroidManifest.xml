@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Android app (android/build.sh): the game in Android's NativeActivity
+     (EqoaActivity, java/), its library libeqoa_android.so (crates/eqoa,
+     src/android.rs). The version is build.sh's. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="io.github.dabdavis.eqoa">
+
+    <!-- wgpu draws on Vulkan, or on OpenGL ES 3 where there is none -->
+    <uses-feature android:glEsVersion="0x00030000" android:required="true" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-feature android:name="android.hardware.gamepad" android:required="false" />
+    <!-- the game's servers -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- allowBackup off: the settings name the player's account -->
+    <application
+        android:label="EQOA"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:hasCode="true"
+        android:isGame="true"
+        android:appCategory="game"
+        android:allowBackup="false"
+        android:extractNativeLibs="false"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
+
+        <!-- landscape, as the game's picture is; every change the game takes
+             itself (its window resized), never by the activity made again:
+             the game's event loop is made once a process -->
+        <activity
+            android:name=".EqoaActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|fontScale|layoutDirection|locale|touchscreen|colorMode"
+            android:windowSoftInputMode="stateAlwaysHidden|adjustNothing"
+            android:resizeableActivity="true">
+            <meta-data android:name="android.app.lib_name" android:value="eqoa_android" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

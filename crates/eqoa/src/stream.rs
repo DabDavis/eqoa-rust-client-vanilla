@@ -145,7 +145,7 @@ impl FileZones {
     /// The file `name` inside the image at `iso_path`.
     pub fn open(iso_path: &std::path::Path, name: &str) -> Option<Self> {
         let e = iso::Iso::open(iso_path).ok()?.find(name)?.clone();
-        let f = std::fs::File::open(iso_path).ok()?;
+        let f = iso::open_file(iso_path).ok()?;
         Some(FileZones { src: esf::Window::new(f, e.lba as u64 * iso::SECTOR, e.size as u64), done: VecDeque::new() })
     }
 }
@@ -285,7 +285,7 @@ pub fn open_file(iso_path: &std::path::Path, name: &str) -> Result<Container, Bo
         }
         return Err(format!("{name}: not on the disc").into());
     };
-    let mut src = esf::Window::new(std::fs::File::open(iso_path)?, e.lba as u64 * iso::SECTOR, e.size as u64);
+    let mut src = esf::Window::new(iso::open_file(iso_path)?, e.lba as u64 * iso::SECTOR, e.size as u64);
     let whole = std::env::var_os("EQOA_WHOLE_WORLD").is_some_and(|v| v != "0");
     if !whole && is_world(&mut src) {
         return Ok(Container::open_deferred(&mut src)?);

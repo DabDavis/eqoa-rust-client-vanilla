@@ -154,10 +154,20 @@ or a browser (each described where it lives below):
 ## Playing a release
 
 One build is published, **dev**: rebuilt from `master` on every push, for Linux
-(x86-64), Windows (x86-64) and macOS, on the
+(x86-64), Windows (x86-64), macOS and Android, on the
 [releases page](https://github.com/DabDavis/eqoa-rust-client-vanilla/releases/tag/dev).
 Each build replaces the one before, so only the newest can be downloaded; the
 release page's update notes (`UPDATE-NOTES.md`) say what each build changed.
+
+On Android (8.0 and later: phones, tablets, Chromebooks) it is
+`eqoa-vanilla-android.apk`: open the download to install it, allowing the browser
+or the file manager to install apps when Android asks. It does not update itself
+(an installed app cannot replace itself): a newer build installs over the old one
+the same way, its settings kept, as both carry the project's key. The first time it
+asks for the disc image in Android's own file picker, so copy the image to the
+device first; it keeps the pick. It plays as the other builds do, the touch
+screen's controller there from the start, a controller or a keyboard as on a
+computer, and the device's keyboard for the game's text boxes (README "Android").
 
 The program's icon is a drawn disc of its own (`icon_art.rs`: no game art; the
 Windows `.exe` carries it in its resources, made by `build.rs` from the same
@@ -934,6 +944,81 @@ and the last three files are kept. In Chromium, in Freeport: 60 fps with the sou
 the region's music read and playing, no underrun after the world's first frames; the
 status line shows the lead and the underruns, and `eqoaAudio.stats()` the worklet's
 counts and level.
+
+## Android
+
+The same client as an Android app (`android/`): Android 8.0 (API 26) and later, for
+phones and tablets (arm64-v8a) and the emulator and Chromebooks (x86_64), one APK for
+both. `android/build.sh` makes it with the SDK's own tools, no Gradle: the game is
+main.rs built as the library Android's NativeActivity loads (`cargo build -p eqoa
+--example eqoa-android --features android`, for each ABI with the NDK's compilers;
+`src/android_lib.rs` is main.rs under another name, so Cargo does not see one file in
+two targets, and nothing builds it unless asked), and the activity is
+`android/java/.../EqoaActivity.java`, the platform's NativeActivity and a little Java of
+its own, which needs nothing outside the platform. The launcher icon is the
+program's drawn disc (`tools/webicons --android`); nothing of the game's goes into
+the APK. It is signed with the key at `~/.config/eqoa-android/eqoa.jks` (made the
+first time, its password beside it; `$EQOA_ANDROID_KEYSTORE` names another): Android
+installs a new APK over an old one only when both have the same key, so keep it.
+
+Android starts the game in its own thread at `android::android_main`, and the
+activity hands it what a desktop's system would, over JNI (`crates/eqoa/src/android.rs`
+is the game's half):
+
+- **The disc image**: picked the first time in Android's own file picker (any file:
+  a disc image has no type of its own), judged as a desktop's pick is (*Frontiers*
+  taken, another EverQuest Online Adventures disc asked about, anything else refused
+  and the picker again) and kept: the next start opens it again before the game
+  starts. The picker opens the file in another process and hands the app a
+  descriptor, which the game opens as `/proc/self/fd/<n>` (`iso::open_file`: a
+  duplicate for each reader, so every read of the image is by position,
+  `iso::read_exact_at`, natively too). The 2002 disc (F9) cannot be chosen yet.
+- **Input**: the activity takes every input event itself (the window's input queue
+  is not given to the native side: winit's Android backend takes every motion event
+  for a touch, a controller's sticks included, and has no way to a phone's keyboard)
+  and hands touches and keys to the window's loop (`App::android_input`), into the
+  paths winit's would take (`App::finger`, `App::key_input`). The touch screen's pad
+  is there from the start. A controller is read as on the other platforms
+  (`input::Gamepads`): its buttons by position as SDL's layout (Android names them as an
+  Xbox controller's), its sticks (AXIS_X and AXIS_Y; the right one AXIS_Z and AXIS_RZ,
+  or AXIS_RX and AXIS_RY where it has no RZ), its hat as the d-pad, its triggers as L2
+  and R2 past a third; no motors yet. A keyboard types as a desktop's; Back is the
+  game's Escape, and the volume keys stay the system's.
+- **The device's keyboard**: up while an edit box of the game's has the keys (as a
+  page's, `note_typing`), typing into an editor that holds a few spaces between
+  keystrokes (as the page's hidden input does), with no suggestions or corrections,
+  so what changed is all that is read: each character as a key, a Backspace for each
+  one taken away. While it is up the game is drawn in the window above it, its whole
+  frame at that size (`Gfx::fit_keyboard`: the render scale's texture laid into the
+  window's top, `Scale::set_into_top`), as a page's browser shrinks the page for it;
+  the frame is the window's again when it goes. After a trip to the home screen it is
+  back only for an edit box that still has the keys.
+- **The background**: Android takes the window's surface away (`suspended`); the
+  game goes on, drawing nothing, at a covered window's pace (30 frames a second, as a
+  hidden page's), its sound and its network with it, for as long as Android lets an
+  app in the back run (it may freeze or end one), and back in front `resumed` makes
+  the surface again. A run's end ends the process: winit's event loop is made once a
+  process.
+- **Its files**: the settings, the servers' folders and the log in the app's own
+  folder (`files/config`, `$EQOA_CONFIG`), the unpacked modules in its cache
+  (`$EQOA_CACHE`); Android's backup is off (the settings name the account, and Save
+  Account keeps its password). The log is logcat's too (tag `eqoa`).
+
+The updater is off (`update`): an installed APK cannot put another program in its
+place, so a newer build is a new APK installed over the old one. One window, so no
+multiboxing; a mouse's hover and wheel do nothing yet.
+
+The emulator plays it: an x86_64 system image with KVM, `-gpu host` (Vulkan on the
+machine's graphics card through gfxstream, headless with `-no-window`), the machine
+itself at 10.0.2.2 (a server of one's own that gives that address out, with
+`server_ip: "10.0.2.2"`). A debug build (`--debug`) is debuggable and takes the
+game's `EQOA_*` settings from its start's extras, as a desktop's run takes them from
+its environment (`adb shell am start -n io.github.dabdavis.eqoa/.EqoaActivity -e
+EQOA_AUTH_PORT 19735 ...`; `-e EQOA_INPUT_TRACE 1` logs every input event the activity
+hands over, tag `eqoa-input`); a release build ignores them. `adb shell input tap`
+presses and lets go within a millisecond, shorter than any frame, so the touch pad's
+buttons are pressed with `input swipe x y x y 120`; `input gamepad keyevent` is a
+controller.
 
 ## Licence
 

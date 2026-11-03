@@ -693,6 +693,11 @@ mod native {
     /// The updater's thread, when this build follows a channel and the run
     /// is a player's (the module's doc): the start's check, then the watch.
     pub fn start() {
+        // an installed Android app cannot put another program in its own
+        // place: its updates are a new APK's
+        if cfg!(target_os = "android") {
+            return;
+        }
         clean_up();
         let (Some(_), Some(commit), Some(platform)) = (CHANNEL, COMMIT, PLATFORM) else { return };
         // the program an update just started does not ask at its start again

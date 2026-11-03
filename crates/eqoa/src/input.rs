@@ -588,6 +588,10 @@ enum Source {
     Hid(u32, Option<gilrs::GamepadId>),
     #[cfg(target_arch = "wasm32")]
     Page(u32),
+    /// an Android controller, by its device id, as the activity reports it
+    /// (`android::pads`; no motors yet)
+    #[cfg(target_os = "android")]
+    Android(i32),
 }
 
 /// What a window reads of the connected controllers (`pick`).
@@ -803,8 +807,9 @@ impl Gamepads {
         // `EQOA_GAMEPAD=0`: none (a script or the touch pad only)
         #[cfg(not(target_arch = "wasm32"))]
         let none = std::env::var("EQOA_GAMEPAD").is_ok_and(|v| v == "0");
+        // Android's come from its activity (`android::pads`): gilrs reads none there
         #[cfg(not(target_arch = "wasm32"))]
-        let gilrs = if none {
+        let gilrs = if none || cfg!(target_os = "android") {
             None
         } else {
             match gilrs::GilrsBuilder::new().with_force_feedback(GILRS_FF).build() {
@@ -1145,6 +1150,21 @@ impl Gamepads {
             }
             out.extend(hid.into_iter().map(|(c, _)| c));
         }
+        // Android's, as its activity reports them, in the order they came
+        #[cfg(target_os = "android")]
+        if std::env::var("EQOA_GAMEPAD").is_ok_and(|v| v == "0") {
+            // none (a script or the touch pad only)
+        } else {
+            for (k, f) in crate::android::pads().into_iter().enumerate() {
+                if !self.seen.contains(&f.name) {
+                    crate::say(&format!("gamepad: {} (Android's device {})", f.label, f.device));
+                    self.seen.push(f.name.clone());
+                }
+                let mut report = f.report;
+                report.rest(self.dead_zone);
+                out.push(Controller { name: f.name, report, between: f.between, rumbles: false, label: f.label, source: Source::Android(f.device), order: (1, k as u64) });
+            }
+        }
         out.sort_by_key(|c| c.order);
         out
     }
@@ -1258,6 +1278,8 @@ impl Gamepads {
                     Source::Gilrs(id) => Some(*id),
                     #[cfg(windows)]
                     Source::Hid(..) | Source::XInput(_) => None,
+                    #[cfg(target_os = "android")]
+                    Source::Android(_) => None,
                 })
                 .collect();
             if ids.is_empty() {

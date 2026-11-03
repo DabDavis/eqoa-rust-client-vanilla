@@ -5,6 +5,19 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+# Android (`android/`, README "Android"): main.rs built as the library the
+# activity loads (`src/android_lib.rs` is main.rs under another name, so
+# Cargo does not see one file in two targets), only when asked for:
+# `cargo build --example eqoa-android --features android`.
+[features]
+android = []
+
+[[example]]
+name = "eqoa-android"
+path = "src/android_lib.rs"
+crate-type = ["cdylib"]
+required-features = ["android"]
+
 [dependencies]
 iso.workspace = true
 dnas.workspace = true
@@ -27,15 +40,24 @@ cpal = "0.16"
 # Gamepad API itself (`padmap`, `web::pad`).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 gilrs = "0.11.2"
-# The disc image's picker (`discs::settle`): the desktop's own file dialog,
-# Windows' common dialog, a Mac's open panel, on Linux the XDG desktop portal
-# (libdbus, opened at run time) or else zenity. Nothing more is linked.
-rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
 # The updater (`update`): HTTPS to the GitHub release (rustls on ring,
 # Mozilla's roots built in), and a download held to the SHA-256 its manifest
 # names.
 ureq = { version = "3.4.2", default-features = false, features = ["rustls"] }
 sha2 = "0.10.9"
+
+# The disc image's picker (`discs::settle`): the desktop's own file dialog,
+# Windows' common dialog, a Mac's open panel, on Linux the XDG desktop portal
+# (libdbus, opened at run time) or else zenity. Nothing more is linked. (On
+# Android the activity's picker, `android`.)
+[target.'cfg(any(target_os = "linux", target_os = "macos", windows))'.dependencies]
+rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
+
+# Android: winit on the platform's NativeActivity, and JNI both ways between
+# the game and its activity (`android`), the version cpal's AAudio brings.
+[target.'cfg(target_os = "android")'.dependencies]
+winit = { version = "0.30.13", features = ["android-native-activity"] }
+jni = "0.21.1"
 
 # The log's pipe (`logfile`): stderr duplicated and replaced.
 [target.'cfg(unix)'.dependencies]

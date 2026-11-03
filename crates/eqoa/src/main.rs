@@ -33,8 +33,9 @@
 //! `boot`, `play`) also takes the image the player picked last, and with none
 //! at hand `eqoa` asks for it in the desktop's file dialog (`discs`).
 
-// The browser build runs none of the commands (the page calls `web`).
-#![cfg_attr(target_arch = "wasm32", allow(dead_code, unused_imports))]
+// The browser build runs none of the commands (the page calls `web`), nor
+// does Android's (the activity calls `android::android_main`, which plays).
+#![cfg_attr(any(target_arch = "wasm32", target_os = "android"), allow(dead_code, unused_imports))]
 // On Windows no console window of its own: double-clicked, the game had a
 // terminal beside it. Run from a terminal it writes there (`attach_console`).
 #![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
@@ -181,6 +182,12 @@ mod hidpad;
 
 #[cfg(target_arch = "wasm32")]
 mod web;
+// the game in an Android activity (`android/`): main.rs built as a library
+#[cfg(target_os = "android")]
+mod android;
+// Android's input as the game reads it (checked natively by its tests)
+#[cfg(any(target_os = "android", test))]
+mod androidmap;
 
 use std::process::ExitCode;
 
@@ -190,7 +197,7 @@ fn main() {
     web::start();
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 fn main() -> ExitCode {
     #[cfg(windows)]
     attach_console();
