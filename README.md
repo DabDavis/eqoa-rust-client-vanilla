@@ -443,7 +443,11 @@ m/s at 60 Hz and 9.30 at 165 against 8.85, a turn 6% faster), and at Tunaria's
 places each frame's add was also cut to the floats' step, so the speed shifted
 with the rate and the heading too. Each frame drawn now puts the walk back to the
 last console frame (two fields, 33.37 ms), steps the console frames come since
-as the console steps them (`Process`: a tick and the rest), and draws that frame
+as the console steps them (`Process` by the game clock's step, VITimer's count of
+983.04 a second: 32 or 34 a frame, three frames in five one 32 ms tick and the
+others a tick and a 2 rest; counted in milliseconds every frame had a 1 or 2 rest,
+and the gait read off that alone flipped between a walk and a run walking slowly
+toward a lower coordinate, where the chopped add rounds a step up), and draws that frame
 on its way to the next (`Process` on a copy, on the frame's controls): the place,
 heading, pitch and height offset as far along as the frame drawn is, in doubles,
 the rest (floor, water, locomotion) as the console frame has it. Its tests keep

@@ -112,6 +112,36 @@ pub struct Walker {
 /// walk keeps only these, at any display rate (`Kept`).
 const CONSOLE_FRAME_MS: f64 = 2.0 * 1001.0 / 60.0;
 
+/// The game's clock, which the walk steps by (`VIScene::GetTime`: `Tick`
+/// journals `VITimer::GetTime()` and sets the scene's time to it): SUPPORT's
+/// VITimer, the EE's timer 0 at the bus clock over 16 (9.216 MHz)
+/// interrupting every 18,750 counts, 491.52 times a second, and adding 2
+/// each time. So it counts 983.04 a second, every count even, and a console
+/// frame is 32.80 of them: the walk steps 32 or 34 (`console_step`).
+const VITIMER_IRQ_PER_MS: f64 = 0.49152;
+
+/// The game clock's step into console frame `n` of a walk's frames: VITimer's
+/// count as the frame begins less its count as the frame before began, 32 or
+/// 34, three frames in five 32. `Process` steps a 32 tick and then the rest,
+/// and takes the gait from the last of those (`UpdateLocomotion`), so on
+/// three frames in five the console reads the gait off the whole tick and on
+/// the others off a 2 tick rest. Counted in milliseconds (33 or 34) every
+/// frame had a rest of 1 or 2, and the gait was read off that alone: a
+/// float step or two of way, which the EE's chopped add rounds toward zero,
+/// up for a walk toward a lower coordinate. Walking toward -z at Tunaria's
+/// z 31570 (one step 1.95 mm) the 1 rest read 3.9 a second, a run, and the 2
+/// rest 2.9, a walk, and the body changed its gait two frames in three
+/// (2026-11-03, Mesh walking toward Warlord Jurglash: "when walking slow
+/// with controller it is still rapidly jitters animation"). On VITimer's
+/// counts it walks throughout, and walks and runs at a PS2's pace on the
+/// wall clock, whose game clock runs 1.7% slower than milliseconds (east on
+/// Tunaria's open ground a run 8.62 a second where it was 8.81, a walk 2.88
+/// where it was 2.91).
+fn console_step(n: i64) -> i64 {
+    let count = |n: i64| ((n as f64 * CONSOLE_FRAME_MS * VITIMER_IRQ_PER_MS) as i64) * 2;
+    count(n) - count(n - 1)
+}
+
 /// The walk on the console's frames. `VIWalkControl::Process` steps 32 ms
 /// ticks and then the rest of the frame, with its accelerations set for the
 /// tick (`InitIntermediate`), so the top speed it reaches grows as the rest
@@ -122,9 +152,12 @@ const CONSOLE_FRAME_MS: f64 = 2.0 * 1001.0 / 60.0;
 /// floats' step as well, the run changed again with the rate and the
 /// heading (east at x 22000: 9.06 m/s at 60, 8.80 at 165, 8.83 at 240). So
 /// each frame drawn puts the walk back where the last console frame left it,
-/// steps every console frame come since as the console steps one (a tick
-/// and the rest) and keeps that: the walk keeps what a console at 30 frames
-/// a second keeps.
+/// steps every console frame come since as the console steps one (the game
+/// clock's step, `console_step`: a tick, and on some frames a rest) and keeps
+/// that: the walk keeps what a console at 30 frames a second keeps. Each
+/// console frame is at its own place on the wall clock (the scene's time,
+/// which the camera, the animation and the drawing go by) and steps the
+/// walk by VITimer's count.
 ///
 /// Each frame drawn shows the kept frame on its way to the next (`ahead`:
 /// Process on a copy, on this frame's controls, so a press shows at once):
@@ -155,10 +188,17 @@ struct Kept {
 }
 
 impl Kept {
-    /// Console frame `n`'s time: 33 or 34 ms apart, as the console's clock
-    /// counts them.
+    /// Console frame `n`'s time on the wall clock: 33 or 34 ms apart.
     fn time(&self, n: i64) -> i64 {
         self.origin + (n as f64 * CONSOLE_FRAME_MS) as i64
+    }
+
+    /// The walk at console frame `n - 1` (its committed state) made to be
+    /// stepped into frame `n` at `scene_time` (frame `n`'s `time`) by the
+    /// game clock's step (`console_step`): `Process` steps the time since the
+    /// committed state's.
+    fn ready(w: &mut WalkPhysics<Ee>, n: i64, scene_time: i64) {
+        w.time = scene_time - console_step(n);
     }
 }
 
@@ -419,6 +459,7 @@ impl Walker {
             w.phys.force = force;
             w.phys.torque = torque;
             scene.time = k.time(k.frames);
+            Kept::ready(&mut w.committed, k.frames, scene.time);
             w.process(0, scene);
         }
         let mut at = w.phys;
@@ -445,6 +486,7 @@ impl Walker {
         let mut w = cam.walk;
         let now = scene.time;
         scene.time = k.time(k.frames + 1);
+        Kept::ready(&mut w.committed, k.frames + 1, scene.time);
         w.process(0, scene);
         scene.time = now;
         k.ahead = Some((k.frames, cam.walk.phys, w.phys));
@@ -1105,6 +1147,18 @@ pub(crate) mod tests {
         w.eye = w.cam.process(&mut w.scene);
     }
 
+    /// The console's frame `n` from `t0` (`t0` the walk's own time when it
+    /// began): `UpdateControls`, then the camera's `Process` with the walk
+    /// stepped by the game clock's step (`console_step`), at the frame's
+    /// place on the wall clock: one `Process` a frame, as the PS2 runs it.
+    fn console_frame(w: &mut Walker, c: Controls, t0: i64, n: i64) {
+        crate::controls::update_controls(w, c.axes(), &crate::controls::Client::default());
+        let now = t0 + (n as f64 * CONSOLE_FRAME_MS) as i64;
+        w.cam.walk.committed.time = now - console_step(n);
+        w.scene.time = now;
+        w.eye = w.cam.process(&mut w.scene);
+    }
+
     /// Frame `k`'s time at `hz` from `t0`, up to `jitter` ms early or late
     /// (a display's frames are not exact).
     fn drawn_at(t0: i64, hz: f64, jitter: f64, k: u64) -> i64 {
@@ -1121,10 +1175,12 @@ pub(crate) mod tests {
     /// The walk keeps the console's frames at any display rate: a run with a
     /// turn drawn at 60, 165 and 240 frames a second, and at 144 with each
     /// frame up to 1.5 ms early or late, keeps bit for bit the states a
-    /// console at 29.97 frames a second keeps (one `Process` a frame), so it
-    /// runs and turns as fast at every rate, and the run drawn at 165 goes as
-    /// fast as the console's. The control: stepped once a frame drawn, as
-    /// until now, it is the console's at the console's rate and 4% faster at
+    /// console at 29.97 frames a second keeps (one `Process` a frame, the walk
+    /// stepped by VITimer's 32 or 34: `console_frame`), so it runs and turns
+    /// as fast at every rate, and the run drawn at 165 goes as fast as the
+    /// console's. The controls: one `Process` a frame on the milliseconds
+    /// (33 or 34, the walk's frames until 2026-11-03) is not the console's;
+    /// stepped once a frame drawn, as until 2026-10-27, it is 4% faster at
     /// 165.
     #[test]
     fn the_walk_keeps_the_consoles_frames_at_any_display_rate() {
@@ -1168,12 +1224,18 @@ pub(crate) mod tests {
             eprintln!("{hz} Hz (jitter {jitter}): {drawn:.4} m/s drawn, the console's {console_speed:.4}");
             assert!((drawn / console_speed - 1.0).abs() < 0.003, "{hz} Hz: drawn at {drawn}, the console's {console_speed}");
         }
-        // the control
+        // the console's own frames, one Process each
         let mut a = open_ground().unwrap();
         for n in 1..=want.len() as i64 {
-            frame_drawn(&mut a, go, console(n));
+            console_frame(&mut a, go, t0, n);
         }
-        assert!(same(&a.cam.walk.phys, want.last().unwrap()), "the control: once a frame at the console's rate is the console's");
+        assert!(same(&a.cam.walk.phys, want.last().unwrap()), "one Process a console frame, on VITimer's steps, is the console's");
+        // the control: the same frames stepped on the milliseconds
+        let mut m = open_ground().unwrap();
+        for n in 1..=want.len() as i64 {
+            frame_drawn(&mut m, go, console(n));
+        }
+        assert!(!same(&m.cam.walk.phys, want.last().unwrap()), "the control: one Process a frame on the milliseconds is not the console's");
         let mut b = open_ground().unwrap();
         let mut path = vec![(t0, b.cam.walk.phys.position)];
         for k in 1.. {
@@ -1187,6 +1249,57 @@ pub(crate) mod tests {
         let fast = speed(&path);
         eprintln!("the control at 165 Hz: {fast:.4} m/s");
         assert!(fast > console_speed * 1.03, "the control: once a frame drawn at 165 runs {fast}, the console {console_speed}");
+    }
+
+    /// The game clock's step into each console frame is VITimer's: 32 or
+    /// 34, three in five 32, an even count summing to 983.04 a second.
+    #[test]
+    fn a_console_frame_steps_the_walk_by_vitimers_count() {
+        let steps: Vec<i64> = (1..=3000).map(console_step).collect();
+        assert!(steps.iter().all(|&s| s == 32 || s == 34), "{:?}", &steps[..10]);
+        let short = steps.iter().filter(|&&s| s == 32).count() as f64 / steps.len() as f64;
+        assert!((short - 0.6).abs() < 0.01, "{short}");
+        let total: i64 = steps.iter().sum();
+        let wall = 3000.0 * CONSOLE_FRAME_MS;
+        assert!((total as f64 / wall - 0.98304).abs() < 1e-4, "{total} counts in {wall} ms");
+    }
+
+    /// Walking slowly where a walk's way rounds up: toward -z from Mesh's
+    /// place at Tunaria's z 31573 (one float step 1.95 mm) toward Warlord
+    /// Jurglash, on a stick held at a walk (2026-11-03: "when walking slow
+    /// with controller it is still rapidly jitters animation"). Drawn at 165
+    /// frames a second, the body walks on every frame once it is under way.
+    /// The control: the console's frames stepped on the milliseconds (33 or
+    /// 34, the walk's until then), whose 1 ms rest reads a walk's float step
+    /// or two of way, rounded up by the EE's chopped add, as a run (3.9 a
+    /// second): the body ran one frame and walked the next.
+    #[test]
+    fn walking_slowly_toward_a_lower_coordinate_keeps_its_gait() {
+        let (x, z, heading) = (25393.32f32, 31573.49f32, 3.0929f32);
+        let walk = Controls { fwd: 0.42, ..Default::default() };
+        let start = || {
+            let mut w = Walker::arrive(tunaria_round(x, z)?, Spawn::ground(x, z, heading));
+            w.cam.set_camera_mode(2);
+            Some(w)
+        };
+        let Some(mut w) = start() else { return };
+        let t0 = w.scene.time;
+        let mut gaits = Vec::new();
+        for k in 1..=(165 * 6) {
+            w.frame(walk, drawn_at(t0, 165.0, 0.0, k));
+            if k > 165 {
+                gaits.push(w.cam.walk.committed.loco_state);
+            }
+        }
+        assert!(w.cam.walk.phys.position.z.0 < z - 10.0, "it walked toward -z: {:?}", w.cam.walk.phys.position);
+        assert!(gaits.iter().all(|&g| g == 1), "a walk on every frame drawn: {} not", gaits.iter().filter(|&&g| g != 1).count());
+        let mut m = start().unwrap();
+        let mut ran = 0;
+        for n in 1..=180 {
+            frame_drawn(&mut m, walk, t0 + (n as f64 * CONSOLE_FRAME_MS) as i64);
+            ran += (n > 30 && m.cam.walk.committed.loco_state == 3) as usize;
+        }
+        assert!(ran > 50, "the control: on the milliseconds it reads a run on {ran} of 150 frames");
     }
 
     /// The farthest and the root mean square (mm) the places drawn are off

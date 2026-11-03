@@ -5,6 +5,12 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-03 · A slow walk keeps walking
+- Walking slowly with a controller no longer makes your character's legs switch between walking and
+  running every moment when you head in some directions (on the way to Warlord Jurglash, for one).
+  Your character now takes its steps on the same clock as a PS2, which also makes walking and running
+  a little slower than before (about 2% when running), as fast as on a PS2.
+
 ## 2026-11-03 · Dying shows your body again; no stutter step on a light push
 - When you die, the camera now starts where it was and swings round and down onto your body as on a
   PS2. It used to start pointing nowhere: the screen broke up into garbage (stripes, a smear of

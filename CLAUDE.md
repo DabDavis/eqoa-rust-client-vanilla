@@ -168,6 +168,9 @@ current.
   goes there, with a test at 30 and 165 Hz. What moves by the clock runs every frame drawn, but
   the walk: its integrator's speed grows as its step shrinks, so it keeps the console's own frames
   (33.37 ms) and is drawn on its way to the next (`walker.rs`, `Kept`); never step it a frame drawn.
+  Each console frame steps it by the game clock's step, VITimer's (983.04 a second, every count even:
+  32 or 34 a frame, `console_step`), not by milliseconds: the gait is read off `Process`'s last
+  sub-step, and a 1 ms one flipped a slow walk toward a lower coordinate to a run every other frame.
   Anything that writes the walk as a control between frames (the mouse's `set_heading`) calls
   `Walker::rewind` first, or it reads as a place given and no console frame is stepped; a place it
   gives the follow orbit's camera then (`set_orbit_angle`, round the console frame put back) is moved
