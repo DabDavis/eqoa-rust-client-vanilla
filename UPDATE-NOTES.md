@@ -5,6 +5,18 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-04 · 8BitDo controllers in the browser
+- In Chrome and Edge on Windows and Mac, an 8BitDo controller in its D-input mode (an 8BitDo Pro 2
+  with its switch on D, an SN30 Pro, a Lite 2 and their kin) now has every button where it belongs:
+  B, the bottom button, is ✕, A is ○, Y is □ and X is △, L and R are L1 and R1, ZL and ZR are L2 and
+  R2, − and + are Select and Start, and the d-pad works. Before, the buttons came mixed up (✕ on A,
+  Start on ZR), the d-pad did nothing (so the Options window could not be stepped down to Save
+  Changes without the keyboard or the mouse), and the right stick's up and down were read from the
+  wrong place.
+- Any other controller those browsers have no layout for now has its d-pad and right stick read
+  where such controllers keep them, and no longer changes layout partway through a session: pushing
+  its right stick up and to the left used to leave L2 and R2 held from then on.
+
 ## 2026-11-03 · A slow walk keeps walking
 - Walking slowly with a controller no longer makes your character's legs switch between walking and
   running every moment when you head in some directions (on the way to Warlord Jurglash, for one).
