@@ -1028,6 +1028,13 @@ presses and lets go within a millisecond, shorter than any frame, so the touch p
 buttons are pressed with `input swipe x y x y 120`; `input gamepad keyevent` is a
 controller.
 
+## Sharing back
+
+Building a launcher, a fork or a client of your own from this one? Fixes and improvements sent
+back here help every player: a pull request, or an issue saying what you changed, is welcome.
+Credit is appreciated, not required: the MIT licence asks only that its notice stays with the
+code. Contributions are taken under the same licence.
+
 ## Licence
 
 MIT (`LICENSE`).
