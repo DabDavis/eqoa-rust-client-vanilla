@@ -85,6 +85,7 @@ mod bgm;
 mod bindpage;
 mod binds;
 mod blacksmith;
+mod bugnote;
 mod gear;
 mod gram;
 mod hideui;

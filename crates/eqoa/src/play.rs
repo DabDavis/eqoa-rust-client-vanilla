@@ -127,6 +127,9 @@ pub struct Play {
     /// `m_p07570`: when the last 0x40 went, on the game's clock
     /// (`Session::timer`); -1 none yet (`Connect`'s).
     last_send: i64,
+    /// Where the walk last put the player, as the last 0x40 said (a bug
+    /// report's note: `bug_note`).
+    last_pos: [f32; 3],
     /// `m_p07578`: the 0x40's interval in the game's clock's ticks (983.04
     /// a second): 100 (101.7 ms), or what 0x07B2 sets. The PS2 keeps it for
     /// the program's run; here a login starts at 100 again (no server we
@@ -2180,7 +2183,7 @@ impl Play {
         crate::live::set_features(Default::default());
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default() };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -3851,6 +3854,7 @@ impl Play {
     /// the target.
     fn send_position(&mut self, walk: &vi::walk::WalkPhysics<Ee>, now: i64) {
         self.last_send = now;
+        self.last_pos = walk.position.to_array();
         if watching(&self.player.name) {
             eprintln!("[sent] {now} pos {:.2?} vel {:.2?} heading {:.3} loco {} flags {:#x} mode {}", walk.position.to_array(), walk.velocity.to_array(), walk.angles.x.0, walk.loco_state, walk.flags, self.mode);
         }
@@ -4321,6 +4325,10 @@ impl Play {
         }
         let target = self.target;
         if wide.first() != Some(&(b'/' as u16)) {
+            // a PS2's spelling of /bug: the note goes first (`send_bug_note`)
+            if text.split(' ').next().is_some_and(|w| w.eq_ignore_ascii_case("#bug")) {
+                self.send_bug_note();
+            }
             match self.channel {
                 4 => self.session.send_op_sub_wide(0x0578, 12, text),
                 3 => self.session.send_op_sub_wide(0x0C01, 2, text),
@@ -4387,8 +4395,45 @@ impl Play {
                     self.session.say(&line, target);
                 }
             }
+            // go-eqoa-server's bug report on the spot: the note first
+            "/bug" => {
+                self.send_bug_note();
+                self.session.say(text, target);
+            }
             _ => self.session.say(text, target),
         }
+    }
+
+    /// The note for a bug report (`bugnote`), to a server that offered them
+    /// (`Session::bug_reports`), else nothing: sent just before the petition.
+    pub(crate) fn send_bug_note(&mut self) {
+        if self.session.bug_reports {
+            let note = self.bug_note();
+            self.session.send_bug_note(&note);
+        }
+    }
+
+    /// What this client shows of the player and its target, after
+    /// `bugnote`'s own facts: where the walk last put the player, the target
+    /// (its name and place as shown, how far), how many entities are shown,
+    /// the window up.
+    pub(crate) fn bug_note(&self) -> String {
+        let p = self.last_pos;
+        let mut lines = vec![("place", format!("world {} ({:.1}, {:.1}, {:.1})", self.player.world, p[0], p[1], p[2]))];
+        if self.target != u32::MAX && self.target != 0 {
+            let t = match self.entities.slots.iter().flatten().find(|e| e.id == self.target) {
+                Some(e) => {
+                    let name = e.creature.as_ref().map(|c| c.name.trim().to_string()).unwrap_or_default();
+                    let d = ((e.pos[0] - p[0]).powi(2) + (e.pos[1] - p[1]).powi(2) + (e.pos[2] - p[2]).powi(2)).sqrt();
+                    format!("{name} (id {}) at ({:.1}, {:.1}, {:.1}), {d:.1} away", e.id, e.pos[0], e.pos[1], e.pos[2])
+                }
+                None => format!("id {}, not shown", self.target),
+            };
+            lines.push(("target", t));
+        }
+        lines.push(("entities shown", self.entities.slots.iter().flatten().count().to_string()));
+        lines.push(("window", self.mode.to_string()));
+        crate::bugnote::compose(&lines)
     }
 
     /// The art swapped (F9, `era`): each creature is made anew in it as it is

@@ -240,9 +240,16 @@ current.
   the click's activation up: ask for it after anything else that click needs (asked first, it broke
   Start with a remembered disc the browser had to ask for).
   It installs as an app (`web/manifest.json`, the icons `tools/webicons` draws off `icon_art.rs`).
-- No problem or crash reports (taken out 2026-10-31, the user: "lets also remove the F3 report and
-  crash report system from vanilla"; the report server on eqoaclassic was shut down the same day):
-  the client sends no reports of any kind, and no telemetry. The log stays on the player's
+- No problem or crash reports to a report server (taken out 2026-10-31, the user: "lets also remove
+  the F3 report and crash report system from vanilla"; the report server on eqoaclassic was shut down
+  the same day), and no telemetry. Bug reports go to the server the player plays on, as petitions
+  over the game's own connection (the user, 2026-11-05), so a server hears only its own players: on
+  a server that offers them (go-eqoa-server's 0x7E0E, `net::session::OP_BUG_REPORTS`) F3 opens
+  Support's request form on Bug Report (`Play::open_bug_report`), and each petition the player files
+  (the form, a typed `/bug` or `#bug`) goes after the client's note (0x7E0F, `bugnote.rs`: build,
+  platform, graphics, frame rate, where it shows the player and its target; one message, at most
+  1,000 bytes; never an account name, an address or a path). Nothing goes unless the player files
+  one, and nothing to a server that made no offer. The log stays on the player's
   machine, theirs to hand on: never log a credential. Natively stderr goes through the log's pipe
   (`logfile::start`, `eqoa boot` only): anything that starts another program in this one's place
   puts it back first (`logfile::restore_stderr`), or the new one inherits a pipe nothing reads, and

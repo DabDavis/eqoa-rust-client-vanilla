@@ -5,6 +5,19 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-05 · Report a bug with F3
+- On a server that takes bug reports (it tells you so when you log in), F3 opens Support's request
+  form, the game's own, with Bug Report already picked and its topics open: choose what the bug is about
+  (a quest, a creature, an item, a spell, combat, the game client or something else), say what
+  happened, and send it. Send it from where it happened: the server keeps where you were, what you
+  had targeted and what you had just been told, so the GMs can see what you saw.
+- Typing /bug and what went wrong in the chat line sends one on the spot, the same way.
+- A GM answers in Support's inbox in the start menu, and you are told in chat when one has.
+- With the report goes a short note of this program's own: its build, your system and graphics card,
+  the frame rate, and where it showed you and your target. Nothing else, and no account name. A
+  server that does not take bug reports (Sandstorm, eqoa.live) is sent nothing, and F3 does nothing
+  there.
+
 ## 2026-11-04 · 8BitDo controllers in the browser
 - In Chrome and Edge on Windows and Mac, an 8BitDo controller in its D-input mode (an 8BitDo Pro 2
   with its switch on D, an SN30 Pro, a Lite 2 and their kin) now has every button where it belongs:

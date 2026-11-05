@@ -23,12 +23,14 @@ pub struct SupportWindows {
     smith_id: u32,
     /// the mode opened, set up with the next HUD frame
     opening: Option<i32>,
+    /// F3's opening (`open_bug_report`): the request form set on Bug Report
+    bug_preset: bool,
     keys: Vec<(i32, bool)>,
 }
 
 impl Default for SupportWindows {
     fn default() -> Self {
-        SupportWindows { cs: CsClient::default(), request: Request::new(false), inbox: Inbox::default(), script: (0, false), smith: Blacksmith::default(), smith_id: 0, opening: None, keys: Vec::new() }
+        SupportWindows { cs: CsClient::default(), request: Request::new(false), inbox: Inbox::default(), script: (0, false), smith: Blacksmith::default(), smith_id: 0, opening: None, bug_preset: false, keys: Vec::new() }
     }
 }
 
@@ -79,6 +81,19 @@ impl Play {
         self.support.opening = Some(mode);
         self.support.keys.clear();
         self.support.script = (0, false);
+    }
+
+    /// F3, on a server that offered bug reports (`Session::bug_reports`):
+    /// Support's request form, from the world with no window up, set on the
+    /// server's Bug Report (`cs::BUG_REPORT`) with its topics open. False
+    /// (nothing done) elsewhere.
+    pub fn open_bug_report(&mut self) -> bool {
+        if !self.session.bug_reports || self.mode != 0 || self.typing.is_some() {
+            return false;
+        }
+        self.open_support(31);
+        self.support.bug_preset = true;
+        true
     }
 
     /// The pump's 0xFF: a new connection (`VICSClient::OnConnect`).
@@ -166,6 +181,9 @@ impl Play {
                     s.request.refresh(&mut s.cs);
                     s.request.visible = true;
                     s.request.focus(vui, r);
+                    if std::mem::take(&mut s.bug_preset) {
+                        s.request.preset(crate::cs::BUG_REPORT);
+                    }
                 }
                 32 => s.inbox.open(vui, r, &mut s.cs, now),
                 _ => {}
@@ -208,6 +226,10 @@ impl Play {
             }
         }
         for msg in std::mem::take(&mut self.support.cs.out) {
+            // a new request (0x0AA1, sub-op 0): the bug report's note first
+            if msg.len() > 2 && msg[..3] == [0xA1, 0x0A, 0] {
+                self.send_bug_note();
+            }
             self.session.send(&msg);
         }
         for up in req_ups {
@@ -248,5 +270,55 @@ impl Play {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::liveplay::tests::play;
+
+    fn sent(p: &mut super::Play) -> Vec<Vec<u8>> {
+        p.session.record.as_mut().map(std::mem::take).unwrap_or_default().into_iter().map(|(_, d)| d).collect()
+    }
+
+    /// F3 opens Support's request form only on a server that offered bug
+    /// reports, from the world with no window up and not typing; a new
+    /// request goes after the client's note, a typed /bug too, nothing else.
+    /// The controls: no offer, no form and no note; a window up, nothing.
+    #[test]
+    fn f3_and_the_note_only_where_offered() {
+        let mut p = play();
+        assert!(!p.open_bug_report(), "no offer");
+        assert_eq!(p.mode, 0);
+        p.chat_line("/bug the gate is shut");
+        assert!(sent(&mut p).iter().all(|m| m[..2] != [0x0F, 0x7E]), "no offer: no note");
+
+        p.session.bug_reports = true;
+        p.mode = 22;
+        assert!(!p.open_bug_report(), "a window up");
+        p.mode = 0;
+        p.typing = Some(String::new());
+        assert!(!p.open_bug_report(), "typing");
+        p.typing = None;
+        assert!(p.open_bug_report());
+        assert_eq!((p.mode, p.support.opening, p.support.bug_preset), (31, Some(31), true));
+
+        // a filing (0x0AA1 sub-op 0) goes after the note
+        p.support.cs.submit_request(1, 13, &"the guard walks through walls".encode_utf16().collect::<Vec<u16>>());
+        let (vui, mut r) = (crate::pointer::testing::vui(), crate::pointer::testing::NullRaster);
+        p.run_support(&vui, &mut r);
+        let m = sent(&mut p);
+        let i = m.iter().position(|d| d[..2] == [0x0F, 0x7E]).expect("the note");
+        let j = m.iter().position(|d| d[..3] == [0xA1, 0x0A, 0]).expect("the request");
+        assert!(i < j, "the note first");
+        let note = String::from_utf8(m[i][10..].to_vec()).unwrap();
+        assert!(note.starts_with("build: ") && note.contains("\nplace: world "), "{note}");
+
+        p.chat_line("/bug the gate is shut");
+        let m = sent(&mut p);
+        assert_eq!(m.len(), 2, "{m:?}");
+        assert_eq!((&m[0][..2], &m[1][..2]), (&[0x0F, 0x7E][..], &[0x0B, 0x00][..]), "the note, then the line");
+        p.chat_line("hello there");
+        assert!(sent(&mut p).iter().all(|d| d[..2] != [0x0F, 0x7E]), "plain chat: no note");
     }
 }

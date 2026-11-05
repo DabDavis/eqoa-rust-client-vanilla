@@ -97,6 +97,23 @@ pub const OP_LIVE_LOOK: u16 = 0x7E0C;
 /// that look (lists are guaranteed messages, in order); a client still
 /// choosing is sent its list again.
 pub const OP_LIVE_LOOK_IN_FORCE: u16 = 0x7E0D;
+/// go-eqoa-server's own, no retail message either: bug reports, a u32 after
+/// the opcode, both ways. The server offers them (1) once the player is in
+/// the world; this client answers 1 at once, and then F3 opens Support's
+/// request form on Bug Report, and each petition it files (the form, or a
+/// typed `/bug`/`#bug`) goes after its own note ([`OP_BUG_NOTE`]). A PS2
+/// ignores the offer; a server that never makes one (Sandstorm's,
+/// eqoa.live's) gets no key and no note.
+pub const OP_BUG_REPORTS: u16 = 0x7E0E;
+/// This client's note for the petition it files next, to a server that
+/// offered [`OP_BUG_REPORTS`]: a u32 version (1), then a u32 byte count and
+/// that many bytes of UTF-8 text, "key: value" lines (`bugnote`), at most
+/// [`BUG_NOTE_MAX`]. The server keeps it for the GMs beside that petition.
+pub const OP_BUG_NOTE: u16 = 0x7E0F;
+/// The most of a note sent, in bytes: one message, as go-eqoa-server takes
+/// each fragment of a longer one for a message of its own.
+pub const BUG_NOTE_MAX: usize = 1000;
+
 /// The raw part of a 0x002C record: the disc's, and the live game's
 /// (`CharacterList`, Corsten's 0x012CC018: no robe tint, six ArmorGroup
 /// variants where the disc's has tints, then the held items', armour slots'
@@ -340,6 +357,9 @@ pub struct Session {
     /// of its length too (`entity::Entities::live_look`). Kept for the
     /// session, as the server keeps it, through the world's connection.
     pub live_look: bool,
+    /// The server offered bug reports ([`OP_BUG_REPORTS`]) and this client
+    /// took them: F3 and the note. Kept for the session.
+    pub bug_reports: bool,
     user: String,
     token: [u8; 32],
     start: Instant,
@@ -467,6 +487,7 @@ impl Session {
             expansion: 0,
             entity_view_offer: None,
             live_look: false,
+            bug_reports: false,
             user: user.to_string(),
             token,
             start: Instant::now(),
@@ -565,6 +586,19 @@ impl Session {
     pub fn send_op_int(&mut self, op: u16, v: u32) {
         let mut w = Writer::op(op);
         w.u32(v);
+        self.send(&w.data);
+    }
+
+    /// [`OP_BUG_NOTE`]: the note for the petition this client files next,
+    /// cut to [`BUG_NOTE_MAX`] bytes on a character's edge.
+    pub fn send_bug_note(&mut self, note: &str) {
+        let mut end = note.len().min(BUG_NOTE_MAX);
+        while !note.is_char_boundary(end) {
+            end -= 1;
+        }
+        let b = &note.as_bytes()[..end];
+        let mut w = Writer::op(OP_BUG_NOTE);
+        w.u32(1).u32(b.len() as u32).bytes(b);
         self.send(&w.data);
     }
 
@@ -892,6 +926,13 @@ impl Session {
             OP_LIVE_LOOK => {
                 if r.u32() & 1 != 0 && !r.error && wants_live_look() {
                     self.send_op_int(OP_LIVE_LOOK, 1);
+                }
+            }
+            // bug reports offered: taken (F3 and the note, `bugnote`)
+            OP_BUG_REPORTS => {
+                if r.u32() != 0 && !r.error {
+                    self.bug_reports = true;
+                    self.send_op_int(OP_BUG_REPORTS, 1);
                 }
             }
             OP_LIVE_LOOK_IN_FORCE => {
@@ -1770,6 +1811,38 @@ mod tests {
 
         deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
         assert_eq!(s.entity_view_offer, None, "a new connection, no offer yet");
+    }
+
+    // Bug reports: the offer taken (answered 1, kept), a short one not; the
+    // note as the server reads it (version 1, its byte count, its bytes), cut
+    // to BUG_NOTE_MAX on a character's edge. The control: no answer before an
+    // offer came.
+    #[test]
+    fn bug_reports_offer_and_note() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let ours = |s: &mut Session| -> Vec<Vec<u8>> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&0x7E)).map(|(_, d)| d).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        ours(&mut s);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x0E, 0x7E, 1, 0]);
+        assert!(!s.bug_reports, "a short offer");
+        assert_eq!(ours(&mut s), Vec::<Vec<u8>>::new(), "the control: nothing answered");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x0E, 0x7E, 1, 0, 0, 0]);
+        assert!(s.bug_reports);
+        assert_eq!(ours(&mut s), [vec![0x0E, 0x7E, 1, 0, 0, 0]]);
+        s.send_bug_note("build: local\nplace: here");
+        let mut want = vec![0x0F, 0x7E, 1, 0, 0, 0, 24, 0, 0, 0];
+        want.extend(b"build: local\nplace: here");
+        assert_eq!(ours(&mut s), [want]);
+        let long = "é".repeat(BUG_NOTE_MAX);
+        s.send_bug_note(&long);
+        let m = ours(&mut s);
+        let n = u32::from_le_bytes(m[0][6..10].try_into().unwrap()) as usize;
+        assert!(n <= BUG_NOTE_MAX && n % 2 == 0 && m[0].len() == 10 + n, "cut on a character's edge: {n}");
     }
 
     // go-eqoa-server's offers and sets past 0x7E00 (0x7E01-0x7E06) are

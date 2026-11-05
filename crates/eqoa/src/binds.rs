@@ -143,8 +143,9 @@ fn default_row(name: &str) -> Option<usize> {
     ROWS.iter().position(|r| r.keys.contains(&name))
 }
 
-/// The keys a capture refuses: the page's and the window's own (F3 the
-/// report, F11 full screen, F12 a browser's tools), and the modifiers, which
+/// The keys a capture refuses: the page's and the window's own (F3 a bug
+/// report, on a server that takes them; F11 full screen, F12 a browser's
+/// tools), and the modifiers, which
 /// `name_of` gives no name.
 pub fn reserved(name: &str) -> bool {
     matches!(name, "f3" | "f11" | "f12")
@@ -760,8 +761,9 @@ mod tests {
         // walk and the camera read (`controls`, `game_keys`)
         names.extend(["1", "2", "3", "4", "5", "6", "w", "s", "a", "d", "i", "j", "k", "l", "pageup", "pagedown", "home", "end"].map(String::from));
         // read only while typing (the soft keyboard's key, an editor's
-        // done), never bound (full screen, the fly camera's speed)
-        let not_rows = ["insert", "f11", "shift"];
+        // done), never bound (full screen, a bug report on a server that
+        // takes them, the fly camera's speed)
+        let not_rows = ["insert", "f11", "f3", "shift"];
         names.retain(|n| !not_rows.contains(&n.as_str()));
         assert!(names.len() > 60, "the scan found the dispatch's keys: {names:?}");
         for n in &names {
@@ -806,6 +808,7 @@ mod tests {
             "Insert" => NamedKey::Insert,
             "Shift" => NamedKey::Shift,
             "F1" => NamedKey::F1,
+            "F3" => NamedKey::F3,
             "F5" => NamedKey::F5,
             "F6" => NamedKey::F6,
             "F7" => NamedKey::F7,

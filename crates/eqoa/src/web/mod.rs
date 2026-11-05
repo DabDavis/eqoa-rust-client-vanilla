@@ -448,6 +448,10 @@ async fn gfx(canvas: web_sys::HtmlCanvasElement) -> Result<viewer::PendingGfx, S
         .map_err(|e| format!("no graphics adapter: {e}"))?;
     let info = adapter.get_info();
     status(&format!("graphics: {} ({:?})", info.name, info.backend));
+    crate::bugnote::set_graphics(&info.name, &format!("{:?}", info.backend));
+    if let Some(ua) = web_sys::window().and_then(|w| w.navigator().user_agent().ok()) {
+        crate::bugnote::set_browser(&ua);
+    }
     if info.backend == wgpu::Backend::Gl && !page_flag("uncapped") {
         crate::settings::set_platform_rate(crate::settings::FrameRate::Thirty);
     }

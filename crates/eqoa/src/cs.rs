@@ -404,6 +404,10 @@ pub enum RequestUp {
     Full,
 }
 
+/// go-eqoa-server's Bug Report category, which F3 opens the form on
+/// (`Play::open_bug_report`).
+pub const BUG_REPORT: i32 = 1;
+
 /// `VIWndCSRequest`: Category, Subcategory, the text and Submit, each picked
 /// from the client's lists (the hidden ones left out); a reply starts on the
 /// text and keeps the message's category.
@@ -423,6 +427,9 @@ pub struct Request {
     pub category_id: i32,
     pub subcategory_id: i32,
     pub reply_to: i32,
+    /// The category to start on once the lists are in (`preset`), not the
+    /// game's: F3's Bug Report.
+    preset: Option<i32>,
     cat_ids: Vec<i32>,
     sub_ids: Vec<i32>,
     /// a send seen going / categories seen coming / an inbox seen coming
@@ -465,6 +472,7 @@ impl Request {
             category_id: 0,
             subcategory_id: 0,
             reply_to: -1,
+            preset: None,
             cat_ids: Vec::new(),
             sub_ids: Vec::new(),
             x4d0: false,
@@ -544,9 +552,45 @@ impl Request {
         self.picking_sub = false;
         self.cat_ids.clear();
         self.sub_ids.clear();
+        self.preset = None;
         self.x4d0 = false;
         self.x4d4 = false;
         self.x4d8 = false;
+    }
+
+    /// Starts the form on category `id` once the server's lists are in (they
+    /// are asked for at the opening): picked as `PickCategory` picks it, the
+    /// subcategory picker open. Not the game's: F3's Bug Report. A list
+    /// without it leaves the form as the game opens it.
+    pub fn preset(&mut self, id: i32) {
+        self.preset = Some(id);
+    }
+
+    /// `preset`, once the lists are in (the client free) and hold it.
+    fn apply_preset(&mut self, vui: &Vui, cs: &CsClient) {
+        let Some(id) = self.preset else { return };
+        if cs.state != 0 || self.reply {
+            return;
+        }
+        let (Some(i), Some(c)) = (self.cat_ids.iter().position(|&c| c == id), find_category(&cs.categories, id)) else {
+            return;
+        };
+        if c.id != id {
+            return;
+        }
+        self.preset = None;
+        self.category = capped(&c.name, 64);
+        self.category_id = id;
+        self.cat_sel = i as i32;
+        self.sel = 1;
+        self.picking = false;
+        self.picking_sub = true;
+        self.list.set_title(Some(&wide(&word(vui, 871))));
+        self.list.open(false);
+        self.sub_sel = 0;
+        self.x4cc = 0;
+        self.subcategory_id = 0;
+        self.subcategory.clear();
     }
 
     /// `Refresh`: back to the first field; a new request asks for the lists.
@@ -855,6 +899,7 @@ impl Request {
         }
         // the categories offered: the client's, less the hidden ones
         self.cat_ids = cs.categories.iter().filter(|c| !c.hidden).map(|c| c.id).collect();
+        self.apply_preset(vui, cs);
         if self.picking && self.draw_list(vui, r, cs) {
             let names: Vec<Vec<u16>> = self.cat_ids.iter().map(|&id| find_category(&cs.categories, id).map(|c| c.name.clone()).unwrap_or_default()).collect();
             let sel = self.cat_sel;
@@ -1749,6 +1794,52 @@ mod tests {
         let sel = q.sel;
         assert!(q.point(field(&q, 11, 1)).is_empty());
         assert_eq!(q.sel, sel);
+    }
+
+    /// F3's preset: the form waits while the lists are coming, then starts on
+    /// the category picked as PickCategory picks it (the subcategory field
+    /// selected, its picker open on that category's topics) and a second
+    /// draw leaves it so. The controls: lists without the category leave the
+    /// form as the game opens it, and the focus of a new opening drops a
+    /// preset never used.
+    #[test]
+    fn a_preset_starts_the_form_on_its_category() {
+        let (vui, mut r) = (vui(), NullRaster);
+        let mut cues = Vec::new();
+        let mut cs = CsClient::default();
+        let mut q = Request::new(false);
+        q.refresh(&mut cs);
+        q.visible = true;
+        q.focus(&vui, &r);
+        q.preset(BUG_REPORT);
+        q.draw(&vui, &mut r, &mut cs, 1000, &mut cues);
+        assert!(q.category.is_empty() && !q.picking_sub, "the lists not in yet");
+        cs.categories = categories();
+        cs.state = 0;
+        q.draw(&vui, &mut r, &mut cs, 1016, &mut cues);
+        assert_eq!((q.category.clone(), q.category_id, q.sel, q.picking_sub), (wide("Bugs"), BUG_REPORT, 1, true));
+        // the lists in, the form asks for the inbox (CheckFull): its rows
+        // wait for the answer
+        assert_eq!(cs.state, 1);
+        cs.state = 0;
+        for t in 0..8 {
+            q.draw(&vui, &mut r, &mut cs, 1032 + 16 * t, &mut cues);
+        }
+        assert_eq!(q.sub_ids, vec![10, 11], "the picked category's topics");
+        q.key(&vui, &mut r, &mut cs, key::CROSS, true, 1200, &mut cues);
+        assert_eq!((q.subcategory.clone(), q.subcategory_id, q.sel), (wide("Crash"), 10, 2), "a topic, on to the text");
+
+        // the controls
+        let mut q = Request::new(false);
+        q.visible = true;
+        q.focus(&vui, &r);
+        q.preset(9);
+        q.draw(&vui, &mut r, &mut cs, 2000, &mut cues);
+        assert!(q.category.is_empty() && q.sel == 0 && !q.picking_sub, "no such category");
+        q.focus(&vui, &r);
+        cs.categories.push(Category { id: 9, hidden: false, name: wide("Other"), subs: Vec::new() });
+        q.draw(&vui, &mut r, &mut cs, 2016, &mut cues);
+        assert!(q.category.is_empty(), "a new opening drops the preset");
     }
 
     /// The inbox: rows selected and read, not past the list, not while the

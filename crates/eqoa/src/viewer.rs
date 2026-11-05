@@ -3165,6 +3165,17 @@ impl App {
             self.toggle_era();
             return;
         }
+        // F3: a bug report, Support's request form on Bug Report, from the
+        // world on a server that offered bug reports (`Play::open_bug_report`)
+        if event.logical_key == Key::Named(NamedKey::F3)
+            && let Some(p) = self.play.as_mut()
+            && p.session.bug_reports
+        {
+            if event.state == ElementState::Pressed && !event.repeat {
+                p.open_bug_report();
+            }
+            return;
+        }
         // The edit box (mode 2) takes the keyboard: characters type,
         // Backspace, Escape (cancel), Enter (done), the arrows move the
         // caret (with the soft keyboard showing, its cursor; Insert
@@ -4039,6 +4050,7 @@ impl ApplicationHandler for App {
             let adapter = pollster::block_on(instance.request_adapter(&Default::default())).expect("adapter");
             let info = adapter.get_info();
             eprintln!("offscreen {w}x{h} on {:?}", info.name);
+            crate::bugnote::set_graphics(&info.name, &format!("{:?}", info.backend));
             let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).expect("device");
             let ps2_sums = render::fog16::supported(&adapter);
             let config = wgpu::SurfaceConfiguration {
@@ -4085,6 +4097,7 @@ impl ApplicationHandler for App {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let info = adapter.get_info();
+            crate::bugnote::set_graphics(&info.name, &format!("{:?}", info.backend));
             crate::gpustart::step(&format!("{} ({:?}, driver {} {}): asking for its device", info.name, info.backend, info.driver, info.driver_info));
             if crate::gpustart::software(&info.name, info.device_type == wgpu::DeviceType::Cpu) {
                 crate::gpustart::step(&format!("{} draws without the graphics card (software): the game will be slow; the graphics card's driver may need installing or updating", info.name));
@@ -4697,6 +4710,7 @@ impl App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                crate::bugnote::frame_drawn(self.clock.elapsed().as_secs_f64() * 1000.0);
                 if !self.unfocus_script.is_empty() {
                     self.unfocus_script(el);
                 }
@@ -4712,6 +4726,14 @@ impl App {
                 }
                 if let Some(g) = self.gfx.as_mut() {
                     g.apply_vsync();
+                }
+                // `EQOA_CS_TEXT` (a playshot's script steps it too): the CS
+                // request's text typed into its editor, while it is up (F3's
+                // form opens here, in the window)
+                if let Some(p) = self.play.as_mut()
+                    && p.support_owns()
+                {
+                    p.support_script_step();
                 }
                 while self.key_script.first().is_some_and(|k| k.0 <= self.clock.elapsed().as_millis() as i64) {
                     let (_, key) = self.key_script.remove(0);

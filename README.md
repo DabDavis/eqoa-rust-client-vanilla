@@ -114,6 +114,15 @@ or a browser (each described where it lives below):
   disc lacks). An undyed slot comes in its tint's colour and looks as it
   always has; a server that never offers the look (Sandstorm, eqoa.live) is
   read as the disc's.
+- **Bug reports with F3**, on a server that takes them (go-eqoa-server's
+  0x7E0E; Sandstorm and eqoa.live make no offer, and F3 does nothing there):
+  Support's request form, the game's own, opened from the world on Bug Report
+  with its topics open; with each petition this client files (the form, or a
+  typed `/bug` or `#bug`), a note of its own first (0x7E0F, `bugnote.rs`: its
+  build, the platform and graphics adapter, the frame rate, where it shows the
+  player and its target), which the server keeps for the GMs beside the
+  server's own view. The user, 2026-11-05: "we can add something to the
+  webclient".
 - **Hide UI** (H): everything drawn over the world hidden until H again or a
   window opens.
 - **Ignore Shouts kept** until Restore Shouts, across logins (the game keeps
