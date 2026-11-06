@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-06 · Any group member can invite
+- On a server that allows it (eqoaclassic does), anyone in a group can invite another player into it,
+  not only the leader: from the target's menu or the who list, as the leader always could. The leader
+  stays the leader. Elsewhere only the leader invites, as before.
+
 ## 2026-11-05 · Report a bug with F3
 - On a server that takes bug reports (it tells you so when you log in), F3 opens Support's request
   form, the game's own, with Bug Report already picked and its topics open: choose what the bug is about

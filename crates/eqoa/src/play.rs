@@ -5876,13 +5876,20 @@ impl Play {
         }
     }
 
+    /// Whether this player may invite into its group: CLIENT's rule, not in
+    /// one or its leader (`InviteEntity`, `InviteToGroup`: else word 640), or
+    /// any member on a server that offered it (`Session::member_invites`).
+    fn may_invite(&self) -> bool {
+        !self.group.in_group || self.group.leader || self.session.member_invites
+    }
+
     /// `InviteToGroup(rec)`: as `InviteEntity`, by the record's id and name.
     fn invite_to_group(&mut self, id: u32, name: &str) {
         if Some(id) == self.self_id32() {
             self.show_word(679);
             return;
         }
-        if self.group.in_group && !self.group.leader {
+        if !self.may_invite() {
             self.show_word(640);
             return;
         }
@@ -6365,7 +6372,7 @@ impl Play {
             self.show_word(679);
             return;
         }
-        if self.group.in_group && !self.group.leader {
+        if !self.may_invite() {
             self.show_word(640);
             return;
         }
@@ -8003,6 +8010,28 @@ mod commands {
         let mut s = Session::connect_with(Box::new(Nowhere), ([127, 0, 0, 1], 5000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
         s.self_id = Some(0x100);
         Play::new(s, Player::default(), dump)
+    }
+
+    /// A member who does not lead its group invites only on a server that
+    /// offered it (`OP_MEMBER_INVITES`): else CLIENT's word 640 and nothing
+    /// sent; offered, the invite goes (word 637 with the name), as the
+    /// leader's always does. The control: the leader invites unoffered.
+    #[test]
+    fn a_member_invites_where_the_server_offers_it() {
+        let said = |p: &Play, w: &str| p.chat.back().is_some_and(|(t, _)| t.starts_with(w));
+        let mut p = play();
+        p.group.in_group = true;
+        p.group.leader = true;
+        p.invite_to_group(0x200, "Bren");
+        assert!(said(&p, "(word 637) Bren"), "the control: the leader invites: {:?}", p.chat.back());
+        p.group.leader = false;
+        p.invite_to_group(0x201, "Cael");
+        assert!(said(&p, "(word 640)"), "a member, unoffered: {:?}", p.chat.back());
+        assert!(!p.may_invite());
+        p.session.member_invites = true;
+        p.invite_to_group(0x201, "Cael");
+        assert!(said(&p, "(word 637) Cael"), "a member, offered: {:?}", p.chat.back());
+        assert!(p.may_invite(), "InviteEntity's rule too");
     }
 
     /// The plain human body is drawn only for a walk with no server: in play

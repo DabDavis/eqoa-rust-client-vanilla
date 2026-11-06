@@ -110,6 +110,12 @@ pub const OP_BUG_REPORTS: u16 = 0x7E0E;
 /// that many bytes of UTF-8 text, "key: value" lines (`bugnote`), at most
 /// [`BUG_NOTE_MAX`]. The server keeps it for the GMs beside that petition.
 pub const OP_BUG_NOTE: u16 = 0x7E0F;
+/// go-eqoa-server's own, no retail message either: any member of a group may
+/// invite into it there, a u32 after the opcode (1), from the server once the
+/// player is in the world; no answer. CLIENT lets only the leader invite
+/// (`InviteEntity`, `InviteToGroup`: word 640), and so does this client on a
+/// server that never offers it (Sandstorm's, eqoa.live's).
+pub const OP_MEMBER_INVITES: u16 = 0x7E17;
 /// The most of a note sent, in bytes: one message, as go-eqoa-server takes
 /// each fragment of a longer one for a message of its own.
 pub const BUG_NOTE_MAX: usize = 1000;
@@ -360,6 +366,9 @@ pub struct Session {
     /// The server offered bug reports ([`OP_BUG_REPORTS`]) and this client
     /// took them: F3 and the note. Kept for the session.
     pub bug_reports: bool,
+    /// The server lets any member of a group invite into it
+    /// ([`OP_MEMBER_INVITES`]). Kept for the session.
+    pub member_invites: bool,
     user: String,
     token: [u8; 32],
     start: Instant,
@@ -488,6 +497,7 @@ impl Session {
             entity_view_offer: None,
             live_look: false,
             bug_reports: false,
+            member_invites: false,
             user: user.to_string(),
             token,
             start: Instant::now(),
@@ -933,6 +943,12 @@ impl Session {
                 if r.u32() != 0 && !r.error {
                     self.bug_reports = true;
                     self.send_op_int(OP_BUG_REPORTS, 1);
+                }
+            }
+            // any member invites into its group there (`Play::may_invite`)
+            OP_MEMBER_INVITES => {
+                if r.u32() != 0 && !r.error {
+                    self.member_invites = true;
                 }
             }
             OP_LIVE_LOOK_IN_FORCE => {
@@ -1843,6 +1859,28 @@ mod tests {
         let m = ours(&mut s);
         let n = u32::from_le_bytes(m[0][6..10].try_into().unwrap()) as usize;
         assert!(n <= BUG_NOTE_MAX && n % 2 == 0 && m[0].len() == 10 + n, "cut on a character's edge: {n}");
+    }
+
+    // Any member's invites (0x7E17): the offer kept, a short one not, and
+    // nothing answered. The control: a session never offered it keeps the
+    // leader's rule.
+    #[test]
+    fn member_invites_offer() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let ours = |s: &mut Session| -> Vec<Vec<u8>> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&0x7E)).map(|(_, d)| d).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        ours(&mut s);
+        assert!(!s.member_invites, "the control: never offered");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x17, 0x7E, 1, 0]);
+        assert!(!s.member_invites, "a short offer");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x17, 0x7E, 1, 0, 0, 0]);
+        assert!(s.member_invites);
+        assert_eq!(ours(&mut s), Vec::<Vec<u8>>::new(), "nothing answered");
     }
 
     // go-eqoa-server's offers and sets past 0x7E00 (0x7E01-0x7E06) are
