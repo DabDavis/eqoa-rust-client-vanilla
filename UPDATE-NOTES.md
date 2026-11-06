@@ -5,6 +5,23 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-06 · Macros
+- The Controls page (Options > Controls, or F1 while you play) has sixteen macros after its keys. A
+  macro presses a set of the game's buttons for you, all at once as a controller would, when you
+  press its key or its controller button.
+- On "Macro 1" (and 2 to 16), pick the key that does it, a controller button, or both. A controller
+  button you put there does the macro and no longer what it did in the game. A key that a row of the
+  page already uses is refused: move that row first.
+- On "Macro 1: presses", choose ✕ and then press the buttons it should press, the controller's or the
+  keys for them, together or one after another: a second after the last one they are kept.
+  Backspace leaves it pressing nothing.
+- Beside them, how it presses (✕ steps through the choices): Hold (while you hold its key or
+  button), Toggle (on at one press, off at the next), or Turbo, pressing and letting go over and
+  over, from 15 presses a second (Turbo 1) down to one a second (Turbo 15), as fast at any frame
+  rate. A toggled turbo keeps going until your next press.
+- Macros are kept with your keys when you Save Changes, and Defaults clears them. A server sees
+  only the button presses, the same as from a controller.
+
 ## 2026-11-06 · Any group member can invite
 - On a server that allows it (eqoaclassic does), anyone in a group can invite another player into it,
   not only the leader: from the target's menu or the who list, as the leader always could. The leader

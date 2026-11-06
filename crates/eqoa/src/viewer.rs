@@ -1848,6 +1848,10 @@ struct App {
     /// each key pressed was made, and the controllers' buttons a capture took.
     keys_edge: crate::binds::KeyEdge,
     pad_edge: crate::binds::PadEdge,
+    /// the player's macros running (`macros`), and whether this frame drawn
+    /// is one of the game's (their turbo counts those)
+    macro_run: crate::macros::Run,
+    macro_frame: bool,
     /// The left stick held past the walk's run threshold once past it
     /// (`input::RunHold`).
     run_hold: crate::input::RunHold,
@@ -2038,6 +2042,8 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         pad_script: crate::input::Script::from_env(),
         keys_edge: Default::default(),
         pad_edge: Default::default(),
+        macro_run: Default::default(),
+        macro_frame: false,
         run_hold: Default::default(),
         arrival: Default::default(),
         stall: Default::default(),
@@ -2499,8 +2505,11 @@ impl App {
                         p.set_key(k, false, w, aspect);
                     }
                 }
+                Sent::Macro(m) => crate::settings::with_binds(|b| self.macro_run.key(m, false, b)),
             }
         }
+        // a toggled macro does not run on behind a window that lost the keys
+        self.macro_run.let_go();
         for k in std::mem::take(&mut self.host_keys) {
             if let Some(h) = self.host.as_mut() {
                 h.key(k, false);
@@ -2562,8 +2571,25 @@ impl App {
         let capturing = self.play.as_ref().is_some_and(|p| p.capturing().is_some());
         let f = crate::settings::with_binds(|b| self.pad_edge.frame(report.buttons, capturing, b));
         report.buttons = f.fields;
-        if let (Some(i), Some(p)) = (f.took, self.play.as_mut()) {
-            p.capture_button(i);
+        // every button a capture took, in order (a macro's buttons take them
+        // all; any other capture the first, and is done)
+        if let Some(p) = self.play.as_mut() {
+            for i in (0..16u8).filter(|i| f.caught & (1 << i) != 0) {
+                p.capture_button(i);
+            }
+        }
+        // the player's macros (`macros`, the client's): the buttons they
+        // press join the controllers', as the game sees a pad's; none while
+        // the Controls page waits for a key or a button
+        if capturing {
+            self.macro_run.let_go();
+        } else {
+            let game_frame = self.macro_frame;
+            let pressed = crate::settings::with_binds(|b| self.macro_run.frame(f.macros, game_frame, b));
+            if pressed != 0 && crate::input::trace() && report.buttons & pressed != pressed {
+                crate::say(&format!("[pad] macros press {}", crate::input::bit::name(pressed)));
+            }
+            report.buttons |= pressed;
         }
         if self.touch.used {
             report.merge(&self.touch.report());
@@ -4523,6 +4549,17 @@ impl App {
                         }
                         return;
                     }
+                    // a macro's key: its buttons pressed as the pad's
+                    // (`macros`), from the next pad poll
+                    Some(Sent::Macro(m)) => {
+                        if !event.repeat {
+                            crate::settings::with_binds(|b| self.macro_run.key(m, down, b));
+                            if let Some(p) = self.play.as_mut() {
+                                p.keyboard = true;
+                            }
+                        }
+                        return;
+                    }
                     None => return,
                 }
             }
@@ -4829,6 +4866,7 @@ impl App {
                 // its windows, the rings, the death camera, the shake) steps
                 // only on these (`frames.rs`)
                 let game_frame = self.frames.due(self.clock.elapsed().as_secs_f64() * 1000.0);
+                self.macro_frame = game_frame;
                 if let Some(at) = self.drawn_at.replace(frame_start) {
                     self.frame_s = frame_start.duration_since(at).as_secs_f32().min(0.1);
                 }

@@ -33,6 +33,19 @@
 //! With nothing moved every key is itself and every button its own field
 //! (`Binds::default`, the tests). Kept per device in `keys.opt` beside the
 //! client's options (`settings`), as the PS2 keeps every option on its card.
+//!
+//! Macros (the user, 2026-11-06: "pcsx2 has a nice macro system for
+//! keys/buttons. lets make a similar native solution"; PCSX2's Macro Buttons,
+//! `claude-notes/vanilla-macros-20261106.md`): `MACROS` of them, each a key
+//! and a controller's button that trigger it (either, or both), the game's
+//! buttons it presses together (`chord`, the fields'), and how: while held,
+//! or from one press to the next (`toggle`), and with `turbo` pressed and
+//! let go every so many of the game's frames. A key given to a macro is no
+//! row's (a row's key is refused; a row moved onto it takes it back), and a
+//! button given to one leaves the field or row it was on, as a row's does:
+//! every button is still in one place, a field's, a row's or a macro's. The
+//! game sees only the buttons pressed (`macros::Run`, before `VIPad::Read`):
+//! nothing new goes to a server.
 
 use crate::input::bit;
 use winit::keyboard::{Key, NamedKey};
@@ -203,10 +216,76 @@ pub enum Alias {
     /// a row with no key of its own (△'s) moved onto it: its button
     /// (`input::bit`), pressed as the pad's
     Button(u16),
+    /// a macro's trigger (its index)
+    Macro(usize),
 }
 
 /// A field whose button went to a row of the client's keys (`Binds::button`).
 pub const NO_BUTTON: u8 = 0xFF;
+
+/// How many macros there are: PCSX2's 16 a controller (the user, 2026-11-06:
+/// "lets make it 16 also"), two rows each on the Controls page. Their
+/// triggers held are a bit each in a u16 (`Binds::macros_held`): no more.
+pub const MACROS: usize = 16;
+
+/// The turbo periods a macro may have, in the game's frames (30 a second):
+/// pressed this many, let go this many (PCSX2's "toggle every N frames").
+pub const TURBOS: [u8; 7] = [1, 2, 3, 4, 6, 8, 15];
+
+/// A macro (`Binds::macros`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Macro {
+    /// the key that triggers it (`name_of`'s name)
+    pub key: Option<String>,
+    /// the controller's button that triggers it (a bit index, physical)
+    pub button: Option<u8>,
+    /// the game's buttons it presses together (`input::bit`'s, as fields)
+    pub chord: u16,
+    /// on from one press of a trigger to the next, rather than while held
+    pub toggle: bool,
+    /// pressed and let go every this many of the game's frames while on;
+    /// 0: pressed all the while
+    pub turbo: u8,
+}
+
+impl Macro {
+    /// How it presses, as the Controls page says it.
+    pub fn mode_text(&self) -> String {
+        match (self.toggle, self.turbo) {
+            (false, 0) => "Hold".into(),
+            (true, 0) => "Toggle".into(),
+            (false, t) => format!("Turbo {t}"),
+            (true, t) => format!("Toggle, turbo {t}"),
+        }
+    }
+
+    /// The next mode in the page's cycle: Hold, Toggle, each turbo, each
+    /// turbo toggled, Hold again.
+    pub fn next_mode(&mut self) {
+        let modes: Vec<(bool, u8)> = [(false, 0), (true, 0)]
+            .into_iter()
+            .chain(TURBOS.iter().map(|&t| (false, t)))
+            .chain(TURBOS.iter().map(|&t| (true, t)))
+            .collect();
+        let at = modes.iter().position(|&m| m == (self.toggle, self.turbo)).unwrap_or(0);
+        (self.toggle, self.turbo) = modes[(at + 1) % modes.len()];
+    }
+
+    /// The chord as the windows draw it: the buttons' glyphs, "-" for none.
+    pub fn chord_glyphs(&self) -> String {
+        let g: String = (0..16u8).filter(|i| self.chord & (1 << i) != 0).map(glyph).collect();
+        if g.is_empty() { "-".into() } else { g }
+    }
+}
+
+/// Why a key cannot trigger a macro (`Binds::bind_macro_key`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MacroKey {
+    /// a key of the page's and the window's own
+    Reserved,
+    /// a key a row is on now (its index)
+    Row(usize),
+}
 
 /// The player's bindings.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -220,11 +299,18 @@ pub struct Binds {
     /// the physical button on each row the game has no button for
     /// (`takes_button`), by `ROWS`' index
     rows: Vec<Option<u8>>,
+    /// the macros
+    pub macros: [Macro; MACROS],
 }
 
 impl Default for Binds {
     fn default() -> Self {
-        Binds { keys: vec![None; ROWS.len()], pad: std::array::from_fn(|i| i as u8), rows: vec![None; ROWS.len()] }
+        Binds {
+            keys: vec![None; ROWS.len()],
+            pad: std::array::from_fn(|i| i as u8),
+            rows: vec![None; ROWS.len()],
+            macros: Default::default(),
+        }
     }
 }
 
@@ -247,6 +333,9 @@ pub enum Moved {
     /// a button moved, and the row of the client's keys that had it (by
     /// `ROWS`' index) took the one it left, or none
     SwappedRow(usize),
+    /// a button moved, and the macro that had it took the one it left, or
+    /// none
+    SwappedMacro(usize),
 }
 
 impl Binds {
@@ -281,6 +370,9 @@ impl Binds {
     /// row's default key, a row's own key it was moved off nothing, every
     /// other key itself.
     pub fn alias(&self, name: &str) -> Alias {
+        if let Some(m) = self.macro_on_key(name) {
+            return Alias::Macro(m);
+        }
         if let Some(r) = self.keys.iter().position(|k| k.as_deref() == Some(name)) {
             return match (ROWS[r].keys.first(), ROWS[r].pad) {
                 (Some(k), _) => Alias::To(k),
@@ -301,6 +393,10 @@ impl Binds {
         let old = self.key(row).map(str::to_string);
         if old.as_deref() == Some(name) || (ROWS[row].keys.is_empty() && !matches!(ROWS[row].pad, Pad::Button(_))) {
             return Moved::Already;
+        }
+        // a macro on the key gives it up: the row takes it back
+        if let Some(m) = self.macro_on_key(name) {
+            self.macros[m].key = None;
         }
         let other = self.row_on(name).filter(|&o| o != row);
         self.set_key(row, Some(name.to_string()));
@@ -363,6 +459,10 @@ impl Binds {
             self.rows[r] = (had != NO_BUTTON).then_some(had);
             return Moved::SwappedRow(r);
         }
+        if let Some(m) = self.macro_of_button(phys) {
+            self.macros[m].button = (had != NO_BUTTON).then_some(had);
+            return Moved::SwappedMacro(m);
+        }
         match self.pad.iter().enumerate().position(|(f, &p)| p == phys && f != field) {
             Some(other) => {
                 self.pad[other] = had;
@@ -390,6 +490,11 @@ impl Binds {
             self.rows[row] = Some(phys);
             return Moved::Swapped(f as usize);
         }
+        if let Some(m) = self.macro_of_button(phys) {
+            self.macros[m].button = had;
+            self.rows[row] = Some(phys);
+            return Moved::SwappedMacro(m);
+        }
         match self.row_of_button(phys) {
             Some(r) => {
                 self.rows[r] = had;
@@ -401,6 +506,75 @@ impl Binds {
                 Moved::Freed(had.map(|b| BUTTONS[b as usize].0.to_string()))
             }
         }
+    }
+
+    /// The macro a key triggers, if any.
+    pub fn macro_on_key(&self, name: &str) -> Option<usize> {
+        self.macros.iter().position(|m| m.key.as_deref() == Some(name))
+    }
+
+    /// The macro a physical button triggers, if any.
+    pub fn macro_of_button(&self, phys: u8) -> Option<usize> {
+        self.macros.iter().position(|m| m.button == Some(phys))
+    }
+
+    /// Key `name` triggers macro `m`: refused for a key of the page's own
+    /// or one a row is on now (a row moved off its key leaves it free);
+    /// another macro on it gives it up. `None` takes the key away.
+    pub fn bind_macro_key(&mut self, m: usize, name: Option<&str>) -> Result<(), MacroKey> {
+        let Some(name) = name else {
+            self.macros[m].key = None;
+            return Ok(());
+        };
+        if reserved(name) {
+            return Err(MacroKey::Reserved);
+        }
+        if let Some(r) = self.row_on(name).or_else(|| default_row(name).filter(|&r| !self.moved(r))) {
+            return Err(MacroKey::Row(r));
+        }
+        if let Some(o) = self.macro_on_key(name) {
+            self.macros[o].key = None;
+        }
+        self.macros[m].key = Some(name.to_string());
+        Ok(())
+    }
+
+    /// Physical button `phys` triggers macro `m`: the field, row or macro it
+    /// was on takes the button `m` had (a swap; none if `m` had none), as a
+    /// row's button moves.
+    pub fn bind_macro_button(&mut self, m: usize, phys: u8) -> Moved {
+        let phys = phys & 15;
+        let had = self.macros[m].button;
+        if had == Some(phys) {
+            return Moved::Already;
+        }
+        self.macros[m].button = Some(phys);
+        if let Some(f) = self.field_of(phys) {
+            self.pad[f as usize] = had.unwrap_or(NO_BUTTON);
+            return Moved::Swapped(f as usize);
+        }
+        if let Some(r) = self.row_of_button(phys) {
+            self.rows[r] = had;
+            return Moved::SwappedRow(r);
+        }
+        if let Some(o) = self.macros.iter().enumerate().position(|(i, x)| i != m && x.button == Some(phys)) {
+            self.macros[o].button = had;
+            return Moved::SwappedMacro(o);
+        }
+        Moved::Freed(had.map(|b| BUTTONS[b as usize].0.to_string()))
+    }
+
+    /// The macros whose button `buttons` (physical) holds, a bit each.
+    pub fn macros_held(&self, buttons: u16) -> u16 {
+        let mut out = 0;
+        for (i, m) in self.macros.iter().enumerate() {
+            if let Some(p) = m.button
+                && buttons & (1 << p) != 0
+            {
+                out |= 1 << i;
+            }
+        }
+        out
     }
 
     /// The controllers' buttons (`input::bit`, physical) as the game's
@@ -439,6 +613,25 @@ impl Binds {
                 s.push_str(&format!("pad.{}={}\n", BUTTONS[f].0, BUTTONS[p as usize].0));
             }
         }
+        for (i, m) in self.macros.iter().enumerate() {
+            let n = i + 1;
+            if let Some(k) = &m.key {
+                s.push_str(&format!("macro.{n}.key={k}\n"));
+            }
+            if let Some(b) = m.button {
+                s.push_str(&format!("macro.{n}.button={}\n", BUTTONS[b as usize].0));
+            }
+            if m.chord != 0 {
+                let names: Vec<&str> = (0..16).filter(|i| m.chord & (1 << i) != 0).map(|i| BUTTONS[i].0).collect();
+                s.push_str(&format!("macro.{n}.buttons={}\n", names.join("+")));
+            }
+            if m.toggle {
+                s.push_str(&format!("macro.{n}.toggle=1\n"));
+            }
+            if m.turbo != 0 {
+                s.push_str(&format!("macro.{n}.turbo={}\n", m.turbo));
+            }
+        }
         s
     }
 
@@ -465,6 +658,28 @@ impl Binds {
                 && let (Some(r), Some(p)) = (row_named(id), button(v))
             {
                 b.bind_row_button(r, p);
+            } else if let Some(rest) = k.strip_prefix("macro.")
+                && let Some((n, what)) = rest.split_once('.')
+                && let Ok(n) = n.parse::<usize>()
+                && (1..=MACROS).contains(&n)
+            {
+                let m = n - 1;
+                match what {
+                    "key" if valid_name(v) => {
+                        let _ = b.bind_macro_key(m, Some(v));
+                    }
+                    "button" => {
+                        if let Some(p) = button(v) {
+                            b.bind_macro_button(m, p);
+                        }
+                    }
+                    "buttons" => {
+                        b.macros[m].chord = v.split('+').filter_map(button).fold(0, |c, i| c | 1 << i);
+                    }
+                    "toggle" => b.macros[m].toggle = v == "1",
+                    "turbo" => b.macros[m].turbo = v.parse().ok().filter(|t| TURBOS.contains(t)).unwrap_or(0),
+                    _ => {}
+                }
             }
         }
         b
@@ -501,6 +716,12 @@ impl Binds {
                 parts.push(format!("pad {} on {}", BUTTONS[f].0, BUTTONS[p as usize].0));
             }
         }
+        for (i, m) in self.macros.iter().enumerate() {
+            if *m != Macro::default() {
+                let on: Vec<String> = m.key.iter().cloned().chain(m.button.map(|b| BUTTONS[b as usize].0.to_string())).collect();
+                parts.push(format!("macro {} on {} pressing {} ({})", i + 1, if on.is_empty() { "nothing".into() } else { on.join(" and ") }, m.chord_glyphs(), m.mode_text()));
+            }
+        }
         parts.join(", ")
     }
 }
@@ -528,6 +749,11 @@ pub struct PadFrame {
     pub fields: u16,
     /// the button a capture took (its bit index)
     pub took: Option<u8>,
+    /// every button a capture took this frame (physical, a bit each): a
+    /// macro's chord takes them all
+    pub caught: u16,
+    /// the macros whose trigger button is held (a bit each)
+    pub macros: u16,
     /// rows of the client's keys (by `ROWS`' index) pressed (true) or let
     /// go, in the buttons' order, the let-go first
     pub rows: Vec<(usize, bool)>,
@@ -540,8 +766,10 @@ impl PadEdge {
         let fresh = raw & !self.last;
         self.last = raw;
         let mut took = None;
+        let mut caught = 0;
         if capturing && fresh != 0 {
             took = Some(fresh.trailing_zeros() as u8);
+            caught = fresh;
             self.swallow |= fresh;
         }
         self.swallow &= raw;
@@ -561,7 +789,7 @@ impl PadEdge {
                 rows.push((row, true));
             }
         }
-        PadFrame { fields: b.remap(raw & !self.swallow), took, rows }
+        PadFrame { fields: b.remap(raw & !self.swallow), took, caught, macros: b.macros_held(raw & !self.swallow), rows }
     }
 }
 
@@ -572,6 +800,8 @@ pub enum Sent {
     Key(String),
     /// a pad button (`input::bit`), to the game's pad path (`SetKey`)
     Button(u16),
+    /// a macro's trigger (its index), to the macros (`macros::Run`)
+    Macro(usize),
 }
 
 /// The keys from press to release through the bindings: what each key
@@ -592,6 +822,7 @@ impl KeyEdge {
             Alias::Same => same(name),
             Alias::To(k) => same(k),
             Alias::Button(k) => Some(Sent::Button(k)),
+            Alias::Macro(m) => Some(Sent::Macro(m)),
             Alias::Nothing => None,
         };
         if !down {
@@ -1023,6 +1254,7 @@ mod tests {
     fn everything_once(b: &Binds) {
         let mut seen: Vec<u8> = (0..16).map(|f| b.button(f)).filter(|&p| p != NO_BUTTON).collect();
         seen.extend((0..ROWS.len()).filter_map(|r| b.row_button(r)));
+        seen.extend(b.macros.iter().filter_map(|m| m.button));
         seen.sort_unstable();
         assert_eq!(seen, (0..16).collect::<Vec<u8>>(), "{b:?}");
     }
@@ -1044,10 +1276,17 @@ mod tests {
         let mut lossy = 0;
         for _ in 0..3000 {
             let phys = next(16) as u8;
-            if next(2) == 0 {
-                b.bind_button(next(16) as u8, phys);
-            } else {
-                b.bind_row_button(rows[next(rows.len())], phys);
+            match next(3) {
+                0 => {
+                    b.bind_button(next(16) as u8, phys);
+                }
+                1 => {
+                    b.bind_row_button(rows[next(rows.len())], phys);
+                }
+                // a macro's trigger: a third place a button may be
+                _ => {
+                    b.bind_macro_button(next(MACROS), phys);
+                }
             }
             everything_once(&b);
             let t = b.to_text();
@@ -1055,7 +1294,7 @@ mod tests {
             let without: String = t.lines().filter(|l| !l.starts_with("button.")).map(|l| format!("{l}\n")).collect();
             lossy += (Binds::from_text(&without) != b) as usize;
         }
-        assert!(lossy > 1000, "the control: {lossy}");
+        assert!(lossy > 600, "the control: {lossy}");
     }
 
     /// A button on a row presses the row's key and lets it go as the row it
@@ -1210,6 +1449,62 @@ mod tests {
         }
         assert_eq!(pad_key(bit::TRIANGLE), Some(132));
         assert_eq!(pad_key(0), None);
+    }
+
+    /// A macro: a key a row is on is refused, a free key taken (its alias the
+    /// macro's); a button given it leaves its field (the game no longer sees
+    /// it as that field, and `PadEdge` says the macro's trigger is held), and
+    /// the field taking the button back leaves the macro none; a row moved
+    /// onto the macro's key takes it back; `keys.opt` round trips. The
+    /// control: with no macros, every button its field and no macro line.
+    #[test]
+    fn a_macro_takes_a_free_key_and_a_button_off_its_field() {
+        let control = Binds::default();
+        assert!(!control.to_text().contains("macro."));
+        assert_eq!((control.macros_held(0xFFFF), control.remap(0xFFFF)), (0, 0xFFFF));
+        let mut b = Binds::default();
+        assert_eq!(b.bind_macro_key(0, Some("q")), Err(MacroKey::Row(row_named("talk").unwrap())));
+        assert_eq!(b.bind_macro_key(0, Some("~")), Err(MacroKey::Row(row_named("cycle_target").unwrap())), "a row's other key");
+        assert_eq!(b.bind_macro_key(0, Some("f12")), Err(MacroKey::Reserved));
+        assert_eq!(b.bind_macro_key(0, Some("g")), Ok(()));
+        assert_eq!(b.alias("g"), Alias::Macro(0));
+        let l3 = bit_index(bit::L3).unwrap();
+        assert_eq!(b.bind_macro_button(0, l3), Moved::Swapped(l3 as usize));
+        assert_eq!(b.remap(bit::L3), 0, "L3 is the macro's now");
+        let f = PadEdge::default().frame(bit::L3, false, &b);
+        assert_eq!((f.fields, f.macros), (0, 1));
+        b.macros[0].chord = bit::CROSS | bit::CIRCLE;
+        b.macros[0].toggle = true;
+        b.macros[0].turbo = 4;
+        let t = b.to_text();
+        assert!(t.contains("macro.1.key=g\nmacro.1.button=l3\nmacro.1.buttons=circle+cross\nmacro.1.toggle=1\nmacro.1.turbo=4\n"), "{t}");
+        assert_eq!(Binds::from_text(&t), b);
+        assert!(b.describe().contains("macro 1 on g and l3 pressing |c|x (Toggle, turbo 4)"), "{}", b.describe());
+        // a second macro taking L3 takes it from the first
+        assert_eq!(b.bind_macro_button(1, l3), Moved::SwappedMacro(0));
+        assert_eq!((b.macros[0].button, b.macros[1].button), (None, Some(l3)));
+        // L3 back on its field: the macro has none
+        assert_eq!(b.bind_button(l3, l3), Moved::SwappedMacro(1));
+        assert_eq!((b.macros[1].button, b.remap(bit::L3)), (None, bit::L3));
+        // a row moved onto G takes it from the macro
+        b.bind_key(row_named("talk").unwrap(), "g");
+        assert_eq!(b.macros[0].key, None);
+        assert_eq!(b.alias("g"), Alias::To("q"));
+    }
+
+    /// A macro's mode steps Hold, Toggle, each turbo, each turbo toggled,
+    /// and Hold again.
+    #[test]
+    fn a_macros_mode_steps_round() {
+        let mut m = Macro::default();
+        let mut seen = vec![m.mode_text()];
+        for _ in 0..2 + 2 * TURBOS.len() {
+            m.next_mode();
+            seen.push(m.mode_text());
+        }
+        assert_eq!(seen.first(), seen.last());
+        assert_eq!(&seen[..4], &["Hold", "Toggle", "Turbo 1", "Turbo 2"]);
+        assert!(seen.contains(&"Toggle, turbo 15".to_string()));
     }
 
     #[test]
