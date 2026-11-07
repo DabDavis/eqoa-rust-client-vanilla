@@ -2181,6 +2181,8 @@ impl Play {
         crate::hideui::show();
         // no server's feature word yet (`live`): the disc's until a 0x07F5
         crate::live::set_features(Default::default());
+        // no race words from this server yet (`racelabel`): the game's
+        crate::racelabel::clear();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
         let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default() };
@@ -2386,6 +2388,8 @@ impl Play {
                     self.cues.push(crate::sound::Cue::Ui(1));
                 }
                 Event::Opcode { op: 0x0E02, data } => self.who.recv(&data),
+                // a race the game does not have, by its own words (`racelabel`)
+                Event::Opcode { op: net::session::OP_RACE_LABELS_DATA, data } => crate::racelabel::take(&data),
                 // the live client's feature word and group search, and the
                 // server's offer of the live auction form (`liveplay`); the
                 // word goes to the duel part's copy too (`duelplay`)
@@ -7874,7 +7878,8 @@ impl Play {
         // GetRace / GetClass: out of range is entry 0; races 10-20 are empty
         const RACE_WORDS: [i32; 10] = [183, 185, 186, 187, 188, 189, 191, 192, 193, 190];
         let race = if (c.race as usize) < 21 { RACE_WORDS.get(c.race as usize).copied().unwrap_or(-1) } else { 183 };
-        let race = word(race);
+        // a race the game does not have, by the server's word for this name
+        let race = crate::racelabel::long(&c.name).unwrap_or_else(|| word(race));
         let class = word(if c.class < 15 { 165 + c.class as i32 } else { 165 });
         let level = format!("{} {}", word(503), c.level);
         match c.p256 {
@@ -9827,6 +9832,42 @@ mod commands {
     /// What shows the UI again (`Play::wants_ui`): a mode of the game's but
     /// the manual camera's, the target's details, a line typed; and a world
     /// entry. The control: play alone wants none.
+    /// The info window's race line: the race list's word for the target's name,
+    /// else the game's; the title (0x0010's) stands where the class would, as sent.
+    /// The controls: a name not on the list, and no list.
+    #[test]
+    fn the_info_window_says_a_race_label() {
+        let mut p = play();
+        p.words = Some(crate::groupsearch::tests::numbered());
+        let target = |id: u32, name: &str| net::entity::Entity {
+            id,
+            creature: Some(net::entity::Creature { name: name.into(), race: 9, class: 9, level: 60, p256: 2, ..Default::default() }),
+            ..Default::default()
+        };
+        p.entities.slots[0] = Some(target(0x10, "Lagerbottoms"));
+        p.entities.slots[1] = Some(target(0x11, "Plainogre"));
+        p.target = 0x10;
+        p.target_info = Some(1);
+        p.target_title = "Titan".into();
+        assert_eq!(p.target_info_text().as_deref(), Some("Lagerbottoms\nw190\nTitan\nw503 60"), "no list");
+        crate::racelabel::tests::given(&[("Hill Giant", "HGT", &["Lagerbottoms"])]);
+        assert_eq!(p.target_info_text().as_deref(), Some("Lagerbottoms\nHill Giant\nTitan\nw503 60"));
+        p.target_title.clear();
+        assert_eq!(p.target_info_text().as_deref(), Some("Lagerbottoms\nHill Giant\nw174\nw503 60"), "no title: the class");
+        p.target = 0x11;
+        assert_eq!(p.target_info_text().as_deref(), Some("Plainogre\nw190\nw174\nw503 60"), "a name not on the list");
+        crate::racelabel::clear();
+    }
+
+    /// 0x7E1D reaches the list through the frame's events, and a world entry starts
+    /// with none.
+    #[test]
+    fn a_world_entry_starts_with_no_race_labels() {
+        crate::racelabel::tests::given(&[("Hill Giant", "HGT", &["Lagerbottoms"])]);
+        let _ = play();
+        assert_eq!(crate::racelabel::long("Lagerbottoms"), None);
+    }
+
     #[test]
     fn a_window_up_shows_the_ui_again() {
         let mut p = play();
