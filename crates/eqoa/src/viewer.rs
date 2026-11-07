@@ -3215,9 +3215,11 @@ impl App {
     }
 
     /// Ctrl+V, Ctrl+C and Ctrl+X (⌘ on a Mac) while an edit box is on the screen:
-    /// paste at its caret, copy what it holds, cut it (`clipboard`, `editbox`). A
-    /// key this takes goes no further, its repeat too. With no edit box up they
-    /// are the keys they always were. A page's are the browser's (`web/main.js`).
+    /// paste at its caret, copy what it holds, cut it (`clipboard`, `editbox`). With
+    /// none up, Ctrl+C with a chat box on the screen copies its lines selected or
+    /// its newest (`chat::copy_text`), and the rest are the keys they always were.
+    /// A key this takes goes no further, its repeat and release too. A page's are
+    /// the browser's (`web/main.js`).
     #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     fn clipboard_key(&mut self, e: &KeyEvent) -> bool {
         use winit::keyboard::{KeyCode, PhysicalKey};
@@ -3233,6 +3235,10 @@ impl App {
                 self.clip_key = None;
             }
             return ours;
+        }
+        // its repeats too, Ctrl let go first or not
+        if e.repeat && self.clip_key == Some(e.physical_key) {
+            return true;
         }
         if !e.repeat {
             self.clip_key = None;

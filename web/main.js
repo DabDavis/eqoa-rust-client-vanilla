@@ -348,6 +348,12 @@ const pasteDone = () => {
   pasteBack = null;
 };
 addEventListener('keydown', (e) => {
+  // its repeats are the copy's too, Ctrl let go first or not
+  if (e.repeat && e.code === copyKey) {
+    e.stopImmediatePropagation();
+    e.preventDefault();
+    return;
+  }
   // (a Mac's browsers send no keyup for a key let go under Cmd: the next key clears it)
   if (!e.repeat) copyKey = null;
   if (!clientReady || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
