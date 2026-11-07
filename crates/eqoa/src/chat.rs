@@ -15,7 +15,6 @@
 //! made in until it is cleared: Esc or a click anywhere else.
 
 use std::cell::RefCell;
-use std::time::Duration;
 use vi::ui::{Raster, Vui, Window};
 
 /// The ring's size. The game's is 32 (`VIChatText::m_lines`, 5,136 bytes of
@@ -225,7 +224,8 @@ impl ChatText {
 /// (the page's keys come in from outside the game, where only this is in reach).
 #[derive(Default)]
 struct ForCopy {
-    drawn: Option<web_time::Instant>,
+    /// when a box was last drawn (`clipboard::screen_time`)
+    drawn: Option<f64>,
     text: Option<String>,
     /// taken since the frame last looked: its sound
     copied: bool,
@@ -236,12 +236,13 @@ thread_local! {
 }
 
 /// A chat box not drawn for this long is gone (`editbox::FIELD_GONE`'s reason).
-const COPY_GONE: Duration = Duration::from_millis(500);
+const COPY_GONE: f64 = 0.5;
 
 /// What the Copy key takes with no edit box up: the lines selected, or the newest
 /// line; none with no chat box on the screen.
 pub fn copy_text() -> Option<String> {
-    FOR_COPY.with_borrow(|c| if c.drawn.is_some_and(|d| d.elapsed() < COPY_GONE) { c.text.clone() } else { None })
+    let now = crate::clipboard::screen_time();
+    FOR_COPY.with_borrow(|c| if c.drawn.is_some_and(|d| now - d < COPY_GONE) { c.text.clone() } else { None })
 }
 
 /// `copy_text`'s text has gone to the clipboard: the step's sound, which is all
@@ -339,6 +340,9 @@ pub struct WndChat {
     told: Option<(u64, Option<(u64, u64)>)>,
     /// The wheel's part of a line not yet stepped.
     wheel: f32,
+    /// The history's view is on the newest lines, nothing having taken it back
+    /// (`follow`).
+    following: bool,
 }
 
 impl WndChat {
@@ -351,7 +355,7 @@ impl WndChat {
 
     /// `Init`: the window is 462 wide and lines wrap at its width less 45.
     pub fn new() -> Self {
-        WndChat { mode: 0, height: 0, target: 0, lines: 0, text: ChatText::new(462 - 45), window: Window::default(), scroll: 0, top: 0, bottom: 0, held: 0, repeat: 0.0, cues: Vec::new(), shown: Vec::new(), sel: None, drag: None, told: None, wheel: 0.0 }
+        WndChat { mode: 0, height: 0, target: 0, lines: 0, text: ChatText::new(462 - 45), window: Window::default(), scroll: 0, top: 0, bottom: 0, held: 0, repeat: 0.0, cues: Vec::new(), shown: Vec::new(), sel: None, drag: None, told: None, wheel: 0.0, following: false }
     }
 
     /// `CountLines`: the fresh lines (every line while scrolling; five in a
@@ -400,6 +404,7 @@ impl WndChat {
             self.cues.push(11);
             self.bottom = ChatText::next(self.bottom);
             self.top = ChatText::next(self.top);
+            self.following = self.bottom == self.text.end();
         } else {
             self.cues.push(9);
         }
@@ -411,6 +416,7 @@ impl WndChat {
             self.cues.push(11);
             self.top = ChatText::prev(self.top);
             self.bottom = ChatText::prev(self.bottom);
+            self.following = false;
         } else {
             self.cues.push(9);
         }
@@ -470,6 +476,7 @@ impl WndChat {
         if self.mode != 0 {
             crate::ui::chat_strip(vui, ui, [200, 331], [442, 118]);
         }
+        self.follow();
         let it = if self.scroll == 1 { self.bottom } else { self.text.end() };
         self.lines = if self.scroll == 1 { 5 } else { self.count_lines() };
         let h = vui.font_height(ui);
@@ -523,6 +530,19 @@ impl WndChat {
         }
     }
 
+    /// A selection made on the newest lines goes on with them once the drag is
+    /// done, so a player who copied and went back to playing misses nothing said;
+    /// one scrolled back stays where it is.
+    fn follow(&mut self) {
+        if self.sel.is_some() && self.drag.is_none() && self.scroll == 1 && self.following {
+            let cues = self.cues.len();
+            while self.bottom != self.text.end() {
+                self.scroll_down();
+            }
+            self.cues.truncate(cues);
+        }
+    }
+
     /// The row drawn at point `p` of the box (as `contains` takes one).
     fn row_at(&self, p: [f32; 2]) -> Option<u64> {
         if !self.contains(p) {
@@ -558,6 +578,7 @@ impl WndChat {
             if !scrolled {
                 self.set_scroll(1);
             }
+            self.following = self.bottom == self.text.end();
         }
     }
 
@@ -649,7 +670,7 @@ impl WndChat {
     /// What the Copy key would take: the lines selected, in order, or the newest.
     fn copy_now(&self) -> Option<String> {
         match self.sel {
-            Some((a, b)) => Some(self.text.rows(a.min(b), a.max(b))),
+            Some((a, b)) => Some(self.text.rows(a.min(b), a.max(b))).filter(|s| !s.is_empty()),
             None => self.text.newest(),
         }
     }
@@ -661,7 +682,7 @@ impl WndChat {
         let text = (self.told != Some(now)).then(|| self.copy_now());
         self.told = Some(now);
         let copied = FOR_COPY.with_borrow_mut(|c| {
-            c.drawn = Some(web_time::Instant::now());
+            c.drawn = Some(crate::clipboard::screen_time());
             if let Some(text) = text {
                 c.text = text;
             }
@@ -916,25 +937,57 @@ mod tests {
         assert!(c.shown.iter().any(|r| r.seq == 0));
     }
 
-    /// New lines go on under a selection: the rows it was made on stay in view and
-    /// its text as it was, where the ring's places have been used again and even
-    /// where the first of them has gone off the end.
+    /// New lines go on under a selection. Left on the newest lines the box goes on
+    /// with them, the selection's rows going up it and off, its text as it was; even
+    /// where the ring's places have been used again; gone off the end, there is
+    /// nothing to copy. Scrolled back, the view stays; and while a drag is on.
     #[test]
     fn a_selection_holds_while_lines_come() {
+        let more = |c: &mut WndChat, n: usize| {
+            for k in 0..n {
+                c.text.add_text(&crate::ui::wide(&format!("more {k}")), [1.0; 4], 0, width);
+            }
+            frame(c, 0.016);
+        };
         let mut c = with_lines(8);
         begin(&mut c, 7);
         to(&mut c, 6);
+        // still dragging: the rows stay under the pointer
+        more(&mut c, 1);
+        assert_eq!(c.shown.first().unwrap().seq, 7, "the view holds through a drag");
         c.release(false);
-        for k in 0..10 {
-            c.text.add_text(&crate::ui::wide(&format!("more {k}")), [1.0; 4], 0, width);
+        frame(&mut c, 0.016);
+        assert_eq!(c.shown.first().unwrap().seq, 8, "the drag done, it catches up");
+        assert_eq!(c.selected().len(), 2, "lit");
+        more(&mut c, 1);
+        assert_eq!(c.shown.first().unwrap().seq, 9, "goes on with them");
+        assert_eq!(c.selected().len(), 2, "its rows gone up the box");
+        more(&mut c, 9);
+        assert_eq!(c.shown.first().unwrap().seq, 18);
+        assert!(c.selected().is_empty(), "and off it");
+        assert_eq!(c.copy_now().as_deref(), Some("line 6\nline 7"), "its text as it was");
+        more(&mut c, 1100);
+        assert_eq!(c.copy_now(), None, "gone with the ring");
+        // scrolled back, the view stays where it is
+        let mut c = with_lines(20);
+        c.set_scroll(1);
+        frame(&mut c, 0.016);
+        assert!(c.wheel(on(&c, 19), 3.0));
+        frame(&mut c, 0.016);
+        begin(&mut c, 14);
+        c.release(false);
+        more(&mut c, 5);
+        assert_eq!(c.shown.first().unwrap().seq, 16, "the view held");
+        assert_eq!(c.selected().len(), 1, "lit");
+        // and back at the newest by a key, it goes on with them again
+        for _ in 0..8 {
+            c.key_down(20);
+            c.key_up(20);
         }
         frame(&mut c, 0.016);
-        assert_eq!(c.copy_now().as_deref(), Some("line 6\nline 7"));
-        assert_eq!(c.selected().len(), 2, "still lit, in the view it was made in");
-        for k in 0..1100 {
-            c.text.add_text(&crate::ui::wide(&format!("later {k}")), [1.0; 4], 0, width);
-        }
-        assert_eq!(c.copy_now().as_deref(), Some(""), "gone with the ring");
+        assert_eq!(c.shown.first().unwrap().seq, 24);
+        more(&mut c, 1);
+        assert_eq!(c.shown.first().unwrap().seq, 25);
     }
 
     /// Esc (the caller's) or a click elsewhere clears it, and the box goes back to
@@ -992,7 +1045,7 @@ mod tests {
         frame(&mut c, 0.016);
         assert_eq!(c.cues, vec![11]);
         // the box gone: nothing to take
-        FOR_COPY.with_borrow_mut(|f| f.drawn = web_time::Instant::now().checked_sub(COPY_GONE * 2));
+        FOR_COPY.with_borrow_mut(|f| f.drawn = Some(crate::clipboard::screen_time() - COPY_GONE * 2.0));
         assert_eq!(copy_text(), None);
     }
 

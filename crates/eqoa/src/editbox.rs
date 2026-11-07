@@ -93,19 +93,20 @@ enum Ask {
 /// it holds).
 #[derive(Default)]
 struct Field {
-    /// when one was last drawn; not every window redraw draws the game's 2D
-    drawn: Option<web_time::Instant>,
+    /// when one was last drawn (`clipboard::screen_time`); not every window redraw
+    /// draws the game's 2D
+    drawn: Option<f64>,
     /// what it holds; `None` for a password's, never copied
     text: Option<String>,
     asks: Vec<Ask>,
 }
 
-/// An edit box not drawn for this long is gone.
-const FIELD_GONE: std::time::Duration = std::time::Duration::from_millis(500);
+/// An edit box not drawn for this long (`clipboard::screen_time`) is gone.
+const FIELD_GONE: f64 = 0.5;
 
 impl Field {
     fn up(&self) -> bool {
-        self.drawn.is_some_and(|t| t.elapsed() < FIELD_GONE)
+        self.drawn.is_some_and(|t| crate::clipboard::screen_time() - t < FIELD_GONE)
     }
 }
 
@@ -335,7 +336,7 @@ impl EditBox {
             if !f.up() {
                 f.asks.clear();
             }
-            f.drawn = Some(web_time::Instant::now());
+            f.drawn = Some(crate::clipboard::screen_time());
             std::mem::take(&mut f.asks)
         }) {
             let ok = match ask {
@@ -1067,7 +1068,7 @@ mod tests {
     /// no longer drawn neither says what it held nor takes a paste asked of it.
     #[test]
     fn the_box_on_the_screen_answers_the_clipboard() {
-        let gone = || FIELD.with_borrow_mut(|f| f.drawn = web_time::Instant::now().checked_sub(FIELD_GONE * 2));
+        let gone = || FIELD.with_borrow_mut(|f| f.drawn = Some(crate::clipboard::screen_time() - FIELD_GONE * 2.0));
         let mut cues = Vec::new();
         gone();
         assert!(!field_up());
