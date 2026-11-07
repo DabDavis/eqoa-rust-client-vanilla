@@ -4807,7 +4807,6 @@ impl App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                crate::editbox::frame_begin();
                 crate::clipboard::poll();
                 crate::bugnote::frame_drawn(self.clock.elapsed().as_secs_f64() * 1000.0);
                 if !self.unfocus_script.is_empty() {

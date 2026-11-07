@@ -87,44 +87,39 @@ enum Ask {
 }
 
 /// The edit box on the screen, as the clipboard's keys find it: whichever
-/// window's it is, the one drawn. Each frame `frame_begin` starts, and `draw`
-/// takes what was asked of it and says what it holds.
+/// window's it is, the one drawn (`draw` takes what was asked of it and says what
+/// it holds).
 #[derive(Default)]
 struct Field {
-    /// drawn this frame, and in the last
-    up: bool,
-    was_up: bool,
-    /// what the last drawn holds; `None` for a password's, never copied
+    /// when one was last drawn; not every window redraw draws the game's 2D
+    drawn: Option<web_time::Instant>,
+    /// what it holds; `None` for a password's, never copied
     text: Option<String>,
     asks: Vec<Ask>,
+}
+
+/// An edit box not drawn for this long is gone.
+const FIELD_GONE: std::time::Duration = std::time::Duration::from_millis(500);
+
+impl Field {
+    fn up(&self) -> bool {
+        self.drawn.is_some_and(|t| t.elapsed() < FIELD_GONE)
+    }
 }
 
 thread_local! {
     static FIELD: std::cell::RefCell<Field> = std::cell::RefCell::default();
 }
 
-/// A frame begins: what was asked of an edit box no longer drawn is dropped, so
-/// it does not land in the next one opened.
-pub fn frame_begin() {
-    FIELD.with_borrow_mut(|f| {
-        f.was_up = f.up;
-        f.up = false;
-        if !f.was_up {
-            f.asks.clear();
-            f.text = None;
-        }
-    });
-}
-
 /// An edit box is on the screen: the clipboard's keys are its.
 pub fn field_up() -> bool {
-    FIELD.with_borrow(|f| f.was_up || f.up)
+    FIELD.with_borrow(Field::up)
 }
 
 /// What the edit box on the screen holds, for Copy and Cut: `None` with none up,
 /// or for a password's, or with nothing in it.
 pub fn field_text() -> Option<String> {
-    FIELD.with_borrow(|f| if f.was_up || f.up { f.text.clone().filter(|t| !t.is_empty()) } else { None })
+    FIELD.with_borrow(|f| if f.up() { f.text.clone().filter(|t| !t.is_empty()) } else { None })
 }
 
 /// Paste: the text goes in at the caret as the edit box next draws.
@@ -334,7 +329,11 @@ impl EditBox {
     /// where typing has one a character.
     fn take_asks(&mut self, now: i64, cues: &mut Vec<i32>) {
         for ask in FIELD.with_borrow_mut(|f| {
-            f.up = true;
+            // what was asked of a box gone is dropped, not left for the next
+            if !f.up() {
+                f.asks.clear();
+            }
+            f.drawn = Some(web_time::Instant::now());
             std::mem::take(&mut f.asks)
         }) {
             let ok = match ask {
@@ -1057,21 +1056,19 @@ mod tests {
     /// no longer drawn neither says what it held nor takes a paste asked of it.
     #[test]
     fn the_box_on_the_screen_answers_the_clipboard() {
+        let gone = || FIELD.with_borrow_mut(|f| f.drawn = web_time::Instant::now().checked_sub(FIELD_GONE * 2));
         let mut cues = Vec::new();
-        frame_begin();
-        frame_begin();
+        gone();
         assert!(!field_up());
         assert_eq!(field_text(), None);
         let mut e = EditBox::default();
         e.set_max_length(128);
         e.set_text(&wide("typed"));
-        frame_begin();
         e.take_asks(0, &mut cues);
         assert!(field_up());
         assert_eq!(field_text().as_deref(), Some("typed"));
         // paste, one cue for all of it
         ask_paste(" more".to_string());
-        frame_begin();
         e.take_asks(0, &mut cues);
         assert_eq!(e.text, wide("typed more"));
         assert_eq!(cues, [11]);
@@ -1079,7 +1076,6 @@ mod tests {
         // cut
         cues.clear();
         ask_cut();
-        frame_begin();
         e.take_asks(0, &mut cues);
         assert!(e.text.is_empty());
         assert_eq!(cues, [11]);
@@ -1088,26 +1084,23 @@ mod tests {
         let mut p = EditBox::default();
         p.password = true;
         p.set_text(&wide("secret"));
-        frame_begin();
         p.take_asks(0, &mut cues);
         assert_eq!(field_text(), None);
         ask_cut();
-        frame_begin();
         p.take_asks(0, &mut cues);
         assert_eq!(p.text, wide("secret"));
         // pasting into one is fine
         ask_paste("!".to_string());
-        frame_begin();
         p.take_asks(0, &mut cues);
         assert_eq!(p.text, wide("secret!"));
-        // the box closed: what was asked of it is dropped, not left for the next
+        // the box closed: it says nothing, and what was asked of it is dropped,
+        // not left for the next
         ask_paste("late".to_string());
-        frame_begin(); // drawn no more
-        frame_begin();
+        gone();
         assert!(!field_up());
+        assert_eq!(field_text(), None);
         let mut next = EditBox::default();
         next.set_max_length(128);
-        frame_begin();
         next.take_asks(0, &mut cues);
         assert!(next.text.is_empty());
     }
