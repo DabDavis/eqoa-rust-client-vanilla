@@ -2025,6 +2025,30 @@ mod tests {
     /// ":\n", each reason's names with its word) and the window closed, a
     /// sent one 839 said by the window. The control: the disc's window says
     /// nothing at 0 (its RecvSend did).
+    /// A paste into a mail's body keeps its lines, as a console's Enter types them
+    /// there; into the subject, a line of its own, they are spaces.
+    #[test]
+    fn a_mails_body_keeps_a_pasted_line_end() {
+        let (vui, mut r) = (mail_vui(), NullRaster);
+        let (mut cues, mut g) = (Vec::new(), Grams::default());
+        let mut c = Compose::new(false);
+        c.visible = true;
+        c.focus(&vui, &NullRaster);
+        c.key(&vui, &mut r, &mut g, 0, false, 0, &mut cues);
+        let pasted = |c: &mut Compose, g: &mut Grams, r: &mut NullRaster, cues: &mut Vec<i32>, sel: i32| {
+            c.sel = sel;
+            c.key(&vui, r, g, 13, true, 0, cues);
+            assert!(c.editing, "field {sel} open");
+            c.edit.paste("one\r\ntwo |+", 0);
+            c.key(&vui, r, g, 143, true, 0, cues);
+            assert!(!c.editing, "field {sel} done");
+        };
+        pasted(&mut c, &mut g, &mut r, &mut cues, 2);
+        assert_eq!(c.body, wide("one\ntwo +"));
+        pasted(&mut c, &mut g, &mut r, &mut cues, 1);
+        assert_eq!(c.subject, wide("one two +"));
+    }
+
     #[test]
     fn the_live_compose_sends_to_several_and_shows_what_came_back() {
         let (vui, mut r) = (mail_vui(), NullRaster);
