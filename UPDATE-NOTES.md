@@ -5,6 +5,14 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-07 · A server's own races
+- A server can have races of its own (eqoaclassic's Hill Giant). Such a character now reads as its own race wherever
+  the game shows a character's race: a target's details, your Stats page, the who list, the guild roster, the buddy
+  list, the group search and a duel's invitation say Hill Giant, or HGT where the column is short, and not the race it
+  plays as (Ogre, OGR). The who list and the roster sort by the word they show.
+- On those same characters the title in a target's details no longer repeats the race: Titan, not Hill Giant Titan.
+- Its camera, what it may wear and how it looks are as before. A server with no such race looks just as it did.
+
 ## 2026-11-07 · Picking the disc on a phone
 - In a browser on an Android phone or any touch device, the disc image's picker now shows every file, as it
   already did on an iPhone. It could grey out an .iso before, so there was nothing to pick. The page still checks
