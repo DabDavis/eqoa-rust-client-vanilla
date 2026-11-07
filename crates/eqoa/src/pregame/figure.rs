@@ -1,8 +1,9 @@
 //! A character in the pregame's 3D: what character select's `ShowCharacter`
 //! and the creation pages' `CreateModel` put in the scene. The model's
 //! CSprite by its DictID (out of CHARSEL1-4.CSF, which CLIENT's pregame
-//! load reads; `HumanMale` when the id is not there, as `ShowCharacter`
-//! falls back), dressed by `vi::cust::apply_look` (`SetArmorSlot` x6,
+//! load reads, or a server's race's out of CHAR.ESF, `res::Res::want_bodies`;
+//! until that is read its `like` race's, else `HumanMale` when the id is not
+//! there, as `ShowCharacter` falls back), dressed by `vi::cust::apply_look` (`SetArmorSlot` x6,
 //! `SetHair`, `SetFace`, `SetRobe`), its items on their nodes
 //! (`AttachItem`), posed once a frame of the game's (`VIHSprite::Process`)
 //! at an actor's place and heading, on the GPU.
@@ -56,6 +57,32 @@ pub fn actor_sprite(lib: &Library, r: esf::Ref, anims: &mut AnimScene<Ee>, rand:
     Some(cs)
 }
 
+thread_local! {
+    /// `sprite_height`'s answers, by model.
+    static HEIGHTS: std::cell::RefCell<std::collections::HashMap<u32, Option<f32>>> = Default::default();
+}
+
+/// How tall a model's skeleton stands at its first pose: its highest node over
+/// its root, in its own units (what the camera's framing of a race is made
+/// for). None when the library has no such model or it has no skeleton. Kept
+/// per model: a body's own never changes.
+pub fn sprite_height(lib: &Library, model: u32) -> Option<f32> {
+    if let Some(h) = HEIGHTS.with(|c| c.borrow().get(&model).copied()) {
+        return h;
+    }
+    let h = lib.lookup(model as i32).and_then(|r| {
+        let mut anims = AnimScene { time: 0, ..Default::default() };
+        let mut cs = actor_sprite(lib, r, &mut anims, &mut Rand(1))?;
+        cs.h.process(0, &anims);
+        cs.h.nodes.iter().map(|n| n.world.m[3].y.0).filter(|y| y.is_finite()).reduce(f32::max).filter(|&y| y > 0.0)
+    });
+    // a body not read yet asks again once it is
+    if h.is_some() {
+        HEIGHTS.with(|c| c.borrow_mut().insert(model, h));
+    }
+    h
+}
+
 impl Figure {
     /// `CreateActor` with the model's sprite (or `HumanMale`'s), dressed in
     /// `look` (a helm on node 8 when its set has one), `items` (DictIDs, 0
@@ -77,7 +104,12 @@ impl Figure {
 
     #[allow(clippy::too_many_arguments)]
     fn new_in_view(lib: &Library, g: &mut Gpu, model: u32, look: vi::cust::Look, items: [u32; 3], at: [f32; 3], hpr: [f32; 3], now: i64) -> Option<Figure> {
-        let r = lib.lookup(model as i32).or_else(|| lib.lookup(vi::hash::hash_resource_id("HumanMale") as i32))?;
+        // a server's race's body not read yet (`res::Res::want_bodies`): its
+        // `like` race's of the body's sex stands in, where the game draws a human
+        let r = lib
+            .lookup(model as i32)
+            .or_else(|| crate::pregame::client::create::tables::stand_in(model).and_then(|m| lib.lookup(m as i32)))
+            .or_else(|| lib.lookup(vi::hash::hash_resource_id("HumanMale") as i32))?;
         let textures = render::library_textures(lib);
         let mut built = lib.build_model(r)?;
         let mut anims = AnimScene { time: now, ..Default::default() };

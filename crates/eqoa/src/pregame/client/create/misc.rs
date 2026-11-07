@@ -68,7 +68,7 @@ impl MiscPage {
     /// limits, mode 1.
     pub fn reactivate(&mut self, form: &NewChar, env: &mut Env) {
         let _ = env;
-        self.pending = Some(super::tables::get_race(form.race).select);
+        self.pending = Some(super::tables::get_race(super::tables::like(form.race)).select);
     }
 
     /// `OnMessage` 295: the four values from the form, or where it has none
@@ -260,13 +260,13 @@ impl MiscPage {
             stage.cam.max_orbit_distance = F::new(25.0);
             stage.cam.min_collision_dist = F::new(3.5);
         }
-        let race = super::tables::get_race(form.race);
+        let model = super::tables::model_of(form.race, form.sex);
         if env.figure.is_none() {
             let c = &stage.cam.walk.committed;
             let (at, hpr) = (c.position.to_array(), c.angles.to_array());
             // turned a little off the camera
             let hpr = [(F::<Ee>::new(hpr[0]) + F::new(5.934_119)).0, hpr[1], hpr[2]];
-            env.figure = create_model(cx, race.model_id(form.sex), self.look(), at, hpr);
+            env.figure = create_model(cx, model, self.look(), at, hpr);
             self.dirty = false;
         } else if std::mem::take(&mut self.dirty)
             && let Some(f) = env.figure.as_mut()
@@ -279,11 +279,13 @@ impl MiscPage {
         }
         // UpdateCamera: the race's appearance framing (the original game's
         // human man his own), no turning
-        let framing = match env.race_camera(form.race) {
-            Some(_) if form.race == 0 && form.sex == 0 && env.expansion & 2 == 0 => [0.9, 1.48, 0.567_232, 1.25],
+        let stage_race = super::tables::like(form.race);
+        let framing = match env.race_camera(stage_race) {
+            Some(_) if stage_race == 0 && form.sex == 0 && env.expansion & 2 == 0 => [0.9, 1.48, 0.567_232, 1.25],
             Some(c) => c.cust,
             None => super::DEFAULT_FRAMING,
         };
+        let framing = super::body_framing(&cx.res.lib, framing, model, super::tables::model_of(stage_race, form.sex));
         frame_camera(stage, framing);
         stage.process(now);
         // the arena's particles: its braziers' flames

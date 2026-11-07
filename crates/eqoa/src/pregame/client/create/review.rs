@@ -32,18 +32,23 @@ impl Default for ReviewPage {
     }
 }
 
-/// The starting city's word (`sHomes`; a human ranger or druid starts in
-/// Surefall Glade, 602), or None for a race and city not in the table.
+/// The starting city's word (`sHomes`; a human ranger or druid of the west
+/// starts in Surefall Glade, 602), or None for a race and city not in the
+/// table. A server's race starts in its `like` race's city (a human's by its
+/// own city), as the server puts it there.
 pub fn home_word(form: &NewChar) -> Option<i32> {
-    let h = tables::HOMES.iter().find(|h| h.0 == form.race && h.1 == form.city)?;
-    Some(if h.0 == 0 && (form.class == 1 || form.class == 7) { 602 } else { h.2 })
+    let (race, city) = tables::server_race(form.race).map_or((form.race, form.city), |r| (r.like, if r.like == 0 { r.city } else { 0 }));
+    let h = tables::HOMES.iter().find(|h| h.0 == race && h.1 == city)?;
+    // the game's own rule names every human ranger and druid, all of them western
+    // there; one of the east (every class open to every race) starts in Freeport
+    Some(if h.0 == 0 && h.1 == 2 && (form.class == 1 || form.class == 7) { 602 } else { h.2 })
 }
 
 /// The stats the review shows: each the form's points, the race's and the
 /// class's bonuses, over 60.
 pub fn shown_stats(form: &NewChar) -> [i32; 7] {
-    let (race, class) = (tables::get_race(form.race), tables::get_class(form.class));
-    std::array::from_fn(|i| form.stats[i] + race.bonus[i] + class.bonus[i] + 60)
+    let (race, class) = (tables::bonus(form.race), tables::get_class(form.class));
+    std::array::from_fn(|i| form.stats[i] + race[i] + class.bonus[i] + 60)
 }
 
 impl ReviewPage {
@@ -109,7 +114,7 @@ impl ReviewPage {
             let mut tp = [60, 96];
             r.draw_string(tp, black, &vi::ui::wide(&form.name));
             tp[1] += 19;
-            r.draw_string(tp, black, &word(vui, tables::get_race(form.race).name));
+            r.draw_string(tp, black, &tables::race_name(vui, form.race));
             tp[1] += 19;
             r.draw_string(tp, black, &word(vui, tables::get_class(form.class).name));
             tp[1] += 38;
@@ -125,7 +130,7 @@ impl ReviewPage {
                 let c = &stage.cam.walk.committed;
                 let (at, hpr) = (c.position.to_array(), c.angles.to_array());
                 let look = [form.face, form.hair_style, form.hair_length, form.hair_color];
-                env.figure = create_model(cx, tables::get_race(form.race).model_id(form.sex), look, at, hpr);
+                env.figure = create_model(cx, tables::model_of(form.race, form.sex), look, at, hpr);
             }
             if self.time == -1 {
                 self.time = now;
@@ -140,7 +145,8 @@ impl ReviewPage {
                     f.set_action(0);
                 }
             }
-            let framing = env.race_camera(form.race).map_or(super::DEFAULT_FRAMING, |c| c.review);
+            let framing = env.race_camera(tables::like(form.race)).map_or(super::DEFAULT_FRAMING, |c| c.review);
+            let framing = super::body_framing(&cx.res.lib, framing, tables::model_of(form.race, form.sex), tables::model_of(tables::like(form.race), form.sex));
             frame_camera(stage, framing);
             stage.cam.orbit_right(F::<Ee>::new(0.3));
             stage.process(now);
@@ -191,6 +197,26 @@ mod tests {
         let east = NewChar { city: 1, ..warrior };
         assert_eq!(home_word(&east), Some(358), "Freeport");
         assert_eq!(home_word(&NewChar { race: 0, city: 0, ..super::super::blank_form() }), None, "a human of no city");
+        // every class open: a ranger of the east starts in Freeport, not Surefall
+        let east_ranger = NewChar { race: 0, city: 1, class: 1, ..super::super::blank_form() };
+        assert_eq!(home_word(&east_ranger), Some(358));
+    }
+
+    /// A server's race starts in its `like` race's city (a human's by its own
+    /// city), with its own bonuses and name; the control: no offer, no city.
+    #[test]
+    fn a_servers_race_is_reviewed_as_its_like_races_city() {
+        tables::set_offer(Some(&tables::tests::servers_offer(true)));
+        let giant = NewChar { race: 11, class: 13, stats: [0, 0, 0, 0, 0, 5, 0], ..super::super::blank_form() };
+        assert_eq!(home_word(&giant), Some(1187), "Oggok");
+        // hill giant 25 20 -5 -5 0 0 0, wizard 0 -5 0 10 -10 15 -10
+        assert_eq!(shown_stats(&giant), [85, 75, 55, 65, 50, 80, 50]);
+        assert_eq!(home_word(&NewChar { race: 12, class: 1, ..super::super::blank_form() }), Some(602), "a kerran ranger: Surefall Glade");
+        assert_eq!(home_word(&NewChar { race: 12, class: 0, ..super::super::blank_form() }), Some(357), "a kerran warrior: Qeynos");
+        assert_eq!(home_word(&NewChar { race: 10, class: 1, ..super::super::blank_form() }), Some(358), "a froglok ranger: Freeport");
+        assert_eq!(home_word(&NewChar { race: 13, class: 0, ..super::super::blank_form() }), Some(360), "a goblin: Neriak");
+        tables::set_offer(None);
+        assert_eq!(home_word(&giant), None, "the control: no such race");
     }
 
     #[test]

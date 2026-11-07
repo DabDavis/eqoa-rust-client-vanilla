@@ -5,6 +5,7 @@
 
 pub mod addr;
 pub mod auth;
+pub mod creation;
 pub mod dump;
 pub mod entity;
 pub mod session;

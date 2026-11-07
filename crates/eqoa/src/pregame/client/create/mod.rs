@@ -256,6 +256,11 @@ impl Create {
         }
         // `VIClient::ExpansionFlags`: 0x07D1's mask and the disc's
         self.env.expansion = session.expansion & net::session::EXPANSION_FLAGS;
+        // what the server said creation takes past the game's (`net::creation`):
+        // the race page's list again when it changed while the page is up
+        if tables::set_offer(session.creation.as_ref()) && self.page == Page::Race {
+            self.activate = Some(Page::Race);
+        }
         let mut stage = stage;
         let mut sounds = Vec::new();
         let mut out = Out::Stay;
@@ -438,7 +443,8 @@ impl Create {
 }
 
 /// The model (`CreateActor` + `SetHair` + `SetFace`), its sprite and its
-/// look, at `at` facing `hpr`.
+/// look, at `at` facing `hpr` (a server's race's body until it is read: its
+/// `like` race's, `Figure::new`).
 pub(crate) fn create_model(cx: &mut Ctx, model: u32, look: [i32; 4], at: [f32; 3], hpr: [f32; 3]) -> Option<Figure> {
     let [face, style, length, color] = look;
     let l = vi::cust::Look { hair: [color.clamp(0, 255) as u8, length.clamp(0, 255) as u8, style.clamp(0, 255) as u8], face: face.clamp(0, 255) as u8, robe: -1, ..Default::default() };
@@ -471,6 +477,21 @@ pub(crate) fn frame_camera(stage: &mut Stage, v: [f32; 4]) {
 
 /// `UpdateCamera`'s default framing when the race has no camera.
 pub(crate) const DEFAULT_FRAMING: [f32; 4] = [1.1, 1.7, 0.698_131_74, 0.75];
+
+/// A framing (target height, look-at height above it, pitch, distance) of
+/// the `like` race's camera, for `model`, a server's race's body, which may
+/// stand taller or shorter than that race's own: its heights and distance
+/// scaled by the two skeletons' heights (a hill giant stands near half again
+/// an ogre's), the pitch kept. As it is for any other body, or one not read.
+pub(crate) fn body_framing(lib: &esf::Library, framing: [f32; 4], model: u32, like_model: u32) -> [f32; 4] {
+    use crate::pregame::figure::sprite_height;
+    if model == like_model || tables::stand_in(model).is_none() {
+        return framing;
+    }
+    let (Some(h), Some(like)) = (sprite_height(lib, model), sprite_height(lib, like_model)) else { return framing };
+    let k = (h / like).clamp(0.4, 3.0);
+    [framing[0] * k, framing[1] * k, framing[2], framing[3] * k]
+}
 
 /// `Music::Bgm` on slot 0 (`PlayBgm(0, bgm)`, gFeatureFlags 0x100).
 pub(crate) fn play_bgm(cx: &mut Ctx, path: &str) {

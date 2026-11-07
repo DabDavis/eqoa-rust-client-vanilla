@@ -299,6 +299,8 @@ pub struct Client {
     /// The art swapped (F9): the stage and the figures to be made again in
     /// it, at the next frame with the GPU.
     remake: bool,
+    /// Bodies came in: the figures to be made again (`bodies_in`).
+    refigure: bool,
 }
 
 impl Default for Client {
@@ -329,6 +331,7 @@ impl Default for Client {
             login: None,
             entered: None,
             remake: false,
+            refigure: false,
         }
     }
 }
@@ -410,6 +413,13 @@ impl Client {
     /// the next frame.
     pub fn art_changed(&mut self) {
         self.remake = true;
+    }
+
+    /// A server's races' bodies came in (`res::Res::want_bodies`): character
+    /// select's figure and creation's made again at the next frame, where their
+    /// `like` races stood in.
+    pub fn bodies_in(&mut self) {
+        self.refigure = true;
     }
 
     /// The stage left (Back to STATION, or the title): the connection goes.
@@ -541,6 +551,13 @@ impl Client {
             self.select.remake(&cx.res.lib, g, cx.now);
             self.create.remake(&cx.res.lib, g, cx.now);
         }
+        if self.refigure
+            && let Some(g) = cx.gpu.as_mut()
+        {
+            self.refigure = false;
+            self.select.remake(&cx.res.lib, g, cx.now);
+            self.create.remake(&cx.res.lib, g, cx.now);
+        }
         // the stage, once ARENA.CSF and the GPU are here (`LoadWorld`'s
         // walk camera limits set as it sets them)
         if self.stage.is_none()
@@ -642,9 +659,10 @@ impl Client {
     fn create_character(&mut self, f: &net::session::NewChar) {
         let rec = CharRecord {
             server_id: -1,
-            model: create::tables::get_race(f.race).model_id(f.sex),
+            model: create::tables::model_of(f.race, f.sex),
             class: f.class,
-            race: f.race,
+            // a server's race as the list will have it: its `like` race's place
+            race: create::tables::like(f.race),
             level: 1,
             hair_color: f.hair_color,
             hair_length: f.hair_length,
@@ -683,6 +701,9 @@ impl Client {
         }
         let Some(s) = self.session.as_mut() else { return };
         let events = s.pump();
+        // what the server said creation takes past the game's (`net::creation`),
+        // for the create pages and character select's stand-ins
+        create::tables::set_offer(s.creation.as_ref());
         for (k, e) in events.iter().enumerate() {
             match e {
                 Event::ShardList(list) if matches!(self.phase, 0 | 1) => {
