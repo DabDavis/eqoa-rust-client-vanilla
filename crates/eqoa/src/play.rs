@@ -4838,6 +4838,8 @@ impl Play {
             steer: false,
             // `IsModal`: the manual camera
             modal: self.mode == 38,
+            // the server's word (`Session::flying`, `walker`)
+            flying: self.session.flying,
             // a frame of the game's: the walker's (`frame_with`)
             step: true,
         }

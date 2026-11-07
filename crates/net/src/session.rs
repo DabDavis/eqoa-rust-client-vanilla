@@ -116,6 +116,14 @@ pub const OP_BUG_NOTE: u16 = 0x7E0F;
 /// (`InviteEntity`, `InviteToGroup`: word 640), and so does this client on a
 /// server that never offers it (Sandstorm's, eqoa.live's).
 pub const OP_MEMBER_INVITES: u16 = 0x7E17;
+/// go-eqoa-server's own, no retail message either: a GM's flight (`#fly`), a
+/// u32 after the opcode, both ways. This client says it flies (1) when it is
+/// offered the GM's trigger names ([`OP_GM_TRIGGERS`], a GM's client's alone), so
+/// the server need send a client that cannot (a PS2) nothing at all, not even an
+/// offer; the server then says 1 flight is on and 0 it is off. Nothing is said
+/// to a server that made no such offer (Sandstorm's, eqoa.live's), and one that
+/// never sends it leaves the walk as it was.
+pub const OP_FLY: u16 = 0x7E1B;
 /// The most of a note sent, in bytes: one message, as go-eqoa-server takes
 /// each fragment of a longer one for a message of its own.
 pub const BUG_NOTE_MAX: usize = 1000;
@@ -369,6 +377,10 @@ pub struct Session {
     /// The server lets any member of a group invite into it
     /// ([`OP_MEMBER_INVITES`]). Kept for the session.
     pub member_invites: bool,
+    /// The server has this client's character flying ([`OP_FLY`]); gone with
+    /// the connection, as the server's goes with its login. A dump (a respawn,
+    /// a restart of the server's) leaves it.
+    pub flying: bool,
     user: String,
     token: [u8; 32],
     start: Instant,
@@ -498,6 +510,7 @@ impl Session {
             live_look: false,
             bug_reports: false,
             member_invites: false,
+            flying: false,
             user: user.to_string(),
             token,
             start: Instant::now(),
@@ -810,6 +823,7 @@ impl Session {
                 self.conn = m.connection;
                 self.self_id = None;
                 self.entity_view_offer = None;
+                self.flying = false;
                 // the old connection's channels go with it
                 self.early_states.clear();
                 ev.push(Event::Promoted);
@@ -918,10 +932,19 @@ impl Session {
                     self.entity_view_offer = Some((slots, view));
                 }
             }
-            // the trigger names offered: taken (the TEST menu shows them)
+            // the trigger names offered: taken (the TEST menu shows them), and
+            // this GM's client says it flies
             OP_GM_TRIGGERS => {
                 if r.u32() != 0 && !r.error {
                     self.send_op_int(OP_GM_TRIGGERS, 1);
+                    self.send_op_int(OP_FLY, 1);
+                }
+            }
+            // flight on or off (`Play::control_client`, `walker`)
+            OP_FLY => {
+                let on = r.u32() != 0;
+                if !r.error {
+                    self.flying = on;
                 }
             }
             // the live duel's messages offered: taken (the client has the
@@ -1881,6 +1904,42 @@ mod tests {
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x17, 0x7E, 1, 0, 0, 0]);
         assert!(s.member_invites);
         assert_eq!(ours(&mut s), Vec::<Vec<u8>>::new(), "nothing answered");
+    }
+
+    // A GM's flight (0x7E1B): this client says it flies when it is offered the
+    // GM's trigger names, in answer to nothing else (the control: the other
+    // offers, a short one and a 0 say nothing); the server's word is kept, a
+    // short one not, and goes with the connection, not with a world entry's dump.
+    #[test]
+    fn fly_said_when_offered_and_kept_for_the_connection() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let ours = |s: &mut Session| -> Vec<Vec<u8>> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&0x7E)).map(|(_, d)| d).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        ours(&mut s);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x17, 0x7E, 1, 0, 0, 0]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x07, 0x7E, 1, 0]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x07, 0x7E, 0, 0, 0, 0]);
+        assert_eq!(ours(&mut s), Vec::<Vec<u8>>::new(), "the control: nothing said to anything else");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x07, 0x7E, 1, 0, 0, 0]);
+        assert_eq!(ours(&mut s), [vec![0x07, 0x7E, 1, 0, 0, 0], vec![0x1B, 0x7E, 1, 0, 0, 0]], "the offer answered, and that it flies");
+
+        assert!(!s.flying, "not until the server says so");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x1B, 0x7E, 1, 0]);
+        assert!(!s.flying, "a short word");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x1B, 0x7E, 1, 0, 0, 0]);
+        assert!(s.flying);
+        assert!(ev.is_empty(), "{ev:?}");
+        assert_eq!(ours(&mut s), Vec::<Vec<u8>>::new(), "nothing answered");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x1B, 0x7E, 0, 0, 0, 0]);
+        assert!(!s.flying, "off");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x1B, 0x7E, 1, 0, 0, 0]);
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert!(!s.flying, "a new connection, a new login: not flying");
     }
 
     // go-eqoa-server's offers and sets past 0x7E00 (0x7E01-0x7E06) are

@@ -52,6 +52,12 @@
 //! gave it, not turning to its motion), and no mode turns to the target. With
 //! it off (the pad, the keys, the touch screen) every call is the game's.
 //! While it steers, follow paces the player but does not turn it.
+//!
+//! A GM's flight (`Client::flying`, go-eqoa-server's `#fly`), also the client's
+//! own: `Walker` takes the moves up and down along the camera's look (the walk
+//! is CLIENT's swim path there), and in the orbits (1 and 3), where the right
+//! stick's y and Page Up and Page Down zoom or swim, they look up and down
+//! instead (`Walk::fly_look`), the mouse's tilt on a stick, so a pad flies too.
 
 // Written as the C writes it: its float literals (pi as 3.1415927), `a = a +
 // b`, and the nested tests.
@@ -104,6 +110,8 @@ pub struct Client {
     pub walk_speed: f32,
     /// `IsModal`: the manual camera (mode 38)
     pub modal: bool,
+    /// the client's own (the module's doc): a GM's flight is on
+    pub flying: bool,
     /// One of the game's frames (`frames.rs`): what this counts in frames
     /// (the manual look's step) moves only then. `Walker::frame_with` sets it.
     pub step: bool,
@@ -111,7 +119,7 @@ pub struct Client {
 
 impl Default for Client {
     fn default() -> Self {
-        Client { has_chat: false, inverted: false, auto_attack: false, swung: false, target: None, autorun: false, casting: false, move_ok: true, look_ok: true, rooted: false, timed_out: false, keys: [0.0; 8], steer: false, follow: Follow::Off, run_speed: vi::walk::RUN_SPEED, walk_speed: 3.0, modal: false, step: true }
+        Client { has_chat: false, inverted: false, auto_attack: false, swung: false, target: None, autorun: false, casting: false, move_ok: true, look_ok: true, rooted: false, timed_out: false, keys: [0.0; 8], steer: false, follow: Follow::Off, run_speed: vi::walk::RUN_SPEED, walk_speed: 3.0, modal: false, flying: false, step: true }
     }
 }
 
@@ -168,6 +176,9 @@ pub trait Walk {
     fn manual_hpr(&self) -> Vect3<Ee>;
     /// `m_walkCam.m_effect.SetManualHpr`
     fn set_manual_hpr(&mut self, v: Vect3<Ee>);
+    /// The client's own (the module's doc): in flight, the orbit's look up (-)
+    /// or down (+) by the stick's `t`.
+    fn fly_look(&mut self, _t: Fe) {}
 }
 
 /// `UpdateControls` up to `Process`, with the sticks `keys` (rx, ry, lx,
@@ -384,7 +395,11 @@ pub fn update_controls(w: &mut impl Walk, keys: [f32; 4], c: &Client) -> Changed
                 w.walk(fwd, strafe);
             }
             w.turn_left(turn);
-            w.orbit_in(-pitch);
+            if c.flying {
+                w.fly_look(if c.inverted { -pitch } else { pitch });
+            } else {
+                w.orbit_in(-pitch);
+            }
             w.orbit_right(if c.inverted { orbit } else { -orbit });
         }
         3 => {
@@ -406,7 +421,9 @@ pub fn update_controls(w: &mut impl Walk, keys: [f32; 4], c: &Client) -> Changed
                     w.set_target_heading(h);
                 }
             }
-            if !w.under_liquid() && !w.at_liquid_surface() {
+            if c.flying {
+                w.fly_look(if c.inverted { -pitch } else { pitch });
+            } else if !w.under_liquid() && !w.at_liquid_surface() {
                 w.orbit_in(-pitch);
             } else {
                 w.swim_up(-pitch);
@@ -502,6 +519,9 @@ mod tests {
         fn set_manual_hpr(&mut self, v: Vect3<Ee>) {
             self.look = v;
         }
+        fn fly_look(&mut self, t: Fe) {
+            self.calls.push(format!("flylook {}", t.0));
+        }
     }
 
     fn run(mode: i32, keys: [f32; 4], c: Client) -> (Vec<String>, Changed) {
@@ -533,6 +553,27 @@ mod tests {
         let cast = Client { casting: true, ..c };
         assert_eq!(run(0, STICKS, cast).0[0], "walk 1 -0.75");
         assert_eq!(run(3, STICKS, cast).0[0], "vwalk 1 -0.75");
+    }
+
+    // In flight the orbits' right stick looks up and down, where it zoomed (or
+    // swam), the option turning it round as it turns the mouse's tilt; first
+    // person and the follow camera pitch the body as ever. The control: the
+    // same sticks not flying, which is `each_mode_takes_the_sticks_as_the_game_does`.
+    #[test]
+    fn in_flight_the_orbits_right_stick_looks_up_and_down() {
+        let c = Client { flying: true, ..Client::default() };
+        assert_eq!(run(3, STICKS, c).0, ["vmove 1 -0.75", "flylook 0.25", "right 0.5"]);
+        assert_eq!(run(1, STICKS, c).0, ["move 1 -0.75", "turn 0.75", "flylook 0.25", "right 0.5"]);
+        for m in [0, 2] {
+            assert_eq!(run(m, STICKS, c).0, ["move 1 -0.75", "turn -0.5", "pitch 0.25"], "mode {m}");
+        }
+        let turned = Client { inverted: true, ..c };
+        assert_eq!(run(3, STICKS, turned).0, ["vmove 1 -0.75", "flylook -0.25", "right -0.5"]);
+        assert_eq!(run(1, STICKS, turned).0, ["move 1 -0.75", "turn 0.75", "flylook -0.25", "right -0.5"]);
+        // the keyboard's Page Up looks up
+        let mut keys = c;
+        keys.keys[4] = 1.0;
+        assert_eq!(run(3, [0.0; 4], keys).0[1], "flylook -1");
     }
 
     #[test]
