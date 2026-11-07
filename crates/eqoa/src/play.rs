@@ -2298,6 +2298,7 @@ impl Play {
                     let me = self.self_id32();
                     self.group.roster(&ids, &names, me);
                 }
+                Event::RaidRoster { total, first, rows } => self.group.raid_page(total, first, rows),
                 Event::GroupInvite { id, name, .. } => {
                     // Msg0773: refused at once while in a group
                     if self.group.in_group {
@@ -2783,6 +2784,7 @@ impl Play {
             }
         }
         self.agree_entity_view();
+        self.agree_raid_roster();
         self.drop_dead_target_info();
         if self.has_self() {
             self.auto_attack_tick(walker, now);
@@ -3428,7 +3430,13 @@ impl Play {
     /// a narrower one draws it at the game's (Vert+).
     pub fn cycle_target(&mut self, group: bool, eye: glam::Vec3, dir: glam::Vec3, game: glam::Mat4, view_proj: glam::Mat4) {
         let me = self.self_id32();
-        let members: Vec<u32> = self.group.members[..self.group.count()].iter().map(|m| m.id).collect();
+        let mut members: Vec<u32> = self.group.members[..self.group.count()].iter().map(|m| m.id).collect();
+        // a raid group's others the client can see (the Raid List)
+        for m in &self.group.raid {
+            if !members.contains(&m.id) && self.entities.slots.iter().flatten().any(|e| e.id == m.id) {
+                members.push(m.id);
+            }
+        }
         let mut cand: Vec<(f32, u32)> = Vec::new();
         if group {
             cand.extend(me.map(|id| (0.0, id)));
@@ -4112,6 +4120,9 @@ impl Play {
             let id = match pick {
                 Some(crate::hud::Pick::Me) => self.self_id32(),
                 Some(crate::hud::Pick::Member(id)) => Some(id),
+                // the raid list's: only one the client can see (out of sight its
+                // id is a stand-in, nothing to target)
+                Some(crate::hud::Pick::Raid(id)) => Some(id).filter(|&id| self.sees_entity(id)),
                 Some(crate::hud::Pick::Pet) => (self.pet_id != u32::MAX).then_some(self.pet_id),
                 None => return false,
             };
@@ -7533,6 +7544,12 @@ impl Play {
                     crate::hud::MemberState { id: m.id, name: m.name.clone(), is_target: m.id == self.target, hp: (m.hp_known != 0).then_some((m.hp, flags & 4 != 0, flags & 8 != 0)) }
                 })
                 .collect(),
+            raid: self
+                .group
+                .raid
+                .iter()
+                .map(|m| crate::raidlist::Row { id: m.id, name: m.name.clone(), hp: m.hp, is_target: m.id == self.target, seen: self.sees_entity(m.id), me: Some(m.id) == me })
+                .collect(),
             patches: self.group.members[..self.group.count()]
                 .iter()
                 .enumerate()
@@ -7824,6 +7841,27 @@ impl Play {
     /// its next pass; what was past a lowered number is dropped here at once,
     /// and its puppets with it). The view distance draws farther on any
     /// server (`lod::view_dist`); only one that offered sends from farther.
+    /// The Raid List: the server told what the Extended row says, and off, what it
+    /// sent forgotten (`group.bars` are drawn again).
+    fn agree_raid_roster(&mut self) {
+        let want = crate::settings::raid_list();
+        self.session.agree_raid_roster(want);
+        if !want {
+            self.group.raid_page(0, 0, Vec::new());
+        }
+    }
+
+    /// The wheel's `lines` over the raid list (`Hud::raid_wheel`).
+    pub fn raid_wheel(&mut self, at: (f64, f64), size: (u32, u32), lines: f32) -> bool {
+        let f = render::ui::frame_from_window(size, [at.0 as f32, at.1 as f32]);
+        self.mode == 0 && self.hud.as_mut().is_some_and(|h| h.2.raid_wheel(f, lines))
+    }
+
+    /// Whether the client can see `id`: an entity's on a slot, or its own.
+    fn sees_entity(&self, id: u32) -> bool {
+        Some(id) == self.self_id32() || self.entities.slots.iter().flatten().any(|e| e.id == id)
+    }
+
     fn agree_entity_view(&mut self) {
         let offer = self.session.entity_view_offer;
         let n = offer.map_or(RETAIL_SLOTS, |(most, _)| crate::settings::entity_slots().min(most as usize)).clamp(RETAIL_SLOTS, MAX_SLOTS);

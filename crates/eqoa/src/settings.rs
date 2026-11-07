@@ -567,6 +567,10 @@ pub struct ClientOptions {
     /// one's is dropped); true, Show, every plate kept, the nearest drawn
     /// over the rest (`play::labels`)
     pub overlapping_names: bool,
+    /// The Raid List (`raidlist`): a raid group's every name and health on the
+    /// HUD where the server sends them, in place of the group's bars, which
+    /// hold three. On by default (the user, 2026-11-07).
+    pub raid_list: bool,
     /// Art: Frontiers' (the disc the game runs off), or the 2002 disc's
     /// (`era`, F9)
     pub art: esf::Era,
@@ -719,6 +723,7 @@ impl Default for ClientOptions {
             entity_view: ENTITY_VIEW_GAME,
             name_distance: NAME_DISTANCE_GAME,
             overlapping_names: false,
+            raid_list: true,
             art: esf::Era::Frontiers,
             vsync: true,
             shouts: true,
@@ -787,6 +792,9 @@ impl ClientOptions {
         }
         if self.overlapping_names {
             s.push_str("overlapping_names=show\n");
+        }
+        if !self.raid_list {
+            s.push_str("raid_list=off\n");
         }
         if self.art == esf::Era::Y2002 {
             s.push_str("art=2002\n");
@@ -886,6 +894,8 @@ impl ClientOptions {
                 ("shouts", "off") => c.shouts = false,
                 ("update_notices", "on") => c.update_notices = true,
                 ("update_notices", "off") => c.update_notices = false,
+                ("raid_list", "on") => c.raid_list = true,
+                ("raid_list", "off") => c.raid_list = false,
                 ("overlapping_names", "show") => c.overlapping_names = true,
                 ("overlapping_names", "hide") => c.overlapping_names = false,
                 ("text", "sharp") => c.text = render::ui::TextFilter::Sharp,
@@ -1115,6 +1125,11 @@ pub fn name_distance() -> f32 {
 /// game's rule (`play::PlateView`).
 pub fn overlapping_names() -> bool {
     client().overlapping_names
+}
+
+/// The Raid List (`raidlist`).
+pub fn raid_list() -> bool {
+    client().raid_list
 }
 
 /// What the windows share as another window saved it (Capture Controller,
@@ -1902,6 +1917,16 @@ mod tests {
     /// Changes in a later window puts it in client.opt (never in its own
     /// file), and window 1 reads it back. The control: this window's own
     /// brightness stays as it read it.
+    #[test]
+    fn the_raid_list_is_kept_only_when_off() {
+        assert!(ClientOptions::default().raid_list, "on by default");
+        assert!(!ClientOptions::default().to_text().contains("raid_list"));
+        assert!(ClientOptions { raid_list: false, ..Default::default() }.to_text().contains("raid_list=off\n"));
+        assert!(!ClientOptions::from_text("raid_list=off").raid_list);
+        assert!(ClientOptions::from_text("raid_list=on").raid_list);
+        assert!(ClientOptions::from_text("raid_list=maybe").raid_list, "the default");
+    }
+
     #[test]
     fn update_notices_reach_every_window() {
         use crate::multibox::testing::set_place;

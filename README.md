@@ -50,13 +50,20 @@ or a browser (each described where it lives below):
   screen, as F11 and Alt+Enter toggle it; Brightness, Frame Rate, VSync, Render
   Scale: x1, x2 or x4, Loading Screens: Longer or Instant), World (Fog, Mipmaps,
   Flora, Environment, Ground Fog: PS2 or Exact, Art), UI (Ability Bars, Update
-  Notices, Text: Sharp or Smooth, HUD: Nearest or Sharp), Controller (Controller
+  Notices, Text: Sharp or Smooth, HUD: Nearest or Sharp, Raid List), Controller (Controller
   Focus, Capture Controller, Touch Pad Size: the touch screen's pad, 50 to
   100% of the most that fits), Camera (Distance, Turn Speed, Screen Shake),
   Characters (Level of Detail, NPC/PC Display and Distance, Name Distance,
   Overlapping Names, Shadows) and Sound (Sound in Background, Output Device: the system's
   default, followed when it changes, or a device by its name), and the rows
   below.
+- **The raid list** (the user's of 2026-11-07, "show names and hp in a way to
+  accomodate"; `raidlist.rs`): on a server that has raid groups (go-eqoa-server: a
+  group past four, its 0x7E18-0x7E1A), every member's name over a thin health bar in
+  place of the group's bars, which hold three, in up to four columns and past them
+  by the wheel. A click targets a member the client can see, and L1's cycle reaches
+  them. Extended > UI's Raid List, on by default; a client that does not ask gets the
+  game's bars, as a PS2 does.
 - **A render scale and a sharp HUD**: Render Scale (off unless chosen) x2 or
   x4 draws the whole picture, the world and everything over it, two or
   four times the window's size each way and averages it down, which smooths

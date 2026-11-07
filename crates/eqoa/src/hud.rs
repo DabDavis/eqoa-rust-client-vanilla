@@ -42,6 +42,9 @@ pub struct HudState {
     pub group: Vec<MemberState>,
     /// Every member, for `DrawPatch`.
     pub patches: Vec<PatchMember>,
+    /// A raid group's every member (`raidlist`), drawn in place of `group`'s
+    /// bars when there are any.
+    pub raid: Vec<crate::raidlist::Row>,
     /// The live client's duel (0x1502 sub 8): its centre while the duel is on
     /// and in the player's world, for `DrawPatch`'s orange patch (`duel.rs`).
     pub duel: Option<[f32; 3]>,
@@ -111,16 +114,22 @@ pub struct Hud {
     /// pointer: `Pick`.
     hits: crate::pointer::Hits,
     picks: Vec<Pick>,
+    /// The raid list's first row showing, and where it lay at the last frame
+    /// (`Hud::raid_wheel`).
+    raid_first: usize,
+    raid_panel: Option<([f32; 4], usize)>,
 }
 
 /// What a pointer finds on the HUD's left side (`Hud::pick`): the player's
 /// own frame, a group member's bar (its id), the pet's bar. Each is what L1's
-/// cycle targets in turn.
+/// cycle targets in turn. A raid list's row (its id) is targeted only when the
+/// client can see that member.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Pick {
     Me,
     Member(u32),
     Pet,
+    Raid(u32),
 }
 
 /// Where `DrawGroup` starts the group's bars and `DrawTarget` the target's.
@@ -141,7 +150,21 @@ impl Hud {
             patch_start: None,
             hits: Default::default(),
             picks: Vec::new(),
+            raid_first: 0,
+            raid_panel: None,
         }
+    }
+
+    /// The wheel's `lines` (up positive) over the raid list, at frame point `p`:
+    /// a row a notch when it holds more than it shows. False when it is not there.
+    pub fn raid_wheel(&mut self, p: [f32; 2], lines: f32) -> bool {
+        let Some((r, room)) = self.raid_panel else { return false };
+        if p[0] < r[0] || p[0] > r[2] || p[1] < r[1] || p[1] > r[3] || room == 0 {
+            return false;
+        }
+        let notch = lines.round() as i64;
+        self.raid_first = (self.raid_first as i64 - notch).clamp(0, room as i64) as usize;
+        true
     }
 
     /// What is under frame point `p`, where the pieces were placed.
@@ -211,8 +234,23 @@ impl Hud {
         let part = part.clamp(0.0, 1.0);
         draw_gauge(vui, ui, 152, 151, [p[0], p[1] + 10], true, part);
         draw_gauge(vui, ui, 8, 136, p, true, v);
-        self.draw_group(vui, ui, GROUP_AT, s);
-        let y = GROUP_AT[1] + ((s.group_count - 1) * 48).max(0);
+        let y = if s.raid.is_empty() {
+            self.raid_panel = None;
+            self.raid_first = 0;
+            self.draw_group(vui, ui, GROUP_AT, s);
+            GROUP_AT[1] + ((s.group_count - 1) * 48).max(0)
+        } else {
+            self.glow1_on = -1;
+            let fit = crate::raidlist::Fit::of(s.raid.len(), s.pet.is_some());
+            self.raid_first = self.raid_first.min(fit.more);
+            for (r, id) in crate::raidlist::draw(vui, ui, GROUP_AT, &fit, &s.raid, self.raid_first) {
+                self.note(ui, r, Pick::Raid(id));
+            }
+            let b = fit.bounds(GROUP_AT);
+            let (a, c) = (ui.ui.placed([b[0] as f32, b[1] as f32]), ui.ui.placed([b[2] as f32, b[3] as f32]));
+            self.raid_panel = Some(([a[0], a[1], c[0], c[1]], fit.more));
+            b[3] + 2
+        };
         self.draw_pet(vui, ui, [20, y], s);
         ui.ui.vertical = Vertical::Bottom;
         let p = [-3, 331];
@@ -441,6 +479,25 @@ mod tests {
 
     fn near(a: [f32; 2], b: [f32; 2]) -> bool {
         (a[0] - b[0]).abs() < 1e-3 && (a[1] - b[1]).abs() < 1e-3
+    }
+
+    /// The wheel steps the raid list while it holds more than it shows, only over
+    /// the list; with nothing left out it takes no notch.
+    #[test]
+    fn the_wheel_steps_the_raid_list() {
+        let mut h = Hud::new();
+        assert!(!h.raid_wheel([30.0, 100.0], 1.0), "no list");
+        h.raid_panel = Some(([20.0, 93.0, 300.0, 300.0], 3));
+        assert!(!h.raid_wheel([400.0, 100.0], -1.0), "off it");
+        assert_eq!(h.raid_first, 0);
+        assert!(h.raid_wheel([30.0, 100.0], -2.0));
+        assert_eq!(h.raid_first, 2);
+        assert!(h.raid_wheel([30.0, 100.0], -5.0));
+        assert_eq!(h.raid_first, 3, "no farther than the last");
+        assert!(h.raid_wheel([30.0, 100.0], 9.0));
+        assert_eq!(h.raid_first, 0, "back to the first");
+        h.raid_panel = Some(([20.0, 93.0, 300.0, 300.0], 0));
+        assert!(!h.raid_wheel([30.0, 100.0], -1.0), "all showing: the wheel is the camera's");
     }
 
     #[test]

@@ -4886,7 +4886,10 @@ impl App {
                 if self.walker.is_some() {
                     // over the chat box's history in view, its lines
                     let took = match (self.play.as_mut(), self.gfx.as_ref()) {
-                        (Some(p), Some(g)) => p.chat_wheel(self.cursor, (g.config.width, g.config.height), d),
+                        (Some(p), Some(g)) => {
+                            let size = (g.config.width, g.config.height);
+                            p.chat_wheel(self.cursor, size, d) || p.raid_wheel(self.cursor, size, d)
+                        }
                         _ => false,
                     };
                     if !took {

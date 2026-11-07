@@ -617,6 +617,9 @@ impl WndOptions {
                     // Overlapping Names: the plates kept from the next
                     // frame (`play::labels`)
                     34 => c.overlapping_names = !c.overlapping_names,
+                    // Raid List: the server told from the next frame
+                    // (`Session::agree_raid_roster`)
+                    49 => c.raid_list = !c.raid_list,
                     // Text: every font drawn from the next frame (`viewer`)
                     30 => c.text = c.text.other(),
                     // Loading Screens: the next long trip's (`loading`)
@@ -1082,7 +1085,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 30] = [
+const EXTENDED_ITEMS: [(i32, &str); 31] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1113,6 +1116,7 @@ const EXTENDED_ITEMS: [(i32, &str); 30] = [
     (46, "Shadows"),
     (47, "Ground Fog"),
     (48, "Touch Pad Size"),
+    (49, "Raid List"),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1144,7 +1148,7 @@ struct Category {
 const CATEGORIES: [Category; 7] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale },
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None },
-    Category { name: "UI", items: &[22, 29, 30, 40], note: Note::None },
+    Category { name: "UI", items: &[22, 29, 30, 40, 49], note: Note::None },
     Category { name: "Controller", items: &[16, 19, 48], note: Note::Reads },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
     Category { name: "Characters", items: &[12, 23, 24, 27, 34, 46], note: Note::Server },
@@ -1230,6 +1234,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         26 => on_off(crate::settings::vsync()),
         29 => on_off(c.update_notices),
         34 => wide(if c.overlapping_names { "Show" } else { "Hide" }),
+        49 => on_off(c.raid_list),
         35 => on_off(c.mipmaps),
         36 => on_off(c.flora),
         37 => on_off(c.environment),
@@ -1601,7 +1606,7 @@ mod tests {
         assert_eq!((w.row, cues.last()), (5, Some(&9)), "World's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!((w.page, w.cat, w.cat_sel, w.item), (3, None, 1, -1), "back to the categories, World still lit");
-        // UI: Ability Bars, Update Notices, Text, HUD
+        // UI: Ability Bars, Update Notices, Text, HUD, Raid List
         press(&mut w, &mut o, key::DOWN, &mut cues);
         press(&mut w, &mut o, key::CROSS, &mut cues);
         assert_eq!((w.cat, w.item), (Some(2), 22), "UI, Ability Bars");
@@ -1636,7 +1641,15 @@ mod tests {
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert_eq!(settings::client().hud, render::ui::HudFilter::Nearest, "and back: two values");
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (3, Some(&9)), "UI's last row");
+        assert_eq!(w.item, 49, "Raid List");
+        assert!(settings::raid_list(), "on: a raid group's every name and health");
+        assert_eq!(value_text(&vui, 49), Some(wide(vui.words.get(551, vui.language))));
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::raid_list(), cues.last()), (false, Some(&11)), "off: the game's bars");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(settings::raid_list(), "and back: two values");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (4, Some(&9)), "UI's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         // Controller: Controller Focus, Capture Controller, Touch Pad Size
         press(&mut w, &mut o, key::DOWN, &mut cues);

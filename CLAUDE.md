@@ -14,6 +14,7 @@ current.
   same day; `chat`, drawn over the game's chat, not in it), 1,000 lines of chat, no green backdrop behind the start menu's windows, the
   Extended options, the updater, the 2002 disc's art on F9, Hide UI
   on H, names from farther and smaller zoomed out (and every one in a crowd, Overlapping Names Show),
+  the raid list on a server that has raid groups (the user's of 2026-11-07: `raidlist`, an Extended row, on by default),
   Ignore Shouts kept, Update Notices, Text Sharp or Smooth, Loading Screens Longer or Instant, Render
   Scale x1, x2 or x4 (off unless chosen), HUD Nearest or Sharp (Nearest, the game's, by default: the
   user's of 2026-10-28, "make nearest the default ... since there is a cost"; Sharp was the default
