@@ -145,12 +145,13 @@ jobs:
             # Windows Notepad reads the text with Windows line ends
             sed 's/$/\r/' release/README.txt > "dist/$name/README.txt"
             sed 's/$/\r/' LICENSE > "dist/$name/LICENSE.txt"
+            sed 's/$/\r/' NOTICE > "dist/$name/NOTICE.txt"
             (cd dist && 7z a -tzip "../out/$name.zip" "$name" > /dev/null)
             cp target/release/eqoa.exe "out/$name.exe"
           else
             cp target/release/eqoa "dist/$name/"
             chmod +x "dist/$name/eqoa"
-            cp release/README.txt LICENSE "dist/$name/"
+            cp release/README.txt LICENSE NOTICE "dist/$name/"
             # Linux: the program's icon, the drawn disc, for a desktop entry of
             # the player's own (Wayland shows a program's icon only through one)
             if [ "${{ matrix.os }}" = linux ]; then
