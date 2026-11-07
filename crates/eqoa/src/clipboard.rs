@@ -91,8 +91,8 @@ const SCREEN_STEP: f64 = 0.1;
 
 /// The seconds the game has been drawing, by which a box tells how long it has
 /// been off the screen: not the wall clock, or a key let out of a stall (a Mac's
-/// first key ever takes seconds on a slow machine) finds every box gone, as it
-/// has not been drawn since the stall began, though nothing else has either.
+/// first Cmd+key takes seconds on a slow machine) finds every box gone, as it has
+/// not been drawn since the stall began, though nothing else has either.
 pub fn screen_time() -> f64 {
     SCREEN.get().0
 }
