@@ -2023,9 +2023,9 @@ mod tests {
     }
 
     // go-eqoa-server's offer of the GM's trigger names (0x7E07) is answered
-    // with 1 at once, every time it comes, and its names (0x7E08) are passed
-    // on for the TEST menu with nothing answered. The controls: an offer cut
-    // short and an offer of 0 are not answered.
+    // with 1 at once, every time it comes, with this client's word that it flies
+    // (0x7E1B), and its names (0x7E08) are passed on for the TEST menu with nothing
+    // answered. The controls: an offer cut short and an offer of 0 are not answered.
     #[test]
     fn the_trigger_names_offer_is_answered() {
         let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
@@ -2044,9 +2044,10 @@ mod tests {
         assert_eq!(answers(&mut s), [], "the control: an offer of 0");
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x07, 0x7E, 1, 0, 0, 0]);
         assert!(ev.is_empty(), "the offer is the session's: {ev:?}");
-        assert_eq!(answers(&mut s), [(251, vec![0x07, 0x7E, 1, 0, 0, 0])]);
+        let answer = [(251, vec![0x07, 0x7E, 1, 0, 0, 0]), (251, vec![0x1B, 0x7E, 1, 0, 0, 0])];
+        assert_eq!(answers(&mut s), answer);
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x07, 0x7E, 1, 0, 0, 0]);
-        assert_eq!(answers(&mut s), [(251, vec![0x07, 0x7E, 1, 0, 0, 0])], "again for another offer");
+        assert_eq!(answers(&mut s), answer, "again for another offer");
         let names = vec![0x08, 0x7E, 1, 2, 1, 3, b'O', b'n', b'e'];
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, names);
         assert!(matches!(&ev[..], [Event::Opcode { op: 0x7E08, data }] if data[..] == [1, 2, 1, 3, b'O', b'n', b'e']), "{ev:?}");

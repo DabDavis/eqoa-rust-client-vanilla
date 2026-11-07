@@ -329,9 +329,9 @@ fn fly_gait(w: &mut WalkControl<Ee>, from: &Vect3<Ee>, was: i32, ms: i64) {
     w.committed.loco_state = gait;
 }
 
-/// How slow a flyer let go is when it stops (units a second): the walk's damping
-/// alone never quite brings a body to rest (`process_aloft`).
-const FLY_STOPPED: f32 = 0.05;
+/// How slow a flyer let go is when it stops, squared (0.05 units a second): the
+/// walk's damping alone never quite brings a body to rest (`process_aloft`).
+const FLY_STOPPED_SQ: f32 = 0.0025;
 
 /// `Process` in the world of water. A body let go comes to rest there and holds
 /// its place to the bit: `Move` adds the body's height to the place and takes it
@@ -343,7 +343,7 @@ fn process_aloft(w: &mut WalkControl<Ee>, scene: &mut World<Ee>) {
     let (from, pushed) = (w.committed.position, w.phys.force);
     w.process(0, &mut Aloft(scene));
     let zero = F::<Ee>::ZERO;
-    if pushed.x == zero && pushed.y == zero && pushed.z == zero && w.phys.velocity.dot(&w.phys.velocity) < F::new(FLY_STOPPED * FLY_STOPPED) {
+    if pushed.x == zero && pushed.y == zero && pushed.z == zero && w.phys.velocity.dot(&w.phys.velocity) < F::new(FLY_STOPPED_SQ) {
         for p in [&mut w.phys, &mut w.committed] {
             p.position = from;
             p.velocity = Vect3::default();
