@@ -475,7 +475,7 @@ pub fn draw_gauge(vui: &Vui, ui: &mut dyn Raster, bar: i32, frame: i32, at: [i32
 
 #[cfg(test)]
 mod tests {
-    use super::{Hud, HudState, Pick, bearing_point, patch_point};
+    use super::{Hud, HudState, MemberState, Pick, bearing_point, patch_point};
 
     fn near(a: [f32; 2], b: [f32; 2]) -> bool {
         (a[0] - b[0]).abs() < 1e-3 && (a[1] - b[1]).abs() < 1e-3
@@ -522,6 +522,42 @@ mod tests {
         // it is where a member would be within it
         assert!(near(bearing_point(0.0, [100.0, 0.0, 0.0]), [12.0, 55.0]));
         assert!(near(bearing_point(0.0, [4000.0, 0.0, 0.0]), [12.0, 55.0]));
+    }
+
+    /// A raid list's rows are where a pointer finds them, past a wide window's left
+    /// side too, and take the group's bars' place: no member's bar there. The
+    /// wheel knows it only while it is drawn, and off the list the control.
+    /// Needs a graphics adapter; without one it says so and passes.
+    #[test]
+    fn a_pointer_finds_the_raid_lists_rows() {
+        let _gpu = crate::GPU_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut ui) = crate::ui::tests::layer() else {
+            eprintln!("SKIP: no graphics adapter");
+            return;
+        };
+        let vui = crate::ui::Vui::new(Default::default(), Default::default(), vec![vi::ui::UiTexEntry::default(); 27]);
+        let assets = crate::ui::UiAssets::default();
+        let row = |id: u32| crate::raidlist::Row { id, name: format!("m{id}"), hp: 255, seen: true, ..Default::default() };
+        // the third row's middle, then the second column's first row's, of twenty
+        let fit = crate::raidlist::Fit::of(20, false);
+        assert_eq!((fit.columns, fit.rows), (2, 10));
+        let (third, next) = ([40.0, 93.0 + 13.0 + 2.0 * 15.0 + 7.0], [20.0 + 104.0 + 20.0, 93.0 + 13.0 + 7.0]);
+        for (size, side) in [((640, 480), 0.0), ((1280, 720), 106.0)] {
+            ui.begin(size);
+            let mut hud = Hud::new();
+            let s = HudState { raid: (1..=20).map(row).collect(), group_count: 4, group: vec![MemberState { id: 99, name: "bar".into(), ..Default::default() }], ..Default::default() };
+            hud.draw(&vui, &mut assets.raster(&mut ui), &s);
+            assert_eq!(hud.pick([third[0] - side, third[1]]), Some(Pick::Raid(3)), "{size:?}");
+            assert_eq!(hud.pick([next[0] - side, next[1]]), Some(Pick::Raid(11)), "{size:?}");
+            assert_eq!(hud.picks.iter().filter(|p| matches!(p, Pick::Member(_))).count(), 0, "{size:?}: no bars");
+            assert!(hud.raid_panel.is_some());
+            // the raid over: the bars again, the panel gone
+            ui.begin(size);
+            let s = HudState { group_count: 2, group: vec![MemberState { id: 99, name: "bar".into(), ..Default::default() }], ..Default::default() };
+            hud.draw(&vui, &mut assets.raster(&mut ui), &s);
+            assert_eq!(hud.pick([third[0] - side, 100.0]), Some(Pick::Member(99)), "{size:?}: the control");
+            assert!(hud.raid_panel.is_none() && !hud.raid_wheel([third[0] - side, third[1]], -1.0));
+        }
     }
 
     /// A pointer finds the HUD's pieces where they were drawn: in a 4:3

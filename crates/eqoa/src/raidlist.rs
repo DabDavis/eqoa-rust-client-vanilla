@@ -120,12 +120,14 @@ fn head(fit: &Fit, first: usize) -> String {
 /// member, for a pointer.
 pub fn draw(vui: &Vui, ui: &mut UiRaster, at: [i32; 2], fit: &Fit, rows: &[Row], first: usize) -> Vec<([i32; 4], u32)> {
     let mut hits = Vec::with_capacity(fit.shown);
-    let Some(font) = ui.assets.font else { return hits };
     ui.solid(3, BACK, corners(fit.bounds(at)));
-    let scale = NAME_H / ui.ui.fonts[font].height.max(1) as f32;
+    let font = ui.assets.font;
+    let scale = font.map_or(1.0, |f| NAME_H / ui.ui.fonts[f].height.max(1) as f32);
     let text = |ui: &mut UiRaster, x: i32, y: i32, c: [f32; 4], s: &[u16]| {
-        ui.ui.text_scaled(font, x as f32 + 1.0, y as f32 + 1.0, scale, SHADOW, s);
-        ui.ui.text_scaled(font, x as f32, y as f32, scale, c, s);
+        if let Some(f) = font {
+            ui.ui.text_scaled(f, x as f32 + 1.0, y as f32 + 1.0, scale, SHADOW, s);
+            ui.ui.text_scaled(f, x as f32, y as f32, scale, c, s);
+        }
     };
     text(ui, at[0] + 2, at[1] + 1, NAME, &wide(&head(fit, first)));
     for (k, row) in rows.iter().skip(first).take(fit.shown).enumerate() {
@@ -133,7 +135,10 @@ pub fn draw(vui: &Vui, ui: &mut UiRaster, at: [i32; 2], fit: &Fit, rows: &[Row],
         let (x, y) = (r[0] + 2, r[1]);
         // the name cut to its column
         let mut name = wide(&row.name);
-        while !name.is_empty() && ui.ui.fonts[font].string_width(&name) as f32 * scale > (COL_W - 4) as f32 {
+        while let Some(f) = font
+            && !name.is_empty()
+            && ui.ui.fonts[f].string_width(&name) as f32 * scale > (COL_W - 4) as f32
+        {
             name.pop();
         }
         text(ui, x, y, name_colour(row), &name);

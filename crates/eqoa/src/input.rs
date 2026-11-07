@@ -488,11 +488,12 @@ impl Script {
 }
 
 /// The scripts that press the game's keys in a run of the client's own.
-const SCRIPTS: [&str; 17] = [
+const SCRIPTS: [&str; 18] = [
     "EQOA_PAD",
     "EQOA_KEYS",
     "EQOA_PLAY_KEYS",
     "EQOA_MOUSE",
+    "EQOA_CLICKS",
     "EQOA_TAP",
     "EQOA_TOUCHES",
     "EQOA_HUD_KEYS",

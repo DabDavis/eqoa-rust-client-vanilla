@@ -8893,6 +8893,55 @@ mod commands {
         assert_eq!(order(&mut p, wide, wide), [b, a, c, b], "the control: measured as drawn, B first");
     }
 
+    /// The raid list's: the wholeness of the roster, what a click may target, L1's
+    /// cycle over those the client can see and Tab past them; off, the server told
+    /// and what it sent forgotten. The controls: one out of sight, a player no one's
+    /// group holds, and the roster's own four as ever.
+    #[test]
+    fn a_raid_group_reaches_past_the_roster_for_those_it_sees() {
+        use net::entity::{Entity, TYPE_CREATURE};
+        use net::session::RaidMember;
+        let mut p = play();
+        crate::settings::set_client(crate::settings::ClientOptions::default());
+        let me = 0x1DCD_6501;
+        p.session.self_id = Some(u64::from(me));
+        grouped(&mut p, &[0x100, me, 0x101, 0x102]);
+        let at = |id: u32, x: f32| {
+            Some(Entity { id, kind: TYPE_CREATURE, creature: Some(net::entity::Creature { name: format!("{id:x}"), ..Default::default() }), p18: 1, actor_pos: [x, 0.0, -12.0], ..Default::default() })
+        };
+        p.entities.slots[0] = at(0x100, 0.0);
+        p.entities.slots[1] = at(0x103, 3.0); // a raid member past the roster, in sight
+        p.entities.slots[2] = at(0x200, -3.0); // a stranger
+        let row = |id: u32| RaidMember { id, name: format!("m{id}"), ..Default::default() };
+        p.group.raid_page(5, 0, vec![row(0x100), row(me), row(0x101), row(0x103), row(0x7F00_0104)]);
+        assert!(p.sees_entity(0x103) && p.sees_entity(me), "in sight, and itself");
+        assert!(!p.sees_entity(0x7F00_0104), "out of sight: its id is a stand-in");
+        let cycle = |p: &mut Play, group: bool| -> Vec<u32> {
+            let view = glam::camera::rh::view::look_to_mat4(glam::Vec3::ZERO, glam::Vec3::NEG_Z, glam::Vec3::Y);
+            let m = crate::walker::projection_to(4.0 / 3.0, 6000.0) * view;
+            (0..7)
+                .map(|_| {
+                    p.cycle_target(group, glam::Vec3::ZERO, glam::Vec3::NEG_Z, m, m);
+                    p.target
+                })
+                .collect()
+        };
+        let group = cycle(&mut p, true);
+        assert!(group.contains(&0x103), "L1 reaches the raid member it sees: {group:x?}");
+        assert!(!group.contains(&0x7F00_0104), "not one out of sight: {group:x?}");
+        assert!(!group.contains(&0x200), "not a stranger: {group:x?}");
+        let tab = cycle(&mut p, false);
+        assert!(tab.contains(&0x200), "Tab finds the stranger: {tab:x?}");
+        assert!(!tab.contains(&0x103), "and passes the raid member: {tab:x?}");
+        // off: the server told, what it sent forgotten, L1 back to the roster
+        p.session.raid_roster_offer = true;
+        crate::settings::set_client(crate::settings::ClientOptions { raid_list: false, ..Default::default() });
+        p.agree_raid_roster();
+        assert!(p.group.raid.is_empty());
+        assert!(!cycle(&mut p, true).contains(&0x103), "the control: the roster's own");
+        crate::settings::set_client(crate::settings::ClientOptions::default());
+    }
+
     fn grouped(p: &mut Play, ids: &[u32]) {
         p.group.in_group = true;
         p.group.members = ids.iter().map(|&id| crate::group::Member { id, ..Default::default() }).collect();
