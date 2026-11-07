@@ -6,6 +6,10 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-07 · Three-letter names
+- A new character's name may be three letters long (it was four). It is still letters only, A to Z.
+  A PS2 keeps asking for four.
+
 ## 2026-11-07 · Auto Attack on from the start
 - New players now start with Auto Attack on (Options, Game). With it off, the attack button
   has to be held down to keep fighting: a tap swings once and stops, which made a first fight

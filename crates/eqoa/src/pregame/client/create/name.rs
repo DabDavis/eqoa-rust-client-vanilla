@@ -3,9 +3,12 @@
 //! spaces, 13 characters with the terminator, titled "Character Name"; under
 //! it a legend: circle Generate Name (0x0012 with the form's race and sex,
 //! `Send0012`; the server's name comes back into the editor), cross Select,
-//! triangle Back. The editor's Done validates the name (four letters or
-//! more, A to Z only, else the message box at (80, 115) with word 875 or
-//! 876) and hands it up capitalised (266); its cancel is the page's back.
+//! triangle Back. The editor's Done validates the name (three letters or
+//! more, A to Z only, else the message box at (80, 115) with our short-name
+//! line or word 876) and hands it up capitalised (266); its cancel is the
+//! page's back. CLIENT asks four letters (word 875 says so); three is the
+//! user's (2026-11-07: "lets allow 3 letter minimum for player names"), the
+//! server's since the account page.
 
 use super::tables;
 use super::{Msg, word};
@@ -38,9 +41,16 @@ impl Default for NamePage {
     }
 }
 
-/// `Validate`: four letters or more, A to Z only; the word refusing it.
+/// The fewest letters a name may have: three (CLIENT's `Validate` four).
+pub const NAME_MIN: usize = 3;
+
+/// The refusal of a name under `NAME_MIN`, in word 875's words (which say four).
+pub const NAME_SHORT: &str = "Name must be at least three characters long.";
+
+/// `Validate`: `NAME_MIN` letters or more, A to Z only; the word refusing it
+/// (875 for a short one, shown as `NAME_SHORT`).
 pub fn validate(name: &str) -> Result<String, i32> {
-    if name.len() < 4 {
+    if name.len() < NAME_MIN {
         return Err(875);
     }
     if !name.bytes().all(|b| b.is_ascii_alphabetic()) {
@@ -113,7 +123,8 @@ impl NamePage {
                     }
                     Err(w) => {
                         self.name = text;
-                        self.mbox.prompt(&word(vui, w), 0, 0, 0, now);
+                        let why = if w == 875 { vi::ui::wide(NAME_SHORT) } else { word(vui, w) };
+                        self.mbox.prompt(&why, 0, 0, 0, now);
                         self.mbox_up = true;
                         None
                     }
@@ -191,7 +202,8 @@ mod tests {
     fn a_name_is_four_letters_or_more_and_capitalised() {
         assert_eq!(validate("brakk"), Ok("Brakk".to_string()));
         assert_eq!(validate("BRAKK"), Ok("Brakk".to_string()));
-        assert_eq!(validate("bra"), Err(875), "three letters");
+        assert_eq!(validate("br"), Err(875), "two letters");
+        assert_eq!(validate("bra"), Ok("Bra".into()), "three letters (the user's; CLIENT's four)");
         assert_eq!(validate("brakk2"), Err(876), "a digit");
         assert_eq!(validate("bra kk"), Err(876), "a space");
         // the control: four is enough
