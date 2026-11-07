@@ -491,7 +491,8 @@ impl Trainer {
     fn draw_header(vui: &Vui, r: &mut dyn Raster, d: &Data, at: [i32; 2]) {
         let w = |id: i32| vui.words.get(id, vui.language).to_string();
         let class = w(if (0..15).contains(&d.class) { 165 + d.class } else { 165 });
-        let s = format!("{}: {} {} {} {}", d.name, w(299), d.level, w(RACE_WORDS.get(d.race as usize).copied().unwrap_or(183)), class);
+        let race = crate::racelabel::long(d.name).unwrap_or_else(|| w(RACE_WORDS.get(d.race as usize).copied().unwrap_or(183)));
+        let s = format!("{}: {} {} {} {}", d.name, w(299), d.level, race, class);
         r.draw_string(at, BLACK, &wide(&s));
     }
 
@@ -661,6 +662,27 @@ pub fn train_stats(points: &[i32; 7], p40: i32) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The header's race: the race list's word for the player's name, else the
+    /// game's (the control).
+    #[test]
+    fn the_header_says_a_race_label() {
+        use crate::racelabel::tests::{Drawn, given, numbered_vui};
+        let vui = numbered_vui();
+        let base = [10; 29];
+        let inv = ItemList::default();
+        let d = Data { name: "Lagerbottoms", class: 9, race: 9, level: 60, base: &base, cur: &base, p40: 2, p44: 11, mastery: &[0; 29], bonuses: &[0; 7], inv: &inv, slot_words: &[] };
+        let header = |d: &Data| {
+            let mut r = Drawn::default();
+            Trainer::draw_header(&vui, &mut r, d, [0, 0]);
+            r.0.join("")
+        };
+        assert_eq!(header(&d), "Lagerbottoms: w299 60 w190 w174", "no list");
+        given(&[("Hill Giant", "HGT", &["Lagerbottoms"])]);
+        assert_eq!(header(&d), "Lagerbottoms: w299 60 Hill Giant w174");
+        let other = Data { name: "Plainogre", ..d };
+        assert_eq!(header(&other), "Plainogre: w299 60 w190 w174", "a name not on the list");
+    }
 
     /// `Adjust`: a point off only what was added, onto a stat only while
     /// there are points and under the cap; `TrainStats` refuses nothing and

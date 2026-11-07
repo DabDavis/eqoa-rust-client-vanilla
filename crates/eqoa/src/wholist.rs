@@ -296,12 +296,13 @@ fn class_word(class: u8) -> i32 {
 pub fn order(sort: Sort, list: &[WhoRow], word: &dyn Fn(i32) -> String) -> Vec<usize> {
     let name = |i: usize| list[i].name.to_lowercase();
     let spelled = |id: i32| word(id).to_lowercase();
+    let spelled_race = |e: &WhoRow| crate::racelabel::short(&e.name).map_or_else(|| spelled(race_word(e.race)), |s| s.to_lowercase());
     let mut v: Vec<usize> = (0..list.len()).collect();
     v.sort_by(|&a, &b| {
         let (ea, eb) = (&list[a], &list[b]);
         let by = match sort {
             Sort::Name => std::cmp::Ordering::Equal,
-            Sort::Race => spelled(race_word(ea.race)).cmp(&spelled(race_word(eb.race))),
+            Sort::Race => spelled_race(ea).cmp(&spelled_race(eb)),
             Sort::Class => spelled(class_word(ea.class)).cmp(&spelled(class_word(eb.class))),
             Sort::Level => eb.level.cmp(&ea.level),
         };
@@ -701,9 +702,9 @@ impl WhoList {
         while i < n && row < 11 {
             let e = &who.list[self.view[i as usize]];
             let c = UI_COLORS[(i == self.sel) as usize];
-            let (race, class) = (race_word(e.race), class_word(e.class));
+            let (race, class) = (crate::racelabel::short(&e.name).map_or_else(|| w(race_word(e.race)), |s| wide(&s)), class_word(e.class));
             self.window.text_box(vui, r, &wide(&e.name), x[0], row, x[1] - x[0], 1, c, 2);
-            self.window.text_box(vui, r, &w(race), x[1], row, x[2] - x[1], 1, c, 2);
+            self.window.text_box(vui, r, &race, x[1], row, x[2] - x[1], 1, c, 2);
             self.window.text_box(vui, r, &w(class), x[2], row, x[3] - x[2], 1, c, 2);
             self.window.text_box(vui, r, &wide(&e.level.to_string()), x[3], row, width - x[3] - 40, 1, c, 2);
             self.hits.push(rows_rect(&self.window, vui, r, x[0], row, width - x[0] - 40, 1), i);
@@ -941,6 +942,45 @@ mod tests {
         l.draw(&vui, &mut r, &who, 32, true, &mut cues);
         assert_eq!(l.point(name), vec![key::TRIANGLE], "the popup closed, the sort kept");
         assert_eq!(l.sort, Sort::Level);
+    }
+
+    /// A name on the race list shows its short word in the race column, by the
+    /// server's spelling; the row beside it, not on the list, the game's (the
+    /// control), and with no list both show the game's. By race it sorts where its
+    /// word spells it.
+    #[test]
+    fn a_race_label_in_the_who_list() {
+        use crate::racelabel::tests::{Drawn, given, numbered_vui};
+        let vui = numbered_vui();
+        let rows = || Who { list: vec![row("Lagerbottoms", 9, 9, 60), row("Plainogre", 9, 9, 50)], ..Default::default() };
+        let drawn = || {
+            let mut r = Drawn::default();
+            let mut l = WhoList::default();
+            l.open(&vui, &r);
+            l.draw(&vui, &mut r, &rows(), 0, true, &mut Vec::new());
+            r.0
+        };
+        assert_eq!(drawn().iter().filter(|s| *s == "w1191").count(), 2, "no list: the game's word twice");
+        given(&[("Hill Giant", "HGT", &["Lagerbottoms"])]);
+        let d = drawn();
+        assert_eq!((d.iter().filter(|s| *s == "HGT").count(), d.iter().filter(|s| *s == "w1191").count()), (1, 1), "{d:?}");
+
+        // Dwarf < HGT < Ogre, whatever its race on the wire says
+        let spell = |id: i32| match id {
+            321 => "DWF".to_string(),
+            1191 => "OGR".to_string(),
+            _ => String::new(),
+        };
+        let list = vec![row("Plainogre", 9, 9, 50), row("Lagerbottoms", 9, 9, 60), row("Beardy", 4, 9, 40)];
+        let names: Vec<&str> = order(Sort::Race, &list, &spell).into_iter().map(|i| list[i].name.as_str()).collect();
+        assert_eq!(names, ["Beardy", "Lagerbottoms", "Plainogre"]);
+        crate::racelabel::clear();
+        let names: Vec<&str> = order(Sort::Race, &list, &spell).into_iter().map(|i| list[i].name.as_str()).collect();
+        assert_eq!(names, ["Beardy", "Lagerbottoms", "Plainogre"], "the control: both ogres, by name");
+        let list = vec![row("Aogre", 9, 9, 50), row("Zgiant", 9, 9, 60), row("Beardy", 4, 9, 40)];
+        given(&[("Hill Giant", "HGT", &["Zgiant"])]);
+        let names: Vec<&str> = order(Sort::Race, &list, &spell).into_iter().map(|i| list[i].name.as_str()).collect();
+        assert_eq!(names, ["Beardy", "Zgiant", "Aogre"], "its word before OGR, though a name after");
     }
 
     /// What the patch's sort draws, by place: a recording raster.

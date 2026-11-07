@@ -174,7 +174,8 @@ pub fn invite_text(vui: &Vui, rec: &Invite) -> String {
     if !rec.guild.is_empty() {
         s += &format!("{}: {}\n", w(512), String::from_utf16_lossy(&rec.guild));
     }
-    s += &format!("{}: {}\n", w(510), w(crate::auctionwnd::race_word(rec.race as i32)));
+    let race = crate::racelabel::long(&rec.name).unwrap_or_else(|| w(crate::auctionwnd::race_word(rec.race as i32)));
+    s += &format!("{}: {}\n", w(510), race);
     let class = if rec.title.is_empty() { w(crate::auctionwnd::class_word(rec.class as i32)) } else { String::from_utf16_lossy(&rec.title) };
     s += &format!("{}: {}\n", w(511), class);
     s += &format!("{}: {}\n", w(503), rec.level);
@@ -743,6 +744,23 @@ mod tests {
         r.title = "Warlord".encode_utf16().collect();
         let t = invite_text(&v, &r);
         assert_eq!(t, "Lanerender challenges you to a duel.\n\nw512: Ours\nw510: w191\nw511: Warlord\nw503: 40\n", "the guild, and the title for the class");
+    }
+
+    /// A challenger on the race list reads by its race's word; one not on it the
+    /// game's (the control).
+    #[test]
+    fn the_invitation_says_a_race_label() {
+        let mut v = vui();
+        let rows: Vec<String> = (1..=1814).map(|n| format!("w{n}")).collect();
+        v.words = vi::strtab::StringTable::parse(rows.join("\n").as_bytes()).unwrap();
+        crate::racelabel::tests::given(&[("Hill Giant", "HGT", &["Lanerender"])]);
+        let t = invite_text(&v, &rec(1));
+        assert!(t.contains("w510: Hill Giant\n"), "{t}");
+        let mut other = rec(1);
+        other.name = "Someone".into();
+        assert!(invite_text(&v, &other).contains("w510: w191\n"));
+        crate::racelabel::clear();
+        assert!(invite_text(&v, &rec(1)).contains("w510: w191\n"), "no list");
     }
 
     /// The invitation's keys (`OnKeyDown`'s invitation half): ✕ accepts (13),

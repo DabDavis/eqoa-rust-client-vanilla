@@ -270,6 +270,11 @@ pub fn levels(level: i32) -> (i32, i32) {
     (min, max)
 }
 
+/// A row's race's short word: S2's, or the server's for this name (`racelabel`).
+fn race_short(art: &Art, e: &Entry) -> Vec<u16> {
+    crate::racelabel::short(&e.name_string()).map_or_else(|| art.race_short[(e.race & 15) as usize].clone(), |s| s.encode_utf16().collect())
+}
+
 /// A player found: 0x1500's body as S2's handler keeps it (at least three
 /// bytes; each later field only when the body reaches it).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -608,7 +613,7 @@ impl Search {
     fn sort_list(&mut self, art: &Art) {
         let cmp = |a: &Entry, b: &Entry| -> i32 {
             let by = match self.sort {
-                1 => compare(&art.race_short[(a.race & 15) as usize], &art.race_short[(b.race & 15) as usize]),
+                1 => compare(&race_short(art, a), &race_short(art, b)),
                 2 => compare(&art.class_short[(a.class & 15) as usize], &art.class_short[(b.class & 15) as usize]),
                 3 => number(&art.numbers[a.level as usize]).wrapping_sub(number(&art.numbers[b.level as usize])),
                 _ => 0,
@@ -720,7 +725,7 @@ impl Search {
             let e = &self.list[i as usize];
             let c = UI_COLORS[(i == self.sel) as usize];
             w.text_box(vui, r, &e.name, 184, row, 110, 1, c, 2);
-            w.text_box(vui, r, &art.race_short[(e.race & 15) as usize], 298, row, 84, 1, c, 2);
+            w.text_box(vui, r, &race_short(art, e), 298, row, 84, 1, c, 2);
             w.text_box(vui, r, &art.class_short[(e.class & 15) as usize], 386, row, 100, 1, c, 2);
             w.text_box(vui, r, &art.numbers[e.level as usize], 490, row, 92, 1, c, 2);
             if self.list_keys && i == self.sel {
@@ -990,6 +995,19 @@ mod tests {
         // 0x1501 empties it
         s.clear();
         assert!(s.list.is_empty());
+    }
+
+    /// A found player on the race list shows its short word in S2's race column;
+    /// one not on it S2's (the control).
+    #[test]
+    fn a_race_label_in_the_search_window() {
+        let a = art();
+        let e = Entry::parse(&body(9, 9, 60, "Lagerbottoms", 7)).unwrap();
+        let plain = Entry::parse(&body(9, 9, 50, "Plainogre", 8)).unwrap();
+        assert_eq!(race_short(&a, &e), a.race_short[9], "no list");
+        crate::racelabel::tests::given(&[("Hill Giant", "HGT", &["Lagerbottoms"])]);
+        assert_eq!(race_short(&a, &e), "HGT".encode_utf16().collect::<Vec<u16>>());
+        assert_eq!(race_short(&a, &plain), a.race_short[9]);
     }
 
     /// The filter's keys as FFA80 has them: up and down along its rows,

@@ -459,12 +459,13 @@ impl Sort {
 /// race's or class's word).
 pub fn order(sort: Sort, g: &Guild, word: &dyn Fn(i32) -> String) -> Vec<i32> {
     let spelled = |id: Option<i32>| id.map_or_else(String::new, |id| word(id).to_lowercase());
+    let spelled_race = |m: &Member| crate::racelabel::short(&m.name).map_or_else(|| spelled(race_short(m.race)), |s| s.to_lowercase());
     let mut v: Vec<&Member> = g.members.values().collect();
     v.sort_by(|a, b| {
         let by = match sort {
             Sort::Name => std::cmp::Ordering::Equal,
             Sort::Rank => b.rank.cmp(&a.rank),
-            Sort::Race => spelled(race_short(a.race)).cmp(&spelled(race_short(b.race))),
+            Sort::Race => spelled_race(a).cmp(&spelled_race(b)),
             Sort::Class => spelled(class_short(a.class)).cmp(&spelled(class_short(b.class))),
             Sort::Level => b.level.cmp(&a.level),
             Sort::Online => b.online.cmp(&a.online),
@@ -912,7 +913,7 @@ impl WndGuild {
             let rank = RANK_WORDS.get(m.rank.clamp(0, 3) as usize).copied().unwrap_or(541);
             cell(r, &word(rank), x[1], y, c);
             let Some(race) = race_short(m.race) else { continue };
-            cell(r, &word(race), x[2], y, c);
+            cell(r, &crate::racelabel::short(&m.name).map_or_else(|| word(race), |s| wide(&s)), x[2], y, c);
             let Some(class) = class_short(m.class) else { continue };
             cell(r, &word(class), x[3], y, c);
             cell(r, &wide(&(m.level as u32).to_string()), x[4], y, c);
@@ -1142,6 +1143,38 @@ mod tests {
             g.members.insert(id, Member { id, name: name.into(), class, race, level, rank, online });
         }
         g
+    }
+
+    /// A member on the race list shows its short word in the race column and
+    /// sorts by it; one not on it the game's (the control).
+    #[test]
+    fn a_race_label_in_the_roster() {
+        use crate::racelabel::tests::{Drawn, given, numbered_vui};
+        let vui = numbered_vui();
+        let g = roster(&[(1, "Zgiant", 9, 9, 60, 0, true), (2, "Aogre", 9, 9, 50, 0, true), (3, "Beardy", 9, 4, 40, 0, true)]);
+        let menus = Menus::default();
+        let drawn = |g: &Guild| {
+            let mut r = Drawn::default();
+            let mut w = WndGuild::default();
+            w.close(&vui, &r, 0);
+            w.draw(&vui, &mut r, &menus, g, 0, &mut Vec::new());
+            r.0
+        };
+        let count = |d: &[String], word: &str| d.iter().filter(|s| *s == word).count();
+        let d = drawn(&g);
+        assert_eq!((count(&d, "HGT"), count(&d, "w1191"), count(&d, "w321")), (0, 2, 1), "no list: {d:?}");
+        given(&[("Hill Giant", "HGT", &["Zgiant"])]);
+        let d = drawn(&g);
+        assert_eq!((count(&d, "HGT"), count(&d, "w1191"), count(&d, "w321")), (1, 1, 1), "{d:?}");
+        let spell = |id: i32| match id {
+            321 => "DWF".to_string(),
+            1191 => "OGR".to_string(),
+            _ => String::new(),
+        };
+        let names = |g: &Guild| order(Sort::Race, g, &spell).into_iter().map(|id| g.members[&id].name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&g), ["Beardy", "Zgiant", "Aogre"], "its word before OGR, though a name after");
+        crate::racelabel::clear();
+        assert_eq!(names(&g), ["Beardy", "Aogre", "Zgiant"], "the control: both ogres, by name");
     }
 
     /// The client's sort (F3 20261023-090229): by name from A to Z, case

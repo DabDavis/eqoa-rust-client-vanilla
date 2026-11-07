@@ -728,7 +728,7 @@ impl BuddyList {
             r.draw_string([left + 40, y], c, &wide(&b.name));
             r.draw_string([left + 170, y], c, &word(if b.online { 21 } else { 22 }));
             let Some(race) = race_short(b.race) else { continue };
-            r.draw_string([left + 240, y], c, &word(race));
+            r.draw_string([left + 240, y], c, &crate::racelabel::short(&b.name).map_or_else(|| word(race), |s| wide(&s)));
             let Some(class) = class_short(b.class) else { continue };
             r.draw_string([left + 302, y], c, &word(class));
             r.draw_string([left + 364, y], c, &wide(&(b.level as u32).to_string()));
@@ -851,6 +851,32 @@ mod tests {
     /// (✕); the menu's rows used at once; off the menu it closes (△) with
     /// the row under the pointer selected; under a request only the box's
     /// buttons are there.
+    #[test]
+    fn a_race_label_in_the_buddy_list() {
+        use crate::pointer::testing::NullRaster;
+        use crate::racelabel::tests::{Drawn, given, numbered_vui};
+        let vui = numbered_vui();
+        let (menus, m) = one_menu();
+        let mut b = Buddies::default();
+        b.recv(0x03D5, &buddy(1, "Lagerbottoms", true, "W"));
+        b.recv(0x03D5, &buddy(2, "Someone", true, "W"));
+        let drawn = || {
+            let mut r = Drawn::default();
+            let mut l = BuddyList::new(m);
+            l.open(&vui, &NullRaster);
+            l.draw(&vui, &mut r, &menus, &b, 0, &mut Vec::new());
+            r.0
+        };
+        let plain = drawn();
+        let word = plain.iter().filter(|s| s.starts_with('w') && s[1..].parse::<i32>().is_ok_and(|n| (317..=325).contains(&n) || n == 1191)).count();
+        assert_eq!(word, 2, "no list: the game's word twice: {plain:?}");
+        given(&[("Hill Giant", "HGT", &["Lagerbottoms"])]);
+        let d = drawn();
+        assert_eq!(d.iter().filter(|s| *s == "HGT").count(), 1, "{d:?}");
+        let word = d.iter().filter(|s| s.starts_with('w') && s[1..].parse::<i32>().is_ok_and(|n| (317..=325).contains(&n) || n == 1191)).count();
+        assert_eq!(word, 1, "the other buddy keeps the game's word: {d:?}");
+    }
+
     #[test]
     fn a_pointer_on_the_buddy_list() {
         use crate::pointer::testing::{NullRaster, mid, vui};

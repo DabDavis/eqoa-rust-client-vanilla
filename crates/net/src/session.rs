@@ -84,6 +84,16 @@ pub const OP_GM_TRIGGERS: u16 = 0x7E07;
 /// at once, and is then sent 0x1502 where a client without it gets boxes. A
 /// PS2 ignores the offer, as it ignores [`OP_ENTITY_VIEW`]'s.
 pub const OP_DUEL_WINDOW: u16 = 0x7E09;
+/// go-eqoa-server's own, no retail message either: a race the server has and
+/// the game does not, by its own words (`racelabel`), a u32 after the opcode,
+/// both ways. On the wire such a race passes as one of the game's. The server
+/// offers its words (1) once the player is in the world; this client answers 1 at
+/// once and is sent who reads differently ([`OP_RACE_LABELS_DATA`]) then and
+/// whenever that changes. A PS2 ignores the offer, as it ignores
+/// [`OP_ENTITY_VIEW`]'s; a server that never makes one gets no answer.
+pub const OP_RACE_LABELS: u16 = 0x7E1C;
+/// The list, to a client that answered [`OP_RACE_LABELS`]: `racelabel::read`.
+pub const OP_RACE_LABELS_DATA: u16 = 0x7E1D;
 /// go-eqoa-server's own, no retail message either: SOE's live game's look, a
 /// u32 after the opcode, both ways. The server offers it (1) after the
 /// session's first character list; this client answers 1 at once: it reads
@@ -1010,6 +1020,12 @@ impl Session {
                 if r.u32() != 0 && !r.error {
                     self.bug_reports = true;
                     self.send_op_int(OP_BUG_REPORTS, 1);
+                }
+            }
+            // a race's own words offered: taken (`racelabel`)
+            OP_RACE_LABELS => {
+                if r.u32() != 0 && !r.error {
+                    self.send_op_int(OP_RACE_LABELS, 1);
                 }
             }
             // any member invites into its group there (`Play::may_invite`)
@@ -2163,6 +2179,36 @@ mod tests {
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, names);
         assert!(matches!(&ev[..], [Event::Opcode { op: 0x7E08, data }] if data[..] == [1, 2, 1, 3, b'O', b'n', b'e']), "{ev:?}");
         assert_eq!(answers(&mut s), [], "the names answered nothing");
+    }
+
+    // A race's own words (0x7E1C): the offer answered with 1 at once, every time
+    // it comes, and the list (0x7E1D) passed on for `racelabel` with nothing
+    // answered. The controls: an offer cut short and an offer of 0 are not answered,
+    // and a session never offered one says nothing.
+    #[test]
+    fn the_race_labels_offer_is_answered() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&0x7E)).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        assert_eq!(answers(&mut s), [], "never offered");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x1C, 0x7E, 1, 0, 0]);
+        assert!(ev.is_empty(), "{ev:?}");
+        assert_eq!(answers(&mut s), [], "the control: an offer cut short");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x1C, 0x7E, 0, 0, 0, 0]);
+        assert_eq!(answers(&mut s), [], "the control: an offer of 0");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x1C, 0x7E, 1, 0, 0, 0]);
+        assert!(ev.is_empty(), "the offer is the session's: {ev:?}");
+        assert_eq!(answers(&mut s), [(251, vec![0x1C, 0x7E, 1, 0, 0, 0])]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x1C, 0x7E, 1, 0, 0, 0]);
+        assert_eq!(answers(&mut s), [(251, vec![0x1C, 0x7E, 1, 0, 0, 0])], "again for another offer");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x1D, 0x7E, 0]);
+        assert!(matches!(&ev[..], [Event::Opcode { op: OP_RACE_LABELS_DATA, data }] if data[..] == [0]), "{ev:?}");
+        assert_eq!(answers(&mut s), [], "the list answered nothing");
     }
 
     // go-eqoa-server's offer of the live duel's messages (0x7E09) is answered

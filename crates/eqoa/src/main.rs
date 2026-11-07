@@ -127,6 +127,7 @@ mod multibox;
 mod quantity;
 mod questlog;
 mod quickchat;
+mod racelabel;
 mod alarm;
 mod startmenu;
 mod textlist;

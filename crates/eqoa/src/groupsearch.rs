@@ -401,7 +401,7 @@ impl GroupSearch {
         for p in &lfg.found {
             let i = self.list.add_string(&wide(&p.name));
             self.list.set_columns(i, &COLUMNS);
-            self.list.set_column_string(i, 1, &wd(race_short(p.race)));
+            self.list.set_column_string(i, 1, &crate::racelabel::short(&p.name).map_or_else(|| wd(race_short(p.race)), |s| wide(&s)));
             self.list.set_column_string(i, 2, &wd(class_short(p.class)));
             self.list.set_column_string(i, 3, &wide(&p.level.to_string()));
         }
@@ -1199,6 +1199,21 @@ pub(crate) mod tests {
             [0, 0, 640, 448]
         }
         fn set_viewport(&mut self, _: [i32; 4]) {}
+    }
+
+    /// A player found, on the race list, shows its short word in the list's race
+    /// column; the one not on it the game's (the control).
+    #[test]
+    fn a_race_label_in_the_group_search() {
+        let mut g = Rig::new(false);
+        let players = [found("Lagerbottoms", 9, 9, 40, 7), found("Plainogre", 9, 9, 30, 8)];
+        g.reply(&players);
+        let d = g.draw();
+        assert_eq!((d.iter().filter(|s| *s == "HGT").count(), d.iter().filter(|s| *s == "w1191").count()), (0, 2), "no list: {d:?}");
+        crate::racelabel::tests::given(&[("Hill Giant", "HGT", &["Lagerbottoms"])]);
+        g.reply(&players);
+        let d = g.draw();
+        assert_eq!((d.iter().filter(|s| *s == "HGT").count(), d.iter().filter(|s| *s == "w1191").count()), (1, 1), "{d:?}");
     }
 
     /// The window as it opens (295): a player's search for a group (state
