@@ -5,14 +5,22 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
-## 2026-11-07 · Copy and paste
+## 2026-11-07 · Copy and paste, and chat lines
 - Any text box in the game (the chat line, Support and F3, mail, a tell, names) takes Ctrl+V to paste
   at the caret, Ctrl+C to copy what it holds and Ctrl+X to cut it (Cmd on a Mac), in the program and
   in a browser.
 - Text you paste is kept to what the game's own keyboard can type: letters, digits, a space and
-  ! " % ' ( ) * + , - . / : ; = ? @ _ ~. Other characters are left out, line ends and tabs become
-  spaces, and curly quotes and long dashes become plain ones. It stops at the box's own length.
+  ! " % ' ( ) * + , - . / : ; = ? @ _ ~. Other characters are left out, tabs become spaces, and curly
+  quotes and long dashes become plain ones. Line ends stay in a mail's body and a Support message, and
+  become spaces everywhere else. It stops at the box's own length.
 - A password's box can be pasted into, but not copied or cut.
+- Chat lines can be copied, in the program and in a browser, with a mouse. Press on a line in the chat
+  box and drag over the lines you want: they light up. Drag past the top or bottom of the box to go on
+  through the lines it has kept. Ctrl+C (Cmd+C on a Mac) copies them as plain text, a line for each
+  row. Esc or a click anywhere else clears them.
+- With nothing selected and no text box up, Ctrl+C copies the newest chat line.
+- While the chat history is up (C or R2 held, or lines selected), the mouse wheel over the box steps
+  through it. A plain click on a chat line still opens the chat line.
 
 ## 2026-11-06 · Macros
 - The Controls page (Options > Controls, or F1 while you play) has sixteen macros after its keys. A

@@ -10,7 +10,8 @@ current.
 - Vanilla: nothing that changes the game's picture or play beyond what README "Vanilla" keeps
   (widescreen, the untethered frame rate, the mouse and the touch screen, the keyboard with WASD and
   the Controls page, copy and paste in the edit boxes (the user's of 2026-11-07, held to what a
-  console's keyboard can type: `editbox::typable`), 1,000 lines of chat, no green backdrop behind the start menu's windows, the
+  console's keyboard can type: `editbox::typable`), chat lines selected with a mouse and copied (the
+  same day; `chat`, drawn over the game's chat, not in it), 1,000 lines of chat, no green backdrop behind the start menu's windows, the
   Extended options, the updater, the 2002 disc's art on F9, Hide UI
   on H, names from farther and smaller zoomed out (and every one in a crowd, Overlapping Names Show),
   Ignore Shouts kept, Update Notices, Text Sharp or Smooth, Loading Screens Longer or Instant, Render

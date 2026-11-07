@@ -35,7 +35,14 @@ or a browser (each described where it lives below):
 - **Copy and paste in the text boxes** (the user's of 2026-11-07, `clipboard`, `editbox`): Ctrl+V,
   Ctrl+C, Ctrl+X (⌘ on a Mac), natively and in a page (not on Android, whose keyboard pastes as
   typing). A paste takes only what a console's keyboard can type, because the line reaches consoles:
-  a PS2's text box writes past its stack on a run of `|x` (`editbox::typable`).
+  a PS2's text box writes past its stack on a run of `|x` (`editbox::typable`). Line ends stay only
+  in the two boxes where a console's Enter types them (a mail's body, a petition).
+- **Chat lines to the clipboard** (the user's of 2026-11-07, `chat`): with a mouse, natively and in a
+  page (not on a phone), a drag over the chat box picks whole lines, on past its edges through the
+  1,000 kept, and the Copy key takes them as plain text, a line a row, the game's `|` codes out; with
+  none picked and no edit box up, the newest line. Esc or a click elsewhere clears them. The game's
+  chat is drawn as it was, the highlight over it; a click on a line is still the chat line, and a drag
+  anywhere else still the camera.
 - **1,000 lines of chat history** (the game's ring holds 31).
 - **The start menu's windows over the world**, with no green backdrop behind
   them.

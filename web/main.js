@@ -348,6 +348,8 @@ const pasteDone = () => {
   pasteBack = null;
 };
 addEventListener('keydown', (e) => {
+  // (a Mac's browsers send no keyup for a key let go under Cmd: the next key clears it)
+  if (!e.repeat) copyKey = null;
   if (!clientReady || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
   // by the letter, or where it is on a keyboard with no Latin letters
   const which = /^[a-z]$/i.test(e.key) ? e.key.toLowerCase() : { KeyV: 'v', KeyC: 'c', KeyX: 'x' }[e.code];
