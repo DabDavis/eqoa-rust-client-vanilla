@@ -5,6 +5,17 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-07 · GMs can fly
+- For GMs, on a server that has the command: `/fly` turns flying on, and `/fly` again turns it off (or
+  `/fly on` and `/fly off`). Nothing changes for anyone else.
+- While flying, moving forward goes where you are looking, up and down too, at your ordinary run speed.
+  Let go and you stay where you are in the air. Your character runs and stands as it does on the ground,
+  and walls and the ground still stop you.
+- With a mouse, look up or down as usual. With a controller or the keyboard in the follow and orbit cameras,
+  the right stick's up and down (Page Up and Page Down) look up and down while you fly, instead of zooming;
+  the wheel still zooms. Your camera goes back as it was when you stop.
+- Turned off, you fall and walk as normal from where you are.
+
 ## 2026-11-07 · Picking the disc on a phone
 - In a browser on an Android phone or any touch device, the disc image's picker now shows every file, as it
   already did on an iPhone. It could grey out an .iso before, so there was nothing to pick. The page still checks

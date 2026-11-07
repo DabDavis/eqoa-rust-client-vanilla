@@ -43,6 +43,10 @@ or a browser (each described where it lives below):
   none picked and no edit box up, the newest line. Esc or a click elsewhere clears them. The game's
   chat is drawn as it was, the highlight over it; a click on a line is still the chat line, and a drag
   anywhere else still the camera.
+- **A GM's flight** (the user's of 2026-11-07, `walker`, `Session::flying`): on a server that turns it on
+  (go-eqoa-server's `#fly`, opcode 0x7E1B), the game's swim path with no gravity, no surface and a land
+  body's gaits and flags, going where the camera looks at the walk's own speed. The console frames are kept as
+  ever; `vi` is untouched. Nothing for anyone a server does not turn it on for.
 - **1,000 lines of chat history** (the game's ring holds 31).
 - **The start menu's windows over the world**, with no green backdrop behind
   them.
