@@ -6,6 +6,13 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-07 · Your combat record
+- On a server that keeps one, the start menu's Character has a new entry, Combat Record: your PvP kills,
+  deaths and assists, your kill streak and your best, the highest-level player you have killed, your last
+  kill and who last killed you, and your duels won, lost, surrendered and drawn, with the tunar your wagers
+  won and lost. Triangle (or Esc) goes back to the start menu.
+- It counts from when the server started keeping it, for each of your characters on that server. In chat,
+  /record shows yours and /record with a name anyone's.
 ## 2026-11-07 · Auto Attack on from the start
 - New players now start with Auto Attack on (Options, Game). With it off, the attack button
   has to be held down to keep fighting: a tap swings once and stops, which made a first fight
