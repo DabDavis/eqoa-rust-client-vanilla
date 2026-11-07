@@ -8,9 +8,10 @@ is put on the page by `.github/workflows/notes.yml`.
 ## 2026-11-07 · GMs can fly
 - For GMs, on a server that has the command: `/fly` turns flying on, and `/fly` again turns it off (or
   `/fly on` and `/fly off`). Nothing changes for anyone else.
-- While flying, moving forward goes where you are looking, up and down too, at your ordinary run speed.
-  Let go and you stay where you are in the air. Your character runs and stands as it does on the ground,
-  and walls and the ground still stop you.
+- While flying, moving forward at the camera's usual angle goes straight along and holds your height. Look
+  up from there to climb and down to dive, at your ordinary run speed whichever way you go. In first person,
+  looking level is level. Let go and you stay where you are in the air. Your character runs and stands as it
+  does on the ground, and walls and the ground still stop you.
 - With a mouse, look up or down as usual. With a controller or the keyboard in the follow and orbit cameras,
   the right stick's up and down (Page Up and Page Down) look up and down while you fly, instead of zooming;
   the wheel still zooms. Your camera goes back as it was when you stop.

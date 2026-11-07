@@ -100,6 +100,10 @@ pub fn apply(cam: &mut WalkCamera<Ee>, p: &Preset) {
 /// Camera Distance sets it from 8 to 50 (`settings::camera_distance`).
 pub const FOLLOW_MAX_DISTANCE: f32 = 11.0;
 
+/// The orbit's (style 1's) default pitch as the game sets it (`SetCameraStyle(1)`:
+/// 25 degrees); the follow orbit's is `camreach::GAME_PITCH`.
+pub const ORBIT_PITCH: f32 = 0.436_332_32;
+
 /// `SetCameraStyle(style)`.
 pub fn set_style<S: Scene<Ee>>(cam: &mut WalkCamera<Ee>, style: i32, rc: Option<RaceCamera>, scene: &mut S) {
     let f = F::<Ee>::new;
@@ -146,7 +150,7 @@ pub fn set_style<S: Scene<Ee>>(cam: &mut WalkCamera<Ee>, style: i32, rc: Option<
             cam.max_orbit_distance = f(25.0);
             cam.min_collision_dist = f(3.5);
             cam.walk.set_pitch_range(-half_pi, half_pi);
-            cam.set_def_orbit_pitch_angle(f(0.436_332_32));
+            cam.set_def_orbit_pitch_angle(f(ORBIT_PITCH));
             cam.walk.turn_rate = half_pi;
             cam.walk.init_intermediate();
             cam.set_camera_mode(1);

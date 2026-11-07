@@ -18,9 +18,12 @@
 //! along the body's pitch (`m_facing`) at the same speed as on the ground (the
 //! swim's damping and the ground's are both 0.02), the walls stop it as they stop a
 //! swimmer, and nothing lets it fall. In the orbits the body takes its pitch from
-//! the camera's look (`fly_pitch`, `fly_view`); first person's and the follow
-//! camera's is the body's own. What the rest of the client and the server are
-//! shown is the walk as a body in the air is, drawn each frame: the gait a land
+//! the camera's tilt, the game's default for the camera counting as level (the
+//! user, of the 15 degrees the follow orbit looks down: "yes make default level";
+//! `fly_pitch`, `fly_view`); first person's and the follow camera's is the body's
+//! own, which looks level at 0 and has no tilt to take off. What the rest of the
+//! client and the server are shown is the walk as a body in the air is, drawn each
+//! frame: the gait a land
 //! walk's, never a swim's (`fly_gait`), and the flags the world's at its place
 //! (`flags_at`), so its 0x40 runs no breath down but under real water. Off, the
 //! flags are the world's again and the walk goes on from where it is.
@@ -334,19 +337,26 @@ fn fly_gait(w: &mut WalkControl<Ee>, from: &Vect3<Ee>, was: i32, ms: i64) {
 const FLY_STOPPED_SQ: f32 = 0.0025;
 
 /// `Process` in the world of water. A body let go comes to rest there and holds
-/// its place to the bit: `Move` adds the body's height to the place and takes it
-/// off again, and the EE's chopped adds lose a float step of height a frame or
-/// gain one (a millimetre a second at 300 up, nothing a floor does not put back on
-/// the ground), so a body in the air would creep for good, and a 0x40 go out for
-/// each step of it where one standing still sends none.
+/// its place to the bit, and one going level holds its height: `Move` adds the
+/// body's height to the place and takes it off again, and the EE's chopped adds
+/// lose a float step of height a frame or gain one (a millimetre a second at 300
+/// up, nothing a floor does not put back on the ground), so a body in the air
+/// would creep for good, and a 0x40 go out for each step of it where one standing
+/// still sends none. A floor or anything else met keeps the height it gave.
 fn process_aloft(w: &mut WalkControl<Ee>, scene: &mut World<Ee>) {
     let (from, pushed) = (w.committed.position, w.phys.force);
     w.process(0, &mut Aloft(scene));
-    let zero = F::<Ee>::ZERO;
-    if pushed.x == zero && pushed.y == zero && pushed.z == zero && w.phys.velocity.dot(&w.phys.velocity) < F::new(FLY_STOPPED_SQ) {
+    let (zero, stopped) = (F::<Ee>::ZERO, F::<Ee>::new(FLY_STOPPED_SQ));
+    let v = w.phys.velocity;
+    if pushed.x == zero && pushed.y == zero && pushed.z == zero && v.dot(&v) < stopped {
         for p in [&mut w.phys, &mut w.committed] {
             p.position = from;
             p.velocity = Vect3::default();
+        }
+    } else if pushed.y == zero && v.y * v.y < stopped && w.phys.flags & (ON_FLOOR | flags::B1) == 0 {
+        for p in [&mut w.phys, &mut w.committed] {
+            p.position.y = from.y;
+            p.velocity.y = zero;
         }
     }
 }
@@ -740,27 +750,35 @@ impl Walker {
         }
     }
 
-    /// In flight, in the orbits: the body's pitch the camera's look, which
-    /// `Run` and `Walk` then push along (`m_facing`, on the body's own axes:
-    /// the orbit of mode 1, mode 3 steered). Before `UpdateControls`, on the walk
-    /// put back; the body is drawn upright whatever its pitch (`pose_sounding`).
+    /// In flight, in the orbits: the body's pitch the tilt the player chose less
+    /// the game's own for the camera (the module's doc), which `Run` and `Walk` then
+    /// push along (`m_facing`, on the body's own axes: the orbit of mode 1, mode 3
+    /// steered) and `fly_view` too. So a camera at its default flies level, tilted
+    /// up from there climbs and down dives, at any frame rate, the eye's own
+    /// direction left out: it looks down by the tilt, and by a race's look-at
+    /// height with the zoom; and in mode 3 the tilt read is the default the
+    /// player's look moves (`mouse::tilt`), not the pitch the camera's own snaps
+    /// swing it to when it meets a wall. Before `UpdateControls`, on the walk put
+    /// back; the body is drawn upright whatever its pitch (`pose_sounding`).
     fn fly_pitch(&mut self) {
-        if !matches!(self.cam.camera_mode, 1 | 3) {
-            return;
-        }
-        let (_, pitch, _) = self.eye.direction.get_hpr();
-        let w = &mut self.cam.walk;
+        let cam = &mut self.cam;
+        let pitch = match cam.camera_mode {
+            3 => cam.def_orbit_pitch - F::new(crate::camreach::GAME_PITCH),
+            1 => cam.cur.orbit.y - F::new(crate::camstyle::ORBIT_PITCH),
+            _ => return,
+        };
+        let w = &mut cam.walk;
         w.phys.angles.y = pitch;
         w.committed.angles.y = pitch;
         w.update_directions();
     }
 
     /// In flight, `ViewRelativeMove` and `ViewRelativeWalk` (`walking`) go up and
-    /// down too: the stick's forward along the camera's look `r` whole, its
-    /// sideways level, both at the walk's own push (so the speed is the ground's in
-    /// any direction), the body turned to the way the stick points across the
-    /// ground, as ever. `NO_TURN` and the rest as the walk's: the game's body
-    /// axes (`fly_pitch` has pitched them).
+    /// down too: the stick's forward along the camera's way `r` across the ground at
+    /// the body's pitch (`fly_pitch`), its sideways level, both at the walk's own
+    /// push (so the speed is the ground's in any direction), the body turned to the
+    /// way the stick points across the ground, as ever. `NO_TURN` and the rest as the
+    /// walk's: the game's body axes.
     fn fly_view(&mut self, r: &Vect3<Ee>, x: F<Ee>, y: F<Ee>, walking: bool) {
         let w = &mut self.cam.walk;
         if w.phys.flags & NO_TURN != 0 {
@@ -780,8 +798,10 @@ impl Walker {
         side.normalize();
         let h = if w.move_deadzone < mag {
             let a = if !walking && w.run_threshold < mag { w.run_accel } else { w.walk_accel };
-            let mut look = *r;
-            look.normalize();
+            let pitch = w.phys.angles.y;
+            let mut look = level;
+            look *= pitch.cosf();
+            look.y = -pitch.sinf();
             w.phys.force.add_scaled(&look, a * v.x);
             w.phys.force.add_scaled(&side, a * v.y);
             let mut way = level;
@@ -2122,13 +2142,14 @@ pub(crate) mod tests {
         at
     }
 
-    /// In the follow orbit (the game's default) W goes where the camera looks.
-    /// The look level goes across at the height it took off at; tilted up it
-    /// climbs along the look, tilted down it comes down along it, each at the
-    /// ground's run, up and down counted, in the look's own pitch. It then runs
-    /// along the ground at the run's whole speed with the camera still looking
-    /// down. The controls: on the ground with no flight the same tilt runs
-    /// across at that speed and rises not at all.
+    /// In the follow orbit (the game's default) W goes where the camera looks, its
+    /// default tilt counting as level. At the default it goes across at the height
+    /// it stands at; tilted up from there it climbs along the tilt, level again it
+    /// holds the height it reached, tilted down from there it comes down along the
+    /// tilt, each at the ground's run, up and down counted. It then runs along the
+    /// ground at the run's whole speed with the camera still looking down. The
+    /// controls: on the ground with no flight the same tilt runs across at that
+    /// speed and rises not at all.
     #[test]
     fn in_flight_the_body_goes_where_the_camera_looks() {
         let (x, z) = (22000.0f32, 18000.0f32);
@@ -2148,23 +2169,24 @@ pub(crate) mod tests {
         assert!((floor - 54.1).abs() < 0.2, "the flat: {floor}");
 
         let mut w = start().unwrap();
-        // at the game's own camera it goes down the 15 degrees, to the ground
-        // it is on: a run on the ground at the run's speed
+        // at the game's own camera, which looks down 15 degrees, it goes straight
+        // along: a run on the flat at the run's speed
         let at = track(&mut w, go, &flying(), 60.0, 1.0);
         assert!((at[at.len() - 1].1.y.0 - at[0].1.y.0).abs() < 0.3 && (speed(&at) / on_foot - 1.0).abs() < 0.01, "the game's camera: {} a second, height {} to {}", speed(&at), at[0].1.y.0, at[at.len() - 1].1.y.0);
 
-        up_by(&mut w, crate::camreach::GAME_PITCH + 0.5); // to 0.5 under the head: the view 0.5 up
-        hold(&mut w, go, &flying(), 60.0, 0.2); // the eye's look follows
-        assert!((w.eye.direction.get_hpr().1.0 + 0.5).abs() < 0.03, "the eye: {:?}", w.eye.direction);
+        up_by(&mut w, 0.5); // 0.5 up from the default
+        hold(&mut w, go, &flying(), 60.0, 0.2);
+        let eye = w.eye.direction.get_hpr().1.0;
+        assert!((eye - (crate::camreach::GAME_PITCH - 0.5)).abs() < 0.03, "the eye looks up by what is left of its 15 degrees: {eye}");
         let at = track(&mut w, go, &flying(), 60.0, 3.0);
         let (a, b) = (at[0].1, at[at.len() - 1].1);
         let (up, across) = (b.y.0 - a.y.0, ((b.x.0 - a.x.0).powi(2) + (b.z.0 - a.z.0).powi(2)).sqrt());
-        eprintln!("looking 0.5 up: {up:.2} up and {across:.2} across in 3 s, {:.3} a second", speed3(&at));
-        assert!((up / across - 0.5f32.tan()).abs() < 0.03, "climbs along its look: {up} up, {across} across");
+        eprintln!("0.5 up from the default: {up:.2} up and {across:.2} across in 3 s, {:.3} a second", speed3(&at));
+        assert!((up / across - 0.5f32.tan()).abs() < 0.03, "climbs along its tilt: {up} up, {across} across");
         assert!((speed3(&at) / on_foot - 1.0).abs() < 0.01, "at the run's speed: {} against {on_foot}", speed3(&at));
         assert!(w.cam.walk.phys.position.y.0 > floor + 15.0);
 
-        // level, at the height it reached
+        // back at the default, level at the height it reached
         up_by(&mut w, -0.5);
         hold(&mut w, go, &flying(), 60.0, 1.0);
         let at = track(&mut w, go, &flying(), 60.0, 1.0);
@@ -2185,11 +2207,125 @@ pub(crate) mod tests {
 
         // the control: the same tilt, no flight
         let mut g = start().unwrap();
-        up_by(&mut g, crate::camreach::GAME_PITCH + 0.5);
+        up_by(&mut g, 0.5);
         hold(&mut g, go, &plain, 60.0, 0.2);
         let at = track(&mut g, go, &plain, 60.0, 2.0);
         assert!((at[at.len() - 1].1.y.0 - at[0].1.y.0).abs() < 0.3, "the control rose: {} to {}", at[0].1.y.0, at[at.len() - 1].1.y.0);
         assert!((speed(&at) / on_foot - 1.0).abs() < 0.01);
+    }
+
+    /// A camera at its default flies level, whichever it is and at any rate: W
+    /// for 6 s high over Tunaria (at 300.5, where `Move`'s add of the body's height
+    /// and back loses a float step a tick: `process_aloft`) holds the height to the
+    /// bit, at the run's speed across the ground, in the follow orbit (the eye looking
+    /// down its 15 degrees: the control, a look taken literally would sink at 2.2 a
+    /// second), the orbit (its
+    /// 25) and first person and the follow camera (no tilt of theirs: their pitch 0
+    /// looks level). So does the follow orbit with a race's look-at height and
+    /// zoomed, which turn the eye and not the tilt, and with its pitch swung by a
+    /// snap, as near a wall. The other controls: a small tilt from the default climbs
+    /// and dives by its sine, in each orbit.
+    #[test]
+    fn a_camera_at_its_default_flies_level_in_every_camera_at_any_rate() {
+        let (x, z) = (22000.0f32, 18000.0f32);
+        let y0 = 300.5f32;
+        let start = |style: i32, rc: Option<crate::camstyle::RaceCamera>| {
+            let mut w = Walker::arrive(tunaria_round(x, z)?, Spawn { pos: [x, y0, z], heading: std::f32::consts::FRAC_PI_2, placing: Placing::AsGiven });
+            crate::camstyle::set_style(&mut w.cam, style, rc, &mut w.scene);
+            Some(w)
+        };
+        let Some(mut ground) = tunaria_round(x, z).map(|s| Walker::arrive(s, Spawn::ground(x, z, std::f32::consts::FRAC_PI_2))) else { return };
+        let go = Controls { fwd: 1.0, ..Default::default() };
+        let on_foot = speed(&track(&mut ground, go, &crate::controls::Client::default(), 60.0, 2.0));
+        // W for 6 s at `hz`: the height each frame drawn held to the bit
+        let level = |w: &mut Walker, hz: f64, jitter: f64, what: &str| {
+            hold(w, go, &flying(), hz, 0.5);
+            let t0 = w.scene.time;
+            let mut at = vec![(t0, w.cam.walk.phys.position)];
+            for k in 1..=(hz * 6.0) as u64 {
+                let now = drawn_at(t0, hz, jitter, k);
+                w.frame_with(go.axes(), now, &flying(), true);
+                let p = w.cam.walk.phys.position;
+                assert_eq!(p.y.0, y0, "{what} at {hz} Hz: frame {k}");
+                assert_eq!(vi::selfstate::encode(0, &w.cam.walk.committed, 0, 0)[35], 3, "{what} at {hz} Hz: frame {k} runs");
+                at.push((now, p));
+            }
+            speed(&at)
+        };
+        for (style, name) in [(3, "the follow orbit"), (1, "the orbit"), (0, "first person"), (2, "the follow camera")] {
+            for (hz, jitter) in [(30.0, 0.0), (60.0, 0.0), (165.0, 0.0), (240.0, 0.0), (144.0, 1.5)] {
+                let mut w = start(style, None).unwrap();
+                let v = level(&mut w, hz, jitter, name);
+                if hz == 60.0 {
+                    eprintln!("{name}: the eye's pitch {:.4}, {v:.3} a second across, the ground's {on_foot:.3}", w.eye.direction.get_hpr().1.0);
+                }
+                assert!((v / on_foot - 1.0).abs() < 0.01, "{name} at {hz} Hz: {v} a second, the ground's {on_foot}");
+                let eye = w.eye.direction.get_hpr().1.0;
+                match style {
+                    3 => assert!((eye - crate::camreach::GAME_PITCH).abs() < 0.02, "the control: the eye looks down its 15 degrees: {eye}"),
+                    1 => assert!(eye > 0.3, "the control: the eye looks down its 25 degrees: {eye}"),
+                    _ => assert!(eye.abs() < 0.001, "{name}: its eye looks level: {eye}"),
+                }
+            }
+        }
+        // a race's look-at height, a zoom: the eye turns, the flight does not
+        let short = crate::camstyle::RaceCamera { race: 3, target_height: 1.1, look_at_height_above: 1.1, pitch: 0.2, distance: 3.0, p34: 0.9, review: [0.0; 4], cust: [0.0; 4] };
+        let mut w = start(3, Some(short)).unwrap();
+        w.cam.set_orbit_distance(F::new(2.0));
+        hold(&mut w, go, &flying(), 60.0, 0.5);
+        let eye = w.eye.direction.get_hpr().1.0;
+        assert!(eye > crate::camreach::GAME_PITCH + 0.05, "the control: the race's look-at height turns the eye: {eye}");
+        level(&mut w, 60.0, 0.0, "a short race zoomed in");
+        // the pitch swung by a snap, as near a wall: the tilt chosen is unchanged
+        let mut w = start(3, None).unwrap();
+        hold(&mut w, go, &flying(), 60.0, 0.5);
+        let t0 = w.scene.time;
+        w.cam.set_orbit_pitch_angle(w.cam.alt_orbit_pitch);
+        for k in 1..=6 {
+            w.frame_with(go.axes(), t0 + k * 16, &flying(), true);
+            assert_eq!(w.cam.walk.phys.position.y.0, y0, "swung to its alternate pitch: frame {k}");
+        }
+        // a small tilt from the default, up and down, each orbit its own default
+        for style in [3, 1] {
+            for tilt in [0.1f32, -0.1] {
+                let mut w = start(style, None).unwrap();
+                crate::mouse::tilt(&mut w.cam, F::new(tilt));
+                hold(&mut w, go, &flying(), 60.0, 1.0);
+                let a = w.cam.walk.phys.position.y.0;
+                hold(&mut w, go, &flying(), 60.0, 3.0);
+                let climbed = (w.cam.walk.phys.position.y.0 - a) / 3.0;
+                let want = -tilt.sin() * on_foot;
+                assert!((climbed - want).abs() < 0.1, "style {style}, {tilt} from the default: {climbed} a second up, want {want}");
+            }
+        }
+    }
+
+    /// The tilts' limits: the follow orbit's 45 degrees under the head climbs at
+    /// 60 degrees from its default (and the orbit at 70), all the run's speed along
+    /// it, more of it up than the eye's own look gave. Its 75 overhead dives at 60.
+    #[test]
+    fn at_the_tilts_limits_the_flight_goes_at_the_run() {
+        let (x, z) = (22000.0f32, 18000.0f32);
+        let y0 = 400.0f32;
+        let go = Controls { fwd: 1.0, ..Default::default() };
+        let Some(mut ground) = tunaria_round(x, z).map(|s| Walker::arrive(s, Spawn::ground(x, z, std::f32::consts::FRAC_PI_2))) else { return };
+        let on_foot = speed(&track(&mut ground, go, &crate::controls::Client::default(), 60.0, 2.0));
+        for (style, name, limit, want) in [
+            (3, "the follow orbit", crate::mouse::MIN_TILT, -60.0f32),
+            (3, "the follow orbit", crate::mouse::MAX_TILT, 60.0),
+            (1, "the orbit", crate::mouse::MIN_TILT, -70.0),
+            (1, "the orbit", crate::mouse::MAX_TILT, 50.0),
+        ] {
+            let mut w = Walker::arrive(tunaria_round(x, z).unwrap(), Spawn { pos: [x, y0, z], heading: std::f32::consts::FRAC_PI_2, placing: Placing::AsGiven });
+            crate::camstyle::set_style(&mut w.cam, style, None, &mut w.scene);
+            crate::mouse::tilt(&mut w.cam, F::new(limit * 3.0));
+            let at = track(&mut w, go, &flying(), 60.0, 2.0);
+            let (a, b) = (at[0].1, at[at.len() - 1].1);
+            let (up, all) = ((b.y.0 - a.y.0) / 2.0, speed3(&at));
+            eprintln!("{name} at its tilt limit {limit:.3}: {up:.3} a second up, {all:.3} in all (the ground's {on_foot:.3})");
+            assert!((up / all + want.to_radians().sin()).abs() < 0.02, "{name}: {up} up of {all}, want {want} degrees");
+            assert!((all / on_foot - 1.0).abs() < 0.015, "{name}: {all} a second, the ground's {on_foot}");
+        }
     }
 
     /// First person is the swim's own way: the stick pitches the body (past the

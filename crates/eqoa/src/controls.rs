@@ -54,10 +54,11 @@
 //! While it steers, follow paces the player but does not turn it.
 //!
 //! A GM's flight (`Client::flying`, go-eqoa-server's `#fly`), also the client's
-//! own: `Walker` takes the moves up and down along the camera's look (the walk
-//! is CLIENT's swim path there), and in the orbits (1 and 3), where the right
-//! stick's y and Page Up and Page Down zoom or swim, they look up and down
-//! instead (`Walk::fly_look`), the mouse's tilt on a stick, so a pad flies too.
+//! own: `Walker` takes the moves up and down along the camera's look, an orbit's
+//! default tilt counting as level (the walk is CLIENT's swim path there), and in
+//! the orbits (1 and 3), where the right stick's y and Page Up and Page Down zoom
+//! or swim, they look up and down instead (`Walk::fly_look`), the mouse's tilt on a
+//! stick, so a pad flies too.
 
 // Written as the C writes it: its float literals (pi as 3.1415927), `a = a +
 // b`, and the nested tests.

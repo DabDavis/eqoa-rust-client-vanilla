@@ -45,8 +45,10 @@ or a browser (each described where it lives below):
   anywhere else still the camera.
 - **A GM's flight** (the user's of 2026-11-07, `walker`, `Session::flying`): on a server that turns it on
   (go-eqoa-server's `#fly`, opcode 0x7E1B), the game's swim path with no gravity, no surface and a land
-  body's gaits and flags, going where the camera looks at the walk's own speed. The console frames are kept as
-  ever; `vi` is untouched. Nothing for anyone a server does not turn it on for.
+  body's gaits and flags, going where the camera looks at the walk's own speed: an orbit's default tilt (the follow
+  orbit's 15 degrees, the orbit's 25) counts as level, and first person and the follow camera, which have none, go
+  by their own pitch. The console frames are kept as ever; `vi` is untouched. Nothing for anyone a server does not
+  turn it on for.
 - **1,000 lines of chat history** (the game's ring holds 31).
 - **The start menu's windows over the world**, with no green backdrop behind
   them.
