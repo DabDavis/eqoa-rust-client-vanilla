@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-07 · The licence
+- The client's source goes under the GNU Affero General Public License (version 3 or later) in place of
+  MIT, from the next build on. Nothing changes in playing it. If you hand out a changed copy or host a
+  changed page, players have to be offered its source. Earlier versions stay under MIT.
+
 ## 2026-11-07 · GMs can fly
 - For GMs, on a server that has the command: `/fly` turns flying on, and `/fly` again turns it off (or
   `/fly on` and `/fly off`). Nothing changes for anyone else.

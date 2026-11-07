@@ -1072,9 +1072,15 @@ controller.
 
 Building a launcher, a fork or a client of your own from this one? Fixes and improvements sent
 back here help every player: a pull request, or an issue saying what you changed, is welcome.
-Credit is appreciated, not required: the MIT licence asks only that its notice stays with the
-code. Contributions are taken under the same licence.
+Contributions are taken under the same licence.
 
 ## Licence
 
-MIT (`LICENSE`).
+GNU Affero General Public License, version 3 or (at your option) any later version (`LICENSE`).
+If you hand out a changed copy or host a changed page, players have to be offered its source.
+
+Commits up to `1e23e80` (2026-11-07) were released under the MIT licence and stay available under
+it at those commits; `NOTICE` keeps its notice for the code they hold.
+
+The licence grants no rights in *EverQuest Online Adventures* itself: the game and its data belong
+to their owners, and the client reads a disc you own.
