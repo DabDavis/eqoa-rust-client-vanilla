@@ -1,6 +1,7 @@
 //! The system's clipboard for the game's edit boxes (the user, 2026-11-07: "we
 //! can add the copy/paste into vanilla client", `editbox`'s `paste_chars` holding
-//! it to what a console's keyboard can type). Natively: `arboard`, on a thread of
+//! it to what a console's keyboard can type) and the chat box's lines
+//! (`chat::copy_text`). Natively: `arboard`, on a thread of
 //! its own (another program answers a read when it answers, and the game does not
 //! wait for it; on X11 the text copied is served from the one `Clipboard` kept for
 //! the whole run). A page has its own way in, the browser's `paste` event
@@ -60,6 +61,9 @@ mod native {
     }
 
     pub fn copy(text: String) {
+        // a line end as that system's own programs write it
+        #[cfg(windows)]
+        let text = text.replace('\n', "\r\n");
         ask(Ask::Set(text));
     }
 }

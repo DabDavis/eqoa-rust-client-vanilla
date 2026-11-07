@@ -207,6 +207,19 @@ pub fn field_paste(text: String) {
     }
 }
 
+/// What the Copy key takes with no edit box up: the chat lines selected, or the
+/// newest (`chat::copy_text`).
+#[wasm_bindgen]
+pub fn chat_copy_text() -> Option<String> {
+    crate::chat::copy_text()
+}
+
+/// That text has gone to the clipboard (`chat::copied`).
+#[wasm_bindgen]
+pub fn chat_copied() {
+    crate::chat::copied();
+}
+
 /// The keys coming now are the device's own keyboard's, not a keyboard's:
 /// the page's input for the game's edit boxes has the focus (`want_text`).
 pub fn device_keyboard() -> bool {

@@ -5,7 +5,7 @@
 // override the defaults: ?relay=ws://127.0.0.1:8790&server=203.0.113.10 for a
 // local server. Notices and what goes wrong are notices.js's
 // (window.eqoaNotices).
-import init, { boot, view, disc_id, disc_2002, update_notices, hidden_tick, field_up, field_text, field_cut, field_paste } from './eqoa.js';
+import init, { boot, view, disc_id, disc_2002, update_notices, hidden_tick, field_up, field_text, chat_copy_text, chat_copied, field_cut, field_paste } from './eqoa.js';
 import { canRemember, keptHandle, keepHandle, forgetHandle } from './discstore.js';
 
 const $ = (id) => document.getElementById(id);
@@ -338,7 +338,10 @@ const typeHere = () => {
 // clipboard that asks the player nothing. For it the focus goes to the hidden
 // input, as every browser fires it there, and the text goes to the client whole,
 // which keeps only what a console's keyboard can type (`editbox::paste_chars`). A
-// phone's paste into that input comes the same way.
+// phone's paste into that input comes the same way. With no edit box up, Copy takes
+// the chat lines selected, or the newest (`chat::copy_text`); its release stops here
+// too, as the game never saw the press (a C let go ends R2's history).
+let copyKey = null;
 let pasteBack = null;
 const pasteDone = () => {
   if (pasteBack) pasteBack.focus({ preventScroll: true });
@@ -348,7 +351,18 @@ addEventListener('keydown', (e) => {
   if (!clientReady || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
   // by the letter, or where it is on a keyboard with no Latin letters
   const which = /^[a-z]$/i.test(e.key) ? e.key.toLowerCase() : { KeyV: 'v', KeyC: 'c', KeyX: 'x' }[e.code];
-  if (!['v', 'c', 'x'].includes(which) || !field_up()) return;
+  if (!['v', 'c', 'x'].includes(which)) return;
+  if (!field_up()) {
+    const lines = which === 'c' ? chat_copy_text() : null;
+    if (lines === undefined || lines === null) return;
+    e.stopImmediatePropagation();
+    e.preventDefault();
+    if (e.repeat) return;
+    copyKey = e.code;
+    if (navigator.clipboard) navigator.clipboard.writeText(lines).catch((err) => console.log(`copy: ${err && err.message}`));
+    chat_copied();
+    return;
+  }
   e.stopImmediatePropagation();
   if (e.repeat) return;
   if (which === 'v') {
@@ -366,6 +380,11 @@ addEventListener('keydown', (e) => {
   e.preventDefault();
   if (navigator.clipboard) navigator.clipboard.writeText(text).catch((err) => console.log(`copy: ${err && err.message ? err.message : err}`));
   if (which === 'x') field_cut();
+}, true);
+addEventListener('keyup', (e) => {
+  if (e.code !== copyKey) return;
+  copyKey = null;
+  e.stopImmediatePropagation();
 }, true);
 typed.addEventListener('paste', (e) => {
   const text = e.clipboardData && e.clipboardData.getData('text/plain');

@@ -4132,6 +4132,72 @@ impl Play {
         true
     }
 
+    /// The chat box's point for a pointer at window pixels `at` (as `point`
+    /// takes it, before a wide window's move and a tall one's).
+    fn chat_point(at: (f64, f64), size: (u32, u32)) -> [f32; 2] {
+        let f = render::ui::frame_from_window(size, [at.0 as f32, at.1 as f32]);
+        [f[0] - render::ui::side(size), f[1] - render::ui::top(size)]
+    }
+
+    /// A mouse button down in the world at window pixels `at` (`left`: the left
+    /// one, with no other held): on one of the chat box's lines, in play or its
+    /// history, it is the box's (`chat`) and the mouse's gesture is none of it,
+    /// which is true here; anywhere else any selection clears, and the press
+    /// goes on as ever.
+    pub fn chat_press(&mut self, at: (f64, f64), size: (u32, u32), left: bool) -> bool {
+        let lines = ((self.mode == 0 && !self.search.open) || self.mode == 33) && !crate::hideui::hidden();
+        let scrolling = self.mode == 33;
+        let Some(c) = self.wnd_chat.as_mut() else { return false };
+        if c.dragging() {
+            return true;
+        }
+        if left && lines && c.press(Self::chat_point(at, size), at) {
+            return true;
+        }
+        c.clear_selection(scrolling);
+        false
+    }
+
+    /// The pointer moved in the world: a drag of the chat box's goes with it.
+    pub fn chat_moved(&mut self, at: (f64, f64), size: (u32, u32)) {
+        if let Some(c) = self.wnd_chat.as_mut() {
+            c.moved(Self::chat_point(at, size), at);
+        }
+    }
+
+    /// The left button let go (`chat::Let`).
+    pub fn chat_release(&mut self) -> crate::chat::Let {
+        let scrolling = self.mode == 33;
+        self.wnd_chat.as_mut().map_or(crate::chat::Let::NotHeld, |c| c.release(scrolling))
+    }
+
+    /// A press of the chat box's that is down (the other button's are nothing
+    /// while it is).
+    pub fn chat_dragging(&self) -> bool {
+        self.wnd_chat.as_ref().is_some_and(|c| c.dragging())
+    }
+
+    /// The pointer gone from the window or the keys to another: a drag's release
+    /// may never come, so it ends here, what it selected kept.
+    pub fn chat_let_go(&mut self) {
+        if let Some(c) = self.wnd_chat.as_mut() {
+            c.let_go();
+        }
+    }
+
+    /// Esc: a selection cleared takes it, and it is nothing more.
+    pub fn chat_escape(&mut self) -> bool {
+        let scrolling = self.mode == 33;
+        let Some(c) = self.wnd_chat.as_mut().filter(|c| c.selecting()) else { return false };
+        c.clear_selection(scrolling);
+        true
+    }
+
+    /// The wheel's `lines` over the chat box's history (`WndChat::wheel`).
+    pub fn chat_wheel(&mut self, at: (f64, f64), size: (u32, u32), lines: f32) -> bool {
+        self.wnd_chat.as_mut().is_some_and(|c| c.wheel(Self::chat_point(at, size), lines))
+    }
+
     /// The wheel's `lines` (up positive; a finger's drag down) on the window
     /// up: the d-pad's up or down for each whole line (a few at most
     /// waiting). False in play.
@@ -7557,12 +7623,18 @@ impl Play {
             }
             r.ui.anchor = Anchor::Right;
             r.ui.vertical = Vertical::Bottom;
+            let in_play = matches!(self.mode, 0 | 33);
             if let Some(c) = self.wnd_chat.as_mut() {
+                // a selection is play's: a window up ends it
+                if !in_play {
+                    c.clear_selection(false);
+                }
                 for (text, color, at) in self.chat_pending.drain(..) {
                     let rr = &r;
                     c.text.add_text(&crate::ui::wide(&text), color, at, |s| vi::ui::Raster::string_width(rr, s));
                 }
                 c.draw(vui, &mut r, now, dt);
+                c.draw_selection(&mut r);
                 self.cues.extend(c.cues.drain(..).map(crate::sound::Cue::Ui));
             }
             r.ui.anchor = Anchor::Middle;

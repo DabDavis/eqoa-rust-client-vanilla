@@ -56,17 +56,19 @@ pub fn typable(c: char) -> bool {
 /// The most of a clipboard read: past any editor's length (512).
 const PASTE_MOST: usize = 4096;
 
-/// A clipboard's text as an edit box takes it: a line end or a tab a space (a
-/// Windows `\r\n` one), a typographer's quote, dash, ellipsis or space as the
-/// keyboard's own, and whatever else a console's keyboard cannot type left out
-/// ([`typable`]).
-pub fn paste_chars(text: &str) -> String {
+/// A clipboard's text as an edit box takes it: a line end a space (a Windows
+/// `\r\n` one), or itself where the box has lines (`lines`: a mail's body and a
+/// petition's, where a console's Enter types one too); a tab a space; a
+/// typographer's quote, dash, ellipsis or space as the keyboard's own; and whatever
+/// else a console's keyboard cannot type left out ([`typable`]).
+pub fn paste_chars(text: &str, lines: bool) -> String {
     let mut out = String::new();
     let mut last_cr = false;
     for c in text.chars().take(PASTE_MOST) {
         let cr = c == '\r';
         match c {
             '\n' if last_cr => {}
+            '\r' | '\n' if lines => out.push('\n'),
             '\r' | '\n' | '\t' | '\u{a0}' | '\u{2002}'..='\u{200a}' | '\u{202f}' | '\u{3000}' => out.push(' '),
             '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{2032}' => out.push('\''),
             '\u{201c}' | '\u{201d}' | '\u{201e}' | '\u{2033}' => out.push('"'),
@@ -322,7 +324,7 @@ impl EditBox {
     /// character taken as `InsertChar` takes a typed one, so the box's length and
     /// its no-spaces hold. Reports how many went in.
     pub fn paste(&mut self, text: &str, now: i64) -> usize {
-        paste_chars(text).chars().filter(|&c| self.insert(c as u16, now)).count()
+        paste_chars(text, self.multi_line).chars().filter(|&c| self.insert(c as u16, now)).count()
     }
 
     /// What was asked of this box on the screen (`Field`): one cue for it all,
@@ -999,18 +1001,22 @@ mod tests {
     fn a_paste_holds_to_it() {
         // ordinary text is as it was
         let plain = "Hail Lord Nagafen! 50% (of 1,000): don't-stop/go? a=b; c+d*e @f_g ~h \"i\".";
-        assert_eq!(paste_chars(plain), plain);
+        assert_eq!(paste_chars(plain, false), plain);
+        assert_eq!(paste_chars(plain, true), plain);
         // the character that brings a console down, and the rest of what it has no key for
-        assert_eq!(paste_chars("|+|+|t||x|"), "++tx");
-        assert_eq!(paste_chars("a#b$c&d<e>f[g]h\\i^j`k{l}m"), "abcdefghijklm");
+        assert_eq!(paste_chars("|+|+|t||x|", false), "++tx");
+        assert_eq!(paste_chars("|+|+|t||x|", true), "++tx");
+        assert_eq!(paste_chars("a#b$c&d<e>f[g]h\\i^j`k{l}m", false), "abcdefghijklm");
         // line ends and tabs as spaces, one for a Windows line end
-        assert_eq!(paste_chars("one\r\ntwo\nthree\rfour\tfive"), "one two three four five");
+        assert_eq!(paste_chars("one\r\ntwo\nthree\rfour\tfive", false), "one two three four five");
+        // where the box has lines they stay lines, the tab still a space
+        assert_eq!(paste_chars("one\r\ntwo\nthree\rfour\tfive\n\n", true), "one\ntwo\nthree\nfour five\n\n");
         // what a web page or a word processor puts in, as the keyboard's own
-        assert_eq!(paste_chars("don\u{2019}t \u{201c}go\u{201d} \u{2013} now\u{2026}\u{a0}ok"), "don't \"go\" - now... ok");
+        assert_eq!(paste_chars("don\u{2019}t \u{201c}go\u{201d} \u{2013} now\u{2026}\u{a0}ok", false), "don't \"go\" - now... ok");
         // what no keyboard here has: emoji, other scripts, surrogate pairs' worth, controls, a NUL
-        assert_eq!(paste_chars("a\u{1f600}b\u{4e2d}c\u{e9}d\u{0}e\u{7}f\u{202e}g"), "abcdefg");
+        assert_eq!(paste_chars("a\u{1f600}b\u{4e2d}c\u{e9}d\u{0}e\u{7}f\u{202e}g", false), "abcdefg");
         // a clipboard of a whole book costs what the longest box does
-        assert!(paste_chars(&"a".repeat(1 << 20)).len() == PASTE_MOST);
+        assert!(paste_chars(&"a".repeat(1 << 20), false).len() == PASTE_MOST);
     }
 
     #[test]
@@ -1033,10 +1039,15 @@ mod tests {
         e.allow_spaces = false;
         e.paste("Sir Robin", 0);
         assert_eq!(e.text, wide("SirRobin"));
-        // a mail's body too: line ends as spaces
+        // a mail's body keeps its lines, as a console's Enter types them there
         let mut e = EditBox::default();
         e.set_multi_line(true);
         e.set_max_length(512);
+        e.paste("HP: 11450\r\nDUR: 50", 0);
+        assert_eq!(e.text, wide("HP: 11450\nDUR: 50"));
+        // the control: a box of one line, the same text
+        let mut e = EditBox::default();
+        e.set_max_length(128);
         e.paste("HP: 11450\r\nDUR: 50", 0);
         assert_eq!(e.text, wide("HP: 11450 DUR: 50"));
     }

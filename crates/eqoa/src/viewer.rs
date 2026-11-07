@@ -1845,6 +1845,9 @@ struct App {
     /// Ctrl held (`ModifiersChanged`), for the clipboard's keys (`clipboard_key`)
     #[cfg(any(target_os = "linux", windows))]
     ctrl_held: bool,
+    /// The key a clipboard's press took, until it is let go.
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    clip_key: Option<winit::keyboard::PhysicalKey>,
     alt_enter_down: bool,
     pad_script: Option<crate::input::Script>,
     /// The player's own keys and buttons (`binds`) at the input's edge: what
@@ -2043,6 +2046,8 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         alt_held: false,
         #[cfg(any(target_os = "linux", windows))]
         ctrl_held: false,
+        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+        clip_key: None,
         alt_enter_down: false,
         pad_script: crate::input::Script::from_env(),
         keys_edge: Default::default(),
@@ -2481,6 +2486,13 @@ impl App {
     /// Controller Focus's Window reads the controllers only in front.
     fn focus_lost(&mut self, el: &ActiveEventLoop) {
         self.pads.focused = false;
+        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+        {
+            self.clip_key = None;
+        }
+        if let Some(p) = self.play.as_mut() {
+            p.chat_let_go();
+        }
         if let Some(line) = self.arrival.lost(Instant::now()) {
             crate::say(&line);
         }
@@ -2862,6 +2874,31 @@ impl App {
         p.click(p.creature_at(c.at(), size, vp), !matches!(c, crate::mouse::Click::Target(..)));
     }
 
+    /// A mouse button on the chat box's lines (`Play::chat_press`), true when it
+    /// was the box's: a click on a line with no selection up, a click there as
+    /// ever (the box's chat line). Phones have no such thing: no key to copy with.
+    fn chat_button(&mut self, left: bool, down: bool) -> bool {
+        if cfg!(target_os = "android") {
+            return false;
+        }
+        let idle = self.mouse.idle();
+        let (Some(p), Some(g)) = (self.play.as_mut(), self.gfx.as_ref()) else { return false };
+        if down {
+            return p.chat_press(self.cursor, (g.config.width, g.config.height), left && idle);
+        }
+        if !left {
+            return p.chat_dragging();
+        }
+        match p.chat_release() {
+            crate::chat::Let::NotHeld => false,
+            crate::chat::Let::Done => true,
+            crate::chat::Let::Click(x, y) => {
+                self.click(crate::mouse::Click::Target(x, y), false);
+                true
+            }
+        }
+    }
+
     /// Fly-camera movement from the held keys, scaled by frame time.
     fn fly(&mut self) -> bool {
         let dt = self.last.elapsed().as_secs_f32().min(0.1);
@@ -3188,7 +3225,19 @@ impl App {
         let held = self.super_held;
         #[cfg(not(target_os = "macos"))]
         let held = self.ctrl_held;
-        if !held || e.state != ElementState::Pressed || !crate::editbox::field_up() {
+        // the release of a key the copy took is the copy's too: it was never
+        // pressed as far as the game knows (a C let go ends R2's history)
+        if e.state != ElementState::Pressed {
+            let ours = self.clip_key == Some(e.physical_key);
+            if ours {
+                self.clip_key = None;
+            }
+            return ours;
+        }
+        if !e.repeat {
+            self.clip_key = None;
+        }
+        if !held {
             return false;
         }
         // by the letter, or where it is on a keyboard that has no Latin letters
@@ -3201,10 +3250,21 @@ impl App {
                 _ => return false,
             },
         };
-        if !matches!(which.as_str(), "v" | "c" | "x") {
+        // no edit box up, Copy is the chat box's (`chat::copy_text`), when it is
+        // on the screen with a line in it; the rest stay the game's keys
+        let (field, lines) = (crate::editbox::field_up(), crate::chat::copy_text());
+        if !matches!(which.as_str(), "v" | "c" | "x") || !(field || (which == "c" && lines.is_some())) {
             return false;
         }
         if e.repeat {
+            return true;
+        }
+        self.clip_key = Some(e.physical_key);
+        if !field {
+            if let Some(text) = lines {
+                crate::clipboard::copy(text);
+                crate::chat::copied();
+            }
             return true;
         }
         match which.as_str() {
@@ -4547,6 +4607,13 @@ impl App {
             }
             return;
         }
+        // Escape with chat lines selected: they are let go, and nothing more
+        if event.state == ElementState::Pressed
+            && event.logical_key == Key::Named(NamedKey::Escape)
+            && self.play.as_mut().is_some_and(|p| p.chat_escape())
+        {
+            return;
+        }
         // Escape while the mouse look holds the pointer: it is let go
         // (as a browser ends its lock on Escape), and nothing more
         if event.state == ElementState::Pressed && event.logical_key == Key::Named(NamedKey::Escape) && self.mouse.escape() {
@@ -4739,10 +4806,18 @@ impl App {
             WindowEvent::CursorLeft { .. } => {
                 self.mouse.release_all();
                 self.grab_pointer(false);
+                if let Some(p) = self.play.as_mut() {
+                    p.chat_let_go();
+                }
             }
             WindowEvent::MouseInput { state, button, .. } if matches!(button, MouseButton::Left | MouseButton::Right) => {
                 let down = state == ElementState::Pressed;
                 if self.walker.is_some() {
+                    // a press on the chat box's lines selects them, and the
+                    // mouse's gesture (the look, a click's target) is none of it
+                    if self.chat_button(button == MouseButton::Left, down) {
+                        return;
+                    }
                     // the left button on a quick-chat choice holds its
                     // direction while it is down (`Play::point_press`), and
                     // what it would click is not a click
@@ -4770,6 +4845,11 @@ impl App {
                     return;
                 }
                 self.mouse.moved(position.x, position.y);
+                if let Some(g) = &self.gfx
+                    && let Some(p) = self.play.as_mut()
+                {
+                    p.chat_moved(self.cursor, (g.config.width, g.config.height));
+                }
                 // a drag begun: the pointer taken, within the press's
                 // gesture; a confined cursor put back to the middle
                 if self.walker.is_some() {
@@ -4798,7 +4878,14 @@ impl App {
                     MouseScrollDelta::PixelDelta(p) => (p.y as f32 / 40.0, p.y as f32 / 100.0),
                 };
                 if self.walker.is_some() {
-                    self.mouse.wheel(d, steps);
+                    // over the chat box's history in view, its lines
+                    let took = match (self.play.as_mut(), self.gfx.as_ref()) {
+                        (Some(p), Some(g)) => p.chat_wheel(self.cursor, (g.config.width, g.config.height), d),
+                        _ => false,
+                    };
+                    if !took {
+                        self.mouse.wheel(d, steps);
+                    }
                 } else if let Camera::Orbit { zoom, .. } = &mut self.camera {
                     *zoom = (*zoom * 0.9f32.powf(d)).clamp(0.05, 20.0);
                 }

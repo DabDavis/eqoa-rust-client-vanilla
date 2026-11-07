@@ -80,7 +80,7 @@ use vi::walk::flags;
 use web_time::{Duration, Instant};
 
 /// A press moves this far (window pixels) before it is a drag.
-const SLOP: f64 = 5.0;
+pub const SLOP: f64 = 5.0;
 /// Two clicks this close in time and place are a double click.
 const DOUBLE: Duration = Duration::from_millis(400);
 /// A page's lock not granted this long after it was asked for: refused.
@@ -394,6 +394,11 @@ impl Mouse {
     #[cfg(test)]
     pub fn dragging(&self) -> bool {
         self.press.is_some_and(|p| p.dragged)
+    }
+
+    /// No button held and no gesture going on.
+    pub fn idle(&self) -> bool {
+        self.press.is_none() && !self.held[0] && !self.held[1]
     }
 
     /// A button pressed or let go; a click when the gesture ends (no button
