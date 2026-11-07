@@ -9,9 +9,18 @@
 //!
 //! Not the game's: the roster's order. The game lists the members by id;
 //! here they are sorted (`Sort`, F3 20261023-090229, the user's choice), by
-//! name from the start, and ○ (C on the keyboard) or a click on a column's
+//! name each time the roster opens, and ○ (C on the keyboard) or a click on a column's
 //! heading sorts them by that column instead. The member menu and its box
 //! act on the member shown.
+//!
+//! On a server whose patch sorts the who list (Sandstorm's S2,
+//! `wholist::PatchSort`) the roster takes that sort's keys too, L1 and left a
+//! column back, R1 and right one on, its marks either side of the heading
+//! sorted by, and its legend, and a sort leaves the selection at its place
+//! in the list as the patch's who list does (the member there another); the
+//! members' order stays the client's. S2
+//! itself leaves the guild window be: this is the client's, so the two
+//! lists are sorted alike.
 //!
 //! The invitation box's yes (268) sends sub 9 and its no, cancel or 45-second
 //! timeout (260) sub 10 with 1; the busy and already-in-a-guild refusals are
@@ -23,9 +32,11 @@ use crate::client_image::Menus;
 use crate::dialog::{BoxAnswer, Key, MBox};
 use crate::pointer::{Hits, MOVED, key};
 use crate::startmenu::KeyFlash;
+use crate::wholist::PatchSort;
 use crate::wndlist::{ListUp, MiniMenu};
 use net::stream::{Reader, Writer};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use vi::ui::{Raster, Vui, Window, wide};
 
 /// 1400: every guild command's opcode.
@@ -453,6 +464,11 @@ impl Sort {
     pub fn next(self) -> Sort {
         Sort::ALL[(self as usize + 1) % Sort::ALL.len()]
     }
+
+    /// The next column to the left, round to the last.
+    pub fn prev(self) -> Sort {
+        Sort::ALL[(self as usize + Sort::ALL.len() - 1) % Sort::ALL.len()]
+    }
 }
 
 /// The roster in the order shown: member ids, by `sort` (`word` spells a
@@ -476,6 +492,10 @@ pub fn order(sort: Sort, g: &Guild, word: &dyn Fn(i32) -> String) -> Vec<i32> {
 
 /// The hit of a column's heading: `HEADING - column`.
 const HEADING: i32 = -10;
+
+/// The pixels between the heading sorted by and the patch's marks either
+/// side of it.
+const MARK_GAP: i32 = 3;
 
 /// The member menu (`sMemberMenu`): (word, message, id).
 const MEMBER_MENU: [(i32, u32, i32); 4] = [(522, 0x0B05_1002, 0), (526, 0x0B05_1003, 0), (527, 0x0B05_1004, 0), (516, 0x0B05_1005, 0)];
@@ -518,12 +538,17 @@ pub struct WndGuild {
     /// the members' rows drawn, by their place on screen, and the headings
     /// (`HEADING - column`) (for a pointer)
     hits: Hits,
-    /// the column the roster is sorted by (the client's, kept while it runs)
+    /// the column the roster is sorted by (the client's, from the name each
+    /// time the roster opens)
     pub sort: Sort,
     /// the members' ids in the order shown (`order`, at each key and draw)
     order: Vec<i32>,
     /// the member to keep selected once a pointer's sort is applied
     keep: Option<i32>,
+    /// the server's patch's who list sort, when it has one: the roster
+    /// takes its keys, marks and legend (the client's, not S2's: S2 leaves
+    /// the guild window be)
+    patch: Option<Arc<PatchSort>>,
 }
 
 impl Default for WndGuild {
@@ -550,6 +575,7 @@ impl Default for WndGuild {
             sort: Sort::default(),
             order: Vec::new(),
             keep: None,
+            patch: None,
         }
     }
 }
@@ -591,13 +617,14 @@ impl WndGuild {
         }
         match self.hits.at(p) {
             // a heading: the members by its column (the client's), the
-            // selected one kept; the column already sorted by is nothing
+            // selected one kept (with the patch's sort, its place); the
+            // column already sorted by is nothing
             Some(h) if h <= HEADING => {
                 let sort = Sort::ALL[(HEADING - h) as usize];
                 if sort == self.sort {
                     return Vec::new();
                 }
-                self.keep = self.order.get(self.sel.max(0) as usize).copied();
+                self.keep = self.keep_member();
                 self.sort = sort;
                 vec![MOVED]
             }
@@ -608,6 +635,17 @@ impl WndGuild {
             }
             None => Vec::new(),
         }
+    }
+
+    /// The member a sort keeps selected wherever it goes: the selected one,
+    /// or with the patch's sort none, the selection left at its place in
+    /// the list (the member there another), as the patch's who list keeps it
+    /// (F3 20261023-185531).
+    fn keep_member(&self) -> Option<i32> {
+        if self.patch.is_some() {
+            return None;
+        }
+        self.order.get(self.sel.max(0) as usize).copied()
     }
 
     /// The selection on `row` as `Move` leaves it: the marker's blink
@@ -654,8 +692,13 @@ impl WndGuild {
         self.mbox_visible = true;
     }
 
-    /// `Close` (`UpdateMode` 21): the roster, from the top, with the focus.
+    /// `Close` (`UpdateMode` 21): the roster, from the top, with the focus,
+    /// sorted by name again (the client's); the server's patch's sort looked
+    /// for (`PatchSort`).
     pub fn close(&mut self, vui: &Vui, r: &dyn Raster, now: i64) {
+        self.patch = PatchSort::current();
+        self.sort = Sort::default();
+        self.keep = None;
         self.mode = 2;
         self.mbox_visible = false;
         self.menu.visible = false;
@@ -768,19 +811,26 @@ impl WndGuild {
             }
             19 | 138 => self.flash.press(138),
             20 | 139 => self.flash.press(139),
-            // ○ (the client's): the next column's order, the selected
-            // member kept selected
-            135 => {
-                self.keep = self.order.get(self.sel.max(0) as usize).copied();
-                self.sort = self.sort.next();
-                self.reorder(g, words);
-                self.fade_in = 1;
-                self.alpha = 1.0;
-                cues.push(11);
-            }
+            // with the patch's who list sort, its keys (L1 and left a column
+            // back, R1 and right one on) and ○ (the client's): the next
+            // column's order, the selected member kept selected
+            k if self.patch.as_ref().is_some_and(|p| p.back.contains(&k)) => self.sort_by(self.sort.prev(), g, words, cues),
+            k if self.patch.as_ref().is_some_and(|p| p.on.contains(&k)) => self.sort_by(self.sort.next(), g, words, cues),
+            135 => self.sort_by(self.sort.next(), g, words, cues),
             _ => {}
         }
         None
+    }
+
+    /// The roster by `sort`, the selected member kept selected; with the
+    /// patch's sort the selection's place kept instead (`keep_member`).
+    fn sort_by(&mut self, sort: Sort, g: &Guild, words: &dyn Fn(i32) -> String, cues: &mut Vec<i32>) {
+        self.keep = self.keep_member();
+        self.sort = sort;
+        self.reorder(g, words);
+        self.fade_in = 1;
+        self.alpha = 1.0;
+        cues.push(11);
     }
 
     /// `Move(d)`.
@@ -870,9 +920,18 @@ impl WndGuild {
         legend.extend(word(212));
         legend.extend(wide("   |t"));
         legend.extend(word(161));
-        // the client's ○ Sort, with its column
-        legend.extend(wide(&format!("   |c{}: ", crate::wholist::SORT)));
-        legend.extend(word(self.sort.word()));
+        // the patch's sort, its keys and its word, as the who list's legend
+        // has it; else the client's ○ Sort, with its column
+        match self.patch.as_ref().and_then(|p| p.sort_legend()) {
+            Some(sort) => {
+                legend.extend(wide("   "));
+                legend.extend(sort);
+            }
+            None => {
+                legend.extend(wide(&format!("   |c{}: ", crate::wholist::SORT)));
+                legend.extend(word(self.sort.word()));
+            }
+        }
         self.window.text(vui, r, &legend, 20, 13, black, 0);
         let count = g.count();
         let t = if count > 11 { self.top as f32 / (count - 11) as f32 } else { 0.0 };
@@ -888,6 +947,16 @@ impl WndGuild {
             let left = if k == 0 { x[0] - 27 } else { (x[k - 1] + x[k]) / 2 };
             let right = if k == x.len() - 1 { x[k] + 60 } else { (x[k] + x[k + 1]) / 2 };
             self.hits.push([left, y - line_h / 2, right, y + line_h - line_h / 2], HEADING - k as i32);
+        }
+        // with the patch's who list sort, its marks either side of the
+        // heading sorted by (which is drawn from x on): glyphs, drawn and
+        // measured as the window's text, as the who list draws them
+        if let Some(p) = &self.patch {
+            let k = self.sort as usize;
+            let heading = r.string_width(&word(self.sort.word()));
+            let before = self.window.text_width(vui, r, &p.marks[0]);
+            self.window.draw_text_internal(vui, r, &p.marks[0], x[k] - MARK_GAP - before, y, hl, 0);
+            self.window.draw_text_internal(vui, r, &p.marks[1], x[k] + heading + MARK_GAP, y, hl, 0);
         }
         y += line_h;
         for i in 0..11 {
@@ -1222,5 +1291,150 @@ mod tests {
         assert_eq!(w.order, [2, 1, 3], "amy 50, Zed 30, Bob 10");
         assert_eq!(w.sel, 1, "Zed kept");
         assert!(w.point(heading(&w, 465.0)).is_empty(), "the same column: nothing");
+    }
+
+    /// With the server's patch's who list sort, its keys go round the
+    /// roster's columns as they go round the who list's: R1 and right one
+    /// on, L1 and left one back, round past either end; each sort, ○'s and a
+    /// heading's too, leaves the selection at its place in the list (the
+    /// member there another), as the patch's who list does. The controls:
+    /// without the patch the keys do nothing, and ○ keeps the member.
+    #[test]
+    fn the_patchs_keys_sort_the_roster() {
+        use crate::pointer::testing::{NullRaster, vui};
+        use crate::wholist::testing::patch_sort;
+        let vui = vui();
+        let mut r = NullRaster;
+        let menus = Menus::default();
+        let g = roster(&[(1, "Zed", 0, 0, 30, 0, true), (2, "amy", 0, 0, 50, 0, true), (3, "Bob", 0, 0, 10, 3, true)]);
+        let words = |_: i32| String::new();
+        let mut cues = Vec::new();
+        let mut w = WndGuild::default();
+        w.close(&vui, &r, 0);
+        w.patch = Some(Arc::new(patch_sort()));
+        w.draw(&vui, &mut r, &menus, &g, 0, &mut cues);
+        w.sel = 2;
+        assert_eq!(w.order[w.sel as usize], 1, "Zed selected");
+        let mut sorts = Vec::new();
+        // right, R1, left, L1, L1
+        for k in [137, 142, 136, 140, 140] {
+            w.key(&menus, &g, 3, &words, k, true, 0, &mut cues);
+            sorts.push(w.sort);
+        }
+        assert_eq!(sorts, [Sort::Rank, Sort::Race, Sort::Rank, Sort::Name, Sort::Online]);
+        // L1 again: level, amy 50, Zed 30, Bob 10
+        w.key(&menus, &g, 3, &words, 140, true, 0, &mut cues);
+        w.draw(&vui, &mut r, &menus, &g, 16, &mut cues);
+        assert_eq!((w.sort, w.order.clone()), (Sort::Level, vec![2, 1, 3]));
+        assert_eq!((w.sel, w.order[w.sel as usize]), (2, 3), "the place kept: Bob there now, not Zed");
+        // the top row stays the top row: right twice, online then name
+        w.sel = 0;
+        w.key(&menus, &g, 3, &words, 137, true, 0, &mut cues);
+        w.key(&menus, &g, 3, &words, 137, true, 0, &mut cues);
+        w.draw(&vui, &mut r, &menus, &g, 32, &mut cues);
+        assert_eq!((w.sort, w.sel, w.order[0]), (Sort::Name, 0, 2), "amy on top by name, the cursor on her");
+        // ○ and a heading keep the place too
+        w.sel = 1;
+        w.key(&menus, &g, 3, &words, 135, true, 0, &mut cues);
+        w.draw(&vui, &mut r, &menus, &g, 48, &mut cues);
+        assert_eq!((w.sort, w.sel), (Sort::Rank, 1));
+        let level = [465.0, w.window.row_center(&vui, &NullRaster, 0)[1] as f32];
+        assert_eq!(w.point(level), vec![crate::pointer::MOVED]);
+        w.draw(&vui, &mut r, &menus, &g, 64, &mut cues);
+        assert_eq!((w.sort, w.sel, w.order[1]), (Sort::Level, 1, 1), "the place kept: Zed second by level");
+        // the controls: without the patch its keys do nothing, and ○ keeps
+        // the member (Zed, third by name and by rank)
+        let mut c = WndGuild::default();
+        c.close(&vui, &r, 0);
+        c.draw(&vui, &mut r, &menus, &g, 0, &mut cues);
+        for k in [136, 137, 140, 142] {
+            c.key(&menus, &g, 3, &words, k, true, 0, &mut cues);
+        }
+        assert_eq!(c.sort, Sort::Name);
+        c.sel = 2;
+        c.key(&menus, &g, 3, &words, 135, true, 0, &mut cues);
+        c.draw(&vui, &mut r, &menus, &g, 16, &mut cues);
+        assert_eq!((c.sort, c.order[c.sel as usize]), (Sort::Rank, 1), "Zed kept");
+    }
+
+    /// The roster opens sorted by name each time, whatever column it was
+    /// left sorted by, the cursor on the top row; the control: until it
+    /// opens again the column is kept.
+    #[test]
+    fn the_roster_opens_sorted_by_name() {
+        use crate::pointer::testing::{NullRaster, vui};
+        let vui = vui();
+        let mut r = NullRaster;
+        let menus = Menus::default();
+        let g = roster(&[(1, "Zed", 0, 0, 30, 0, true), (2, "amy", 0, 0, 50, 0, true), (3, "Bob", 0, 0, 10, 3, true)]);
+        let words = |_: i32| String::new();
+        let mut cues = Vec::new();
+        let mut w = WndGuild::default();
+        w.close(&vui, &r, 0);
+        w.draw(&vui, &mut r, &menus, &g, 0, &mut cues);
+        w.sel = 1;
+        for _ in 0..4 {
+            w.key(&menus, &g, 3, &words, 135, true, 0, &mut cues);
+        }
+        // Escape: hidden; still by level until it opens again (the control)
+        assert_eq!(w.key(&menus, &g, 3, &words, 27, true, 0, &mut cues), Some(Up::Hide));
+        w.reset();
+        assert_eq!(w.sort, Sort::Level);
+        w.close(&vui, &r, 1000);
+        w.draw(&vui, &mut r, &menus, &g, 1000, &mut cues);
+        assert_eq!((w.sort, w.sel, w.order.clone()), (Sort::Name, 0, vec![2, 3, 1]), "by name, amy on top and selected");
+    }
+
+    /// With the patch's sort the heading sorted by is drawn between the
+    /// patch's marks, on the headings' row, `MARK_GAP` from its two ends
+    /// (a heading is drawn from its column's x on), and the legend's sort is
+    /// the patch's (its word). A patch's marks are glyphs (a `|` and its
+    /// code), drawn as the window's text draws them, never their codes as
+    /// letters. The control: without it no marks, and the client's ○ Sort.
+    #[test]
+    fn the_patchs_marks_and_legend_are_drawn_in_the_roster() {
+        use crate::pointer::testing::vui;
+        use crate::wholist::testing::{Texts, patch_sort};
+        let vui = vui();
+        let menus = Menus::default();
+        let g = roster(&[(1, "Zed", 0, 0, 30, 0, true), (2, "amy", 0, 0, 50, 0, true)]);
+        let mut cues = Vec::new();
+        let at = |t: &Texts, s: &str| t.0.iter().find(|(_, x)| x == s).map(|(a, _)| *a);
+        let width = |s: &str| Texts::default().string_width(&wide(s));
+        let heading = |s: Sort| width(vui.words.get(s.word(), vui.language));
+        let mut w = WndGuild::default();
+        w.close(&vui, &Texts::default(), 0);
+        w.patch = Some(Arc::new(patch_sort()));
+        w.sort = Sort::Level;
+        let mut t = Texts::default();
+        w.draw(&vui, &mut t, &menus, &g, 0, &mut cues);
+        let (before, after) = (at(&t, "<").expect("the mark before"), at(&t, ">").expect("the mark after"));
+        // Level's heading is drawn from x 465, on the row above amy's
+        let heading_y = at(&t, "amy").map(|a| a[1] - (vui.font_height(&t) - 4));
+        assert_eq!(before[0] + width("<") + MARK_GAP, 465, "the mark before ends a gap short of Level");
+        assert_eq!(after[0], 465 + heading(Sort::Level) + MARK_GAP, "the mark after starts a gap past it");
+        assert_eq!((Some(before[1]), Some(after[1])), (heading_y, heading_y), "on the headings' row");
+        assert!(t.0.iter().any(|(_, s)| s == "Order") && !t.0.iter().any(|(_, s)| s.contains(crate::wholist::SORT)), "the patch's legend: {:?}", t.0);
+        // another column: the marks go with it
+        w.sort = Sort::Rank;
+        let mut t = Texts::default();
+        w.draw(&vui, &mut t, &menus, &g, 16, &mut cues);
+        let (before, after) = (at(&t, "<").unwrap(), at(&t, ">").unwrap());
+        assert_eq!((before[0] + width("<") + MARK_GAP, after[0]), (225, 225 + heading(Sort::Rank) + MARK_GAP), "round Rank");
+        // marks that are glyphs (the test's own: L1 and R1): no code drawn
+        // as letters
+        let mut p = patch_sort();
+        p.marks = [wide("|v"), wide("|V")];
+        w.patch = Some(Arc::new(p));
+        let mut t = Texts::default();
+        w.draw(&vui, &mut t, &menus, &g, 32, &mut cues);
+        assert!(!t.0.iter().any(|(_, s)| s.contains('|')), "the marks' codes drawn as letters: {:?}", t.0);
+        // the control: the client's sort alone
+        let mut c = WndGuild::default();
+        c.close(&vui, &Texts::default(), 0);
+        let mut t = Texts::default();
+        c.draw(&vui, &mut t, &menus, &g, 0, &mut cues);
+        assert!(at(&t, "<").is_none() && at(&t, ">").is_none(), "the control: no marks");
+        assert!(t.0.iter().any(|(_, s)| s.contains(crate::wholist::SORT)), "the client's ○ Sort: {:?}", t.0);
     }
 }
