@@ -25,12 +25,12 @@ pub struct Row {
 }
 
 /// A row, a column and the line over them, in the HUD's frame.
-const ROW_H: i32 = 15;
+const ROW_H: i32 = 16;
 const COL_W: i32 = 100;
 const COL_GAP: i32 = 4;
 const HEAD_H: i32 = 13;
 /// A name's height (the font is scaled to it), and the bar under it.
-const NAME_H: f32 = 11.0;
+const NAME_H: f32 = 12.0;
 const BAR_H: i32 = 3;
 /// The most columns: past them the wheel steps through the rows.
 const MOST_COLUMNS: usize = 4;
@@ -186,11 +186,11 @@ mod tests {
         let f = |n| Fit::of(n, false);
         assert_eq!((f(5).columns, f(5).rows, f(5).more), (1, 5, 0));
         assert_eq!((f(6).columns, f(6).rows), (1, 6));
-        assert_eq!((f(14).columns, f(14).rows), (1, 14));
-        assert_eq!((f(15).columns, f(15).rows), (2, 8), "evened out");
+        assert_eq!((f(13).columns, f(13).rows), (1, 13));
+        assert_eq!((f(14).columns, f(14).rows), (2, 7), "evened out");
         assert_eq!((f(20).columns, f(20).rows, f(20).shown), (2, 10, 20));
-        assert_eq!((f(56).columns, f(56).rows, f(56).more), (4, 14, 0));
-        assert_eq!((f(57).columns, f(57).rows, f(57).shown, f(57).more), (4, 14, 56, 1), "past that the wheel");
+        assert_eq!((f(52).columns, f(52).rows, f(52).more), (4, 13, 0));
+        assert_eq!((f(53).columns, f(53).rows, f(53).shown, f(53).more), (4, 13, 52, 1), "past that the wheel");
         // the pet's bar takes rows
         assert_eq!((Fit::of(12, true).columns, Fit::of(12, true).rows), (2, 6));
     }
@@ -208,6 +208,6 @@ mod tests {
     #[test]
     fn the_head_says_how_many_and_which() {
         assert_eq!(head(&Fit::of(6, false), 0), "Raid (6)");
-        assert_eq!(head(&Fit::of(60, false), 3), "Raid (60) 4-59");
+        assert_eq!(head(&Fit::of(60, false), 3), "Raid (60) 4-55");
     }
 }

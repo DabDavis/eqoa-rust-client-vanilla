@@ -541,7 +541,7 @@ mod tests {
         // the third row's middle, then the second column's first row's, of twenty
         let fit = crate::raidlist::Fit::of(20, false);
         assert_eq!((fit.columns, fit.rows), (2, 10));
-        let (third, next) = ([40.0, 93.0 + 13.0 + 2.0 * 15.0 + 7.0], [20.0 + 104.0 + 20.0, 93.0 + 13.0 + 7.0]);
+        let (third, next) = ([40.0, 93.0 + 13.0 + 2.0 * 16.0 + 7.0], [20.0 + 104.0 + 20.0, 93.0 + 13.0 + 7.0]);
         for (size, side) in [((640, 480), 0.0), ((1280, 720), 106.0)] {
             ui.begin(size);
             let mut hud = Hud::new();
