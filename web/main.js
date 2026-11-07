@@ -646,13 +646,16 @@ $('iso').addEventListener('change', async () => {
   }
 });
 
-// iOS turns an input's `accept` into file types and knows none for a disc
-// image's .iso, .bin or .img, so its picker greys the image out in every
-// browser there (all of them WebKit; Chrome on an iPhone, 2026-10-27: "it
-// doesn't let you select the ISO"). The disc is judged here anyway (SYSTEM.CNF,
-// `disc_id`), so on iOS the inputs take any file.
+// A phone's picker turns an input's `accept` into file types, and knows none for
+// a disc image's .iso, .bin or .img or knows another than the one its files are
+// given, so it greys the image out: iOS in every browser there (all of them
+// WebKit; Chrome on an iPhone, 2026-10-27: "it doesn't let you select the ISO"),
+// and Android and any touch device the same (2026-11-07: "for mobile players cant
+// select iso"). The disc is judged here anyway (SYSTEM.CNF, `disc_id`), so on those
+// the inputs take any file, and the picker that can be remembered names no types.
 const onIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-if (onIOS) for (const id of ['iso', 'iso2002']) $(id).removeAttribute('accept');
+const anyFile = onIOS || /Android/.test(navigator.userAgent) || window.eqoaTouchFirst();
+if (anyFile) for (const id of ['iso', 'iso2002']) $(id).removeAttribute('accept');
 
 // ---- the 2002 disc: EverQuest Online Adventures (USA), SLUS-20470, whose
 // art F9 swaps in (crates/eqoa/src/era.rs). Optional, judged by the client's
@@ -798,7 +801,7 @@ function offerKeep(name) {
 // `id`); a start it cannot open in is tried once more without.
 function pickRemembered(name) {
   const d = discInputs[name];
-  const opts = { id: d.id, types: [{ description: 'Disc image', accept: { 'application/octet-stream': ['.iso', '.bin', '.img'] } }] };
+  const opts = anyFile ? { id: d.id } : { id: d.id, types: [{ description: 'Disc image', accept: { 'application/octet-stream': ['.iso', '.bin', '.img'] } }] };
   const start = remembered[d.key] ? remembered[d.key].handle : null;
   const open = (o) => window.showOpenFilePicker(o).then(async ([handle]) => {
     const file = await handle.getFile();

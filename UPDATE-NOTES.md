@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-07 · Picking the disc on a phone
+- In a browser on an Android phone or any touch device, the disc image's picker now shows every file, as it
+  already did on an iPhone. It could grey out an .iso before, so there was nothing to pick. The page still checks
+  the disc you choose.
+
 ## 2026-11-07 · Copy and paste, and chat lines
 - Any text box in the game (the chat line, Support and F3, mail, a tell, names) takes Ctrl+V to paste
   at the caret, Ctrl+C to copy what it holds and Ctrl+X to cut it (Cmd on a Mac), in the program and
