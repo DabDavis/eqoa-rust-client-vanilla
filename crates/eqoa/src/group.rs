@@ -3,6 +3,7 @@
 //! member's health and place from state channel 0x40 (`Channel40`), and what
 //! the HUD's `DrawGroup` reads.
 
+use net::session::RaidMember;
 use net::stream::Reader;
 
 /// `VIPartyMember`.
@@ -35,6 +36,11 @@ pub struct Group {
     pub members: Vec<Member>,
     /// `m_p2BD58`
     pub invites: Vec<Invite>,
+    /// The whole of a raid group, where `members` holds four (`raidlist`, the
+    /// server's 0x7E1A): empty out of one.
+    pub raid: Vec<RaidMember>,
+    /// The messages of the next set so far, the set showing until it is whole.
+    raid_next: Vec<RaidMember>,
 }
 
 impl Group {
@@ -48,6 +54,29 @@ impl Group {
         self.in_group = false;
         self.leader = false;
         self.members.clear();
+        self.raid.clear();
+        self.raid_next.clear();
+    }
+
+    /// A 0x7E1A: `rows` from place `first` of `total`. 0 in all is no raid group;
+    /// the set goes up whole, and one out of its order is left for the next.
+    pub fn raid_page(&mut self, total: usize, first: usize, rows: Vec<RaidMember>) {
+        if total == 0 {
+            self.raid.clear();
+            self.raid_next.clear();
+            return;
+        }
+        if first == 0 {
+            self.raid_next.clear();
+        }
+        if first != self.raid_next.len() {
+            self.raid_next.clear();
+            return;
+        }
+        self.raid_next.extend(rows);
+        if self.raid_next.len() >= total {
+            self.raid = std::mem::take(&mut self.raid_next);
+        }
     }
 
     /// `Msg0772`: the roster, each old member's last state replayed onto it;
@@ -132,6 +161,29 @@ mod tests {
         assert!(g.leader);
         let g = grouped(&[2, 1]);
         assert!(!g.leader, "member 0 is someone else");
+    }
+
+    #[test]
+    fn a_raid_roster_goes_up_whole() {
+        let row = |id: u32| RaidMember { id, name: format!("m{id}"), ..Default::default() };
+        let mut g = Group::default();
+        g.raid_page(3, 0, vec![row(1), row(2)]);
+        assert!(g.raid.is_empty(), "two of three");
+        g.raid_page(3, 2, vec![row(3)]);
+        assert_eq!(g.raid.len(), 3);
+        // a new set's first part: the old set stays up until it is whole
+        g.raid_page(2, 0, vec![row(4)]);
+        assert_eq!(g.raid.len(), 3);
+        g.raid_page(2, 1, vec![row(5)]);
+        assert_eq!(g.raid.iter().map(|m| m.id).collect::<Vec<_>>(), [4, 5]);
+        // one out of its order is no part of a set
+        g.raid_page(2, 1, vec![row(6)]);
+        assert_eq!(g.raid.iter().map(|m| m.id).collect::<Vec<_>>(), [4, 5]);
+        g.raid_page(0, 0, vec![]);
+        assert!(g.raid.is_empty(), "no raid group now");
+        g.raid_page(1, 0, vec![row(7)]);
+        g.clear();
+        assert!(g.raid.is_empty(), "out of the group");
     }
 
     #[test]

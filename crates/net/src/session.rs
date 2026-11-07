@@ -124,9 +124,34 @@ pub const OP_MEMBER_INVITES: u16 = 0x7E17;
 /// to a server that made no such offer (Sandstorm's, eqoa.live's), and one that
 /// never sends it leaves the walk as it was.
 pub const OP_FLY: u16 = 0x7E1B;
+/// go-eqoa-server's own, no retail message either: the whole of a raid group,
+/// where a roster holds four (`m_group`). The offer, from the server once the
+/// player is in the world, a u32 after the opcode (1); a server without it
+/// never sends the rest.
+pub const OP_RAID_ROSTER_OFFER: u16 = 0x7E18;
+/// A client's answer to [`OP_RAID_ROSTER_OFFER`]: a u32, 1 to be sent the
+/// roster, 0 to stop.
+pub const OP_RAID_ROSTER_ANSWER: u16 = 0x7E19;
+/// The roster, to a client that asked, on a change and at most once a second:
+/// u16 members in all, u16 this message's first, u8 how many it holds, then
+/// each [`RaidMember`] (u32 id, u8 and the bytes of its name, u8 class, u8
+/// level, u8 HP of 255, u8 power of 255). 0 members: no raid group (now).
+pub const OP_RAID_ROSTER: u16 = 0x7E1A;
 /// The most of a note sent, in bytes: one message, as go-eqoa-server takes
 /// each fragment of a longer one for a message of its own.
 pub const BUG_NOTE_MAX: usize = 1000;
+
+/// One member of a raid group ([`OP_RAID_ROSTER`]): `id` as this client knows
+/// it (its own, an entity's, or the roster's stand-in for one out of sight).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RaidMember {
+    pub id: u32,
+    pub name: String,
+    pub class: u8,
+    pub level: u8,
+    pub hp: u8,
+    pub power: u8,
+}
 
 /// The raw part of a 0x002C record: the disc's, and the live game's
 /// (`CharacterList`, Corsten's 0x012CC018: no robe tint, six ArmorGroup
@@ -245,6 +270,8 @@ pub enum Event {
     ItemHp { id: u32, hp: i32 },
     /// 0x0772 (`Msg0772`): the group's roster, ids and names.
     GroupRoster { ids: Vec<u32>, names: Vec<String> },
+    /// [`OP_RAID_ROSTER`]: a message's part of the whole raid group.
+    RaidRoster { total: usize, first: usize, rows: Vec<RaidMember> },
     /// 0x0773 (`Msg0773`): an invitation from `id`.
     GroupInvite { id: u32, x: i32, name: String },
     /// 0x0774 (`Msg0774`): the invitation from `id` withdrawn.
@@ -381,6 +408,10 @@ pub struct Session {
     /// the connection, as the server's goes with its login. A dump (a respawn,
     /// a restart of the server's) leaves it.
     pub flying: bool,
+    /// The server offered the whole of a raid group
+    /// ([`OP_RAID_ROSTER_OFFER`]), and what it was last told since the offer.
+    pub raid_roster_offer: bool,
+    raid_roster_asked: Option<bool>,
     user: String,
     token: [u8; 32],
     start: Instant,
@@ -511,6 +542,8 @@ impl Session {
             bug_reports: false,
             member_invites: false,
             flying: false,
+            raid_roster_offer: false,
+            raid_roster_asked: None,
             user: user.to_string(),
             token,
             start: Instant::now(),
@@ -610,6 +643,17 @@ impl Session {
         let mut w = Writer::op(op);
         w.u32(v);
         self.send(&w.data);
+    }
+
+    /// The Raid List: a server that offered the whole of a raid group
+    /// ([`OP_RAID_ROSTER_OFFER`]) is told whether to send it (`want`), at once
+    /// and whenever that changes; one that made no offer is told nothing.
+    pub fn agree_raid_roster(&mut self, want: bool) {
+        if !self.raid_roster_offer || self.raid_roster_asked == Some(want) {
+            return;
+        }
+        self.raid_roster_asked = Some(want);
+        self.send_op_int(OP_RAID_ROSTER_ANSWER, want as u32);
     }
 
     /// [`OP_BUG_NOTE`]: the note for the petition this client files next,
@@ -972,6 +1016,29 @@ impl Session {
             OP_MEMBER_INVITES => {
                 if r.u32() != 0 && !r.error {
                     self.member_invites = true;
+                }
+            }
+            OP_RAID_ROSTER_OFFER => {
+                // an offer (again at every world entry): told afresh what the
+                // client wants, the server's player being a new one
+                r.u32();
+                if !r.error {
+                    self.raid_roster_offer = true;
+                    self.raid_roster_asked = None;
+                }
+            }
+            OP_RAID_ROSTER => {
+                let (total, first, n) = (r.u16() as usize, r.u16() as usize, r.u8() as usize);
+                let rows: Vec<RaidMember> = (0..n)
+                    .map(|_| {
+                        let id = r.u32();
+                        let len = r.u8() as usize;
+                        let name = String::from_utf8_lossy(r.bytes(len)).into_owned();
+                        RaidMember { id, name, class: r.u8(), level: r.u8(), hp: r.u8(), power: r.u8() }
+                    })
+                    .collect();
+                if !r.error {
+                    ev.push(Event::RaidRoster { total, first, rows });
                 }
             }
             OP_LIVE_LOOK_IN_FORCE => {
@@ -1940,6 +2007,50 @@ mod tests {
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x1B, 0x7E, 1, 0, 0, 0]);
         deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
         assert!(!s.flying, "a new connection, a new login: not flying");
+    }
+
+    // The whole of a raid group: told nothing with no offer; offered, told what
+    // is wanted once and when it changes, and afresh at another offer; each
+    // message read whole, a short one not at all.
+    #[test]
+    fn the_raid_roster_is_agreed_and_read() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<Vec<u8>> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&0x7E)).map(|(_, d)| d).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        answers(&mut s);
+        s.agree_raid_roster(true);
+        assert_eq!(answers(&mut s), Vec::<Vec<u8>>::new(), "no offer: the control");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x18, 0x7E, 1, 0, 0, 0]);
+        s.agree_raid_roster(true);
+        s.agree_raid_roster(true);
+        assert_eq!(answers(&mut s), [vec![0x19, 0x7E, 1, 0, 0, 0]], "once");
+        s.agree_raid_roster(false);
+        assert_eq!(answers(&mut s), [vec![0x19, 0x7E, 0, 0, 0, 0]], "when it changes");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x18, 0x7E, 1, 0, 0, 0]);
+        s.agree_raid_roster(false);
+        assert_eq!(answers(&mut s), [vec![0x19, 0x7E, 0, 0, 0, 0]], "afresh at another offer");
+
+        let mut m = vec![0x1A, 0x7E, 6, 0, 2, 0, 2];
+        m.extend([0xA1, 0x86, 1, 0, 3]);
+        m.extend(b"Ann");
+        m.extend([9, 60, 200, 100]);
+        m.extend([0x01, 0x65, 0xCD, 0x1D, 2]);
+        m.extend(b"Bo");
+        m.extend([0, 7, 255, 0]);
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, m.clone());
+        let want = vec![
+            RaidMember { id: 100001, name: "Ann".into(), class: 9, level: 60, hp: 200, power: 100 },
+            RaidMember { id: 0x1DCD_6501, name: "Bo".into(), class: 0, level: 7, hp: 255, power: 0 },
+        ];
+        assert!(matches!(&ev[..], [Event::RaidRoster { total: 6, first: 2, rows }] if *rows == want), "{ev:?}");
+        m.pop();
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, m);
+        assert!(!ev.iter().any(|e| matches!(e, Event::RaidRoster { .. })), "a short one: {ev:?}");
     }
 
     // go-eqoa-server's offers and sets past 0x7E00 (0x7E01-0x7E06) are

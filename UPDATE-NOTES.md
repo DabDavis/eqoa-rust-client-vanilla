@@ -17,6 +17,15 @@ is put on the page by `.github/workflows/notes.yml`.
   the wheel still zooms. Your camera goes back as it was when you stop.
 - Turned off, you fall and walk as normal from where you are.
 
+## 2026-11-07 · The raid list
+- In a raid group, on a server that has them, the group's bars become a list of everyone in it: each
+  name over a thin health bar, in more columns as the raid grows, and past four columns the mouse wheel
+  over it steps through the rest. It sits where the bars do, with your pet's bar under it.
+- Click a name to target that member, when they are near enough for you to see. Someone out of sight is
+  greyed, your target's name is gold, your own is blue and the dead are red. L1's cycle reaches
+  everyone you can see too.
+- Options > Extended > UI > Raid List turns it off, and you get the game's bars, as on any other server.
+
 ## 2026-11-07 · Picking the disc on a phone
 - In a browser on an Android phone or any touch device, the disc image's picker now shows every file, as it
   already did on an iPhone. It could grey out an .iso before, so there was nothing to pick. The page still checks

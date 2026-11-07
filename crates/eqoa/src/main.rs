@@ -92,6 +92,7 @@ mod gram;
 mod hideui;
 mod livewords;
 mod hud;
+mod raidlist;
 mod damage;
 mod display;
 mod hudmenu;

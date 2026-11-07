@@ -856,6 +856,31 @@ impl Ui {
         }
     }
 
+    /// `text` drawn `scale` times its size from (x, y): its glyphs, their
+    /// widths and the pixel between them all scaled (1 is `text` exactly).
+    pub fn text_scaled(&mut self, font: usize, x: f32, y: f32, scale: f32, color: [f32; 4], s: &[u16]) {
+        let f = &self.fonts[font];
+        let (tex, h) = (f.tex, f.height as f32 * scale);
+        let mut x0 = x;
+        let mut quads = Vec::new();
+        for &c in s {
+            let Some(&(w, uv)) = f.find(c) else { return };
+            let x1 = x0 + w as f32 * scale;
+            quads.push(Quad {
+                tex,
+                blend: 3,
+                pos: [[x0, y], [x1, y], [x1, y + h], [x0, y + h]],
+                uv: [[uv[0], uv[1]], [uv[2], uv[1]], [uv[2], uv[3]], [uv[0], uv[3]]],
+                color,
+                clip: None,
+            });
+            x0 = x1 + scale;
+        }
+        for q in quads {
+            self.push(q);
+        }
+    }
+
     /// A quad cut only to the target, not to the frame or a viewport: for
     /// what floats over the world, which reaches past the frame's sides in a
     /// wider window. Its place is its own (no `anchor`).

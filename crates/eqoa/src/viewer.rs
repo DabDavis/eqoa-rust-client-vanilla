@@ -1919,6 +1919,9 @@ struct App {
     /// keyboard's dispatch, as a controller's button on a key's row is
     /// (`pad_rows`).
     key_script: Vec<(i64, String)>,
+    /// `EQOA_CLICKS=<x> <y>@<ms>[;...]`: a click at that window point then (ms on
+    /// `clock`), as the mouse's.
+    click_script: Vec<(i64, f64, f64)>,
     /// `EQOA_VSYNC_AT=<ms>;<ms>...`: when a test's script turns VSync over
     /// (ms on `clock`), as the Extended page's row does.
     vsync_script: Vec<i64>,
@@ -2083,6 +2086,17 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
             .unwrap_or_default(),
         target_script: std::env::var("EQOA_TARGET")
             .map(|v| v.split(';').filter_map(|s| s.rsplit_once('@').and_then(|(l, t)| Some((t.trim().parse().ok()?, l.to_string())))).collect())
+            .unwrap_or_default(),
+        click_script: std::env::var("EQOA_CLICKS")
+            .map(|v| {
+                v.split(';')
+                    .filter_map(|s| {
+                        let (at, t) = s.rsplit_once('@')?;
+                        let (x, y) = at.trim().split_once(' ')?;
+                        Some((t.trim().parse().ok()?, x.parse().ok()?, y.trim().parse().ok()?))
+                    })
+                    .collect()
+            })
             .unwrap_or_default(),
         key_script: std::env::var("EQOA_PLAY_KEYS")
             .map(|v| v.split(';').filter_map(|s| s.rsplit_once('@').and_then(|(k, t)| Some((t.trim().parse().ok()?, k.trim().to_string())))).collect())
@@ -4886,7 +4900,10 @@ impl App {
                 if self.walker.is_some() {
                     // over the chat box's history in view, its lines
                     let took = match (self.play.as_mut(), self.gfx.as_ref()) {
-                        (Some(p), Some(g)) => p.chat_wheel(self.cursor, (g.config.width, g.config.height), d),
+                        (Some(p), Some(g)) => {
+                            let size = (g.config.width, g.config.height);
+                            p.chat_wheel(self.cursor, size, d) || p.raid_wheel(self.cursor, size, d)
+                        }
                         _ => false,
                     };
                     if !took {
@@ -4931,6 +4948,11 @@ impl App {
                     crate::say(&format!("script: {key} pressed"));
                     self.keyboard(el, KeyIn::named(&key, true));
                     self.keyboard(el, KeyIn::named(&key, false));
+                }
+                while self.click_script.first().is_some_and(|c| c.0 <= self.clock.elapsed().as_millis() as i64) {
+                    let (_, x, y) = self.click_script.remove(0);
+                    crate::say(&format!("script: click at {x} {y}"));
+                    self.click(crate::mouse::Click::Target(x, y), false);
                 }
                 // the game's save icon on the window once SUPPORT has come (`icon`)
                 #[cfg(not(target_arch = "wasm32"))]

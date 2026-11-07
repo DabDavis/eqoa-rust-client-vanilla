@@ -2298,6 +2298,7 @@ impl Play {
                     let me = self.self_id32();
                     self.group.roster(&ids, &names, me);
                 }
+                Event::RaidRoster { total, first, rows } => self.group.raid_page(total, first, rows),
                 Event::GroupInvite { id, name, .. } => {
                     // Msg0773: refused at once while in a group
                     if self.group.in_group {
@@ -2783,6 +2784,7 @@ impl Play {
             }
         }
         self.agree_entity_view();
+        self.agree_raid_roster();
         self.drop_dead_target_info();
         if self.has_self() {
             self.auto_attack_tick(walker, now);
@@ -3428,7 +3430,13 @@ impl Play {
     /// a narrower one draws it at the game's (Vert+).
     pub fn cycle_target(&mut self, group: bool, eye: glam::Vec3, dir: glam::Vec3, game: glam::Mat4, view_proj: glam::Mat4) {
         let me = self.self_id32();
-        let members: Vec<u32> = self.group.members[..self.group.count()].iter().map(|m| m.id).collect();
+        let mut members: Vec<u32> = self.group.members[..self.group.count()].iter().map(|m| m.id).collect();
+        // a raid group's others the client can see (the Raid List)
+        for m in &self.group.raid {
+            if !members.contains(&m.id) && self.entities.slots.iter().flatten().any(|e| e.id == m.id) {
+                members.push(m.id);
+            }
+        }
         let mut cand: Vec<(f32, u32)> = Vec::new();
         if group {
             cand.extend(me.map(|id| (0.0, id)));
@@ -4112,6 +4120,9 @@ impl Play {
             let id = match pick {
                 Some(crate::hud::Pick::Me) => self.self_id32(),
                 Some(crate::hud::Pick::Member(id)) => Some(id),
+                // the raid list's: only one the client can see (out of sight its
+                // id is a stand-in, nothing to target)
+                Some(crate::hud::Pick::Raid(id)) => Some(id).filter(|&id| self.sees_entity(id)),
                 Some(crate::hud::Pick::Pet) => (self.pet_id != u32::MAX).then_some(self.pet_id),
                 None => return false,
             };
@@ -7535,6 +7546,12 @@ impl Play {
                     crate::hud::MemberState { id: m.id, name: m.name.clone(), is_target: m.id == self.target, hp: (m.hp_known != 0).then_some((m.hp, flags & 4 != 0, flags & 8 != 0)) }
                 })
                 .collect(),
+            raid: self
+                .group
+                .raid
+                .iter()
+                .map(|m| crate::raidlist::Row { id: m.id, name: m.name.clone(), hp: m.hp, is_target: m.id == self.target, seen: self.sees_entity(m.id), me: Some(m.id) == me })
+                .collect(),
             patches: self.group.members[..self.group.count()]
                 .iter()
                 .enumerate()
@@ -7826,6 +7843,27 @@ impl Play {
     /// its next pass; what was past a lowered number is dropped here at once,
     /// and its puppets with it). The view distance draws farther on any
     /// server (`lod::view_dist`); only one that offered sends from farther.
+    /// The Raid List: the server told what the Extended row says, and off, what it
+    /// sent forgotten (`group.bars` are drawn again).
+    fn agree_raid_roster(&mut self) {
+        let want = crate::settings::raid_list();
+        self.session.agree_raid_roster(want);
+        if !want {
+            self.group.raid_page(0, 0, Vec::new());
+        }
+    }
+
+    /// The wheel's `lines` over the raid list (`Hud::raid_wheel`).
+    pub fn raid_wheel(&mut self, at: (f64, f64), size: (u32, u32), lines: f32) -> bool {
+        let f = render::ui::frame_from_window(size, [at.0 as f32, at.1 as f32]);
+        self.mode == 0 && self.hud.as_mut().is_some_and(|h| h.2.raid_wheel(f, lines))
+    }
+
+    /// Whether the client can see `id`: an entity's on a slot, or its own.
+    fn sees_entity(&self, id: u32) -> bool {
+        Some(id) == self.self_id32() || self.entities.slots.iter().flatten().any(|e| e.id == id)
+    }
+
     fn agree_entity_view(&mut self) {
         let offer = self.session.entity_view_offer;
         let n = offer.map_or(RETAIL_SLOTS, |(most, _)| crate::settings::entity_slots().min(most as usize)).clamp(RETAIL_SLOTS, MAX_SLOTS);
@@ -8855,6 +8893,55 @@ mod commands {
         assert_eq!(order(&mut p, game, wide), [a, b, c, a], "measured by the game's camera, in view as drawn");
         assert_eq!(order(&mut p, game, tall), [a, b, a, b], "narrower than 4:3: C out of view");
         assert_eq!(order(&mut p, wide, wide), [b, a, c, b], "the control: measured as drawn, B first");
+    }
+
+    /// The raid list's: the wholeness of the roster, what a click may target, L1's
+    /// cycle over those the client can see and Tab past them; off, the server told
+    /// and what it sent forgotten. The controls: one out of sight, a player no one's
+    /// group holds, and the roster's own four as ever.
+    #[test]
+    fn a_raid_group_reaches_past_the_roster_for_those_it_sees() {
+        use net::entity::{Entity, TYPE_CREATURE};
+        use net::session::RaidMember;
+        let mut p = play();
+        crate::settings::set_client(crate::settings::ClientOptions::default());
+        let me = 0x1DCD_6501;
+        p.session.self_id = Some(u64::from(me));
+        grouped(&mut p, &[0x100, me, 0x101, 0x102]);
+        let at = |id: u32, x: f32| {
+            Some(Entity { id, kind: TYPE_CREATURE, creature: Some(net::entity::Creature { name: format!("{id:x}"), ..Default::default() }), p18: 1, actor_pos: [x, 0.0, -12.0], ..Default::default() })
+        };
+        p.entities.slots[0] = at(0x100, 0.0);
+        p.entities.slots[1] = at(0x103, 3.0); // a raid member past the roster, in sight
+        p.entities.slots[2] = at(0x200, -3.0); // a stranger
+        let row = |id: u32| RaidMember { id, name: format!("m{id}"), ..Default::default() };
+        p.group.raid_page(5, 0, vec![row(0x100), row(me), row(0x101), row(0x103), row(0x7F00_0104)]);
+        assert!(p.sees_entity(0x103) && p.sees_entity(me), "in sight, and itself");
+        assert!(!p.sees_entity(0x7F00_0104), "out of sight: its id is a stand-in");
+        let cycle = |p: &mut Play, group: bool| -> Vec<u32> {
+            let view = glam::camera::rh::view::look_to_mat4(glam::Vec3::ZERO, glam::Vec3::NEG_Z, glam::Vec3::Y);
+            let m = crate::walker::projection_to(4.0 / 3.0, 6000.0) * view;
+            (0..7)
+                .map(|_| {
+                    p.cycle_target(group, glam::Vec3::ZERO, glam::Vec3::NEG_Z, m, m);
+                    p.target
+                })
+                .collect()
+        };
+        let group = cycle(&mut p, true);
+        assert!(group.contains(&0x103), "L1 reaches the raid member it sees: {group:x?}");
+        assert!(!group.contains(&0x7F00_0104), "not one out of sight: {group:x?}");
+        assert!(!group.contains(&0x200), "not a stranger: {group:x?}");
+        let tab = cycle(&mut p, false);
+        assert!(tab.contains(&0x200), "Tab finds the stranger: {tab:x?}");
+        assert!(!tab.contains(&0x103), "and passes the raid member: {tab:x?}");
+        // off: the server told, what it sent forgotten, L1 back to the roster
+        p.session.raid_roster_offer = true;
+        crate::settings::set_client(crate::settings::ClientOptions { raid_list: false, ..Default::default() });
+        p.agree_raid_roster();
+        assert!(p.group.raid.is_empty());
+        assert!(!cycle(&mut p, true).contains(&0x103), "the control: the roster's own");
+        crate::settings::set_client(crate::settings::ClientOptions::default());
     }
 
     fn grouped(p: &mut Play, ids: &[u32]) {
