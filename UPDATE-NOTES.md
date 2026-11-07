@@ -5,6 +5,15 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-07 · Copy and paste
+- Any text box in the game (the chat line, Support and F3, mail, a tell, names) takes Ctrl+V to paste
+  at the caret, Ctrl+C to copy what it holds and Ctrl+X to cut it (Cmd on a Mac), in the program and
+  in a browser.
+- Text you paste is kept to what the game's own keyboard can type: letters, digits, a space and
+  ! " % ' ( ) * + , - . / : ; = ? @ _ ~. Other characters are left out, line ends and tabs become
+  spaces, and curly quotes and long dashes become plain ones. It stops at the box's own length.
+- A password's box can be pasted into, but not copied or cut.
+
 ## 2026-11-06 · Macros
 - The Controls page (Options > Controls, or F1 while you play) has sixteen macros after its keys. A
   macro presses a set of the game's buttons for you, all at once as a controller would, when you

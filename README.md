@@ -32,6 +32,10 @@ or a browser (each described where it lives below):
 - **The keyboard**, with WASD walking, and the options' **Controls** page: every
   key and button can be moved, and a controller's button can take any of the
   keyboard's own actions (Hide UI, F9's art).
+- **Copy and paste in the text boxes** (the user's of 2026-11-07, `clipboard`, `editbox`): Ctrl+V,
+  Ctrl+C, Ctrl+X (⌘ on a Mac), natively and in a page (not on Android, whose keyboard pastes as
+  typing). A paste takes only what a console's keyboard can type, because the line reaches consoles:
+  a PS2's text box writes past its stack on a run of `|x` (`editbox::typable`).
 - **1,000 lines of chat history** (the game's ring holds 31).
 - **The start menu's windows over the world**, with no green backdrop behind
   them.
