@@ -361,13 +361,16 @@ addEventListener('keydown', (e) => {
   const which = /^[a-z]$/i.test(e.key) ? e.key.toLowerCase() : { KeyV: 'v', KeyC: 'c', KeyX: 'x' }[e.code];
   if (!['v', 'c', 'x'].includes(which)) return;
   if (!field_up()) {
-    const lines = which === 'c' ? chat_copy_text() : null;
+    // (text picked on the page itself is the browser's to copy; a page not served
+    // over https has no clipboard to write to)
+    const free = navigator.clipboard && document.getSelection().isCollapsed;
+    const lines = which === 'c' && free ? chat_copy_text() : null;
     if (lines === undefined || lines === null) return;
     e.stopImmediatePropagation();
     e.preventDefault();
     if (e.repeat) return;
     copyKey = e.code;
-    if (navigator.clipboard) navigator.clipboard.writeText(lines).catch((err) => console.log(`copy: ${err && err.message}`));
+    navigator.clipboard.writeText(lines).catch((err) => console.log(`copy: ${err && err.message}`));
     chat_copied();
     return;
   }

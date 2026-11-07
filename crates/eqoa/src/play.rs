@@ -4140,10 +4140,9 @@ impl Play {
     }
 
     /// A mouse button down in the world at window pixels `at` (`left`: the left
-    /// one, with no other held): on one of the chat box's lines, in play or its
-    /// history, it is the box's (`chat`) and the mouse's gesture is none of it,
-    /// which is true here; anywhere else any selection clears, and the press
-    /// goes on as ever.
+    /// one, with no other held). True when it is the chat box's (`chat`), on one of
+    /// its lines in play or in its history, and so none of the mouse's gesture;
+    /// anywhere else any selection clears, and the press goes on as ever.
     pub fn chat_press(&mut self, at: (f64, f64), size: (u32, u32), left: bool) -> bool {
         let lines = ((self.mode == 0 && !self.search.open) || self.mode == 33) && !crate::hideui::hidden();
         let scrolling = self.mode == 33;
