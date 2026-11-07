@@ -119,6 +119,16 @@ or a browser (each described where it lives below):
   server's word for it (the user, 2026-11-07: "my race says ogre, but lets make
   it Hill Giant, Titan as MC"). Its camera and what it may wear stay the race it
   passes as.
+- **The combat record**, on a server that keeps one (go-eqoa-server's offer, 0x7E20,
+  and its record, 0x7E21; Sandstorm and eqoa.live have none, and show no entry): the
+  start menu's Character > Combat Record, the client's own window (`record.rs`,
+  `recordplay.rs`; the user, 2026-11-07: "lets add a combat record for pvp and duels to
+  the menu for players, has lifetime kills, deaths, etc."): the character's lifetime
+  PvP (kills, deaths, assists, the kill streak and the best, the best, last kill and
+  last death) and duels (won, lost, surrendered, drawn, the tunar its wagers won and
+  lost), asked for as it opens and drawn as the server words it, under a title bar as
+  the game's windows are; Triangle goes back. The server's `/record` and the info
+  window's lines are every client's.
 - **More NPCs and players in view, and farther**: the Extended page's NPC/PC
   Display, the game's 24 up to 204, on a server that offers more
   (go-eqoa-server does; Sandstorm and eqoa.live keep the game's 24), and

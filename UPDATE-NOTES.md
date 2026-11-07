@@ -6,6 +6,14 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-07 · Your combat record
+- On a server that keeps one, the start menu's Character has a new entry, Combat Record: your PvP kills,
+  deaths and assists, your kill streak and your best, the highest-level player you have killed, your last
+  kill and who last killed you, and your duels won, lost, surrendered and drawn, with the tunar your wagers
+  won and lost. Triangle (or Esc) goes back to the start menu.
+- It counts from when the server started keeping it, for each of your characters on that server. In chat,
+  /record shows yours and /record with a name anyone's.
+
 ## 2026-11-07 · More races to make
 - On a server that has them (the Heirloom Test Server), character creation offers more races: the froglok,
   hill giant, kerran, goblin, aviak, lizardman and kappa, each in the list in its alphabetical place with

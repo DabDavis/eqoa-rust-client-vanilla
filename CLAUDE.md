@@ -21,7 +21,9 @@ current.
   on 2026-10-27), and the live game's duel window on a server that turns duels on (the user's of
   2026-10-29, "port the duel window to vanilla too": `duel.rs`, `duelwnd.rs`, `duelplay.rs`, read off SOE's
   final CLIENT in the Corsten save state, README "duels"), and a GM's flight on a server that turns it on (the
-  user's of 2026-11-07, "lets add a gm fly command": `walker.rs`, never in `vi`)).
+  user's of 2026-11-07, "lets add a gm fly command": `walker.rs`, never in `vi`), and the combat record's window on a
+  server that keeps one (the user's of 2026-11-07, "lets add a combat record for pvp and duels to the menu": Character >
+  Combat Record, `record.rs`, `recordplay.rs`, the server's rows by 0x7E20/0x7E21)).
   A new client-side addition is the user's call: ask first. Sharp filtering is for the 2D layer and
   the text only: the world's textures are drawn smooth, as the game filters them (the user,
   2026-10-27, after a Crisp row for them: "world textures cant render proper without smooth. so

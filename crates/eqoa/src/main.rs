@@ -128,6 +128,7 @@ mod quantity;
 mod questlog;
 mod quickchat;
 mod racelabel;
+mod record;
 mod alarm;
 mod startmenu;
 mod textlist;
