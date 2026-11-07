@@ -1842,6 +1842,9 @@ struct App {
     /// Alt held (`ModifiersChanged`), for Alt+Enter (`display`), and an
     /// Enter it took, whose release is its too
     alt_held: bool,
+    /// Ctrl held (`ModifiersChanged`), for the clipboard's keys (`clipboard_key`)
+    #[cfg(any(target_os = "linux", windows))]
+    ctrl_held: bool,
     alt_enter_down: bool,
     pad_script: Option<crate::input::Script>,
     /// The player's own keys and buttons (`binds`) at the input's edge: what
@@ -2038,6 +2041,8 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         #[cfg(target_os = "macos")]
         super_held: false,
         alt_held: false,
+        #[cfg(any(target_os = "linux", windows))]
+        ctrl_held: false,
         alt_enter_down: false,
         pad_script: crate::input::Script::from_env(),
         keys_edge: Default::default(),
@@ -3172,6 +3177,50 @@ impl App {
         self.load();
     }
 
+    /// Ctrl+V, Ctrl+C and Ctrl+X (⌘ on a Mac) while an edit box is on the screen:
+    /// paste at its caret, copy what it holds, cut it (`clipboard`, `editbox`). A
+    /// key this takes goes no further, its repeat too. With no edit box up they
+    /// are the keys they always were. A page's are the browser's (`web/main.js`).
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    fn clipboard_key(&mut self, e: &KeyEvent) -> bool {
+        use winit::keyboard::{KeyCode, PhysicalKey};
+        #[cfg(target_os = "macos")]
+        let held = self.super_held;
+        #[cfg(not(target_os = "macos"))]
+        let held = self.ctrl_held;
+        if !held || e.state != ElementState::Pressed || !crate::editbox::field_up() {
+            return false;
+        }
+        // by the letter, or where it is on a keyboard that has no Latin letters
+        let which = match &e.logical_key {
+            Key::Character(c) if c.is_ascii() => c.to_ascii_lowercase(),
+            _ => match e.physical_key {
+                PhysicalKey::Code(KeyCode::KeyV) => "v".to_string(),
+                PhysicalKey::Code(KeyCode::KeyC) => "c".to_string(),
+                PhysicalKey::Code(KeyCode::KeyX) => "x".to_string(),
+                _ => return false,
+            },
+        };
+        if !matches!(which.as_str(), "v" | "c" | "x") {
+            return false;
+        }
+        if e.repeat {
+            return true;
+        }
+        match which.as_str() {
+            "v" => crate::clipboard::paste(),
+            _ => {
+                if let Some(text) = crate::editbox::field_text() {
+                    crate::clipboard::copy(text);
+                    if which == "x" {
+                        crate::editbox::ask_cut();
+                    }
+                }
+            }
+        }
+        true
+    }
+
     /// The keyboard's dispatch below the player's own keys (`binds`): a key as
     /// the window's event gives it, or one the client sends itself (a
     /// release the system never sent, `let_go_keys`; a controller's button on
@@ -3866,9 +3915,12 @@ impl App {
                     t.pop();
                     return;
                 }
+                // this stand-in line has no `EditBox`, so its limits are held
+                // here: what a console's keyboard can type, 127 as its chat line
                 (Some(t), _) => {
                     if let Some(s) = &event.text {
-                        t.push_str(s);
+                        let room = 127usize.saturating_sub(t.chars().count());
+                        t.extend(s.chars().filter(|&c| crate::editbox::typable(c)).take(room));
                     }
                     return;
                 }
@@ -4592,6 +4644,10 @@ impl App {
         // a key: the keyboard's dispatch (`key_input`), which takes the
         // client's own keys too (an Android activity's, `android`)
         if let WindowEvent::KeyboardInput { event: e, is_synthetic, .. } = &event {
+            #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+            if !*is_synthetic && self.clipboard_key(e) {
+                return;
+            }
             let k = KeyIn::of(e);
             self.key_input(el, k, *is_synthetic);
             return;
@@ -4626,6 +4682,10 @@ impl App {
             // item took it, asking as Settings… does (`macos`)
             WindowEvent::ModifiersChanged(m) => {
                 self.alt_held = m.state().alt_key();
+                #[cfg(any(target_os = "linux", windows))]
+                {
+                    self.ctrl_held = m.state().control_key();
+                }
                 #[cfg(target_os = "macos")]
                 {
                     self.super_held = m.state().super_key();
@@ -4747,6 +4807,8 @@ impl App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                crate::editbox::frame_begin();
+                crate::clipboard::poll();
                 crate::bugnote::frame_drawn(self.clock.elapsed().as_secs_f64() * 1000.0);
                 if !self.unfocus_script.is_empty() {
                     self.unfocus_script(el);

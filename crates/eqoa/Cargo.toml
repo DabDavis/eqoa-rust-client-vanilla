@@ -52,6 +52,10 @@ sha2 = "0.10.9"
 # Android the activity's picker, `android`.)
 [target.'cfg(any(target_os = "linux", target_os = "macos", windows))'.dependencies]
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
+# The clipboard for the edit boxes (`clipboard`): X11, Wayland's data-control
+# where the compositor has it, Windows' and a Mac's own. A page uses the
+# browser's, Android has none.
+arboard = { version = "3.6", default-features = false, features = ["wayland-data-control"] }
 
 # Android: winit on the platform's NativeActivity, and JNI both ways between
 # the game and its activity (`android`), the version cpal's AAudio brings.

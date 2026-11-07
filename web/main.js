@@ -5,7 +5,7 @@
 // override the defaults: ?relay=ws://127.0.0.1:8790&server=203.0.113.10 for a
 // local server. Notices and what goes wrong are notices.js's
 // (window.eqoaNotices).
-import init, { boot, view, disc_id, disc_2002, update_notices, hidden_tick } from './eqoa.js';
+import init, { boot, view, disc_id, disc_2002, update_notices, hidden_tick, field_up, field_text, field_cut, field_paste } from './eqoa.js';
 import { canRemember, keptHandle, keepHandle, forgetHandle } from './discstore.js';
 
 const $ = (id) => document.getElementById(id);
@@ -331,6 +331,48 @@ const typeHere = () => {
   typedRest();
   typed.focus({ preventScroll: true });
 };
+
+// The clipboard for the game's edit boxes: Ctrl+V, Ctrl+C, Ctrl+X (Cmd on a Mac),
+// while one is on the screen. They stop here, before the canvas: winit would keep
+// the browser from its paste, and the paste event is the one way to read the
+// clipboard that asks the player nothing. For it the focus goes to the hidden
+// input, as every browser fires it there, and the text goes to the client whole,
+// which keeps only what a console's keyboard can type (`editbox::paste_chars`). A
+// phone's paste into that input comes the same way.
+let pasteBack = null;
+const pasteDone = () => {
+  if (pasteBack) pasteBack.focus({ preventScroll: true });
+  pasteBack = null;
+};
+addEventListener('keydown', (e) => {
+  if (!clientReady || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+  const which = { KeyV: 'v', KeyC: 'c', KeyX: 'x' }[e.code] || e.key.toLowerCase();
+  if (!['v', 'c', 'x'].includes(which) || !field_up()) return;
+  e.stopImmediatePropagation();
+  if (e.repeat) return;
+  if (which === 'v') {
+    if (document.activeElement !== typed) {
+      pasteBack = document.activeElement;
+      typedRest();
+      typed.focus({ preventScroll: true });
+      // nothing to paste fires no event: the keys go back to where they were
+      setTimeout(pasteDone, 100);
+    }
+    return;
+  }
+  const text = field_text();
+  if (text === undefined || text === null) return;
+  e.preventDefault();
+  if (navigator.clipboard) navigator.clipboard.writeText(text).catch((err) => console.log(`copy: ${err && err.message ? err.message : err}`));
+  if (which === 'x') field_cut();
+}, true);
+typed.addEventListener('paste', (e) => {
+  const text = e.clipboardData && e.clipboardData.getData('text/plain');
+  if (text === undefined || text === null || !clientReady) return;
+  e.preventDefault();
+  field_paste(text);
+  pasteDone();
+});
 let lastTouch = false;
 window.eqoaWantText = (on) => {
   wantText = !!on;

@@ -40,6 +40,104 @@ pub fn pad_only() -> bool {
     PAD_ONLY.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Whether a console's own keyboard can put this character in an edit box:
+/// what `OnKeyDown` types and what `sKeys` holds (`*` is the soft keyboard's
+/// alone). Nothing else reaches a console from one of its own players, and a
+/// paste may send it nothing else either: of the rest, `|` is what can bring a
+/// console down. Its text box draws `|x` as a button's glyph, so a run of them
+/// has no width, the line never wraps, and `VIUIWindow::TextBox` writes its
+/// terminator past its 256 characters and over its own stack: a gram of 360
+/// characters of `|+` killed the game as it was opened (tried in the tracer,
+/// 2026-11-07, through the read window's `CountLines`).
+pub fn typable(c: char) -> bool {
+    c.is_ascii_alphanumeric() || " !\"%'()*+,-./:;=?@_~".contains(c)
+}
+
+/// The most of a clipboard read: past any editor's length (512).
+const PASTE_MOST: usize = 4096;
+
+/// A clipboard's text as an edit box takes it: a line end or a tab a space (a
+/// Windows `\r\n` one), a typographer's quote, dash, ellipsis or space as the
+/// keyboard's own, and whatever else a console's keyboard cannot type left out
+/// ([`typable`]).
+pub fn paste_chars(text: &str) -> String {
+    let mut out = String::new();
+    let mut last_cr = false;
+    for c in text.chars().take(PASTE_MOST) {
+        let cr = c == '\r';
+        match c {
+            '\n' if last_cr => {}
+            '\r' | '\n' | '\t' | '\u{a0}' | '\u{2002}'..='\u{200a}' | '\u{202f}' | '\u{3000}' => out.push(' '),
+            '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{2032}' => out.push('\''),
+            '\u{201c}' | '\u{201d}' | '\u{201e}' | '\u{2033}' => out.push('"'),
+            '\u{2010}'..='\u{2015}' | '\u{2212}' => out.push('-'),
+            '\u{2026}' => out.push_str("..."),
+            c if typable(c) => out.push(c),
+            _ => {}
+        }
+        last_cr = cr;
+    }
+    out
+}
+
+/// What a clipboard key asks of the edit box on the screen.
+enum Ask {
+    Paste(String),
+    Cut,
+}
+
+/// The edit box on the screen, as the clipboard's keys find it: whichever
+/// window's it is, the one drawn. Each frame `frame_begin` starts, and `draw`
+/// takes what was asked of it and says what it holds.
+#[derive(Default)]
+struct Field {
+    /// drawn this frame, and in the last
+    up: bool,
+    was_up: bool,
+    /// what the last drawn holds; `None` for a password's, never copied
+    text: Option<String>,
+    asks: Vec<Ask>,
+}
+
+thread_local! {
+    static FIELD: std::cell::RefCell<Field> = std::cell::RefCell::default();
+}
+
+/// A frame begins: what was asked of an edit box no longer drawn is dropped, so
+/// it does not land in the next one opened.
+pub fn frame_begin() {
+    FIELD.with_borrow_mut(|f| {
+        f.was_up = f.up;
+        f.up = false;
+        if !f.was_up {
+            f.asks.clear();
+            f.text = None;
+        }
+    });
+}
+
+/// An edit box is on the screen: the clipboard's keys are its.
+pub fn field_up() -> bool {
+    FIELD.with_borrow(|f| f.was_up || f.up)
+}
+
+/// What the edit box on the screen holds, for Copy and Cut: `None` with none up,
+/// or for a password's, or with nothing in it.
+pub fn field_text() -> Option<String> {
+    FIELD.with_borrow(|f| if f.was_up || f.up { f.text.clone().filter(|t| !t.is_empty()) } else { None })
+}
+
+/// Paste: the text goes in at the caret as the edit box next draws.
+pub fn ask_paste(text: String) {
+    FIELD.with_borrow_mut(|f| f.asks.push(Ask::Paste(text)));
+}
+
+/// Cut's second half: the edit box emptied as it next draws (Copy's half is
+/// [`field_text`], the caller's).
+pub fn ask_cut() {
+    FIELD.with_borrow_mut(|f| f.asks.push(Ask::Cut));
+}
+
 /// What the editor tells its parent.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum EditUp {
@@ -223,6 +321,36 @@ impl EditBox {
             return true;
         }
         false
+    }
+
+    /// Paste: the clipboard's text in at the caret ([`paste_chars`]), each
+    /// character taken as `InsertChar` takes a typed one, so the box's length and
+    /// its no-spaces hold. Reports how many went in.
+    pub fn paste(&mut self, text: &str, now: i64) -> usize {
+        paste_chars(text).chars().filter(|&c| self.insert(c as u16, now)).count()
+    }
+
+    /// What was asked of this box on the screen (`Field`): one cue for it all,
+    /// where typing has one a character.
+    fn take_asks(&mut self, now: i64, cues: &mut Vec<i32>) {
+        for ask in FIELD.with_borrow_mut(|f| {
+            f.up = true;
+            std::mem::take(&mut f.asks)
+        }) {
+            let ok = match ask {
+                Ask::Paste(text) => self.paste(&text, now) > 0,
+                Ask::Cut => {
+                    let ok = !self.password && !self.text.is_empty();
+                    if ok {
+                        self.clear();
+                    }
+                    ok
+                }
+            };
+            Self::sound(ok, cues);
+        }
+        let text = (!self.password).then(|| String::from_utf16_lossy(&self.text));
+        FIELD.with_borrow_mut(|f| f.text = text);
     }
 
     fn backspace(&mut self, now: i64) -> bool {
@@ -617,6 +745,7 @@ impl EditBox {
 
     /// `OnDrawSelf`.
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, now: i64, cues: &mut Vec<i32>) {
+        self.take_asks(now, cues);
         let dt = (now - self.time) as f32 * 0.001;
         self.time = now;
         self.alpha = (self.alpha + dt * 5.0).min(1.0);
@@ -849,6 +978,140 @@ mod tests {
 
     /// `InsertChar`: spaces refused where not allowed, the buffer kept one
     /// short for the terminator.
+    /// Everything a console's own keyboard can put in, and nothing else
+    /// (`OnKeyDown`'s list and `sKeys`, viwndedit.cpp): a console has no way to
+    /// type a `|`, and its text box cannot take a run of them.
+    #[test]
+    fn typable_is_the_consoles_keyboard() {
+        let mut soft: Vec<char> = KEYS.iter().filter(|&&k| k > 16).map(|&k| k as char).collect();
+        soft.extend("-~,\"_' ".chars()); // the soft keyboard's special keys (11-16, 2)
+        for c in soft {
+            assert!(typable(c), "the soft keyboard's {c:?}");
+        }
+        for c in "abcxyzABCXYZ0189!\"%'()+,-./:;=?@_~".chars() {
+            assert!(typable(c), "the keyboard's {c:?}");
+        }
+        for c in "|#$&<>[]\\^`{}\n\r\t\u{0}\u{7f}\u{e9}\u{4e2d}\u{1f600}".chars() {
+            assert!(!typable(c), "{c:?}");
+        }
+    }
+
+    #[test]
+    fn a_paste_holds_to_it() {
+        // ordinary text is as it was
+        let plain = "Hail Lord Nagafen! 50% (of 1,000): don't-stop/go? a=b; c+d*e @f_g ~h \"i\".";
+        assert_eq!(paste_chars(plain), plain);
+        // the character that brings a console down, and the rest of what it has no key for
+        assert_eq!(paste_chars("|+|+|t||x|"), "++tx");
+        assert_eq!(paste_chars("a#b$c&d<e>f[g]h\\i^j`k{l}m"), "abcdefghijklm");
+        // line ends and tabs as spaces, one for a Windows line end
+        assert_eq!(paste_chars("one\r\ntwo\nthree\rfour\tfive"), "one two three four five");
+        // what a web page or a word processor puts in, as the keyboard's own
+        assert_eq!(paste_chars("don\u{2019}t \u{201c}go\u{201d} \u{2013} now\u{2026}\u{a0}ok"), "don't \"go\" - now... ok");
+        // what no keyboard here has: emoji, other scripts, surrogate pairs' worth, controls, a NUL
+        assert_eq!(paste_chars("a\u{1f600}b\u{4e2d}c\u{e9}d\u{0}e\u{7}f\u{202e}g"), "abcdefg");
+        // a clipboard of a whole book costs what the longest box does
+        assert!(paste_chars(&"a".repeat(1 << 20)).len() == PASTE_MOST);
+    }
+
+    #[test]
+    fn a_paste_goes_in_at_the_caret_up_to_the_boxs_length() {
+        let mut e = EditBox::default();
+        e.set_max_length(128);
+        e.set_text(&wide("Hello world"));
+        e.set_cursor(6);
+        assert_eq!(e.paste("big |+wide ", 0), 10);
+        assert_eq!(e.text, wide("Hello big +wide world"));
+        assert_eq!(e.cursor, 16, "the caret after what went in");
+        // the box's own length: one short of its buffer, as typing
+        let mut e = EditBox::default();
+        e.set_max_length(8);
+        assert_eq!(e.paste("abcdefghijkl", 0), 7);
+        assert_eq!(e.text, wide("abcdefg"));
+        // a name's box takes no space, as typing
+        let mut e = EditBox::default();
+        e.set_max_length(13);
+        e.allow_spaces = false;
+        e.paste("Sir Robin", 0);
+        assert_eq!(e.text, wide("SirRobin"));
+        // a mail's body too: line ends as spaces
+        let mut e = EditBox::default();
+        e.set_multi_line(true);
+        e.set_max_length(512);
+        e.paste("HP: 11450\r\nDUR: 50", 0);
+        assert_eq!(e.text, wide("HP: 11450 DUR: 50"));
+    }
+
+    /// The hostile mail of the tracer's crash can no longer be pasted: not one
+    /// bar of the 360 characters goes in.
+    #[test]
+    fn the_crashing_gram_cannot_be_pasted() {
+        let mut e = EditBox::default();
+        e.set_multi_line(true);
+        e.set_max_length(512);
+        e.paste(&"|+".repeat(180), 0);
+        assert!(!e.text.contains(&(b'|' as u16)));
+    }
+
+    /// The clipboard's keys go to the box on the screen, whichever it is; one
+    /// no longer drawn neither says what it held nor takes a paste asked of it.
+    #[test]
+    fn the_box_on_the_screen_answers_the_clipboard() {
+        let mut cues = Vec::new();
+        frame_begin();
+        frame_begin();
+        assert!(!field_up());
+        assert_eq!(field_text(), None);
+        let mut e = EditBox::default();
+        e.set_max_length(128);
+        e.set_text(&wide("typed"));
+        frame_begin();
+        e.take_asks(0, &mut cues);
+        assert!(field_up());
+        assert_eq!(field_text().as_deref(), Some("typed"));
+        // paste, one cue for all of it
+        ask_paste(" more".to_string());
+        frame_begin();
+        e.take_asks(0, &mut cues);
+        assert_eq!(e.text, wide("typed more"));
+        assert_eq!(cues, [11]);
+        assert_eq!(field_text().as_deref(), Some("typed more"));
+        // cut
+        cues.clear();
+        ask_cut();
+        frame_begin();
+        e.take_asks(0, &mut cues);
+        assert!(e.text.is_empty());
+        assert_eq!(cues, [11]);
+        assert_eq!(field_text(), None, "nothing in it to copy");
+        // a password's is never copied or cut
+        let mut p = EditBox::default();
+        p.password = true;
+        p.set_text(&wide("secret"));
+        frame_begin();
+        p.take_asks(0, &mut cues);
+        assert_eq!(field_text(), None);
+        ask_cut();
+        frame_begin();
+        p.take_asks(0, &mut cues);
+        assert_eq!(p.text, wide("secret"));
+        // pasting into one is fine
+        ask_paste("!".to_string());
+        frame_begin();
+        p.take_asks(0, &mut cues);
+        assert_eq!(p.text, wide("secret!"));
+        // the box closed: what was asked of it is dropped, not left for the next
+        ask_paste("late".to_string());
+        frame_begin(); // drawn no more
+        frame_begin();
+        assert!(!field_up());
+        let mut next = EditBox::default();
+        next.set_max_length(128);
+        frame_begin();
+        next.take_asks(0, &mut cues);
+        assert!(next.text.is_empty());
+    }
+
     #[test]
     fn insert_keeps_room_for_the_terminator() {
         let mut e = EditBox::default();

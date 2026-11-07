@@ -180,6 +180,33 @@ pub fn want_text(on: bool) {
     call_page("eqoaWantText", &JsValue::from_bool(on));
 }
 
+/// An edit box is on the screen: the page's clipboard keys are its (main.js).
+#[wasm_bindgen]
+pub fn field_up() -> bool {
+    crate::editbox::field_up()
+}
+
+/// What the edit box on the screen holds, for Copy and Cut; none for a password.
+#[wasm_bindgen]
+pub fn field_text() -> Option<String> {
+    crate::editbox::field_text()
+}
+
+/// Cut's second half: the edit box on the screen emptied.
+#[wasm_bindgen]
+pub fn field_cut() {
+    crate::editbox::ask_cut();
+}
+
+/// Paste: the browser's `paste` event's text into the edit box on the screen, as
+/// `editbox::paste_chars` lets it.
+#[wasm_bindgen]
+pub fn field_paste(text: String) {
+    if crate::editbox::field_up() {
+        crate::editbox::ask_paste(text);
+    }
+}
+
 /// The keys coming now are the device's own keyboard's, not a keyboard's:
 /// the page's input for the game's edit boxes has the focus (`want_text`).
 pub fn device_keyboard() -> bool {

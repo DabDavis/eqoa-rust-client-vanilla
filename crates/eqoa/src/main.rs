@@ -75,6 +75,7 @@ mod icon_art;
 #[cfg(not(target_arch = "wasm32"))]
 mod saveicon;
 mod editbox;
+mod clipboard;
 mod fog;
 mod frames;
 mod group;
