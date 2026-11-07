@@ -346,7 +346,8 @@ const pasteDone = () => {
 };
 addEventListener('keydown', (e) => {
   if (!clientReady || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
-  const which = { KeyV: 'v', KeyC: 'c', KeyX: 'x' }[e.code] || e.key.toLowerCase();
+  // by the letter, or where it is on a keyboard with no Latin letters
+  const which = /^[a-z]$/i.test(e.key) ? e.key.toLowerCase() : { KeyV: 'v', KeyC: 'c', KeyX: 'x' }[e.code];
   if (!['v', 'c', 'x'].includes(which) || !field_up()) return;
   e.stopImmediatePropagation();
   if (e.repeat) return;
