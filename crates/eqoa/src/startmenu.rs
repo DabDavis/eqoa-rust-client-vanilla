@@ -962,6 +962,27 @@ impl StartData {
         }
     }
 
+    /// Character > Combat Record (`record`), the client's own entry, put last in
+    /// every Character menu (title word 415: on the disc Summary and Tradeskills,
+    /// and with the expansion's Class Mastery and Factions) or taken out. Its words are set at run time
+    /// (`Menus::labels`): the game has none. The client shows it while the server
+    /// offers the record (`recordplay`).
+    pub fn set_record(&mut self, on: bool) {
+        use crate::client_image::{Label, MenuEntry};
+        let msg = crate::record::MSG_RECORD;
+        self.menus.labels.insert((msg, 0), Label { text: vi::ui::wide(crate::record::ENTRY), ..Default::default() });
+        for m in self.menus.list.iter_mut().filter(|m| m.x04 == 415) {
+            let at = m.entries.iter().position(|e| e.msg == msg);
+            match (on, at) {
+                (true, None) => m.entries.push(MenuEntry { msg, id: 0, ..Default::default() }),
+                (false, Some(k)) => {
+                    m.entries.remove(k);
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// `OpenStartMenu`'s table: the bank's when a banker is in range, the
     /// expansion's when the mask has bit 1.
     pub fn pick(&mut self, bank: bool, expansion: u32) {
@@ -1334,5 +1355,43 @@ mod tests {
             assert_eq!(m.entries.last().unwrap().word, 423, "Quit last");
         }
         assert_eq!(d.bounds[0].map(|b| b[1] - b[0] >= 0), Some(true));
+    }
+
+    /// Character > Combat Record: put last in the Character menu on every table
+    /// (on the disc Summary and Tradeskills, Class Mastery and Factions with the
+    /// expansion's, the control), with
+    /// its words set at run time and its message the record's, once however often it
+    /// is set; taken out again. Needs `run/client.bin` (SKIPs without).
+    #[test]
+    fn the_record_entry_goes_in_character() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/client.bin");
+        let Some(img) = std::fs::read(&path).ok().and_then(crate::client_image::ClientImage::from_bytes) else {
+            eprintln!("SKIP: no run/client.bin");
+            return;
+        };
+        let mut d = StartData::from_image(&img);
+        let character = |d: &StartData| -> Vec<Vec<(i32, u32)>> {
+            d.menus.list.iter().filter(|m| m.x04 == 415).map(|m| m.entries.iter().map(|e| (e.word, e.msg)).collect()).collect()
+        };
+        let disc = character(&d);
+        let words: Vec<Vec<i32>> = disc.iter().map(|m| m.iter().map(|e| e.0).collect()).collect();
+        assert_eq!(words, [vec![1772, 1474], vec![1772, 1474, 1652, 1770]], "the control: the disc's Character, without and with the expansion's");
+        d.set_record(true);
+        d.set_record(true);
+        let msg = crate::record::MSG_RECORD;
+        for (m, before) in character(&d).iter().zip(&disc) {
+            assert_eq!(m.len(), before.len() + 1, "once");
+            assert_eq!(m[..before.len()], before[..]);
+            assert_eq!(*m.last().unwrap(), (-1, msg), "last");
+        }
+        assert_eq!(d.menus.labels.get(&(msg, 0)).map(|l| String::from_utf16_lossy(&l.text)), Some("Combat Record".into()));
+        for (bank, x) in [(false, 0), (false, 2), (true, 0), (true, 2)] {
+            d.pick(bank, x);
+            let root = &d.menus.list[d.menu.main.menu];
+            let ch = root.entries.iter().find(|e| e.word == 415).and_then(|e| e.sub).expect("Character in the root");
+            assert_eq!(d.menus.list[ch].entries.last().map(|e| e.msg), Some(msg), "reached from table {bank} {x}");
+        }
+        d.set_record(false);
+        assert_eq!(character(&d), disc, "taken out");
     }
 }

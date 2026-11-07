@@ -94,6 +94,16 @@ pub const OP_DUEL_WINDOW: u16 = 0x7E09;
 pub const OP_RACE_LABELS: u16 = 0x7E1C;
 /// The list, to a client that answered [`OP_RACE_LABELS`]: `racelabel::read`.
 pub const OP_RACE_LABELS_DATA: u16 = 0x7E1D;
+/// go-eqoa-server's own, no retail message either: the character's combat
+/// record, its PvP and its duels (`record`), a u32 after the opcode, both ways.
+/// The server offers it (1) once the player is in the world; this client answers
+/// 1 at once and shows Character > Combat Record, which asks for the record
+/// ([`OP_COMBAT_RECORD_DATA`], a u32 1) as its window opens; the server sends it
+/// then and whenever a count changes it. A PS2 ignores the offer; a server that
+/// never makes one (Sandstorm's, eqoa.live's) gets no answer and no entry shows.
+pub const OP_COMBAT_RECORD: u16 = 0x7E20;
+/// The record: this client's ask (a u32 1), the server's rows (`record::read`).
+pub const OP_COMBAT_RECORD_DATA: u16 = 0x7E21;
 /// go-eqoa-server's own, no retail message either: SOE's live game's look, a
 /// u32 after the opcode, both ways. The server offers it (1) after the
 /// session's first character list; this client answers 1 at once: it reads
@@ -414,6 +424,9 @@ pub struct Session {
     /// The server lets any member of a group invite into it
     /// ([`OP_MEMBER_INVITES`]). Kept for the session.
     pub member_invites: bool,
+    /// The server offered the combat record ([`OP_COMBAT_RECORD`]) and this
+    /// client took it: Character > Combat Record. Kept for the session.
+    pub combat_record: bool,
     /// The server has this client's character flying ([`OP_FLY`]); gone with
     /// the connection, as the server's goes with its login. A dump (a respawn,
     /// a restart of the server's) leaves it.
@@ -551,6 +564,7 @@ impl Session {
             live_look: false,
             bug_reports: false,
             member_invites: false,
+            combat_record: false,
             flying: false,
             raid_roster_offer: false,
             raid_roster_asked: None,
@@ -653,6 +667,15 @@ impl Session {
         let mut w = Writer::op(op);
         w.u32(v);
         self.send(&w.data);
+    }
+
+    /// The combat record asked for now (its window opening), of a server that
+    /// offered it ([`OP_COMBAT_RECORD`]); false, and nothing sent, otherwise.
+    pub fn ask_combat_record(&mut self) -> bool {
+        if self.combat_record {
+            self.send_op_int(OP_COMBAT_RECORD_DATA, 1);
+        }
+        self.combat_record
     }
 
     /// The Raid List: a server that offered the whole of a raid group
@@ -1026,6 +1049,14 @@ impl Session {
             OP_RACE_LABELS => {
                 if r.u32() != 0 && !r.error {
                     self.send_op_int(OP_RACE_LABELS, 1);
+                }
+            }
+            // the combat record offered: taken (`record`, Character > Combat
+            // Record)
+            OP_COMBAT_RECORD => {
+                if r.u32() != 0 && !r.error {
+                    self.combat_record = true;
+                    self.send_op_int(OP_COMBAT_RECORD, 1);
                 }
             }
             // any member invites into its group there (`Play::may_invite`)
@@ -2209,6 +2240,36 @@ mod tests {
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x1D, 0x7E, 0]);
         assert!(matches!(&ev[..], [Event::Opcode { op: OP_RACE_LABELS_DATA, data }] if data[..] == [0]), "{ev:?}");
         assert_eq!(answers(&mut s), [], "the list answered nothing");
+    }
+
+    // The combat record (0x7E20): the offer answered with 1 at once and kept, so the
+    // record may be asked for (0x7E21, a u32 1); the record itself passed on for
+    // `record`, answered with nothing. The controls: an offer cut short and an offer
+    // of 0 are neither answered nor kept, and a session never offered one asks nothing.
+    #[test]
+    fn the_combat_record_offer_is_answered() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&0x7E)).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        assert!(!s.ask_combat_record(), "never offered: no ask");
+        assert_eq!(answers(&mut s), [], "never offered");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x20, 0x7E, 1, 0, 0]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x20, 0x7E, 0, 0, 0, 0]);
+        assert!(!s.combat_record, "the controls: cut short, or 0");
+        assert_eq!(answers(&mut s), []);
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x20, 0x7E, 1, 0, 0, 0]);
+        assert!(ev.is_empty() && s.combat_record, "the offer is the session's: {ev:?}");
+        assert_eq!(answers(&mut s), [(251, vec![0x20, 0x7E, 1, 0, 0, 0])]);
+        assert!(s.ask_combat_record());
+        assert_eq!(answers(&mut s), [(251, vec![0x21, 0x7E, 1, 0, 0, 0])]);
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x21, 0x7E, 1, 0, 0]);
+        assert!(matches!(&ev[..], [Event::Opcode { op: OP_COMBAT_RECORD_DATA, data }] if data[..] == [1, 0, 0]), "{ev:?}");
+        assert_eq!(answers(&mut s), [], "the record answered nothing");
     }
 
     // go-eqoa-server's offer of the live duel's messages (0x7E09) is answered
