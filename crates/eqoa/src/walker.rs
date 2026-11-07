@@ -2482,6 +2482,64 @@ pub(crate) mod tests {
         assert!((f.cam.walk.phys.position.y.0 - y).abs() < 0.2, "and holds: {y} to {:?}", f.cam.walk.phys.position.y);
     }
 
+    /// Flown down onto the ground a body runs on with no landing's gait (the
+    /// game's locomotion 7, told from the walk's own flags): it did not fall. Off
+    /// in the air, it falls and is told the landing, once. The body is drawn
+    /// upright under real water, its pitch left out of its centre (`UpdateSprite`
+    /// pitches a swimmer). The control: the same place and pitch with no flight is
+    /// pitched.
+    #[test]
+    fn a_flyer_lands_with_no_landing_and_is_drawn_upright_under_water() {
+        let (x, z) = (22000.0f32, 18000.0f32);
+        let Some(mut w) = tunaria_round(x, z).map(|s| Walker::arrive(s, Spawn { pos: [x, 60.0, z], heading: 1.5, placing: Placing::AsGiven })) else { return };
+        w.cam.set_camera_mode(0);
+        hold(&mut w, Controls::default(), &flying(), 30.0, 0.2);
+        crate::mouse::pitch_body(&mut w.cam, F::new(1.0));
+        let t0 = w.scene.time;
+        let go = Controls { fwd: 1.0, ..Default::default() };
+        for k in 1..=(60 * 4) {
+            w.frame_with(go.axes(), t0 + (k as f64 * 1000.0 / 60.0) as i64, &flying(), true);
+            assert_eq!(w.cam.walk.parm118, 0, "frame {k}: a landing told in flight at {:?}", w.cam.walk.phys.position);
+        }
+        assert!((w.cam.walk.phys.position.y.0 - 54.1).abs() < 0.2, "on the ground: {:?}", w.cam.walk.phys.position.y);
+
+        let plain = crate::controls::Client::default();
+        let mut told = 0;
+        let mut f = Walker::arrive(tunaria_round(x, z).unwrap(), Spawn { pos: [x, 60.0, z], heading: 1.5, placing: Placing::AsGiven });
+        hold(&mut f, Controls::default(), &flying(), 30.0, 0.5);
+        let t0 = f.scene.time;
+        for k in 1..=(60 * 4) {
+            f.frame_with(Controls::default().axes(), t0 + (k as f64 * 1000.0 / 60.0) as i64, &plain, true);
+            told += (f.cam.walk.parm118 == 16) as usize;
+        }
+        assert!(told >= 1, "the control: off in the air, no landing told");
+
+        // under the bay, pitched
+        let (x, z) = (25390.0f32, 15860.0f32);
+        let Some((lib, file)) = tunaria_and_chars(x, z) else { return };
+        let human = lib.lookup(0x70D898C6).unwrap();
+        let at = Spawn { pos: [x, 40.0, z], heading: 0.0, placing: Placing::AsGiven };
+        let rot = |client: &crate::controls::Client| {
+            let mut w = Walker::arrive(World::load(&lib, file).unwrap(), at);
+            w.set_character(&lib, human);
+            w.cam.set_camera_mode(0);
+            hold(&mut w, Controls::default(), client, 30.0, 0.1);
+            let t0 = w.scene.time;
+            for k in 1..=30 {
+                crate::mouse::pitch_body(&mut w.cam, F::new(0.05));
+                w.frame_with(Controls::default().axes(), t0 + k * 33, client, true);
+                w.pose();
+            }
+            let cs = w.sprite.as_ref().unwrap();
+            assert!(w.cam.walk.is_under_liquid(), "under the bay: {:#x}", w.cam.walk.phys.flags);
+            let q = cs.h.transform[1].rot;
+            [q.x.0, q.y.0, q.z.0, q.w.0]
+        };
+        let upright = vi::quat::Quat::<Ee>::from_hpr(&Vect3::default());
+        assert_eq!(rot(&flying()), [upright.x.0, upright.y.0, upright.z.0, upright.w.0], "drawn upright in flight");
+        assert_ne!(rot(&plain), [upright.x.0, upright.y.0, upright.z.0, upright.w.0], "the control: a swimmer is pitched");
+    }
+
     /// The right stick's look in the follow orbit, at the body's pitching rate
     /// at any frame rate, up, then back: the camera's tilt, as the mouse's, and it
     /// goes back to what it was when the flight ends. The control: not flying, it
