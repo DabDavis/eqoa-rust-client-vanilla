@@ -5,6 +5,12 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+
+## 2026-11-07 · Auto Attack on from the start
+- New players now start with Auto Attack on (Options, Game). With it off, the attack button
+  has to be held down to keep fighting: a tap swings once and stops, which made a first fight
+  look like a laggy server. If you already saved your options, your own choice stays; you
+  can turn it either way there as before.
 ## 2026-11-07 · The licence
 - The client's source goes under the GNU Affero General Public License (version 3 or later) in place of
   MIT, from the next build on. Nothing changes in playing it. If you hand out a changed copy or host a

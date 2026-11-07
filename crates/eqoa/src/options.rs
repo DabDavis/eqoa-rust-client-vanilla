@@ -150,7 +150,11 @@ impl Default for GameOptions {
             no_damage: 0,
             no_faction: 0,
             no_loot: 0,
-            auto_attack: 0,
+            // on from the start (the user, 2026-11-07: "make auto attack on by
+            // default"): off, the attack button must be held, and a new player's
+            // tap swings once and stops, which reads as a laggy server. CLIENT's
+            // SetDefaults leaves it 0; a saved game.opt keeps its own
+            auto_attack: 1,
             vibration: 1,
         }
     }
@@ -1334,11 +1338,20 @@ mod tests {
     use super::*;
 
     /// The four held settings change only when saved; the live ones at
+    /// Auto Attack is on from the start (the user's choice); everything else
+    /// is CLIENT's SetDefaults.
+    #[test]
+    fn auto_attack_on_by_default() {
+        let o = GameOptions::default();
+        assert_eq!(o.auto_attack, 1);
+        assert_eq!((o.stereo, o.follow, o.vibration, o.no_loot), (1, 0, 1, 0));
+    }
+
     /// once; Triangle on the menu puts the live ones back.
     #[test]
     fn held_settings_wait_for_save() {
         let mut w = WndOptions::default();
-        let mut o = GameOptions::default();
+        let mut o = GameOptions { auto_attack: 0, ..GameOptions::default() };
         w.saved = o;
         w.edit = [1, 1, 0, 1];
         let (mut cues, mut ups) = (Vec::new(), Vec::new());
@@ -1467,7 +1480,7 @@ mod tests {
         testing::reset(false);
         let vui = vui();
         let mut r = NullRaster;
-        let mut o = GameOptions::default();
+        let mut o = GameOptions { auto_attack: 0, ..GameOptions::default() };
         let mut w = WndOptions::default();
         let (mut cues, mut ups) = (Vec::new(), Vec::new());
         let mut press = |w: &mut WndOptions, o: &mut GameOptions, k: i32, cues: &mut Vec<i32>| {
