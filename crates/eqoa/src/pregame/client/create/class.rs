@@ -154,9 +154,9 @@ impl ClassPage {
 
     /// `SetBaseStats`: the race's bonus and the class's.
     fn set_base_stats(&mut self, c: i32) {
-        let (race, class) = (tables::get_race(self.race), tables::get_class(c));
+        let (race, class) = (tables::bonus(self.race), tables::get_class(c));
         for &(s, _, _) in &tables::STAT_ROWS {
-            self.stats[s] = race.bonus[s] + class.bonus[s];
+            self.stats[s] = race[s] + class.bonus[s];
         }
     }
 
@@ -214,7 +214,7 @@ impl ClassPage {
             return;
         }
         let s = tables::STAT_ROWS[self.sel.clamp(0, 6) as usize].0;
-        let base = tables::get_race(self.race).bonus[s] + tables::get_class(self.class).bonus[s];
+        let base = tables::bonus(self.race)[s] + tables::get_class(self.class).bonus[s];
         if delta < 0 && self.stats[s] == base {
             return;
         }
@@ -242,11 +242,11 @@ impl ClassPage {
                     self.update_text();
                     return Some(Msg::Class(c));
                 }
-                let (race, class) = (tables::get_race(self.race), tables::get_class(self.class));
+                let (race, class) = (tables::bonus(self.race), tables::get_class(self.class));
                 let mut c = [0; 7];
                 let mut total = 0;
                 for &(s, _, _) in &tables::STAT_ROWS {
-                    c[s] = self.stats[s] - race.bonus[s] - class.bonus[s];
+                    c[s] = self.stats[s] - race[s] - class.bonus[s];
                     total += c[s];
                 }
                 if total <= 20 {

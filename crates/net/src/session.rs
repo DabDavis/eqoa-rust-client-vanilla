@@ -94,6 +94,17 @@ pub const OP_DUEL_WINDOW: u16 = 0x7E09;
 pub const OP_RACE_LABELS: u16 = 0x7E1C;
 /// The list, to a client that answered [`OP_RACE_LABELS`]: `racelabel::read`.
 pub const OP_RACE_LABELS_DATA: u16 = 0x7E1D;
+/// go-eqoa-server's own, no retail message either: what character creation
+/// takes past the game's own races and classes, a u32 after the opcode, both
+/// ways. The server offers it (1) after the session's first character list, and
+/// only where it takes something past the game's; this client answers 1 at once
+/// and is sent the races ([`OP_CREATION_RACES`], `creation::read`), which the
+/// create pages offer. A PS2 ignores the offer; a server that never makes one
+/// gets no answer and its create pages are the game's.
+pub const OP_CREATION_OFFER: u16 = 0x7E1E;
+/// The races, to a client that answered [`OP_CREATION_OFFER`]: `creation::read`,
+/// kept as [`Session::creation`].
+pub const OP_CREATION_RACES: u16 = 0x7E1F;
 /// go-eqoa-server's own, no retail message either: SOE's live game's look, a
 /// u32 after the opcode, both ways. The server offers it (1) after the
 /// session's first character list; this client answers 1 at once: it reads
@@ -414,6 +425,9 @@ pub struct Session {
     /// The server lets any member of a group invite into it
     /// ([`OP_MEMBER_INVITES`]). Kept for the session.
     pub member_invites: bool,
+    /// What character creation takes past the game's, as the server last told
+    /// it ([`OP_CREATION_RACES`]); none from a server that never offers it.
+    pub creation: Option<crate::creation::Creation>,
     /// The server has this client's character flying ([`OP_FLY`]); gone with
     /// the connection, as the server's goes with its login. A dump (a respawn,
     /// a restart of the server's) leaves it.
@@ -551,6 +565,7 @@ impl Session {
             live_look: false,
             bug_reports: false,
             member_invites: false,
+            creation: None,
             flying: false,
             raid_roster_offer: false,
             raid_roster_asked: None,
@@ -1028,6 +1043,16 @@ impl Session {
                     self.send_op_int(OP_RACE_LABELS, 1);
                 }
             }
+            // creation's races offered: taken (the create pages offer them)
+            OP_CREATION_OFFER => {
+                if r.u32() != 0 && !r.error {
+                    self.send_op_int(OP_CREATION_OFFER, 1);
+                }
+            }
+            OP_CREATION_RACES => match crate::creation::read(&m.data[2.min(m.data.len())..]) {
+                Some(c) => self.creation = Some(c),
+                None => debug_line(&format!("[net] creation's races: {} bytes not read", m.data.len())),
+            },
             // any member invites into its group there (`Play::may_invite`)
             OP_MEMBER_INVITES => {
                 if r.u32() != 0 && !r.error {
@@ -2209,6 +2234,42 @@ mod tests {
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x1D, 0x7E, 0]);
         assert!(matches!(&ev[..], [Event::Opcode { op: OP_RACE_LABELS_DATA, data }] if data[..] == [0]), "{ev:?}");
         assert_eq!(answers(&mut s), [], "the list answered nothing");
+    }
+
+    // Creation's races (0x7E1E): the offer answered with 1 at once, and the races
+    // (0x7E1F) kept on the session for the create pages, answering nothing and
+    // passing nothing on. The controls: a session never offered one says nothing
+    // and keeps none; an offer cut short or of 0 is not answered; races that do
+    // not read leave what was kept.
+    #[test]
+    fn the_creation_offer_is_answered_and_its_races_kept() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&0x7E)).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        assert_eq!((answers(&mut s), s.creation.is_none()), (vec![], true), "never offered");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x1E, 0x7E, 1, 0, 0]);
+        assert_eq!(answers(&mut s), [], "the control: an offer cut short");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x1E, 0x7E, 0, 0, 0, 0]);
+        assert_eq!(answers(&mut s), [], "the control: an offer of 0");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x1E, 0x7E, 1, 0, 0, 0]);
+        assert!(ev.is_empty(), "the offer is the session's: {ev:?}");
+        assert_eq!(answers(&mut s), [(251, vec![0x1E, 0x7E, 1, 0, 0, 0])]);
+        let mut races = vec![0x1F, 0x7E, 1, 1, 1, 13, 2, 0, 0, 5, 10, 15, 0, 5, 0, 0x49, 0x7E, 0xE0, 0x08, 0x13, 0x6C, 0, 0, 0, 0];
+        races.extend([6, b'G', b'o', b'b', b'l', b'i', b'n', 3, b'G', b'O', b'B', 4, 0, b'S', b'l', b'y', b'.']);
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, races);
+        assert!(ev.is_empty(), "the races are the session's: {ev:?}");
+        assert_eq!(answers(&mut s), [], "the races answered nothing");
+        let c = s.creation.clone().expect("kept");
+        assert!(c.all_classes);
+        let g = c.race(13).expect("the goblin");
+        assert_eq!((g.like, g.class_mask, g.body_for(1), g.name.as_str(), g.desc.as_str()), (2, 0x7E49, 0x6C13_08E0, "Goblin", "Sly."));
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x1F, 0x7E, 1, 0, 1, 13]);
+        assert_eq!(s.creation, Some(c), "the control: races cut short leave what was kept");
     }
 
     // go-eqoa-server's offer of the live duel's messages (0x7E09) is answered

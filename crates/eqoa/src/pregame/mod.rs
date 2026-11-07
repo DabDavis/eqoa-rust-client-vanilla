@@ -321,6 +321,12 @@ impl Pregame {
     /// moves on if its files are in.
     pub fn update(&mut self, now: i64) {
         self.res.poll();
+        // a server's races' bodies (CHARSEL's files hold the game's alone):
+        // read once it tells of them, and the figures made again when they come
+        self.res.want_bodies(&client::create::tables::bodies());
+        if self.res.take_bodies_in() {
+            self.client.bodies_in();
+        }
         if self.stage == Stage::Boot {
             // VILauncher::Init's two calls, _root's, then SETUP's Init
             match self.boot_step {

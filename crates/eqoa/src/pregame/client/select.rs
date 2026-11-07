@@ -357,9 +357,16 @@ impl CharSelect {
             && !in_cust
             && let Some(st) = stage.as_deref_mut()
         {
-            let rc = chars.get(self.sel as usize).and_then(|c| cx.race_cams.and_then(|t| crate::camstyle::race_camera(t, c.race, cx.expansion)));
+            // a race the server told creation of: its `like` race's camera,
+            // framed to its body's height
+            let like = |c: &CharRecord| super::create::tables::like(c.race);
+            let rc = chars.get(self.sel as usize).and_then(|c| cx.race_cams.and_then(|t| crate::camstyle::race_camera(t, like(c), cx.expansion)));
             if self.sel < count {
-                let [h, l, p, d] = framing(rc, true);
+                let mut fr = framing(rc, true);
+                if let (Some(c), Some(lib)) = (chars.get(self.sel as usize), cx.lib) {
+                    fr = super::create::body_framing(lib, fr, c.model, super::create::tables::stand_in(c.model).unwrap_or(c.model));
+                }
+                let [h, l, p, d] = fr;
                 let f = F::<Ee>::new;
                 st.cam.target_height = f(h);
                 st.cam.look_at_height_above = f(l);
@@ -452,7 +459,10 @@ impl CharSelect {
     /// another.
     #[allow(clippy::too_many_arguments)]
     fn show_character(&mut self, c: &CharRecord, lib: &esf::Library, g: &mut crate::play::Gpu, st: &mut Stage, expansion: u32, now: i64, music: &mut Vec<Music>) {
-        let at = select_place(c.race, c.class, c.level, expansion);
+        // a race the server told creation of (the froglok's 10, which the game's
+        // table leaves empty) stands where its `like` race does, to its music
+        let race = super::create::tables::like(c.race);
+        let at = select_place(race, c.class, c.level, expansion);
         let hpr = st.cam.walk.committed.angles.to_array();
         self.figure = Figure::new(lib, g, c.model, look_of(c, true), c.weapons, at, hpr, now);
         self.show_time = now + 5000;
@@ -468,9 +478,9 @@ impl CharSelect {
             }
         }
         st.aim(at, hpr);
-        if c.race != self.last_race {
-            music.push(Music::Bgm { slot: 0, path: get_race(c.race).bgm.to_string() });
-            self.last_race = c.race;
+        if race != self.last_race {
+            music.push(Music::Bgm { slot: 0, path: get_race(race).bgm.to_string() });
+            self.last_race = race;
         }
     }
 

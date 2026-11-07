@@ -1,8 +1,9 @@
 //! A character in the pregame's 3D: what character select's `ShowCharacter`
 //! and the creation pages' `CreateModel` put in the scene. The model's
 //! CSprite by its DictID (out of CHARSEL1-4.CSF, which CLIENT's pregame
-//! load reads; `HumanMale` when the id is not there, as `ShowCharacter`
-//! falls back), dressed by `vi::cust::apply_look` (`SetArmorSlot` x6,
+//! load reads, or a server's race's out of CHAR.ESF, `res::Res::want_bodies`;
+//! until that is read its `like` race's, else `HumanMale` when the id is not
+//! there, as `ShowCharacter` falls back), dressed by `vi::cust::apply_look` (`SetArmorSlot` x6,
 //! `SetHair`, `SetFace`, `SetRobe`), its items on their nodes
 //! (`AttachItem`), posed once a frame of the game's (`VIHSprite::Process`)
 //! at an actor's place and heading, on the GPU.
@@ -56,6 +57,35 @@ pub fn actor_sprite(lib: &Library, r: esf::Ref, anims: &mut AnimScene<Ee>, rand:
     Some(cs)
 }
 
+thread_local! {
+    /// `sprite_height`'s answers, by model.
+    static HEIGHTS: std::cell::RefCell<std::collections::HashMap<u32, Option<f32>>> = Default::default();
+}
+
+/// How tall a model stands at its first pose: its skeleton's highest node over
+/// its root, times the sprite's default scale (`VIHSprite::m_defaultScale`, the
+/// CSprite header's: every player race's skeleton stands about 1.8, a gnome's
+/// drawn at 0.67 of it), in world units (what the camera's framing of a race is
+/// made for). None when the library has no such model or it has no skeleton.
+/// Kept per model: a body's own never changes.
+pub fn sprite_height(lib: &Library, model: u32) -> Option<f32> {
+    if let Some(h) = HEIGHTS.with(|c| c.borrow().get(&model).copied()) {
+        return h;
+    }
+    let h = lib.lookup(model as i32).and_then(|r| {
+        let mut anims = AnimScene { time: 0, ..Default::default() };
+        let mut cs = actor_sprite(lib, r, &mut anims, &mut Rand(1))?;
+        cs.h.process(0, &anims);
+        let top = cs.h.nodes.iter().map(|n| n.world.m[3].y.0).filter(|y| y.is_finite()).reduce(f32::max)?;
+        Some(top * cs.h.default_scale.0).filter(|&y| y > 0.0)
+    });
+    // a body not read yet asks again once it is
+    if h.is_some() {
+        HEIGHTS.with(|c| c.borrow_mut().insert(model, h));
+    }
+    h
+}
+
 impl Figure {
     /// `CreateActor` with the model's sprite (or `HumanMale`'s), dressed in
     /// `look` (a helm on node 8 when its set has one), `items` (DictIDs, 0
@@ -77,7 +107,12 @@ impl Figure {
 
     #[allow(clippy::too_many_arguments)]
     fn new_in_view(lib: &Library, g: &mut Gpu, model: u32, look: vi::cust::Look, items: [u32; 3], at: [f32; 3], hpr: [f32; 3], now: i64) -> Option<Figure> {
-        let r = lib.lookup(model as i32).or_else(|| lib.lookup(vi::hash::hash_resource_id("HumanMale") as i32))?;
+        // a server's race's body not read yet (`res::Res::want_bodies`): its
+        // `like` race's of the body's sex stands in, where the game draws a human
+        let r = lib
+            .lookup(model as i32)
+            .or_else(|| crate::pregame::client::create::tables::stand_in(model).and_then(|m| lib.lookup(m as i32)))
+            .or_else(|| lib.lookup(vi::hash::hash_resource_id("HumanMale") as i32))?;
         let textures = render::library_textures(lib);
         let mut built = lib.build_model(r)?;
         let mut anims = AnimScene { time: now, ..Default::default() };
@@ -344,5 +379,39 @@ mod tests {
         fig.remake(&lib, &mut g, 200);
         assert_eq!(nodes(&fig), y_nodes);
         eprintln!("HumanMale: Frontiers {} nodes, 2002 {y_nodes}", nodes(&frontiers));
+    }
+}
+
+#[cfg(test)]
+mod heights {
+    /// A body's height is its skeleton's times its sprite's default scale: every
+    /// player race's skeleton stands about 1.8, the gnome's drawn at 0.67 of it,
+    /// so a gnome is the shorter and an ogre the taller; a hill giant (CHAR.ESF's,
+    /// cut as the pregame cuts it) stands about 1.8 ogres. The control: the
+    /// skeleton alone puts the gnome over the human. Needs `run/eqoa.iso`.
+    #[test]
+    fn a_bodys_height_takes_its_sprites_scale() {
+        let iso = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut d) = iso::Iso::open(iso.to_str().unwrap()) else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let mut lib = esf::Library::new();
+        for f in ["CHARSEL1.CSF", "CHARSEL3.CSF"] {
+            lib.add(f, esf::Container::open(d.read(f).unwrap()).unwrap());
+        }
+        lib.add(crate::pregame::res::BODIES, crate::pregame::res::cut_bodies(d.read("CHAR.ESF").unwrap(), &[0xFFB1_EA2C]).unwrap());
+        let race = |r: i32| crate::pregame::client::races::get_race(r).model_id(0);
+        let h = |m: u32| super::sprite_height(&lib, m).unwrap();
+        let (human, gnome, ogre, giant) = (h(race(0)), h(race(3)), h(race(9)), h(0xFFB1_EA2C));
+        assert!((1.7..1.85).contains(&human) && (1.25..1.4).contains(&gnome) && (2.5..2.8).contains(&ogre), "{human} {gnome} {ogre}");
+        assert!((1.7..1.9).contains(&(giant / ogre)), "the giant: {giant} against {ogre}");
+        // the control: the gnome's skeleton alone stands over the human's
+        let r = lib.lookup(race(3) as i32).unwrap();
+        let mut anims = vi::hsprite::AnimScene { time: 0, ..Default::default() };
+        let mut cs = super::actor_sprite(&lib, r, &mut anims, &mut vi::csprite::Rand(1)).unwrap();
+        cs.h.process(0, &anims);
+        let bare = cs.h.nodes.iter().map(|n| n.world.m[3].y.0).reduce(f32::max).unwrap();
+        assert!(bare > human, "the gnome's bare skeleton {bare} against the human's {human}");
     }
 }

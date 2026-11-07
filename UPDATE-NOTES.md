@@ -6,6 +6,15 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-07 · More races to make
+- On a server that has them (the Heirloom Test Server), character creation offers more races: the froglok,
+  hill giant, kerran, goblin, aviak, lizardman and kappa, each in the list in its alphabetical place with
+  its own description, bonuses, body and starting city. Your character stands in the arena in its own body
+  while you choose, and at character select too.
+- Such a server can also open every class to every race: every class is then lit on the class page,
+  whatever the race.
+- Nothing changes on other servers, or on a server that doesn't offer them.
+
 ## 2026-11-07 · Three-letter names
 - A new character's name may be three letters long (it was four). It is still letters only, A to Z.
   A PS2 keeps asking for four.

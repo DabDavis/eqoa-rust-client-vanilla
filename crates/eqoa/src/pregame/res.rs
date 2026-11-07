@@ -59,6 +59,32 @@ pub struct Res {
     /// The art changed: what is drawn is made again in it once its files are
     /// in (`take_art_change`).
     art_due: bool,
+    /// A server's races' bodies (`want_bodies`): each asked for once; CHAR.ESF
+    /// being read for some; some just put in the library (`take_bodies_in`).
+    bodies_asked: HashSet<u32>,
+    bodies_reading: Option<(Vec<u32>, files::Pending)>,
+    bodies_in: bool,
+}
+
+/// The name a server's races' bodies go into the library under.
+pub const BODIES: &str = "CHAR.ESF (bodies)";
+
+/// A server's races' bodies out of CHAR.ESF: each body's CSprite record
+/// (0x2700, header and all) whole, together one container of those records
+/// alone; every other record let go. A body's record holds its skeleton,
+/// meshes, materials and surfaces: built from it alone it is the whole file's
+/// (`tests::a_cut_body_is_the_whole_files`). None when none of them is there.
+pub fn cut_bodies(file: Vec<u8>, ids: &[u32]) -> Option<esf::Container> {
+    let c = esf::Container::open(file).ok()?;
+    let mut bytes = Vec::new();
+    for &id in ids {
+        let Some(&n) = c.dict.get(&(id as i32)) else { continue };
+        let node = c.node(n);
+        if node.ty == 0x2700 && node.body >= 12 {
+            bytes.extend_from_slice(&c.data[node.body - 12..node.body + node.size]);
+        }
+    }
+    (!bytes.is_empty()).then(|| esf::Container::parse_records(bytes))
 }
 
 /// A file's name in the library: its disc path's last part (`SETUP.CSF`).
@@ -189,8 +215,49 @@ impl Res {
         }
     }
 
+    /// Asks for the bodies among `ids` the library lacks (a server's races',
+    /// `create::tables::bodies`): CHAR.ESF read, one read at a time, and only
+    /// those bodies' records kept (`cut_bodies`), as `BODIES`. Each is asked
+    /// for once.
+    pub fn want_bodies(&mut self, ids: &[u32]) {
+        if self.bodies_reading.is_some() {
+            return;
+        }
+        let new: Vec<u32> = ids.iter().copied().filter(|&id| id != 0 && self.lib.lookup(id as i32).is_none() && self.bodies_asked.insert(id)).collect();
+        if !new.is_empty() {
+            self.bodies_reading = Some((new, files::read(&["DATA/CHAR.ESF"])));
+        }
+    }
+
+    /// Whether bodies came in since the last call: the figures are made again.
+    pub fn take_bodies_in(&mut self) -> bool {
+        std::mem::take(&mut self.bodies_in)
+    }
+
+    /// The bodies' read, once it is done: cut and put in the library.
+    fn poll_bodies(&mut self) {
+        let Some((_, p)) = self.bodies_reading.as_mut() else { return };
+        let Some(r) = p.poll() else { return };
+        let (ids, _) = self.bodies_reading.take().expect("reading");
+        match r {
+            Ok(list) => {
+                for (_, bytes) in list {
+                    match cut_bodies(bytes, &ids) {
+                        Some(c) => {
+                            self.lib.add(BODIES, c);
+                            self.bodies_in = true;
+                        }
+                        None => crate::say(&format!("pregame: CHAR.ESF has none of the bodies {ids:08X?}")),
+                    }
+                }
+            }
+            Err(e) => crate::say(&format!("pregame: the bodies: {e}")),
+        }
+    }
+
     /// The files read since the last frame, put where they go.
     pub fn poll(&mut self) {
+        self.poll_bodies();
         let mut arrived = Vec::new();
         self.pending.retain_mut(|p| match p.poll() {
             Some(r) => {
@@ -487,5 +554,40 @@ mod tests {
         r.set_server_words(Some(b"server one\nserver two\n".to_vec()));
         r.put("DATA/WORDS.TXT", b"disc one\ndisc two\n".to_vec());
         assert_eq!(r.words.as_ref().unwrap().get(2, 0), "server two");
+    }
+
+    /// A server's races' bodies cut out of CHAR.ESF build as the whole file
+    /// builds them, every texture there, and their sprites load (skeleton and
+    /// animations: `actor_sprite`); a body not asked for is not in the cut, and
+    /// one CHAR.ESF lacks leaves nothing. Needs the disc (`run/eqoa.iso`).
+    #[test]
+    fn a_cut_body_is_the_whole_files() {
+        let iso = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut d) = iso::Iso::open(iso.to_str().unwrap()) else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let bytes = d.read("CHAR.ESF").unwrap();
+        // the froglok, the hill giant, a kerran woman, the kappa
+        let ids = [0x141B_FE0Cu32, 0xFFB1_EA2C, 0xB749_BF57, 0x31A1_5F17];
+        let mut cut = esf::Library::new();
+        cut.add(BODIES, cut_bodies(bytes.clone(), &ids).expect("cut"));
+        let mut whole = esf::Library::new();
+        whole.add("CHAR.ESF", esf::Container::open(bytes.clone()).unwrap());
+        for id in ids {
+            let (a, b) = (cut.lookup(id as i32).expect("in the cut"), whole.lookup(id as i32).unwrap());
+            let (ma, mb) = (cut.build_model(a).unwrap(), whole.build_model(b).unwrap());
+            assert_eq!((ma.pos.len(), ma.batches.len(), ma.triangles), (mb.pos.len(), mb.batches.len(), mb.triangles), "{id:08X}");
+            let textures: Vec<i32> = ma.batches.iter().flat_map(|b| b.layers.iter().map(|l| l.texture)).filter(|&t| t != 0).collect();
+            assert!(!textures.is_empty() && textures.iter().all(|&t| cut.surface(t).is_some()), "{id:08X}: a texture outside the cut");
+            let mut anims = vi::hsprite::AnimScene::default();
+            let mut rand = vi::csprite::Rand(1);
+            let sprite = crate::pregame::figure::actor_sprite(&cut, a, &mut anims, &mut rand).expect("its sprite");
+            let whole_sprite = crate::pregame::figure::actor_sprite(&whole, b, &mut vi::hsprite::AnimScene::default(), &mut vi::csprite::Rand(1)).unwrap();
+            assert_eq!(sprite.node_ids, whole_sprite.node_ids, "{id:08X}: its skeleton");
+        }
+        // the controls: one not asked for is not there, one CHAR.ESF lacks leaves none
+        assert!(cut.lookup(0x2217_6258).is_none(), "the kerran man was not asked for");
+        assert!(cut_bodies(bytes, &[0x1234_5678]).is_none());
     }
 }

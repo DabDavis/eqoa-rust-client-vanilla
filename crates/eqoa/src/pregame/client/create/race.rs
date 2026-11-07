@@ -174,6 +174,12 @@ impl RacePage {
         look_for(r.race, r.city, self.sex, form, env)
     }
 
+    /// The row's human city: its own, or a server's race's (`like` a human).
+    fn city(&self) -> i32 {
+        let r = self.row();
+        tables::server_race(r.race).map_or(r.city, |s| s.city)
+    }
+
     /// `OnDrawSelf`: the frame, the list, the description, the legend; then
     /// the model (made if there is none), standing, the camera framing it,
     /// and the scene into the viewport.
@@ -225,7 +231,7 @@ impl RacePage {
                     n.extend(word(vui, rr.city_word));
                     n
                 } else {
-                    word(vui, tables::get_race(rr.race).name)
+                    tables::race_name(vui, rr.race)
                 };
                 vui.blit_bar3(r, &name, c, pos, left, right, mid, bw, 0, 1.0, 1, true);
                 let at = [pos[0] + bw, pos[1]];
@@ -254,7 +260,7 @@ impl RacePage {
             vui.blit_fill_frame(r, pos, [325, 100], &fp, 35, 0, 1.0, true);
             let pos = [pos[0] + 163, pos[1] + 50];
             self.window.init(vui, r, pos, 345, 5, 1);
-            let desc = word(vui, self.row().desc_word);
+            let desc = tables::race_desc(vui, &self.row());
             let ww = self.window.size[0];
             self.window.text_box(vui, r, &desc, 20, 0, ww - 40, 5, black, 2);
         }
@@ -277,15 +283,16 @@ impl RacePage {
         let Some(stage) = stage else { return };
         if env.figure.is_none() {
             let r = self.row();
-            let race = tables::get_race(r.race);
+            // a server's race stands where its `like` race does, to its music
+            let race = tables::get_race(tables::like(r.race));
             let at = [race.select[0], 0.0, race.select[1]];
             let hpr = stage.cam.walk.committed.angles.to_array();
             let look = self.look(form, env);
-            env.figure = create_model(cx, race.model_id(self.sex), look, at, hpr);
+            env.figure = create_model(cx, tables::model_of(r.race, self.sex), look, at, hpr);
             if env.figure.is_some() {
                 stage.aim(at, hpr);
                 if self.music > 0 {
-                    let bgm = match r.city {
+                    let bgm = match self.city() {
                         2 => "bgm\\qeynos.bgm",
                         1 => "bgm\\freeport.bgm",
                         _ => race.bgm,
@@ -302,7 +309,9 @@ impl RacePage {
             f.set_action(0);
         }
         // UpdateCamera: the race's review framing, turning
-        let framing = env.race_camera(self.row().race).map_or(super::DEFAULT_FRAMING, |c| c.review);
+        let framing = env.race_camera(tables::like(self.row().race)).map_or(super::DEFAULT_FRAMING, |c| c.review);
+        let (race, like) = (self.row().race, tables::like(self.row().race));
+        let framing = super::body_framing(&cx.res.lib, framing, tables::model_of(race, self.sex), tables::model_of(like, self.sex));
         frame_camera(stage, framing);
         stage.cam.orbit_right(F::<Ee>::new(0.3));
         stage.process(now);
@@ -337,6 +346,8 @@ impl RacePage {
 /// original's) or the race's default (`GetRaceInfo`), by sex. Face, hair
 /// style, hair length, hair colour.
 pub fn look_for(race: i32, city: i32, sex: i32, form: &NewChar, env: &Env) -> [i32; 4] {
+    // a server's race: its `like` race's defaults (its body has none of its own)
+    let (race, city) = tables::server_race(race).map_or((race, city), |r| (r.like, r.city));
     let def = if city == 1 {
         if env.expansion & 2 != 0 { if sex == 0 { [2, 2, 2, 1] } else { [0, 0, 3, 1] } } else { [2, 0, 2, 2] }
     } else {
