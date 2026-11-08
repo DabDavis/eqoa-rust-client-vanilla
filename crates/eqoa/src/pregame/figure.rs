@@ -119,7 +119,12 @@ impl Figure {
         let mut built = lib.build_model(r)?;
         let mut anims = AnimScene { time: now, ..Default::default() };
         let mut rand = Rand(1);
-        let sprite = actor_sprite(lib, r, &mut anims, &mut rand);
+        let mut sprite = actor_sprite(lib, r, &mut anims, &mut rand);
+        // a player's character: in a body one of the server's races wears it
+        // holds items as a race's body does (`racebody`)
+        if let Some(cs) = sprite.as_mut() {
+            crate::racebody::grant(cs, id, true, Some(&crate::pregame::client::create::tables::offer()));
+        }
         let mut attached = Vec::new();
         let mut helm_worn = false;
         if let Some(cs) = &sprite {
@@ -314,6 +319,53 @@ mod tests {
         let near = |c: &[f32; 3]| (0..3).map(|k| (c[k] - hand[k]).powi(2)).sum::<f32>().sqrt() < 3.0;
         assert!(quads.iter().all(near), "round the hand at {hand:?}: {:?}", quads.iter().find(|c| !near(c)));
         assert!(glow([0; 3], &mut g).0.is_empty(), "the control: empty hands, no particles");
+    }
+
+    /// A figure in a body one of the server's races wears holds its items as
+    /// a race's does (`racebody`): the gargoyles' body, which holds nothing by
+    /// its header, hangs the sword on its right hand and the shield on its
+    /// left while the server's offer lists it; the control: with no offer (a
+    /// server with no races of its own, and a PS2's character select) it holds
+    /// nothing. Needs `run/eqoa.iso` and a graphics adapter.
+    #[test]
+    fn a_gargoyle_figure_holds_its_items() {
+        const GARGOYLE: u32 = 0xB4D2_D132;
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut iso) = iso::Iso::open(&path) else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let _gpu = crate::GPU_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let instance = render::wgpu::Instance::new(render::wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&render::wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("SKIP: no graphics adapter");
+            return;
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let mut renderer = render::Renderer::new(&device, &queue, render::TARGET_FORMAT);
+        let mut g = Gpu { renderer: &mut renderer, device: &device, queue: &queue };
+        let mut lib = Library::new();
+        for f in ["CHAR.ESF", "ITEM.ESF"] {
+            lib.add(f, esf::Container::open(iso.read(f).unwrap()).unwrap());
+        }
+        let look = vi::cust::Look { robe: -1, ..Default::default() };
+        // the heirloom sword and shield
+        let items = [0x47D9_81E0, 0, 0xD21E_C0C5];
+        let nodes = |g: &mut Gpu| {
+            let fig = Figure::new(&lib, g, GARGOYLE, look, items, [0.0; 3], [0.0; 3], 0).expect("the figure");
+            let mut v: Vec<i32> = fig.attached.iter().map(|a| a.0).collect();
+            v.sort_unstable();
+            v
+        };
+        use crate::pregame::client::create::tables;
+        tables::set_offer(None);
+        assert_eq!(nodes(&mut g), Vec::<i32>::new(), "the control: no offer, nothing held");
+        tables::set_offer(Some(&net::creation::Creation {
+            all_classes: true,
+            races: vec![net::creation::Race { id: 29, like: 9, city: 0, bonus: [0; 7], class_mask: 0x7FFF, body: [GARGOYLE, GARGOYLE], name: "Gargoyle".into(), short: "GAR".into(), desc: String::new() }],
+        }));
+        assert_eq!(nodes(&mut g), [11, 20], "the sword on node 11, the shield on 20");
+        tables::set_offer(None);
     }
 
     /// A figure is its model as the art drawn has it (`era`): with the 2002
