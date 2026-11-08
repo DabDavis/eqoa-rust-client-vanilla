@@ -238,7 +238,15 @@ pub fn fit_of(lib: &Library, id: i32, model: &esf::Model, cs: &CSprite<Ee>, art:
         let alpha: [Option<Rc<Alpha>>; SLOTS] = std::array::from_fn(|i| alpha_of(lib, art[i].map_or(r.own[i], |t| t as i32)));
         Some(Rc::new(fit(&r, &c, &alpha, robed)))
     });
-    FITS.with(|f| f.borrow_mut().insert(key, fit.clone()));
+    FITS.with(|f| {
+        let mut f = f.borrow_mut();
+        // a fit takes a few milliseconds to make again: keep at most a few
+        // hundred looks' worth
+        if f.len() >= 256 {
+            f.clear();
+        }
+        f.insert(key, fit.clone());
+    });
     fit
 }
 

@@ -119,6 +119,14 @@ or a browser (each described where it lives below):
   server's word for it (the user, 2026-11-07: "my race says ogre, but lets make
   it Hill Giant, Titan as MC"). Its camera and what it may wear stay the race it
   passes as.
+- **Armour on bodies made without it** (the user's of 2026-11-08, "Lay armour textures on", a
+  prototype; `slotless`): a body with no texture slots (the kappa, brownie, pixie, fairy, minotaur,
+  dryad, skeleton, fungusman, gargoyle and hill giant a server's races wear) shows the armour, robe and
+  dye in its look, laid over its torso, arms, hands, legs and feet as they sit on a human: its triangles
+  are carried onto HumanMale (HumanFemale for a female body) bone by bone, and take the slot and texture
+  coordinates of what a human shows there in the same look. Heads, necks, wings and tails keep their
+  own look; any body with texture slots is dressed exactly as before (held to every CSprite on the disc).
+  `eqoa dress <body> <out.png> [set=N robe=R dye=RRGGBB ...]` draws a body in a look from four sides.
 - **The combat record**, on a server that keeps one (go-eqoa-server's offer, 0x7E20,
   and its record, 0x7E21; Sandstorm and eqoa.live have none, and show no entry): the
   start menu's Character > Combat Record, the client's own window (`record.rs`,
