@@ -6,6 +6,15 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-08 · Sun Shadows
+- A new option, Options > Extended > Lighting > Sun Shadows, lets the sun cast shadows. Buildings, walls, roofs,
+  trees and their leaves, rocks, hills and every character block the sunlight, and their shadows fall across the
+  ground, the walls and each other. They follow the sun through the day: short at noon, long in the morning and
+  the evening. Step under a roof, an awning or a tree and you stand in its shade.
+- It works with Dynamic Lighting on (the page tells you when it is off). The shadows reach a good way from the
+  camera and fade out beyond it. At night there are none: the game's night light comes from under the horizon.
+- It is off unless you turn it on, and off the game looks exactly as before.
+
 ## 2026-11-08 · eqoaclassic.com is the server out of the box
 - A new install (on a phone too) connects to eqoaclassic.com without being told: the title's Network Setup shows it, and
   logging in works at once. Until now a client that had never been given a server had none, so a phone's first login
