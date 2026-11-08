@@ -2,7 +2,8 @@
 //! start menu's "Ability" entry (0x8010000, `VIWndGame` mode 5). A tab per
 //! ten levels, six rows of the abilities shown on the tab (by display
 //! index), the selected one's stats and description, a popup per ability
-//! (Memorize, Arrange, Unmemorize All, Exit) and the hot-bar slots it is
+//! (Memorize, Arrange, Unmemorize, Unmemorize All, Exit: Unmemorize is
+//! vanilla's, the selected ability alone off its slot) and the hot-bar slots it is
 //! put on (five, ten with the expansion's bit 1, and five more a bar of the
 //! client's with the Extended page's Ability Bars: slots 10-19, the list's
 //! ten rows showing them ten at a time, `draw_slots10`).
@@ -46,8 +47,13 @@ const TARGET_WORDS: [(i32, i64); 5] = [(144, 0), (145, 1), (79, 2), (469, 3), (4
 /// `gWeaponTypeWords` (`FindWeaponTypeWord`): an equip-mask bit's word.
 const WEAPON_WORDS: [(i32, i32); 8] = [(342, 0), (343, 1), (344, 2), (345, 3), (346, 4), (348, 5), (347, 6), (339, 7)];
 
-/// The popup's four entries (`Init`): word and message.
-const POPUP: [(i32, u32); 4] = [(1016, 0x0804_0000), (200, 0x0808_0000), (1800, 0x0809_0000), (161, 0x0802_0000)];
+/// The popup's entries (`Init`'s four, and vanilla's Unmemorize before
+/// Unmemorize All): word and message.
+const POPUP: [(i32, u32); 5] =
+    [(1016, 0x0804_0000), (200, 0x0808_0000), (crate::wndlist::WORD_UNMEMORIZE, UNMEMORIZE_ONE), (1800, 0x0809_0000), (161, 0x0802_0000)];
+
+/// Unmemorize's message (ours; the game's popup has none).
+const UNMEMORIZE_ONE: u32 = 0x080A_0000;
 
 /// What the book notes where it is drawn, for a pointer: the rows by
 /// index, a tab by its place from the left (`TAB` + place), a slot (`SLOT`
@@ -415,6 +421,18 @@ impl SpellBook {
                 } else {
                     self.refocus(now);
                 }
+            }
+            UNMEMORIZE_ONE => {
+                // Unmemorize (vanilla's; the user, 2026-11-08: "lets allow players
+                // unmemorize one spell not just all"): the selected ability off its
+                // slot, as 0x0033 at the slot it is on, which the server and CLIENT's
+                // Msg00B4 both take as its toggle off; one not memorized, nothing
+                self.popup.visible = false;
+                if let Some(a) = row.and_then(|r| abilities.get(&r.id)).filter(|a| a.valid != 0 && a.slot >= 0) {
+                    out.push(Out::Send0033(a.display_index, a.slot));
+                    out.push(Out::Sound(13));
+                }
+                self.refocus(now);
             }
             0x0809_0000 => {
                 // Unmemorize All
@@ -932,6 +950,31 @@ mod tests {
         let out = b.key(&map, 1, 134, true, 0);
         assert_eq!(out, vec![Out::Word(912)]);
         assert_ne!(b.mode, 2);
+    }
+
+    /// Unmemorize (the popup's third, vanilla's): a memorized ability off its
+    /// own slot alone, as 0x0033 with its display index and that slot (the
+    /// toggle the server answers with 0x00B4); on one not memorized, nothing
+    /// (the control).
+    #[test]
+    fn unmemorize_sends_0033_for_its_own_slot() {
+        let (mut b, map) = book(&[ability(1, 7, 1, false, -1), ability(2, 9, 2, true, 3)]);
+        let unmemorize = |b: &mut SpellBook| {
+            b.key(&map, 2, 134, true, 0);
+            assert!(b.popup.visible);
+            for _ in 0..2 {
+                b.key(&map, 2, 139, true, 0);
+                if b.popup.list.flash.pulse(139) {
+                    b.popup.list.scroll(1, 0, &mut Vec::new());
+                }
+            }
+            assert_eq!(b.popup.list.sel, 2, "the popup down to Unmemorize");
+            b.key(&map, 2, 134, true, 0)
+        };
+        b.sel = 1; // the memorized one, on slot 3
+        assert_eq!(unmemorize(&mut b), vec![Out::Send0033(9, 3), Out::Sound(13)]);
+        b.sel = 0;
+        assert_eq!(unmemorize(&mut b), vec![], "not memorized: nothing");
     }
 
     /// Arrange: hold one, move, X sends 0x003A (held index, target index);
