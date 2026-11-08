@@ -321,6 +321,55 @@ fn a_cascade_draws_the_casters_it_reaches() {
     assert!(draws > 4 + 4, "and the boxes near enough drawn: {draws}");
 }
 
+/// The far two cascades are drawn in turn: with nothing moving, the
+/// frames after the first (each drawing the near two and one far one, the
+/// other kept) are byte for byte the first; with the camera turned away and
+/// back (150 degrees a frame), the frame looking back, which takes a far
+/// cascade drawn while looking away, shades the shadow of a box 70 off as a
+/// renderer drawing every cascade at once (the far two are round the
+/// camera: a turn does not move them).
+#[test]
+fn the_far_cascades_drawn_in_turn_keep_the_picture() {
+    let Some(g) = gpu() else { return };
+    let none = |_: i32| None;
+    let far_view = |turn: f32| {
+        let proj = glam::camera::rh::proj::directx::perspective(55f32.to_radians(), 1.6, 0.3, 800.0);
+        let eye = Vec3::new(0.0, 25.0, 70.0);
+        let look = Mat4::from_rotation_y(turn).transform_vector3(Vec3::new(0.0, -25.0, -70.0)).normalize();
+        let v = glam::camera::rh::view::look_to_mat4(eye, look, Vec3::Y);
+        View { eye, sun: Vec3::X, sun_dir: SUN45.normalize(), ambient: Vec3::splat(0.1), clear: Vec3::ZERO, lights: Some(Lights::default()), ..View::daylight(proj * v) }
+    };
+    let scene = |r: &mut Renderer| {
+        let f = r.upload(&g.device, &g.queue, &floor(HALF * 8.0, 1.0), &[render::IDENTITY], &none);
+        let b = r.upload(&g.device, &g.queue, &cube(Vec3::new(0.0, 3.0, 0.0), 1.0, layer(0, 0)), &[render::IDENTITY], &none);
+        (f, b)
+    };
+    let mut r = renderer(&g, true);
+    let (f, b) = scene(&mut r);
+    let first = shot(&g, &mut r, &far_view(0.0), &[Draw::Model(&f), Draw::Model(&b)]);
+    for k in 1..4 {
+        assert!(shot(&g, &mut r, &far_view(0.0), &[Draw::Model(&f), Draw::Model(&b)]) == first, "frame {k}: a far cascade kept, the same picture");
+    }
+    // the box's shadow on the floor, 70 off: where each frame draws it
+    let shadow_px = |v: &View| {
+        let c = v.view_proj.project_point3(Vec3::new(3.5, 0.0, 0.0));
+        (((c.x * 0.5 + 0.5) * SIZE as f32) as u32, ((0.5 - c.y * 0.5) * SIZE as f32) as u32)
+    };
+    // turned away and back: each frame looking back takes a far cascade
+    // drawn while looking away
+    for (away, turn) in [(2.6f32, 0.3f32), (-2.6, -0.3), (1.8, 0.15)] {
+        shot(&g, &mut r, &far_view(away), &[Draw::Model(&f), Draw::Model(&b)]);
+        let v = far_view(turn);
+        let kept = shot(&g, &mut r, &v, &[Draw::Model(&f), Draw::Model(&b)]);
+        let mut fresh = renderer(&g, true);
+        let (f2, b2) = scene(&mut fresh);
+        let whole = shot(&g, &mut fresh, &v, &[Draw::Model(&f2), Draw::Model(&b2)]);
+        let p = shadow_px(&v);
+        assert!(red(&whole, p) < 0.3, "turned {turn}: every cascade drawn, the shadow at {p:?}: {}", red(&whole, p));
+        assert!(close(red(&kept, p), red(&whole, p)), "turned {turn}: a far cascade kept, the shadow at {p:?}: {} against {}", red(&kept, p), red(&whole, p));
+    }
+}
+
 /// The floor's baked visibility (vertex alpha 0.5) stays the upper bound:
 /// half the sun in the open, none in the shadow (the lesser of the two).
 #[test]

@@ -53,21 +53,31 @@ use glam::{DMat4, DVec3, DVec4, Mat4, Vec3};
 /// The cascades the view's depth is cut into.
 pub const CASCADES: usize = 4;
 
-/// Where each cascade ends, in depth before the camera: the practical split
-/// (three quarters logarithmic, a quarter even) of 0.3 to [`RANGE`], each a
-/// sphere that holds its slice (at the game's 55° and a 16:9 window: radii
-/// about 21, 48, 105 and 280, so a texel of 2, 5, 10 and 27 cm at 2,048).
+/// Where each cascade ends: the practical split (three quarters
+/// logarithmic, a quarter even) of 0.3 to [`RANGE`]. The near two are
+/// slices of the view's depth, each the sphere that holds its slice; the far
+/// two go by the distance from the camera, each a sphere round the camera
+/// [`JUMP`] wider than its end, so a turn of the camera does not move them
+/// (they are drawn in turn, `Sun::draw`). At the game's 55° in a 16:9
+/// window the radii are about 21, 48, 102 and 258: a texel of 2, 5, 10 and
+/// 25 cm at 2,048.
 pub const ENDS: [f32; CASCADES] = [19.0, 43.0, 94.0, 250.0];
 
-/// How far before the camera the shadows reach.
+/// How far from the camera the shadows reach (the far cascades' end).
 pub const RANGE: f32 = ENDS[CASCADES - 1];
 
-/// Where they start to fade, gone by [`RANGE`].
+/// Where they start to fade (the distance from the camera), gone by
+/// [`RANGE`].
 pub const FADE_FROM: f32 = 212.5;
 
 /// How far toward the sun past its sphere a cascade takes casters: a hill or
 /// a tower up to this far upwind of what is drawn still casts onto it.
 pub const UPWIND: f64 = 500.0;
+
+/// How far the eye may move between two frames and the far cascades drawn a
+/// frame before still serve (`Sun::draw`): farther (a port, a world's
+/// change), every cascade is drawn again at once.
+pub const JUMP: f32 = 8.0;
 
 /// How high over what it shadows a cluster of casters (not the terrain or a
 /// sprite placed all over a zone, which every cascade draws) is taken to
@@ -210,9 +220,14 @@ pub fn fit(view_proj: Mat4, eye: Vec3, sun_dir: Vec3, size: u32) -> [Cascade; CA
     let s = size.max(4) as f64;
     std::array::from_fn(|c| {
         let (n, f) = (if c == 0 { 0.0 } else { ENDS[c - 1] as f64 }, ENDS[c] as f64);
-        // the sphere round the slice's eight corners, its centre on the axis
-        let zc = ((n + f) * (1.0 + k2) * 0.5).min(f);
-        let r = ((f - zc).powi(2) + k2 * f * f).max((zc - n).powi(2) + k2 * n * n).sqrt();
+        // the near two: the sphere round the slice's eight corners, its
+        // centre on the axis; the far two: round the camera
+        let (zc, r) = if c < 2 {
+            let zc = ((n + f) * (1.0 + k2) * 0.5).min(f);
+            (zc, ((f - zc).powi(2) + k2 * f * f).max((zc - n).powi(2) + k2 * n * n).sqrt())
+        } else {
+            (0.0, f + JUMP as f64)
+        };
         let r = (r * 16.0).ceil() / 16.0;
         // a texel's margin round it, so the snapped box still holds it
         let t = 2.0 * r / (s - 2.0);
@@ -382,6 +397,10 @@ pub(crate) struct Sun {
     /// The last frame's draws into the map: the clusters' bundles executed
     /// and the draw calls in all.
     pub(crate) drawn: std::cell::Cell<(u32, u32)>,
+    /// The cascades as each was last drawn, the eye and the stepped sun then,
+    /// and the frames counted (`draw`: the far two in turn).
+    last: std::cell::Cell<Option<([Cascade; CASCADES], Vec3, DVec3)>>,
+    frames: std::cell::Cell<u64>,
 }
 
 impl Sun {
@@ -513,7 +532,7 @@ impl Sun {
             })
         };
         let (caster, solid) = (cast_pipeline("vs_cast", Some("fs_cast")), cast_pipeline("vs_cast_solid", None));
-        Some(Sun { pipelines, bg, buf, caster, solid, cascades, cascade_buf, stride, layers, size, drawn: Default::default() })
+        Some(Sun { pipelines, bg, buf, caster, solid, cascades, cascade_buf, stride, layers, size, drawn: Default::default(), last: Default::default(), frames: Default::default() })
     }
 
     /// A group's casters, in clusters: its members that draw an opaque
@@ -597,23 +616,40 @@ impl Sun {
     /// Draws the frame's casters into the map for `view`, and sets the
     /// receivers' uniform: whether the sun is up enough to cast (`strength`),
     /// its light not black. `false`: no shadow this frame (the receivers
-    /// need not be used).
+    /// need not be used). The near two cascades are drawn every frame and the
+    /// far two in turn, each every other frame (they hold half the draws and
+    /// the characters far off): a far cascade kept from a frame before is
+    /// used as it was drawn, and a fragment it no longer holds (the camera
+    /// turned) takes the next cascade (`sunshadow.wgsl`). Every cascade is
+    /// drawn the first frame, after the eye jumps ([`JUMP`]) and when the
+    /// sun's step changes.
     pub(crate) fn draw(&self, r: &Renderer, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, view: &View, items: &[Draw]) -> bool {
         let dir = view.sun_dir.normalize_or(Vec3::NEG_Y);
         let k = strength(dir);
         if k <= 0.0 || view.sun.max_element() < 0.5 / 255.0 {
             self.drawn.set((0, 0));
+            self.last.set(None);
             return false;
         }
-        let cascades = fit(view.view_proj, view.eye, dir, self.size);
+        let fitted = fit(view.view_proj, view.eye, dir, self.size);
+        let step = stepped(dir);
+        let frame = self.frames.get();
+        self.frames.set(frame + 1);
+        let kept = self.last.get().filter(|(_, eye, s)| (*eye - view.eye).length() <= JUMP && *s == step);
+        let drawn_now = |c: usize| kept.is_none() || c < 2 || c == 2 + (frame % 2) as usize;
+        let cascades: [Cascade; CASCADES] = std::array::from_fn(|c| match kept {
+            Some((last, _, _)) if !drawn_now(c) => last[c],
+            _ => fitted[c],
+        });
+        self.last.set(Some((cascades, view.eye, step)));
         queue.write_buffer(&self.buf, 0, bytemuck::bytes_of(&ShadowUniform::new(&cascades, k, self.size)));
-        for (c, cascade) in cascades.iter().enumerate() {
+        for (c, cascade) in cascades.iter().enumerate().filter(|(c, _)| drawn_now(*c)) {
             let push = [(BACK_PUSH / cascade.depth as f64) as f32, 0.0, 0.0, 0.0];
             let u = CascadeUniform { m: cascade.m.to_cols_array_2d(), push };
             queue.write_buffer(&self.cascade_buf, c as u64 * self.stride, bytemuck::bytes_of(&u));
         }
         let (mut runs, mut draws) = (0u32, 0u32);
-        for (c, cascade) in cascades.iter().enumerate() {
+        for (c, cascade) in cascades.iter().enumerate().filter(|(c, _)| drawn_now(*c)) {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("sun shadow cascade"),
                 color_attachments: &[],
@@ -734,10 +770,11 @@ mod tests {
         near + (far - near) * ((d - w(near)) / (w(far) - w(near)))
     }
 
-    /// Each cascade's box holds its slice of the view: every corner of the
-    /// slice falls inside its map, seen near the origin and far out at
-    /// Freeport's x; the control, the last slice's far corner, is outside
-    /// the first cascade's box.
+    /// Each cascade's box holds what it is for: the near two every corner of
+    /// their slice of the view's depth, the far two everything within their
+    /// end of the camera, whichever way, the eye moved by up to a jump; seen
+    /// near the origin and far out at Freeport's x. The control: the range's
+    /// far corner is outside the first cascade's box.
     #[test]
     fn each_cascade_holds_its_slice() {
         let noon = Vec3::new(-0.3, -0.95, 0.0).normalize();
@@ -749,10 +786,22 @@ mod tests {
                 q.x.abs() <= 1.0 && q.y.abs() <= 1.0 && (0.0..=1.0).contains(&q.z)
             };
             for c in 0..CASCADES {
-                let n = if c == 0 { 0.3 } else { ENDS[c - 1] as f64 };
-                for d in [n, ENDS[c] as f64] {
-                    for (x, y) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
-                        assert!(inside(c, corner(vp, x, y, d)), "cascade {c} at {eye}: corner ({x}, {y}) at depth {d}");
+                if c < 2 {
+                    // the near two: the corners of their slice of depth
+                    let n = if c == 0 { 0.3 } else { ENDS[c - 1] as f64 };
+                    for d in [n, ENDS[c] as f64] {
+                        for (x, y) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+                            assert!(inside(c, corner(vp, x, y, d)), "cascade {c} at {eye}: corner ({x}, {y}) at depth {d}");
+                        }
+                    }
+                } else {
+                    // the far two: anything within their end of the camera,
+                    // whichever way (behind it too), and the eye moved JUMP
+                    for k in 0..26 {
+                        let dir = DVec3::new((k % 3) as f64 - 1.0, (k / 3 % 3) as f64 - 1.0, (k / 9) as f64 - 1.0 + if k == 13 { 1.0 } else { 0.0 });
+                        let p = eye.as_dvec3() + dir.normalize() * (ENDS[c] as f64 - 1e-3);
+                        assert!(inside(c, p), "cascade {c} at {eye}: {dir} at {}", ENDS[c]);
+                        assert!(inside(c, p + DVec3::new(JUMP as f64 * 0.7, 0.0, JUMP as f64 * 0.7)), "cascade {c}: the eye moved by a jump's worth");
                     }
                 }
                 assert!(cs[c].texel > 0.0 && cs[c].texel < [0.03, 0.06, 0.12, 0.3][c], "cascade {c}'s texel {}", cs[c].texel);

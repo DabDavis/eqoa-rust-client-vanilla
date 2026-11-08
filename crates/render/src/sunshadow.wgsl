@@ -10,14 +10,19 @@
 // same wall. A radial flora plant's sun (VIRStrip6's sun × 0.15, no normal)
 // takes the map's visibility alone.
 //
-// The map is four cascades of the view's depth (`sunshadow::ENDS`), each an
-// orthographic view along the sun's light round the sphere that holds its
-// slice of the view, snapped to its texels in the world so it does not
-// shimmer as the camera moves (`sunshadow::fit`). A fragment takes the
-// cascade its depth before the camera falls in, looked up from a point moved
-// off the surface along its normal (more as the sun grazes it) and a little
-// toward the sun, four bilinear comparisons a texel apart; past
-// `params.y` the shadow fades out, gone by `params.z`, the cascades' end.
+// The map is four cascades (`sunshadow::ENDS`), each an orthographic view
+// along the sun's light, snapped to its texels in the world so it does not
+// shimmer as the camera moves (`sunshadow::fit`): the near two round the
+// slices of the view's depth they hold, the far two round the camera. A
+// fragment takes the near cascade its depth before the camera falls in, or
+// else the far one its distance from the camera does, looked up from a
+// point moved off the surface along its normal (more as the sun grazes it)
+// and a little toward the sun, four bilinear comparisons a texel apart; past
+// `params.y` from the camera the shadow fades out, gone by `params.z`, the
+// cascades' end.
+// The far two cascades are drawn in turn (`sunshadow::Sun::draw`): one drawn
+// a frame before that no longer holds a point (the camera turned) gives it
+// to the next.
 
 struct SunShadow {
     // each cascade's matrix: a position less the eye to its clip space
@@ -46,12 +51,15 @@ const SUN_DEPTH_BIAS: f32 = 1.0;
 // The sun's visibility at the fragment, 0 (in shadow) to 1, for a surface
 // facing `n` (a unit, or the plant's up).
 fn sun_shadow(i: LitOut, n: vec3<f32>) -> f32 {
+    // the near two cascades by the depth before the camera, the far two by
+    // the distance from it
     let d = i.misc.y;
-    if (sun.params.x <= 0.0 || d >= sun.params.z) {
+    let dist = length(i.rel);
+    if (sun.params.x <= 0.0 || dist >= sun.params.z) {
         return 1.0;
     }
     var c = 3u;
-    if (d < sun.ends.z) {
+    if (dist < sun.ends.z) {
         c = 2u;
     }
     if (d < sun.ends.y) {
@@ -60,10 +68,25 @@ fn sun_shadow(i: LitOut, n: vec3<f32>) -> f32 {
     if (d < sun.ends.x) {
         c = 0u;
     }
-    let t = sun.texel[c];
     let cosl = clamp(-dot(n, frame.sun_dir.xyz), 0.0, 1.0);
     let sinl = sqrt(1.0 - cosl * cosl);
-    let p = sun.m[c] * vec4<f32>(i.rel + n * (t * SUN_NORMAL_OFFSET * sinl), 1.0);
+    // the cascade the depth names, or the next where one drawn a frame
+    // before (the far two are drawn in turn) no longer holds the point, a
+    // texel clear of its edge for the taps; past the last, no shadow
+    var t = sun.texel[c];
+    var p = sun.m[c] * vec4<f32>(i.rel + n * (t * SUN_NORMAL_OFFSET * sinl), 1.0);
+    let edge = 1.0 - 2.0 * sun.params.w;
+    loop {
+        if ((abs(p.x) <= edge && abs(p.y) <= edge) || c == 3u) {
+            break;
+        }
+        c = c + 1u;
+        t = sun.texel[c];
+        p = sun.m[c] * vec4<f32>(i.rel + n * (t * SUN_NORMAL_OFFSET * sinl), 1.0);
+    }
+    if (abs(p.x) > edge || abs(p.y) > edge) {
+        return 1.0;
+    }
     let uv = vec2<f32>(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
     let z = p.z - t * SUN_DEPTH_BIAS * sun.inv_depth[c];
     let e = 0.5 * sun.params.w;
@@ -71,6 +94,6 @@ fn sun_shadow(i: LitOut, n: vec3<f32>) -> f32 {
     v += textureSampleCompareLevel(sun_map, sun_cmp, uv + vec2<f32>(e, -e), c, z);
     v += textureSampleCompareLevel(sun_map, sun_cmp, uv + vec2<f32>(-e, e), c, z);
     v += textureSampleCompareLevel(sun_map, sun_cmp, uv + vec2<f32>(e, e), c, z);
-    let fade = smoothstep(sun.params.y, sun.params.z, d);
+    let fade = smoothstep(sun.params.y, sun.params.z, dist);
     return mix(1.0, v * 0.25, sun.params.x * (1.0 - fade));
 }
