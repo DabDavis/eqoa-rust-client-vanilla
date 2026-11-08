@@ -109,12 +109,18 @@ pub fn stat_highlighted(c: i32, stat: i32) -> bool {
 /// own classes, and where the server opens every class to every race any race
 /// it or the game has takes any class.
 pub fn valid_combo(race: i32, c: i32, city: i32) -> bool {
-    if !(0..21).contains(&race) || !(0..15).contains(&c) {
+    if !(0..15).contains(&c) {
         return false;
     }
+    // a server's race by its own number, whatever it is (go-eqoa-server's go
+    // to 30): the game's table stops at 20, and Orc (21) to Gargoyle (29) had
+    // no class to take
     let o = offer();
     if let Some(r) = o.race(race) {
         return o.all_classes || r.has_class(c);
+    }
+    if !(0..21).contains(&race) {
+        return false;
     }
     if o.all_classes && (0..10).contains(&race) && (race != 0 || (1..=2).contains(&city)) {
         return true;
@@ -312,6 +318,29 @@ pub(crate) mod tests {
                 race(13, 2, 0, "Goblin", 0x7E49, [0x6C13_08E0, 0], [0, 5, 10, 15, 0, 5, 0]),
             ],
         }
+    }
+
+    /// A server's race past the game's twenty takes its classes from the offer as
+    /// any server race does (every class where the server opens them all, else
+    /// its own mask); the control: with no offer, race 21 is refused, as before.
+    #[test]
+    fn a_server_race_past_twenty_has_classes() {
+        let mut o = servers_offer(true);
+        let mut far = o.races[2].clone();
+        far.id = 29;
+        far.class_mask = 0x0005;
+        let mut orc = o.races[1].clone();
+        orc.id = 21;
+        o.races.push(far);
+        o.races.push(orc);
+        set_offer(Some(&o));
+        assert_eq!((0..15).filter(|&c| valid_combo(29, c, 0)).count(), 15, "every class, the server opens them all");
+        assert_eq!((0..15).filter(|&c| valid_combo(21, c, 0)).count(), 15);
+        o.all_classes = false;
+        set_offer(Some(&o));
+        assert_eq!((0..15).filter(|&c| valid_combo(29, c, 0)).collect::<Vec<_>>(), vec![0, 2], "its own mask");
+        set_offer(None);
+        assert!(!valid_combo(21, 0, 0) && !valid_combo(29, 0, 0), "with no offer, past twenty is no race");
     }
 
     /// A server's races take their alphabetical places in the race page's list
