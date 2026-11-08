@@ -126,6 +126,8 @@ or a browser (each described where it lives below):
   are carried onto HumanMale (HumanFemale for a female body) bone by bone, and take the slot and texture
   coordinates of what a human shows there in the same look. Heads, necks, wings and tails keep their
   own look; any body with texture slots is dressed exactly as before (held to every CSprite on the disc).
+  Players' characters only (a creature whose name colour is a player's, 2, and the pregame's figures):
+  NPCs keep the look the PS2 gave them (the user: "Players only").
   `eqoa dress <body> <out.png> [set=N robe=R dye=RRGGBB ...]` draws a body in a look from four sides.
 - **The combat record**, on a server that keeps one (go-eqoa-server's offer, 0x7E20,
   and its record, 0x7E21; Sandstorm and eqoa.live have none, and show no entry): the

@@ -12,9 +12,9 @@ is put on the page by `.github/workflows/notes.yml`.
   bodies were never made for armour, so nothing they wore was drawn; the armour is now laid over their
   torso, arms, hands, legs and feet the way it sits on a human, in its own colour and dye. Heads, wings,
   tails and the like keep their own look.
-- Other creature bodies that stand on two legs show armour too when a server dresses them in it. Every
-  body that already showed armour (the game's races, Kerrans, Goblins, Frogloks and the rest) looks
-  exactly as before.
+- Only players' characters are dressed this way: creatures and other NPCs look as they always have.
+  Every body that already showed armour (the game's races, Kerrans, Goblins, Frogloks and the rest)
+  looks exactly as before.
 
 ## 2026-11-08 · Texture packs and texture dumps, as PCSX2 makes them
 - Texture packs made for PCSX2 now work here as they are: put the pack's files in the `textures/SLUS-20744/replacements`

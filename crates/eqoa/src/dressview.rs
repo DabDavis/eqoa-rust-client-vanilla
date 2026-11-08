@@ -77,7 +77,7 @@ pub fn shot(lib: &Library, model: i32, look: &vi::cust::Look, at: i64, (w, h): (
     let mut cs = load_csprite(lib, r, &mut anims, &mut AnimCache::new(), &mut rand).ok_or("not a character")?;
     let mut mesh = lib.build_model(r).ok_or("no mesh")?;
     let before = mesh.batches.len();
-    crate::play::dress_look(lib, model, &mut mesh, &cs, look, false, &vi::cust::Tables::retail());
+    crate::play::dress_look(lib, model, &mut mesh, &cs, look, false, &vi::cust::Tables::retail(), true);
     let tris = |b: &[esf::Batch]| b.iter().map(|b| b.indices.len() / 3).sum::<usize>();
     // `EQOA_DRESS_DEBUG=slots`: the made-up batches flat, a colour a slot
     // (chest red, bracer yellow, gloves green, legs blue, boots magenta);

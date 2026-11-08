@@ -148,7 +148,7 @@ impl Figure {
                 helm_worn = true;
                 attached.push((cs.node_ids[8], g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
             }
-            crate::play::dress_look(lib, id as i32, &mut built, cs, &look, helm_worn, &t);
+            crate::play::dress_look(lib, id as i32, &mut built, cs, &look, helm_worn, &t, true);
         }
         let gpu = g.renderer.upload(g.device, g.queue, &built, &[render::IDENTITY], &textures);
         Some(Figure { model, look, sprite, anims, rand, gpu, attached, items, at, hpr, centre: Matrix44::identity(), held: None, fx: Vec::new() })

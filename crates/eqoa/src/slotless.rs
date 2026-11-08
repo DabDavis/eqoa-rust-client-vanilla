@@ -1270,7 +1270,7 @@ mod tests {
                 let mut before = model.clone();
                 crate::play::dress(&mut before, &vi::cust::apply_look_with(&cs, look, helm, has, &t));
                 let mut after = model.clone();
-                crate::play::dress_look(&lib, id, &mut after, &cs, look, helm, &t);
+                crate::play::dress_look(&lib, id, &mut after, &cs, look, helm, &t, true);
                 if !is_slotless(&cs) {
                     assert!(same(&before, &after), "{id:#010x} has text slots and changed in {look:?}");
                     continue;
@@ -1314,7 +1314,7 @@ mod tests {
         let model = lib.build_model(r).unwrap();
         let cs = vi::character::load_csprite(&lib, r, &mut vi::hsprite::AnimScene::default(), &mut vi::character::AnimCache::new(), &mut Rand(1)).unwrap();
         let mut off = model.clone();
-        crate::play::dress_look(&lib, NINE[0] as i32, &mut off, &cs, &looks[4], false, &t);
+        crate::play::dress_look(&lib, NINE[0] as i32, &mut off, &cs, &looks[4], false, &t, true);
         set_enabled(true);
         assert!(same(&model, &off));
     }
