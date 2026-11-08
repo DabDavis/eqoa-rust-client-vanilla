@@ -408,6 +408,10 @@ pub enum RequestUp {
 /// (`Play::open_bug_report`).
 pub const BUG_REPORT: i32 = 1;
 
+/// The text's buffer as the disc's form has it (`m_text[512]`, the editor's
+/// `SetMaxLength(512)`): 511 characters and the end.
+pub const TEXT_DISC: usize = 512;
+
 /// `VIWndCSRequest`: Category, Subcategory, the text and Submit, each picked
 /// from the client's lists (the hidden ones left out); a reply starts on the
 /// text and keeps the message's category.
@@ -427,6 +431,10 @@ pub struct Request {
     pub category_id: i32,
     pub subcategory_id: i32,
     pub reply_to: i32,
+    /// The text's buffer, its end counted: the disc's [`TEXT_DISC`], or more
+    /// where the server says it takes more (`Session::petition_text`, set
+    /// by `support`). Not the game's past 512.
+    pub most: usize,
     /// The category to start on once the lists are in (`preset`), not the
     /// game's: F3's Bug Report.
     preset: Option<i32>,
@@ -472,6 +480,7 @@ impl Request {
             category_id: 0,
             subcategory_id: 0,
             reply_to: -1,
+            most: TEXT_DISC,
             preset: None,
             cat_ids: Vec::new(),
             sub_ids: Vec::new(),
@@ -626,7 +635,7 @@ impl Request {
                 // 259: TakeText (only the text field has an editor)
                 EditUp::Done(_) => {
                     if self.sel == 2 {
-                        self.text = capped(&self.edit.text, 512);
+                        self.text = capped(&self.edit.text, self.most);
                     }
                     self.editing = false;
                 }
@@ -768,7 +777,7 @@ impl Request {
             }
             2 => {
                 let text = self.text.clone();
-                edit_field(&mut self.edit, 4, true, 512, self.window.center, &text, now);
+                edit_field(&mut self.edit, 4, true, self.most, self.window.center, &text, now);
                 self.editing = true;
             }
             _ => {
@@ -1895,6 +1904,50 @@ mod tests {
         assert_eq!(ib.point(text), vec![key::CROSS], "a reply starts on its text");
         assert_eq!(ib.point(submit), vec![MOVED]);
         assert_eq!(ib.read.request.sel, 3);
+    }
+
+    /// The text holds what the form's `most` lets it: typed into the editor
+    /// a key a character (as `EQOA_CS_TEXT` types) up to one short of it, the
+    /// keys past it refused, Done keeping all of it, and the request sending
+    /// all of it (9 bytes and two a character); a paste the same. The control:
+    /// the disc's 512 keeps 511, as a PS2's form does.
+    #[test]
+    fn the_text_holds_what_the_server_takes() {
+        for (most, kept) in [(TEXT_DISC, 511), (net::session::PETITION_TEXT_MOST + 1, 2047)] {
+            let (vui, mut r) = (vui(), NullRaster);
+            let mut cues = Vec::new();
+            let mut cs = CsClient { categories: categories(), ..Default::default() };
+            let mut q = Request::new(false);
+            q.refresh(&mut cs);
+            cs.state = 0;
+            q.visible = true;
+            q.focus(&vui, &r);
+            q.most = most;
+            (q.category, q.category_id, q.subcategory, q.subcategory_id, q.sel) = (wide("Bugs"), 1, wide("Crash"), 10, 2);
+            q.key(&vui, &mut r, &mut cs, key::CROSS, true, 1000, &mut cues);
+            assert!(q.editing, "the text's editor");
+            cues.clear();
+            for c in "A gate guard walks through the wall. ".bytes().cycle().take(kept + 5) {
+                q.key(&vui, &mut r, &mut cs, c as i32, true, 1000, &mut cues);
+            }
+            assert_eq!(q.edit.text.len(), kept, "{most}");
+            assert_eq!(cues.iter().filter(|&&c| c == 9).count(), 5, "the keys past it refused");
+            q.key(&vui, &mut r, &mut cs, 143, true, 1100, &mut cues);
+            assert!(!q.editing);
+            assert_eq!(q.text.len(), kept, "Done keeps it all");
+            q.sel = 3;
+            q.key(&vui, &mut r, &mut cs, key::CROSS, true, 1200, &mut cues);
+            let m = cs.out.last().expect("the request");
+            assert_eq!(m[..5], [0xA1, 0x0A, 0, 2, 20], "sub-op 0, Bugs, Crash");
+            assert_eq!(u32::from_le_bytes(m[5..9].try_into().unwrap()) as usize, kept);
+            assert_eq!(m.len(), 9 + 2 * kept);
+            assert_eq!(String::from_utf16_lossy(&q.text), String::from_utf16_lossy(&q.edit.text));
+            // a paste fills it as typing does
+            let mut e = EditBox::default();
+            e.set_multi_line(true);
+            e.set_max_length(most);
+            assert_eq!(e.paste(&"word ".repeat(1000), 0), kept);
+        }
     }
 
     /// The live -8 (`VIWndCSInbox::OnDrawSelf` 0x0133FB8C and its two
