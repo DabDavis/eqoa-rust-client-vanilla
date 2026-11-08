@@ -6,6 +6,10 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-08 · The mastery window can't hang
+- If the server's answer to a mastery request (buying a mastery, opening one, your share of experience) is lost on the
+  way, the window's "please wait" box now lets go after ten seconds instead of staying up for good with no way out.
+
 ## 2026-11-08 · Sun Shadows
 - A new option, Options > Extended > Lighting > Sun Shadows, lets the sun cast shadows. Buildings, walls, roofs,
   trees and their leaves, rocks, hills and every character block the sunlight, and their shadows fall across the

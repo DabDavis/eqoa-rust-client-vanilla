@@ -167,6 +167,30 @@ pub struct Part {
     pub pending: i32,
 }
 
+/// How long the window waits for the server's answer to a request (its box
+/// over the lists) before it lets go, in ms.
+pub const WAIT_MS: i64 = 10_000;
+
+/// The wait for an answer, let go when it has lasted [`WAIT_MS`]: `pending`
+/// the sub-op waited for (0 none), `since` when this wait was first seen.
+/// CLIENT's window waits for ever, which a PS2's link never leaves it to; a
+/// reply lost on the way here left the box up with no way out (a player, on
+/// the web page, 2026-11-08: "I am stuck in buying mastery... and I can't make
+/// it go away"). The server answers every request, a refusal included
+/// (go-eqoa-server's Recv02), so a wait this long has lost its answer.
+pub fn expire_wait(pending: &mut i32, since: &mut Option<i64>, now: i64) {
+    match (*pending, *since) {
+        (0, _) => *since = None,
+        (_, None) => *since = Some(now),
+        (_, Some(t)) if now < t => *since = Some(now), // the clock wrapped
+        (_, Some(t)) if now - t >= WAIT_MS => {
+            *pending = 0;
+            *since = None;
+        }
+        _ => {}
+    }
+}
+
 /// What a 0x1402 asks of the game.
 #[derive(Clone, Debug, PartialEq)]
 pub enum PartUp {
@@ -1038,6 +1062,30 @@ impl ClassMastery {
 
 #[cfg(test)]
 mod tests {
+    /// A wait the server never ends lets go after WAIT_MS, timed from when it
+    /// was first seen; a wait answered in time is the answer's; the control: a
+    /// short wait stays.
+    #[test]
+    fn a_wait_with_no_answer_lets_go() {
+        let (mut pending, mut since) = (2, None);
+        expire_wait(&mut pending, &mut since, 1_000);
+        assert_eq!((pending, since), (2, Some(1_000)), "first seen");
+        expire_wait(&mut pending, &mut since, 1_000 + WAIT_MS - 1);
+        assert_eq!(pending, 2, "the control: not yet");
+        expire_wait(&mut pending, &mut since, 1_000 + WAIT_MS);
+        assert_eq!((pending, since), (0, None), "let go");
+        // answered: the next wait is timed afresh
+        let (mut pending, mut since) = (5, Some(500));
+        pending = 0;
+        expire_wait(&mut pending, &mut since, 900);
+        assert_eq!(since, None);
+        pending = 4;
+        expire_wait(&mut pending, &mut since, 20_000);
+        assert_eq!(since, Some(20_000));
+        expire_wait(&mut pending, &mut since, 20_000 + WAIT_MS - 1);
+        assert_eq!(pending, 4);
+    }
+
     use super::*;
 
     fn skill(x00: i32, parent: i32, id: i32) -> Skill {
