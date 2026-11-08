@@ -4487,10 +4487,14 @@ impl Play {
                     self.session.say(&line, target);
                 }
             }
-            // go-eqoa-server's bug report on the spot: the note first
+            // go-eqoa-server's bug report: F3's form with the words typed after
+            // it (`open_bug_report_typed`), where the server offered bug
+            // reports; elsewhere the line as typed, its note first
             "/bug" => {
-                self.send_bug_note();
-                self.session.say(text, target);
+                if !self.open_bug_report_typed(&rest) {
+                    self.send_bug_note();
+                    self.session.say(text, target);
+                }
             }
             _ => self.session.say(text, target),
         }
@@ -6147,7 +6151,14 @@ impl Play {
         let mut keep = false;
         if !text.is_empty() {
             match purpose {
-                0x0B0F_0000 => self.chat_line(&text),
+                0x0B0F_0000 => {
+                    self.chat_line(&text);
+                    // /bug opened F3's form (support.rs): it keeps its mode
+                    if self.mode == 31 {
+                        self.edit.title.clear();
+                        keep = true;
+                    }
+                }
                 0x0B04_0000 => match self.buddies.add(&self.dump.player.name, &text) {
                     Ok(req) => self.session.send(&req),
                     Err((word, name)) => {
@@ -7574,7 +7585,7 @@ impl Play {
                 .group
                 .raid
                 .iter()
-                .map(|m| crate::raidlist::Row { id: m.id, name: m.name.clone(), hp: m.hp, is_target: m.id == self.target, seen: self.sees_entity(m.id), me: Some(m.id) == me })
+                .map(|m| crate::raidlist::Row { id: m.id, name: m.name.clone(), hp: m.hp, power: m.power, is_target: m.id == self.target, seen: self.sees_entity(m.id), me: Some(m.id) == me })
                 .collect(),
             patches: self.group.members[..self.group.count()]
                 .iter()
