@@ -32,7 +32,8 @@ struct Light {
 };
 
 struct Lights {
-    // x: how many of `l` are in use; y, z: the screen's tiles across and down
+    // x: how many of `l` are in use; y, z: the screen's tiles across and
+    // down; w: the mask of the fixed ones
     count: vec4<u32>,
     l: array<Light, 16>,
     // each tile's mask of the lights that reach it (`lit::tile_masks`),
@@ -127,7 +128,11 @@ fn tile_mask(i: LitOut) -> u32 {
 
 fn shade(i: LitOut, baked: bool) -> vec3<f32> {
     var light = i.base.rgb;
-    let mask = tile_mask(i);
+    // a baked instance's colour buffers carry the fixed lights: the others
+    var mask = tile_mask(i);
+    if (baked) {
+        mask = mask & ~lights.count.w;
+    }
     if (layer.flags.w > 0.5) {
         // VIRStrip6: the falloff alone, times 0.15, in the plant's space
         let k = 0.15;
@@ -152,9 +157,6 @@ fn shade(i: LitOut, baked: bool) -> vec3<f32> {
             continue;
         }
         let p = lights.l[j];
-        if (baked && p.color.w < 0.0) {
-            continue;
-        }
         let l = p.at.xyz - i.rel;
         // out of reach: nothing (most fragments, most lights)
         let d2 = dot(l, l);

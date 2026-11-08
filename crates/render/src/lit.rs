@@ -77,7 +77,8 @@ impl Lights {
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub(crate) struct LightsUniform {
-    /// x: lights in use, y and z: the tiles across and down
+    /// x: lights in use, y and z: the tiles across and down, w: the mask of
+    /// the fixed ones (a baked instance's fragments take the others alone)
     count: [u32; 4],
     /// each light's (position less the eye, range) and (colour, the range's
     /// inverse, negative for a fixed light)
@@ -100,7 +101,8 @@ impl LightsUniform {
         let all: Vec<PointLight> = personal.into_iter().chain(lights.as_slice().iter().copied()).take(MAX_LIGHTS).collect();
         let lights = Lights::new(&all);
         let mut u = LightsUniform::zeroed();
-        u.count = [lights.len() as u32, TILES.0 as u32, TILES.1 as u32, 0];
+        let fixed = lights.as_slice().iter().enumerate().filter(|(_, p)| p.fixed).fold(0u32, |m, (k, _)| m | 1 << k);
+        u.count = [lights.len() as u32, TILES.0 as u32, TILES.1 as u32, fixed];
         for (k, p) in lights.as_slice().iter().enumerate() {
             let r = p.range.max(1e-3);
             u.l[k] = [(p.at - eye).extend(p.range.max(0.0)).to_array(), p.color.extend(if p.fixed { -1.0 / r } else { 1.0 / r }).to_array()];
