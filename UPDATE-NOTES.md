@@ -15,8 +15,8 @@ is put on the page by `.github/workflows/notes.yml`.
   in the distance and into the fog. It works with Dynamic Lighting, Render Scale and both Ground Fog settings, in a
   browser too.
 - It is off unless you turn it on, and off the game looks exactly as it did on a PS2. On, it asks a little more of
-  the graphics card: about half a millisecond a frame at 1080p on a Radeon RX 580, and about a millisecond at 1440p
-  or 4K.
+  the graphics card: under a millisecond a frame at 1080p on a Radeon RX 580, and about one and a half at 1440p or
+  4K.
 
 ## 2026-11-08 · Dynamic Lighting
 - A new option, Options > Extended > Lighting > Dynamic Lighting, lights the world as a PC game would: the light of
