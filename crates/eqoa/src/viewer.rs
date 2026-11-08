@@ -1089,7 +1089,7 @@ pub fn shot_with(
             eprintln!("dynamic lighting: {} fixed lights made, {} found, {} drawn", parts.fixed.len(), found.len(), frame.0.lights.map_or(0, |l| l.len()));
             if std::env::var_os("EQOA_LIGHTS_TRACE").is_some() {
                 eprintln!("  eye {shot_eye:?}");
-                for l in frame.0.lights.iter().flat_map(|l| l.as_slice().iter().copied().collect::<Vec<_>>()) {
+                for l in frame.0.lights.map(|l| l.as_slice().to_vec()).unwrap_or_default() {
                     eprintln!("  light at {:?} range {:.1} colour {:?} fixed {} ({:.1} from the eye)", l.at, l.range, l.color, l.fixed, (l.at - shot_eye).length());
                 }
             }
