@@ -3770,6 +3770,9 @@ impl App {
                     Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
                     Key::Named(NamedKey::ArrowLeft) => Some(136),
                     Key::Named(NamedKey::ArrowRight) => Some(137),
+                    // the description up and down a line: the pad's R1 and R2
+                    Key::Named(NamedKey::PageUp) => Some(142),
+                    Key::Named(NamedKey::PageDown) => Some(143),
                     Key::Named(NamedKey::Enter) => Some(K::CROSS),
                     Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
                     Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
@@ -4902,7 +4905,7 @@ impl App {
                     let took = match (self.play.as_mut(), self.gfx.as_ref()) {
                         (Some(p), Some(g)) => {
                             let size = (g.config.width, g.config.height);
-                            p.chat_wheel(self.cursor, size, d) || p.raid_wheel(self.cursor, size, d)
+                            p.chat_wheel(self.cursor, size, d) || p.raid_wheel(self.cursor, size, d) || p.book_wheel(self.cursor, size, d)
                         }
                         _ => false,
                     };

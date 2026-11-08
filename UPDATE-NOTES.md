@@ -6,6 +6,11 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-08 · Scroll a spell description with the mouse or the keyboard
+- A spell description too long for its box now scrolls on the mouse wheel over the box, and on PageUp
+  and PageDown, as well as on a controller's R1 and R2. Over the list, the wheel still moves the
+  selection as before.
+
 ## 2026-11-08 · Scroll a long spell description
 - In the spell book, R1 and R2 scroll a description too long for its box, a line at a time (R1 up, R2
   down), as the live game did. It goes back to the top when you pick another ability.
