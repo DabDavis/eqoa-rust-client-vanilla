@@ -209,7 +209,8 @@ impl Frame {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: crate::DEPTH_FORMAT,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                // read by the Ambient Occlusion's passes (`ao`)
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             })
             .create_view(&Default::default());

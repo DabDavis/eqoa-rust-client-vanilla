@@ -6,6 +6,18 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-08 · Ambient Occlusion
+- A new option, Options > Extended > Lighting > Ambient Occlusion, shades the places the light reaches least: where a
+  wall meets the ground, the corners of a room, under a ledge or the edge of a roof, round a barrel, a post or a tree
+  standing on the ground, and under the feet of everyone standing about. The world looks more solid and its objects
+  sit on the ground instead of floating over it.
+- Water, glows, fog, spell effects, shadows, names and the HUD are drawn over it as they always were, and it fades out
+  in the distance and into the fog. It works with Dynamic Lighting, Render Scale and both Ground Fog settings, in a
+  browser too.
+- It is off unless you turn it on, and off the game looks exactly as it did on a PS2. On, it asks a little more of
+  the graphics card: under a millisecond a frame at 1080p on a Radeon RX 580, and about one and a half at 1440p or
+  4K.
+
 ## 2026-11-08 · Gargoyles hold their weapons
 - On a server with races of its own, a Gargoyle now shows what it holds: its weapons in its claws and its
   shield on its left arm, at character select and in the world. The gargoyles' body was made for creatures

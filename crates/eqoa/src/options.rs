@@ -44,7 +44,9 @@
 //! - Lighting (2026-11-08): Dynamic Lighting (Off, the PS2's: the strip
 //!   programs' light per vertex, the personal light the one point light;
 //!   On: the light per fragment, and the fires, placed lights, spells and
-//!   glowing weapons lighting what is round them, `lights`, `render::lit`);
+//!   glowing weapons lighting what is round them, `lights`, `render::lit`)
+//!   and Ambient Occlusion (Off, the game's picture; On: the opaque scene's
+//!   creases, corners and contacts darkened per pixel, `render::ao`);
 //! - UI: Ability Bars (the game's 2, or 3 or 4: the HUD's quick menus and
 //!   the spell book's slots, `hudmenu`), Update Notices (one setting for
 //!   every window: off, the game never asks to restart into a newer build,
@@ -667,6 +669,9 @@ impl WndOptions {
                     // Ground Fog: the fog's fans from the next frame (`fx`,
                     // `render::fog16`)
                     47 => c.ps2_fog = !c.ps2_fog,
+                    // Ambient Occlusion: its passes over the world from the
+                    // next frame (`viewer`, `render::ao`)
+                    54 => c.ambient_occlusion = !c.ambient_occlusion,
                     // Dynamic Lighting: the world lit per fragment or the
                     // PS2's way from the next frame (`viewer`, `lights`)
                     52 => c.dynamic_lighting = !c.dynamic_lighting,
@@ -1110,7 +1115,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 34] = [
+const EXTENDED_ITEMS: [(i32, &str); 35] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1145,6 +1150,7 @@ const EXTENDED_ITEMS: [(i32, &str); 34] = [
     (50, "Texture Packs"),
     (51, "Dump Textures"),
     (52, "Dynamic Lighting"),
+    (54, "Ambient Occlusion"),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1176,13 +1182,14 @@ struct Category {
 
 /// Extended's categories, in its menu's order (the user's: "Extended, then
 /// Video, UI, Controller, etc."), each a page of `PAGE_MOST` rows at most;
-/// Lighting after World (2026-11-08: Dynamic Lighting, the world's light);
+/// Lighting after World (2026-11-08: Dynamic Lighting, the world's light,
+/// and Ambient Occlusion);
 /// natively Textures last (2026-11-08: Texture Packs and Dump Textures, a
 /// folder's files a page cannot reach).
 const ALL_CATEGORIES: [Category; 9] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale },
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None },
-    Category { name: "Lighting", items: &[52], note: Note::None },
+    Category { name: "Lighting", items: &[52, 54], note: Note::None },
     Category { name: "UI", items: &[22, 29, 30, 40, 49], note: Note::None },
     Category { name: "Controller", items: &[16, 19, 48], note: Note::Reads },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
@@ -1282,6 +1289,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         37 => on_off(c.environment),
         46 => on_off(c.shadows),
         47 => wide(if c.ps2_fog { "PS2" } else { "Exact" }),
+        54 => on_off(c.ambient_occlusion),
         52 => on_off(c.dynamic_lighting),
         38 => wide(if c.loading_longer { "Longer" } else { "Instant" }),
         39 => wide(&format!("x{}", c.render_scale)),
@@ -1668,8 +1676,17 @@ mod tests {
         assert_eq!(value_text(&vui, 52), Some(wide(vui.words.get(551, vui.language))));
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(!settings::client().dynamic_lighting, "and back: two values");
+        // Ambient Occlusion, Off (the game's picture), then On
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (0, Some(&9)), "Lighting's one row");
+        assert_eq!(w.item, 54, "Ambient Occlusion");
+        assert_eq!(value_text(&vui, 54), Some(wide(vui.words.get(552, vui.language))), "Off, the game's picture");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::client().ambient_occlusion, settings::client().dynamic_lighting, cues.last()), (true, false, Some(&11)), "On, Dynamic Lighting still off");
+        assert_eq!(value_text(&vui, 54), Some(wide(vui.words.get(551, vui.language))));
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(!settings::client().ambient_occlusion, "and back: two values");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (1, Some(&9)), "Lighting's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!((w.page, w.cat, w.cat_sel, w.item), (3, None, 2, -1), "back to the categories, Lighting still lit");
         // UI: Ability Bars, Update Notices, Text, HUD, Raid List
