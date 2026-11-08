@@ -2285,6 +2285,37 @@ mod held {
         assert!(made_anew.is_none(), "the puppet kept");
         assert_eq!(nodes(&late), [11, 20, 21]);
     }
+
+    /// The player's own sprite, the walker's, holds items as its puppet's
+    /// does (`grant_walker`), which is what `spells_frame` reads for its own
+    /// hands' attack types: the gargoyles' body, the player told it wears it,
+    /// holds nothing while the server lists no races of its own (the control:
+    /// as a PS2, and as the build before this whatever the list) and its
+    /// items, the shield on its left hand, once the server's races list it.
+    /// Needs `run/eqoa.iso`.
+    #[test]
+    fn the_players_own_gargoyle_holds_items() {
+        const GARGOYLE: u32 = 0xB4D2_D132;
+        let (x, z) = (25275.115f32, 15766.627f32);
+        let Some(world) = crate::walker::tests::tunaria_round(x, z) else { return };
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let mut iso = iso::Iso::open(&path).unwrap();
+        let mut lib = Library::new();
+        lib.add("CHAR.ESF", esf::Container::open(iso.read("CHAR.ESF").unwrap()).unwrap());
+        let mut walker = Walker::new(world, x, z, 0.0);
+        walker.set_character(&lib, lib.lookup(GARGOYLE as i32).unwrap());
+        let mut p = super::commands::play();
+        p.self_model = Some(GARGOYLE);
+        let holds = |w: &Walker| w.sprite.as_ref().map(|cs| (cs.holds_items, cs.item_node(0), cs.item_node(2)));
+        p.grant_walker(&mut walker);
+        assert_eq!(holds(&walker), Some((false, None, None)), "the control: no races listed");
+        p.session.creation = Some(net::creation::Creation {
+            all_classes: true,
+            races: vec![net::creation::Race { id: 29, like: 9, city: 0, bonus: [0; 7], class_mask: 0x7FFF, body: [GARGOYLE, GARGOYLE], name: "Gargoyle".into(), short: "GAR".into(), desc: String::new() }],
+        });
+        p.grant_walker(&mut walker);
+        assert_eq!(holds(&walker), Some((true, Some(11), Some(20))));
+    }
 }
 
 pub struct Gpu<'a> {
@@ -2381,17 +2412,23 @@ impl Play {
     /// a different one (the caller re-dresses the walker). `game_frame`: one
     /// of the game's frames (`frames.rs`), which what it counts in frames
     /// steps on.
+    /// The player's own sprite holds items as its puppet's does
+    /// (`racebody`), so its hands swing and shoot by their weapons: the walker
+    /// wears the model the player was last told of (`self_model`, which the
+    /// viewer puts on it after the frame that names it).
+    fn grant_walker(&self, walker: &mut Walker) {
+        if let (Some(cs), Some(model)) = (walker.sprite.as_mut(), self.self_model) {
+            crate::racebody::grant(cs, model, true, self.session.creation.as_ref());
+        }
+    }
+
     pub fn frame(&mut self, walker: &mut Walker, lib: &Library, mut g: Gpu, game_ms: i64, game_frame: bool, mut sound: Option<&mut crate::sound::Sound>) -> Option<u32> {
         self.take_modules(sound.as_deref_mut());
         self.drawn = self.drawn.wrapping_add(1);
         let now = self.session.now();
         // the loading screen's gears, turning by the clock (`SetTime(now)`)
         self.loading.frame(lib, g.renderer, g.device, g.queue, now as i64);
-        // the player's own sprite holds items as its puppet's does
-        // (`racebody`): the walker wears the model it was told of last frame
-        if let (Some(cs), Some(model)) = (walker.sprite.as_mut(), self.self_model) {
-            crate::racebody::grant(cs, model, true, self.session.creation.as_ref());
-        }
+        self.grant_walker(walker);
         let mut new_model = None;
         self.actors_scene(walker);
         for e in self.session.pump() {
