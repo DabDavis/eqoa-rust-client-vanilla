@@ -6,6 +6,17 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-08 · Fungusmen keep their bag and fungus, skeletons wear real armour
+- A Fungusman in armour keeps its own bag and strap, and its glowing fungus: the growths on its
+  shoulders, wrists and shins, its claws and its cap look as they always did, and the armour covers
+  the rest of its body. Its upper arms now show the armour's sleeve, shoulder plate and all, instead
+  of a stretched, smeared piece of chest plate.
+- A Skeleton now wears its armour the way a human does, round its bones, instead of armour painted
+  thinly onto each bone. Only what it wears is shown: a chest piece alone leaves its bony legs, hands
+  and feet bare.
+- As before, only players' characters are dressed this way, and every body that already showed
+  armour looks exactly as it did.
+
 ## 2026-11-08 · Dynamic Lighting
 - A new option, Options > Extended > Lighting > Dynamic Lighting, lights the world as a PC game would: the light of
   the sky and of your lantern is worked out for every pixel instead of only at the corners of each surface, so it

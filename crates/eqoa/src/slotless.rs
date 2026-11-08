@@ -33,7 +33,21 @@
 //! triangles, a batch per slot with the human's slot layer (a human's armour
 //! is a layer over its skin: a texel the human shows its skin through shows
 //! the body's). The head, what reaches away from the torso, and translucent
-//! or untextured parts keep the body's own look.
+//! or untextured parts keep the body's own look, and so do the parts of a
+//! body's own model `KEPT` names (the fungusman's bag and its fungus).
+//!
+//! A triangle goes with the bones its corners are skinned to, but for one
+//! weighted to the spine that runs along an arm's upper bone to the elbow
+//! (`Rig::arm_along`): a body with no vertex on its upper arm (the
+//! fungusman's skin runs from the shoulder, on the spine, straight to the
+//! elbow) has its upper arm's triangles on the spine, and they are fitted to
+//! the human's sleeve, not to its side.
+//!
+//! The skeleton's bones are too thin to carry armour laid on them: it wears
+//! the human's armour itself (`SHELLED`, `Shell`), a human's surfaces for
+//! each slot with art, on its bones (it is built on HumanMale's skeleton),
+//! and its own bones under them are hidden; where nothing is worn they stay
+//! bare.
 //!
 //! Only a body with no text slot at all changes; one with a TSlotList is
 //! dressed by `vi::cust` exactly as before. `set_enabled(false)` turns it off
@@ -65,6 +79,130 @@ const ANKLE: f32 = 0.88;
 /// that height (a chest's, a belly's and a kilt's are within it; a bee's
 /// abdomen, a tail and wings reach past it).
 const HUG: f32 = 1.2;
+
+/// A spine triangle that reaches the elbow (a corner this fraction of the
+/// way from the shoulder to the elbow, or past it) is an arm's when its
+/// middle lies past `ARM_ALONG` of the way (`Rig::arm_along`).
+const ELBOW: f32 = 0.9;
+const ARM_ALONG: f32 = 0.25;
+
+/// Parts of a body's own model that keep its look under armour, as the
+/// palette entries they are drawn in, by body (its CHAR.ESF DictID): parts
+/// no rule tells apart from the skin, each one the user named. The
+/// fungusman's (the user, 2026-11-08: "the bag that is part of the model if
+/// we could not cover that with armor, but the body still"; "the fungus that
+/// protrudes to not take armor texture"): entry 0 its fungus, the cap and the
+/// growths on its shoulders, wrists and shins and its claws, drawn with a glow
+/// over the skin's own texture; entry 2 its bag and strap, a texture of their
+/// own. Neither makes a rule: ten other slotless bodies on the disc draw a
+/// glow over a texture their skin also shows plain, some over the whole body
+/// (0x8A416240's 750 triangles), and a texture of a limb's own is as often its
+/// skin (the dryad's hands and feet).
+const KEPT: &[(u32, &[i32])] = &[(0x4A4D88FB, &[0, 2])];
+
+/// The palette entries body `id` keeps its own look on (`KEPT`).
+fn kept(id: i32) -> &'static [i32] {
+    KEPT.iter().find(|(b, _)| *b == id as u32).map_or(&[], |(_, e)| e)
+}
+
+/// Bodies that wear armour as a human does, round them, not laid on their
+/// own triangles: the skeleton's, whose bones are too thin to carry it (the
+/// user, 2026-11-08: "lets fit armor on skeletons like humans or similar,
+/// dont make the armor model formfitting"). It is built on the human's own
+/// skeleton (HumanMale's forty nodes in the same bind pose), so it wears the
+/// human's armour surfaces themselves (`Shell`), skinned to the same nodes;
+/// on any other skeleton a body listed here is dressed as the others are.
+const SHELLED: &[u32] = &[0x6AF98A81];
+
+/// Whether a material is opaque and textured (not a wing's translucent
+/// membrane, not a painted eye).
+fn opaque(b: &esf::Batch) -> bool {
+    b.layers.first().is_some_and(|l| l.blend == 0 && l.texture != 0)
+}
+
+/// Which of `model`'s triangles can wear armour, per batch: those of its
+/// opaque materials, but the parts the body keeps (`kept`). Of a kept entry
+/// whose texture the skin shares, a triangle drawn in the skin's colours
+/// (its texels' mean nearer the skin's triangles' than the part's own, by
+/// `colours`, a texture's texels) is the skin's: the fungusman's fungus
+/// material also draws one strip of its right upper arm in the skin's bark,
+/// and that strip wears armour as the arm round it does.
+fn wearing(model: &esf::Model, kept: &[i32], colours: impl Fn(i32) -> Option<Rc<Texels>>) -> Vec<Vec<bool>> {
+    let uv = |b: &esf::Batch, t: &[u32]| [0, 1, 2].map(|k| b.layers[0].apply_uv(model.uv[t[k] as usize]));
+    // per texture a kept entry is drawn in: its texels, and the mean colour
+    // of the part's triangles and of the skin's
+    let mut means: HashMap<i32, (Rc<Texels>, Vec3, Vec3)> = HashMap::new();
+    for b in model.batches.iter().filter(|b| opaque(b) && kept.contains(&b.material)) {
+        let tex = b.layers[0].texture;
+        if means.contains_key(&tex) {
+            continue;
+        }
+        let Some(texels) = colours(tex) else { continue };
+        let mean = |part: bool| {
+            let all: Vec<Vec3> = model.batches.iter().filter(|o| opaque(o) && o.layers[0].texture == tex && kept.contains(&o.material) == part).flat_map(|o| o.indices.chunks_exact(3).map(|t| texels.mean(&uv(o, t)))).collect();
+            (!all.is_empty()).then(|| all.iter().sum::<Vec3>() / all.len() as f32)
+        };
+        if let (Some(part), Some(skin)) = (mean(true), mean(false)) {
+            means.insert(tex, (texels.clone(), part, skin));
+        }
+    }
+    model
+        .batches
+        .iter()
+        .map(|b| {
+            b.indices
+                .chunks_exact(3)
+                .map(|t| {
+                    if !opaque(b) {
+                        return false;
+                    }
+                    if !kept.contains(&b.material) {
+                        return true;
+                    }
+                    means.get(&b.layers[0].texture).is_some_and(|(texels, part, skin)| {
+                        let c = texels.mean(&uv(b, t));
+                        c.distance(*skin) < c.distance(*part)
+                    })
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// A texture's colours, as decoded.
+pub struct Texels {
+    w: usize,
+    h: usize,
+    rgb: Vec<[u8; 3]>,
+}
+
+impl Texels {
+    /// The mean colour of a triangle's points (`Alpha::points`), the
+    /// texture repeated.
+    fn mean(&self, uv: &[[f32; 2]; 3]) -> Vec3 {
+        let pts = Alpha::points(uv);
+        pts.iter()
+            .map(|p| {
+                let x = (p[0].rem_euclid(1.0) * self.w as f32) as usize % self.w;
+                let y = (p[1].rem_euclid(1.0) * self.h as f32) as usize % self.h;
+                Vec3::from(self.rgb[y * self.w + x].map(f32::from))
+            })
+            .sum::<Vec3>()
+            / pts.len() as f32
+    }
+}
+
+/// Texture `id`'s colours in the library's view now; None when it does not
+/// resolve or decode.
+fn colours_of(lib: &Library, id: i32) -> Option<Rc<Texels>> {
+    let key = (id, lib.view());
+    if let Some(t) = TEXELS.with(|t| t.borrow().get(&key).cloned()) {
+        return t;
+    }
+    let made = lib.surface(id).and_then(|(c, s)| s.decode(&c.data)).map(|img| Rc::new(Texels { w: img.width as usize, h: img.height as usize, rgb: img.rgba.chunks_exact(4).map(|p| [p[0], p[1], p[2]]).collect() }));
+    TEXELS.with(|t| t.borrow_mut().insert(key, made.clone()));
+    made
+}
 
 static ENABLED: AtomicBool = AtomicBool::new(true);
 
@@ -111,8 +249,10 @@ fn worn(changes: &[LayerChange]) -> [(Option<u32>, Option<[u8; 4]>); SLOTS] {
 
 /// Where the look puts the armour on a slotless body: `model` (the body as
 /// `build_model` made it, `id` its DictID) gains a batch for each slot the
-/// look gives art to, drawn over the body's own triangles there. False when
-/// nothing was added (no art worn, a body this cannot fit, or turned off).
+/// look gives art to, drawn over the body's own triangles there; a body that
+/// wears a human's armour (`SHELLED`) gains the human's surfaces there
+/// instead, and loses its own triangles under them. False when nothing was
+/// added (no art worn, a body this cannot fit, or turned off).
 /// The look's textures resolve as `has` says, by the tables `t`, as
 /// `vi::cust::apply_look_with` dresses a body with slots.
 #[allow(clippy::too_many_arguments)]
@@ -129,8 +269,34 @@ pub fn dress(lib: &Library, id: i32, model: &mut esf::Model, cs: &CSprite<Ee>, l
     // them otherwise)
     let unrobed = vi::cust::apply_look_slots(&slots(), cs.race, cs.sex, &Look { robe: -1, ..*look }, helm_worn, &has, t);
     let robed = art[3].is_some() && worn(&unrobed)[3].0 != art[3];
-    let Some(fit) = fit_of(lib, id, model, cs, art, robed) else { return false };
+    let fit = fit_of(lib, id, model, cs, art, robed);
+    if SHELLED.contains(&(id as u32))
+        && let Some(shell) = shell_of(lib, id, cs, art)
+    {
+        // the body's own triangles where it wears something are hidden: the
+        // fit lays them in that slot, and a skeleton's hips and finger bones
+        // reach out through a human's armour
+        if let Some(fit) = &fit {
+            hide(model, fit, &shell);
+        }
+        return put_on(model, &shell, &changes);
+    }
+    let Some(fit) = fit else { return false };
     apply(model, &fit, &changes)
+}
+
+/// Takes out of `model`'s own batches its triangles the fit lays in a slot
+/// the shell puts armour in.
+fn hide(model: &mut esf::Model, fit: &Fit, shell: &Shell) {
+    let gone: std::collections::HashSet<([u32; 3], Option<u8>)> = (0..SLOTS).filter(|&i| !shell.tris[i].is_empty()).flat_map(|i| fit.tris[i].iter().map(|t| (t.v, t.lod))).collect();
+    if gone.is_empty() {
+        return;
+    }
+    for b in model.batches.iter_mut() {
+        let before = b.indices.len();
+        b.indices = b.indices.chunks_exact(3).filter(|t| !gone.contains(&([t[0], t[1], t[2]], b.lod))).flatten().copied().collect();
+        model.triangles -= ((before - b.indices.len()) / 3) as u32;
+    }
 }
 
 /// The layer changes on the made-up slots put on `model` as batches: per
@@ -177,6 +343,121 @@ pub fn apply(model: &mut esf::Model, fit: &Fit, changes: &[LayerChange]) -> bool
     added
 }
 
+/// A human's armour for one look, to put on a body whose skeleton is the
+/// human's (`SHELLED`): per slot with art, the triangles of the human's slot
+/// material that show in it (any of their points on an opaque texel: the
+/// rest, a robe's skirt that armour hides, is left out), each corner as the
+/// human has it (place, normal, colour, bones and weights) with the texture
+/// coordinates its slot layer samples; and the human's layer per slot.
+#[derive(Clone, Debug)]
+pub struct Shell {
+    pub tris: [Vec<[Corner; 3]>; SLOTS],
+    pub layers: [esf::Layer; SLOTS],
+}
+
+/// A corner of a human's armour triangle.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Corner {
+    pub pos: [f32; 3],
+    pub normal: [f32; 3],
+    pub color: [f32; 4],
+    pub uv: [f32; 2],
+    pub bones: [u8; 4],
+    pub weights: [u8; 4],
+}
+
+/// The shell of body `id` (`cs` its sprite) wearing `art`, made once per
+/// body, art and look; None when its skeleton is not the human's.
+fn shell_of(lib: &Library, id: i32, cs: &CSprite<Ee>, art: Art) -> Option<Rc<Shell>> {
+    let key = (id, lib.view(), art);
+    if let Some(s) = SHELLS.with(|s| s.borrow().get(&key).cloned()) {
+        return s;
+    }
+    let made = Human::load(lib, cs.sex != 0).and_then(|h| {
+        let shell = Shell::of(lib, &h, art);
+        same_skeleton(&h.cs, cs, shell.tris.iter().flatten().flatten().flat_map(|c| (0..4).filter(|&k| c.weights[k] > 0).map(|k| c.bones[k] as usize))).then(|| Rc::new(shell))
+    });
+    SHELLS.with(|s| {
+        let mut s = s.borrow_mut();
+        if s.len() >= 256 {
+            s.clear();
+        }
+        s.insert(key, made.clone());
+    });
+    made
+}
+
+/// Whether two sprites' skeletons are one for vertices skinned to `used`:
+/// the same nodes and parents, and those nodes in the same bind pose (a
+/// vertex skinned to them on one sits on the other's bones as it did). The
+/// skeleton's differs from HumanMale's in one node only, the top of its
+/// skull, 3 cm higher, which no armour is skinned to.
+fn same_skeleton(a: &CSprite<Ee>, b: &CSprite<Ee>, mut used: impl Iterator<Item = usize>) -> bool {
+    let (a, b) = (&a.h.nodes, &b.h.nodes);
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(x, y)| x.parent == y.parent)
+        && used.all(|i| {
+            let (p, q) = (a.get(i).map(|n| n.inv_bind_world.to_cols()), b.get(i).map(|n| n.inv_bind_world.to_cols()));
+            p.zip(q).is_some_and(|(p, q)| p.iter().flatten().zip(q.iter().flatten()).all(|(u, v)| (u - v).abs() < 1e-4))
+        })
+}
+
+impl Shell {
+    fn of(lib: &Library, h: &Human, art: Art) -> Shell {
+        let m = &h.model;
+        let layer = |i: usize| {
+            let (entry, layer) = h.cs.text_slots[i];
+            m.batches.iter().find(|b| b.material == entry).and_then(|b| b.layers.get(layer as usize)).cloned()
+        };
+        let mut tris: [Vec<[Corner; 3]>; SLOTS] = Default::default();
+        for (i, slot) in tris.iter_mut().enumerate() {
+            let (Some(tex), Some(l)) = (art[i], layer(i)) else { continue };
+            let alpha = alpha_of(lib, tex as i32);
+            for (_, t) in near_triangles(m).filter(|(b, _)| b.material == h.cs.text_slots[i].0) {
+                let uv = t.map(|v| l.apply_uv(m.uv[v]));
+                if alpha.as_ref().is_none_or(|a| a.any(&uv)) {
+                    slot.push([0, 1, 2].map(|k| Corner { pos: m.pos[t[k]], normal: m.normal[t[k]], color: m.color[t[k]], uv: uv[k], bones: m.bones[t[k]], weights: m.weights[t[k]] }));
+                }
+            }
+        }
+        let fallback = esf::Layer { flags: 0, texture: 0, wrap: 0, blend: 0, color: [255; 4], uv_transform: [0.0; 9], lod_bias: 0.8, uv_rate: [0.0; 2], emissive: [0; 4] };
+        Shell { tris, layers: std::array::from_fn(|i| layer(i).unwrap_or_else(|| fallback.clone())) }
+    }
+}
+
+/// The layer changes on the made-up slots put on `model` as a shell's
+/// batches: per slot with art, the human's triangles there, new vertices of
+/// the body's, with the human's slot layer in the slot's texture and colour.
+pub fn put_on(model: &mut esf::Model, shell: &Shell, changes: &[LayerChange]) -> bool {
+    let mut added = false;
+    for (slot, (tex, color)) in worn(changes).into_iter().enumerate() {
+        let Some(tex) = tex else { continue };
+        let tris = &shell.tris[slot];
+        if tris.is_empty() {
+            continue;
+        }
+        let mut layer = shell.layers[slot].clone();
+        layer.texture = tex as i32;
+        if let Some(c) = color {
+            layer.color = c;
+        }
+        let mut indices = Vec::new();
+        for c in tris.iter().flatten() {
+            indices.push(model.pos.len() as u32);
+            model.pos.push(c.pos);
+            model.uv.push(c.uv);
+            model.normal.push(c.normal);
+            model.color.push(c.color);
+            model.bones.push(c.bones);
+            model.weights.push(c.weights);
+        }
+        model.triangles += tris.len() as u32;
+        model.batches.push(esf::Batch { material: ENTRY + slot as i32, layers: vec![layer], indices, lod: None });
+        added = true;
+    }
+    added
+}
+
 /// One of a body's triangles in a slot: its three vertices (the model's
 /// indices), the texture coordinates the human has where they land, and the
 /// level of detail its batch is drawn at.
@@ -212,6 +493,10 @@ thread_local! {
     static FITS: Cache<(i32, Era, Art, bool), Fit> = std::cell::RefCell::new(HashMap::new());
     /// Textures' see-through texels, by DictID and art.
     static ALPHAS: Cache<(i32, Era), Alpha> = std::cell::RefCell::new(HashMap::new());
+    /// Shells made, by body, art and what each slot wears.
+    static SHELLS: Cache<(i32, Era, Art), Shell> = std::cell::RefCell::new(HashMap::new());
+    /// The colours of the textures kept parts are drawn in, by DictID and art.
+    static TEXELS: Cache<(i32, Era), Texels> = std::cell::RefCell::new(HashMap::new());
 }
 
 /// The fit of body `id` (`model` and `cs` built from it in the library's
@@ -231,7 +516,7 @@ pub fn fit_of(lib: &Library, id: i32, model: &esf::Model, cs: &CSprite<Ee>, art:
     });
     let fit = r.and_then(|r| {
         let c = CARRIED.with(|c| c.borrow().get(&(id, era)).cloned()).unwrap_or_else(|| {
-            let made = Carried::of(&r, model, cs).map(Rc::new);
+            let made = Carried::of(&r, model, cs, &wearing(model, kept(id), |t| colours_of(lib, t))).map(Rc::new);
             CARRIED.with(|c| c.borrow_mut().insert((id, era), made.clone()));
             made
         })?;
@@ -269,10 +554,19 @@ impl Alpha {
     /// Whether a triangle shows: four of its corners, its edges' middles and
     /// its middle.
     fn shows(&self, uv: &[[f32; 2]; 3]) -> bool {
+        Alpha::points(uv).iter().filter(|&&p| self.at(p)).count() >= 4
+    }
+
+    /// Whether any of those points of a triangle shows.
+    fn any(&self, uv: &[[f32; 2]; 3]) -> bool {
+        Alpha::points(uv).iter().any(|&p| self.at(p))
+    }
+
+    /// A triangle's corners, its edges' middles and its middle.
+    fn points(uv: &[[f32; 2]; 3]) -> [[f32; 2]; 7] {
         let mid = |a: [f32; 2], b: [f32; 2]| [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5];
         let c = [(uv[0][0] + uv[1][0] + uv[2][0]) / 3.0, (uv[0][1] + uv[1][1] + uv[2][1]) / 3.0];
-        let points = [uv[0], uv[1], uv[2], mid(uv[0], uv[1]), mid(uv[1], uv[2]), mid(uv[2], uv[0]), c];
-        points.iter().filter(|&&p| self.at(p)).count() >= 4
+        [uv[0], uv[1], uv[2], mid(uv[0], uv[1]), mid(uv[1], uv[2]), mid(uv[2], uv[0]), c]
     }
 }
 
@@ -508,6 +802,28 @@ impl Rig {
         Some(Rig { part: part.into_iter().map(|p| p.unwrap_or(Part::Other)).collect(), parent: parent.to_vec(), segs, head, shoulders })
     }
 
+    /// The arm whose upper bone a triangle (its corners `p`, in the bind
+    /// pose) runs along, from the shoulder to the elbow: a corner at the
+    /// elbow (`ELBOW` of the way there or past it), and its middle past
+    /// `ARM_ALONG` of the way, not past the elbow, and nearer that bone than
+    /// the spine's. A body whose upper arm has no vertex of its own skins
+    /// such triangles to the spine at the shoulder (the fungusman's run from
+    /// the shoulder straight to the elbow); on the arm they take the human's
+    /// sleeve, where on the spine they took its side, stretched along the
+    /// arm. A triangle of the torso by the shoulder, or of a kappa's shell
+    /// beside the arm, reaches no elbow.
+    fn arm_along(&self, p: [Vec3; 3]) -> Option<u8> {
+        let (a, b) = self.segs[&Seg::Body];
+        let spine = Frame::new(a, b);
+        let mid = (p[0] + p[1] + p[2]) / 3.0;
+        (0..2u8).find(|&s| {
+            let (a, b) = self.segs[&Seg::Limb(Limb::Arm(s), 0)];
+            let arm = Frame::new(a, b);
+            let t = |q: Vec3| (q - a).dot(arm.d) / arm.len;
+            p.iter().any(|&q| t(q) >= ELBOW) && t(mid) > ARM_ALONG && t(mid) <= 1.0 && seg_distance(&arm, mid) < seg_distance(&spine, mid)
+        })
+    }
+
     /// The neck made the head's: the spine between the head and the node
     /// the arms hang from (a human's neck is its head's material, and its
     /// armour stops below it).
@@ -658,9 +974,20 @@ fn part_of(model: &esf::Model, rig: &Rig, v: usize) -> Part {
     bone_of(model, v).and_then(|b| rig.part.get(b).copied()).unwrap_or(Part::Other)
 }
 
-/// A triangle's group: where most of its three vertices' weight is, None
-/// when at least as much is on the head or on something off the spine.
+/// A triangle's group: where most of its three vertices' weight is
+/// (`weight_group`), but an arm's for one on the spine that runs along that
+/// arm's upper bone to the elbow (`Rig::arm_along`).
 fn group_of(model: &esf::Model, rig: &Rig, t: [usize; 3]) -> Option<Group> {
+    let g = weight_group(model, rig, t)?;
+    match rig.arm_along(t.map(|v| pos(model, v))) {
+        Some(s) if g == Group::Body => Some(Group::Limb(Limb::Arm(s))),
+        _ => Some(g),
+    }
+}
+
+/// Where most of a triangle's three vertices' weight is, None when at least
+/// as much is on the head or on something off the spine.
+fn weight_group(model: &esf::Model, rig: &Rig, t: [usize; 3]) -> Option<Group> {
     let mut by: HashMap<Option<Group>, u32> = HashMap::new();
     for &v in &t {
         let (b, w) = (model.bones[v], model.weights[v]);
@@ -844,13 +1171,17 @@ struct CarriedTri {
 }
 
 impl Carried {
-    fn of(r: &Reference, model: &esf::Model, cs: &CSprite<Ee>) -> Option<Carried> {
+    /// `wearing`: per batch, per triangle, whether it can wear armour
+    /// (`wearing`).
+    fn of(r: &Reference, model: &esf::Model, cs: &CSprite<Ee>, wearing: &[Vec<bool>]) -> Option<Carried> {
         let mut rig = Rig::of_sprite(cs)?;
         rig.neck();
-        // the triangles that can wear armour: on an opaque textured material
-        // (not a wing's translucent membrane, not a painted eye)
-        let wears = |b: &esf::Batch| b.layers.first().is_some_and(|l| l.blend == 0 && l.texture != 0);
-        let worn: Vec<([usize; 3], Option<u8>)> = model.batches.iter().filter(|b| wears(b)).flat_map(|b| b.indices.chunks_exact(3).map(|t| ([t[0] as usize, t[1] as usize, t[2] as usize], b.lod))).collect();
+        let worn: Vec<([usize; 3], Option<u8>)> = model
+            .batches
+            .iter()
+            .zip(wearing)
+            .flat_map(|(b, on)| b.indices.chunks_exact(3).zip(on).filter(|(_, on)| **on).map(|(t, _)| ([t[0] as usize, t[1] as usize, t[2] as usize], b.lod)))
+            .collect();
         let verts: Vec<usize> = {
             let mut v: Vec<usize> = worn.iter().flat_map(|(t, _)| *t).collect();
             v.sort_unstable();
@@ -981,14 +1312,15 @@ fn seg_distance(f: &Frame, p: Vec3) -> f32 {
 }
 
 /// For a look at the fit (`dressview`'s pictures): each triangle of each of
-/// `model`'s batches, where it is fitted: 0 the body, 1 and 2 the arms, 3
-/// and 4 the legs, 5 the head, 6 a part that wears nothing (translucent,
-/// untextured), 7 something off the spine. None for a body this cannot fit.
-pub fn debug_groups(model: &esf::Model, cs: &CSprite<Ee>) -> Option<Vec<Vec<u8>>> {
+/// `model`'s batches (body `id`'s), where it is fitted: 0 the body, 1 and 2
+/// the arms, 3 and 4 the legs, 5 the head, 6 a part that wears nothing
+/// (translucent, untextured), 7 something off the spine, 8 a part the body
+/// keeps its own look on (`KEPT`). None for a body this cannot fit.
+pub fn debug_groups(lib: &Library, id: i32, model: &esf::Model, cs: &CSprite<Ee>) -> Option<Vec<Vec<u8>>> {
     let mut rig = Rig::of_sprite(cs)?;
     rig.neck();
-    let wears = |b: &esf::Batch| b.layers.first().is_some_and(|l| l.blend == 0 && l.texture != 0);
-    let verts: Vec<usize> = model.batches.iter().filter(|b| wears(b)).flat_map(|b| b.indices.iter().map(|&v| v as usize)).collect();
+    let wearing = wearing(model, kept(id), |t| colours_of(lib, t));
+    let verts: Vec<usize> = model.batches.iter().zip(&wearing).flat_map(|(b, on)| b.indices.chunks_exact(3).zip(on).filter(|(_, on)| **on).flat_map(|(t, _)| t.iter().map(|&v| v as usize))).collect();
     let body = frames(&rig, verts.iter().filter(|&&v| part_of(model, &rig, v) == Part::Body).map(|&v| (pos(model, v), Seg::Body)))[&Seg::Body];
     let on: Vec<(Vec3, usize)> = verts.iter().filter_map(|&v| bone_of(model, v).map(|b| (pos(model, v), b))).collect();
     rig.fold(&body, &on);
@@ -996,12 +1328,14 @@ pub fn debug_groups(model: &esf::Model, cs: &CSprite<Ee>) -> Option<Vec<Vec<u8>>
         model
             .batches
             .iter()
-            .map(|b| {
+            .zip(&wearing)
+            .map(|(b, on)| {
                 b.indices
                     .chunks_exact(3)
-                    .map(|t| {
-                        if !wears(b) {
-                            return 6;
+                    .zip(on)
+                    .map(|(t, on)| {
+                        if !on {
+                            return if opaque(b) { 8 } else { 6 };
                         }
                         let t = [t[0] as usize, t[1] as usize, t[2] as usize];
                         match group_of(model, &rig, t) {
@@ -1241,7 +1575,8 @@ mod tests {
     /// byte as before in all of them (it is never fitted); a slotless one as
     /// before in a look with no art, and in one with art it only gains the
     /// made-up batches after its own, its own batches and vertices as they
-    /// were. The nine and the hill giant are fitted in every look, and each
+    /// were (the skeleton's batches losing only triangles, those under its
+    /// armour). The nine and the hill giant are fitted in every look, and each
     /// gains armour in a set; the other slotless bodies in plate. The control:
     /// with the dressing off, a slotless body in plate is as before.
     #[test]
@@ -1287,6 +1622,19 @@ mod tests {
                 own.bones.truncate(before.bones.len());
                 own.weights.truncate(before.weights.len());
                 own.triangles = before.triangles;
+                if SHELLED.contains(&(id as u32)) {
+                    // only triangles taken out, each batch's rest in order
+                    for (b, o) in before.batches.iter().zip(own.batches.iter_mut()) {
+                        let mut left = o.indices.chunks_exact(3).peekable();
+                        for t in b.indices.chunks_exact(3) {
+                            if left.peek() == Some(&t) {
+                                left.next();
+                            }
+                        }
+                        assert!(left.next().is_none(), "{id:#010x}: a triangle of its own put back changed");
+                        o.indices = b.indices.clone();
+                    }
+                }
                 assert!(same(&before, &own), "{id:#010x}: its own batches and vertices as they were");
                 assert!(after.batches[n..].iter().all(|b| (ENTRY..ENTRY + SLOTS as i32).contains(&b.material)));
                 if look.armor[..5].iter().all(|&s| s == 0) && look.robe < 0 {
@@ -1353,6 +1701,192 @@ mod tests {
         assert!(fit.tris.iter().flatten().any(|t| t.v.iter().all(|v| torso.contains(v))));
         // the control: read without the neck rule, the head's material wears more
         assert!(Rig::of_sprite(&cs).unwrap().part[4] == Part::Body && rig.part[4] == Part::Head);
+    }
+
+    /// A triangle skinned to the spine that runs along an arm from the
+    /// shoulder to the elbow is the arm's (the fungusman's upper arm, from its
+    /// shoulder on the spine straight to its elbow); one by the shoulder
+    /// joint, or out along the arm short of the elbow, stays the torso's, and
+    /// one skinned to the arm is the arm's (the controls).
+    #[test]
+    fn a_spine_triangle_out_along_an_arm_is_the_arms() {
+        let (parent, at, ids) = skeleton();
+        let rig = Rig::of(&parent, &at, &ids).expect("a rig");
+        let mut m = esf::Model::default();
+        fn vert(m: &mut esf::Model, p: [f32; 3], bone: u8) -> usize {
+            m.pos.push(p);
+            m.uv.push([0.0; 2]);
+            m.normal.push([0.0, 1.0, 0.0]);
+            m.color.push([1.0; 4]);
+            m.bones.push([bone, 255, 255, 255]);
+            m.weights.push([127, 0, 0, 0]);
+            m.pos.len() - 1
+        }
+        // the chest is node 2; the right arm's upper arm 10, forearm 11
+        // shoulder to elbow: two corners on the chest, one on the forearm
+        let long = [vert(&mut m, [0.2, 1.45, 0.03], 2), vert(&mut m, [0.2, 1.35, -0.03], 2), vert(&mut m, [0.42, 1.4, 0.04], 11)];
+        // by the shoulder joint, all on the chest
+        let near = [vert(&mut m, [0.12, 1.45, 0.05], 2), vert(&mut m, [0.12, 1.3, 0.05], 2), vert(&mut m, [0.16, 1.38, 0.06], 2)];
+        // on the forearm
+        let fore = [vert(&mut m, [0.45, 1.42, 0.03], 11), vert(&mut m, [0.55, 1.42, 0.03], 11), vert(&mut m, [0.5, 1.37, -0.03], 11)];
+        // out along the arm, on the chest, but reaching no elbow
+        let short = [vert(&mut m, [0.25, 1.45, 0.05], 2), vert(&mut m, [0.3, 1.35, 0.05], 2), vert(&mut m, [0.28, 1.4, -0.05], 2)];
+        // the other arm's mirror image of the first (its forearm is node 6)
+        let mirror = long.map(|v| {
+            let (p, b) = (m.pos[v], m.bones[v][0]);
+            vert(&mut m, [-p[0], p[1], p[2]], if b == 2 { 2 } else { 6 })
+        });
+        assert_eq!(rig.part[10], Part::Limb(Limb::Arm(1), 0));
+        assert_eq!(weight_group(&m, &rig, long), Some(Group::Body), "by its weights, the torso's");
+        assert_eq!(group_of(&m, &rig, long), Some(Group::Limb(Limb::Arm(1))));
+        assert_eq!(group_of(&m, &rig, near), Some(Group::Body));
+        assert_eq!(group_of(&m, &rig, short), Some(Group::Body), "a shoulder's, or a shell's beside the arm");
+        assert_eq!(group_of(&m, &rig, fore), Some(Group::Limb(Limb::Arm(1))));
+        assert_eq!(group_of(&m, &rig, mirror), Some(Group::Limb(Limb::Arm(0))));
+    }
+
+    /// The triangles of a kept entry keep the body's look, but one drawn in
+    /// the skin's colours (nearer the mean of the skin's triangles on that
+    /// texture than of the part's); a kept entry on a texture of its own
+    /// keeps all of it, and with nothing kept every opaque triangle wears
+    /// (the controls).
+    #[test]
+    fn kept_parts_but_where_they_show_the_skin() {
+        let mut m = esf::Model::default();
+        for p in [[0.0, 0.0], [0.4, 0.0], [0.0, 0.9], [0.6, 0.1], [0.9, 0.1], [0.6, 0.9], [0.1, 0.1], [0.3, 0.1], [0.1, 0.3]] {
+            m.pos.push([p[0], p[1], 0.0]);
+            m.uv.push(p);
+            m.normal.push([0.0, 0.0, 1.0]);
+            m.color.push([1.0; 4]);
+            m.bones.push([0, 255, 255, 255]);
+            m.weights.push([127, 0, 0, 0]);
+        }
+        let layer = |texture: i32| esf::Layer { flags: 0, texture, wrap: 0, blend: 0, color: [255; 4], uv_transform: [0.0; 9], lod_bias: 0.8, uv_rate: [0.0; 2], emissive: [0; 4] };
+        // texture 7: brown bark on its left half, blue on its right; entry 1
+        // the skin on the bark; entry 0 a part in the blue, with one triangle
+        // in the bark; entry 2 a part on texture 9, of its own
+        m.batches.push(esf::Batch { material: 1, layers: vec![layer(7)], indices: vec![0, 1, 2], lod: None });
+        m.batches.push(esf::Batch { material: 0, layers: vec![layer(7)], indices: vec![3, 4, 5, 3, 5, 4, 6, 7, 8], lod: None });
+        m.batches.push(esf::Batch { material: 2, layers: vec![layer(9)], indices: vec![6, 7, 8], lod: None });
+        let colours = |t: i32| (t == 7 || t == 9).then(|| Rc::new(Texels { w: 2, h: 1, rgb: vec![[120, 90, 80], [40, 90, 200]] }));
+        assert_eq!(wearing(&m, &[0, 2], colours), vec![vec![true], vec![false, false, true], vec![false]]);
+        assert_eq!(wearing(&m, &[], colours), vec![vec![true], vec![true; 3], vec![true]]);
+        // a translucent entry wears nothing either way
+        m.batches[0].layers[0].blend = 3;
+        assert_eq!(wearing(&m, &[], colours)[0], vec![false]);
+    }
+
+    /// The fungusman in Fun's look (plate on all six, the live game's white):
+    /// its bag and strap (entry 2) and its fungus (entry 0, but the one strip
+    /// of its right upper arm the fungus material draws in the skin's bark)
+    /// wear nothing; its skin wears every slot but the gloves (its hands are
+    /// the fungus's claws, bar a sliver at the wrist), and its upper arms
+    /// take the human's sleeve, on the arm. The controls: with nothing kept,
+    /// the bag and the fungus wear armour; read by its weights alone, the
+    /// upper arm is the torso's.
+    #[test]
+    fn the_fungusman_keeps_its_bag_and_fungus() {
+        let Some(lib) = disc() else { return };
+        let id = 0x4A4D88FBu32 as i32;
+        let r = lib.lookup(id).unwrap();
+        let model = lib.build_model(r).unwrap();
+        let cs = vi::character::load_csprite(&lib, r, &mut vi::hsprite::AnimScene::default(), &mut vi::character::AnimCache::new(), &mut Rand(1)).unwrap();
+        let t = Tables::retail();
+        let has = |id: u32| lib.surface(id as i32).is_some();
+        let look = Look { armor: [4; 6], armor_color: Some([[255; 4]; 6]), robe: -1, ..Default::default() };
+        let art = worn(&vi::cust::apply_look_slots(&slots(), cs.race, cs.sex, &look, false, has, &t)).map(|(t, _)| t);
+        let dressed = fit_of(&lib, id, &model, &cs, art, false).expect("a fit");
+        let mut entry = vec![-1; model.pos.len()];
+        for b in &model.batches {
+            for &v in &b.indices {
+                entry[v as usize] = b.material;
+            }
+        }
+        let of = |fit: &Fit, e: i32| fit.tris.iter().map(|ts| ts.iter().filter(|t| t.v.iter().all(|&v| entry[v as usize] == e)).count()).collect::<Vec<_>>();
+        assert_eq!(of(&dressed, 2), [0; SLOTS], "the bag");
+        let fungus: usize = of(&dressed, 0).iter().sum();
+        assert_eq!(fungus, 1, "the fungus but the arm's strip of bark");
+        let skin = of(&dressed, 1);
+        assert!(skin[0] > 50 && skin[1] > 5 && skin[3] > 50 && skin[4] > 20, "{skin:?}");
+        // the control: nothing kept
+        let r0 = REFS.with(|r| r.borrow().get(&(lib.view(), false)).cloned()).flatten().expect("the human");
+        let all = Carried::of(&r0, &model, &cs, &wearing(&model, &[], |t| colours_of(&lib, t))).unwrap();
+        let alpha: [Option<Rc<Alpha>>; SLOTS] = std::array::from_fn(|i| alpha_of(&lib, art[i].map_or(r0.own[i], |t| t as i32)));
+        let bare = fit(&r0, &all, &alpha, false);
+        assert!(of(&bare, 2).iter().sum::<usize>() > 40 && of(&bare, 0).iter().sum::<usize>() > 100);
+        // the upper arms: their skin's triangles out along the arm, by their
+        // weights the torso's, are the arms'
+        let mut rig = Rig::of_sprite(&cs).unwrap();
+        rig.neck();
+        let groups = debug_groups(&lib, id, &model, &cs).unwrap();
+        let (mut along, mut on_arm) = (0, 0);
+        for (b, g) in model.batches.iter().zip(&groups).filter(|(b, _)| b.material == 1) {
+            for (t, &code) in b.indices.chunks_exact(3).zip(g) {
+                let t = [t[0] as usize, t[1] as usize, t[2] as usize];
+                if rig.arm_along(t.map(|v| pos(&model, v))).is_some() && weight_group(&model, &rig, t) == Some(Group::Body) {
+                    along += 1;
+                    on_arm += (code == 1 || code == 2) as usize;
+                }
+            }
+        }
+        assert!(along >= 10 && on_arm == along, "{on_arm} of {along}");
+    }
+
+    /// The skeleton wears a human's armour, not its own bones painted: in
+    /// plate, each slot's batch is HumanMale's slot triangles as they are
+    /// (place, bones, weights), and its own triangles under them are taken
+    /// out; in a chest alone, only the chest's, its legs, hands and feet
+    /// bare. The controls: the kappa, on a skeleton of its own, is painted
+    /// as before; bare, the skeleton is as it was.
+    #[test]
+    fn the_skeleton_wears_a_humans_armour() {
+        let Some(lib) = disc() else { return };
+        let t = Tables::retail();
+        let load = |id: i32| {
+            let r = lib.lookup(id).unwrap();
+            let model = lib.build_model(r).unwrap();
+            let cs = vi::character::load_csprite(&lib, r, &mut vi::hsprite::AnimScene::default(), &mut vi::character::AnimCache::new(), &mut Rand(1)).unwrap();
+            (model, cs)
+        };
+        let id = 0x6AF98A81u32 as i32;
+        let (model, cs) = load(id);
+        let human = Human::load(&lib, false).unwrap();
+        let plate = Look { armor: [4; 6], robe: -1, ..Default::default() };
+        let mut dressed = model.clone();
+        crate::play::dress_look(&lib, id, &mut dressed, &cs, &plate, false, &t, true);
+        let n = model.batches.len();
+        let made = &dressed.batches[n..];
+        assert_eq!(made.iter().map(|b| b.material).collect::<Vec<_>>(), (0..SLOTS as i32).map(|i| ENTRY + i).collect::<Vec<_>>());
+        for (i, b) in made.iter().enumerate() {
+            let entry = human.cs.text_slots[i].0;
+            let theirs: Vec<[f32; 3]> = near_triangles(&human.model).filter(|(hb, _)| hb.material == entry).flat_map(|(_, t)| t.map(|v| human.model.pos[v])).collect();
+            let ours: Vec<[f32; 3]> = b.indices.iter().map(|&v| dressed.pos[v as usize]).collect();
+            assert!(!ours.is_empty() && ours.len() <= theirs.len());
+            assert!(ours.iter().all(|p| theirs.contains(p)), "slot {i}: the human's own places");
+            let bones: std::collections::HashSet<u8> = b.indices.iter().flat_map(|&v| dressed.bones[v as usize]).filter(|&k| k != 255).collect();
+            assert!(!bones.contains(&5), "slot {i}: nothing on the skull's top, the one node the skeletons differ in");
+        }
+        let own = |m: &esf::Model| m.batches[..n].iter().map(|b| b.indices.len() / 3).sum::<usize>();
+        let hidden = own(&model) - own(&dressed);
+        assert!(hidden > 400, "{hidden} of its own triangles hidden in plate");
+        // a chest alone: the chest's batch, and fewer of its own hidden
+        let chest = Look { armor: [4, 0, 0, 0, 0, 0], robe: -1, ..Default::default() };
+        let mut top = model.clone();
+        crate::play::dress_look(&lib, id, &mut top, &cs, &chest, false, &t, true);
+        assert_eq!(top.batches[n..].iter().map(|b| b.material).collect::<Vec<_>>(), vec![ENTRY]);
+        assert!(own(&model) - own(&top) < hidden && own(&model) > own(&top));
+        // the controls
+        let mut bare = model.clone();
+        crate::play::dress_look(&lib, id, &mut bare, &cs, &Look { robe: -1, ..Default::default() }, false, &t, true);
+        assert!(same(&bare, &model));
+        let kappa = NINE[0] as i32;
+        let (km, kcs) = load(kappa);
+        assert!(shell_of(&lib, kappa, &kcs, [Some(0x40B0DDA7), None, None, None, None]).is_none(), "the kappa's skeleton is its own");
+        let mut k = km.clone();
+        crate::play::dress_look(&lib, kappa, &mut k, &kcs, &plate, false, &t, true);
+        assert_eq!(k.pos[..km.pos.len()], km.pos[..], "painted on its own vertices");
+        assert!(k.batches[km.batches.len()..].iter().flat_map(|b| &b.indices).all(|&v| (v as usize) >= km.pos.len()));
+        assert!(k.batches[..km.batches.len()].iter().zip(&km.batches).all(|(a, b)| a.indices == b.indices), "none of its own hidden");
     }
 
     trait ConcatSets {
