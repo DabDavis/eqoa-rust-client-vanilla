@@ -48,9 +48,10 @@ use vi::csprite::CSprite;
 use vi::fpu::Ee;
 
 /// Whether `model` is a body one of the server's races wears, by what it
-/// listed (`races`; none: no race of its own).
+/// listed (`races`; none: no race of its own), or one its races' options offer
+/// a player (another body of the same creature, `raceopts`: the gargoyles' six).
 pub fn worn_by_a_race(model: u32, races: Option<&Creation>) -> bool {
-    model != 0 && races.is_some_and(|c| c.races.iter().any(|r| r.body.contains(&model)))
+    model != 0 && (races.is_some_and(|c| c.races.iter().any(|r| r.body.contains(&model))) || crate::raceopts::offered_body(model))
 }
 
 /// `cs`, made of `model`, holds items when it is a player's character

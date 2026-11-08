@@ -130,6 +130,7 @@ mod questlog;
 mod quickchat;
 mod racebody;
 mod racelabel;
+mod raceopts;
 mod record;
 mod alarm;
 mod startmenu;

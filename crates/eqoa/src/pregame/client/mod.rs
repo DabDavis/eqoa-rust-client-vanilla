@@ -1102,7 +1102,7 @@ mod tests {
         c.chars = vec![CharRecord::of(&character("A", 1, vec![7; 32]))];
         (c.top, c.active) = (Wnd::Create, Wnd::Create);
         c.select.set_pending();
-        let form = net::session::NewChar { name: "Brakk".into(), race: 4, class: 9, sex: 1, hair_color: 2, hair_length: 1, hair_style: 3, face: 2, city: 0, stats: [0; 7] };
+        let form = net::session::NewChar { name: "Brakk".into(), race: 4, class: 9, sex: 1, hair_color: 2, hair_length: 1, hair_style: 3, face: 2, city: 0, stats: [0; 7], options: vec![] };
         c.create_character(&form);
         assert_eq!(c.chars.len(), 2);
         let n = &c.chars[1];

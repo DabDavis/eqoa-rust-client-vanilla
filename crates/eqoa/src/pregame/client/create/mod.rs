@@ -187,7 +187,7 @@ impl Default for Create {
 /// `VIWndCharCreateBlank::Reset`'s form: no name, city 0, and every choice
 /// -1 (the pages then take the race's defaults), no points spent.
 pub fn blank_form() -> NewChar {
-    NewChar { name: String::new(), race: -1, class: -1, sex: -1, hair_color: -1, hair_length: -1, hair_style: -1, face: -1, city: 0, stats: [0; 7] }
+    NewChar { name: String::new(), race: -1, class: -1, sex: -1, hair_color: -1, hair_length: -1, hair_style: -1, face: -1, city: 0, stats: [0; 7], options: Vec::new() }
 }
 
 impl Create {
