@@ -12,8 +12,13 @@ use net::dump::{ItemList, NetItem};
 pub const CAPACITY: usize = 40;
 
 /// `CanWearIn(wear, slot)` (`viclientutil.cpp`): whether an item of wear
-/// slot `wear` goes into equip slot `slot`.
+/// slot `wear` goes into equip slot `slot`; and a cape in the cape's slot
+/// while the server's offer of capes is taken (`cape`: no retail table has
+/// either).
 pub fn can_wear_in(wear: i64, slot: i64) -> bool {
+    if wear == crate::cape::WEAR_SLOT {
+        return slot == crate::cape::EQUIP_SLOT && crate::cape::offered();
+    }
     match wear {
         1 => slot == 0,
         3 => slot == 2 || slot == 3,
@@ -270,6 +275,29 @@ mod tests {
         assert_eq!(equip(&mut l, 2, 3), None, "wear 1 does not go in 3");
         assert_eq!(take_off(&mut l, 16), Some(5));
         assert_eq!(l.items[1].equip_slot, -1);
+    }
+
+    /// A cape (wear 28) goes in the cape's slot (22) while capes are offered,
+    /// takes nothing else off, and comes off by its slot; the controls: with
+    /// no offer it goes nowhere (as on a PS2, which is never sent one), and
+    /// in the offer no other slot takes it nor it another wear's.
+    #[test]
+    fn a_cape_is_worn_only_where_capes_are_offered() {
+        let mut l = ItemList { p04: 0, items: vec![item(1, 28, 0, 1, 0), item(2, 5, 0, 1, 1), item(3, 2, 0, 1, 2)] };
+        l.items[1].equip_slot = 5;
+        l.items[2].equip_slot = 21;
+        crate::cape::with_offered(false, || {
+            assert!(!can_wear_in(28, 22), "the control: no offer");
+            assert_eq!(equip(&mut l.clone(), 0, 22), None);
+        });
+        crate::cape::with_offered(true, || {
+            assert!(can_wear_in(28, 22));
+            assert!(!can_wear_in(28, 21) && !can_wear_in(28, 5) && !can_wear_in(2, 22) && !can_wear_in(5, 22), "the controls: no other slot, no other wear");
+            assert_eq!(equip(&mut l, 0, 22), Some(5));
+            assert_eq!((l.items[0].equip_slot, l.items[1].equip_slot, l.items[2].equip_slot), (22, 5, 21), "the chest and the robe stay on");
+            assert_eq!(take_off(&mut l, 22), Some(5));
+            assert_eq!(l.items[0].equip_slot, -1);
+        });
     }
 
     #[test]

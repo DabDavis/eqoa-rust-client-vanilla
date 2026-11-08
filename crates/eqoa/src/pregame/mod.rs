@@ -323,7 +323,10 @@ impl Pregame {
         self.res.poll();
         // a server's races' bodies (CHARSEL's files hold the game's alone):
         // read once it tells of them, and the figures made again when they come
-        self.res.want_bodies(&client::create::tables::bodies());
+        // and the bodies the characters' capes are cut from (`cape`)
+        let mut bodies = client::create::tables::bodies();
+        bodies.extend(self.client.cape_bodies());
+        self.res.want_bodies(&bodies);
         if self.res.take_bodies_in() {
             self.client.bodies_in();
         }
