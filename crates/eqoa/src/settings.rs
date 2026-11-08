@@ -616,6 +616,11 @@ pub struct ClientOptions {
     /// at eight bits a channel (a brighter cloud). PS2 by default, the
     /// game's look (the user, 2026-10-30, named no default: flip it here).
     pub ps2_fog: bool,
+    /// Ambient Occlusion (the user's of 2026-11-08, "lets add ambient
+    /// occlusion"): off, the picture as the game draws it; on, the opaque
+    /// scene's creases, corners and contacts darkened per pixel
+    /// (`render::ao`). Off by default.
+    pub ambient_occlusion: bool,
     /// Dynamic Lighting (the user's of 2026-11-08, phase 1): off, the
     /// PS2's, the strip programs' light per vertex with the personal light
     /// the one point light; on, the light per fragment and the scene's fires,
@@ -751,6 +756,7 @@ impl Default for ClientOptions {
             shadows: true,
             environment: true,
             ps2_fog: true,
+            ambient_occlusion: false,
             dynamic_lighting: false,
             loading_longer: true,
             render_scale: 1,
@@ -775,7 +781,7 @@ impl ClientOptions {
     /// 1, HUD only when Nearest, Output Device only when a device is
     /// chosen (by its name), Touch Pad Size only when smaller than
     /// the full pad, and Texture Packs and Dump Textures only when on
-    /// (Dynamic Lighting the same).
+    /// (Ambient Occlusion and Dynamic Lighting the same).
     pub fn to_text(self) -> String {
         let mut s = format!("lod={}\nbrightness={}\ncamera_distance={}\n", if self.lod { "on" } else { "off" }, self.brightness, self.camera_distance);
         if let Some(r) = self.frame_rate {
@@ -850,6 +856,10 @@ impl ClientOptions {
         // Ground Fog only when Exact
         if !self.ps2_fog {
             s.push_str("ground_fog=exact\n");
+        }
+        // Ambient Occlusion only when on
+        if self.ambient_occlusion {
+            s.push_str("ambient_occlusion=on\n");
         }
         // Dynamic Lighting only when on
         if self.dynamic_lighting {
@@ -942,6 +952,8 @@ impl ClientOptions {
                 ("environment", "off") => c.environment = false,
                 ("ground_fog", "ps2") => c.ps2_fog = true,
                 ("ground_fog", "exact") => c.ps2_fog = false,
+                ("ambient_occlusion", "on") => c.ambient_occlusion = true,
+                ("ambient_occlusion", "off") => c.ambient_occlusion = false,
                 ("dynamic_lighting", "on") => c.dynamic_lighting = true,
                 ("dynamic_lighting", "off") => c.dynamic_lighting = false,
                 ("loading", "longer") => c.loading_longer = true,
@@ -1796,6 +1808,23 @@ mod tests {
         }
         // the control: Flora off is not Shadows off
         assert!(ClientOptions::from_text("flora=off").shadows);
+    }
+
+    /// Ambient Occlusion, off by default (the picture as the game draws
+    /// it), kept only when on; anything but on or off leaves it off. The
+    /// control: Dynamic Lighting on is not it.
+    #[test]
+    fn ambient_occlusion_kept_only_when_on() {
+        let d = ClientOptions::default();
+        assert!(!d.ambient_occlusion, "off, the game's picture");
+        assert!(!d.to_text().contains("ambient_occlusion"), "the default not written");
+        let on = ClientOptions { ambient_occlusion: true, ..Default::default() };
+        assert_eq!(on.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nambient_occlusion=on\n");
+        assert_eq!(ClientOptions::from_text(&on.to_text()), on);
+        assert!(ClientOptions::from_text("ambient_occlusion=off") == d);
+        for bad in ["ambient_occlusion=1", "ambient_occlusion=", "ambient_occlusion=On", "ao=on", "dynamic_lighting=on"] {
+            assert!(!ClientOptions::from_text(bad).ambient_occlusion, "{bad}: off, the default");
+        }
     }
 
     /// Dynamic Lighting, off by default (the PS2's light), kept only when

@@ -1207,6 +1207,8 @@ pub fn shot_with(
     render::ui::set_text_filter(crate::settings::client().text);
     render::ui::set_hud_filter(crate::settings::client().hud);
     render::set_mipmaps(crate::settings::client().mipmaps);
+    // and its Ambient Occlusion, over the world (not the loading screen's gears)
+    renderer.ao.set(if loading.is_none() { ambient_occlusion() } else { render::ao::Settings::OFF });
     let rgba = render::capture_with_sky(&device, &queue, &mut renderer, w, h, loading.as_ref().map_or(&view, |l| &l.0), &refs, particles, sky);
     let mut enc = png::Encoder::new(std::io::BufWriter::new(std::fs::File::create(out)?), w, h);
     enc.set_color(png::ColorType::Rgba);
@@ -1460,6 +1462,26 @@ fn fog_sequential() -> bool {
     return std::env::var("EQOA_FOG16").is_ok_and(|v| v == "sequential");
     #[cfg(target_arch = "wasm32")]
     false
+}
+
+/// The options' Ambient Occlusion, unless `EQOA_AO` (in a page, `?ao=`)
+/// names a mode instead: on, off, factor (the factor alone), depth or
+/// normals (`render::ao::Mode`). `EQOA_AO_RADIUS` and `EQOA_AO_INTENSITY`
+/// (`?ao_radius=`, `?ao_intensity=`) change those two, for tuning.
+fn ambient_occlusion() -> render::ao::Settings {
+    use render::ao::{Mode, Settings};
+    static GIVEN: std::sync::OnceLock<(Option<Mode>, Settings)> = std::sync::OnceLock::new();
+    let (mode, s) = *GIVEN.get_or_init(|| {
+        #[cfg(target_arch = "wasm32")]
+        let value = |name: &str| crate::web::page_value(name);
+        #[cfg(not(target_arch = "wasm32"))]
+        let value = |name: &str| std::env::var(format!("EQOA_{}", name.to_uppercase())).ok();
+        let number = |name: &str, default: f32| value(name).and_then(|v| v.parse().ok()).unwrap_or(default);
+        let s = Settings { radius: number("ao_radius", Settings::RADIUS), intensity: number("ao_intensity", Settings::INTENSITY), ..Settings::OFF };
+        (value("ao").and_then(|v| Mode::named(&v)), s)
+    });
+    let chosen = if crate::settings::client().ambient_occlusion { Mode::On } else { Mode::Off };
+    Settings { mode: mode.unwrap_or(chosen), ..s }
 }
 
 /// A surface and device made before the event loop: a browser's, where the
@@ -5622,6 +5644,12 @@ impl App {
                 }
                 let scene = g.renderer.curve.scene_target(&g.device, f.size);
                 let st = scene.as_ref().unwrap_or(&f.color);
+                // the options' Ambient Occlusion: its passes over the world's
+                // opaque half (`render::ao`), not the loading screen's gears
+                g.renderer.ao.set(ambient_occlusion());
+                if loading.is_none() {
+                    g.renderer.ao.prepare(&g.device, &f);
+                }
                 g.renderer.draw(&g.queue, &mut enc, st, &f.depth, loading.as_ref().map_or(&view, |l| &l.0), &refs);
                 let textures = render::library_textures(&self.lib);
                 // under the loading screen no sky, volumes or particles
