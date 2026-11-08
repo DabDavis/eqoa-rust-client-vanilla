@@ -13,7 +13,7 @@
 //! of a cascade's box skipped) and the models (characters, what they hold,
 //! the boids) as they are, every opaque layer of a material whose first
 //! layer is opaque, alpha tested as the layer is drawn (leaves cut out), both
-//! faces, a face turned from the sun put back a little ([`BACK_PUSH`]);
+//! faces, a vertex turned from the sun put back a little ([`BACK_PUSH`]);
 //! not the radial flora (`Draw::Instances`), the sky, nor any blended layer
 //! (water, glass, fog, effects), nor the particles, billboards, fans, plates
 //! or the HUD, which `draw` does not draw. Then the world is drawn through a
@@ -69,12 +69,16 @@ pub const FADE_FROM: f32 = 212.5;
 /// a tower up to this far upwind of what is drawn still casts onto it.
 pub const UPWIND: f64 = 500.0;
 
-/// How far a caster's face turned from the sun is put back along the light
-/// (`suncast.wgsl`): a ceiling or a cave's roof, seen from above, still
-/// casts, and the underside of a thin thing does not shadow its own top. Over
-/// Freeport such a face lies over a face turned to the sun in 6 to 8% of the
-/// map's texels, 5 cm over it at the median and under 0.5 in 99.8 to 100%
-/// (a dump of the map's two halves, front faces and back faces apart).
+/// How far a caster's vertex whose normal is turned from the sun is put back
+/// along the light (`suncast.wgsl`): a ceiling or a cave's roof, seen from
+/// above, still casts, and the underside of a thin thing does not shadow its
+/// own top. Over Freeport such a face lies over a face turned to the sun in 6
+/// to 8% of the map's texels, 5 cm over it at the median and under 0.5 in
+/// 99.8 to 100% (a dump of the map's two halves, front faces and back faces
+/// apart); over seven towns at noon a face turned from the sun lies more
+/// than 0.5 over every face turned to it below (a ceiling nothing covers) in
+/// up to 0.14% of a cascade's texels (Qeynos; 0 to 0.006% in the others),
+/// which culling those faces would have lost.
 pub const BACK_PUSH: f64 = 0.5;
 
 /// The step the sun's direction is taken in (radians: an eighth of a
@@ -461,7 +465,7 @@ impl Sun {
                 compilation_options: Default::default(),
                 buffers: &vertex_buffers(),
             },
-            // both faces, a face turned from the sun put back (`BACK_PUSH`):
+            // both faces, a vertex turned from the sun put back (`BACK_PUSH`):
             // culled, a cave's roof or a ceiling seen from above casts
             // nothing; drawn as they are, the undersides of thin things (an
             // awning's patches, a roof's planks a little over its top)
