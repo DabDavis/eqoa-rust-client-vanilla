@@ -324,10 +324,9 @@ fn a_cascade_draws_the_casters_it_reaches() {
 /// The far two cascades are drawn in turn: with nothing moving, the
 /// frames after the first (each drawing the near two and one far one, the
 /// other kept) are byte for byte the first; with the camera turned away and
-/// back (150 degrees a frame), the frame looking back, which takes a far
-/// cascade drawn while looking away, shades the shadow of a box 70 off as a
-/// renderer drawing every cascade at once (the far two are round the
-/// camera: a turn does not move them).
+/// back (150 degrees a frame: every cascade drawn again), and turned a
+/// little a frame (a far cascade kept), the shadow of a box 70 off is shaded
+/// as a renderer drawing every cascade at once shades it.
 #[test]
 fn the_far_cascades_drawn_in_turn_keep_the_picture() {
     let Some(g) = gpu() else { return };
@@ -355,10 +354,10 @@ fn the_far_cascades_drawn_in_turn_keep_the_picture() {
         let c = v.view_proj.project_point3(Vec3::new(3.5, 0.0, 0.0));
         (((c.x * 0.5 + 0.5) * SIZE as f32) as u32, ((0.5 - c.y * 0.5) * SIZE as f32) as u32)
     };
-    // turned away and back: each frame looking back takes a far cascade
-    // drawn while looking away
-    for (away, turn) in [(2.6f32, 0.3f32), (-2.6, -0.3), (1.8, 0.15)] {
-        shot(&g, &mut r, &far_view(away), &[Draw::Model(&f), Draw::Model(&b)]);
+    // turned away and back (every cascade drawn again), then a little a
+    // frame (one far cascade kept from the frame before)
+    for (before, turn) in [(2.6f32, 0.3f32), (-2.6, -0.3), (0.13, 0.15), (0.15, 0.17), (0.17, 0.19)] {
+        shot(&g, &mut r, &far_view(before), &[Draw::Model(&f), Draw::Model(&b)]);
         let v = far_view(turn);
         let kept = shot(&g, &mut r, &v, &[Draw::Model(&f), Draw::Model(&b)]);
         let mut fresh = renderer(&g, true);
