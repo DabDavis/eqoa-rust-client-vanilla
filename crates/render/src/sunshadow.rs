@@ -12,8 +12,8 @@
 //! from bundles recorded at their upload (`RunSun::casters`, a run wholly out
 //! of a cascade's box skipped) and the models (characters, what they hold,
 //! the boids) as they are, every opaque layer of a material whose first
-//! layer is opaque, alpha tested as the layer is drawn (leaves cut out), the
-//! faces turned to the sun alone (as the strip programs cull for a camera);
+//! layer is opaque, alpha tested as the layer is drawn (leaves cut out), both
+//! faces, a face turned from the sun put back a little ([`BACK_PUSH`]);
 //! not the radial flora (`Draw::Instances`), the sky, nor any blended layer
 //! (water, glass, fog, effects), nor the particles, billboards, fans, plates
 //! or the HUD, which `draw` does not draw. Then the world is drawn through a
@@ -68,6 +68,14 @@ pub const FADE_FROM: f32 = 212.5;
 /// How far toward the sun past its sphere a cascade takes casters: a hill or
 /// a tower up to this far upwind of what is drawn still casts onto it.
 pub const UPWIND: f64 = 500.0;
+
+/// How far a caster's face turned from the sun is put back along the light
+/// (`suncast.wgsl`): a ceiling or a cave's roof, seen from above, still
+/// casts, and the underside of a thin thing does not shadow its own top. Over
+/// Freeport such a face lies over a face turned to the sun in 6 to 8% of the
+/// map's texels, 5 cm over it at the median and under 0.5 in 99.8 to 100%
+/// (a dump of the map's two halves, front faces and back faces apart).
+pub const BACK_PUSH: f64 = 0.5;
 
 /// The step the sun's direction is taken in (radians: an eighth of a
 /// degree, the sun's travel in about 1.25 s of the game's day), so a
@@ -226,6 +234,15 @@ impl ShadowUniform {
     }
 }
 
+/// `suncast.wgsl`'s `Cascade`: the matrix, and how far a face turned from the
+/// sun is put back in its clip z.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct CascadeUniform {
+    m: [[f32; 4]; 4],
+    push: [f32; 4],
+}
+
 /// The sun's line of lit.wgsl, and a radial flora plant's return, as the
 /// receivers change them (`receivers_wgsl`).
 const SUN_LINE: &str = "    light += frame.sun.rgb * max(-dot(n, frame.sun_dir.xyz), 0.0) * i.base.w;\n";
@@ -371,7 +388,7 @@ impl Sun {
         let make = |fs: &str| (0..5).map(|m| crate::model_pipeline(device, &layout, &module, ("vs_lit", fs), m, false, format)).collect();
         let pipelines = [make("fs_lit"), make("fs_lit_baked")];
         // the casters: a cascade's matrix each, at the device's uniform alignment
-        let stride = (size_of::<[[f32; 4]; 4]>() as u64).next_multiple_of(device.limits().min_uniform_buffer_offset_alignment as u64);
+        let stride = (size_of::<CascadeUniform>() as u64).next_multiple_of(device.limits().min_uniform_buffer_offset_alignment as u64);
         let cascade_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sun shadow cascades"),
             size: stride * CASCADES as u64,
@@ -380,7 +397,7 @@ impl Sun {
         });
         let cascade_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("sun shadow cascade"),
-            entries: &[crate::uniform_entry(0, wgpu::ShaderStages::VERTEX)],
+            entries: &[crate::uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT)],
         });
         let cascades = (0..CASCADES as u64)
             .map(|c| {
@@ -389,7 +406,7 @@ impl Sun {
                     layout: &cascade_layout,
                     entries: &[wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &cascade_buf, offset: c * stride, size: wgpu::BufferSize::new(64) }),
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &cascade_buf, offset: c * stride, size: wgpu::BufferSize::new(size_of::<CascadeUniform>() as u64) }),
                     }],
                 })
             })
@@ -409,11 +426,12 @@ impl Sun {
                 compilation_options: Default::default(),
                 buffers: &vertex_buffers(),
             },
-            // what the sun sees casts: back faces culled, as the strip
-            // programs cull them for the camera. Drawn with both faces, the
-            // undersides of thin things (an awning's patches, a roof's
-            // ceiling planks, a little above its top) shadowed their tops.
-            primitive: wgpu::PrimitiveState { front_face: crate::FRONT_FACE, cull_mode: Some(wgpu::Face::Back), ..Default::default() },
+            // both faces, a face turned from the sun put back (`BACK_PUSH`):
+            // culled, a cave's roof or a ceiling seen from above casts
+            // nothing; drawn as they are, the undersides of thin things (an
+            // awning's patches, a roof's planks a little over its top)
+            // shadowed their own tops
+            primitive: wgpu::PrimitiveState { front_face: crate::FRONT_FACE, cull_mode: None, ..Default::default() },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: DEPTH_FORMAT,
                 depth_write_enabled: Some(true),
@@ -483,7 +501,9 @@ impl Sun {
         let cascades = fit(view.view_proj, view.eye, dir, self.size);
         queue.write_buffer(&self.buf, 0, bytemuck::bytes_of(&ShadowUniform::new(&cascades, k, self.size)));
         for (c, cascade) in cascades.iter().enumerate() {
-            queue.write_buffer(&self.cascade_buf, c as u64 * self.stride, bytemuck::bytes_of(&cascade.m.to_cols_array_2d()));
+            let push = [(BACK_PUSH / cascade.depth as f64) as f32, 0.0, 0.0, 0.0];
+            let u = CascadeUniform { m: cascade.m.to_cols_array_2d(), push };
+            queue.write_buffer(&self.cascade_buf, c as u64 * self.stride, bytemuck::bytes_of(&u));
         }
         let (mut runs, mut draws) = (0u32, 0u32);
         for (c, cascade) in cascades.iter().enumerate() {

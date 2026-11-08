@@ -9,7 +9,8 @@
 //!   the shadow's place.
 //! - A cut-out casts its shape (the alpha test), a blended layer, a radial
 //!   flora plant and the sky cast nothing, a skinned model casts where its
-//!   palette puts it.
+//!   palette puts it, a ceiling (a face turned from the sun) casts and the
+//!   underside of a thin thing does not shadow its own top.
 //! - A baked visibility stays the upper bound: half the sun outside the
 //!   shadow, none in it (the lesser of the two).
 //! - No shadow while the sun is under the horizon or black, and every frame
@@ -264,6 +265,30 @@ fn a_skinned_model_casts_where_its_skin_puts_it() {
     assert!(red(&moved, pixel(3.5, 0.0)) > 0.7, "none where it was: {}", red(&moved, pixel(3.5, 0.0)));
     let still = frame(false);
     assert!(close(red(&still, pixel(3.5, 0.0)), 0.1), "the control: unmoved, at z 0: {}", red(&still, pixel(3.5, 0.0)));
+}
+
+/// A face turned from the sun casts (a ceiling's, a cave roof's, seen from
+/// above), and the underside of a thin thing does not shadow its own top: a
+/// card facing up at y 3 with a face turned down 0.1 over it is lit, where
+/// that face drawn at its own depth would shadow it; the same face alone, a
+/// ceiling over the floor, shadows the floor.
+#[test]
+fn a_ceiling_casts_and_an_underside_does_not() {
+    let Some(g) = gpu() else { return };
+    let none = |_: i32| None;
+    let lit = 0.1 + std::f32::consts::FRAC_1_SQRT_2;
+    let square = |y: f32, n: Vec3| quad([Vec3::new(-1.0, y, -1.0), Vec3::new(-1.0, y, 1.0), Vec3::new(1.0, y, 1.0), Vec3::new(1.0, y, -1.0)], n, 1.0, layer(0, 0));
+    let mut r = renderer(&g, true);
+    let f = r.upload(&g.device, &g.queue, &floor(HALF, 1.0), &[render::IDENTITY], &none);
+    let ceiling = r.upload(&g.device, &g.queue, &square(3.0, Vec3::NEG_Y), &[render::IDENTITY], &none);
+    let px = shot(&g, &mut r, &view(Vec3::ZERO, SUN45), &[Draw::Model(&f), Draw::Model(&ceiling)]);
+    assert!(close(red(&px, pixel(3.0, 0.0)), 0.1), "a ceiling's shadow on the floor: {}", red(&px, pixel(3.0, 0.0)));
+    let top = r.upload(&g.device, &g.queue, &square(3.0, Vec3::Y), &[render::IDENTITY], &none);
+    let under = r.upload(&g.device, &g.queue, &square(3.1, Vec3::NEG_Y), &[render::IDENTITY], &none);
+    let px = shot(&g, &mut r, &view(Vec3::ZERO, SUN45), &[Draw::Model(&f), Draw::Model(&top), Draw::Model(&under)]);
+    // the card's middle, seen from 17 over it
+    assert!(close(red(&px, (SIZE / 2, SIZE / 2)), lit), "the card's top under its own underside: {}", red(&px, (SIZE / 2, SIZE / 2)));
+    assert!(close(red(&px, pixel(3.0, 0.0)), 0.1), "and the pair's shadow on the floor: {}", red(&px, pixel(3.0, 0.0)));
 }
 
 /// The floor's baked visibility (vertex alpha 0.5) stays the upper bound:

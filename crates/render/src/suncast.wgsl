@@ -7,14 +7,18 @@
 //
 // Every opaque layer of a material whose first layer is opaque is drawn,
 // alpha tested as fs_main tests it (a leaf's cut-out casts the leaf's
-// shape), at the level the camera sees the texture at, its faces turned to
-// the sun alone (the pipeline culls back faces, as for a camera); nothing
-// is written but depth. Positions are taken relative to the eye as vs_main
+// shape), at the level the camera sees the texture at, both its faces: a
+// face turned from the sun put back by the cascade's `push` (a ceiling or a
+// cave's roof, seen from above, casts; the underside of a thin thing, an
+// awning's patches or a roof's planks a little over its own top, does not
+// shadow that top). Nothing is written but depth. Positions are taken relative to the eye as vs_main
 // takes them: the cascade's matrix is the eye's too (`sunshadow::fit`).
 
 struct Cascade {
     // a position less the eye to the cascade's clip space
     m: mat4x4<f32>,
+    // x: how far a face turned from the sun is put back, in clip z
+    push: vec4<f32>,
 };
 @group(3) @binding(0) var<uniform> cascade: Cascade;
 
@@ -53,9 +57,10 @@ fn vs_cast(v: VsIn) -> CastOut {
     return o;
 }
 
-// fs_main's alpha test, and nothing else: what it lets through casts.
+// fs_main's alpha test (what it lets through casts), and the depth, a face
+// turned from the sun's put back.
 @fragment
-fn fs_cast(i: CastOut) {
+fn fs_cast(i: CastOut, @builtin(front_facing) front: bool) -> @builtin(frag_depth) f32 {
     var alpha = layer.tint.a;
     if (layer.flags.x > 0.5) {
         var lod = -16.0;
@@ -67,4 +72,8 @@ fn fs_cast(i: CastOut) {
     if (alpha < 0.5) {
         discard;
     }
+    if (front) {
+        return i.clip.z;
+    }
+    return min(i.clip.z + cascade.push.x, 1.0);
 }
