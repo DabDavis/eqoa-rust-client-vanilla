@@ -12,6 +12,7 @@
 //! second pass goes in model order, where the game's goes rooms, flora, then
 //! actors in the order its tree walk met them.
 
+pub mod ao;
 pub mod billboard;
 pub mod curve;
 pub mod fans;
@@ -489,6 +490,8 @@ pub struct Renderer {
     pub scale: scale::Scale,
     /// The options' Brightness over the scene (`curve`): none until set.
     pub curve: curve::Curve,
+    /// The options' Ambient Occlusion (`ao`): off until set.
+    pub ao: ao::Ao,
 }
 
 /// What to draw this frame. The lights are the VU1 strip programs' uniforms:
@@ -751,6 +754,7 @@ impl Renderer {
             identity_palette,
             scale: scale::Scale::new(format),
             curve: curve::Curve::new(format),
+            ao: ao::Ao::new(format),
         }
     }
 
@@ -1092,9 +1096,9 @@ impl Renderer {
         // The view-projection relative to the eye, in doubles: `view_proj`'s
         // translation is the projection of the eye's world position, which
         // the eye's own translation here cancels (shader.wgsl, vs_main).
-        let rel = (view.view_proj.as_dmat4() * glam::DMat4::from_translation(view.eye.as_dvec3())).as_mat4();
+        let rel = view.view_proj.as_dmat4() * glam::DMat4::from_translation(view.eye.as_dvec3());
         let uniform = FrameUniform {
-            view_proj: rel.to_cols_array_2d(),
+            view_proj: rel.as_mat4().to_cols_array_2d(),
             eye: view.eye.extend(mipmaps() as i32 as f32).to_array(),
             sun_dir: view.sun_dir.normalize().extend(0.0).to_array(),
             sun: view.sun.extend(self.scroll_time.unwrap_or_else(|| self.start.elapsed().as_secs_f32())).to_array(),
@@ -1193,8 +1197,32 @@ impl Renderer {
         // Two passes, as VIScene::Render's: a material whose layer 0 is
         // opaque (MaterialHasDepthSort) draws all its layers at once in the
         // first, one whose layer 0 blends is deferred whole to the second
-        // (DrawPrimBuffer's flags; RenderDeferredList).
+        // (DrawPrimBuffer's flags; RenderDeferredList). The Ambient Occlusion
+        // goes between them, over what the first wrote, in passes of its own
+        // (`ao`: the frame `prepare` readied it for, never part of one).
+        let ao = rect.is_none() && self.ao.take(depth);
         for deferred in [false, true] {
+            if deferred && ao {
+                drop(pass);
+                self.ao.run(queue, encoder, target, rel, view.fog);
+                pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("models, blended"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: target,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: depth,
+                        depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+            }
             // the pass's state, unset again by each bundle it executes
             let mut bound = false;
             let mut current = usize::MAX;
@@ -1622,7 +1650,8 @@ pub fn depth_view(device: &wgpu::Device, w: u32, h: u32) -> wgpu::TextureView {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: DEPTH_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            // read by the Ambient Occlusion's passes (`ao`)
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         })
         .create_view(&Default::default())
@@ -1698,6 +1727,8 @@ pub fn capture_with_sky(
     renderer.read_frame_through(&f.color);
     let scene = renderer.curve.scene_target(device, f.size);
     let st = scene.as_ref().unwrap_or(&f.color);
+    // the Ambient Occlusion's passes over its opaque half, while set (`ao`)
+    renderer.ao.prepare(device, &f);
     renderer.draw(queue, &mut enc, st, &f.depth, view, items);
     if let Some((v, p, batches, textures)) = sky {
         renderer.draw_sky_billboards(device, queue, &mut enc, st, &f.depth, v, p, batches, textures);
