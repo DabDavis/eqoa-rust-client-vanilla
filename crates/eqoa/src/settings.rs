@@ -654,6 +654,17 @@ pub struct ClientOptions {
     /// to `TOUCH_SIZE_MIN` in `TOUCH_SIZE_STEP`s (a player, 2026-11-02:
     /// "Is there a way to make the on screen controller size adjustable?").
     pub touch_size: u8,
+    /// Texture Packs, natively (the user, 2026-11-08: PCSX2's replacement
+    /// packs read as they are, "an Extended page row turns packs on and
+    /// off"): on, a texture a pack in the config directory's
+    /// `textures/SLUS-20744/replacements` names is drawn as the pack has it
+    /// (`texpack`); off, every texture the game's own. Off by default, as
+    /// PCSX2's Load Textures is.
+    pub texture_packs: bool,
+    /// Dump Textures, natively: on, each texture made is written to
+    /// `textures/SLUS-20744/dumps` under the names PCSX2 gives it
+    /// (`texpack`), for a pack to be made from. Off by default.
+    pub dump_textures: bool,
 }
 
 /// Render Scale's steps, the first the game's picture as drawn.
@@ -739,6 +750,8 @@ impl Default for ClientOptions {
             hud: render::ui::HudFilter::Nearest,
             output: None,
             touch_size: TOUCH_SIZE_MAX,
+            texture_packs: false,
+            dump_textures: false,
         }
     }
 }
@@ -753,8 +766,8 @@ impl ClientOptions {
     /// Show, Art only when it is the 2002 disc's, VSync, Shouts and Update
     /// Notices only when off, Text only when Smooth, Render Scale only above
     /// 1, HUD only when Nearest, Output Device only when a device is
-    /// chosen (by its name), and Touch Pad Size only when smaller than
-    /// the full pad.
+    /// chosen (by its name), Touch Pad Size only when smaller than
+    /// the full pad, and Texture Packs and Dump Textures only when on.
     pub fn to_text(self) -> String {
         let mut s = format!("lod={}\nbrightness={}\ncamera_distance={}\n", if self.lod { "on" } else { "off" }, self.brightness, self.camera_distance);
         if let Some(r) = self.frame_rate {
@@ -847,6 +860,13 @@ impl ClientOptions {
         if self.touch_size != TOUCH_SIZE_MAX {
             s.push_str(&format!("touch_size={}\n", self.touch_size));
         }
+        // Texture Packs and Dump Textures only when on
+        if self.texture_packs {
+            s.push_str("texture_packs=on\n");
+        }
+        if self.dump_textures {
+            s.push_str("dump_textures=on\n");
+        }
         s
     }
 
@@ -917,6 +937,10 @@ impl ClientOptions {
                         c.render_scale = k;
                     }
                 }
+                ("texture_packs", "on") => c.texture_packs = true,
+                ("texture_packs", "off") => c.texture_packs = false,
+                ("dump_textures", "on") => c.dump_textures = true,
+                ("dump_textures", "off") => c.dump_textures = false,
                 ("hud", "nearest") => c.hud = render::ui::HudFilter::Nearest,
                 ("hud", "sharp") => c.hud = render::ui::HudFilter::Sharp,
                 ("output", v) if !v.is_empty() => c.output = Some(DeviceName::new(v)),
@@ -1721,6 +1745,24 @@ mod tests {
         assert!(!ClientOptions::from_text("mipmaps=off").mipmaps && ClientOptions::from_text("mipmaps=on").mipmaps);
         for bad in ["mipmaps=0", "mipmaps=no", "mipmaps="] {
             assert!(ClientOptions::from_text(bad).mipmaps, "{bad}: on, the default");
+        }
+    }
+
+    /// Texture Packs and Dump Textures, off by default (every texture the
+    /// game's own, as PCSX2's Load Textures and Dump Textures start), kept
+    /// only when on; anything but on or off leaves each off.
+    #[test]
+    fn texture_packs_and_dumps_kept_only_when_on() {
+        let d = ClientOptions::default();
+        assert!(!d.texture_packs && !d.dump_textures, "off, the game's own textures");
+        assert_eq!(d.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\n", "nothing kept while off");
+        let both = ClientOptions { texture_packs: true, dump_textures: true, ..Default::default() };
+        assert_eq!(both.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\ntexture_packs=on\ndump_textures=on\n");
+        assert_eq!(ClientOptions::from_text(&both.to_text()), both);
+        assert!(!ClientOptions::from_text("texture_packs=off\ndump_textures=off").texture_packs);
+        for bad in ["texture_packs=1", "texture_packs=yes", "dump_textures=", "dump_textures=true"] {
+            let c = ClientOptions::from_text(bad);
+            assert!(!c.texture_packs && !c.dump_textures, "{bad}: off, the default");
         }
     }
 

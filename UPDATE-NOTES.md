@@ -6,10 +6,21 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-08 · Texture packs and texture dumps, as PCSX2 makes them
+- Texture packs made for PCSX2 now work here as they are: put the pack's files in the `textures/SLUS-20744/replacements`
+  folder of the client's settings folder (`eqoa-rs`: in `~/.config` on Linux, `~/Library/Application Support` on a Mac,
+  `%APPDATA%` on Windows; it is made for you the first time), then turn on Options > Extended > Textures > Texture Packs.
+  PNG and DDS files of any size are read as PCSX2 reads them, subfolders too; a larger texture keeps its detail up close
+  and looks as the game's does in the distance.
+- Dump Textures, on the same page, writes each texture the game draws to `textures/SLUS-20744/dumps`, named as PCSX2
+  names it, so a pack made from them works in PCSX2 as well (and a pack made from PCSX2's dumps works here).
+- Both are off until you turn them on, and the game looks exactly as before. Not in a browser.
+
 ## 2026-11-08 · Every class for the newest races
 - On a server with races of its own, character creation now offers classes for all of them. The races
   numbered past the game's own twenty (Orc, Kobold, Minotaur, Ratman, Satyr, Dryad, Skeleton, Fungusman and
   Gargoyle on the Heirloom server) showed no class to pick; they now take every class the server allows.
+
 ## 2026-11-08 · Scroll a spell description with the mouse or the keyboard
 - A spell description too long for its box now scrolls on the mouse wheel over the box, and on PageUp
   and PageDown, as well as on a controller's R1 and R2. Over the list, the wheel still moves the

@@ -510,23 +510,37 @@ impl Streamer {
             self.zones.remove(z);
         }
         let load: Vec<usize> = load.into_iter().filter(|&z| world.loaded.get(z).copied().unwrap_or(false)).collect();
-        let textures = render::library_textures(lib);
         let n = budget.unwrap_or(usize::MAX).min(load.len());
+        let mut g = g;
         for &z in &load[..n] {
-            let Some((zf, zn)) = lib.zone(self.file, z) else { continue };
-            let s = scene::zones(lib, zf, &[zn], &format!("zone {z}"), true);
-            let props = AnimatedProps::new(world, lib, &s.hsprites);
-            let prop_mats = props.matrices(world);
-            let mut parts: Vec<GroupPart> =
-                s.parts.iter().zip(&s.statics).map(|((m, mats), st)| GroupPart { model: m, instances: mats, statics: st, moves: false }).collect();
-            let props_at = parts.len();
-            parts.extend(
-                props.groups.iter().zip(&prop_mats).map(|(group, mats)| GroupPart { model: &group.model, instances: mats, statics: &[], moves: true }),
-            );
-            let group = g.renderer.upload_group(g.device, g.queue, &parts, &textures);
-            self.zones.insert(z, Loaded { group, props, props_at });
+            self.upload(z, world, lib, &mut g);
         }
         !release.is_empty() || n > 0
+    }
+
+    /// Zone `z` uploaded, its parts and animated props as one group.
+    fn upload(&mut self, z: usize, world: &mut World<Ee>, lib: &Library, g: &mut Gpu) {
+        let Some((zf, zn)) = lib.zone(self.file, z) else { return };
+        let textures = render::library_textures(lib);
+        let s = scene::zones(lib, zf, &[zn], &format!("zone {z}"), true);
+        let props = AnimatedProps::new(world, lib, &s.hsprites);
+        let prop_mats = props.matrices(world);
+        let mut parts: Vec<GroupPart> =
+            s.parts.iter().zip(&s.statics).map(|((m, mats), st)| GroupPart { model: m, instances: mats, statics: st, moves: false }).collect();
+        let props_at = parts.len();
+        parts.extend(props.groups.iter().zip(&prop_mats).map(|(group, mats)| GroupPart { model: &group.model, instances: mats, statics: &[], moves: true }));
+        let group = g.renderer.upload_group(g.device, g.queue, &parts, &textures);
+        self.zones.insert(z, Loaded { group, props, props_at });
+    }
+
+    /// Every zone drawn now uploaded again, its textures as they are now (a
+    /// texture pack turned on or off: `texpack`), in place: none goes undrawn
+    /// for a frame.
+    pub fn retexture(&mut self, world: &mut World<Ee>, lib: &Library, mut g: Gpu) {
+        let zones: Vec<usize> = self.zones.keys().copied().collect();
+        for z in zones {
+            self.upload(z, world, lib, &mut g);
+        }
     }
 
     /// Whether the zones round `at` are in and drawn: what the loading screen

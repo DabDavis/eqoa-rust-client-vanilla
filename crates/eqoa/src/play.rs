@@ -83,6 +83,9 @@ struct Puppet {
     /// The art it was built in (`esf::Library::view_for` its model): a model
     /// the 2002 disc has is built whole as that disc has it, F9 rebuilds it.
     era: esf::Era,
+    /// The textures it was built with (`texpack::generation`): a texture
+    /// pack turned on or off rebuilds it.
+    textures: u64,
 }
 
 /// An entity's actor in the walker's collision world (`VIEntity::m_actor`):
@@ -262,8 +265,9 @@ pub struct Play {
     ui_data: Option<(Vec<vi::ui::UiTexEntry>, vi::strtab::StringTable)>,
     /// The HUD's surfaces and fonts, uploaded while the atlas is awaited.
     ui_assets: Option<crate::ui::UiAssets>,
-    /// The art the HUD's layer was made in (`attach_ui`).
-    ui_art: Option<esf::Era>,
+    /// The art the HUD's layer was made in, and the textures
+    /// (`texpack::generation`) it was made with (`attach_ui`).
+    ui_art: Option<(esf::Era, u64)>,
     /// CLIENT's and SUPPORT's images taken up (`take_modules`).
     modules_taken: [bool; 2],
     /// The HUD, once the viewer has a device (`attach_ui`): `VIUI`, the
@@ -892,7 +896,7 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                         dress(&mut model, &vi::cust::apply_look_with(cs, look, helm_worn, |id| lib.surface(id as i32).is_some(), &crate::s2::get().cust()));
                     }
                     let gpu = g.renderer.upload(g.device, g.queue, &model, &[render::IDENTITY], &textures);
-                    Some(Puppet { id: e.id, model: e.drawn_model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era })
+                    Some(Puppet { id: e.id, model: e.drawn_model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era, textures: crate::texpack::generation() })
                 })
 }
 
@@ -914,7 +918,7 @@ fn ui_layer(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFor
             assets.add_surfaces_of(&mut ui, device, queue, lib, f);
         }
         if name.eq_ignore_ascii_case("FX.CSF") {
-            assets.add_surface(&mut ui, device, queue, c, vi::hash::hash_resource_id("damage_font.tga"));
+            assets.add_surface(&mut ui, device, queue, c, vi::hash::hash_resource_id("damage_font.tga"), lib.era_of(f));
         }
     }
     let id = vi::ui::font_id() as i32;
@@ -1009,8 +1013,9 @@ fn redo(was: (u32, u32, Option<vi::cust::Look>, Held), now: (u32, u32, Option<vi
 /// anew.
 fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64) -> Option<Option<Puppet>> {
     let r = p.as_ref().map_or(Redo::Build, |p| redo((p.id, p.model, p.look, p.held), (e.id, e.drawn_model, look, held_by(p.sprite.as_ref(), e.creature.as_ref()))));
-    // the art swapped (F9) since it was built: made anew in the art now
-    let r = if p.as_ref().is_some_and(|p| p.era != lib.view_for(e.drawn_model as i32)) { Redo::Build } else { r };
+    // the art swapped (F9), or a texture pack turned on or off (`texpack`),
+    // since it was built: made anew in the art and the textures now
+    let r = if p.as_ref().is_some_and(|p| p.era != lib.view_for(e.drawn_model as i32) || p.textures != crate::texpack::generation()) { Redo::Build } else { r };
     match r {
         Redo::Keep => None,
         Redo::Build => Some(std::mem::replace(p, build_puppet(lib, g, e, look, slot, game_ms))),
@@ -4548,6 +4553,18 @@ impl Play {
         self.add_chat(crate::era::line(era).to_string(), [1.0; 4]);
     }
 
+    /// The textures changed (a texture pack turned on or off, `texpack`):
+    /// what `art_changed` makes again, made again with them (the creatures
+    /// as they are next applied, `Puppet::textures`; the HUD's layer at the
+    /// next `attach_ui`), and nothing said.
+    pub fn retexture(&mut self) {
+        self.self_model = None;
+        self.projectiles.clear();
+        self.spells = None;
+        self.rings.art_changed();
+        self.loading.art_changed();
+    }
+
     /// F9 or the Extended page's Art with no 2002 disc image at hand, in the
     /// world: where to choose it (natively a file dialog is not opened in the
     /// world, `viewer`'s `ask_disc`).
@@ -7458,10 +7475,11 @@ impl Play {
     /// (as the viewer gets its device); then `VIUI` over them, once
     /// SUPPORT's atlas is here. The viewer calls it every frame.
     pub fn attach_ui(&mut self, renderer: &mut render::Renderer, device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat, lib: &Library) {
-        // the art swapped since the layer was made (F9, `era`): the layer and
-        // its surfaces made again in the art now, the HUD's windows kept
-        if self.ui_art.is_some_and(|a| a != lib.view()) {
-            self.ui_art = Some(lib.view());
+        // the art swapped since the layer was made (F9, `era`), or a texture
+        // pack turned on or off (`texpack`): the layer and its surfaces made
+        // again in the art and the textures now, the HUD's windows kept
+        if self.ui_art.is_some_and(|a| a != (lib.view(), crate::texpack::generation())) {
+            self.ui_art = Some((lib.view(), crate::texpack::generation()));
             if let Some(hud) = self.hud.as_mut() {
                 let (ui, mut assets) = ui_layer(device, queue, format, lib);
                 assets.glyphs = Some(crate::pointer::GlyphTable::new(&hud.0));
@@ -7475,7 +7493,7 @@ impl Play {
             let (ui, assets) = ui_layer(device, queue, format, lib);
             renderer.ui = Some(ui);
             self.ui_assets = Some(assets);
-            self.ui_art = Some(lib.view());
+            self.ui_art = Some((lib.view(), crate::texpack::generation()));
         }
         if self.hud.is_none()
             && self.ui_data.is_some()
@@ -7528,7 +7546,7 @@ impl Play {
                 let mut r = assets.raster(ui);
                 // the Frontiers layout, its logo too; the original game's in
                 // the 2002 art (`era`)
-                crate::loading::draw_2d(hud.map(|h| &h.0), &mut r, net::session::EXPANSION_FLAGS & 2 != 0 && self.ui_art != Some(esf::Era::Y2002));
+                crate::loading::draw_2d(hud.map(|h| &h.0), &mut r, net::session::EXPANSION_FLAGS & 2 != 0 && self.ui_art.map(|a| a.0) != Some(esf::Era::Y2002));
             }
             ui.end();
             return;

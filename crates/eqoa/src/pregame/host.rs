@@ -158,6 +158,13 @@ impl Host {
         self.pre.res.set_art(era);
     }
 
+    /// The textures changed (a texture pack turned on or off, `texpack`):
+    /// the 2D layer and what the stages keep made again in the art as it is
+    /// (`Res::retexture`), as for an art swapped.
+    pub fn retexture(&mut self) {
+        self.pre.res.retexture();
+    }
+
     /// A key the window took (the game's code).
     pub fn key(&mut self, key: i32, down: bool) {
         self.pre.key(key, down);

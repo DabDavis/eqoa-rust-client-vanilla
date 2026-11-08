@@ -137,6 +137,7 @@ mod trainer;
 mod trails;
 mod options;
 mod settings;
+mod texpack;
 mod social;
 mod wholist;
 mod zones;
